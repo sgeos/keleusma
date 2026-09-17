@@ -1,5 +1,38 @@
 # Design Journal
 
+## 2026-09-17 — the nesting subjects cannot catch the thing they were written for
+
+180 generated nested composites agree with the reference, no refusals. **And the
+perturbation the brief demanded shows they do not catch the failure that motivated
+them.**
+
+The `Width` documentation names the dangerous case: storing a nested body as a
+scalar writes the POINTER into the parent while every downstream offset still looks
+correct — *a silent wrong answer rather than a fault* — and one of the ten recorded
+defects was exactly that. So the brief required turning a `Body` width into a
+`Scalar` of the same size and watching the comparison fail.
+
+**All three sites that produce a `Body` were perturbed in turn. Every test in the
+new file stayed green each time**, as did the composite-field and array-element
+suites.
+
+**`composite_return_aliasing.rs` catches it** — three of its tests fail on that
+perturbation. The distinction matters where a body crosses a CALL, not where one is
+built and read inside a single function, which is all these subjects do.
+
+**Writing the perturbation into the brief BEFORE the run is what turned a green
+result into a finding.** Without it I would have reported 180 nestings agreeing on
+the surface where a mistake is a wrong answer, and that sentence would have been
+true and misleading in equal measure. The file now says what it is worth —
+exercising the repaired widths one level down — and points at the file the
+`Body`/`Scalar` guarantee actually rests on.
+
+**Three times today a brief's pre-committed check changed the conclusion**: the
+revert contingency for the byte fix, the demand for a perturbation the generated
+composites catch and the hand-written ones do not, and this. **A prediction written
+after the result is a description.**
+
+
 ## 2026-09-17 — the repair was broader than its framing, and the wider half was unpinned
 
 Probed whether the width family reaches ARRAY elements. It does, identically:
