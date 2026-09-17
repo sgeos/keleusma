@@ -1,5 +1,28 @@
 # Design Journal
 
+## 2026-09-17 — the repair was broader than its framing, and the wider half was unpinned
+
+Probed whether the width family reaches ARRAY elements. It does, identically:
+reverting `preserved_scalar_width` refuses `div`, `mod` and `band` in an array
+literal exactly as in a composite field.
+
+**So the four repairs restored array-element capability as well, and nothing
+pinned it.** Every test written for them checks a composite field, because that is
+where the refusals surfaced — the framing followed the symptom rather than the
+mechanism. **A capability restored by accident and guarded nowhere is one refactor
+away from being lost again with nothing going red.**
+
+All three producer lists now run in both positions: 19 word, 11 byte and 8 bool
+producers, as a field and as an element.
+
+**The lesson is about framing, not about arrays.** Every instrument I wrote today
+was named for where the problem appeared. The mechanism was "a packed width is
+consumed", and it is consumed anywhere a flat body is built. **Asking what
+consumes the thing, rather than where it was noticed, would have covered both
+positions the first time** — and it took a deliberate probe to notice, because all
+the tests were green either way.
+
+
 ## 2026-09-17 — answering my own `unmeasured` markers found a fourth gap
 
 The census recorded three arms as `unmeasured` — *nobody has checked whether a

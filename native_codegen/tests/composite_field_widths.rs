@@ -1,4 +1,4 @@
-//! **WHICH COMPUTED VALUES CAN FILL A COMPOSITE FIELD?**
+//! **WHICH COMPUTED VALUES CAN FILL A COMPOSITE FIELD, OR AN ARRAY ELEMENT?**
 //!
 //! # The finding
 //!
@@ -184,5 +184,70 @@ fn the_admitted_bool_fields_pack_where_the_reference_packs_them() {
             vm, native,
             "bool producer `{name}` MISPACKS: reference {vm}, native {native}\n  {src}"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// THE SAME RULE GOVERNS ARRAY ELEMENTS, AND NOTHING PINNED THAT
+// ---------------------------------------------------------------------------
+//
+// The repairs were framed as being about composite FIELDS, because that is where
+// the refusals surfaced. **Measured 2026-09-17, they govern array ELEMENTS
+// identically**: reverting `preserved_scalar_width` refuses `div`, `mod` and
+// `band` in an array literal exactly as it does in a field.
+//
+// **So the repair was broader than the framing, and the array position was
+// unpinned.** A capability restored by accident and guarded nowhere is one
+// refactor away from being lost again without anything going red.
+
+/// An array literal whose FIRST element holds the produced value, with the
+/// second element read too so a shifted element cannot hide.
+fn element_source(ty: &str, value: &str, read: &str) -> String {
+    format!(
+        "fn g(z: Word) -> Word {{ z + 1 }}\n\
+         fn main(a: Word, b: Word) -> Word {{ \
+           let xs: [{ty}; 2] = [{value}, {value}]; \
+           ({read} * 1000) + b }}"
+    )
+}
+
+#[test]
+fn every_producer_can_fill_an_array_element() {
+    let mut broken = Vec::new();
+    for (name, v) in WORD_PRODUCERS {
+        if let Some(e) = refusal(&element_source("Word", v, "(xs[0] % 9)")) {
+            broken.push((format!("word/{name}"), e));
+        }
+    }
+    for (name, v) in BYTE_PRODUCERS {
+        if let Some(e) = refusal(&element_source("Byte", v, "(xs[0] as Word)")) {
+            broken.push((format!("byte/{name}"), e));
+        }
+    }
+    for (name, v) in BOOL_PRODUCERS {
+        if let Some(e) = refusal(&element_source("bool", v, "(if xs[0] { 5 } else { 2 })")) {
+            broken.push((format!("bool/{name}"), e));
+        }
+    }
+    assert!(
+        broken.is_empty(),
+        "producer(s) whose result cannot fill an ARRAY element: {broken:?}.\n\n\
+         Array elements consume a packed width exactly as composite fields do. \
+         This position was unpinned until 2026-09-17, so a repair that restored it \
+         could have been lost again silently."
+    );
+}
+
+#[test]
+fn the_admitted_array_elements_agree_with_the_reference() {
+    for (name, v) in WORD_PRODUCERS {
+        let src = element_source("Word", v, "(xs[0] % 9)");
+        let (vm, native) = common::vm_and_native_two_arg(&src, 9, 5);
+        assert_eq!(vm, native, "word element `{name}` diverges\n  {src}");
+    }
+    for (name, v) in BOOL_PRODUCERS {
+        let src = element_source("bool", v, "(if xs[0] { 5 } else { 2 })");
+        let (vm, native) = common::vm_and_native_two_arg(&src, 9, 5);
+        assert_eq!(vm, native, "bool element `{name}` diverges\n  {src}");
     }
 }
