@@ -65,3 +65,56 @@ is someone running it and reading the result.
   that is a per-run cost and the operator has said such costs are their call.
 - **Red**: that is a backend finding and it takes priority over everything else
   queued. Reduce it to the smallest module that diverges before reporting.
+
+
+---
+
+## OUTCOME
+
+**The sweep was run and it is green. The more useful result is what the sweep's
+absence had hidden.**
+
+### The corpus-wide run
+
+`KEL_OPTIMIZE=1` over `corpus_differential`: **10 tests, 0 failed, frozen tree,
+382.5 seconds.** Six unoptimised runs of that same phase the same day took
+379-433s, so **the middle end costs approximately nothing here** — the reason the
+sweep stayed opt-in does not hold.
+
+**The variable's reach was proven before the result was believed.** The flat
+timing was suspicious: if O2 had run on every module, why no cost? A probe inside
+the hook settles it — with the variable set the probe panics, without it the same
+test passes. So the variable does reach the test process, and the flat timing
+simply means LLVM is a small share of a VM-dominated workload.
+
+**Scope of the claim**: the corpus agrees under `default<O2>` at this commit on
+this machine. **Not** that the emitted IR is free of undefined behaviour; an
+optimiser exploiting UB is input- and version-dependent.
+
+### ⚠ AND THE COVERAGE WOULD HAVE SURVIVED A DEAD OPTIMISER
+
+Adding permanent optimised-execution coverage, four subjects driven through the
+middle end on every run, it passed first time. **Then the instrument was
+perturbed, and the result was worse than expected**: stubbing the shared
+`force_optimize` helper to return immediately left **all three** tests in
+`optimised_lowering.rs` passing — including the one named *"the O2 pipeline
+measurably transforms a real module"*.
+
+**That test ran `run_passes` inline**, so it guarded a pipeline nothing else used.
+The file's own header warns against exactly this: *"An unguarded 'it passes under
+O2' would be the same mistake in a new place."* It was already the same mistake,
+one helper away from where the header was looking.
+
+Routed through the shared helper now. A dead optimiser fails the suite.
+
+### A fifth probe implicating itself
+
+One subject was written with `let mut`, and **Keleusma has no mutable local**. The
+failure was a `ParseError`, not a divergence. Replaced with nested conditionals,
+which is what an optimiser folds anyway.
+
+### What this does NOT settle
+
+Whether the sweep should join the routine gate. It costs one extra corpus phase of
+roughly six and a half minutes, which is a gate-time decision rather than a
+correctness one.

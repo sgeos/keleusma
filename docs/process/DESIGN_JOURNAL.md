@@ -1,5 +1,39 @@
 # Design Journal
 
+## 2026-09-17 — the optimiser sweep nobody had run, and the coverage that would have survived it being dead
+
+Three checkable facts made a gap: every execution differential runs at `-O0`,
+which is a codegen setting rather than a pass pipeline; the corpus-wide
+`default<O2>` path is gated on `KEL_OPTIMIZE`, which **no script sets**; and the
+unconditional guard checks that optimised IR still VERIFIES, which is not whether
+it still computes the same values. **The corpus had been optimised and validated,
+and never optimised and run.**
+
+**Ran it: 10 tests, 0 failed, frozen, 382.5s** — inside the 379-433s range of six
+unoptimised runs the same day. The middle end costs approximately nothing here, so
+the cost argument for keeping the sweep opt-in does not hold.
+
+**The flat timing nearly became a false negative.** My first reading was that the
+variable had not reached the test process. A probe settles it: with it set the hook
+panics, without it the test passes. **The timing was weak evidence and the probe
+was strong evidence**, and I had committed in the brief to asking what the command
+covered before believing it.
+
+**The larger finding came from perturbing my own new coverage.** Four subjects
+driven through the middle end on every run, passing first time. Stub
+`force_optimize` to return immediately and **all three tests still pass** —
+including `the_o2_pipeline_measurably_transforms_a_real_module`, which ran
+`run_passes` INLINE and therefore guarded a pipeline nothing else used.
+
+That file's header already warns: *"An unguarded 'it passes under O2' would be the
+same mistake in a new place."* **It was already the same mistake, one helper away
+from where the header was looking.** Routed through the shared helper; a dead
+optimiser now fails the suite.
+
+A fifth probe implicated itself on the way: a subject written with `let mut`, and
+there is no mutable local in this language. A `ParseError`, not a divergence.
+
+
 ## 2026-09-17 — the arena finding is reported, and the measurement stops here
 
 Report six is filed in the shared channel: the arena figure my backend publishes

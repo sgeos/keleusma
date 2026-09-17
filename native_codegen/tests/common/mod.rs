@@ -30,6 +30,23 @@ pub fn maybe_optimize(lm: &inkwell::module::Module<'_>) {
     if std::env::var("KEL_OPTIMIZE").is_err() {
         return;
     }
+    force_optimize(lm);
+}
+
+/// The O2 pipeline, run UNCONDITIONALLY.
+///
+/// # Why this is separate from the environment-gated form
+///
+/// `KEL_OPTIMIZE` makes the whole suite optimised at once, which is the right
+/// shape for an occasional corpus-wide sweep and the wrong one for permanent
+/// coverage: **a run nobody performs proves nothing**, and until 2026-09-17
+/// nobody had performed it — the variable is set by no script, and continuous
+/// integration does not build this package at all.
+///
+/// A handful of subjects driven through this unconditionally are covered by every
+/// gate instead, which is a smaller claim that is actually made.
+#[allow(dead_code)]
+pub fn force_optimize(lm: &inkwell::module::Module<'_>) {
     use inkwell::OptimizationLevel;
     use inkwell::passes::PassBuilderOptions;
     use inkwell::targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine};
@@ -156,6 +173,17 @@ pub fn install_private_init_bytes(m: &keleusma::bytecode::Module, privs: &mut [u
 /// segmentation fault inside JIT-compiled code with no usable stack.
 #[allow(dead_code)]
 pub fn vm_and_native_two_arg(src: &str, a: i64, b: i64) -> (i64, i64) {
+    vm_and_native_two_arg_at(src, a, b, false)
+}
+
+/// The scalar driver, with the middle end forced on when `optimise` is set.
+///
+/// **`-O0` is a codegen setting, not a pass pipeline**, so the everyday
+/// differentials have never exercised the optimiser. This is how a subject gets
+/// permanent optimised-EXECUTION coverage rather than waiting for a sweep nobody
+/// runs.
+#[allow(dead_code)]
+pub fn vm_and_native_two_arg_at(src: &str, a: i64, b: i64, optimise: bool) -> (i64, i64) {
     use inkwell::OptimizationLevel;
     use inkwell::context::Context;
     use keleusma::bytecode::Value;
@@ -182,7 +210,11 @@ pub fn vm_and_native_two_arg(src: &str, a: i64, b: i64) -> (i64, i64) {
     let lm = ctx.create_module("k");
     keleusma_native::lower_module(&ctx, &lm, &m, keleusma_native::LowerOptions::default())
         .expect("lower");
-    maybe_optimize(&lm);
+    if optimise {
+        force_optimize(&lm);
+    } else {
+        maybe_optimize(&lm);
+    }
     let ee = lm
         .create_jit_execution_engine(OptimizationLevel::None)
         .expect("jit");

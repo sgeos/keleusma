@@ -18,6 +18,8 @@
 //! `corpus_differential` now runs the whole corpus through `default<O2>` when
 //! `KEL_OPTIMIZE` is set. This file is the guard that makes that run mean
 //! something.
+mod common;
+
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
 use inkwell::passes::PassBuilderOptions;
@@ -81,9 +83,16 @@ fn the_o2_pipeline_measurably_transforms_a_real_module() {
     lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower");
     lm.verify().expect("valid IR before optimisation");
 
+    // ⚠ **THROUGH THE SHARED HELPER, NOT AN INLINE PIPELINE.**
+    //
+    // This test ran `run_passes` itself until 2026-09-17, which meant it guarded
+    // a pipeline **nothing else used**. Measured: stubbing `common::force_optimize`
+    // to return immediately left this test and both of its neighbours PASSING, so
+    // the entire optimised-execution coverage would have survived a dead
+    // optimiser. Routing it through the helper every optimised path shares is what
+    // gives the others their reach.
     let before = instruction_count(&lm);
-    lm.run_passes("default<O2>", &machine(), PassBuilderOptions::create())
-        .expect("O2 pipeline");
+    common::force_optimize(&lm);
     let after = instruction_count(&lm);
     lm.verify().expect("valid IR AFTER optimisation");
 
@@ -137,4 +146,87 @@ fn corpus_modules_still_verify_after_the_middle_end() {
         checked >= 5,
         "only {checked} modules were checked; the assertion is thin"
     );
+}
+
+// ---------------------------------------------------------------------------
+// OPTIMISED **EXECUTION**, COVERED BY EVERY GATE RATHER THAN BY A SWEEP
+// ---------------------------------------------------------------------------
+//
+// # The distinction this closes
+//
+// `corpus_modules_still_verify_after_the_middle_end` above asks whether the IR
+// is still VALID after `default<O2>`. **That is not whether it still computes the
+// same values**, and undefined behaviour characteristically manifests as a wrong
+// result rather than as invalid IR — an optimiser is entitled to assume UB does
+// not happen and to fold accordingly, producing IR that verifies perfectly and
+// answers wrongly.
+//
+// # And the corpus-wide sweep was never actually run until 2026-09-17
+//
+// `corpus_differential` honours `KEL_OPTIMIZE`, but **no script sets it**:
+// `tools/backend-gate.sh` does not, and continuous integration does not build
+// this package at all. The capability existed, was documented, and had never
+// produced a result.
+//
+// **It was run on 2026-09-17: 10 tests, 0 failed, frozen tree, 382s** — inside
+// the 379-433s range of six unoptimised runs of the same phase that day, so the
+// middle end costs approximately nothing here. **The variable's reach was proven
+// before the result was believed**: with it set, a probe inside the hook panics;
+// without it, the same test passes.
+//
+// A sweep is still a sweep. The subjects below are driven through the middle end
+// on EVERY run, so the coverage does not depend on anyone remembering.
+
+/// Subjects chosen for what an optimiser is most likely to disturb.
+const OPTIMISED_SUBJECTS: &[(&str, &str)] = &[
+    // Region aliasing: the backend hands every call site a disjoint block of the
+    // caller's buffer, and alias analysis is exactly what `-O2` sharpens.
+    (
+        "a composite returned through the caller's region",
+        "struct P { x: Word, y: Word }\nfn mk(a: Word, b: Word) -> P { P { x: a, y: b } }\nfn main(a: Word, b: Word) -> Word { let p: P = mk(a, b); p.x + p.y }",
+    ),
+    // Checked arithmetic lowers to intrinsics with branches an optimiser folds.
+    (
+        "checked arithmetic near its boundary",
+        "fn main(a: Word, b: Word) -> Word { (a + b) * (a - b) }",
+    ),
+    // Nested conditionals, which `-O2` folds and re-associates aggressively.
+    //
+    // ⚠ **THIS ROW REPLACES A LOOP SUBJECT THAT DID NOT PARSE.** It was written
+    // with `let mut`, and **Keleusma has no mutable local** — the accumulator
+    // shape it assumed does not exist in the language. A probe implicating itself
+    // rather than the backend, which this line has now done five times; the
+    // failure was a `ParseError`, not a divergence.
+    (
+        "nested conditionals",
+        "fn main(a: Word, b: Word) -> Word { if a > b { if a > 0 { a - b } else { b - a } } else { if b > 0 { b + a } else { 0 } } }",
+    ),
+    // Nested field reads through two levels of flat offsets.
+    (
+        "a nested composite read",
+        "struct I { v: Word }\nstruct O { i: I, w: Word }\nfn main(a: Word, b: Word) -> Word { let o: O = O { i: I { v: a }, w: b }; o.i.v + o.w }",
+    ),
+];
+
+/// **The optimised results must equal the reference's, not merely verify.**
+#[test]
+fn the_subjects_execute_identically_after_the_middle_end() {
+    for (label, src) in OPTIMISED_SUBJECTS {
+        let (vm, plain) = common::vm_and_native_two_arg_at(src, 9, 4, false);
+        let (_, optimised) = common::vm_and_native_two_arg_at(src, 9, 4, true);
+        assert_eq!(
+            vm, plain,
+            "`{label}` already disagrees at -O0, so the optimised comparison below \
+             would be measuring the wrong thing"
+        );
+        assert_eq!(
+            vm, optimised,
+            "`{label}` DIVERGES after `default<O2>`: the reference gives {vm}, the \
+             optimised lowering gives {optimised}, and the unoptimised lowering \
+             gives {plain}. IR that verifies after the middle end can still answer \
+             wrongly -- that is the whole reason this test exists beside the \
+             verification one. This establishes that the two implementations \
+             disagree, NOT which of them is right."
+        );
+    }
 }
