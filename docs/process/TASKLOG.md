@@ -10,6 +10,65 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-16, session 66, second increment). H1 RESIDUAL CLOSED, H2 OPEN.**
+>
+> **The depth residual was reachable.** With the bound lifted, on a two-mebibyte
+> stack, the verifier's region walks survive a chunk nested 4600 deep and ABORT at
+> 4800 — inside the ~16384 levels a `u16` target addresses. `MAX_REGION_DEPTH` is
+> 256, threaded through all four walkers. Chosen from measurement: the deepest
+> nesting the COMPILER can emit is 20, so 256 is ~13x what a program can reach and
+> ~19x below the abort.
+>
+> **THE FIRST BOUNDARY I MEASURED WAS WRONG, AND THE REASON GENERALISES.** It said
+> 5500. The test builder was itself recursive and overflowed alongside its subject.
+> An instrument that shares a failure mode with its subject reports the sum of the
+> two.
+>
+> **H2 is OPEN, and the severity I gave it was WRONG.** I called the parser's abort
+> on deeply nested SOURCE a denial of service on the command-line front end, the
+> language server and the playground. Those ship as RELEASE builds, and the release
+> measurement was the one I had not taken: nested `if`/`else` survives 159 levels in
+> release against 20 in debug, so at `MAX_PARSE_DEPTH = 24` release has ~6x headroom
+> and only a DEBUG build aborts. Corrected to Low.
+>
+> **What was genuinely wrong is a claim, now fixed**: the constant's comment asserted
+> the limit holds "even in a debug build with fat frames", which measurement refutes.
+>
+> **No single limit fixes it.** The counter is a poor proxy for stack in both
+> directions, and the deepest real source (`wire.kel`, depth 21) costs less stack
+> than either synthetic shape. Charging blocks too was tried and made it worse.
+> Left open deliberately.
+
+> **Currency note (2026-09-16, session 66, first increment). AUDIT H1.**
+>
+> **The verifier could be made to hang forever, or to abort the process, by a module
+> differing from a valid one in a single `If` operand.** Fixed. Every region walker
+> in `src/verify.rs` advances its cursor to a position taken from an `If`, `Else` or
+> `Loop` operand; a backward operand repeats the walk forever, and the recursive
+> If-Else arm overflows the stack and aborts, which does not unwind and so cannot be
+> defended against by wrapping the call. Three public entries reached a walker with
+> the operand unvalidated, `verify` among them, because it computed the productivity
+> classification before the pass that validates targets. Measured exhaustively on a
+> seventeen-instruction chunk: four positions hung, four aborted.
+>
+> **H1 is a sibling of F1 and G1 along an axis those rounds' fix shape could not
+> reach.** Both hardened these same functions against an out-of-bounds index with
+> clamps. An in-range backward target passes every clamp and is a liveness fault,
+> not an indexing fault.
+>
+> **The harness that found it is the one this project's security audit asked for.**
+> Its Coverage note names "a hostile-bytecode corpus driven through the full safe
+> `Vm::new`" as the most valuable missing addition; it had never been built.
+> `tests/hostile_module_mutation.rs` is 4216 mutants in under five seconds, and its
+> census reports zero encoder and zero loader refusals, so the whole burden falls on
+> `verify`.
+>
+> **Not closed, and not claimed**: recursion DEPTH is still unbounded on all-forward
+> targets, and whether that is reachable has not been measured.
+>
+> **Frontier unchanged otherwise**: no `.kel` stage source was touched, no opcode, no
+> `BYTECODE_VERSION`, and the seven operator decisions are untouched.
+
 > **Currency note (2026-09-13, session 65, increments 89 onward). THE SESSION'S LAST BLOCK.**
 >
 > Same convention as the note below: one entry, with per-increment reasoning in
