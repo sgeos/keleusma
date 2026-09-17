@@ -42,6 +42,7 @@ const WORD_PRODUCERS: &[(&str, &str)] = &[
     ("sub", "(a - b)"),
     ("mul", "(a * b)"),
     ("neg", "(-a)"),
+    ("fixed_to_word", "((a as Fixed) as Word)"),
     ("div", "(a / b)"),
     ("mod", "(a % b)"),
     ("band", "(a band b)"),
@@ -81,6 +82,19 @@ const BOOL_PRODUCERS: &[(&str, &str)] = &[
     ("or", "((a > 0) or (b > 0))"),
     ("xor", "((a > 0) xor (b > 0))"),
     ("literal", "true"),
+];
+
+/// `Fixed`-valued producers. **Added after `FixedMul` and `FixedDiv` were found
+/// refused** while `+`, `-`, a cast and a negation were admitted: a fixed-point
+/// product is a `Fixed`, the same eight bytes its operands are. The fifth
+/// arm-group in this family.
+const FIXED_PRODUCERS: &[(&str, &str)] = &[
+    ("cast", "(a as Fixed)"),
+    ("add", "((a as Fixed) + (b as Fixed))"),
+    ("sub", "((a as Fixed) - (b as Fixed))"),
+    ("neg", "(-(a as Fixed))"),
+    ("mul", "((a as Fixed) * (b as Fixed))"),
+    ("div", "((a as Fixed) / (b as Fixed))"),
 ];
 
 /// A two-field struct whose FIRST field holds the produced value. **The second
@@ -249,5 +263,34 @@ fn the_admitted_array_elements_agree_with_the_reference() {
         let src = element_source("bool", v, "(if xs[0] { 5 } else { 2 })");
         let (vm, native) = common::vm_and_native_two_arg(&src, 9, 5);
         assert_eq!(vm, native, "bool element `{name}` diverges\n  {src}");
+    }
+}
+
+#[test]
+fn every_fixed_producer_can_fill_a_composite_field() {
+    let mut broken = Vec::new();
+    for (name, v) in FIXED_PRODUCERS {
+        if let Some(e) = refusal(&field_source("Fixed", v, "(p.x as Word)")) {
+            broken.push((*name, e));
+        }
+    }
+    assert!(
+        broken.is_empty(),
+        "fixed producer(s) whose result cannot fill a composite field: {broken:?}.\n\n\
+         A fixed-point product or quotient is a `Fixed`, the same eight bytes its \
+         operands are. `FixedMul` and `FixedDiv` were refused here while `+`, `-`, \
+         a cast and a negation were admitted."
+    );
+}
+
+#[test]
+fn the_admitted_fixed_fields_agree_with_the_reference() {
+    for (name, v) in FIXED_PRODUCERS {
+        let src = field_source("Fixed", v, "(p.x as Word)");
+        let (vm, native) = common::vm_and_native_two_arg(&src, 9, 5);
+        assert_eq!(
+            vm, native,
+            "fixed producer `{name}` diverges: reference {vm}, native {native}\n  {src}"
+        );
     }
 }

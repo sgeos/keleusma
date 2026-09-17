@@ -4804,6 +4804,13 @@ fn lower_chunk_body<'ctx>(
             // never revisited. **A stale blocker costs more than a stale figure:
             // a wrong number misleads a reader, a wrong blocker stops work.**
             Op::FixedMul(frac_bits) => {
+                // **The operands' shared width, read before the pops.** A
+                // fixed-point product or quotient is a `Fixed`, the same eight
+                // bytes its operands are, and dropping that meant no composite
+                // field or array element could hold one — the fifth arm-group in
+                // the family censused in `unknown_width_census.rs`, found by the
+                // same one-line probe as the others.
+                let kept_fx = preserved_scalar_width(st.width_at(1), st.width_at(0));
                 if u32::from(*frac_bits) >= WORD_BITS as u32 {
                     return Err(LowerError::unsupported_op(
                         "FixedMul",
@@ -4843,7 +4850,7 @@ fn lower_chunk_body<'ctx>(
                 // `arith_result_kind`.
                 st.push_k(
                     st.b.build_int_truncate(clamped, i64t, "fxm").unwrap(),
-                    Width::Unknown,
+                    kept_fx.unwrap_or(Width::Unknown),
                     OperandKind::Fixed,
                 );
             }
@@ -4853,6 +4860,13 @@ fn lower_chunk_body<'ctx>(
             // copying the neighbour would produce a plausible wrong answer that
             // still agrees on zero.
             Op::FixedDiv(frac_bits) => {
+                // **The operands' shared width, read before the pops.** A
+                // fixed-point product or quotient is a `Fixed`, the same eight
+                // bytes its operands are, and dropping that meant no composite
+                // field or array element could hold one — the fifth arm-group in
+                // the family censused in `unknown_width_census.rs`, found by the
+                // same one-line probe as the others.
+                let kept_fx = preserved_scalar_width(st.width_at(1), st.width_at(0));
                 // (1) The VM fails closed on an out-of-range fraction count. The
                 // count is a static operand, so this is a lowering-time refusal,
                 // exactly as `FixedMul` and `FixedToWord` already do.
@@ -4914,11 +4928,26 @@ fn lower_chunk_body<'ctx>(
                 // A Q-format quotient is Q-format; see `arith_result_kind`.
                 st.push_k(
                     st.b.build_int_truncate(clamped, i64t, "fxd").unwrap(),
-                    Width::Unknown,
+                    kept_fx.unwrap_or(Width::Unknown),
                     OperandKind::Fixed,
                 );
             }
             Op::FixedToWord(frac_bits) => {
+                // **The operand's width, carried through the conversion.**
+                //
+                // A `Fixed` and the `Word` it converts to are the same number of
+                // bytes, and the sibling `Op::WordToFixed` states `Scalar(8)`
+                // while this arm stated nothing — so a converted word could not
+                // fill a composite field while a converted fixed-point value
+                // could. **Read from the operand rather than hard-coded**, so a
+                // narrower word configuration cannot make it a lie.
+                //
+                // The KIND stays `Unknown`, which is correct: the result is a
+                // `Word`, neither `Fixed` nor `Float`. Only the width was missing.
+                let kept_f2w = match st.width_at(0) {
+                    w @ Width::Scalar(_) => w,
+                    _ => Width::Unknown,
+                };
                 if u32::from(*frac_bits) >= WORD_BITS as u32 {
                     return Err(LowerError::unsupported_op(
                         "FixedToWord",
@@ -4939,7 +4968,7 @@ fn lower_chunk_body<'ctx>(
                 // `Word` remainder the reference computes happily.
                 st.push_k(
                     st.b.build_right_shift(v, sh, true, "fx2w").unwrap(),
-                    Width::Unknown,
+                    kept_f2w,
                     OperandKind::Unknown,
                 );
             }

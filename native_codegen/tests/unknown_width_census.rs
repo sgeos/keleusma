@@ -21,6 +21,11 @@
 //!
 //! # ⚠ A DISPOSITION IS NOT A CLAIM THAT THE SITE IS FINE
 //!
+//! **SIX arm-groups in this family were repaired**, the last two — `FixedMul`
+//! with `FixedDiv`, then `FixedToWord` — found only after the census's own
+//! population was widened, because they pushed `Width::Unknown` EXPLICITLY rather
+//! than through the sugared bare call the first matcher counted.
+//!
 //! Two dispositions are `unmeasured` — recorded as such rather than asserted to
 //! be correct. **A third was `Op::Not`, and answering it found a fourth gap**: a
 //! negated comparison could not fill a `bool` field while an un-negated one could,
@@ -42,6 +47,29 @@ const DISPOSITIONS: &[(&str, &str)] = &[
     ("Op::Div | Op::Mod => {", "fallback"),
     ("Op::BitAnd | Op::BitOr | Op::BitXor => {", "fallback"),
     ("Op::Shl | Op::Shr => {", "fallback"),
+    ("Op::FixedMul(frac_bits) => {", "fallback"),
+    ("Op::FixedDiv(frac_bits) => {", "fallback"),
+    ("Op::FixedToWord(frac_bits) => {", "fallback"),
+    (
+        "Op::Const(idx) => {",
+        "sound, MEASURED: a literal field value reaches a composite by another \
+         path, and `x: 42` fills a field today",
+    ),
+    (
+        "Op::GetLocal(n) => {",
+        "sound, MEASURED: a local carries the width it was given, and a field \
+         filled from a local -- word, computed word or byte -- lowers today",
+    ),
+    (
+        "Op::SetLocal(n) => {",
+        "sound, MEASURED: the same local table as `GetLocal`, checked by the same \
+         subjects",
+    ),
+    (
+        "Op::Yield if general_stream => {",
+        "sound: the reentrant reply of a general stream has no static shape, which \
+         is why the typed verifier defers here too",
+    ),
     (
         "Op::Dup => {",
         "unmeasured: a duplicate could copy the width of what it duplicates, and \
@@ -78,6 +106,19 @@ fn bare_push_arms() -> Vec<(usize, String)> {
         if line.starts_with("            Op::") {
             arm = t.to_string();
         }
+        // **AND ON `Width::Unknown` TOO, NOT ONLY THE BARE CALL.**
+        //
+        // The second keying flaw in this file. Its title says *every place the
+        // emitter pushes an unknown width*, and it counted only `st.push(` — the
+        // SUGARED form. `Op::FixedMul` and `Op::FixedDiv` pushed
+        // `push_k(.., Width::Unknown, ..)` explicitly, so **the fifth arm-group in
+        // this family was invisible to the census built to enumerate the family**,
+        // and was found instead by a one-line probe.
+        //
+        // **The title was broader than the population**, which is the same defect
+        // as a record outliving its subject, arriving through the matcher instead
+        // of the prose.
+        //
         // **KEYED ON `contains`, NOT `starts_with`.** The first version of this
         // scan required the call to begin the line, and missed every
         // `None => st.push(v),` arm — which is the exact form the three repairs
@@ -85,7 +126,8 @@ fn bare_push_arms() -> Vec<(usize, String)> {
         // matcher cannot see the sites it was written for reports a clean
         // population and means nothing**, and this package catalogues that class
         // three times over. Found because the stale half of the check fired.
-        if line.contains("st.push(") {
+        let comment = t.starts_with("//");
+        if !comment && (line.contains("st.push(") || line.contains("Width::Unknown")) {
             out.push((i + 1, arm.clone()));
         }
     }

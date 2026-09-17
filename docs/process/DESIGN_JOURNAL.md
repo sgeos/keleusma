@@ -1,5 +1,37 @@
 # Design Journal
 
+## 2026-09-17 — the census's population was narrower than its title, and hid two more
+
+A one-line probe asked whether `Fixed` producers can fill a composite field.
+**`FixedMul` and `FixedDiv` could not** — a fifth arm-group. Then, widening the
+census to catch them, **`FixedToWord` surfaced as a sixth**: its sibling
+`WordToFixed` states `Scalar(8)` and it stated nothing, so a converted word could
+not fill a field while a converted fixed-point value could.
+
+**The census could not have found either, and its title said it should.** It is
+called *every place the emitter pushes an unknown width* and it counted only
+`st.push(` — the SUGARED form. Both Fixed arms push `push_k(.., Width::Unknown,
+..)` explicitly. **The title was broader than the population**, which is a record
+outliving its subject arriving through the matcher rather than the prose, and it is
+the second keying flaw in this one file.
+
+Widened to count explicit `Width::Unknown` too, which surfaced five more arms.
+**Each was measured before being dispositioned**, not assumed: `Const`, `GetLocal`
+and `SetLocal` narrow nothing — a field filled from a literal, a local, a computed
+local or a byte local all lower today — `Yield` is genuinely shapeless, and
+`FixedToWord` was the sixth gap.
+
+**Six arm-groups, and the last two were invisible to the instrument built to
+enumerate the first four.** The lesson is not "widen matchers"; it is that **a
+census names a population, and the name is a claim that has to be checked like any
+other.** Three of this session's findings came from asking what an instrument was
+keyed by, and this is the fourth.
+
+The `FixedToWord` width is read from the operand rather than hard-coded to eight,
+so a narrower word configuration cannot make it a lie — the sibling arm does
+hard-code it, and that is now the asymmetry worth watching rather than this one.
+
+
 ## 2026-09-17 — the nesting subjects cannot catch the thing they were written for
 
 180 generated nested composites agree with the reference, no refusals. **And the
