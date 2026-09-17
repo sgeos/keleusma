@@ -72,6 +72,15 @@ const SHAPES: &[(&str, &str)] = &[
         "writing a private data slot each tick",
         "private data d { n: Word }\nloop main(t: Word) -> Word { d.n = t; (yield d.n) + (yield d.n + 1) }",
     ),
+    // **CARRIED HERE TO GIVE THE SHARED-SEGMENT CANARY REACH**, which its own
+    // comment recorded as unobtainable: the reference driver called through the
+    // plain `call`, which lends an EMPTY segment, so the runtime refused any
+    // shared-slot module and no such stream was drivable. The driver lends the
+    // segment now, sized from the module's declaration.
+    (
+        "writing a shared data slot each tick",
+        "shared data s { n: Word }\nloop main(t: Word) -> Word { s.n = t; (yield s.n) + (yield s.n + 1) }",
+    ),
 ];
 
 /// Ticks to drive. The previous maximum in this package was **6**.

@@ -249,13 +249,35 @@ const NO_WITNESS_HERE: &[(&str, &str)] = &[
         "the reference emits none by a bounded search recorded upstream, which \
          deliberately stops short of claiming unreachability; see opcode_denominator",
     ),
+];
+
+/// **The two native-call opcodes, DRIVEN rather than deferred.**
+///
+/// They were the last two entries in `NO_WITNESS_HERE`, recorded as *"needs a
+/// registered native; driven by the corpus differential"* — and for the external
+/// form, `examples/scripts/external_native_witness.kel` went further and said the
+/// reference *"cannot EXECUTE such a module at all"*, because that harness
+/// registers every native as VERIFIED and the runtime rejects a verified
+/// registration invoked as external.
+///
+/// **The obstruction was real and removable.** `Vm::register_external_native`
+/// exists; the harness simply never called it. Registering each form the way its
+/// declaration asks makes both drivable here, against a stub that is not the
+/// identity, so a lowering that dropped the call could not pass.
+///
+/// `(opcode, source, native name, register as external)`
+const NATIVE_WITNESSED: &[(&str, &str, &str, bool)] = &[
     (
         "CallVerifiedNative",
-        "needs a registered native; driven by the corpus differential",
+        "use host::tick\nfn main(seed: Word) -> Word { host::tick(seed) }",
+        "host::tick",
+        false,
     ),
     (
         "CallExternalNative",
-        "needs a registered native; driven by the corpus differential",
+        "use external host::tick\nfn main(seed: Word) -> Word { host::tick(seed) }",
+        "host::tick",
+        true,
     ),
 ];
 
@@ -313,6 +335,7 @@ fn the_two_columns_partition_the_instruction_set() {
         .iter()
         .map(|(o, _)| *o)
         .chain(STREAM_WITNESSED.iter().copied())
+        .chain(NATIVE_WITNESSED.iter().map(|(o, _, _, _)| *o))
         .collect();
     let recorded: BTreeSet<&str> = NO_WITNESS_HERE.iter().map(|(o, _)| *o).collect();
 
@@ -392,4 +415,39 @@ fn the_stream_witness_emits_its_opcodes_and_agrees_tick_for_tick() {
     }
     // Drives both implementations across ticks and compares every yield.
     common::assert_general_stream_agrees(STREAM_WITNESS, 1, &[2, 3]);
+}
+
+/// **The native-call opcodes, emitted and agreeing.**
+///
+/// The stub multiplies by three and adds one on both sides. **A lowering that
+/// dropped the call and forwarded the argument would return the seed**, which is
+/// a different number — the identity stub this witness deliberately does not use
+/// would have hidden exactly that.
+#[test]
+fn the_native_call_witnesses_emit_their_opcodes_and_agree() {
+    assert!(
+        !NATIVE_WITNESSED.is_empty(),
+        "no native witnesses; if both opcodes gained coverage elsewhere these \
+         rows should move rather than be left passing vacuously"
+    );
+    for (opcode, src, native, external) in NATIVE_WITNESSED {
+        let m = common::build(src);
+        assert!(
+            ops_of(&m).contains(*opcode),
+            "the witness for `{opcode}` compiles but does not emit it: {src}. \
+             The claim that this opcode is driven rests on this."
+        );
+        let (vm, native_side) = common::vm_and_native_calling_one_native(src, native, *external, 7);
+        assert_eq!(
+            vm, native_side,
+            "`{opcode}` DIVERGES: the reference gives {vm}, native gives \
+             {native_side}. Both were handed the same non-identity stub, so an \
+             equal pair cannot be a coincidence of a dropped call."
+        );
+        assert_ne!(
+            vm, 7,
+            "`{opcode}`: the reference returned its own argument, so the native \
+             was not actually invoked and this comparison proves nothing."
+        );
+    }
 }

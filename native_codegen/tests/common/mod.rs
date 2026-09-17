@@ -452,22 +452,43 @@ pub fn general_vm_sequence(src: &str, first: i64, replies: &[i64]) -> Vec<i64> {
     let mut arena = keleusma_arena::Arena::with_capacity(cap);
     arena.resize_persistent(need).expect("persistent region");
 
+    // **THE SHARED SEGMENT IS LENT, NOT OMITTED.**
+    //
+    // This driver used the plain `call`/`resume`, which forward an EMPTY slice.
+    // The runtime requires the buffer to be exactly `shared_data_bytes` long, so
+    // a stream declaring a shared slot was REFUSED here -- and because it was
+    // refused, no shared-slot stream was drivable, nothing ever wrote to the
+    // native side's shared buffer, and that buffer's canary could not fire. It
+    // was documented as having no reach for precisely this reason.
+    //
+    // The buffer is sized from the module's own declaration rather than a
+    // literal, which is also what gives the native side's sentinel somewhere
+    // meaningful to sit.
+    let shared_len = m.shared_data_bytes as usize;
+    let mut shared = vec![0u8; shared_len];
+
     let mut vm = Vm::new(m, &arena).expect("vm");
     let mut out = Vec::new();
-    let mut st = vm.call(&[Value::Int(first)]).expect("vm run");
+    let mut st = vm
+        .call_with_shared(&mut shared, &[Value::Int(first)])
+        .expect("vm run");
     while out.len() < replies.len() {
         match st {
             VmState::Yielded(Value::Int(v)) => {
                 out.push(v);
                 let r = replies[out.len() - 1];
-                st = vm.resume(Value::Int(r)).expect("resume");
+                st = vm
+                    .resume_with_shared(&mut shared, Value::Int(r))
+                    .expect("resume");
             }
             // The runtime reports the rewind as a leg of its own; the native
             // driver collapses it, so it contributes no yielded value here and
             // is offered the SAME reply as the suspension it follows.
             VmState::Reset => {
                 let r = replies[out.len().saturating_sub(1)];
-                st = vm.resume(Value::Int(r)).expect("resume after reset");
+                st = vm
+                    .resume_with_shared(&mut shared, Value::Int(r))
+                    .expect("resume after reset");
             }
             other => panic!("a stream produced {other:?}"),
         }
@@ -567,11 +588,14 @@ pub fn general_native_arena_extent(
     //   there and the canary could never have fired. Shrinking to 8 is still not
     //   enough — one `Word` slot occupies exactly 8 bytes — so zero is what
     //   demonstrates it.
-    // - **shared segment — NOT PROVEN, and cannot be by this helper.**
-    //   `general_vm_sequence` calls without supplying a shared segment, so the
-    //   reference refuses a shared-slot stream and no drivable shape writes
-    //   there. The canary is kept because it costs nothing and would catch a
-    //   stray write, but **it is not evidence of anything today.**
+    // - **shared segment — PROVEN, 2026-09-16.** It was recorded here as *"NOT
+    //   PROVEN, and cannot be by this helper"*, and the diagnosis was right
+    //   without being final: `general_vm_sequence` called through the plain
+    //   `call`, which lends an EMPTY segment, so the runtime refused every
+    //   shared-slot module and no such stream was drivable. **The helper was the
+    //   obstruction, not the shape.** It lends the segment now, a shared-slot
+    //   stream is in the depth test, and shrinking this buffer to zero fires the
+    //   check over 200 ticks. All three canaries have measured reach.
     const STREAM_CANARY: u8 = 0xA5;
     const CANARY_LEN: usize = 16;
 
@@ -580,7 +604,11 @@ pub fn general_native_arena_extent(
     install_private_init_bytes(&m, &mut privs);
     privs[privs_body..].fill(STREAM_CANARY);
 
-    let shared_body = 4096;
+    // **SIZED FROM THE DECLARATION, NOT FROM A LITERAL.** A flat 4096 put the
+    // sentinel thousands of bytes past the declared end of the segment, so a
+    // write just past the bound landed in slack and was invisible -- the same
+    // defect the private buffer once had, which reached the gate as a SIGSEGV.
+    let shared_body = m.shared_data_bytes as usize;
     let mut shared = vec![0u8; shared_body + CANARY_LEN];
     shared[shared_body..].fill(STREAM_CANARY);
 
@@ -619,10 +647,11 @@ pub fn general_native_arena_extent(
     ] {
         assert!(
             buf[body..].iter().all(|&b| b == STREAM_CANARY),
-            "{what} was overrun by the lowered stream over {} tick(s). Its size \
-             comes from the published contract plus slack; something wrote past \
-             both. This is the defect class that once reached the gate as a \
-             SIGSEGV.",
+            "{what} was overrun by the lowered stream over {} tick(s). The private \
+             and arena buffers are the published contract plus slack and the \
+             shared one is the declaration exactly, so something wrote past its \
+             bound either way. This is the defect class that once reached the \
+             gate as a SIGSEGV.",
             replies.len()
         );
     }
@@ -659,4 +688,147 @@ pub fn assert_general_stream_agrees(src: &str, first: i64, replies: &[i64]) {
         nat, vm,
         "YIELD SEQUENCE differs for {src:?}\n  native={nat:?}\n  vm    ={vm:?}"
     );
+}
+
+/// **The stub every native witness binds, on both sides.**
+///
+/// Deliberately NOT the identity. A native returning its argument unchanged is
+/// indistinguishable from a lowering that drops the call and forwards the
+/// operand, which is precisely the defect a native-call witness exists to catch.
+#[allow(dead_code)]
+pub unsafe extern "C" fn witness_native_stub(x: i64) -> i64 {
+    x.wrapping_mul(3).wrapping_add(1)
+}
+
+/// Drive a one-argument module that calls ONE one-argument native, on both
+/// implementations, and return `(reference, native)`.
+///
+/// # Why this exists
+///
+/// `CallVerifiedNative` and `CallExternalNative` were the only two opcodes with
+/// no DRIVEN witness. The recorded reason was that the registration machinery
+/// lives inside `corpus_differential` rather than in a reusable helper — and for
+/// the external form, that the reference *"cannot EXECUTE such a module at
+/// all"*, because the corpus harness registers every native as VERIFIED and the
+/// runtime refuses a verified registration invoked as external.
+///
+/// **That second reason was a registration choice, not an impossibility.**
+/// `Vm::register_external_native` exists. The obstruction was in the harness,
+/// exactly as its own note said, but it was removable rather than fundamental.
+///
+/// # The comparison is only as good as the stub
+///
+/// Both sides compute the same non-identity function, so a lowering that dropped
+/// the call, forwarded the argument, or bound the wrong symbol produces a
+/// different number rather than a coincidentally equal one.
+#[allow(dead_code)]
+pub fn vm_and_native_calling_one_native(
+    src: &str,
+    native_name: &str,
+    external: bool,
+    a: i64,
+) -> (i64, i64) {
+    use inkwell::OptimizationLevel;
+    use inkwell::context::Context;
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
+
+    let m = build(src);
+    assert!(
+        keleusma_native::module_refusals(&m, keleusma_native::LowerOptions::default()).is_empty(),
+        "the case must LOWER for the comparison to mean anything"
+    );
+
+    let need = required_persistent_capacity_for(&m);
+    let cap = auto_arena_capacity_for(&m, &[]).expect("arena") + need + (1 << 20);
+    let mut arena = keleusma_arena::Arena::with_capacity(cap);
+    arena.resize_persistent(need).expect("persistent");
+    let mut vm = Vm::new(m.clone(), &arena).expect("vm");
+
+    let body = |args: &[Value]| -> Result<Value, keleusma::vm::VmError> {
+        let Value::Int(v) = args[0] else {
+            panic!("the witness native takes one Word");
+        };
+        Ok(Value::Int(v.wrapping_mul(3).wrapping_add(1)))
+    };
+    if external {
+        vm.register_external_native(native_name, body, 16);
+    } else {
+        vm.register_native_closure(native_name, body);
+    }
+
+    let vv = match vm.call(&[Value::Int(a)]).expect("vm run") {
+        VmState::Finished(Value::Int(v)) | VmState::Yielded(Value::Int(v)) => v,
+        other => panic!("unexpected VM outcome: {other:?}"),
+    };
+
+    let ctx = Context::create();
+    let lm = ctx.create_module("k");
+    keleusma_native::lower_module(&ctx, &lm, &m, keleusma_native::LowerOptions::default())
+        .expect("lower");
+    maybe_optimize(&lm);
+    let ee = lm
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .expect("jit");
+
+    // **Bound through the backend's own spelling of the symbol**, not a string
+    // rebuilt here. A harness that re-derived the sanitisation rule would be a
+    // second computation of the same quantity.
+    let nsym = keleusma_native::native_symbol(native_name);
+    let nf = lm
+        .get_function(&nsym)
+        .unwrap_or_else(|| panic!("the lowering declared no `{nsym}`; the module may not call it"));
+    // Cast through the fn POINTER type rather than straight to an integer:
+    // a direct function-item cast is refused by `function_casts_as_integer`.
+    let stub: unsafe extern "C" fn(i64) -> i64 = witness_native_stub;
+    ee.add_global_mapping(&nf, stub as usize);
+
+    let entry = m.entry_point.expect("entry");
+    let sym = format!("kel_chunk_{entry}");
+    let np = lm.get_function(&sym).expect("entry fn").count_params();
+
+    const CANARY: u64 = 0xDEAD_BEEF_FEED_FACE;
+    let n_region = keleusma_native::region::host_arena_supplement_bytes(&m) as usize;
+    let mut region = vec![0u64; n_region.div_ceil(8) + 4];
+    let region_canary_at = region.len() - 1;
+    region[region_canary_at] = CANARY;
+    let mut shared = vec![0u8; keleusma::vm::shared_data_bytes_for(&m).max(64) + 8];
+    let n_priv = (required_persistent_capacity_for(&m)
+        + keleusma_native::region::persistent_supplement_bytes(&m) as usize)
+        .div_ceil(8);
+    let mut privs = vec![0u64; n_priv + 1];
+    privs[n_priv] = CANARY;
+    install_private_init(&m, &mut privs[..n_priv]);
+
+    let nv = match np {
+        1 => {
+            let f = unsafe { ee.get_function::<unsafe extern "C" fn(i64) -> i64>(&sym) }
+                .expect("symbol");
+            unsafe { f.call(a) }
+        }
+        4 => {
+            let f = unsafe {
+                ee.get_function::<unsafe extern "C" fn(i64, *mut u8, *mut u8, *mut u8) -> i64>(&sym)
+            }
+            .expect("symbol");
+            unsafe {
+                f.call(
+                    a,
+                    shared.as_mut_ptr(),
+                    privs.as_mut_ptr() as *mut u8,
+                    region.as_mut_ptr() as *mut u8,
+                )
+            }
+        }
+        n => panic!("entry takes {n} parameters; this harness drives 1 or 4"),
+    };
+    assert_eq!(
+        privs[n_priv], CANARY,
+        "the lowering wrote past the {n_priv}-word private region"
+    );
+    assert_eq!(
+        region[region_canary_at], CANARY,
+        "the lowering wrote past the {n_region}-byte composite region"
+    );
+    (vv, nv)
 }

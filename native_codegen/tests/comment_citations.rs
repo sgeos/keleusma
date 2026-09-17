@@ -235,6 +235,14 @@ const EXCUSED: &[(&str, &str)] = &[
          feature belongs to `keleusma` and the guard is therefore always false. \
          Naming the lint is the useful part of that note",
     ),
+    (
+        "function_casts_as_integer",
+        "a CLIPPY LINT, real and external. Cited because it refuses a direct \
+         cast of a function ITEM to an integer, which is how the native-witness \
+         stub was first bound into the execution engine. The note records why \
+         the cast goes through a function POINTER type instead, which is \
+         otherwise an unexplained detour",
+    ),
 ];
 
 fn package_root() -> PathBuf {

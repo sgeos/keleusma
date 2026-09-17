@@ -274,9 +274,13 @@ const PINNED: &[(&str, u64)] = &[
     ),
     ("examples/scripts/14_frame_log.kel", 0x295b974b908054b5),
     ("examples/scripts/15_pixel_blend.kel", 0xdc03ec3362c45a3f),
+    // Re-pinned 2026-09-16: a COMMENT-ONLY change recording that the opcode now
+    // has a driven witness. No construct moved, so no corpus-derived figure
+    // does either -- which the run that follows this re-pin confirms rather
+    // than assumes.
     (
         "examples/scripts/external_native_witness.kel",
-        0xc2dcdcb0d176b3d6,
+        0x082cb18d1090211b,
     ),
     ("examples/scripts/fixed_arithmetic.kel", 0x81978de44e2a4fd6),
     ("examples/scripts/fixed_conversions.kel", 0x628add26f68053a8),

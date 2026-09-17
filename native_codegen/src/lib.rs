@@ -2611,7 +2611,15 @@ fn mask_if_byte<'ctx>(
 /// is the drift this package spent a day removing elsewhere.
 pub const NATIVE_SYMBOL_PREFIX: &str = "kel_native_";
 
-fn native_symbol(name: &str) -> String {
+/// The object-file symbol a host must bind for a native of this name.
+///
+/// **Public because it IS the host contract.** A host linking an object this
+/// backend emitted, or a harness mapping a stub into a JIT engine, needs the
+/// exact spelling; re-deriving the sanitisation rule at the call site would be a
+/// second computation of the same quantity, free to drift from this one. That is
+/// the specific failure `NATIVE_SYMBOL_PREFIX` above already exists to prevent,
+/// and publishing the function rather than only the prefix closes the rest of it.
+pub fn native_symbol(name: &str) -> String {
     let mut s = String::from(NATIVE_SYMBOL_PREFIX);
     for c in name.chars() {
         s.push(if c.is_ascii_alphanumeric() || c == '_' {

@@ -21,6 +21,15 @@
 // Kept as its own file so the opcode retains a corpus witness while the
 // programs that CAN execute are free to.
 //
+// UPDATE 2026-09-16: THE OBSTRUCTION WAS THE REGISTRATION, AND IT IS REMOVABLE.
+// Everything above remains true OF THIS HARNESS -- the corpus differential still
+// registers every native as verified, so this module still cannot execute there.
+// What was wrong was the implied generality. `Vm::register_external_native`
+// exists, and registering the native the way its declaration asks makes the
+// module executable on both implementations. `driven_opcode_witnesses.rs` now
+// drives `CallExternalNative` end to end against a non-identity stub, so the
+// opcode has a DRIVEN witness and no longer rests on this citation alone.
+//
 // WITNESSES: CallExternalNative
 //
 // THE LINE ABOVE IS A MACHINE-CHECKED CLAIM, not a comment.
