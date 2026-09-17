@@ -29,7 +29,7 @@
 //!
 //! # ⚠ AN INTERMITTENT `LEAK` MARKER, AND A HYPOTHESIS OF MINE THAT WAS WRONG
 //!
-//! `cargo nextest` has reported `LEAK` seven times, always alongside a PASS:
+//! `cargo nextest` has reported `LEAK` eight times, always alongside a PASS:
 //!
 //! | when | test | binary |
 //! |---|---|---|
@@ -40,6 +40,7 @@
 //! | 2026-09-13 | `a_trapping_programs_native_side_dies_with_sigtrap` **(repeat)** | this one |
 //! | 2026-09-17 | `trap_child_runs_one_module_natively` | this one |
 //! | 2026-09-17 | `two_yields_in_one_iteration_agree` | `general_stream_sequence` |
+//! | 2026-09-17 | `region::width_tests::a_composite_body_length_is_not_on_its_tag` | the LIBRARY |
 //!
 //! **Commit `6603c399` said this note existed. It did not.** The edit meant to
 //! write it raised inside a heredoc whose output was never read, the command chain
@@ -85,7 +86,19 @@
 //! unchanged, which is the first time a new data point has confirmed it rather
 //! than revised it.
 //!
-//! Seven leaks, six tests, three binaries, four of them trivial or unrelated, none
+//! **THE EIGHTH IS A SECOND OCCURRENCE IN `region::width_tests`.** The third was
+//! `a_float_tag_has_no_width_because_it_has_no_representation`; the eighth is
+//! `a_composite_body_length_is_not_on_its_tag`, in the same library module. Two
+//! trivial unit tests that build nothing and hold no operating-system resource,
+//! in one module, is a **second mini-cluster** beside the trap-child one — and it
+//! is the cluster that most resists the "holds a resource" explanation, since
+//! these tests hold none.
+//!
+//! **So the picture is two clusters and a residue**, neither cluster sharing a
+//! mechanism with the other. That is further from a single cause than the first
+//! guess, not closer.
+//!
+//! Eight leaks, seven tests, three binaries, five of them trivial or unrelated, none
 //! reproducing on demand — the first was re-run five times cleanly. The runner or
 //! the machine under load is what remains, and **that is not traced either**.
 //! Recorded rather than chased: a `LEAK` warns about teardown, not a failed
