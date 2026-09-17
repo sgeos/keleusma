@@ -24,11 +24,20 @@ Current sprint source of truth.
 > An instrument that shares a failure mode with its subject reports the sum of the
 > two.
 >
-> **H2 is OPEN and not fixed**: the recursive-descent PARSER aborts on deeply nested
-> SOURCE, with no bytecode involved — nesting 20 compiles, 22 aborts inside `parse`.
-> A compile-time denial of service on untrusted source, which the command-line front
-> end, the language server and the playground all accept. Different component,
-> different fix, recorded with its measurement rather than folded in here.
+> **H2 is OPEN, and the severity I gave it was WRONG.** I called the parser's abort
+> on deeply nested SOURCE a denial of service on the command-line front end, the
+> language server and the playground. Those ship as RELEASE builds, and the release
+> measurement was the one I had not taken: nested `if`/`else` survives 159 levels in
+> release against 20 in debug, so at `MAX_PARSE_DEPTH = 24` release has ~6x headroom
+> and only a DEBUG build aborts. Corrected to Low.
+>
+> **What was genuinely wrong is a claim, now fixed**: the constant's comment asserted
+> the limit holds "even in a debug build with fat frames", which measurement refutes.
+>
+> **No single limit fixes it.** The counter is a poor proxy for stack in both
+> directions, and the deepest real source (`wire.kel`, depth 21) costs less stack
+> than either synthetic shape. Charging blocks too was tried and made it worse.
+> Left open deliberately.
 
 > **Currency note (2026-09-16, session 66, first increment). AUDIT H1.**
 >

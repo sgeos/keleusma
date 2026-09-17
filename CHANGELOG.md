@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The parser's recursion limit now documents its measured margin, replacing a
+  claim that measurement refutes.** The constant asserted that the limit keeps a
+  maximally nested admissible program well under two mebibytes of stack even in
+  a debug build. Measured with the limit lifted on a two-mebibyte stack, nested
+  conditionals survive one hundred and fifty nine levels in a release build and
+  twenty in a debug one, and nested parentheses one hundred and ninety eight and
+  twenty four, so a release build has roughly six times the headroom the limit
+  of twenty four needs while a debug build aborts below it. The limit is
+  unchanged, because no single value both admits the deepest source in this
+  repository, which reaches depth twenty one, and prevents the abort; charging
+  blocks against the budget as well was tried and moved the binding shape rather
+  than fixing it. The residual is recorded rather than papered over, since
+  narrowing the accepted nesting to accommodate an artefact of debug frame sizes
+  would cost more than the defect, which affects no shipping build.
+
 - **A hostile-bytecode mutation corpus driven through the full safe `Vm::new`,
   and the verifier defect it found on its first run.** The security audit's own
   coverage note named this corpus as the most valuable missing addition and it

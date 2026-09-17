@@ -66,12 +66,35 @@ subject, so the number described neither. The builder derives its layout in clos
 form now. An instrument that shares a failure mode with its subject reports the sum
 of the two, and this one was mine.
 
-**H2 IS OPEN AND IS YOURS TO PRIORITISE.** The recursive-descent **parser** aborts
-on deeply nested SOURCE, independently of any bytecode: nesting **20** compiles,
-**22** aborts inside `parse`, on a two-mebibyte stack. That is a compile-time denial
-of service on untrusted source, which the command-line front end, the language
-server and the playground all accept. Different component, different fix; recorded
-with its measurement rather than folded into this increment.
+**H2 IS OPEN, AND I OVERSTATED IT — THE CORRECTION IS THE USEFUL PART.** I wrote
+that the parser's abort on deeply nested SOURCE was "a compile-time denial of
+service on the command-line front end, the language server and the playground".
+**Those ship as RELEASE builds, and the measurement I had not taken was the release
+one.** With the limit lifted on a two-mebibyte stack:
+
+| shape | release | debug |
+|---|---|---|
+| nested parentheses | 198 | 24 |
+| nested `if`/`else` | 159 | 20 |
+
+So at `MAX_PARSE_DEPTH = 24` a release build has ~6x the headroom it needs, and only
+a **debug** build aborts, at depth 20, below the limit. Severity corrected from
+Medium to Low in the ledger.
+
+**What is genuinely wrong is a claim, and it is fixed.** The constant's comment said
+the limit holds "even in a debug build with fat frames". Measurement refutes exactly
+that sentence; the comment now carries the table instead.
+
+**NO SINGLE LIMIT FIXES IT, and this is the part worth your attention.** The counter
+is a poor proxy for stack in BOTH directions. At equal counter depth, `if`-shaped
+input costs far more stack than parenthesis-shaped input, while the deepest real
+source in the tree — `src/selfhost/kel/wire.kel` at depth **21** — costs less than
+either. A limit of 21 would refuse a shipping stage source; 22 still lets `if`-shaped
+input abort in debug. **Charging blocks against the budget was tried and made it
+worse**, raising the corpus maximum to 41 while parenthesis input began aborting at
+counter 27. Left open deliberately: narrowing the language's accepted nesting to
+accommodate an artefact of debug frame sizes costs more than the defect does. That
+trade is yours to overrule if you disagree.
 
 **Four candidate goals died against existing coverage before this one was chosen** —
 wire error correction, the Keleusma-level parity plane, empirical worst-case bounds,

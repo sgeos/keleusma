@@ -13,6 +13,73 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-16 (ninety-fourth) — I overstated H2, and the measurement I had not taken was the obvious one
+
+### THE CLAIM I MADE, AND WHY IT WAS WRONG
+
+Last increment recorded H2 as "a compile-time denial of service on untrusted source,
+which the command-line front end, the language server and the playground all accept",
+severity Medium. Every number behind it was taken in a **debug** build, and I did not
+say so in the claim. Those three front ends ship as **release** builds.
+
+With the limit lifted, on a two-mebibyte stack:
+
+| shape | release | debug |
+|---|---|---|
+| nested parentheses | 198 | 24 |
+| nested `match` | — | 23 |
+| nested `if`/`else` | 159 | 20 |
+| nested `if` without `else` | 159 | 19 |
+
+At `MAX_PARSE_DEPTH = 24` a release build has about six times the headroom the limit
+needs. Only a debug build aborts, at 20, below the limit. Severity corrected Medium
+to Low.
+
+**The generalisable form**: a measurement taken in one build profile is a claim about
+that profile. I reported it as a claim about the product. The debug/release frame-size
+difference here is roughly eightfold, which is more than enough to invert a
+conclusion.
+
+### WHAT IS ACTUALLY WRONG IS A SENTENCE, AND IT WAS ALREADY IN THE TREE
+
+`MAX_PARSE_DEPTH`'s comment said the limit keeps a maximally-nested admissible program
+"well under 2 MiB of stack **even in a debug build with fat frames**, fitting
+comfortably inside the default cargo-test thread stack". That sentence is false as
+written, and measurement refutes precisely it. The comment now carries the table.
+
+The guard itself works, and the tests show it: nested parentheses are refused cleanly
+at the limit. It is the `if`-shaped input the limit does not cover in debug.
+
+### WHY NO SINGLE LIMIT FIXES IT, MEASURED RATHER THAN ARGUED
+
+The counter increments once per expression level, and that is a poor proxy for stack
+in **both** directions:
+
+- At equal counter depth, `if`-shaped input consumes far more stack than
+  parenthesis-shaped input — debug aborts at 20 against 24.
+- The deepest **real** source in the tree, `src/selfhost/kel/wire.kel` at depth
+  **21**, consumes less than either, which is why it parses comfortably.
+
+So the ordering is: real source needs 21, `if`-shaped input dies at 20, parentheses
+survive to 24. **A limit of 21 refuses a shipping stage source; a limit of 22 still
+lets `if`-shaped input abort in debug, which was measured, not assumed.** There is no
+value that admits the corpus and prevents the abort.
+
+**Charging blocks against the budget as well was tried, and made it worse.** It raised
+the corpus maximum from 21 to 41 while parenthesis-shaped input began aborting at
+counter 27 — the binding shape simply changed from `if` to parentheses, and the gap
+widened. Recorded so the next person does not spend the same hour.
+
+### THE DECISION, AND IT IS OVERRULABLE
+
+Left open. Narrowing the language's accepted nesting depth to accommodate an artefact
+of debug frame sizes costs more than the defect, which affects no shipping build. The
+trade is stated in the reverse prompt so the operator can overrule it.
+
+**An increment whose honest output is a corrected claim and a "no" is a complete
+increment.** The alternative on offer was a code change that degrades the language
+surface to fix something that does not occur in any shipped configuration.
+
 ## 2026-09-16 (ninety-third) — my instrument shared a failure mode with its subject, and reported the sum
 
 ### THE RESIDUAL WAS REAL, AND THE FIRST NUMBER FOR IT WAS WRONG
