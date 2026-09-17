@@ -66,3 +66,43 @@ of operators actually appearing across the run.
 non-trapping arithmetic, at this commit. **May not**: that the lowering is
 correct, that composition is exhaustively covered, or anything about the trap
 paths, floats, composites, or streams — none of which this generator emits.
+
+
+---
+
+## OUTCOME
+
+**300 generated programs, 0 divergences, 0.58 seconds.** Depth 3, 300 distinct
+sources, seven distinct operators appearing, deepest nesting 3 levels.
+
+### Reach proven at the SUBJECT, not at the assertion
+
+`Op::BitXor` was temporarily lowered as `build_or` in the emitter — a real defect
+in the real lowering, not an edited expectation. **The differential caught it on
+program 0**:
+
+```
+fn main(a: Word, b: Word) -> Word { (((b * 7) - (b bxor b)) * ((1 bor b) band (a + a))) }
+  reference = 42
+  native    = 36
+```
+
+`b bxor b` is zero; `b bor b` is `b`. The failure names the program and both
+values, and the generator is seeded, so it reproduces by re-running.
+
+**This is the first instrument in the package whose reach was demonstrated by
+breaking the lowering itself** rather than by shrinking a buffer or stubbing a
+helper. Every operator in the tree was already covered one-at-a-time by
+`scalar_operator_matrix.rs`; what this adds is composition.
+
+### No defect found, and what that is worth
+
+The backend survived 300 composed trees on the first attempt. **That is a
+genuinely informative negative** — the fixed matrices could not have told us
+whether composition holds — but it is bounded: depth 3, `Word` only,
+non-trapping arithmetic, one seed.
+
+**The cheapest way to make this stronger is more seeds, not more machinery.**
+The run costs 0.58s; a future increment could sweep several seeds for a few
+seconds more. Deliberately not done now: one seeded run that is understood beats
+a wider one added in the same breath as the harness.

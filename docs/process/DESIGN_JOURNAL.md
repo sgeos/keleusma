@@ -1,5 +1,37 @@
 # Design Journal
 
+## 2026-09-17 — the first generated subjects, and the first reach proven by breaking the lowering
+
+Every subject in this package was hand-written: 74 corpus modules, 132 operator
+cells, four witness families, three stream shapes. **All of them test operators
+one at a time.** Nothing tested composition, and the backend had produced no
+defect since `Fixed % Fixed` under every hand-written instrument — the classic
+signal that the next one lives in a shape nobody wrote down.
+
+**300 generated expression trees, depth 3, compared against the reference: no
+divergence, 0.58 seconds.**
+
+**The interesting half is the reach demonstration.** Every previous instrument
+this session was perturbed by shrinking a buffer, stubbing a helper or moving a
+pinned constant. This one was perturbed **at the lowering**: `Op::BitXor`
+temporarily emitted `build_or`. It failed on program 0, because `b bxor b` is zero
+and `b bor b` is `b`, and the message named the program and both values. **A real
+defect in the real emitter, caught by the real comparison.**
+
+**Trapping is why the generator is narrower than it looks**, and the header says
+so: `+`, `-`, `*` are checked, and on overflow the native side executes
+`llvm.trap` — a dead test binary rather than a comparison. Leaves are `0..=9`,
+depth is capped so an all-multiply tree reaches at most about 43 million, and every
+divisor is a literal in `1..=9`. Nothing here touches the trap paths, floats,
+composites or streams.
+
+**A negative result that the fixed matrices could not have produced.** Worth
+having, and bounded: one seed, one depth, one type. The cheap strengthening is
+more seeds, not more machinery — and deliberately left for later, because one
+seeded run that is understood beats a wider one added in the same breath as the
+harness that produces it.
+
+
 ## 2026-09-17 — consolidation, two negative leads, and a scoping stated rather than assumed
 
 The measurable work this line owns alone is finished. Backlog zero. Two leads
