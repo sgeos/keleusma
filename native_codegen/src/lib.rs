@@ -4939,8 +4939,15 @@ fn lower_chunk_body<'ctx>(
                 // bytes, and the sibling `Op::WordToFixed` states `Scalar(8)`
                 // while this arm stated nothing — so a converted word could not
                 // fill a composite field while a converted fixed-point value
-                // could. **Read from the operand rather than hard-coded**, so a
-                // narrower word configuration cannot make it a lie.
+                // could. **Read from the operand rather than hard-coded.**
+                //
+                // ⚠ **THE FIRST VERSION OF THIS NOTE JUSTIFIED THAT BY A NARROWER
+                // WORD CONFIGURATION, AND THERE IS NONE HERE.** `WORD_BITS` is a
+                // `const` 64 in this package and the only feature it forwards is
+                // `narrow-float-32`, so that build does not exist and the claim
+                // was reasoning about a configuration nobody can produce. The real
+                // reason is smaller and true: **a derived width cannot drift from
+                // what the operand actually carries**, where a literal can.
                 //
                 // The KIND stays `Unknown`, which is correct: the result is a
                 // `Word`, neither `Fixed` nor `Float`. Only the width was missing.

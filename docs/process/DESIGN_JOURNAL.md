@@ -1,5 +1,33 @@
 # Design Journal
 
+## 2026-09-17 — two of my own records, an hour old, already overstating
+
+**A justification reasoning about a configuration nobody can build.** I wrote that
+`FixedToWord`'s width is read from the operand *"so a narrower word configuration
+cannot make it a lie"*. **There is no narrower word configuration in this
+package**: `WORD_BITS` is a `const` 64 and the only feature forwarded is
+`narrow-float-32`. The change is still right; the reason I gave for it was about a
+build that does not exist. The real reason is smaller and true — **a derived width
+cannot drift from what the operand actually carries, where a literal can.**
+
+**And two `unmeasured` markers that had been measured an hour earlier.** The probe
+that answered `Op::Not` answered `Op::Dup` and `Op::PushImmediate` in the same run.
+**Only the one that found a gap got its disposition updated**, because that was the
+one I was interested in. The other two sat in the file still saying nobody had
+looked.
+
+That is this session's own recurring class, at one more level of recursion: **a
+record outliving its subject, inside the census whose purpose is to stop records
+outliving their subjects.** The `unmeasured` population is now zero, and the note
+says why it lingered rather than quietly dropping to zero.
+
+**Both were caught by re-reading my own work rather than by any guard.** Nothing in
+the tree could have flagged either: a comment's reasoning is not checkable, and a
+disposition marked `unmeasured` is valid whether or not someone has since measured
+it. **The guards close the classes they were built for; they do not close the class
+of writing something slightly untrue in passing.**
+
+
 ## 2026-09-17 — the census's population was narrower than its title, and hid two more
 
 A one-line probe asked whether `Fixed` producers can fill a composite field.

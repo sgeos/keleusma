@@ -26,8 +26,8 @@
 //! population was widened, because they pushed `Width::Unknown` EXPLICITLY rather
 //! than through the sugared bare call the first matcher counted.
 //!
-//! Two dispositions are `unmeasured` — recorded as such rather than asserted to
-//! be correct. **A third was `Op::Not`, and answering it found a fourth gap**: a
+//! **NO disposition is `unmeasured` any more.** Three were, and answering all
+//! three is what closed them: **`Op::Not` was a real gap**: a
 //! negated comparison could not fill a `bool` field while an un-negated one could,
 //! because the comparison arm pushed `Scalar(1)` and `Op::Not` pushed nothing.
 //! `Op::Dup` and `Op::PushImmediate` were measured at the same time and neither
@@ -72,13 +72,13 @@ const DISPOSITIONS: &[(&str, &str)] = &[
     ),
     (
         "Op::Dup => {",
-        "unmeasured: a duplicate could copy the width of what it duplicates, and \
-         nothing has measured whether losing it narrows anything",
+        "sound, MEASURED: the short-circuit `andalso` form emits `Dup` and fills a \
+         `bool` field today, so the duplicate's lost width narrows nothing",
     ),
     (
         "Op::PushImmediate(imm) => {",
-        "unmeasured: an immediate has a knowable shape, but the compiler emits \
-         Op::Const for a literal field value, so no subject reaches this",
+        "sound, MEASURED: the loop-index construct that emits it fills a field \
+         today; the immediate's value is not what a field receives",
     ),
     (
         "Op::GetData(_)",
@@ -194,7 +194,7 @@ fn every_unknown_width_push_is_dispositioned() {
 /// **The `unmeasured` count is stated, so it cannot quietly grow.**
 #[test]
 fn the_unmeasured_population_is_pinned() {
-    const PINNED_UNMEASURED: usize = 2;
+    const PINNED_UNMEASURED: usize = 0;
     let n = DISPOSITIONS
         .iter()
         .filter(|(_, d)| d.starts_with("unmeasured"))
