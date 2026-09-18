@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Accepted hostile modules are now driven through the execution protocol that
+  reaches the retained runtime guards.** The corpus had been generating mutants
+  faster than it drove them: every module verification accepted received a
+  single argument-free call, with no shared-data buffer and no resume, so the
+  coroutine reentry path was never entered. That path matters because the typed
+  operand-stack pass is documented as deferring on a per-yield reentrant reply,
+  a load-time check deliberately traded for a runtime guard, which makes resume
+  exactly where the guard is load-bearing. An accepted mutant is now called
+  with arguments derived from its own declared parameter types, since guessed
+  ones are refused by the call's type check before any bytecode runs and would
+  leave the phase vacuous while still looking green, with a shared-data buffer
+  sized from the module's own declaration, and resumed while it keeps yielding
+  under a bound, a bound being necessary because a loop block is productively
+  divergent and yielding forever is the healthy outcome rather than a defect.
+  How far execution actually got is counted and asserted rather than assumed:
+  six hundred and eight mutants ran bytecode, one hundred and nineteen yielded,
+  and one hundred and nineteen were resumed. No new defect was found, which
+  establishes for the first time by execution rather than by reasoning that the
+  retained runtime guards hold across the reentrant path on hostile input.
+
 - **The hostile-bytecode corpus reaches the descriptor tables, the coroutine
   paths, and the hot swap.** It previously mutated instructions and chunk
   metadata only, so the module-level tables the typed operand-stack pass seeds

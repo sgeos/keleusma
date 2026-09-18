@@ -10,6 +10,39 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-17, session 66, fourth increment.**
+
+**THE CORPUS WAS GENERATING MUTANTS FASTER THAN IT WAS DRIVING THEM. THAT IS FIXED,
+AND IT FOUND NOTHING — WHICH IS ITSELF THE RESULT.**
+
+All 871 accepted mutants had been receiving a single argument-free `call`, with no
+shared-data buffer and **no resume**. The typed pass is documented as deferring on a
+**per-yield reentrant reply** — a load-time check deliberately traded for a retained
+runtime guard — so the resume path is where that guard is load-bearing, and no
+hostile module had ever reached it.
+
+**Reach, counted and asserted**: **608** mutants ran bytecode, **119** yielded, **119**
+were resumed. Arguments come from the module's OWN `param_types` (guessed ones are
+refused before any bytecode runs, leaving the phase green and empty), the shared
+buffer is sized from its own declaration, and the resume loop is bounded because a
+`loop` is productively divergent and yielding forever is the HEALTHY outcome.
+
+**THE SAME SHAPE HAS NOW APPEARED THREE INCREMENTS RUNNING**, and it is the thing
+worth carrying forward: **an outcome that looks like a pass while testing nothing.**
+Nineteen schema-hash mutants read that way. A whole descriptor table read that way.
+The entire execution phase could have. The stage census cannot see any of it, because
+it records where a mutant STOPPED, not what it DID.
+
+**The result, stated as narrowly as it deserves**: the retained runtime guards hold
+across the reentrant path on hostile input. That is the first time that half of the
+defer-on-unknown argument has been exercised rather than reasoned about.
+
+**Unchanged and untouched**: the seven operator decisions, the opcode count,
+`BYTECODE_VERSION`, and every file under `src/selfhost/kel/`. H2 remains open on the
+trade stated below.
+
+---
+
 **2026-09-17, session 66, third increment.**
 
 **THE HOSTILE-BYTECODE CORPUS NOW COVERS BOTH UNTRUSTED ARRIVALS, THE DESCRIPTOR

@@ -89,6 +89,27 @@
 //! - Whether an accepted mutant computes the RIGHT answer. Only that it does
 //!   not panic, hang, or read out of bounds.
 //!
+//! # How an accepted mutant is driven, and why it matters
+//!
+//! A mutant that verification accepts is not merely called once. It is called
+//! with arguments derived from its OWN declared parameter types — guessed ones
+//! are refused by the call's type check before any bytecode runs, which would
+//! leave the whole execution phase vacuous while still looking green — with a
+//! shared-data buffer sized from the module's own declaration, and then
+//! resumed while it keeps yielding.
+//!
+//! The resume matters specifically. The typed operand-stack pass is documented
+//! as running in a sound defer-on-unknown mode, and one of the two cases it
+//! names is a **per-yield reentrant reply**. That is a load-time check
+//! deliberately traded for a retained runtime guard, so the resume path is
+//! where that guard is load-bearing — and nothing was entering it. The
+//! `Reached` record counts how many mutants ran, yielded and resumed, and the
+//! test fails if any of those collapses to zero.
+//!
+//! A `loop` block is productively divergent by design, so a healthy stream
+//! yields forever. The resume count is bounded, and reaching the bound is the
+//! normal outcome rather than a defect.
+//!
 //! # What it found, and what it did not
 //!
 //! Its first run found audit H1, a verifier that could be hung or made to
@@ -117,14 +138,15 @@ use std::time::Duration;
 
 use keleusma::Arena;
 use keleusma::bytecode::{
-    ArrayElem, EnumField, Module, NewCompositeOperand, Op, StructField, TupleField, WireShape,
+    ArrayElem, EnumField, Module, NewCompositeOperand, Op, StructField, TupleField, TypeTag, Value,
+    WireShape,
 };
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
 use keleusma::value_layout::{CompositeKind, ScalarKind};
 use keleusma::verify::verify;
-use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, required_persistent_capacity_for};
+use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 use keleusma::wire_format::{module_from_wire_bytes, module_to_wire_bytes};
 
 /// Wall-clock allowance for one mutant, across every phase.
@@ -830,7 +852,7 @@ struct Breach {
 /// has not answered is detached rather than joined: a thread stuck in a
 /// non-terminating walk cannot be asked to stop, and joining it would make the
 /// harness inherit the hang it exists to report.
-fn drive(m: Mutant) -> Result<(Family, Stage), Breach> {
+fn drive(m: Mutant) -> Result<(Family, Stage, Drove), Breach> {
     let id = m.id;
     let family = m.family;
     let module = m.module;
@@ -842,7 +864,7 @@ fn drive(m: Mutant) -> Result<(Family, Stage), Breach> {
     });
 
     match rx.recv_timeout(WATCHDOG) {
-        Ok(Ok(stage)) => Ok((family, stage)),
+        Ok(Ok((stage, drove))) => Ok((family, stage, drove)),
         Ok(Err(_)) => Err(Breach {
             id,
             what: "a phase panicked",
@@ -859,28 +881,36 @@ fn drive(m: Mutant) -> Result<(Family, Stage), Breach> {
 /// A panic anywhere here is caught by the caller and reported against the
 /// mutant's identity. Returning normally means the mutant was disposed of by
 /// one of the stages without breaching anything.
-fn pipeline(module: Module) -> Stage {
+fn pipeline(module: Module) -> (Stage, Drove) {
     let Ok(encoded) = module_to_wire_bytes(&module) else {
-        return Stage::EncodeRefused;
+        return (Stage::EncodeRefused, Drove::default());
     };
     let Ok(loaded) = module_from_wire_bytes(&encoded) else {
-        return Stage::LoadRejected;
+        return (Stage::LoadRejected, Drove::default());
     };
     let need = required_persistent_capacity_for(&loaded);
     if need > PERSISTENT_CAP {
-        return Stage::PersistentRefused;
+        return (Stage::PersistentRefused, Drove::default());
     }
     if verify(&loaded).is_err() {
-        return Stage::VerifyRejected;
+        return (Stage::VerifyRejected, Drove::default());
     }
     let Ok(mut arena) = Arena::try_with_capacity(DEFAULT_ARENA_CAPACITY + need) else {
-        return Stage::PersistentRefused;
+        return (Stage::PersistentRefused, Drove::default());
     };
     if arena.resize_persistent(need).is_err() {
-        return Stage::Ran;
+        return (Stage::Ran, Drove::default());
     }
+    let shared_len = keleusma::vm::shared_data_bytes_for(&loaded);
+    if shared_len > SHARED_CAP {
+        return (Stage::PersistentRefused, Drove::default());
+    }
+    let mut shared = alloc::vec![0u8; shared_len];
+    let entry = loaded.entry_point.and_then(|i| loaded.chunks.get(i));
+    let args = entry.map(args_for).unwrap_or_default();
+    let mut drove = Drove::default();
     if let Ok(mut vm) = Vm::new(loaded, &arena) {
-        let _ = vm.call(&[]);
+        drove = drive_execution(&mut vm, &args, &mut shared);
     }
 
     // The SECOND untrusted arrival. The verifier's documented job is to
@@ -890,7 +920,109 @@ fn pipeline(module: Module) -> Stage {
     // incoming one must be compatible with, so it exercises checks the fresh
     // load has no occasion to run -- the schema-hash comparison among them,
     // which is the ONLY place that field is ever compared.
-    swap_into_a_live_vm(&encoded)
+    (swap_into_a_live_vm(&encoded), drove)
+}
+
+/// Resume cycles a yielding mutant is given.
+///
+/// A `loop` block is PRODUCTIVELY DIVERGENT by design: a valid stream yields
+/// forever, so reaching this bound is the normal outcome for a healthy mutant
+/// and is not a defect. The bound exists so the harness terminates, not to
+/// catch anything.
+const MAX_RESUMES: u32 = 8;
+
+/// Largest shared-data buffer the harness will lend a mutant.
+///
+/// A hostile module declares its own `shared_data_bytes`, so the claim is
+/// refused above this rather than honoured, the same way the persistent region
+/// is. A host sizes its own buffer and would refuse identically.
+const SHARED_CAP: usize = 1 << 20;
+
+/// Arguments for the entry chunk, taken from its OWN declared parameter types.
+///
+/// Guessed arguments would be rejected by the call's type check before any
+/// bytecode ran, which would make the whole execution phase vacuous while
+/// still looking green. `Composite` gets `Unit`, which is refused; that is
+/// correct and is why the census counts what actually ran rather than what was
+/// attempted.
+fn args_for(chunk: &keleusma::bytecode::Chunk) -> Vec<Value> {
+    chunk
+        .param_types
+        .iter()
+        .map(|t| match t {
+            TypeTag::Word => Value::Int(1),
+            TypeTag::Byte => Value::Byte(1),
+            TypeTag::Fixed => Value::Fixed(1),
+            TypeTag::Float => Value::Float(1.0),
+            TypeTag::Bool => Value::Bool(true),
+            TypeTag::Unit | TypeTag::Text | TypeTag::Composite => Value::Unit,
+        })
+        .collect()
+}
+
+/// What the execution phase actually managed to do with a mutant.
+///
+/// Carried alongside the stage so the census can show that the coroutine
+/// reentry path was entered. Without it, a change that stopped reaching
+/// `resume` would leave every count looking exactly as healthy as before —
+/// the same way nineteen schema-hash mutants read as passes while testing
+/// nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+struct Drove {
+    /// The call was accepted and bytecode ran.
+    called: bool,
+    /// The mutant yielded at least once.
+    yielded: bool,
+    /// The mutant was resumed at least once, entering the reentrant reply
+    /// path the typed pass explicitly DEFERS on.
+    resumed: bool,
+}
+
+/// Calls the entry point and resumes it while it keeps yielding.
+///
+/// The shared-data buffer is bound for the whole protocol, because a module
+/// declaring shared data faults without one, and a mutant that faults on its
+/// first instruction exercises nothing below it.
+fn drive_execution(vm: &mut Vm<'_, '_>, args: &[Value], shared: &mut [u8]) -> Drove {
+    let mut d = Drove::default();
+    let mut state = match vm.call_with_shared(shared, args) {
+        Ok(st) => {
+            d.called = true;
+            st
+        }
+        Err(_) => return d,
+    };
+    for _ in 0..MAX_RESUMES {
+        match state {
+            VmState::Yielded(_) => {
+                d.yielded = true;
+                state = match vm.resume_with_shared(shared, Value::Int(1)) {
+                    Ok(st) => {
+                        d.resumed = true;
+                        st
+                    }
+                    Err(_) => {
+                        d.resumed = true;
+                        return d;
+                    }
+                };
+            }
+            VmState::Reset => {
+                state = match vm.resume_with_shared(shared, Value::Int(1)) {
+                    Ok(st) => {
+                        d.resumed = true;
+                        st
+                    }
+                    Err(_) => {
+                        d.resumed = true;
+                        return d;
+                    }
+                };
+            }
+            _ => return d,
+        }
+    }
+    d
 }
 
 /// Source of the module a hot swap is attempted against.
@@ -935,16 +1067,43 @@ fn swap_into_a_live_vm(bytes: &[u8]) -> Stage {
 }
 
 /// The whole corpus, driven once, with the census and every breach.
-fn census() -> (BTreeMap<(Family, Stage), usize>, alloc::vec::Vec<Breach>) {
+fn census() -> (
+    BTreeMap<(Family, Stage), usize>,
+    Reached,
+    alloc::vec::Vec<Breach>,
+) {
     let mut counts: BTreeMap<(Family, Stage), usize> = BTreeMap::new();
+    let mut reached = Reached::default();
     let mut breaches = alloc::vec::Vec::new();
     for m in mutants() {
         match drive(m) {
-            Ok(k) => *counts.entry(k).or_insert(0) += 1,
+            Ok((f, s, d)) => {
+                *counts.entry((f, s)).or_insert(0) += 1;
+                reached.called += usize::from(d.called);
+                reached.yielded += usize::from(d.yielded);
+                reached.resumed += usize::from(d.resumed);
+            }
             Err(b) => breaches.push(b),
         }
     }
-    (counts, breaches)
+    (counts, reached, breaches)
+}
+
+/// How far into the execution protocol mutants actually got.
+///
+/// Separate from the stage census because the stage says where a mutant
+/// STOPPED and this says what it DID. A mutant that verifies, is refused at
+/// the call's type check, and then hot-swaps cleanly looks identical in the
+/// stage census to one that ran, yielded and resumed.
+#[derive(Debug, Default, Clone, Copy)]
+struct Reached {
+    /// Bytecode actually ran.
+    called: usize,
+    /// The coroutine yielded.
+    yielded: usize,
+    /// The coroutine was resumed, entering the reentrant reply path the typed
+    /// pass defers on.
+    resumed: usize,
 }
 
 /// Mutants of `family` that reached `stage`.
@@ -972,13 +1131,14 @@ fn total_for(counts: &BTreeMap<(Family, Stage), usize>, family: Family) -> usize
 /// out of the same pass.
 #[test]
 fn a_hostile_module_is_rejected_or_runs_without_panicking_or_hanging() {
-    let (counts, breaches) = census();
+    let (counts, reached, breaches) = census();
 
     let total: usize = counts.values().sum::<usize>() + breaches.len();
     // Printed rather than only asserted on: the census is the evidence that a
     // green result means anything, and a reader who wants to know what this
     // file covered should not have to make it fail to find out.
     println!("hostile-module mutation census over {total} mutants: {counts:?}");
+    println!("execution reached: {reached:?}");
     assert!(
         total > 500,
         "the mutation enumeration collapsed to {total} mutants; the corpus or the \
@@ -1063,6 +1223,30 @@ fn a_hostile_module_is_rejected_or_runs_without_panicking_or_hanging() {
         "the hot-swap stage saw {swapped} accepted and {swap_rejected} refused; both \
          outcomes must occur or it is not exercising the compatibility checks; \
          census {counts:?}"
+    );
+
+    // The execution protocol must actually reach the coroutine reentry path.
+    //
+    // This is the assertion the file most needs and least obviously has. The
+    // typed operand-stack pass is documented as DEFERRING on a per-yield
+    // reentrant reply, trading a load-time check for a runtime guard, so the
+    // resume path is exactly where that guard is load-bearing. If a change
+    // stopped reaching it, every stage count above would look identical --
+    // which is how nineteen schema-hash mutants read as passes while testing
+    // nothing.
+    assert!(
+        reached.called > 0,
+        "no mutant's bytecode ran at all; the arguments are being refused before \
+         execution and the whole run phase is vacuous: {reached:?}"
+    );
+    assert!(
+        reached.yielded > 0,
+        "no mutant yielded, so no coroutine reached a suspension: {reached:?}"
+    );
+    assert!(
+        reached.resumed > 0,
+        "no mutant was resumed, so the reentrant reply path the typed pass defers \
+         on was never entered: {reached:?}"
     );
 
     let ran: usize = counts
