@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A census of the runtime faults a verified, compiler-produced module can
+  raise, and whether it carries a trap opcode when it does.** The unhandled-trap
+  workstream proposes making trap reachability decidable by turning every
+  non-trap opcode total and reducing the validator to a scan, which is a
+  bytecode-version-bumping instruction-set change. Two things that proposal
+  rests on were unmeasured: how large making every other opcode total actually
+  is, and whether such a scan would be honest today. Both are measured now,
+  by execution rather than by reading source, against the partial operations
+  the proposal enumerates rather than against whichever cases were easy to
+  provoke. Exactly two operation families fault with no trap opcode anywhere in
+  the module, division or modulo by zero and array bounds, so a scan would not
+  be honest under the current instruction set even for compiler output. Several
+  entries on the proposal's list are already in the shape it wants: arithmetic
+  overflow does not fault at all, because the specification defines the bare
+  operator as wrapping and the outcome flag the proposal asks for already
+  exists and is simply discarded; a cast out of range truncates rather than
+  faulting; the assertion construct is compiled out of a release build
+  entirely; and the bounded loop already lowers to an explicit trap, as do the
+  match and enum-discrimination fallbacks. No trap-freedom verdict is shipped,
+  because an interface that cannot deliver its guarantee is worse than none.
+  The two-family result is pinned so that a change resizes the obligation
+  deliberately rather than silently.
+
 - **Accepted hostile modules are now driven through the execution protocol that
   reaches the retained runtime guards.** The corpus had been generating mutants
   faster than it drove them: every module verification accepted received a

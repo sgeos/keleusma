@@ -13,6 +13,85 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-18 (ninety-seventh) — sizing a fenced decision, and three suspicions that measurement refuted
+
+### THE SEAM WAS EXHAUSTED, SO I CHANGED SEAMS
+
+Three increments on the hostile-bytecode corpus, the last two finding nothing. The
+fourth extension would have been more of the same. Reading the roadmap instead
+surfaced workstream **C, unhandled-trap analysis**, which I had never looked at.
+
+It is a `BYTECODE_VERSION`-bumping instruction-set change and therefore **not mine**.
+But its premise — "`Trap` becomes the only opcode that traps, every other opcode is made
+total, the validator becomes a scan" — rests on two unmeasured quantities: how large
+"make every other opcode total" is, and whether the scan would be honest today. Both
+are measurable with no instruction-set change and no authorisation, and measuring them
+**sizes a decision that is the operator's**. That is the useful half available to me.
+
+### THE ANSWER IS SMALLER THAN THE DESIGN'S OWN LIST
+
+**Exactly two operation families fault with no `Trap` opcode anywhere in the module:
+division or modulo by zero, and array bounds.**
+
+The design enumerates far more partial operations than that, and most are already in
+the shape it wants:
+
+| enumerated | measured today |
+|---|---|
+| checked arithmetic overflow | **does not fault** — the bare operator wraps, by specification |
+| division/modulo by zero | **faults, no trap present** |
+| array and indexed-data bounds | **faults, no trap present** |
+| bare `for .. limit` | already lowers to an explicit `Trap` |
+| cast range | **does not fault** — truncates |
+| newtype refinement | predicate must be declared; not reached from this corpus |
+| native errors | host-contract, covered elsewhere |
+
+**So the scanning validator would not be honest under the current instruction set**,
+even for compiler output: zero `Trap` opcodes and still a division-by-zero fault. That
+is why this increment ships **no** trap-freedom verdict. An interface that cannot
+deliver its guarantee is worse than none, and shipping it would have been the easy,
+wrong move.
+
+### THREE SUSPICIONS, ALL REFUTED BY CHECKING BEFORE CLAIMING
+
+The probe threw up three results that looked like defects. Every one was correct
+behaviour, and I found that out by reading the specification and the codegen rather
+than by writing the finding down first.
+
+1. **`i64::MAX + 1` finished with a wrapped negative.** That looks like silent
+   wraparound in a language whose headline is totality. `INSTRUCTION_SET.md` states the
+   push order exists precisely so `a + b` compiles to `CheckedAdd; PopN(2)`, discarding
+   the flag and leaving the wrapping result. **Wrapping is the specified behaviour of
+   the bare operator**, and the flag workstream C wants already exists.
+2. **`assert false;` produced zero trap opcodes and completed.** The compiler has assert
+   codegen emitting `Trap(AssertionFailed)` — gated on `emit_debug`, because `assert` is
+   a **debug** construct (B29) compiled out entirely in a release build.
+3. **`300 as Byte` completed.** It truncates to 44. Not a fault.
+
+Three for three. The cost of checking was minutes; the cost of not checking would have
+been three false defect reports in a security ledger.
+
+### AND I REPRODUCED THE SESSION'S OWN LESSON IN MINIATURE, TWICE
+
+- Filtering the probe output with `grep -E "^[a-z_]+:"` silently dropped the
+  `cast_byte_300` row, because the pattern excludes digits. A crude instrument, on my
+  own output, in an increment about crude instruments.
+- The first non-vacuity demonstration of the drift guard used a `sed` pattern that no
+  longer matched after `cargo fmt` reflowed the line. It printed nothing and I nearly
+  read that as a pass. **A demonstration that silently does nothing looks exactly like
+  one that succeeded** — the same shape as the schema-hash mutants, now in the
+  verification of a guard rather than in the guard.
+
+Both guards are demonstrated properly: claiming the obligation set is smaller fails
+with the set diffed, and claiming a faulting row completes fails naming the row.
+
+### WHAT IT DOES NOT ESTABLISH
+
+Nothing about hand-built bytecode, which can reach fault kinds no row reaches; nothing
+about host-contract failures such as an unregistered native; and it is exhaustive over
+the specified list rather than over source programs, which is a weaker claim and is
+written as one.
+
 ## 2026-09-17 (ninety-sixth) — the corpus was generating mutants faster than it was driving them
 
 ### THE GAP WAS NOT IN THE MUTATIONS, IT WAS IN THE EXECUTION

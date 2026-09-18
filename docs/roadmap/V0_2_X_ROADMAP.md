@@ -209,6 +209,37 @@ supersedes the interval-and-refinement approach that was previously sketched her
 aligns with the flat-machine ISA direction and with the native partial-operation lowering
 planned for V0.4.0 (B35 P8).
 
+**THE OBLIGATION IS MEASURED, 2026-09-18, and it is smaller than this section's list
+implies.** `tests/runtime_fault_census.rs` executes every partial operation enumerated
+above against compiler output and records, per case, whether the module carries a
+`Trap` opcode at all.
+
+**Exactly two operation families fault with no `Trap` anywhere in the module: division
+or modulo by zero, and array bounds.** Those are the whole of "make every other opcode
+total", for compiler output. Several entries on the list above are already in the shape
+this design wants:
+
+- **Arithmetic overflow does not fault.** `INSTRUCTION_SET.md` states that a surface
+  `a + b` on `Int` operands compiles to the checked opcode followed by `PopN(2)`,
+  discarding the outcome flag and leaving the WRAPPING result. Wrapping is the
+  specified behaviour of the bare operator, and the flag this design asks for already
+  exists — the bare form simply discards it.
+- **A cast out of range does not fault either**; it truncates.
+- **`assert` is a debug construct (B29)**, compiled out entirely in a release build.
+- **The bare `for .. limit` already lowers to an explicit `Trap`**, as do the match and
+  enum-discrimination fallbacks.
+
+**So the scanning validator would NOT be honest under the current instruction set**,
+even for compiler output: a module containing zero `Trap` opcodes can still fault on a
+division by zero or an out-of-bounds index. That is why the census ships no
+trap-freedom verdict — an API that cannot deliver its guarantee is worse than none.
+
+The census is guarded both ways: the two-family set is pinned, so a change resizes this
+obligation deliberately rather than silently, and the specified list is pinned, so a row
+cannot quietly disappear. **It says nothing about hand-built bytecode**, which can reach
+fault kinds no row here reaches, nor about host-contract failures such as an
+unregistered native.
+
 **First pass versus full language.** The first pass covers the trap classes the toolchain
 source can raise (arithmetic and bounds over `Word`/`Byte`); the newtype-refinement and
 native-error classes widen with Workstream F, but the scanning validator is complete from the
