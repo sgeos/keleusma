@@ -1,0 +1,51 @@
+COMPLETION CONDITION — generated breadth over the Fixed surface
+
+Ordering is not a completion criterion. No property below depends on the order
+the work was done in, on which branch it happened on, or on any process step.
+Any sequence of actions leaving the tree with these properties is complete.
+
+1. Something in the tree generates Fixed-typed programs, in quantity rather than
+   as a handful of named cases, and compares each one's result against the
+   reference implementation.
+
+2. The generated population is asserted, not assumed. A run that silently
+   produced no Fixed programs, or produced programs containing no Fixed
+   arithmetic, or produced trees that do not nest, fails rather than passes.
+
+3. The magnitude bound that keeps generated values inside the representable range
+   is enforced or checked in the tree, not only argued in a comment, and the tree
+   states that Fixed arithmetic is unchecked so an overflow is a wrong number
+   rather than a trap.
+
+4. The generator emits no modulo operation, and the refusal of Fixed modulo
+   remains in place with the reference's trapping behaviour unchanged.
+
+5. Every divisor the generator emits is a literal that cannot be zero.
+
+6. The tree carries evidence that the generator detects a fault, meaning a
+   recorded perturbation of Fixed arithmetic in the emitter that the generator
+   fails under in both float configurations. An argument that it would detect one
+   is not evidence.
+
+7. Whatever the generator excludes is stated where a reader of that generator
+   will meet it, and no claim in the tree describes its coverage as broader than
+   what it emits.
+
+8. Any harness newly allocating host buffers for a native call derives its
+   private region size from the published contract and is declared wherever the
+   tree enumerates such harnesses.
+
+9. src/ and tests/ at the repository root are unchanged by this session except
+   for changes the other line itself made.
+
+10. The backend suite passes in both float configurations, and that rests on a
+    whole gate run per configuration rather than on separately read phase
+    summaries, on targeted runs selected by binary name, or on one run assumed to
+    cover both.
+
+11. The handoff state table agrees with the tree, figures that cannot be
+    re-derived name the commit they were measured at, and the guards that check
+    it pass.
+
+12. The working tree is clean, and the branch on the remote matches the local
+    branch, established by querying the remote.
