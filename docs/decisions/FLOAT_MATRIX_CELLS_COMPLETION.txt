@@ -1,0 +1,51 @@
+COMPLETION CONDITION — float cells in the scalar-operator matrix
+
+Ordering is not a completion criterion. No property below depends on the order
+work was done in, on which branch it happened on, or on any process step. Any
+sequence of actions that leaves the tree with these properties is complete.
+
+1. The backend's scalar-operator matrix enumerates all four scalar types,
+   including Float. Its recorded cell list and its cell-floor figure both reflect
+   the larger population, and no comment in that file still states that Float is
+   absent from the enumeration.
+
+2. Float cells are established by EXECUTING both implementations and comparing
+   results, not by lowering alone.
+
+3. The lowered entry point is called through a signature derived from that
+   function's own parameter and return types as read from the emitted module. A
+   parameter or return shape the driver does not anticipate causes a loud failure
+   instead of a call through a guessed signature.
+
+4. Every float operand the matrix drives, and every float result it accepts as
+   agreement, is exactly representable in a four-byte float, and something in the
+   tree fails if that stops being true. The tree states the reason: the reference
+   virtual machine is instantiated at eight-byte float in both configurations
+   while the backend lowers at the configured width, so a value needing more
+   precision would report rounding as divergence. Agreement is decided by exact
+   comparison, not by a tolerance.
+
+5. Every cell the matrix observes carries a recorded class. No cell sits in a
+   class meaning "the backend returned a value where the reference raised an
+   error" or "both produced values and they differ", unless the emitter has been
+   changed so it no longer does, or the tree states why that cell is not a
+   backend defect.
+
+6. The absorption backlog from the other line is either absorbed, or recorded in
+   the tree as deliberately deferred with a reason. If absorbed, a brief exists
+   recording the prediction together with the unabsorbed count and the commit
+   that prediction was computed against.
+
+7. src/ and tests/ at the repository root are byte-identical to what the other
+   line publishes, except for changes that line itself made.
+
+8. The backend suite passes in both float configurations, and the result rests on
+   a whole gate run rather than on separately-read phase summaries.
+
+9. The handoff's state table agrees with the tree, and the guards that check it
+   pass.
+
+10. Any statement added to a document about what an instrument covers is backed
+    by something in the tree that fails when the statement stops being true.
+
+11. The working tree is clean and the branch is pushed.
