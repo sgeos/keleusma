@@ -285,11 +285,17 @@ const SUBJECTS: &[(&str, &str)] = &[
     // suspension is worth driving. It is not a width witness, and calling it one
     // would be the failure this file has already corrected once.
     //
-    // **No expressible subject found so far makes the float spill width
-    // observable.** That is a real result rather than a shortfall: it bounds the
-    // hazard — a width lost on this path has no consumer that would notice — but
-    // it does not close it. See `the_float_reply_cannot_be_packed_into_a_composite`
-    // below for what was found while looking.
+    // These three were written when **no expressible subject made the float spill
+    // width observable**, which was recorded as a real result rather than a
+    // shortfall. **That is no longer true**: the last subject below — a composite
+    // built DIRECTLY from the spilled operand and the reply, without a local in
+    // between — detects a corrupted spilled width in both configurations, refusing
+    // with *"unknown packed width"*. It became expressible only once the resumed
+    // reply carried its declared float width, so closing the reply gap closed this
+    // one too.
+    //
+    // The three are kept: they are the coverage, and the record of what does NOT
+    // reach the width is what made the working route identifiable.
     (
         "a spilled float packed into an all-float struct",
         "struct P { a: Float, b: Float }\nloop main(t: Float) -> Float { \
@@ -304,6 +310,16 @@ const SUBJECTS: &[(&str, &str)] = &[
         "a spilled float placed in an array",
         "loop main(t: Float) -> Float { \
            let x: Float = ((t * 2.0) + (yield t)); let arr: [Float; 2] = [x, 1.0]; yield arr[0] }",
+    ),
+    // **THE COMPOSITE BUILT DIRECTLY FROM A SPILLED OPERAND AND A REPLY.** Refused
+    // until 2026-09-18 because the resumed reply carried `Width::Unknown`; it now
+    // carries the module's declared float width. Both operands reach
+    // `NewComposite` without passing through a local, so this is the only subject
+    // where the SPILLED operand's own width is load-bearing.
+    (
+        "a composite built directly from a spilled float and a reply",
+        "struct P { a: Float, b: Float }\nloop main(t: Float) -> Float { \
+           let p = P { a: (t * 2.0), b: (yield t) }; yield p.a }",
     ),
 ];
 
@@ -447,66 +463,80 @@ fn a_float_degenerate_yield_is_still_refused() {
     );
 }
 
-/// **A FLOAT REPLY CANNOT BE PACKED DIRECTLY INTO A COMPOSITE. A BYTE REPLY CAN.**
+/// **A FLOAT REPLY PACKS INTO A COMPOSITE, AND THE VALUES ARE COMPARED.**
 ///
-/// # Found while hunting the spill width, which is why it is here
+/// # What this replaced, and why the replacement had to change shape
 ///
-/// Making the spilled width load-bearing needs a composite that consumes the
-/// spilled operand DIRECTLY rather than through a local. Writing that subject
-/// produced a refusal instead:
+/// Until 2026-09-18 this test pinned a REFUSAL: a composite built directly from a
+/// resumed float reply was rejected with *"NewComposite has an operand of unknown
+/// packed width"*. The resumed value was pushed with `width_of_tag(TypeTag::Float)`,
+/// which returns `Unknown`.
 ///
-/// > `NewComposite ... has an operand of unknown packed width: operand 2 of 2`
+/// **`width_of_tag` is still right to refuse and is untouched.** It takes a TAG,
+/// and a float's packed width is not on the tag. The resume-push site is not in
+/// that position: it holds `float_bytes` from the module header — **8 by default,
+/// 4 under `narrow-float-32`, measured** — and the canonical layout function is
+/// `flat_byte_size(word_bytes, float_bytes, addr_bytes)`, so that figure is the
+/// reference's own packing parameter rather than a guess.
 ///
-/// The offending operand is **the yield's own result** — the resumed reply — not
-/// the spilled value. A reply is pushed with the width its declared tag gives,
-/// and `width_of_tag` returns `Unknown` for `Float` deliberately: a float's packed
-/// width inside a body would be a guess, and that function exists not to guess.
+/// # ⚠ THE OLD TEST'S OWN INSTRUCTION, FOLLOWED
 ///
-/// # Why the Byte control matters
+/// Its panic message said that if the gap closed, *"this test must be replaced by
+/// one that checks the PACKING rather than the refusal."* **A module that lowers
+/// is not a module that packs correctly**, and a test asserting only the absence
+/// of a refusal would pass against a backend mispacking the field.
 ///
-/// The identical shape at `Byte` LOWERS, because `width_of_tag` gives `Byte` a
-/// one-byte width. **So this is specific to `Float`, not a general rule about
-/// replies in composites**, and without the control this test would support a
-/// claim much broader than the fact.
+/// So the subject is driven in [`SUBJECTS`] above, compared value by value against
+/// the reference, and this test asserts the property that makes the comparison
+/// meaningful: the composite really is built from the reply, in both float
+/// configurations.
 ///
-/// # This is a capability gap, recorded and NOT repaired here
+/// # Three perturbations, and each established something different
 ///
-/// The refusal is sound — it fails closed on a width it does not know rather than
-/// packing at a guessed size. Changing `width_of_tag` for `Float` is an emitter
-/// change with consequences for every composite carrying a float field, and the
-/// increment that found this committed in advance to adding no emitter change.
-/// **A float inside a composite already works** when the operand's width is known,
-/// which is why the subjects above lower; only a value whose width comes from the
-/// TAG is affected.
+/// | perturbation | outcome |
+/// |---|---|
+/// | the width fix reverted to `Unknown` | the refusal returns — the fix is load-bearing |
+/// | the width **hardcoded to 8** | default passes, **`narrow-float-32` FAILS** with the emitter's own *"packs 12 bytes but the instruction bakes 8; the layout model has drifted"* |
+/// | the SPILLED operand's width dropped | **now detected**, in both configurations |
 ///
-/// The test pins both halves so a movement in either direction is noticed.
+/// The second is the one worth keeping in mind: a hardcoded width is invisible in
+/// the configuration it was written in and wrong in the other, which is exactly
+/// how `Op::Neg` shipped broken. **The backend's own layout check catches it**, so
+/// the guard here is the gate running both configurations rather than this file.
+///
+/// The third closed a gap recorded as open hours earlier. The spilled operand's
+/// width had no witness because every route to it passed through a local first;
+/// this subject reaches `NewComposite` with both operands direct.
 #[test]
-fn the_float_reply_cannot_be_packed_into_a_composite() {
+fn a_float_reply_packs_into_a_composite() {
     let float_src = "struct P { a: Float, b: Float }\nloop main(t: Float) -> Float { \
                      let p = P { a: (t * 2.0), b: (yield t) }; yield p.a }";
     let refusals = keleusma_native::module_refusals(
         &common::build(float_src),
         keleusma_native::LowerOptions::default(),
     );
-    let Some((_, e)) = refusals.first() else {
-        panic!(
-            "a float reply now packs into a composite. That is the gap closing and \
-             it is good news -- but `width_of_tag` must then give `Float` a width, \
-             and every composite carrying a float field is affected, so this test \
-             must be replaced by one that checks the PACKING rather than the \
-             refusal."
-        );
-    };
-    let msg = format!("{e:?}");
     assert!(
-        msg.contains("NewComposite") && msg.contains("unknown packed width"),
-        "the float reply in a composite is refused for a different reason now: \
-         {msg}. The recorded cause is an operand whose packed width is unknown."
+        refusals.is_empty(),
+        "a float reply no longer packs into a composite: {refusals:?}. The resumed \
+         value must carry the module's declared float width."
     );
 
-    // **THE CONTROL, AND WITHOUT IT THIS TEST OVERCLAIMS.** The same shape at
-    // `Byte` must lower, or the refusal above is about replies in composites
-    // generally rather than about `Float`.
+    // **THE SUBJECT IS ACTUALLY DRIVEN.** Without this, the test would pass on a
+    // lowering that is never executed, which is the shape of the vacuous
+    // degenerate-yield test this file already had to replace.
+    let driven = SUBJECTS
+        .iter()
+        .any(|(_, src)| src.contains("let p = P { a: (t * 2.0), b: (yield t) }"));
+    assert!(
+        driven,
+        "the composite-from-reply program is not among the subjects compared \
+         against the reference, so nothing checks that it packs CORRECTLY rather \
+         than merely lowering"
+    );
+
+    // **AND THE BYTE CONTROL IS KEPT.** It showed the old refusal was specific to
+    // `Float`; it now shows both widths reach the same place, so a future
+    // regression that refuses one and not the other is still visible.
     let byte_src = "struct R { a: Byte, b: Byte }\nloop main(t: Word) -> Word { \
                     let r = R { a: ((t as Byte) / (2 as Byte)), b: ((yield t) as Byte) }; \
                     yield (r.a as Word) }";
@@ -516,8 +546,7 @@ fn the_float_reply_cannot_be_packed_into_a_composite() {
             keleusma_native::LowerOptions::default(),
         )
         .is_empty(),
-        "the Byte control is refused too, so the refusal above says nothing \
-         specific about `Float` and this test supports a broader claim than the \
-         facts do"
+        "the Byte control is refused, which would be a regression in the path this \
+         change did not touch"
     );
 }

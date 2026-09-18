@@ -7064,11 +7064,36 @@ fn lower_chunk_body<'ctx>(
                     } else {
                         OperandKind::Int
                     };
-                    st.push_k(
-                        rv,
-                        declared.map(width_of_tag).unwrap_or(Width::Unknown),
-                        resumed_kind,
-                    );
+                    // **A FLOAT'S WIDTH COMES FROM THE MODULE, NOT FROM THE TAG,
+                    // AND THAT IS WHY `width_of_tag` IS LEFT ALONE.**
+                    //
+                    // `width_of_tag` returns `Unknown` for `Float` and is right to:
+                    // it takes a TAG and a float's packed width is not on it. Its
+                    // own comment says a body width for a float field *"would be a
+                    // guess, which is the one thing this function exists not to
+                    // do."* Widening it would make it guess, for every caller,
+                    // including ones holding no module.
+                    //
+                    // **This site is not in that position.** `float_bytes` is in
+                    // scope — `float_to_bits` uses it two lines above — and it is
+                    // `1 << module.float_bits_log2 >> 3`: measured as **8** by
+                    // default and **4** under `narrow-float-32`, read from the
+                    // module's own header rather than from a cargo feature.
+                    //
+                    // That it is the RIGHT width is not an inference: the canonical
+                    // layout is `flat_byte_size(word_bytes, float_bytes,
+                    // addr_bytes)`, so the reference's own packing is parameterised
+                    // by exactly this figure.
+                    //
+                    // Without it a resumed float reply carried `Width::Unknown` and
+                    // `NewComposite` refused it — sound, but it meant a float reply
+                    // could never enter a composite while a `Byte` reply could.
+                    let resumed_width = if declared == Some(TypeTag::Float) {
+                        Width::Scalar(float_bytes)
+                    } else {
+                        declared.map(width_of_tag).unwrap_or(Width::Unknown)
+                    };
+                    st.push_k(rv, resumed_width, resumed_kind);
                     note!(i + 1, st.depth);
                     st.b.build_unconditional_branch(blocks[&(i + 1)]).unwrap();
                     st.depth = saved_depth;
