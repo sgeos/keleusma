@@ -1,4 +1,4 @@
-//! **THE MIXED-TYPE HALF OF THE OPERATOR MATRIX. ALL 42 CELLS ARE REFUSED.**
+//! **THE MIXED-TYPE HALF OF THE OPERATOR MATRIX. ALL 84 CELLS ARE REFUSED.**
 //!
 //! # Why drive a matrix that is entirely negative
 //!
@@ -57,12 +57,25 @@ fn refusal_of(src: &str) -> Result<Module, String> {
     keleusma::compiler::compile(&ast).map_err(|e| e.message)
 }
 
-const TYPES: &[(&str, &str)] = &[("byte", "Byte"), ("word", "Word"), ("fixed", "Fixed")];
+/// **ALL FOUR SCALAR TYPES.** `Float` was absent until 2026-09-18 while this file
+/// described itself as enumerating *"every ordered pair of DISTINCT scalar
+/// types"* — the same gap, in the same shape, as the one that let float negation
+/// ship broken past `scalar_operator_matrix.rs`. Found by asking which OTHER
+/// instrument here enumerates scalar types, rather than by a new defect.
+const TYPES: &[(&str, &str)] = &[
+    ("byte", "Byte"),
+    ("word", "Word"),
+    ("fixed", "Fixed"),
+    ("float", "Float"),
+];
 const OPS: &[&str] = &["+", "-", "*", "/", "%"];
 const CMPS: &[&str] = &["<", "=="];
 
 /// Fewer cells than this means the enumeration broke.
-const CELL_FLOOR: usize = 42;
+///
+/// **42 until `Float` joined the type list.** Four types give twelve ordered
+/// distinct pairs against seven operators.
+const CELL_FLOOR: usize = 84;
 
 /// Every ordered pair of DISTINCT scalar types against the operator surface.
 fn cells() -> Vec<(String, Result<Module, String>)> {
@@ -109,7 +122,7 @@ fn every_mixed_pair_is_refused_and_the_message_names_both_types() {
                 // unrelated reason would sit here looking like support for the
                 // claim while supporting nothing — which is exactly how an
                 // unknown type name was once filed as a fact about comparisons.
-                let names_a_type = ["Byte", "Word", "Fixed"]
+                let names_a_type = ["Byte", "Word", "Fixed", "Float"]
                     .iter()
                     .filter(|t| msg.contains(*t))
                     .count();
@@ -186,4 +199,58 @@ fn fixed_point_widths_do_not_mix_and_the_bare_spelling_is_q32() {
         "bare `Fixed` no longer bakes 32 fraction bits: {ops}. Every prose figure \
          describing a bare-`Fixed` measurement is scaled by this number."
     );
+}
+
+/// **THE FLOAT PAIRS ARE REALLY DRIVEN, AND REFUSED FOR THE STATED CAUSE.**
+///
+/// The matrix above passes on an aggregate: every cell refused, every message
+/// naming two types. **An aggregate cannot say which cells exist.** When `Float`
+/// joined `TYPES` the count moved from 42 to 84 and the whole file stayed green,
+/// which is exactly what it would have done had the new cells been refused for
+/// some unrelated reason — a lexer error, say, or an unknown type name. That
+/// mistake has been made in this package before, and it was made in this very
+/// file's subject area.
+///
+/// So the float half is asserted by name, in both operand positions, with the
+/// message quoted rather than counted.
+#[test]
+fn the_float_pairs_are_present_and_refused_by_type() {
+    for (src, needle) in [
+        (
+            "fn main(a: Word, b: Float) -> Word { a + b }",
+            "cannot add Word and Float",
+        ),
+        (
+            "fn main(a: Float, b: Word) -> Float { a + b }",
+            "cannot add Float and Word",
+        ),
+        (
+            "fn main(a: Byte, b: Float) -> bool { a < b }",
+            "cannot order Byte and Float",
+        ),
+    ] {
+        let msg = refusal_of(src).expect_err(
+            "a mixed pair involving Float is ACCEPTED. Keleusma gained an implicit \
+             numeric conversion, which is a language change this matrix exists to \
+             notice.",
+        );
+        assert!(
+            msg.contains(needle),
+            "`{src}` is refused, but not for the recorded cause. Expected a \
+             message containing `{needle}`, got: {msg}. A refusal for a different \
+             reason would sit in the matrix above looking like support for the \
+             no-implicit-conversion claim while supporting nothing."
+        );
+    }
+
+    // **AND THE ENUMERATION REALLY CARRIES THEM.** The aggregate test checks a
+    // floor; this checks that the float labels are among the cells counted.
+    let labels: Vec<String> = cells().into_iter().map(|(l, _)| l).collect();
+    for want in ["float + word", "word + float", "float < fixed"] {
+        assert!(
+            labels.iter().any(|l| l == want),
+            "the enumeration produced no cell `{want}`, so the floor of \
+             {CELL_FLOOR} is being met by something other than the float pairs"
+        );
+    }
 }
