@@ -13,6 +13,63 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-17 (ninety-sixth) — the corpus was generating mutants faster than it was driving them
+
+### THE GAP WAS NOT IN THE MUTATIONS, IT WAS IN THE EXECUTION
+
+Two increments had grown the corpus: descriptor tables, coroutine programs, a
+native call, a hot swap. 5288 mutants, seven families, nothing found. The
+natural next move is more mutants, and it would have been the wrong one.
+
+Every one of the 871 mutants verification accepted received exactly **one
+argument-free `call`**, with no shared-data buffer and **no resume**. So the
+mutation surface kept widening while the execution surface stayed a single
+instruction-fetch deep.
+
+**The resume path is not an arbitrary omission.** The A.2.1 typed pass is
+documented as running in a sound defer-on-unknown mode, and one of the two
+cases it names is a **per-yield reentrant reply**. That is a load-time check
+deliberately traded for a retained runtime guard. So the whole soundness
+argument for that trade rests on a guard that no hostile module had ever
+reached.
+
+### THREE THINGS THAT WOULD HAVE MADE IT VACUOUS
+
+- **Guessed arguments.** A call whose argument types do not match
+  `param_types` is refused before any bytecode runs. The arguments are derived
+  from the module's own declared types for that reason. Had they been guessed,
+  the phase would have been green and empty.
+- **No shared buffer.** A module declaring shared data faults on its first
+  shared access without one, so it would have exercised nothing below that
+  instruction. The buffer is sized from the module's own `shared_data_bytes`,
+  capped like the persistent region because a hostile module names its own
+  size.
+- **An unbounded resume loop.** A `loop` block is productively divergent; a
+  healthy stream yields forever. Reaching the bound is the NORMAL outcome, not
+  a defect, and the harness would otherwise hang on its healthiest inputs.
+
+### REACH IS COUNTED, BECAUSE THE STAGE CENSUS CANNOT SEE THIS
+
+608 mutants ran bytecode, 119 yielded, 119 were resumed.
+
+The stage census could not have shown any of that. It records where a mutant
+STOPPED, and a mutant that verifies, is refused at the call's type check, and
+then hot-swaps cleanly is indistinguishable in it from one that ran, yielded
+and resumed. This is the third time in three increments that the same shape has
+appeared: **an outcome that looks like a pass while testing nothing.** Nineteen
+schema-hash mutants read that way; a whole descriptor table read that way; now
+the entire execution phase could have.
+
+The floor is shown non-vacuous by setting the resume bound to zero, which fails
+it.
+
+### THE RESULT
+
+No new defect. Stated as narrowly as it deserves: the retained runtime guards
+hold across the reentrant path on hostile input, which is the first time that
+half of the defer-on-unknown argument has been exercised rather than reasoned
+about.
+
 ## 2026-09-17 (ninety-fifth) — the aggregate count was healthy and one whole table had never been touched
 
 ### THE EXTENSION, AND WHY THESE TWO AXES

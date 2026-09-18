@@ -10,6 +10,27 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-17, session 66, fourth increment). EXECUTION PROTOCOL, NO
+> NEW DEFECT.**
+>
+> The corpus was generating mutants faster than it was DRIVING them: all 871 accepted
+> mutants got one argument-free `call`, no shared buffer, no resume. The typed pass
+> defers on a PER-YIELD REENTRANT REPLY — a load-time check traded for a runtime
+> guard — so resume is where that guard is load-bearing, and nothing reached it.
+>
+> Now: arguments from the module's own `param_types`, a shared buffer sized from its
+> own declaration, and a bounded resume loop (a `loop` is productively divergent, so
+> yielding forever is the healthy outcome). Reach counted and asserted: 608 ran, 119
+> yielded, 119 resumed.
+>
+> **THE SAME SHAPE, THREE INCREMENTS RUNNING**: an outcome that looks like a pass
+> while testing nothing. The stage census records where a mutant STOPPED, not what it
+> DID, and cannot see it.
+>
+> **No new defect.** The retained runtime guards hold across the reentrant path on
+> hostile input — the first time that half of the defer-on-unknown argument has been
+> exercised rather than reasoned about.
+
 > **Currency note (2026-09-17, session 66, third increment). CORPUS EXTENDED, NO NEW
 > DEFECT.**
 >
