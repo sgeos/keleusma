@@ -10,6 +10,27 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-18, session 66, fifth increment). WORKSTREAM C SIZED.**
+>
+> Workstream C (unhandled-trap analysis) is a `BYTECODE_VERSION`-bumping ISA change and
+> is the OPERATOR'S. Its premise is now sized by measurement, with no ISA change:
+> `tests/runtime_fault_census.rs`.
+>
+> **Exactly two operation families fault with no `Trap` opcode present: division or
+> modulo by zero, and array bounds.** Most of the design's own list is already in the
+> shape it wants — arithmetic overflow does NOT fault (the bare operator wraps, by
+> specification; the flag already exists and is discarded), a cast out of range
+> truncates, `assert` is compiled out of a release build, and `for .. limit` already
+> lowers to an explicit `Trap`.
+>
+> **The scan would not be honest today**, so no trap-freedom verdict is shipped.
+>
+> **Three suspicions were refuted by checking before claiming** — wrapped overflow, a
+> silent assert, a truncating cast. All specified behaviour.
+>
+> Both guards demonstrated non-vacuous. Says nothing about hand-built bytecode or
+> host-contract failures.
+
 > **Currency note (2026-09-17, session 66, fourth increment). EXECUTION PROTOCOL, NO
 > NEW DEFECT.**
 >

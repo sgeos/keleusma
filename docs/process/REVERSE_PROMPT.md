@@ -10,6 +10,45 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-18, session 66, fifth increment.**
+
+**WORKSTREAM C IS NOW SIZED BY MEASUREMENT. THE OBLIGATION IS TWO OPERATION FAMILIES,
+NOT THE SEVEN ITS OWN LIST IMPLIES.**
+
+Workstream C (unhandled-trap analysis) is a `BYTECODE_VERSION`-bumping ISA change and
+therefore **yours**. Its premise rests on two unmeasured quantities, and both are now
+measured with no ISA change: `tests/runtime_fault_census.rs`.
+
+**Exactly two operation families fault with no `Trap` opcode anywhere in the module:
+division or modulo by zero, and array bounds.** Everything else on the design's list is
+already in the shape it wants — arithmetic overflow **does not fault** (the bare
+operator wraps, by specification, and the outcome flag the design asks for already
+exists and is discarded), a cast out of range **truncates**, `assert` is a debug
+construct compiled out of a release build, and the bare `for .. limit` already lowers to
+an explicit `Trap`.
+
+**THE SCAN WOULD NOT BE HONEST TODAY**, even for compiler output: zero `Trap` opcodes
+and still a division-by-zero fault. **So no trap-freedom verdict is shipped.** An
+interface that cannot deliver its guarantee is worse than none.
+
+**THREE SUSPICIONS WERE REFUTED BY CHECKING BEFORE CLAIMING.** `i64::MAX + 1` finishing
+with a wrapped negative, `assert false;` emitting nothing, and `300 as Byte` completing
+all looked like defects. All three are specified behaviour. Minutes to check; three
+false entries in a security ledger if I had not.
+
+**The census is guarded both ways** and both guards are demonstrated non-vacuous: the
+two-family set is pinned so a change resizes your decision deliberately, and the
+specified list is pinned so a row cannot quietly vanish.
+
+**What it does not establish**: nothing about hand-built bytecode, nothing about
+host-contract failures, and it is exhaustive over the specified list rather than over
+source programs.
+
+**Unchanged and untouched**: the seven operator decisions, the opcode count,
+`BYTECODE_VERSION`, and every file under `src/selfhost/kel/`.
+
+---
+
 **2026-09-17, session 66, fourth increment.**
 
 **THE CORPUS WAS GENERATING MUTANTS FASTER THAN IT WAS DRIVING THEM. THAT IS FIXED,
