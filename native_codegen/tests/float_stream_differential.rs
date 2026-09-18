@@ -267,6 +267,44 @@ const SUBJECTS: &[(&str, &str)] = &[
         "a float sum left on the operand stack, consumed by subtraction",
         "loop main(t: Float) -> Float { let x: Float = ((t + 1.0) - (yield t)); yield x }",
     ),
+    // **THREE SUBJECTS AIMED AT THE SPILLED WIDTH — AND THEY MISS IT TOO.**
+    //
+    // They were written to catch a lost WIDTH, the half the two subjects above are
+    // blind to, on the reasoning that the composite arm packs each operand at the
+    // operand's own width. **Measured: they do not.** With the spilled width
+    // dropped to `Unknown` and the kind kept, all three still agree with the
+    // reference.
+    //
+    // The chain breaks before the composite. The spilled operand is consumed by
+    // the add at the resume point, its result goes into a LOCAL, and the composite
+    // is built from that local — whose width comes from `local_widths`, not from
+    // the spill. So the spilled width is never load-bearing here.
+    //
+    // **They are kept as coverage and labelled for what they are.** A spilled
+    // float reaching a composite, a mixed composite and an array across a
+    // suspension is worth driving. It is not a width witness, and calling it one
+    // would be the failure this file has already corrected once.
+    //
+    // **No expressible subject found so far makes the float spill width
+    // observable.** That is a real result rather than a shortfall: it bounds the
+    // hazard — a width lost on this path has no consumer that would notice — but
+    // it does not close it. See `the_float_reply_cannot_be_packed_into_a_composite`
+    // below for what was found while looking.
+    (
+        "a spilled float packed into an all-float struct",
+        "struct P { a: Float, b: Float }\nloop main(t: Float) -> Float { \
+           let x: Float = ((t * 2.0) + (yield t)); let p = P { a: x, b: 1.0 }; yield p.a }",
+    ),
+    (
+        "a spilled float packed beside a Word",
+        "struct Q { a: Float, b: Word }\nloop main(t: Float) -> Float { \
+           let x: Float = ((t * 2.0) + (yield t)); let q = Q { a: x, b: 1 }; yield q.a }",
+    ),
+    (
+        "a spilled float placed in an array",
+        "loop main(t: Float) -> Float { \
+           let x: Float = ((t * 2.0) + (yield t)); let arr: [Float; 2] = [x, 1.0]; yield arr[0] }",
+    ),
 ];
 
 fn replies(n: usize) -> Vec<Flt> {
@@ -406,5 +444,80 @@ fn a_float_degenerate_yield_is_still_refused() {
             .is_empty(),
         "the Word control is refused too, so the assertion above says nothing \
          about floats"
+    );
+}
+
+/// **A FLOAT REPLY CANNOT BE PACKED DIRECTLY INTO A COMPOSITE. A BYTE REPLY CAN.**
+///
+/// # Found while hunting the spill width, which is why it is here
+///
+/// Making the spilled width load-bearing needs a composite that consumes the
+/// spilled operand DIRECTLY rather than through a local. Writing that subject
+/// produced a refusal instead:
+///
+/// > `NewComposite ... has an operand of unknown packed width: operand 2 of 2`
+///
+/// The offending operand is **the yield's own result** — the resumed reply — not
+/// the spilled value. A reply is pushed with the width its declared tag gives,
+/// and `width_of_tag` returns `Unknown` for `Float` deliberately: a float's packed
+/// width inside a body would be a guess, and that function exists not to guess.
+///
+/// # Why the Byte control matters
+///
+/// The identical shape at `Byte` LOWERS, because `width_of_tag` gives `Byte` a
+/// one-byte width. **So this is specific to `Float`, not a general rule about
+/// replies in composites**, and without the control this test would support a
+/// claim much broader than the fact.
+///
+/// # This is a capability gap, recorded and NOT repaired here
+///
+/// The refusal is sound — it fails closed on a width it does not know rather than
+/// packing at a guessed size. Changing `width_of_tag` for `Float` is an emitter
+/// change with consequences for every composite carrying a float field, and the
+/// increment that found this committed in advance to adding no emitter change.
+/// **A float inside a composite already works** when the operand's width is known,
+/// which is why the subjects above lower; only a value whose width comes from the
+/// TAG is affected.
+///
+/// The test pins both halves so a movement in either direction is noticed.
+#[test]
+fn the_float_reply_cannot_be_packed_into_a_composite() {
+    let float_src = "struct P { a: Float, b: Float }\nloop main(t: Float) -> Float { \
+                     let p = P { a: (t * 2.0), b: (yield t) }; yield p.a }";
+    let refusals = keleusma_native::module_refusals(
+        &common::build(float_src),
+        keleusma_native::LowerOptions::default(),
+    );
+    let Some((_, e)) = refusals.first() else {
+        panic!(
+            "a float reply now packs into a composite. That is the gap closing and \
+             it is good news -- but `width_of_tag` must then give `Float` a width, \
+             and every composite carrying a float field is affected, so this test \
+             must be replaced by one that checks the PACKING rather than the \
+             refusal."
+        );
+    };
+    let msg = format!("{e:?}");
+    assert!(
+        msg.contains("NewComposite") && msg.contains("unknown packed width"),
+        "the float reply in a composite is refused for a different reason now: \
+         {msg}. The recorded cause is an operand whose packed width is unknown."
+    );
+
+    // **THE CONTROL, AND WITHOUT IT THIS TEST OVERCLAIMS.** The same shape at
+    // `Byte` must lower, or the refusal above is about replies in composites
+    // generally rather than about `Float`.
+    let byte_src = "struct R { a: Byte, b: Byte }\nloop main(t: Word) -> Word { \
+                    let r = R { a: ((t as Byte) / (2 as Byte)), b: ((yield t) as Byte) }; \
+                    yield (r.a as Word) }";
+    assert!(
+        keleusma_native::module_refusals(
+            &common::build(byte_src),
+            keleusma_native::LowerOptions::default(),
+        )
+        .is_empty(),
+        "the Byte control is refused too, so the refusal above says nothing \
+         specific about `Float` and this test supports a broader claim than the \
+         facts do"
     );
 }
