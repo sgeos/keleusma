@@ -54,13 +54,22 @@ const BUFFER_HARNESSES: &[&str] = &[
     "declared_float_width.rs",
     "delegated_suspension.rs",
     "fixed_shared_scale.rs",
-    // Added 2026-09-17 with the float-stream asymmetry file. **Its driver is
-    // parked rather than live** -- `Op::Yield` refuses a float operand, so the
-    // differential it implements cannot run yet -- but it builds the same three
-    // host buffers and sizes the private region from the contract, so it belongs
-    // in this population now rather than whenever the refusal lifts.
+    // Added 2026-09-17 with the float-stream asymmetry file, when its driver was
+    // PARKED -- `Op::Yield` refused a float operand, so the differential could
+    // not run. It was listed anyway, because it built the same three host buffers
+    // and sized the private region from the contract.
+    //
+    // **That judgement paid off on 2026-09-18**: the refusal lifted, the driver
+    // went live, and nothing had to be added here. Listing a harness on what it
+    // ALLOCATES rather than on whether it currently runs is why.
     "float_stream_differential.rs",
     "general_stream_sequence.rs",
+    // Added 2026-09-18 with the generated float streams. **This census caught it
+    // in the gate**, and the targeted runs that preceded the commit did not --
+    // they selected the new binary by name and never ran this one. Its driver is
+    // copied from `float_stream_differential.rs` and asks the same two contract
+    // functions.
+    "generated_float_streams.rs",
     "module_differential.rs",
     "module_source_differential.rs",
     "native_calls.rs",
