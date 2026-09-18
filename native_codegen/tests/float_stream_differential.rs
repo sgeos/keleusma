@@ -220,6 +220,53 @@ const SUBJECTS: &[(&str, &str)] = &[
         "a reply yielded straight back, never operated on",
         "loop main(t: Float) -> Float { let r = yield t; yield r }",
     ),
+    // **THE ONLY SUBJECTS HERE THAT REACH THE SPILL SLICE, AND THAT IS THE POINT.**
+    //
+    // Every subject above — and all 240 generated streams in
+    // `generated_float_streams.rs` — carries its values in LOCALS. At each
+    // `Op::Yield` the operand stack holds only the yielded value, so `deep` is
+    // zero and the spill loop never runs. **`local_widths` and `spilled` are
+    // different tables and different mechanisms**, and `stream_width_survival.rs`
+    // measured that distinction the hard way: corrupting the restored spill
+    // widths left five subjects passing.
+    //
+    // A `yield` used as a SUBEXPRESSION puts a computed operand underneath it.
+    // `(t * 2.0)` is pushed, then `yield t` suspends with it on the stack, so the
+    // pair `(Width, OperandKind)` must survive the suspension and come back.
+    //
+    // **Before these, the package's ONLY spill witness was a `Byte`.**
+    // `OperandKind::Float` crossing a suspension had none at all, and
+    // `Op::Yield` only became float-aware on 2026-09-18.
+    //
+    // # ⚠ WHAT THESE WITNESS, MEASURED IN BOTH DIRECTIONS
+    //
+    // The spill carries a `(Width, OperandKind)` PAIR, and it would be easy to
+    // write that these subjects prove the pair survives. **They do not.** Both
+    // halves were corrupted separately:
+    //
+    // | corruption | outcome |
+    // |---|---|
+    // | kind dropped to `Unknown` | **DETECTED** — refused, *"Add with operand kinds Unknown and Float"* |
+    // | width dropped to `Unknown`, kind kept | **NOT DETECTED** — both configurations still agree |
+    //
+    // So these witness the **KIND** crossing the suspension. The `Byte` subject
+    // in `stream_width_survival.rs` witnesses the **WIDTH**, because a byte add
+    // needs a matched one-byte pair and a float add does not. The two are
+    // complementary and neither covers the other.
+    //
+    // The detection is by REFUSAL rather than by a wrong value, which is the
+    // same shape as the reply-kind case above: the mixed-kind guard fails closed
+    // instead of reinterpreting bits. That is worth stating rather than
+    // glossing, because a differential that only ever reports refusals is not
+    // testing the numbers it appears to be testing.
+    (
+        "a float product left on the operand stack across a yield",
+        "loop main(t: Float) -> Float { let x: Float = ((t * 2.0) + (yield t)); yield x }",
+    ),
+    (
+        "a float sum left on the operand stack, consumed by subtraction",
+        "loop main(t: Float) -> Float { let x: Float = ((t + 1.0) - (yield t)); yield x }",
+    ),
 ];
 
 fn replies(n: usize) -> Vec<Flt> {

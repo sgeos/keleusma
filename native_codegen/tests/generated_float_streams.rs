@@ -8,11 +8,29 @@
 //! arm.** `generated_floats.rs` covers the straight-line float surface; this
 //! covers the one where a value crosses a suspension.
 //!
-//! The stream path is where it matters most. Everything beneath a yielded value
-//! is spilled to an ephemeral slice as `(Width, OperandKind)` pairs and restored
-//! at the resume point. **That width-and-kind interaction across a suspension is
-//! exactly where this line found six width arm-groups silently refusing, and
-//! where a `lower_module` panic sat unnoticed until 2026-09-17.**
+//! What these subjects reach is **composition across a suspension through
+//! LOCALS** — a value computed before a yield, stored in a `let`, and consumed
+//! after it — driven over six ticks and compared value by value.
+//!
+//! # ⚠ WHAT THEY DO NOT REACH, CORRECTED 2026-09-18
+//!
+//! This header first claimed they exercised the OPERAND SPILL — *"everything
+//! beneath a yielded value is spilled to an ephemeral slice as
+//! `(Width, OperandKind)` pairs"*. **They do not.** Every generated body has the
+//! shape `let r = yield E1; yield (r op E2)`, so at each `Op::Yield` the operand
+//! stack holds only the yielded value, `deep` is zero, and the spill loop never
+//! runs. `local_widths` and `spilled` are different tables.
+//!
+//! **This was already written down in a file I had not re-read.**
+//! `stream_width_survival.rs` records that its first five subjects all carried
+//! values in locals and that corrupting the restored spill widths left every one
+//! of them passing. The spill subjects now live in
+//! `float_stream_differential.rs`, where a `yield` is used as a subexpression so
+//! an operand sits beneath it.
+//!
+//! The generator is kept because composition through locals across a suspension
+//! is real coverage. It is simply not the spill instrument, and saying it was
+//! would be the exact failure this line keeps finding in its own records.
 //!
 //! # ⚠ A STREAM FEEDS ITS OWN OUTPUT BACK, AND THAT BREAKS THE SIBLING'S BOUND
 //!
