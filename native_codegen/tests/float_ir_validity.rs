@@ -15,15 +15,22 @@
 //!
 //! # Why nothing caught it
 //!
-//! `scalar_operator_matrix.rs` enumerates *"every cell, from the types and the
-//! operators"* — and its type list is `byte`, `word`, `fixed`. **`Float` is not in
-//! it.** Its `raw` helper panics on a float with a message calling it a
-//! non-scalar, and its header discusses float dispatch. So the omission looks
+//! `scalar_operator_matrix.rs` enumerated *"every cell, from the types and the
+//! operators"* over a type list of `byte`, `word`, `fixed`. **`Float` was not in
+//! it.** Its `raw` helper panicked on a float with a message calling it a
+//! non-scalar, and its header discussed float dispatch. So the omission looked
 //! deliberate and was nowhere stated.
 //!
 //! **A scalar type absent from the scalar-operator matrix is exactly the shape
 //! this package keeps finding**: an instrument whose population is narrower than
 //! its description.
+//!
+//! **THAT GAP IS CLOSED AS OF 2026-09-18** — the matrix enumerates all four scalar
+//! types and executes the float cells against the reference. This file is not
+//! redundant: it checks IR validity for **every** float operator with no
+//! execution and no argument marshalling, where the matrix drives a chosen pair
+//! of operands. A wrong number and invalid IR are different failures, and this
+//! is the cheap instrument for the second.
 //!
 //! # What this checks, and why it is cheap
 //!
