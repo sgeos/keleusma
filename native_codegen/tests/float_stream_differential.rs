@@ -1,53 +1,51 @@
-//! **FLOAT STREAMS: THE REFERENCE RUNS THEM, THIS BACKEND REFUSES THEM.**
+//! **FLOAT STREAMS: BOTH IMPLEMENTATIONS RUN THEM, AND THIS COMPARES THEM.**
 //!
-//! # How that was established, not assumed
+//! # What this file used to say, and why the change is the point
 //!
-//! The reference RUNS them — a `loop main(t: Float)` yields `Float(3.0)` when
-//! called with `Value::Float(3.0)`. But it **rejects `Value::Int`** for that
-//! parameter:
+//! Until 2026-09-18 this file recorded an ASYMMETRY — the reference ran float
+//! streams and this backend refused them — and carried two drivers unused,
+//! waiting for the day the arm was written. **That day is this one.** `Op::Yield`
+//! is float-aware for a general stream now, and the differential is switched on.
 //!
-//! > `TypeError("function `main` parameter 0 expected Float, got Int")`
+//! The history is kept because the refusal was RIGHT while it stood, and because
+//! two defects on this path were found only by writing the instrument before the
+//! capability:
 //!
-//! `common::general_vm_sequence` passes `Value::Int(first)`. **So the general
-//! driver cannot carry a float parameter, and every stream differential in this
-//! package goes through it.**
+//! * `lower_module` PANICKED on `loop main(t: Float)` until 2026-09-17 — two
+//!   sites restoring the resume parameter disagreed about whether it could be a
+//!   float. **A panic is the lucky case.** A wrong NUMBER on the same path had
+//!   nothing watching it.
+//! * The reply was pushed with a marking that made it an integer-kinded operand,
+//!   so every float operation on it refused. Admitting the yield without fixing
+//!   that would have delivered a capability that does not work.
 //!
-//! # Why that mattered more than it looked
+//! # ⚠ WHAT THE MISSING KIND ACTUALLY DID, MEASURED RATHER THAN ASSUMED
 //!
-//! `lower_module` PANICKED on `loop main(t: Float)` until 2026-09-17 — two sites
-//! restoring the resume parameter disagreed about whether it could be a float.
-//! **That defect surfaced as a crash, which is the lucky case.** A wrong NUMBER on
-//! the same path would have had nothing watching it: the backend lowers these
-//! streams, the reference runs them, and no test compared the two.
+//! `FLOAT_YIELD_SCOPE.md` predicted it would produce *"a module that lowers and
+//! computes on a float's bit pattern as an integer — precisely the silent wrong
+//! number the refusal prevents."* **That was measured after the work and it is
+//! false.** With the kind reverted, a subject that operates on the reply REFUSES
+//! loudly, and a subject that yields it straight back lowers cleanly and still
+//! agrees value for value. **No subject produced a wrong number.**
 //!
-//! # ⚠ AND THE DIFFERENTIAL IS IMPOSSIBLE, FOR A GOOD REASON
+//! The scope document is corrected in place. The distinction matters because a
+//! hazard overstated in the direction that makes the work sound necessary is the
+//! direction to distrust.
 //!
-//! This file was written to BE that differential. It cannot be one:
+//! # The degenerate form is deliberately still refused
 //!
-//! > `Yield would consume a float operand, and this arm was not written for one.
-//! > Interpreting a double's bit pattern as an integer is a plausible wrong
-//! > number rather than a fault, so the operand kind fails closed here`
+//! A yield in TAIL POSITION lowers to the host callback `kel_yield(i64) -> i64`.
+//! Carrying a float through that is a HOST-FACING ABI change, so the float-aware
+//! admission is conditional on a general stream, and a test below pins the
+//! consequence with a `Word` control beside it.
 //!
-//! **`Op::Yield` refuses a float operand deliberately**, which is the
-//! conservative stance working exactly as designed — its second category, a case
-//! that is provable in principle where the analysis is not yet written.
+//! # The f64-versus-f32 constraint, which is a harness fact and not a backend one
 //!
-//! So the asymmetry is the finding: **the reference RUNS a float stream, and this
-//! backend declines to lower one.** That is a capability gap, recorded rather
-//! than repaired, and the refusal is right until someone writes the arm.
-//!
-//! **My fix on 2026-09-17 is what makes that refusal reachable.** Before it,
-//! `lower_module` PANICKED on `loop main(t: Float)` before the refusal could be
-//! produced. A panic and a refusal look equally red from a distance; only one of
-//! them is a decision.
-//!
-//! # The driver below is kept, and it is not dead weight
-//!
-//! It is the differential this path will need the day the `Yield` arm is written.
-//! **Keeping it costs nothing and rebuilding it would cost the same care twice**
-//! — the signature is configuration-dependent and hand-named, which is how a
-//! probe here has already taken a SIGBUS. `the_float_stream_driver_still_builds`
-//! keeps it compiling, so it cannot rot unnoticed while unused.
+//! `keleusma::vm::Vm` is `GenericVm<.., f64>` — **the reference runs at eight
+//! bytes in BOTH configurations** — while this backend lowers at the configured
+//! width. Every subject value, reply and result is therefore checked to be exact
+//! in four bytes, OPERANDS INCLUDED. A result-only version of that check let a
+//! phantom divergence through in `scalar_operator_matrix.rs` earlier the same day.
 //!
 //! # The signature is named by hand, which is how a probe here takes a SIGBUS
 //!
@@ -55,9 +53,8 @@
 //! return, not an `i64` — so the usual `fn(i64, ptr, ptr, ptr) -> i64` shape is
 //! wrong and calling through it is undefined behaviour. **The width also changes
 //! with the configuration**: `f64` by default, `f32` under `narrow-float-32`.
-//! Both are named below, and the parameter count is asserted before the call
-//! rather than after it, because this package has already produced a SIGBUS from
-//! a hand-named signature.
+//! Both are named below, and the parameter count and kind are asserted before the
+//! call rather than after it.
 
 mod common;
 
@@ -88,23 +85,7 @@ fn wide(x: Flt) -> f64 {
     x
 }
 
-/// The reference's first yield, or `None` if it does not yield a float.
-fn vm_first_yield(src: &str) -> Option<f64> {
-    let m = common::build(src);
-    let need = required_persistent_capacity_for(&m);
-    let cap = auto_arena_capacity_for(&m, &[]).expect("arena") + need + (64 << 10);
-    let mut arena = keleusma_arena::Arena::with_capacity(cap);
-    arena.resize_persistent(need).expect("persistent");
-    let mut vm = Vm::new(m, &arena).expect("vm");
-    let mut shared: Vec<u8> = Vec::new();
-    match vm.call_with_shared(&mut shared, &[Value::Float(2.0)]) {
-        Ok(VmState::Yielded(Value::Float(v))) => Some(v),
-        _ => None,
-    }
-}
-
 /// Drive the reference, passing and receiving `Value::Float`.
-#[allow(dead_code)]
 fn vm_sequence(src: &str, first: Flt, replies: &[Flt]) -> Vec<f64> {
     let m = common::build(src);
     let need = required_persistent_capacity_for(&m);
@@ -140,7 +121,6 @@ fn vm_sequence(src: &str, first: Flt, replies: &[Flt]) -> Vec<f64> {
 }
 
 /// Drive the lowered module through a signature named for THIS configuration.
-#[allow(dead_code)]
 fn native_sequence(src: &str, first: Flt, replies: &[Flt]) -> Vec<f64> {
     let m = common::build(src);
     let entry = m.entry_point.expect("entry point");
@@ -214,61 +194,170 @@ const SUBJECTS: &[(&str, &str)] = &[
         "a product across a yield",
         "loop main(t: Float) -> Float { let p: Float = t * t; let r = yield p; yield (r - p) }",
     ),
+    // **THE PASS-THROUGH REPLY — A DISTINCT SHAPE, AND IT DISCRIMINATES NOTHING.**
+    //
+    // It was added believing it was the case where a wrong reply kind would
+    // produce a silent wrong NUMBER, since the other three operate on the reply
+    // and would hit the mixed-kind guard instead. **Both halves of that belief
+    // were then measured and the second is false.**
+    //
+    // With the reply's kind reverted to `Int`:
+    //   * the other three REFUSE, loudly — *"Add with operand kinds Int and
+    //     Float"* — so they discriminate the fix, by refusal and not by value;
+    //   * this one LOWERS CLEANLY **and still agrees value for value**, because a
+    //     reply that is only moved is a pure bit copy and no arm consults its kind.
+    //
+    // **So no subject here produces a wrong number without the fix.** The kind is
+    // required for CAPABILITY, not for correctness: without it every float
+    // operation on a reply refuses and the arm delivers nothing. That is a weaker
+    // and more accurate claim than the one `FLOAT_YIELD_SCOPE.md` recorded, and
+    // the scope document is corrected rather than left standing.
+    //
+    // The subject is KEPT because it covers a shape the others do not — a value
+    // crossing the suspension untouched, exercising the spill and restore alone —
+    // not because it guards the kind.
+    (
+        "a reply yielded straight back, never operated on",
+        "loop main(t: Float) -> Float { let r = yield t; yield r }",
+    ),
 ];
 
 fn replies(n: usize) -> Vec<Flt> {
     (0..n).map(|i| ((i % 5) as Flt) + 1.0).collect()
 }
 
-/// **THE ASYMMETRY, PINNED FROM BOTH SIDES.**
+/// **EVERY SUBJECT AND REPLY IS EXACT IN FOUR BYTES, AND THAT IS CHECKED.**
 ///
-/// The reference runs a float stream; this backend refuses one. **Both halves are
-/// asserted**, because a register stale in only one direction is a bias: if the
-/// reference stopped running them the refusal would look justified for the wrong
-/// reason, and if the backend started lowering them this test must fail so the
-/// differential below can be switched on.
-#[test]
-fn the_reference_runs_a_float_stream_and_this_backend_refuses_one() {
-    for (label, src) in SUBJECTS {
-        // The reference side: it really does run these.
-        let first = vm_first_yield(src);
+/// `keleusma::vm::Vm` is `GenericVm<.., f64>` — the reference runs at EIGHT bytes
+/// in BOTH configurations, while this backend lowers at the configured width.
+/// Under `narrow-float-32` the comparison is therefore f64-against-f32, and a
+/// value needing more than a four-byte mantissa would differ **legitimately**,
+/// reporting rounding as a divergence.
+///
+/// **The operands are checked, not only the results**, and that distinction was
+/// paid for: in `scalar_operator_matrix.rs` a result-only version of this check
+/// let a phantom `Disagree` through, because an inexact OPERAND means the two
+/// implementations are computing different problems even when both results
+/// happen to be representable.
+fn assert_four_byte_exact(label: &str, side: &str, values: &[f64]) {
+    for v in values {
         assert!(
-            first.is_some(),
-            "`{label}`: the reference no longer yields from a float stream. Then \
-             the refusal below is no longer a capability gap and this file needs \
-             re-reading from the top."
-        );
-
-        // This backend's side: a refusal, naming the operand kind.
-        let refusals = keleusma_native::module_refusals(
-            &common::build(src),
-            keleusma_native::LowerOptions::default(),
-        );
-        let Some((_, e)) = refusals.first() else {
-            panic!(
-                "`{label}` now LOWERS. That is the gap closing, and it is good \
-                 news — but the differential in this file must then be switched \
-                 on, because a lowered float stream with nothing comparing it is \
-                 exactly the state that let a panic sit on this path unnoticed."
-            );
-        };
-        let msg = format!("{e:?}");
-        assert!(
-            msg.contains("Yield") && msg.contains("float"),
-            "`{label}` is refused for a different reason now: {msg}. The recorded \
-             gap is the `Yield` arm not being written for a float operand; a \
-             different refusal is a different fact."
+            f64::from(*v as f32) == *v,
+            "`{label}`: the {side} value {v} is not exact in four bytes. Under \
+             `narrow-float-32` this differential would report rounding as a \
+             divergence. Choose subjects whose every intermediate is four-byte \
+             exact; do not add a tolerance."
         );
     }
 }
 
-/// **The driver must keep compiling while it waits.** An unused differential that
-/// stops building is one that will be rewritten rather than switched on.
+/// **THE DIFFERENTIAL, SWITCHED ON.**
+///
+/// This file previously asserted an ASYMMETRY — the reference ran float streams
+/// and this backend refused them — and carried these two drivers unused, waiting.
+/// `Op::Yield` is now float-aware for a general stream, so the asymmetry is gone
+/// and the assertion that recorded it would be false.
+///
+/// **The refusal was sound while it stood**, and it is worth saying why it is
+/// safe to drop rather than merely possible: the reply used to be pushed with a
+/// marking that made it an INTEGER-kinded operand, so admitting the yield without
+/// kinding the reply would have computed on a double's bit pattern as an integer
+/// — the silent wrong number the refusal existed to prevent. Both halves landed
+/// together.
 #[test]
-fn the_float_stream_driver_still_builds() {
-    let _ = (
-        vm_sequence as fn(&str, Flt, &[Flt]) -> Vec<f64>,
-        native_sequence as fn(&str, Flt, &[Flt]) -> Vec<f64>,
+fn a_float_stream_agrees_with_the_reference_value_for_value() {
+    for (label, src) in SUBJECTS {
+        let first: Flt = 2.0;
+        let reps = replies(6);
+
+        assert_four_byte_exact(label, "first argument", &[wide(first)]);
+        let widened: Vec<f64> = reps.iter().map(|r| wide(*r)).collect();
+        assert_four_byte_exact(label, "reply", &widened);
+
+        let vm = vm_sequence(src, first, &reps);
+        let native = native_sequence(src, first, &reps);
+
+        assert_four_byte_exact(label, "reference result", &vm);
+        assert_four_byte_exact(label, "backend result", &native);
+
+        assert_eq!(
+            vm, native,
+            "`{label}`: the reference and the backend disagree on a float stream. \
+             This is the oracle for the float yield arm; a disagreement means the \
+             arm is wrong, not that the comparison needs loosening."
+        );
+        assert!(
+            !vm.is_empty(),
+            "`{label}`: the reference produced no yields, so the comparison above \
+             compared two empty vectors and established nothing"
+        );
+    }
+}
+
+/// **THE BACKEND REALLY DOES LOWER THESE NOW**, asserted apart from the
+/// differential.
+///
+/// The comparison above would pass vacuously if `native_sequence` were never
+/// reached, and it would panic rather than report if lowering failed. This says
+/// the refusal is gone, in the terms the refusal itself used.
+#[test]
+fn a_general_float_stream_is_no_longer_refused() {
+    for (label, src) in SUBJECTS {
+        let refusals = keleusma_native::module_refusals(
+            &common::build(src),
+            keleusma_native::LowerOptions::default(),
+        );
+        assert!(
+            refusals.is_empty(),
+            "`{label}` is still refused: {refusals:?}. The differential above \
+             cannot run, and the float yield arm is not in place."
+        );
+    }
+}
+
+/// **THE DEGENERATE YIELD IS UNTOUCHED, AND THAT IS A HOST ABI PROMISE.**
+///
+/// A degenerate yield is one in TAIL POSITION: the emitter lowers it to the host
+/// callback `kel_yield(i64) -> i64` rather than to a return. Admitting `Op::Yield`
+/// to the float-aware set WITHOUT the `general_stream` condition would carry a
+/// double's bit pattern through that signature, where the host reads an integer —
+/// a host-facing ABI change made by accident.
+///
+/// # ⚠ THE FIRST VERSION OF THIS TEST WAS VACUOUS
+///
+/// It used `fn ping(t: Float) -> Float {{ let r = yield t; r }}` and returned
+/// early, because **the reference refuses that shape outright** — so it
+/// established nothing about the backend while passing. Found by probing what the
+/// reference actually does with the subject, not by the test failing.
+///
+/// The shape below is a real degenerate yield that the reference DOES compile,
+/// so the refusal asserted here is the backend's own.
+#[test]
+fn a_float_degenerate_yield_is_still_refused() {
+    let src = "loop main(t: Float) -> Float { yield t }";
+    let m = common::build(src);
+    let refusals = keleusma_native::module_refusals(&m, keleusma_native::LowerOptions::default());
+    let Some((_, e)) = refusals.first() else {
+        panic!(
+            "a float-carrying DEGENERATE yield now lowers. `kel_yield` takes an \
+             `i64`, so this is a host-facing ABI change, and it must not happen \
+             as a side effect of admitting the general-stream arm."
+        );
+    };
+    let msg = format!("{e:?}");
+    assert!(
+        msg.contains("Yield") && msg.contains("float"),
+        "the degenerate float yield is refused for a different reason now: \
+         {msg}. The recorded cause is the operand kind failing closed."
     );
-    assert_eq!(replies(3).len(), 3, "the reply generator is intact");
+
+    // **NON-VACUITY.** The same shape at `Word` must LOWER, so the refusal above
+    // is about the float and not about degenerate yields in general.
+    let control = common::build("loop main(t: Word) -> Word { yield t }");
+    assert!(
+        keleusma_native::module_refusals(&control, keleusma_native::LowerOptions::default())
+            .is_empty(),
+        "the Word control is refused too, so the assertion above says nothing \
+         about floats"
+    );
 }

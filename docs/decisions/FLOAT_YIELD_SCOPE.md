@@ -47,9 +47,31 @@ otherwise leak into a later integer one. That is correct defensive behaviour.
 
 The resumed value is pushed with `push_w`. **So after a `yield`, the reply is an
 integer-kinded operand even in a float stream**, and the next float operation on it
-sees a kind mismatch. Admitting `Op::Yield` to `float_aware` without addressing
-this would produce a module that lowers and computes on a float's bit pattern as an
-integer — **precisely the silent wrong number the refusal prevents.**
+sees a kind mismatch.
+
+> ⚠ **CORRECTED 2026-09-18, BY MEASUREMENT, AND THE CORRECTION MATTERS.**
+>
+> This paragraph continued: *"Admitting `Op::Yield` to `float_aware` without
+> addressing this would produce a module that lowers and computes on a float's bit
+> pattern as an integer — precisely the silent wrong number the refusal prevents."*
+>
+> **It does not.** Admitting the yield with the reply still kinded `Int` was
+> implemented and driven in both float configurations:
+>
+> * a subject that OPERATES on the reply **refuses, loudly** — *"Add with operand
+>   kinds Int and Float: one side is a float and the other is not, so no lowering
+>   is correct for both"*. The mixed-kind guard catches it.
+> * a subject that yields the reply straight back **lowers cleanly and agrees with
+>   the reference value for value**, because a value that is only moved is a pure
+>   bit copy and no arm consults its kind.
+>
+> **No subject produced a wrong number.** The kind is required for CAPABILITY —
+> without it every float operation on a reply refuses and the arm delivers nothing
+> — not to prevent a miscompile. The hazard was overstated in the direction that
+> makes the work sound more necessary, which is the direction to distrust.
+>
+> The fix is unchanged and still correct. Only the claim about what it prevents
+> was wrong.
 
 ## The shape of the work, for whoever takes it
 

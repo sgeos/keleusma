@@ -3952,8 +3952,20 @@ fn lower_chunk_body<'ctx>(
                     }
                     _ => false,
                 };
+            // **`Op::Yield` IS ADMITTED ONLY FOR A GENERAL STREAM, AND THE
+            // CONDITION IS THE POINT.** The degenerate form lowers to the host
+            // callback `kel_yield(i64) -> i64`; carrying a float through that
+            // signature is a HOST-FACING ABI CHANGE, not an emitter change. A
+            // blanket entry in the list below would admit both forms and
+            // silently mispass the degenerate one, handing the host a double's
+            // bit pattern in an `i64` parameter it reads as an integer.
+            //
+            // The lowering arm is itself spelled `Op::Yield if general_stream`,
+            // so this guard carries the same condition rather than a weaker one.
+            let float_yield_in_a_general_stream = general_stream && matches!(op, Op::Yield);
             let float_aware = float_store_into_a_float_slot
                 || float_into_a_composite_body
+                || float_yield_in_a_general_stream
                 || matches!(
                     op,
                     Op::Add
@@ -7027,14 +7039,35 @@ fn lower_chunk_body<'ctx>(
                     } else {
                         rv_raw.into_int_value()
                     };
-                    st.push_w(
+                    // **THE RESUMED VALUE CARRIES ITS DECLARED KIND, AND THE
+                    // KIND COMES FROM THE TAG RATHER THAN FROM THE LLVM VALUE.**
+                    //
+                    // This was `push_w`, which marks the slot `Int` — correctly,
+                    // and that default is deliberately left alone: the operand
+                    // stack reuses slots, so a stale `Float` tag would otherwise
+                    // leak into a later integer pushed at the same depth. What
+                    // was wrong is that a float stream's reply took that default
+                    // too, so after a `yield` the reply was an integer-kinded
+                    // operand and the next float operation on it refused.
+                    //
+                    // The tag is the source, not `is_float_value()`. For FLOAT
+                    // the two agree, but the habit does not generalise — a
+                    // `Fixed` IS an `i64` at the LLVM level, so the machine type
+                    // cannot discriminate it, which this file already records
+                    // about the `Fixed` parameter seeding.
+                    //
+                    // Everything that is not a declared `Float` keeps exactly the
+                    // marking `push_w` gave it, so no non-float behaviour moves.
+                    let declared = chunk.param_types.first().copied();
+                    let resumed_kind = if declared == Some(TypeTag::Float) {
+                        OperandKind::Float
+                    } else {
+                        OperandKind::Int
+                    };
+                    st.push_k(
                         rv,
-                        chunk
-                            .param_types
-                            .first()
-                            .copied()
-                            .map(width_of_tag)
-                            .unwrap_or(Width::Unknown),
+                        declared.map(width_of_tag).unwrap_or(Width::Unknown),
+                        resumed_kind,
                     );
                     note!(i + 1, st.depth);
                     st.b.build_unconditional_branch(blocks[&(i + 1)]).unwrap();
