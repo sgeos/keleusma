@@ -10,6 +10,77 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-17, session 66, fourth increment.**
+
+**THE CORPUS WAS GENERATING MUTANTS FASTER THAN IT WAS DRIVING THEM. THAT IS FIXED,
+AND IT FOUND NOTHING — WHICH IS ITSELF THE RESULT.**
+
+All 871 accepted mutants had been receiving a single argument-free `call`, with no
+shared-data buffer and **no resume**. The typed pass is documented as deferring on a
+**per-yield reentrant reply** — a load-time check deliberately traded for a retained
+runtime guard — so the resume path is where that guard is load-bearing, and no
+hostile module had ever reached it.
+
+**Reach, counted and asserted**: **608** mutants ran bytecode, **119** yielded, **119**
+were resumed. Arguments come from the module's OWN `param_types` (guessed ones are
+refused before any bytecode runs, leaving the phase green and empty), the shared
+buffer is sized from its own declaration, and the resume loop is bounded because a
+`loop` is productively divergent and yielding forever is the HEALTHY outcome.
+
+**THE SAME SHAPE HAS NOW APPEARED THREE INCREMENTS RUNNING**, and it is the thing
+worth carrying forward: **an outcome that looks like a pass while testing nothing.**
+Nineteen schema-hash mutants read that way. A whole descriptor table read that way.
+The entire execution phase could have. The stage census cannot see any of it, because
+it records where a mutant STOPPED, not what it DID.
+
+**The result, stated as narrowly as it deserves**: the retained runtime guards hold
+across the reentrant path on hostile input. That is the first time that half of the
+defer-on-unknown argument has been exercised rather than reasoned about.
+
+**Unchanged and untouched**: the seven operator decisions, the opcode count,
+`BYTECODE_VERSION`, and every file under `src/selfhost/kel/`. H2 remains open on the
+trade stated below.
+
+---
+
+**2026-09-17, session 66, third increment.**
+
+**THE HOSTILE-BYTECODE CORPUS NOW COVERS BOTH UNTRUSTED ARRIVALS, THE DESCRIPTOR
+TABLES, AND THE COROUTINE PATHS. NO NEW DEFECT FOUND.**
+
+Census: **5288** mutants over seven families — 4286 refused by verification, 131
+refused at the hot swap, 871 hot-swapped into a live machine and run. Runs in under
+seven seconds.
+
+**THE PER-FAMILY FLOOR PAID FOR ITSELF IN ONE RUN.** The aggregate read 5184
+mutants, all healthy, while the **native-return-shape table had never been touched**
+— no corpus program called a native. An aggregate floor is satisfied by whichever
+population is largest, and the instruction family is four thousand strong.
+
+**A CLAIM I WROTE AN HOUR EARLIER WAS WRONG, AND IT IS THE USEFUL PART.** I treated
+`schema_hash` as a load-time fingerprint and expected mutations of it to be refused.
+All nineteen ran. It is `compute_schema_hash(data_layout)` and the **only** place it
+is compared is the HOT SWAP. So those mutants were testing nothing, and the census
+could not see it, because "ran without panicking" is what a pass looks like. **A
+mutation aimed at a check that does not exist on the path under test is
+indistinguishable from a passing one.**
+
+That exposed the real gap: the threat model names TWO arrivals and the harness
+covered one. Adding the hot swap turned those nineteen into nineteen refusals — the
+check observed doing its job.
+
+**THE CLEAN RESULT, STATED PRECISELY.** A wrong flat shape in a signature widens what
+the typed pass will accept, and the runtime bounds guard it defers to holds. The
+defer-on-unknown design is documented as sound; what was not known is whether a shape
+that is WRONG rather than unknown behaves the same way. It does, across these
+mutations. That is a result about the enumerated mutations, not a general claim.
+
+**Unchanged and untouched**: the seven operator decisions, the opcode count,
+`BYTECODE_VERSION`, and every file under `src/selfhost/kel/`. H2 remains open on the
+trade stated below.
+
+---
+
 **2026-09-16, session 66, first increment.**
 
 **THE VERIFIER COULD BE MADE TO HANG FOREVER, OR TO ABORT THE PROCESS, BY A MODULE

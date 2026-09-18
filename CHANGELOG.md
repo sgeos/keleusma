@@ -9,6 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Accepted hostile modules are now driven through the execution protocol that
+  reaches the retained runtime guards.** The corpus had been generating mutants
+  faster than it drove them: every module verification accepted received a
+  single argument-free call, with no shared-data buffer and no resume, so the
+  coroutine reentry path was never entered. That path matters because the typed
+  operand-stack pass is documented as deferring on a per-yield reentrant reply,
+  a load-time check deliberately traded for a runtime guard, which makes resume
+  exactly where the guard is load-bearing. An accepted mutant is now called
+  with arguments derived from its own declared parameter types, since guessed
+  ones are refused by the call's type check before any bytecode runs and would
+  leave the phase vacuous while still looking green, with a shared-data buffer
+  sized from the module's own declaration, and resumed while it keeps yielding
+  under a bound, a bound being necessary because a loop block is productively
+  divergent and yielding forever is the healthy outcome rather than a defect.
+  How far execution actually got is counted and asserted rather than assumed:
+  six hundred and eight mutants ran bytecode, one hundred and nineteen yielded,
+  and one hundred and nineteen were resumed. No new defect was found, which
+  establishes for the first time by execution rather than by reasoning that the
+  retained runtime guards hold across the reentrant path on hostile input.
+
+- **The hostile-bytecode corpus reaches the descriptor tables, the coroutine
+  paths, and the hot swap.** It previously mutated instructions and chunk
+  metadata only, so the module-level tables the typed operand-stack pass seeds
+  operand shapes from were exercised on the consuming side and never on the
+  seeding side, although four of the audit findings it descends from were about
+  trusting a compiler-baked value an attacker supplies. Per-chunk signatures,
+  native return shapes, enum layouts and the schema hash are now mutated, two
+  coroutine programs and a native-calling program were added so the stream,
+  productivity and native-shape paths receive mutants of their own, and every
+  mutant is now carried through both documented untrusted arrivals rather than
+  one: a fresh load, and a hot swap into a machine that is already live. The
+  second matters because a hot swap runs compatibility checks a fresh load has
+  no occasion to, the schema hash being compared only there, so before this
+  every mutation of that field was accepted and counted as a pass. The census
+  is now per family, with a floor each, after an aggregate count of five
+  thousand one hundred and eighty four mutants looked healthy while one entire
+  table had never been touched, because no program in the corpus called a
+  native. Five thousand two hundred and eighty eight mutants across seven
+  families: four thousand two hundred and eighty six refused by verification,
+  one hundred and thirty one refused at the swap, and eight hundred and
+  seventy one hot-swapped into a live machine and run. No further defect was
+  found, which is a result about the enumerated mutations rather than a general
+  claim.
+
 - **The parser's recursion limit now documents its measured margin, replacing a
   claim that measurement refutes.** The constant asserted that the limit keeps a
   maximally nested admissible program well under two mebibytes of stack even in

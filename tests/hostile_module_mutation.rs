@@ -5,12 +5,30 @@
 //! # The threat model this exercises
 //!
 //! `Vm::new` runs `verify` on bytecode the host did not compile. The two
-//! documented arrivals are a hot-swapped module and a precompiled artifact,
+//! documented arrivals are a precompiled artifact and a hot-swapped module,
 //! and the crate's own `tests/typed_conformance.rs` names the same model.
 //! That file carries **five** mutations, each hand-written to recreate one
-//! audit finding. This file is the systematic form: it enumerates mutations
-//! over every instruction of a corpus of real programs and carries each mutant
-//! through the public entry a host would use.
+//! audit finding. This file is the systematic form, and it carries every
+//! mutant through **both** arrivals: a fresh load into a new virtual machine,
+//! and a hot swap into one that is already live.
+//!
+//! Both are needed, and the second was added after the first had run for a
+//! while. A hot swap runs compatibility checks a fresh load has no occasion
+//! to: the schema hash is compared **only** there, so before the swap stage
+//! existed every mutation of that field was accepted and counted as a pass.
+//!
+//! # What is mutated
+//!
+//! - Every instruction: operands, opcode substitution, deletion, duplication.
+//! - Chunk metadata: local and parameter counts.
+//! - The module entry point.
+//! - The **module-level descriptor tables** the typed operand-stack pass
+//!   (A.2.1) seeds operand shapes from — per-chunk signatures, native return
+//!   shapes, and enum layouts — plus the schema hash. Four audit findings (B1,
+//!   B2, B6, B8) were about trusting a compiler-baked value an attacker
+//!   supplies, and B8 was an enum's payload padding hint specifically. The
+//!   instruction mutations exercise the ops that CONSUME these tables; these
+//!   exercise the seeding side.
 //!
 //! # Why the module is mutated and the artifact re-encoded
 //!
@@ -29,6 +47,7 @@
 //! - the encoder refuses it (it tested nothing; counted separately);
 //! - the loader rejects it;
 //! - `verify` rejects it;
+//! - a live virtual machine refuses it as a hot swap;
 //! - it runs to a result, an error, or a yield, without panicking or hanging.
 //!
 //! **Nothing here asserts a mutant computes anything in particular.** A
@@ -44,19 +63,62 @@
 //! therefore part of the contract: it fails when the census collapses, and it
 //! prints its counts so a reader need not make it fail to see them. The counts
 //! come from the real outcome of each stage, never from searching an error
-//! message for a substring.
+//! message for a substring, and each mutant carries its family as a field
+//! rather than having one parsed back out of its printed identity.
+//!
+//! **The census is per family, and that is not decoration.** An aggregate
+//! count hides a family that produces nothing: at 5184 mutants this file
+//! looked healthy while the native-return-shape table had never been touched,
+//! because no corpus program called a native. A per-family floor caught it in
+//! one run. The same structure is what shows the schema-hash mutants are
+//! refused at the swap rather than silently passing.
 //!
 //! # What this does NOT cover
 //!
 //! - Signature forgery, covered by the signing tests.
 //! - Wire-container corruption, covered by `tests/wire_fuzz.rs` for the
 //!   decoders and by `keleusma-wire`'s own suite for the container.
-//! - Mutations of the auxiliary tables that the `Module` type does not
-//!   express. This file reaches what a `Module` can hold.
+//! - Auxiliary-body structure the `Module` type does not express. The
+//!   module-level descriptor tables ARE `Module` fields and are mutated here;
+//!   an earlier version of this note said otherwise and was wrong about its
+//!   own subject.
 //! - A process abort. A stack overflow aborts rather than unwinding, so no
 //!   watchdog and no `catch_unwind` can turn it into a named failure; it ends
 //!   the harness. The first run of this file did exactly that, and the defect
 //!   it found is pinned in `tests/verify_hostile_termination.rs`.
+//! - Whether an accepted mutant computes the RIGHT answer. Only that it does
+//!   not panic, hang, or read out of bounds.
+//!
+//! # How an accepted mutant is driven, and why it matters
+//!
+//! A mutant that verification accepts is not merely called once. It is called
+//! with arguments derived from its OWN declared parameter types — guessed ones
+//! are refused by the call's type check before any bytecode runs, which would
+//! leave the whole execution phase vacuous while still looking green — with a
+//! shared-data buffer sized from the module's own declaration, and then
+//! resumed while it keeps yielding.
+//!
+//! The resume matters specifically. The typed operand-stack pass is documented
+//! as running in a sound defer-on-unknown mode, and one of the two cases it
+//! names is a **per-yield reentrant reply**. That is a load-time check
+//! deliberately traded for a retained runtime guard, so the resume path is
+//! where that guard is load-bearing — and nothing was entering it. The
+//! `Reached` record counts how many mutants ran, yielded and resumed, and the
+//! test fails if any of those collapses to zero.
+//!
+//! A `loop` block is productively divergent by design, so a healthy stream
+//! yields forever. The resume count is bounded, and reaching the bound is the
+//! normal outcome rather than a defect.
+//!
+//! # What it found, and what it did not
+//!
+//! Its first run found audit H1, a verifier that could be hung or made to
+//! abort by one branch operand. Since then it has found no further defect. The
+//! descriptor tables are broadly attacker-controllable and the module is still
+//! disposed of safely: a wrong flat shape widens what the typed pass will
+//! accept, and the runtime bounds guard the pass defers to holds. **That is a
+//! result, not an absence of one**, but it is a result about the mutations
+//! enumerated here, which is why the census prints what it covered.
 //!
 //! # Every phase is watchdogged, and that is not the original design
 //!
@@ -76,14 +138,15 @@ use std::time::Duration;
 
 use keleusma::Arena;
 use keleusma::bytecode::{
-    ArrayElem, EnumField, Module, NewCompositeOperand, Op, StructField, TupleField,
+    ArrayElem, EnumField, Module, NewCompositeOperand, Op, StructField, TupleField, TypeTag, Value,
+    WireShape,
 };
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
 use keleusma::value_layout::{CompositeKind, ScalarKind};
 use keleusma::verify::verify;
-use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, required_persistent_capacity_for};
+use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 use keleusma::wire_format::{module_from_wire_bytes, module_to_wire_bytes};
 
 /// Wall-clock allowance for one mutant, across every phase.
@@ -162,6 +225,34 @@ const CORPUS: &[(&str, &str)] = &[
          fn main() -> Word {\n\
          \x20 let t = split(9);\n\
          \x20 t.0 + t.1\n\
+         }",
+    ),
+    // A COROUTINE, because without one the Stream, Reset and Yield opcodes and
+    // the productivity classification receive mutants only by accident. H1 was
+    // found in `compute_always_yielding`, which exists for Stream chunks, and
+    // was reached only because that walk runs over every chunk in the module.
+    (
+        "stream_yield",
+        "loop main(seed: Word) -> Word {\n\
+         \x20 let a = seed + 1;\n\
+         \x20 if a > 3 { yield a } else { yield seed }\n\
+         }",
+    ),
+    // A NATIVE call, because without one `native_return_shapes` is empty and
+    // that whole descriptor table receives no mutant. The per-family census
+    // caught exactly this: the aggregate looked healthy at 5184 mutants while
+    // one table had never been touched.
+    (
+        "native_call",
+        "use math::sqrt\n\
+         fn main() -> Float { math::sqrt(9.0) }",
+    ),
+    (
+        "stream_delegating",
+        "fn bump(n: Word) -> Word { n + 1 }\n\
+         loop main(seed: Word) -> Word {\n\
+         \x20 let a = bump(seed);\n\
+         \x20 yield a\n\
          }",
     ),
 ];
@@ -376,13 +467,61 @@ fn substitutes() -> alloc::vec::Vec<(&'static str, Op)> {
     ]
 }
 
+/// Flat shapes substituted into the descriptor tables.
+///
+/// `Top` is the lattice top and is documented as reproducing the unseeded
+/// behaviour, so it is the benign end. The rest are wrong in the ways that
+/// matter to a pass reading a body at a baked offset: a scalar kind that is
+/// not a kind, a composite body claimed larger than any that exists, and one
+/// claimed empty.
+const SHAPES: &[WireShape] = &[
+    WireShape::Top,
+    WireShape::Scalar { kind: 0 },
+    WireShape::Scalar { kind: 255 },
+    WireShape::Flat {
+        kind: 0,
+        size: u32::MAX,
+    },
+    WireShape::Flat { kind: 255, size: 0 },
+];
+
 /// One mutation applied to one module, with the identity that reproduces it.
 struct Mutant {
     /// Stable identity, printable and sufficient to re-derive the mutation
     /// without re-running anything. The harness is enumerative rather than
     /// random, so this is the whole reproduction.
     id: alloc::string::String,
+    /// Which family of mutation produced this mutant.
+    ///
+    /// Carried explicitly rather than parsed back out of [`Self::id`]. Reading
+    /// a category out of a formatted string is the same crude-instrument
+    /// mistake this suite has paid for elsewhere: it silently miscounts the
+    /// moment an identity's shape changes, and a census that miscounts is
+    /// worse than no census, because it still reads as evidence.
+    family: Family,
     module: Module,
+}
+
+/// Mutation families, so the reach census can say which part of the module a
+/// mutant attacked rather than only how many there were.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Family {
+    /// An instruction's operand, opcode, presence or duplication.
+    Instruction,
+    /// A chunk's local or parameter counts.
+    ChunkMeta,
+    /// The module's entry point.
+    EntryPoint,
+    /// A per-chunk signature: a parameter, the return, the resume value, or
+    /// the table's own length.
+    Signature,
+    /// An enum layout: a discriminant, the payload padding hint, or the
+    /// variant list.
+    EnumLayout,
+    /// A native return shape.
+    NativeShape,
+    /// The flat-layout schema hash.
+    SchemaHash,
 }
 
 /// Every mutation of every program in the corpus.
@@ -407,6 +546,7 @@ fn mutants() -> alloc::vec::Vec<Mutant> {
                         let mut m = base.clone();
                         m.chunks[ci].ops[oi] = op;
                         out.push(Mutant {
+                            family: Family::Instruction,
                             id: alloc::format!("{prog}/c{ci}/op{oi}/operand1={v}"),
                             module: m,
                         });
@@ -417,6 +557,7 @@ fn mutants() -> alloc::vec::Vec<Mutant> {
                         let mut m = base.clone();
                         m.chunks[ci].ops[oi] = op;
                         out.push(Mutant {
+                            family: Family::Instruction,
                             id: alloc::format!("{prog}/c{ci}/op{oi}/operand2={v}"),
                             module: m,
                         });
@@ -430,6 +571,7 @@ fn mutants() -> alloc::vec::Vec<Mutant> {
                     let mut m = base.clone();
                     m.chunks[ci].ops[oi] = *op;
                     out.push(Mutant {
+                        family: Family::Instruction,
                         id: alloc::format!("{prog}/c{ci}/op{oi}/sub={name}"),
                         module: m,
                     });
@@ -438,6 +580,7 @@ fn mutants() -> alloc::vec::Vec<Mutant> {
                 let mut deleted = base.clone();
                 deleted.chunks[ci].ops.remove(oi);
                 out.push(Mutant {
+                    family: Family::Instruction,
                     id: alloc::format!("{prog}/c{ci}/op{oi}/delete"),
                     module: deleted,
                 });
@@ -445,6 +588,7 @@ fn mutants() -> alloc::vec::Vec<Mutant> {
                 let mut doubled = base.clone();
                 doubled.chunks[ci].ops.insert(oi, here);
                 out.push(Mutant {
+                    family: Family::Instruction,
                     id: alloc::format!("{prog}/c{ci}/op{oi}/duplicate"),
                     module: doubled,
                 });
@@ -459,6 +603,7 @@ fn mutants() -> alloc::vec::Vec<Mutant> {
                     let mut m = base.clone();
                     m.chunks[ci].local_count = v;
                     out.push(Mutant {
+                        family: Family::ChunkMeta,
                         id: alloc::format!("{prog}/c{ci}/local_count={v}"),
                         module: m,
                     });
@@ -469,10 +614,173 @@ fn mutants() -> alloc::vec::Vec<Mutant> {
                     let mut m = base.clone();
                     m.chunks[ci].param_count = v;
                     out.push(Mutant {
+                        family: Family::ChunkMeta,
                         id: alloc::format!("{prog}/c{ci}/param_count={v}"),
                         module: m,
                     });
                 }
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // Module-level DESCRIPTOR TABLES.
+        //
+        // The typed operand-stack pass (A.2.1) reconstructs each operand's
+        // flat shape by seeding from three additive tables: per-chunk
+        // signatures, native return shapes, and enum layouts. Four audit
+        // findings (B1, B2, B6, B8) were about trusting a compiler-baked value
+        // an attacker supplies, and B8 was `min_payload` specifically. The
+        // instruction mutations above exercise the ops that CONSUME these
+        // tables; these exercise the seeding side, which nothing did.
+        // ------------------------------------------------------------------
+
+        for (si, sig) in base.signatures.iter().enumerate() {
+            for (wi, w) in SHAPES.iter().enumerate() {
+                let mut m = base.clone();
+                m.signatures[si].ret = *w;
+                out.push(Mutant {
+                    family: Family::Signature,
+                    id: alloc::format!("{prog}/sig{si}/ret=shape{wi}"),
+                    module: m,
+                });
+                let mut m = base.clone();
+                m.signatures[si].resume = *w;
+                out.push(Mutant {
+                    family: Family::Signature,
+                    id: alloc::format!("{prog}/sig{si}/resume=shape{wi}"),
+                    module: m,
+                });
+                for pi in 0..sig.params.len() {
+                    let mut m = base.clone();
+                    m.signatures[si].params[pi] = *w;
+                    out.push(Mutant {
+                        family: Family::Signature,
+                        id: alloc::format!("{prog}/sig{si}/param{pi}=shape{wi}"),
+                        module: m,
+                    });
+                }
+            }
+            // An extra parameter the callee does not have, and one fewer than
+            // it does: the arity the pass checks a `Call`'s arguments against.
+            let mut m = base.clone();
+            m.signatures[si].params.push(WireShape::Scalar { kind: 0 });
+            out.push(Mutant {
+                family: Family::Signature,
+                id: alloc::format!("{prog}/sig{si}/param_added"),
+                module: m,
+            });
+            if !sig.params.is_empty() {
+                let mut m = base.clone();
+                m.signatures[si].params.pop();
+                out.push(Mutant {
+                    family: Family::Signature,
+                    id: alloc::format!("{prog}/sig{si}/param_dropped"),
+                    module: m,
+                });
+            }
+        }
+
+        // The whole signature table removed, and one entry short of the chunk
+        // count. An absent table is documented as reproducing the unseeded
+        // behaviour, so this is a claim under test rather than an attack.
+        for (what, f) in [("sigs_cleared", 0usize), ("sigs_truncated", 1usize)] {
+            if base.signatures.len() >= f {
+                let mut m = base.clone();
+                m.signatures
+                    .truncate(base.signatures.len().saturating_sub(if f == 0 {
+                        base.signatures.len()
+                    } else {
+                        f
+                    }));
+                out.push(Mutant {
+                    family: Family::Instruction,
+                    id: alloc::format!("{prog}/{what}"),
+                    module: m,
+                });
+            }
+        }
+
+        for (ei, layout) in base.enum_layouts.iter().enumerate() {
+            // B8: `min_payload` is the padding hint a flat enum's fixed body
+            // size is computed from, so it decides where every payload field
+            // is read.
+            for &v in &[0u32, 1, 7, u32::MAX] {
+                if layout.min_payload != v {
+                    let mut m = base.clone();
+                    m.enum_layouts[ei].min_payload = v;
+                    out.push(Mutant {
+                        family: Family::EnumLayout,
+                        id: alloc::format!("{prog}/enum{ei}/min_payload={v}"),
+                        module: m,
+                    });
+                }
+            }
+            for vi in 0..layout.variants.len() {
+                for &d in &[-1i64, 0, 1, i64::MAX] {
+                    if layout.variants[vi].disc != d {
+                        let mut m = base.clone();
+                        m.enum_layouts[ei].variants[vi].disc = d;
+                        out.push(Mutant {
+                            family: Family::EnumLayout,
+                            id: alloc::format!("{prog}/enum{ei}/variant{vi}/disc={d}"),
+                            module: m,
+                        });
+                    }
+                }
+                let mut m = base.clone();
+                m.enum_layouts[ei].variants.remove(vi);
+                out.push(Mutant {
+                    family: Family::EnumLayout,
+                    id: alloc::format!("{prog}/enum{ei}/variant{vi}/removed"),
+                    module: m,
+                });
+            }
+            let mut m = base.clone();
+            m.enum_layouts[ei].variants.clear();
+            out.push(Mutant {
+                family: Family::EnumLayout,
+                id: alloc::format!("{prog}/enum{ei}/variants_cleared"),
+                module: m,
+            });
+        }
+        if !base.enum_layouts.is_empty() {
+            let mut m = base.clone();
+            m.enum_layouts.clear();
+            out.push(Mutant {
+                family: Family::EnumLayout,
+                id: alloc::format!("{prog}/enum_layouts_cleared"),
+                module: m,
+            });
+        }
+
+        for (ni, _) in base.native_return_shapes.iter().enumerate() {
+            for (wi, w) in SHAPES.iter().enumerate() {
+                let mut m = base.clone();
+                m.native_return_shapes[ni] = *w;
+                out.push(Mutant {
+                    family: Family::NativeShape,
+                    id: alloc::format!("{prog}/native{ni}=shape{wi}"),
+                    module: m,
+                });
+            }
+        }
+
+        // The schema hash. **It is not a load-time fingerprint**, which an
+        // earlier version of this comment claimed: it is
+        // `compute_schema_hash(data_layout)` and the only place it is compared
+        // is the HOT SWAP, where the running module's hash must match the
+        // incoming one. So a fresh load of a module carrying any hash at all
+        // is correct behaviour, and these mutants earn their keep at the swap
+        // stage below rather than here.
+        for &h in &[0u32, 1, u32::MAX] {
+            if base.schema_hash != h {
+                let mut m = base.clone();
+                m.schema_hash = h;
+                out.push(Mutant {
+                    family: Family::SchemaHash,
+                    id: alloc::format!("{prog}/schema_hash={h}"),
+                    module: m,
+                });
             }
         }
 
@@ -484,6 +792,7 @@ fn mutants() -> alloc::vec::Vec<Mutant> {
                 let mut m = base.clone();
                 m.entry_point = Some(v);
                 out.push(Mutant {
+                    family: Family::EntryPoint,
                     id: alloc::format!("{prog}/entry_point={v}"),
                     module: m,
                 });
@@ -492,6 +801,7 @@ fn mutants() -> alloc::vec::Vec<Mutant> {
         let mut no_entry = base.clone();
         no_entry.entry_point = None;
         out.push(Mutant {
+            family: Family::EntryPoint,
             id: alloc::format!("{prog}/entry_point=none"),
             module: no_entry,
         });
@@ -520,6 +830,12 @@ enum Stage {
     /// The module verified and execution returned, yielded, or faulted
     /// cleanly.
     Ran,
+    /// The module ran, and was then refused by a live virtual machine's hot
+    /// swap.
+    SwapRejected,
+    /// The module ran, and a live virtual machine accepted it as a hot swap
+    /// and then executed it.
+    Swapped,
 }
 
 /// A breach of the invariant, with the identity that reproduces it.
@@ -536,8 +852,9 @@ struct Breach {
 /// has not answered is detached rather than joined: a thread stuck in a
 /// non-terminating walk cannot be asked to stop, and joining it would make the
 /// harness inherit the hang it exists to report.
-fn drive(m: Mutant) -> Result<Stage, Breach> {
+fn drive(m: Mutant) -> Result<(Family, Stage, Drove), Breach> {
     let id = m.id;
+    let family = m.family;
     let module = m.module;
 
     let (tx, rx) = mpsc::channel();
@@ -547,7 +864,7 @@ fn drive(m: Mutant) -> Result<Stage, Breach> {
     });
 
     match rx.recv_timeout(WATCHDOG) {
-        Ok(Ok(stage)) => Ok(stage),
+        Ok(Ok((stage, drove))) => Ok((family, stage, drove)),
         Ok(Err(_)) => Err(Breach {
             id,
             what: "a phase panicked",
@@ -564,43 +881,243 @@ fn drive(m: Mutant) -> Result<Stage, Breach> {
 /// A panic anywhere here is caught by the caller and reported against the
 /// mutant's identity. Returning normally means the mutant was disposed of by
 /// one of the stages without breaching anything.
-fn pipeline(module: Module) -> Stage {
+fn pipeline(module: Module) -> (Stage, Drove) {
     let Ok(encoded) = module_to_wire_bytes(&module) else {
-        return Stage::EncodeRefused;
+        return (Stage::EncodeRefused, Drove::default());
     };
     let Ok(loaded) = module_from_wire_bytes(&encoded) else {
-        return Stage::LoadRejected;
+        return (Stage::LoadRejected, Drove::default());
     };
     let need = required_persistent_capacity_for(&loaded);
     if need > PERSISTENT_CAP {
-        return Stage::PersistentRefused;
+        return (Stage::PersistentRefused, Drove::default());
     }
     if verify(&loaded).is_err() {
-        return Stage::VerifyRejected;
+        return (Stage::VerifyRejected, Drove::default());
     }
     let Ok(mut arena) = Arena::try_with_capacity(DEFAULT_ARENA_CAPACITY + need) else {
-        return Stage::PersistentRefused;
+        return (Stage::PersistentRefused, Drove::default());
+    };
+    if arena.resize_persistent(need).is_err() {
+        return (Stage::Ran, Drove::default());
+    }
+    let shared_len = keleusma::vm::shared_data_bytes_for(&loaded);
+    if shared_len > SHARED_CAP {
+        return (Stage::PersistentRefused, Drove::default());
+    }
+    let mut shared = alloc::vec![0u8; shared_len];
+    let entry = loaded.entry_point.and_then(|i| loaded.chunks.get(i));
+    let args = entry.map(args_for).unwrap_or_default();
+    let mut drove = Drove::default();
+    if let Ok(mut vm) = Vm::new(loaded, &arena) {
+        drove = drive_execution(&mut vm, &args, &mut shared);
+    }
+
+    // The SECOND untrusted arrival. The verifier's documented job is to
+    // protect a hot-swapped module and a precompiled artifact; everything
+    // above is the precompiled path only. A hot swap enters a virtual machine
+    // that is already live, with a running module whose data layout the
+    // incoming one must be compatible with, so it exercises checks the fresh
+    // load has no occasion to run -- the schema-hash comparison among them,
+    // which is the ONLY place that field is ever compared.
+    (swap_into_a_live_vm(&encoded), drove)
+}
+
+/// Resume cycles a yielding mutant is given.
+///
+/// A `loop` block is PRODUCTIVELY DIVERGENT by design: a valid stream yields
+/// forever, so reaching this bound is the normal outcome for a healthy mutant
+/// and is not a defect. The bound exists so the harness terminates, not to
+/// catch anything.
+const MAX_RESUMES: u32 = 8;
+
+/// Largest shared-data buffer the harness will lend a mutant.
+///
+/// A hostile module declares its own `shared_data_bytes`, so the claim is
+/// refused above this rather than honoured, the same way the persistent region
+/// is. A host sizes its own buffer and would refuse identically.
+const SHARED_CAP: usize = 1 << 20;
+
+/// Arguments for the entry chunk, taken from its OWN declared parameter types.
+///
+/// Guessed arguments would be rejected by the call's type check before any
+/// bytecode ran, which would make the whole execution phase vacuous while
+/// still looking green. `Composite` gets `Unit`, which is refused; that is
+/// correct and is why the census counts what actually ran rather than what was
+/// attempted.
+fn args_for(chunk: &keleusma::bytecode::Chunk) -> Vec<Value> {
+    chunk
+        .param_types
+        .iter()
+        .map(|t| match t {
+            TypeTag::Word => Value::Int(1),
+            TypeTag::Byte => Value::Byte(1),
+            TypeTag::Fixed => Value::Fixed(1),
+            TypeTag::Float => Value::Float(1.0),
+            TypeTag::Bool => Value::Bool(true),
+            TypeTag::Unit | TypeTag::Text | TypeTag::Composite => Value::Unit,
+        })
+        .collect()
+}
+
+/// What the execution phase actually managed to do with a mutant.
+///
+/// Carried alongside the stage so the census can show that the coroutine
+/// reentry path was entered. Without it, a change that stopped reaching
+/// `resume` would leave every count looking exactly as healthy as before —
+/// the same way nineteen schema-hash mutants read as passes while testing
+/// nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+struct Drove {
+    /// The call was accepted and bytecode ran.
+    called: bool,
+    /// The mutant yielded at least once.
+    yielded: bool,
+    /// The mutant was resumed at least once, entering the reentrant reply
+    /// path the typed pass explicitly DEFERS on.
+    resumed: bool,
+}
+
+/// Calls the entry point and resumes it while it keeps yielding.
+///
+/// The shared-data buffer is bound for the whole protocol, because a module
+/// declaring shared data faults without one, and a mutant that faults on its
+/// first instruction exercises nothing below it.
+fn drive_execution(vm: &mut Vm<'_, '_>, args: &[Value], shared: &mut [u8]) -> Drove {
+    let mut d = Drove::default();
+    let mut state = match vm.call_with_shared(shared, args) {
+        Ok(st) => {
+            d.called = true;
+            st
+        }
+        Err(_) => return d,
+    };
+    for _ in 0..MAX_RESUMES {
+        match state {
+            VmState::Yielded(_) => {
+                d.yielded = true;
+                state = match vm.resume_with_shared(shared, Value::Int(1)) {
+                    Ok(st) => {
+                        d.resumed = true;
+                        st
+                    }
+                    Err(_) => {
+                        d.resumed = true;
+                        return d;
+                    }
+                };
+            }
+            VmState::Reset => {
+                state = match vm.resume_with_shared(shared, Value::Int(1)) {
+                    Ok(st) => {
+                        d.resumed = true;
+                        st
+                    }
+                    Err(_) => {
+                        d.resumed = true;
+                        return d;
+                    }
+                };
+            }
+            _ => return d,
+        }
+    }
+    d
+}
+
+/// Source of the module a hot swap is attempted against.
+///
+/// Deliberately a different program from anything in the corpus: a swap whose
+/// incoming module happens to match the running one tests the easy case, and
+/// the hostile case is a module that does not belong here at all.
+const SWAP_HOST: &str = "fn main() -> Word { 21 + 21 }";
+
+/// Stands a live virtual machine up and offers it `bytes` as a hot swap.
+fn swap_into_a_live_vm(bytes: &[u8]) -> Stage {
+    let host = compile_source("swap_host", SWAP_HOST);
+    let need = required_persistent_capacity_for(&host);
+    if need > PERSISTENT_CAP {
+        return Stage::Ran;
+    }
+    let Ok(mut arena) = Arena::try_with_capacity(DEFAULT_ARENA_CAPACITY + need) else {
+        return Stage::Ran;
     };
     if arena.resize_persistent(need).is_err() {
         return Stage::Ran;
     }
-    if let Ok(mut vm) = Vm::new(loaded, &arena) {
-        let _ = vm.call(&[]);
+    let Ok(mut vm) = Vm::new(host, &arena) else {
+        return Stage::Ran;
+    };
+    let _ = vm.call(&[]);
+    // `replace_module` with a separately decoded module rather than
+    // `replace_module_from_bytes`, which requires the `signatures` feature.
+    // Reaching a gated path from an ungated test is the defect that turned
+    // three continuous-integration jobs red earlier in this line's history,
+    // and this file is gated on `compile` and `verify` only. The crate's own
+    // documentation states the two are equivalent when no verifying key is
+    // registered, and the signature layer has its own tests.
+    let Ok(incoming) = module_from_wire_bytes(bytes) else {
+        return Stage::SwapRejected;
+    };
+    if vm.replace_module(incoming, Vec::new()).is_err() {
+        return Stage::SwapRejected;
     }
-    Stage::Ran
+    let _ = vm.call(&[]);
+    Stage::Swapped
 }
 
 /// The whole corpus, driven once, with the census and every breach.
-fn census() -> (BTreeMap<Stage, usize>, alloc::vec::Vec<Breach>) {
-    let mut counts: BTreeMap<Stage, usize> = BTreeMap::new();
+fn census() -> (
+    BTreeMap<(Family, Stage), usize>,
+    Reached,
+    alloc::vec::Vec<Breach>,
+) {
+    let mut counts: BTreeMap<(Family, Stage), usize> = BTreeMap::new();
+    let mut reached = Reached::default();
     let mut breaches = alloc::vec::Vec::new();
     for m in mutants() {
         match drive(m) {
-            Ok(s) => *counts.entry(s).or_insert(0) += 1,
+            Ok((f, s, d)) => {
+                *counts.entry((f, s)).or_insert(0) += 1;
+                reached.called += usize::from(d.called);
+                reached.yielded += usize::from(d.yielded);
+                reached.resumed += usize::from(d.resumed);
+            }
             Err(b) => breaches.push(b),
         }
     }
-    (counts, breaches)
+    (counts, reached, breaches)
+}
+
+/// How far into the execution protocol mutants actually got.
+///
+/// Separate from the stage census because the stage says where a mutant
+/// STOPPED and this says what it DID. A mutant that verifies, is refused at
+/// the call's type check, and then hot-swaps cleanly looks identical in the
+/// stage census to one that ran, yielded and resumed.
+#[derive(Debug, Default, Clone, Copy)]
+struct Reached {
+    /// Bytecode actually ran.
+    called: usize,
+    /// The coroutine yielded.
+    yielded: usize,
+    /// The coroutine was resumed, entering the reentrant reply path the typed
+    /// pass defers on.
+    resumed: usize,
+}
+
+/// Mutants of `family` that reached `stage`.
+fn at(counts: &BTreeMap<(Family, Stage), usize>, family: Family, stage: Stage) -> usize {
+    counts.get(&(family, stage)).copied().unwrap_or(0)
+}
+
+/// Mutants of `family`, whatever became of them.
+fn total_for(counts: &BTreeMap<(Family, Stage), usize>, family: Family) -> usize {
+    counts
+        .iter()
+        .filter(|((f, _), _)| *f == family)
+        .map(|(_, n)| *n)
+        .sum()
 }
 
 // ---------------------------------------------------------------------------
@@ -614,13 +1131,14 @@ fn census() -> (BTreeMap<Stage, usize>, alloc::vec::Vec<Breach>) {
 /// out of the same pass.
 #[test]
 fn a_hostile_module_is_rejected_or_runs_without_panicking_or_hanging() {
-    let (counts, breaches) = census();
+    let (counts, reached, breaches) = census();
 
     let total: usize = counts.values().sum::<usize>() + breaches.len();
     // Printed rather than only asserted on: the census is the evidence that a
     // green result means anything, and a reader who wants to know what this
     // file covered should not have to make it fail to find out.
     println!("hostile-module mutation census over {total} mutants: {counts:?}");
+    println!("execution reached: {reached:?}");
     assert!(
         total > 500,
         "the mutation enumeration collapsed to {total} mutants; the corpus or the \
@@ -643,20 +1161,106 @@ fn a_hostile_module_is_rejected_or_runs_without_panicking_or_hanging() {
     // tree. These are the floors that make the assertion above meaningful;
     // they are deliberately low, because their purpose is to catch a collapse
     // rather than to pin a number that every corpus change would move.
-    let at = |s: Stage| counts.get(&s).copied().unwrap_or(0);
+    // Reach, per family. A green run in which a family never arrived at the
+    // verifier would be evidence about the harness and none about the tree,
+    // and a single total hides exactly that: the instruction family is large
+    // enough to satisfy any aggregate floor on its own.
+    for family in [
+        Family::Instruction,
+        Family::ChunkMeta,
+        Family::EntryPoint,
+        Family::Signature,
+        Family::EnumLayout,
+        Family::NativeShape,
+        Family::SchemaHash,
+    ] {
+        assert!(
+            total_for(&counts, family) > 0,
+            "the {family:?} family produced no mutants at all; census {counts:?}"
+        );
+        assert_eq!(
+            at(&counts, family, Stage::EncodeRefused) + at(&counts, family, Stage::LoadRejected),
+            0,
+            "{family:?} mutants died before the verifier, so they tested nothing there; \
+             census {counts:?}"
+        );
+    }
+
+    // The descriptor tables specifically. These seed the typed operand-stack
+    // pass, and the point of mutating them is to reach that pass -- which
+    // means being ACCEPTED by verification and then run, not rejected early.
+    // If these ever stop running, the tables have started being validated and
+    // this file's claim about them needs rewriting rather than reasserting.
+    let reached_execution = |f: Family| {
+        at(&counts, f, Stage::Ran)
+            + at(&counts, f, Stage::Swapped)
+            + at(&counts, f, Stage::SwapRejected)
+    };
+    for family in [Family::Signature, Family::EnumLayout, Family::SchemaHash] {
+        assert!(
+            reached_execution(family) > 0,
+            "no {family:?} mutant reached execution, so the seeding side of the typed \
+             pass was not exercised; census {counts:?}"
+        );
+    }
+
+    // The hot-swap arrival must actually be reached, and both of its outcomes
+    // must occur. If every mutant were refused at the swap, the stage would be
+    // testing the swap's front door and nothing behind it; if every mutant were
+    // accepted, the compatibility checks would not be running at all.
+    let swapped: usize = counts
+        .iter()
+        .filter(|((_, s), _)| *s == Stage::Swapped)
+        .map(|(_, n)| *n)
+        .sum();
+    let swap_rejected: usize = counts
+        .iter()
+        .filter(|((_, s), _)| *s == Stage::SwapRejected)
+        .map(|(_, n)| *n)
+        .sum();
     assert!(
-        at(Stage::LoadRejected) + at(Stage::VerifyRejected) + at(Stage::Ran) > total / 2,
-        "more than half the mutants never reached the loader; census {counts:?}"
+        swapped > 0 && swap_rejected > 0,
+        "the hot-swap stage saw {swapped} accepted and {swap_rejected} refused; both \
+         outcomes must occur or it is not exercising the compatibility checks; \
+         census {counts:?}"
+    );
+
+    // The execution protocol must actually reach the coroutine reentry path.
+    //
+    // This is the assertion the file most needs and least obviously has. The
+    // typed operand-stack pass is documented as DEFERRING on a per-yield
+    // reentrant reply, trading a load-time check for a runtime guard, so the
+    // resume path is exactly where that guard is load-bearing. If a change
+    // stopped reaching it, every stage count above would look identical --
+    // which is how nineteen schema-hash mutants read as passes while testing
+    // nothing.
+    assert!(
+        reached.called > 0,
+        "no mutant's bytecode ran at all; the arguments are being refused before \
+         execution and the whole run phase is vacuous: {reached:?}"
     );
     assert!(
-        at(Stage::VerifyRejected) > 50,
-        "only {} mutants reached a verification rejection; census {counts:?}",
-        at(Stage::VerifyRejected)
+        reached.yielded > 0,
+        "no mutant yielded, so no coroutine reached a suspension: {reached:?}"
     );
     assert!(
-        at(Stage::Ran) > 10,
-        "only {} mutants were accepted by verification and run, so the execution \
-         half of this file tested almost nothing; census {counts:?}",
-        at(Stage::Ran)
+        reached.resumed > 0,
+        "no mutant was resumed, so the reentrant reply path the typed pass defers \
+         on was never entered: {reached:?}"
+    );
+
+    let ran: usize = counts
+        .iter()
+        .filter(|((_, s), _)| matches!(s, Stage::Ran | Stage::Swapped | Stage::SwapRejected))
+        .map(|(_, n)| *n)
+        .sum();
+    let rejected: usize = counts
+        .iter()
+        .filter(|((_, s), _)| *s == Stage::VerifyRejected)
+        .map(|(_, n)| *n)
+        .sum();
+    assert!(
+        rejected > 50 && ran > 10,
+        "census collapsed: {rejected} rejected, {ran} ran; {counts:?}"
     );
 }
