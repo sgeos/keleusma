@@ -2,6 +2,9 @@
 
 **Filed 2026-09-18, against `c9c0932a`, backlog 0, suite 647.**
 
+> ⚠ **STATUS, ADDED BY THE ARTIFACT AUDIT 2026-09-18.** A BRIEF DESCRIBES THE TREE AT FILING, BEFORE ITS OWN WORK LANDS. Every gap it states in the present tense was, by construction, still open when written. **LANDED `97156846` AS A NEGATIVE RESULT, AND ITS TITLE CLAIM IS NOW FALSE.** The float spill width HAS a witness as of `51542c99`: a composite built directly from the spilled operand and the reply detects a corrupted spilled width in both float configurations. It became expressible only once the resumed reply carried its declared width, which is why this brief could not find it.
+
+
 ## The gap, and it was found by measurement rather than by reading
 
 The previous increment added two subjects that leave a float operand beneath a

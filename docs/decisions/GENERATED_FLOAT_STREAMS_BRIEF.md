@@ -2,6 +2,9 @@
 
 **Filed 2026-09-18, against `2c90a176`, backlog 0, suite 644.**
 
+> ⚠ **STATUS, ADDED BY THE ARTIFACT AUDIT 2026-09-18.** A BRIEF DESCRIBES THE TREE AT FILING, BEFORE ITS OWN WORK LANDS. Every gap it states in the present tense was, by construction, still open when written. **LANDED `a4bb539a`, AND ONE OF ITS CLAIMS WAS FALSIFIED THE SAME DAY.** It argues the generator reaches the operand spill — *"spilled to an ephemeral slice as `(Width, OperandKind)` pairs"*. **It does not.** All 240 subjects carry values in LOCALS, `deep` is zero, and the spill loop never runs. Corrected in `float_stream_differential.rs` and in `FLOAT_SPILL_BRIEF.md`; this brief was left stale until the artifact audit found it.
+
+
 ## Why this, and why now
 
 `Op::Yield` became float-aware for a general stream earlier today. That arm is

@@ -2,6 +2,9 @@
 
 **Filed 2026-09-18, against `299cfd6a`, backlog 0, suite 647.**
 
+> ⚠ **STATUS, ADDED BY THE ARTIFACT AUDIT 2026-09-18.** A BRIEF DESCRIBES THE TREE AT FILING, BEFORE ITS OWN WORK LANDS. Every gap it states in the present tense was, by construction, still open when written. **LANDED `c9c0932a`.** Its part two says *"`OperandKind::Float` has no spill witness at all"* — true at filing, closed by the increment this brief proposed.
+
+
 ## Part one: a claim of mine that the tree does not support
 
 `generated_float_streams.rs`, committed hours ago, says in its header:

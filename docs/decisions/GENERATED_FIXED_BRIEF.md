@@ -2,6 +2,9 @@
 
 **Filed 2026-09-18, against `af51d7d7`, backlog 0, suite 648.**
 
+> ⚠ **STATUS, ADDED BY THE ARTIFACT AUDIT 2026-09-18.** A BRIEF DESCRIBES THE TREE AT FILING, BEFORE ITS OWN WORK LANDS. Every gap it states in the present tense was, by construction, still open when written. **NOT IMPLEMENTED.** Blocked on the toolchain: `cc` exits 69 with the Xcode licence message, so nothing links and no instrument can be shown to detect a fault. The brief stands as filed.
+
+
 ## What is left uncovered
 
 Four generators now exist: word and byte expressions, composites, nesting, float

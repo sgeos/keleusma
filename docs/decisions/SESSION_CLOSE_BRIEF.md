@@ -2,6 +2,9 @@
 
 **Filed 2026-09-18, against `97156846`, backlog 0, suite 648, five commits unpushed.**
 
+> ⚠ **STATUS, ADDED BY THE ARTIFACT AUDIT 2026-09-18.** A BRIEF DESCRIBES THE TREE AT FILING, BEFORE ITS OWN WORK LANDS. Every gap it states in the present tense was, by construction, still open when written. **LANDED `246ddbc2`.** ⚠ Its count is wrong: it says this session's records overstated the tree *"three times in its own"*. The session-close block it produced lists **four**, and the artifact audit that followed found a **fifth class** — briefs whose gap-claims read as current fact after the gap closed, which is what these status lines exist to fix.
+
+
 ## Why consolidation is the right increment, not another instrument
 
 Eight increments have landed. The handoff's newest NARRATIVE section is still

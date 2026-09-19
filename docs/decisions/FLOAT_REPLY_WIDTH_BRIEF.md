@@ -2,6 +2,9 @@
 
 **Filed 2026-09-18, against `246ddbc2`, backlog 0, suite 648.**
 
+> ⚠ **STATUS, ADDED BY THE ARTIFACT AUDIT 2026-09-18.** A BRIEF DESCRIBES THE TREE AT FILING, BEFORE ITS OWN WORK LANDS. Every gap it states in the present tense was, by construction, still open when written. **LANDED `51542c99`, AND THE GAP IS CLOSED.** Its opening — *"A float reply cannot be packed into a composite"* — describes the tree before the work. It packs now, and the subject is driven value by value against the reference.
+
+
 ## The gap, and why it is smaller than the handoff assumed
 
 A float reply cannot be packed into a composite:

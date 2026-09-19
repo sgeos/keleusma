@@ -1,6 +1,9 @@
 # BRIEF — the float yield arm
 
 **Filed 2026-09-18. Supersedes nothing; it executes `FLOAT_YIELD_SCOPE.md`, which
+
+> ⚠ **STATUS, ADDED BY THE ARTIFACT AUDIT 2026-09-18.** A BRIEF DESCRIBES THE TREE AT FILING, BEFORE ITS OWN WORK LANDS. Every gap it states in the present tense was, by construction, still open when written. **LANDED `142d9b68`.** `Op::Yield` IS float-aware for a general stream now, so this brief's opening — *"`Op::Yield` is absent from the emitter's `float_aware` set"* — describes the tree BEFORE the work. One premise in it was also false when written; see the box below.
+
 scoped this deliberately and stopped.**
 
 ## Why this and why now

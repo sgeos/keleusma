@@ -2,6 +2,9 @@
 
 **Filed 2026-09-18, against `8b218e2e`, backlog 0, suite 641.**
 
+> ⚠ **STATUS, ADDED BY THE ARTIFACT AUDIT 2026-09-18.** A BRIEF DESCRIBES THE TREE AT FILING, BEFORE ITS OWN WORK LANDS. Every gap it states in the present tense was, by construction, still open when written. **LANDED `2c90a176`.** The generators DO emit float programs now, so this brief's *"zero float programs between them"* describes the tree before the work.
+
+
 ## What this closes, and what it is not
 
 The three generators in this package — expressions, composites, nesting — emit
