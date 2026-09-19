@@ -10,6 +10,54 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-18, session 66, sixth increment. NO TEST WAS EXECUTED FOR THIS WORK.**
+
+**THE TOOLCHAIN IS BLOCKED AND IT IS NOT A CHANGE OF MINE.** This machine's Xcode
+updated to 27.0 mid-session and its licence has not been agreed, so **linking any
+executable fails** — every test binary and the command-line binary included.
+`cargo build` still produces the rlib and `cargo check`, `cargo clippy` and `cargo doc`
+still work; nothing that must link does. Clearing it needs `sudo xcodebuild -license`,
+which is interactive and privileged.
+
+Everything below was therefore established by **reading the implementation and the
+specification**, or measured **before** the blocker appeared. Nothing here is
+verified-by-execution, and nothing claims to be.
+
+**A DEFECT IN AN AUTHORITATIVE DOCUMENT, FOUND BY READING.**
+`docs/spec/INSTRUCTION_SET.md` stated that `CheckedMod` "Traps on divide-by-zero". **The
+implementation has never done that** — it reifies flag `3` carrying the numerator,
+mirroring `CheckedDiv`, and says so in its own comment. Corrected, and the row records
+that it was wrong. The census that found it covered every row in that file claiming a
+trap: **three rows, two correct, one wrong.**
+
+**WORKSTREAM C IS SMALLER AND LOPSIDED, WHICH CHANGES WHAT YOU ARE BEING ASKED TO
+AUTHORISE.** Last increment reported two operation families. They are not symmetric:
+
+- **Division and modulo need no new opcode.** `CheckedDiv` and `CheckedMod` are ALREADY
+  TOTAL, `TrapKind::ZeroDivisor` exists, and `compile_checked` already emits the
+  flag-guarded `Trap` for an unhandled outcome class. What faults is the BARE operator,
+  which the specification routes to `Op::Div`/`Op::Mod`, and those rows say they trap.
+  The work is routing the bare form through machinery that already exists. **Its size is
+  NOT claimed — it was not measured** — and it changes emitted bytecode for every
+  program using `/` or `%`, so `codegen.kel` must change with it or the byte-identical
+  oracle breaks. That half is capacity-fenced.
+- **Array bounds is the real instruction-set work.** `BoundsCheck` is specified to trap,
+  and there is no flag-producing bounds opcode to route through — no `CheckedBounds` the
+  way there is a `CheckedDiv`.
+
+**H2 IS NARROWED A SECOND TIME, AND BOTH NARROWINGS CAME FROM A MEASUREMENT I HAD NOT
+TAKEN.** The shipping binary does not abort at ANY nesting in EITHER profile: driven at
+60, 100 and 400, the debug command-line binary refuses cleanly at the depth-24 guard,
+because it parses on the process's MAIN thread rather than a spawned one. H2 needs
+roughly a two-mebibyte stack — a test harness, or a host parsing on a worker.
+
+**UNMERGED AND UNVERIFIED**: branch `test/cli-bad-input` carries a CLI bad-input test
+file that **has never been compiled or run**. The findings it encodes were measured
+against the binary built before the blocker — 27 inputs, zero panics, appropriate exit
+statuses — but the file itself is unproven. Do not merge it until it runs.
+
+---
+
 **2026-09-18, session 66, fifth increment.**
 
 **WORKSTREAM C IS NOW SIZED BY MEASUREMENT. THE OBLIGATION IS TWO OPERATION FAMILIES,
