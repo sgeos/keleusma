@@ -10,6 +10,41 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-19, session 66, eighth increment. THE BLOCKER IS CLEARED AND EVERYTHING IS
+LOCALLY VERIFIED.**
+
+**THE THREE INCREMENTS MERGED ON CI'S WORD ALONE NOW AGREE WITH A LOCAL RUN.** The
+operator agreed the Xcode licence, linking works again, and the full workspace suite is
+green at **2890 tests, zero failures**. `tests/spec_trap_claims.rs` (4) and
+`keleusma-cli/tests/bad_input.rs` (7) pass locally exactly as they did on CI. `clippy
+--tests --features signatures,shell,self-host -D warnings` is clean, run after touching
+the sources so a warm cache could not print silence, and `fmt` is clean.
+
+**Every "blocked" statement below this block is now HISTORY, not a live claim.** Three
+increments were completed and merged while no executable could link on this machine;
+each said so in its own commit, and CI was the verification throughout. That arrangement
+worked and is worth knowing about, but it is over.
+
+**WHAT REMAINS FOR THE OPERATOR IS UNCHANGED BY ANY OF THIS:**
+
+1. **H2**, open on a stated trade: the parser's recursion guard does not cover
+   `if`-shaped input on a small stack, no single limit both admits the corpus and
+   prevents the abort, and the shipping binary is unaffected in either build profile.
+   Narrowing the language's accepted nesting to fix something no shipped invocation
+   reaches costs more than the defect. Overrule that if you disagree.
+2. **Workstream C**, now sized and known to be LOPSIDED. Division and modulo need no new
+   opcode — the checked opcodes are already total, `TrapKind::ZeroDivisor` exists, and
+   `compile_checked` already emits the guarded trap; only the bare operator's lowering is
+   missing, and its size is NOT claimed because it was not measured. Array bounds is the
+   genuine instruction-set work. Either way the change bumps `BYTECODE_VERSION`, which is
+   yours.
+3. **The seven standing decisions**, untouched all session.
+
+**No file under `src/selfhost/kel/` was modified in this session**, so the capacity
+decision remains unprejudiced.
+
+---
+
 **2026-09-19, session 66, seventh increment. STILL NO LOCAL TEST EXECUTION; CI VERIFIES.**
 
 **THE CHECKEDMOD DEFECT'S CLASS IS NOW GUARDED, NOT JUST ITS INSTANCE.**

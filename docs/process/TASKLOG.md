@@ -10,6 +10,18 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-19, session 66, eighth increment). BLOCKER CLEARED; ALL LOCALLY
+> VERIFIED.**
+>
+> The operator agreed the Xcode licence. Linking works, and the full workspace suite is
+> green at **2890 tests, zero failures**. The two suites merged during the blocker —
+> `spec_trap_claims` and the CLI `bad_input` — pass locally exactly as on CI. Clippy is
+> clean, run after touching the sources so a warm cache could not print silence.
+>
+> **Every "blocked" note above is HISTORY now, not a live claim.** Three increments were
+> completed and merged while nothing could link here, each saying so in its commit, with
+> CI as the verification.
+
 > **Currency note (2026-09-19, session 66, seventh increment). THE SPEC-CLAIM CLASS IS
 > GUARDED.**
 >
