@@ -10,12 +10,37 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-19, session 66, seventh increment). THE SPEC-CLAIM CLASS IS
+> GUARDED.**
+>
+> `tests/spec_trap_claims.rs` drives every opcode whose spec row makes a trap-or-reify
+> claim and asserts the implementation agrees — `Div`, `Mod`, `CheckedDiv`, `CheckedMod`,
+> `BoundsCheck`, a population derived from the spec's own rows and pinned by a second
+> test. Asserts BEHAVIOUR, never wording. This closes the CLASS the `CheckedMod` defect
+> came from, where fixing the row closed only the instance.
+>
+> Bare `/` lowers to `Op::Div` (`src/compiler.rs:9192`), so the checked opcodes are
+> reached by splicing `Div` into `CheckedDiv; PopN(2)` — the spec's own sequence,
+> stack-neutral, with the fixture asserted jump-free.
+>
+> **A prose tension in `GRAMMAR.md` was NOT filed as a defect**: its "uncaptured
+> operation" sentence is coherent under the reading that "uncaptured" means a class with
+> no arm. Recorded in the journal.
+>
+> **Correction to my own environment claim**: `cargo clippy` does NOT work under the
+> blocker (it rebuilds a proc-macro dylib, which links). Only the rlib build and
+> `cargo doc` do.
+>
+> **Still no local test execution. CI is the verification.**
+
 > **Currency note (2026-09-18, session 66, sixth increment). TOOLCHAIN BLOCKED; NO TEST
 > RUN.**
 >
 > **This machine's Xcode updated to 27.0 mid-session and its licence is unagreed, so
-> linking any executable fails** — test binaries and the CLI included. `cargo build`,
-> `check`, `clippy` and `doc` still work. Needs `sudo xcodebuild -license`. Everything
+> linking any executable fails** — test binaries and the CLI included. `cargo build` and
+> `cargo doc` work; **`clippy` does NOT** (it rebuilds a proc-macro dylib, which links), and
+> `check` completes only off cached proc-macro artifacts. An earlier note said clippy worked
+> and was wrong. Needs `sudo xcodebuild -license`. Everything
 > in this note was established by READING, or measured before the blocker.
 >
 > **A defect in an authoritative document**: `INSTRUCTION_SET.md` said `CheckedMod`

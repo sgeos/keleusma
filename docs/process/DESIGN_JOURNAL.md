@@ -13,6 +13,70 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-19 (ninety-ninth) — guarding the class the CheckedMod defect came from, and six refuted candidates
+
+### THE DURABLE FIX FOR A DEFECT I HAD ONLY PATCHED
+
+Yesterday's `CheckedMod` row was wrong because **nothing asserts the specification's prose
+against the implementation for that class**. Fixing the row fixes one instance. The class
+stays open until something checks it, and `tests/push_order_claims.rs` shows this project
+already guards a different prose class the same way, so the shape is established rather
+than invented.
+
+`tests/spec_trap_claims.rs` drives each opcode whose row makes a trap-or-reify claim and
+asserts the implementation agrees. The population is derived from the specification's own
+rows, not hand-picked, and a further test pins that population so a newly-claiming row
+cannot arrive unguarded.
+
+**It asserts BEHAVIOUR, never wording.** A reworded row must not fail it; a reworded row
+that becomes untrue must.
+
+### THE CHECKED OPCODES NEEDED A CONSTRUCTED PATH, AND THE SPEC SUPPLIED IT
+
+The surface `/` lowers to `Op::Div` — established by reading `src/compiler.rs:9192`, which
+emits `Op::Div` with the comment "Division can trap on a zero divisor". So no source-level
+program reaches `CheckedDiv` without the arm construct.
+
+The test therefore splices `Div` into `CheckedDiv; PopN(2)`, which is the exact sequence
+the specification describes for an uncaptured operation, and is stack-neutral. The fixture
+is asserted to contain no jump, since splicing an instruction would move a target.
+
+### SIX CANDIDATES REFUTED BEFORE THIS ONE, WHICH IS THE POINT
+
+Across this session I have proposed and killed six goals by measuring first: the wire
+format's error correction, the Keleusma-level parity plane, empirical worst-case bounds,
+the wire decoder fuzz, an opcode-table set-equality gap, and a CLI robustness defect. Each
+died against coverage or behaviour that already existed.
+
+Today's addition: the opcode table's row names and the `Op` enum **agree exactly** — 66
+variants, 66 rows, and the six apparent extras are header words from the file's other
+tables. The existing `claimed_counts.rs` guard compares only the stated COUNT, which is
+strictly weaker than set equality, so this was worth checking; it is simply not wrong.
+
+**A refuted candidate is a cheap result.** The alternative is building a guard for a gap
+that is not there, which costs the same to write and then has to be maintained.
+
+### A PROSE TENSION I DECLINED TO CALL A DEFECT
+
+`GRAMMAR.md` says "an uncaptured operation lowers to the opcode followed by `PopN(2)`",
+which cannot trap, and two sentences later that "an unhandled zero divisor traps as a
+division by zero". Measurement says bare `/` traps.
+
+The coherent reading is that "uncaptured" means a CLASS with no arm inside a checked
+construct, not an operation written without an arm block. On that reading the paragraph is
+consistent. **Filing a defect on a contested reading would be exactly the overclaiming
+this session has been correcting**, so it is recorded here and not in the ledger.
+
+### AND I HAD TO CORRECT A CLAIM ABOUT MY OWN ENVIRONMENT
+
+I told the operator that `cargo clippy` still worked under the linker blocker. It does not:
+clippy must rebuild a proc-macro dylib, and a dylib links. `cargo check` completes only
+because the proc-macro artifacts are cached, which is not a durable capability either. Only
+`cargo build` of the rlib and `cargo doc` genuinely work. Corrected in both channels.
+
+That is the same error shape as the severity corrections earlier in the session: **I
+measured one thing and wrote about a wider set.**
+
 ## 2026-09-18 (ninety-eighth) — the toolchain broke, and reading found a defect running could not have
 
 ### THE CONSTRAINT CAME FIRST
