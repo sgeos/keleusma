@@ -10,6 +10,32 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-18, session 66, sixth increment). TOOLCHAIN BLOCKED; NO TEST
+> RUN.**
+>
+> **This machine's Xcode updated to 27.0 mid-session and its licence is unagreed, so
+> linking any executable fails** — test binaries and the CLI included. `cargo build`,
+> `check`, `clippy` and `doc` still work. Needs `sudo xcodebuild -license`. Everything
+> in this note was established by READING, or measured before the blocker.
+>
+> **A defect in an authoritative document**: `INSTRUCTION_SET.md` said `CheckedMod`
+> "Traps on divide-by-zero". The implementation has never done that; it reifies flag 3
+> mirroring `CheckedDiv`. Corrected. Census over every row claiming a trap: three rows,
+> two correct, one wrong.
+>
+> **Workstream C is LOPSIDED**, which changes the authorisation being sought. Division
+> and modulo need NO new opcode — the checked opcodes are already total, the trap kind
+> exists, and `compile_checked` already emits the guarded trap; only the BARE operator's
+> lowering is missing, and its size is NOT claimed because it was not measured. Array
+> bounds is the real ISA work: `BoundsCheck` traps by specification and there is no
+> flag-producing bounds opcode.
+>
+> **H2 narrowed a SECOND time**: the shipping binary aborts at no nesting in either
+> profile, because it parses on the MAIN thread. H2 needs a ~2 MiB stack.
+>
+> **Unmerged and unverified**: branch `test/cli-bad-input` holds a CLI bad-input test
+> that has never compiled or run.
+
 > **Currency note (2026-09-18, session 66, fifth increment). WORKSTREAM C SIZED.**
 >
 > Workstream C (unhandled-trap analysis) is a `BYTECODE_VERSION`-bumping ISA change and

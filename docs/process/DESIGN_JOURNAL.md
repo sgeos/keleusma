@@ -13,6 +13,86 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-18 (ninety-eighth) — the toolchain broke, and reading found a defect running could not have
+
+### THE CONSTRAINT CAME FIRST
+
+This machine's Xcode updated to 27.0 mid-session and its licence has not been agreed, so
+**linking any executable fails**. `cargo build` still produces the rlib; `check`,
+`clippy` and `doc` still work. No test binary and no command-line binary can be
+produced, so **no test could be run at all**.
+
+That is worth recording as a methodological situation rather than an interruption. This
+session's whole discipline is that a claim needs a measurement. With execution gone, the
+honest move is not to write code that cannot be tested, but to do work whose verification
+is READING — and to say plainly that it was.
+
+### AND READING FOUND A DEFECT IN AN AUTHORITATIVE DOCUMENT
+
+`docs/spec/INSTRUCTION_SET.md` stated that `CheckedMod` "Traps on divide-by-zero". **The
+implementation has never done that.** It reifies flag `3` carrying the numerator, and its
+own comment says it is "mirroring CheckedDiv". The `CheckedDiv` row states the reifying
+behaviour correctly; the `CheckedMod` row beside it contradicts the code.
+
+The census that found it was over a SPECIFIED population — every row in that file
+claiming a trap. **Three rows, two correct, one wrong.** Censusing against a specified
+list rather than against the rows that looked suspicious is what made the result
+complete rather than anecdotal, and it is the same method that closed the typed-opcode
+matrix earlier in this line.
+
+**A running test could not have found this.** The spec is prose; no test asserts the
+prose against the implementation. Only reading both does.
+
+### THE WORKSTREAM-C SIZING I MERGED YESTERDAY WAS TRUE AND INCOMPLETE
+
+I reported two operation families needing work. They are **not symmetric**, and the
+asymmetry is the decision-shaping part:
+
+| family | what it actually needs |
+|---|---|
+| division and modulo | **no new opcode.** `CheckedDiv`/`CheckedMod` are already total, `TrapKind::ZeroDivisor` exists, `compile_checked` already emits the flag-guarded `Trap` for an unhandled class. Only the BARE operator's lowering is missing. |
+| array bounds | **the real instruction-set work.** `BoundsCheck` traps by specification and no flag-producing bounds opcode exists to route through. |
+
+So half of what looked like an instruction-set change is a lowering change over
+machinery that already exists end to end. **I did not claim its size**, because I did
+not measure it, and this session has already recorded that claiming a fix is small
+without landing it is precisely the error to avoid. It also carries a consequence past
+the reference: the bytecode for every program using `/` or `%` changes, so `codegen.kel`
+must change with it or the byte-identical oracle breaks — and that half is
+capacity-fenced.
+
+### H2 NARROWED A SECOND TIME, BY THE MEASUREMENT I STILL HAD NOT TAKEN
+
+Yesterday I corrected H2 from "denial of service on the shipping front ends" to
+"debug builds only", after finally measuring release. Today, driving the debug
+command-line binary at nesting 60, 100 and 400: **every one is refused cleanly by the
+depth-24 guard.** The binary parses on the process's MAIN thread, whose stack dwarfs the
+roughly two mebibytes a spawned thread gets, so the guard is reached long before the
+stack is.
+
+**The shipping binary aborts at no nesting in either profile.** H2 requires parsing on a
+small stack — a test harness, or a host parsing on a worker thread.
+
+Two corrections to the same finding, both from measurements I had not taken when I first
+wrote it down. The pattern is not that I was careless twice; it is that **a severity is a
+claim about an environment**, and each time I had measured one environment and written
+about all of them.
+
+### AND THE THIRD CRUDE-INSTRUMENT SELF-INFLICTION OF THIS SESSION
+
+Probing the command-line binary, my panic detector grepped for the free text "stack
+overflow" — which appears inside the parser's entirely correct refusal, "deeply nested
+expressions are rejected to prevent stack overflow". It reported the **healthiest
+possible outcome as a crash**. The detector in the committed test file is narrow, and
+carries that reason.
+
+### WHAT IS UNVERIFIED, SAID PLAINLY
+
+Branch `test/cli-bad-input` carries a CLI bad-input test file that **has never been
+compiled or run**. Its findings were measured against the binary built before the
+blocker — 27 inputs, zero panics, appropriate exit statuses — but the file encoding them
+is unproven and the branch is not merged.
+
 ## 2026-09-18 (ninety-seventh) — sizing a fenced decision, and three suspicions that measurement refuted
 
 ### THE SEAM WAS EXHAUSTED, SO I CHANGED SEAMS

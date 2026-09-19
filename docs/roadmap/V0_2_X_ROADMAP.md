@@ -240,6 +240,36 @@ cannot quietly disappear. **It says nothing about hand-built bytecode**, which c
 fault kinds no row here reaches, nor about host-contract failures such as an
 unregistered native.
 
+**THE TWO FAMILIES ARE NOT SYMMETRIC, AND ONLY ONE OF THEM NEEDS THE INSTRUCTION SET
+TOUCHED.** Established 2026-09-18 by reading the implementation and this project's own
+instruction-set specification, since no test could be executed that day.
+
+**Division and modulo need no new opcode, and arguably no opcode change at all.**
+`CheckedDiv` and `CheckedMod` are ALREADY TOTAL: a zero divisor reifies as flag `3`
+carrying the numerator rather than trapping. `TrapKind::ZeroDivisor` exists, and
+`compile_checked` already emits the flag-guarded `Trap` for an outcome class the source
+leaves unhandled — which is precisely the lowering this design describes, already
+implemented, for the arm form. What faults today is the BARE operator, which the
+specification routes to `Op::Div` and `Op::Mod`, and those two rows say plainly that
+they trap on divide-by-zero. So the work for this family is routing the bare `/` and
+`%` on `Int` through the checked family and the guarded trap, using machinery that
+already exists end to end. **Its size is not claimed here, because it was not
+measured**, and it carries a consequence beyond the reference: the emitted bytecode for
+every program using `/` or `%` changes, so `codegen.kel` must change with it or the
+byte-identical differential oracle breaks. That part is capacity-fenced.
+
+**Array bounds is the genuine instruction-set work.** `BoundsCheck` is specified to
+trap if the index is outside `[0, bound)`, and no flag-producing bounds opcode exists to
+route through — there is no `CheckedBounds` the way there is a `CheckedDiv`. Making this
+family total therefore means changing `BoundsCheck`'s contract or adding a form, and the
+rad-hard minimal-instruction-set constraint prefers reuse over addition.
+
+**A defect in this document's sibling was found while establishing the above.** The
+`CheckedMod` row of `docs/spec/INSTRUCTION_SET.md` stated "Traps on divide-by-zero",
+which the implementation has never done; it reifies flag 3 mirroring `CheckedDiv`. The
+row is corrected and says so. The census that found it was over every row in that file
+claiming a trap: three rows, two correct, one wrong.
+
 **First pass versus full language.** The first pass covers the trap classes the toolchain
 source can raise (arithmetic and bounds over `Word`/`Byte`); the newtype-refinement and
 native-error classes widen with Workstream F, but the scanning validator is complete from the
