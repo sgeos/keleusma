@@ -1,6 +1,24 @@
 # BRIEF — audit this session's own artifacts against what it later established
 
 **Filed 2026-09-18, against `c081515d`. Backlog 0. Suite 648 at the last gated
+
+> ⚠ **STATUS, ADDED BY THE ARTIFACT AUDIT 2026-09-18 — AND THIS FILE WAS THE ONE IT
+> MISSED.** Landed `c090dae6`. **The audit was blind to its own brief.** It gave a
+> status line to eight briefs and there were nine; the ninth is this one, the brief
+> of the audit itself.
+>
+> **Its population figure was also wrong.** The commit message says *"seventeen
+> decision documents were filed today"*; derived from the session's first commit the
+> true figure is **nineteen**, nine briefs and nine completions plus
+> `FLOAT_YIELD_SCOPE.md`. The count came from a log range starting at the wrong
+> commit and was asserted rather than derived.
+>
+> **This is the third census blind to its own subject in one session**, and the
+> other two are recorded in the handoff. The lesson is not to be more careful: it is
+> that a population must be DERIVED from a stated rule and printed, so the reader
+> can see what was covered. The audit checked documents against the tree and never
+> checked its own list against the tree.
+
 commit. THE TOOLCHAIN CANNOT LINK.**
 
 ## Why this work, and why now specifically
