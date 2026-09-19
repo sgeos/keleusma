@@ -86,6 +86,32 @@ expressions are rejected to prevent stack overflow". It reported the **healthies
 possible outcome as a crash**. The detector in the committed test file is narrow, and
 carries that reason.
 
+### AND CONTINUOUS INTEGRATION CAUGHT WHAT MY BLOCKED TOOLCHAIN COULD NOT
+
+Opening the pull request was the right move under the blocker, because **CI runs on
+machines without this machine's problem**. It went red on the Doc-links job, which I
+could not have run locally at all — the link checker is itself a Keleusma script driven
+through the command-line binary I cannot build.
+
+The cause was found by reading the workflow rather than waiting for the log: that job
+has a SECOND step regenerating `book/src/INSTRUCTION_SET.md` from the authoritative
+spec and failing on any diff, so the two copies cannot drift. I had edited the spec and
+not regenerated the book. **The guard did exactly its job**, and the regeneration is a
+Python script, so I could run it despite the blocker.
+
+**And looking there found the same wrong claim a second time, with an explicit wrong
+REASON.** `book/src/BIG_NUMBERS.md` said "Division by zero continues to trap with
+`VmError::DivisionByZero` because **the opcode fails before arm dispatch runs**". The
+opcode does not fail: it reifies flag 3 carrying the numerator, precisely so a
+`zero_divisor(numerator)` arm CAN bind it. An unhandled zero divisor does surface as
+`DivisionByZero`, but through the compiled dispatch. That file is hand-written, not
+generated, so no guard would ever have caught it — it took reading the neighbourhood of
+a defect the first census had already found.
+
+**One wrong claim about `CheckedMod` had propagated to three places**: the spec row, the
+generated book chapter, and a hand-written book page giving the wrong mechanism. The
+generated copy was protected by a guard; the other two were not.
+
 ### WHAT IS UNVERIFIED, SAID PLAINLY
 
 Branch `test/cli-bad-input` carries a CLI bad-input test file that **has never been
