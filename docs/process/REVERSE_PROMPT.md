@@ -10,13 +10,51 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-19, session 66, seventh increment. STILL NO LOCAL TEST EXECUTION; CI VERIFIES.**
+
+**THE CHECKEDMOD DEFECT'S CLASS IS NOW GUARDED, NOT JUST ITS INSTANCE.**
+`tests/spec_trap_claims.rs` drives every opcode whose specification row makes a
+trap-or-reify claim and asserts the implementation agrees. The population is derived
+from the spec's OWN rows — `Div`, `Mod`, `CheckedDiv`, `CheckedMod`, `BoundsCheck` — and a
+second test pins that population so a newly-claiming row cannot arrive unguarded. It
+asserts BEHAVIOUR, never wording.
+
+**The checked opcodes needed a constructed path.** Bare `/` lowers to `Op::Div`
+(`src/compiler.rs:9192`, "Division can trap on a zero divisor"), so no source program
+reaches `CheckedDiv` without the arm construct. The test splices `Div` into
+`CheckedDiv; PopN(2)` — the exact sequence the spec describes for an uncaptured
+operation, and stack-neutral — asserting first that the fixture contains no jump.
+
+**A PROSE TENSION I DECLINED TO FILE.** `GRAMMAR.md` says an uncaptured operation lowers
+to "the opcode followed by `PopN(2)`", which cannot trap, then says an unhandled zero
+divisor traps. The coherent reading is that "uncaptured" means a CLASS with no arm inside
+a checked construct. Filing a defect on a contested reading is the overclaiming this
+session has been correcting, so it is in the journal and not the ledger.
+
+**AND I CORRECTED A CLAIM ABOUT MY OWN ENVIRONMENT.** I told you `cargo clippy` still
+worked. **It does not** — clippy rebuilds a proc-macro dylib, and a dylib links. `cargo
+check` completes only off cached proc-macro artifacts. Only the rlib build and `cargo doc`
+genuinely work. Same error shape as the severity corrections: I measured one thing and
+wrote about a wider set.
+
+**Six candidate goals were refuted by measurement before this one was chosen**, today's
+being the opcode table: its row names and the `Op` enum agree exactly, 66 and 66, and the
+existing count-only guard is weaker than set equality but not wrong.
+
+**THE BLOCKER PERSISTS** and needs `sudo xcodebuild -license`, which is interactive and
+privileged. CI is the verification.
+
+---
+
 **2026-09-18, session 66, sixth increment. NO TEST WAS EXECUTED FOR THIS WORK.**
 
 **THE TOOLCHAIN IS BLOCKED AND IT IS NOT A CHANGE OF MINE.** This machine's Xcode
 updated to 27.0 mid-session and its licence has not been agreed, so **linking any
 executable fails** — every test binary and the command-line binary included.
-`cargo build` still produces the rlib and `cargo check`, `cargo clippy` and `cargo doc`
-still work; nothing that must link does. Clearing it needs `sudo xcodebuild -license`,
+`cargo build` still produces the rlib, and `cargo doc` works. **`cargo clippy` does NOT** —
+it must rebuild a proc-macro dylib, and a dylib links; an earlier note here said clippy
+worked and was wrong. `cargo check` completes, but only off cached proc-macro artifacts,
+so it is not a durable capability either. Clearing it needs `sudo xcodebuild -license`,
 which is interactive and privileged.
 
 Everything below was therefore established by **reading the implementation and the
