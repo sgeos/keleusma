@@ -555,8 +555,28 @@ pub fn general_native_sequence(src: &str, first: i64, replies: &[i64]) -> Vec<i6
 /// pattern or the other, never both. `arena_high_water.rs` does exactly that,
 /// and is the reason this parameter exists.
 #[allow(dead_code)]
+/// Drive a general stream from SOURCE and report its touched arena extent.
+///
+/// A thin wrapper over [`native_arena_extent_of_module`]. The implementation lives
+/// there so a caller holding an already-built module — the streaming corpus census
+/// does — needs no second copy of this driver to drift from.
 pub fn general_native_arena_extent(
     src: &str,
+    first: i64,
+    replies: &[i64],
+    arena_fill: u8,
+) -> (Vec<i64>, usize) {
+    let m = build(src);
+    native_arena_extent_of_module(&m, first, replies, arena_fill)
+}
+
+/// Drive an already-built general stream and report its touched arena extent.
+///
+/// **Every corpus streaming module has a one-parameter `Stream` entry** — all 28,
+/// measured rather than assumed — so the hand-named signature below fits each of
+/// them, and the parameter count is asserted before the call regardless.
+pub fn native_arena_extent_of_module(
+    m: &keleusma::bytecode::Module,
     first: i64,
     replies: &[i64],
     arena_fill: u8,
@@ -566,11 +586,10 @@ pub fn general_native_arena_extent(
     use keleusma::vm::required_persistent_capacity_for;
     use keleusma_native::{LowerOptions, lower_module};
 
-    let m = build(src);
     let entry = m.entry_point.expect("entry point");
     let ctx = Context::create();
     let lm = ctx.create_module("kel");
-    lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower module");
+    lower_module(&ctx, &lm, m, LowerOptions::default()).expect("lower module");
     lm.verify().expect("LLVM module verification");
     maybe_optimize(&lm);
     let ee = lm
@@ -592,8 +611,8 @@ pub fn general_native_arena_extent(
 
     // Persistent carries the resume state, which is why it is sized with the
     // backend's supplement and not with the runtime's figure alone.
-    let persistent = required_persistent_capacity_for(&m)
-        + keleusma_native::region::persistent_supplement_bytes(&m) as usize;
+    let persistent = required_persistent_capacity_for(m)
+        + keleusma_native::region::persistent_supplement_bytes(m) as usize;
     // ⚠ **EVERY BUFFER CARRIES A CANARY, AS THE SCALAR DRIVER'S DO.**
     //
     // These three had slack and no sentinel until 2026-09-14. A write past the
@@ -633,7 +652,7 @@ pub fn general_native_arena_extent(
 
     let privs_body = persistent + 64;
     let mut privs = vec![0u8; privs_body + CANARY_LEN];
-    install_private_init_bytes(&m, &mut privs);
+    install_private_init_bytes(m, &mut privs);
     privs[privs_body..].fill(STREAM_CANARY);
 
     // **SIZED FROM THE DECLARATION, NOT FROM A LITERAL.** A flat 4096 put the
@@ -650,7 +669,7 @@ pub fn general_native_arena_extent(
         arena_fill, STREAM_CANARY,
         "the arena fill may not equal the overrun sentinel"
     );
-    let region_body = keleusma_native::region::host_arena_supplement_bytes(&m) as usize + 4096;
+    let region_body = keleusma_native::region::host_arena_supplement_bytes(m) as usize + 4096;
     let mut region = vec![arena_fill; region_body + CANARY_LEN];
     region[region_body..].fill(STREAM_CANARY);
 
