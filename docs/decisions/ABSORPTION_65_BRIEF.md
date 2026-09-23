@@ -76,3 +76,23 @@ Measured **alone**, after the seven stacked commits are verified and pushed. Thi
 suite contains tests that read source text from disk, so "edits do not affect a
 running suite" is false here — and absorbing nine commits on top of six unverified
 ones would make any failure's attribution an argument rather than an observation.
+
+## Outcome, recorded after the merge
+
+**All four predictions hit exactly.**
+
+1. **Zero conflicting files.** Three files auto-merged — `DESIGN_JOURNAL.md`,
+   `REVERSE_PROMPT.md`, `TASKLOG.md` — and none conflicted. Twelve files, 1421
+   insertions, 4 deletions.
+2. **Zero movement in every backend figure.** `handoff_figures.rs` and
+   `test_population_guard.rs` pass unchanged. The three new test files land in the
+   repository-root `tests/` and `keleusma-cli/`, neither of which this line's
+   figures count.
+3. **The ownership check went empty**, from two lines to zero, and the backlog from
+   nine to zero.
+4. **`outstanding_reports.rs` stayed green, and the channel survived.** This line's
+   appended section and its report six are both still present in
+   `REVERSE_PROMPT.md` after the other line rewrote that file across nine commits.
+   **That was the prediction at real risk** and it held — but it held by the two
+   lines editing disjoint regions, not by any mechanism, so the operator question
+   about where this line's outgoing reports belong is unresolved and unchanged.
