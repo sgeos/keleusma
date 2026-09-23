@@ -5071,6 +5071,255 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-19 (ninety-ninth) — guarding the class the CheckedMod defect came from, and six refuted candidates
+
+### THE DURABLE FIX FOR A DEFECT I HAD ONLY PATCHED
+
+Yesterday's `CheckedMod` row was wrong because **nothing asserts the specification's prose
+against the implementation for that class**. Fixing the row fixes one instance. The class
+stays open until something checks it, and `tests/push_order_claims.rs` shows this project
+already guards a different prose class the same way, so the shape is established rather
+than invented.
+
+`tests/spec_trap_claims.rs` drives each opcode whose row makes a trap-or-reify claim and
+asserts the implementation agrees. The population is derived from the specification's own
+rows, not hand-picked, and a further test pins that population so a newly-claiming row
+cannot arrive unguarded.
+
+**It asserts BEHAVIOUR, never wording.** A reworded row must not fail it; a reworded row
+that becomes untrue must.
+
+### THE CHECKED OPCODES NEEDED A CONSTRUCTED PATH, AND THE SPEC SUPPLIED IT
+
+The surface `/` lowers to `Op::Div` — established by reading `src/compiler.rs:9192`, which
+emits `Op::Div` with the comment "Division can trap on a zero divisor". So no source-level
+program reaches `CheckedDiv` without the arm construct.
+
+The test therefore splices `Div` into `CheckedDiv; PopN(2)`, which is the exact sequence
+the specification describes for an uncaptured operation, and is stack-neutral. The fixture
+is asserted to contain no jump, since splicing an instruction would move a target.
+
+### SIX CANDIDATES REFUTED BEFORE THIS ONE, WHICH IS THE POINT
+
+Across this session I have proposed and killed six goals by measuring first: the wire
+format's error correction, the Keleusma-level parity plane, empirical worst-case bounds,
+the wire decoder fuzz, an opcode-table set-equality gap, and a CLI robustness defect. Each
+died against coverage or behaviour that already existed.
+
+Today's addition: the opcode table's row names and the `Op` enum **agree exactly** — 66
+variants, 66 rows, and the six apparent extras are header words from the file's other
+tables. The existing `claimed_counts.rs` guard compares only the stated COUNT, which is
+strictly weaker than set equality, so this was worth checking; it is simply not wrong.
+
+**A refuted candidate is a cheap result.** The alternative is building a guard for a gap
+that is not there, which costs the same to write and then has to be maintained.
+
+### A PROSE TENSION I DECLINED TO CALL A DEFECT
+
+`GRAMMAR.md` says "an uncaptured operation lowers to the opcode followed by `PopN(2)`",
+which cannot trap, and two sentences later that "an unhandled zero divisor traps as a
+division by zero". Measurement says bare `/` traps.
+
+The coherent reading is that "uncaptured" means a CLASS with no arm inside a checked
+construct, not an operation written without an arm block. On that reading the paragraph is
+consistent. **Filing a defect on a contested reading would be exactly the overclaiming
+this session has been correcting**, so it is recorded here and not in the ledger.
+
+### AND I HAD TO CORRECT A CLAIM ABOUT MY OWN ENVIRONMENT
+
+I told the operator that `cargo clippy` still worked under the linker blocker. It does not:
+clippy must rebuild a proc-macro dylib, and a dylib links. `cargo check` completes only
+because the proc-macro artifacts are cached, which is not a durable capability either. Only
+`cargo build` of the rlib and `cargo doc` genuinely work. Corrected in both channels.
+
+That is the same error shape as the severity corrections earlier in the session: **I
+measured one thing and wrote about a wider set.**
+
+## 2026-09-18 (ninety-eighth) — the toolchain broke, and reading found a defect running could not have
+
+### THE CONSTRAINT CAME FIRST
+
+This machine's Xcode updated to 27.0 mid-session and its licence has not been agreed, so
+**linking any executable fails**. `cargo build` still produces the rlib; `check`,
+`clippy` and `doc` still work. No test binary and no command-line binary can be
+produced, so **no test could be run at all**.
+
+That is worth recording as a methodological situation rather than an interruption. This
+session's whole discipline is that a claim needs a measurement. With execution gone, the
+honest move is not to write code that cannot be tested, but to do work whose verification
+is READING — and to say plainly that it was.
+
+### AND READING FOUND A DEFECT IN AN AUTHORITATIVE DOCUMENT
+
+`docs/spec/INSTRUCTION_SET.md` stated that `CheckedMod` "Traps on divide-by-zero". **The
+implementation has never done that.** It reifies flag `3` carrying the numerator, and its
+own comment says it is "mirroring CheckedDiv". The `CheckedDiv` row states the reifying
+behaviour correctly; the `CheckedMod` row beside it contradicts the code.
+
+The census that found it was over a SPECIFIED population — every row in that file
+claiming a trap. **Three rows, two correct, one wrong.** Censusing against a specified
+list rather than against the rows that looked suspicious is what made the result
+complete rather than anecdotal, and it is the same method that closed the typed-opcode
+matrix earlier in this line.
+
+**A running test could not have found this.** The spec is prose; no test asserts the
+prose against the implementation. Only reading both does.
+
+### THE WORKSTREAM-C SIZING I MERGED YESTERDAY WAS TRUE AND INCOMPLETE
+
+I reported two operation families needing work. They are **not symmetric**, and the
+asymmetry is the decision-shaping part:
+
+| family | what it actually needs |
+|---|---|
+| division and modulo | **no new opcode.** `CheckedDiv`/`CheckedMod` are already total, `TrapKind::ZeroDivisor` exists, `compile_checked` already emits the flag-guarded `Trap` for an unhandled class. Only the BARE operator's lowering is missing. |
+| array bounds | **the real instruction-set work.** `BoundsCheck` traps by specification and no flag-producing bounds opcode exists to route through. |
+
+So half of what looked like an instruction-set change is a lowering change over
+machinery that already exists end to end. **I did not claim its size**, because I did
+not measure it, and this session has already recorded that claiming a fix is small
+without landing it is precisely the error to avoid. It also carries a consequence past
+the reference: the bytecode for every program using `/` or `%` changes, so `codegen.kel`
+must change with it or the byte-identical oracle breaks — and that half is
+capacity-fenced.
+
+### H2 NARROWED A SECOND TIME, BY THE MEASUREMENT I STILL HAD NOT TAKEN
+
+Yesterday I corrected H2 from "denial of service on the shipping front ends" to
+"debug builds only", after finally measuring release. Today, driving the debug
+command-line binary at nesting 60, 100 and 400: **every one is refused cleanly by the
+depth-24 guard.** The binary parses on the process's MAIN thread, whose stack dwarfs the
+roughly two mebibytes a spawned thread gets, so the guard is reached long before the
+stack is.
+
+**The shipping binary aborts at no nesting in either profile.** H2 requires parsing on a
+small stack — a test harness, or a host parsing on a worker thread.
+
+Two corrections to the same finding, both from measurements I had not taken when I first
+wrote it down. The pattern is not that I was careless twice; it is that **a severity is a
+claim about an environment**, and each time I had measured one environment and written
+about all of them.
+
+### AND THE THIRD CRUDE-INSTRUMENT SELF-INFLICTION OF THIS SESSION
+
+Probing the command-line binary, my panic detector grepped for the free text "stack
+overflow" — which appears inside the parser's entirely correct refusal, "deeply nested
+expressions are rejected to prevent stack overflow". It reported the **healthiest
+possible outcome as a crash**. The detector in the committed test file is narrow, and
+carries that reason.
+
+### AND CONTINUOUS INTEGRATION CAUGHT WHAT MY BLOCKED TOOLCHAIN COULD NOT
+
+Opening the pull request was the right move under the blocker, because **CI runs on
+machines without this machine's problem**. It went red on the Doc-links job, which I
+could not have run locally at all — the link checker is itself a Keleusma script driven
+through the command-line binary I cannot build.
+
+The cause was found by reading the workflow rather than waiting for the log: that job
+has a SECOND step regenerating `book/src/INSTRUCTION_SET.md` from the authoritative
+spec and failing on any diff, so the two copies cannot drift. I had edited the spec and
+not regenerated the book. **The guard did exactly its job**, and the regeneration is a
+Python script, so I could run it despite the blocker.
+
+**And looking there found the same wrong claim a second time, with an explicit wrong
+REASON.** `book/src/BIG_NUMBERS.md` said "Division by zero continues to trap with
+`VmError::DivisionByZero` because **the opcode fails before arm dispatch runs**". The
+opcode does not fail: it reifies flag 3 carrying the numerator, precisely so a
+`zero_divisor(numerator)` arm CAN bind it. An unhandled zero divisor does surface as
+`DivisionByZero`, but through the compiled dispatch. That file is hand-written, not
+generated, so no guard would ever have caught it — it took reading the neighbourhood of
+a defect the first census had already found.
+
+**One wrong claim about `CheckedMod` had propagated to three places**: the spec row, the
+generated book chapter, and a hand-written book page giving the wrong mechanism. The
+generated copy was protected by a guard; the other two were not.
+
+### WHAT IS UNVERIFIED, SAID PLAINLY
+
+Branch `test/cli-bad-input` carries a CLI bad-input test file that **has never been
+compiled or run**. Its findings were measured against the binary built before the
+blocker — 27 inputs, zero panics, appropriate exit statuses — but the file encoding them
+is unproven and the branch is not merged.
+
+## 2026-09-18 (ninety-seventh) — sizing a fenced decision, and three suspicions that measurement refuted
+
+### THE SEAM WAS EXHAUSTED, SO I CHANGED SEAMS
+
+Three increments on the hostile-bytecode corpus, the last two finding nothing. The
+fourth extension would have been more of the same. Reading the roadmap instead
+surfaced workstream **C, unhandled-trap analysis**, which I had never looked at.
+
+It is a `BYTECODE_VERSION`-bumping instruction-set change and therefore **not mine**.
+But its premise — "`Trap` becomes the only opcode that traps, every other opcode is made
+total, the validator becomes a scan" — rests on two unmeasured quantities: how large
+"make every other opcode total" is, and whether the scan would be honest today. Both
+are measurable with no instruction-set change and no authorisation, and measuring them
+**sizes a decision that is the operator's**. That is the useful half available to me.
+
+### THE ANSWER IS SMALLER THAN THE DESIGN'S OWN LIST
+
+**Exactly two operation families fault with no `Trap` opcode anywhere in the module:
+division or modulo by zero, and array bounds.**
+
+The design enumerates far more partial operations than that, and most are already in
+the shape it wants:
+
+| enumerated | measured today |
+|---|---|
+| checked arithmetic overflow | **does not fault** — the bare operator wraps, by specification |
+| division/modulo by zero | **faults, no trap present** |
+| array and indexed-data bounds | **faults, no trap present** |
+| bare `for .. limit` | already lowers to an explicit `Trap` |
+| cast range | **does not fault** — truncates |
+| newtype refinement | predicate must be declared; not reached from this corpus |
+| native errors | host-contract, covered elsewhere |
+
+**So the scanning validator would not be honest under the current instruction set**,
+even for compiler output: zero `Trap` opcodes and still a division-by-zero fault. That
+is why this increment ships **no** trap-freedom verdict. An interface that cannot
+deliver its guarantee is worse than none, and shipping it would have been the easy,
+wrong move.
+
+### THREE SUSPICIONS, ALL REFUTED BY CHECKING BEFORE CLAIMING
+
+The probe threw up three results that looked like defects. Every one was correct
+behaviour, and I found that out by reading the specification and the codegen rather
+than by writing the finding down first.
+
+1. **`i64::MAX + 1` finished with a wrapped negative.** That looks like silent
+   wraparound in a language whose headline is totality. `INSTRUCTION_SET.md` states the
+   push order exists precisely so `a + b` compiles to `CheckedAdd; PopN(2)`, discarding
+   the flag and leaving the wrapping result. **Wrapping is the specified behaviour of
+   the bare operator**, and the flag workstream C wants already exists.
+2. **`assert false;` produced zero trap opcodes and completed.** The compiler has assert
+   codegen emitting `Trap(AssertionFailed)` — gated on `emit_debug`, because `assert` is
+   a **debug** construct (B29) compiled out entirely in a release build.
+3. **`300 as Byte` completed.** It truncates to 44. Not a fault.
+
+Three for three. The cost of checking was minutes; the cost of not checking would have
+been three false defect reports in a security ledger.
+
+### AND I REPRODUCED THE SESSION'S OWN LESSON IN MINIATURE, TWICE
+
+- Filtering the probe output with `grep -E "^[a-z_]+:"` silently dropped the
+  `cast_byte_300` row, because the pattern excludes digits. A crude instrument, on my
+  own output, in an increment about crude instruments.
+- The first non-vacuity demonstration of the drift guard used a `sed` pattern that no
+  longer matched after `cargo fmt` reflowed the line. It printed nothing and I nearly
+  read that as a pass. **A demonstration that silently does nothing looks exactly like
+  one that succeeded** — the same shape as the schema-hash mutants, now in the
+  verification of a guard rather than in the guard.
+
+Both guards are demonstrated properly: claiming the obligation set is smaller fails
+with the set diffed, and claiming a faulting row completes fails naming the row.
+
+### WHAT IT DOES NOT ESTABLISH
+
+Nothing about hand-built bytecode, which can reach fault kinds no row reaches; nothing
+about host-contract failures such as an unregistered native; and it is exhaustive over
+the specified list rather than over source programs, which is a weaker claim and is
+written as one.
+
 ## 2026-09-17 (ninety-sixth) — the corpus was generating mutants faster than it was driving them
 
 ### THE GAP WAS NOT IN THE MUTATIONS, IT WAS IN THE EXECUTION

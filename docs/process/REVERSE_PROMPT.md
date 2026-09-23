@@ -10,6 +10,166 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-19, session 66, eighth increment. THE BLOCKER IS CLEARED AND EVERYTHING IS
+LOCALLY VERIFIED.**
+
+**THE THREE INCREMENTS MERGED ON CI'S WORD ALONE NOW AGREE WITH A LOCAL RUN.** The
+operator agreed the Xcode licence, linking works again, and the full workspace suite is
+green at **2890 tests, zero failures**. `tests/spec_trap_claims.rs` (4) and
+`keleusma-cli/tests/bad_input.rs` (7) pass locally exactly as they did on CI. `clippy
+--tests --features signatures,shell,self-host -D warnings` is clean, run after touching
+the sources so a warm cache could not print silence, and `fmt` is clean.
+
+**Every "blocked" statement below this block is now HISTORY, not a live claim.** Three
+increments were completed and merged while no executable could link on this machine;
+each said so in its own commit, and CI was the verification throughout. That arrangement
+worked and is worth knowing about, but it is over.
+
+**WHAT REMAINS FOR THE OPERATOR IS UNCHANGED BY ANY OF THIS:**
+
+1. **H2**, open on a stated trade: the parser's recursion guard does not cover
+   `if`-shaped input on a small stack, no single limit both admits the corpus and
+   prevents the abort, and the shipping binary is unaffected in either build profile.
+   Narrowing the language's accepted nesting to fix something no shipped invocation
+   reaches costs more than the defect. Overrule that if you disagree.
+2. **Workstream C**, now sized and known to be LOPSIDED. Division and modulo need no new
+   opcode — the checked opcodes are already total, `TrapKind::ZeroDivisor` exists, and
+   `compile_checked` already emits the guarded trap; only the bare operator's lowering is
+   missing, and its size is NOT claimed because it was not measured. Array bounds is the
+   genuine instruction-set work. Either way the change bumps `BYTECODE_VERSION`, which is
+   yours.
+3. **The seven standing decisions**, untouched all session.
+
+**No file under `src/selfhost/kel/` was modified in this session**, so the capacity
+decision remains unprejudiced.
+
+---
+
+**2026-09-19, session 66, seventh increment. STILL NO LOCAL TEST EXECUTION; CI VERIFIES.**
+
+**THE CHECKEDMOD DEFECT'S CLASS IS NOW GUARDED, NOT JUST ITS INSTANCE.**
+`tests/spec_trap_claims.rs` drives every opcode whose specification row makes a
+trap-or-reify claim and asserts the implementation agrees. The population is derived
+from the spec's OWN rows — `Div`, `Mod`, `CheckedDiv`, `CheckedMod`, `BoundsCheck` — and a
+second test pins that population so a newly-claiming row cannot arrive unguarded. It
+asserts BEHAVIOUR, never wording.
+
+**The checked opcodes needed a constructed path.** Bare `/` lowers to `Op::Div`
+(`src/compiler.rs:9192`, "Division can trap on a zero divisor"), so no source program
+reaches `CheckedDiv` without the arm construct. The test splices `Div` into
+`CheckedDiv; PopN(2)` — the exact sequence the spec describes for an uncaptured
+operation, and stack-neutral — asserting first that the fixture contains no jump.
+
+**A PROSE TENSION I DECLINED TO FILE.** `GRAMMAR.md` says an uncaptured operation lowers
+to "the opcode followed by `PopN(2)`", which cannot trap, then says an unhandled zero
+divisor traps. The coherent reading is that "uncaptured" means a CLASS with no arm inside
+a checked construct. Filing a defect on a contested reading is the overclaiming this
+session has been correcting, so it is in the journal and not the ledger.
+
+**AND I CORRECTED A CLAIM ABOUT MY OWN ENVIRONMENT.** I told you `cargo clippy` still
+worked. **It does not** — clippy rebuilds a proc-macro dylib, and a dylib links. `cargo
+check` completes only off cached proc-macro artifacts. Only the rlib build and `cargo doc`
+genuinely work. Same error shape as the severity corrections: I measured one thing and
+wrote about a wider set.
+
+**Six candidate goals were refuted by measurement before this one was chosen**, today's
+being the opcode table: its row names and the `Op` enum agree exactly, 66 and 66, and the
+existing count-only guard is weaker than set equality but not wrong.
+
+**THE BLOCKER PERSISTS** and needs `sudo xcodebuild -license`, which is interactive and
+privileged. CI is the verification.
+
+---
+
+**2026-09-18, session 66, sixth increment. NO TEST WAS EXECUTED FOR THIS WORK.**
+
+**THE TOOLCHAIN IS BLOCKED AND IT IS NOT A CHANGE OF MINE.** This machine's Xcode
+updated to 27.0 mid-session and its licence has not been agreed, so **linking any
+executable fails** — every test binary and the command-line binary included.
+`cargo build` still produces the rlib, and `cargo doc` works. **`cargo clippy` does NOT** —
+it must rebuild a proc-macro dylib, and a dylib links; an earlier note here said clippy
+worked and was wrong. `cargo check` completes, but only off cached proc-macro artifacts,
+so it is not a durable capability either. Clearing it needs `sudo xcodebuild -license`,
+which is interactive and privileged.
+
+Everything below was therefore established by **reading the implementation and the
+specification**, or measured **before** the blocker appeared. Nothing here is
+verified-by-execution, and nothing claims to be.
+
+**A DEFECT IN AN AUTHORITATIVE DOCUMENT, FOUND BY READING.**
+`docs/spec/INSTRUCTION_SET.md` stated that `CheckedMod` "Traps on divide-by-zero". **The
+implementation has never done that** — it reifies flag `3` carrying the numerator,
+mirroring `CheckedDiv`, and says so in its own comment. Corrected, and the row records
+that it was wrong. The census that found it covered every row in that file claiming a
+trap: **three rows, two correct, one wrong.**
+
+**WORKSTREAM C IS SMALLER AND LOPSIDED, WHICH CHANGES WHAT YOU ARE BEING ASKED TO
+AUTHORISE.** Last increment reported two operation families. They are not symmetric:
+
+- **Division and modulo need no new opcode.** `CheckedDiv` and `CheckedMod` are ALREADY
+  TOTAL, `TrapKind::ZeroDivisor` exists, and `compile_checked` already emits the
+  flag-guarded `Trap` for an unhandled outcome class. What faults is the BARE operator,
+  which the specification routes to `Op::Div`/`Op::Mod`, and those rows say they trap.
+  The work is routing the bare form through machinery that already exists. **Its size is
+  NOT claimed — it was not measured** — and it changes emitted bytecode for every
+  program using `/` or `%`, so `codegen.kel` must change with it or the byte-identical
+  oracle breaks. That half is capacity-fenced.
+- **Array bounds is the real instruction-set work.** `BoundsCheck` is specified to trap,
+  and there is no flag-producing bounds opcode to route through — no `CheckedBounds` the
+  way there is a `CheckedDiv`.
+
+**H2 IS NARROWED A SECOND TIME, AND BOTH NARROWINGS CAME FROM A MEASUREMENT I HAD NOT
+TAKEN.** The shipping binary does not abort at ANY nesting in EITHER profile: driven at
+60, 100 and 400, the debug command-line binary refuses cleanly at the depth-24 guard,
+because it parses on the process's MAIN thread rather than a spawned one. H2 needs
+roughly a two-mebibyte stack — a test harness, or a host parsing on a worker.
+
+**UNMERGED AND UNVERIFIED**: branch `test/cli-bad-input` carries a CLI bad-input test
+file that **has never been compiled or run**. The findings it encodes were measured
+against the binary built before the blocker — 27 inputs, zero panics, appropriate exit
+statuses — but the file itself is unproven. Do not merge it until it runs.
+
+---
+
+**2026-09-18, session 66, fifth increment.**
+
+**WORKSTREAM C IS NOW SIZED BY MEASUREMENT. THE OBLIGATION IS TWO OPERATION FAMILIES,
+NOT THE SEVEN ITS OWN LIST IMPLIES.**
+
+Workstream C (unhandled-trap analysis) is a `BYTECODE_VERSION`-bumping ISA change and
+therefore **yours**. Its premise rests on two unmeasured quantities, and both are now
+measured with no ISA change: `tests/runtime_fault_census.rs`.
+
+**Exactly two operation families fault with no `Trap` opcode anywhere in the module:
+division or modulo by zero, and array bounds.** Everything else on the design's list is
+already in the shape it wants — arithmetic overflow **does not fault** (the bare
+operator wraps, by specification, and the outcome flag the design asks for already
+exists and is discarded), a cast out of range **truncates**, `assert` is a debug
+construct compiled out of a release build, and the bare `for .. limit` already lowers to
+an explicit `Trap`.
+
+**THE SCAN WOULD NOT BE HONEST TODAY**, even for compiler output: zero `Trap` opcodes
+and still a division-by-zero fault. **So no trap-freedom verdict is shipped.** An
+interface that cannot deliver its guarantee is worse than none.
+
+**THREE SUSPICIONS WERE REFUTED BY CHECKING BEFORE CLAIMING.** `i64::MAX + 1` finishing
+with a wrapped negative, `assert false;` emitting nothing, and `300 as Byte` completing
+all looked like defects. All three are specified behaviour. Minutes to check; three
+false entries in a security ledger if I had not.
+
+**The census is guarded both ways** and both guards are demonstrated non-vacuous: the
+two-family set is pinned so a change resizes your decision deliberately, and the
+specified list is pinned so a row cannot quietly vanish.
+
+**What it does not establish**: nothing about hand-built bytecode, nothing about
+host-contract failures, and it is exhaustive over the specified list rather than over
+source programs.
+
+**Unchanged and untouched**: the seven operator decisions, the opcode count,
+`BYTECODE_VERSION`, and every file under `src/selfhost/kel/`.
+
+---
+
 **2026-09-17, session 66, fourth increment.**
 
 **THE CORPUS WAS GENERATING MUTANTS FASTER THAN IT WAS DRIVING THEM. THAT IS FIXED,

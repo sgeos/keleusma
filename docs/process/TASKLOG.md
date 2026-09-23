@@ -34,6 +34,90 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-19, session 66, eighth increment). BLOCKER CLEARED; ALL LOCALLY
+> VERIFIED.**
+>
+> The operator agreed the Xcode licence. Linking works, and the full workspace suite is
+> green at **2890 tests, zero failures**. The two suites merged during the blocker —
+> `spec_trap_claims` and the CLI `bad_input` — pass locally exactly as on CI. Clippy is
+> clean, run after touching the sources so a warm cache could not print silence.
+>
+> **Every "blocked" note above is HISTORY now, not a live claim.** Three increments were
+> completed and merged while nothing could link here, each saying so in its commit, with
+> CI as the verification.
+
+> **Currency note (2026-09-19, session 66, seventh increment). THE SPEC-CLAIM CLASS IS
+> GUARDED.**
+>
+> `tests/spec_trap_claims.rs` drives every opcode whose spec row makes a trap-or-reify
+> claim and asserts the implementation agrees — `Div`, `Mod`, `CheckedDiv`, `CheckedMod`,
+> `BoundsCheck`, a population derived from the spec's own rows and pinned by a second
+> test. Asserts BEHAVIOUR, never wording. This closes the CLASS the `CheckedMod` defect
+> came from, where fixing the row closed only the instance.
+>
+> Bare `/` lowers to `Op::Div` (`src/compiler.rs:9192`), so the checked opcodes are
+> reached by splicing `Div` into `CheckedDiv; PopN(2)` — the spec's own sequence,
+> stack-neutral, with the fixture asserted jump-free.
+>
+> **A prose tension in `GRAMMAR.md` was NOT filed as a defect**: its "uncaptured
+> operation" sentence is coherent under the reading that "uncaptured" means a class with
+> no arm. Recorded in the journal.
+>
+> **Correction to my own environment claim**: `cargo clippy` does NOT work under the
+> blocker (it rebuilds a proc-macro dylib, which links). Only the rlib build and
+> `cargo doc` do.
+>
+> **Still no local test execution. CI is the verification.**
+
+> **Currency note (2026-09-18, session 66, sixth increment). TOOLCHAIN BLOCKED; NO TEST
+> RUN.**
+>
+> **This machine's Xcode updated to 27.0 mid-session and its licence is unagreed, so
+> linking any executable fails** — test binaries and the CLI included. `cargo build` and
+> `cargo doc` work; **`clippy` does NOT** (it rebuilds a proc-macro dylib, which links), and
+> `check` completes only off cached proc-macro artifacts. An earlier note said clippy worked
+> and was wrong. Needs `sudo xcodebuild -license`. Everything
+> in this note was established by READING, or measured before the blocker.
+>
+> **A defect in an authoritative document**: `INSTRUCTION_SET.md` said `CheckedMod`
+> "Traps on divide-by-zero". The implementation has never done that; it reifies flag 3
+> mirroring `CheckedDiv`. Corrected. Census over every row claiming a trap: three rows,
+> two correct, one wrong.
+>
+> **Workstream C is LOPSIDED**, which changes the authorisation being sought. Division
+> and modulo need NO new opcode — the checked opcodes are already total, the trap kind
+> exists, and `compile_checked` already emits the guarded trap; only the BARE operator's
+> lowering is missing, and its size is NOT claimed because it was not measured. Array
+> bounds is the real ISA work: `BoundsCheck` traps by specification and there is no
+> flag-producing bounds opcode.
+>
+> **H2 narrowed a SECOND time**: the shipping binary aborts at no nesting in either
+> profile, because it parses on the MAIN thread. H2 needs a ~2 MiB stack.
+>
+> **Unmerged and unverified**: branch `test/cli-bad-input` holds a CLI bad-input test
+> that has never compiled or run.
+
+> **Currency note (2026-09-18, session 66, fifth increment). WORKSTREAM C SIZED.**
+>
+> Workstream C (unhandled-trap analysis) is a `BYTECODE_VERSION`-bumping ISA change and
+> is the OPERATOR'S. Its premise is now sized by measurement, with no ISA change:
+> `tests/runtime_fault_census.rs`.
+>
+> **Exactly two operation families fault with no `Trap` opcode present: division or
+> modulo by zero, and array bounds.** Most of the design's own list is already in the
+> shape it wants — arithmetic overflow does NOT fault (the bare operator wraps, by
+> specification; the flag already exists and is discarded), a cast out of range
+> truncates, `assert` is compiled out of a release build, and `for .. limit` already
+> lowers to an explicit `Trap`.
+>
+> **The scan would not be honest today**, so no trap-freedom verdict is shipped.
+>
+> **Three suspicions were refuted by checking before claiming** — wrapped overflow, a
+> silent assert, a truncating cast. All specified behaviour.
+>
+> Both guards demonstrated non-vacuous. Says nothing about hand-built bytecode or
+> host-contract failures.
+
 > **Currency note (2026-09-17, session 66, fourth increment). EXECUTION PROTOCOL, NO
 > NEW DEFECT.**
 >

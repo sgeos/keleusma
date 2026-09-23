@@ -209,6 +209,67 @@ supersedes the interval-and-refinement approach that was previously sketched her
 aligns with the flat-machine ISA direction and with the native partial-operation lowering
 planned for V0.4.0 (B35 P8).
 
+**THE OBLIGATION IS MEASURED, 2026-09-18, and it is smaller than this section's list
+implies.** `tests/runtime_fault_census.rs` executes every partial operation enumerated
+above against compiler output and records, per case, whether the module carries a
+`Trap` opcode at all.
+
+**Exactly two operation families fault with no `Trap` anywhere in the module: division
+or modulo by zero, and array bounds.** Those are the whole of "make every other opcode
+total", for compiler output. Several entries on the list above are already in the shape
+this design wants:
+
+- **Arithmetic overflow does not fault.** `INSTRUCTION_SET.md` states that a surface
+  `a + b` on `Int` operands compiles to the checked opcode followed by `PopN(2)`,
+  discarding the outcome flag and leaving the WRAPPING result. Wrapping is the
+  specified behaviour of the bare operator, and the flag this design asks for already
+  exists — the bare form simply discards it.
+- **A cast out of range does not fault either**; it truncates.
+- **`assert` is a debug construct (B29)**, compiled out entirely in a release build.
+- **The bare `for .. limit` already lowers to an explicit `Trap`**, as do the match and
+  enum-discrimination fallbacks.
+
+**So the scanning validator would NOT be honest under the current instruction set**,
+even for compiler output: a module containing zero `Trap` opcodes can still fault on a
+division by zero or an out-of-bounds index. That is why the census ships no
+trap-freedom verdict — an API that cannot deliver its guarantee is worse than none.
+
+The census is guarded both ways: the two-family set is pinned, so a change resizes this
+obligation deliberately rather than silently, and the specified list is pinned, so a row
+cannot quietly disappear. **It says nothing about hand-built bytecode**, which can reach
+fault kinds no row here reaches, nor about host-contract failures such as an
+unregistered native.
+
+**THE TWO FAMILIES ARE NOT SYMMETRIC, AND ONLY ONE OF THEM NEEDS THE INSTRUCTION SET
+TOUCHED.** Established 2026-09-18 by reading the implementation and this project's own
+instruction-set specification, since no test could be executed that day.
+
+**Division and modulo need no new opcode, and arguably no opcode change at all.**
+`CheckedDiv` and `CheckedMod` are ALREADY TOTAL: a zero divisor reifies as flag `3`
+carrying the numerator rather than trapping. `TrapKind::ZeroDivisor` exists, and
+`compile_checked` already emits the flag-guarded `Trap` for an outcome class the source
+leaves unhandled — which is precisely the lowering this design describes, already
+implemented, for the arm form. What faults today is the BARE operator, which the
+specification routes to `Op::Div` and `Op::Mod`, and those two rows say plainly that
+they trap on divide-by-zero. So the work for this family is routing the bare `/` and
+`%` on `Int` through the checked family and the guarded trap, using machinery that
+already exists end to end. **Its size is not claimed here, because it was not
+measured**, and it carries a consequence beyond the reference: the emitted bytecode for
+every program using `/` or `%` changes, so `codegen.kel` must change with it or the
+byte-identical differential oracle breaks. That part is capacity-fenced.
+
+**Array bounds is the genuine instruction-set work.** `BoundsCheck` is specified to
+trap if the index is outside `[0, bound)`, and no flag-producing bounds opcode exists to
+route through — there is no `CheckedBounds` the way there is a `CheckedDiv`. Making this
+family total therefore means changing `BoundsCheck`'s contract or adding a form, and the
+rad-hard minimal-instruction-set constraint prefers reuse over addition.
+
+**A defect in this document's sibling was found while establishing the above.** The
+`CheckedMod` row of `docs/spec/INSTRUCTION_SET.md` stated "Traps on divide-by-zero",
+which the implementation has never done; it reifies flag 3 mirroring `CheckedDiv`. The
+row is corrected and says so. The census that found it was over every row in that file
+claiming a trap: three rows, two correct, one wrong.
+
 **First pass versus full language.** The first pass covers the trap classes the toolchain
 source can raise (arithmetic and bounds over `Word`/`Byte`); the newtype-refinement and
 native-error classes widen with Workstream F, but the scanning validator is complete from the
