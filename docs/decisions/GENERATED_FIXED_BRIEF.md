@@ -2,7 +2,7 @@
 
 **Filed 2026-09-18, against `af51d7d7`, backlog 0, suite 648.**
 
-> ⚠ **STATUS, ADDED BY THE ARTIFACT AUDIT 2026-09-18.** A BRIEF DESCRIBES THE TREE AT FILING, BEFORE ITS OWN WORK LANDS. Every gap it states in the present tense was, by construction, still open when written. **NOT IMPLEMENTED.** Blocked on the toolchain: `cc` exits 69 with the Xcode licence message, so nothing links and no instrument can be shown to detect a fault. The brief stands as filed.
+> ⚠ **STATUS, ADDED BY THE ARTIFACT AUDIT 2026-09-18.** A BRIEF DESCRIBES THE TREE AT FILING, BEFORE ITS OWN WORK LANDS. Every gap it states in the present tense was, by construction, still open when written. **LANDED 2026-09-23**, after five days blocked on a toolchain that could not link. The brief stands as filed and its hazard analysis held: the f32/f64 constraint did not apply, and the overflow bound is what guards the run. **One thing it did not anticipate**: a bare decimal literal is a FLOAT, so `Fixed + 2.0` is a mixed pair the reference refuses, and Fixed literals must be written `(N as Fixed)`.
 
 
 ## What is left uncovered
