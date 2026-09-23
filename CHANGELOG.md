@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Two defects that made the task runner unable to run any task at all, found
+  by writing its first integration test.** The first moved a task's arena after
+  handing the virtual machine a reference into it: the arena was built by value,
+  a reference was taken, and the arena was then moved into the task structure
+  and again into the task vector, so the machine read a stale address. The
+  safety comment reasoned that the arena was kept alive, which was true and not
+  sufficient, because moving it invalidates the address; it presented as an
+  arena reporting forty-eight bytes of capacity and every task failing on its
+  first composite allocation. The arena is now boxed, so it keeps one heap
+  address however often its owner moves. The second decoded a task's yielded
+  pair without the arena, and since the flat-composite work a yielded tuple's
+  body is arena-resident, so the decode could not read it and the scheduler
+  treated every task as having yielded a non-tuple value and finished it; the
+  decode now resolves against the task's arena at the module's declared widths.
+  Either defect alone ended the runner within a second of start, and both
+  survived because the subcommand had no integration test.
+
+- **The task runner reloads its manifest on a hangup signal.** The signal
+  previously set a flag that led only to a message saying the feature was not
+  implemented. The runner now re-reads and re-parses the manifest and applies
+  what needs no change to a running task: the scheduler-wide tick interval and
+  shutdown grace, which are consulted while it runs, and each task's restart
+  policy, which is consulted only when a task restarts. A manifest that cannot
+  be read or parsed leaves the runner running on its previous configuration and
+  reports the refusal, which is the behaviour an operator depends on rather
+  than a fallback. Changes the slice cannot make are reported as deferred
+  rather than silently ignored, so nobody is left believing a change took
+  effect when it did not; adding or removing a task, and changing a bytecode
+  path, arena capacity, period, priority or event identifier, all remain
+  deferred because they need a task's arena and virtual machine rebuilt.
+
 - **A census of the runtime faults a verified, compiler-produced module can
   raise, and whether it carries a trap opcode when it does.** The unhandled-trap
   workstream proposes making trap reachability decidable by turning every

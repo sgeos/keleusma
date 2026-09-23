@@ -10,6 +10,56 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-23, session 66, ninth increment.**
+
+**`run-tasks` COULD NOT RUN ANY TASK. TWO DEFECTS, BOTH FIXED, FOUND BY WRITING THE
+SUBCOMMAND'S FIRST INTEGRATION TEST.**
+
+1. **An arena was moved after a `&'static` reference into it was taken.** `load_task`
+   built the arena by value, handed the machine a reference, then moved the arena into
+   the `Task` and again into the task vector. The safety comment said the arena is "kept
+   alive as long as the Vm exists" — **true, and insufficient: keeping a value alive says
+   nothing about keeping it at one address.** It presented as an arena reporting **48
+   bytes** of capacity and every task failing on its first composite allocation. Boxed
+   now.
+2. **A yielded tuple was decoded without the arena.** Since B28 the body is flat and
+   arena-resident, so the context-free decode could not read it and the scheduler
+   finished every task as having "yielded a non-tuple value". It now resolves against the
+   task's arena at the module's declared widths.
+
+**WHY THEY SURVIVED, AND THIS IS THE PART THAT GENERALISES.** `run-tasks` had **no
+integration test at all**. A subcommand with no end-to-end test can be completely
+non-functional while every test passes. The regression guard is deliberately the crudest
+possible assertion — spawn it, wait, is it still alive — because that is what catches
+both. Non-vacuous: reintroducing the first defect fails it in under two seconds.
+
+**MY OWN GUARD IS WHAT FOUND THEM.** All four of my first tests failed on
+`wait_until_running` — "the runner exited before the test could signal it; nothing was
+exercised". Had I written the obvious version that spawns, signals, and asserts the
+process is gone at the end, **all four would have passed against a completely broken
+runner.**
+
+**AND THE BACKLOG IS WHERE I SHOULD HAVE STARTED.** Eight increments of self-selected
+goals before I opened `docs/decisions/BACKLOG.md`. B31 item 4 is labelled the
+highest-leverage of its list.
+
+**THE FEATURE, SCOPED HONESTLY.** SIGHUP now re-reads the manifest and applies what needs
+no lifecycle change (scheduler `tick_interval`/`shutdown_grace`, per-task restart policy
+matched by name). A manifest that will not parse leaves the runner running on its
+previous configuration. **Deferred changes are REPORTED, not dropped** — an operator who
+edits a bytecode path and sees only "applied" would believe something took effect that
+did not. The lifecycle half (draining removed tasks, starting added ones) remains, and
+B31 says so.
+
+Tests observe **timing, not log lines**: a reload that shortens `shutdown_grace` shows as
+a 1.2-second stop against the control's 7.0. The control is what makes the assertion mean
+anything.
+
+**Full suite green at 2895.** Toolchain is working again; everything here is locally
+verified.
+
+---
+
 **2026-09-19, session 66, eighth increment. THE BLOCKER IS CLEARED AND EVERYTHING IS
 LOCALLY VERIFIED.**
 
