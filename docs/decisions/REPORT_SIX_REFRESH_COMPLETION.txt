@@ -1,0 +1,38 @@
+COMPLETION CONDITION — report six carries the dynamic corpus figures
+
+Ordering is not a completion criterion. No property below depends on the order
+the work was done in, on which branch it happened on, or on any process step.
+Any sequence of actions leaving the tree with these properties is complete.
+
+1. The outgoing report about the published arena figure states the dynamic
+   measurement of corpus streaming modules, including how many of the streaming
+   population were driven and how many were not, and why the rest were not.
+
+2. Every figure that report quotes is re-derivable from something in the tree,
+   and the guard watching that report passes and covers the newly quoted figures
+   as well as the ones it already covered.
+
+3. The report still states that neither its static nor its dynamic half bounds
+   what an arbitrary program would touch, and still does not describe the
+   reservation as a defect.
+
+4. Nothing in the tree claims the streaming corpus population is fully measured
+   dynamically while modules remain undriven.
+
+5. The region planner is unchanged, and the tuned corpus differential harness is
+   unchanged.
+
+6. src/ and tests/ at the repository root are unchanged by this session except
+   for changes the other line itself made.
+
+7. The backend suite passes in both float configurations, and that rests on a
+   whole gate run per configuration rather than on separately read phase
+   summaries, on targeted runs selected by binary name, or on one run assumed to
+   cover both.
+
+8. The handoff state table agrees with the tree, figures that cannot be
+   re-derived name the commit they were measured at, and the guards that check it
+   pass.
+
+9. The working tree is clean, and the branch on the remote matches the local
+   branch, established by querying the remote.

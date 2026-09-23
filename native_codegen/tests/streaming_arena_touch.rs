@@ -69,6 +69,15 @@ const TICKS: usize = 4;
 /// itself**; `region_composition.rs` pins the same figure independently.
 const PINNED_STREAMING: usize = 28;
 
+/// How many of those this census can currently drive. **The rest are accounted
+/// for by name and reason**, not dropped: eleven need host natives registered,
+/// three need a non-`Int` first argument, one the backend refuses to lower.
+const DRIVEN: usize = 13;
+/// `14_frame_log.kel` — the first corpus module outside the self-hosted stages
+/// ever measured dynamically. **Report six publishes these two figures.**
+const FRAME_LOG_TOUCHED: usize = 48;
+const FRAME_LOG_PLAN: usize = 600;
+
 fn replies(n: usize) -> Vec<i64> {
     (0..n).map(|i| (i as i64 % 5) + 1).collect()
 }
@@ -266,5 +275,56 @@ fn the_census_distinguishes_modules() {
          instrument reports. Extents seen: {distinct:?}. If the corpus genuinely \
          touches nothing, say so where a reader meets it rather than leaving this \
          test to pass vacuously."
+    );
+}
+
+/// **THE FIGURES REPORT SIX PUBLISHES, PINNED SO THEY CANNOT DRIFT UNWATCHED.**
+///
+/// `REVERSE_PROMPT.md` discloses these to the other line, and
+/// `outstanding_reports.rs` exists because **a disclosure whose figures have
+/// drifted is worse than none** — the other line would act on numbers this line no
+/// longer measures.
+///
+/// A measured value is pinned rather than recomputed in the report, so a change
+/// fails here with the module named instead of silently republishing a new number.
+/// **Stability was checked before publishing**: two independent runs give the same
+/// 48 bytes.
+#[test]
+fn the_published_dynamic_figures_are_pinned() {
+    let (rows, skipped) = census();
+
+    assert_eq!(
+        (rows.len(), skipped.len()),
+        (DRIVEN, PINNED_STREAMING - DRIVEN),
+        "the driven/skipped split moved to ({}, {}). Report six publishes it, so \
+         say what changed and why before republishing.",
+        rows.len(),
+        skipped.len()
+    );
+
+    let frame = rows
+        .iter()
+        .find(|r| r.name == "14_frame_log.kel")
+        .expect("`14_frame_log.kel` is the one corpus module outside the stages that drives");
+    assert_eq!(
+        (frame.touched, frame.plan),
+        (FRAME_LOG_TOUCHED, FRAME_LOG_PLAN),
+        "`14_frame_log.kel` now touches {} of {}, not {FRAME_LOG_TOUCHED} of \
+         {FRAME_LOG_PLAN}. Report six quotes those figures.",
+        frame.touched,
+        frame.plan
+    );
+
+    // **THE STAGES ARE STILL ZERO.** Report six says so, and it is the stronger
+    // half of the dynamic claim.
+    let stages_nonzero: Vec<&str> = rows
+        .iter()
+        .filter(|r| r.name != "14_frame_log.kel" && r.touched != 0)
+        .map(|r| r.name.as_str())
+        .collect();
+    assert!(
+        stages_nonzero.is_empty(),
+        "these stage modules no longer touch zero arena: {stages_nonzero:?}. That \
+         is the more interesting finding and report six must say so."
     );
 }

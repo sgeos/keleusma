@@ -2557,6 +2557,16 @@ beyond `auto_arena_capacity_for` to run a module natively. Measured two ways:
   native_codegen/tests/stage_differential.rs: three hand-written streams touch 16, 24 and 48 bytes of
   520-552 byte plans, and **the twelve stages touch ZERO** of 520-600. Instrument reach was proven
   before the numbers were believed — poking one byte into the region moves the measurement.
+- **Dynamically across the CORPUS** by native_codegen/tests/streaming_arena_touch.rs, added
+  2026-09-23: **13 of the 28 streaming modules are driven.** The twelve stages confirm ZERO by a
+  second route, and `14_frame_log.kel` is **the first corpus module outside the stages ever measured
+  this way — 48 bytes of a 600-byte plan, 8%.** The figure was checked stable across two independent
+  runs before being published here.
+  **The other 15 are NOT measured, and they are named rather than dropped**: eleven need host natives
+  registered (`host::song_name`, `host::run_player_turn`), three take a non-`Int` first argument, and
+  one my backend refuses to lower — the yield-escape hazard already dispositioned. Reaching them
+  needs the stub machinery in my corpus differential, which I declined to extract rather than
+  disturb a tuned instrument. **So read this as 13 of 28, not as the corpus.**
 
 **Why it may matter to you.** A host sizing an arena from that figure provisions roughly twenty times
 what these streams use, and for the compiler stages provisions a region nothing writes. Whether that

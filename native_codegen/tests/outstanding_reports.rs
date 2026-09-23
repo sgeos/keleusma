@@ -276,6 +276,31 @@ fn report_six_still_reproduces_from_the_tree() {
         );
     }
 
+    // **THE CORPUS FIGURES ADDED 2026-09-23 ARE WATCHED TOO.** Report six now
+    // publishes a driven count and one module's measured extent; an unwatched
+    // published figure is exactly what this test exists to prevent.
+    let touch = std::fs::read_to_string("tests/streaming_arena_touch.rs")
+        .expect("the streaming arena census is readable");
+    for (quantity, needle) in [
+        ("the driven count", "const DRIVEN: usize = 13;"),
+        (
+            "the measured extent",
+            "const FRAME_LOG_TOUCHED: usize = 48;",
+        ),
+        (
+            "the plan it is measured against",
+            "const FRAME_LOG_PLAN: usize = 600;",
+        ),
+    ] {
+        assert!(
+            touch.contains(needle),
+            "report six quotes {quantity}, and `streaming_arena_touch.rs` no longer \
+             pins it. Re-measure and correct the report, or withdraw the figure — \
+             do not leave the other line reading a number this line has stopped \
+             measuring."
+        );
+    }
+
     let stages = std::fs::read_to_string("tests/stage_differential.rs")
         .expect("the stage differential is readable");
     assert!(
