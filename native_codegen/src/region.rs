@@ -51,9 +51,25 @@
 //! them.** Summing every site over-approximates the true high-water mark, so a
 //! chunk with two constructions in mutually exclusive branches reserves both. That
 //! is sound and loose, and tightening it needs a liveness analysis this pass
-//! deliberately omits. The looseness is bounded and small in practice: bodies run
-//! 8 to 64 bytes with a median of 24, and the corpus-wide worst case over all 239
-//! sites is 15,296 bytes.
+//! deliberately omits. The looseness is bounded and small in practice: **bodies run
+//! 8 to 40 bytes with a median of 24, and the corpus-wide total over all 256 sites
+//! is 4,936 bytes.**
+//!
+//! ⚠ **THREE OF THOSE FOUR FIGURES WERE WRONG UNTIL 2026-09-24, AND ALL THREE CAME
+//! FROM THE WALK THIS FILE ALREADY RETRACTED TWO PARAGRAPHS ABOVE.** The sentence
+//! read *"8 to 64 bytes with a median of 24, and the corpus-wide worst case over
+//! all 239 sites is 15,296 bytes"*.
+//!
+//! **`15,296` is exactly `239 × 64`** — the retracted site count multiplied by a
+//! maximum that is also wrong. Measured over the four-root corpus the maximum body
+//! is **40**, and the true total is **4,936**, about a third of what was claimed.
+//! Only the median survived.
+//!
+//! **The retraction above named the 239 as carried rather than measured and gave
+//! 256 in its place; this sentence kept using it anyway.** A correction that does
+//! not reach every instance leaves the stale one looking corroborated by the
+//! corrected one beside it. `the_documented_body_figures_are_measured` re-derives
+//! all four.
 //!
 //! **It does not decide the section.** A body that outlives its chunk cannot live
 //! at an offset from that chunk's base, and 23 of 826 corpus chunks return a flat

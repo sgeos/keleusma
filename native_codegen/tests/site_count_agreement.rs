@@ -175,3 +175,59 @@ fn the_comparison_distinguishes_a_mismatched_pair() {
          cannot be built from this corpus and the check above is untested"
     );
 }
+
+/// **THE BODY FIGURES `region.rs` PUBLISHES, RE-DERIVED.**
+///
+/// That module's doc comment quotes a body-size range, a median and a corpus-wide
+/// total. **Three of the four were wrong until 2026-09-24**, and all three came
+/// from the very walk the same comment had already retracted two paragraphs above:
+/// it named 239 as *"carried rather than measured"*, gave 256 in its place, and
+/// then used 239 again.
+///
+/// The old total, `15,296`, is exactly `239 × 64` — a retracted count times a
+/// maximum that was also wrong. **A correction that does not reach every instance
+/// leaves the stale one looking corroborated by the corrected one beside it**,
+/// which is why these are re-derived rather than re-read.
+///
+/// **Pinned rather than reported**, unlike the agreement figures above, precisely
+/// because they are published in a doc comment: a figure a reader will quote needs
+/// to fail when it drifts, and the same idiom guards the handoff's state table. If
+/// the corpus grows, both the numbers and that comment move together.
+#[test]
+fn the_documented_body_figures_are_measured() {
+    let corpus = corpus();
+    let mut sizes: Vec<u32> = Vec::new();
+    let mut chunks = 0usize;
+    for (_name, m) in &corpus {
+        for c in &m.chunks {
+            let before = sizes.len();
+            for op in &c.ops {
+                if let Op::NewComposite(NewCompositeOperand::Flat { byte_size, .. }) = *op {
+                    sizes.push(u32::from(byte_size));
+                }
+            }
+            if sizes.len() > before {
+                chunks += 1;
+            }
+        }
+    }
+    sizes.sort_unstable();
+    let total: u32 = sizes.iter().sum();
+    let min = sizes.first().copied().unwrap_or(0);
+    let max = sizes.last().copied().unwrap_or(0);
+    let median = sizes.get(sizes.len() / 2).copied().unwrap_or(0);
+
+    assert!(
+        !sizes.is_empty(),
+        "no composite sites found, so every figure below is vacuous"
+    );
+    assert_eq!(
+        (sizes.len(), chunks, min, max, median, total),
+        (256, 35, 8, 40, 24, 4936),
+        "the composite body figures moved to sites={}, chunks={chunks}, {min}..{max}, \
+         median {median}, total {total}. `region.rs` publishes these; update that \
+         comment in the SAME change, or the next reader quotes a figure nothing \
+         measures.",
+        sizes.len()
+    );
+}
