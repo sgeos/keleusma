@@ -11,8 +11,14 @@
 //! 2. The second added six paths by grepping, and still missed **root `src/`** —
 //!    where `stage_differential.rs` reads `../src/selfhost/kel/*.kel`, the stage
 //!    differential's own SUBJECTS, and other tests read `../src/bytecode.rs`,
-//!    `compiler.rs`, `vm.rs` and `wire_format.rs`. That is the `v0.2.3` line's most
-//!    active directory, so it was the likeliest of the holes to fire.
+//!    `compiler.rs`, `vm.rs` and `wire_format.rs`.
+//!
+//! **The first telling of point 2 claimed root `src/` was the other line's most active
+//! directory, and the measurement refuted it**: over their 30 most recent commits,
+//! `REVERSE_PROMPT.md` was touched 14 times, `docs/decisions` 7, root `src/` 3, and
+//! `src/selfhost/kel` and `examples/scripts` not once. The hole was real; the reason
+//! given for it was an unmeasured ranking. The figures live in `tools/gate-status.sh`
+//! beside the set they describe.
 //!
 //! Fixing an instance twice is the signal to close the class. A hand-maintained list
 //! of inputs drifts from the inputs exactly as a hand-maintained figure drifts from

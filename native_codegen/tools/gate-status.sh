@@ -32,9 +32,23 @@ record="GATE_RECORD.md"
 # `../src` is here for a reason found on 2026-09-24 while building the census guard:
 # `stage_differential.rs` reads `../src/selfhost/kel/*.kel`, and other tests read
 # `../src/bytecode.rs`, `compiler.rs`, `vm.rs` and `wire_format.rs`. Those are the
-# stage differential's SUBJECTS. Root `src/` is the `v0.2.3` line's most active
-# directory, so this was by far the likeliest of these holes to fire, and it was the
-# one the first hand-built set missed.
+# stage differential's SUBJECTS, and the first hand-built set missed them.
+#
+# ⚠ **HOW OFTEN EACH MEMBER ACTUALLY FIRES, measured over the 30 most recent commits
+# on `origin/v0.2.3` on 2026-09-24** -- because the first version of this comment
+# asserted an activity ranking instead of measuring one, and the measurement refuted it:
+#
+#   docs/process/REVERSE_PROMPT.md  14/30      src                        3/30
+#   docs/decisions                   7/30      src/selfhost/kel           0/30
+#   examples/scripts                 0/30      examples/rtos/scripts      0/30
+#   compiler/kel                     0/30      native_codegen             0/30
+#
+# So the LOUDEST contributor is the least consequential one: a `REVERSE_PROMPT.md` edit
+# only feeds a documentation guard, while the stage sources and corpus -- the inputs
+# whose change could alter a VERDICT -- were untouched across the whole sample. This is
+# why the reporter NAMES the paths rather than only counting them: a reader who sees
+# `REVERSE_PROMPT.md` judges it differently from `examples/scripts`, and could not if
+# the output were a number.
 #
 # Several of these belong to the `v0.2.3` line. That is a FEATURE: absorbing its
 # commits can change a stage source, a corpus script or a decision document, and the
