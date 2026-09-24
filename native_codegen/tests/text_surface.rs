@@ -40,11 +40,18 @@
 //! | a `Multiword` multiply | **DECLINED** — traced to the multi-write local rule, which is deliberate |
 //! | **a `Text` struct field** | **pinned here** — at op 2, so it is the TAG-level case, like `Float` was |
 //!
-//! Whether the third is closable is **not settled by this file**, and it should not
-//! be guessed: the float one looked like a `width_of_tag` change and was not, and
-//! the multi-word one looked like the float one and was not. A string's packed width
-//! is whatever the canonical layout says, and that must be read before anything is
-//! changed.
+//! **SETTLED BY READING, 2026-09-23** — see `TEXT_FIELD_VERDICT.md`. The width IS
+//! knowable: `value_layout.rs` sizes a `Text` at `2 * word_bytes`, a handle of
+//! pointer-or-offset plus length-or-epoch with a discriminant. **And it still must
+//! not be supplied**, because the emitter lowers a string constant as a BARE
+//! ADDRESS — one word, no discriminant — and says so where it withholds the width:
+//! *"packing an address into a composite body as though it were a scalar is exactly
+//! the mistake `Width::Unknown` exists to make impossible."*
+//!
+//! So the refusal is correct and deliberate, and closing it is the string
+//! representation workstream rather than a width lookup. **A shared error message is
+//! not a shared cause**: three instances of this refusal had three different roots,
+//! and only the float one was a width that was merely missing.
 
 mod common;
 
