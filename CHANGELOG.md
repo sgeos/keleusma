@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Tests for the task-runner scheduler behaviours that had never executed.**
+  Until the arena-move and yield-decode defects were repaired the runner could
+  not run a single task, so its documented behaviour had never run at all: the
+  restart policy, the restart rate limit, isolation between tasks, and periodic
+  scheduling. Each was probed first and each is correct, which is when a guard
+  costs least. The restart path carries the most weight, because it
+  re-allocates a task's arena and re-instantiates its virtual machine, and that
+  is the path whose defect was just repaired, so a regression there is that
+  defect returning. A faulting task is shown to restart up to its limit, then
+  be disabled, while the runner and its sibling task continue unaffected; a
+  task configured never to restart is shown not to; and a periodically
+  scheduled task is shown to keep running.
+
+- **A correction to the task-runner design document.** It distinguished the
+  restart-on-error mode from the always mode by what happens on voluntary
+  termination, hedging that case as unusual for a stream entry point. It is
+  more than unusual: a stream entry point that never yields cannot be compiled
+  at all, because structural verification requires at least one yield. The
+  distinction therefore rests on a case valid source does not readily produce,
+  which the document now states and the tests record as the reason that one
+  behaviour is not covered.
+
 - **The success paths of the command-line subcommands a coverage census found
   unexercised.** The previous increment found the task runner completely
   non-functional, and the reason was that nothing exercised it end to end.
