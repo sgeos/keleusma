@@ -60,7 +60,19 @@ if [ "${1:-}" = "--narrow" ]; then
     label="narrow-float-32"
 fi
 
+# Provenance, captured BEFORE any phase runs: the tree this verdict will belong
+# to. `frozen-run.sh` proves the tree did not MOVE during a phase; it cannot prove
+# the tree was the COMMITTED one, which is how a green verdict once came to belong
+# to no commit at all. The record below closes that by naming both.
+#
+# This file's own state is excluded: a record left by the previous configuration's
+# run is not a modification of the code under test.
+start_commit=$(git rev-parse HEAD 2>/dev/null || echo UNKNOWN)
+_dirt=$(git status --porcelain 2>/dev/null | grep -cv 'GATE_RECORD.md') || true
+start_tree=$([ "${_dirt:-0}" -eq 0 ] && echo clean || echo "dirty(${_dirt})")
+
 echo "================ BACKEND GATE — $label"
+echo "   tree: $start_commit ($start_tree)"
 fail=0
 
 echo "-- fmt"
@@ -107,5 +119,41 @@ echo "-- suite, part 3 of 3 (everything but corpus_differential, UNDER THE MIDDL
 KEL_OPTIMIZE=1 tools/frozen-run.sh cargo nextest run --no-fail-fast "${feat[@]}" \
     -E 'not binary(corpus_differential)' || fail=1
 
-echo "================ BACKEND GATE — $label: $([ $fail -eq 0 ] && echo PASS || echo FAIL)"
+verdict=$([ $fail -eq 0 ] && echo PASS || echo FAIL)
+echo "================ BACKEND GATE — $label: $verdict"
+
+# The record is written HERE, after every frozen window has closed, so the gate
+# cannot perturb its own freeze check. Writing it mid-run would reintroduce the
+# exact fault this provenance exists to expose.
+record="GATE_RECORD.md"
+other=$(grep -E '^\| (default features|narrow-float-32) \|' "$record" 2>/dev/null \
+        | grep -v "^| $label |") || true
+row="| $label | $start_commit | $start_tree | $verdict | $(date -u +%Y-%m-%dT%H:%M:%SZ) |"
+{
+    cat <<'HDR'
+# Backend gate record
+
+Written by `tools/backend-gate.sh`. One row per float configuration; a run updates
+its own row and leaves the other's alone. Rows are machine-read by the guard in
+`tests/gate_record.rs` and by `tools/gate-status.sh`.
+
+**What a row attests.** That a gate run completed against the named commit, with
+the worktree in the stated condition, and reached the stated verdict. The
+`worktree` column excludes this file, whose own state says nothing about the code.
+
+**What a row does NOT attest.** That the backend is green *now*. A row describes
+the tree at one commit and nothing after it. `tools/gate-status.sh` reports how
+many backend sources have changed since, which is the question actually worth
+asking; a bare commit mismatch is not a defect, because committing a record
+necessarily produces a commit the record cannot name.
+
+**`dirty` is a disclosure, not a failure.** A dirty run's verdict belongs to a tree
+that was never committed and cannot be reproduced from history.
+
+| configuration | commit | worktree | verdict | run (UTC) |
+|---|---|---|---|---|
+HDR
+    printf '%s\n' "$row" "$other" | grep -v '^$' | sort
+} > "$record"
+
 exit $fail

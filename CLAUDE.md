@@ -218,6 +218,7 @@ for once; the detail is in [`docs/process/DESIGN_JOURNAL.md`](docs/process/DESIG
 | A run whose tree was **perturbed and restored** mid-flight | `frozen-run.sh` compares two SNAPSHOTS, so a file created and deleted inside the window leaves both identical and the verdict reads FROZEN. A probe file in `tests/` turned the narrow gate red against a pinned population count, on a tree that was never committed. **A `target/` write is harmless; a file in `tests/` is an input to the suite** |
 | A **push** whose pre-push gate ran while commits landed | The pre-push hook runs the workspace suite against the WORKING TREE, so committing during it changes what its doc-reading guards read. Same class as the row above, and the rule *"do not create files in `tests/`"* was too narrow: **the tree must not move while ANY gate reads it.** Observed 2026-09-24; the run passed, which is not evidence it was safe |
 | A gate run **phase by phase**, with the verdict ASSEMBLED by hand | The script accumulates `fail=1` across its phases and prints one PASS or FAIL; running the phases separately — which a ten-minute ceiling forces for a long one — moves that accumulation into the operator's memory, and **a phase can then be dropped with nothing saying so**. A `clippy` failure stood for four commits behind a suite figure recorded as green from "six runs" |
+| A **launcher's** exit status, read as the suite's | `&` inside an already-backgrounded call reports the LAUNCH succeeding, not the run. The log carried no summary line and no captured status, and its single FAIL sat at test 306 of 669 — where a `tail -3` cannot reach. **A log missing its final summary is an IN-FLIGHT log, not a clean one**; require the summary line and the exit status together, from the same run |
 
 **A guard for that last row was attempted and ABANDONED, which is worth knowing before
 trying again.** A text scan for a gated module path reached by an ungated item produced
@@ -230,8 +231,11 @@ among them. A sound version needs brace-aware scoping. **The compiler already do
 correctly, in five configurations, which is what the gate runs** — so the instrument for
 this class is the gate, not a scan.
 
-**Not exhaustive.** Nine found across three sessions is evidence that more exist, not
-that these are all of them. The seventh came from re-running a measurement whose feature
+**Not exhaustive.** Thirteen found is evidence that more exist, not that these are all
+of them — and **this sentence said NINE while the table above it held twelve rows**,
+until 2026-09-24. The summary of the catalogue had drifted from the catalogue, which is
+the very class the catalogue documents; re-count the rows rather than trusting the
+count. The seventh came from re-running a measurement whose feature
 set continuous integration does not cover. **The eighth was committed by the author of the
 seventh, two increments later**, which is the more useful fact: knowing a failure class
 does not prevent producing it, and only running the configurations does. A run that is about to justify a claim deserves the question
