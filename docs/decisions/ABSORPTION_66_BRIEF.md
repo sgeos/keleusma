@@ -56,3 +56,20 @@ verified this time**, which is the point of stating it.
 
 Measured **alone**. This suite contains tests that read source text from disk, so
 "edits do not affect a running suite" is false here.
+
+## Outcome, recorded after the merge
+
+**Every prediction held, and the vacuous one was still vacuous.**
+
+1. **Zero conflicting files.** Three auto-merged — `DESIGN_JOURNAL.md`,
+   `REVERSE_PROMPT.md`, `TASKLOG.md`. Seven files, 702 insertions, 26 deletions.
+2. **Zero movement in every backend figure.** `handoff_figures.rs` and
+   `test_population_guard.rs` pass unchanged.
+3. **The ownership check read empty before and after**, exactly as predicted, and
+   **it established nothing** — which is what the prediction said it would.
+   Recorded as an absent check rather than a passing one.
+4. **`outstanding_reports.rs` stayed green**, including its new coverage of the
+   corpus arena figures published the same day. The channel survived a second
+   consecutive rewrite of `REVERSE_PROMPT.md` by the other line.
+
+Backlog zero.
