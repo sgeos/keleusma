@@ -54,6 +54,11 @@ const BUFFER_HARNESSES: &[&str] = &[
     "declared_float_width.rs",
     "delegated_suspension.rs",
     "fixed_shared_scale.rs",
+    // Added 2026-09-23 with the Fixed stream differential. **This census caught it
+    // before the commit**, which is the tenth catalogue row working: a targeted run
+    // selected by binary name cannot see a census in another binary. Its driver is
+    // modelled on the float stream one and asks the same two contract functions.
+    "fixed_stream_differential.rs",
     // Added 2026-09-17 with the float-stream asymmetry file, when its driver was
     // PARKED -- `Op::Yield` refused a float operand, so the differential could
     // not run. It was listed anyway, because it built the same three host buffers
