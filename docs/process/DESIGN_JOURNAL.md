@@ -13,6 +13,57 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-23 (hundred and first) — generalising the run-tasks lesson by counting
+
+### THE CLASS WAS CONFIRMED, SO THE NEXT MOVE WAS TO COUNT IT
+
+`run-tasks` was completely broken because nothing exercised it end to end. That is a
+confirmed severe class rather than a worry, and the obvious generalisation is: **which
+other shipping subcommands are in that position?**
+
+Counting invocations by tests that actually run the binary:
+
+| subcommand | invocations |
+|---|---|
+| `run` | 24 |
+| `compile` | 14 |
+| `keygen` | 3 |
+| `strip` | **1, and a REFUSAL case only** |
+| `version` | **0** |
+
+`strip` is the same shape `run-tasks` was: a real transformation whose success path
+nothing exercised. The refusal case, which I had added myself two increments earlier,
+made it look covered in a naive count.
+
+### IT WORKS, AND THAT IS WHEN THE GUARD IS CHEAP
+
+Measured before writing anything: a debug build is 4812 bytes, the plain build 3780, and
+stripping the debug build produces **exactly** the plain artifact, byte for byte.
+Stripping is idempotent. All three run to 42.
+
+So no defect this time. **A subcommand that works today is precisely when a guard costs
+least and is worth most** — the alternative is discovering the regression the way
+`run-tasks` was discovered.
+
+### THE PROPERTY CHOSEN MATTERS MORE THAN THE TEST COUNT
+
+The weak test available was "the stripped artifact still runs". It would pass against a
+strip that removed **nothing**, and against one that removed something else as well.
+
+The property asserted instead is **byte identity with the non-debug build**. That pins
+the actual contract — debug metadata is separable without residue — and it fails in both
+of those directions.
+
+Bytes are compared, not lengths. The lengths matched here, and comparing them would have
+been the weaker check with the stronger one sitting in the same two files.
+
+### A FIXTURE ASSERTION THAT EARNS ITS PLACE
+
+The identity test first asserts the debug artifact is LARGER than the plain one. Without
+that, a fixture carrying no debug metadata at all would make the identity assertion
+trivially true, and the test would pass while proving nothing — this suite's recurring
+failure mode, guarded against here before it could occur rather than after.
+
 ## 2026-09-23 (hundredth) — consulting the backlog, and finding a shipping subcommand that could not run anything
 
 ### THE OMISSION FIRST

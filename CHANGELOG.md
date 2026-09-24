@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The success paths of the command-line subcommands a coverage census found
+  unexercised.** The previous increment found the task runner completely
+  non-functional, and the reason was that nothing exercised it end to end.
+  Counting how often each subcommand is actually invoked by a test that runs
+  the binary showed the same shape elsewhere: the artifact-stripping
+  subcommand appeared once, in a refusal case only, and the version subcommand
+  not at all. Stripping is now pinned by the property it exists for rather than
+  by a smoke test, namely that stripping a debug-built artifact reproduces the
+  non-debug build exactly, compared as bytes rather than as lengths, since two
+  artifacts of equal length can differ. Stripping is also shown idempotent, and
+  a stripped artifact shown to still run and agree with the unstripped one. The
+  reported version is checked against the crate's own version, so a hardcoded
+  string cannot drift unnoticed until someone reads a release note against a
+  binary.
+
 - **Two defects that made the task runner unable to run any task at all, found
   by writing its first integration test.** The first moved a task's arena after
   handing the virtual machine a reference into it: the arena was built by value,

@@ -10,6 +10,20 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-23, session 66, tenth increment). COVERAGE CENSUS; STRIP AND
+> VERSION PINNED.**
+>
+> Generalised the `run-tasks` lesson by COUNTING end-to-end invocations per subcommand:
+> `run` 24, `compile` 14, `keygen` 3, `strip` 1 (a REFUSAL case only, which I had added
+> myself), `version` 0.
+>
+> **No defect found** — stripping a debug build reproduces the plain build byte for byte,
+> is idempotent, and the result runs. **That is when a guard is cheapest.**
+>
+> The property pinned is BYTE IDENTITY, not "it still runs", because the latter would
+> pass against a strip that removed nothing. Bytes compared, not lengths. Both guards
+> demonstrated non-vacuous.
+
 > **Currency note (2026-09-23, session 66, ninth increment). `run-tasks` WAS BROKEN;
 > FIXED.**
 >
