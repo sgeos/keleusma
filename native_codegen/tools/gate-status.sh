@@ -20,14 +20,34 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 record="GATE_RECORD.md"
-HANDOFF="../docs/process/handoffs/v0.3.0.md"
+
+# EVERY PATH THE SUITE READS, not merely the package the suite lives in.
+#
+# Established on 2026-09-24 by grepping the tests for external paths, after the
+# handoff alone was added and the same argument was noticed to apply more widely. The
+# differential's SUBJECTS are `../examples/scripts/*.kel`: a corpus file could change
+# and a reach computed over `native_codegen/` alone would not see it, while reporting
+# that the record still spoke to HEAD. At least eight test files read these.
+#
+# Several of these belong to the `v0.2.3` line. That is a FEATURE: absorbing its
+# commits can change a corpus script or a decision document, and the record should
+# then report itself unverified, because it is.
+REACH=(
+    .
+    ../docs/process/handoffs/v0.3.0.md
+    ../docs/process/REVERSE_PROMPT.md
+    ../docs/decisions
+    ../examples/scripts
+    ../examples/rtos/scripts
+    ../compiler/kel
+)
 head_commit=$(git rev-parse HEAD 2>/dev/null || echo UNKNOWN)
 echo "HEAD is $head_commit"
 
 # The reach figures below diff COMMIT to COMMIT, so uncommitted work is invisible
 # to them. Saying "still speaks to HEAD" while backend sources sit unstaged would
 # be the reporter telling its own version of the lie it exists to prevent.
-now_dirt=$(git status --porcelain -- . "$HANDOFF" 2>/dev/null | grep -cv 'GATE_RECORD.md') || true
+now_dirt=$(git status --porcelain -- "${REACH[@]}" 2>/dev/null | grep -cv 'GATE_RECORD.md') || true
 if [ "${now_dirt:-0}" -gt 0 ]; then
     echo "⚠ ${now_dirt} backend file(s) are UNCOMMITTED right now. No record can speak"
     echo "  to them: the reach figures below compare commits and cannot see them."
@@ -56,11 +76,11 @@ while IFS='|' read -r _ cfg commit tree verdict when _rest; do
         echo "   ⚠ that commit is NOT in this repository -- the row cannot be checked"
         continue
     fi
-    # The handoff is diffed alongside the package because `handoff_figures.rs` READS
-    # it: a figure edited there can turn this suite red without a single file under
-    # `native_codegen/` changing. Counting only the package would have this reporter
-    # answer "still speaks to HEAD" while a test's input had moved underneath it.
-    changed=$(git diff --name-only "${commit}..HEAD" -- . "$HANDOFF" 2>/dev/null \
+    # Diffed over every READ path, not the package alone. Counting only the package
+    # would have this reporter answer "still speaks to HEAD" while a test's input --
+    # a corpus script, a handoff figure, a decision document -- had moved underneath
+    # it. That is the reporter telling its own version of the lie it exists to stop.
+    changed=$(git diff --name-only "${commit}..HEAD" -- "${REACH[@]}" 2>/dev/null \
               | grep -v "$record")
     n=$(printf '%s' "$changed" | grep -c . ) || true
     if [ "${n:-0}" -eq 0 ]; then
