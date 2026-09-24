@@ -42,7 +42,14 @@
 # a mid-run watcher would be a larger instrument than the problem. The corrective is
 # the rule below, which is about the operator rather than the script:
 #
-#   ** DO NOT CREATE FILES IN `tests/` WHILE A RUN IS IN FLIGHT. **
+#   ** THE TREE MUST NOT MOVE WHILE ANY GATE READS IT. **
+#
+# Widened 2026-09-24 from "do not create files in `tests/`", which was too narrow
+# by two steps. The first instance was a probe file during a backend gate. The
+# second was COMMITTING during a PUSH's pre-push gate, which runs the workspace
+# suite against the working tree and whose doc-reading guards therefore saw a tree
+# mid-change. **That one did not fail, and that is not evidence it was safe** — the
+# guards happened to pass against whichever version they read.
 #
 # The reason is specific and already on record: this suite contains tests that READ
 # SOURCE TEXT FROM DISK, which is why absorptions are measured alone. A `target/`
