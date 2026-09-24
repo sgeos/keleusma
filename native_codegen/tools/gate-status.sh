@@ -29,14 +29,22 @@ record="GATE_RECORD.md"
 # and a reach computed over `native_codegen/` alone would not see it, while reporting
 # that the record still spoke to HEAD. At least eight test files read these.
 #
+# `../src` is here for a reason found on 2026-09-24 while building the census guard:
+# `stage_differential.rs` reads `../src/selfhost/kel/*.kel`, and other tests read
+# `../src/bytecode.rs`, `compiler.rs`, `vm.rs` and `wire_format.rs`. Those are the
+# stage differential's SUBJECTS. Root `src/` is the `v0.2.3` line's most active
+# directory, so this was by far the likeliest of these holes to fire, and it was the
+# one the first hand-built set missed.
+#
 # Several of these belong to the `v0.2.3` line. That is a FEATURE: absorbing its
-# commits can change a corpus script or a decision document, and the record should
-# then report itself unverified, because it is.
+# commits can change a stage source, a corpus script or a decision document, and the
+# record should then report itself unverified, because it is.
 REACH=(
     .
     ../docs/process/handoffs/v0.3.0.md
     ../docs/process/REVERSE_PROMPT.md
     ../docs/decisions
+    ../src
     ../examples/scripts
     ../examples/rtos/scripts
     ../compiler/kel
