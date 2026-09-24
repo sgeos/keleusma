@@ -10,6 +10,34 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-23, session 66, tenth increment.**
+
+**THE `run-tasks` LESSON, GENERALISED BY COUNTING.** That subcommand was broken because
+nothing exercised it end to end. Counting invocations by tests that actually run the
+binary found the same shape elsewhere: `run` 24, `compile` 14, `keygen` 3, **`strip` 1 —
+and a refusal case only** — **`version` 0**. The refusal case was one I had added myself
+two increments earlier, which made `strip` look covered in a naive count.
+
+**NO DEFECT THIS TIME, AND THAT IS WHEN A GUARD IS CHEAPEST.** Measured: a debug build is
+4812 bytes, the plain build 3780, and stripping the debug build produces **exactly** the
+plain artifact, byte for byte. Stripping is idempotent. All three run to 42.
+
+**THE PROPERTY CHOSEN MATTERS MORE THAN THE TEST COUNT.** The weak test available was
+"the stripped artifact still runs", which would pass against a strip that removed
+**nothing**. The property asserted is **byte identity with the non-debug build**, which
+fails in both directions. Bytes are compared, not lengths — the lengths matched, and
+comparing them would have been the weaker check with the stronger one available.
+
+The identity test first asserts the debug artifact is LARGER than the plain one, because
+a fixture carrying no debug metadata would make the identity assertion trivially true.
+Both guards are demonstrated non-vacuous.
+
+**WHAT REMAINS FOR YOU IS UNCHANGED**: H2's trade, workstream C's `BYTECODE_VERSION`
+authorisation, and the seven standing decisions. **No file under `src/selfhost/kel/` has
+been modified in this session.**
+
+---
+
 **2026-09-23, session 66, ninth increment.**
 
 **`run-tasks` COULD NOT RUN ANY TASK. TWO DEFECTS, BOTH FIXED, FOUND BY WRITING THE
