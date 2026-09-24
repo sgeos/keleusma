@@ -37,6 +37,7 @@
 //! | **a non-zero fraction count means the operand is `Fixed`** | **refuse — the count is the only static type signal, and a wrong one lowers a Fixed multiply as an integer** |
 //! | float division flows through `Op::Div`, not `CheckedDiv` | already corrected once; the note records the correction rather than the premise |
 //! | **the reference virtual machine has no `Fixed` arm for `Op::Mod`/`Op::Div`** | **refuse — and CHECKED, by `report_four_still_reproduces_on_the_reference`, which drives the reference and asserts it errors** |
+//! | **the reference packs a float field at `float_bytes`** | **refuse — and CHECKED, by `the_documented_composite_sizes_hold_in_this_configuration`. A wrong width here cannot mispack silently: `NewComposite` compares the packed bytes against the byte size the instruction bakes and refuses on a mismatch. Measured the same day — hardcoding the width to 8 yields *"packs 12 bytes but the instruction bakes 8"* under `narrow-float-32`, which is a refusal, not a wrong value** |
 //!
 //! # ⚠ THREE ENTRIES WERE INVISIBLE TO THIS CENSUS UNTIL 2026-09-12
 //!
@@ -137,7 +138,7 @@ const PREMISE_PHRASES: &[&str] = &[
 /// **Re-derive this rather than trusting it.** It moves with every increment
 /// that adds or removes such a comment, including this file's own prose being
 /// quoted into the emitter.
-const RECORDED_PREMISE_LINES: usize = 34;
+const RECORDED_PREMISE_LINES: usize = 35;
 // 12 -> 29 with the impossibility phrases. The seventeen new lines were read,
 // and they fall in one class: **statements of what the backend DECLINES** —
 // "an unknown width cannot be placed", "`Op::Add` cannot be lowered without

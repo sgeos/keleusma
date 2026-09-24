@@ -372,19 +372,23 @@ fn the_admitted_float_fields_agree_with_the_reference() {
 /// other did not.
 #[test]
 fn the_documented_composite_sizes_hold_in_this_configuration() {
+    // **NO EARLY `return`, DELIBERATELY.** `skippable_tests.rs` pins the set of
+    // tests that can return before asserting, and a `return` inside this helper
+    // read as one — *"not necessarily wrong, but it must be a decision rather
+    // than a silent addition to the pass count."* Expressed as a search, the
+    // question does not arise: this either yields a size or panics.
     fn composite_size(src: &str) -> u32 {
         let m = common::build(src);
-        for c in &m.chunks {
-            for op in &c.ops {
-                if let keleusma::bytecode::Op::NewComposite(
+        m.chunks
+            .iter()
+            .flat_map(|c| c.ops.iter())
+            .find_map(|op| match op {
+                keleusma::bytecode::Op::NewComposite(
                     keleusma::bytecode::NewCompositeOperand::Flat { byte_size, .. },
-                ) = op
-                {
-                    return u32::from(*byte_size);
-                }
-            }
-        }
-        panic!("no composite built by `{src}`");
+                ) => Some(u32::from(*byte_size)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no composite built by `{src}`"))
     }
 
     let float_bytes: u32 = if cfg!(feature = "narrow-float-32") {
