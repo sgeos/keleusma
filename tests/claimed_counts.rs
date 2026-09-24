@@ -219,6 +219,61 @@ fn the_stated_figures_say_how_they_were_measured() {
 /// embedded at more than one site. The test failed on that and the instrument was corrected
 /// rather than the expectation — the failure was real evidence about the counter, not the tree.
 #[test]
+fn the_arena_integration_test_claim_matches_the_directory() {
+    // The project instructions describe the arena crate's tests as a lib count
+    // "plus N integration". That second half is STATICALLY DERIVABLE -- it is a
+    // directory and a count of `#[test]` in it -- unlike the run counts this
+    // file's header correctly says it cannot check.
+    //
+    // It was wrong. The instructions said "51 lib plus 8 integration" while
+    // `keleusma-arena/tests/` DID NOT EXIST. That is not a figure drifting; it
+    // asserted a body of tests that was not there, and it said so in two
+    // places. This is the second defect found in the region the header names as
+    // unguarded, the first having been the stage-source count.
+    //
+    // Both sides are derived. Nothing here pins a number that ordinary work
+    // would move: adding an integration test and updating the instructions
+    // keeps this green, and doing only one of the two does not.
+    let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/keleusma-arena/tests"));
+    let on_disk: usize = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(Result::ok)
+                .filter(|e| e.path().extension().is_some_and(|x| x == "rs"))
+                .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+                .map(|t| t.matches("#[test]").count())
+                .sum()
+        })
+        .unwrap_or(0);
+
+    let claimed: Vec<usize> = INSTRUCTIONS
+        .lines()
+        .filter(|l| l.contains("keleusma-arena ("))
+        .filter_map(|l| {
+            let at = l.find("keleusma-arena (")?;
+            let rest = &l[at..];
+            let plus = rest.find("plus ")? + "plus ".len();
+            let tail = &rest[plus..];
+            let digits: String = tail.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse().ok()
+        })
+        .collect();
+
+    assert!(
+        !claimed.is_empty(),
+        "the instructions no longer state an arena integration-test count in a shape this \
+         guard recognises. Re-derive the guard rather than deleting it: the claim being \
+         unstated is how the previous defect survived."
+    );
+    for c in &claimed {
+        assert_eq!(
+            *c, on_disk,
+            "the instructions claim {c} arena integration tests and the directory holds \
+             {on_disk}. The claim asserted eight while the directory did not exist at all."
+        );
+    }
+}
+
+#[test]
 fn the_stage_source_count_claim_matches_the_directory() {
     use std::collections::BTreeSet;
 
