@@ -10,6 +10,37 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-24, session 66, eleventh increment.**
+
+**A BROKEN SUBCOMMAND MEANS EVERY BEHAVIOUR IT DOCUMENTS IS ALSO UNVERIFIED.** `run-tasks`
+could not run a task until two increments ago, so its restart policy, restart rate
+limiting, multi-task isolation and periodic scheduling had **never executed**. Each was
+probed; **all correct, no new defect** — which is the cheapest moment to guard.
+
+**The restart path carries the most weight**: it re-allocates the arena and
+re-instantiates the machine, which is the path whose defect I repaired. Three restarts
+exercise it three times, so a regression there is that defect returning.
+
+**A DOCUMENTED DISTINCTION THAT VALID SOURCE CANNOT READILY PRODUCE.** `RUN_TASKS.md`
+separated `on_error` from `always` by behaviour on **voluntary** termination, hedged as
+"unusual for `loop main`". It is more than unusual: such a loop **does not compile**,
+because structural verification requires a Stream block to contain at least one yield.
+The document is corrected, and the test file records that behaviour as untested **for
+that reason rather than by omission** — a reader counting covered behaviours would
+otherwise see a gap and not know whether it had been considered.
+
+**I BROKE ONE OF MY OWN RULES DELIBERATELY, WHICH IS DIFFERENT FROM BREAKING IT.** An
+earlier brief said not to assert on log wording where state is observable. A restart count
+has no externally observable state, so the scheduler's report IS the observable. The file
+says so, matches a stable substring rather than a formatted line, and asserts every
+structural consequence that does exist alongside — which is what would catch a scheduler
+printing the right words and doing the wrong thing.
+
+**Unchanged and yours**: H2's trade, workstream C's `BYTECODE_VERSION` authorisation, the
+seven standing decisions. **No file under `src/selfhost/kel/` modified this session.**
+
+---
+
 **2026-09-23, session 66, tenth increment.**
 
 **THE `run-tasks` LESSON, GENERALISED BY COUNTING.** That subcommand was broken because

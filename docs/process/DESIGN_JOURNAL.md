@@ -5071,6 +5071,56 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-24 (hundred and second) — everything a broken subcommand documented was also unverified
+
+### THE INFERENCE
+
+`run-tasks` could not run a single task until two increments ago. That does not only mean
+the two defects were unguarded — it means **every behaviour the subcommand documents had
+never executed**. Restart policy, restart rate limiting, multi-task isolation, periodic
+scheduling: all described in `RUN_TASKS.md`, none ever run.
+
+So the prior on further defects was high. I probed each before writing anything.
+
+### ALL CORRECT, WHICH IS THE CHEAPEST MOMENT TO GUARD
+
+Measured: a faulting task with `restart = "always"` restarts on each error and is disabled
+after its limit; the sibling task and the runner are untouched; a periodic task runs for
+seconds without error. No new defect.
+
+**The restart path carries the most weight**, because it re-allocates the arena and
+re-instantiates the machine — the path whose defect I repaired. Three restarts exercise
+it three times, so a regression is that defect returning.
+
+### A DOCUMENTED DISTINCTION THAT VALID SOURCE CANNOT READILY PRODUCE
+
+`RUN_TASKS.md` separates `on_error` from `always` by what happens on **voluntary**
+termination, hedging it as "unusual for `loop main`".
+
+It is more than unusual. A `loop main` that never yields **does not compile**:
+
+```
+error: structural verification: main: Stream block must contain at least one Yield,
+directly or by delegating to an always-yielding function
+```
+
+So the distinction rests on a case the productivity requirement resists. The document now
+says so, and the test file records that behaviour as **not tested for that reason rather
+than by omission** — which is the distinction that matters, because a reader counting
+covered behaviours would otherwise see a gap and not know whether it was considered.
+
+### AND I BROKE MY OWN RULE DELIBERATELY, WHICH IS DIFFERENT FROM BREAKING IT
+
+A prior brief in this session said: do not assert on log wording where state is
+observable. Here a **restart count has no externally observable state** — the scheduler's
+report is the observable. Asserting it is therefore legitimate, and the file says so
+rather than quietly doing it.
+
+Two mitigations: a stable substring is matched rather than a formatted line, and every
+structural consequence that DOES exist is asserted alongside — the runner surviving, the
+sibling never reported as errored or terminated. The structural half is what would catch
+a scheduler that printed the right words and did the wrong thing.
+
 ## 2026-09-23 (hundred and first) — generalising the run-tasks lesson by counting
 
 ### THE CLASS WAS CONFIRMED, SO THE NEXT MOVE WAS TO COUNT IT

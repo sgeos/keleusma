@@ -34,6 +34,22 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-24, session 66, eleventh increment). SCHEDULER BEHAVIOURS
+> PINNED.**
+>
+> `run-tasks` could not run a task until two increments ago, so EVERY behaviour it
+> documents was also unverified. Probed restart policy, restart rate limiting, multi-task
+> isolation and periodic scheduling: **all correct, no new defect** — the cheapest moment
+> to guard. The restart path matters most; it re-allocates the arena, which is the defect
+> just repaired.
+>
+> **`RUN_TASKS.md` corrected**: its `on_error`-versus-`always` distinction rests on
+> voluntary termination, and a `loop main` that never yields DOES NOT COMPILE. Recorded as
+> untested for that reason rather than by omission.
+>
+> **A rule broken deliberately and said so**: a restart count has no observable state, so
+> the scheduler's report is the observable. Structural consequences asserted alongside.
+
 > **Currency note (2026-09-23, session 66, tenth increment). COVERAGE CENSUS; STRIP AND
 > VERSION PINNED.**
 >
