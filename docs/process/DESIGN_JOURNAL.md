@@ -13,6 +13,60 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-24 (hundred and third) — a claimed body of tests that did not exist
+
+### CENSUSING ONE LEVEL UP
+
+The productive move all session has been finding shipping surfaces with no end-to-end
+coverage. Applied to the workspace rather than to one binary, counting tests per member,
+`keleusma-arena` reported **51 unit tests and no tests directory** — while `CLAUDE.md`
+said, twice, "59 keleusma-arena (51 lib plus 8 integration)".
+
+**That is not a figure drifting.** It asserted a body of eight integration tests that did
+not exist in any form.
+
+### THE GUARD FILE HAD ALREADY NAMED THE REGION
+
+`tests/claimed_counts.rs` exists because the instructions once stated test counts three
+times wrong. Its header says the lib, arena and bench figures are RUN counts it cannot
+cheaply confirm, and that "the others remain unguarded".
+
+**This is the second defect found in exactly that region**, the first being the
+stage-source count. The header was right to flag it and right about the consequence.
+
+But the wrong half here was **statically derivable after all**: whether a tests directory
+exists and how many `#[test]` it holds needs no cargo run. The run count (51) genuinely
+is not checkable here; the structural claim always was.
+
+### FIXING IT BY MAKING THE MISSING THING EXIST
+
+The cheap repair is to correct the number downward. The better one is to write the tests,
+**but only because they have independent value** — writing tests to make a number true
+would be the wrong reason, and worth naming as such.
+
+The value is real: `keleusma-arena` is published, and an integration test can reach only
+the **public** interface. That catches an item that is not actually exported, and an
+interface unusable without a private helper. A unit test cannot fail for either reason,
+and every one of the crate's 51 tests was a unit test.
+
+### AND THE FOURTH SUSPICION THIS SESSION THAT READING REFUTED
+
+My budget test asserted that an arena holding 512 bottom bytes would report a 64-byte
+bottom budget as not fitting. It failed.
+
+`fits_budget` is `budget.total() <= capacity`. It asks whether a **budget** is admissible
+for the arena at all; **current usage does not enter the answer**, and the method's own
+documentation says so. The name invites the opposite reading, which is why the corrected
+test pins that current usage is irrelevant rather than merely testing the true direction —
+the next reader will make the same assumption I did.
+
+### THE GUARD DERIVES BOTH SIDES
+
+Neither the claim nor the directory is pinned, so adding an integration test and updating
+the instructions together stays green, while doing only one of the two does not. It is
+demonstrated non-vacuous in **both** directions: restoring the original "8" fails it, and
+hiding the tests directory fails it.
+
 ## 2026-09-24 (hundred and second) — everything a broken subcommand documented was also unverified
 
 ### THE INFERENCE
