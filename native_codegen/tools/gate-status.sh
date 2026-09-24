@@ -20,13 +20,14 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 record="GATE_RECORD.md"
+HANDOFF="../docs/process/handoffs/v0.3.0.md"
 head_commit=$(git rev-parse HEAD 2>/dev/null || echo UNKNOWN)
 echo "HEAD is $head_commit"
 
 # The reach figures below diff COMMIT to COMMIT, so uncommitted work is invisible
 # to them. Saying "still speaks to HEAD" while backend sources sit unstaged would
 # be the reporter telling its own version of the lie it exists to prevent.
-now_dirt=$(git status --porcelain -- . 2>/dev/null | grep -cv 'GATE_RECORD.md') || true
+now_dirt=$(git status --porcelain -- . "$HANDOFF" 2>/dev/null | grep -cv 'GATE_RECORD.md') || true
 if [ "${now_dirt:-0}" -gt 0 ]; then
     echo "⚠ ${now_dirt} backend file(s) are UNCOMMITTED right now. No record can speak"
     echo "  to them: the reach figures below compare commits and cannot see them."
@@ -55,7 +56,12 @@ while IFS='|' read -r _ cfg commit tree verdict when _rest; do
         echo "   ⚠ that commit is NOT in this repository -- the row cannot be checked"
         continue
     fi
-    changed=$(git diff --name-only "${commit}..HEAD" -- . 2>/dev/null | grep -v "$record")
+    # The handoff is diffed alongside the package because `handoff_figures.rs` READS
+    # it: a figure edited there can turn this suite red without a single file under
+    # `native_codegen/` changing. Counting only the package would have this reporter
+    # answer "still speaks to HEAD" while a test's input had moved underneath it.
+    changed=$(git diff --name-only "${commit}..HEAD" -- . "$HANDOFF" 2>/dev/null \
+              | grep -v "$record")
     n=$(printf '%s' "$changed" | grep -c . ) || true
     if [ "${n:-0}" -eq 0 ]; then
         echo "   reach    still speaks to HEAD: no backend source changed since"
