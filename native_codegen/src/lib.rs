@@ -2557,16 +2557,30 @@ struct BodyCfg<'a> {
 
 /// The external symbol a declared native binds to.
 ///
-/// `host::play` becomes `kel_native_host_play`. Any character outside
-/// `[A-Za-z0-9_]` becomes `_`, since a Keleusma path separator is not a legal C
-/// identifier and the whole point of this backend is an object file an ordinary
-/// linker resolves.
+/// `host::play` becomes `kel_native_host__play` — **TWO** underscores, because
+/// each character outside `[A-Za-z0-9_]` becomes `_` ONE FOR ONE, and `::` is two
+/// characters. The substitution exists because a Keleusma path separator is not a
+/// legal C identifier and the whole point of this backend is an object file an
+/// ordinary linker resolves.
+///
+/// ⚠ **THIS EXAMPLE SAID `kel_native_host_play`, WITH ONE UNDERSCORE, UNTIL
+/// 2026-09-24.** The rule stated beside it was right and the example was wrong, so
+/// the comment contradicted itself — and the example is the half a reader copies.
+/// **The cost of copying it is a SEGFAULT, not a compile error**: a host defining
+/// `kel_native_host_play` leaves the module's declaration unresolved, and
+/// `native_calls.rs` records what happens then — the engine *"resolves the
+/// declaration to nothing and jumps to it."* The working stubs in that file are
+/// `kel_native_host__one`, `__two`, `__three`, all double, which is what the code
+/// has always produced. [`the_native_symbol_examples_match_the_code`] pins it.
 ///
 /// **The mapping is not injective**, which is why [`native_symbol_collisions`]
-/// exists: `host::play` and `host_play` both land here. Two natives sharing a
-/// symbol would silently bind both call sites to whichever the host defined,
-/// and the differential oracle would only catch it if the corpus happened to
-/// call both.
+/// exists: `host::play` and a name spelled with a literal double underscore in
+/// place of the separator both land on `kel_native_host__play`. (That pair was
+/// given as `host::play` against a single-underscore spelling until 2026-09-24,
+/// which does NOT collide under the real rule — the same off-by-one error.) Two
+/// natives sharing a symbol would silently bind both call sites to whichever the
+/// host defined, and the differential oracle would only catch it if the corpus
+/// happened to call both.
 /// Result width for the generic arithmetic surface, or `None` to refuse.
 ///
 /// **Refusing is the default and the point.** A matched `Byte` pair yields a

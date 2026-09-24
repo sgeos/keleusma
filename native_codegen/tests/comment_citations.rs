@@ -127,7 +127,6 @@ const EXCUSED: &[(&str, &str)] = &[
         "kel_native_host_two",
         "the symbol `host::two` mangles to, contrasting a different separator",
     ),
-    ("host_play", "the unmangled half of the same example"),
     ("host_two", "the unmangled half of the same example"),
     (
         "kel_chunk_2",
