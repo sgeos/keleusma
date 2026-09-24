@@ -147,6 +147,33 @@ fn every_multiword_subject_agrees_with_the_reference() {
 /// **The control is what stops this overclaiming.** `add` on the identical shape
 /// LOWERS, so the refusal is specific to multiply rather than general to the
 /// family — which is exactly the distinction the float-reply pin needed.
+///
+/// # ⚠ TRACED TO ITS ROOT, AND THE REFUSAL IS CORRECT
+///
+/// The float-reply refusal of this same class turned out to be **one site** using a
+/// width the module already carried, so the obvious move was to look for the same
+/// thing here. **It is not the same thing.**
+///
+/// The chain, read from the emitter rather than guessed:
+///
+/// 1. `x * y` expands into per-limb `BitAnd`, `BitXor`, `Shr` and `Checked*` over
+///    temporaries — the backend has no multi-word opcode.
+/// 2. Those temporaries are locals the chunk writes **more than once**.
+/// 3. `certified_local_widths` trusts a multi-write local only when every write's
+///    width is fixed **by the instruction rather than by its operands**, so that no
+///    fixpoint is needed. It certifies `Const` and the `Checked*` family.
+/// 4. A `BitAnd`, `BitXor` or `Shr` result's width is **operand-dependent**, so it
+///    is unclassifiable, and *"one unclassifiable write sinks the local"*.
+/// 5. The local reads back at `Width::Unknown`, and `NewComposite` refuses it.
+///
+/// **So this is not an oversight to repair.** The width pass is a linear walk that
+/// cannot see a back edge, and declining to trust a disagreeing multi-write local
+/// *"costs coverage and cannot mispack, which is the correct direction for a
+/// decision that is otherwise silent."* Certifying operand-dependent sources would
+/// need the fixpoint that design deliberately avoids.
+///
+/// **The cost is capability, never a wrong answer** — which is what
+/// `unknown_width_census.rs` says of this whole family.
 #[test]
 fn multiword_multiply_is_refused_and_addition_is_not() {
     let mul = "fn main(a: Word, b: Word) -> Word { let x = (a, 0) as Multiword<2>; \
