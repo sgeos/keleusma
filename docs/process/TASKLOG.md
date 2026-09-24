@@ -34,6 +34,25 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-23, session 66, ninth increment). `run-tasks` WAS BROKEN;
+> FIXED.**
+>
+> **The subcommand could not run any task.** Two defects, found by writing its FIRST
+> integration test: an arena moved after a `&'static` reference into it was taken (the
+> safety comment reasoned about the arena staying ALIVE, where the hazard is MOVEMENT —
+> it reported 48 bytes of capacity), and a yielded tuple decoded without the arena, which
+> since B28 is where the body lives. Both fixed; regression guard is non-vacuous.
+>
+> **They survived because `run-tasks` had no integration test at all.** A subcommand with
+> no end-to-end test can be wholly non-functional while every test passes.
+>
+> **B31 item 4 first slice landed**: SIGHUP re-reads the manifest and applies what needs
+> no lifecycle change; an unparseable manifest leaves the runner running; deferred
+> changes are REPORTED. The lifecycle half remains.
+>
+> **Picked from `docs/decisions/BACKLOG.md`**, which I had not opened in eight prior
+> increments. Full suite green at 2895.
+
 > **Currency note (2026-09-19, session 66, eighth increment). BLOCKER CLEARED; ALL LOCALLY
 > VERIFIED.**
 >

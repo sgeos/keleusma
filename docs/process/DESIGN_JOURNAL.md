@@ -5071,6 +5071,82 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-23 (hundredth) — consulting the backlog, and finding a shipping subcommand that could not run anything
+
+### THE OMISSION FIRST
+
+Eight increments of self-selected goals, and I had not once opened
+`docs/decisions/BACKLOG.md`. The project maintains a backlog; picking from it is better
+than inventing a ninth goal, and B31 item 4 is labelled **"Highest-leverage item in this
+list per the V0.2.1 close-out assessment"**.
+
+### THE FEATURE WAS THE PRETEXT; THE DEFECTS WERE THE FIND
+
+Writing `run-tasks`'s **first integration test** surfaced two defects, either of which
+alone ended the runner within a second of start. **The subcommand could not run any task
+at all.**
+
+**One: an arena moved after a `&'static` reference into it was taken.**
+
+```
+let arena = Arena::with_capacity(total);
+let arena_ref: &'static Arena = unsafe { transmute(&arena) };
+let vm = Vm::new(module, arena_ref)?;
+Ok(Task { arena, vm, .. })     // moved, and moved again into the vector
+```
+
+The safety comment said "we keep the arena alive in the Task struct for as long as the
+Vm exists". **That is true and insufficient.** Keeping a value alive says nothing about
+keeping it at one address, and a reference cares about the address. The comment reasoned
+about lifetime where the hazard is movement.
+
+It presented as an arena reporting **48 bytes** of capacity — the machine reading a
+stale stack location — and every task failing on its first composite allocation. Boxing
+the arena fixes it: a heap allocation survives every move of its owner.
+
+**Two: a yielded tuple decoded without the arena.** Since B28 a yielded tuple's body is
+flat and arena-resident, so the context-free `from_value` could not read it, and the
+scheduler concluded every task had "yielded a non-tuple value" and finished it. The
+decode now builds a `RefContext` against the task's arena, with widths from the module
+rather than the host's `i64`.
+
+### WHY THEY SURVIVED, WHICH IS THE PART THAT GENERALISES
+
+`run-tasks` had **no integration test**. Not a thin one — none. The unit-level pieces
+(manifest parsing, duration parsing) are covered; the thing the operator actually runs
+was not.
+
+**A subcommand with no end-to-end test can be completely non-functional while every
+test passes.** Both defects are invisible to any test that does not start the process
+and watch it stay up. The regression guard is one such test, and it is deliberately the
+crudest possible assertion — spawn it, wait, is it still alive — because that is what
+catches both.
+
+### THE DIAGNOSIS PATH IS WORTH RECORDING
+
+My first four tests all failed on my own `wait_until_running` guard: *"the runner exited
+before the test could signal it; nothing was exercised"*. That guard existed because this
+session has repeatedly found outcomes that look like passes while testing nothing. Here
+it did the opposite service — it refused to let me proceed against a runner that was
+already dead, and pointed straight at the defect.
+
+Had I written the obvious version, which spawns, signals, and asserts the process is
+gone at the end, **all four tests would have passed against a completely broken runner.**
+
+### THE FEATURE, SCOPED HONESTLY
+
+Full hot reload means draining removed tasks and starting added ones, each owning an
+arena, a machine and a module. That is lifecycle work in an 844-line scheduler and it is
+not landable in one increment, so this is a first slice: apply what needs no lifecycle
+change, refuse and keep running on a manifest that will not parse, and **report every
+deferred change rather than dropping it silently.** An operator who edits a bytecode path
+and sees only "reload applied" would believe something took effect that did not.
+
+The tests observe **timing, not log lines**: `shutdown_grace` governs how long a stop
+takes, so a reload that shortens it is visible as a shutdown in 1.2 seconds against the
+control's 7.0. The control is what makes the first assertion mean anything — without it,
+a runner that ignored the grace entirely would satisfy it.
+
 ## 2026-09-19 (ninety-ninth) — guarding the class the CheckedMod defect came from, and six refuted candidates
 
 ### THE DURABLE FIX FOR A DEFECT I HAD ONLY PATCHED

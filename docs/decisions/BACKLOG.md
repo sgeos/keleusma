@@ -1387,6 +1387,30 @@ Three items deferred during the V0.2.1 CLI runner work that are not specific to 
 - The Generic `Result<T, E>` decision is in the V0.3.x language-extension territory; it interacts with monomorphisation and with the host-native marshalling surface.
 - The `shell::read_lines` decision is contingent on a dynamic-length Array type or a script-side string-splitting native; either is a separate decision.
 
+## B31a. Two defects that made `run-tasks` unable to run any task (Fixed 2026-09-23)
+
+Found by writing the subcommand's **first integration test**. Neither had test coverage,
+and either alone ended the runner within a second of start.
+
+1. **The arena was moved after a `&'static` reference into it was taken.** `load_task`
+   built an `Arena` by value, handed the virtual machine a reference derived from that
+   local, and then moved the arena into the returned `Task`, which was moved again into
+   the task vector. The safety comment reasoned that the arena was kept alive, which was
+   true and insufficient: **moving it invalidates the address.** It presented as an arena
+   reporting forty-eight bytes of capacity and every task failing on its first composite
+   allocation. The arena is now boxed, so it keeps one heap address however often its
+   owner moves.
+
+2. **A yielded tuple was decoded without the arena.** Since B28 a yielded tuple's body is
+   flat and arena-resident, so the context-free decode could not read it and the
+   scheduler treated every task as having "yielded a non-tuple value" and finished it.
+   The decode now resolves against the task's arena, with the widths taken from the
+   module rather than from the host's `i64`.
+
+**Why they survived.** `run-tasks` had no integration test at all. The regression guard
+is `a_task_loads_and_keeps_running`, which is non-vacuous: reintroducing the first defect
+fails it in under two seconds.
+
 ## B31. run-tasks deferred work
 
 Ten items deferred during the V0.2.1 `keleusma run-tasks <manifest.toml>` implementation. Each was explicitly marked deferred in the design proposal (`docs/architecture/RUN_TASKS.md`) and none blocks V0.2.1 landing. This entry consolidates the items into a durable backlog record and gives each a tracking row that survives REVERSE_PROMPT rewrites.
@@ -1396,7 +1420,7 @@ Ten items deferred during the V0.2.1 `keleusma run-tasks <manifest.toml>` implem
 | 1 | Manifest signing | The TOML manifest itself is unsigned. Tasks declared in the manifest reference per-task bytecode artefacts that can be independently signed and verified, but the manifest's task list, restart limits, and per-task policy is plain text. A manifest signing scheme would Ed25519-sign the manifest body and require the runner to verify before scheduling tasks. | Operators deploying to environments where the manifest itself is a tamper target. |
 | 2 | Per-task isolation through OS primitives | Tasks share the runner process's address space, file descriptors, and OS-level permissions. Per-OS isolation primitives (Linux namespaces, FreeBSD jails, OpenBSD `pledge`/`unveil`, macOS sandbox profiles, Windows job objects) would scope a task's OS-visible side effects. Substantial per-OS work because each platform's primitive set has different semantics. | Operators running mixed-trust task sets in a single runner. |
 | 3 | Dynamic task addition | Tasks are declared statically in the manifest and the manifest is read once at startup. A control socket or a `kernel::add_task` native would let a running task add new tasks at runtime. | Operators whose workload shape includes spawning sub-tasks in response to events. |
-| 4 | Hot reload via SIGHUP | A SIGHUP handler is installed but performs no action. Hot reload would re-read the manifest, gracefully drain removed tasks, and start added tasks without restarting the runner process. Highest-leverage item in this list per the V0.2.1 close-out assessment. | Operators who want to update task configuration without process restart. |
+| 4 | Hot reload via SIGHUP | **FIRST SLICE LANDED 2026-09-23.** SIGHUP now re-reads and re-parses the manifest and applies what needs no lifecycle change: the scheduler-wide `tick_interval` and `shutdown_grace`, which are read inside the dispatch loop, and each task's restart policy, which is consulted only when a task restarts, matched by name. A manifest that cannot be read or parsed leaves the runner running on its previous configuration and reports the refusal; that property has its own tests. Changes the slice cannot make are REPORTED as deferred rather than silently ignored: adding or removing a task, a changed bytecode path or arena capacity, a changed period or priority, and any change to the event-id map. **What remains** is the lifecycle half the original entry describes -- draining removed tasks and starting added ones -- which needs the rebuild of a task's arena and virtual machine. | Operators who want to update task configuration without process restart. |
 | 5 | Priority levels and preemption | The cooperative scheduler treats all tasks as equal-priority and runs each dispatch to completion (or to a yield). Priority levels with preemption would let a high-priority task interrupt a low-priority task. Out of scope by design for the cooperative model; operators needing preemption write their own host. | Operators whose workload includes hard-real-time tasks alongside best-effort tasks. |
 | 6 | Soft resource caps beyond WCMU | The arena bounds per-task memory and the cooperative model bounds per-dispatch CPU. Neither bounds wall-clock task lifetime, cumulative output volume, or other operational ceilings. A kill-runaway-task cap would terminate a task that exceeds a declared lifetime budget. | Operators running untrusted task sets who want to prevent a misbehaving task from monopolising the runner. |
 | 7 | Typed event payloads | Events currently carry a single `Word` payload. A manifest-declared event schema would let tasks declare typed payloads (structs, tuples, enums) and have the kernel validate payload conformance at `post_event` time. | Operators with rich inter-task communication patterns. |

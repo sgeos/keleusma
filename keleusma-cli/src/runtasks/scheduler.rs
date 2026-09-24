@@ -119,7 +119,12 @@ impl EventAtomics {
 /// Per-task scheduler state.
 struct Task {
     cfg: TaskConfig,
-    arena: Arena,
+    /// Boxed so the arena has a STABLE ADDRESS. The virtual machine holds a
+    /// `&'static Arena` into it, and this `Task` is moved -- into the task
+    /// vector, and again whenever the vector is moved -- after that reference
+    /// is taken. Keeping the arena alive is not enough; moving it would leave
+    /// the machine reading a stale location.
+    arena: Box<Arena>,
     vm: Vm<'static, 'static>,
     state: TaskState,
     last_wakeup_reason: i64,
@@ -183,7 +188,12 @@ pub fn run(manifest_path: &Path, quiet: bool) -> RunOutcome {
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    let manifest = match Manifest::parse(&source, &base_dir) {
+    // `mut` so a reload can swap the scheduler section in place (B31 item 4).
+    // `manifest.tasks` is deliberately NOT replaced by a reload: it describes
+    // the tasks that are actually RUNNING, and a reload does not start or stop
+    // any, so overwriting it would make every later reader of that field
+    // wrong.
+    let mut manifest = match Manifest::parse(&source, &base_dir) {
         Ok(m) => m,
         Err(e) => return RunOutcome::ManifestError(e),
     };
@@ -258,7 +268,8 @@ pub fn run(manifest_path: &Path, quiet: bool) -> RunOutcome {
 
     let outcome = dispatch_loop(
         &mut tasks,
-        &manifest,
+        &mut manifest,
+        manifest_path,
         &signals,
         &notify,
         kernel_state,
@@ -346,21 +357,28 @@ fn load_task(
         keleusma::vm::auto_arena_capacity_for(&module, &[]).unwrap_or(cfg.arena_capacity);
     let transient = cfg.arena_capacity.max(auto_transient);
     let total = persistent_bytes + transient;
-    let mut arena = Arena::with_capacity(total);
+    // BOXED, and that is load-bearing rather than stylistic. The virtual
+    // machine below is handed a `&'static Arena` derived from this binding,
+    // and the `Task` this function returns is then MOVED into the task vector.
+    // An `Arena` held by value would move with it and leave the machine
+    // reading the old location; the box keeps the arena itself at one heap
+    // address however often its owner moves.
+    let mut arena = Box::new(Arena::with_capacity(total));
     arena
         .resize_persistent(persistent_bytes)
         .map_err(|e| format!("task {}: arena resize_persistent: {:?}", cfg.name, e))?;
 
-    // The Vm holds a reference into the arena, so we need to break
-    // the lifetime relationship via Box leak. The arena outlives the
-    // runner; the leak is intentional and exists for the runner's
-    // operational lifetime.
+    // SAFETY: the reference is to the boxed arena's heap allocation, which
+    // outlives every move of its owner and is kept alive in the returned
+    // `Task` for as long as the virtual machine exists. The scheduler never
+    // drops a task's arena while its machine is live, and on exit the process
+    // reclaims everything.
     //
-    // SAFETY: we keep the arena alive in the Task struct for as long
-    // as the Vm exists. The leak transmute is sound because we never
-    // drop the arena while the Vm holds a reference. On scheduler
-    // exit, the entire process exits, which reclaims everything.
-    let arena_ref: &'static Arena = unsafe { std::mem::transmute(&arena) };
+    // The previous form took this reference from a by-value local that was
+    // then moved into the `Task`, so the machine read a stale address. It
+    // presented as an arena whose reported capacity was a few dozen bytes and
+    // as every task failing on its first composite allocation.
+    let arena_ref: &'static Arena = unsafe { &*(&*arena as *const Arena) };
 
     let mut vm = Vm::new(module.clone(), arena_ref)
         .map_err(|e| format!("task {}: verify: {:?}", cfg.name, e))?;
@@ -485,9 +503,11 @@ fn read_word(args: &[Value], idx: usize, ctx: &str) -> Result<i64, VmError> {
 /// The main dispatch loop. Returns when all tasks have terminated,
 /// when a shutdown signal has drained, or when an internal error
 /// is unrecoverable.
+#[allow(clippy::too_many_arguments)]
 fn dispatch_loop(
     tasks: &mut [Task],
-    manifest: &Manifest,
+    manifest: &mut Manifest,
+    manifest_path: &Path,
     signals: &SignalFlags,
     notify: &NotifySocket,
     kernel_state: Arc<std::sync::Mutex<KernelState>>,
@@ -554,11 +574,35 @@ fn dispatch_loop(
             }
         }
         if signals.reload_requested.swap(false, Ordering::SeqCst) {
-            if !quiet {
-                eprintln!(
-                    "[scheduler] reload requested (event id {}); not yet implemented",
-                    reload_event_id
-                );
+            match reload_manifest(manifest_path, manifest, tasks) {
+                ReloadOutcome::Applied { applied, deferred } => {
+                    if !quiet {
+                        if applied.is_empty() {
+                            eprintln!("[scheduler] reload: manifest re-read, nothing changed");
+                        } else {
+                            for a in &applied {
+                                eprintln!("[scheduler] reload: applied {a}");
+                            }
+                        }
+                        // Deferred changes are REPORTED, never silently
+                        // dropped. An operator who edited a task's bytecode
+                        // path and saw only "reload applied" would believe a
+                        // change took effect that did not.
+                        for d in &deferred {
+                            eprintln!("[scheduler] reload: DEFERRED {d} (needs a restart)");
+                        }
+                    }
+                }
+                ReloadOutcome::Refused(why) => {
+                    // The running configuration is kept. This is the correct
+                    // behaviour rather than a fallback: a bad edit to a
+                    // manifest must not take down a running runner.
+                    if !quiet {
+                        eprintln!(
+                            "[scheduler] reload REFUSED, keeping the running configuration: {why}"
+                        );
+                    }
+                }
             }
             let mut s = kernel_state.lock().unwrap();
             if s.event_queue.len() < MAX_EVENT_QUEUE {
@@ -676,7 +720,7 @@ fn dispatch_one(task: &mut Task, now_ms: u64, quiet: bool) {
 
     match result {
         Ok(VmState::Yielded(v)) => {
-            let (reason, payload) = match parse_yield_tuple(&v) {
+            let (reason, payload) = match parse_yield_tuple(&v, &task.arena, &task.module) {
                 Some(t) => t,
                 None => {
                     eprintln!(
@@ -732,11 +776,33 @@ fn dispatch_one(task: &mut Task, now_ms: u64, quiet: bool) {
     }
 }
 
-fn parse_yield_tuple(v: &Value) -> Option<(i64, i64)> {
-    // Read the (reason, payload) Word pair through the typed marshalling
-    // path, which decodes both the flat and boxed tuple bodies (B28 P2).
+fn parse_yield_tuple(v: &Value, arena: &Arena, module: &Module) -> Option<(i64, i64)> {
+    // Read the (reason, payload) Word pair through the typed marshalling path.
+    //
+    // THE ARENA IS REQUIRED, and omitting it is why every task appeared to
+    // yield "a non-tuple value" and was treated as finished. Since B28 a
+    // yielded tuple's body is FLAT AND ARENA-RESIDENT, so decoding it means
+    // resolving a handle against the arena it lives in. The context-free
+    // `from_value` can only read an inline body, which is no longer what a
+    // task yields.
+    //
+    // The widths come from the module rather than from the host's `i64`,
+    // because a module may declare narrower words than the bundled runtime.
     use keleusma::KeleusmaType;
-    <(i64, i64) as KeleusmaType<i64, f64>>::from_value(v).ok()
+    let word_bytes = (1usize << module.word_bits_log2) / 8;
+    let float_bytes = (1usize << module.float_bits_log2) / 8;
+    let addr_bytes = (1usize << module.addr_bits_log2) / 8;
+    let ctx = keleusma::marshall::RefContext {
+        arena,
+        opaques: &[],
+        word_bytes,
+        float_bytes,
+        addr_bytes,
+        // The value is read immediately after the yield and before the next
+        // resume, so the current epoch is the body's originating epoch.
+        ref_epoch: arena.epoch(),
+    };
+    <(i64, i64) as KeleusmaType<i64, f64>>::from_value_ctx(v, &ctx).ok()
 }
 
 fn on_task_exit(task: &mut Task, was_error: bool, quiet: bool) {
@@ -786,7 +852,9 @@ fn on_task_exit(task: &mut Task, was_error: bool, quiet: bool) {
         task.state = TaskState::Finished;
         return;
     }
-    let arena_ref: &'static Arena = unsafe { std::mem::transmute(&task.arena) };
+    // SAFETY: as in `load_task`, the reference is to the boxed arena's heap
+    // allocation, which is stable across any move of the owning `Task`.
+    let arena_ref: &'static Arena = unsafe { &*(&*task.arena as *const Arena) };
     match Vm::new(task.module.clone(), arena_ref) {
         Ok(mut vm) => {
             // Re-register the natives against the new Vm. The same
@@ -827,6 +895,138 @@ fn on_task_exit(task: &mut Task, was_error: bool, quiet: bool) {
 // Module loading delegates to crate::load_module in main.rs so
 // signing and encryption gates use the same code path as the
 // `run` subcommand.
+
+/// What a reload attempt did.
+enum ReloadOutcome {
+    /// The manifest was re-read and parsed. `applied` names each change that
+    /// took effect; `deferred` names each change this slice cannot make
+    /// without restarting a task.
+    Applied {
+        applied: Vec<String>,
+        deferred: Vec<String>,
+    },
+    /// The manifest could not be read, parsed or validated. The running
+    /// configuration is untouched.
+    Refused(String),
+}
+
+/// Re-reads the manifest and applies what can be applied without disturbing
+/// running task state (B31 item 4, first slice).
+///
+/// # What this applies, and why only this
+///
+/// The scheduler-wide settings are read INSIDE the dispatch loop, so swapping
+/// the section takes effect on the next iteration. Each task's restart policy
+/// is consulted only when a task actually restarts, so updating it in place on
+/// a task matched BY NAME is likewise safe.
+///
+/// # What it defers, and why that is reported rather than ignored
+///
+/// Adding or removing a task, changing its bytecode path or its arena
+/// capacity, and changing the event-id map all require rebuilding a task's
+/// virtual machine and arena, or invalidating ids already baked into running
+/// scripts. Those need the drain-and-restart lifecycle this slice does not
+/// implement. They are named in the report, because an operator who edited a
+/// bytecode path and saw only "applied" would believe a change took effect
+/// that did not.
+///
+/// # The property that matters
+///
+/// A manifest that cannot be read or parsed leaves the runner running with its
+/// previous configuration intact. A bad edit must not take down a live runner,
+/// which is the behaviour an operator depends on rather than a fallback.
+fn reload_manifest(
+    manifest_path: &Path,
+    manifest: &mut Manifest,
+    tasks: &mut [Task],
+) -> ReloadOutcome {
+    let source = match std::fs::read_to_string(manifest_path) {
+        Ok(s) => s,
+        Err(e) => {
+            return ReloadOutcome::Refused(format!("reading {}: {e}", manifest_path.display()));
+        }
+    };
+    let base_dir = manifest_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let incoming = match Manifest::parse(&source, &base_dir) {
+        Ok(m) => m,
+        Err(e) => return ReloadOutcome::Refused(format!("{e:?}")),
+    };
+
+    let mut applied: Vec<String> = Vec::new();
+    let mut deferred: Vec<String> = Vec::new();
+
+    if incoming.scheduler.tick_interval != manifest.scheduler.tick_interval {
+        applied.push(format!(
+            "scheduler.tick_interval {:?} -> {:?}",
+            manifest.scheduler.tick_interval, incoming.scheduler.tick_interval
+        ));
+        manifest.scheduler.tick_interval = incoming.scheduler.tick_interval;
+    }
+    if incoming.scheduler.shutdown_grace != manifest.scheduler.shutdown_grace {
+        applied.push(format!(
+            "scheduler.shutdown_grace {:?} -> {:?}",
+            manifest.scheduler.shutdown_grace, incoming.scheduler.shutdown_grace
+        ));
+        manifest.scheduler.shutdown_grace = incoming.scheduler.shutdown_grace;
+    }
+
+    if incoming.events != manifest.events {
+        deferred.push(String::from(
+            "the event-id map changed; ids are already baked into running scripts",
+        ));
+    }
+
+    for cfg in &incoming.tasks {
+        match tasks.iter_mut().find(|t| t.cfg.name == cfg.name) {
+            None => deferred.push(format!("task {} added", cfg.name)),
+            Some(task) => {
+                if cfg.restart != task.cfg.restart {
+                    applied.push(format!(
+                        "task {} restart {:?} -> {:?}",
+                        cfg.name, task.cfg.restart, cfg.restart
+                    ));
+                    task.cfg.restart = cfg.restart;
+                }
+                if cfg.restart_limit != task.cfg.restart_limit {
+                    applied.push(format!(
+                        "task {} restart_limit {} -> {}",
+                        cfg.name, task.cfg.restart_limit, cfg.restart_limit
+                    ));
+                    task.cfg.restart_limit = cfg.restart_limit;
+                }
+                if cfg.restart_window != task.cfg.restart_window {
+                    applied.push(format!(
+                        "task {} restart_window {:?} -> {:?}",
+                        cfg.name, task.cfg.restart_window, cfg.restart_window
+                    ));
+                    task.cfg.restart_window = cfg.restart_window;
+                }
+                if cfg.bytecode != task.cfg.bytecode {
+                    deferred.push(format!("task {} bytecode path changed", cfg.name));
+                }
+                if cfg.arena_capacity != task.cfg.arena_capacity {
+                    deferred.push(format!("task {} arena capacity changed", cfg.name));
+                }
+                if cfg.period != task.cfg.period {
+                    deferred.push(format!("task {} period changed", cfg.name));
+                }
+                if cfg.priority != task.cfg.priority {
+                    deferred.push(format!("task {} priority changed", cfg.name));
+                }
+            }
+        }
+    }
+    for task in tasks.iter() {
+        if !incoming.tasks.iter().any(|c| c.name == task.cfg.name) {
+            deferred.push(format!("task {} removed", task.cfg.name));
+        }
+    }
+
+    ReloadOutcome::Applied { applied, deferred }
+}
 
 impl TaskConfig {
     fn clone_owned(&self) -> Self {
