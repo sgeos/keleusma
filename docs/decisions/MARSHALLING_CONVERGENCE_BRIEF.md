@@ -111,3 +111,46 @@ never a separable part to take.**
 
 The brief above committed to stopping and reporting rather than letting a refactor
 spread. It spread on the first read, so nothing moved.
+
+---
+
+# ⚠ CORRECTION TO THE VERDICT ABOVE, 2026-09-24 — IT WAS TOO STRONG
+
+The verdict concluded there is *"no separable stub registration to lift out"* and
+reframed all three gaps as blocked on a design question. **That is right for a
+DIFFERENTIAL and wrong as stated**, because it applied a differential's requirement
+to a consumer that does not have it.
+
+**The arena-touch census does not compare native call sequences.** It measures how
+many arena bytes a module touches. It needs natives only so the module RUNS. The
+logging and masking that make `corpus_differential`'s stubs inseparable serve a
+comparison the census does not perform.
+
+And the reference side is weaker still than assumed: `native_calls.rs` records that
+the `piano_roll` family's natives *"carry zero return shape"* with 1643 `PopN`
+against 999 call sites, so **their results are overwhelmingly discarded**. A stub
+that merely succeeds is sufficient for running them.
+
+## What the census would actually need
+
+- **Reference side**: a trivial stub per declared native. Small.
+- **Native side**: the JIT resolves a declared native by SYMBOL. `native_calls.rs`
+  binds hand-written `extern "C" kel_native_host__one/two/three` and relies on the
+  linker retaining them; a corpus module declaring `host::song_name` needs
+  `kel_native_host__song_name`, which does not exist in the process — and its own
+  comment warns that the engine then *"resolves the declaration to nothing and jumps
+  to it, which is a segfault, not a failed assertion."*
+  The mechanism that closes this is `add_global_mapping`, binding each declared
+  native to an arity-matched stub at run time.
+
+## Why this correction matters more than the increment it unblocks
+
+The unblocked work is **confirmatory**: eleven piano-roll modules whose static share
+`region_composition.rs` already establishes. **The wrong claim is the liability.**
+It was published in a commit message and in the handoff's pickup list, where a later
+reader would take "blocked on a design question" as settled and not look again.
+
+**The error has a name this session has used repeatedly**: a requirement belonging to
+one instrument asserted as a property of the capability. The differential needs
+logging; the census needs a function that returns. Reading `run_vm` answered the
+first question and I reported it as the answer to both.
