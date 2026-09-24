@@ -3941,9 +3941,22 @@ fn lower_chunk_body<'ctx>(
             // **COMPOSITE CONSTRUCTION IS A BIT COPY INTO THE BODY**, so it is
             // admitted whole rather than positionally. The pack places each
             // operand at the OPERAND'S OWN width, and a float already carries
-            // `Width::Scalar(8)` from `push_k`, which is exactly where the
-            // reference puts it: `struct { x: Float, n: Word }` compiles at
-            // `byte_size: 16`, a pair of slots. Nothing is interpreted.
+            // `Width::Scalar(float_bytes)` from `push_k`, which is exactly where
+            // the reference puts it.
+            //
+            // ⚠ **THIS SAID `Width::Scalar(8)` AND `byte_size: 16` UNTIL
+            // 2026-09-24, WHICH IS THE DEFAULT CONFIGURATION STATED AS THE RULE.**
+            // Measured: `struct { x: Float, n: Word }` packs at **16** by default
+            // and at **12** under `narrow-float-32`, because the canonical layout
+            // is parameterised by `float_bytes` — 8 and 4 respectively. The CODE
+            // was always configuration-aware; only this comment was not.
+            //
+            // The cost of trusting the old figure is specific and was demonstrated
+            // the same day: hardcoding a float's width to 8 **passes the default
+            // gate and fails `narrow-float-32`**, caught by this backend's own
+            // layout check. `composite_field_widths.rs` pins the rule as
+            // `8 + float_bytes` so a configuration-dependent figure cannot be
+            // restated as an absolute one. Nothing is interpreted.
             //
             // **The existing exactness check is what makes the whole admission
             // safe**: the arm requires the operand widths to account for the

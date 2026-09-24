@@ -350,3 +350,72 @@ fn the_admitted_float_fields_agree_with_the_reference() {
         );
     }
 }
+
+/// **A DOCUMENTED LAYOUT FIGURE THAT DEPENDS ON THE CONFIGURATION, PINNED AS A RULE.**
+///
+/// The emitter's composite arm justified a float's packed width by asserting that
+/// `struct { x: Float, n: Word }` *"compiles at `byte_size: 16`, a pair of slots"*.
+/// **That is the default configuration stated as the rule.** Measured: 16 by
+/// default and **12** under `narrow-float-32`, because the canonical layout is
+/// parameterised by `float_bytes`.
+///
+/// **The cost of trusting the absolute figure was demonstrated the same day**:
+/// hardcoding a float's width to 8 passes the default gate and fails the narrow
+/// one. So the rule is pinned rather than either number — `8 + float_bytes` holds
+/// in both, and a future edit restating a configuration-dependent figure as an
+/// absolute one fails here.
+///
+/// The neighbouring `Fixed` claim is checked too, and it IS configuration
+/// independent: a `Fixed` pair packs at 16 either way, because a Q-format value is
+/// an `i64` of fixed-point bits whatever the float width. **Checking both is what
+/// makes this a measurement rather than a suspicion** — one figure moved and the
+/// other did not.
+#[test]
+fn the_documented_composite_sizes_hold_in_this_configuration() {
+    fn composite_size(src: &str) -> u32 {
+        let m = common::build(src);
+        for c in &m.chunks {
+            for op in &c.ops {
+                if let keleusma::bytecode::Op::NewComposite(
+                    keleusma::bytecode::NewCompositeOperand::Flat { byte_size, .. },
+                ) = op
+                {
+                    return u32::from(*byte_size);
+                }
+            }
+        }
+        panic!("no composite built by `{src}`");
+    }
+
+    let float_bytes: u32 = if cfg!(feature = "narrow-float-32") {
+        4
+    } else {
+        8
+    };
+
+    let mixed = composite_size(
+        "struct Q { x: Float, n: Word }\n\
+         fn main(a: Word) -> Word { let q = Q { x: 1.0, n: a }; q.n }",
+    );
+    assert_eq!(
+        mixed,
+        8 + float_bytes,
+        "`struct {{ x: Float, n: Word }}` packs at {mixed}, not at 8 + {float_bytes}. \
+         The emitter's comment asserted a fixed 16 until 2026-09-24; the rule is the \
+         sum, and restating either number as an absolute is the defect this pins."
+    );
+
+    // **THE CONTROL, AND IT IS THE POINT.** A `Fixed` pair is configuration
+    // independent, so if BOTH figures moved together the check above would be
+    // measuring something other than the float width.
+    let fixed_pair = composite_size(
+        "struct P { a: Fixed<16>, b: Fixed<16> }\n\
+         fn main(x: Word) -> Word { let p = P { a: (1 as Fixed<16>), b: (2 as Fixed<16>) }; x }",
+    );
+    assert_eq!(
+        fixed_pair, 16,
+        "a `Fixed` pair packs at {fixed_pair}, not 16. A Q-format value is an `i64` \
+         of fixed-point bits whatever the float width, so this figure must NOT move \
+         with the configuration."
+    );
+}
