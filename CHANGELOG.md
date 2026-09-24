@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Integration tests for the arena crate's published interface, which the
+  project instructions claimed already existed.** The instructions stated, in
+  two places, fifty-one library tests plus eight integration tests for that
+  crate. Measured: fifty-one, all library, and the crate's tests directory did
+  not exist at all. That is not a figure drifting but an assertion of a body of
+  tests that was not there. The crate is published, so the gap was real rather
+  than clerical: an integration test can reach only the public interface, which
+  makes it a different check from a unit test, catching an item that is not
+  actually exported and an interface that cannot be used without a private
+  helper. The tests assert the guarantees the crate exists to provide, as a
+  consumer sees them: that the ordinary workflow is reachable using only
+  exported items, that the two allocation heads meet and report exhaustion as
+  an error rather than a panic, that the persistent region survives a reset
+  while the ephemeral heads do not, that zeroing it actually clears it so the
+  survival result is a property of reset rather than of nothing overwriting,
+  that the budget check asks whether a budget is admissible for the capacity
+  rather than whether current usage fits it, and that an impossible capacity is
+  refused rather than aborting.
+
+- **A guard for the statically derivable half of that claim.** Whether the
+  crate has a tests directory, and how many tests it holds, needs no test run,
+  unlike the library and bench figures the existing guard correctly says it
+  cannot check. That guard's own header named the remaining claims as
+  unguarded, and this is the second defect found in exactly that region. Both
+  sides are derived and neither is pinned, so adding a test and updating the
+  instructions together stays green while doing only one of the two does not.
+
 - **Tests for the task-runner scheduler behaviours that had never executed.**
   Until the arena-move and yield-decode defects were repaired the runner could
   not run a single task, so its documented behaviour had never run at all: the
