@@ -530,3 +530,61 @@ fn the_same_composite_is_refused_when_the_native_is_unsignatured() {
         "must refuse for the WIDTH, not incidentally: {text}"
     );
 }
+
+/// **THE FIGURES THIS FILE'S HEADER PUBLISHES, GIVEN A PRODUCER.**
+///
+/// The header states 999 native call sites across the `piano_roll` family, 1643
+/// `PopN`, and zero non-`Top` return shapes. **All three were correct when checked
+/// on 2026-09-24 and pinned by nothing.**
+///
+/// They are pinned now for a reason this session measured rather than assumed:
+/// three separate published figures were found stale the same day, and `region.rs`
+/// named the defect precisely — a number *"carried rather than measured"* that
+/// *"had no producer"*. Its `239` survived a retraction sitting two paragraphs
+/// above it, and the total derived from it was wrong by a factor of three.
+///
+/// **A correct figure with no producer is one edit away from a wrong one**, and the
+/// reader who would check it is the reader who believes it. This is the producer.
+#[test]
+fn the_documented_native_call_figures_are_measured() {
+    use keleusma::bytecode::{Op, WireShape};
+
+    let corpus = common::corpus();
+    let piano: Vec<_> = corpus
+        .iter()
+        .filter(|(n, _)| n.starts_with("piano_roll"))
+        .collect();
+
+    let calls = piano
+        .iter()
+        .flat_map(|(_, m)| m.chunks.iter())
+        .flat_map(|c| c.ops.iter())
+        .filter(|o| matches!(o, Op::CallVerifiedNative(..) | Op::CallExternalNative(..)))
+        .count();
+    let popn = piano
+        .iter()
+        .flat_map(|(_, m)| m.chunks.iter())
+        .flat_map(|c| c.ops.iter())
+        .filter(|o| matches!(o, Op::PopN(_)))
+        .count();
+    let shaped = piano
+        .iter()
+        .flat_map(|(_, m)| m.native_return_shapes.iter())
+        .filter(|s| !matches!(s, WireShape::Top))
+        .count();
+
+    assert!(
+        !piano.is_empty(),
+        "no `piano_roll` modules found, so every figure below is vacuous"
+    );
+    assert_eq!(
+        (piano.len(), calls, popn, shaped),
+        (10, 999, 1643, 0),
+        "the `piano_roll` native-call figures moved to {} modules, {calls} calls, \
+         {popn} PopN, {shaped} shaped returns. This file's header publishes them; \
+         update it in the SAME change, or the next reader quotes a figure nothing \
+         measures — which is exactly how `region.rs` came to carry a count that had \
+         been retracted two paragraphs above it.",
+        piano.len()
+    );
+}
