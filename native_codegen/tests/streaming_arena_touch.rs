@@ -71,7 +71,7 @@ const PINNED_STREAMING: usize = 28;
 
 /// How many of those this census can currently drive. **The rest are accounted
 /// for by name and reason**, not dropped: eleven need host natives registered,
-/// three need a non-`Int` first argument, one the backend refuses to lower.
+/// three take a **`Composite`** first argument, one the backend refuses to lower.
 const DRIVEN: usize = 13;
 /// `14_frame_log.kel` — the first corpus module outside the self-hosted stages
 /// ever measured dynamically. **Report six publishes these two figures.**

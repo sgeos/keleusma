@@ -29,7 +29,24 @@
 #
 # It does NOT catch: untracked files the run reads, environment changes, machine
 # load, another process writing outside the worktree, or anything about whether
-# the measurement was correct in the first place. **A CLEAN VERDICT HERE IS NOT
+# the measurement was correct in the first place.
+#
+# AND IT DOES NOT CATCH A TRANSIENT CHANGE THAT IS REVERTED INSIDE THE WINDOW.
+# Demonstrated 2026-09-23, not theorised: a probe file was created in `tests/` and
+# deleted again while the narrow gate ran. Both stamps saw the same tree, so the
+# verdict read FROZEN -- and `test_population_guard` had meanwhile counted 149 files
+# against a pinned 148, turning the gate red on a tree that was never committed.
+#
+# The stamp is a pair of SNAPSHOTS, so anything that returns to its starting value
+# before the end is invisible to it. That is not fixable by comparing endpoints, and
+# a mid-run watcher would be a larger instrument than the problem. The corrective is
+# the rule below, which is about the operator rather than the script:
+#
+#   ** DO NOT CREATE FILES IN `tests/` WHILE A RUN IS IN FLIGHT. **
+#
+# The reason is specific and already on record: this suite contains tests that READ
+# SOURCE TEXT FROM DISK, which is why absorptions are measured alone. A `target/`
+# write is harmless; a file in `tests/` is an input to the suite. **A CLEAN VERDICT HERE IS NOT
 # A VALID MEASUREMENT.** It rules out one specific way of being wrong, which is
 # the way this project keeps being wrong.
 #

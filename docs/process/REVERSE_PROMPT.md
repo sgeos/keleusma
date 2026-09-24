@@ -2613,7 +2613,7 @@ beyond `auto_arena_capacity_for` to run a module natively. Measured two ways:
   this way — 48 bytes of a 600-byte plan, 8%.** The figure was checked stable across two independent
   runs before being published here.
   **The other 15 are NOT measured, and they are named rather than dropped**: eleven need host natives
-  registered (`host::song_name`, `host::run_player_turn`), three take a non-`Int` first argument, and
+  registered (`host::song_name`, `host::run_player_turn`), three take a **`Composite`** first argument, and
   one my backend refuses to lower — the yield-escape hazard already dispositioned. Reaching them
   needs the stub machinery in my corpus differential, which I declined to extract rather than
   disturb a tuned instrument. **So read this as 13 of 28, not as the corpus.**
