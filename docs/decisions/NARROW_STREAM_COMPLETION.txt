@@ -1,0 +1,47 @@
+COMPLETION CONDITION — a Byte and bool stream differential
+
+Ordering is not a completion criterion. No property below depends on the order
+the work was done in, on which branch it happened on, or on any process step.
+Any sequence of actions leaving the tree with these properties is complete.
+
+1. Something in the tree drives stream programs whose entry parameter and return
+   are a one-byte type, through several suspensions, and compares the whole
+   sequence of yielded values against the reference implementation rather than
+   only a final value.
+
+2. Both one-byte types the language offers for such an entry are covered, or the
+   tree records why one of them is not drivable.
+
+3. The reference is driven before the backend for each subject, and the tree states
+   that this ordering is a safety property because a trapping input would kill the
+   test binary rather than fail a comparison.
+
+4. The bound that keeps every value inside a byte across all ticks is enforced or
+   checked in the tree, not only argued in a comment, and the tree states that
+   byte arithmetic is checked so an overflow is a trap rather than a wrong number.
+
+5. The tree carries evidence that the differential detects a fault on the stream
+   path specifically, meaning a recorded perturbation of suspension or resume that
+   it fails under. A perturbation of byte arithmetic alone does not satisfy this.
+
+6. If the masking of a resumed one-byte value turns out not to be load-bearing,
+   the tree says so as a measured result rather than implying the opposite.
+
+7. Any harness newly allocating host buffers for a native call derives its private
+   region size from the published contract and is declared wherever the tree
+   enumerates such harnesses.
+
+8. src/ and tests/ at the repository root are unchanged by this session except for
+   changes the other line itself made.
+
+9. The backend suite passes in both float configurations, and that rests on a
+   whole gate run per configuration rather than on separately read phase
+   summaries, on targeted runs selected by binary name, or on one run assumed to
+   cover both.
+
+10. The handoff state table agrees with the tree, figures that cannot be
+    re-derived name the commit they were measured at, and the guards that check it
+    pass.
+
+11. The working tree is clean, and the branch on the remote matches the local
+    branch, established by querying the remote.

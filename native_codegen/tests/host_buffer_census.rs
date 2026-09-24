@@ -77,6 +77,11 @@ const BUFFER_HARNESSES: &[&str] = &[
     "generated_float_streams.rs",
     "module_differential.rs",
     "module_source_differential.rs",
+    // Added 2026-09-23 with the narrow stream differential. **Caught by this census
+    // before the commit for the second time in a day** — and then caught AGAIN,
+    // because the list is compared as an ORDERED sequence and the first insertion
+    // was alphabetically misplaced. The sets were identical; only the order was not.
+    "narrow_stream_differential.rs",
     "native_calls.rs",
     "partial_operation_census.rs",
     "reset_region_retention.rs",
