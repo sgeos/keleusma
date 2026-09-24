@@ -62,3 +62,20 @@ order, by any route, on any branch. Judge only the end state of the tree.
 - Continuous-integration coverage of the backend.
 - A blocking mechanism preventing an ungated push.
 - Any particular commit granularity, branch, or merge.
+
+---
+
+## Iteration 2 — fixed point
+
+Ordering is not a completion criterion.
+
+1. The tree carries machine-written records for both float configurations, naming a
+   commit that is an ancestor of the tip, with a clean worktree and passing verdicts.
+2. The staleness reporter, run at the tip, reports NO changed backend sources for
+   either configuration.
+3. That zero is reached WITHOUT narrowing what the reporter watches; the handoff
+   remains among its inputs.
+4. Tracked documentation states, as an observed result, whether the arrangement has a
+   fixed point.
+5. Local and remote agree, root `src/` and `tests/` are unmodified, and there is no
+   opcode or bytecode-version change.

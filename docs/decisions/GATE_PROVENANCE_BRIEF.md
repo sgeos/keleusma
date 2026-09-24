@@ -56,3 +56,30 @@ demonstrated nothing. This is recorded in memory as its own lesson.
 **A record is disclosure, not a warrant.** It says a run happened on a stated tree
 with a stated verdict. It does not make the run correct, does not make a dirty-tree
 run acceptable, and must never be cited as evidence the backend is green NOW.
+
+---
+
+## Iteration 2 — does the arrangement have a FIXED POINT?
+
+The first iteration left a standing warning: the reporter counts the handoff as a
+test input, the handoff was edited after the gate ran, so reach is nonzero at the tip.
+Documented and honest — but it raises a question the design must answer. **If every
+gate run is necessarily followed by a handoff edit, and every handoff edit invalidates
+reach, the warning is permanent.** A permanently-warning instrument is the thing this
+brief argues against in its own "wrong turns": a reader learns to ignore it.
+
+The claim to test is that a fixed point exists, reached by running the gate and then
+committing ONLY the record, which reach excludes by construction.
+
+**Wrong turn: clearing the warning by narrowing the reporter.** Dropping the handoff
+from reach would make the warning vanish and restore exactly the false assurance the
+widening removed. The handoff is read by `handoff_figures.rs`; that is a fact about
+the suite, not a preference.
+
+**Wrong turn: settling this by argument.** The reasoning above is a hypothesis. This
+line's method is that a claim about an instrument is checked by running the
+instrument. Run it.
+
+**Wrong turn: touching the handoff after this iteration's gate run.** That edit is the
+variable under test. If the fixed point requires not editing the handoff last, say so
+plainly as a property of the arrangement.
