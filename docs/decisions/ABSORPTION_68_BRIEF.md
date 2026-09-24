@@ -47,3 +47,25 @@ verified**, which is the point of stating it.
 ## Discipline
 
 Measured **alone**, and nothing else touches the tree while its guards run.
+
+## Outcome, recorded after the merge
+
+**Every prediction held, and the vacuous one stayed vacuous.**
+
+1. **Zero conflicting files.** Six files, 362 insertions, one deletion.
+2. **Zero movement in every backend figure**; both figure guards pass unchanged.
+3. **The ownership check read empty before and after**, establishing nothing — as
+   predicted, for the third consecutive absorption. Recorded as an ABSENT check.
+4. **`outstanding_reports.rs` stayed green.** This line's appended section and its
+   report six survive a FOURTH consecutive rewrite of `REVERSE_PROMPT.md` by the
+   other line — still by disjoint editing rather than by any mechanism.
+
+Backlog zero.
+
+## A note on the vacuous check, now that it has repeated three times
+
+Three absorptions running, the ownership check could not fail, because the other
+line has been working in `keleusma-cli/` and documentation. **The honest reading is
+that this line's isolation from `src/` and `tests/` is currently untested, not
+confirmed.** The check becomes evidence again the moment either line touches those
+directories; until then it is a standing assertion with no observation behind it.
