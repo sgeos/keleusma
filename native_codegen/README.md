@@ -19,7 +19,7 @@ implement is the specific error the census now prints a disposition table to pre
 | opcode | disposition |
 |---|---|
 | `Reset` | **accepted**, by a route the census does not instrument — consumed by the degenerate-stream shape match |
-| `IsStruct` | **no verdict available**; no corpus witness and no producer found by a bounded search |
+| `IsStruct` | **refused, loudly and by name** — `UnsupportedOp { op: "IsStruct" }`, driven by `tests/is_struct_verdict.rs` against a hand-mutated module, with a control that lowers cleanly. No source can supply the witness: the reference emits it only where a struct pattern's annotated type differs from its own struct name, and the type checker refuses every such program. Refusing is consistent with the reference, whose machine returns an error for `IsStruct` against a FLAT struct because the test is then a compile-time constant |
 | `Len` | **refusing is correct.** The machine returns `InvalidBytecode` for it on a flat array, so lowering it would compute a length where the reference traps |
 
 **A LOWERS verdict is not a correctness claim.** It says the backend emitted code, not that the code is

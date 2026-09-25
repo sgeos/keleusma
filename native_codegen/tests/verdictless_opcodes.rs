@@ -12,6 +12,12 @@
 //! here. This file supplies the missing verdict by driving the backend rather
 //! than by reading it.
 //!
+//! **`IsStruct` was the third such opcode and now has its own file.**
+//! `tests/is_struct_verdict.rs` drives it with a hand-mutated module, because no
+//! source can produce it: the type checker refuses every program that would. Its
+//! verdict is a loud, named refusal. This file covers `Reset`; that one covers
+//! `IsStruct`; between them the `63 of 66` census has no verdictless entry left.
+//!
 //! # Why `Reset` never reaches opcode dispatch
 //!
 //! The backend recognises a degenerate stream by SHAPE, not by walking its
