@@ -83,3 +83,27 @@ instrument. Run it.
 **Wrong turn: touching the handoff after this iteration's gate run.** That edit is the
 variable under test. If the fixed point requires not editing the handoff last, say so
 plainly as a property of the arrangement.
+
+---
+
+## Iteration 3 — the README is the same shape as the banner
+
+The handoff banner drifted 121 commits because `handoff_figures.rs` guarded the state table
+BESIDE it and nothing read the banner. **Proximity to a guard is not coverage.**
+`native_codegen/README.md` has the same shape: it sits next to a censused package and is
+itself unguarded, and it records having been badly wrong before in its own voice — "It
+understated the backend by more than half and pointed a reader at finished work. A
+hand-maintained opcode list is what drifted." It fixed that one list. The question is what
+else it asserts that no guard re-derives.
+
+**Wrong turn: guarding a figure with no derivable referent.** That is what a
+`measured at <commit>` stamp is for; a check invented for it would be guessing.
+
+**Wrong turn: guarding a DUPLICATE.** Copying the state table's figures into a README guard
+makes two things to keep in step. The gate-record row points at `GATE_RECORD.md` rather than
+restating its hash, and that decision paid off one commit after it was made. Prefer DELETING
+a restated figure and pointing at the census that computes it.
+
+**Wrong turn: an unscoped extraction.** The README, like the handoff, carries historical
+notes in which an old number is correct AS HISTORY. The banner guards are scoped to the
+banner region for exactly this reason.

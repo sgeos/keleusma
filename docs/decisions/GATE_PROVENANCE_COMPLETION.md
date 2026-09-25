@@ -79,3 +79,23 @@ Ordering is not a completion criterion.
    fixed point.
 5. Local and remote agree, root `src/` and `tests/` are unmodified, and there is no
    opcode or bytecode-version change.
+
+---
+
+## Iteration 3 — README currency
+
+Ordering is not a completion criterion.
+
+1. No tracked figure in the backend package's README asserts a count or coverage claim
+   that is neither re-derived by a guard, carried with an explicit measurement stamp, nor
+   replaced by a pointer to the census that computes it.
+2. Any figure found stale is corrected or removed, and the correction states what was
+   measured.
+3. No new guard compares two in-tree copies of the same figure; where a duplicate existed,
+   the duplicate is removed rather than pinned.
+4. Any new guard's reach is demonstrated by a perturbation whose failure MESSAGE is shown,
+   not merely a failing status.
+5. Both float configurations pass with a machine-written record, and its rows agree on the
+   commit they name.
+6. Local and remote agree; root `src/` and `tests/` unmodified by this line; no opcode or
+   bytecode-version change; recorded test-population figures match the tree.
