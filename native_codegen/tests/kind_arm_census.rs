@@ -219,6 +219,28 @@ fn every_kind_arm_is_reached_by_the_corpus_or_named_as_unreached() {
 ///
 /// **The unconstructible verdicts are measurements, not assumptions**: each was
 /// established by compiling the shape and reading what came back.
+/// The residue this census expects: the five read families against the three
+/// kinds that cannot be inhabited. Pinned so it cannot move unnoticed; see the
+/// assertion at the end of [`the_unreached_combinations_are_each_accounted_for`]
+/// for what a change in either direction means.
+const EXPECTED_UNEXERCISED: [&str; 15] = [
+    "GetField(Flat) x Unit",
+    "GetField(Flat) x Text",
+    "GetField(Flat) x Opaque",
+    "GetTupleField(Flat) x Unit",
+    "GetTupleField(Flat) x Text",
+    "GetTupleField(Flat) x Opaque",
+    "GetEnumField(Flat) x Unit",
+    "GetEnumField(Flat) x Text",
+    "GetEnumField(Flat) x Opaque",
+    "GetIndex(Flat) x Unit",
+    "GetIndex(Flat) x Text",
+    "GetIndex(Flat) x Opaque",
+    "shared slot x Unit",
+    "shared slot x Text",
+    "shared slot x Opaque",
+];
+
 #[test]
 fn the_unreached_combinations_are_each_accounted_for() {
     let (tally, _, _) = corpus_reach();
@@ -408,5 +430,33 @@ fn the_unreached_combinations_are_each_accounted_for() {
         resolved > 0,
         "the attribution table resolved nothing, so this test is a listing \
          rather than an accounting"
+    );
+
+    // **AND THE RESIDUE IS PINNED, WHICH IS NOT THE SAME AS ASSERTING IT EMPTY.**
+    //
+    // The paragraph above explains why emptiness is the wrong target, and that
+    // reasoning stands. What it left unguarded is its own next sentence: the
+    // claim that every accepted combination is driven "will decay the moment a
+    // new arm lands". **It named the decay and did not watch for it.** Until
+    // this assertion, a new family or kind, or a deleted test, moved the count
+    // from fifteen to sixteen and nothing failed — the residue is PRINTED, and a
+    // printed number is read by a human who is not looking.
+    //
+    // The set below is structural rather than arbitrary: the five read families
+    // against exactly the three kinds that cannot be inhabited here — `Unit` and
+    // `Opaque` are unconstructible, and a `Text` field declares but refuses to
+    // construct. It is listed literally rather than computed as that product, so
+    // that a NEW family does not silently inherit three excused rows.
+    let mut got = unexercised.clone();
+    got.sort();
+    let mut want: Vec<String> = EXPECTED_UNEXERCISED.iter().map(|s| s.to_string()).collect();
+    want.sort();
+    assert_eq!(
+        got, want,
+        "the unexercised residue moved. GREW: a new arm landed, or a test that \
+         drove a combination was removed or renamed — decide and record which, \
+         rather than widening this list to make the failure stop. SHRANK: a \
+         combination became reachable, so delete its row here and, if a named \
+         test now drives it, add it to the attribution table instead."
     );
 }
