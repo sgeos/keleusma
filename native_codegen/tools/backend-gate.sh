@@ -27,6 +27,24 @@
 #      version of the mistake this file exists to prevent. **Run the script
 #      detached and the question does not arise**; split by test name only if a
 #      foreground run is killed.
+#      ⚠ **DO NOT CHAIN BOTH CONFIGURATIONS IN ONE BACKGROUND COMMAND.** Measured
+#      2026-09-25: under sustained load the phases roughly TRIPLED -- the narrow corpus
+#      phase reached 578s against the ~400s it takes idle, and its non-corpus optimised
+#      phase 449s against ~130s -- putting a chained pair near 38 minutes. **Two
+#      consecutive chained runs were killed mid-flight**, the first during the default
+#      corpus phase and the second during the narrow run after the default had
+#      finished. A single configuration is roughly 19 minutes under the same load and
+#      completes. This is the same lesson as note 1's ceiling, one level up: the script
+#      says one invocation covers ONE configuration, and the harness agrees.
+#
+#      **What a kill leaves behind is worth knowing, because it is the design working.**
+#      `GATE_RECORD.md` is written only after the last frozen window closes, so the
+#      first kill left it UNTOUCHED -- no verdict at all -- and the second left the
+#      `default features` row naming the new commit while `narrow-float-32` still named
+#      the previous one. The record then says exactly which configuration is behind. A
+#      per-phase write would instead have stamped a partial or stale PASS against a tree
+#      the run never finished checking.
+#
 #   2. THERE ARE TWO FLOAT CONFIGURATIONS. `narrow-float-32` is selectable only
 #      because `native_codegen/Cargo.toml` forwards it; without that it is
 #      reachable by hand-editing the manifest, which is why it went unmeasured
