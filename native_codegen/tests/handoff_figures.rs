@@ -74,6 +74,105 @@ fn handoff() -> String {
     std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()))
 }
 
+/// The BANNER: everything above the resume section's heading.
+///
+/// **Scoped, for the same reason the state table is.** "ABSORPTION 61" appears in
+/// archived `◄ RECORD` blocks where it is correct as history; a search over the
+/// whole document would read one of those and compare the wrong number.
+fn banner() -> String {
+    let s = handoff();
+    let end = s
+        .find("## ► RESUME HERE")
+        .expect("the handoff still has a resume section heading to bound the banner");
+    s[..end].to_string()
+}
+
+/// The commit the resume section claims to describe.
+fn resume_stamp() -> String {
+    let s = handoff();
+    let start = s
+        .find("## ► RESUME HERE")
+        .expect("the handoff still has a resume section");
+    let rest = &s[start..];
+    const LEAD: &str = "Covers the tree at `";
+    let i = rest
+        .find(LEAD)
+        .expect("the resume section still stamps a commit")
+        + LEAD.len();
+    let j = rest[i..].find('`').expect("the stamp is closed");
+    rest[i..i + j].to_string()
+}
+
+/// The banner's absorption number must equal the state table's.
+///
+/// # The drift this exists after
+///
+/// Measured 2026-09-25: the banner read "after ABSORPTION 61, stamped 2026-09-14"
+/// while the state table read **71**, and the resume stamp was **121 commits**
+/// behind `HEAD`. Ten absorptions and eleven days passed unnoticed, because this
+/// file guarded the TABLE and nothing read the banner — which the handoff itself
+/// describes as "the least-refreshed line in the file". Naming a hazard is not
+/// watching it.
+///
+/// **The two numbers live in the same document, so this is a self-consistency
+/// check** and cannot go stale against the tree. It deliberately does NOT check
+/// the banner's DATE: a date has no derivable referent here, and a guard that
+/// demanded one would be guessing.
+#[test]
+fn the_banner_agrees_with_the_state_table() {
+    let b = banner();
+    // **NON-VACUITY.** A banner that stopped naming an absorption would make the
+    // extraction return nothing, and a silent `None` would pass every check.
+    let n_banner: u64 = b
+        .split("ABSORPTION ")
+        .nth(1)
+        .and_then(|r| {
+            let d: String = r.chars().take_while(|c| c.is_ascii_digit()).collect();
+            d.parse().ok()
+        })
+        .expect(
+            "the banner no longer names an absorption number, so this guard is \
+             reading nothing. Restore it or delete this test deliberately.",
+        );
+    let n_table = row_figure(&state_table(), "absorption")
+        .expect("the state table still carries an absorption row");
+    assert_eq!(
+        n_banner, n_table,
+        "the banner says absorption {n_banner} and the state table says {n_table}. \
+         The banner is the least-refreshed line in this file and it once drifted ten \
+         absorptions and 121 commits behind while every guarded figure stayed \
+         current. Refresh the banner."
+    );
+}
+
+/// The resume section's stamp must name a commit that exists.
+///
+/// **Distance is deliberately NOT asserted.** A stamp cannot name the commit that
+/// carries it, so a freshly refreshed file reads one or two commits behind and a
+/// zero-distance check would be red in the ordinary case. The handoff carries the
+/// distance as a MEASUREMENT for the reader instead; this guard only rejects a
+/// stamp that names nothing, which is what a typo produces.
+#[test]
+fn the_resume_stamp_names_a_real_commit() {
+    let stamp = resume_stamp();
+    assert!(
+        stamp.len() >= 7 && stamp.chars().all(|c| c.is_ascii_hexdigit()),
+        "`{stamp}` is not a commit id, so the resume section stamps nothing checkable"
+    );
+    let ok = std::process::Command::new("git")
+        .args(["cat-file", "-e", &format!("{stamp}^{{commit}}")])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    assert!(
+        ok,
+        "the resume section stamps `{stamp}`, which is not a commit in this \
+         repository. A stamp naming nothing is worse than an old stamp: it cannot \
+         even be measured against HEAD."
+    );
+}
+
 /// The state table in the resume section, and nothing else.
 ///
 /// **Scoping is the whole correctness of this file.** The document is thousands
