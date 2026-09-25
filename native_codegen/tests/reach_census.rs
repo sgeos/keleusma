@@ -39,6 +39,16 @@
 //! proof**, and it is why the floor below exists: a scan that silently matched
 //! nothing would otherwise pass.
 //!
+//! **The blind spot is known precisely, and reach is shaped around it.** Four names --
+//! `examples`, `src`, `tests`, `tools` -- exist both inside this package and at the
+//! repository root, so a literal such as `"examples/scripts"` cannot be classified from
+//! the text: `tests/common/mod.rs` joins that very spelling against `".."`, making it
+//! repo-relative, while other files resolve the same spelling package-locally. Such
+//! literals are invisible here. The mitigation is not better vision but BREADTH in the
+//! set being checked: `../src` and `../examples` are watched whole, so a corpus root
+//! added under either is covered even though this census never saw it. That is why the
+//! reach set is deliberately coarser than the paths the tests name.
+//!
 //! A text scan was ABANDONED in this package once before, for gated module paths.
 //! That one needed brace-aware scoping to match attributes to items, and each fix
 //! traded one false-positive class for another. This scan has no such structure to

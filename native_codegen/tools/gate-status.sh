@@ -43,6 +43,20 @@ record="GATE_RECORD.md"
 #   examples/scripts                 0/30      examples/rtos/scripts      0/30
 #   compiler/kel                     0/30      native_codegen             0/30
 #
+# ⚠ `../examples` is deliberately BROAD rather than the two corpus subdirectories it
+# replaced, and the reason is a blind spot in the census that watches this set. Four
+# names -- `examples`, `src`, `tests`, `tools` -- exist BOTH inside this package and at
+# the repository root, so a literal like `"examples/scripts"` cannot be classified
+# statically: `common/mod.rs` joins exactly that against `".."`, making it
+# repo-relative, while another file resolves the same spelling package-locally. The
+# census therefore cannot see those literals. **Breadth is the mitigation**: a new
+# corpus root added under `examples/` or `src/` is covered even though unseen. Measured
+# 2026-09-24, `examples/` broad was touched 0 of the other line's 30 most recent
+# commits, so the breadth costs nothing in noise.
+#
+# Root `tests/` and `tools/` are deliberately absent: no test reads them, so watching
+# them would add warnings with no signal behind them.
+#
 # So the LOUDEST contributor is the least consequential one: a `REVERSE_PROMPT.md` edit
 # only feeds a documentation guard, while the stage sources and corpus -- the inputs
 # whose change could alter a VERDICT -- were untouched across the whole sample. This is
@@ -59,8 +73,7 @@ REACH=(
     ../docs/process/REVERSE_PROMPT.md
     ../docs/decisions
     ../src
-    ../examples/scripts
-    ../examples/rtos/scripts
+    ../examples
     ../compiler/kel
 )
 head_commit=$(git rev-parse HEAD 2>/dev/null || echo UNKNOWN)
