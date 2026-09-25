@@ -21,3 +21,9 @@ path = "src/main.rs"
 keleusma = { path = ".." }
 tower-lsp = "0.20"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
+
+# Test-only. The protocol test speaks JSON-RPC to the built binary, and
+# building or checking those messages by string matching would be the crude
+# instrument this repository keeps paying for.
+[dev-dependencies]
+serde_json = "1"

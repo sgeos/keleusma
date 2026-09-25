@@ -5071,6 +5071,58 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-24 (hundred and fourth) — my harness said the server was broken, and the harness was wrong
+
+### THE LAST THIN SURFACE FROM THE WORKSPACE CENSUS
+
+`keleusma-lsp` is 390 lines with six unit tests and no integration test, and it is
+EXCLUDED from the workspace, so a root `cargo test` never reaches it. Continuous
+integration runs `cargo test` for it in its own job, so tests added there do execute —
+checked before writing any, because a test nobody runs is the failure mode being closed.
+
+Its six tests call `analyze`, `document_symbols` and the completion helper directly.
+Those are the pure functions. **Nothing covered the layer an editor talks to.** Same shape
+as the task runner: unit pieces green, integration absent.
+
+### THE PROBE SAID THE SERVER WAS BROKEN
+
+Piping a finite file of JSON-RPC messages produced:
+
+```
+{"jsonrpc":"2.0","error":{"code":-32800,"message":"Canceled"},"id":1}
+{"jsonrpc":"2.0","error":{"code":-32002,"message":"Server not initialized"},"id":2}
+```
+
+Handshake cancelled, everything after refused, and **no diagnostics published** for a
+document that does not parse. That reads exactly like a non-functional server, and two
+increments earlier a probe reading exactly like that WAS one.
+
+**It was my harness.** A finite pipe means end-of-file arrives immediately; the server
+cancels work in flight and never initialises. Holding the input open, the handshake
+succeeds, three capabilities are advertised, and `fn (` yields one diagnostic.
+
+### WHY THIS ONE IS WORTH A JOURNAL ENTRY
+
+Five suspicions this session have been refuted by checking before claiming. **This is the
+first where the instrument, not my reading of the subject, was at fault** — and it is the
+most dangerous kind, because the false signal was *identical in shape* to a real defect I
+had genuinely found days earlier. Pattern-matching on "the probe says it is dead" would
+have produced a confident, wrong defect report against working code.
+
+The rule, written into the test file: **a server given a closed standard input is a broken
+harness, not a broken server.**
+
+And the mitigation that matters more than the rule: closing the input early is
+demonstrated to make these tests **fail**, not pass. The trap can cost a wrong diagnosis;
+it cannot cost a false pass.
+
+### THE CONTROL, AGAIN
+
+A valid document publishing zero diagnostics is what makes "a malformed one publishes one"
+mean anything. Without it, a server reporting an error for every document satisfies the
+test. That is the third increment running where the control carried the evidential weight
+rather than the assertion it supports.
+
 ## 2026-09-24 (hundred and third) — a claimed body of tests that did not exist
 
 ### CENSUSING ONE LEVEL UP
