@@ -34,14 +34,27 @@ record="GATE_RECORD.md"
 # `../src/bytecode.rs`, `compiler.rs`, `vm.rs` and `wire_format.rs`. Those are the
 # stage differential's SUBJECTS, and the first hand-built set missed them.
 #
-# ⚠ **HOW OFTEN EACH MEMBER ACTUALLY FIRES, measured over the 30 most recent commits
-# on `origin/v0.2.3` on 2026-09-24** -- because the first version of this comment
+# ⚠ **HOW OFTEN EACH MEMBER ACTUALLY FIRES, measured over the 200 most recent commits
+# on `origin/v0.2.3` on 2026-09-25** -- because an earlier version of this comment
 # asserted an activity ranking instead of measuring one, and the measurement refuted it:
 #
-#   docs/process/REVERSE_PROMPT.md  14/30      src                        3/30
-#   docs/decisions                   7/30      src/selfhost/kel           0/30
-#   examples/scripts                 0/30      examples/rtos/scripts      0/30
-#   compiler/kel                     0/30      native_codegen             0/30
+#   docs/process/REVERSE_PROMPT.md  84/200     src                       19/200
+#   docs/decisions                  34/200     src/selfhost/kel           7/200
+#   examples                         0/200     compiler/kel               0/200
+#
+# A 30-commit sample gave the same ordering, and the 200-commit figures supersede it as
+# the better estimate. The LOUDEST contributor is the least consequential: a
+# `REVERSE_PROMPT.md` edit only feeds a documentation guard, while the stage sources --
+# whose change can alter a VERDICT -- fire at 7 in 200. This is why the reporter NAMES
+# the paths rather than only counting them: a reader judges `REVERSE_PROMPT.md`
+# differently from `src/selfhost/kel`, and cannot if the output is a number.
+#
+# ✅ **AND THE SET IS VALIDATED AGAINST REAL WORK, not only by perturbation.** The four
+# most recent commits to touch each high-stakes member are all flagged by this set, and
+# `e90d71e4` is flagged by exactly one file, `src/selfhost/kel/parse.kel`. So a real
+# change by the other line to the differential's own subjects does reach this list. That
+# validates the PATH SET; it is not an end-to-end test of the reporter in a live
+# absorption, which is a weaker claim and the accurate one.
 #
 # ⚠ `../examples` is deliberately BROAD rather than the two corpus subdirectories it
 # replaced, and the reason is a blind spot in the census that watches this set. Four

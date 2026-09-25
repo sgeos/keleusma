@@ -14,11 +14,12 @@
 //!    `compiler.rs`, `vm.rs` and `wire_format.rs`.
 //!
 //! **The first telling of point 2 claimed root `src/` was the other line's most active
-//! directory, and the measurement refuted it**: over their 30 most recent commits,
-//! `REVERSE_PROMPT.md` was touched 14 times, `docs/decisions` 7, root `src/` 3, and
-//! `src/selfhost/kel` and `examples/scripts` not once. The hole was real; the reason
-//! given for it was an unmeasured ranking. The figures live in `tools/gate-status.sh`
-//! beside the set they describe.
+//! directory, and the measurement refuted it**: over their 200 most recent commits,
+//! `REVERSE_PROMPT.md` was touched 84 times, `docs/decisions` 34, root `src/` 19,
+//! `src/selfhost/kel` 7, and `examples` and `compiler/kel` not once. The hole was real;
+//! the reason given for it was an unmeasured ranking. The figures live in
+//! `tools/gate-status.sh` beside the set they describe, along with the retrospective
+//! check that the set flags the real commits which last touched each member.
 //!
 //! Fixing an instance twice is the signal to close the class. A hand-maintained list
 //! of inputs drifts from the inputs exactly as a hand-maintained figure drifts from
