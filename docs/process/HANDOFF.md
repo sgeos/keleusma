@@ -1,8 +1,8 @@
 # Handoff Prompt
 
-**Refreshed 2026-09-14, describing `origin/v0.2.3` at `89a13bfb` (merge of #446).** Session 65
-landed #433 through #446 and left #447 open. Read this block, run the validity check, then stop and
-wait for the human prompt.
+**Refreshed 2026-09-24, describing `origin/v0.2.3` at `edb99de9`.** Session 66 merged
+#447 through #458. Read this block, run the validity check, then stop and wait for the
+human prompt.
 
 ---
 
@@ -12,115 +12,125 @@ wait for the human prompt.
   `docs/process/handoffs/v0.3.0.md` and **do not overwrite this file**.
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
-**Validate by ANCESTRY and by CONTENT, never by a hash match.** A stamp requiring `HEAD~1` to equal
-a recorded parent claims nothing else ever lands, and it has failed three times.
+### First: how far behind is this file?
 
-**Ancestry**: `origin/v0.2.3` should contain **`89a13bfb`** (`Merge pull request #446`), the last
-merge before this refresh. If it does not, this file predates a reset and is stale.
+```
+git rev-list --count edb99de9..HEAD
+```
 
-**Content** — cheap, independent, and each verified on 2026-09-14. Check the rendered ORDER of this
-list, not just the next unused number: this file has twice had an item inserted above its
-predecessor by an agent that had just read the warning against it.
+**This is a MEASUREMENT, not a pass or fail.** Zero means the file describes the current
+tree, and **one or two is what a freshly refreshed handoff reads**, because it cannot stamp
+the commit that carries it. A small number means it describes a slightly older one and the state section below
+is probably still usable. A large number means treat every specific claim here as
+historical and re-derive from `REVERSE_PROMPT.md` and the task log instead.
 
-1. `scripts/fingerprint.sh` reports `0x4327_63E1`. A different value means a release was rolled and
-   every version-adjacent statement here needs re-reading.
-2. `cargo test -p keleusma --test claimed_counts` reports **12** passing. It guards the figures
-   `CLAUDE.md` restates against the sources that own them.
-3. `CLAUDE.md` says continuous integration runs **five** feature sets. If it says three, this file
-   predates the 2026-09-13 correction and the two it omitted are the ones a docs-only change has
-   already failed under.
-4. `src/selfhost/kel/` holds **12** stage sources, and **none was modified in session 65**.
-5. `tests/selfhost_typed_opcode_boundary.rs` and `keleusma-cli/tests/compile_reproducible.rs` exist.
-   Both are session-65 work; their absence means this file predates it.
+**Why this exists.** The ancestry check below cannot detect staleness. The stamped commit
+stays an ancestor forever on a branch that only moves forward, so ancestry passes whether
+this file is current or thirty commits behind. Measured on 2026-09-24: the previous
+handoff was **32 commits and eleven merged pull requests** out of date, its ancestry check
+passed, and **four of its five content checks still passed** — the fifth failed only
+because that session happened to add a test to the guarded file. Without that accident it
+would have validated cleanly while describing a superseded tree.
+
+**Why not a stricter stamp.** Requiring `HEAD~1` to equal a recorded parent asserts that
+nothing else ever lands, and this file records that such a stamp failed three times. The
+count is the honest form: it tells a reader how much to trust, rather than pretending the
+answer is binary.
+
+### Then: ancestry, which detects a RESET and nothing else
+
+`origin/v0.2.3` should contain **`edb99de9`**. If it does not, this file predates a reset
+and is stale in the stronger sense.
+
+### Then: content, each verified on 2026-09-24 by running it
+
+Check the rendered ORDER of this list, not just the next unused number: this file has
+twice had an item inserted above its predecessor by an agent that had just read the
+warning against it.
+
+1. `scripts/fingerprint.sh` reports `0x4327_63E1`. Unchanged across session 66. A
+   different value means a release was rolled.
+2. `cargo nextest run -p keleusma --test claimed_counts` reports **13** passing. It guards
+   figures `CLAUDE.md` restates against the sources that own them.
+3. `cargo nextest run -p keleusma-arena` reports **57**. It was 51 with a false claim of
+   59 until session 66.
+4. `src/selfhost/kel/` holds **12** stage sources, and `git diff --name-only
+   edb99de9 -- src/selfhost/kel/` is **empty for the whole of session 66**.
+5. `keleusma-cli/tests/` holds `runtasks_reload.rs`, `runtasks_scheduler.rs`,
+   `bad_input.rs` and `strip_and_version.rs`; `keleusma-lsp/tests/protocol.rs` exists.
+   All are session-66 work.
 
 ## What a resuming session should do first
 
-1. Run the validity check above and report the handoff valid, or invalid-and-stale, on its outcome.
-2. Read `docs/process/REVERSE_PROMPT.md` — the CURRENT STATE block at its head, then stop. It holds
-   the bounded latest state and the seven open decisions. Everything below its superseded-history
-   line is history.
-3. Check whether **#447** merged. If it is green and unmerged, merge it; routine green feature
-   merges are pre-authorised.
-4. **Wait for the human prompt.** Do not start the parser-gap work on your own — see below.
+1. Run the freshness measurement, then the validity checks, and report the outcome.
+2. Read `docs/process/REVERSE_PROMPT.md` — the CURRENT STATE block at its head, then stop.
+3. **Wait for the human prompt.**
 
 ## The state
 
-**Green and clean.** Fourteen pull requests merged in session 65 (#433–#446), #447 open carrying
-three commits. Nothing uncommitted, nothing unpushed.
+**Green and clean.** Twelve pull requests merged in session 66. Nothing uncommitted,
+nothing unpushed. The full workspace suite was last green at **2909** tests.
 
-**What session 65 actually did** was not a feature. It found that claims in this repository had
-drifted from what the code does, and corrected them by running or reading the thing rather than
-reasoning about it. Six standing claims were corrected, two of them retractions of framings written
-hours earlier in the same session.
+### What session 66 found, in order of consequence
 
-Findings that outlive the session:
+- **`run-tasks` could not run a single task.** Two defects, either fatal alone: an arena
+  moved after a `&'static` reference into it was taken (the safety comment reasoned about
+  the arena staying ALIVE, where the hazard is MOVEMENT), and a yielded tuple decoded
+  without the arena, which since B28 is where the body lives. **Both survived because the
+  subcommand had no integration test at all.**
+- **Audit H1**: `verify()` could be hung forever, or made to abort the process, by a module
+  differing from a valid one in a single `If` operand. Its depth residual is closed too.
+- **The `CheckedMod` specification row was wrong**, and the same wrong claim had reached
+  three places; only the generated copy was protected by a guard.
+- **`CLAUDE.md` claimed eight arena integration tests that did not exist.** Written, and
+  the structural half of the claim guarded.
 
-- **A FIFTH self-hosted gap.** Bare `E::N` in expression position is refused while `E::N()`
-  compiles; the reference accepts both. Its refusal **cannot name the construct** — the syntax tree
-  records both spellings identically, so a scan arm matching that shape flags the working form, and
-  the stage-source guard rejected exactly such an arm. The fix is located at `step_enum`'s phase 3,
-  which requires `(`. **Its size is deliberately not claimed.**
-- **The typed-opcode divergence is characterised**, censused against `codegen.kel`'s own operator
-  list with every cell run. `codegen.kel` selects opcodes from the operator code ALONE, with no
-  operand type. Fixed-point `*` and `/` are the serious half: they diverge against the scale-aware
-  `FixedMul`/`FixedDiv`, a **wrong-VALUE hazard** rather than a checking difference.
-- **Byte-reproducibility is established in both senses** — same-process and cross-process, plus
-  path-independence — where nothing had tested it. **The differential oracle could not have shown
-  either**, since it compares the two backends against each other.
-- **Five facts `CLAUDE.md` restates are now guarded** against the sources that own them, after one
-  (the feature-set count) was found wrong.
+### The standing method, which earned its keep repeatedly
 
-## What is YOURS: seven decisions, every basis re-verified
+**An outcome that looks like a pass while testing nothing.** It appeared in a mutation
+family that never reached the verifier, a descriptor table nothing touched, an execution
+phase that never resumed, and a probe whose own recursion overflowed alongside its
+subject. Every instance was caught by counting what was REACHED, not by the assertion.
 
-Stated in full in the reverse prompt's current-state block. **Every one had its basis checked
-against the tree on 2026-09-13/14**; four confirmed, and the two that moved made the decisions
-SMALLER, not larger.
+**Five suspicions were refuted by checking before claiming**, including one where the
+INSTRUMENT was at fault: a language server driven down a closed pipe looks exactly like a
+dead server, and two increments earlier a probe reading exactly like that WAS one.
 
-1. **`Text<N>` entry spelling** — methods or free operations. The cited question is *Surface syntax*;
-   the operation's shape is settled. Smaller than earlier wordings implied.
-2. **The width bundle** — 33 signatures, 14 public, re-measured and current. Count by PARSING
-   signatures: line-based greps gave 10, then 32, then 42 before a parse gave 33.
-3. **The float `verify()` refusal** — still the cheapest. `src/verify.rs` contains ZERO mentions of
-   the feature, so the change is an addition rather than a condition threaded through. **The "ten
-   lines" figure was NOT re-measured**; re-deriving it means doing the deferred work.
-4. **Whether any build configuration earns a CI job** — the feature-axis gap is now known to be
-   **exactly one file**.
-5. **The capacity decision** — host-side, so the 16 MB frame is right. `parse` is at **1.27x**
-   (bindings 162/128), not the ~1.5x once recorded. **It is not close to fitting**: all four channels
-   must come under, and bindings is +34.
-6. **Whether the typeless codegen warrants a type channel** — the `scope/` filing is CORRECT; this
-   is a capability gap, not a mislabelled defect.
-7. **Whether the construct-support boundary table should absorb the parser gaps** — its counts are a
-   compaction anchor that adding rows would move.
+## What is YOURS
+
+1. **H2**, open on a stated trade: the parser's recursion guard does not cover `if`-shaped
+   input on a small stack, no single limit both admits the corpus and prevents the abort,
+   and **the shipping binary is unaffected in either build profile** because it parses on
+   the main thread. Narrowing the language's accepted nesting to fix something no shipped
+   invocation reaches costs more than the defect. Overrule that if you disagree.
+2. **Workstream C**, sized and **lopsided**. Division and modulo need **no new opcode** —
+   the checked opcodes are already total, `TrapKind::ZeroDivisor` exists, and
+   `compile_checked` already emits the guarded trap; only the bare operator's lowering is
+   missing, and **its size is NOT claimed because it was not measured**. Array bounds is
+   the genuine instruction-set work. Either way it bumps `BYTECODE_VERSION`, which is
+   yours.
+3. **The seven standing decisions**, untouched, stated in the reverse prompt.
 
 ## What is NOT yours, and why it stays unstarted
 
-**Five self-hosted parser gaps remain**, all feature work. They are left alone for a specific reason,
-not because a stage source is untouchable: **bindings are `parse`'s tightest channel and the gap
-fixes add bindings**, pushing it away from a reduction that is closer than the old figure suggested.
-
-**A seventh host-side reduction was looked for and is not there on the obvious axis.** Dropping
-binding rows no occurrence references saves **4** rows in `parse` and **20** in `wire`, against gaps
-of 34 and ~420. Recorded so it is not re-derived.
+**Five self-hosted parser gaps**, all feature work, left alone because **bindings are
+`parse`'s tightest channel at 162/128 and the gap fixes add bindings**, pushing it away
+from a reduction. Not because a stage source is untouchable — none was touched all
+session, so the capacity decision is unprejudiced.
 
 ## Governing rules that are easy to lose
 
-- **The gate is a FIVE-entry feature matrix**, and compiling under a feature set is weaker than
-  RUNNING under it. Session 65 corrected `CLAUDE.md` for saying three, then failed two of the five
-  itself and turned three jobs red. **Knowing a failure class does not prevent producing it.**
-- **A mechanical guard for that class was attempted and ABANDONED.** Its three false-positive shapes
-  are in `CLAUDE.md` so the next attempt starts informed. The instrument for it is the gate.
-- **A crude instrument does not merely miss things — it can MANUFACTURE a contradiction.** Counting
-  by grep nearly refuted two figures that were correct.
-- **A citation can resolve and still be wrong.** Resolving proves the target exists, not that it says
-  what the citing text claims.
-- **Distinguish a live claim from a ledger entry.** History recording what was true at an increment
-  is not stale; rewriting it corrupts the record.
-- CI gates feature-branch merges; the local gate does not. `BYTECODE_VERSION` moves only on operator
-  authorisation (it is 2). Prefer opcode reuse — the count is 66. Irreversible or outward-facing
-  actions need confirmation; publication needs explicit in-session authorisation.
-
----
+- **The gate is a FIVE-entry feature matrix**, and compiling under a feature set is weaker
+  than RUNNING under it.
+- **A subcommand with no end-to-end test can be wholly non-functional while every test
+  passes.** Session 66's largest find, twice over.
+- **A crude instrument does not merely miss things — it can MANUFACTURE a contradiction**,
+  and it can do so in your own harness.
+- **Distinguish a live claim from a ledger entry.** History recording what was true at an
+  increment is not stale; rewriting it corrupts the record.
+- CI gates feature-branch merges; the local gate does not. `BYTECODE_VERSION` moves only
+  on operator authorisation (it is 2). Prefer opcode reuse — the count is 66. Irreversible
+  or outward-facing actions need confirmation.
 
 ## EVERYTHING BELOW THIS LINE IS ACCUMULATED HISTORY
 
