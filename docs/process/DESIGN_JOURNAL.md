@@ -13,6 +13,62 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-25 (hundred and sixth) — naming the class, beside the table it does not belong in
+
+### THE LAST EXPORTED SURFACE
+
+The playground crate exports `check`, `disasm`, `keywords`, and
+`Session::{new, reset, step}`. Eight tests covered all but **`reset`** — the playground's
+reset button, with no coverage at all. It now has one, asserting the behaviour rather than
+the call: after stepping twice and resetting, the next step returns to the FIRST yield and
+the step counter goes back.
+
+**A test that only called `reset` and checked the next step returned something would pass
+against a `reset` that did nothing**, since stepping a third time also returns something.
+Demonstrated: stubbing the body out fails the test.
+
+The wasm32 build could not be verified locally — that target is not installed here — but
+the change is inside `#[cfg(test)]`, which is not compiled for it, so it cannot affect
+that build. Said rather than glossed.
+
+### THE CLASS THIS SESSION KEPT FINDING NOW HAS A HOME
+
+`CLAUDE.md` carries a catalogue of eight ways a green run has lied, and the section states
+their common property: **the run did LESS than the reader believed.**
+
+Six findings this session do not share that property. In each, the command ran fully and
+honestly, reported truthfully, and **the subject was never reached**. A green result there
+is not an under-report; it is an empty one.
+
+- A family producing **zero** cases behind a healthy aggregate of 5184.
+- Cases attacking a check **not on the path under test** — nineteen mutants of a field
+  compared only at hot swap, run against a fresh load.
+- A phase **entered but never advanced**: every accepted mutant got one argument-free
+  call, so the reentry path the typed pass explicitly defers on was never entered.
+- An **instrument sharing a failure mode with its subject**: a recursive builder
+  overflowing alongside the recursive walk it measured.
+- A **harness breaking the subject** so the result looked like a defect — and two
+  increments earlier, a probe reading identically WAS one.
+- A check passing **whenever its anchor is any ancestor**, which is always.
+
+**They are filed BESIDE that table, not in it.** Adding them to it would make its stated
+common property false of its own rows, and that property is the useful part — it is what
+tells a reader which corrective applies.
+
+### THE CORRECTIVES ARE GENUINELY DIFFERENT, WHICH IS WHY THE SPLIT EARNS ITS KEEP
+
+For the existing table: **know what a command covers.** For this one: **count what was
+REACHED** — how many cases arrived at each stage, how many ran, how deep the walk got —
+and fail when a count collapses.
+
+Every instance in the new list was caught by such a count, **never by the assertion it
+supported**. That is the operational claim, and it is checkable against the six entries.
+
+The same applies to a control. Three increments running, a case that must SUCCEED is what
+stopped "everything was refused" from reading as "the refusals were meaningful".
+
+Recorded as **not exhaustive**, and as the younger of the two lists.
+
 ## 2026-09-24 (hundred and fifth) — the validity check could not detect the thing it was for
 
 ### THE HANDOFF WAS 32 COMMITS STALE AND VALIDATED CLEANLY
