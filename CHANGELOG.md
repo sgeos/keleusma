@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Protocol-level tests for the language server, whose wire layer had none.**
+  Its existing tests call the analysis, symbol and completion helpers directly.
+  Those are pure functions, and a correct analysis says nothing about whether a
+  reply is framed in a way an editor can read — the same shape as the task
+  runner, which was wholly non-functional while its unit-level pieces passed.
+  The new tests spawn the built server and speak the real protocol to it,
+  establishing that initialization succeeds and advertises the capabilities the
+  server implements, that a malformed document publishes a diagnostic carrying
+  a range and a message, that a valid document publishes none, and that symbols
+  and completions come back over the protocol. The valid-document case is the
+  control without which the malformed one would be satisfied by a server that
+  reported an error for every document. Every read is bounded, so a server that
+  stops replying fails a test rather than hanging the suite, and silence is
+  never treated as success.
+
+  **A harness trap is recorded with them, because the naive version produces a
+  confident false negative.** The server's input must stay open for as long as
+  replies are expected. Driving it by piping a finite file closes the input
+  immediately, at which point the server cancels work in flight, answers the
+  handshake with a cancellation error, and refuses every later request as
+  uninitialized — indistinguishable from a broken server, and entirely an
+  artefact of the harness. The first probe written for this work did exactly
+  that. Closing the input early is demonstrated to make these tests fail rather
+  than pass, so the trap can cost a wrong diagnosis but not a false pass.
+
 - **Integration tests for the arena crate's published interface, which the
   project instructions claimed already existed.** The instructions stated, in
   two places, fifty-one library tests plus eight integration tests for that
