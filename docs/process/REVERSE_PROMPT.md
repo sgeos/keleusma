@@ -10,6 +10,42 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-24, session 66, thirteenth increment.**
+
+**THE LANGUAGE SERVER'S WIRE LAYER NOW HAS TESTS. ITS SIX EXISTING ONES COVER ONLY THE
+PURE FUNCTIONS.** `keleusma-lsp` is excluded from the workspace, so a root `cargo test`
+never reaches it; continuous integration runs `cargo test` for it in its own job, which
+was **checked before writing anything**, because a test nobody runs is the failure mode
+being closed.
+
+**MY PROBE SAID THE SERVER WAS BROKEN, AND MY PROBE WAS WRONG.** Piping a finite file gave
+`-32800 Canceled` on the handshake, `Server not initialized` after, and no diagnostics —
+which reads exactly like a dead server, and two increments earlier a probe reading exactly
+like that WAS one. A finite pipe means end-of-file arrives at once and the server cancels
+work in flight. With the input held open the handshake succeeds, three capabilities are
+advertised, and `fn (` yields one diagnostic.
+
+**Five suspicions this session have been refuted by checking first. This is the first
+where the INSTRUMENT was at fault rather than my reading of the subject**, and it is the
+most dangerous kind: the false signal was identical in shape to a real defect found days
+earlier. Pattern-matching on "the probe says it is dead" would have produced a confident,
+wrong defect report against working code.
+
+The rule is in the test file: **a server given a closed standard input is a broken harness,
+not a broken server.** And the mitigation matters more — closing the input early is
+demonstrated to make the tests **fail**, not pass, so the trap can cost a wrong diagnosis
+and not a false pass.
+
+**Verification is scoped and the reasoning stated**: changes are confined to a crate the
+workspace excludes, so the root suite cannot be affected; the claim guards were run anyway
+to check the one thing that plausibly could be. The crate's own gate — `fmt`, `clippy
+--all-targets -D warnings`, `cargo test` — is clean, run exactly as its job does.
+
+**Unchanged and yours**: H2's trade, workstream C's `BYTECODE_VERSION` authorisation, the
+seven standing decisions. **No file under `src/selfhost/kel/` modified this session.**
+
+---
+
 **2026-09-24, session 66, eleventh increment.**
 
 **A BROKEN SUBCOMMAND MEANS EVERY BEHAVIOUR IT DOCUMENTS IS ALSO UNVERIFIED.** `run-tasks`

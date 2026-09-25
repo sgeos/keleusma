@@ -10,6 +10,25 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-24, session 66, twelfth and thirteenth increments). ARENA
+> CLAIM AND LSP WIRE LAYER.**
+>
+> **Twelfth**: `CLAUDE.md` claimed "59 keleusma-arena (51 lib plus 8 integration)" in two
+> places; the crate had 51, all lib, and NO tests directory. Written (six integration
+> tests over the published interface, which only an integration test can check) and
+> guarded, deriving both sides. Second defect in the region `claimed_counts.rs` names as
+> unguarded.
+>
+> **Thirteenth**: the language server's wire layer had no tests — its six cover the pure
+> functions. Five protocol tests added; CI does run `cargo test` for that detached crate,
+> checked first.
+>
+> **MY PROBE SAID THE SERVER WAS BROKEN AND WAS WRONG.** A finite pipe closes stdin, the
+> server cancels in-flight work, and the result is indistinguishable from a dead server —
+> which two increments earlier was a real defect. First time this session the INSTRUMENT
+> was at fault rather than my reading. Closing stdin early is demonstrated to make the
+> tests FAIL, not pass.
+
 > **Currency note (2026-09-24, session 66, eleventh increment). SCHEDULER BEHAVIOURS
 > PINNED.**
 >
