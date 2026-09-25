@@ -13,6 +13,57 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-24 (hundred and fifth) — the validity check could not detect the thing it was for
+
+### THE HANDOFF WAS 32 COMMITS STALE AND VALIDATED CLEANLY
+
+`HANDOFF.md` is the resume anchor, and the protocol makes keeping it current the agent's
+job. It was stamped at `89a13bfb`, **32 commits and eleven merged pull requests** behind.
+
+Running its own validity procedure:
+
+- **Ancestry PASSED.** It always would. The stamped commit stays an ancestor forever on a
+  branch that only moves forward, so ancestry answers "was there a reset?" and nothing
+  else.
+- **Four of five content checks PASSED.** The fifth failed only because this session
+  happened to add a test to the file that check counts.
+
+**Without that accident the handoff would have validated cleanly while describing a
+superseded tree.** A resuming session would have acted on it.
+
+### THE CHECK ANSWERED A DIFFERENT QUESTION THAN IT APPEARED TO
+
+The file presents its procedure as establishing that the handoff is trustworthy. What the
+procedure actually establishes is that the handoff does not describe a tree that never
+existed. Those are different questions, and the gap between them is exactly the failure
+mode a resume anchor has.
+
+The content checks are a snapshot of incidental facts. They drift when the tree changes in
+the particular ways they happen to sample, and hold otherwise. **They are evidence about
+those five facts, not about currency.**
+
+### THE FIX IS A MEASUREMENT, NOT A STRICTER STAMP
+
+The tempting repair is to require `HEAD~1` to equal a recorded parent. This file already
+records that such a stamp **failed three times**, and it is right to: it asserts that
+nothing else ever lands, which on a shared branch is false by construction.
+
+The honest mechanism is `git rev-list --count <stamp>..HEAD`. It is not pass-or-fail. Zero
+means current; a small number means slightly older and the state section is probably still
+usable; a large number means treat every specific claim as historical. **It tells a reader
+how much to trust rather than pretending the answer is binary** — which is the same shape
+as this repository's preference for censuses over verdicts.
+
+One wrinkle worth stating rather than leaving a reader to puzzle over: a freshly refreshed
+handoff reads **one or two**, not zero, because it cannot stamp the commit that carries it.
+
+### DEMONSTRATED, NOT ASSERTED
+
+The new measure reports **32** against the old stamp — precisely the staleness ancestry
+waved through. The refreshed file was then validated by running its own procedure end to
+end, including the rendered order of its numbered list, which this file has twice had
+broken by an agent that had just read the warning against it.
+
 ## 2026-09-24 (hundred and fourth) — my harness said the server was broken, and the harness was wrong
 
 ### THE LAST THIN SURFACE FROM THE WORKSPACE CENSUS
