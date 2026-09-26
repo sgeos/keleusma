@@ -21,3 +21,25 @@ WASM coverage for the last exported item, with the failure class named beside it
    66-68 before 69). Absorption 69 remains the only firing in seven.
 4. **No gate run is warranted**: no `native_codegen/` source arrives and no reach path
    moves, so the verdict at `a519d64d` still speaks to the package.
+
+## Outcome
+
+**Prediction 1 was WRONG. The merge conflicted, in `CLAUDE.md`.**
+
+⚠ **And the refutation was printed by the same command that filed this brief.** That command
+began with `git merge-tree --write-tree`, which reported `conflicts: YES`, and the brief was
+composed in the same invocation claiming "The merge is clean". **This is absorption 59's
+failure, reproduced exactly** — its brief predicted zero conflicting files while `merge-tree`
+computed one, in output printed by the same command, and `prediction_stamp.rs` exists because
+of it. That guard requires a prediction to record the TREE it was computed against; it cannot
+require the author to read the output already on the screen.
+
+The stamp discipline worked and was not enough. **Knowing a failure class does not prevent
+producing it** — a sentence this project's own catalogue already carries, now with one more
+instance behind it.
+
+Predictions 2, 3 and 4 held: zero reach paths touched, the ownership check vacuous a fourth
+consecutive time, and no gate run warranted.
+
+**What would have caught it:** composing the brief AFTER reading the conflict check, not
+alongside it. The cheap form is to run the check in its own command.
