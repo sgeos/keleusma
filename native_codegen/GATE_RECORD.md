@@ -19,5 +19,5 @@ that was never committed and cannot be reproduced from history.
 
 | configuration | commit | worktree | verdict | run (UTC) |
 |---|---|---|---|---|
-| default features | a519d64d4e172de552cef4c0464807f336e17e83 | clean | PASS | 2026-09-25T09:05:36Z |
-| narrow-float-32 | a519d64d4e172de552cef4c0464807f336e17e83 | clean | PASS | 2026-09-25T09:26:32Z |
+| default features | 91e59a783f31be1aafaed01fef39b75c17924aef | clean | PASS | 2026-09-26T14:03:15Z |
+| narrow-float-32 | 91e59a783f31be1aafaed01fef39b75c17924aef | clean | PASS | 2026-09-26T14:17:36Z |
