@@ -1,8 +1,9 @@
 # Handoff Prompt
 
-**Refreshed 2026-09-24, describing `origin/v0.2.3` at `edb99de9`.** Session 66 merged
-#447 through #458. Read this block, run the validity check, then stop and wait for the
-human prompt.
+**Refreshed 2026-09-25, describing `origin/v0.2.3` at `71c9afb9`.** Session 66 is closed.
+It merged fourteen pull requests, #447 through #460; #447 carried session 65's remaining
+work and #448 onward is session 66's. Read this block, run the validity check, then stop
+and wait for the human prompt.
 
 ---
 
@@ -15,122 +16,134 @@ human prompt.
 ### First: how far behind is this file?
 
 ```
-git rev-list --count edb99de9..HEAD
+git rev-list --count 71c9afb9..HEAD
 ```
 
-**This is a MEASUREMENT, not a pass or fail.** Zero means the file describes the current
-tree, and **one or two is what a freshly refreshed handoff reads**, because it cannot stamp
-the commit that carries it. A small number means it describes a slightly older one and the state section below
-is probably still usable. A large number means treat every specific claim here as
-historical and re-derive from `REVERSE_PROMPT.md` and the task log instead.
+**A MEASUREMENT, not a pass or fail.** Zero means this file describes the current tree, and
+**one or two is what a freshly refreshed handoff reads**, because it cannot stamp the
+commit that carries it. A small number means the state section below is probably still
+usable. A large number means treat every specific claim here as historical and re-derive
+from `REVERSE_PROMPT.md` and the task log.
 
-**Why this exists.** The ancestry check below cannot detect staleness. The stamped commit
-stays an ancestor forever on a branch that only moves forward, so ancestry passes whether
-this file is current or thirty commits behind. Measured on 2026-09-24: the previous
-handoff was **32 commits and eleven merged pull requests** out of date, its ancestry check
-passed, and **four of its five content checks still passed** — the fifth failed only
-because that session happened to add a test to the guarded file. Without that accident it
-would have validated cleanly while describing a superseded tree.
+**Why this exists, and it was added because the previous handoff failed without it.**
+Ancestry cannot detect staleness: the stamped commit stays an ancestor forever on a branch
+that only moves forward. Measured 2026-09-24, the previous handoff was **32 commits and
+eleven merged pull requests** out of date, its ancestry check **passed**, and **four of its
+five content checks still passed** — the fifth failed only because that session happened to
+add a test to the guarded file. Without that accident it would have validated cleanly while
+describing a superseded tree.
 
 **Why not a stricter stamp.** Requiring `HEAD~1` to equal a recorded parent asserts that
 nothing else ever lands, and this file records that such a stamp failed three times. The
-count is the honest form: it tells a reader how much to trust, rather than pretending the
-answer is binary.
+count tells a reader how much to trust rather than pretending the answer is binary.
 
 ### Then: ancestry, which detects a RESET and nothing else
 
-`origin/v0.2.3` should contain **`edb99de9`**. If it does not, this file predates a reset
-and is stale in the stronger sense.
+`origin/v0.2.3` should contain **`71c9afb9`**. If it does not, this file predates a reset.
 
-### Then: content, each verified on 2026-09-24 by running it
+### Then: content, each RUN on 2026-09-25 rather than carried forward
 
 Check the rendered ORDER of this list, not just the next unused number: this file has
 twice had an item inserted above its predecessor by an agent that had just read the
 warning against it.
 
-1. `scripts/fingerprint.sh` reports `0x4327_63E1`. Unchanged across session 66. A
+1. `scripts/fingerprint.sh` reports `0x4327_63E1`. Unchanged across the whole session; a
    different value means a release was rolled.
-2. `cargo nextest run -p keleusma --test claimed_counts` reports **13** passing. It guards
-   figures `CLAUDE.md` restates against the sources that own them.
-3. `cargo nextest run -p keleusma-arena` reports **57**. It was 51 with a false claim of
-   59 until session 66.
+2. `cargo nextest run --workspace` reports **2909 passed, 2 skipped**, verified green on
+   this exact tree. Note that `nextest list` counts **2911**; the difference is the two
+   skipped entries, and both figures are named to their moment deliberately.
+3. `cargo nextest run -p keleusma --test claimed_counts` reports **13**, and
+   `-p keleusma-arena` reports **57**.
 4. `src/selfhost/kel/` holds **12** stage sources, and `git diff --name-only
-   edb99de9 -- src/selfhost/kel/` is **empty for the whole of session 66**.
-5. `keleusma-cli/tests/` holds `runtasks_reload.rs`, `runtasks_scheduler.rs`,
-   `bad_input.rs` and `strip_and_version.rs`; `keleusma-lsp/tests/protocol.rs` exists.
-   All are session-66 work.
+   89a13bfb..HEAD -- src/selfhost/kel/` is **empty for the entire session**.
+5. These session-66 files exist: `keleusma-cli/tests/{bad_input,strip_and_version,
+   runtasks_reload,runtasks_scheduler}.rs`, `keleusma-arena/tests/public_api.rs`,
+   `keleusma-lsp/tests/protocol.rs`, `tests/{hostile_module_mutation,
+   verify_hostile_termination,runtime_fault_census,spec_trap_claims}.rs`.
 
 ## What a resuming session should do first
 
 1. Run the freshness measurement, then the validity checks, and report the outcome.
 2. Read `docs/process/REVERSE_PROMPT.md` — the CURRENT STATE block at its head, then stop.
-3. **Wait for the human prompt.**
+3. **Wait for the human prompt.** Nothing here is in flight and nothing needs rescuing.
 
 ## The state
 
-**Green and clean.** Twelve pull requests merged in session 66. Nothing uncommitted,
-nothing unpushed. The full workspace suite was last green at **2909** tests.
+**Green and clean.** Nothing uncommitted, nothing unpushed, no branch awaiting a merge, no
+run in flight. The workspace suite is verified green at **2909** on this tree.
 
-### What session 66 found, in order of consequence
+## What session 66 found, in order of consequence
 
-- **`run-tasks` could not run a single task.** Two defects, either fatal alone: an arena
-  moved after a `&'static` reference into it was taken (the safety comment reasoned about
-  the arena staying ALIVE, where the hazard is MOVEMENT), and a yielded tuple decoded
-  without the arena, which since B28 is where the body lives. **Both survived because the
-  subcommand had no integration test at all.**
-- **Audit H1**: `verify()` could be hung forever, or made to abort the process, by a module
-  differing from a valid one in a single `If` operand. Its depth residual is closed too.
-- **The `CheckedMod` specification row was wrong**, and the same wrong claim had reached
-  three places; only the generated copy was protected by a guard.
-- **`CLAUDE.md` claimed eight arena integration tests that did not exist.** Written, and
-  the structural half of the claim guarded.
+1. **`run-tasks` could not run a single task.** Two defects, either fatal alone. An arena
+   was moved after a `&'static` reference into it was taken — the safety comment reasoned
+   about the arena staying ALIVE, where the hazard is MOVEMENT, and it presented as an
+   arena reporting 48 bytes of capacity. And a yielded tuple was decoded without the arena,
+   which since B28 is where the body lives, so every task was finished as having "yielded a
+   non-tuple value". **Both survived because the subcommand had no integration test at
+   all.**
+2. **Audit H1**: `verify()` could be hung forever, or made to **abort the process**, by a
+   module differing from a valid one in a single `If` operand, through three public entries.
+   Its recursion-depth residual is closed too, with the bound measured rather than borrowed.
+3. **The `CheckedMod` specification row was wrong** and had propagated to three places;
+   only the generated copy was protected by a guard. Found by reading, which no test could
+   have done, since nothing asserts prose against implementation.
+4. **`CLAUDE.md` claimed eight arena integration tests that did not exist.** Written — the
+   crate is published, and an integration test checks what a unit test cannot — and the
+   structural half of the claim is now guarded.
+5. **`HANDOFF.md`'s validity check could not detect staleness**, described above.
 
-### The standing method, which earned its keep repeatedly
+## The method that earned its keep, now in `CLAUDE.md`
 
-**An outcome that looks like a pass while testing nothing.** It appeared in a mutation
-family that never reached the verifier, a descriptor table nothing touched, an execution
-phase that never resumed, and a probe whose own recursion overflowed alongside its
-subject. Every instance was caught by counting what was REACHED, not by the assertion.
+The orientation document's catalogue of "how a green local run has actually lied" now has a
+**companion section** for a distinct class this session hit six times: the run was complete
+and honest and **the subject was never reached**. The two are kept apart because their
+correctives differ — "know what a command covers" versus **"count what was REACHED, and
+fail when a count collapses"**. Every instance in the new list was caught by such a count,
+never by the assertion it supported.
 
 **Five suspicions were refuted by checking before claiming**, including one where the
 INSTRUMENT was at fault: a language server driven down a closed pipe looks exactly like a
-dead server, and two increments earlier a probe reading exactly like that WAS one.
+dead server, and two increments earlier a probe reading identically WAS one.
 
 ## What is YOURS
 
-1. **H2**, open on a stated trade: the parser's recursion guard does not cover `if`-shaped
-   input on a small stack, no single limit both admits the corpus and prevents the abort,
-   and **the shipping binary is unaffected in either build profile** because it parses on
-   the main thread. Narrowing the language's accepted nesting to fix something no shipped
-   invocation reaches costs more than the defect. Overrule that if you disagree.
+1. **H2**, open on a stated trade. The parser's recursion guard does not cover `if`-shaped
+   input on a small stack, and no single limit both admits the corpus and prevents the
+   abort. **The shipping binary is unaffected in either build profile**, because it parses
+   on the main thread where the guard is reached long before the stack is. Narrowing the
+   language's accepted nesting to fix something no shipped invocation reaches costs more
+   than the defect. Overrule that if you disagree.
 2. **Workstream C**, sized and **lopsided**. Division and modulo need **no new opcode** —
    the checked opcodes are already total, `TrapKind::ZeroDivisor` exists, and
-   `compile_checked` already emits the guarded trap; only the bare operator's lowering is
-   missing, and **its size is NOT claimed because it was not measured**. Array bounds is
-   the genuine instruction-set work. Either way it bumps `BYTECODE_VERSION`, which is
-   yours.
+   `compile_checked` already emits the flag-guarded trap; only the bare operator's lowering
+   is missing, and **its size is NOT claimed, because it was not measured**. Array bounds is
+   the genuine instruction-set work. Either way it bumps `BYTECODE_VERSION`, which is yours.
 3. **The seven standing decisions**, untouched, stated in the reverse prompt.
 
 ## What is NOT yours, and why it stays unstarted
 
-**Five self-hosted parser gaps**, all feature work, left alone because **bindings are
+**Five self-hosted parser gaps**, all feature work. Left alone because **bindings are
 `parse`'s tightest channel at 162/128 and the gap fixes add bindings**, pushing it away
-from a reduction. Not because a stage source is untouchable — none was touched all
-session, so the capacity decision is unprejudiced.
+from a reduction — not because a stage source is untouchable. **No file under
+`src/selfhost/kel/` was modified in the whole session**, verified rather than asserted, so
+the capacity decision is unprejudiced.
 
 ## Governing rules that are easy to lose
 
+- **A subcommand with no end-to-end test can be wholly non-functional while every test
+  passes.** This session's largest find, and it generalised: counting end-to-end coverage
+  per surface then found the arena claim, the language server's wire layer, and the
+  playground's reset button.
 - **The gate is a FIVE-entry feature matrix**, and compiling under a feature set is weaker
   than RUNNING under it.
-- **A subcommand with no end-to-end test can be wholly non-functional while every test
-  passes.** Session 66's largest find, twice over.
-- **A crude instrument does not merely miss things — it can MANUFACTURE a contradiction**,
-  and it can do so in your own harness.
+- **A crude instrument can MANUFACTURE a contradiction**, including in your own harness.
 - **Distinguish a live claim from a ledger entry.** History recording what was true at an
   increment is not stale; rewriting it corrupts the record.
-- CI gates feature-branch merges; the local gate does not. `BYTECODE_VERSION` moves only
-  on operator authorisation (it is 2). Prefer opcode reuse — the count is 66. Irreversible
-  or outward-facing actions need confirmation.
+- **CI can verify what a broken local toolchain cannot.** Three increments were completed
+  and merged while nothing could link on this machine, each commit saying so plainly.
+- CI gates feature-branch merges; the local gate does not. `BYTECODE_VERSION` moves only on
+  operator authorisation (it is 2). Prefer opcode reuse — the count is 66. Irreversible or
+  outward-facing actions need confirmation.
 
 ## EVERYTHING BELOW THIS LINE IS ACCUMULATED HISTORY
 
