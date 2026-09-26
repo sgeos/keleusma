@@ -62,6 +62,7 @@ dependencies = [
  "allocator-api2",
  "keleusma-arena",
  "keleusma-macros",
+ "keleusma-wire",
  "libm",
  "rkyv",
 ]
@@ -90,6 +91,22 @@ dependencies = [
  "serde",
  "serde_json",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "keleusma-wire"
+version = "0.1.0"
+dependencies = [
+ "keleusma-wire-derive",
+]
+
+[[package]]
+name = "keleusma-wire-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

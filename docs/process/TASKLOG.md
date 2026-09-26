@@ -34,6 +34,23 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-25, session 66, fifteenth increment). LAST EXPORTED SURFACE,
+> AND THE FAILURE CLASS NAMED.**
+>
+> `Session::reset` — the playground's reset button — was the one exported item with no
+> test. Covered, behaviourally: a test that merely called it would pass against a `reset`
+> that did nothing. Demonstrated by stubbing the body out.
+>
+> **`CLAUDE.md` now records the class this session kept finding**, BESIDE the existing
+> "how a green run has lied" table rather than inside it, because those eight rows share
+> the property "the run did LESS than the reader believed" and these six do not: the run
+> was complete and honest and **the subject was never reached**.
+>
+> The correctives differ, which is why the split is worth keeping: the old table's is
+> "know what a command covers"; the new one's is "**count what was REACHED**, and fail
+> when a count collapses". Every instance was caught by such a count, never by the
+> assertion it supported.
+
 > **Currency note (2026-09-24, session 66, twelfth and thirteenth increments). ARENA
 > CLAIM AND LSP WIRE LAYER.**
 >

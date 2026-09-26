@@ -231,6 +231,31 @@ among them. A sound version needs brace-aware scoping. **The compiler already do
 correctly, in five configurations, which is what the gate runs** — so the instrument for
 this class is the gate, not a scan.
 
+### And a DIFFERENT class: the run was complete and the subject was never reached
+
+Every row above shares the property that section states — the run did **less** than the
+reader believed. These do not. In each, the command ran fully and honestly, reported
+truthfully, and **the thing under test was never exercised**. A green result here is not
+an under-report; it is an empty one.
+
+| how it was empty | the instance that paid for it |
+|---|---|
+| A whole family produced **zero** cases, behind a healthy aggregate | A mutation corpus read 5184 mutants while the native-return-shape table had never been touched, because no corpus program called a native. An aggregate floor is satisfied by whichever population is largest |
+| Cases attacked a check that is **not on the path under test** | Nineteen mutants of a field compared only at hot swap ran as passes against a fresh load, where nothing compares it. A mutation aimed at a check that is not on the path is indistinguishable from a passing one |
+| A phase was **entered but never advanced** | Every accepted mutant got one argument-free call, so the coroutine reentry path — the one the typed pass explicitly DEFERS on — was never entered. The stage census cannot see this: it records where a mutant STOPPED, not what it DID |
+| The **instrument shared a failure mode with its subject** | A recursive test builder overflowed the stack alongside the recursive walk it was measuring, so the reported boundary described neither. It also produced a second wrong reading before it was caught |
+| The **harness** broke the subject and the result looked like a defect | A language server driven down a closed pipe cancels its work and looks exactly like a dead server — and two increments earlier, a probe reading exactly like that WAS one |
+| A check passed **whenever its anchor was any ancestor** | `HANDOFF.md`'s ancestry validation passes forever on a forward-only branch, so it detects a reset and never staleness. It was 32 commits behind with four of five content checks still green |
+
+**The corrective is different from the one above.** For the first table it is knowing what
+a command covers. For this one it is **counting what was REACHED** — how many cases
+arrived at each stage, how many actually ran, how deep the walk actually got — and
+failing when a count collapses. Every instance here was caught by such a count, never by
+the assertion it supported. The same applies to a control: a case that must SUCCEED is
+what stops "everything was refused" from reading as "the refusals were meaningful".
+
+**Also not exhaustive**, and it is the younger list.
+
 **Not exhaustive.** Thirteen found is evidence that more exist, not that these are all
 of them — and **this sentence said NINE while the table above it held twelve rows**,
 until 2026-09-24. The summary of the catalogue had drifted from the catalogue, which is
