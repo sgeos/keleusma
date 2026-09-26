@@ -132,6 +132,22 @@ pub fn corpus_sources() -> Vec<std::path::PathBuf> {
     }
     out.sort();
     out.dedup();
+    // **THE SAME FLOOR, AND THIS IS THE ENTRY POINT THAT NEEDED IT MOST.** Measured
+    // 2026-09-26: 21 real call sites against 9 for `corpus()`. A silent empty return
+    // here would have twenty-one censuses and probes reporting a reassuring shape
+    // over nothing, and **their agreement would read as corroboration when it had a
+    // single common cause** -- the one row of the `v0.2.3` line's "subject never
+    // reached" table this package had not answered.
+    //
+    // Loose on purpose: it catches a COLLAPSE, not corpus growth.
+    assert!(
+        out.len() >= 40,
+        "the shared corpus SOURCE loader returned only {} paths from \
+         {CORPUS_DIRS:?}. Twenty-one call sites read this; every one of them would \
+         describe almost nothing while looking healthy. Check that the corpus roots \
+         still resolve before adjusting this floor.",
+        out.len()
+    );
     out
 }
 
@@ -448,6 +464,33 @@ pub fn corpus() -> Vec<(String, keleusma::bytecode::Module)> {
             out.push((name, m));
         }
     }
+    // **A FLOOR AT THE SHARED POINT, because 26 test binaries call this.**
+    //
+    // The doc above says callers needing a population floor must assert one. That
+    // delegation is the hazard: if `CORPUS_DIRS` ever resolved to nothing -- a
+    // rename, a moved worktree, a path edited in one place -- this returns EMPTY
+    // and every one of those 26 callers sees zero modules and agrees perfectly.
+    // **Their agreement would read as corroboration when it had a single common
+    // cause.** That is the one row of the `v0.2.3` line's "subject never reached"
+    // table this package had not answered: an instrument whose silent failure is
+    // invisible because it is shared.
+    //
+    // Auditing 26 call sites was attempted first and abandoned: the floors are
+    // multi-line `assert!` forms, so a line-based scan cannot see them, which is
+    // the same brace-aware-scoping problem that retired an earlier scan here. One
+    // assertion at the shared point protects every caller instead.
+    //
+    // The threshold is deliberately loose. It exists to catch a COLLAPSE, not to
+    // pin the corpus, which grows; a tight figure here would fail on ordinary
+    // growth and teach the next reader to delete it.
+    assert!(
+        out.len() >= 40,
+        "the shared corpus loader returned only {} modules from {CORPUS_DIRS:?}. \
+         Every census and differential that calls it would report a reassuring \
+         shape over almost nothing. Check that the corpus roots still resolve \
+         before adjusting this floor.",
+        out.len()
+    );
     out
 }
 
