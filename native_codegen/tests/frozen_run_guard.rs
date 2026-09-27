@@ -36,6 +36,19 @@ use std::process::Command;
 fn frozen_run(inner: &str) -> String {
     let out = Command::new("tools/frozen-run.sh")
         .args(["bash", "-c", inner])
+        // **THIS TEST TRIPS THE GUARD ON PURPOSE, SO ITS BREACHES MUST NOT BE COUNTED
+        // AS REAL ONES.** `backend-gate.sh` exports `KEL_FREEZE_BREACH_LOG` so its
+        // phases can report a moved tree into `GATE_RECORD.md`. This file runs INSIDE
+        // those phases and deliberately moves the tree, so on 2026-09-27 the gate
+        // recorded `MOVED(2)` — two breaches, one per non-corpus phase — while all
+        // three phases had reported FROZEN. **The instrument counted its own
+        // self-test's intentional breaches**, which is a false positive, and a record
+        // that cries wolf is worse than the gap it was added to close.
+        //
+        // Caught only because two instruments disagreed: the phase verdicts said
+        // FROZEN and the record said MOVED. Pointing the variable at a discarded path
+        // keeps the deliberate breach local to this test.
+        .env("KEL_FREEZE_BREACH_LOG", "")
         .output()
         .expect("run tools/frozen-run.sh");
     String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr)
