@@ -10,6 +10,56 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-27, session 67, third increment.**
+
+**THE SENTENCE THAT LICENSES MERGING ON CI ALONE WAS UNVERIFIED, AND FALSE.** `CLAUDE.md` and
+`GIT_STRATEGY.md` permit a merge without the local gate because "CI is a verified strict
+superset of the local gate". Nothing checked it. On the Miri axis it was wrong: the gate's
+`--miri` step runs `c1_null_text_pointer_marshals_to_empty_string_not_ub` under Tree Borrows
+and the Miri job ran only `keleusma-arena`. **A named undefined-behaviour pin was exercised by
+no merge**, only by a human running the gate before a publication. CI now runs it; I ran it
+under nightly Miri here first rather than discovering it remotely.
+
+**THE GATE'S OWN COMMENT ASSERTED THE REVERSE RELATIONSHIP.** It said including the detached
+subproject made the gate the broader instrument and that nothing else covered it. True when
+written at `a5f646bd`, falsified by `4483f43e` adding the `selfhost-compiler` job and then by
+`fa978eff`, whose subject line is "close the coverage holes so CI is a superset of the local
+gate". The relationship was deliberately inverted and the comment kept asserting the old one.
+
+**A GUARD NOW CHECKS IT**: `tests/gate_ci_correspondence.rs` derives the gate's commands and
+the workflows' commands from their files and requires every gate command to have a workflow
+command of the same shape — same subcommand, package and feature selection. It says plainly
+that this establishes a counterpart EXISTS and **not** that the two do equivalent work, since
+`cargo test --workspace` and `cargo nextest run --profile ci --workspace` are meant to match
+and differ in runner, profile and doctests. Direction is gate-to-CI only; CI having more is
+the intended shape.
+
+**THREE THINGS I GOT WRONG AND FIXED BY READING RATHER THAN ADJUSTING.**
+
+1. **My parser was half-blind.** It read `run: |` block scalars and missed inline
+   `- run: cargo ...` steps, so it reported **eight** false holes. The non-vacuity floor passed
+   regardless, because the block-scalar steps alone exceeded it. **A floor is necessary and is
+   not sufficient** — reading the eight items is what found it.
+2. **My retraction note quoted the text the guard forbids.** The absence assertion matched my
+   own explanation of the retracted claim: the tenth instance of the comment-matching class
+   this repository has swept, produced inside the increment adding the guard against it. The
+   note now paraphrases, and the guard says why that is required.
+3. **My exemption list was unnecessary and coarse.** It exempted `cargo run` by verb, which
+   would silently cover every future `cargo run` the gate gained. Removing it left the test
+   green. **It is now empty, checked rather than assumed.**
+
+**The guard was mutation-tested against the real hole**: removing the Miri step I added makes
+it fail and name that exact command, and `ci.yml` was confirmed byte-identical after
+restoration.
+
+**Left for you.** Translating the book's 38 untranslated messages; `run --print-memory`
+reporting an arena bound for a program `run` refuses; H2's trade; workstream C's
+`BYTECODE_VERSION` authorisation; the seven standing decisions.
+
+**No file under `src/selfhost/kel/` modified.** `BYTECODE_VERSION` is 2, the opcode count 66.
+
+---
+
 **2026-09-27, session 67, second increment.**
 
 **A CATALOGUE REPORTING ZERO UNTRANSLATED MESSAGES WAS REPORTING ON ITSELF.** `book/po/ja.po`

@@ -10,6 +10,34 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-27, session 67, third increment). "CI IS A VERIFIED STRICT
+> SUPERSET OF THE LOCAL GATE" WAS UNVERIFIED AND FALSE.**
+>
+> That sentence licenses merging on continuous integration alone. Nothing checked it, and on
+> the Miri axis it was wrong: the gate's `--miri` step runs the
+> `c1_null_text_pointer_marshals_to_empty_string_not_ub` undefined-behaviour pin under Tree
+> Borrows, and the Miri job ran only `keleusma-arena`. **A named UB pin was exercised by no
+> merge** — only by a human running the gate before a publication. CI now runs it, verified
+> locally under nightly Miri before the step was written.
+>
+> **The gate's own comment asserted the opposite relationship.** It said including the
+> detached subproject made the gate the broader instrument and that nothing else covered it.
+> True at `a5f646bd`, falsified by `4483f43e` adding the `selfhost-compiler` job and by
+> `fa978eff`, whose subject is "close the coverage holes so CI is a superset of the local
+> gate". Corrected, with the retracted wording **paraphrased rather than quoted**, because
+> the new guard asserts its absence and a quotation satisfies that search as surely as a live
+> claim — the first draft quoted it and turned the test red.
+>
+> `tests/gate_ci_correspondence.rs` now derives both sides and requires every gate command to
+> have a workflow command of the same shape. It states what it does **not** establish: that
+> the two do equivalent work. Its exemption list is **empty**, checked rather than assumed —
+> the first draft exempted `cargo run` and removing the entry left it green.
+>
+> **My own parser was half-blind and a floor did not catch it.** It read `run: |` block
+> scalars and missed inline `- run: cargo ...` steps, reporting eight false holes. The
+> non-vacuity floor passed anyway, because the block-scalar steps alone exceeded it. **A floor
+> is necessary and is not sufficient**; reading the eight reported items is what found it.
+
 > **Currency note (2026-09-27, session 67, second increment). THE TRANSLATION CATALOGUE
 > DESCRIBES THE SOURCE AGAIN, AND THE BOOK WORKFLOW RUNS ON THE RELEASE LINE.**
 >
