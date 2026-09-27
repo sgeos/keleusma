@@ -10,6 +10,35 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-27, session 67, second increment). THE TRANSLATION CATALOGUE
+> DESCRIBES THE SOURCE AGAIN, AND THE BOOK WORKFLOW RUNS ON THE RELEASE LINE.**
+>
+> `ja.po` reported **3047 entries, zero untranslated, zero fuzzy**. That was true of the
+> catalogue and false of the book: `messages.pot` was stamped **2026-07-08** and held
+> **2782** messages against **3072** the source contains, so a message could not be
+> untranslated because the catalogue did not know it existed. Measured with
+> `mdbook-xgettext` and `msgmerge`, **30 messages were untranslated and 6 translations
+> orphaned on `v0.2.3`**; increment 1's own English edits added **8 and 7**, stated
+> separately rather than folded in.
+>
+> Now 3072 live entries, **3034 translated (98 per cent)**, 38 untranslated, 13 obsolete.
+> The merge is mechanical and **no Japanese was authored**; translating the remainder is
+> recorded as the operator's call. Two complete Japanese book builds before and after are
+> byte-identical, and that diff was shown able to catch a single mutated translation.
+>
+> **`book.yml` was left triggering on `main` alone when `ci.yml` was extended to `v*`.** So
+> the example verification, both book builds, the playground build, and now the catalogue
+> drift check had never run on the release line. Fixed, with deploy still gated to `main`
+> and the pull-request supersede pattern `ci.yml` already reasons about.
+>
+> **A hand-rolled measurement was refused on the strength of the journal.** It records an
+> earlier attempt reporting "2,329 stale of 2,926" as "not a finding, it is my wrong model
+> of `mdbook-i18n-helpers`", instrument deleted rather than repaired. Mine reproduced the
+> class at 34 with visible false positives. Two gettext files written by one tool can be
+> compared to each other without any model of the extractor; comparing either to the
+> markdown needs the extractor itself. The guard does the first, the workflow the second,
+> and **neither alone is sufficient**.
+
 > **Currency note (2026-09-26, session 67, first increment). THE BOOK'S EXAMPLES ARE
 > VERIFIED WHERE THE WORK HAPPENS, AND 34 PROGRAMS THAT NOTHING EXECUTED NOW RUN.**
 >
