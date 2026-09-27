@@ -6,7 +6,7 @@ Three instruments could cover `native_codegen`. Measured, not recalled:
 
 | instrument | covers the backend? | evidence |
 |---|---|---|
-| continuous integration | **no** | `grep -c native_codegen .github/workflows/ci.yml` = 0, across 14 jobs |
+| continuous integration | **no** | `grep -c native_codegen .github/workflows/ci.yml` = 0, across all 25 jobs |
 | the shared pre-push hook | **no** | runs `cargo nextest run --workspace`; this package is DETACHED, so the selector cannot reach it |
 | `tools/backend-gate.sh` | yes | and it is invoked only when a human chooses to |
 

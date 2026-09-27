@@ -31,7 +31,8 @@ A handoff refresh with a staleness check, and its journal entry:
 4. **The backend gate is unaffected**; no `native_codegen/` source arrives.
 
 5. **Reach will name this brief and nothing else from the absorption.** `docs/decisions`
-   is in the reach set, so filing the prediction moves reach while the absorption itself
+   `docs/decisions` is in the reach set, so filing the prediction moves reach while the
+   absorption itself
    does not — the self-reference recorded twice before, arriving a third time.
 
 ## The narrower point

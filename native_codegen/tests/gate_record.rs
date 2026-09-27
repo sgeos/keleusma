@@ -4,7 +4,7 @@
 //!
 //! `native_codegen` is a detached package. Measured on 2026-09-24: continuous
 //! integration does not mention it (zero occurrences across the workflow's
-//! fourteen jobs), and the shared pre-push hook runs a `--workspace` selector,
+//! all 25 of its jobs), and the shared pre-push hook runs a `--workspace` selector,
 //! which cannot reach a detached package. `tools/backend-gate.sh` is therefore the
 //! only instrument covering this code, and it runs only when a human chooses to.
 //!
