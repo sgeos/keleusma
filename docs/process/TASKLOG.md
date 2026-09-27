@@ -10,6 +10,21 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-27, session 67, ninth increment, follow-up). I HIT THE FIRST TRAP IN
+> THE ORIENTATION DOCUMENT'S OWN TABLE.**
+>
+> The CI Clippy job failed #467 on a `collapsible_if` in a just-appended test that my local clippy
+> had passed. My first hypothesis was a version difference. **Disproved**: local clippy is
+> `0.1.98 (48a229ceae 2026-09-01)` and CI's is `rustc 1.98.1 (48a229cea 2026-09-01)`, the same
+> build, and CI's exact command reproduces the error locally.
+>
+> **The run was CACHED.** Its entire output was `Finished`, which `CLAUDE.md` already records as
+> not evidence. What the row lacked is the actionable tell, now added: a run that analysed anything
+> prints `Checking <crate>` lines first, so a bare `Finished` means nothing was re-analysed.
+>
+> Fixed as a let-chain, matching the style already used in `examples/rtos/src/kernel.rs`, and
+> verified by a forced-fresh run that shows the `Checking` lines.
+
 > **Currency note (2026-09-27, session 67, ninth increment). THE CRATE-COUNT GUARD CLOSED THE
 > CLASS FOR ONE FILE.**
 >

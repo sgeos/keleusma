@@ -670,10 +670,10 @@ fn no_entry_point_claims_an_unpublished_crate_is_already_on_crates_io() {
         }
         let changelog = mani.parent().map(|d| d.join("CHANGELOG.md"));
         let Some(cl) = changelog else { continue };
-        if let Ok(text) = std::fs::read_to_string(&cl) {
-            if text.contains("has never been published") {
-                unpublished.insert(name);
-            }
+        if let Ok(text) = std::fs::read_to_string(&cl)
+            && text.contains("has never been published")
+        {
+            unpublished.insert(name);
         }
     }
 
