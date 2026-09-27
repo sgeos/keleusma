@@ -10,6 +10,30 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-27, session 67, eighth increment). THE AGENT-FACING MANIFEST WAS
+> WRONG IN FOUR PLACES, AND NOTHING COULD HAVE CAUGHT IT.**
+>
+> `llms.txt` is 58 lines, **ships in the crate tarball**, and exists to orient models consuming
+> the project. `documentation_links.rs` resolves RELATIVE links; every link here is an absolute
+> GitHub URL, so the file was outside that guard's reach **by construction**.
+>
+> The instruction set was given as **69** opcodes against the specification's **66**. That claim
+> was TRUE of V0.2.0 — the V0.2.1 `NewComposite` consolidation retired four construct opcodes and
+> added one — so it is a version-scoped statement that went stale, not a confusion with the
+> maximum live wire id, which is coincidentally also 69. Getting that distinction right changed
+> the correction's wording.
+>
+> `docs/guide/COOKBOOK.md` and `docs/guide/FAQ.md` did not exist: commit `f745b16e` ported the
+> guide to an mdbook and they live under `book/src/`. Two of twenty-nine paths dead, and the file
+> had not been touched since before that port.
+>
+> And the branching model was called "Trunk-based development", while `GIT_STRATEGY.md` — the file
+> that link points at — opens with "a **release-branch model** with a four-level hierarchy".
+>
+> `tests/llms_txt_currency.rs` checks all three properties offline, since what rots is the tree
+> rather than the host. Each was mutation-tested: a broken path, a changed count, and a
+> reintroduced contradiction each fail and name the problem.
+
 > **Currency note (2026-09-27, session 67, seventh increment). THE HANDOFF DESCRIBES THIS TRUNK.**
 >
 > It was stamped on a previous-session commit. Every content check in the refreshed file was RUN

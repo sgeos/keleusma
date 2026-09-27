@@ -10,6 +10,46 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-27, session 67, eighth increment.**
+
+**THE FILE WHOSE JOB IS TO ORIENT MODELS WAS WRONG IN FOUR PLACES.** `llms.txt` is 58 lines, ships
+in the crate tarball, and tells a model to consult the agent-onboarding file and the architecture
+description first. **Nothing checked it, and `documentation_links.rs` could not**: that guard
+resolves relative markdown links and every link here is an absolute GitHub URL, so the file sat
+outside its reach by construction rather than by oversight.
+
+**The opcode count said 69 against the specification's 66 — and the diagnosis matters.** That claim
+was TRUE of V0.2.0; the V0.2.1 `NewComposite` consolidation retired four construct opcodes and
+added one. It is a version-scoped statement that went stale, NOT a confusion with the maximum live
+wire id, which is coincidentally also 69. I nearly recorded the wrong cause, and checking changed
+the correction's wording.
+
+**Two of twenty-nine referenced paths were dead.** `docs/guide/COOKBOOK.md` and
+`docs/guide/FAQ.md` were moved to `book/src/` by commit `f745b16e`, the mdbook port, and `llms.txt`
+has not been touched since before it.
+
+**And it contradicted the document it links to**, calling the branching model "Trunk-based
+development" where `GIT_STRATEGY.md` opens with "a release-branch model with a four-level
+hierarchy".
+
+`tests/llms_txt_currency.rs` checks that every referenced path resolves, that the stated opcode
+count equals the specification's, and that the trunk-based contradiction has not returned. It works
+**offline** — what rots is the tree, not the host — and each check was mutation-tested: a broken
+path, a changed count and a reintroduced contradiction each fail and name the problem.
+
+**This is the eighth increment and the sixth to find a real defect**, which revises the note two
+increments ago about a thinning seam. What had stopped paying was survey by inspection of surfaces
+already near a guard. A surface that no guard could structurally reach was still carrying four
+errors.
+
+**Yours, unchanged**: the book's 38 untranslated messages; whether `compile` should refuse a module
+no host can load; H2's trade; workstream C's `BYTECODE_VERSION` authorisation; the seven standing
+decisions; the parser-gap capacity call at 162 bindings against 128.
+
+**No file under `src/selfhost/kel/` modified.** `BYTECODE_VERSION` is 2, the opcode count 66.
+
+---
+
 **2026-09-27, session 67, seventh increment. The session's handoff is refreshed and this is its
 closing block.**
 

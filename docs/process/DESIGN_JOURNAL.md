@@ -13,6 +13,55 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-27 — session 67, increment 8: the surface no guard could reach
+
+**Why I looked here.** Two increments earlier I recorded that the coverage seam was thinning,
+after three probes came back clean. That was true of the surfaces I had been probing, and the
+observation was incomplete. The sharper question is not "is there anything left" but **"is there a
+surface that no existing guard can structurally reach"**. `llms.txt` is one: `documentation_links.rs`
+resolves relative markdown links, and every link in that file is an absolute GitHub URL. It was
+outside the guard's reach by construction, not by oversight, and nothing else looked at it.
+
+**It was wrong in four places, in a file that ships to crates.io and exists to orient models.**
+Two dead paths of twenty-nine, an opcode count three too high, and a branching-model description
+contradicted by the very document it links to.
+
+**The opcode diagnosis is the part worth recording, because my first reading was wrong.** I saw 69
+and noted that the specification says the maximum live wire id is also 69, and nearly wrote that
+the two had been conflated. They had not. `CLAUDE.md` records that the `NewComposite`
+consolidation "took the instruction set from 69 to 66", and that landed in V0.2.1 — so
+"the 69-opcode V0.2.0 ISA" was **true when written** and went stale one release later. A
+version-scoped claim that aged is a different defect from a confusion, and it changes the
+correction: the file now states 66 and explains the transition, rather than silently swapping a
+digit.
+
+**The dead paths have provenance.** `git log --diff-filter=D` names `f745b16e docs(book): port the
+learning guide to mdbook (bilingual EN/JA)` as the commit that removed `docs/guide/`, and
+`llms.txt`'s own last two commits predate it. So the links have been broken since V0.2.2 shipped,
+in a file included in that release's tarball.
+
+**The guard is offline on purpose.** The natural instinct with a file full of URLs is to fetch
+them. What rots is the tree — a file moves and the link goes stale — not the host. Stripping the
+`blob/main/` prefix and testing the path against the working tree checks the thing that actually
+breaks, and it runs in a sandbox with no network.
+
+**The branching-model check is deliberately narrow.** Asserting that two documents "describe the
+model the same way" is not mechanisable. The check asserts the specific contradiction that
+existed, and it first asserts its own premise — that `GIT_STRATEGY.md` really does say
+"release-branch model" — so if that document changes, the check fails loudly rather than
+continuing to enforce a stale contrast.
+
+**All three were mutation-tested**: a broken path, a changed count, and a reintroduced
+"trunk-based" each fail and name the problem, and `llms.txt` was confirmed byte-identical after
+each restoration.
+
+**What this revises.** Six of eight increments found real defects. The claim to retire is not
+"the seam is thin" but the method behind it: inspecting surfaces that already sit near a guard has
+stopped paying, while asking which surfaces no guard can reach is still paying. That is a
+generative question rather than an exhaustible list.
+
+---
+
 ## 2026-09-27 — session 67, increment 5: an ungated binary two layers down
 
 **The surface.** `examples/rtos` ships a cooperative microkernel. Continuous integration
