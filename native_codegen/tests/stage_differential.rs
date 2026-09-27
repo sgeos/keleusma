@@ -2,7 +2,7 @@
 //!
 //! # Why this file exists
 //!
-//! `corpus_differential` counts nine of the ten stage sources among its
+//! `corpus_differential` counts most of the TWELVE stage sources among its
 //! "executed and agreeing" modules. `probe_stage_vacuity` shows what that
 //! agreement is worth: it drives every module with an **all-zero shared data
 //! segment**, and `lexer.kel` documents that the host places the source in
