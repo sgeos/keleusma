@@ -10,6 +10,55 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-27, session 67, fourth increment.**
+
+**THE ONE TOOL WHOSE ENTIRE OUTPUT IS A WORST-CASE MEMORY BOUND WAS FABRICATING IT.**
+`run --print-memory` computed its transient region as
+`auto_arena_capacity_for(module, &[]).unwrap_or(DEFAULT_ARENA_CAPACITY)`. That call fails for
+a program whose worst-case memory usage cannot be statically bounded, and the discarded
+`VmError` was the only record of why. So the flag printed the default arena constant as
+though it were the program's computed bound and exited zero. On the recursive example from
+`19_why_rejected.md`: **`arena: 65536 bytes total (persistent 0, transient 65536)`**, for a
+program the runtime refuses on load. An operator sizing a host from that figure provisions
+for a program that cannot run.
+
+**The crate's value proposition is a DEFINITIVE bound**, and `CLAUDE.md` forbids implying
+completeness where verification is incomplete. This is the sharpest place for that to fail.
+
+**I RAISED THIS AS AN AMBIGUITY IN THE FIRST INCREMENT AND THEN RESOLVED IT.** I had recorded
+two readings — a deliberate pre-verification figure, or a saturating fallback — and said the
+evidence did not separate them. Reading the code separates them: it is the fallback, and the
+`.unwrap_or` is the whole mechanism. Leaving that to you with less information than I could
+get was the wrong call, and it is corrected.
+
+**The two paths need opposite treatments**, which is why the fallback was not simply deleted.
+Verification compares the arena's capacity against the bound, so an arena must exist before
+the check runs; refusing to allocate would replace a precise verification error with an
+allocation error. On the allocation path `Vm::new` catches the unbounded case immediately
+afterwards. On the reporting path nothing ran afterwards at all.
+
+`keleusma-cli/tests/print_memory_bound.rs` pins both directions on both input forms, source
+and compiled bytecode, **each refusal paired with a program that must still report** — without
+which the refusals are satisfied by a binary that refuses everything. Restoring the swallowing
+call reproduces the original output exactly, fails both refusal tests, and leaves the control
+passing, so they discriminate. **No expected byte count is asserted anywhere**, since this
+session removed two stale byte-count claims from the guide.
+
+**MEASURED AND LEFT TO YOU.** `compile` writes an artifact for the unbounded program, and
+`run` on that artifact refuses it, so the compiler emits a module no host can load. The
+distinction that matters: a bound that is computable but larger than the default arena is
+legitimately emittable, since a bigger host loads it; a bound that is not computable at all
+can be loaded by nobody. `auto_arena_capacity_for` already separates the two, so refusing is
+cheap — but it changes the contract of a published subcommand, which is yours.
+`docs/decisions/PRINT_MEMORY_BOUND.md` has both.
+
+**Also yours, unchanged**: the book's 38 untranslated messages, H2's trade, workstream C's
+`BYTECODE_VERSION` authorisation, the seven standing decisions.
+
+**No file under `src/selfhost/kel/` modified.** `BYTECODE_VERSION` is 2, the opcode count 66.
+
+---
+
 **2026-09-27, session 67, third increment.**
 
 **THE SENTENCE THAT LICENSES MERGING ON CI ALONE WAS UNVERIFIED, AND FALSE.** `CLAUDE.md` and

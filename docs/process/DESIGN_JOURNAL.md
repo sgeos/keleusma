@@ -13,6 +13,57 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-27 — session 67, increment 4: resolving an ambiguity I had handed over
+
+**Why this increment exists at all.** In the first increment I recorded that
+`run --print-memory` reports an arena bound for a program `run` refuses, offered two readings,
+said the evidence did not separate them, and left it to the operator. That was defensible in
+the moment and wrong on reflection: the two readings are separated by one line of code, and
+handing over an ambiguity I could have resolved gives the operator less than I had.
+
+**The mechanism.** `module_arena_sizing` ended in
+`auto_arena_capacity_for(module, &[]).unwrap_or(DEFAULT_ARENA_CAPACITY)`. The call returns
+`Result<usize, VmError>` and fails when the worst-case memory usage cannot be bounded. The
+error carried the verifier's own sentence and was thrown away. So the benign reading — that
+the figure is deliberately pre-verification, because a host must learn the size before a
+capacity is fixed — is not what the code does. It substitutes a constant.
+
+**The benign reading was not entirely wrong, and that is why the fix is asymmetric.** Two
+callers shared the function. On the allocation path the substitution IS load-bearing:
+verification compares the arena's capacity against the bound, so something must be allocated
+before the check can run, and refusing would turn a precise verification error into an
+allocation error. `Vm::new` then catches the unbounded case a few lines later. On the
+reporting path nothing ran afterwards, so the substitution was the entire output. The fallback
+now lives in its own named function whose comment states that it is a fallback and what
+catches the case instead — the substitution is visible at its site rather than implied.
+
+**The control is what makes the test mean anything.** A test asserting only that the
+unbounded program is refused passes against a binary that refuses everything, including one
+that cannot parse its arguments. Each refusal is paired with a program that must still
+report, on both input forms, because the reporting path is reached separately for source and
+for compiled bytecode and the defect was present on both. A fix applied to one would
+otherwise have read as covering the other.
+
+**The mutation is the strongest evidence here.** Restoring the swallowing call reproduces the
+original output character for character, fails both refusal tests, and **leaves the control
+passing**. A mutation that failed everything would not have shown the tests discriminate.
+
+**And no byte count is asserted.** Two increments earlier this session removed
+`wrote pulse.bin (2372 bytes)` and `wrote tune.kel.bin (2400 bytes)` from the guide because
+the size of a compiled artifact is not a stable property to promise. Pinning an arena figure
+in a test is the same mistake with a longer fuse, so the assertions are "a figure was
+produced" and "the refusal names the cause".
+
+**What I measured and did not change.** `compile` writes an artifact for the unbounded program
+and `run` on that artifact refuses it. The distinction worth recording is that a bound which
+is computable but larger than the default arena is legitimately emittable — that is what
+cross-compilation is for — while a bound that is not computable at all can be loaded by no
+host at any capacity. `auto_arena_capacity_for` already separates them, so refusing at compile
+time is cheap. Whether it should is a decision about a published subcommand's contract, and
+this time the handover carries the distinguishing test rather than an open question.
+
+---
+
 ## 2026-09-27 — session 67, increment 3: the sentence that licenses a merge, unverified
 
 **The claim.** `CLAUDE.md` and `GIT_STRATEGY.md` permit merging on continuous integration
