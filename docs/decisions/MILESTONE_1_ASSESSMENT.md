@@ -50,7 +50,47 @@ unqualified; an extraction requiring a literal argument when the names are passe
 loop variable; and four earlier. Each looked like an answer. The instrument for "what does
 this harness cover" is the harness's own test list and its own reported counts.
 
-## No claim about milestone 1 is made here
+## ✅ THE OPEN QUESTION IS NOW SETTLED, BY READING THE REGISTRY
+
+The retraction left one thing unresolved: how the done-list's *"12 of 12 stage sources seeded"*
+reconciles with five agreement tests in `stage_differential.rs`. **They count different things,
+and the authority is a registry neither earlier version opened.**
+
+`tests/corpus_differential.rs` holds `const STAGE_SEEDED` — the stages its seeding switch has an
+arm for — with a documented reason per entry, plus the per-stage seeders
+(`type_pairs_seed`, `seed_reconstruct_single`, `seed_codegen_subject`, `seed_analyze_subject`,
+`seed_verify_yield_subject`, the generic `seed_named_slots`) and subject tables for each. **The
+seeding lives in the CORPUS harness, not in `stage_differential.rs`** — which is why searching
+the latter found five and searching for qualified slot prefixes found nothing.
+
+Read from the registry, for twelve stage sources:
+
+| status | stages | count |
+|---|---|---|
+| seeded, with an arm and subjects | `lexer`, `parse`, `codegen`, `analyze`, `verify_yield`, `verify_depth`, `verify_typed`, `verify_structural`, `verify_types` | **9** |
+| listed **so the harness prints why it is blocked** | `reconstruct` | 1 |
+| **deliberately unseedable, by joint agreement** | `verify_datalayout` | 1 |
+| absent from the registry | `wire` | 1 |
+
+**`verify_datalayout` is not a gap and the registry says so**: its verdict accumulates across
+three differently-encoded phases in the retained buffer, so a single seeded buffer cannot produce
+a verdict at all. It stays in `KNOWN_VACUOUS`, which is correct rather than missing.
+
+**Two design notes worth carrying**, both stated in the registry:
+
+- `codegen.kel` is seeded **by chaining** — it consumes an AST, and that AST is exactly what
+  `reconstruct.kel` publishes at identical widths, so it is bridged from real output rather than
+  hand-built. That is the pattern to prefer.
+- Several stages were seeded **without accessors**, via `shared_slot_offset` resolving a slot by
+  name against the module's own layout — which mattered because `src/selfhost/mod.rs` exposes five
+  accessors, is the other line's file, and is read-only here.
+
+**So the prior session's entry was right in substance**: the seeding work was done broadly and
+deliberately, with its exceptions reasoned and recorded. The precise figure is ten arms for twelve
+stages, two of the twelve excluded for stated reasons.
+
+## No claim about milestone 1's gate is made here
+
 
 The gate may be met, partly met, or not met. **This document asserts nothing about it**, and
 the next session should start from the handoff's done-list and the corpus harness rather than
