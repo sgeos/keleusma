@@ -43,9 +43,14 @@ license = "0BSD"
 # this a workspace ROOT, so none of that reached here and this package built full debug
 # info for 155 test binaries across two float configurations.
 #
-# Measured 2026-09-26, prompted by a `cargo clean` elsewhere in the tree: `target/` here
-# was **31 GiB**. That figure accumulated over many runs and both configurations, so it is
-# indicative rather than a controlled baseline.
+# **MEASURED FROM AN EMPTY TARGET, 2026-09-27**, after the operator cleaned the worktree:
+# one default-features gate run leaves **6.7 GiB**, and adding one `narrow-float-32` run
+# takes it to **13 GiB**. That is the honest baseline for this profile.
+#
+# ⚠ **IT IS A BASELINE, NOT A SAVING.** The figures recorded before the clean -- 31, then
+# 38, then 44 GiB -- accumulated across many runs of both configurations over days. Setting
+# 13 against 44 would compare different quantities, which is the mismatched-units error this
+# session made once already.
 #
 # The same reasoning the root gives applies unchanged, so the same setting is made here.
 # **The timing effect is NOT claimed**: the first build after a profile change is cold and
