@@ -10,6 +10,56 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-27, session 67, fifth increment, follow-up). THE NEW JOB FAILED ON
+> ITS FIRST RUN, AND THAT IS THE ARGUMENT FOR IT.**
+>
+> `examples/rtos/rust-toolchain.toml` pins channel 1.92 and its component list omitted
+> **`clippy`**. `cargo clippy` there passed locally because this machine happens to have
+> clippy installed for 1.92; a clean runner auto-installed the pinned toolchain with its seven
+> declared components and then reported
+> `error: 'cargo-clippy' is not installed for the toolchain '1.92-x86_64-unknown-linux-gnu'`.
+> **The crate was never lintable from a clean checkout.** `cargo fmt --check` passed, because
+> `rustfmt` IS declared.
+>
+> Diagnosed from the job log verbatim rather than from the hypothesis, then fixed by declaring
+> `clippy` in the pin, which makes the crate lintable for anyone rather than only in CI.
+>
+> A row is added to `CLAUDE.md`'s "how a green local run has actually lied" table for the
+> class: **the run used a toolchain component the project does not declare.** It was honest
+> and it was not reproducible.
+
+> **Currency note (2026-09-27, session 67, fifth increment). AN UNGATED BINARY HID A TEST
+> TARGET, WHICH HID TWO ROTTED TESTS.**
+>
+> `examples/rtos`'s `cargo test` **did not compile**. Two causes, one behind the other.
+> `bench_n6` was auto-discovered from `src/bin/` with **no `required-features`**, unlike both
+> siblings, so any host build tried to compile an embassy-and-defmt binary and failed with
+> eight unresolved imports. Behind that, the crate's two unit tests still destructured
+> `Value::Enum { type_name, variant, fields }` — the pre-B28 struct variant — and had been
+> dead since that change, invisible because the test target never built.
+>
+> **`three-task-std` was built by nothing.** It is the quick start in `CLAUDE.md`,
+> `README.md` and `MANUAL.md`; CI cross-built only the two N6 binaries and the release gate
+> does not mention the crate. Six Keleusma task scripts are reachable only through these
+> binaries, including the supervised-restart demonstration.
+>
+> **It works, measured**: five tasks at their documented cadences, a boot-time WCET report,
+> and `faulty.kel` tripping `DivisionByZero` at iterations 5 and 10 with the kernel logging
+> `soft-script` and restarting. No defect in the demonstrator — which is the cheapest moment
+> to guard it, the same position session 66 reached with the scheduler behaviours.
+>
+> `Kernel::run_until` adds the wall-clock budget `three_task_std.rs` had recorded as needed;
+> unbounded `run()` is unchanged. A new `rtos-host` CI job lints and tests the host target,
+> and `clippy --all-targets` works there for the first time, as a direct consequence of
+> gating `bench_n6`.
+>
+> **The repaired tests are written at the contract level, not against a representation.**
+> Pinning `Value::Enum`'s shape is exactly why they rotted.
+>
+> **A near-miss worth recording.** Reading the first 45 and last 12 lines of an 80-line run, I
+> concluded the faulty task never ran and nearly reported a defect. It faults at 6016ms, in
+> the 23 lines I had cut. Filter for the property; do not sample the output.
+
 > **Currency note (2026-09-27, session 67, fourth increment). THE TOOL THAT REPORTS A
 > WORST-CASE MEMORY BOUND WAS FABRICATING IT.**
 >

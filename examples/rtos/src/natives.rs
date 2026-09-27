@@ -434,27 +434,44 @@ fn check_arity(name: &str, expected: usize, args: &[Value]) -> Result<(), VmErro
 mod tests {
     use super::*;
 
+    // These tests did not COMPILE between the B28 representation change and
+    // 2026-09-27, because nothing ever built this crate's test target.
+
+    /// **THE STATUS VALUES THE SCRIPTS DESTRUCTURE ARE THE ONES THE HOST BUILDS.**
+    ///
+    /// Every task script matches on `Status::Ok` and `Status::Err(code)`, so the type
+    /// name, the variant name, the discriminant and the payload are a contract between
+    /// this module and six `.kel` files. A wrong discriminant would send a script down
+    /// the wrong arm with no diagnostic anywhere.
+    ///
+    /// **ASSERTED AGAINST AN EXPECTED VALUE RATHER THAN AGAINST A REPRESENTATION.** The
+    /// previous version of these tests destructured `Value::Enum { type_name, variant,
+    /// fields }`, the pre-B28 struct variant. B28 replaced it with `Enum(EnumBody)`,
+    /// which is `Flat` when an arena is available and `Boxed` otherwise, and the tests
+    /// stopped compiling. Nothing noticed, because `cargo test` was never run for this
+    /// crate: continuous integration cross-built the two N6 binaries and never touched
+    /// the host target. Comparing against a constructed expected value pins the contract
+    /// and survives a further representation change, which is the property the old form
+    /// lacked. Enum equality is padding-tolerant by design, so this holds across the
+    /// flat and boxed forms.
     #[test]
-    fn status_ok_construction() {
-        let s = status_ok();
-        match s {
-            Value::Enum {
-                type_name,
-                variant,
-                fields,
-            } => {
-                assert_eq!(type_name, "Status");
-                assert_eq!(variant, "Ok");
-                assert!(fields.is_empty());
-            }
-            other => panic!("expected Value::Enum, got {:?}", other),
-        }
+    fn status_ok_is_the_unit_ok_variant() {
+        assert_eq!(
+            status_ok(),
+            Value::enum_value(String::from("Status"), String::from("Ok"), 0, Vec::new()),
+            "status_ok() no longer builds Status::Ok with discriminant 0 and no payload"
+        );
     }
 
+    /// **EACH ERROR CODE REACHES THE SCRIPT AS ITS OWN DISCRIMINANT.**
+    ///
+    /// The codes are checked one at a time against an independently written expected
+    /// number, so a table that mapped two codes to one value, or shifted the whole range
+    /// by one, fails here rather than in a script's `match`.
     #[test]
-    fn status_err_construction_carries_code() {
+    fn status_err_carries_each_code_as_its_discriminant() {
         for (code, expected_disc) in [
-            (StatusErrorCode::InvalidPin, 1),
+            (StatusErrorCode::InvalidPin, 1i64),
             (StatusErrorCode::InvalidChannel, 2),
             (StatusErrorCode::InvalidController, 3),
             (StatusErrorCode::InvalidAddress, 4),
@@ -463,27 +480,41 @@ mod tests {
             (StatusErrorCode::Timeout, 7),
             (StatusErrorCode::BadArgument, 8),
         ] {
-            let s = status_err(code);
-            match s {
-                Value::Enum {
-                    type_name,
-                    variant,
-                    fields,
-                } => {
-                    assert_eq!(type_name, "Status");
-                    assert_eq!(variant, "Err");
-                    assert_eq!(fields.len(), 1);
-                    match &fields[0] {
-                        Value::Int(n) => assert_eq!(
-                            *n, expected_disc,
-                            "discriminant for {:?} should be {}",
-                            code, expected_disc
-                        ),
-                        other => panic!("expected payload Value::Int, got {:?}", other),
-                    }
-                }
-                other => panic!("expected Value::Enum, got {:?}", other),
-            }
+            assert_eq!(
+                status_err(code),
+                Value::enum_value(
+                    String::from("Status"),
+                    String::from("Err"),
+                    1,
+                    vec![Value::Int(expected_disc)],
+                ),
+                "status_err({code:?}) should carry discriminant {expected_disc}"
+            );
         }
+    }
+
+    /// **THE CODES ARE DISTINCT.**
+    ///
+    /// The loop above would pass if two codes shared a discriminant and the expected
+    /// table repeated it. This cannot.
+    #[test]
+    fn no_two_error_codes_share_a_discriminant() {
+        let all = [
+            StatusErrorCode::InvalidPin,
+            StatusErrorCode::InvalidChannel,
+            StatusErrorCode::InvalidController,
+            StatusErrorCode::InvalidAddress,
+            StatusErrorCode::NotSupported,
+            StatusErrorCode::Busy,
+            StatusErrorCode::Timeout,
+            StatusErrorCode::BadArgument,
+        ];
+        let mut seen = alloc::vec::Vec::new();
+        for c in all {
+            let d = c as i64;
+            assert!(!seen.contains(&d), "{c:?} reuses discriminant {d}");
+            seen.push(d);
+        }
+        assert_eq!(seen.len(), 8, "the code table changed size");
     }
 }
