@@ -55,3 +55,43 @@ existing evidence covers it.
 A yield-in-`if` module that lowers and agrees with the virtual machine over a tick sequence, with
 the ISA and refusal censuses re-derived, and the yield-escape gate's shadow status restated —
 since the done-list records that refusal as shadowed only because `Stream` is refused first.
+
+---
+
+## THE DENOMINATOR RE-MEASURED, 2026-09-27 — and the conclusion strengthens
+
+The roadmap's split is over **"ten `loop` blocks"**. Measured: **all twelve stage sources contain
+exactly one `loop` block**, so the denominator is twelve. Its ten are `parse`, `analyze`,
+`reconstruct`, five `verify_*`, `codegen`, `lexer` — but there are **six** `verify_*` files plus
+`wire.kel`, so **two stages were unclassified**.
+
+Both are tail-shape, read rather than inferred:
+
+| stage | loop block | callee |
+|---|---|---|
+| `verify_datalayout.kel` | `loop main(resume: Word) -> Word { yield run() }` | `fn run()`, plain; the file's ONLY yield |
+| `wire.kel` | `loop main(cmd: Word) -> Word { yield dispatch(cmd) }` | `fn dispatch()`, plain; its other three "yield" hits are COMMENTS |
+
+**So the corrected split is ten of twelve needing no coroutine intrinsic, and the set needing
+Workstream B is unchanged at exactly two — `codegen` and `lexer`.** The roadmap's conclusion is
+strengthened; only its denominator was stale.
+
+## ⚠ AND THE CLASSIFIER USED HERE IS INSUFFICIENT IN GENERAL
+
+**Demonstrated by `codegen`, whose answer was already known.** Its loop block is
+`loop main(resume: Word) -> Word { yield emit_next(resume) }` — **a single tail yield**. Read by
+loop-block shape alone it classifies as needing nothing. The roadmap is right that it needs the
+workstream, for a reason **invisible at that level**: `emit_next` is declared
+`fn emit_next(resume: Word) -> Word when st.started == 0`, a MULTIHEADED callee.
+
+So "read the loop block" is not a sufficient test, and the two classifications above rest on the
+additional check that each callee is a plain `fn` and the file contains no other yield expression.
+**Validating the classifier against a case with a known answer is what exposed this**; had it been
+run only on the two unknowns, both would have been recorded on an unsound method.
+
+## A forward hazard, from `wire.kel`'s own comment
+
+It notes that `dispatch` "still answers each command in one yield; converting the emit commands to
+yield per record is the increment that follows." **That change would move `wire` out of the
+tail-shape set and into the coroutine-needing one**, so the ten-of-twelve figure is contingent on
+work the other line has already described as next.
