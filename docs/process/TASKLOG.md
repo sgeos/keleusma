@@ -10,6 +10,38 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-27, session 67, fourth increment). THE TOOL THAT REPORTS A
+> WORST-CASE MEMORY BOUND WAS FABRICATING IT.**
+>
+> `run --print-memory` exists to turn the static worst-case-memory bound into an operational
+> figure "for provisioning a host". Its sizing call ended in
+> `unwrap_or(DEFAULT_ARENA_CAPACITY)`, so a program whose worst-case memory usage cannot be
+> bounded printed **`arena: 65536 bytes total (persistent 0, transient 65536)` and exited
+> zero** — for a program `run` refuses on load. The discarded `VmError` was the only record of
+> why no bound existed.
+>
+> **This was raised as an ambiguity in the first increment and resolved by reading the code.**
+> I had said the evidence did not separate "deliberate pre-verification figure" from
+> "saturating fallback". It is the second, and the `.unwrap_or` says so.
+>
+> Repaired: the reporting path names the verifier's cause and exits non-zero, printing no
+> figure. The allocation path keeps the substitution in a separately named function whose
+> comment says it is a fallback and what catches the case instead — the two paths need
+> opposite treatments, because verification compares capacity against the bound and so needs
+> an arena to exist first.
+>
+> Pinned in both directions on both input forms by
+> `keleusma-cli/tests/print_memory_bound.rs`, each refusal paired with a program that must
+> still report. Restoring the swallowing call reproduces the original output exactly, fails
+> both refusal tests, and leaves the control passing. **No expected byte count is asserted**,
+> since this session removed two stale byte-count claims from the guide for that reason.
+>
+> **Measured and left to you**: `compile` writes an artifact for the unbounded program that no
+> host can load. The bounded-but-large case is legitimately emittable and the not-bounded-at-all
+> case is not, and `auto_arena_capacity_for` already distinguishes them — but whether `compile`
+> should refuse is a decision about that subcommand's contract.
+> See `docs/decisions/PRINT_MEMORY_BOUND.md`.
+
 > **Currency note (2026-09-27, session 67, third increment). "CI IS A VERIFIED STRICT
 > SUPERSET OF THE LOCAL GATE" WAS UNVERIFIED AND FALSE.**
 >
