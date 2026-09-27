@@ -195,6 +195,22 @@ name = "three-task-n6"
 path = "src/bin/three_task_n6.rs"
 required-features = ["stm32n6570dk-platform"]
 
+# THE COST-MODEL CALIBRATION BINARY, WHICH WAS AUTO-DISCOVERED AND UNGATED.
+#
+# Its two siblings above carry `required-features`; this one was never declared,
+# so Cargo picked it up from `src/bin/` with no feature requirement at all. It
+# imports `defmt`, `embassy_executor`, `embassy_stm32` and a `keleusma-bench`
+# counter that exist only under `stm32n6570dk-platform`, so ANY host-target
+# build or test of this crate tried to compile it and failed with eight
+# unresolved imports. That is why `cargo test` could not run here, which is in
+# turn why the crate's own unit tests sat uncompiled through a representation
+# change. Measured 2026-09-27. Continuous integration builds it with the feature
+# enabled, so gating it changes nothing there.
+[[bin]]
+name = "bench_n6"
+path = "src/bin/bench_n6.rs"
+required-features = ["stm32n6570dk-platform"]
+
 [profile.dev]
 opt-level = 0
 panic = "abort"

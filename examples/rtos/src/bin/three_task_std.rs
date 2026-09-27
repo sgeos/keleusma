@@ -6,8 +6,11 @@
 //! completion through a minimal `block_on`.
 //!
 //! Run with `cargo run --release --bin three-task-std`.
-//! Ctrl-C to stop. The kernel runs forever; a later iteration
-//! will add a wall-clock budget for CI.
+//! Ctrl-C to stop. The kernel runs forever unless given a
+//! wall-clock budget with `--run-for <milliseconds>`, which
+//! returns cleanly once that much time has elapsed. The budget
+//! exists so continuous integration can exercise the
+//! demonstrator; without an argument the behaviour is unchanged.
 
 use core::future::Future;
 use core::pin::pin;
@@ -17,6 +20,28 @@ use keleusma_rtos::setup::three_task_kernel;
 use keleusma_rtos::{Platform, StdPlatform};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // `--run-for <ms>`: a wall-clock budget after which the kernel returns
+    // cleanly. Absent, the kernel never returns, which is what a deployed
+    // cooperative kernel does and what this demonstrator documented before the
+    // flag existed.
+    let mut run_for_ms: Option<u64> = None;
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--run-for" => {
+                let v = args
+                    .next()
+                    .ok_or("--run-for requires a duration in milliseconds")?;
+                run_for_ms = Some(v.parse::<u64>().map_err(|_| {
+                    format!("--run-for expects a whole number of milliseconds, got `{v}`")
+                })?);
+            }
+            other => {
+                return Err(format!("unknown argument `{other}`; expected --run-for <ms>").into());
+            }
+        }
+    }
+
     let mut kernel = three_task_kernel::<StdPlatform>()?;
 
     println!("=== Keleusma RTOS demonstrator ===");
@@ -64,10 +89,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("Press Ctrl-C to stop.");
+    match run_for_ms {
+        Some(ms) => println!("Running for {ms}ms, then stopping."),
+        None => println!("Press Ctrl-C to stop."),
+    }
     println!();
 
-    block_on(kernel.run());
+    block_on(kernel.run_until(run_for_ms));
+    if run_for_ms.is_some() {
+        println!("Budget elapsed; kernel stopped.");
+    }
     Ok(())
 }
 

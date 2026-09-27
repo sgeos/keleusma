@@ -13,6 +13,65 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-27 — session 67, increment 5: an ungated binary two layers down
+
+**The surface.** `examples/rtos` ships a cooperative microkernel. Continuous integration
+cross-builds its two STM32N6 binaries and never touches `three-task-std`, the host binary that
+`CLAUDE.md`, `README.md` and `MANUAL.md` all give as the quick start. The release gate does not
+mention the crate. Six Keleusma task scripts are reachable only through these binaries.
+
+**The first thing I did was run it, and it works.** Five tasks at their documented cadences, a
+boot-time worst-case-execution-time report, the kernel's event ticker, and `faulty.kel`
+tripping `DivisionByZero` on its fifth and tenth iterations with the kernel categorising the
+error `soft-script` and restarting the task. No defect. That is the cheapest moment to guard
+something, which is the conclusion session 66 reached about the scheduler's restart policy.
+
+**Then `cargo test` would not build, and the causal chain is the interesting part.** The
+proximate failure was three compile errors in the lib test target: the crate's two unit tests
+destructured `Value::Enum { type_name, variant, fields }`, the struct variant B28 replaced with
+`Enum(EnumBody)`. Dead code since that change.
+
+The root cause is one layer further down. `bench_n6` was **auto-discovered** from `src/bin/`
+with no `required-features`, while both of its siblings are explicitly declared and gated. It
+imports `defmt`, `embassy_executor`, `embassy_stm32` and a `keleusma-bench` counter that exist
+only under `stm32n6570dk-platform`. So any host-target build or test of the crate tried to
+compile it and failed with eight unresolved imports — which means **the test target could never
+build, which is why nobody could see that the tests were broken.** One missing three-line
+declaration made a whole test surface unreportable.
+
+Gating it also made `cargo clippy --all-targets` succeed on the host for the first time, which
+is how CI can now lint this crate the way it lints the language server and the playground.
+
+**The repaired tests are deliberately written at a different level than the ones they replace.**
+The old form destructured a representation; representations change, and this one did. The new
+form compares against a constructed expected value, which pins the contract the six task
+scripts actually depend on — type name, variant name, discriminant, payload — and survives a
+further representation change. Enum equality is padding-tolerant by design, so the assertion
+holds across the flat and boxed forms. A third test was added because the table-driven loop
+would pass if two error codes shared a discriminant and the expected table repeated the value.
+
+**The budget was the code's own request.** `three_task_std.rs` read "The kernel runs forever; a
+later iteration will add a wall-clock budget for CI." `Kernel::run_until` adds it at the
+scheduler iteration boundary where the clock is already read, so it costs one comparison and
+nothing at all in the unbounded case, and `run()` delegates with `None` so its behaviour is
+unchanged. I briefly considered bounding it externally by killing a subprocess instead; the
+internal budget is better because a clean exit is assertable and the kernel gains a capability
+its own comment asked for.
+
+**A near-miss that would have been a false defect report.** Reading the first 45 and last 12
+lines of an 80-line run, I concluded the faulty task never ran, and started looking for the
+defect. It faults at 6016ms — inside the 23 lines I had cut. `CLAUDE.md` records this trap
+exactly: a log truncated by `head` or `tail` looks identical to a clean one. The corrective is
+to filter for the property rather than sample the output, and the second attempt did that and
+found all six fault-and-restart lines immediately.
+
+**The test asserts the demonstrator's purpose, with a control that makes it discriminate.** A
+long run must show every task's own observable plus all three fault-and-restart lines; a short
+run must stop before the first fault. The short run is what proves the fault lines come from
+elapsed runtime rather than from the banner, which names every task and the fault policy in its
+opening paragraph. A malformed budget must be refused, because a silently ignored flag would
+make the bounded tests hang instead of fail. No timestamp, cycle count or line count is pinned.
+
 ## 2026-09-27 — session 67, increment 4: resolving an ambiguity I had handed over
 
 **Why this increment exists at all.** In the first increment I recorded that

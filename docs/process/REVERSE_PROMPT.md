@@ -10,6 +10,63 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-27, session 67, fifth increment.** The fourth increment's block follows directly
+below; both are dated today and each names its own number.
+
+**`cargo test` IN `examples/rtos` DID NOT COMPILE, AND THE CAUSE WAS TWO DEEP.** `bench_n6`
+was auto-discovered from `src/bin/` with **no `required-features`**, unlike both of its
+siblings, so any host build of the crate tried to compile an embassy-and-defmt binary and died
+with eight unresolved imports. Behind that, the crate's own two unit tests still destructured
+`Value::Enum { type_name, variant, fields }` — the struct variant B28 replaced with
+`Enum(EnumBody)` — and had been dead since. **The ungated binary is why the rot was
+invisible**: the test target never built, so nothing could report the tests broken.
+
+**AND THE HOST DEMONSTRATOR WAS BUILT BY NOTHING.** `three-task-std` is the quick start in
+`CLAUDE.md`, `examples/rtos/README.md` and `examples/rtos/MANUAL.md`. Continuous integration
+cross-built only the two STM32N6 binaries; `scripts/release-gate.sh` does not mention the
+crate. Six Keleusma task scripts are reachable only through these binaries, including
+`faulty.kel`, whose whole purpose is the supervised-restart policy.
+
+**IT WORKS, AND THAT IS WHY TO GUARD IT NOW.** Measured: five tasks at their documented
+cadences, a boot-time worst-case-execution-time report, and the deliberate fault tripping at
+iterations 5 and 10 with the kernel categorising it `soft-script` and restarting the task. No
+defect in the demonstrator. Session 66 reached the same position with `run-tasks`'s restart
+policy and guarded it immediately.
+
+**What was added.** `Kernel::run_until` gives the wall-clock budget `three_task_std.rs` itself
+recorded as needed — its doc comment read "The kernel runs forever; a later iteration will add
+a wall-clock budget for CI" — with unbounded `run()` unchanged and the budget checked where the
+clock is already read. `three-task-std` takes `--run-for <ms>`. A new `rtos-host` job lints and
+tests the host target, and `clippy --all-targets` succeeds there for the first time, as a
+direct consequence of gating `bench_n6`.
+
+**THE REPAIRED TESTS ARE WRITTEN AT THE CONTRACT LEVEL.** They compare against a constructed
+expected value rather than destructuring a representation, because pinning the representation
+is precisely why they rotted. Enum equality is padding-tolerant, so the assertion holds across
+the flat and boxed forms and survives a further change.
+
+**A NEAR-MISS, RECORDED BECAUSE IT NEARLY BECAME A FALSE DEFECT REPORT.** Reading the first 45
+and last 12 lines of an 80-line run, I concluded the faulty task never ran. It faults at
+6016ms, inside the 23 lines I had cut. `CLAUDE.md` records this exact trap — a truncated log
+looks identical to a clean one — and the corrective is to filter for the property rather than
+sample the output.
+
+**THE NEW `rtos-host` JOB FAILED ON ITS FIRST RUN, WHICH IS THE ARGUMENT FOR ADDING IT.**
+`examples/rtos/rust-toolchain.toml` pins channel 1.92 and its component list omitted
+**`clippy`**. `cargo clippy` there passed on this machine, which happens to have clippy
+installed for 1.92; a clean runner auto-installed the pinned toolchain with its seven declared
+components and reported `error: 'cargo-clippy' is not installed for the toolchain`. **The crate
+was never lintable from a clean checkout.** `cargo fmt --check` passed, because `rustfmt` is
+declared. Diagnosed from the job log verbatim rather than left as a hypothesis, then fixed by
+declaring `clippy` in the pin so the crate is lintable for anyone.
+
+`CLAUDE.md` gains a row for the class: **the run used a toolchain component the project does
+not declare.** Honest, and not reproducible.
+
+**Left for you**: the book's 38 untranslated messages; whether `compile` should refuse a module
+no host can load; H2's trade; workstream C's `BYTECODE_VERSION` authorisation; the seven
+standing decisions.
+
 **2026-09-27, session 67, fourth increment.**
 
 **THE ONE TOOL WHOSE ENTIRE OUTPUT IS A WORST-CASE MEMORY BOUND WAS FABRICATING IT.**

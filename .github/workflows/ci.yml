@@ -288,6 +288,40 @@ jobs:
       - name: Build keleusma against thumbv7em-none-eabihf
         run: cargo build -p keleusma --target thumbv7em-none-eabihf
 
+  # THE HOST HALF OF THE RTOS EXAMPLE, WHICH NOTHING BUILT.
+  #
+  # The job below cross-builds the two STM32N6 binaries. `three-task-std`, the
+  # host binary that `CLAUDE.md`, `examples/rtos/README.md` and
+  # `examples/rtos/MANUAL.md` all give as the quick start, was built by nothing —
+  # not this workflow and not `scripts/release-gate.sh`, which does not mention
+  # the crate. Six Keleusma task scripts are reachable only through these
+  # binaries, including the one that exercises the supervised-restart policy.
+  #
+  # Measured 2026-09-27, `cargo test` could not even build here. `bench_n6` was
+  # auto-discovered from `src/bin/` with no `required-features`, unlike both of
+  # its siblings, so a host build tried to compile an embassy-and-defmt binary
+  # and failed with eight unresolved imports. Behind that, the crate's own unit
+  # tests had been broken since B28 changed the enum representation, invisible
+  # because the test target never built.
+  rtos-host:
+    name: RTOS host demonstrator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # The integration test drives the demonstrator under a wall-clock budget,
+      # which the kernel gained for exactly this purpose. It runs for nine
+      # seconds so the deliberate fault on the faulty task's fifth iteration
+      # (1500ms period) is reached and the supervised restart is observed.
+      - name: Lint and test the detached RTOS example on the host target
+        run: |
+          cd examples/rtos
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test --release
+
   rtos-n6-build:
     name: RTOS demonstrator build (N6 / thumbv8m.main-none-eabihf)
     runs-on: ubuntu-latest
