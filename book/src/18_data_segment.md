@@ -19,6 +19,7 @@ The answer is the data segment. It is the one region of a program's
 memory that may be changed, and whose values survive from one cycle to
 the next. It is declared with the word `data`:
 
+<!-- verify: compile -->
 ```
 data state {
     steps: [Word; 4],

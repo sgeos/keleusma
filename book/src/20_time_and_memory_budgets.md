@@ -64,6 +64,7 @@ program the verifier accepts.
 
 This program is accepted:
 
+<!-- verify: accept -->
 ```
 fn main() -> Word {
     for _b in 0..8 {

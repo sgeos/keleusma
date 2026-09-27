@@ -5071,6 +5071,68 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-26 — session 67, increment 1: the book's code is executed, not displayed
+
+**What was measured before anything was built.** 175 bare Keleusma fences in `book/src`,
+60 of them complete programs, 26 verified. `book.yml`, which owns the only verification,
+triggers on the default branch: last run 2026-07-24, never on `v0.2.3`. The script printed
+`checked` and compared it to nothing, so an empty run exited zero. The 51 existing
+assertions **passed** on this tree, which is an honest negative and also the point: the
+value was entirely in what nothing reached.
+
+**Why the reach collapsed silently.** The extraction was prose-shaped. A block was
+asserted if a sentence within fifteen lines said "output is" or "prints"; everything else
+hit a `continue` that incremented no counter. Two further filters were invisible: `if "fn
+main" not in code` excluded all eight `loop main` and both `yield main` programs, and a
+bare fence was assumed to be Keleusma while nine shell invocations are fenced bare.
+
+**The design choice worth recording: the expectation is written down, not inferred.** A
+first census inferred intent from surrounding prose and immediately mis-classified the
+**Rewrite** half of a rejected-then-corrected pair — a program that must compile — as one
+that must be refused. A classifier good enough to count is not good enough to judge. The
+expectation is an HTML comment above the fence: invisible when rendered, carried with the
+code it describes rather than in a manifest keyed by line, and absent from `book/po`,
+which contains no HTML comment and no fence line.
+
+**`prelude` exists because a fragment fed to a compiler looks exactly like a defect.**
+Several chapters advance by saying "change the program to ..." and printing only the
+replacement entry point. Run standalone, `23_big_numbers.md`'s block fails with
+`undefined function add_checked` — which is the harness misreading the book, not the book
+being wrong, and session 66 paid twice for exactly this confusion. `prelude` strips the
+preceding program's entry point and prepends the rest. `22_newtypes_and_refinement.md`
+then reproduces its chapter's quoted refinement diagnostic **exactly**, a verification
+that chapter has never had.
+
+**The harness nearly shipped with a vacuous rejection check.** `reject` first used
+`keleusma compile`, which writes bytecode without the structural pass and **accepts the
+recursive program that `keleusma run` refuses**. The chapter-19 expectation failed, which
+is the only reason this surfaced. `compile` is now `run --print-memory`, which verifies and
+exits, and `reject` is the full `run`. A rejection expectation checked with a command that
+cannot reach the check is the second row of the companion table wearing new clothes.
+
+**Three defects, and the third was fixed in the implementation.** The `FAQ` described a
+lexical productivity rule that no longer exists. Two byte counts were stale and are now
+removed rather than corrected, because the size of a compiled artefact is not a stable
+property to promise. And `WHY_REJECTED.md` quoted a first-class-function diagnostic the
+pipeline could not produce: the text is in `src/compiler.rs`, the type checker refused
+first with `undefined identifier`, and its site carried the comment "Bare function name
+reference. Report unknown." **The name is defined.** Emitting the accurate wording from the
+type checker makes the guide true and fixes a message that sent readers hunting for a
+missing definition. A control confirms an actually-undefined name still reports as one.
+
+**Reach, demonstrated rather than assumed.** An empty source tree trips four floors; a
+flipped expectation fails; a refusal for the wrong reason fails and says so; a deleted
+marker fails. And the Rust guard caught a real divergence — it rejected `prelude` as
+malformed because only the script knew that form — which is the cross-check between the two
+implementations working before I noticed the gap myself.
+
+**Recorded and not acted on.** `run --print-memory` reports an arena bound for a program
+`run` refuses, the transient figure equalling the whole default arena. Two readings, and the
+evidence does not separate them; the benign one does not cover this case, whose refusal is
+recursion rather than capacity. Left to the operator, with the reproduction.
+
+---
+
 ## 2026-09-25 (hundred and sixth) — naming the class, beside the table it does not belong in
 
 ### THE LAST EXPORTED SURFACE

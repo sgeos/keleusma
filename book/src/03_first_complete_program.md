@@ -52,6 +52,7 @@ major scale its sound.
 The program is built from three functions. Read the whole program first,
 then the explanation that follows.
 
+<!-- verify: accept -->
 ```
 use math::pow
 

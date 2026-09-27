@@ -63,6 +63,7 @@ the function with `octaves` set to `3`.
 A function may take more than one input. The parameters are separated by
 commas:
 
+<!-- verify: accept -->
 ```
 fn interval(low: Word, high: Word) -> Word {
     high - low

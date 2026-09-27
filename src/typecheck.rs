@@ -4241,7 +4241,26 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             if ctx.data.contains_key(name) {
                 return Ok(Type::Struct(name.clone(), Vec::new()));
             }
-            // Bare function name reference. Report unknown.
+            // A bare function name in a value position. This USED TO report
+            // "undefined identifier", which is misleading in the one case it most
+            // often arises: the name IS defined, as a function, and what is
+            // unsupported is referring to it without calling it. The compiler
+            // already carries the accurate diagnostic for this shape, and
+            // `book/src/WHY_REJECTED.md` quotes it as the message a reader will
+            // see -- but the compiler never runs, because this check refuses
+            // first. Emitting the same wording here makes the guide's quotation
+            // true and tells the reader what to do instead.
+            if ctx.functions.contains_key(name) {
+                return Err(TypeError::new(
+                    format!(
+                        "first-class function references are not supported in V0.2.0; \
+                         rewrite `{}` as a direct call site or as a trait-bounded \
+                         generic",
+                        name
+                    ),
+                    *span,
+                ));
+            }
             Err(TypeError::new(
                 format!("undefined identifier `{}`", name),
                 *span,

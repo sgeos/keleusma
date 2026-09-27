@@ -10,6 +10,67 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-26, session 67, first increment.**
+
+**THE BOOK'S FRESHNESS GUARANTEE WAS ATTACHED TO A BRANCH THE WORK NEVER REACHES.**
+`book/ci/verify_examples.py` is described in its own workflow as running "on each CI
+run". `book.yml` triggers on the default branch only. Measured: it **last ran
+2026-07-24** and has **never run on `v0.2.3`**, while `book/src` was edited on that
+branch repeatedly, twice in session 66 to correct a wrongly stated mechanism. Nothing
+was red because nothing ran. It is now invoked from the `docs-links` job of `ci.yml`,
+which already builds the CLI and which runs on every branch.
+
+**AND IT ASSERTED 51 OF THE BOOK'S 60 COMPLETE PROGRAMS' WORTH OF CLAIMS WHILE 34
+PROGRAMS WERE NEVER EXECUTED.** The extraction matched prose: a block was asserted only
+if a sentence near it happened to say "output is" or "prints". Everything else passed
+through a `continue` that no count recorded, including every `loop main` and `yield main`
+program, which the entry-point test could not see at all. The principal examples of
+chapters 15, 17 and 18 were among them.
+
+**Now 85 assertions, zero programs excused, and 54 acceptances as the control on the
+refusals.** Every complete program carries either an output claim or an explicit
+`<!-- verify: ... -->` expectation beside it, invisible in the rendered book and absent
+from `book/po`. `accept` runs it, `compile` verifies it without running it, `reject`
+requires a refusal and may pin the diagnostic, and `prelude` assembles a
+"change the program to ..." block the way the prose tells a reader to.
+
+**THREE DEFECTS IN THE GUIDE, AND THE THIRD WAS REPAIRED IN THE IMPLEMENTATION
+INSTEAD.** The `FAQ` described the productivity rule as purely lexical and not chasing
+calls, and printed a program it said was rejected — which compiles, because
+`compute_always_yielding` is a fixpoint over the call graph. Two chapters pinned exact
+byte counts of compiled output, 2372 against 3676 and 2400 against 3684, both stale and
+now removed rather than updated. And `WHY_REJECTED.md` quoted a diagnostic the pipeline
+could not produce: the text exists in `src/compiler.rs` and the type checker refused
+first with `undefined identifier`, at a site whose comment read "Bare function name
+reference. Report unknown." **The name is defined.** The type checker now emits the
+accurate wording, with a control confirming a genuinely undefined name still reports as
+undefined.
+
+**A WEAKER COMMAND WOULD HAVE MADE THE REFUSALS VACUOUS.** `keleusma compile` writes
+bytecode without the structural pass and **accepts a program `keleusma run` refuses**.
+A rejection expectation checked with `compile` would have passed against a program the
+runtime rejects. The chapter-19 recursion example is exactly that case and it failed
+loudly when the harness first used `compile`, which is how this was found.
+
+**The harness is mutation-tested in five directions**: an empty source tree trips four
+floors, a flipped expectation fails, a refusal for the wrong reason fails, a deleted
+marker fails, and the Rust guard caught a real grammar divergence between itself and the
+script before I noticed it.
+
+**Left for you, not acted on.** `run --print-memory` reports an arena bound for a
+program `run` refuses, with the transient figure equal to the whole default arena. Two
+readings are available — deliberate, because a host must learn the size before a
+capacity is fixed, or a saturating fallback for a bound never computed — and the
+evidence does not separate them. The first does not cover this case, whose refusal is
+recursion rather than capacity. Recorded in
+`docs/decisions/BOOK_EXAMPLE_VERIFICATION.md`.
+
+**Unchanged and yours**: H2's trade, workstream C's `BYTECODE_VERSION` authorisation,
+the seven standing decisions. **No file under `src/selfhost/kel/` modified.**
+`BYTECODE_VERSION` is 2 and the opcode count is 66.
+
+---
+
 **2026-09-24, session 66, thirteenth increment.**
 
 **THE LANGUAGE SERVER'S WIRE LAYER NOW HAS TESTS. ITS SIX EXISTING ONES COVER ONLY THE

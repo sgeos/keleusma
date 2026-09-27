@@ -38,6 +38,7 @@ let factorial = |n: Word| if n <= 1 { 1 } else { n * factorial(n - 1) };
 
 The first is to reclassify the entry point as `loop` and accumulate across iterations through a data block.
 
+<!-- verify: compile -->
 ```
 data state { result: Word }
 
@@ -52,6 +53,7 @@ The host must initialize `state.result` to a meaningful starting value through t
 
 The second is to register a host-side fold native and call it from a `fn`.
 
+<!-- verify: compile -->
 ```
 use math::fold_product
 
@@ -73,6 +75,7 @@ a direct call site or as a trait-bounded generic
 
 **Trigger.** A `let` binding holds a function value, or a function value flows through an argument.
 
+<!-- verify: reject: first-class function references are not supported -->
 ```
 fn increment(x: Word) -> Word { x + 1 }
 
@@ -84,6 +87,7 @@ fn main() -> Word {
 
 **Rewrite.** Replace the indirect dispatch with a direct call or a trait method.
 
+<!-- verify: accept -->
 ```
 fn increment(x: Word) -> Word { x + 1 }
 
@@ -163,6 +167,7 @@ Stream block must contain at least one Yield
 
 **Trigger.** A `loop` declaration with a body that does not call `yield`.
 
+<!-- verify: reject: Stream block must contain at least one Yield -->
 ```
 loop main(input: Word) -> Word {
     input * 2
@@ -171,6 +176,7 @@ loop main(input: Word) -> Word {
 
 **Rewrite.** Add a `yield` expression to the loop body.
 
+<!-- verify: compile -->
 ```
 loop main(input: Word) -> Word {
     let doubled = input * 2;
