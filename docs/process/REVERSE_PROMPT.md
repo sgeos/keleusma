@@ -10,6 +10,50 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-27, session 67, tenth increment.** Increments eight and nine are on an unmerged branch
+(#467); each block names its own number.
+
+**AN INSTALLED TOOL HAD NEVER BEEN RUN AGAINST THIS TREE, AND IT HELD THREE ADVISORIES.**
+`cargo audit` appears in no CI job, no gate step, and nowhere in `scripts/`. Its first run
+reported **RUSTSEC-2026-0233**, a use-after-free during deserialization of crafted archives, plus
+**0234** and **0235**, out-of-bounds reads — all against `rkyv 0.8.16`, all fixed in `>= 0.8.17`,
+the oldest dated **2026-05-11**. `keleusma 0.2.2` is published carrying it, so they accumulated
+for about four months.
+
+The fix is **lockfile-only**: the manifest already requires `"0.8"`, the lock moves to 0.8.18, and
+the scan clears at 102 dependencies. **2930 workspace tests pass under the new version**, which is
+the check that mattered, since rkyv participates in the bytecode format. A CI job now runs the
+scan, with its cost stated where it lives: a new advisory against an unchanged tree will fail an
+unrelated pull request, which is the price of not accumulating them silently.
+
+**REACHABILITY IS MEASURED, AND THE ANSWER IS THE CONSERVATIVE ONE.** With comments stripped,
+`src/wire_format.rs` contains **no `rkyv::` use at all**, and `src/bytecode.rs`'s only
+code-position uses are trait bounds inside derive attributes. There is no `rkyv::deserialize`,
+`rkyv::access` or `rkyv::from_bytes` call in `src/`. The vulnerable code is rkyv's validation and
+deserialization path, which nothing reaches. `CLAUDE.md` was right.
+
+**THE SOURCE SAYS OTHERWISE IN SEVEN PLACES, AND THAT IS WHY THIS TOOK TWO INCREMENTS.** Present
+tense, in the two files that carry the bytecode format: five in `wire_format.rs` and two in
+`bytecode.rs` describe the auxiliary body as rkyv-archived. Anyone assessing an rkyv advisory here
+reads them and concludes the path is affected — they misled me. And `wire_format.rs:1707` asserts
+an **8-byte alignment requirement** that `Module::validate_bytes` explicitly says is gone, which a
+host implementer would act on.
+
+**NOT REPAIRED, DELIBERATELY.** Each of the seven needs individual judgement, and some
+neighbouring rkyv comments are **accurate** — `bytecode.rs:1746` correctly says a section "carries
+no rkyv archive" — so a blanket edit would damage correct prose in the most load-bearing files.
+The live-claim-versus-history distinction applies exactly as it did to a changelog earlier today.
+`docs/decisions/DEPENDENCY_ADVISORY_COVERAGE.md` carries the line numbers and the reasoning.
+
+**A THIRD ITEM IS YOURS.** If nothing calls rkyv's archive path, the `Archive`/`Deserialize`/
+`Serialize` derives on the bytecode types may be vestigial. Removing them would eliminate the
+advisory exposure rather than tracking it, but they sit on published types. `AlignedVec` is still
+used, so the dependency itself cannot simply be dropped.
+
+**Also yours, unchanged**: the book's 38 untranslated messages; whether `compile` should refuse a
+module no host can load; H2's trade; workstream C's `BYTECODE_VERSION` authorisation; the seven
+standing decisions; the parser-gap capacity call at 162 bindings against 128.
+
 **2026-09-27, session 67, eighth increment.**
 
 **THE FILE WHOSE JOB IS TO ORIENT MODELS WAS WRONG IN FOUR PLACES.** `llms.txt` is 58 lines, ships
