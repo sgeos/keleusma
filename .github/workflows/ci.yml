@@ -303,6 +303,43 @@ jobs:
   # and failed with eight unresolved imports. Behind that, the crate's own unit
   # tests had been broken since B28 changed the enum representation, invisible
   # because the test target never built.
+  # THE SHELL TOOLING THAT GATES AND MOVES WORK.
+  #
+  # `scripts/` holds the release gate, the worktree helper and the merge script.
+  # A defect in one of those surfaces at the worst moment -- a publication, or a
+  # merge -- and nothing checked them. Measured 2026-09-27: all twelve pass
+  # `bash -n`, and shellcheck reported THREE warnings and FIVE style findings,
+  # all repaired in the increment that added this job. Two of the warnings were
+  # real: a `cd` in `verify.sh` that continued silently on failure, and two
+  # declarations in `worktree.sh` that masked a command substitution's exit
+  # status.
+  #
+  # An earlier note here said "zero findings". That was wrong, and it came from a
+  # counting grep that searched for `^-- SC` where shellcheck emits `^--^ SC`, so
+  # it matched nothing. The severity claim WAS right -- no finding is
+  # error-severity -- which is a different statement from none existing.
+  #
+  # The availability check below is deliberate, and so is running with no
+  # severity threshold: a threshold would have hidden exactly the eight findings
+  # this job was added to surface.
+  #
+  # The availability check is deliberate. A step that silently no-opped when the
+  # tool was absent would read as coverage while providing none, which is the
+  # failure this repository keeps meeting.
+  shellcheck:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Analyse every script under scripts/
+        run: |
+          command -v shellcheck >/dev/null || {
+            echo "shellcheck is not available on this runner; this step would otherwise pass without checking anything"
+            exit 1
+          }
+          shellcheck --version
+          shellcheck scripts/*.sh
+
   rtos-host:
     name: RTOS host demonstrator
     runs-on: ubuntu-latest

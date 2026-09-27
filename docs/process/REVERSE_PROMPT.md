@@ -10,13 +10,80 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-27, session 67, sixth increment. I REPORTED THIS INCREMENT AS FINDING NOTHING, AND
+THAT WAS WRONG.** The two guards found nothing. The shellcheck step found **eight** findings,
+three of them warnings and two of those genuine defects in load-bearing scripts.
+
+**The toolchain-component class was swept and is a one-member population.** Only two
+`rust-toolchain.toml` files exist and one lives under gitignored `tmp/`, so the tracked
+population is `examples/rtos` alone, fixed in the previous increment.
+
+**The instructive measurement is the negative one.** Sweeping every workflow job for "runs
+clippy or rustfmt but does not declare the component" found **zero offenders** — and the
+`rtos-host` job that failed yesterday DID declare clippy. It failed because the crate's own pin
+overrides the job's toolchain for anything run inside that directory. **A job-level check cannot
+see that defect.** `tests/toolchain_pin_components.rs` checks the cross-level property instead,
+and says in its own text that its population is one, so its scope is not mistaken for broader
+coverage.
+
+**MY "ZERO SHELLCHECK FINDINGS" WAS AN INSTRUMENT ERROR, AND I PUBLISHED IT.** My counting grep
+searched for `^-- SC` where shellcheck emits `^--^ SC`, so it matched nothing and I reported
+zero. The real figures: **0 error, 3 warning, 5 style.** The severity claim I also made — that
+none is error-severity — was correct, and it is a different statement from none existing.
+Conflating them is how a wrong number reaches a durable document.
+
+Two of the three warnings are genuine: `cd "$(dirname "$0")/.."` in `verify.sh` continued
+silently if the directory did not exist, and two `local dir="...$(leaf ...)"` declarations in
+`worktree.sh` masked the substitution's exit status. All eight are repaired and the job runs with
+**no severity threshold**, since a threshold would have hidden exactly these.
+
+**AND I PINNED A STALE-PRONE NUMBER TWO INCREMENTS AFTER REMOVING TWO FROM THE GUIDE.** The
+packaging guard's first draft quoted "335 files"; it was 336 inside the same increment, because
+this increment adds a test file and tests ship in the tarball. The number is now not quoted at
+all — what matters is the ABSENCES, which are properties of the exclude list rather than of the
+tree's size. This repository's own note applies: knowing a failure class does not prevent
+producing it.
+
+**A precision correction, applied across five files.** I wrote that a host build of the RTOS
+crate "failed with eight unresolved imports". It failed with eight RESOLUTION errors: five
+unresolved imports and three unresolved modules. The conclusion is unchanged and the wording was
+wrong, so it is fixed where it is durable.
+
+**The tarball did measure clean**: 335 files with `secret/`, `compiler/`, `examples/rtos/` and
+`book/` absent, and `secret/` protected twice, by `.gitignore` and by `exclude`.
+
+**What was added, and why despite finding nothing.** A `shellcheck` job that **fails loudly if
+the tool is absent** rather than silently no-opping, over scripts that include the release gate,
+the worktree helper and the merge script. And a guard that the manifest still excludes the
+confidential and detached paths, because publishing is irreversible: a version cannot be
+withdrawn, only yanked, and the tarball stays downloadable. That guard states that it checks the
+DECLARATION and not a built tarball, since a second exclusion mechanism could be lost while the
+list stayed intact.
+
+**Every guard was mutation-tested**: removing `clippy` from the pin makes the first fail and name
+it, removing `secret/` from the exclude list makes the second fail and name it, and both files
+were confirmed byte-identical after restoration.
+
+**THE SEAM IS THINNER, NOT EXHAUSTED — AND I WAS TOO QUICK TO SAY SO.** I declared this
+increment defect-free before running the tool properly. Asking what an instrument covers still
+paid here: three script defects, two of them real. What HAS stopped yielding is the survey by
+inspection; running the tool is still finding things.
+
+**Yours**: the book's 38 untranslated messages; whether `compile` should refuse a module no host
+can load; H2's trade; workstream C's `BYTECODE_VERSION` authorisation; the seven standing
+decisions; the parser-gap capacity call at 162 bindings against 128.
+
+**No file under `src/selfhost/kel/` modified.** `BYTECODE_VERSION` is 2, the opcode count 66.
+
+---
+
 **2026-09-27, session 67, fifth increment.** The fourth increment's block follows directly
 below; both are dated today and each names its own number.
 
 **`cargo test` IN `examples/rtos` DID NOT COMPILE, AND THE CAUSE WAS TWO DEEP.** `bench_n6`
 was auto-discovered from `src/bin/` with **no `required-features`**, unlike both of its
-siblings, so any host build of the crate tried to compile an embassy-and-defmt binary and died
-with eight unresolved imports. Behind that, the crate's own two unit tests still destructured
+siblings, so any host build of the crate tried to compile an embassy-and-defmt binary and died with eight resolution errors
+(five unresolved imports, three unresolved modules). Behind that, the crate's own two unit tests still destructured
 `Value::Enum { type_name, variant, fields }` — the struct variant B28 replaced with
 `Enum(EnumBody)` — and had been dead since. **The ungated binary is why the rot was
 invisible**: the test target never built, so nothing could report the tests broken.

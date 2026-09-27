@@ -10,7 +10,7 @@
 //! **THIS CRATE'S `cargo test` DID NOT COMPILE.** Two causes, one behind the other. The
 //! `bench_n6` binary was auto-discovered from `src/bin/` with no `required-features`, unlike
 //! both of its siblings, so any host build tried to compile an embassy-and-defmt binary and
-//! failed with eight unresolved imports. Behind that, the lib's own unit tests had been
+//! failed with eight resolution errors (five unresolved imports, three unresolved modules). Behind that, the lib's own unit tests had been
 //! broken since B28 replaced `Value::Enum { .. }` with `Enum(EnumBody)` — invisible, because
 //! the test target never built.
 //!

@@ -35,7 +35,8 @@ The root cause is one layer further down. `bench_n6` was **auto-discovered** fro
 with no `required-features`, while both of its siblings are explicitly declared and gated. It
 imports `defmt`, `embassy_executor`, `embassy_stm32` and a `keleusma-bench` counter that exist
 only under `stm32n6570dk-platform`. So any host-target build or test of the crate tried to
-compile it and failed with eight unresolved imports — which means **the test target could never
+compile it and failed with eight resolution errors, five unresolved imports and three
+unresolved modules — which means **the test target could never
 build, which is why nobody could see that the tests were broken.** One missing three-line
 declaration made a whole test surface unreportable.
 

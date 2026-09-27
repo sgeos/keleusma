@@ -10,6 +10,42 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-27, session 67, sixth increment). INSURANCE, AND IT FOUND NOTHING
+> — WHICH IS THE HONEST SUMMARY.**
+>
+> Two sweeps returned clean and one population turned out to have a single member.
+>
+> **The toolchain-component class was swept.** Only two `rust-toolchain.toml` files exist and
+> one is under gitignored `tmp/`, so the tracked population is **one directory**, already
+> fixed. Sweeping every workflow job for "runs clippy or rustfmt without declaring it" found
+> **zero** — and that is the instructive part: the `rtos-host` job DID declare clippy and failed
+> anyway, because the crate's pin overrides the job's toolchain. **A job-level check cannot see
+> this defect.** `tests/toolchain_pin_components.rs` checks the cross-level property and says in
+> its own text that its population is one.
+>
+> **The shell scripts were NOT clean, and my first report of them was wrong.** I wrote "zero
+> findings"; shellcheck actually reported **three warnings and five style findings** across three
+> scripts. The error came from a counting grep searching for `^-- SC` where shellcheck emits
+> `^--^ SC`, so it matched nothing and I published its number. The severity claim was right —
+> none is error-severity — which is a different statement from none existing.
+>
+> All eight are repaired, two of them genuine: a `cd` in `verify.sh` that continued silently on
+> failure, and two declarations in `worktree.sh` masking a command substitution's exit status.
+> The `shellcheck` job runs with **no severity threshold**, since a threshold would have hidden
+> exactly these, and it **fails loudly if the tool is absent** rather than silently no-opping.
+>
+> **The tarball is correct**: 335 files with `secret/`, `compiler/`, `examples/rtos/` and `book/`
+> absent, and `secret/` protected twice, by gitignore and by `exclude`. A guard in
+> `tests/release_process_crate_list.rs` now fails if the manifest stops excluding the
+> confidential and detached paths. It states that it checks the DECLARATION and not a built
+> tarball.
+>
+> **The two guards repaired nothing; the shellcheck step repaired three real defects**, which is
+> not what I expected of it and is the opposite of what I first reported. The guards remain
+> insurance, recorded as such because publishing is irreversible and the checks cost a few lines. Every guard was mutation-tested: removing
+> `clippy` from the pin, removing `secret/` from the exclude list, and both restored
+> byte-identically.
+
 > **Currency note (2026-09-27, session 67, fifth increment, follow-up). THE NEW JOB FAILED ON
 > ITS FIRST RUN, AND THAT IS THE ARGUMENT FOR IT.**
 >
@@ -34,7 +70,8 @@ Current sprint source of truth.
 > `examples/rtos`'s `cargo test` **did not compile**. Two causes, one behind the other.
 > `bench_n6` was auto-discovered from `src/bin/` with **no `required-features`**, unlike both
 > siblings, so any host build tried to compile an embassy-and-defmt binary and failed with
-> eight unresolved imports. Behind that, the crate's two unit tests still destructured
+> eight resolution errors (five unresolved imports, three unresolved modules). Behind that,
+> the crate's two unit tests still destructured
 > `Value::Enum { type_name, variant, fields }` — the pre-B28 struct variant — and had been
 > dead since that change, invisible because the test target never built.
 >
