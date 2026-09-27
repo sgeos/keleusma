@@ -13,6 +13,102 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-27 — session 67, increment 9: the class was closed for one file
+
+**The finding is about a guard, not a document.** `tests/release_process_crate_list.rs` exists
+because `RELEASE_PROCESS.md` once said five crates when seven publish, and its own opening comment
+states the corrective: "Correcting the document closed the instance. It did not close the class.
+... This test closes the class, by deriving one side from the filesystem instead of trusting both
+sides to be edited together." It then closed the class **for one file**.
+
+`README.md` said "Five crates:" and `AGENTS.md` said "Five workspace crates", both omitting
+`keleusma-wire` and `keleusma-wire-derive` **entirely** — zero mentions of either. `README.md` is
+what crates.io renders, so that was the project's most publicly visible statement of its own crate
+set. `AGENTS.md` is what `llms.txt` names as the first thing a model should read, and no test read
+it at all. `AGENTS.md` also reported V0.2.0 as published while the workspace was at 0.2.2.
+
+**This is the shape `CLAUDE.md` already records**: "AND I FIXED WHAT THE GUARD CAUGHT, NOT THE
+CLASS. The citation guard scans two documents, flagged two bare file names in one, and I corrected
+exactly those." Same shape, different site, and the corrective is the same: name the population and
+derive the expectation.
+
+**Three design choices worth the words.**
+
+The entry-point set is named in the test WITH a justification for each document, because a named
+set nobody can audit is exactly how these two were missed when the original instance was fixed.
+The crate set is derived from the manifests, so no number is written into the test — writing
+"seven" would reproduce the defect one release later, which is the defect's own mechanism.
+And the count check is separate from the naming check, because a document can name every crate and
+still open with a stale total; conflating them lets one failure mask the other.
+
+**The count check's first run flagged history, and the repository's own rule settled it.**
+`RELEASE_PROCESS.md` contains "published all four crates" — a dated V0.2.2 lesson recording what
+an agent did when four was the number. `CLAUDE.md`: "Distinguish a live claim from a ledger entry.
+History recording what was true at an increment is not stale; rewriting it corrupts the record." So
+the check reads only unquoted lines, since this repository keeps ledger entries in blockquotes, and
+**the trade is written into the test**: a live claim inside a blockquote escapes it. That is the
+lesser error, because the alternative pressures a future reader into editing the ledger to make a
+test pass.
+
+**And my own mutation was wrong before the guard was.** The prefix-safety mutation replaced the
+`keleusma-wire` bullet with the derive name and the test passed, which looked like a broken check.
+It was not: the derive bullet's own description says "backing `keleusma-wire`'s `derive` feature",
+so a genuine whole-token mention survived. The real mutation replaces every whole-token occurrence,
+and then the guard names `keleusma-wire` as missing while two `keleusma-wire-derive` mentions
+remain. **Third time this session that my instrument was at fault rather than my subject**, and the
+corrective each time was to look at what the mutation actually produced.
+
+---
+
+## 2026-09-27 — session 67, increment 8: the surface no guard could reach
+
+**Why I looked here.** Two increments earlier I recorded that the coverage seam was thinning,
+after three probes came back clean. That was true of the surfaces I had been probing, and the
+observation was incomplete. The sharper question is not "is there anything left" but **"is there a
+surface that no existing guard can structurally reach"**. `llms.txt` is one: `documentation_links.rs`
+resolves relative markdown links, and every link in that file is an absolute GitHub URL. It was
+outside the guard's reach by construction, not by oversight, and nothing else looked at it.
+
+**It was wrong in four places, in a file that ships to crates.io and exists to orient models.**
+Two dead paths of twenty-nine, an opcode count three too high, and a branching-model description
+contradicted by the very document it links to.
+
+**The opcode diagnosis is the part worth recording, because my first reading was wrong.** I saw 69
+and noted that the specification says the maximum live wire id is also 69, and nearly wrote that
+the two had been conflated. They had not. `CLAUDE.md` records that the `NewComposite`
+consolidation "took the instruction set from 69 to 66", and that landed in V0.2.1 — so
+"the 69-opcode V0.2.0 ISA" was **true when written** and went stale one release later. A
+version-scoped claim that aged is a different defect from a confusion, and it changes the
+correction: the file now states 66 and explains the transition, rather than silently swapping a
+digit.
+
+**The dead paths have provenance.** `git log --diff-filter=D` names `f745b16e docs(book): port the
+learning guide to mdbook (bilingual EN/JA)` as the commit that removed `docs/guide/`, and
+`llms.txt`'s own last two commits predate it. So the links have been broken since V0.2.2 shipped,
+in a file included in that release's tarball.
+
+**The guard is offline on purpose.** The natural instinct with a file full of URLs is to fetch
+them. What rots is the tree — a file moves and the link goes stale — not the host. Stripping the
+`blob/main/` prefix and testing the path against the working tree checks the thing that actually
+breaks, and it runs in a sandbox with no network.
+
+**The branching-model check is deliberately narrow.** Asserting that two documents "describe the
+model the same way" is not mechanisable. The check asserts the specific contradiction that
+existed, and it first asserts its own premise — that `GIT_STRATEGY.md` really does say
+"release-branch model" — so if that document changes, the check fails loudly rather than
+continuing to enforce a stale contrast.
+
+**All three were mutation-tested**: a broken path, a changed count, and a reintroduced
+"trunk-based" each fail and name the problem, and `llms.txt` was confirmed byte-identical after
+each restoration.
+
+**What this revises.** Six of eight increments found real defects. The claim to retire is not
+"the seam is thin" but the method behind it: inspecting surfaces that already sit near a guard has
+stopped paying, while asking which surfaces no guard can reach is still paying. That is a
+generative question rather than an exhaustible list.
+
+---
+
 ## 2026-09-27 — session 67, increment 5: an ungated binary two layers down
 
 **The surface.** `examples/rtos` ships a cooperative microkernel. Continuous integration

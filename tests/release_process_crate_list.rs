@@ -434,3 +434,283 @@ fn the_package_manifest_still_excludes_the_paths_that_must_not_be_published() {
         );
     }
 }
+
+/// The documents that present a COMPLETE list of the workspace's crates, each with the reason it
+/// is in scope. **The set is named and justified here on purpose**: a named set nobody can audit
+/// is how the next entry point gets added without this guard following it, which is exactly what
+/// happened between `RELEASE_PROCESS.md` and these two.
+const ENTRY_POINTS: &[(&str, &str)] = &[
+    (
+        "README.md",
+        "what crates.io renders, so it is the project's most publicly visible statement of its \
+         own crate set",
+    ),
+    (
+        "AGENTS.md",
+        "the model-facing entry point, named by llms.txt as the first thing to read; no test read \
+         it at all before 2026-09-27",
+    ),
+    (
+        "docs/process/RELEASE_PROCESS.md",
+        "the document the first instance of this defect was found in, kept in scope so the \
+         original site cannot regress",
+    ),
+];
+
+/// Whether `name` occurs in `text` as a whole token rather than as the prefix of a longer name.
+///
+/// **`keleusma-wire` is a prefix of `keleusma-wire-derive`.** A plain containment check finds the
+/// shorter name inside the longer one and reports coverage that does not exist — the same prefix
+/// hazard that defeated an abandoned scan for `keleusma::selfhost`, which also matched
+/// `selfhost_host`. A raw `grep -c` for `keleusma-wire` in the corrected README returns 2 for one
+/// real mention, which is this hazard in miniature.
+fn names_whole_token(text: &str, name: &str) -> bool {
+    let mut from = 0usize;
+    while let Some(rel) = text[from..].find(name) {
+        let at = from + rel;
+        let after = text[at + name.len()..].chars().next();
+        let continues = after.is_some_and(|c| c.is_alphanumeric() || c == '-' || c == '_');
+        if !continues {
+            return true;
+        }
+        from = at + name.len();
+    }
+    false
+}
+
+/// **EVERY ENTRY-POINT DOCUMENT NAMES EVERY CRATE THAT PUBLISHES.**
+///
+/// `RELEASE_PROCESS.md` once said five crates when seven publish, and this file's opening comment
+/// records that "correcting the document closed the instance. It did not close the class." It then
+/// closed the class for one file. Measured 2026-09-27, `README.md` said "Five crates:" and
+/// `AGENTS.md` said "Five workspace crates", both omitting `keleusma-wire` and
+/// `keleusma-wire-derive` entirely — the identical omission, at two sites the guard did not reach.
+///
+/// The crate set is DERIVED from the manifests, so no number is written into this test. Writing
+/// "seven" here would reproduce the defect one release later.
+#[test]
+fn every_entry_point_document_names_every_publishing_crate() {
+    let mut paths = Vec::new();
+    manifests(&root(), &mut paths);
+    let publishing: BTreeSet<String> = paths
+        .iter()
+        .filter_map(|p| package_of(p))
+        .filter(|(_, publishes)| *publishes)
+        .map(|(name, _)| name)
+        .collect();
+
+    // NON-VACUITY on the derivation. An empty set satisfies every containment below.
+    assert!(
+        publishing.len() >= 5,
+        "derived only {} publishing crates from the manifests, so the derivation has broken",
+        publishing.len()
+    );
+
+    let mut missing = Vec::new();
+    for (doc, why) in ENTRY_POINTS {
+        let text = std::fs::read_to_string(root().join(doc))
+            .unwrap_or_else(|e| panic!("read the entry-point document {doc}: {e}"));
+        for crate_name in &publishing {
+            if !names_whole_token(&text, crate_name) {
+                missing.push(format!("{doc} does not name `{crate_name}` ({why})"));
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "{} entry-point omission(s), the same class this file was written for:\n{}",
+        missing.len(),
+        missing.join("\n")
+    );
+}
+
+/// **NO ENTRY-POINT DOCUMENT STATES A CRATE COUNT THAT DISAGREES WITH THE MANIFESTS.**
+///
+/// Separate from the naming check on purpose: a document can name every crate and still open with
+/// a stale total, and conflating the two lets one failure mask the other. The expected word is
+/// derived from the manifest count rather than written down.
+#[test]
+fn no_entry_point_document_states_a_stale_crate_count() {
+    const WORDS: &[(usize, &str)] = &[
+        (3, "three"),
+        (4, "four"),
+        (5, "five"),
+        (6, "six"),
+        (7, "seven"),
+        (8, "eight"),
+        (9, "nine"),
+        (10, "ten"),
+    ];
+
+    let mut paths = Vec::new();
+    manifests(&root(), &mut paths);
+    let n = paths
+        .iter()
+        .filter_map(|p| package_of(p))
+        .filter(|(_, publishes)| *publishes)
+        .count();
+    let expected = WORDS
+        .iter()
+        .find(|(k, _)| *k == n)
+        .unwrap_or_else(|| panic!("no English word tabulated for {n} crates; extend the table"))
+        .1;
+
+    let mut wrong = Vec::new();
+    for (doc, _) in ENTRY_POINTS {
+        // LEDGER ENTRIES ARE EXCLUDED, AND THIS IS NOT A CONVENIENCE.
+        //
+        // The first run of this check flagged `RELEASE_PROCESS.md` for "published all four
+        // crates". That is a dated lesson recording what an agent did during V0.2.2, when four
+        // was the number -- history, not a live claim. `CLAUDE.md` states the rule directly:
+        // history recording what was true at an increment is not stale, and rewriting it
+        // corrupts the record. This repository keeps such entries in blockquotes, so the check
+        // reads only unquoted lines.
+        //
+        // The trade is stated rather than hidden: a live claim written inside a blockquote would
+        // escape this check. That is the lesser error, because the alternative pressures a future
+        // reader into editing the ledger to make a test pass.
+        let text: String = std::fs::read_to_string(root().join(doc))
+            .unwrap_or_else(|e| panic!("read {doc}: {e}"))
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('>'))
+            .collect::<Vec<_>>()
+            .join("\n")
+            .to_lowercase();
+        for (k, word) in WORDS {
+            if *k == n {
+                continue;
+            }
+            for phrase in [format!("{word} crates"), format!("{word} workspace crates")] {
+                if text.contains(&phrase) {
+                    wrong.push(format!(
+                        "{doc} says \"{phrase}\" and the manifests give {n} ({expected})"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// **NO DOCUMENT REPORTS A PUBLISHED RELEASE OLDER THAN THE MANIFEST CARRIES.**
+///
+/// `AGENTS.md` reported V0.2.0 as published while the workspace was at 0.2.2, two releases on. A
+/// stale status line tells a model the wrong thing about what consumers can actually depend on.
+#[test]
+fn no_entry_point_reports_a_published_release_older_than_the_manifest() {
+    let manifest = std::fs::read_to_string(root().join("Cargo.toml")).expect("the root manifest");
+    let at = manifest
+        .find("\nversion = \"")
+        .expect("the root manifest states no version");
+    let ver: String = manifest[at + 12..]
+        .chars()
+        .take_while(|c| *c != '"')
+        .collect();
+    assert!(
+        ver.split('.').count() == 3,
+        "parsed `{ver}` as the workspace version, which is not a triple"
+    );
+
+    let mut stale = Vec::new();
+    for (doc, _) in ENTRY_POINTS {
+        let text =
+            std::fs::read_to_string(root().join(doc)).unwrap_or_else(|e| panic!("{doc}: {e}"));
+        // Only the "published to crates.io" claim is checked. A document may legitimately discuss
+        // an older release historically; claiming it is the published one is the defect.
+        for line in text.lines() {
+            if !line.contains("published to crates.io") {
+                continue;
+            }
+            let claimed: Vec<&str> = line
+                .split_whitespace()
+                .filter(|w| w.starts_with('V') && w[1..].split('.').count() == 3)
+                .collect();
+            for c in claimed {
+                let num = c.trim_start_matches('V').trim_end_matches('.');
+                if num != ver {
+                    stale.push(format!(
+                        "{doc} reports {c} published while the workspace is at {ver}"
+                    ));
+                }
+            }
+        }
+    }
+    assert!(stale.is_empty(), "{}", stale.join("\n"));
+}
+
+/// **NO DOCUMENT CLAIMS A CRATE IS PUBLISHED WHEN ITS CHANGELOG SAYS IT IS NOT.**
+///
+/// **This guard exists because the increment that added the checks above got this wrong.** While
+/// correcting `README.md` from "Five crates:" to name all seven, I wrote "Seven crates, all
+/// published to crates.io". Seven crates are PUBLISHABLE — no manifest sets `publish = false`, and
+/// `RELEASE_PROCESS.md` lists seven for a release — but `keleusma-wire` and `keleusma-wire-derive`
+/// are at `0.1.0` and their own changelogs say, in as many words, "This crate has never been
+/// published."
+///
+/// **That distinction is the original defect's own mechanism.** "Will publish at the next release"
+/// and "is on crates.io today" are different claims, and collapsing them is how a document comes to
+/// describe a crate set that does not exist. The earlier five-versus-seven confusion lived in the
+/// same gap.
+///
+/// The unpublished set is DERIVED from the changelogs rather than listed here, so a crate's first
+/// publication retires its entry automatically.
+#[test]
+fn no_entry_point_claims_an_unpublished_crate_is_already_on_crates_io() {
+    let mut paths = Vec::new();
+    manifests(&root(), &mut paths);
+
+    // Crates whose own changelog states they have never been published.
+    let mut unpublished: BTreeSet<String> = BTreeSet::new();
+    for mani in &paths {
+        let Some((name, publishes)) = package_of(mani) else {
+            continue;
+        };
+        if !publishes {
+            continue;
+        }
+        let changelog = mani.parent().map(|d| d.join("CHANGELOG.md"));
+        let Some(cl) = changelog else { continue };
+        if let Ok(text) = std::fs::read_to_string(&cl)
+            && text.contains("has never been published")
+        {
+            unpublished.insert(name);
+        }
+    }
+
+    // NON-VACUITY, in the direction that matters. If this set is empty the check below passes
+    // trivially, so an empty set must be explained rather than assumed: it means every publishable
+    // crate has shipped at least once, which is a real state and not a parse failure. The floor is
+    // therefore on the DERIVATION reaching the changelogs at all.
+    let with_changelogs = paths
+        .iter()
+        .filter(|m| m.parent().is_some_and(|d| d.join("CHANGELOG.md").exists()))
+        .count();
+    assert!(
+        with_changelogs >= 4,
+        "found only {with_changelogs} manifests with a sibling changelog, so the derivation has \
+         broken rather than the crates having lost their changelogs"
+    );
+
+    let mut wrong = Vec::new();
+    for (doc, _) in ENTRY_POINTS {
+        let text =
+            std::fs::read_to_string(root().join(doc)).unwrap_or_else(|e| panic!("{doc}: {e}"));
+        for line in text.lines() {
+            let l = line.trim_start();
+            if l.starts_with('>') {
+                continue; // a ledger entry, per the rule above
+            }
+            let lower = line.to_lowercase();
+            if !(lower.contains("all published") || lower.contains("all are published")) {
+                continue;
+            }
+            for name in &unpublished {
+                wrong.push(format!(
+                    "{doc} says every crate is published, but `{name}`'s changelog states it has \
+                     never been. Publishable is not published."
+                ));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

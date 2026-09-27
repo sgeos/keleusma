@@ -10,7 +10,7 @@ The full project context, coding conventions, and per-session protocol live in [
 
 Keleusma is a Total Functional Stream Processor that compiles to bytecode and runs on a stack-based virtual machine. It targets `no_std + alloc` environments. The ecosystem value proposition is definitive worst-case execution time and worst-case memory usage. Programs whose bounds cannot be statically computed are rejected by the safe verifier.
 
-**Status**. V0.2.0 published to crates.io. Five workspace crates: `keleusma`, `keleusma-arena`, `keleusma-macros`, `keleusma-bench`, `keleusma-cli`.
+**Status**. V0.2.2 published to crates.io. Seven workspace crates: `keleusma`, `keleusma-arena`, `keleusma-macros`, `keleusma-bench`, `keleusma-cli`, `keleusma-wire`, `keleusma-wire-derive`.
 
 ## Reading order for new sessions
 
