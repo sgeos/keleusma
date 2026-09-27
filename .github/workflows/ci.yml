@@ -288,6 +288,77 @@ jobs:
       - name: Build keleusma against thumbv7em-none-eabihf
         run: cargo build -p keleusma --target thumbv7em-none-eabihf
 
+  # THE HOST HALF OF THE RTOS EXAMPLE, WHICH NOTHING BUILT.
+  #
+  # The job below cross-builds the two STM32N6 binaries. `three-task-std`, the
+  # host binary that `CLAUDE.md`, `examples/rtos/README.md` and
+  # `examples/rtos/MANUAL.md` all give as the quick start, was built by nothing —
+  # not this workflow and not `scripts/release-gate.sh`, which does not mention
+  # the crate. Six Keleusma task scripts are reachable only through these
+  # binaries, including the one that exercises the supervised-restart policy.
+  #
+  # Measured 2026-09-27, `cargo test` could not even build here. `bench_n6` was
+  # auto-discovered from `src/bin/` with no `required-features`, unlike both of
+  # its siblings, so a host build tried to compile an embassy-and-defmt binary
+  # and failed with eight unresolved imports. Behind that, the crate's own unit
+  # tests had been broken since B28 changed the enum representation, invisible
+  # because the test target never built.
+  # THE SHELL TOOLING THAT GATES AND MOVES WORK.
+  #
+  # `scripts/` holds the release gate, the worktree helper and the merge script.
+  # A defect in one of those surfaces at the worst moment -- a publication, or a
+  # merge -- and nothing checked them. Measured 2026-09-27: all twelve pass
+  # `bash -n`, and shellcheck reported THREE warnings and FIVE style findings,
+  # all repaired in the increment that added this job. Two of the warnings were
+  # real: a `cd` in `verify.sh` that continued silently on failure, and two
+  # declarations in `worktree.sh` that masked a command substitution's exit
+  # status.
+  #
+  # An earlier note here said "zero findings". That was wrong, and it came from a
+  # counting grep that searched for `^-- SC` where shellcheck emits `^--^ SC`, so
+  # it matched nothing. The severity claim WAS right -- no finding is
+  # error-severity -- which is a different statement from none existing.
+  #
+  # The availability check below is deliberate, and so is running with no
+  # severity threshold: a threshold would have hidden exactly the eight findings
+  # this job was added to surface.
+  #
+  # The availability check is deliberate. A step that silently no-opped when the
+  # tool was absent would read as coverage while providing none, which is the
+  # failure this repository keeps meeting.
+  shellcheck:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Analyse every script under scripts/
+        run: |
+          command -v shellcheck >/dev/null || {
+            echo "shellcheck is not available on this runner; this step would otherwise pass without checking anything"
+            exit 1
+          }
+          shellcheck --version
+          shellcheck scripts/*.sh
+
+  rtos-host:
+    name: RTOS host demonstrator
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # The integration test drives the demonstrator under a wall-clock budget,
+      # which the kernel gained for exactly this purpose. It runs for nine
+      # seconds so the deliberate fault on the faulty task's fifth iteration
+      # (1500ms period) is reached and the supervised restart is observed.
+      - name: Lint and test the detached RTOS example on the host target
+        run: |
+          cd examples/rtos
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test --release
+
   rtos-n6-build:
     name: RTOS demonstrator build (N6 / thumbv8m.main-none-eabihf)
     runs-on: ubuntu-latest
@@ -411,6 +482,25 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-tree-borrows
         run: cargo miri test -p keleusma-arena
+      # THE LIBRARY PACKAGE'S UNDEFINED-BEHAVIOUR PIN, WHICH RAN NOWHERE BUT A
+      # PRE-PUBLICATION GATE INVOCATION.
+      #
+      # `scripts/release-gate.sh --miri` runs this test and this job did not, so a
+      # regression on the null-text-pointer path survived every merge and was
+      # caught only when a human ran the gate before a release. The repository
+      # permits a merge on this workflow alone, justified by it being a superset of
+      # that gate; on Miri it was not. Measured 2026-09-27.
+      #
+      # Tree Borrows specifically: rkyv archive validation trips Stacked Borrows,
+      # so a VM-touching Miri run needs this aliasing model. That is why the gate
+      # invokes it this way and why this step does not also run under the default
+      # model.
+      - name: Tree borrows (library package, null-text-pointer UB pin)
+        env:
+          MIRIFLAGS: -Zmiri-tree-borrows
+        run: |
+          cargo miri test -p keleusma \
+            --test marshall c1_null_text_pointer_marshals_to_empty_string_not_ub
 
   docs-links:
     name: Doc links

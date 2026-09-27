@@ -107,12 +107,25 @@ cargo run -q -p keleusma-cli -- run scripts/check-md-links.kel
 # The self-hosted compiler at compiler/ is a DETACHED workspace: excluded from the
 # crate tarball, run by neither the pre-push hook nor CI. It reads the shared
 # kel/*.kel stage sources, so a change to those or to its Rust driver can break it
-# silently. Including it here is where that is caught before a merge to the release
-# line, and it makes this gate a SUPERSET of CI (which never sees the subproject). A
-# stale decoder here shipped `unknown op tag 62` into v0.2.3 undetected; the
-# `decoder_drift_guard` unit test in compiler/src/selfhost.rs is the fast standing
+# silently. A stale decoder here shipped `unknown op tag 62` into v0.2.3 undetected;
+# the `decoder_drift_guard` unit test in compiler/src/selfhost.rs is the fast standing
 # regression, and this step is the full check. (Process-audit 2026-07-22, item 4.)
-step "Detached compiler/ subproject (fmt, clippy, tests — gated nowhere else)"
+#
+# CORRECTED 2026-09-27. This comment used to assert the reverse relationship: that
+# including the subproject made this gate the broader of the two instruments, and that
+# no other check covered it. Both were true when written at a5f646bd and were falsified
+# by 4483f43e, which added the `selfhost-compiler` CI job, and then by fa978eff, whose
+# subject is "close the coverage holes so CI is a superset of the local gate". The
+# relationship was deliberately inverted and this comment kept asserting the old one.
+#
+# The retracted wording is PARAPHRASED rather than quoted on purpose.
+# `nothing_claims_the_gate_is_a_superset_or_that_ci_skips_the_subproject` in
+# tests/gate_ci_correspondence.rs asserts the ABSENCE of those phrases, and a quoted
+# retraction satisfies the search as surely as a live claim. The first draft of this
+# very comment quoted them and turned that test red -- the tenth instance of the
+# comment-matching class the repository's own sweep documents, committed inside the
+# increment that added the guard against it.
+step "Detached compiler/ subproject (fmt, clippy, tests — also the selfhost-compiler CI job)"
 ( cd compiler && cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo test )
 
 # The LLVM backend at native_codegen/ is a DETACHED workspace for the same

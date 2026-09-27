@@ -10,6 +10,317 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-27, session 67, eighth increment.**
+
+**THE FILE WHOSE JOB IS TO ORIENT MODELS WAS WRONG IN FOUR PLACES.** `llms.txt` is 58 lines, ships
+in the crate tarball, and tells a model to consult the agent-onboarding file and the architecture
+description first. **Nothing checked it, and `documentation_links.rs` could not**: that guard
+resolves relative markdown links and every link here is an absolute GitHub URL, so the file sat
+outside its reach by construction rather than by oversight.
+
+**The opcode count said 69 against the specification's 66 — and the diagnosis matters.** That claim
+was TRUE of V0.2.0; the V0.2.1 `NewComposite` consolidation retired four construct opcodes and
+added one. It is a version-scoped statement that went stale, NOT a confusion with the maximum live
+wire id, which is coincidentally also 69. I nearly recorded the wrong cause, and checking changed
+the correction's wording.
+
+**Two of twenty-nine referenced paths were dead.** `docs/guide/COOKBOOK.md` and
+`docs/guide/FAQ.md` were moved to `book/src/` by commit `f745b16e`, the mdbook port, and `llms.txt`
+has not been touched since before it.
+
+**And it contradicted the document it links to**, calling the branching model "Trunk-based
+development" where `GIT_STRATEGY.md` opens with "a release-branch model with a four-level
+hierarchy".
+
+`tests/llms_txt_currency.rs` checks that every referenced path resolves, that the stated opcode
+count equals the specification's, and that the trunk-based contradiction has not returned. It works
+**offline** — what rots is the tree, not the host — and each check was mutation-tested: a broken
+path, a changed count and a reintroduced contradiction each fail and name the problem.
+
+**This is the eighth increment and the sixth to find a real defect**, which revises the note two
+increments ago about a thinning seam. What had stopped paying was survey by inspection of surfaces
+already near a guard. A surface that no guard could structurally reach was still carrying four
+errors.
+
+**Yours, unchanged**: the book's 38 untranslated messages; whether `compile` should refuse a module
+no host can load; H2's trade; workstream C's `BYTECODE_VERSION` authorisation; the seven standing
+decisions; the parser-gap capacity call at 162 bindings against 128.
+
+**No file under `src/selfhost/kel/` modified.** `BYTECODE_VERSION` is 2, the opcode count 66.
+
+---
+
+**2026-09-27, session 67, seventh increment. The session's handoff is refreshed and this is its
+closing block.**
+
+**`HANDOFF.md` described a commit from the previous session and is now stamped on this trunk.**
+Every content check in it was RUN while it was written, not carried forward, and the numbered list
+was checked in its rendered order — this file has twice had an item inserted above its predecessor
+by an agent that had just read the warning against it.
+
+**Two things are written into it deliberately.** The suite figure carries "re-derive rather than
+trust it", because this session added six test files and the number moved four times; a figure
+that moves every increment cannot live in a document refreshed every few increments. And the
+session's lesson is stated as **survey by inspection has stopped paying, running the tools has
+not** — not as "the seam is exhausted", which increment 6 disproved within the hour by reporting
+nothing and then finding three real defects the moment shellcheck was run properly.
+
+**What the session did.** Seven increments, six of which found that an instrument covered less
+than its description claimed: a book verifier attached to a branch the work never reached; a
+translation catalogue reporting on itself; an unverified superset claim licensing every merge; a
+worst-case memory bound that was a constant; an ungated binary hiding a test target hiding two
+tests rotted since B28; and eight shellcheck findings I had reported as zero, two of them
+silent-failure paths in the scripts that gate and move work.
+
+**Six of my own defects landed inside the increments that fixed their class.** A non-vacuity
+floor that passed while my parser was half-blind. A retraction quoting the text its own guard
+forbids. An exemption coarse enough to hide future gaps. A stale-prone number pinned two
+increments after removing two from the guide. A truncated log read as a missing feature. A
+counting grep that reported zero because its pattern could not match. **Each was caught by
+running the check, never by knowing the class**, which is this repository's own recorded
+conclusion about this shape. `CLAUDE.md` gained three rows.
+
+**Unchanged and verified**: fingerprint `0x4327_63E1`, `BYTECODE_VERSION` 2, opcode count 66, and
+**no file under `src/selfhost/kel/` modified in the whole session** — so the parser-gap capacity
+decision is unprejudiced.
+
+**What is yours**, and two of these are new this session:
+
+1. The book's **38 untranslated messages**. Editorial work on a published, human-curated
+   artifact. `docs/decisions/BOOK_TRANSLATION_CURRENCY.md`.
+2. Whether **`compile` should refuse a module no host can load**. It emits one today, and
+   `auto_arena_capacity_for` already separates the emittable case from the impossible one.
+   `docs/decisions/PRINT_MEMORY_BOUND.md`.
+3. **H2**, on its recorded trade.
+4. **Workstream C's `BYTECODE_VERSION` authorisation** — array bounds alone remain.
+5. The **seven standing decisions**.
+6. The **parser-gap capacity call**, 162 bindings against 128.
+
+---
+
+**2026-09-27, session 67, sixth increment. I REPORTED THIS INCREMENT AS FINDING NOTHING, AND
+THAT WAS WRONG.** The two guards found nothing. The shellcheck step found **eight** findings,
+three of them warnings and two of those genuine defects in load-bearing scripts.
+
+**The toolchain-component class was swept and is a one-member population.** Only two
+`rust-toolchain.toml` files exist and one lives under gitignored `tmp/`, so the tracked
+population is `examples/rtos` alone, fixed in the previous increment.
+
+**The instructive measurement is the negative one.** Sweeping every workflow job for "runs
+clippy or rustfmt but does not declare the component" found **zero offenders** — and the
+`rtos-host` job that failed yesterday DID declare clippy. It failed because the crate's own pin
+overrides the job's toolchain for anything run inside that directory. **A job-level check cannot
+see that defect.** `tests/toolchain_pin_components.rs` checks the cross-level property instead,
+and says in its own text that its population is one, so its scope is not mistaken for broader
+coverage.
+
+**MY "ZERO SHELLCHECK FINDINGS" WAS AN INSTRUMENT ERROR, AND I PUBLISHED IT.** My counting grep
+searched for `^-- SC` where shellcheck emits `^--^ SC`, so it matched nothing and I reported
+zero. The real figures: **0 error, 3 warning, 5 style.** The severity claim I also made — that
+none is error-severity — was correct, and it is a different statement from none existing.
+Conflating them is how a wrong number reaches a durable document.
+
+Two of the three warnings are genuine: `cd "$(dirname "$0")/.."` in `verify.sh` continued
+silently if the directory did not exist, and two `local dir="...$(leaf ...)"` declarations in
+`worktree.sh` masked the substitution's exit status. All eight are repaired and the job runs with
+**no severity threshold**, since a threshold would have hidden exactly these.
+
+**AND I PINNED A STALE-PRONE NUMBER TWO INCREMENTS AFTER REMOVING TWO FROM THE GUIDE.** The
+packaging guard's first draft quoted "335 files"; it was 336 inside the same increment, because
+this increment adds a test file and tests ship in the tarball. The number is now not quoted at
+all — what matters is the ABSENCES, which are properties of the exclude list rather than of the
+tree's size. This repository's own note applies: knowing a failure class does not prevent
+producing it.
+
+**A precision correction, applied across five files.** I wrote that a host build of the RTOS
+crate "failed with eight unresolved imports". It failed with eight RESOLUTION errors: five
+unresolved imports and three unresolved modules. The conclusion is unchanged and the wording was
+wrong, so it is fixed where it is durable.
+
+**The tarball did measure clean**: 335 files with `secret/`, `compiler/`, `examples/rtos/` and
+`book/` absent, and `secret/` protected twice, by `.gitignore` and by `exclude`.
+
+**What was added, and why despite finding nothing.** A `shellcheck` job that **fails loudly if
+the tool is absent** rather than silently no-opping, over scripts that include the release gate,
+the worktree helper and the merge script. And a guard that the manifest still excludes the
+confidential and detached paths, because publishing is irreversible: a version cannot be
+withdrawn, only yanked, and the tarball stays downloadable. That guard states that it checks the
+DECLARATION and not a built tarball, since a second exclusion mechanism could be lost while the
+list stayed intact.
+
+**Every guard was mutation-tested**: removing `clippy` from the pin makes the first fail and name
+it, removing `secret/` from the exclude list makes the second fail and name it, and both files
+were confirmed byte-identical after restoration.
+
+**THE SEAM IS THINNER, NOT EXHAUSTED — AND I WAS TOO QUICK TO SAY SO.** I declared this
+increment defect-free before running the tool properly. Asking what an instrument covers still
+paid here: three script defects, two of them real. What HAS stopped yielding is the survey by
+inspection; running the tool is still finding things.
+
+**Yours**: the book's 38 untranslated messages; whether `compile` should refuse a module no host
+can load; H2's trade; workstream C's `BYTECODE_VERSION` authorisation; the seven standing
+decisions; the parser-gap capacity call at 162 bindings against 128.
+
+**No file under `src/selfhost/kel/` modified.** `BYTECODE_VERSION` is 2, the opcode count 66.
+
+---
+
+**2026-09-27, session 67, fifth increment.** The fourth increment's block follows directly
+below; both are dated today and each names its own number.
+
+**`cargo test` IN `examples/rtos` DID NOT COMPILE, AND THE CAUSE WAS TWO DEEP.** `bench_n6`
+was auto-discovered from `src/bin/` with **no `required-features`**, unlike both of its
+siblings, so any host build of the crate tried to compile an embassy-and-defmt binary and died with eight resolution errors
+(five unresolved imports, three unresolved modules). Behind that, the crate's own two unit tests still destructured
+`Value::Enum { type_name, variant, fields }` — the struct variant B28 replaced with
+`Enum(EnumBody)` — and had been dead since. **The ungated binary is why the rot was
+invisible**: the test target never built, so nothing could report the tests broken.
+
+**AND THE HOST DEMONSTRATOR WAS BUILT BY NOTHING.** `three-task-std` is the quick start in
+`CLAUDE.md`, `examples/rtos/README.md` and `examples/rtos/MANUAL.md`. Continuous integration
+cross-built only the two STM32N6 binaries; `scripts/release-gate.sh` does not mention the
+crate. Six Keleusma task scripts are reachable only through these binaries, including
+`faulty.kel`, whose whole purpose is the supervised-restart policy.
+
+**IT WORKS, AND THAT IS WHY TO GUARD IT NOW.** Measured: five tasks at their documented
+cadences, a boot-time worst-case-execution-time report, and the deliberate fault tripping at
+iterations 5 and 10 with the kernel categorising it `soft-script` and restarting the task. No
+defect in the demonstrator. Session 66 reached the same position with `run-tasks`'s restart
+policy and guarded it immediately.
+
+**What was added.** `Kernel::run_until` gives the wall-clock budget `three_task_std.rs` itself
+recorded as needed — its doc comment read "The kernel runs forever; a later iteration will add
+a wall-clock budget for CI" — with unbounded `run()` unchanged and the budget checked where the
+clock is already read. `three-task-std` takes `--run-for <ms>`. A new `rtos-host` job lints and
+tests the host target, and `clippy --all-targets` succeeds there for the first time, as a
+direct consequence of gating `bench_n6`.
+
+**THE REPAIRED TESTS ARE WRITTEN AT THE CONTRACT LEVEL.** They compare against a constructed
+expected value rather than destructuring a representation, because pinning the representation
+is precisely why they rotted. Enum equality is padding-tolerant, so the assertion holds across
+the flat and boxed forms and survives a further change.
+
+**A NEAR-MISS, RECORDED BECAUSE IT NEARLY BECAME A FALSE DEFECT REPORT.** Reading the first 45
+and last 12 lines of an 80-line run, I concluded the faulty task never ran. It faults at
+6016ms, inside the 23 lines I had cut. `CLAUDE.md` records this exact trap — a truncated log
+looks identical to a clean one — and the corrective is to filter for the property rather than
+sample the output.
+
+**THE NEW `rtos-host` JOB FAILED ON ITS FIRST RUN, WHICH IS THE ARGUMENT FOR ADDING IT.**
+`examples/rtos/rust-toolchain.toml` pins channel 1.92 and its component list omitted
+**`clippy`**. `cargo clippy` there passed on this machine, which happens to have clippy
+installed for 1.92; a clean runner auto-installed the pinned toolchain with its seven declared
+components and reported `error: 'cargo-clippy' is not installed for the toolchain`. **The crate
+was never lintable from a clean checkout.** `cargo fmt --check` passed, because `rustfmt` is
+declared. Diagnosed from the job log verbatim rather than left as a hypothesis, then fixed by
+declaring `clippy` in the pin so the crate is lintable for anyone.
+
+`CLAUDE.md` gains a row for the class: **the run used a toolchain component the project does
+not declare.** Honest, and not reproducible.
+
+**Left for you**: the book's 38 untranslated messages; whether `compile` should refuse a module
+no host can load; H2's trade; workstream C's `BYTECODE_VERSION` authorisation; the seven
+standing decisions.
+
+**2026-09-27, session 67, fourth increment.**
+
+**THE ONE TOOL WHOSE ENTIRE OUTPUT IS A WORST-CASE MEMORY BOUND WAS FABRICATING IT.**
+`run --print-memory` computed its transient region as
+`auto_arena_capacity_for(module, &[]).unwrap_or(DEFAULT_ARENA_CAPACITY)`. That call fails for
+a program whose worst-case memory usage cannot be statically bounded, and the discarded
+`VmError` was the only record of why. So the flag printed the default arena constant as
+though it were the program's computed bound and exited zero. On the recursive example from
+`19_why_rejected.md`: **`arena: 65536 bytes total (persistent 0, transient 65536)`**, for a
+program the runtime refuses on load. An operator sizing a host from that figure provisions
+for a program that cannot run.
+
+**The crate's value proposition is a DEFINITIVE bound**, and `CLAUDE.md` forbids implying
+completeness where verification is incomplete. This is the sharpest place for that to fail.
+
+**I RAISED THIS AS AN AMBIGUITY IN THE FIRST INCREMENT AND THEN RESOLVED IT.** I had recorded
+two readings — a deliberate pre-verification figure, or a saturating fallback — and said the
+evidence did not separate them. Reading the code separates them: it is the fallback, and the
+`.unwrap_or` is the whole mechanism. Leaving that to you with less information than I could
+get was the wrong call, and it is corrected.
+
+**The two paths need opposite treatments**, which is why the fallback was not simply deleted.
+Verification compares the arena's capacity against the bound, so an arena must exist before
+the check runs; refusing to allocate would replace a precise verification error with an
+allocation error. On the allocation path `Vm::new` catches the unbounded case immediately
+afterwards. On the reporting path nothing ran afterwards at all.
+
+`keleusma-cli/tests/print_memory_bound.rs` pins both directions on both input forms, source
+and compiled bytecode, **each refusal paired with a program that must still report** — without
+which the refusals are satisfied by a binary that refuses everything. Restoring the swallowing
+call reproduces the original output exactly, fails both refusal tests, and leaves the control
+passing, so they discriminate. **No expected byte count is asserted anywhere**, since this
+session removed two stale byte-count claims from the guide.
+
+**MEASURED AND LEFT TO YOU.** `compile` writes an artifact for the unbounded program, and
+`run` on that artifact refuses it, so the compiler emits a module no host can load. The
+distinction that matters: a bound that is computable but larger than the default arena is
+legitimately emittable, since a bigger host loads it; a bound that is not computable at all
+can be loaded by nobody. `auto_arena_capacity_for` already separates the two, so refusing is
+cheap — but it changes the contract of a published subcommand, which is yours.
+`docs/decisions/PRINT_MEMORY_BOUND.md` has both.
+
+**Also yours, unchanged**: the book's 38 untranslated messages, H2's trade, workstream C's
+`BYTECODE_VERSION` authorisation, the seven standing decisions.
+
+**No file under `src/selfhost/kel/` modified.** `BYTECODE_VERSION` is 2, the opcode count 66.
+
+---
+
+**2026-09-27, session 67, third increment.**
+
+**THE SENTENCE THAT LICENSES MERGING ON CI ALONE WAS UNVERIFIED, AND FALSE.** `CLAUDE.md` and
+`GIT_STRATEGY.md` permit a merge without the local gate because "CI is a verified strict
+superset of the local gate". Nothing checked it. On the Miri axis it was wrong: the gate's
+`--miri` step runs `c1_null_text_pointer_marshals_to_empty_string_not_ub` under Tree Borrows
+and the Miri job ran only `keleusma-arena`. **A named undefined-behaviour pin was exercised by
+no merge**, only by a human running the gate before a publication. CI now runs it; I ran it
+under nightly Miri here first rather than discovering it remotely.
+
+**THE GATE'S OWN COMMENT ASSERTED THE REVERSE RELATIONSHIP.** It said including the detached
+subproject made the gate the broader instrument and that nothing else covered it. True when
+written at `a5f646bd`, falsified by `4483f43e` adding the `selfhost-compiler` job and then by
+`fa978eff`, whose subject line is "close the coverage holes so CI is a superset of the local
+gate". The relationship was deliberately inverted and the comment kept asserting the old one.
+
+**A GUARD NOW CHECKS IT**: `tests/gate_ci_correspondence.rs` derives the gate's commands and
+the workflows' commands from their files and requires every gate command to have a workflow
+command of the same shape — same subcommand, package and feature selection. It says plainly
+that this establishes a counterpart EXISTS and **not** that the two do equivalent work, since
+`cargo test --workspace` and `cargo nextest run --profile ci --workspace` are meant to match
+and differ in runner, profile and doctests. Direction is gate-to-CI only; CI having more is
+the intended shape.
+
+**THREE THINGS I GOT WRONG AND FIXED BY READING RATHER THAN ADJUSTING.**
+
+1. **My parser was half-blind.** It read `run: |` block scalars and missed inline
+   `- run: cargo ...` steps, so it reported **eight** false holes. The non-vacuity floor passed
+   regardless, because the block-scalar steps alone exceeded it. **A floor is necessary and is
+   not sufficient** — reading the eight items is what found it.
+2. **My retraction note quoted the text the guard forbids.** The absence assertion matched my
+   own explanation of the retracted claim: the tenth instance of the comment-matching class
+   this repository has swept, produced inside the increment adding the guard against it. The
+   note now paraphrases, and the guard says why that is required.
+3. **My exemption list was unnecessary and coarse.** It exempted `cargo run` by verb, which
+   would silently cover every future `cargo run` the gate gained. Removing it left the test
+   green. **It is now empty, checked rather than assumed.**
+
+**The guard was mutation-tested against the real hole**: removing the Miri step I added makes
+it fail and name that exact command, and `ci.yml` was confirmed byte-identical after
+restoration.
+
+**Left for you.** Translating the book's 38 untranslated messages; `run --print-memory`
+reporting an arena bound for a program `run` refuses; H2's trade; workstream C's
+`BYTECODE_VERSION` authorisation; the seven standing decisions.
+
+**No file under `src/selfhost/kel/` modified.** `BYTECODE_VERSION` is 2, the opcode count 66.
+
+---
+
 **2026-09-27, session 67, second increment.**
 
 **A CATALOGUE REPORTING ZERO UNTRANSLATED MESSAGES WAS REPORTING ON ITSELF.** `book/po/ja.po`

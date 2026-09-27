@@ -5,5 +5,11 @@
 # predictability across the two crates.
 [toolchain]
 channel = "1.92"
-components = ["rust-src", "rustfmt", "llvm-tools"]
+# `clippy` was ABSENT from this list until 2026-09-27, so the crate was not
+# lintable from a clean checkout: `cargo clippy` inside this directory resolves
+# to the pinned toolchain, which did not carry it. It passed on a developer
+# machine that happened to have clippy installed for 1.92 anyway, and failed on
+# the first continuous-integration run of the new `rtos-host` job. A green local
+# run that depends on an undeclared component is not evidence about the project.
+components = ["rust-src", "rustfmt", "llvm-tools", "clippy"]
 targets = ["thumbv8m.main-none-eabihf"]

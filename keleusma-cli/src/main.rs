@@ -1704,12 +1704,44 @@ fn parse_target_name(name: &str) -> Result<keleusma::target::Target, String> {
 /// Worst-case arena byte sizing for `module`: the persistent (`.data`)
 /// region, the transient stream-iteration region, and the total floored at
 /// the working minimum. The total is the arena the runner allocates.
-fn module_arena_sizing(module: &keleusma::bytecode::Module) -> (usize, usize, usize) {
+///
+/// **THE TRANSIENT REGION IS `Err` FOR A PROGRAM WHOSE WORST-CASE MEMORY USAGE
+/// CANNOT BE BOUNDED**, carrying the verifier's own reason. Callers must decide
+/// what to do with that; see [`module_arena_sizing_or_default`] for the
+/// allocation path and [`print_module_memory`] for the reporting path, which
+/// need opposite treatments.
+fn module_arena_sizing(
+    module: &keleusma::bytecode::Module,
+) -> Result<(usize, usize, usize), String> {
     let persistent = keleusma::vm::required_persistent_capacity_for(module);
-    let transient =
-        keleusma::vm::auto_arena_capacity_for(module, &[]).unwrap_or(DEFAULT_ARENA_CAPACITY);
+    let transient = keleusma::vm::auto_arena_capacity_for(module, &[]).map_err(|e| match e {
+        keleusma::vm::VmError::VerifyError(m) => m,
+        other => alloc_fmt_error(other),
+    })?;
     let total = (persistent + transient).max(DEFAULT_ARENA_CAPACITY);
-    (persistent, transient, total)
+    Ok((persistent, transient, total))
+}
+
+/// One-line rendering for a non-`VerifyError` fault from the sizing call.
+fn alloc_fmt_error(e: keleusma::vm::VmError) -> String {
+    format!("{:?}", e)
+}
+
+/// The sizing an allocation needs, substituting the working default when no
+/// bound can be computed.
+///
+/// **THIS SUBSTITUTION IS A FALLBACK AND IS DELIBERATE HERE.** Verification
+/// compares the arena's capacity against the program's bound, so an arena must
+/// exist before the check can run; refusing to allocate would replace a precise
+/// verification error with an allocation error. The unbounded case is caught
+/// immediately afterwards by `Vm::new`, which is why swallowing the reason is
+/// safe on this path and was NOT safe on the reporting path.
+fn module_arena_sizing_or_default(module: &keleusma::bytecode::Module) -> (usize, usize, usize) {
+    module_arena_sizing(module).unwrap_or_else(|_| {
+        let persistent = keleusma::vm::required_persistent_capacity_for(module);
+        let total = (persistent + DEFAULT_ARENA_CAPACITY).max(DEFAULT_ARENA_CAPACITY);
+        (persistent, DEFAULT_ARENA_CAPACITY, total)
+    })
 }
 
 /// Allocate the worst-case arena for `module` and size its persistent
@@ -1719,7 +1751,7 @@ fn module_arena_sizing(module: &keleusma::bytecode::Module) -> (usize, usize, us
 /// robustness point: a host that cannot provide the program's bounded arena
 /// fails actionably rather than with `SIGABRT`.
 fn allocate_module_arena(module: &keleusma::bytecode::Module) -> Result<Arena, String> {
-    let (persistent, _transient, total) = module_arena_sizing(module);
+    let (persistent, _transient, total) = module_arena_sizing_or_default(module);
     let mut arena = Arena::try_with_capacity(total).map_err(|_| {
         format!("out of memory: this program needs a {total}-byte arena, which this host cannot allocate")
     })?;
@@ -1733,9 +1765,27 @@ fn allocate_module_arena(module: &keleusma::bytecode::Module) -> Result<Arena, S
 /// `run --print-memory`, so an operator can size or qualify a host before
 /// deploying, turning the static worst-case-memory bound into an
 /// operational figure.
-fn print_module_memory(module: &keleusma::bytecode::Module) {
-    let (persistent, transient, total) = module_arena_sizing(module);
+///
+/// **IT USED TO FABRICATE THE FIGURE IT EXISTS TO REPORT.** The sizing call
+/// swallowed the verifier's error with `unwrap_or(DEFAULT_ARENA_CAPACITY)`, so a
+/// program whose worst-case memory usage cannot be bounded printed the default
+/// arena as though it were that program's bound, and exited zero. Measured
+/// 2026-09-27 on the recursive example of `book/src/19_why_rejected.md`:
+/// `arena: 65536 bytes total (persistent 0, transient 65536)`, for a program the
+/// runtime refuses on load. An operator sizing a host from that figure would be
+/// provisioning for a program that cannot run.
+///
+/// The crate's value proposition is a DEFINITIVE worst-case bound, so the one
+/// tool whose output is that bound must report a computed figure or no figure.
+fn print_module_memory(module: &keleusma::bytecode::Module) -> Result<(), String> {
+    let (persistent, transient, total) = module_arena_sizing(module).map_err(|why| {
+        format!(
+            "no worst-case memory bound exists for this program, so no arena size can be \
+             reported: {why}"
+        )
+    })?;
     println!("arena: {total} bytes total (persistent {persistent}, transient {transient})");
+    Ok(())
 }
 
 /// Run a source program through compile and execute. The runner
@@ -1749,8 +1799,7 @@ fn execute_source(
 ) -> Result<(), String> {
     let module = compile_source(source)?;
     if print_memory {
-        print_module_memory(&module);
-        return Ok(());
+        return print_module_memory(&module);
     }
     let entry_kind = detect_entry_kind(&module)?;
     let arena = allocate_module_arena(&module)?;
@@ -1887,8 +1936,7 @@ fn execute_bytecode(
     let module = load_module(bytes, verifying_keys, decryption_keys, policy)?;
 
     if print_memory {
-        print_module_memory(&module);
-        return Ok(());
+        return print_module_memory(&module);
     }
 
     // Auto-size the arena from the module's declared bounds and allocate it

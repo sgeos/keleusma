@@ -34,6 +34,231 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-27, session 67, ninth increment, follow-up). I HIT THE FIRST TRAP IN
+> THE ORIENTATION DOCUMENT'S OWN TABLE.**
+>
+> The CI Clippy job failed #467 on a `collapsible_if` in a just-appended test that my local clippy
+> had passed. My first hypothesis was a version difference. **Disproved**: local clippy is
+> `0.1.98 (48a229ceae 2026-09-01)` and CI's is `rustc 1.98.1 (48a229cea 2026-09-01)`, the same
+> build, and CI's exact command reproduces the error locally.
+>
+> **The run was CACHED.** Its entire output was `Finished`, which `CLAUDE.md` already records as
+> not evidence. What the row lacked is the actionable tell, now added: a run that analysed anything
+> prints `Checking <crate>` lines first, so a bare `Finished` means nothing was re-analysed.
+>
+> Fixed as a let-chain, matching the style already used in `examples/rtos/src/kernel.rs`, and
+> verified by a forced-fresh run that shows the `Checking` lines.
+
+> **Currency note (2026-09-27, session 67, ninth increment). THE CRATE-COUNT GUARD CLOSED THE
+> CLASS FOR ONE FILE.**
+>
+> `release_process_crate_list.rs` exists because a document said five crates when seven publish,
+> and its own comment says it "closes the class". It closed it for `RELEASE_PROCESS.md` alone.
+> **`README.md` said "Five crates:" and `AGENTS.md` said "Five workspace crates"**, both omitting
+> `keleusma-wire` and `keleusma-wire-derive` entirely — zero mentions of either. README is what
+> crates.io renders; `AGENTS.md` is what `llms.txt` names as a model's first read, and no test read
+> it. `AGENTS.md` also reported V0.2.0 published while the workspace is at 0.2.2.
+>
+> Three checks added, the entry-point set NAMED with a justification per document, the crate set
+> DERIVED from the manifests so no number sits in the test, and the count check kept separate from
+> the naming check so one failure cannot mask the other.
+>
+> **The count check first flagged a ledger entry** — "published all four crates", a dated V0.2.2
+> lesson — and `CLAUDE.md`'s rule settled it: history is not stale and rewriting it corrupts the
+> record. The check now reads only unquoted lines, with the trade written into the test.
+>
+> **And my prefix-safety mutation was wrong before the guard was**: the derive bullet mentions
+> `keleusma-wire` in its own description, so a whole-token match survived. The real mutation
+> removes every whole-token occurrence, and the guard then names it. Third instrument error this
+> session.
+
+> **Currency note (2026-09-27, session 67, eighth increment). THE AGENT-FACING MANIFEST WAS
+> WRONG IN FOUR PLACES, AND NOTHING COULD HAVE CAUGHT IT.**
+>
+> `llms.txt` is 58 lines, **ships in the crate tarball**, and exists to orient models consuming
+> the project. `documentation_links.rs` resolves RELATIVE links; every link here is an absolute
+> GitHub URL, so the file was outside that guard's reach **by construction**.
+>
+> The instruction set was given as **69** opcodes against the specification's **66**. That claim
+> was TRUE of V0.2.0 — the V0.2.1 `NewComposite` consolidation retired four construct opcodes and
+> added one — so it is a version-scoped statement that went stale, not a confusion with the
+> maximum live wire id, which is coincidentally also 69. Getting that distinction right changed
+> the correction's wording.
+>
+> `docs/guide/COOKBOOK.md` and `docs/guide/FAQ.md` did not exist: commit `f745b16e` ported the
+> guide to an mdbook and they live under `book/src/`. Two of twenty-nine paths dead, and the file
+> had not been touched since before that port.
+>
+> And the branching model was called "Trunk-based development", while `GIT_STRATEGY.md` — the file
+> that link points at — opens with "a **release-branch model** with a four-level hierarchy".
+>
+> `tests/llms_txt_currency.rs` checks all three properties offline, since what rots is the tree
+> rather than the host. Each was mutation-tested: a broken path, a changed count, and a
+> reintroduced contradiction each fail and name the problem.
+
+> **Currency note (2026-09-27, session 67, seventh increment). THE HANDOFF DESCRIBES THIS TRUNK.**
+>
+> It was stamped on a previous-session commit. Every content check in the refreshed file was RUN
+> while writing it rather than carried forward, and the numbered list was verified in its
+> rendered order.
+>
+> **Two deliberate choices.** The suite figure carries "re-derive rather than trust it": this
+> session added six test files and the number moved four times, so a figure that moves every
+> increment cannot sit in a document refreshed every few increments. And the session's lesson is
+> recorded as **survey by inspection has stopped paying, running the tools has not** — increment 6
+> reported nothing and then found three real defects once shellcheck was run properly.
+>
+> Also recorded: **CI's shellcheck is 0.9.0 and a developer machine may be newer.** The eight
+> findings were repaired against 0.11.0, the stricter tool, so the runner's older one is satisfied
+> too — but a local lint can be stricter than CI's, which is the direction worth knowing.
+
+> **Currency note (2026-09-27, session 67, sixth increment). INSURANCE, AND IT FOUND NOTHING
+> — WHICH IS THE HONEST SUMMARY.**
+>
+> Two sweeps returned clean and one population turned out to have a single member.
+>
+> **The toolchain-component class was swept.** Only two `rust-toolchain.toml` files exist and
+> one is under gitignored `tmp/`, so the tracked population is **one directory**, already
+> fixed. Sweeping every workflow job for "runs clippy or rustfmt without declaring it" found
+> **zero** — and that is the instructive part: the `rtos-host` job DID declare clippy and failed
+> anyway, because the crate's pin overrides the job's toolchain. **A job-level check cannot see
+> this defect.** `tests/toolchain_pin_components.rs` checks the cross-level property and says in
+> its own text that its population is one.
+>
+> **The shell scripts were NOT clean, and my first report of them was wrong.** I wrote "zero
+> findings"; shellcheck actually reported **three warnings and five style findings** across three
+> scripts. The error came from a counting grep searching for `^-- SC` where shellcheck emits
+> `^--^ SC`, so it matched nothing and I published its number. The severity claim was right —
+> none is error-severity — which is a different statement from none existing.
+>
+> All eight are repaired, two of them genuine: a `cd` in `verify.sh` that continued silently on
+> failure, and two declarations in `worktree.sh` masking a command substitution's exit status.
+> The `shellcheck` job runs with **no severity threshold**, since a threshold would have hidden
+> exactly these, and it **fails loudly if the tool is absent** rather than silently no-opping.
+>
+> **The tarball is correct**: 335 files with `secret/`, `compiler/`, `examples/rtos/` and `book/`
+> absent, and `secret/` protected twice, by gitignore and by `exclude`. A guard in
+> `tests/release_process_crate_list.rs` now fails if the manifest stops excluding the
+> confidential and detached paths. It states that it checks the DECLARATION and not a built
+> tarball.
+>
+> **The two guards repaired nothing; the shellcheck step repaired three real defects**, which is
+> not what I expected of it and is the opposite of what I first reported. The guards remain
+> insurance, recorded as such because publishing is irreversible and the checks cost a few lines. Every guard was mutation-tested: removing
+> `clippy` from the pin, removing `secret/` from the exclude list, and both restored
+> byte-identically.
+
+> **Currency note (2026-09-27, session 67, fifth increment, follow-up). THE NEW JOB FAILED ON
+> ITS FIRST RUN, AND THAT IS THE ARGUMENT FOR IT.**
+>
+> `examples/rtos/rust-toolchain.toml` pins channel 1.92 and its component list omitted
+> **`clippy`**. `cargo clippy` there passed locally because this machine happens to have
+> clippy installed for 1.92; a clean runner auto-installed the pinned toolchain with its seven
+> declared components and then reported
+> `error: 'cargo-clippy' is not installed for the toolchain '1.92-x86_64-unknown-linux-gnu'`.
+> **The crate was never lintable from a clean checkout.** `cargo fmt --check` passed, because
+> `rustfmt` IS declared.
+>
+> Diagnosed from the job log verbatim rather than from the hypothesis, then fixed by declaring
+> `clippy` in the pin, which makes the crate lintable for anyone rather than only in CI.
+>
+> A row is added to `CLAUDE.md`'s "how a green local run has actually lied" table for the
+> class: **the run used a toolchain component the project does not declare.** It was honest
+> and it was not reproducible.
+
+> **Currency note (2026-09-27, session 67, fifth increment). AN UNGATED BINARY HID A TEST
+> TARGET, WHICH HID TWO ROTTED TESTS.**
+>
+> `examples/rtos`'s `cargo test` **did not compile**. Two causes, one behind the other.
+> `bench_n6` was auto-discovered from `src/bin/` with **no `required-features`**, unlike both
+> siblings, so any host build tried to compile an embassy-and-defmt binary and failed with
+> eight resolution errors (five unresolved imports, three unresolved modules). Behind that,
+> the crate's two unit tests still destructured
+> `Value::Enum { type_name, variant, fields }` — the pre-B28 struct variant — and had been
+> dead since that change, invisible because the test target never built.
+>
+> **`three-task-std` was built by nothing.** It is the quick start in `CLAUDE.md`,
+> `README.md` and `MANUAL.md`; CI cross-built only the two N6 binaries and the release gate
+> does not mention the crate. Six Keleusma task scripts are reachable only through these
+> binaries, including the supervised-restart demonstration.
+>
+> **It works, measured**: five tasks at their documented cadences, a boot-time WCET report,
+> and `faulty.kel` tripping `DivisionByZero` at iterations 5 and 10 with the kernel logging
+> `soft-script` and restarting. No defect in the demonstrator — which is the cheapest moment
+> to guard it, the same position session 66 reached with the scheduler behaviours.
+>
+> `Kernel::run_until` adds the wall-clock budget `three_task_std.rs` had recorded as needed;
+> unbounded `run()` is unchanged. A new `rtos-host` CI job lints and tests the host target,
+> and `clippy --all-targets` works there for the first time, as a direct consequence of
+> gating `bench_n6`.
+>
+> **The repaired tests are written at the contract level, not against a representation.**
+> Pinning `Value::Enum`'s shape is exactly why they rotted.
+>
+> **A near-miss worth recording.** Reading the first 45 and last 12 lines of an 80-line run, I
+> concluded the faulty task never ran and nearly reported a defect. It faults at 6016ms, in
+> the 23 lines I had cut. Filter for the property; do not sample the output.
+
+> **Currency note (2026-09-27, session 67, fourth increment). THE TOOL THAT REPORTS A
+> WORST-CASE MEMORY BOUND WAS FABRICATING IT.**
+>
+> `run --print-memory` exists to turn the static worst-case-memory bound into an operational
+> figure "for provisioning a host". Its sizing call ended in
+> `unwrap_or(DEFAULT_ARENA_CAPACITY)`, so a program whose worst-case memory usage cannot be
+> bounded printed **`arena: 65536 bytes total (persistent 0, transient 65536)` and exited
+> zero** — for a program `run` refuses on load. The discarded `VmError` was the only record of
+> why no bound existed.
+>
+> **This was raised as an ambiguity in the first increment and resolved by reading the code.**
+> I had said the evidence did not separate "deliberate pre-verification figure" from
+> "saturating fallback". It is the second, and the `.unwrap_or` says so.
+>
+> Repaired: the reporting path names the verifier's cause and exits non-zero, printing no
+> figure. The allocation path keeps the substitution in a separately named function whose
+> comment says it is a fallback and what catches the case instead — the two paths need
+> opposite treatments, because verification compares capacity against the bound and so needs
+> an arena to exist first.
+>
+> Pinned in both directions on both input forms by
+> `keleusma-cli/tests/print_memory_bound.rs`, each refusal paired with a program that must
+> still report. Restoring the swallowing call reproduces the original output exactly, fails
+> both refusal tests, and leaves the control passing. **No expected byte count is asserted**,
+> since this session removed two stale byte-count claims from the guide for that reason.
+>
+> **Measured and left to you**: `compile` writes an artifact for the unbounded program that no
+> host can load. The bounded-but-large case is legitimately emittable and the not-bounded-at-all
+> case is not, and `auto_arena_capacity_for` already distinguishes them — but whether `compile`
+> should refuse is a decision about that subcommand's contract.
+> See `docs/decisions/PRINT_MEMORY_BOUND.md`.
+
+> **Currency note (2026-09-27, session 67, third increment). "CI IS A VERIFIED STRICT
+> SUPERSET OF THE LOCAL GATE" WAS UNVERIFIED AND FALSE.**
+>
+> That sentence licenses merging on continuous integration alone. Nothing checked it, and on
+> the Miri axis it was wrong: the gate's `--miri` step runs the
+> `c1_null_text_pointer_marshals_to_empty_string_not_ub` undefined-behaviour pin under Tree
+> Borrows, and the Miri job ran only `keleusma-arena`. **A named UB pin was exercised by no
+> merge** — only by a human running the gate before a publication. CI now runs it, verified
+> locally under nightly Miri before the step was written.
+>
+> **The gate's own comment asserted the opposite relationship.** It said including the
+> detached subproject made the gate the broader instrument and that nothing else covered it.
+> True at `a5f646bd`, falsified by `4483f43e` adding the `selfhost-compiler` job and by
+> `fa978eff`, whose subject is "close the coverage holes so CI is a superset of the local
+> gate". Corrected, with the retracted wording **paraphrased rather than quoted**, because
+> the new guard asserts its absence and a quotation satisfies that search as surely as a live
+> claim — the first draft quoted it and turned the test red.
+>
+> `tests/gate_ci_correspondence.rs` now derives both sides and requires every gate command to
+> have a workflow command of the same shape. It states what it does **not** establish: that
+> the two do equivalent work. Its exemption list is **empty**, checked rather than assumed —
+> the first draft exempted `cargo run` and removing the entry left it green.
+>
+> **My own parser was half-blind and a floor did not catch it.** It read `run: |` block
+> scalars and missed inline `- run: cargo ...` steps, reporting eight false holes. The
+> non-vacuity floor passed anyway, because the block-scalar steps alone exceeded it. **A floor
+> is necessary and is not sufficient**; reading the eight reported items is what found it.
+
 > **Currency note (2026-09-27, session 67, second increment). THE TRANSLATION CATALOGUE
 > DESCRIBES THE SOURCE AGAIN, AND THE BOOK WORKFLOW RUNS ON THE RELEASE LINE.**
 >

@@ -5071,6 +5071,275 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-27 — session 67, increment 9: the class was closed for one file
+
+**The finding is about a guard, not a document.** `tests/release_process_crate_list.rs` exists
+because `RELEASE_PROCESS.md` once said five crates when seven publish, and its own opening comment
+states the corrective: "Correcting the document closed the instance. It did not close the class.
+... This test closes the class, by deriving one side from the filesystem instead of trusting both
+sides to be edited together." It then closed the class **for one file**.
+
+`README.md` said "Five crates:" and `AGENTS.md` said "Five workspace crates", both omitting
+`keleusma-wire` and `keleusma-wire-derive` **entirely** — zero mentions of either. `README.md` is
+what crates.io renders, so that was the project's most publicly visible statement of its own crate
+set. `AGENTS.md` is what `llms.txt` names as the first thing a model should read, and no test read
+it at all. `AGENTS.md` also reported V0.2.0 as published while the workspace was at 0.2.2.
+
+**This is the shape `CLAUDE.md` already records**: "AND I FIXED WHAT THE GUARD CAUGHT, NOT THE
+CLASS. The citation guard scans two documents, flagged two bare file names in one, and I corrected
+exactly those." Same shape, different site, and the corrective is the same: name the population and
+derive the expectation.
+
+**Three design choices worth the words.**
+
+The entry-point set is named in the test WITH a justification for each document, because a named
+set nobody can audit is exactly how these two were missed when the original instance was fixed.
+The crate set is derived from the manifests, so no number is written into the test — writing
+"seven" would reproduce the defect one release later, which is the defect's own mechanism.
+And the count check is separate from the naming check, because a document can name every crate and
+still open with a stale total; conflating them lets one failure mask the other.
+
+**The count check's first run flagged history, and the repository's own rule settled it.**
+`RELEASE_PROCESS.md` contains "published all four crates" — a dated V0.2.2 lesson recording what
+an agent did when four was the number. `CLAUDE.md`: "Distinguish a live claim from a ledger entry.
+History recording what was true at an increment is not stale; rewriting it corrupts the record." So
+the check reads only unquoted lines, since this repository keeps ledger entries in blockquotes, and
+**the trade is written into the test**: a live claim inside a blockquote escapes it. That is the
+lesser error, because the alternative pressures a future reader into editing the ledger to make a
+test pass.
+
+**And my own mutation was wrong before the guard was.** The prefix-safety mutation replaced the
+`keleusma-wire` bullet with the derive name and the test passed, which looked like a broken check.
+It was not: the derive bullet's own description says "backing `keleusma-wire`'s `derive` feature",
+so a genuine whole-token mention survived. The real mutation replaces every whole-token occurrence,
+and then the guard names `keleusma-wire` as missing while two `keleusma-wire-derive` mentions
+remain. **Third time this session that my instrument was at fault rather than my subject**, and the
+corrective each time was to look at what the mutation actually produced.
+
+---
+
+## 2026-09-27 — session 67, increment 8: the surface no guard could reach
+
+**Why I looked here.** Two increments earlier I recorded that the coverage seam was thinning,
+after three probes came back clean. That was true of the surfaces I had been probing, and the
+observation was incomplete. The sharper question is not "is there anything left" but **"is there a
+surface that no existing guard can structurally reach"**. `llms.txt` is one: `documentation_links.rs`
+resolves relative markdown links, and every link in that file is an absolute GitHub URL. It was
+outside the guard's reach by construction, not by oversight, and nothing else looked at it.
+
+**It was wrong in four places, in a file that ships to crates.io and exists to orient models.**
+Two dead paths of twenty-nine, an opcode count three too high, and a branching-model description
+contradicted by the very document it links to.
+
+**The opcode diagnosis is the part worth recording, because my first reading was wrong.** I saw 69
+and noted that the specification says the maximum live wire id is also 69, and nearly wrote that
+the two had been conflated. They had not. `CLAUDE.md` records that the `NewComposite`
+consolidation "took the instruction set from 69 to 66", and that landed in V0.2.1 — so
+"the 69-opcode V0.2.0 ISA" was **true when written** and went stale one release later. A
+version-scoped claim that aged is a different defect from a confusion, and it changes the
+correction: the file now states 66 and explains the transition, rather than silently swapping a
+digit.
+
+**The dead paths have provenance.** `git log --diff-filter=D` names `f745b16e docs(book): port the
+learning guide to mdbook (bilingual EN/JA)` as the commit that removed `docs/guide/`, and
+`llms.txt`'s own last two commits predate it. So the links have been broken since V0.2.2 shipped,
+in a file included in that release's tarball.
+
+**The guard is offline on purpose.** The natural instinct with a file full of URLs is to fetch
+them. What rots is the tree — a file moves and the link goes stale — not the host. Stripping the
+`blob/main/` prefix and testing the path against the working tree checks the thing that actually
+breaks, and it runs in a sandbox with no network.
+
+**The branching-model check is deliberately narrow.** Asserting that two documents "describe the
+model the same way" is not mechanisable. The check asserts the specific contradiction that
+existed, and it first asserts its own premise — that `GIT_STRATEGY.md` really does say
+"release-branch model" — so if that document changes, the check fails loudly rather than
+continuing to enforce a stale contrast.
+
+**All three were mutation-tested**: a broken path, a changed count, and a reintroduced
+"trunk-based" each fail and name the problem, and `llms.txt` was confirmed byte-identical after
+each restoration.
+
+**What this revises.** Six of eight increments found real defects. The claim to retire is not
+"the seam is thin" but the method behind it: inspecting surfaces that already sit near a guard has
+stopped paying, while asking which surfaces no guard can reach is still paying. That is a
+generative question rather than an exhaustible list.
+
+---
+
+## 2026-09-27 — session 67, increment 5: an ungated binary two layers down
+
+**The surface.** `examples/rtos` ships a cooperative microkernel. Continuous integration
+cross-builds its two STM32N6 binaries and never touches `three-task-std`, the host binary that
+`CLAUDE.md`, `README.md` and `MANUAL.md` all give as the quick start. The release gate does not
+mention the crate. Six Keleusma task scripts are reachable only through these binaries.
+
+**The first thing I did was run it, and it works.** Five tasks at their documented cadences, a
+boot-time worst-case-execution-time report, the kernel's event ticker, and `faulty.kel`
+tripping `DivisionByZero` on its fifth and tenth iterations with the kernel categorising the
+error `soft-script` and restarting the task. No defect. That is the cheapest moment to guard
+something, which is the conclusion session 66 reached about the scheduler's restart policy.
+
+**Then `cargo test` would not build, and the causal chain is the interesting part.** The
+proximate failure was three compile errors in the lib test target: the crate's two unit tests
+destructured `Value::Enum { type_name, variant, fields }`, the struct variant B28 replaced with
+`Enum(EnumBody)`. Dead code since that change.
+
+The root cause is one layer further down. `bench_n6` was **auto-discovered** from `src/bin/`
+with no `required-features`, while both of its siblings are explicitly declared and gated. It
+imports `defmt`, `embassy_executor`, `embassy_stm32` and a `keleusma-bench` counter that exist
+only under `stm32n6570dk-platform`. So any host-target build or test of the crate tried to
+compile it and failed with eight resolution errors, five unresolved imports and three
+unresolved modules — which means **the test target could never
+build, which is why nobody could see that the tests were broken.** One missing three-line
+declaration made a whole test surface unreportable.
+
+Gating it also made `cargo clippy --all-targets` succeed on the host for the first time, which
+is how CI can now lint this crate the way it lints the language server and the playground.
+
+**The repaired tests are deliberately written at a different level than the ones they replace.**
+The old form destructured a representation; representations change, and this one did. The new
+form compares against a constructed expected value, which pins the contract the six task
+scripts actually depend on — type name, variant name, discriminant, payload — and survives a
+further representation change. Enum equality is padding-tolerant by design, so the assertion
+holds across the flat and boxed forms. A third test was added because the table-driven loop
+would pass if two error codes shared a discriminant and the expected table repeated the value.
+
+**The budget was the code's own request.** `three_task_std.rs` read "The kernel runs forever; a
+later iteration will add a wall-clock budget for CI." `Kernel::run_until` adds it at the
+scheduler iteration boundary where the clock is already read, so it costs one comparison and
+nothing at all in the unbounded case, and `run()` delegates with `None` so its behaviour is
+unchanged. I briefly considered bounding it externally by killing a subprocess instead; the
+internal budget is better because a clean exit is assertable and the kernel gains a capability
+its own comment asked for.
+
+**A near-miss that would have been a false defect report.** Reading the first 45 and last 12
+lines of an 80-line run, I concluded the faulty task never ran, and started looking for the
+defect. It faults at 6016ms — inside the 23 lines I had cut. `CLAUDE.md` records this trap
+exactly: a log truncated by `head` or `tail` looks identical to a clean one. The corrective is
+to filter for the property rather than sample the output, and the second attempt did that and
+found all six fault-and-restart lines immediately.
+
+**The test asserts the demonstrator's purpose, with a control that makes it discriminate.** A
+long run must show every task's own observable plus all three fault-and-restart lines; a short
+run must stop before the first fault. The short run is what proves the fault lines come from
+elapsed runtime rather than from the banner, which names every task and the fault policy in its
+opening paragraph. A malformed budget must be refused, because a silently ignored flag would
+make the bounded tests hang instead of fail. No timestamp, cycle count or line count is pinned.
+
+## 2026-09-27 — session 67, increment 4: resolving an ambiguity I had handed over
+
+**Why this increment exists at all.** In the first increment I recorded that
+`run --print-memory` reports an arena bound for a program `run` refuses, offered two readings,
+said the evidence did not separate them, and left it to the operator. That was defensible in
+the moment and wrong on reflection: the two readings are separated by one line of code, and
+handing over an ambiguity I could have resolved gives the operator less than I had.
+
+**The mechanism.** `module_arena_sizing` ended in
+`auto_arena_capacity_for(module, &[]).unwrap_or(DEFAULT_ARENA_CAPACITY)`. The call returns
+`Result<usize, VmError>` and fails when the worst-case memory usage cannot be bounded. The
+error carried the verifier's own sentence and was thrown away. So the benign reading — that
+the figure is deliberately pre-verification, because a host must learn the size before a
+capacity is fixed — is not what the code does. It substitutes a constant.
+
+**The benign reading was not entirely wrong, and that is why the fix is asymmetric.** Two
+callers shared the function. On the allocation path the substitution IS load-bearing:
+verification compares the arena's capacity against the bound, so something must be allocated
+before the check can run, and refusing would turn a precise verification error into an
+allocation error. `Vm::new` then catches the unbounded case a few lines later. On the
+reporting path nothing ran afterwards, so the substitution was the entire output. The fallback
+now lives in its own named function whose comment states that it is a fallback and what
+catches the case instead — the substitution is visible at its site rather than implied.
+
+**The control is what makes the test mean anything.** A test asserting only that the
+unbounded program is refused passes against a binary that refuses everything, including one
+that cannot parse its arguments. Each refusal is paired with a program that must still
+report, on both input forms, because the reporting path is reached separately for source and
+for compiled bytecode and the defect was present on both. A fix applied to one would
+otherwise have read as covering the other.
+
+**The mutation is the strongest evidence here.** Restoring the swallowing call reproduces the
+original output character for character, fails both refusal tests, and **leaves the control
+passing**. A mutation that failed everything would not have shown the tests discriminate.
+
+**And no byte count is asserted.** Two increments earlier this session removed
+`wrote pulse.bin (2372 bytes)` and `wrote tune.kel.bin (2400 bytes)` from the guide because
+the size of a compiled artifact is not a stable property to promise. Pinning an arena figure
+in a test is the same mistake with a longer fuse, so the assertions are "a figure was
+produced" and "the refusal names the cause".
+
+**What I measured and did not change.** `compile` writes an artifact for the unbounded program
+and `run` on that artifact refuses it. The distinction worth recording is that a bound which
+is computable but larger than the default arena is legitimately emittable — that is what
+cross-compilation is for — while a bound that is not computable at all can be loaded by no
+host at any capacity. `auto_arena_capacity_for` already separates them, so refusing at compile
+time is cheap. Whether it should is a decision about a published subcommand's contract, and
+this time the handover carries the distinguishing test rather than an open question.
+
+---
+
+## 2026-09-27 — session 67, increment 3: the sentence that licenses a merge, unverified
+
+**The claim.** `CLAUDE.md` and `GIT_STRATEGY.md` permit merging on continuous integration
+alone, justified by "CI is a verified strict superset of the local gate". *Verified* was doing
+unearned work: nothing checked it. That is the third instrument this session that was
+attached to less than its description claimed, after a book verifier that never ran on the
+release line and a translation catalogue that reported on itself.
+
+**It was false on the Miri axis.** CI's Miri job runs `cargo miri test -p keleusma-arena`
+under Stacked and then Tree Borrows. The gate's `--miri` step also runs
+`c1_null_text_pointer_marshals_to_empty_string_not_ub` under Tree Borrows, on the library
+package, and CI ran no `-p keleusma` Miri test at all. The test's name states its purpose: it
+pins that a null text pointer does not produce undefined behaviour. It was exercised by no
+merge — only by a human choosing `--miri` before a publication, which by policy is rare.
+
+**I ran the command before writing the step.** Nightly and the Miri component are installed
+here, so the new job step is verified to pass rather than hoped to. Tree Borrows specifically,
+because rkyv archive validation trips Stacked Borrows — already recorded, and the reason the
+gate invokes it that way.
+
+**The gate's own comment asserted the reverse, with clean provenance.** It said including the
+detached subproject made the gate the broader instrument and that nothing else gated it. `git
+log -S` dates the comment to `a5f646bd`; `4483f43e` then added the `selfhost-compiler` job and
+`fa978eff` — subject line "close the coverage holes so CI is a superset of the local gate" —
+deliberately inverted the relationship. The comment was never updated, so for months the
+script asserted the opposite of what the repository had chosen. **Prose that contradicts the
+tree is worse than absent prose, because it reads as current.**
+
+**Three defects of my own, each found by reading rather than by adjusting a threshold.**
+
+The first is the most useful. My workflow parser read `run: |` block scalars and missed inline
+`- run: cargo ...` list items, so it reported **eight** gate commands as unmatched when all
+eight were fine. **The non-vacuity floor passed throughout**, because the block-scalar steps
+alone exceeded it. A floor proves the parse found something; it cannot prove the parse found
+the right population. The eight were only exposed because the failure message printed them and
+I read them instead of relaxing the assertion.
+
+The second is the tenth instance of a class this repository has already swept. My correction
+note to the gate **quoted** the retracted phrases while explaining they were wrong, and the
+new guard asserts their absence — so the quotation satisfied the search exactly as a live
+claim would, and turned the test red. The note now paraphrases, and the guard carries a
+comment explaining that a retraction must paraphrase. Committed inside the increment that
+added the guard against it, which is the familiar shape: knowing the class does not prevent
+producing it.
+
+The third is an exemption I wrote and deleted. It exempted `cargo run` by **verb**, which
+would silently cover every future `cargo run` the gate gained — the coarse form whose hazard
+the exemption list's own comment warns about. Removing it left the test green, because the
+gate's link-checker command and the docs-links job's are identical. The list is now empty and
+that was measured, not assumed.
+
+**What the guard does not claim, stated in the guard.** It shows a counterpart command exists,
+with the same subcommand, package and feature selection. It does not show the two do
+equivalent work: `cargo test --workspace` and `cargo nextest run --profile ci --workspace`
+differ in runner, profile and doctest handling and are intended to correspond. Leaving that
+unsaid would have produced the next unearned "verified".
+
+**Direction is deliberate.** Only gate-to-workflow is checked. CI has many jobs the gate lacks
+and that is the intended shape.
+
+---
+
 ## 2026-09-27 — session 67, increment 2: a catalogue that was reporting on itself
 
 **The flattering reading came first.** `ja.po` reports zero untranslated and zero fuzzy over
