@@ -10,6 +10,37 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-27, session 67, eleventh increment). SEVEN COMMENTS SAYING RKYV
+> ARCHIVES THE AUXILIARY BODY ARE CORRECTED, AND I MISCOUNTED THEM TWICE.**
+>
+> The previous increment measured that no code path invokes rkyv's archive validation or
+> deserialization, and recorded that seven comments in the two files carrying the bytecode format
+> say the opposite in the present tense. **That is security-relevant**: it is what misled that
+> assessment for two increments.
+>
+> All seven corrected: `wire_format.rs` 1272, 1395, 1595, 1707, 2356 and `bytecode.rs` 4159, 4192.
+>
+> **The `from_bytes` site contradicted `Module::validate_bytes` in the same file.** The correction
+> says why that is worse than either being wrong alone: a reader who checks one believes they have
+> checked both.
+>
+> **The alignment comment is corrected without over-claiming.** Its padding is real and the code
+> does it; only the justification was stale. Whether the padding is still needed is recorded as
+> open, since removing it would change the wire format.
+>
+> **One site was accurate and is untouched**: `bytecode.rs:3556` says the full-`Module` rkyv archive
+> "is no longer produced or consumed". A blanket edit would have broken a correct sentence.
+>
+> `ConstValue`'s subset rationale is restated — the set is unchanged, the reason now comes from the
+> schema layer — and the `WireChunk` derives are marked vestigial in place rather than removed,
+> since they sit on a public type.
+>
+> **I counted this population seven, then six, then seven.** The middle figure came from a grep that
+> clipped `bytecode.rs:3556` mid-sentence and inverted its meaning. Fourth instrument error this
+> session, same class as the counting grep that reported zero shellcheck findings. The correction
+> is posted on #468 rather than applied silently. **Three passes to establish a population of
+> seven** is why the previous increment deferred this rather than rushing it.
+
 > **Currency note (2026-09-27, session 67, tenth increment). THE ADVISORY DATABASE HAD NEVER
 > BEEN CONSULTED, AND IT HELD THREE.**
 >
