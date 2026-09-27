@@ -250,13 +250,15 @@ Each pipeline stage produces typed errors with source locations.
 
 ## Workspace
 
-Five crates:
+Seven crates. Five are published to crates.io; `keleusma-wire` and `keleusma-wire-derive` are at `0.1.0` and await their first publication, which the next release makes.
 
 - `keleusma`. The runtime crate.
 - `keleusma-macros`. Compile-time proc macro for `#[derive(KeleusmaType)]`.
 - `keleusma-arena`. Standalone dual-end bump allocator. Published on crates.io as `keleusma-arena`.
 - `keleusma-bench`. Cost-model calibration tool that emits a measured `CostModel` for the host CPU.
 - `keleusma-cli`. Standalone command-line frontend providing `run`, `compile`, `keygen`, and `repl` subcommands. If the CLI runner does not do what you need, write your own host; the runtime library is the product and the CLI is one example of how to embed it.
+- `keleusma-wire`. Standalone wire-format container: triplicated prologue and region directory read by majority-of-three vote, fixed-stride record tables, byte-addressed pools, CRC-32, and an optional (72,64) SECDED parity plane. Usable without the rest of Keleusma.
+- `keleusma-wire-derive`. Derive macro backing `keleusma-wire`'s `derive` feature. An implementation detail of that crate rather than a direct dependency.
 
 ## Examples
 
