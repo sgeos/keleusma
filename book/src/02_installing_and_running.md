@@ -103,6 +103,7 @@ it in a file.
 Create a file named `octave.kel` in any folder. The `.kel` ending marks
 it as Keleusma source. Put one line in it:
 
+<!-- verify: accept -->
 ```
 fn main() -> Word { 7 + 5 }
 ```
@@ -133,6 +134,7 @@ accepts the file without the word `run`, as `keleusma octave.kel`.
 On macOS and Linux a file can be made to run on its own, like any other
 command. Add one line to the very top of `octave.kel`, so the file reads:
 
+<!-- verify: accept -->
 ```
 #!/usr/bin/env keleusma
 fn main() -> Word { 7 + 5 }
