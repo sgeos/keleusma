@@ -22,6 +22,24 @@ license = "0BSD"
 # Detached from the parent workspace.
 [workspace]
 
+# **DETACHED MEANS THIS PACKAGE INHERITS NO PROFILE, INCLUDING THE ONE THE ROOT CHOSE
+# DELIBERATELY.** The root `Cargo.toml` sets `debug = "line-tables-only"` and says why:
+# faster dev and test compile/link, with backtraces still carrying file and line numbers,
+# because the dev/test loop does not need full DWARF. The `[workspace]` line above makes
+# this a workspace ROOT, so none of that reached here and this package built full debug
+# info for 155 test binaries across two float configurations.
+#
+# Measured 2026-09-26, prompted by a `cargo clean` elsewhere in the tree: `target/` here
+# was **31 GiB**. That figure accumulated over many runs and both configurations, so it is
+# indicative rather than a controlled baseline.
+#
+# The same reasoning the root gives applies unchanged, so the same setting is made here.
+# **The timing effect is NOT claimed**: the first build after a profile change is cold and
+# therefore slower, and a fair comparison needs a warm run against the recorded phase
+# times. Gate time is this line's bottleneck, which is the motive, not the evidence.
+[profile.dev]
+debug = "line-tables-only"
+
 [dependencies]
 # **`floats` IS LISTED BECAUSE THIS PACKAGE USES IT, NOT BECAUSE IT NEEDS TURNING ON.**
 #
