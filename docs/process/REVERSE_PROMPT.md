@@ -10,6 +10,56 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-27, session 67, second increment.**
+
+**A CATALOGUE REPORTING ZERO UNTRANSLATED MESSAGES WAS REPORTING ON ITSELF.** `book/po/ja.po`
+said 3047 entries, zero untranslated, zero fuzzy. `book/po/messages.pot` was stamped
+**2026-07-08** and held **2782** messages against **3072** the English source contains, so a
+paragraph could not be counted untranslated because the catalogue did not know it existed. The
+Japanese book fell back to English for about one per cent of its paragraphs, silently.
+
+**Measured with the project's own tools**, `mdbook-xgettext` and `msgmerge`: **30 untranslated
+and 6 orphaned on `v0.2.3`**, with **8 and 7 added by increment 1's own English edits**. That
+split is stated rather than combined, because a total that hides which side caused it is how a
+regression is absorbed into a baseline. The two committed files did not describe each other
+either — 2781 live against 3047, with 56 template messages absent from the translation.
+
+**Now 3072 live, 3034 translated, 38 untranslated, 13 obsolete.** The merge is mechanical.
+**No Japanese was authored**: filling those 38 is an editorial act on a published,
+human-curated artifact and is recorded as yours. Two complete Japanese builds before and after
+are byte-identical across 59 pages, and the comparison was then shown able to detect a single
+deliberately mutated translation.
+
+**`book.yml` TRIGGERED ON `main` ALONE, AND `ci.yml` HAD ALREADY BEEN FIXED FOR EXACTLY THIS.**
+That workflow owns the example verification, both book builds, the playground build, and now the
+catalogue drift check, and none of them had ever run on the release line. It now matches
+`ci.yml`'s `[main, 'v*']`, with deploy gated to `main` in its own job and the pull-request
+supersede concurrency `ci.yml` already reasons about in detail.
+
+**THE JOURNAL STOPPED ME REPEATING A DELETED INSTRUMENT.** It records an earlier attempt to
+size this class by matching each message against its source line, reporting "2,329 stale of
+2,926", and calls that "not a finding, it is my wrong model of `mdbook-i18n-helpers`" —
+instrument deleted rather than repaired, the seventh instance of a check built from the same
+model as its subject. My own hand-rolled version reproduced the class at 34 with visible false
+positives on escaped punctuation and on the chapter that documents escape sequences. The
+correction is not a better approximation: two gettext files written by one tool compare to each
+other with no model of the extractor, while comparing either to the markdown needs the
+extractor. **The Rust guard does the first and cannot do the second, and that is stated in
+both.**
+
+**Reach demonstrated**: 40 emptied translations trip the debt ceiling, a truncated template
+trips the size check, a sentence added to a chapter makes the drift check fail and its removal
+makes it pass again, and every mutated file was verified byte-identical after restoration.
+
+**Left for you.** Translating the 38 messages. And, from increment 1, `run --print-memory`
+reporting an arena bound for a program `run` refuses.
+
+**Unchanged and yours**: H2's trade, workstream C's `BYTECODE_VERSION` authorisation, the seven
+standing decisions. **No file under `src/selfhost/kel/` modified.** `BYTECODE_VERSION` is 2 and
+the opcode count is 66.
+
+---
+
 **2026-09-26, session 67, first increment.**
 
 **THE BOOK'S FRESHNESS GUARANTEE WAS ATTACHED TO A BRANCH THE WORK NEVER REACHES.**
