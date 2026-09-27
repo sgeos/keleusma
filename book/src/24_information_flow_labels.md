@@ -41,6 +41,7 @@ The point of a label is that the language follows it. A labelled value
 may not flow into a place that does not accept the label. Here a function
 `broadcast` sends a plain `Word` to a public output:
 
+<!-- verify: reject: argument to `broadcast` expects Word, got Word@Master -->
 ```
 fn broadcast(x: Word) -> Word {
     x

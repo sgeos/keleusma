@@ -258,6 +258,7 @@ vm.register_native("upper_case", |args| {
 
 Script side:
 
+<!-- verify: compile -->
 ```
 use make_string
 use upper_case

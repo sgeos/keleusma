@@ -26,6 +26,7 @@ If the command is not found, ensure Cargo's bin directory is on the shell `PATH`
 
 Create a file called `hello.kel` with the following contents.
 
+<!-- verify: accept -->
 ```
 fn double(x: Word) -> Word {
     x + x

@@ -431,3 +431,14 @@ jobs:
         run: |
           python3 scripts/gen-book-instruction-set.py
           git diff --exit-code book/src/INSTRUCTION_SET.md
+      # The book's Keleusma programs are executed against the CLI built above.
+      # This ran only in the Book workflow, which triggers on the default branch:
+      # measured 2026-09-26 it had last run on 2026-07-24 and had never run on the
+      # version branch, while book/src had been edited there repeatedly. A
+      # freshness guarantee attached to a branch the work does not pass through is
+      # not one. The Book workflow keeps its release-binary run; this is the one
+      # that sees a feature branch.
+      - name: Book examples still describe the implementation
+        run: |
+          cargo build -q -p keleusma-cli
+          python3 book/ci/verify_examples.py target/debug/keleusma book/src

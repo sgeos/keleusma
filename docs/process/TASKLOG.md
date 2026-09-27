@@ -10,6 +10,31 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-26, session 67, first increment). THE BOOK'S EXAMPLES ARE
+> VERIFIED WHERE THE WORK HAPPENS, AND 34 PROGRAMS THAT NOTHING EXECUTED NOW RUN.**
+>
+> `book/ci/verify_examples.py` is called its workflow's "freshness guarantee ... on each
+> CI run". `book.yml` triggers on the default branch only: it **last ran 2026-07-24** and
+> has **never** run on `v0.2.3`, whose `book/src` has been edited repeatedly. Now invoked
+> from `ci.yml`'s `docs-links` job, which builds the CLI already and runs on every branch.
+>
+> **The reach was 51 assertions over 60 complete programs.** The extraction matched prose,
+> so only blocks near a sentence saying "output is" or "prints" were asserted; `loop main`
+> and `yield main` programs were invisible to the entry-point test entirely. **85
+> assertions now, zero programs excused, 54 acceptances as the control on the refusals.**
+>
+> **Three defects in the guide.** The `FAQ` claimed the productivity check is lexical and
+> does not chase calls, printing a program it said was rejected — it compiles, because
+> `compute_always_yielding` is a fixpoint over the call graph. Two chapters pinned stale
+> byte counts of compiled output, 2372 against 3676 and 2400 against 3684, removed rather
+> than updated. And a quoted diagnostic was unreachable: the **type checker** was improved
+> so the guide's quotation is true, rather than the guide amended to quote a message that
+> told a reader a defined name was undefined.
+>
+> **`keleusma compile` accepts a program `keleusma run` refuses**, so a rejection checked
+> with the weaker command passes vacuously. Found because the recursion example failed
+> loudly when the harness first used it.
+
 > **Currency note (2026-09-25, session 66, fifteenth increment). LAST EXPORTED SURFACE,
 > AND THE FAILURE CLASS NAMED.**
 >
