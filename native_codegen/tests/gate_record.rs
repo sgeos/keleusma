@@ -44,10 +44,37 @@ fn check_record(text: &str, commit_exists: &dyn Fn(&str) -> bool) -> Result<usiz
             continue;
         }
         let f: Vec<&str> = line.trim_matches('|').split('|').map(str::trim).collect();
-        if f.len() != 5 {
-            return Err(format!("row has {} fields, expected 5: {line}", f.len()));
+        // **FIVE OR SIX, and the transition is deliberate.** A `phases` column was added
+        // on 2026-09-27 after a gate run had one UNFROZEN phase, reported PASS because
+        // `frozen-run.sh` reports rather than blocks, and this record had no field to say
+        // so. The gate carries the other configuration's row forward verbatim, so a
+        // five-field LEGACY row coexists with a six-field one until both configurations
+        // have run. Rejecting five would fail the gate's own record test mid-transition.
+        if f.len() != 5 && f.len() != 6 {
+            return Err(format!(
+                "row has {} fields, expected 5 or 6: {line}",
+                f.len()
+            ));
         }
-        let (cfg, commit, tree, verdict, when) = (f[0], f[1], f[2], f[3], f[4]);
+        let six = f.len() == 6;
+        let (cfg, commit, tree) = (f[0], f[1], f[2]);
+        let (verdict, when) = if six { (f[4], f[5]) } else { (f[3], f[4]) };
+        if six {
+            let phases = f[3];
+            let ok = phases == "frozen"
+                || (phases.starts_with("MOVED(")
+                    && phases.ends_with(')')
+                    && phases[6..phases.len() - 1]
+                        .parse::<u32>()
+                        .is_ok_and(|n| n > 0));
+            if !ok {
+                return Err(format!(
+                    "`{phases}` is not `frozen` or `MOVED(N)` with N > 0. A run with an \
+                     unfrozen phase must SAY so: its verdict describes a tree that moved \
+                     underneath it."
+                ));
+            }
+        }
 
         if seen.contains(&cfg) {
             return Err(format!("configuration `{cfg}` appears twice"));

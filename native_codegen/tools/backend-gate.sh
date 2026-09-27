@@ -85,6 +85,13 @@ fi
 #
 # This file's own state is excluded: a record left by the previous configuration's
 # run is not a modification of the code under test.
+# Phases report a freeze breach here; the record carries the outcome. A start-state
+# snapshot cannot express "a phase ran while the tree moved", which is exactly what
+# went unrecorded on 2026-09-27.
+KEL_FREEZE_BREACH_LOG="$(mktemp)"
+export KEL_FREEZE_BREACH_LOG
+trap 'rm -f "$KEL_FREEZE_BREACH_LOG"' EXIT
+
 start_commit=$(git rev-parse HEAD 2>/dev/null || echo UNKNOWN)
 _dirt=$(git status --porcelain 2>/dev/null | grep -cv 'GATE_RECORD.md') || true
 start_tree=$([ "${_dirt:-0}" -eq 0 ] && echo clean || echo "dirty(${_dirt})")
@@ -146,7 +153,9 @@ echo "================ BACKEND GATE — $label: $verdict"
 record="GATE_RECORD.md"
 other=$(grep -E '^\| (default features|narrow-float-32) \|' "$record" 2>/dev/null \
         | grep -v "^| $label |") || true
-row="| $label | $start_commit | $start_tree | $verdict | $(date -u +%Y-%m-%dT%H:%M:%SZ) |"
+breaches=$(grep -c . "$KEL_FREEZE_BREACH_LOG" 2>/dev/null) || true
+freeze=$([ "${breaches:-0}" -eq 0 ] && echo frozen || echo "MOVED(${breaches})")
+row="| $label | $start_commit | $start_tree | $freeze | $verdict | $(date -u +%Y-%m-%dT%H:%M:%SZ) |"
 {
     cat <<'HDR'
 # Backend gate record
@@ -168,8 +177,8 @@ necessarily produces a commit the record cannot name.
 **`dirty` is a disclosure, not a failure.** A dirty run's verdict belongs to a tree
 that was never committed and cannot be reproduced from history.
 
-| configuration | commit | worktree | verdict | run (UTC) |
-|---|---|---|---|---|
+| configuration | commit | worktree | phases | verdict | run (UTC) |
+|---|---|---|---|---|---|
 HDR
     printf '%s\n' "$row" "$other" | grep -v '^$' | sort
 } > "$record"

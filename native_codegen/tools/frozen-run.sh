@@ -111,6 +111,12 @@ if [ "$before" = "$after" ]; then
     echo "              This rules out ONE way of being wrong. It is not a claim"
     echo "              that the measurement is correct."
 else
+    # **RECORD THE BREACH WHERE A CALLER CAN SEE IT.** Printing it was not enough:
+    # on 2026-09-27 a gate run had one unfrozen phase, reported PASS because this
+    # wrapper deliberately does not block, and `GATE_RECORD.md` had no field to say
+    # so -- the record claimed a clean verdict for a run one phase of which was not
+    # frozen. The caller sets `KEL_FREEZE_BREACH_LOG` and reads it after its phases.
+    [ -n "${KEL_FREEZE_BREACH_LOG:-}" ] && echo "$*" >> "$KEL_FREEZE_BREACH_LOG"
     echo "  VERDICT   : *** NOT FROZEN. THE TREE MOVED DURING THIS RUN. ***"
     echo "              Do not quote this result as a clean measurement. Re-run"
     echo "              it on a still tree, or report it with this caveat"
