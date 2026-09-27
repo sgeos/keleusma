@@ -411,6 +411,25 @@ jobs:
         env:
           MIRIFLAGS: -Zmiri-tree-borrows
         run: cargo miri test -p keleusma-arena
+      # THE LIBRARY PACKAGE'S UNDEFINED-BEHAVIOUR PIN, WHICH RAN NOWHERE BUT A
+      # PRE-PUBLICATION GATE INVOCATION.
+      #
+      # `scripts/release-gate.sh --miri` runs this test and this job did not, so a
+      # regression on the null-text-pointer path survived every merge and was
+      # caught only when a human ran the gate before a release. The repository
+      # permits a merge on this workflow alone, justified by it being a superset of
+      # that gate; on Miri it was not. Measured 2026-09-27.
+      #
+      # Tree Borrows specifically: rkyv archive validation trips Stacked Borrows,
+      # so a VM-touching Miri run needs this aliasing model. That is why the gate
+      # invokes it this way and why this step does not also run under the default
+      # model.
+      - name: Tree borrows (library package, null-text-pointer UB pin)
+        env:
+          MIRIFLAGS: -Zmiri-tree-borrows
+        run: |
+          cargo miri test -p keleusma \
+            --test marshall c1_null_text_pointer_marshals_to_empty_string_not_ub
 
   docs-links:
     name: Doc links

@@ -13,6 +13,68 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-27 — session 67, increment 3: the sentence that licenses a merge, unverified
+
+**The claim.** `CLAUDE.md` and `GIT_STRATEGY.md` permit merging on continuous integration
+alone, justified by "CI is a verified strict superset of the local gate". *Verified* was doing
+unearned work: nothing checked it. That is the third instrument this session that was
+attached to less than its description claimed, after a book verifier that never ran on the
+release line and a translation catalogue that reported on itself.
+
+**It was false on the Miri axis.** CI's Miri job runs `cargo miri test -p keleusma-arena`
+under Stacked and then Tree Borrows. The gate's `--miri` step also runs
+`c1_null_text_pointer_marshals_to_empty_string_not_ub` under Tree Borrows, on the library
+package, and CI ran no `-p keleusma` Miri test at all. The test's name states its purpose: it
+pins that a null text pointer does not produce undefined behaviour. It was exercised by no
+merge — only by a human choosing `--miri` before a publication, which by policy is rare.
+
+**I ran the command before writing the step.** Nightly and the Miri component are installed
+here, so the new job step is verified to pass rather than hoped to. Tree Borrows specifically,
+because rkyv archive validation trips Stacked Borrows — already recorded, and the reason the
+gate invokes it that way.
+
+**The gate's own comment asserted the reverse, with clean provenance.** It said including the
+detached subproject made the gate the broader instrument and that nothing else gated it. `git
+log -S` dates the comment to `a5f646bd`; `4483f43e` then added the `selfhost-compiler` job and
+`fa978eff` — subject line "close the coverage holes so CI is a superset of the local gate" —
+deliberately inverted the relationship. The comment was never updated, so for months the
+script asserted the opposite of what the repository had chosen. **Prose that contradicts the
+tree is worse than absent prose, because it reads as current.**
+
+**Three defects of my own, each found by reading rather than by adjusting a threshold.**
+
+The first is the most useful. My workflow parser read `run: |` block scalars and missed inline
+`- run: cargo ...` list items, so it reported **eight** gate commands as unmatched when all
+eight were fine. **The non-vacuity floor passed throughout**, because the block-scalar steps
+alone exceeded it. A floor proves the parse found something; it cannot prove the parse found
+the right population. The eight were only exposed because the failure message printed them and
+I read them instead of relaxing the assertion.
+
+The second is the tenth instance of a class this repository has already swept. My correction
+note to the gate **quoted** the retracted phrases while explaining they were wrong, and the
+new guard asserts their absence — so the quotation satisfied the search exactly as a live
+claim would, and turned the test red. The note now paraphrases, and the guard carries a
+comment explaining that a retraction must paraphrase. Committed inside the increment that
+added the guard against it, which is the familiar shape: knowing the class does not prevent
+producing it.
+
+The third is an exemption I wrote and deleted. It exempted `cargo run` by **verb**, which
+would silently cover every future `cargo run` the gate gained — the coarse form whose hazard
+the exemption list's own comment warns about. Removing it left the test green, because the
+gate's link-checker command and the docs-links job's are identical. The list is now empty and
+that was measured, not assumed.
+
+**What the guard does not claim, stated in the guard.** It shows a counterpart command exists,
+with the same subcommand, package and feature selection. It does not show the two do
+equivalent work: `cargo test --workspace` and `cargo nextest run --profile ci --workspace`
+differ in runner, profile and doctest handling and are intended to correspond. Leaving that
+unsaid would have produced the next unearned "verified".
+
+**Direction is deliberate.** Only gate-to-workflow is checked. CI has many jobs the gate lacks
+and that is the intended shape.
+
+---
+
 ## 2026-09-27 — session 67, increment 2: a catalogue that was reporting on itself
 
 **The flattering reading came first.** `ja.po` reports zero untranslated and zero fuzzy over
