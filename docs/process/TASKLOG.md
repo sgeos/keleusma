@@ -10,6 +10,36 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-27, session 67, tenth increment). THE ADVISORY DATABASE HAD NEVER
+> BEEN CONSULTED, AND IT HELD THREE.**
+>
+> `cargo audit` was installed on this machine and had **never run against this tree** — no CI
+> job, no gate step, no mention in `scripts/`. Its first run reported **three advisories against
+> `rkyv 0.8.16`**: RUSTSEC-2026-0233, a **use-after-free during deserialization** of crafted
+> archives, plus 0234 and 0235, out-of-bounds reads. All fixed in `>= 0.8.17`, the oldest dated
+> 2026-05-11, and **`keleusma 0.2.2` is published carrying it** — so they accumulated unnoticed
+> for about four months.
+>
+> The fix is lockfile-only: the manifest already requires `"0.8"`, so the lock moves to 0.8.18
+> and the scan clears at 102 dependencies, exit 0. **2930 workspace tests pass under it**, which
+> matters because rkyv participates in the bytecode format.
+>
+> **Reachability is measured, and the answer is no.** With comments stripped,
+> `src/wire_format.rs` contains no `rkyv::` use at all and `src/bytecode.rs`'s only ones are
+> trait bounds inside derive attributes; there is no `rkyv::deserialize`, `rkyv::access` or
+> `rkyv::from_bytes` call in `src/`. `CLAUDE.md` was right that rkyv no longer reads the
+> auxiliary body.
+>
+> **RECORDED AND NOT REPAIRED: seven comments say the opposite.** Present tense, in the two files
+> that carry the bytecode format, and they misled this assessment for two increments.
+> `wire_format.rs:1707` asserts an 8-byte alignment requirement that `Module::validate_bytes`
+> explicitly says is gone — an API-adjacent contradiction. Not fixed here because each needs
+> individual judgement and some neighbouring rkyv comments are **accurate**, so a blanket edit
+> would damage correct prose. See `docs/decisions/DEPENDENCY_ADVISORY_COVERAGE.md`.
+>
+> **Note on ordering**: increments eight and nine sit on an unmerged branch, so this note appears
+> above the seventh's rather than theirs. Each names its own number.
+
 > **Currency note (2026-09-27, session 67, ninth increment, follow-up). I HIT THE FIRST TRAP IN
 > THE ORIENTATION DOCUMENT'S OWN TABLE.**
 >
