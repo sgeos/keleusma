@@ -1,10 +1,18 @@
 name: Book
 
+# Trigger on `main` and any version branch, matching `ci.yml`. This workflow was
+# left on `main` alone when `ci.yml` was extended, and the consequence was
+# measured on 2026-09-26: it had last run on 2026-07-24 and had NEVER run on
+# `v0.2.3`, while `book/src` was edited on that branch repeatedly. Nothing was
+# red because nothing ran. The example verification, the English and Japanese
+# builds, the playground build, and the catalogue drift check all live here, so
+# none of them saw the release line's work. Deploy stays gated to `main` in its
+# own job.
 on:
   push:
-    branches: [main]
+    branches: [main, 'v*']
   pull_request:
-    branches: [main]
+    branches: [main, 'v*']
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,10 +23,17 @@ permissions:
   pages: write
   id-token: write
 
-# One in-flight Pages deployment at a time; do not cancel a running deploy.
+# Supersede an in-flight run when a PULL REQUEST is pushed again, and leave
+# branch runs alone. Keyed by the ref for a pull request and by the unique
+# `run_id` otherwise, so a second merge to a version branch cannot cancel the
+# first commit's verification. `ci.yml` carries the full reasoning for this
+# shape; it matters more now that this workflow runs on every version branch.
+#
+# The single-in-flight-deployment rule moved to the `deploy` job, since a
+# workflow-level `pages` group would also serialise the build jobs.
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   # The freshness guarantee: every book example that states an output is
@@ -46,6 +61,25 @@ jobs:
           tool: mdbook,wasm-pack
       - name: Install mdbook-i18n-helpers
         run: cargo install mdbook-i18n-helpers --locked
+      # THE TRANSLATION CATALOGUE STILL DESCRIBES THE ENGLISH SOURCE.
+      #
+      # `book/po/messages.pot` is the extracted catalogue and `book/po/ja.po` is
+      # keyed by it. When English prose changes and the catalogue is not
+      # regenerated, the Japanese build falls back to English for the changed
+      # paragraph and says nothing, while `ja.po` keeps reporting itself fully
+      # translated. Measured 2026-09-26: the committed catalogue was stamped
+      # 2026-07-08 and held 2782 messages against 3072 the source contained.
+      #
+      # The creation date is excluded because it changes on every regeneration;
+      # everything else must match. `tests/book_translation_currency.rs` holds the
+      # complementary half -- it compares the two committed catalogues to each
+      # other and CANNOT see whether either matches the markdown, which is what
+      # this step answers. Neither half alone is sufficient.
+      - name: Translation catalogue is in sync with the English source
+        run: |
+          MDBOOK_OUTPUT__XGETTEXT__POT_FILE=messages.pot mdbook build book -d "$RUNNER_TEMP/potcheck"
+          diff <(grep -v '^"POT-Creation-Date' book/po/messages.pot) \
+               <(grep -v '^"POT-Creation-Date' "$RUNNER_TEMP/potcheck/xgettext/messages.pot")
       - name: Build English (source) book
         run: mdbook build book -d "$GITHUB_WORKSPACE/site"
       - name: Build Japanese translation
@@ -68,6 +102,10 @@ jobs:
     name: Deploy to GitHub Pages
     needs: [build, verify-examples]
     if: github.ref == 'refs/heads/main'
+    # One in-flight Pages deployment at a time; do not cancel a running deploy.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

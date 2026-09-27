@@ -5071,6 +5071,66 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-09-27 — session 67, increment 2: a catalogue that was reporting on itself
+
+**The flattering reading came first.** `ja.po` reports zero untranslated and zero fuzzy over
+3047 entries. Two other hypotheses died quickly too: `SUMMARY.md` has no orphans and no
+dangling links. The remaining question was the one the report cannot answer — a message is
+untranslated only if the catalogue knows it exists — and `messages.pot` was stamped
+**2026-07-08**, holding 2782 messages against 3072 in the source.
+
+**I nearly became the eighth instance of a class this repository has already catalogued.** My
+first measurement compared each `msgid` against the markdown and reported 34 stale. Reading the
+journal found an earlier session doing exactly that, reporting 2,329 of 2,926, recording it as
+"not a finding, it is my wrong model of `mdbook-i18n-helpers`", and **deleting the instrument
+rather than repairing it** — logged there as the seventh instance of a check built from the same
+model as the thing it checks. My 34 had visible false positives on escaped punctuation and on the
+chapter that documents escape sequences.
+
+**What the record closed was the approximation, not the measurement.** The real extractor is
+installed here, which the earlier attempt evidently lacked. `mdbook-xgettext` plus
+`msgmerge --no-fuzzy-matching` is authoritative and needs no model at all.
+
+**The design insight worth keeping.** Two gettext files written by the same tool can be compared
+to each other with zero knowledge of the extractor's transformations, because their escaping is
+identical by construction. Comparing either to the markdown needs the extractor itself. So the
+work splits: a Rust guard compares the two committed catalogues on every branch with no tooling,
+and a workflow step regenerates the template and fails on drift. **Neither alone is sufficient,
+and both files say so** — the guard's own failure message names what it cannot see.
+
+**My first version of the guard was insufficient in a way worth recording.** It checked only
+that the translation covers every extracted message. That is satisfied by a template which has
+gone stale in the SHRINKING direction: if extraction stopped covering chapters, its messages
+would all still be present in a larger translation. Adding a mutual-size leg immediately
+reported the real state, a gap of 266 with 56 template messages absent from the translation, so
+the two committed files had been generated at different times and neither described the other.
+
+**The split between pre-existing and self-inflicted is stated deliberately.** Thirty
+untranslated and six orphans were on `v0.2.3`; eight and seven were added by increment 1's own
+English edits, hours earlier, when it corrected the productivity-rule entry. A combined total
+would have quietly absorbed my own regression into the baseline.
+
+**Where I stopped, on purpose.** Filling the 38 untranslated messages is authoring Japanese
+prose into a published, human-curated artifact. That is an editorial act and the operator's, not
+a mechanical consequence of a measurement. The merge inserts empty entries and invents nothing;
+the translation is recorded as an item.
+
+**And `book.yml` was the same defect increment 1 had already found and only half fixed.** It
+triggered on `main` alone while `ci.yml` had been extended to `[main, 'v*']` with a comment
+explaining precisely this reasoning. So the example verification, both book builds, the
+playground build, and the new drift check had never run on the release line. Extended, with
+deploy gated to `main` in its own job and the pull-request supersede group `ci.yml` reasons
+about at length — the `pages` group had to move off the workflow, since at workflow level it
+would serialise the build jobs.
+
+**Everything here was mutation-tested, including the restorations.** Forty emptied translations
+trip the debt ceiling; a truncated template trips the size check; a sentence appended to a
+chapter makes the drift check fail and its removal makes it pass again. Each mutated file was
+then confirmed byte-identical to its backup, because a mutation test that leaves residue turns
+the next measurement into a reading of no tree at all.
+
+---
+
 ## 2026-09-26 — session 67, increment 1: the book's code is executed, not displayed
 
 **What was measured before anything was built.** 175 bare Keleusma fences in `book/src`,
