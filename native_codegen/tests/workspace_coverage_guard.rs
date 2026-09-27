@@ -223,12 +223,29 @@ fn an_unmoved_tree_is_current() {
 #[test]
 fn an_unrecognised_path_is_treated_as_compiled_so_the_guard_fails_safe() {
     // The guard classifies by prefix. Only `native_codegen/` is inert and only `docs/`
-    // is read-only, so any other path must land in the strongest class. Demonstrated
-    // through a range that moved a top-level script, which is neither.
+    // is read-only, so any other path must land in the strongest class.
+    //
+    // **THIS ASSERTS THE VERDICT, NOT THE PATH LISTING, AND THAT IS THE WHOLE FIX.**
+    // It formerly required the output to mention `scripts/` or `keleusma-macros/`, and
+    // it reddened the gate on 2026-09-27 when absorption 74 arrived: the guard prints
+    // `printf ... | head -20` followed by "... N more", so a range that gained a hundred
+    // alphabetically-early `book/` paths pushed both named directories out of view. **The
+    // property never failed; the display changed.**
+    //
+    // `STALE-COMPILED` is the verdict the guard reaches only when a compiled-class path
+    // was counted, so it states the property directly and cannot be moved by truncation
+    // or by which files happen to sort first. The other two verdicts are `CURRENT` and
+    // `STALE-READ-ONLY`, neither of which a compiled path can produce.
+    //
+    // Recorded because this is the green-run catalogue's truncation row for the THIRD
+    // time in one session — a `head -14` listing read as a job total, this `head -20`
+    // listing read as a complete one, and `grep -c` counting lines rather than
+    // occurrences. **Asserting on a human-facing summary is the shape to avoid.**
     require_commit(LAST_WORKSPACE_RUN);
     let (_code, text) = guard(&["check", "--since", LAST_WORKSPACE_RUN]);
     assert!(
-        text.contains("scripts/") || text.contains("keleusma-macros/"),
-        "a path on neither list must be counted as compiled:\n{text}"
+        text.contains("VERDICT: STALE-COMPILED"),
+        "a path on neither list must be counted as compiled, which is what the \
+         STALE-COMPILED verdict means:\n{text}"
     );
 }
