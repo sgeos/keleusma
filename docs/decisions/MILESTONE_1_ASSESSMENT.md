@@ -1,81 +1,57 @@
-# MILESTONE 1 OF THE V0.3.X ROADMAP IS NOT MET, AND THIS IS WHAT IT NEEDS
+# RETRACTED: this document assessed work a previous session had recorded as DONE
 
-**Measured 2026-09-27.** No document in the tree claimed this milestone before or after; this
-one states where it stands so the next session does not have to re-derive it.
+**Written and retracted on 2026-09-27, within the hour.** It is kept, emptied of its claims,
+because the way it went wrong is worth more than anything it asserted.
 
-## The gate
+## What it claimed, and why every version was unsound
 
-`docs/roadmap/V0_3_X_ROADMAP.md` order 1: *"Subset bytecode lowers to native — Workstream A
-(first pass) — the self-hosted compiler's own bytecode runs correctly as native code,
-differential-tested against the VM."*
+It set out to assess roadmap order 1 — *"the self-hosted compiler's own bytecode runs correctly
+as native code, differential-tested against the VM"* — and state what remained.
 
-## What is true
+- **First version**: "2 of 12 stages driven on seeded input; ten per-stage seeders are the
+  work." Wrong. It rested entirely on `probe_stage_vacuity`'s table, which prints
+  `seeded: no len/bytes pair` for ten stages. **That describes THAT PROBE'S seeder**, which
+  understands one convention, not the project's coverage.
+- **Second version**: "5 of 12; seven seeders remain." Also unsound. Five is the number of
+  `*_agrees_with_the_vm_*` tests in `stage_differential.rs`, which is not the same quantity as
+  stages seeded.
+- **Both versions** were written without reading the handoff section headed
+  **"► WHAT IS DONE, SO IT IS NOT REDONE"**, which states: *"Order-1 gate: **12 of 12 stage
+  sources seeded, 0 unseeded** (was 3 unseeded). The last three went in without the read-only
+  accessors that were assumed to be the only route; `codegen.kel` is seeded by chaining
+  `reconstruct.kel`'s published AST."*
 
-The self-hosted compiler's twelve stage sources under `src/selfhost/kel/` are in the
-differential corpus, they lower, and they agree with the virtual machine. **That much is
-real and is not being diminished here.**
+**A section exists in this line's own handoff for the express purpose of preventing this, and
+it was not read before writing a "what remains" document.** That is the finding.
 
-## Why the gate is not met
+## What is measured and still stands
 
-**Agreement on degenerate input is not the gate.** Measured by
-`probe_stage_vacuity::how_far_does_each_stage_get_on_the_differentials_own_input`, over 60
-ticks each:
+- `stage_differential.rs` carries agreement tests for **five** stages — `lexer`, `parse`,
+  `verify_yield`, `analyze`, `codegen` — each with a negative control, and two of them are
+  driven on **the preceding stage's real output** rather than a synthetic seed.
+- Under the CORPUS drive, which is an all-zero shared segment and NOT
+  `stage_differential`'s seeded one, **8 of 12 stages yield a single repeated value** over 60
+  ticks, and `lexer.kel` yields its end-of-source marker `62` sixty times. Corpus agreement
+  alone therefore cannot carry the gate.
 
-| | count |
-|---|---|
-| stage sources | **12** |
-| yielding a SINGLE repeated value under the corpus drive | **8 of 12** |
-| driven on a meaningfully SEEDED shared segment | **2 of 12** |
-| reporting `seeded: no len/bytes pair` | **10 of 12** |
+Those two facts are consistent with each other and with the prior session's claim. **What is
+NOT established is how they reconcile** — whether "12 of 12 seeded" counts seeding in the
+corpus harness, which is a different quantity from an agreement test in `stage_differential`.
+Settling that needs the corpus harness's seeding read directly, which this document did not do.
 
-The two that are seeded are `lexer.kel`, which produces 10 distinct token codes instead of
-one, and `wire.kel` at 4. A tokenizer emitting one value for sixty ticks has reached end of
-source immediately: `lexer.kel` documents 62 as end-of-source and 63 as pending, and the
-corpus drive yields `62` sixty times.
+## The process lesson, which is the reusable part
 
-**So eleven or ten of twelve stages are verified against the VM on input that exercises one
-path.** The differential is sound; its INPUT is not representative.
+**Read "WHAT IS DONE, SO IT IS NOT REDONE" before writing anything titled "what remains".**
+The section is in the handoff above the pickup list and exists for this.
 
-## What would close it, concretely
+**And stop answering coverage questions with greps.** Six searches in one iteration returned
+the wrong answer to the question asked: a prefix search for `wa.` when slots are addressed
+unqualified; an extraction requiring a literal argument when the names are passed through a
+loop variable; and four earlier. Each looked like an answer. The instrument for "what does
+this harness cover" is the harness's own test list and its own reported counts.
 
-The seeder understands one convention — `src.bytes` with its length in `src.len`, which is
-`lexer.kel`'s. Every other stage consumes a differently named shared block, and the probe
-already prints each one's leading slots:
+## No claim about milestone 1 is made here
 
-| stage | block prefix |
-|---|---|
-| `analyze.kel` | `wa.op_count`, `wa.stream_pos`, `wa.reset_pos`, `wa.local_count`, … |
-| `codegen.kel` | `ast.root`, `ast.kinds`, … |
-| `parse.kel` | `toks.len`, `toks.packed`, … |
-| `reconstruct.kel` | `io.rec_count`, `io.in_category`, `io.in_param_count`, … |
-| `verify_datalayout.kel` | `dl.phase`, `dl.count`, `dl.n_slots`, `dl.buffer`, `dl.pool`, … |
-| `verify_depth.kel` | `dv.op_count`, `dv.class`, … |
-| `verify_structural.kel` | `sv.op_count`, `sv.local_count`, `sv.const_count`, … |
-| `verify_typed.kel` | `tv.op_count`, `tv.resume_tag`, `tv.resume_size`, … |
-| `verify_types.kel` | `ty.cmd`, `ty.verdict`, `ty.n`, `ty.lhs`, … |
-| `verify_yield.kel` | `yv.op_count`, `yv.region_start`, `yv.region_end`, `yv.class`, … |
-
-**Ten per-stage shared-block seeders is the work**, and the slot names are already measured
-rather than guessed. `selfhost_host.rs` carries the layouts the stages are seeded through,
-which is where the conventions live.
-
-## Wrong turns
-
-**Do not claim the milestone on a count of agreeing modules.** That is the error this
-document exists to prevent: nine or ten stages "executing and agreeing" reads like coverage
-and is agreement on a zero segment.
-
-**Do not seed a stage with arbitrary bytes to move its distinct-value count.** A seeder that
-produces values the stage would never receive proves the two implementations agree on
-nonsense. The seeded input must satisfy the stage's documented contract, which is why the
-slot layouts matter.
-
-**Do not treat `wire.kel` as solved because it shows 4 distinct seeded values.** Its
-zero-input run FAILED — `resume failed at tick 19: IndexOutOfBounds(1570812, 65536)` — so its
-seeded column describes a different situation from the others and deserves its own look.
-
-## A stale figure corrected alongside this
-
-`stage_differential.rs` said "nine of the **ten** stage sources". There are **twelve**, and
-`probe_stage_vacuity` already reports 12 correctly. The doc comment had not followed the two
-stages added since it was written.
+The gate may be met, partly met, or not met. **This document asserts nothing about it**, and
+the next session should start from the handoff's done-list and the corpus harness rather than
+from anything here.
