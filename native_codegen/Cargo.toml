@@ -15,6 +15,20 @@
 name = "keleusma-native"
 version = "0.3.0-dev"
 edition = "2024"
+# **TESTED, NOT ASSUMED.** The root pins `rust-version = "1.88"`; this package is a
+# detached workspace root and so inherited no such pin, and neither do `compiler/` or
+# `examples/rtos/` — reported below rather than changed, since they are not this line's.
+#
+# Verified 2026-09-27 before writing the number: `cargo +1.88 check --all-targets` in a
+# fresh target directory, 25 crates compiled from scratch, exit 0, no errors, and 196
+# `.rmeta` artifacts including ones for individual test targets — so the TEST targets were
+# checked too, not just the library. The 14.5s runtime looked too fast to trust, which is
+# why the artifacts were counted rather than the exit status believed.
+#
+# What this buys is small and worth stating: continuous integration never builds this
+# package and it is `publish = false`, so no consumer contract rests on the figure. The
+# pin turns a confusing failure on an older toolchain into a clear one.
+rust-version = "1.88"
 publish = false
 description = "LLVM native code generation for verified Keleusma bytecode (V0.3.x)."
 license = "0BSD"
