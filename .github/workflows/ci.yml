@@ -326,6 +326,38 @@ jobs:
   # The availability check is deliberate. A step that silently no-opped when the
   # tool was absent would read as coverage while providing none, which is the
   # failure this repository keeps meeting.
+  # THE ADVISORY DATABASE, WHICH HAD NEVER BEEN CONSULTED.
+  #
+  # `cargo audit` was installed on a developer machine and had never been run
+  # against this tree: no job here, no step in `scripts/release-gate.sh`, no
+  # mention anywhere. Its first run, 2026-09-27, reported THREE advisories against
+  # `rkyv 0.8.16` -- RUSTSEC-2026-0233 (use-after-free during deserialization of
+  # crafted archives), 0234 and 0235 (out-of-bounds reads) -- all fixed in
+  # >= 0.8.17, while `keleusma 0.2.2` was published carrying it. The lock now
+  # holds 0.8.18 and the scan is clean across 102 dependencies.
+  #
+  # WHETHER THOSE ADVISORIES WERE REACHABLE HERE IS A SEPARATE QUESTION, and the
+  # measured answer is that no code path invokes rkyv's archive validation or
+  # deserialization: `src/wire_format.rs` contains no `rkyv::` use in a code
+  # position at all, and `src/bytecode.rs`'s only ones are trait bounds inside
+  # derive attributes. See `docs/decisions/DEPENDENCY_ADVISORY_COVERAGE.md`.
+  #
+  # THE COST IS DELIBERATE AND WORTH STATING. A new advisory published against an
+  # unchanged tree turns an unrelated pull request red. That is the price of not
+  # accumulating advisories silently, which is what happened for at least four
+  # months here.
+  audit:
+    name: Dependency advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Scan the dependency graph against the advisory database
+        run: cargo audit
+
   shellcheck:
     name: Shell scripts
     runs-on: ubuntu-latest
