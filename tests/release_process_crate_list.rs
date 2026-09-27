@@ -344,3 +344,93 @@ fn policy_paragraph(doc: &str) -> &str {
         .unwrap_or(doc.len());
     &doc[start..end]
 }
+
+/// **THE TARBALL STILL EXCLUDES WHAT MUST NOT SHIP.**
+///
+/// The strongest entry is `secret/`. It holds the operator's out-of-repository requirements
+/// note, and publishing to a registry is **irreversible**: a version, once uploaded, cannot be
+/// withdrawn, only yanked, and the tarball remains downloadable. Losing that exclusion would
+/// disclose material the repository is explicitly instructed never to place in tracked files,
+/// let alone in a public artifact.
+///
+/// Measured 2026-09-27: `cargo package --list -p keleusma` shows `secret/`, `compiler/`,
+/// `examples/rtos/` and `book/` all absent, so the declaration is currently effective.
+///
+/// **THE TOTAL FILE COUNT IS DELIBERATELY NOT QUOTED HERE.** The first draft of this comment
+/// said 335 files. It was 336 within the same increment, because this increment adds a test
+/// file and tests ship in the tarball. Two increments earlier this session removed
+/// `wrote pulse.bin (2372 bytes)` and `wrote tune.kel.bin (2400 bytes)` from the guide for
+/// exactly that reason, and then reproduced the shape here -- which is the repository's own
+/// observation that knowing a failure class does not prevent producing it. What matters is
+/// the ABSENCES, which are properties of the exclude list rather than of the tree's size. `secret/` is in fact protected twice, by `.gitignore` and by this list;
+/// both would have to be lost. **This guard found nothing.** It exists because the failure is
+/// irreversible and the cost of the check is a few lines.
+///
+/// **WHAT THIS CHECKS, AND WHAT IT DOES NOT.** It checks the manifest's DECLARATION. It does
+/// not run `cargo package`, so it cannot prove a built tarball omits a path — a second
+/// exclusion mechanism could be removed while this list stayed intact, or a future Cargo could
+/// interpret the list differently. Saying so is the point: a guard that implied it had verified
+/// the artifact would be the kind of overclaim this suite exists to prevent.
+#[test]
+fn the_package_manifest_still_excludes_the_paths_that_must_not_be_published() {
+    let manifest = root().join("Cargo.toml");
+    let text = std::fs::read_to_string(&manifest).expect("the root manifest");
+
+    let open = text.find("exclude = [").expect(
+        "the root manifest no longer has an `exclude` list, so nothing is withheld from \
+                 the published tarball",
+    );
+    let rest = &text[open..];
+    let close = rest.find(']').expect("an unterminated exclude list");
+    let body = &rest[..close];
+
+    // Comment lines inside the list explain entries; an entry named only in a comment must not
+    // satisfy this check.
+    let entries: Vec<String> = body
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#'))
+        .flat_map(|l| l.split(','))
+        .map(|p| p.trim().trim_matches('"').trim().to_string())
+        .filter(|p| !p.is_empty() && p != "exclude = [")
+        .collect();
+
+    // NON-VACUITY: an extraction that produced nothing would satisfy every containment below.
+    assert!(
+        entries.len() >= 8,
+        "parsed only {} exclude entries, so the extraction has broken rather than the list \
+         having shrunk: {entries:?}",
+        entries.len()
+    );
+
+    for (path, why) in [
+        (
+            "secret/",
+            "the operator's out-of-repository notes; publishing is irreversible",
+        ),
+        (
+            "tmp/",
+            "scratch space, which may hold anything a session left behind",
+        ),
+        (
+            "keleusma-lsp/",
+            "a detached developer-tooling crate released separately",
+        ),
+        (
+            "keleusma-wasm/",
+            "a detached developer-tooling crate released separately",
+        ),
+        (
+            "compiler/",
+            "the self-hosted compiler subproject, not part of the consumed runtime",
+        ),
+        ("editors/", "editor integrations, not consumer material"),
+        ("tools/", "contributor tooling, not consumer material"),
+    ] {
+        assert!(
+            entries.iter().any(|e| e == path),
+            "`{path}` is no longer excluded from the published tarball ({why}). Entries found: \
+             {entries:?}"
+        );
+    }
+}
