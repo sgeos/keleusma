@@ -10,6 +10,54 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-27, session 67, seventh increment. The session's handoff is refreshed and this is its
+closing block.**
+
+**`HANDOFF.md` described a commit from the previous session and is now stamped on this trunk.**
+Every content check in it was RUN while it was written, not carried forward, and the numbered list
+was checked in its rendered order — this file has twice had an item inserted above its predecessor
+by an agent that had just read the warning against it.
+
+**Two things are written into it deliberately.** The suite figure carries "re-derive rather than
+trust it", because this session added six test files and the number moved four times; a figure
+that moves every increment cannot live in a document refreshed every few increments. And the
+session's lesson is stated as **survey by inspection has stopped paying, running the tools has
+not** — not as "the seam is exhausted", which increment 6 disproved within the hour by reporting
+nothing and then finding three real defects the moment shellcheck was run properly.
+
+**What the session did.** Seven increments, six of which found that an instrument covered less
+than its description claimed: a book verifier attached to a branch the work never reached; a
+translation catalogue reporting on itself; an unverified superset claim licensing every merge; a
+worst-case memory bound that was a constant; an ungated binary hiding a test target hiding two
+tests rotted since B28; and eight shellcheck findings I had reported as zero, two of them
+silent-failure paths in the scripts that gate and move work.
+
+**Six of my own defects landed inside the increments that fixed their class.** A non-vacuity
+floor that passed while my parser was half-blind. A retraction quoting the text its own guard
+forbids. An exemption coarse enough to hide future gaps. A stale-prone number pinned two
+increments after removing two from the guide. A truncated log read as a missing feature. A
+counting grep that reported zero because its pattern could not match. **Each was caught by
+running the check, never by knowing the class**, which is this repository's own recorded
+conclusion about this shape. `CLAUDE.md` gained three rows.
+
+**Unchanged and verified**: fingerprint `0x4327_63E1`, `BYTECODE_VERSION` 2, opcode count 66, and
+**no file under `src/selfhost/kel/` modified in the whole session** — so the parser-gap capacity
+decision is unprejudiced.
+
+**What is yours**, and two of these are new this session:
+
+1. The book's **38 untranslated messages**. Editorial work on a published, human-curated
+   artifact. `docs/decisions/BOOK_TRANSLATION_CURRENCY.md`.
+2. Whether **`compile` should refuse a module no host can load**. It emits one today, and
+   `auto_arena_capacity_for` already separates the emittable case from the impossible one.
+   `docs/decisions/PRINT_MEMORY_BOUND.md`.
+3. **H2**, on its recorded trade.
+4. **Workstream C's `BYTECODE_VERSION` authorisation** — array bounds alone remain.
+5. The **seven standing decisions**.
+6. The **parser-gap capacity call**, 162 bindings against 128.
+
+---
+
 **2026-09-27, session 67, sixth increment. I REPORTED THIS INCREMENT AS FINDING NOTHING, AND
 THAT WAS WRONG.** The two guards found nothing. The shellcheck step found **eight** findings,
 three of them warnings and two of those genuine defects in load-bearing scripts.

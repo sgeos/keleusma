@@ -1,5 +1,152 @@
 # Handoff Prompt
 
+**Refreshed 2026-09-27, describing `origin/v0.2.3` at `4cec3bf0`.** Session 67 is closed.
+It merged six pull requests, #461 through #466. Read this block, run the validity
+check, then stop and wait for the human prompt.
+
+---
+
+## Validity
+
+- **Branch**: `v0.2.3`, or a branch cut from it. On `v0.3.0`, read
+  `docs/process/handoffs/v0.3.0.md` and **do not overwrite this file**.
+- **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
+
+### First: how far behind is this file?
+
+```
+git rev-list --count 4cec3bf0..HEAD
+```
+
+**A MEASUREMENT, not a pass or fail.** Zero means this file describes the current tree, and
+**one or two is what a freshly refreshed handoff reads**, because it cannot stamp the commit
+that carries it. A large number means treat every specific claim here as historical and
+re-derive from `REVERSE_PROMPT.md` and the task log.
+
+**Why this exists.** Ancestry cannot detect staleness: the stamped commit stays an ancestor
+forever on a branch that only moves forward. The previous handoff was measured at **32 commits
+out of date with its ancestry check passing and four of five content checks still green**.
+
+### Then: ancestry, which detects a RESET and nothing else
+
+`origin/v0.2.3` should contain **`4cec3bf0`**. If it does not, this file predates a reset.
+
+### Then: content, each RUN on 2026-09-27 rather than carried forward
+
+Check the rendered ORDER of this list, not just the next unused number: this file has twice
+had an item inserted above its predecessor by an agent that had just read the warning
+against it.
+
+1. `scripts/fingerprint.sh` reports `0x4327_63E1`. Unchanged across sessions 66 and 67; a
+   different value means a release was rolled.
+2. `cargo nextest run --workspace` passes. It reported **2923 passed, 2 skipped** on the
+   tree of the last increment. **Re-derive rather than trust it**: this session added six test
+   files and the figure moved four times.
+3. `src/selfhost/kel/` holds **12** stage sources, and `git diff --name-only 89b7f999..HEAD --
+   src/selfhost/kel/` is **empty for the entire session**. The parser-gap capacity decision is
+   therefore unprejudiced.
+4. These session-67 files exist: `tests/{book_example_coverage,book_translation_currency,
+   gate_ci_correspondence,toolchain_pin_components}.rs`,
+   `keleusma-cli/tests/print_memory_bound.rs`,
+   `examples/rtos/tests/host_demonstrator.rs`.
+5. `shellcheck scripts/*.sh` is clean, and `cd examples/rtos && cargo test` passes. Both were
+   impossible before this session: the second could not compile.
+
+## What a resuming session should do first
+
+1. Run the freshness measurement, then the validity checks, and report the outcome.
+2. Read `docs/process/REVERSE_PROMPT.md` — the CURRENT STATE block at its head, then stop.
+3. **Wait for the human prompt.** Nothing here is in flight.
+
+## The state
+
+**Green and clean.** Nothing uncommitted, nothing unpushed, no branch awaiting a merge, no run in flight. Six pull requests merged, #461 through #466, each green on CI before merging.
+
+## What session 67 did, in one sentence each
+
+Every increment asked the same question — *what does this instrument actually cover?* — and
+six of seven found that the answer was less than the description claimed.
+
+1. **The book's examples are executed.** The verifier ran on the default branch only: last run
+   2026-07-24, **never** on the release line, while `book/src` was edited there repeatedly. It
+   asserted 51 claims over 60 complete programs; the other 34 passed through a `continue` no
+   count recorded, and every `loop main` and `yield main` program was invisible to it. Now 85
+   assertions, 60 of 60 executed, zero excused, 54 acceptances as the control on the refusals.
+2. **Three defects in the guide, one fixed in the compiler instead.** The FAQ described a
+   productivity rule the implementation no longer has; two chapters pinned byte counts stale by
+   a third; and a quoted diagnostic was unreachable because the type checker refused first with
+   `undefined identifier` — for a name that **is** defined. The type checker now emits the
+   accurate message.
+3. **The translation catalogue was reporting on itself.** `ja.po` said zero untranslated while
+   `messages.pot` was stamped 2026-07-08 with 2782 messages against 3072 in the source. Now
+   3072 live, 38 untranslated, 13 orphaned. **No Japanese was authored** — that is yours.
+4. **"CI is a verified strict superset of the local gate" was unverified and false.** The gate's
+   `--miri` step runs a named undefined-behaviour pin on the library package; CI's Miri job ran
+   only the arena. That pin was exercised by **no merge**. It now runs, and
+   `tests/gate_ci_correspondence.rs` checks the claim instead of asserting it.
+5. **`run --print-memory` fabricated the bound it exists to report.** `unwrap_or(DEFAULT_ARENA_
+   CAPACITY)` printed the default arena for a program whose worst-case memory cannot be bounded.
+   It now names the verifier's cause and exits non-zero.
+6. **An ungated binary hid a test target which hid two rotted tests.** `bench_n6` was
+   auto-discovered with no `required-features`, so any host build of `examples/rtos` failed and
+   `cargo test` there could not compile — concealing two unit tests dead since B28. The host
+   demonstrator, the documented quick start, was built by nothing.
+7. **shellcheck found eight findings I had reported as zero**, two of them silent-failure paths
+   in `verify.sh` and `worktree.sh`.
+
+## What is YOURS
+
+1. **The book's 38 untranslated messages.** Filling them is editorial work on a published,
+   human-curated artifact. `docs/decisions/BOOK_TRANSLATION_CURRENCY.md` has the figures and the
+   command that re-derives them.
+2. **Whether `compile` should refuse a module no host can load.** It emits one today. A bound
+   that is computable but larger than the default arena is legitimately emittable; one that is
+   not computable at all can be loaded by nobody, and `auto_arena_capacity_for` already
+   separates them. `docs/decisions/PRINT_MEMORY_BOUND.md`.
+3. **H2**, open on its recorded trade: the shipping binary is unaffected in either build profile.
+4. **Workstream C's `BYTECODE_VERSION` authorisation.** The remaining instruction-set work is
+   array bounds alone; division and modulo need no new opcode.
+5. **The seven standing decisions**, stated in the reverse prompt.
+6. **The parser-gap capacity call**, 162 bindings against 128. No stage source was touched all
+   session, so this is unprejudiced.
+
+## What the session learned, and the one thing not to over-read
+
+**Survey by inspection has stopped paying; running the tools has not.** Increment 6 was reported
+by me as finding nothing and then found three real defects the moment shellcheck was run
+properly. Three other probes that session — the packaging exclusions, the confidentiality
+boundary, the job-level component sweep — came back genuinely clean. **The distinction is
+between looking and running**, not between a mined-out seam and a fresh one.
+
+**And six defects of my own were committed inside the increments that fixed their class.** A
+non-vacuity floor that passed while my parser was half-blind; a retraction that quoted the text
+its own guard forbids; an exemption coarse enough to hide future gaps; a stale-prone number
+pinned two increments after removing two from the guide; a truncated log read as a missing
+feature; and a counting grep that reported zero because its pattern could not match. Each was
+caught by running the check, never by knowing the class. `CLAUDE.md` gained three rows for the
+new ones.
+
+## Governing rules that are easy to lose
+
+- **A green local run can depend on undeclared local state.** `examples/rtos`'s toolchain pin
+  omitted `clippy`; the crate linted here and nowhere else. CI's shellcheck is 0.9.0 and a
+  developer machine may be newer, so a local lint can be stricter than CI's.
+- **CI gates feature-branch merges; the local gate does not.** That is now checked rather than
+  asserted, and the guard establishes only that a counterpart command EXISTS.
+- **`BYTECODE_VERSION` moves only on operator authorisation** (it is 2). Prefer opcode reuse —
+  the count is 66. Irreversible or outward-facing actions need confirmation.
+- **Distinguish a live claim from a ledger entry.** History recording what was true at an
+  increment is not stale; rewriting it corrupts the record.
+
+## EVERYTHING BELOW THIS LINE IS ACCUMULATED HISTORY
+
+It is retained deliberately and much of it is still useful, but it predates this refresh and is not
+a statement of current state. Where it disagrees with the block above, **the block above wins.**
+
+### The session-66 head, preserved verbatim at the 2026-09-27 refresh
+
+#### (the session-66 head began here)
+
 **Refreshed 2026-09-25, describing `origin/v0.2.3` at `71c9afb9`.** Session 66 is closed.
 It merged fourteen pull requests, #447 through #460; #447 carried session 65's remaining
 work and #448 onward is session 66's. Read this block, run the validity check, then stop
@@ -145,7 +292,6 @@ the capacity decision is unprejudiced.
   operator authorisation (it is 2). Prefer opcode reuse — the count is 66. Irreversible or
   outward-facing actions need confirmation.
 
-## EVERYTHING BELOW THIS LINE IS ACCUMULATED HISTORY
 
 It is retained deliberately and much of it is still useful, but it predates this refresh and is not
 a statement of current state. Where it disagrees with the block above, **the block above wins**.

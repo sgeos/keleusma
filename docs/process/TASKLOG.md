@@ -10,6 +10,22 @@ Current sprint source of truth.
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
 
+> **Currency note (2026-09-27, session 67, seventh increment). THE HANDOFF DESCRIBES THIS TRUNK.**
+>
+> It was stamped on a previous-session commit. Every content check in the refreshed file was RUN
+> while writing it rather than carried forward, and the numbered list was verified in its
+> rendered order.
+>
+> **Two deliberate choices.** The suite figure carries "re-derive rather than trust it": this
+> session added six test files and the number moved four times, so a figure that moves every
+> increment cannot sit in a document refreshed every few increments. And the session's lesson is
+> recorded as **survey by inspection has stopped paying, running the tools has not** — increment 6
+> reported nothing and then found three real defects once shellcheck was run properly.
+>
+> Also recorded: **CI's shellcheck is 0.9.0 and a developer machine may be newer.** The eight
+> findings were repaired against 0.11.0, the stricter tool, so the runner's older one is satisfied
+> too — but a local lint can be stricter than CI's, which is the direction worth knowing.
+
 > **Currency note (2026-09-27, session 67, sixth increment). INSURANCE, AND IT FOUND NOTHING
 > — WHICH IS THE HONEST SUMMARY.**
 >
