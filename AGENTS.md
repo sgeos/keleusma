@@ -60,9 +60,11 @@ workspace-level configuration changes; it has already cost three separate redisc
   that "looks right" is not evidence; agreement with the virtual machine is.
 - **Absorb first.** `git rev-list --count HEAD..origin/v0.2.3` — derive it, never quote a figure for
   it — and run the conflict check in its OWN command before writing any prediction about the merge.
-- **Commits**: the global rule below says no commits without explicit authorisation. **This line is a
-  deliberate exception**: it commits per increment and pushes after a green gate. Publishing, and
-  anything outward-facing, still requires confirmation.
+- **Commits** follow the project feature-branch and pull-request workflow. Run both native
+  gates before integrating this line. Root continuous integration is also required and does
+  not replace either native gate. Publication requires explicit in-session confirmation.
+- **Shared channels** retain both lines. Update this line's bounded brief and archive, and
+  append attributed reports to the shared reverse prompt. Preserve its upstream current block.
 
 ## Reading order for new sessions
 

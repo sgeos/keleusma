@@ -111,6 +111,15 @@ only in `docs/process/HANDOFF.md` — a file whose own preamble says it is not k
 and which a resuming agent may reasonably treat as historical. It is repeated here and in
 `AGENTS.md` because the failure mode is disclosure, which cannot be undone.
 
+**V0.3.X routing takes precedence over the shared protocol below.** On `v0.3.0` or
+a feature branch cut from it, start at
+[`docs/process/handoffs/v0.3.0-BRIEF.md`](docs/process/handoffs/v0.3.0-BRIEF.md).
+Validate its archive by the documented freshness, ancestry and content checks.
+Run both native gates. Maintain that brief and archive, preserving the upstream
+current block and this line's attributed reports in the shared reverse prompt.
+The protocol below describes the V0.2.X channels. The same routing applies after
+compaction.
+
 **Session startup protocol**:
 1. Read [`docs/process/HANDOFF.md`](docs/process/HANDOFF.md) and run the validity check **its own Validity section defines**, which is by ANCESTRY and CONTENT and explicitly **not** by a hash match. This instruction previously prescribed comparing the recorded parent to `git rev-parse HEAD~1`; that stamp asserts nothing else ever lands, `HANDOFF.md` records that it has failed three times, and following it would report a current handoff as stale. Report the handoff as valid, or as invalid-and-stale, on the outcome of the checks that file lists.
 2. Read [`docs/process/TASKLOG.md`](docs/process/TASKLOG.md) for current task state.

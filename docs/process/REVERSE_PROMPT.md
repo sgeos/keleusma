@@ -3274,3 +3274,12 @@ worst-case claim should be read out of them.
 Watched by the report-six test in native_codegen/tests/outstanding_reports.rs, which re-derives the figures rather than
 trusting this text. If they move, this section is wrong and should be re-measured or withdrawn.
 
+
+
+### V0.3.X handoff repair checkpoint of 2026-09-28
+
+Absorption 78 incorporates the upstream guard repair and preserves all existing
+reports above. The bounded V0.3.X brief now defines the resume procedure and the
+required evidence. Read its archive and the machine-written native gate record
+for the current state. This checkpoint does not close the outstanding reports or
+start the nested-yield increment.
