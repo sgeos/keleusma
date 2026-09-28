@@ -10,39 +10,20 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
-**2026-09-28. The first Codex setup audit is complete.** The full findings and
-reproduction commands are in [CODEX_SETUP_AUDIT.md](./CODEX_SETUP_AUDIT.md).
-The audited tips were `f4090bbc` on `v0.2.3` and `7ebcd1e8` on `v0.3.0`.
-The audit changes documentation only and does not transfer ownership of either line.
+**2026-09-28. V0.3.X handoff repair is in progress.** The root coverage guard now
+separates the native gate label from stale claims about `compiler/`. Regression
+controls reproduce the old false rejection and retain rejection of the compiler
+claim and unrelated surrounding claims. The compaction and attribution instructions
+and shared-channel policy are reconciled in this increment.
 
-**V0.2.X readiness.** The handoff is valid under its stated checks. The workspace run passed 2,930 tests, skipped two and exited zero.
-The advisory scan, shell-script analysis and six host tests in the real-time operating
-system example passed. The current remote tip had successful continuous integration.
-Codex's unrestricted diagnostic passed all 21 checks. Sandboxed compilation failed at
-`sccache`, while approved execution worked. This is an execution-permission issue,
-not a missing Rust toolchain.
+The repair belongs to the V0.2.X-owned root tests and must reach that version branch
+through a green pull request before V0.3.X absorbs it. Native gate refresh and private
+setup remain pending downstream. Do not read this checkpoint as a green V0.3.X verdict.
+The preceding audit is in [CODEX_SETUP_AUDIT.md](./CODEX_SETUP_AUDIT.md).
 
-**V0.3.X is not a verified green handoff.** The root documentation guard has a locally
-reproduced failure because it confuses the native package with the self-hosted compiler.
-Both native gate records are stale against two documentation inputs. Eighty focused
-native tests passed in each float configuration, but neither complete gate was rerun.
-All 150 ancestry checks passed. Five upstream commits were unabsorbed at the audit tip.
-A fresh session should start in that worktree from `v0.3.0-BRIEF.md`. Appendix B must be
-made privately available there before tracked edits.
-
-**Next intended work.** Repair the package-scoping defect in the V0.2.X-owned
-`tests/gate_ci_correspondence.rs`, verify it against both development trees, and let
-V0.3.X absorb the repair before rerunning its two full gates. Reconcile the obsolete
-`HEAD~1` compaction instruction, assistant attribution, and cross-line channel rules.
-These are audit findings, not changes already made by this session. Preserve the
-native line's addendum when reconciling the reverse prompt across branches.
-
-**Existing operator decisions remain open.** The book's 38 untranslated messages,
-whether compilation should refuse modules no host can load, vestigial archive derives,
-H2's recorded trade, Workstream C's bytecode-version authorization, the seven standing
-decisions, and parser capacity are unchanged. Their prior discussion remains below
-and in the decision documents. Publication remains held. No opcode, bytecode-version,
-wire-format, or language-semantics change was made or authorized by this audit.
+Existing operator decisions and publication holds are unchanged. The next step is
+to absorb the upstream repair on V0.3.X, preserving its attributed addendum and native
+routing, then run each complete native gate on the committed, stationary tree.
 
 ---
 
