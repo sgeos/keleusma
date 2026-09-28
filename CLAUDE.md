@@ -103,6 +103,14 @@ A knowledge graph is maintained in `docs/`. Start at [`docs/README.md`](docs/REA
 
 See `docs/process/PROCESS_STRATEGY.md` for the library engineering approach and agentic development loop.
 
+**HARD CONSTRAINT, before any of the below.** Before writing anything tracked, read
+`secret/notes/APPENDIX_B.md`. It holds operator-stated context held outside the repository
+deliberately. **Do not copy any of it into tracked files, commit messages, or public
+documentation; reference it only as "Appendix B".** Until 2026-09-28 this constraint was stated
+only in `docs/process/HANDOFF.md` — a file whose own preamble says it is not kept always-current,
+and which a resuming agent may reasonably treat as historical. It is repeated here and in
+`AGENTS.md` because the failure mode is disclosure, which cannot be undone.
+
 **Session startup protocol**:
 1. Read [`docs/process/HANDOFF.md`](docs/process/HANDOFF.md) and run the validity check **its own Validity section defines**, which is by ANCESTRY and CONTENT and explicitly **not** by a hash match. This instruction previously prescribed comparing the recorded parent to `git rev-parse HEAD~1`; that stamp asserts nothing else ever lands, `HANDOFF.md` records that it has failed three times, and following it would report a current handoff as stale. Report the handoff as valid, or as invalid-and-stale, on the outcome of the checks that file lists.
 2. Read [`docs/process/TASKLOG.md`](docs/process/TASKLOG.md) for current task state.

@@ -15,11 +15,12 @@ Keleusma is a Total Functional Stream Processor that compiles to bytecode and ru
 ## Reading order for new sessions
 
 1. [`CLAUDE.md`](./CLAUDE.md) for project conventions and protocol.
-2. [`docs/architecture/LANGUAGE_DESIGN.md`](./docs/architecture/LANGUAGE_DESIGN.md) for the why behind the unusual design choices.
-3. [`docs/decisions/RESOLVED.md`](./docs/decisions/RESOLVED.md) for the historical record of architectural decisions.
-4. [`docs/process/TASKLOG.md`](./docs/process/TASKLOG.md) for the current sprint state.
-5. [`docs/process/REVERSE_PROMPT.md`](./docs/process/REVERSE_PROMPT.md) for the most recent AI-to-human handoff.
-6. [`docs/roadmap/`](./docs/roadmap/) for the V0.3.0, V0.4.0, V0.5.0, and IMPLEMENTATION_ORDER strategy documents.
+2. [`docs/process/HANDOFF.md`](./docs/process/HANDOFF.md) — **the resume prompt**. Run the validity check its own Validity section defines, and report the handoff as valid, or as invalid-and-stale, on that outcome. This entry was missing until 2026-09-28, so an assistant following this list alone never reached the file `CLAUDE.md`'s startup protocol names first.
+3. [`docs/architecture/LANGUAGE_DESIGN.md`](./docs/architecture/LANGUAGE_DESIGN.md) for the why behind the unusual design choices.
+4. [`docs/decisions/RESOLVED.md`](./docs/decisions/RESOLVED.md) for the historical record of architectural decisions.
+5. [`docs/process/TASKLOG.md`](./docs/process/TASKLOG.md) for the current sprint state.
+6. [`docs/process/REVERSE_PROMPT.md`](./docs/process/REVERSE_PROMPT.md) for the most recent AI-to-human handoff.
+7. [`docs/roadmap/`](./docs/roadmap/) for the V0.3.0, V0.4.0, V0.5.0, and IMPLEMENTATION_ORDER strategy documents.
 
 ## Conventions worth flagging up front
 
@@ -31,8 +32,14 @@ Items that an AI assistant trained on general Rust code is likely to get wrong o
 - **Trait-bounded generics over trait objects.** Prefer `fn foo<T: Trait>(x: T)` to `fn foo(x: &dyn Trait)`. The latter is rejected by the verifier in most positions.
 - **No flat jumps.** Control flow uses block-structured instructions (`If`, `Else`, `EndIf`, `Loop`, `EndLoop`, `Break`, `BreakIf`). Flat `Jmp` and `Branch` opcodes are not present in the ISA.
 - **Per-session protocol.** Read `docs/process/TASKLOG.md` for current task state and `docs/process/REVERSE_PROMPT.md` for the last AI-to-human handoff before proceeding. After completing a task, update `TASKLOG.md` and overwrite `REVERSE_PROMPT.md`.
+- **HARD CONSTRAINT: before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** It holds operator-stated context held outside the repository deliberately. **Do not copy any of it into tracked files, commit messages, or public documentation; reference it only as "Appendix B".** Until 2026-09-28 this constraint appeared only in `docs/process/HANDOFF.md`, which was absent from the reading order above — so an assistant could follow this file faithfully and never learn it. The failure mode is disclosure, which is irreversible.
+
+- **Three limits are the operator's, not yours.** `BYTECODE_VERSION` moves only on explicit operator authorisation; it is 2. The rad-hard minimal-ISA constraint means the opcode count is itself a design limit, so prefer reusing an opcode over adding one; the count is 66. And a crates.io publication needs in-session confirmation. If a change appears to require any of these, stop and record the question in `REVERSE_PROMPT.md` rather than proceeding.
+
 - **Scratch directories.** Use `tmp/` for transient files (drafts, probe outputs, scratch scripts). Contents of `tmp/` are gitignored by convention; do not commit them.
-- **No commits without explicit authorisation.** Even when work is complete, do not run `git commit` unless the human operator explicitly asks.
+- **Commit once per prompt; do not publish without confirmation.** When the tasks in a prompt are complete, commit them with a scoped conventional-commit message, including the `REVERSE_PROMPT.md` update. Work flows through a short-lived feature branch and a pull request; continuous integration gates the merge, and the local gate does not. Irreversible or outward-facing actions — a crates.io publication above all — need explicit in-session confirmation every time, and an earlier "expedite" is not authorisation for a later one.
+
+  **CORRECTED 2026-09-28. This said "No commits without explicit authorisation. Even when work is complete, do not run `git commit` unless the human operator explicitly asks."** That contradicted `CLAUDE.md`, which this file names as authoritative and which states the agent commits once per prompt; it contradicted `CONTRIBUTING.md`, whose branching section reads "work, commit, push branch"; and it contradicted years of practice. The line entered in `776acbe1`, the commit that created this file, as generic assistant-onboarding language rather than a considered policy for this repository. **An assistant reading only this file would have completed work and stopped, waiting for a permission the operator had no reason to know it was waiting for.** Resolved toward `CLAUDE.md` on that evidence; overrule it here if the intent was the opposite.
 
 ## Build, test, lint
 
@@ -48,6 +55,15 @@ Full verification before considering work complete:
 ```sh
 cargo test && cargo clippy --tests -- -D warnings
 ```
+
+**These are the everyday commands and they are not what gates a merge.** Continuous integration
+runs the suite across five feature sets and adds Miri, two minimum-supported-version checks, a
+`no_std` build, a cross-target build, the book, the language server, the playground, a shell-script
+analysis and a dependency-advisory scan. `scripts/release-gate.sh` is a subset of it, kept for a
+pre-publication run and for working offline. `CLAUDE.md` carries two catalogues of the ways a
+green local run has nonetheless been misleading here; **they are the most useful pages in the
+repository for anyone working in it, and they are worth reading before trusting your own green
+run.**
 
 ## Other documentation entry points
 
