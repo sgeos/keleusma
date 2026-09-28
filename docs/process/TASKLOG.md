@@ -3777,3 +3777,14 @@ Item 4 (StaticStr to rodata for flat Text fields) is complete end to end on `fea
 | 2026-05-08 | V0.0-M2 for-in arrays, tuple literals, utility natives, formal related-work pass with citations across knowledge graph. |
 | 2026-05-08 | V0.0-M1 productivity verification and WCET analysis (R22–R23). |
 | 2026-03-02 | Crate extracted from Vows of Love and War workspace. Knowledge graph created. Block-structured ISA transition (R22). |
+
+
+## V0.3.X verification receipt of 2026-09-28
+
+**Attributed to the V0.3.X line.** Handoff routing and verification requirements
+are repaired. Both complete native gates pass on `e6698c5c`, clean and frozen.
+The bounded native brief records one non-failing runner diagnostic and the
+non-reproducing isolated checks. The upstream current-state entries above are
+preserved. Final integration is subject to root continuous integration and the
+upstream guard repair landing first. Read the native brief and machine-written
+gate record when resuming this line.
