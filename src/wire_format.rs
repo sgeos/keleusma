@@ -1269,10 +1269,17 @@ pub fn parse_signature_metadata(
 const WIRE_FORMAT_CRC32_RESIDUE: u32 = 0x2144DF1C;
 
 /// Wire-format chunk metadata. Mirrors [`Chunk`] but moves the
-/// `ops` vector out of the rkyv-archived body and into the
-/// opcode stream section. Carries the byte offset and record
-/// count needed to recover the chunk's opcode sequence from the
+/// `ops` vector out of the auxiliary body and into the opcode
+/// stream section. Carries the byte offset and record count
+/// needed to recover the chunk's opcode sequence from the
 /// section-partitioned body.
+///
+/// The `Archive`/`Serialize`/`Deserialize` derives below are
+/// VESTIGIAL as of wire format v2: nothing in this module calls
+/// rkyv, and the auxiliary body is built and read by the schema
+/// layer. Recorded rather than removed because the derives sit on
+/// a public type; see
+/// `docs/decisions/DEPENDENCY_ADVISORY_COVERAGE.md`.
 #[derive(Debug, Clone, Archive, Serialize, Deserialize)]
 pub struct WireChunk {
     /// Function name; matches `Chunk::name`.
@@ -1392,7 +1399,9 @@ pub struct WireSections<'a> {
     /// Bytes of the operand pool section. Length is a multiple
     /// of [`OPERAND_POOL_ENTRY_BYTES`].
     pub operand_pool: &'a [u8],
-    /// Bytes of the rkyv-archived auxiliary body.
+    /// Bytes of the auxiliary body. Wire format v2: a
+    /// word-oriented container, byte-addressed, NOT an rkyv
+    /// archive.
     pub aux_body: &'a [u8],
 }
 
@@ -1592,8 +1601,8 @@ pub fn decode_op_stream(
 }
 
 /// Encode a [`Module`] into the V0.2.0 wire format: 64-byte
-/// framing header, opcode stream, operand pool, rkyv-archived
-/// auxiliary body, 4-byte CRC-32 trailer.
+/// framing header, opcode stream, operand pool, auxiliary body,
+/// 4-byte CRC-32 trailer.
 ///
 /// The opcode stream packs every chunk's opcodes as 4-byte
 /// records in chunk declaration order. The auxiliary body's
@@ -1704,8 +1713,21 @@ fn assemble_wire_bytes(
     // Compute section offsets. The opcode stream begins
     // immediately after the framing header. Each section is then
     // padded to an 8-byte boundary so the next section starts
-    // aligned. The aux body is rkyv-archived and requires 8-byte
-    // alignment for in-place access.
+    // aligned.
+    //
+    // CORRECTED 2026-09-27. This said the aux body "is
+    // rkyv-archived and requires 8-byte alignment for in-place
+    // access". Wire format v2 replaced that body, and
+    // `Module::validate_bytes` documents the opposite in as many
+    // words: "No alignment requirement. The wire format v2
+    // auxiliary body is byte-addressed." A host implementer
+    // reading the old comment would provision alignment the
+    // public contract calls unnecessary.
+    //
+    // The PADDING ITSELF IS RETAINED and is what the code below
+    // does; only its stated justification was stale. Whether it is
+    // still needed is a separate question, unanswered here, and
+    // changing it would change the wire format.
     let opcode_stream_offset = header_length as u32;
     let opcode_stream_length = opcode_stream.len() as u32;
     let mut after_opcodes = opcode_stream_offset + opcode_stream_length;
@@ -2353,9 +2375,9 @@ fn patch_section_offsets_subtract(buf: &mut [u8], shift: usize) {
 ///
 /// Validates the framing header, the CRC residue, and the
 /// declared section offsets/lengths. Reads the opcode stream
-/// and operand pool, deserializes the rkyv-archived auxiliary
-/// body, and reconstructs each chunk's `ops` from its byte
-/// offset and record count.
+/// and operand pool, decodes the auxiliary body through the
+/// wire format v2 schema layer, and reconstructs each chunk's
+/// `ops` from its byte offset and record count.
 ///
 /// V0.2.0 Phase 7b ships this function as a parallel route to
 /// [`Module::from_bytes`]; the cutover is Phase 7c.

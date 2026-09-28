@@ -62,7 +62,7 @@ present tense, in the two most load-bearing files.
 | `src/wire_format.rs:1595` | "framing header, opcode stream, operand pool, rkyv-archived …" |
 | `src/wire_format.rs:1707` | "The aux body is rkyv-archived and **requires 8-byte** [alignment]" |
 | `src/wire_format.rs:2356` | "deserializes the rkyv-archived auxiliary …" |
-| `src/bytecode.rs:3556` | "the rkyv archive of the full [module]" |
+| `src/bytecode.rs:4192` | `Module::from_bytes`: "the auxiliary body's rkyv archive supplies the rest of the module" — the site that contradicts `Module::validate_bytes` a few lines below |
 | `src/bytecode.rs:4159` | "every other Module field is rkyv-archived in the [aux body]" |
 
 **This is security-relevant, not cosmetic.** Anyone assessing an rkyv advisory against this
@@ -84,6 +84,24 @@ file. Some neighbouring rkyv comments are **accurate** — `bytecode.rs:1746` sa
 "carries no rkyv archive" and `bytecode.rs:2226` notes the derives will retire — so a blanket
 edit would damage correct prose. The distinction between a live claim and a historical note
 applies here exactly as it does to a changelog.
+
+### Correction to the table above, 2026-09-27
+
+**This table first listed `src/bytecode.rs:3556` and omitted `src/bytecode.rs:4192`.** Both
+entries were wrong, and the count of seven was right.
+
+`bytecode.rs:3556` is **accurate**: its full sentence reads "the rkyv archive of the full `Module`
+is no longer produced or consumed". A grep clipped it mid-sentence and inverted its meaning, and
+the table then carried an accurate site as stale. `bytecode.rs:4192` was identified while
+investigating and left out when the table was written.
+
+**The population was counted seven, then six, then seven.** That is the same class as a counting
+grep that reported zero shellcheck findings earlier in the same session: trusting a pattern over
+reading the sentence. Recorded rather than silently renumbered, and posted on the pull request
+that introduced the table.
+
+All seven are corrected in the increment that followed, and `bytecode.rs:3556` is deliberately
+untouched.
 
 ## Also open: the derives may be vestigial
 

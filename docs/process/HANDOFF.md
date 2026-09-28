@@ -1,5 +1,167 @@
 # Handoff Prompt
 
+**Refreshed 2026-09-27, describing `origin/v0.2.3` at `e84d7cfa`.** Session 67 is closed. It
+merged nine pull requests, #461 through #469. Read this block, run the validity check, then
+stop and wait for the human prompt.
+
+---
+
+## Validity
+
+- **Branch**: `v0.2.3`, or a branch cut from it. On `v0.3.0`, read
+  `docs/process/handoffs/v0.3.0.md` and **do not overwrite this file**.
+- **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
+
+### First: how far behind is this file?
+
+```
+git rev-list --count e84d7cfa..HEAD
+```
+
+**A MEASUREMENT, not a pass or fail.** Zero means this file describes the current tree, and
+**one is what a freshly refreshed handoff reads**, because it cannot stamp the commit that
+carries it. A large number means treat every specific claim here as historical and re-derive from
+`REVERSE_PROMPT.md` and the task log.
+
+**Ancestry cannot detect staleness**: the stamped commit stays an ancestor forever on a branch
+that only moves forward. A previous handoff was measured **32 commits out of date with its
+ancestry check passing and four of five content checks still green**.
+
+### Then: ancestry, which detects a RESET and nothing else
+
+`origin/v0.2.3` should contain **`e84d7cfa`**. If it does not, this file predates a reset.
+
+### Then: content, each RUN on 2026-09-27 rather than carried forward
+
+Check the rendered ORDER of this list, not just the next unused number: this file has twice had
+an item inserted above its predecessor by an agent that had just read the warning against it.
+
+1. `scripts/fingerprint.sh` reports `0x4327_63E1`. Unchanged across sessions 66 and 67.
+2. `cargo audit` exits 0. **This is new and it is the session's most consequential check** — see
+   below. It loads the advisory database, so it needs a network.
+3. `cargo nextest run --workspace` passes. It reported **2930 passed, 2 skipped** on the last
+   increment's tree. **Re-derive rather than trust it**: this session added seven test files and
+   the figure moved six times.
+4. `src/selfhost/kel/` holds **12** stage sources, and `git diff --name-only 89b7f999..HEAD --
+   src/selfhost/kel/` is **empty for the entire session**. The parser-gap capacity decision is
+   therefore unprejudiced after a session of this length.
+5. `shellcheck scripts/*.sh` is clean, and `cd examples/rtos && cargo test` passes. Both were
+   impossible before session 67; the second could not compile.
+
+## What a resuming session should do first
+
+1. Run the freshness measurement, then the validity checks, and report the outcome.
+2. Read `docs/process/REVERSE_PROMPT.md` — the CURRENT STATE block at its head, then stop.
+3. **Wait for the human prompt.** Nothing here is in flight, and the remaining large work needs a
+   decision rather than an increment.
+
+## The state
+
+**Green and clean.** Nothing uncommitted, nothing unpushed, no branch awaiting a merge, no run in flight. Nine pull requests merged, #461 through #469, each green on continuous integration before merging.
+
+## THE ONE THING TO READ IF YOU READ NOTHING ELSE
+
+**`cargo audit` had never been run against this tree, and its first run found three advisories
+against a dependency of a published crate.** RUSTSEC-2026-0233 is a use-after-free during
+deserialization of crafted archives; 0234 and 0235 are out-of-bounds reads. All against
+`rkyv 0.8.16`, all fixed in `>= 0.8.17`, the oldest dated **2026-05-11**, and `keleusma 0.2.2`
+shipped carrying it. They accumulated for about four months with no tool looking.
+
+The lock now holds 0.8.18, the scan is clean across 102 dependencies, and a CI job runs it.
+**Reachability was measured and the answer is no**: no code path invokes rkyv's archive
+validation or deserialization. `docs/decisions/DEPENDENCY_ADVISORY_COVERAGE.md` carries the
+detail, including the open question of whether the now-vestigial derives can leave the published
+bytecode types — which would remove the exposure rather than track it.
+
+## What the session did, and the method that produced it
+
+Twelve increments. Every one asked the same question — **what does this instrument actually
+cover?** — and the answer was repeatedly "less than its description claims".
+
+| # | what it found |
+|---|---|
+| 1 | the book's example verifier ran on the default branch only; last run 2026-07-24, never on the release line, asserting 51 claims over 60 complete programs. Now 85 assertions, 60 of 60 executed |
+| 2 | the translation catalogue reported zero untranslated while its template was stamped 2026-07-08 with 2782 messages against 3072 |
+| 3 | "CI is a verified strict superset of the local gate" was unverified **and false** — a named undefined-behaviour pin ran in no merge |
+| 4 | `run --print-memory` printed the default arena as though it were a computed bound |
+| 5 | an ungated `bench_n6` made the RTOS test target unbuildable, hiding two tests rotted since B28 |
+| 6 | shellcheck found eight findings I had reported as zero; two were silent-failure paths in `verify.sh` and `worktree.sh` |
+| 7 | the handoff |
+| 8 | `llms.txt`, which no link checker could reach, was wrong in four places |
+| 9 | the crate-count guard had closed its class for one file; `README.md` and `AGENTS.md` still said five of seven |
+| 10 | the advisories above |
+| 11 | seven comments claiming rkyv archives the auxiliary body — what made increment 10 take two increments |
+
+**THE METHOD, SHARPENED.** Survey by inspection of surfaces near an existing guard stopped paying
+around increment 6. Two questions kept paying, and both are generative rather than exhaustible:
+
+- **Which surfaces can no existing guard structurally reach?** `documentation_links.rs` resolves
+  relative links; `llms.txt` uses absolute ones, so it was outside that guard by construction.
+  Four errors.
+- **Which installed tools have never been run against the tree?** shellcheck: three defects.
+  `cargo audit`: three advisories. `msgfmt`: clean, and recorded as clean.
+
+## FOUR INSTRUMENT ERRORS OF MINE, ALL THE SAME SHAPE
+
+Recorded because the shape matters more than the instances. Each was **trusting what a tool was
+meant to produce over what it did**, and each was caught by looking at the output.
+
+1. A non-vacuity floor passed while my workflow parser was half-blind to inline steps, reporting
+   eight false holes.
+2. A retraction **quoted** the text its own guard forbids, turning that guard red — the tenth
+   instance of a class this repository has already swept.
+3. A counting grep searched for `^-- SC` where shellcheck emits `^--^ SC`, so **eight findings
+   were published as zero**.
+4. A grep clipped a sentence mid-way and inverted its meaning, making me count seven comments as
+   six.
+
+**And two near-misses worth as much as the findings.** I nearly reported the RTOS faulty task as
+broken from a log I had truncated myself, and I nearly "fixed" a correct comment in the file that
+carries the bytecode format. Both were avoided by reading before claiming.
+
+**And one error caught before it landed**: writing that all seven crates are published when two
+never have been. Publishable is not published, and that distinction is the original
+five-versus-seven defect's own mechanism. It is now guarded by a check derived from the
+changelogs.
+
+## What is YOURS
+
+Most of what remains needs a decision rather than an increment. That is why the loop stopped here.
+
+1. **The book's 38 untranslated messages.** Editorial work on a published, human-curated
+   artifact. `docs/decisions/BOOK_TRANSLATION_CURRENCY.md`.
+2. **Whether `compile` should refuse a module no host can load.** It emits one today, and
+   `auto_arena_capacity_for` already separates the emittable case from the impossible one.
+   `docs/decisions/PRINT_MEMORY_BOUND.md`.
+3. **Whether the vestigial rkyv derives can leave the published bytecode types.** Removing them
+   eliminates advisory exposure rather than tracking it. `AlignedVec` still needs the dependency.
+4. **H2**, on its recorded trade.
+5. **Workstream C's `BYTECODE_VERSION` authorisation** — array bounds alone remain.
+6. **The seven standing decisions.**
+7. **The parser-gap capacity call**, 162 bindings against 128, unprejudiced.
+
+## Governing rules that are easy to lose
+
+- **A green local run can be cached and say nothing.** The tell: a run that analysed anything
+  prints `Checking <crate>` lines before `Finished`. A bare `Finished` is not a result.
+- **A green local run can depend on undeclared local state.** `examples/rtos`'s pin omitted
+  `clippy`; the crate linted here and nowhere else.
+- **Distinguish a live claim from a ledger entry.** A count check flagged "published all four
+  crates" — history, and rewriting it would corrupt the record. Blockquotes hold ledger entries.
+- **CI gates feature-branch merges; the local gate does not.** That is now checked by
+  `tests/gate_ci_correspondence.rs`, which establishes only that a counterpart command EXISTS.
+- **`BYTECODE_VERSION` moves only on operator authorisation** (it is 2). Prefer opcode reuse —
+  the count is 66. Irreversible or outward-facing actions need confirmation.
+
+## EVERYTHING BELOW THIS LINE IS ACCUMULATED HISTORY
+
+It is retained deliberately and much of it is still useful, but it predates this refresh and is not
+a statement of current state. Where it disagrees with the block above, **the block above wins.**
+
+### The previous head, preserved verbatim at the 2026-09-27 session-close refresh
+
+#### (the previous head began here)
+
 **Refreshed 2026-09-27, describing `origin/v0.2.3` at `4cec3bf0`.** Session 67 is closed.
 It merged six pull requests, #461 through #466. Read this block, run the validity
 check, then stop and wait for the human prompt.
@@ -138,7 +300,6 @@ new ones.
 - **Distinguish a live claim from a ledger entry.** History recording what was true at an
   increment is not stale; rewriting it corrupts the record.
 
-## EVERYTHING BELOW THIS LINE IS ACCUMULATED HISTORY
 
 It is retained deliberately and much of it is still useful, but it predates this refresh and is not
 a statement of current state. Where it disagrees with the block above, **the block above wins.**
