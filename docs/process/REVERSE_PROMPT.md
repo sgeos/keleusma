@@ -10,47 +10,46 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
-**2026-09-28. The agent-facing files are reconciled, in preparation for handing the V0.2.X line
-to a different assistant.** Session 67's own work is closed at `44741f90`; this is a follow-on.
+**2026-09-28. The first Codex setup audit is complete.** The full findings and
+reproduction commands are in [CODEX_SETUP_AUDIT.md](./CODEX_SETUP_AUDIT.md).
+The audited tips were `f4090bbc` on `v0.2.3` and `7ebcd1e8` on `v0.3.0`.
+The audit changes documentation only and does not transfer ownership of either line.
 
-**THE TWO FILES CONTRADICTED EACH OTHER ON COMMITS, AND THE CONTRADICTION FAVOURED SILENCE.**
-`AGENTS.md` said "No commits without explicit authorisation. Even when work is complete, do not
-run `git commit` unless the human operator explicitly asks." `CLAUDE.md` says the agent commits
-once per prompt. **Codex and most non-Claude assistants read `AGENTS.md` by convention**, so one
-would have completed work and stopped, waiting for a permission the operator had no reason to
-know it was waiting for — and that reads as timidity rather than as obedience to the repository.
+**V0.2.X readiness.** The handoff is valid under its stated checks. The workspace run passed 2,930 tests, skipped two and exited zero.
+The advisory scan, shell-script analysis and six host tests in the real-time operating
+system example passed. The current remote tip had successful continuous integration.
+Codex's unrestricted diagnostic passed all 21 checks. Sandboxed compilation failed at
+`sccache`, while approved execution worked. This is an execution-permission issue,
+not a missing Rust toolchain.
 
-Resolved toward `CLAUDE.md` **on evidence, not preference**: the `AGENTS.md` line entered in
-`776acbe1`, the commit that created that file, as generic assistant-onboarding language;
-`CLAUDE.md`'s policy entered in `c308df65`, the commit that created the process files;
-`CONTRIBUTING.md`'s branching section reads "work, commit, push branch"; and nine agent-authored
-merges landed in session 67 alone. **The retraction is quoted in place and flagged for override.**
+**V0.3.X is not a verified green handoff.** The root documentation guard has a locally
+reproduced failure because it confuses the native package with the self-hosted compiler.
+Both native gate records are stale against two documentation inputs. Eighty focused
+native tests passed in each float configuration, but neither complete gate was rerun.
+All 150 ancestry checks passed. Five upstream commits were unabsorbed at the audit tip.
+A fresh session should start in that worktree from `v0.3.0-BRIEF.md`. Appendix B must be
+made privately available there before tracked edits.
 
-**THE HARD CONSTRAINT WAS STATED IN ONE FILE, AND NOT THE ONE AN ASSISTANT WOULD REACH.** The
-Appendix B rule lived only in `docs/process/HANDOFF.md`, which was **absent from `AGENTS.md`'s own
-reading order** — so an assistant could follow that file faithfully and never learn it. It is now
-in all three, and `HANDOFF.md` is item 2 of the reading order. The failure mode here is
-disclosure, which cannot be undone, so duplication is the right trade.
+**Next intended work.** Repair the package-scoping defect in the V0.2.X-owned
+`tests/gate_ci_correspondence.rs`, verify it against both development trees, and let
+V0.3.X absorb the repair before rerunning its two full gates. Reconcile the obsolete
+`HEAD~1` compaction instruction, assistant attribution, and cross-line channel rules.
+These are audit findings, not changes already made by this session. Preserve the
+native line's addendum when reconciling the reverse prompt across branches.
 
-**THREE OPERATOR-GATED LIMITS ARE NOW STATED WHERE A NEW ASSISTANT WILL SEE THEM**:
-`BYTECODE_VERSION` at 2, the rad-hard minimal-ISA opcode count at 66, and publication needing
-in-session confirmation — with the instruction to stop and record the question rather than
-proceed. `AGENTS.md` also now says that its own build commands are **not** what gates a merge, and
-points at the two failure catalogues in `CLAUDE.md`.
+**Existing operator decisions remain open.** The book's 38 untranslated messages,
+whether compilation should refuse modules no host can load, vestigial archive derives,
+H2's recorded trade, Workstream C's bytecode-version authorization, the seven standing
+decisions, and parser capacity are unchanged. Their prior discussion remains below
+and in the decision documents. Publication remains held. No opcode, bytecode-version,
+wire-format, or language-semantics change was made or authorized by this audit.
 
-**A LEAK CHECK FIRED ON MY OWN NEW TEXT AND WAS A FALSE POSITIVE.** It matched "radiation-hard" in
-the sentence about the minimal ISA. That terminology is already tracked in five files —
-`CHANGELOG.md`, `CLAUDE.md` and three decision documents — so the motivation is public rather than
-Appendix B content. The wording was aligned to the repository's own phrase anyway. **Over-flagging
-is the correct polarity for a disclosure check**, and it was resolved by reading rather than by
-relaxing the pattern.
+---
 
-**Unchanged and yours**, all seven items from session 67's close, each with its decision document:
-the book's 38 untranslated messages; whether `compile` should refuse a module no host can load;
-whether the vestigial rkyv derives can leave the published bytecode types; H2's trade; workstream
-C's `BYTECODE_VERSION` authorisation; the seven standing decisions; the parser-gap capacity call.
+# HISTORICAL RECORD BELOW
 
-**No file under `src/selfhost/kel/` modified.** `BYTECODE_VERSION` is 2, the opcode count 66.
+The following material preserves prior sessions. Read it for provenance, not as the
+current task status.
 
 ---
 
