@@ -12,6 +12,58 @@ Keleusma is a Total Functional Stream Processor that compiles to bytecode and ru
 
 **Status**. V0.2.2 published to crates.io. Seven workspace crates: `keleusma`, `keleusma-arena`, `keleusma-macros`, `keleusma-bench`, `keleusma-cli`, `keleusma-wire`, `keleusma-wire-derive`.
 
+## ⚠ TWO DEVELOPMENT LINES — check which one you are on BEFORE the reading order below
+
+The reading order and the verification commands in this file describe the **`v0.2.3` line**. A
+second line runs concurrently and **neither its channel nor its gate appears anywhere else in this
+file**, so following the sections below on that line will point you at the wrong documents and run
+a verification that cannot see the code you are changing.
+
+### If you are on `v0.3.0` — the V0.3.X native-code-generation line
+
+| | |
+|---|---|
+| Where | worktree `keleusma-worktrees/arena-composites`, branch `v0.3.0` |
+| The package | `native_codegen/` — **a DETACHED workspace root**, not one of the seven workspace crates |
+| Start here | [`docs/process/handoffs/v0.3.0-BRIEF.md`](./docs/process/handoffs/v0.3.0-BRIEF.md) — bounded. The full channel is `docs/process/handoffs/v0.3.0.md`, which is over ten thousand lines and is an ARCHIVE |
+| **Not** its channel | `docs/process/TASKLOG.md` and `docs/process/REVERSE_PROMPT.md` belong to the `v0.2.3` line |
+
+**The verification commands in "Build, test, lint" below DO NOT REACH THIS PACKAGE.** A detached
+workspace root is invisible to a root `cargo test`, and continuous integration never builds it —
+measured, zero occurrences of `native_codegen` across every job in `ci.yml`. Its only gate is:
+
+```sh
+cd native_codegen
+tools/backend-gate.sh            # default features
+tools/backend-gate.sh --narrow   # narrow-float-32
+```
+
+**One invocation covers ONE float configuration, and a single run is not both.** Each takes roughly
+ten to twenty minutes and must run with the tree STILL — the gate freeze-checks itself, and editing
+anything, documentation included, while it runs voids that phase. The result is written to
+`native_codegen/GATE_RECORD.md`, which records the commit, whether the worktree was clean, whether
+the phases stayed frozen, and the verdict. **That file, not a claim in prose, is this line's
+evidence that it is green.**
+
+**A detached package shares nothing with the parent workspace unless it declares it** — it has its
+own `Cargo.lock`, its own `[profile.dev]`, its own `rust-version`. Ask that question whenever
+workspace-level configuration changes; it has already cost three separate rediscoveries.
+
+### Constraints on the `v0.3.0` line specifically
+
+- **Root `src/` and root `tests/` are READ-ONLY to this line.** Read them freely; report problems
+  rather than repairing them. Verify with the commits **not reachable from `origin/v0.2.3`**, or the
+  check counts the other line's absorbed work as this line's violation.
+- **No new opcodes**, and **no `BYTECODE_VERSION` change without operator authorisation.**
+- **Publication is held.** Nothing is published from this line.
+- **The byte-identical differential against the reference VM is the correctness signal.** A lowering
+  that "looks right" is not evidence; agreement with the virtual machine is.
+- **Absorb first.** `git rev-list --count HEAD..origin/v0.2.3` — derive it, never quote a figure for
+  it — and run the conflict check in its OWN command before writing any prediction about the merge.
+- **Commits**: the global rule below says no commits without explicit authorisation. **This line is a
+  deliberate exception**: it commits per increment and pushes after a green gate. Publishing, and
+  anything outward-facing, still requires confirmation.
+
 ## Reading order for new sessions
 
 1. [`CLAUDE.md`](./CLAUDE.md) for project conventions and protocol.
