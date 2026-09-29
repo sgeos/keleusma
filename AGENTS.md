@@ -39,6 +39,8 @@ Items that an AI assistant trained on general Rust code is likely to get wrong o
 - **Scratch directories.** Use `tmp/` for transient files (drafts, probe outputs, scratch scripts). Contents of `tmp/` are gitignored by convention; do not commit them.
 - **Commit once per prompt. Only feature branches may commit on red.** The operator confirmed this policy on 2026-09-28. Include the `REVERSE_PROMPT.md` update in the scoped conventional commit. Version branches and `main` must remain green. Full gates must pass before publication or merging into `main`. Version branches stay green through remote continuous integration. Local gates may remain targeted when they provide high confidence in a green remote result. Record what ran and what remains unverified. See `CLAUDE.md` and `docs/process/GIT_STRATEGY.md` for integration requirements. Publication requires explicit in-session confirmation.
 
+The operator wording and conversation provenance are recorded in [the gate-policy record](docs/process/GATE_POLICY.md).
+
 ## Build, test, lint
 
 ```sh

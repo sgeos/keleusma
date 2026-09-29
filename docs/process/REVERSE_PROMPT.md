@@ -10,13 +10,13 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
-**2026-09-28. The operator has resolved the gate boundary.**
+**2026-09-28. Legacy re-review follow-up.**
 
-Full gates must pass before publication or merging into `main`. Keep version branches green through remote continuous integration. Local checks may remain targeted when they provide high confidence that remote continuous integration will pass. Record the selected checks and their coverage limits. A version-branch merge does not itself require a full local gate. Detached packages need relevant local checks because root continuous integration does not cover them. Their complete gates remain mandatory before publication or merging their changes into `main`.
+The [gate-policy record](./GATE_POLICY.md) quotes the operator messages from this conversation and records which assistant-authored requirement they superseded. `PROMPT.md` remains untouched. The pre-push checklist now requires exact commands, successful exit codes, nonempty intended test selections and explicit omissions for a green receipt.
 
-Commit once per prompt. Only feature branches may commit on red. Pull request 472 carries the native reporter and handoff follow-up. Its historical full-gate records remain stale, which is disclosed separately from its passing targeted checks. No publication or merge into `main` is requested.
+The accumulated historical section of `HANDOFF.md` is restored byte for byte from `c6730025`. Only the current validity block routes to the bounded V0.3.X brief. Archived routing remains historical. Native reporter diagnostics and independent fixture-test registration are being corrected on pull request 472.
 
-Verification for this documentation change is recorded in `TASKLOG.md`.
+Verification is recorded in `TASKLOG.md`. No publication or merge into `main` is requested.
 
 ---
 

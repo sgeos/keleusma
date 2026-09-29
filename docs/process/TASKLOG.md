@@ -6,6 +6,10 @@ Current sprint source of truth.
 
 ---
 
+## 2026-09-28 Legacy re-review follow-up
+
+Restored the accumulated historical section of `HANDOFF.md` exactly from `c6730025`, retaining the bounded route only in the current block. The old route in the archived fourth validity block remains historical. Recorded the operator conversation excerpts in [GATE_POLICY.md](./GATE_POLICY.md) and made the pre-push criteria falsifiable through exact commands, exit codes, executed-test counts and documented omissions. Native diagnostics and handoff follow-up remain on pull request 472. All 13 root documentation-link, citation and gate-correspondence tests passed. A byte comparison against `c6730025` confirms the entire historical suffix is unchanged.
+
 ## 2026-09-28 Gate-boundary clarification
 
 The operator requires full gates before publication or merging into `main`. Version branches remain green through remote continuous integration. Local checks may be targeted when confidence in a green remote result is high. Removed the earlier interpretation requiring full local native gates for every version-branch integration. Relevant detached-package checks remain necessary because root continuous integration does not cover them. All 13 focused documentation-link, citation and gate-correspondence checks passed. No runtime code changed.

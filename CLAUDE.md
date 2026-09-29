@@ -165,6 +165,8 @@ not the source of truth.
 After compaction, before acting, validate `HANDOFF.md` and re-read the three resume channels and the
 active plan document. They, the boundary test counts, and the git state are the true resume anchors.
 
+The operator wording and conversation provenance are recorded in [the gate-policy record](docs/process/GATE_POLICY.md).
+
 ## Git Workflow
 
 **Operator clarification, 2026-09-28.** Commit once per prompt. Only feature branches may commit on red. Full gates must pass before publication or merging into `main`. Keep version branches green through remote continuous integration. Local checks may remain targeted when they provide high confidence that remote continuous integration will pass. Record the selected checks and their coverage limits. A version-branch merge does not itself require a full local gate. Detached packages need relevant local checks because root continuous integration does not cover them. Their complete gates remain mandatory before publication or merging their changes into `main`. A feature branch may be iterated on or abandoned. This clarification supersedes conflicting commit-frequency and gate-cadence instructions.
