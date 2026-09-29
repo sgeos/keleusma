@@ -1,3 +1,56 @@
+# Workstream B first increment
+
+**Completed and revalidated on 2026-09-29 against `d9b6bceb` and this increment.**
+The requested conditional `yield` shape was already implemented. This increment
+strengthens its existing regression and corrects the stale resume instructions.
+There is no backend lowering change.
+
+The previous brief was invalid-and-stale for this task. All 150 archive ancestry
+anchors passed, the archive stamp was four commits behind, and fetching upstream
+left zero unabsorbed V0.2.3 commits. These ancestry facts did not establish the
+brief's capability claims. The full-gate reporter returned the expected
+`UNVERIFIED` result for changed inputs, rather than a recorded test failure.
+
+## Established behavior
+
+The conditional leaves in `lexer.kel` end their iteration. The existing
+conditional-tail transformation follows branch targets and lowers the selected
+`yield` to a return. No live continuation must cross that return. Nesting inside
+an `if` alone does not require a resumable frame. The historical warning below
+that this shape necessarily requires real suspension was incorrect.
+
+The existing regression in
+[native_codegen/tests/yield_sequence.rs](../../native_codegen/tests/yield_sequence.rs)
+now also drives conditional tails with private state across six ticks. Both the
+virtual machine and native code must produce `[15, 2200, 375, 425, 51, 6200]`.
+The inputs visit all three leaves and distinguish persistence from reinitialization.
+A temporary mutation making tail yields return zero compiled and failed this
+sequence assertion. The mutation was removed. An initial mutation attempt did
+not compile and supplies no behavioral evidence.
+
+The seeded lexer differential in
+[native_codegen/tests/stage_differential.rs](../../native_codegen/tests/stage_differential.rs)
+compares 400 yielded values and the shared bytes. Its input spans token classes,
+and its existing distinct-value floor excludes the unseeded end-of-source-only
+run. This is finite-input evidence, not an exhaustive claim about every lexer path.
+
+The instruction set architecture census still reports 63 of 66 opcodes lowered
+over 74 compiled modules. The separate refusal census covers 67 modules and
+reports one refusal, `13_telemetry_stream.kel`, for a composite escaping a loop
+through a yield. The yield-escape gate is **unshadowed and load-bearing**.
+The existing frontier test also retains the suspending-callee refusal.
+
+No opcode, bytecode version, root source or root test changed. No broader stream
+capability was added or removed. Complete native gates and the full workspace
+suite were not rerun. Historical gate records remain unchanged and stale.
+
+The exact verification receipt is maintained in the
+[bounded resume brief](../process/handoffs/v0.3.0-BRIEF.md).
+
+---
+
+## Historical scope and findings, superseded by the result above
+
 # SCOPING THE FIRST WORKSTREAM B INCREMENT — from measured facts, not from the roadmap alone
 
 **Written 2026-09-27.** Milestones 2 through 6 are untouched. `STREAM_FRONTIER_BRIEF.md` records
