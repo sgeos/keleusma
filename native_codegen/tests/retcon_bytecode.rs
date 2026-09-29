@@ -398,6 +398,18 @@ fn invalid_bytecode_and_composite_escape_remain_refused() {
             .any(|(_, original)| original.to_string() == error.to_string()),
         "{error}"
     );
+    // A reentrant chunk selects coroutine admission instead of the old
+    // callback preflight. The scalar boundary must still refuse this module.
+    let source = std::fs::read_to_string("../examples/scripts/13_telemetry_stream.kel").unwrap();
+    let with_delegate = common::build(&format!(
+        "{source}\nyield unused(a: Word) -> Word {{ yield a }}"
+    ));
+    let delegated_error = coroutine::lower(&ctx, &with_delegate, &tm, 4096).unwrap_err();
+    assert!(
+        delegated_error
+            .to_string()
+            .contains("scalar yield signature")
+    );
 }
 
 #[test]
@@ -478,6 +490,12 @@ fn scalar_reply_widths_and_kinds_match_the_vm() {
         "loop main(t: bool) -> bool { let r = yield t; yield (r and t) }",
         "loop main(t: Fixed) -> Fixed { let r = yield t; yield (r * t) }",
         "loop main(t: Float) -> Float { let keep = -t; let r = yield t; yield (r + keep) }",
+        "yield emit(a: ()) -> () { yield a; yield a } loop main(t: ()) -> () { emit(t) }",
+        "yield emit(a: ()) -> () { yield (); yield () } loop main(t: ()) -> () { emit(t) }",
+        "yield emit(a: Byte) -> Byte { let q: Byte = a + (1 as Byte); let r = yield a; yield q + r + a } loop main(t: Byte) -> Byte { emit(t) }",
+        "yield emit(a: bool) -> bool { let r = yield a; yield (r and a) } loop main(t: bool) -> bool { emit(t) }",
+        "yield emit(a: Fixed) -> Fixed { let r = yield a; yield (r * a) } loop main(t: Fixed) -> Fixed { emit(t) }",
+        "yield emit(a: Float) -> Float { let r = yield a; yield (r + a) } loop main(t: Float) -> Float { emit(t) }",
     ];
     for src in cases {
         let p = common::build(src);
@@ -535,6 +553,89 @@ fn scalar_reply_widths_and_kinds_match_the_vm() {
         }
         for optimize in [false, true] {
             assert_eq!(native(src, first, &replies, optimize), expected, "{src}");
+        }
+    }
+}
+
+#[test]
+fn delegated_yields_preserve_callee_locals_and_update_only_the_entry_parameter() {
+    let src = "yield emit(a: Word) -> Word { let keep = a + 100; let x = yield a; yield keep + x }\nloop main(t: Word) -> Word { let keep = t + 1000; let v = emit(t + 1); yield keep + v + t }";
+    let replies = [7, 20, 3, 11, 30, 9, 0];
+    let expected = [6, 113, 1045, 4, 115, 1063, 10];
+    assert_eq!(common::general_vm_sequence(src, 5, &replies), expected);
+    for optimize in [false, true] {
+        assert_eq!(native(src, 5, &replies, optimize), expected);
+    }
+    let src = "yield emit(a: Word) -> Word { yield a } loop main(t: Word) -> Word { yield (t + 100) + emit(t) }";
+    let replies = [7, 11, 13, 17];
+    let expected = [5, 112, 11, 124];
+    assert_eq!(common::general_vm_sequence(src, 5, &replies), expected);
+    for optimize in [false, true] {
+        assert_eq!(native(src, 5, &replies, optimize), expected);
+    }
+}
+
+#[test]
+fn nested_delegation_preserves_each_call_frame() {
+    let src = "yield inner(a: Word) -> Word { let keep = a + 100; let r = yield a; yield keep + r + a }\nyield outer(a: Word) -> Word { let keep = a * 10; let v = inner(a + 2); yield keep + v + a }\nloop main(t: Word) -> Word { let v = outer(t + 1); yield v + t }";
+    let replies = [7, 11, 13, 17, 19, 23, 29, 31];
+    let expected = [5, 117, 44, 26, 20, 159, 221, 58];
+    assert_eq!(common::general_vm_sequence(src, 2, &replies), expected);
+    for optimize in [false, true] {
+        assert_eq!(native(src, 2, &replies, optimize), expected);
+    }
+}
+
+#[test]
+fn release_inside_a_callee_does_not_execute_its_remaining_effects() {
+    let p = common::build(
+        "shared data st { n: Word }\nyield emit(a: Word) -> Word { st.n = st.n + 1; yield a; st.n = st.n + 100; yield a + 1 }\nloop main(t: Word) -> Word { emit(t) }",
+    );
+    let seed = vec![0; p.shared_data_bytes as usize];
+    for optimize in [false, true] {
+        for (last, expected_shared) in [1, 101, 102, 202].into_iter().enumerate() {
+            let replies = [7, 11, 13, 17];
+            let (values, shared) = native_module(&p, &seed, 5, &replies[..=last], optimize);
+            assert_eq!(values, [5, 6, 11, 12][..=last]);
+            assert_eq!(
+                i64::from_le_bytes(shared[..8].try_into().unwrap()),
+                expected_shared
+            );
+        }
+    }
+}
+
+#[test]
+fn delegated_composite_yields_remain_refused() {
+    let p = common::build(
+        "yield emit(a: Word) -> (Word, Word) { yield (a, a) } loop main(t: Word) -> Word { emit(t); yield t }",
+    );
+    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
+    assert!(error.to_string().contains("scalar value"), "{error}");
+    let p = common::build(
+        "fn pick(p: (Word, Word), a: Word) -> Word { p.0 + a } yield emit(a: Word) -> Word { yield a } loop main(t: Word) -> Word { yield pick((t, t), emit(t)) }",
+    );
+    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("composite operand survives a delegated suspension"),
+        "{error}"
+    );
+}
+
+#[test]
+fn guarded_heads_dispatch_across_suspensions() {
+    let cases = [
+        "yield emit(a: Word) -> Word when a == 0 { yield 10 } yield emit(a: Word) -> Word when a > 5 { yield a + 100 } yield emit(a: Word) -> Word { yield a + 20 } loop main(t: Word) -> Word { emit(t) }",
+        "loop main(t: Word) -> Word when t == 0 { yield 10 } loop main(t: Word) -> Word when t > 5 { yield t + 100 } loop main(t: Word) -> Word { yield t + 20 }",
+    ];
+    let replies = [7, 2, 0, 9, 3, 0];
+    for src in cases {
+        let expected = common::general_vm_sequence(src, 0, &replies);
+        assert_eq!(expected, [10, 107, 22, 10, 109, 23]);
+        for optimize in [false, true] {
+            assert_eq!(native(src, 0, &replies, optimize), expected);
         }
     }
 }

@@ -1606,6 +1606,7 @@ pub fn lower_chunk<'ctx>(
         BodyCfg {
             opts,
             retcon: false,
+            retcon_resume_type: None,
             degenerate_yield: None,
             delegated_call: None,
             // No module, so no signature table.
@@ -1966,6 +1967,10 @@ fn lower_module_with<'ctx>(
                 // into memory the host scoped.
                 params.push(ptrt.into()); // composite body region
             }
+            let retcon_delegate = retcon_bytes.is_some() && c.block_type == BlockType::Reentrant;
+            if retcon_delegate {
+                params.push(ptrt.into());
+            }
             // The RETURN type comes from the same table. `lower_chunk` cannot do
             // this at all — a chunk carries its parameter types but NOT its
             // return type, which lives only in the module-level signature — which
@@ -1981,6 +1986,9 @@ fn lower_module_with<'ctx>(
             } else {
                 module.add_function(&format!("kel_chunk_{i}"), fnty, None)
             };
+            if retcon_delegate {
+                coroutine::mark_delegate(ctx, f);
+            }
             mark_nounwind(ctx, f);
             Ok(f)
         })
@@ -2150,6 +2158,9 @@ fn lower_module_with<'ctx>(
         let cfg = BodyCfg {
             opts,
             retcon,
+            retcon_resume_type: retcon_bytes
+                .and(program.entry_point)
+                .and_then(|entry| program.chunks[entry].param_types.first().copied()),
             degenerate_yield: tail.as_deref(),
             delegated_call,
             own_signature: program.signatures.get(i),
@@ -2476,6 +2487,9 @@ fn chunk_builds_composite(chunk: &Chunk) -> bool {
 struct BodyCfg<'a> {
     /// LLVM owns suspension state instead of the handwritten stream dispatch.
     retcon: bool,
+    /// The VM writes host replies to the outer entry parameter even when a
+    /// reentrant callee is suspended. Its own parameters retain their values.
+    retcon_resume_type: Option<TypeTag>,
     opts: LowerOptions,
     /// Byte width of the runtime's `Float`, from the module header's
     /// `float_bits_log2`.
@@ -3267,6 +3281,7 @@ fn lower_chunk_body<'ctx>(
     let BodyCfg {
         opts,
         retcon,
+        retcon_resume_type,
         degenerate_yield,
         delegated_call,
         own_signature,
@@ -3279,6 +3294,7 @@ fn lower_chunk_body<'ctx>(
         visited,
         float_bytes,
     } = cfg;
+    let retcon_delegate = coroutine::is_delegate(func);
     let i64t = ctx.i64_type();
     let i128t = ctx.i128_type();
     let i8t = ctx.i8_type();
@@ -3363,6 +3379,19 @@ fn lower_chunk_body<'ctx>(
             None => b.build_alloca(i64t, &format!("l{i}")).unwrap(),
         })
         .collect();
+    let delegate_context = if retcon {
+        Some(coroutine::delegate_context(
+            ctx,
+            &b,
+            retcon_reply.unwrap(),
+            locals[0],
+            retcon_latest.unwrap(),
+        ))
+    } else if retcon_delegate {
+        Some(func.get_last_param().unwrap().into_pointer_value())
+    } else {
+        None
+    };
     for (i, local) in locals.iter().enumerate().take(chunk.param_count as usize) {
         // **A FLOAT PARAMETER ARRIVES AS A DOUBLE AND LIVES AS ITS BITS.** Local
         // slots are `i64` because the operand stack is, so the boundary is where
@@ -3591,7 +3620,11 @@ fn lower_chunk_body<'ctx>(
     let mut local_widths = alloc_vec_unknown(locals.len());
     for (i, t) in chunk.param_types.iter().enumerate() {
         if i < local_widths.len() {
-            local_widths[i] = width_of_tag(*t);
+            local_widths[i] = match (retcon || retcon_delegate, *t) {
+                (true, TypeTag::Unit) => Width::Scalar(0),
+                (true, TypeTag::Float) => Width::Scalar(float_bytes),
+                _ => width_of_tag(*t),
+            };
         }
     }
     // **A COMPOSITE PARAMETER'S BODY SIZE COMES FROM THE SIGNATURE, NOT THE
@@ -4041,7 +4074,7 @@ fn lower_chunk_body<'ctx>(
             // Both native stream paths preserve float bits across suspension.
             // The callback path for a reentrant chunk remains outside this guard.
             let float_yield_in_a_general_stream =
-                (general_stream || retcon) && matches!(op, Op::Yield);
+                (general_stream || retcon || retcon_delegate) && matches!(op, Op::Yield);
             let float_aware = float_store_into_a_float_slot
                 || float_into_a_composite_body
                 || float_yield_in_a_general_stream
@@ -5186,7 +5219,14 @@ fn lower_chunk_body<'ctx>(
                         ConstValue::Bool(b) => (*b as i64, Width::Scalar(1)),
                         // Unit is pushed and popped without being read. Same
                         // placeholder, same caveat, as `PushImmediate(0)`.
-                        ConstValue::Unit => (0, Width::Unknown),
+                        ConstValue::Unit => (
+                            0,
+                            if retcon || retcon_delegate {
+                                Width::Scalar(0)
+                            } else {
+                                Width::Unknown
+                            },
+                        ),
                         other => {
                             return Err(LowerError::unsupported_op(
                                 "Const",
@@ -5230,16 +5270,15 @@ fn lower_chunk_body<'ctx>(
                 // layout already fixes. `Bool` is one byte there, and an `Int`
                 // immediate is a `Word`, which is eight throughout this backend.
                 //
-                // **`Unit` DELIBERATELY STAYS UNKNOWN.** Its flat width is ZERO
-                // and the zero pushed above is a placeholder, sound only because
-                // nothing consumes it; giving it a scalar width would invent a
-                // representation. `None` never reaches here -- it is refused
-                // above -- for the same class of reason.
+                // Unit retains the legacy unknown width outside retcon. The
+                // coroutine scalar boundary explicitly represents Unit by zero
+                // bits and a zero-byte payload. None remains refused above.
                 //
                 // Safe to widen because the construction arm requires the
                 // operand widths to account for the baked `byte_size` EXACTLY,
                 // so a width that is wrong refuses rather than mispacking.
                 match *imm {
+                    0 if retcon || retcon_delegate => st.push_w(c, Width::Scalar(0)),
                     1 | 2 => st.push_w(c, Width::Scalar(1)),
                     4..=19 => st.push_w(c, Width::Scalar(8)),
                     _ => st.push(c),
@@ -5312,7 +5351,8 @@ fn lower_chunk_body<'ctx>(
                 // calling convention from a plain native call, so it is refused
                 // rather than approximated: an arity mismatch here would produce
                 // a call LLVM accepts and the VM does not agree with.
-                let declared = callee.count_params() - trailing_ptrs(&data);
+                let suspending = coroutine::is_delegate(callee);
+                let declared = callee.count_params() - trailing_ptrs(&data) - u32::from(suspending);
                 if u32::from(*arg_count) != declared {
                     return Err(LowerError::MalformedInput(format!(
                         "Call({idx}, {arg_count}) passes {arg_count} arguments to a chunk \
@@ -5323,6 +5363,17 @@ fn lower_chunk_body<'ctx>(
 
                 let mut args: Vec<_> = (0..*arg_count).map(|_| st.pop()).collect();
                 args.reverse();
+                if suspending
+                    && st
+                        .widths
+                        .iter()
+                        .take(st.depth)
+                        .any(|w| matches!(w, Width::Body(_)))
+                {
+                    return Err(LowerError::UnsupportedShape(
+                        "a composite operand survives a delegated suspension".into(),
+                    ));
+                }
                 // **CONVERTED TO THE CALLEE'S DECLARED PARAMETER TYPES.** The
                 // operand stack hands over an `i64` even when the value is a
                 // float's bit pattern, so a float parameter needs the bitcast here
@@ -5375,6 +5426,12 @@ fn lower_chunk_body<'ctx>(
                     }
                 }
 
+                if suspending {
+                    let context = delegate_context.ok_or_else(|| {
+                        LowerError::UnsupportedShape("suspending call outside a coroutine".into())
+                    })?;
+                    args.push(context.into());
+                }
                 let ret = match st
                     .b
                     .build_call(callee, &args, "call")
@@ -7014,6 +7071,44 @@ fn lower_chunk_body<'ctx>(
             // the locals. Together they ARE the coroutine instance, which is why
             // the same lowered code driven with two arenas is two independent
             // streams.
+            Op::Yield if retcon_delegate => {
+                if !matches!(st.width_at(0), Width::Scalar(_)) {
+                    return Err(LowerError::UnsupportedShape(format!(
+                        "a coroutine yield needs a scalar value in {} at {i}, found {:?}",
+                        chunk.name,
+                        st.width_at(0)
+                    )));
+                }
+                if st
+                    .widths
+                    .iter()
+                    .take(st.depth.saturating_sub(1))
+                    .any(|w| matches!(w, Width::Body(_)))
+                {
+                    return Err(LowerError::UnsupportedShape(
+                        "a composite operand survives a delegated suspension".into(),
+                    ));
+                }
+                let value = st.pop();
+                let helper = coroutine::delegate_yield(ctx, module)?;
+                let reply =
+                    st.b.build_call(
+                        helper,
+                        &[value.into(), delegate_context.unwrap().into()],
+                        "delegate_reply",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let (width, kind) = match retcon_resume_type.unwrap() {
+                    TypeTag::Unit => (Width::Scalar(0), OperandKind::Int),
+                    TypeTag::Float => (Width::Scalar(float_bytes), OperandKind::Float),
+                    TypeTag::Fixed => (Width::Scalar(8), OperandKind::Fixed),
+                    tag => (width_of_tag(tag), OperandKind::Int),
+                };
+                st.push_k(reply, width, kind);
+            }
             Op::Yield if retcon => {
                 if st
                     .widths
@@ -7057,6 +7152,7 @@ fn lower_chunk_body<'ctx>(
                 st.b.build_store(retcon_latest.unwrap(), reply).unwrap();
                 st.b.build_store(st.locals[0], reply).unwrap();
                 let (width, kind) = match chunk.param_types[0] {
+                    TypeTag::Unit => (Width::Scalar(0), OperandKind::Int),
                     TypeTag::Float => (Width::Scalar(float_bytes), OperandKind::Float),
                     TypeTag::Fixed => (Width::Scalar(8), OperandKind::Fixed),
                     tag => (width_of_tag(tag), OperandKind::Int),

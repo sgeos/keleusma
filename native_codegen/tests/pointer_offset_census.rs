@@ -30,6 +30,7 @@
 //!
 //! | site | offset source |
 //! |---|---|
+//! | retcon delegate context fields | three constant structure field indices, written by one builder site and read through three parsed LLVM offsets |
 //! | locals in the stream frame | constant — `plan_chunk_region` bytes plus slot index |
 //! | stream state word (three sites) | constant — `stream_state_off` |
 //! | call-site region base | constant — per-site plan |
@@ -81,7 +82,8 @@
 ///
 /// **Re-derive rather than trust.** It moves whenever a site is added or
 /// removed.
-const RECORDED_GEP_SITES: usize = 24;
+// 24 -> 28, including the coroutine context and parsed intrinsic helper.
+const RECORDED_GEP_SITES: usize = 28;
 // 22 -> 24 on 2026-09-11, when the shared composite slot landed. **Both are
 // compile-time constant.** The body's address is the slot's STATED offset in the
 // host buffer — a field of the layout, not a computed quantity — and the second
@@ -134,23 +136,29 @@ const ADDRESS_FORMS: &[&str] = &[
     // An integer becoming a pointer: where a computed address enters pointer
     // space and every later use trusts it.
     "build_int_to_ptr",
+    "build_struct_gep(",
+    " = getelementptr ",
 ];
 
-fn gep_sites() -> Vec<(usize, String)> {
-    let src = std::fs::read_to_string("src/lib.rs").expect("the emitter is readable");
-    src.lines()
-        .enumerate()
-        .filter(|(_, l)| ADDRESS_FORMS.iter().any(|f| l.contains(f)))
-        .map(|(i, l)| (i + 1, l.trim().to_string()))
-        .collect()
+fn gep_sites() -> Vec<(&'static str, usize, String)> {
+    let mut sites = Vec::new();
+    for file in ["src/lib.rs", "src/coroutine.rs"] {
+        let src = std::fs::read_to_string(file).expect("the emitter is readable");
+        for (i, line) in src.lines().enumerate() {
+            if ADDRESS_FORMS.iter().any(|form| line.contains(form)) {
+                sites.push((file, i + 1, line.trim().to_string()));
+            }
+        }
+    }
+    sites
 }
 
 #[test]
 fn every_pointer_offset_is_constant_or_bounded() {
     let sites = gep_sites();
     println!("\n================ POINTER-ARITHMETIC SITES IN THE EMITTER");
-    for (n, _) in &sites {
-        println!("  src/lib.rs:{n}");
+    for (file, n, _) in &sites {
+        println!("  {file}:{n}");
     }
     println!("  ------------------------------------------------");
     println!("  sites: {}", sites.len());

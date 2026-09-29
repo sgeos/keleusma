@@ -3803,3 +3803,11 @@ non-reproducing isolated checks. The upstream current-state entries above are
 preserved. The upstream guard repair is merged. Final downstream integration is subject to
 root continuous integration on the completed feature branch. Read the native brief and machine-written
 gate record when resuming this line.
+
+
+## V0.3.X Workstream B progress of 2026-09-29
+
+Attributed to Codex on the V0.3.X line. Scalar bytecode and nested reentrant
+calls now lower through LLVM returned continuations. The bounded native brief
+records verification and the remaining stream and composite cases. Workstream B
+remains active. Upstream task state above is preserved.

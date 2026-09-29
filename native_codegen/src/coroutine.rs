@@ -11,7 +11,9 @@
 //!
 //! LLVM manages the continuation and captures live allocas. The emitted module
 //! is accepted only if splitting eliminates every overflow allocator use.
-//! This API currently admits one scalar stream with non-suspending callees.
+//! This API currently admits one scalar stream with ordinary or reentrant
+//! callees. Reentrant callees are inlined before splitting. Host replies update
+//! the entry parameter while preserving each callee's own parameters and locals.
 //!
 //! The provisional start symbol is `kel_chunk_<entry_point>` with the scalar
 //! argument followed by shared, private, composite-region, frame and reply
@@ -22,13 +24,15 @@
 //! initialises the frame itself; its previous bytes need not be cleared.
 //! Never resume a released instance or invoke one continuation concurrently.
 
+use inkwell::attributes::{Attribute, AttributeLoc};
+use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::Module as LlvmModule;
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::TargetMachine;
 use inkwell::types::BasicMetadataTypeEnum;
-use inkwell::values::{BasicValue, FunctionValue, InstructionOpcode};
+use inkwell::values::{BasicValue, CallSiteValue, FunctionValue, InstructionOpcode, PointerValue};
 use keleusma::bytecode::{BlockType, Module, Op, TypeTag};
 
 use crate::{LowerError, LowerOptions};
@@ -64,8 +68,16 @@ pub fn lower<'ctx>(
         .map_err(|e| error(format!("resource admission: {e:?}")))?;
     // Reuse the established safety refusals, including composite yield escape.
     // Passing verification alone does not certify fixed-offset native storage.
-    let preflight = ctx.create_module("retcon_preflight");
-    crate::lower_module(ctx, &preflight, program, LowerOptions::default())?;
+    if !program
+        .chunks
+        .iter()
+        .any(|c| c.block_type == BlockType::Reentrant)
+    {
+        let preflight = ctx.create_module("retcon_preflight");
+        crate::lower_module(ctx, &preflight, program, LowerOptions::default())?;
+    }
+    // Reentrant calls are admitted by the coroutine emitter itself. Its
+    // confinement checks still apply to every allocation and suspension.
     let entry = program
         .entry_point
         .ok_or_else(|| error("coroutine needs an entry point"))?;
@@ -92,11 +104,13 @@ pub fn lower<'ctx>(
             "retcon currently requires a one-scalar Stream entry ending in Reset",
         ));
     }
-    if program.chunks.iter().enumerate().any(|(i, c)| {
-        i != entry
-            && (c.block_type != BlockType::Func || c.ops.iter().any(|op| matches!(op, Op::Yield)))
-    }) {
-        return Err(error("retcon currently requires non-suspending callees"));
+    if program
+        .chunks
+        .iter()
+        .enumerate()
+        .any(|(i, c)| i != entry && !matches!(c.block_type, BlockType::Func | BlockType::Reentrant))
+    {
+        return Err(error("retcon currently requires Func or Reentrant callees"));
     }
     if !matches!(program.signatures.get(entry).map(|s| &s.ret),
         Some(keleusma::bytecode::WireShape::Scalar { kind }) if *kind <= keleusma::value_layout::ScalarKind::Float.to_tag())
@@ -115,12 +129,62 @@ pub fn lower<'ctx>(
         None,
         Some(frame_bytes),
     )?;
+    module.verify().map_err(error)?;
+    // The verified call graph is acyclic. Inline suspension-capable callees
+    // into the one coroutine before splitting, so LLVM captures each live
+    // call frame and abnormal resume bypasses every remaining callee effect.
+    module
+        .run_passes(
+            "always-inline,globaldce",
+            machine,
+            PassBuilderOptions::create(),
+        )
+        .map_err(error)?;
+    if module.get_functions().any(is_delegate) {
+        return Err(error("a suspension-capable callee survived inlining"));
+    }
     // mem2reg promotes only entry-block allocas. The intrinsic scaffold
     // precedes the bytecode body, so move its fixed scalar slots to that entry.
     let f = module.get_function(&format!("kel_chunk_{entry}")).unwrap();
+    let cleanup = f
+        .get_basic_blocks()
+        .into_iter()
+        .find(|b| b.get_name().to_bytes() == b"retcon.cleanup")
+        .unwrap();
+    // Retcon requires one fallthrough coro.end. Redirect inlined abnormal
+    // resume exits to the entry's cleanup, before the coroutine passes run.
+    let cleanup_builder = ctx.create_builder();
+    for block in f.get_basic_blocks().into_iter().filter(|b| *b != cleanup) {
+        let ends: Vec<_> = block
+            .get_instructions()
+            .filter(|i| {
+                CallSiteValue::try_from(*i)
+                    .ok()
+                    .and_then(|c| c.get_called_fn_value())
+                    .is_some_and(|callee| callee.get_name().to_bytes() == b"llvm.coro.end")
+            })
+            .collect();
+        for end in ends {
+            let terminal = end
+                .get_next_instruction()
+                .ok_or_else(|| error("coroutine cleanup has no terminator"))?;
+            if terminal.get_opcode() != InstructionOpcode::Unreachable {
+                return Err(error("coroutine cleanup has effects after coro.end"));
+            }
+            terminal.erase_from_basic_block();
+            end.erase_from_basic_block();
+            cleanup_builder.position_at_end(block);
+            cleanup_builder.build_unconditional_branch(cleanup).unwrap();
+        }
+    }
     let header = f.get_first_basic_block().unwrap();
     let builder = ctx.create_builder();
-    builder.position_before(&header.get_first_instruction().unwrap());
+    builder.position_before(
+        &header
+            .get_instructions()
+            .find(|i| i.get_opcode() != InstructionOpcode::Alloca)
+            .unwrap(),
+    );
     let allocas: Vec<_> = f
         .get_basic_blocks()
         .iter()
@@ -136,7 +200,7 @@ pub fn lower<'ctx>(
     // suspension occupy the frame. No handwritten resume dispatch is emitted.
     module
         .run_passes(
-            "function(mem2reg),coro-early,coro-split,coro-cleanup",
+            "function(sroa,mem2reg),coro-early,coro-split,coro-cleanup",
             machine,
             PassBuilderOptions::create(),
         )
@@ -206,4 +270,90 @@ retcon.cleanup:
     let scaffold = ctx.create_module_from_ir(buffer).map_err(error)?;
     module.link_in_module(scaffold).map_err(error)?;
     Ok(module.get_function(&format!("kel_chunk_{index}")).unwrap())
+}
+
+/// Hidden context belongs to the entry instance, never to a callee's locals.
+/// Scalar replacement removes the three pointer slots before frame splitting.
+pub(crate) fn delegate_context<'ctx>(
+    ctx: &'ctx Context,
+    builder: &Builder<'ctx>,
+    reply: PointerValue<'ctx>,
+    entry_parameter: PointerValue<'ctx>,
+    latest_reply: PointerValue<'ctx>,
+) -> PointerValue<'ctx> {
+    let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
+    let ty = ctx.struct_type(&[ptr.into(), ptr.into(), ptr.into()], false);
+    let context = builder.build_alloca(ty, "delegate_context").unwrap();
+    for (index, value) in [reply, entry_parameter, latest_reply]
+        .into_iter()
+        .enumerate()
+    {
+        let field = builder
+            .build_struct_gep(ty, context, index as u32, "context_field")
+            .unwrap();
+        builder.build_store(field, value).unwrap();
+    }
+    context
+}
+
+pub(crate) fn mark_delegate(ctx: &Context, function: FunctionValue<'_>) {
+    function.set_linkage(inkwell::module::Linkage::Internal);
+    function.add_attribute(
+        AttributeLoc::Function,
+        ctx.create_enum_attribute(Attribute::get_named_enum_kind_id("alwaysinline"), 0),
+    );
+    function.add_attribute(
+        AttributeLoc::Function,
+        ctx.create_string_attribute("kel.retcon.delegate", ""),
+    );
+}
+
+pub(crate) fn is_delegate(function: FunctionValue<'_>) -> bool {
+    function
+        .get_string_attribute(AttributeLoc::Function, "kel.retcon.delegate")
+        .is_some()
+}
+
+pub(crate) fn delegate_yield<'ctx>(
+    ctx: &'ctx Context,
+    module: &LlvmModule<'ctx>,
+) -> Result<FunctionValue<'ctx>, LowerError> {
+    if let Some(function) = module.get_function("kel_retcon_delegate_yield") {
+        return Ok(function);
+    }
+    // After inlining, lower redirects this helper's abnormal exit to the
+    // enclosing coroutine's single cleanup block. No helper survives splitting.
+    let ir = r#"
+declare i1 @llvm.coro.suspend.retcon.i1(...)
+declare void @llvm.coro.end(ptr, i1, token)
+define i64 @kel_retcon_delegate_yield(i64 %value, ptr %context) alwaysinline {
+entry:
+  %reply_slot = getelementptr {ptr, ptr, ptr}, ptr %context, i32 0, i32 0
+  %parameter_slot = getelementptr {ptr, ptr, ptr}, ptr %context, i32 0, i32 1
+  %latest_slot = getelementptr {ptr, ptr, ptr}, ptr %context, i32 0, i32 2
+  %reply = load ptr, ptr %reply_slot
+  %parameter = load ptr, ptr %parameter_slot
+  %latest = load ptr, ptr %latest_slot
+  %unwind = call i1 (...) @llvm.coro.suspend.retcon.i1(i64 %value)
+  br i1 %unwind, label %cleanup, label %resume
+cleanup:
+  call void @llvm.coro.end(ptr null, i1 false, token none)
+  unreachable
+resume:
+  %result = load i64, ptr %reply
+  store i64 %result, ptr %parameter
+  store i64 %result, ptr %latest
+  ret i64 %result
+}
+"#;
+    let buffer = MemoryBuffer::create_from_memory_range_copy(
+        format!("{ir}\0").as_bytes(),
+        "delegate scaffold",
+    );
+    module
+        .link_in_module(ctx.create_module_from_ir(buffer).map_err(error)?)
+        .map_err(error)?;
+    let function = module.get_function("kel_retcon_delegate_yield").unwrap();
+    mark_delegate(ctx, function);
+    Ok(function)
 }

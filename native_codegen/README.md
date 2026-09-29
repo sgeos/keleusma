@@ -161,5 +161,7 @@ that owns the step.
 streams. Its [module documentation](src/coroutine.rs) describes the provisional
 host contract and checked frame reservation. [Execution tests](tests/retcon_bytecode.rs)
 compare suspension sequences and seeded lexer state with the virtual machine.
-Delegated suspension remains refused. This is separate from the existing
-`lower_module` interface and does not complete Workstream B yet.
+Reentrant callees suspend through the same LLVM continuation, including nested
+calls and guarded heads. Nested stream callees and composite suspension values
+remain refused. This interface is separate from `lower_module`; Workstream B
+remains active pending the remaining cases and complete native gates.

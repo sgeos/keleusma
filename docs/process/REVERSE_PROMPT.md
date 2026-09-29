@@ -3323,3 +3323,13 @@ configurations. The initial broad phase found seven maintenance-guard failures,
 now corrected and checked individually. Full native gates remain outstanding.
 Pull request 473 is merged. Workstream B remains active, with delegated suspension
 next. Resume from the bounded V0.3.X brief. Upstream current-state material is preserved.
+
+
+## V0.3.X delegated coroutine increment, 2026-09-29
+
+Codex extends LLVM retcon lowering to nested reentrant calls and guarded heads.
+The default broad native phase passed 694 tests with frozen inputs. Fourteen
+coroutine tests and both lint configurations pass. Full gates remain outstanding.
+The branch is `feat/retcon-delegation`, stacked on pull request 474. Continue from
+the bounded V0.3.X brief. Workstream B remains active, with nested stream callees
+and composite suspension values still refused. Upstream material is preserved.
