@@ -128,7 +128,7 @@ fn native_module(
         replies,
         optimize,
         false,
-        |bits, _, _| bits,
+        |bits, _, _, _| bits,
     );
     let stable = native_module_read(
         program,
@@ -137,7 +137,7 @@ fn native_module(
         replies,
         optimize,
         true,
-        |bits, _, _| bits,
+        |bits, _, _, _| bits,
     );
     assert_eq!(
         raw, stable,
@@ -153,7 +153,7 @@ fn native_module_read<T>(
     replies: &[i64],
     optimize: bool,
     stable: bool,
-    mut read: impl FnMut(i64, &Guarded, &Guarded) -> T,
+    mut read: impl FnMut(i64, &Guarded, &Guarded, &Guarded) -> T,
 ) -> (Vec<T>, Vec<u8>) {
     assert!(!replies.is_empty());
     let ctx = Context::create();
@@ -296,7 +296,7 @@ fn native_module_read<T>(
     };
     for (i, &value) in replies.iter().enumerate() {
         assert!(!step.next.is_null());
-        result.push(read(step.value, &region, &private));
+        result.push(read(step.value, &region, &private, &frame));
         for storage in [&frame, &reply, &shared, &private, &region] {
             storage.check();
         }
@@ -1295,10 +1295,10 @@ fn composite_bodies(src: &str, first: i64, replies: &[i64]) -> Vec<Vec<u8>> {
             replies,
             optimize,
             stable,
-            |bits, region, private| {
+            |bits, region, private, frame| {
                 let address = bits as usize;
                 let end = address.checked_add(size as usize).unwrap();
-                let storage = [region, private]
+                let storage = [region, private, frame]
                     .into_iter()
                     .find(|storage| {
                         address >= storage.ptr() as usize
@@ -1637,4 +1637,320 @@ int main(void) {{
         String::from_utf8_lossy(&run.stderr)
     );
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Reuse one exact-sized host buffer for every incoming body. Older values
+/// must survive overwrite, while private-storage references still alias.
+fn flat_inputs(src: &str, inputs: &[keleusma::bytecode::Value], expected: &[i64]) {
+    flat_inputs_read(
+        src,
+        inputs,
+        expected,
+        |value, _| match value {
+            keleusma::bytecode::Value::Int(v) => *v,
+            other => panic!("expected Word, got {other:?}"),
+        },
+        |bits, _, _, _| bits,
+    );
+}
+
+fn flat_inputs_read<T: std::fmt::Debug + PartialEq>(
+    src: &str,
+    inputs: &[keleusma::bytecode::Value],
+    expected: &[T],
+    vm_read: impl Fn(&keleusma::bytecode::Value, &keleusma_arena::Arena) -> T,
+    read: impl Fn(i64, &Guarded, &Guarded, &Guarded) -> T,
+) {
+    use keleusma::bytecode::{ArrayBody, EnumBody, StructBody, TupleBody, Value, WireShape};
+    use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
+    let program = common::build(src);
+    let WireShape::Flat { size, .. } = program.signatures[program.entry_point.unwrap()].params[0]
+    else {
+        panic!("flat input fixture required");
+    };
+    assert_eq!(inputs.len(), expected.len());
+    let need = required_persistent_capacity_for(&program);
+    let mut arena = keleusma_arena::Arena::with_capacity(
+        auto_arena_capacity_for(&program, &[]).unwrap() + need + 65536,
+    );
+    arena.resize_persistent(need).unwrap();
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    let mut state = vm.call(&inputs[..1]).unwrap();
+    for (index, value) in expected.iter().enumerate() {
+        let VmState::Yielded(ref actual) = state else {
+            panic!("VM step {index}: {state:?}");
+        };
+        assert_eq!(&vm_read(actual, &arena), value, "VM step {index}");
+        if index + 1 < inputs.len() {
+            state = vm.resume(inputs[index + 1].clone()).unwrap();
+            if matches!(state, VmState::Reset) {
+                state = vm.resume(inputs[index + 1].clone()).unwrap();
+            }
+        }
+    }
+    let packing = keleusma_arena::Arena::with_capacity(65536);
+    let bodies: Vec<_> = inputs
+        .iter()
+        .map(|value| {
+            let flat = value
+                .clone()
+                .into_arena_canonical(8, std::mem::size_of::<NativeFloat>(), 8, &packing)
+                .unwrap();
+            let bytes = match &flat {
+                Value::Tuple(TupleBody::Flat(body))
+                | Value::Array(ArrayBody::Flat(body))
+                | Value::Struct(StructBody::Flat(body))
+                | Value::Enum(EnumBody::Flat(body)) => body.resolve(&packing).unwrap(),
+                other => panic!("not a flat host body: {other:?}"),
+            };
+            assert_eq!(bytes.len(), size as usize);
+            bytes.to_vec()
+        })
+        .collect();
+    for (optimize, stable) in [(false, false), (false, true), (true, false), (true, true)] {
+        let host = Guarded::new(size as usize);
+        unsafe { std::slice::from_raw_parts_mut(host.ptr(), host.len) }.copy_from_slice(&bodies[0]);
+        let pointer = host.ptr() as i64;
+        let mut index = 0;
+        let (actual, _) = native_module_read(
+            &program,
+            &vec![0; program.shared_data_bytes as usize],
+            pointer,
+            &vec![pointer; inputs.len()],
+            optimize,
+            stable,
+            |value, region, private, frame| {
+                let output = read(value, region, private, frame);
+                index += 1;
+                let bytes = unsafe { std::slice::from_raw_parts_mut(host.ptr(), host.len) };
+                // Poison even the final body before release, so release cannot
+                // depend on a still-valid host input after the last call.
+                bytes.fill(0xdd);
+                if index < bodies.len() {
+                    bytes.copy_from_slice(&bodies[index]);
+                }
+                host.check();
+                output
+            },
+        );
+        assert_eq!(
+            actual, expected,
+            "optimized={optimize}, stable={stable}: {src}"
+        );
+        host.check();
+    }
+}
+
+#[test]
+fn flat_host_inputs_survive_reused_buffers_and_ordinary_calls() {
+    use keleusma::bytecode::Value;
+    let inputs: Vec<_> = [5, 7, 20, 3, 40, 1, 2, 4]
+        .into_iter()
+        .map(|a| Value::tuple(vec![Value::Int(a), Value::Int(a * 10)]))
+        .collect();
+    flat_inputs(
+        "fn same(p: (Word, Word)) -> (Word, Word) { p } loop main(t: (Word, Word)) -> Word { let keep = same(t); let r: (Word, Word) = yield t.0; yield keep.0 + r.1 + t.0 }",
+        &inputs,
+        &[5, 82, 20, 53, 40, 51, 2, 46],
+    );
+    flat_inputs(
+        "fn pick(p: (Word, Word), r: (Word, Word)) -> Word { p.0 + r.1 } loop main(t: (Word, Word)) -> Word { yield pick(t, yield t.0) }",
+        &inputs,
+        &[5, 75, 20, 50, 40, 50, 2, 42],
+    );
+    flat_inputs(
+        "fn choose(p: (Word, Word)) -> (Word, Word) { if p.0 > 10 { p } else { (99, 100) } } loop main(t: (Word, Word)) -> Word { let keep = choose(t); let r: (Word, Word) = yield t.0; yield keep.0 + r.0 }",
+        &inputs,
+        &[5, 106, 20, 23, 40, 41, 2, 103],
+    );
+}
+
+#[test]
+fn flat_host_replies_cross_delegated_suspension() {
+    use keleusma::bytecode::Value;
+    let inputs: Vec<_> = [5, 7, 20, 3, 40, 1]
+        .into_iter()
+        .map(|a| Value::tuple(vec![Value::Int(a), Value::Int(a * 10)]))
+        .collect();
+    flat_inputs(
+        "yield emit(p: (Word, Word)) -> Word { let r: (Word, Word) = yield p.0; yield p.0 + r.1; 0 } loop main(t: (Word, Word)) -> Word { emit(t); yield t.0 }",
+        &inputs,
+        &[5, 75, 20, 3, 403, 1],
+    );
+}
+
+#[test]
+fn flat_host_ownership_preserves_private_aliases_in_the_same_frame() {
+    use keleusma::bytecode::Value;
+    let inputs: Vec<_> = [5, 7, 20, 3, 40, 1]
+        .into_iter()
+        .map(|a| Value::tuple(vec![Value::Int(a), Value::Int(a * 10)]))
+        .collect();
+    flat_inputs(
+        "private data st { p: (Word, Word) } loop main(t: (Word, Word)) -> Word { st.p = t; let alias = st.p; let owned = t; let r = yield t.0; st.p = r; yield alias.0 + owned.0 + st.p.0 }",
+        &inputs,
+        &[5, 19, 20, 26, 40, 42],
+    );
+}
+
+#[test]
+fn owned_flat_yields_live_inside_the_bounded_instance() {
+    use keleusma::bytecode::{TupleBody, Value};
+    let inputs: Vec<_> = [5, 7, 20, 3, 40, 1]
+        .into_iter()
+        .map(|a| Value::tuple(vec![Value::Int(a), Value::Int(a * 10)]))
+        .collect();
+    let expected: Vec<_> = [5i64, 5, 20, 20, 40, 40]
+        .into_iter()
+        .map(|a| [a.to_le_bytes(), (a * 10).to_le_bytes()].concat())
+        .collect();
+    flat_inputs_read(
+        "loop main(t: (Word, Word)) -> (Word, Word) { let keep = t; yield t; yield keep }",
+        &inputs,
+        &expected,
+        |value, arena| match value {
+            Value::Tuple(TupleBody::Flat(body)) => body.resolve(arena).unwrap().to_vec(),
+            other => panic!("expected tuple, got {other:?}"),
+        },
+        |bits, region, private, frame| {
+            let address = bits as usize;
+            let end = address.checked_add(16).unwrap();
+            let storage = [region, private, frame]
+                .into_iter()
+                .find(|storage| {
+                    address >= storage.ptr() as usize && end <= storage.ptr() as usize + storage.len
+                })
+                .expect("yielded body must fit a bounded instance reservation");
+            let offset = address - storage.ptr() as usize;
+            (unsafe { std::slice::from_raw_parts(storage.ptr(), storage.len) })[offset..offset + 16]
+                .to_vec()
+        },
+    );
+}
+
+#[test]
+fn nested_flat_host_inputs_preserve_packed_fields_and_array_views() {
+    use keleusma::bytecode::Value;
+    let inputs: Vec<_> = [5, 7, 20, 3, 40, 1]
+        .into_iter()
+        .map(|a| {
+            Value::array(vec![
+                Value::tuple(vec![
+                    Value::Byte(2),
+                    Value::Float(a as f64),
+                    Value::Int(a * 10),
+                ]),
+                Value::tuple(vec![Value::Byte(3), Value::Float(1.0), Value::Int(a)]),
+            ])
+        })
+        .collect();
+    flat_inputs(
+        "loop main(t: [(Byte, Float, Word); 2]) -> Word { let keep = t[0]; let r: [(Byte, Float, Word); 2] = yield t[1].2; yield (keep.1 as Word) + (r[0].0 as Word) + r[0].2 }",
+        &inputs,
+        &[5, 77, 20, 52, 40, 52],
+    );
+}
+
+#[test]
+fn host_struct_and_enum_bodies_survive_later_replies() {
+    use keleusma::bytecode::Value;
+    let structs: Vec<_> = [5, 7, 20, 3, 40, 1]
+        .into_iter()
+        .map(|a| {
+            Value::struct_value(
+                "P".into(),
+                vec![
+                    ("a".into(), Value::Int(a)),
+                    ("b".into(), Value::Int(a * 10)),
+                ],
+            )
+        })
+        .collect();
+    flat_inputs(
+        "struct P { a: Word, b: Word } loop main(t: P) -> Word { let keep = t; let r: P = yield t.a; yield keep.a + r.b }",
+        &structs,
+        &[5, 75, 20, 50, 40, 50],
+    );
+    let enums: Vec<_> = [5, 7, 20, 3, 40, 1]
+        .into_iter()
+        .map(|a| {
+            Value::enum_value(
+                "E".into(),
+                "Pair".into(),
+                0,
+                vec![Value::Int(a), Value::Int(a * 10)],
+            )
+        })
+        .collect();
+    flat_inputs(
+        "enum E { Pair(Word, Word) } fn first(e: E) -> Word { match e { E::Pair(a, b) => a } } fn last(e: E) -> Word { match e { E::Pair(a, b) => b } } loop main(t: E) -> Word { let keep = t; let r: E = yield first(t); yield first(keep) + last(r) }",
+        &enums,
+        &[5, 75, 20, 50, 40, 50],
+    );
+}
+
+#[test]
+fn flat_host_values_survive_repeated_loop_suspension() {
+    use keleusma::bytecode::Value;
+    let inputs: Vec<_> = [5, 7, 20, 3, 40, 1, 2, 4]
+        .into_iter()
+        .map(|a| Value::tuple(vec![Value::Int(a), Value::Int(a * 10)]))
+        .collect();
+    flat_inputs(
+        "loop main(t: (Word, Word)) -> Word { let keep = t; for i in 0..3 { let r: (Word, Word) = yield keep.0 + i; yield r.1 + keep.0; } yield t.0 }",
+        &inputs,
+        &[5, 75, 6, 35, 7, 15, 2, 4],
+    );
+}
+
+#[test]
+fn flat_host_copies_require_bounded_signatures_and_frame_space() {
+    use keleusma::bytecode::WireShape;
+    let mut p = common::build(
+        "loop main(t: (Word, Word)) -> Word { let keep = t; yield t.0; yield keep.1 }",
+    );
+    let error = coroutine::lower(&Context::create(), &p, &machine(), 8).unwrap_err();
+    assert!(error.to_string().contains("frame exceeds"), "{error}");
+    p.signatures[p.entry_point.unwrap()].params[0] = WireShape::Top;
+    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
+    assert!(
+        error.to_string().contains("flat composite input signature"),
+        "{error}"
+    );
+
+    let mut native = common::build(
+        "use host::identity\nloop main(t: (Word, Word)) -> Word { let keep: (Word, Word) = host::identity(t); yield keep.0; yield t.0 }",
+    );
+    native.native_return_shapes[0] = native.signatures[native.entry_point.unwrap()].params[0];
+    keleusma::verify::verify(&native).unwrap();
+    let error = coroutine::lower(&Context::create(), &native, &machine(), 4096).unwrap_err();
+    assert!(error.to_string().contains("ownership contract"), "{error}");
+
+    // The current emitter cannot certify this multiply-written local's extent.
+    // A missing copy size must refuse, rather than preserve a pointer to a
+    // fixed transfer buffer which a later loop iteration can overwrite.
+    let mut p = common::build(
+        "loop main(t: (Word, Word)) -> Word { let keep = t; let replacement = t; yield 0; yield keep.0 }",
+    );
+    let entry = p.entry_point.unwrap();
+    let writes: Vec<_> = p.chunks[entry]
+        .ops
+        .iter()
+        .enumerate()
+        .filter_map(|(i, op)| {
+            if let keleusma::bytecode::Op::SetLocal(slot) = op {
+                Some((i, *slot))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(writes.len(), 2);
+    p.chunks[entry].ops[writes[1].0] = keleusma::bytecode::Op::SetLocal(writes[0].1);
+    keleusma::verify::verify(&p).unwrap();
+    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
+    assert!(
+        error.to_string().contains("proven transfer extent"),
+        "{error}"
+    );
 }

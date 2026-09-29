@@ -157,12 +157,16 @@ that owns the step.
 
 ## Bytecode coroutines
 
-`coroutine::lower` provides the Workstream B retcon path for verified scalar
-streams. Its [module documentation](src/coroutine.rs) describes the provisional
+`coroutine::lower` provides the Workstream B retcon path for verified streams
+with scalar or flat inputs and outputs. Its [module documentation](src/coroutine.rs) describes the provisional
 host contract and checked frame reservation. [Execution tests](tests/retcon_bytecode.rs)
 compare suspension sequences and seeded lexer state with the virtual machine.
 Reentrant and stream callees suspend through the same LLVM continuation,
 including nested calls and guarded heads. Nested streams clear their own locals
 at Reset. Cleared non-Unit parameter reads, differing delegated yield signatures
-and composite suspension values remain refused. This interface is separate from `lower_module`; Workstream B
-remains active pending the remaining cases and complete native gates.
+and unproved transfer extents remain refused. Host input buffers may be reused
+once start or resume returns. Bounded copies preserve older live values while
+private-data references retain aliasing. The stable arena handle stores the
+current continuation and supports release and reuse. This interface is separate
+from `lower_module`. Workstream B remains active pending complete verification
+and version integration.

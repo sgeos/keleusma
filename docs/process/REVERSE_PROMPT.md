@@ -3402,3 +3402,15 @@ all-target lints pass in both float configurations. Composite host inputs and re
 remain outside admission. Pull request 475 continues remote checks unchanged.
 Workstream B and combined native gates remain outstanding. Resume from the
 bounded native brief. Upstream material is preserved.
+
+
+## V0.3.X bounded flat host values, 2026-09-29
+
+`feat/retcon-flat-inputs` copies host-derived bodies at bounded value transfers
+while preserving private-data aliases. Its eight new tests cover buffer reuse,
+delegation, nested packed fields, frame-resident yields and refusal boundaries.
+All 41 coroutine tests and all-target lints pass in both float configurations.
+Both complete gates passed on clean, frozen `360d3295`. The flat-input changes
+still need complete native gates. Pull request 475 has two remote test jobs
+running and its head remains unchanged. Workstream B remains active. Resume from
+the bounded native brief. Upstream material is preserved.

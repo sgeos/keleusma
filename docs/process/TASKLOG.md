@@ -3810,6 +3810,8 @@ gate record when resuming this line.
 Attributed to Codex on the V0.3.X line. Scalar bytecode and nested reentrant
 and stream calls now lower through LLVM returned continuations. The bounded
 native brief records scalar reply and enum inspection corrections, followed by
-flat composite yields, live body operands and stable arena-handle wrappers.
-Composite host inputs and replies remain outside admission. Workstream B
-remains active. Upstream task state above is preserved.
+flat composite yields, live body operands, stable arena handles and bounded flat
+host inputs. Host buffers can be reused while older values remain live. Unproved
+transfer extents and external native body ownership remain refused. Both complete
+gates passed on the stable-handle commit. The flat-input increment and version
+integration remain outstanding. Upstream task state above is preserved.

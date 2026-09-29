@@ -1,3 +1,9 @@
+//! Flat-input contexts use fixed field indices bounded by their allocated
+//! argument count plus one return flag. Delegate context fields are indices
+//! one through three in a four-pointer structure. Body copy pointers retain
+//! the exact verified operand or signature extent and require that many
+//! readable host bytes during start or resume. No input buffer is retained.
+//!
 //! **EVERY POINTER-ARITHMETIC SITE IN THE EMITTER, AND WHERE ITS OFFSET COMES
 //! FROM.**
 //!
@@ -85,7 +91,7 @@
 /// removed.
 // 24 -> 28, including the coroutine context and parsed intrinsic helper.
 // 28 -> 29 for constant header offsets within the declared stable slot.
-const RECORDED_GEP_SITES: usize = 29;
+const RECORDED_GEP_SITES: usize = 33;
 // 22 -> 24 on 2026-09-11, when the shared composite slot landed. **Both are
 // compile-time constant.** The body's address is the slot's STATED offset in the
 // host buffer — a field of the layout, not a computed quantity — and the second
@@ -144,7 +150,12 @@ const ADDRESS_FORMS: &[&str] = &[
 
 fn gep_sites() -> Vec<(&'static str, usize, String)> {
     let mut sites = Vec::new();
-    for file in ["src/lib.rs", "src/coroutine.rs", "src/coroutine/host.rs"] {
+    for file in [
+        "src/lib.rs",
+        "src/coroutine.rs",
+        "src/coroutine/host.rs",
+        "src/coroutine/ownership.rs",
+    ] {
         let src = std::fs::read_to_string(file).expect("the emitter is readable");
         for (i, line) in src.lines().enumerate() {
             if ADDRESS_FORMS.iter().any(|form| line.contains(form)) {
