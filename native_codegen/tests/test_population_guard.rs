@@ -34,7 +34,9 @@
 ///
 /// **Derive this, do not transcribe it.** A count in this tree once read
 /// "nineteen" while the block it described held twenty-nine.
-const RECORDED_TEST_FUNCTIONS: usize = 662;
+// 662 -> 663 on 2026-09-28. The reporter fixtures have an independent test
+// entry instead of depending on the unrelated schema-staleness test.
+const RECORDED_TEST_FUNCTIONS: usize = 663;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

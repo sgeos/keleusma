@@ -225,6 +225,24 @@ fn guard_does_not_enforce_staleness() {
     assert_eq!(check_record(&t, &all_exist).unwrap(), 1);
 }
 
+/// Exercise the reporter itself against isolated Git histories and negative cases.
+#[test]
+fn gate_status_reporter_passes_isolated_fixtures() {
+    // Schema acceptance and current verification are separate contracts. Exercise
+    // the actual reporter against isolated Git histories, including failure paths.
+    let output = Command::new("bash")
+        .arg("tools/test-gate-status.sh")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("run the isolated gate-status fixtures");
+    assert!(
+        output.status.success(),
+        "gate-status fixtures failed\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// A FAIL row is a legitimate record. The guard reports on the record's honesty,
 /// not on the gate's verdict; suppressing a failure would be the actual defect.
 #[test]

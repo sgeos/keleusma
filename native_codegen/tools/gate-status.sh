@@ -15,9 +15,9 @@
 #
 # `GATE_RECORD.md` is excluded throughout: the record is not code under test.
 #
-# Usage:  tools/gate-status.sh
+# Usage:  tools/gate-status.sh [--exit-zero]
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 record="GATE_RECORD.md"
 
@@ -89,55 +89,110 @@ REACH=(
     ../examples
     ../compiler/kel
 )
-head_commit=$(git rev-parse HEAD 2>/dev/null || echo UNKNOWN)
+# Exit 1 means no current verified PASS. Diagnostics distinguish recorded FAIL
+# from invalid, incomplete or stale evidence.
+# --exit-zero is for display-only callers and does not suppress diagnostics.
+exit_zero=false
+case "${1:-}" in
+    '') ;;
+    --exit-zero) exit_zero=true; shift ;;
+    *) echo "Usage: $0 [--exit-zero]" >&2; exit 2 ;;
+esac
+if [ "$#" -ne 0 ]; then
+    echo "Usage: $0 [--exit-zero]" >&2
+    exit 2
+fi
+finish() {
+    if "$exit_zero"; then exit 0; fi
+    exit "$1"
+}
+
+# Exclude only the package's record, including when it is uncommitted. A source
+# with GATE_RECORD.md in its name must still invalidate the measurement.
+exclude=':(top,exclude)native_codegen/GATE_RECORD.md'
+if ! head_commit=$(git rev-parse --verify HEAD 2>/dev/null); then
+    echo "UNVERIFIED: cannot resolve HEAD"
+    finish 1
+fi
 echo "HEAD is $head_commit"
-
-# The reach figures below diff COMMIT to COMMIT, so uncommitted work is invisible
-# to them. Saying "still speaks to HEAD" while backend sources sit unstaged would
-# be the reporter telling its own version of the lie it exists to prevent.
-now_dirt=$(git status --porcelain -- "${REACH[@]}" 2>/dev/null | grep -cv 'GATE_RECORD.md') || true
-if [ "${now_dirt:-0}" -gt 0 ]; then
-    echo "⚠ ${now_dirt} backend file(s) are UNCOMMITTED right now. No record can speak"
-    echo "  to them: the reach figures below compare commits and cannot see them."
+status=0
+if ! now_dirt=$(git status --porcelain --untracked-files=all -- "${REACH[@]}" "$exclude"); then
+    echo "UNVERIFIED: cannot inspect the worktree"
+    finish 1
+fi
+if [ -n "$now_dirt" ]; then
+    echo "UNVERIFIED: backend inputs are UNCOMMITTED. No record speaks to this worktree."
+    printf '%s\n' "$now_dirt"
+    status=1
 fi
 
-if [ ! -f "$record" ]; then
-    echo "no gate record exists -- the backend's only instrument has left no trace"
-    exit 0
+if [ ! -r "$record" ]; then
+    echo "UNVERIFIED: no readable gate record exists"
+    finish 1
 fi
 
-rows=$(grep -E '^\| (default features|narrow-float-32) \|' "$record") || true
-if [ -z "$rows" ]; then
-    echo "gate record present but carries no configuration rows"
-    exit 0
+# Only six-field rows establish phase freezing. Legacy five-field records remain
+# historical evidence, but cannot establish a clean/frozen/PASS result.
+if ! rows=$(awk -F '|' '
+    /^\| (default features|narrow-float-32) \|/ {
+        if (NF != 8) { bad=1; next }
+        for (i=2; i<=7; i++) gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
+        seen[$2]++
+        if (seen[$2] != 1 || length($3) != 40 || $3 ~ /[^0-9a-fA-F]/ ||
+            ($4 != "clean" && $4 !~ /^dirty\([1-9][0-9]*\)$/) ||
+            ($5 != "frozen" && $5 !~ /^MOVED\([1-9][0-9]*\)$/) ||
+            ($6 != "PASS" && $6 != "FAIL") ||
+            $7 !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/ ||
+            $1 !~ /^[[:space:]]*$/ || $8 !~ /^[[:space:]]*$/) bad=1
+        print $2 "|" $3 "|" $4 "|" $5 "|" $6 "|" $7
+    }
+    END { if (bad || seen["default features"] != 1 || seen["narrow-float-32"] != 1) exit 1 }
+' "$record"); then
+    echo "UNVERIFIED: invalid gate record schema; require one valid six-column row per configuration"
+    finish 1
 fi
 
-while IFS='|' read -r _ cfg commit tree verdict when _rest; do
-    cfg=$(echo "$cfg" | xargs); commit=$(echo "$commit" | xargs)
-    tree=$(echo "$tree" | xargs); verdict=$(echo "$verdict" | xargs)
-    when=$(echo "$when" | xargs)
+while IFS='|' read -r cfg commit tree phases verdict when; do
     echo ""
     echo "$cfg"
-    echo "   verdict  $verdict on a $tree worktree, $when"
+    echo "   verdict  $verdict on a $tree worktree, $phases phases, $when"
     echo "   commit   $commit"
     if ! git cat-file -e "${commit}^{commit}" 2>/dev/null; then
-        echo "   ⚠ that commit is NOT in this repository -- the row cannot be checked"
+        echo "   UNVERIFIED: recorded commit is not in this repository"
+        status=1
         continue
     fi
-    # Diffed over every READ path, not the package alone. Counting only the package
-    # would have this reporter answer "still speaks to HEAD" while a test's input --
-    # a corpus script, a handoff figure, a decision document -- had moved underneath
-    # it. That is the reporter telling its own version of the lie it exists to stop.
-    changed=$(git diff --name-only "${commit}..HEAD" -- "${REACH[@]}" 2>/dev/null \
-              | grep -v "$record")
-    n=$(printf '%s' "$changed" | grep -c . ) || true
-    if [ "${n:-0}" -eq 0 ]; then
-        echo "   reach    still speaks to HEAD: no backend source changed since"
-    else
-        echo "   reach    ⚠ ${n} backend source(s) changed since, so UNVERIFIED:"
-        printf '%s\n' "$changed" | sed 's/^/              /'
+    row_verified=true
+    if [ "$verdict" = "FAIL" ]; then
+        echo "   FAILED: $cfg recorded FAIL at $commit"
+        row_verified=false
+        status=1
     fi
     if [ "$tree" != "clean" ]; then
-        echo "   ⚠ run on a modified worktree: this verdict is not reproducible from history"
+        echo "   UNVERIFIED: recorded run used a $tree worktree"
+        row_verified=false
+        status=1
+    fi
+    if [ "$phases" != "frozen" ]; then
+        echo "   UNVERIFIED: recorded phases were $phases"
+        row_verified=false
+        status=1
+    fi
+    if ! changed=$(git diff --name-only "$commit" HEAD -- "${REACH[@]}" "$exclude"); then
+        echo "   UNVERIFIED: cannot compare recorded inputs with HEAD"
+        status=1
+        continue
+    fi
+    if [ -n "$changed" ]; then
+        echo "   reach    UNVERIFIED: backend inputs changed since the recorded run"
+        printf '%s\n' "$changed" | sed 's/^/              /'
+        status=1
+    elif [ -n "$now_dirt" ]; then
+        echo "   reach    committed inputs match, but this worktree is UNVERIFIED"
+    elif ! "$row_verified"; then
+        echo "   reach    no committed input change; recorded run is not a verified PASS"
+    else
+        echo "   reach    still speaks to HEAD: no backend source changed since"
     fi
 done <<< "$rows"
+finish "$status"

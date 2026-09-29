@@ -10,19 +10,13 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
-**2026-09-28. The upstream portion of the V0.3.X handoff repair is complete.**
-Pull request 470 repairs the root coverage guard and reconciles compaction,
-assistant attribution and shared-channel ownership instructions. The complete
-upstream continuous integration checks passed before the merge.
+**2026-09-28. Legacy re-review follow-up.**
 
-The V0.3.X line owns its current native verification and integration state in
-`docs/process/handoffs/v0.3.0-BRIEF.md` on that branch. Its machine-written gate
-record and freshness reporter determine whether the native verdicts still apply.
-This upstream checkpoint does not substitute for that line's current handoff.
+The [gate-policy record](./GATE_POLICY.md) quotes the operator messages from this conversation and records which assistant-authored requirement they superseded. `PROMPT.md` remains untouched. The pre-push checklist now requires exact commands, successful exit codes, nonempty intended test selections and explicit omissions for a green receipt.
 
-The preceding [CODEX_SETUP_AUDIT.md](./CODEX_SETUP_AUDIT.md) is a historical baseline.
-Existing operator decisions and publication holds remain unchanged. The repair
-changes the coverage guard and process guidance, with no runtime behavior change.
+The accumulated historical section of `HANDOFF.md` is restored byte for byte from `c6730025`. Only the current validity block routes to the bounded V0.3.X brief. Archived routing remains historical. Native reporter diagnostics and independent fixture-test registration are being corrected on pull request 472.
+
+Verification is recorded in `TASKLOG.md`. No publication or merge into `main` is requested.
 
 ---
 
@@ -3282,3 +3276,18 @@ reports above. The bounded V0.3.X brief now defines the resume procedure and the
 required evidence. Read its archive and the machine-written native gate record
 for the current state. This checkpoint does not close the outstanding reports or
 start the nested-yield increment.
+
+
+## V0.3.X review follow-up, 2026-09-28
+
+Codex prepared `fix/v3-handoff-residuals` from `20decc75`, absorbing upstream `cb91b987`. Reporter exit status now reflects unverified evidence, and six-column provenance is parsed correctly. The diagnostic catalogue records the fifteenth occurrence. The operator-confirmed gate cadence applies. See `docs/process/handoffs/v0.3.0-BRIEF.md` for targeted checks and outstanding integration verification. The previous native addendum and upstream current block remain preserved.
+
+
+## V0.3.X gate-boundary resolution, 2026-09-28
+
+Codex absorbed upstream `e3634edb` into the feature branch. The operator requires full gates before publication or merging into `main`. Version-branch integration depends on green remote continuous integration and relevant targeted local checks. Historical full native records remain unchanged. The bounded brief now records the resolved policy rather than leaving the merge-cadence question pending.
+
+
+## V0.3.X legacy re-review corrections, 2026-09-28
+
+Codex absorbed upstream `89fc6aac`. The bounded brief explains the expected stale full-gate report before its first-action command. The reporter distinguishes valid recorded failure from malformed evidence, and the fixture suite has an independent test entry. The archive stamps completed absorption 80 at `aa4db05f`, with absorption 81 described separately through its rehearsal and merge receipt. The original native addendum remains preserved. The bounded brief records verification outcomes. No publication or merge into `main` is requested.
