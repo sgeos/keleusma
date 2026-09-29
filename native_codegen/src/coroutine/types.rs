@@ -8,34 +8,70 @@
 
 use crate::LowerError;
 use keleusma::bytecode::{BlockType, ConstValue, Module, Op, TypeTag, WireShape};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 const UNIT: u16 = 1;
-const BOOL: u16 = 2;
+const FALSE: u16 = 2;
+const TRUE: u16 = 4096;
+const BOOL: u16 = FALSE | TRUE;
 const BYTE: u16 = 4;
 const WORD: u16 = 8;
 const FIXED: u16 = 16;
 const FLOAT: u16 = 32;
-const BODY: u16 = 256;
-const UNKNOWN: u16 = 511;
+const TUPLE: u16 = 256;
+const ARRAY: u16 = 512;
+const STRUCT: u16 = 1024;
+const ENUM: u16 = 2048;
+const BODY: u16 = TUPLE | ARRAY | STRUCT | ENUM;
+const UNKNOWN: u16 = 8191;
+
+pub(crate) struct Analysis {
+    pub(crate) false_inspections: BTreeSet<(usize, usize)>,
+    pub(crate) branches: Vec<BTreeMap<usize, bool>>,
+}
+fn scalar(kind: u8) -> u16 {
+    if kind == 1 {
+        BOOL
+    } else if kind < 8 {
+        1 << kind
+    } else {
+        UNKNOWN
+    }
+}
+fn body(kind: u8) -> u16 {
+    if kind < 4 { 1 << (8 + kind) } else { BODY }
+}
+fn kind(mask: u16) -> u16 {
+    (mask & !TRUE) | if mask & TRUE != 0 { FALSE } else { 0 }
+}
 
 fn shape(s: WireShape) -> u16 {
     match s {
-        WireShape::Scalar { kind } if kind < 8 => 1 << kind,
-        WireShape::Flat { .. } => BODY,
+        WireShape::Scalar { kind } => scalar(kind),
+        WireShape::Flat { kind, .. } => body(kind),
         _ => UNKNOWN,
     }
 }
 fn constant(c: &ConstValue) -> u16 {
     match c {
         ConstValue::Unit => UNIT,
-        ConstValue::Bool(_) => BOOL,
+        ConstValue::Bool(b) => {
+            if *b {
+                TRUE
+            } else {
+                FALSE
+            }
+        }
         ConstValue::Byte(_) => BYTE,
         ConstValue::Int(_) => WORD,
         ConstValue::Fixed(_) => FIXED,
         ConstValue::Float(_) => FLOAT,
         ConstValue::StaticStr(_) => 64,
-        _ => BODY,
+        ConstValue::Tuple(_) => TUPLE,
+        ConstValue::Array(_) => ARRAY,
+        ConstValue::Struct { .. } => STRUCT,
+        ConstValue::Enum { .. } => ENUM,
+        _ => UNKNOWN,
     }
 }
 #[derive(Clone)]
@@ -65,7 +101,7 @@ fn slot(m: &Module, index: u32) -> u16 {
         return UNKNOWN;
     };
     if let Some(s) = d.shared_layout.get(index as usize) {
-        return if s.kind < 8 { 1 << s.kind } else { BODY };
+        return if s.kind < 8 { scalar(s.kind) } else { BODY };
     }
     if d.private_composite_layout
         .iter()
@@ -75,11 +111,17 @@ fn slot(m: &Module, index: u32) -> u16 {
     }
     d.private_init
         .get(index as usize - d.shared_layout.len())
-        .map(constant)
+        .map(|c| {
+            if matches!(c, ConstValue::Bool(_)) {
+                BOOL
+            } else {
+                constant(c)
+            }
+        })
         .unwrap_or(UNKNOWN)
 }
 
-pub(super) fn check(m: &Module, entry: usize) -> Result<(), LowerError> {
+pub(super) fn check(m: &Module, entry: usize) -> Result<Analysis, LowerError> {
     if m.signatures.len() != m.chunks.len()
         || m.chunks
             .iter()
@@ -109,6 +151,10 @@ pub(super) fn check(m: &Module, entry: usize) -> Result<(), LowerError> {
             }
         }
     }
+    let mut analysis = Analysis {
+        false_inspections: BTreeSet::new(),
+        branches: vec![BTreeMap::new(); m.chunks.len()],
+    };
     let reply = shape(m.signatures[entry].params[0]);
     let output = shape(m.signatures[entry].ret);
     for (ci, chunk) in m.chunks.iter().enumerate() {
@@ -146,9 +192,9 @@ pub(super) fn check(m: &Module, entry: usize) -> Result<(), LowerError> {
             let produced = (n as i32 + delta) as usize;
             let mut out = vec![UNKNOWN; produced];
             let same = |allowed: u16| -> Result<u16, LowerError> {
-                let a = args[0];
-                require(a, allowed)?;
-                if a.count_ones() != 1 || args.iter().any(|b| *b != a) {
+                let a = kind(args[0]);
+                require(a, kind(allowed))?;
+                if a.count_ones() != 1 || args.iter().any(|b| kind(*b) != a) {
                     return Err(fail());
                 }
                 Ok(a)
@@ -158,7 +204,8 @@ pub(super) fn check(m: &Module, entry: usize) -> Result<(), LowerError> {
                 Op::PushImmediate(i) => {
                     out[0] = match i {
                         0 => UNIT,
-                        1 | 2 => BOOL,
+                        1 => TRUE,
+                        2 => FALSE,
                         4..=19 => WORD,
                         _ => UNKNOWN,
                     }
@@ -216,7 +263,8 @@ pub(super) fn check(m: &Module, entry: usize) -> Result<(), LowerError> {
                 }
                 Op::Not => {
                     require(args[0], BOOL)?;
-                    out[0] = BOOL;
+                    out[0] = if args[0] & TRUE != 0 { FALSE } else { 0 }
+                        | if args[0] & FALSE != 0 { TRUE } else { 0 };
                 }
                 Op::BitAnd | Op::BitOr | Op::BitXor => out[0] = same(WORD)?,
                 Op::Shl | Op::Shr => {
@@ -281,26 +329,48 @@ pub(super) fn check(m: &Module, entry: usize) -> Result<(), LowerError> {
                         out[0] = kinds;
                     }
                 }
-                Op::NewComposite(_) => out[0] = BODY,
+                Op::NewComposite(c) => out[0] = body(c.kind().to_tag()),
                 Op::GetField(keleusma::bytecode::StructField::Flat { kind, .. })
                 | Op::GetTupleField(keleusma::bytecode::TupleField::Flat { kind, .. })
                 | Op::GetEnumField(keleusma::bytecode::EnumField::Flat { kind, .. }) => {
                     require(args[0], BODY)?;
-                    out[0] = 1 << kind.to_tag();
+                    out[0] = scalar(kind.to_tag());
                 }
-                Op::GetField(_) | Op::GetTupleField(_) | Op::GetEnumField(_) => {
+                Op::GetField(keleusma::bytecode::StructField::FlatNested { variant, .. })
+                | Op::GetTupleField(keleusma::bytecode::TupleField::FlatNested {
+                    variant, ..
+                })
+                | Op::GetEnumField(keleusma::bytecode::EnumField::FlatNested { variant, .. }) => {
                     require(args[0], BODY)?;
-                    out[0] = BODY;
+                    out[0] = body(variant.to_tag());
                 }
+                Op::GetField(_) | Op::GetTupleField(_) | Op::GetEnumField(_) => return Err(fail()),
                 Op::GetIndex(kind) => {
                     require(args[0], BODY)?;
                     require(args[1], WORD)?;
                     out[0] = match kind {
-                        keleusma::bytecode::ArrayElem::Flat { kind } => 1 << kind.to_tag(),
-                        _ => BODY,
+                        keleusma::bytecode::ArrayElem::Flat { kind } => scalar(kind.to_tag()),
+                        keleusma::bytecode::ArrayElem::FlatNested { variant, .. } => {
+                            body(variant.to_tag())
+                        }
+                        _ => UNKNOWN,
                     };
                 }
-                Op::IsEnum(..) | Op::IsStruct(..) => out.copy_from_slice(&[args[0], BOOL]),
+                Op::IsEnum(..) | Op::IsStruct(..) => {
+                    let inspected = if matches!(op, Op::IsEnum(..)) {
+                        ENUM
+                    } else {
+                        STRUCT
+                    };
+                    out.copy_from_slice(&[
+                        args[0],
+                        if args[0] & inspected == 0 {
+                            FALSE
+                        } else {
+                            BOOL
+                        },
+                    ]);
+                }
                 Op::CallVerifiedNative(i, _) | Op::CallExternalNative(i, _) => {
                     out[0] = m
                         .native_return_shapes
@@ -334,7 +404,19 @@ pub(super) fn check(m: &Module, entry: usize) -> Result<(), LowerError> {
             match op {
                 Op::Return | Op::Trap(_) => successors.clear(),
                 Op::Else(t) | Op::EndLoop(t) | Op::Break(t) => successors = vec![*t as usize],
-                Op::If(t) | Op::BreakIf(t) => successors.push(*t as usize),
+                Op::If(t) | Op::BreakIf(t) => {
+                    let taken = match args[0] {
+                        FALSE => Some(false),
+                        TRUE => Some(true),
+                        _ => None,
+                    };
+                    let jumps_on_true = matches!(op, Op::BreakIf(_));
+                    match taken {
+                        Some(value) if value == jumps_on_true => successors = vec![*t as usize],
+                        Some(_) => {}
+                        None => successors.push(*t as usize),
+                    }
+                }
                 Op::Reset => successors = vec![1],
                 _ => {}
             }
@@ -353,6 +435,39 @@ pub(super) fn check(m: &Module, entry: usize) -> Result<(), LowerError> {
                 }
             }
         }
+        // Only converged states justify folding. An early visit can miss a
+        // later loop iteration that brings a different kind to the same site.
+        for (ip, state) in states.iter().enumerate() {
+            let Some(state) = state else { continue };
+            match chunk.ops[ip] {
+                Op::IsEnum(..) | Op::IsStruct(..) => {
+                    let inspected = if matches!(chunk.ops[ip], Op::IsEnum(..)) {
+                        ENUM
+                    } else {
+                        STRUCT
+                    };
+                    let actual = *state.stack.last().expect("verified inspection operand");
+                    if actual & inspected == 0 {
+                        analysis.false_inspections.insert((ci, ip));
+                    } else if actual != inspected {
+                        return Err(LowerError::UnsupportedShape(
+                            "coroutine inspection has mixed or unknown receiver kinds".into(),
+                        ));
+                    }
+                }
+                Op::If(_) | Op::BreakIf(_) => {
+                    let value = match state.stack.last() {
+                        Some(&FALSE) => Some(false),
+                        Some(&TRUE) => Some(true),
+                        _ => None,
+                    };
+                    if let Some(value) = value {
+                        analysis.branches[ci].insert(ip, value);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
-    Ok(())
+    Ok(analysis)
 }

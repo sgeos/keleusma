@@ -1607,6 +1607,7 @@ pub fn lower_chunk<'ctx>(
             opts,
             retcon: false,
             retcon_resume_type: None,
+            retcon_branches: None,
             degenerate_yield: None,
             delegated_call: None,
             // No module, so no signature table.
@@ -1798,8 +1799,9 @@ fn lower_module_with<'ctx>(
     opts: LowerOptions,
     mut refusals: Option<&mut Vec<(String, LowerError)>>,
     mut visits: Option<&mut Vec<Option<Vec<usize>>>>,
-    retcon_bytes: Option<u32>,
+    retcon_config: Option<(u32, &coroutine::types::Analysis)>,
 ) -> Result<Vec<FunctionValue<'ctx>>, LowerError> {
+    let retcon_bytes = retcon_config.map(|(bytes, _)| bytes);
     check_word_width(program.word_bits_log2)?;
     let i64t = ctx.i64_type();
     // **The module's float width, hoisted above its first use.** It was computed
@@ -2164,6 +2166,7 @@ fn lower_module_with<'ctx>(
         let cfg = BodyCfg {
             opts,
             retcon,
+            retcon_branches: retcon_config.map(|(_, facts)| &facts.branches[i]),
             retcon_resume_type: retcon_bytes
                 .and(program.entry_point)
                 .and_then(|entry| program.chunks[entry].param_types.first().copied()),
@@ -2499,6 +2502,8 @@ struct BodyCfg<'a> {
     /// The VM writes host replies to the outer entry parameter even when a
     /// reentrant callee is suspended. Its own parameters retain their values.
     retcon_resume_type: Option<TypeTag>,
+    /// Proven outcomes after the coroutine type analysis reaches a fixed point.
+    retcon_branches: Option<&'a BTreeMap<usize, bool>>,
     opts: LowerOptions,
     /// Byte width of the runtime's `Float`, from the module header's
     /// `float_bits_log2`.
@@ -3291,6 +3296,7 @@ fn lower_chunk_body<'ctx>(
         opts,
         retcon,
         retcon_resume_type,
+        retcon_branches,
         degenerate_yield,
         delegated_call,
         own_signature,
@@ -5306,6 +5312,18 @@ fn lower_chunk_body<'ctx>(
                 note!(*t as usize, st.depth);
                 st.b.build_unconditional_branch(blocks[&(*t as usize)])
                     .unwrap();
+            }
+            Op::If(t) | Op::BreakIf(t)
+                if retcon_branches.is_some_and(|facts| facts.contains_key(&i)) =>
+            {
+                st.pop();
+                let value = retcon_branches.unwrap()[&i];
+                if value == matches!(op, Op::BreakIf(_)) {
+                    note!(*t as usize, st.depth);
+                    st.b.build_unconditional_branch(blocks[&(*t as usize)])
+                        .unwrap();
+                    dead = true;
+                }
             }
             Op::BreakIf(t) => {
                 let c = st.pop();

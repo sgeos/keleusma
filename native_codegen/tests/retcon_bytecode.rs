@@ -398,8 +398,8 @@ fn invalid_bytecode_and_composite_escape_remain_refused() {
             .any(|(_, original)| original.to_string() == error.to_string()),
         "{error}"
     );
-    // A reentrant chunk selects coroutine admission instead of the old
-    // callback preflight. The scalar boundary must still refuse this module.
+    // An unrelated reentrant yield with a different signature must also
+    // remain refused without bypassing coroutine boundary admission.
     let source = std::fs::read_to_string("../examples/scripts/13_telemetry_stream.kel").unwrap();
     let with_delegate = common::build(&format!(
         "{source}\nyield unused(a: Word) -> Word {{ yield a }}"
@@ -408,7 +408,7 @@ fn invalid_bytecode_and_composite_escape_remain_refused() {
     assert!(
         delegated_error
             .to_string()
-            .contains("scalar yield signature")
+            .contains("yield signature changes")
     );
 }
 
@@ -959,4 +959,158 @@ fn scalar_reply_admission_reaches_a_later_loop_iteration() {
         panic!("later iteration must see the changed parameter type");
     };
     assert!(message.contains("CheckedAdd"), "{message}");
+}
+
+#[test]
+fn scalar_replies_do_not_become_enum_pointers() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
+    for (tag, bits, input) in [
+        ("Word", 7, Value::Int(7)),
+        ("Byte", 7, Value::Byte(7)),
+        ("bool", 1, Value::Bool(true)),
+        ("()", 0, Value::Unit),
+        ("Fixed", 7 * 65536, Value::Fixed(7 * 65536)),
+        (
+            "Float",
+            (7.25 as NativeFloat).to_bits() as i64,
+            Value::Float(7.25),
+        ),
+    ] {
+        for (variants, pattern, arm) in [("A, B", "E::A", "1"), ("A(Word), B", "E::A(x)", "x")] {
+            for delegated in [false, true] {
+                let body = format!(
+                    "let r = yield 5; let _ = yield match r {{ {pattern} => {arm}, _ => 0 }};"
+                );
+                let src = if delegated {
+                    format!(
+                        "enum E {{ {variants} }} yield inspect() -> Word {{ {body} 0 }} loop main(t: {tag}) -> Word {{ inspect(); yield 99 }}"
+                    )
+                } else {
+                    format!("enum E {{ {variants} }} loop main(t: {tag}) -> Word {{ {body} 0 }}")
+                };
+                if !delegated && pattern == "E::A(x)" {
+                    // The core verifier already knows a direct scalar resume
+                    // cannot supply a composite field, even in this dead arm.
+                    let ast =
+                        keleusma::parser::parse(&keleusma::lexer::tokenize(&src).unwrap()).unwrap();
+                    let error = keleusma::compiler::compile(&ast).unwrap_err();
+                    assert!(error.message.contains("ExpectedComposite"), "{error:?}");
+                    continue;
+                }
+                let p = common::build(&src);
+                let before = format!("{p:?}");
+                let expected: &[i64] = if delegated {
+                    &[5, 0, 99, 5, 0, 99]
+                } else {
+                    &[5, 0, 5, 0, 5, 0]
+                };
+                let need = required_persistent_capacity_for(&p);
+                let mut arena = keleusma_arena::Arena::with_capacity(
+                    auto_arena_capacity_for(&p, &[]).unwrap() + need + 65536,
+                );
+                arena.resize_persistent(need).unwrap();
+                let mut vm = Vm::new(p.clone(), &arena).unwrap();
+                let mut state = vm.call(std::slice::from_ref(&input)).unwrap();
+                for (i, value) in expected.iter().enumerate() {
+                    assert!(
+                        matches!(state, VmState::Yielded(Value::Int(v)) if v == *value),
+                        "{src}: {state:?}"
+                    );
+                    if i + 1 < expected.len() {
+                        state = vm.resume(input.clone()).unwrap();
+                        if matches!(state, VmState::Reset) {
+                            state = vm.resume(input.clone()).unwrap();
+                        }
+                    }
+                }
+                for optimize in [false, true] {
+                    let seed = vec![0; p.shared_data_bytes as usize];
+                    assert_eq!(
+                        native_module(&p, &seed, bits, &vec![bits; expected.len()], optimize).0,
+                        expected,
+                        "{src}"
+                    );
+                }
+                assert_eq!(
+                    format!("{p:?}"),
+                    before,
+                    "lowering must preserve the input bytecode"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn coroutine_inspection_distinguishes_enum_and_struct_bodies() {
+    use keleusma::bytecode::{NewCompositeOperand, Op, Value};
+    use keleusma::value_layout::CompositeKind;
+    use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
+    let src = "enum E { A, B } loop main(t: Word) -> Word { let e = E::A; let r = yield t; yield match e { E::A => r, _ => 0 } }";
+    let p = common::build(src);
+    for optimize in [false, true] {
+        assert_eq!(native(src, 5, &[7, 9, 1, 0], optimize), [5, 7, 9, 1]);
+    }
+    let mut changed = p;
+    let ops = &mut changed.chunks[changed.entry_point.unwrap()].ops;
+    let constructor = ops
+        .iter_mut()
+        .find(|o| matches!(o, Op::NewComposite(_)))
+        .unwrap();
+    let Op::NewComposite(NewCompositeOperand::Flat { kind, .. }) = constructor else {
+        panic!("flat constructor")
+    };
+    *kind = CompositeKind::Struct;
+    keleusma::verify::verify(&changed).unwrap();
+    let need = required_persistent_capacity_for(&changed);
+    let mut arena = keleusma_arena::Arena::with_capacity(
+        auto_arena_capacity_for(&changed, &[]).unwrap() + need + 65536,
+    );
+    arena.resize_persistent(need).unwrap();
+    let mut vm = Vm::new(changed.clone(), &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(5))
+    ));
+    assert!(matches!(
+        vm.resume(Value::Int(7)).unwrap(),
+        VmState::Yielded(Value::Int(0))
+    ));
+    for optimize in [false, true] {
+        assert_eq!(
+            native_module(&changed, &[], 5, &[7, 9, 1, 0], optimize).0,
+            [5, 0, 9, 0]
+        );
+    }
+}
+
+#[test]
+fn mixed_enum_receiver_kinds_remain_an_explicit_boundary() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
+    let src = "enum E { A, B } loop main(t: Word) -> Word { let r = yield 5; let e = if t > 0 { E::A } else { r }; yield match e { E::A => 1, _ => 0 } }";
+    let p = common::build(src);
+    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("mixed or unknown receiver kinds"),
+        "{error}"
+    );
+    for (reply, expected) in [(7, 1), (-7, 0)] {
+        let need = required_persistent_capacity_for(&p);
+        let mut arena = keleusma_arena::Arena::with_capacity(
+            auto_arena_capacity_for(&p, &[]).unwrap() + need + 65536,
+        );
+        arena.resize_persistent(need).unwrap();
+        let mut vm = Vm::new(p.clone(), &arena).unwrap();
+        assert!(matches!(
+            vm.call(&[Value::Int(5)]).unwrap(),
+            VmState::Yielded(Value::Int(5))
+        ));
+        assert!(
+            matches!(vm.resume(Value::Int(reply)).unwrap(), VmState::Yielded(Value::Int(v)) if v == expected)
+        );
+    }
 }
