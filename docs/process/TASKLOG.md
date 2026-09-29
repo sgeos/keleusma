@@ -8,13 +8,13 @@ Current sprint source of truth.
 
 ## 2026-09-28 V0.3.X handoff repair
 
-**In progress.** The V0.2.X-owned coverage guard is repaired on
-`fix/native-handoff-readiness`. Two regression controls failed before the correction.
-The fix permits only the native gate's exact step label, while retaining the compiler
-and surrounding-claim controls. Compaction guidance, assistant attribution and channel
-ownership are reconciled. All five guard tests pass in each of the five continuous
-integration feature configurations. Targeted Clippy and all eight documentation-link
-and citation tests pass. Downstream absorption and complete native gates remain pending.
+**Upstream portion complete.** Pull request 470 repairs the V0.2.X-owned coverage
+guard and reconciles compaction guidance, assistant attribution and channel
+ownership. Two regression controls failed before the correction. All five guard
+tests pass in each of the five feature configurations. Targeted Clippy, all eight
+documentation-link and citation tests, and the complete upstream continuous
+integration checks pass. The V0.3.X bounded brief owns the native handoff state
+and its machine-written record owns the gate verdicts.
 
 ## 2026-09-28 Codex setup audit
 
