@@ -8,8 +8,8 @@ stop and wait for the human prompt.
 
 ## Validity
 
-- **Branch**: `v0.2.3`, or a branch cut from it. On `v0.3.0`, read
-  `docs/process/handoffs/v0.3.0.md` and **do not overwrite this file**.
+- **Branch**: `v0.2.3`, or a branch cut from it. On `v0.3.0` or a feature branch cut from it, read
+  `docs/process/handoffs/v0.3.0-BRIEF.md` and **do not overwrite this file**.
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
 ### First: how far behind is this file?
@@ -170,8 +170,8 @@ check, then stop and wait for the human prompt.
 
 ## Validity
 
-- **Branch**: `v0.2.3`, or a branch cut from it. On `v0.3.0`, read
-  `docs/process/handoffs/v0.3.0.md` and **do not overwrite this file**.
+- **Branch**: `v0.2.3`, or a branch cut from it. On `v0.3.0` or a feature branch cut from it, read
+  `docs/process/handoffs/v0.3.0-BRIEF.md` and **do not overwrite this file**.
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
 ### First: how far behind is this file?
@@ -317,8 +317,8 @@ and wait for the human prompt.
 
 ## Validity
 
-- **Branch**: `v0.2.3`, or a branch cut from it. On `v0.3.0`, read
-  `docs/process/handoffs/v0.3.0.md` and **do not overwrite this file**.
+- **Branch**: `v0.2.3`, or a branch cut from it. On `v0.3.0` or a feature branch cut from it, read
+  `docs/process/handoffs/v0.3.0-BRIEF.md` and **do not overwrite this file**.
 - **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
 
 ### First: how far behind is this file?

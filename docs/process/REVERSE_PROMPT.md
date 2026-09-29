@@ -10,19 +10,13 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
-**2026-09-28. The upstream portion of the V0.3.X handoff repair is complete.**
-Pull request 470 repairs the root coverage guard and reconciles compaction,
-assistant attribution and shared-channel ownership instructions. The complete
-upstream continuous integration checks passed before the merge.
+**2026-09-28. Handoff review and operator policy clarification.**
 
-The V0.3.X line owns its current native verification and integration state in
-`docs/process/handoffs/v0.3.0-BRIEF.md` on that branch. Its machine-written gate
-record and freshness reporter determine whether the native verdicts still apply.
-This upstream checkpoint does not substitute for that line's current handoff.
+Commit once per prompt. Only feature branches may commit on red. Version branches and `main` must remain green. Use relevant subsets during feature development and complete suites at important integration and release checkpoints. The authoritative workflow documents now record this clarification and remove the previous unresolved commit-frequency conflict.
 
-The preceding [CODEX_SETUP_AUDIT.md](./CODEX_SETUP_AUDIT.md) is a historical baseline.
-Existing operator decisions and publication holds remain unchanged. The repair
-changes the coverage guard and process guidance, with no runtime behavior change.
+`HANDOFF.md` now routes V0.3.X sessions to `docs/process/handoffs/v0.3.0-BRIEF.md` on that line. Native reporter and diagnostic-catalogue repairs are developed separately on a feature branch. Their targeted checks do not refresh historical complete-gate records. Publication remains held.
+
+Verification for this documentation change is recorded in `TASKLOG.md`.
 
 ---
 

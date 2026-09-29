@@ -6,6 +6,10 @@ Current sprint source of truth.
 
 ---
 
+## 2026-09-28 Handoff review and operator policy
+
+Recorded the operator-confirmed once-per-prompt policy, with red commits confined to feature branches. Relevant gate subsets support feature iteration. Full integration and release verification remain checkpoint requirements. Corrected the V0.3.X resume route to the bounded brief. Native reporter and diagnostic-catalogue repairs belong to the V0.3.X feature branch. Documentation links, comment citations and gate-to-workflow correspondence passed all 13 targeted tests. No runtime source changed and the full workspace suite was not repeated.
+
 ## 2026-09-28 V0.3.X handoff repair
 
 **Upstream portion complete.** Pull request 470 repairs the V0.2.X-owned coverage
