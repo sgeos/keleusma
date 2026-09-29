@@ -6,6 +6,29 @@ Current sprint source of truth.
 
 ---
 
+## 2026-09-28 V0.3.X handoff repair
+
+**Upstream portion complete.** Pull request 470 repairs the V0.2.X-owned coverage
+guard and reconciles compaction guidance, assistant attribution and channel
+ownership. Two regression controls failed before the correction. All five guard
+tests pass in each of the five feature configurations. Targeted Clippy, all eight
+documentation-link and citation tests, and the complete upstream continuous
+integration checks pass. The V0.3.X bounded brief owns the native handoff state
+and its machine-written record owns the gate verdicts.
+
+## 2026-09-28 Codex setup audit
+
+**Complete.** Audited the first Codex session against both development-line handoffs.
+[CODEX_SETUP_AUDIT.md](./CODEX_SETUP_AUDIT.md) records the baseline commits,
+reproduction commands, readiness findings and verification limits.
+V0.2.X handoff checks passed, including 2,930 workspace tests and six example host tests.
+Eighty native checks passed in each float configuration. V0.3.X remains red on a
+locally reproduced root documentation guard and has stale full-gate records.
+The installation diagnostic passed all 21 checks outside the sandbox. Remaining work
+includes the guard repair, instruction reconciliation, upstream absorption and fresh
+native gates. Documentation-link and citation checks passed eight tests. This audit changed no
+implementation or global configuration.
+
 > **Currency note (2026-09-11, V0.3.X line). THREE DEFECTS CLOSED, AND NONE WAS WHAT THE INCREMENT
 > WAS CHECKING.**
 >
@@ -33,6 +56,37 @@ Current sprint source of truth.
 ## Current Phase
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
+
+> **Currency note (2026-09-27, session 67, eleventh increment). SEVEN COMMENTS SAYING RKYV
+> ARCHIVES THE AUXILIARY BODY ARE CORRECTED, AND I MISCOUNTED THEM TWICE.**
+>
+> The previous increment measured that no code path invokes rkyv's archive validation or
+> deserialization, and recorded that seven comments in the two files carrying the bytecode format
+> say the opposite in the present tense. **That is security-relevant**: it is what misled that
+> assessment for two increments.
+>
+> All seven corrected: `wire_format.rs` 1272, 1395, 1595, 1707, 2356 and `bytecode.rs` 4159, 4192.
+>
+> **The `from_bytes` site contradicted `Module::validate_bytes` in the same file.** The correction
+> says why that is worse than either being wrong alone: a reader who checks one believes they have
+> checked both.
+>
+> **The alignment comment is corrected without over-claiming.** Its padding is real and the code
+> does it; only the justification was stale. Whether the padding is still needed is recorded as
+> open, since removing it would change the wire format.
+>
+> **One site was accurate and is untouched**: `bytecode.rs:3556` says the full-`Module` rkyv archive
+> "is no longer produced or consumed". A blanket edit would have broken a correct sentence.
+>
+> `ConstValue`'s subset rationale is restated — the set is unchanged, the reason now comes from the
+> schema layer — and the `WireChunk` derives are marked vestigial in place rather than removed,
+> since they sit on a public type.
+>
+> **I counted this population seven, then six, then seven.** The middle figure came from a grep that
+> clipped `bytecode.rs:3556` mid-sentence and inverted its meaning. Fourth instrument error this
+> session, same class as the counting grep that reported zero shellcheck findings. The correction
+> is posted on #468 rather than applied silently. **Three passes to establish a population of
+> seven** is why the previous increment deferred this rather than rushing it.
 
 > **Currency note (2026-09-27, session 67, tenth increment). THE ADVISORY DATABASE HAD NEVER
 > BEEN CONSULTED, AND IT HELD THREE.**
@@ -3723,3 +3777,17 @@ Item 4 (StaticStr to rodata for flat Text fields) is complete end to end on `fea
 | 2026-05-08 | V0.0-M2 for-in arrays, tuple literals, utility natives, formal related-work pass with citations across knowledge graph. |
 | 2026-05-08 | V0.0-M1 productivity verification and WCET analysis (R22–R23). |
 | 2026-03-02 | Crate extracted from Vows of Love and War workspace. Knowledge graph created. Block-structured ISA transition (R22). |
+
+
+## V0.3.X verification receipt of 2026-09-28
+
+**Attributed to the V0.3.X line.** Handoff routing and verification requirements
+are repaired. Initial native gates passed on `e6698c5c`, clean and frozen. The
+final upstream checkpoint changes a document within the suite's reach and requires
+fresh native records. The machine-written rows and freshness reporter hold the
+current verdicts.
+The bounded native brief records one non-failing runner diagnostic and the
+non-reproducing isolated checks. The upstream current-state entries above are
+preserved. The upstream guard repair is merged. Final downstream integration is subject to
+root continuous integration on the completed feature branch. Read the native brief and machine-written
+gate record when resuming this line.

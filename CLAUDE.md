@@ -103,6 +103,23 @@ A knowledge graph is maintained in `docs/`. Start at [`docs/README.md`](docs/REA
 
 See `docs/process/PROCESS_STRATEGY.md` for the library engineering approach and agentic development loop.
 
+**HARD CONSTRAINT, before any of the below.** Before writing anything tracked, read
+`secret/notes/APPENDIX_B.md`. It holds operator-stated context held outside the repository
+deliberately. **Do not copy any of it into tracked files, commit messages, or public
+documentation; reference it only as "Appendix B".** Until 2026-09-28 this constraint was stated
+only in `docs/process/HANDOFF.md` — a file whose own preamble says it is not kept always-current,
+and which a resuming agent may reasonably treat as historical. It is repeated here and in
+`AGENTS.md` because the failure mode is disclosure, which cannot be undone.
+
+**V0.3.X routing takes precedence over the shared protocol below.** On `v0.3.0` or
+a feature branch cut from it, start at
+[`docs/process/handoffs/v0.3.0-BRIEF.md`](docs/process/handoffs/v0.3.0-BRIEF.md).
+Validate its archive by the documented freshness, ancestry and content checks.
+Run both native gates. Maintain that brief and archive, preserving the upstream
+current block and this line's attributed reports in the shared reverse prompt.
+The protocol below describes the V0.2.X channels. The same routing applies after
+compaction.
+
 **Session startup protocol**:
 1. Read [`docs/process/HANDOFF.md`](docs/process/HANDOFF.md) and run the validity check **its own Validity section defines**, which is by ANCESTRY and CONTENT and explicitly **not** by a hash match. This instruction previously prescribed comparing the recorded parent to `git rev-parse HEAD~1`; that stamp asserts nothing else ever lands, `HANDOFF.md` records that it has failed three times, and following it would report a current handoff as stale. Report the handoff as valid, or as invalid-and-stale, on the outcome of the checks that file lists.
 2. Read [`docs/process/TASKLOG.md`](docs/process/TASKLOG.md) for current task state.
@@ -132,8 +149,9 @@ not the source of truth.
 
 - **The handoff prompt** [`docs/process/HANDOFF.md`](docs/process/HANDOFF.md), the self-contained
   imperative resume prompt. It is written/overwritten before a planned compaction and stamped with the
-  commit it describes. On resume, validate it (compare its recorded parent commit to `git rev-parse
-  HEAD~1`); report it invalid-and-stale on a mismatch rather than trusting it.
+  commit it describes. On resume, run the validity procedure defined by that handoff, including its freshness
+  measurement, ancestry anchors and content checks. Do not substitute a parent-hash match.
+  Report uncompleted checks explicitly rather than treating them as passes.
 - **The three resume channels**, plus the instruction to re-read them fresh after compaction:
   [`docs/process/REVERSE_PROMPT.md`](docs/process/REVERSE_PROMPT.md) (bounded latest state and the
   next intended increment), [`docs/process/DESIGN_JOURNAL.md`](docs/process/DESIGN_JOURNAL.md)
@@ -160,7 +178,10 @@ active plan document. They, the boundary test counts, and the git state are the 
 
 Release-branch model with a four-level hierarchy: `main` holds releases (always green; releases cut only from a green `main`); a `vX.Y.Z` version branch integrates the next version (green before merging to `main`); short-lived feature branches are cut from the version branch (intermediate commits may be red, tip green before merge) and merged back via a **no-fast-forward merge commit**; sub-feature branches are cut from and merged back into a feature. **A merge proceeds once CI is green on a pull request from the feature branch to the version branch; the local gate no longer gates a merge** (changed 2026-08-11, because gate time is the project's bottleneck and two sessions were serialising on one machine). CI covers the local gate, and `tests/gate_ci_correspondence.rs` now CHECKS that rather than asserting it — every gate command must have a workflow command of the same shape, and CI adds two MSRV checks, `no_std`, the RTOS cross-build, the SDL3 examples, the LSP, the WASM playground and the book. **This said "verified strict superset" while nothing verified it, and on 2026-09-27 it was FALSE**: the gate's `--miri` step ran the `c1_null_text_pointer_marshals_to_empty_string_not_ub` undefined-behaviour pin under Tree Borrows and the Miri job ran only `keleusma-arena`, so that pin was exercised by no merge, only by a human running the gate before a publication. CI now runs it. The guard establishes that a counterpart command EXISTS and **not** that the two do equivalent work; `cargo test --workspace` and `cargo nextest run --profile ci --workspace` are intended to match and differ in runner, profile and doctest handling. CI takes about 61 minutes against the local gate's 2h30m, without contending for the shared machine (measured 2026-09-08 over five runs; the row this replaced said 48). A red CI result on the version branch or `main` is remedied immediately. The local gate remains the instrument for a pre-publication run (with `--miri`) and for working without a network. Direct commits to the version branch are allowed only for small green docs/process changes; all code flows through a feature branch. See [`docs/process/GIT_STRATEGY.md`](docs/process/GIT_STRATEGY.md) for full details. For running multiple agents concurrently (worktree isolation via `scripts/worktree.sh`, per-branch handoffs, and merge/gate serialization) see [`docs/process/PARALLEL_DEVELOPMENT.md`](docs/process/PARALLEL_DEVELOPMENT.md).
 
-Use scoped conventional commits: `<scope>: <imperative summary>`. Common scopes: `feat`, `fix`, `docs`, `refactor`, `chore`, `test`. Include `Co-Authored-By: Claude <noreply@anthropic.com>` when AI-assisted.
+Use scoped conventional commits: `<scope>: <imperative summary>`. Common scopes: `feat`, `fix`, `docs`, `refactor`, `chore`, `test`. Attribute assisted commits to the assistant that actually contributed. Use
+`Co-Authored-By: Codex <noreply@openai.com>` for Codex and
+`Co-Authored-By: Claude <noreply@anthropic.com>` for Claude. Do not attribute another
+assistant merely because this file is named `CLAUDE.md`.
 
 The AI agent commits once after all tasks in a prompt are complete, including the `REVERSE_PROMPT.md` update. `PROMPT.md` is read-only for the AI agent but must be included in the commit if the human pilot has modified it.
 

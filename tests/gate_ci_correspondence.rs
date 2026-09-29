@@ -351,17 +351,78 @@ fn nothing_claims_the_gate_is_a_superset_or_that_ci_skips_the_subproject() {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
+        let claims = stale_coverage_claims(&text, rel == "scripts/release-gate.sh");
+        assert!(
+            claims.is_empty(),
+            "{rel} contains stale coverage claims at lines {claims:?}. The compiler/ package \
+             has a selfhost-compiler workflow job. Check the named package's actual coverage."
+        );
+    }
+}
+
+/// The phrase check is deliberately narrow. It is not a natural-language coverage proof.
+fn stale_coverage_claims(text: &str, release_gate: bool) -> Vec<(usize, &'static str)> {
+    let mut claims = Vec::new();
+    for (line, text) in text.lines().enumerate() {
         let lower = text.to_lowercase();
+        // The native package is a detached workspace with its own local gate. This
+        // exact step label makes no claim about compiler/. Exempt only this label,
+        // only in the gate script. Adjacent claims and prose remain checked.
+        // Deliberately do not infer package scope from a nearby mention or heading.
+        let native_step = release_gate
+            && lower.trim()
+                == r#"step "detached native_codegen/ subproject (fmt, clippy, tests — gated nowhere else)""#;
         for claim in [
             "gate a superset of ci",
             "gated nowhere else",
             "which never sees the subproject",
         ] {
-            assert!(
-                !lower.contains(claim),
-                "{rel} contains {claim:?}. CI has a `selfhost-compiler` job and covers the \
-                 gate; a file asserting the reverse misdirects a release decision."
-            );
+            if lower.contains(claim) && !(native_step && claim == "gated nowhere else") {
+                claims.push((line + 1, claim));
+            }
         }
     }
+    claims
+}
+
+#[test]
+fn native_gate_label_does_not_claim_compiler_coverage() {
+    let native =
+        r#"step "Detached native_codegen/ subproject (fmt, clippy, tests — gated nowhere else)""#;
+    assert!(stale_coverage_claims(native, true).is_empty());
+    // An identically worded label for the compiler remains a regression.
+    let compiler = native.replace("native_codegen/", "compiler/");
+    assert_eq!(
+        stale_coverage_claims(&compiler, true),
+        [(1, "gated nowhere else")]
+    );
+}
+
+#[test]
+fn native_label_does_not_exempt_other_lines_or_documents() {
+    let native =
+        r#"step "Detached native_codegen/ subproject (fmt, clippy, tests — gated nowhere else)""#;
+    let mixed = format!("{native}\n# The compiler is gated nowhere else\n");
+    assert_eq!(
+        stale_coverage_claims(&mixed, true),
+        [(2, "gated nowhere else")]
+    );
+    assert_eq!(
+        stale_coverage_claims(native, false),
+        [(1, "gated nowhere else")]
+    );
+}
+
+#[test]
+fn unsupported_global_coverage_claims_remain_detected() {
+    assert_eq!(
+        stale_coverage_claims(
+            "# Gate a superset of CI\n# which never sees the subproject",
+            true
+        ),
+        [
+            (1, "gate a superset of ci"),
+            (2, "which never sees the subproject")
+        ]
+    );
 }

@@ -10,6 +10,86 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
+**2026-09-28. The upstream portion of the V0.3.X handoff repair is complete.**
+Pull request 470 repairs the root coverage guard and reconciles compaction,
+assistant attribution and shared-channel ownership instructions. The complete
+upstream continuous integration checks passed before the merge.
+
+The V0.3.X line owns its current native verification and integration state in
+`docs/process/handoffs/v0.3.0-BRIEF.md` on that branch. Its machine-written gate
+record and freshness reporter determine whether the native verdicts still apply.
+This upstream checkpoint does not substitute for that line's current handoff.
+
+The preceding [CODEX_SETUP_AUDIT.md](./CODEX_SETUP_AUDIT.md) is a historical baseline.
+Existing operator decisions and publication holds remain unchanged. The repair
+changes the coverage guard and process guidance, with no runtime behavior change.
+
+---
+
+# HISTORICAL RECORD BELOW
+
+The following material preserves prior sessions. Read it for provenance, not as the
+current task status.
+
+---
+
+**2026-09-27, session 67, closed at `e84d7cfa`. Nine pull requests merged, #461 through #469.**
+
+**READ `HANDOFF.md` FIRST.** It is refreshed onto this trunk with every content check run while
+writing it, and it carries the session's findings, the method, and what is yours. This block is
+the bounded latest state; that file is the resume prompt.
+
+**THE ONE THING THAT MATTERS MOST.** `cargo audit` had never been run against this tree, and its
+first run found three advisories against `rkyv 0.8.16` — including **RUSTSEC-2026-0233, a
+use-after-free during deserialization of crafted archives**. The oldest is dated 2026-05-11 and
+`keleusma 0.2.2` shipped carrying it, so they accumulated for about four months with nothing
+looking. The lock now holds 0.8.18, the scan is clean across 102 dependencies, and a CI job runs
+it. **Reachability was measured and the answer is no**: no code path invokes rkyv's archive
+validation or deserialization.
+
+**THE METHOD, WHICH IS THE DURABLE OUTPUT.** Twelve increments each asked *what does this
+instrument actually cover?* Enumerating surfaces stopped paying around the sixth. Two questions
+did not, and both are generative rather than exhaustible:
+
+- **Which surfaces can no existing guard structurally reach?** `documentation_links.rs` resolves
+  relative links; `llms.txt` uses absolute ones and sat outside it by construction. Four errors.
+- **Which installed tools have never been run against the tree?** shellcheck, three defects.
+  `cargo audit`, three advisories. `msgfmt`, clean and recorded as clean.
+
+**FOUR INSTRUMENT ERRORS OF MINE, ONE SHAPE.** Trusting what a tool was meant to produce over
+what it did. A non-vacuity floor that passed on a half-blind parser. A retraction quoting the
+text its own guard forbids. A grep for `^-- SC` where shellcheck emits `^--^ SC`, publishing
+eight findings as zero. A grep that clipped a sentence and inverted it. Each caught by reading
+the output, never by knowing the class.
+
+**TWO NEAR-MISSES WORTH AS MUCH AS THE FINDINGS.** I nearly reported the RTOS faulty task broken
+from a log I had truncated myself, and nearly "fixed" a correct comment in the file carrying the
+bytecode format.
+
+**AND ONE ERROR CAUGHT BEFORE LANDING**: writing that all seven crates are published when two
+never have been. Publishable is not published, and that is the original five-versus-seven
+defect's own mechanism. Now guarded by a check derived from the changelogs.
+
+**Unchanged and verified**: fingerprint `0x4327_63E1`, `BYTECODE_VERSION` 2, opcode count 66, and
+**no file under `src/selfhost/kel/` modified in the whole session** — so the parser-gap capacity
+decision is unprejudiced after nine merges.
+
+**WHAT IS YOURS.** The loop stopped here because most of what remains needs a decision rather
+than an increment.
+
+1. The book's **38 untranslated messages**. `docs/decisions/BOOK_TRANSLATION_CURRENCY.md`.
+2. Whether **`compile` should refuse a module no host can load**.
+   `docs/decisions/PRINT_MEMORY_BOUND.md`.
+3. Whether the **vestigial rkyv derives** can leave the published bytecode types — removing them
+   eliminates advisory exposure rather than tracking it.
+   `docs/decisions/DEPENDENCY_ADVISORY_COVERAGE.md`.
+4. **H2**, on its recorded trade.
+5. **Workstream C's `BYTECODE_VERSION` authorisation** — array bounds alone remain.
+6. The **seven standing decisions**.
+7. The **parser-gap capacity call**, 162 bindings against 128.
+
+---
+
 **2026-09-27, session 67, tenth increment.** Increments eight and nine are on an unmerged branch
 (#467); each block names its own number.
 
@@ -3193,3 +3273,12 @@ worst-case claim should be read out of them.
 Watched by the report-six test in native_codegen/tests/outstanding_reports.rs, which re-derives the figures rather than
 trusting this text. If they move, this section is wrong and should be re-measured or withdrawn.
 
+
+
+### V0.3.X handoff repair checkpoint of 2026-09-28
+
+Absorption 78 incorporates the upstream guard repair and preserves all existing
+reports above. The bounded V0.3.X brief now defines the resume procedure and the
+required evidence. Read its archive and the machine-written native gate record
+for the current state. This checkpoint does not close the outstanding reports or
+start the nested-yield increment.

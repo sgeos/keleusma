@@ -193,7 +193,21 @@ branches are live:
 cut from whichever version branch owns the work, with `KEL_TRUNK=v0.3.0` where
 needed — both `worktree.sh` and `merge-to-trunk.sh` honour it.
 
-### The three channels are single-writer and belong to `v0.2.3`
+### Current channel ownership
+
+The V0.2.X line maintains the current-state blocks in `TASKLOG.md` and
+`REVERSE_PROMPT.md`. The V0.3.X line resumes from its own brief and handoff under
+`docs/process/handoffs/` and preserves its attributed reverse-prompt addendum.
+During absorption, keep both lines' material and outstanding reports. A native
+regression guard checks that the addendum survives. Journal entries remain
+attributed, and concurrent edits to a shared channel require reconciliation.
+
+The following single-writer arrangement records the original policy. The current
+arrangement above reflects the shared addendum already maintained and checked by
+the native line. It does not grant either line ownership of the other's code.
+
+### Original channel arrangement
+
 
 `REVERSE_PROMPT.md`, `DESIGN_JOURNAL.md`, and `TASKLOG.md` would conflict on
 **every** merge between version branches. `DESIGN_JOURNAL.md` is newest-first, so

@@ -20,11 +20,15 @@ use crate::kstring::KString;
 /// A compile-time constant, the variant of [`Value`] that the compiler
 /// emits into the bytecode's constant pool.
 ///
-/// Strict subset of [`Value`]. Only variants that the rkyv archive can
-/// faithfully serialize and deserialize. The runtime-only variant
-/// [`Value::KStr`] is intentionally absent because it is produced
-/// exclusively by native functions and runtime string operations,
-/// never as a compile-time constant.
+/// Strict subset of [`Value`]: only variants the bytecode's constant pool can
+/// faithfully round-trip. The runtime-only variant [`Value::KStr`] is
+/// intentionally absent because it is produced exclusively by native functions
+/// and runtime string operations, never as a compile-time constant.
+///
+/// The subset was originally drawn around what the rkyv archive could serialize.
+/// Wire format v2 replaced that archive, so the constraint now comes from the
+/// schema layer rather than from rkyv; the SET is unchanged, and the reason for
+/// it is restated here because the old one no longer holds.
 ///
 /// The runtime executes against the archived form
 /// [`ArchivedConstValue`]. Each operand-stack push from a constant
@@ -4156,9 +4160,13 @@ impl Module {
         // V0.2.0 Phase 7c cuts the producer over to the section-
         // partitioned wire format defined in `wire_format.rs`. The
         // ops live in the opcode stream and the operand pool;
-        // every other Module field is rkyv-archived in the
-        // auxiliary body section. See `docs/architecture/WIRE_FORMAT.md`
-        // for the framing-header layout and the section semantics.
+        // every other Module field is encoded into the auxiliary
+        // body section, which since wire format v2 is a
+        // word-oriented container built by `keleusma-wire` and given
+        // meaning by `wire_schema.rs` -- NOT an rkyv archive, as this
+        // comment said until 2026-09-27. See
+        // `docs/architecture/WIRE_FORMAT.md` for the framing-header
+        // layout and the section semantics.
         crate::wire_format::module_to_wire_bytes(self)
     }
 
@@ -4185,8 +4193,15 @@ impl Module {
         // and CRC residue checks run inside
         // `module_from_wire_bytes`; the opcode stream and
         // operand pool sections supply the chunk ops while the
-        // auxiliary body's rkyv archive supplies the rest of the
-        // module.
+        // auxiliary body supplies the rest of the module.
+        //
+        // CORRECTED 2026-09-27: this said "the auxiliary body's rkyv
+        // archive". Wire format v2 replaced that body, and
+        // `Module::validate_bytes` a few lines below documents the
+        // change explicitly. The two comments contradicted each other
+        // in the same file, which is worse than either being wrong
+        // alone, because a reader who checks one believes they have
+        // checked both.
         crate::wire_format::module_from_wire_bytes(bytes)
     }
 
