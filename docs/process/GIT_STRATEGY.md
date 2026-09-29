@@ -4,6 +4,9 @@
 
 Version control conventions for Keleusma.
 
+**Operator clarification, 2026-09-28.** Commit once per prompt. Only feature branches may commit on red. Version branches and `main` must remain green. Use relevant subsets of gates while developing a feature, and record both the checks performed and verification still outstanding. Complete suites belong at important integration and release checkpoints. A feature may be revised across prompts or abandoned. This policy supersedes conflicting historical guidance below.
+
+
 ## Branch Model
 
 Keleusma uses a **release-branch model** with a four-level hierarchy: `main` holds releases, a
@@ -48,16 +51,13 @@ integration trunk, and feature integration uses merge commits, not rebase-to-lin
 
 - **Cut from the active version branch.** Naming convention `<scope>/<short-description>` (for
   example `feat/selfhost-nested-eq`, `fix/parser-error-recovery`).
-- **Intermediate commits may be red.** A feature branch is a workspace. A session may take several
-  commits, passing through red states, to converge on a working approach; only the branch **tip at
-  merge** must be green. Nothing on the branch is load-bearing until it merges, so a session should
-  commit freely to checkpoint work rather than hold a single large uncommitted change.
+- **Intermediate commits may be red.** A feature branch is a workspace. Successive prompts may produce commits passing through red states, to converge on a working approach; only the branch **tip at
+  merge** must be green. Nothing on the branch is load-bearing until it merges, so commit once per prompt with the verification state recorded.
 - **Abandoning the branch is an acceptable outcome, not a failure.** If an approach does not
   converge, discard the branch (delete it unmerged) and start a new one rather than force an unsound
   approach to green. The version branch is only ever touched by green merges, so a dead-end feature
   branch costs nothing but the branch itself. This is the worst case, and it is a normal one.
-- **Must be all-green before merging back** into the version branch (a green
-  `scripts/release-gate.sh`).
+- **Must be all-green before merging back** into the version branch. Use the continuous integration requirements below and the separate gates for any detached package affected by the change. A duplicate local full workspace gate is not required when continuous integration covers it.
 - **A PUSH CANCELS THE RUNNING CONTINUOUS-INTEGRATION JOB FOR THAT PULL REQUEST.** The workflow sets
   `cancel-in-progress: true` on a concurrency group keyed by the pull request's ref, which is
   correct for superseding a stale run and fatal for a session that pushes faster than the run
@@ -257,21 +257,7 @@ Commit after completing a prompted request. Each commit should represent one log
 combining unrelated changes in a single commit. The AI agent commits once after all tasks in a prompt
 are complete, including the `REVERSE_PROMPT.md` update.
 
-> **UNRESOLVED, FLAGGED 2026-09-08, NOT DECIDED HERE.** The paragraph above and the feature-branch
-> rules earlier in this document disagree, and both are stated as current. **"Commits once after all
-> tasks in a prompt are complete"** is the rule here; **"a session should commit freely to checkpoint
-> work rather than hold a single large uncommitted change"** is the rule under *Feature branches*,
-> which also says a session may take several commits passing through red states.
->
-> They can be partly reconciled — checkpoints on the branch, one final commit carrying the channel
-> update — but the wording does not say that, and an agent reading either section alone will follow
-> it. **Which governs is a process decision and is the operator's**, so it is recorded rather than
-> settled. `CLAUDE.md` currently repeats the once-per-prompt form, faithfully summarising the half it
-> quotes.
->
-> A second, smaller divergence between this document and practice: the commit-message template above
-> gives `Co-Authored-By: Claude <noreply@anthropic.com>`, while recent commits carry a
-> model-specific name. Recorded, not changed.
+The operator resolved the previously recorded commit-frequency conflict on 2026-09-28. The once-per-prompt rule applies, and red commits are permitted only on feature branches. Attribute assisted commits to the assistant that contributed, as specified in `CLAUDE.md`.
 
 ## Pre-Push Checklist
 
@@ -287,25 +273,10 @@ The push itself runs the cargo-husky pre-push hook (the default-feature workspac
 doc, markdown links). Per the test tiers (process audit item 1), that hook runs the **routine `quick`
 tier**, which excludes the ~198 self-hosted byte-identity tests (the `selfhost_*` binaries); it also
 does **not** exercise the `--no-default-features`/`signatures` feature matrix, and it does **not** run
-the detached `compiler/` subproject. All three — the full self-host suite, the feature matrix, and
-the subproject — live only in the pre-merge gate below. This makes the pre-merge gate the sole local
-enforcement point for self-host regressions on the release line, so running it before a merge is not
-optional.
+the detached `compiler/` subproject. The hook does not establish complete integration coverage. The full self-host suite, feature matrix and compiler subproject are covered by continuous integration. Detached native-code-generation checks remain separate.
 
-## Pre-Merge Gate (mandatory)
+## Integration and release checkpoints
 
-Before merging a feature branch into the version branch (or the version branch into `main`), run the
-full gate:
+Before merging into a version branch, require green continuous integration on the pull request and the relevant detached-package gates. For a native backend integration checkpoint, run both native float configurations. A targeted feature-branch run establishes only its stated scope and does not substitute for complete integration evidence.
 
-```
-scripts/release-gate.sh
-```
-
-This is the recommended local mirror of CI: it runs the `--no-default-features` and
-`signatures`/`signatures,shell` feature matrix **and** the detached `compiler/` subproject (`cd
-compiler && cargo test`) — the same coverage CI provides. As of 2026-07-24 CI triggers on `main`
-**and** any `v*` version branch and includes a `selfhost-compiler` subproject job, so **the version
-branch is CI-gated**. Run the gate before the merge so a break is caught locally in one pass; CI is
-the authoritative confirmation afterward, per [Definition of Green](#definition-of-green).
-Historically the subproject was gated **nowhere**, which is how a stale decoder shipped `unknown op
-tag 62` into `v0.2.3` (process audit item 4); that gap is now closed in both places.
+The local `scripts/release-gate.sh` remains available for offline work and is required before publication with `--miri`. Do not repeat that complete local workspace gate at each feature increment when continuous integration provides the integration coverage. Release preparation still requires an all-green version branch and `main`, and publication requires explicit in-session confirmation.

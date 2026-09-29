@@ -221,6 +221,19 @@ fn guard_rejects_a_duplicated_configuration() {
 /// red in the ordinary case.
 #[test]
 fn guard_does_not_enforce_staleness() {
+    // Schema acceptance and current verification are separate contracts. Exercise
+    // the actual reporter against isolated Git histories, including failure paths.
+    let output = Command::new("bash")
+        .arg("tools/test-gate-status.sh")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("run the isolated gate-status fixtures");
+    assert!(
+        output.status.success(),
+        "gate-status fixtures failed\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let t = row(GOOD_SHA, "clean", "PASS", "2026-09-24T12:00:00Z");
     assert_eq!(check_record(&t, &all_exist).unwrap(), 1);
 }

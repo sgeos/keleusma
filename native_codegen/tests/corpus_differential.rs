@@ -29,7 +29,7 @@
 //!
 //! # ⚠ AN INTERMITTENT `LEAK` MARKER, AND A HYPOTHESIS OF MINE THAT WAS WRONG
 //!
-//! `cargo nextest` has reported `LEAK` fourteen times, always alongside a PASS:
+//! `cargo nextest` has reported `LEAK` fifteen times, always alongside a PASS:
 //!
 //! | when | test | binary |
 //! |---|---|---|
@@ -47,6 +47,7 @@
 //! | 2026-09-17 | `the_shared_corpus_enumeration_matches_this_harness` | this one |
 //! | 2026-09-17 | `the_sentinel_band_still_matches_the_stage_sources` **(fourth time)** | this one |
 //! | 2026-09-17 | `a_clean_chunk_still_counts_inside_a_module_that_has_a_refusing_chunk` | `isa_lowering_census` |
+//! | 2026-09-28 | `the_sentinel_band_still_matches_the_stage_sources` **(fifth time)** | this one |
 //!
 //! **Commit `6603c399` said this note existed. It did not.** The edit meant to
 //! write it raised inside a heredoc whose output was never read, the command chain
@@ -137,9 +138,13 @@
 //! weakens any explanation resting on a particular harness, and the two clusters
 //! plus a widening residue is further from a single cause than every guess so far.
 //!
-//! Fourteen leaks, ten tests, four binaries, six of them trivial or unrelated, none
+//! Fifteen leaks, ten tests, four binaries, six of them trivial or unrelated, none
 //! reproducing on demand — the first was re-run five times cleanly. The runner or
 //! the machine under load is what remains, and **that is not traced either**.
+//! The fifteenth occurred during the initial default handoff-repair gate on
+//! `e6698c5c`. Three isolated repetitions, the narrow gate and both final gates
+//! did not reproduce it. This adds a fifth sentinel-band occurrence, without
+//! establishing a cause or reviving the refuted whole-binary hypothesis above.
 //! Recorded rather than chased: a `LEAK` warns about teardown, not a failed
 //! assertion, and no observed behaviour depends on it.
 use inkwell::OptimizationLevel;
