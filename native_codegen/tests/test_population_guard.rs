@@ -43,7 +43,8 @@
 // Name comparison against a9a674e9 found no removed functions or files.
 // 682 -> 686 with four coroutine scalar-admission regressions.
 // 686 -> 689 with three coroutine inspection controls. No names removed.
-const RECORDED_TEST_FUNCTIONS: usize = 689;
+// 689 -> 692 with three flat coroutine yield controls. No names removed.
+const RECORDED_TEST_FUNCTIONS: usize = 692;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

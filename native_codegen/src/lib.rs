@@ -4174,6 +4174,21 @@ fn lower_chunk_body<'ctx>(
             }
         }
 
+        // Coroutine payloads are untagged. The type pass proves the body kind;
+        // the emitter must also prove the exact extent at every boundary,
+        // including ordinary callees whose declared return shapes feed callers.
+        if retcon_resume_type.is_some()
+            && matches!(op, Op::Yield | Op::Return)
+            && let Some(keleusma::bytecode::WireShape::Flat { size, .. }) =
+                own_signature.map(|signature| signature.ret)
+            && st.width_at(0) != Width::Body(size)
+        {
+            return Err(LowerError::UnsupportedShape(format!(
+                "coroutine composite boundary requires {size} body bytes in {} at {i}, found {:?}",
+                chunk.name,
+                st.width_at(0)
+            )));
+        }
         match op {
             Op::GetLocal(n) => {
                 // **A LOCAL INDEX OUT OF RANGE IS A REFUSAL, NOT A `Vec` PANIC.**
@@ -7130,9 +7145,9 @@ fn lower_chunk_body<'ctx>(
             // the same lowered code driven with two arenas is two independent
             // streams.
             Op::Yield if retcon_delegate => {
-                if !matches!(st.width_at(0), Width::Scalar(_)) {
+                if !matches!(st.width_at(0), Width::Scalar(_) | Width::Body(_)) {
                     return Err(LowerError::UnsupportedShape(format!(
-                        "a coroutine yield needs a scalar value in {} at {i}, found {:?}",
+                        "a coroutine yield needs a scalar or flat value in {} at {i}, found {:?}",
                         chunk.name,
                         st.width_at(0)
                     )));

@@ -96,6 +96,17 @@ fn native_module(
     replies: &[i64],
     optimize: bool,
 ) -> (Vec<i64>, Vec<u8>) {
+    native_module_read(program, seed, first, replies, optimize, |bits, _, _| bits)
+}
+
+fn native_module_read<T>(
+    program: &keleusma::bytecode::Module,
+    seed: &[u8],
+    first: i64,
+    replies: &[i64],
+    optimize: bool,
+    mut read: impl FnMut(i64, &Guarded, &Guarded) -> T,
+) -> (Vec<T>, Vec<u8>) {
     assert!(!replies.is_empty());
     let ctx = Context::create();
     let tm = machine();
@@ -184,7 +195,7 @@ fn native_module(
     };
     for (i, &value) in replies.iter().enumerate() {
         assert!(!step.next.is_null());
-        result.push(step.value);
+        result.push(read(step.value, &region, &private));
         for storage in [&frame, &reply, &shared, &private, &region] {
             storage.check();
         }
@@ -1113,4 +1124,141 @@ fn mixed_enum_receiver_kinds_remain_an_explicit_boundary() {
             matches!(vm.resume(Value::Int(reply)).unwrap(), VmState::Yielded(Value::Int(v)) if v == expected)
         );
     }
+}
+
+fn composite_bodies(src: &str, first: i64, replies: &[i64]) -> Vec<Vec<u8>> {
+    use keleusma::bytecode::{ArrayBody, EnumBody, StructBody, TupleBody, Value, WireShape};
+    use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
+    let p = common::build(src);
+    let WireShape::Flat { size, .. } = p.signatures[p.entry_point.unwrap()].ret else {
+        panic!("a flat output fixture is required");
+    };
+    let need = required_persistent_capacity_for(&p);
+    let mut arena = keleusma_arena::Arena::with_capacity(
+        auto_arena_capacity_for(&p, &[]).unwrap() + need + 65536,
+    );
+    arena.resize_persistent(need).unwrap();
+    let mut vm = Vm::new(p.clone(), &arena).unwrap();
+    let mut state = vm.call(&[Value::Int(first)]).unwrap();
+    let mut expected = Vec::new();
+    for (i, &reply) in replies.iter().enumerate() {
+        let VmState::Yielded(value) = &state else {
+            panic!("expected a yielded body, got {state:?}");
+        };
+        let body = match value {
+            Value::Tuple(TupleBody::Flat(body))
+            | Value::Array(ArrayBody::Flat(body))
+            | Value::Struct(StructBody::Flat(body))
+            | Value::Enum(EnumBody::Flat(body)) => body.resolve(&arena).unwrap(),
+            other => panic!("expected flat body, got {other:?}"),
+        };
+        assert_eq!(body.len(), size as usize);
+        expected.push(body.to_vec());
+        if i + 1 < replies.len() {
+            state = vm.resume(Value::Int(reply)).unwrap();
+            if matches!(state, VmState::Reset) {
+                state = vm.resume(Value::Int(reply)).unwrap();
+            }
+        }
+    }
+    for optimize in [false, true] {
+        let (actual, _) = native_module_read(
+            &p,
+            &vec![0; p.shared_data_bytes as usize],
+            first,
+            replies,
+            optimize,
+            |bits, region, private| {
+                let address = bits as usize;
+                let end = address.checked_add(size as usize).unwrap();
+                let storage = [region, private]
+                    .into_iter()
+                    .find(|storage| {
+                        address >= storage.ptr() as usize
+                            && end <= storage.ptr() as usize + storage.len
+                    })
+                    .expect("yielded body must fit a declared instance region");
+                let offset = address - storage.ptr() as usize;
+                // Read through the checked owning region before the next resume.
+                unsafe {
+                    std::slice::from_raw_parts(storage.ptr(), storage.len)
+                        [offset..offset + size as usize]
+                        .to_vec()
+                }
+            },
+        );
+        assert_eq!(actual, expected, "{src}, optimized={optimize}");
+    }
+    expected
+}
+
+#[test]
+fn flat_yields_preserve_bodies_across_resumes_and_resets() {
+    let replies = [11, 20, 31, 40, 55, 0];
+    let expected: Vec<Vec<u8>> = [
+        (7i64, 8i64),
+        (11, 13),
+        (20, 21),
+        (31, 33),
+        (40, 41),
+        (55, 57),
+    ]
+    .into_iter()
+    .map(|(a, b)| [a.to_le_bytes(), b.to_le_bytes()].concat())
+    .collect();
+    for src in [
+        "struct P { a: Word, b: Word } loop main(t: Word) -> P { let r = yield P { a: t, b: t + 1 }; yield P { a: r, b: r + 2 } }",
+        "loop main(t: Word) -> (Word, Word) { let r: Word = yield (t, t + 1); yield (r, r + 2) }",
+        "loop main(t: Word) -> [Word; 2] { let r: Word = yield [t, t + 1]; yield [r, r + 2] }",
+    ] {
+        assert_eq!(composite_bodies(src, 7, &replies), expected);
+    }
+}
+
+#[test]
+fn delegated_flat_yields_preserve_callee_state_and_entry_replies() {
+    let replies = [11, 20, 31, 40, 55, 0];
+    for src in [
+        "struct P { a: Word, b: Word } yield emit(a: Word) -> P { let r = yield P { a: a, b: a + 1 }; yield P { a: r, b: a }; P { a: a, b: a } } loop main(t: Word) -> P { emit(t); yield P { a: t, b: t + 2 } }",
+        "struct P { a: Word, b: Word } loop child() -> P { let r = yield P { a: 7, b: 8 }; yield P { a: r, b: r + 2 } } loop main(t: Word) -> P { child(); yield P { a: t, b: t } }",
+        "enum E { A(Word), B(Word) } loop main(t: Word) -> E { let r = yield E::A(t); yield E::B(r) }",
+        "struct P { a: Word, b: Word } loop main(t: Word) -> P { let p = P { a: t, b: t + 1 }; yield p; yield p }",
+        "struct P { a: Byte, b: Word } struct Q { p: P, c: Word } fn make(t: Word) -> Q { Q { p: P { a: (t as Byte), b: t + 1 }, c: t + 2 } } loop main(t: Word) -> Q { let r: Word = yield make(t); yield make(r) }",
+        "struct F { a: Float, b: Byte } loop main(t: Word) -> F { yield F { a: 0.5, b: (t as Byte) }; yield F { a: 1.25, b: (t as Byte) } }",
+    ] {
+        composite_bodies(src, 7, &replies);
+    }
+}
+
+#[test]
+fn coroutine_composite_boundaries_check_declared_extent() {
+    use keleusma::bytecode::WireShape;
+    for src in [
+        "loop main(t: Word) -> (Word, Word) { yield (t, t); yield (t, t) }",
+        "fn pair(t: Word) -> (Word, Word) { (t, t) } loop main(t: Word) -> (Word, Word) { yield pair(t); yield pair(t) }",
+    ] {
+        let mut p = common::build(src);
+        for signature in &mut p.signatures {
+            if let WireShape::Flat { size, .. } = &mut signature.ret {
+                *size += 8;
+            }
+        }
+        // Verification does not establish native body extents from metadata.
+        keleusma::verify::verify(&p).unwrap();
+        let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
+        assert!(error.to_string().contains("composite boundary"), "{error}");
+    }
+    let mut p = common::build(
+        "fn pair(t: Word) -> (Word, Word) { (t, t) } loop main(t: Word) -> (Word, Word) { yield pair(t); yield pair(t) }",
+    );
+    let pair = p.chunks.iter_mut().find(|c| c.name == "pair").unwrap();
+    assert!(matches!(
+        pair.ops.pop(),
+        Some(keleusma::bytecode::Op::Return)
+    ));
+    pair.ops.push(keleusma::bytecode::Op::PopN(1));
+    // The current verifier already closes implicit-return paths before lowering.
+    assert!(keleusma::verify::verify(&p).is_err());
+    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
+    assert!(error.to_string().contains("verification:"), "{error}");
 }

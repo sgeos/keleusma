@@ -2,16 +2,19 @@
 //!
 //! The caller owns the frame, reply cell, and the ordinary shared, private and
 //! composite regions as disjoint reservations for the entire lifetime of a suspended instance. Start
-//! returns a continuation and yielded scalar bits. Before each resume the caller
+//! returns a continuation and yielded scalar bits or a flat body pointer. Before each resume the caller
 //! writes the next scalar bits to the reply cell, then calls the continuation with
 //! `(frame, false)`. Release calls it with `(frame, true)` and invalidates the
 //! instance. Float bits occupy the low 32 or all 64 bits according to the
 //! module width. Byte and Boolean inputs must be in their declared ranges.
+//! Read a yielded flat body before the next resume or release. Its declared
+//! byte size is carried by the entry signature, and its storage belongs to the
+//! instance regions.
 //! The start argument retains its normal native type. A released frame may be reused; a live frame may not be moved.
 //!
 //! LLVM manages the continuation and captures live allocas. The emitted module
 //! is accepted only if splitting eliminates every overflow allocator use.
-//! This API currently admits one scalar entry stream with ordinary, reentrant
+//! This API currently admits one scalar-input entry stream with ordinary, reentrant
 //! or stream callees. Suspending callees are inlined before splitting. Host
 //! replies update the entry parameter while preserving callee state until Reset.
 //! A nested stream clears its own locals on Reset. Reads of non-Unit callee
@@ -51,7 +54,7 @@ fn error(message: impl ToString) -> LowerError {
     LowerError::UnsupportedShape(message.to_string())
 }
 
-/// Emit and split a verified, resource-bounded scalar stream for `machine`.
+/// Emit and split a verified, resource-bounded stream for `machine`.
 ///
 /// `frame_bytes` is the exact caller reservation, not an estimate of LLVM's
 /// internal frame. An insufficient reservation is a lowering error. Buffer
@@ -166,8 +169,12 @@ pub fn lower<'ctx>(
     )?;
     if !matches!(program.signatures.get(entry).map(|s| &s.ret),
         Some(keleusma::bytecode::WireShape::Scalar { kind }) if *kind <= keleusma::value_layout::ScalarKind::Float.to_tag())
+        && !matches!(
+            yield_shape,
+            keleusma::bytecode::WireShape::Flat { kind: 0..=3, .. }
+        )
     {
-        return Err(error("retcon currently requires a scalar yield signature"));
+        return Err(error("retcon requires a scalar or flat yield signature"));
     }
     module.verify().map_err(error)?;
     // The verified call graph is acyclic. Inline suspension-capable callees

@@ -3365,3 +3365,15 @@ controls and the explicit mixed-receiver refusal. All 25 coroutine tests and
 all-target lint checks pass in both float configurations. Complete native gates remain
 outstanding. Workstream B remains active at the composite suspension boundary.
 Resume from the bounded native brief. Upstream material is preserved.
+
+
+## V0.3.X flat coroutine yield increment, 2026-09-29
+
+`feat/retcon-composite-yields` adds flat body outputs and exact yield and return
+extent checks. The host reads each body before the next resume or release.
+Three regression functions cover direct and delegated bodies and incorrect
+extent metadata. All 28 coroutine tests and all-target lints pass in both float
+configurations. Composite inputs, replies and live operands remain refused.
+Full gates for the preceding correction continue on frozen `15b96c2e` in
+`retcon-reply-types`. Workstream B remains active. Resume from the bounded native
+brief. Upstream material is preserved.
