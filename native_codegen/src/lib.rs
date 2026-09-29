@@ -1607,6 +1607,7 @@ pub fn lower_chunk<'ctx>(
             opts,
             retcon: false,
             retcon_resume_type: None,
+            retcon_branches: None,
             degenerate_yield: None,
             delegated_call: None,
             // No module, so no signature table.
@@ -1798,8 +1799,9 @@ fn lower_module_with<'ctx>(
     opts: LowerOptions,
     mut refusals: Option<&mut Vec<(String, LowerError)>>,
     mut visits: Option<&mut Vec<Option<Vec<usize>>>>,
-    retcon_bytes: Option<u32>,
+    retcon_config: Option<(u32, &coroutine::types::Analysis)>,
 ) -> Result<Vec<FunctionValue<'ctx>>, LowerError> {
+    let retcon_bytes = retcon_config.map(|(bytes, _)| bytes);
     check_word_width(program.word_bits_log2)?;
     let i64t = ctx.i64_type();
     // **The module's float width, hoisted above its first use.** It was computed
@@ -1891,6 +1893,11 @@ fn lower_module_with<'ctx>(
             .as_ref()
             .map(|dl| dl.private_composite_layout.as_slice())
             .unwrap_or(&[]),
+        private_init: program
+            .data_layout
+            .as_ref()
+            .map(|dl| dl.private_init.as_slice())
+            .unwrap_or(&[]),
         persistent_composite_bytes: program.persistent_composite_bytes,
         composite_init_off: u32::try_from(keleusma::vm::required_persistent_capacity_for(program))
             .unwrap_or(u32::MAX)
@@ -1967,7 +1974,9 @@ fn lower_module_with<'ctx>(
                 // into memory the host scoped.
                 params.push(ptrt.into()); // composite body region
             }
-            let retcon_delegate = retcon_bytes.is_some() && c.block_type == BlockType::Reentrant;
+            let retcon_delegate = retcon_bytes.is_some()
+                && Some(i) != program.entry_point
+                && c.block_type != BlockType::Func;
             if retcon_delegate {
                 params.push(ptrt.into());
             }
@@ -1980,8 +1989,7 @@ fn lower_module_with<'ctx>(
             } else {
                 i64t.fn_type(&params, false)
             };
-            let f = if let Some(bytes) = retcon_bytes.filter(|_| c.block_type == BlockType::Stream)
-            {
+            let f = if let Some(bytes) = retcon_bytes.filter(|_| Some(i) == program.entry_point) {
                 coroutine::declare(ctx, module, i, &params, bytes)?
             } else {
                 module.add_function(&format!("kel_chunk_{i}"), fnty, None)
@@ -2151,13 +2159,14 @@ fn lower_module_with<'ctx>(
         }
         let call_regions = region::plan_call_site_regions(program, i);
         let seen = core::cell::RefCell::new(Vec::new());
-        let retcon = retcon_bytes.is_some() && chunk.block_type == BlockType::Stream;
-        if retcon {
+        let retcon = retcon_bytes.is_some() && Some(i) == program.entry_point;
+        if retcon || coroutine::is_delegate(*func) {
             tail = None;
         }
         let cfg = BodyCfg {
             opts,
             retcon,
+            retcon_branches: retcon_config.map(|(_, facts)| &facts.branches[i]),
             retcon_resume_type: retcon_bytes
                 .and(program.entry_point)
                 .and_then(|entry| program.chunks[entry].param_types.first().copied()),
@@ -2241,6 +2250,9 @@ fn lower_module_with<'ctx>(
 /// reason a call is: the information required to resolve it was never supplied.
 #[derive(Default, Clone, Copy)]
 struct DataCtx<'a> {
+    /// Load-time scalar categories for private slots. Retcon preserves these categories
+    /// through slot writes so scalar yields need not guess their payload width.
+    private_init: &'a [ConstValue],
     /// Number of shared slots. Shared slots occupy the low indices, so this is
     /// also the boundary above which a slot is private.
     shared_count: u32,
@@ -2490,6 +2502,8 @@ struct BodyCfg<'a> {
     /// The VM writes host replies to the outer entry parameter even when a
     /// reentrant callee is suspended. Its own parameters retain their values.
     retcon_resume_type: Option<TypeTag>,
+    /// Proven outcomes after the coroutine type analysis reaches a fixed point.
+    retcon_branches: Option<&'a BTreeMap<usize, bool>>,
     opts: LowerOptions,
     /// Byte width of the runtime's `Float`, from the module header's
     /// `float_bits_log2`.
@@ -3282,6 +3296,7 @@ fn lower_chunk_body<'ctx>(
         opts,
         retcon,
         retcon_resume_type,
+        retcon_branches,
         degenerate_yield,
         delegated_call,
         own_signature,
@@ -3295,6 +3310,7 @@ fn lower_chunk_body<'ctx>(
         float_bytes,
     } = cfg;
     let retcon_delegate = coroutine::is_delegate(func);
+    let retcon_stream = (retcon || retcon_delegate) && chunk.block_type == BlockType::Stream;
     let i64t = ctx.i64_type();
     let i128t = ctx.i128_type();
     let i8t = ctx.i8_type();
@@ -3340,7 +3356,7 @@ fn lower_chunk_body<'ctx>(
     // **EPHEMERAL, and that is deliberate**: `Op::Reset` clears every local, which
     // is what an ephemeral region is for. The resume-state word is the other half
     // of the frame and is `.bss`, so it lives in the PERSISTENT region instead.
-    let stream_frame_base: Option<PointerValue<'ctx>> = if !retcon
+    let stream_frame_base: Option<PointerValue<'ctx>> = if !retcon_stream
         && chunk.block_type == BlockType::Stream
         && degenerate_yield.is_none()
         && (data.has_data || data.needs_region)
@@ -3363,7 +3379,7 @@ fn lower_chunk_body<'ctx>(
     // suspension, so anything emitted unconditionally here runs again on every
     // resume. See the deferral below.
     let general_stream_frame =
-        !retcon && chunk.block_type == BlockType::Stream && degenerate_yield.is_none();
+        !retcon_stream && chunk.block_type == BlockType::Stream && degenerate_yield.is_none();
 
     let locals: Vec<_> = (0..chunk.local_count as usize)
         .map(|i| match stream_frame_base {
@@ -3510,7 +3526,7 @@ fn lower_chunk_body<'ctx>(
     // reachable only from the entry dispatch — never by fall-through, because
     // the yield terminated its block.
     let general_stream =
-        !retcon && chunk.block_type == BlockType::Stream && degenerate_yield.is_none();
+        !retcon_stream && chunk.block_type == BlockType::Stream && degenerate_yield.is_none();
     // **A GENERAL STREAM NEEDS THE FRAME POINTERS, AND `lower_chunk` HAS NONE.**
     //
     // The single-chunk entry point receives no module, so it declares neither the
@@ -3586,7 +3602,7 @@ fn lower_chunk_body<'ctx>(
     // branches to the shared block at the depth the branch edge already carries.
     // See the `Op::Yield` arm.
 
-    let loop_top: Option<usize> = match (general_stream || retcon, stream_pos) {
+    let loop_top: Option<usize> = match (general_stream || retcon_stream, stream_pos) {
         (true, Some(p)) if p + 1 < chunk.ops.len() => {
             targets.push(p + 1);
             for &y in &yield_positions {
@@ -3787,7 +3803,7 @@ fn lower_chunk_body<'ctx>(
     // State 0 is the loop top, which is also what an all-zero arena gives on the
     // first call and what `Op::Reset` restores — so a fresh instance and a reset
     // instance take the same path with no distinguished first call.
-    if let Some(top) = loop_top.filter(|_| !retcon) {
+    if let Some(top) = loop_top.filter(|_| general_stream) {
         // **ONE PARAMETER ONLY, REFUSED RATHER THAN GUESSED.** The runtime's
         // resume writes the incoming value into slot 0 and nothing else, so a
         // second parameter has no defined value on re-entry. Lowering one anyway
@@ -5297,6 +5313,18 @@ fn lower_chunk_body<'ctx>(
                 st.b.build_unconditional_branch(blocks[&(*t as usize)])
                     .unwrap();
             }
+            Op::If(t) | Op::BreakIf(t)
+                if retcon_branches.is_some_and(|facts| facts.contains_key(&i)) =>
+            {
+                st.pop();
+                let value = retcon_branches.unwrap()[&i];
+                if value == matches!(op, Op::BreakIf(_)) {
+                    note!(*t as usize, st.depth);
+                    st.b.build_unconditional_branch(blocks[&(*t as usize)])
+                        .unwrap();
+                    dead = true;
+                }
+            }
             Op::BreakIf(t) => {
                 let c = st.pop();
                 let nz =
@@ -6390,7 +6418,16 @@ fn lower_chunk_body<'ctx>(
                         // binary interface is correct while every float
                         // operation downstream refuses the operand -- the same
                         // detail a float PARAMETER's local needed.
-                        if kind == SCALAR_FLOAT_TAG {
+                        if retcon_resume_type.is_some() {
+                            let category = match kind {
+                                SCALAR_FLOAT_TAG => OperandKind::Float,
+                                SCALAR_FIXED_TAG => OperandKind::Fixed,
+                                _ => OperandKind::Int,
+                            };
+                            // The shared layout already fixed the scalar load
+                            // width. Carry it into the coroutine yield check.
+                            st.push_k(v, Width::Scalar(width.get_bit_width() / 8), category);
+                        } else if kind == SCALAR_FLOAT_TAG {
                             st.push_k(v, Width::Scalar(float_bytes), OperandKind::Float);
                         } else if kind == SCALAR_FIXED_TAG {
                             // **The same reasoning as the float tag above, for
@@ -6436,6 +6473,23 @@ fn lower_chunk_body<'ctx>(
                     }
                     let base = private_base.expect("has_data implies the private pointer");
                     let rel = slot - data.shared_count;
+                    let retcon_scalar = if retcon_resume_type.is_some() {
+                        let count = if indexed { bound } else { 1 };
+                        coroutine::private_scalar_shape(data.private_init, rel, count, float_bytes)?
+                    } else {
+                        None
+                    };
+                    if !is_read && let Some((width, kind)) = retcon_scalar {
+                        let incoming_kind = st.kind_at(0);
+                        let compatible_kind = incoming_kind == kind
+                            || (kind == OperandKind::Int && incoming_kind == OperandKind::Unknown);
+                        if st.width_at(0) != width || !compatible_kind {
+                            return Err(LowerError::UnsupportedDataSlot {
+                                slot,
+                                why: "a coroutine private scalar write changes or obscures its declared type".into(),
+                            });
+                        }
+                    }
                     let byte_index =
                         st.b.build_int_mul(
                             match index {
@@ -6475,7 +6529,11 @@ fn lower_chunk_body<'ctx>(
                             .expect("a load is an instruction")
                             .set_alignment(PRIVATE_SLOT_BYTES)
                             .expect("PRIVATE_SLOT_BYTES is a power of two");
-                        st.push(load.into_int_value());
+                        if let Some((width, kind)) = retcon_scalar {
+                            st.push_k(load.into_int_value(), width, kind);
+                        } else {
+                            st.push(load.into_int_value());
+                        }
                     } else {
                         let v = st.pop();
                         let store = st.b.build_store(addr, v).unwrap();
@@ -7057,7 +7115,7 @@ fn lower_chunk_body<'ctx>(
             Op::Stream | Op::Reset if degenerate_yield.is_some() => {}
             // **`Op::Stream` MARKS THE LOOP TOP AND EMITS NOTHING.** The block
             // after it is entered from the dispatch or by the `Reset` back edge.
-            Op::Stream if general_stream || retcon => {}
+            Op::Stream if general_stream || retcon_stream => {}
 
             // **`Op::Yield` SAVES THE RESUME POINT AND RETURNS.**
             //
@@ -7401,15 +7459,19 @@ fn lower_chunk_body<'ctx>(
             // including the two it closes only indirectly. **Emitting a clear here
             // would buy nothing**: it would pay per iteration to hide bytes
             // nothing can name.
-            Op::Reset if retcon => {
+            Op::Reset if retcon_stream => {
                 st.depth = 0;
                 for l in &st.locals {
                     st.b.build_store(*l, i64t.const_zero()).unwrap();
                 }
-                let reply =
-                    st.b.build_load(i64t, retcon_latest.unwrap(), "reset_reply")
-                        .unwrap();
-                st.b.build_store(st.locals[0], reply).unwrap();
+                // A nested Stream does not receive the host reply in its own
+                // parameter slot. Only the entry restores the latest reply.
+                if retcon {
+                    let reply =
+                        st.b.build_load(i64t, retcon_latest.unwrap(), "reset_reply")
+                            .unwrap();
+                    st.b.build_store(st.locals[0], reply).unwrap();
+                }
                 let top = loop_top.unwrap();
                 note!(top, 0);
                 st.b.build_unconditional_branch(blocks[&top]).unwrap();

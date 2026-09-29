@@ -974,7 +974,13 @@ pub fn private_init_image(module: &keleusma::bytecode::Module) -> Option<Vec<u8>
             // enabled and the emitter handles float values unconditionally
             // elsewhere. A gate naming a feature this package does not declare
             // is dead text that clippy correctly rejects.
-            ConstValue::Float(f) => f.to_bits() as i64,
+            // The slot is eight bytes, but the scalar payload follows the
+            // module's float width. Narrow bits occupy its low four bytes.
+            ConstValue::Float(f) => match module.float_bits_log2 {
+                5 => i64::from((*f as f32).to_bits()),
+                6 => f.to_bits() as i64,
+                _ => return None,
+            },
             // A string, a tuple or anything else is not a word, and this
             // backend has no place to put it. Refuse the whole image rather
             // than install a partially correct one.

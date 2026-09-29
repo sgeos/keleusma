@@ -3808,6 +3808,7 @@ gate record when resuming this line.
 ## V0.3.X Workstream B progress of 2026-09-29
 
 Attributed to Codex on the V0.3.X line. Scalar bytecode and nested reentrant
-calls now lower through LLVM returned continuations. The bounded native brief
-records verification and the remaining stream and composite cases. Workstream B
+and stream calls now lower through LLVM returned continuations. The bounded
+native brief records scalar reply and enum inspection corrections, with 25 coroutine
+tests passing in both float configurations. The composite boundary remains. Workstream B
 remains active. Upstream task state above is preserved.

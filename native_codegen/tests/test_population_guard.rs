@@ -39,7 +39,11 @@
 // 663 -> 672 with nine retcon bytecode tests. Name comparison against
 // 40acc268 found no removed files or test functions.
 // 672 -> 677 with five delegated coroutine regressions. No names removed.
-const RECORDED_TEST_FUNCTIONS: usize = 677;
+// 677 -> 682 with four nested-stream checks and the float initializer pin.
+// Name comparison against a9a674e9 found no removed functions or files.
+// 682 -> 686 with four coroutine scalar-admission regressions.
+// 686 -> 689 with three coroutine inspection controls. No names removed.
+const RECORDED_TEST_FUNCTIONS: usize = 689;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

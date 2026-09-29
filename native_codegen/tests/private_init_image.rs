@@ -154,3 +154,20 @@ fn the_image_does_not_mark_a_composite_slot_as_written() {
          initialisation words would mark a composite slot as written"
     );
 }
+
+#[test]
+fn private_float_initializers_follow_the_declared_module_width() {
+    let mut module = common::build(
+        "private data st { value: Float = 0.5 } fn main(t: Float) -> Float { if t > 0.0 { st.value = t; } st.value }",
+    );
+    for (log2, expected) in [
+        (5, 0x0000_0000_3f00_0000_u64),
+        (6, 0x3fe0_0000_0000_0000_u64),
+    ] {
+        module.float_bits_log2 = log2;
+        let image = region::private_init_image(&module).unwrap();
+        assert_eq!(image, expected.to_le_bytes());
+    }
+    module.float_bits_log2 = 0;
+    assert!(region::private_init_image(&module).is_none());
+}
