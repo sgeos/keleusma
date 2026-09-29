@@ -10,47 +10,27 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
-**2026-09-28. The agent-facing files are reconciled, in preparation for handing the V0.2.X line
-to a different assistant.** Session 67's own work is closed at `44741f90`; this is a follow-on.
+**2026-09-28. V0.3.X handoff repair is in progress.** The root coverage guard now
+separates the native gate label from stale claims about `compiler/`. Regression
+controls reproduce the old false rejection and retain rejection of the compiler
+claim and unrelated surrounding claims. The compaction and attribution instructions
+and shared-channel policy are reconciled in this increment.
 
-**THE TWO FILES CONTRADICTED EACH OTHER ON COMMITS, AND THE CONTRADICTION FAVOURED SILENCE.**
-`AGENTS.md` said "No commits without explicit authorisation. Even when work is complete, do not
-run `git commit` unless the human operator explicitly asks." `CLAUDE.md` says the agent commits
-once per prompt. **Codex and most non-Claude assistants read `AGENTS.md` by convention**, so one
-would have completed work and stopped, waiting for a permission the operator had no reason to
-know it was waiting for — and that reads as timidity rather than as obedience to the repository.
+The repair belongs to the V0.2.X-owned root tests and must reach that version branch
+through a green pull request before V0.3.X absorbs it. Native gate refresh and private
+setup remain pending downstream. Do not read this checkpoint as a green V0.3.X verdict.
+The preceding audit is in [CODEX_SETUP_AUDIT.md](./CODEX_SETUP_AUDIT.md).
 
-Resolved toward `CLAUDE.md` **on evidence, not preference**: the `AGENTS.md` line entered in
-`776acbe1`, the commit that created that file, as generic assistant-onboarding language;
-`CLAUDE.md`'s policy entered in `c308df65`, the commit that created the process files;
-`CONTRIBUTING.md`'s branching section reads "work, commit, push branch"; and nine agent-authored
-merges landed in session 67 alone. **The retraction is quoted in place and flagged for override.**
+Existing operator decisions and publication holds are unchanged. The next step is
+to absorb the upstream repair on V0.3.X, preserving its attributed addendum and native
+routing, then run each complete native gate on the committed, stationary tree.
 
-**THE HARD CONSTRAINT WAS STATED IN ONE FILE, AND NOT THE ONE AN ASSISTANT WOULD REACH.** The
-Appendix B rule lived only in `docs/process/HANDOFF.md`, which was **absent from `AGENTS.md`'s own
-reading order** — so an assistant could follow that file faithfully and never learn it. It is now
-in all three, and `HANDOFF.md` is item 2 of the reading order. The failure mode here is
-disclosure, which cannot be undone, so duplication is the right trade.
+---
 
-**THREE OPERATOR-GATED LIMITS ARE NOW STATED WHERE A NEW ASSISTANT WILL SEE THEM**:
-`BYTECODE_VERSION` at 2, the rad-hard minimal-ISA opcode count at 66, and publication needing
-in-session confirmation — with the instruction to stop and record the question rather than
-proceed. `AGENTS.md` also now says that its own build commands are **not** what gates a merge, and
-points at the two failure catalogues in `CLAUDE.md`.
+# HISTORICAL RECORD BELOW
 
-**A LEAK CHECK FIRED ON MY OWN NEW TEXT AND WAS A FALSE POSITIVE.** It matched "radiation-hard" in
-the sentence about the minimal ISA. That terminology is already tracked in five files —
-`CHANGELOG.md`, `CLAUDE.md` and three decision documents — so the motivation is public rather than
-Appendix B content. The wording was aligned to the repository's own phrase anyway. **Over-flagging
-is the correct polarity for a disclosure check**, and it was resolved by reading rather than by
-relaxing the pattern.
-
-**Unchanged and yours**, all seven items from session 67's close, each with its decision document:
-the book's 38 untranslated messages; whether `compile` should refuse a module no host can load;
-whether the vestigial rkyv derives can leave the published bytecode types; H2's trade; workstream
-C's `BYTECODE_VERSION` authorisation; the seven standing decisions; the parser-gap capacity call.
-
-**No file under `src/selfhost/kel/` modified.** `BYTECODE_VERSION` is 2, the opcode count 66.
+The following material preserves prior sessions. Read it for provenance, not as the
+current task status.
 
 ---
 

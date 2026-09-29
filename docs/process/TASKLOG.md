@@ -6,6 +6,29 @@ Current sprint source of truth.
 
 ---
 
+## 2026-09-28 V0.3.X handoff repair
+
+**In progress.** The V0.2.X-owned coverage guard is repaired on
+`fix/native-handoff-readiness`. Two regression controls failed before the correction.
+The fix permits only the native gate's exact step label, while retaining the compiler
+and surrounding-claim controls. Compaction guidance, assistant attribution and channel
+ownership are reconciled. All five guard tests pass in each of the five continuous
+integration feature configurations. Targeted Clippy and all eight documentation-link
+and citation tests pass. Downstream absorption and complete native gates remain pending.
+
+## 2026-09-28 Codex setup audit
+
+**Complete.** Audited the first Codex session against both development-line handoffs.
+[CODEX_SETUP_AUDIT.md](./CODEX_SETUP_AUDIT.md) records the baseline commits,
+reproduction commands, readiness findings and verification limits.
+V0.2.X handoff checks passed, including 2,930 workspace tests and six example host tests.
+Eighty native checks passed in each float configuration. V0.3.X remains red on a
+locally reproduced root documentation guard and has stale full-gate records.
+The installation diagnostic passed all 21 checks outside the sandbox. Remaining work
+includes the guard repair, instruction reconciliation, upstream absorption and fresh
+native gates. Documentation-link and citation checks passed eight tests. This audit changed no
+implementation or global configuration.
+
 ## Current Phase
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
