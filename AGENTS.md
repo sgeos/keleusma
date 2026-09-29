@@ -60,7 +60,8 @@ workspace-level configuration changes; it has already cost three separate redisc
   that "looks right" is not evidence; agreement with the virtual machine is.
 - **Absorb first.** `git rev-list --count HEAD..origin/v0.2.3` — derive it, never quote a figure for
   it — and run the conflict check in its OWN command before writing any prediction about the merge.
-- **Commit once per prompt. Only feature branches may commit on red.** Run relevant subsets during feature iteration and record their limits. Reserve both complete native gates for important integration and release checkpoints. Root continuous integration does not cover this package. Follow the project integration requirements when the feature is ready to merge. Version branches and `main` must remain green. Publication requires explicit in-session confirmation.
+- **Commit once per prompt. Only feature branches may commit on red.** Full gates must pass before publication or merging into `main`. Version branches remain green through remote continuous integration. Local checks may stay targeted when they provide high confidence in a green remote result. Root continuous integration does not cover this detached package, so select relevant native checks as well. Both complete native configurations are mandatory before publication or merging into `main`, rather than at every version-branch integration. A stale full-gate record identifies missing complete verification, not an observed test failure. Publication requires explicit in-session confirmation.
+
 - **Shared channels** retain both lines. Update this line's bounded brief and archive, and
   append attributed reports to the shared reverse prompt. Preserve its upstream current block.
 
@@ -89,7 +90,7 @@ Items that an AI assistant trained on general Rust code is likely to get wrong o
 - **Three limits are the operator's, not yours.** `BYTECODE_VERSION` moves only on explicit operator authorisation; it is 2. The rad-hard minimal-ISA constraint means the opcode count is itself a design limit, so prefer reusing an opcode over adding one; the count is 66. And a crates.io publication needs in-session confirmation. If a change appears to require any of these, stop and record the question in `REVERSE_PROMPT.md` rather than proceeding.
 
 - **Scratch directories.** Use `tmp/` for transient files (drafts, probe outputs, scratch scripts). Contents of `tmp/` are gitignored by convention; do not commit them.
-- **Commit once per prompt. Only feature branches may commit on red.** The operator confirmed this policy on 2026-09-28. Include the `REVERSE_PROMPT.md` update in the scoped conventional commit. Version branches and `main` must remain green. Use relevant subsets of gates during feature development and reserve complete suites for important integration and release checkpoints. Record what ran and what remains unverified. See `CLAUDE.md` and `docs/process/GIT_STRATEGY.md` for integration requirements. Publication requires explicit in-session confirmation.
+- **Commit once per prompt. Only feature branches may commit on red.** The operator confirmed this policy on 2026-09-28. Include the `REVERSE_PROMPT.md` update in the scoped conventional commit. Version branches and `main` must remain green. Full gates must pass before publication or merging into `main`. Version branches stay green through remote continuous integration. Local gates may remain targeted when they provide high confidence in a green remote result. Record what ran and what remains unverified. See `CLAUDE.md` and `docs/process/GIT_STRATEGY.md` for integration requirements. Publication requires explicit in-session confirmation.
 
 ## Build, test, lint
 

@@ -6,6 +6,10 @@ Current sprint source of truth.
 
 ---
 
+## 2026-09-28 Gate-boundary clarification
+
+The operator requires full gates before publication or merging into `main`. Version branches remain green through remote continuous integration. Local checks may be targeted when confidence in a green remote result is high. Removed the earlier interpretation requiring full local native gates for every version-branch integration. Relevant detached-package checks remain necessary because root continuous integration does not cover them. All 13 focused documentation-link, citation and gate-correspondence checks passed. No runtime code changed.
+
 ## 2026-09-28 Handoff review and operator policy
 
 Recorded the operator-confirmed once-per-prompt policy, with red commits confined to feature branches. Relevant gate subsets support feature iteration. Full integration and release verification remain checkpoint requirements. Corrected the V0.3.X resume route to the bounded brief. Native reporter and diagnostic-catalogue repairs belong to the V0.3.X feature branch. Documentation links, comment citations and gate-to-workflow correspondence passed all 13 targeted tests. No runtime source changed and the full workspace suite was not repeated.
