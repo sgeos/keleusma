@@ -534,6 +534,25 @@ fn assert_refused(src: &str) {
 /// prove nothing about the join.
 #[test]
 fn nested_yields_in_tail_position_agree_in_sequence() {
+    // The lexer selects conditional tails using private state that survives
+    // between ticks. Drive every leaf and check the sequence independently of
+    // the differential so two drivers selecting the same wrong ticks fail too.
+    let stateful = "private data st { cursor: Word }\n\
+        loop main(a: Word) -> Word {\n\
+          st.cursor = st.cursor + 1;\n\
+          if a > 10 {\n\
+            if a > 100 { yield st.cursor * 1000 + a }\n\
+            else { yield st.cursor * 100 + a }\n\
+          } else { yield st.cursor * 10 + a }\n\
+        }";
+    let replies = [200, 75, 25, 1, 200, 0];
+    let expected = [15, 2200, 375, 425, 51, 6200];
+    assert_eq!(common::general_vm_sequence(stateful, 5, &replies), expected);
+    assert_eq!(
+        common::general_native_sequence(stateful, 5, &replies),
+        expected
+    );
+
     // Both arms yield. Alternating replies cross the branch each iteration.
     assert_stream_sequences_agree(
         "loop main(a: Word) -> Word { if a > 10 { yield a * 2 } else { yield a + 100 } }",

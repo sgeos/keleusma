@@ -1,3 +1,19 @@
+# Workstream B first increment
+
+**Completed and revalidated on 2026-09-29.** The plan's premise was wrong.
+All 25 yields in `lexer.kel`'s entry are conditional tails. A compiled bytecode
+walk reaches Reset after every yield through only delimiters, forward branch
+targets and stack discards. Conditional nesting does not require a resumable
+frame when no live continuation follows the yield.
+
+The implementation already existed at `d9b6bceb`. Commit `ed212340` strengthens
+its existing sequence regression with private state and explicit expected ticks.
+The seeded lexer agrees over 400 ticks and shared bytes. No lowering changed.
+Verification receipts are in [the archive](../process/handoffs/v0.3.0.md).
+The next Workstream B increment remains an operator decision.
+
+## Superseded original scope
+
 # SCOPING THE FIRST WORKSTREAM B INCREMENT — from measured facts, not from the roadmap alone
 
 **Written 2026-09-27.** Milestones 2 through 6 are untouched. `STREAM_FRONTIER_BRIEF.md` records
