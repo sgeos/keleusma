@@ -10,7 +10,13 @@ The implementation already existed at `d9b6bceb`. Commit `ed212340` strengthens
 its existing sequence regression with private state and explicit expected ticks.
 The seeded lexer agrees over 400 ticks and shared bytes. No lowering changed.
 Verification receipts are in [the archive](../process/handoffs/v0.3.0.md).
-The next Workstream B increment remains an operator decision.
+The roadmap supplies the next increment without another operator ruling.
+Its retcon feasibility, linkage and overhead probes already exist. The next
+slice connects verified `Word` stream bytecode to returned-continuation lowering,
+with a non-tail yield and live state in a bounded arena frame. Host start,
+resume and release must be exercised against the virtual machine, including
+reply use and independent instances. Unsupported shapes remain refused.
+This production lowering is not implemented by the conditional-tail increment.
 
 ## Superseded original scope
 

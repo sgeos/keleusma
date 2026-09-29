@@ -3305,3 +3305,11 @@ Codex revalidated the existing lowering and strengthened its regression in
 shortens the bounded brief, archives receipts and relocates the worktree under
 `keleusma-worktrees/` for remote review. No lowering or next increment is added.
 See the V0.3.X brief and archive for verification and integration status.
+
+
+## V0.3.X roadmap sequencing correction, 2026-09-29
+
+Codex selected the next bounded Workstream B slice from the roadmap rather than
+requiring another operator ruling. The bounded brief remains 66 lines. A stale
+absolute corpus claim in the historical codegen probe is corrected. This follow-up
+adds no lowering and is separate from pull request 473 while its checks run.
