@@ -3390,3 +3390,15 @@ Both complete gates passed on frozen `15b96c2e`. The same tree is now the combin
 head of pull request 475, with remote checks running. Keep that head unchanged.
 Workstream B remains active. Resume from the bounded native brief. Upstream
 material is preserved.
+
+
+## V0.3.X stable arena handles, 2026-09-29
+
+`feat/retcon-stable-handle` stores the current continuation inside a bounded
+caller-owned slot through provisional start, resume and release entry points.
+Existing VM differentials now exercise both interfaces. Two new tests cover
+independent slots, release, reuse and C linkage. All 33 coroutine tests and
+all-target lints pass in both float configurations. Composite host inputs and replies
+remain outside admission. Pull request 475 continues remote checks unchanged.
+Workstream B and combined native gates remain outstanding. Resume from the
+bounded native brief. Upstream material is preserved.

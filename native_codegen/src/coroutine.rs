@@ -31,6 +31,19 @@
 //! ordinary data regions using their existing contracts before start. LLVM
 //! initialises the frame itself; its previous bytes need not be cleared.
 //! Never resume a released instance or invoke one continuation concurrently.
+//!
+//! Stable arena handles use `kel_coroutine_<entry>_start`, `_resume` and `_release`.
+//! Reserve [`slot_bytes`] bytes aligned to [`FRAME_ALIGN`]. Start takes the normal
+//! scalar argument, shared, private and composite-region pointers, then the slot.
+//! Resume takes the same slot and an i64 reply bit pattern. Both return
+//! `{i64 live, i64 value}`. A live status of one marks a yielded value; zero
+//! returns a zero payload. Release takes the slot and returns nothing. It clears
+//! the continuation, is idempotent, and makes subsequent resume return zeros.
+//! Start may reuse a released slot but must never overwrite a live one. The slot
+//! needs no prior initialization before start and must remain allocated and
+//! unmoved until release. These provisional entry points use the same code and
+//! ordinary-region lifetime contract as the raw interface above. They manage
+//! continuation state, not allocation or ownership of the caller's arena pool.
 
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::builder::Builder;
@@ -45,10 +58,22 @@ use keleusma::bytecode::{BlockType, Module, Op, TypeTag};
 
 use crate::{LowerError, LowerOptions};
 
+mod host;
 pub(crate) mod types;
 
 /// Alignment required for the caller-provided coroutine frame.
 pub const FRAME_ALIGN: u32 = 8;
+
+/// Bytes for a stable host slot, including its continuation and reply header.
+/// The slot requires [`FRAME_ALIGN`] alignment and remains reserved until release.
+pub fn slot_bytes(frame_bytes: u32) -> Result<u32, LowerError> {
+    if !(FRAME_ALIGN..=i32::MAX as u32).contains(&frame_bytes) {
+        return Err(error(
+            "coroutine frame size must be between 8 and i32::MAX bytes",
+        ));
+    }
+    Ok(frame_bytes + host::HEADER_BYTES)
+}
 
 fn error(message: impl ToString) -> LowerError {
     LowerError::UnsupportedShape(message.to_string())
@@ -271,6 +296,8 @@ pub fn lower<'ctx>(
     }) {
         return Err(error("coroutine intrinsic survived splitting"));
     }
+    host::emit(ctx, &module, f, entry);
+    module.verify().map_err(error)?;
     Ok(module)
 }
 

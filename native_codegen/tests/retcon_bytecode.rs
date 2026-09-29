@@ -28,6 +28,31 @@ struct Step {
     next: *const (),
     value: i64,
 }
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Outcome {
+    live: u64,
+    value: i64,
+}
+impl Outcome {
+    fn step(self, slot: *mut u8) -> Step {
+        assert!(self.live <= 1);
+        Step {
+            next: if self.live == 0 {
+                std::ptr::null()
+            } else {
+                slot.cast()
+            },
+            value: self.value,
+        }
+    }
+}
+type HandleStart = unsafe extern "C" fn(i64, *mut u8, *mut u8, *mut u8, *mut u8) -> Outcome;
+type HandleFloatStart =
+    unsafe extern "C" fn(NativeFloat, *mut u8, *mut u8, *mut u8, *mut u8) -> Outcome;
+type HandleResume = unsafe extern "C" fn(*mut u8, i64) -> Outcome;
+type HandleRelease = unsafe extern "C" fn(*mut u8);
+
 type Resume = unsafe extern "C" fn(*mut u8, bool) -> Step;
 type Start = unsafe extern "C" fn(i64, *mut u8, *mut u8, *mut u8, *mut u8, *mut u8) -> Step;
 
@@ -96,7 +121,29 @@ fn native_module(
     replies: &[i64],
     optimize: bool,
 ) -> (Vec<i64>, Vec<u8>) {
-    native_module_read(program, seed, first, replies, optimize, |bits, _, _| bits)
+    let raw = native_module_read(
+        program,
+        seed,
+        first,
+        replies,
+        optimize,
+        false,
+        |bits, _, _| bits,
+    );
+    let stable = native_module_read(
+        program,
+        seed,
+        first,
+        replies,
+        optimize,
+        true,
+        |bits, _, _| bits,
+    );
+    assert_eq!(
+        raw, stable,
+        "stable handle must preserve the raw retcon sequence"
+    );
+    raw
 }
 
 fn native_module_read<T>(
@@ -105,6 +152,7 @@ fn native_module_read<T>(
     first: i64,
     replies: &[i64],
     optimize: bool,
+    stable: bool,
     mut read: impl FnMut(i64, &Guarded, &Guarded) -> T,
 ) -> (Vec<T>, Vec<u8>) {
     assert!(!replies.is_empty());
@@ -158,8 +206,36 @@ fn native_module_read<T>(
             64
         );
     }
-    let frame = Guarded::new(4096);
-    let reply = Guarded::new(8);
+    let frame = Guarded::new(if stable {
+        coroutine::slot_bytes(4096).unwrap() as usize
+    } else {
+        4096
+    });
+    let reply = Guarded::new(if stable { 0 } else { 8 });
+    let handle = format!("kel_coroutine_{}", program.entry_point.unwrap());
+    if stable {
+        assert_eq!(
+            module
+                .get_function(&format!("{handle}_start"))
+                .unwrap()
+                .count_params(),
+            5
+        );
+        assert_eq!(
+            module
+                .get_function(&format!("{handle}_resume"))
+                .unwrap()
+                .count_params(),
+            2
+        );
+        assert_eq!(
+            module
+                .get_function(&format!("{handle}_release"))
+                .unwrap()
+                .count_params(),
+            1
+        );
+    }
     let shared = Guarded::new(program.shared_data_bytes as usize);
     unsafe { std::slice::from_raw_parts_mut(shared.ptr(), shared.len) }.copy_from_slice(seed);
     let private = Guarded::new(
@@ -173,7 +249,32 @@ fn native_module_read<T>(
     let used = frame.arena.bottom_used();
     let mut result = Vec::new();
     let mut step = unsafe {
-        if float_input {
+        if stable {
+            let started = if float_input {
+                engine
+                    .get_function::<HandleFloatStart>(&format!("{handle}_start"))
+                    .unwrap()
+                    .call(
+                        NativeFloat::from_bits(first as _),
+                        shared.ptr(),
+                        private.ptr(),
+                        region.ptr(),
+                        frame.ptr(),
+                    )
+            } else {
+                engine
+                    .get_function::<HandleStart>(&format!("{handle}_start"))
+                    .unwrap()
+                    .call(
+                        first,
+                        shared.ptr(),
+                        private.ptr(),
+                        region.ptr(),
+                        frame.ptr(),
+                    )
+            };
+            started.step(frame.ptr())
+        } else if float_input {
             engine.get_function::<FloatStart>(&entry).unwrap().call(
                 NativeFloat::from_bits(first as _),
                 shared.ptr(),
@@ -200,16 +301,42 @@ fn native_module_read<T>(
             storage.check();
         }
         if i + 1 < replies.len() {
-            unsafe {
-                reply.ptr().cast::<i64>().write(value);
+            if stable {
+                step = unsafe {
+                    engine
+                        .get_function::<HandleResume>(&format!("{handle}_resume"))
+                        .unwrap()
+                        .call(frame.ptr(), value)
+                }
+                .step(frame.ptr());
+            } else {
+                unsafe {
+                    reply.ptr().cast::<i64>().write(value);
+                }
+                let resume: Resume = unsafe { std::mem::transmute(step.next) };
+                step = unsafe { resume(frame.ptr(), false) };
             }
-            let resume: Resume = unsafe { std::mem::transmute(step.next) };
-            step = unsafe { resume(frame.ptr(), false) };
         }
     }
-    let release: Resume = unsafe { std::mem::transmute(step.next) };
-    let end = unsafe { release(frame.ptr(), true) };
-    assert!(end.next.is_null());
+    if stable {
+        unsafe {
+            engine
+                .get_function::<HandleRelease>(&format!("{handle}_release"))
+                .unwrap()
+                .call(frame.ptr());
+        }
+        let after = unsafe {
+            engine
+                .get_function::<HandleResume>(&format!("{handle}_resume"))
+                .unwrap()
+                .call(frame.ptr(), 99)
+        };
+        assert_eq!(after, Outcome { live: 0, value: 0 });
+    } else {
+        let release: Resume = unsafe { std::mem::transmute(step.next) };
+        let end = unsafe { release(frame.ptr(), true) };
+        assert!(end.next.is_null());
+    }
     assert_eq!(frame.arena.bottom_used(), used);
     for storage in [&frame, &reply, &shared, &private, &region] {
         storage.check();
@@ -1160,13 +1287,14 @@ fn composite_bodies(src: &str, first: i64, replies: &[i64]) -> Vec<Vec<u8>> {
             }
         }
     }
-    for optimize in [false, true] {
+    for (optimize, stable) in [(false, false), (false, true), (true, false), (true, true)] {
         let (actual, _) = native_module_read(
             &p,
             &vec![0; p.shared_data_bytes as usize],
             first,
             replies,
             optimize,
+            stable,
             |bits, region, private| {
                 let address = bits as usize;
                 let end = address.checked_add(size as usize).unwrap();
@@ -1331,4 +1459,182 @@ fn live_body_coroutines_require_frame_space_and_verified_arguments() {
     assert!(keleusma::verify::verify(&p).is_err());
     let error = coroutine::lower(&ctx, &p, &tm, 4096).unwrap_err();
     assert!(error.to_string().contains("verification:"), "{error}");
+}
+
+#[test]
+fn stable_handles_release_independently_and_reuse_the_same_slot() {
+    let src = "loop main(a: Word) -> Word { let keep = a + 100; let r = yield a; yield r + keep }";
+    assert_eq!(
+        common::general_vm_sequence(src, 5, &[11, 20, 31, 0]),
+        [5, 116, 20, 151]
+    );
+    assert_eq!(common::general_vm_sequence(src, 99, &[22, 0]), [99, 221]);
+    assert_eq!(common::general_vm_sequence(src, 17, &[2, 0]), [17, 119]);
+    assert!(coroutine::slot_bytes(7).is_err());
+    assert!(coroutine::slot_bytes(u32::MAX).is_err());
+    let program = common::build(src);
+    for optimize in [false, true] {
+        let ctx = Context::create();
+        let tm = machine();
+        let module = coroutine::lower(&ctx, &program, &tm, 128).unwrap();
+        if optimize {
+            module
+                .run_passes(
+                    "default<O2>",
+                    &tm,
+                    inkwell::passes::PassBuilderOptions::create(),
+                )
+                .unwrap();
+        }
+        let engine = module
+            .create_jit_execution_engine(OptimizationLevel::None)
+            .unwrap();
+        let name = format!("kel_coroutine_{}", program.entry_point.unwrap());
+        let start =
+            unsafe { engine.get_function::<HandleStart>(&format!("{name}_start")) }.unwrap();
+        let resume =
+            unsafe { engine.get_function::<HandleResume>(&format!("{name}_resume")) }.unwrap();
+        let release =
+            unsafe { engine.get_function::<HandleRelease>(&format!("{name}_release")) }.unwrap();
+        let slots = [
+            Guarded::new(coroutine::slot_bytes(128).unwrap() as usize),
+            Guarded::new(coroutine::slot_bytes(128).unwrap() as usize),
+        ];
+        let used = slots.each_ref().map(|slot| slot.arena.bottom_used());
+        let unused = Guarded::new(0);
+        let launch = |i: usize, value| unsafe {
+            start.call(
+                value,
+                unused.ptr(),
+                unused.ptr(),
+                unused.ptr(),
+                slots[i].ptr(),
+            )
+        };
+        assert_eq!(launch(0, 5), Outcome { live: 1, value: 5 });
+        assert_eq!(launch(1, 99), Outcome { live: 1, value: 99 });
+        assert_eq!(
+            unsafe { resume.call(slots[1].ptr(), 22) },
+            Outcome {
+                live: 1,
+                value: 221
+            }
+        );
+        unsafe {
+            release.call(slots[1].ptr());
+            release.call(slots[1].ptr());
+        }
+        assert_eq!(
+            unsafe { resume.call(slots[1].ptr(), 99) },
+            Outcome { live: 0, value: 0 }
+        );
+        assert_eq!(
+            unsafe { resume.call(slots[0].ptr(), 11) },
+            Outcome {
+                live: 1,
+                value: 116
+            }
+        );
+        assert_eq!(launch(1, 17), Outcome { live: 1, value: 17 });
+        assert_eq!(
+            unsafe { resume.call(slots[0].ptr(), 20) },
+            Outcome { live: 1, value: 20 }
+        );
+        assert_eq!(
+            unsafe { resume.call(slots[0].ptr(), 31) },
+            Outcome {
+                live: 1,
+                value: 151
+            }
+        );
+        assert_eq!(
+            unsafe { resume.call(slots[1].ptr(), 2) },
+            Outcome {
+                live: 1,
+                value: 119
+            }
+        );
+        for (slot, used) in slots.iter().zip(used) {
+            unsafe {
+                release.call(slot.ptr());
+            }
+            assert_eq!(slot.arena.bottom_used(), used);
+            slot.check();
+        }
+        unused.check();
+    }
+}
+
+#[test]
+fn stable_handle_entry_points_link_and_run_from_c() {
+    use std::process::Command;
+    let program = common::build(
+        "loop main(a: Word) -> Word { let keep = a + 100; let r = yield a; yield r + keep }",
+    );
+    let ctx = Context::create();
+    let tm = machine();
+    let module = coroutine::lower(&ctx, &program, &tm, 128).unwrap();
+    let dir =
+        std::path::PathBuf::from("../tmp").join(format!("stable-handle-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let object = dir.join("coroutine.o");
+    tm.write_to_file(&module, inkwell::targets::FileType::Object, &object)
+        .unwrap();
+    let host = dir.join("host.c");
+    std::fs::write(
+        &host,
+        format!(
+            r#"
+#include <assert.h>
+#include <stdint.h>
+#include <stdalign.h>
+struct outcome {{ uint64_t live; int64_t value; }};
+extern struct outcome kel_coroutine_{entry}_start(int64_t, void *, void *, void *, void *);
+extern struct outcome kel_coroutine_{entry}_resume(void *, int64_t);
+extern void kel_coroutine_{entry}_release(void *);
+int main(void) {{
+    alignas(8) unsigned char slot[{bytes}];
+    struct outcome s = kel_coroutine_{entry}_start(5, 0, 0, 0, slot);
+    assert(s.live == 1 && s.value == 5);
+    s = kel_coroutine_{entry}_resume(slot, 11);
+    assert(s.live == 1 && s.value == 116);
+    kel_coroutine_{entry}_release(slot);
+    kel_coroutine_{entry}_release(slot);
+    s = kel_coroutine_{entry}_resume(slot, 99);
+    assert(s.live == 0 && s.value == 0);
+    s = kel_coroutine_{entry}_start(17, 0, 0, 0, slot);
+    assert(s.live == 1 && s.value == 17);
+    s = kel_coroutine_{entry}_resume(slot, 2);
+    assert(s.live == 1 && s.value == 119);
+    kel_coroutine_{entry}_release(slot);
+    return 0;
+}}
+"#,
+            entry = program.entry_point.unwrap(),
+            bytes = coroutine::slot_bytes(128).unwrap()
+        ),
+    )
+    .unwrap();
+    let executable = dir.join("host");
+    let linked = Command::new("cc")
+        .arg("-std=c11")
+        .arg(&host)
+        .arg(&object)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .unwrap();
+    assert!(
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
+    let run = Command::new(&executable).output().unwrap();
+    assert!(
+        run.status.success(),
+        "{:?}: {}",
+        run.status,
+        String::from_utf8_lossy(&run.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }

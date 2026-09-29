@@ -23,6 +23,7 @@
 //!
 //! | destination | outlives the region? | what stops an address landing there |
 //! |---|---|---|
+//! | stable arena-slot header | until release | continuation points into emitted code kept alive by the host; the reply cell carries scalar bits; release stores a null continuation |
 //! | operand slot (`push_w`) | no — dies with the call | nothing needed; an address is the intended content |
 //! | local slot (`SetLocal`, parameters, the resume value) | no — cleared at `Op::Reset` | nothing needed, same reason |
 //! | retcon latest reply | yes, until release | the public lowering admits scalar parameters only; initialised at start and updated on resume |
@@ -84,7 +85,8 @@ const MOVE_FORMS: &[&str] = &["build_store(", "build_memcpy(", "store i64 "];
 // 19 -> 24 with two latest-reply stores, one resume-local store, and
 // the two Reset stores. These destinations are classified above.
 // 24 -> 27, including the coroutine context and parsed intrinsic helper.
-const RECORDED_MOVE_SITES: usize = 27;
+// 27 -> 30 for the stable continuation, reply, and release stores.
+const RECORDED_MOVE_SITES: usize = 30;
 // 18 -> 19 on 2026-09-11, when the shared composite slot landed: one body copy
 // into the host's buffer, at the offset and length the module's shared layout
 // STATES. Unlike the persistent pool, nothing here is derived — so there is no
@@ -104,7 +106,7 @@ const RECORDED_MOVE_SITES: usize = 27;
 
 fn move_sites() -> Vec<(&'static str, usize, String)> {
     let mut sites = Vec::new();
-    for file in ["src/lib.rs", "src/coroutine.rs"] {
+    for file in ["src/lib.rs", "src/coroutine.rs", "src/coroutine/host.rs"] {
         let src = std::fs::read_to_string(file).expect("the emitter is readable");
         for (i, line) in src.lines().enumerate() {
             if MOVE_FORMS.iter().any(|form| line.contains(form)) {

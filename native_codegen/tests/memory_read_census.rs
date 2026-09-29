@@ -18,6 +18,7 @@
 //!
 //! | read | what guarantees the contents |
 //! |---|---|
+//! | stable handle continuation | start writes it before use, resume replaces it, and release clears it; the slot remains caller-owned until release |
 //! | operand slot (`peek`, `pop`) | a push earlier in the same call |
 //! | local slot (`GetLocal`) | zeroed on first entry, cleared at `Op::Reset`; the runtime's `Unit` is this backend's zero |
 //! | operand spill slot | written at the `yield` that suspended, read only by that yield's resume block |
@@ -55,7 +56,8 @@ const READ_FORMS: &[&str] = &["build_load(", " = load "];
 /// Read sites in the emitter, at the stamp.
 // 16 -> 18 with the retcon reply cell and latest-reply reads described above.
 // 18 -> 22, including the coroutine context and parsed intrinsic helper.
-const RECORDED_READ_SITES: usize = 22;
+// 22 -> 23 for the stable handle continuation, initialized by start.
+const RECORDED_READ_SITES: usize = 23;
 // 16 at first derivation, 2026-09-11. Four are on the host-provided boundary —
 // the resume-state word, the composite initialisation word, the private slot
 // array and the shared segment — and the rest read memory this lowering wrote
@@ -63,7 +65,7 @@ const RECORDED_READ_SITES: usize = 22;
 
 fn read_sites() -> Vec<(&'static str, usize, String)> {
     let mut sites = Vec::new();
-    for file in ["src/lib.rs", "src/coroutine.rs"] {
+    for file in ["src/lib.rs", "src/coroutine.rs", "src/coroutine/host.rs"] {
         let src = std::fs::read_to_string(file).expect("the emitter is readable");
         for (i, line) in src.lines().enumerate() {
             if READ_FORMS.iter().any(|form| line.contains(form)) {
