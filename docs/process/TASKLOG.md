@@ -3809,5 +3809,5 @@ gate record when resuming this line.
 
 Attributed to Codex on the V0.3.X line. Scalar bytecode and nested reentrant
 and stream calls now lower through LLVM returned continuations. The bounded
-native brief records verification and the remaining composite boundary. Workstream B
+native brief records the scalar reply correction and the remaining composite boundary. Workstream B
 remains active. Upstream task state above is preserved.

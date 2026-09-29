@@ -16,7 +16,9 @@
 //! replies update the entry parameter while preserving callee state until Reset.
 //! A nested stream clears its own locals on Reset. Reads of non-Unit callee
 //! parameters remain refused because the VM does not replenish those slots.
-//! Delegated yields must have the same signature as the entry yield.
+//! Delegated yields must have the same signature as the entry yield. Scalar
+//! admission follows actual host reply tags through control flow and refuses
+//! operations or boundaries whose types cannot be proved.
 //!
 //! The provisional start symbol is `kel_chunk_<entry_point>` with the scalar
 //! argument followed by shared, private, composite-region, frame and reply
@@ -39,6 +41,8 @@ use inkwell::values::{BasicValue, CallSiteValue, FunctionValue, InstructionOpcod
 use keleusma::bytecode::{BlockType, Module, Op, TypeTag};
 
 use crate::{LowerError, LowerOptions};
+
+mod types;
 
 /// Alignment required for the caller-provided coroutine frame.
 pub const FRAME_ALIGN: u32 = 8;
@@ -152,6 +156,7 @@ pub fn lower<'ctx>(
             ));
         }
     }
+    types::check(program, entry)?;
     let module = ctx.create_module("kel_retcon");
     module.set_triple(&machine.get_triple());
     module.set_data_layout(&machine.get_target_data().get_data_layout());
