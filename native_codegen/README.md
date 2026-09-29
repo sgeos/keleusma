@@ -153,3 +153,13 @@ The condition was set by the `v0.2.3` line, which owns the release process, when
 step joins the release gate at the back-merge. **The corresponding rule in
 `docs/process/RELEASE_PROCESS.md` is theirs to write**; this note records the requirement on the side
 that owns the step.
+
+
+## Bytecode coroutines
+
+`coroutine::lower` provides the Workstream B retcon path for verified scalar
+streams. Its [module documentation](src/coroutine.rs) describes the provisional
+host contract and checked frame reservation. [Execution tests](tests/retcon_bytecode.rs)
+compare suspension sequences and seeded lexer state with the virtual machine.
+Delegated suspension remains refused. This is separate from the existing
+`lower_module` interface and does not complete Workstream B yet.

@@ -1,0 +1,540 @@
+//! Bytecode, rather than handwritten LLVM fragments, drives these coroutines.
+mod common;
+
+use inkwell::OptimizationLevel;
+use inkwell::context::Context;
+use inkwell::targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine};
+use keleusma_native::{coroutine, region};
+
+fn machine() -> TargetMachine {
+    Target::initialize_native(&InitializationConfig::default()).unwrap();
+    let triple = TargetMachine::get_default_triple();
+    Target::from_triple(&triple)
+        .unwrap()
+        .create_target_machine(
+            &triple,
+            "generic",
+            "",
+            OptimizationLevel::Default,
+            RelocMode::PIC,
+            CodeModel::Default,
+        )
+        .unwrap()
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Step {
+    next: *const (),
+    value: i64,
+}
+type Resume = unsafe extern "C" fn(*mut u8, bool) -> Step;
+type Start = unsafe extern "C" fn(i64, *mut u8, *mut u8, *mut u8, *mut u8, *mut u8) -> Step;
+
+#[cfg(feature = "narrow-float-32")]
+type NativeFloat = f32;
+#[cfg(not(feature = "narrow-float-32"))]
+type NativeFloat = f64;
+type FloatStart =
+    unsafe extern "C" fn(NativeFloat, *mut u8, *mut u8, *mut u8, *mut u8, *mut u8) -> Step;
+
+#[cfg(feature = "narrow-float-32")]
+fn wide(value: NativeFloat) -> f64 {
+    f64::from(value)
+}
+#[cfg(not(feature = "narrow-float-32"))]
+fn wide(value: NativeFloat) -> f64 {
+    value
+}
+
+/// Exact boundaries, including zero-length regions, have adjacent sentinels.
+/// Each reservation comes from the arena and is stable until release.
+struct Guarded {
+    arena: keleusma_arena::Arena,
+    allocation: std::ptr::NonNull<[u8]>,
+    len: usize,
+}
+impl Guarded {
+    fn new(len: usize) -> Self {
+        let arena = keleusma_arena::Arena::with_capacity(len + 128);
+        let mut allocation = arena.alloc_bottom_bytes(len + 32).unwrap();
+        unsafe {
+            allocation.as_mut().fill(0xa5);
+            allocation.as_mut()[16..16 + len].fill(0);
+        }
+        let this = Self {
+            arena,
+            allocation,
+            len,
+        };
+        assert_eq!(this.ptr() as usize % 8, 0);
+        this
+    }
+    fn ptr(&self) -> *mut u8 {
+        unsafe { (self.allocation.as_ptr() as *mut u8).add(16) }
+    }
+    fn check(&self) {
+        let bytes = unsafe { self.allocation.as_ref() };
+        assert!(bytes[..16].iter().all(|&b| b == 0xa5), "prefix overwritten");
+        assert!(
+            bytes[16 + self.len..].iter().all(|&b| b == 0xa5),
+            "suffix overwritten"
+        );
+    }
+}
+
+fn native(src: &str, first: i64, replies: &[i64], optimize: bool) -> Vec<i64> {
+    let program = common::build(src);
+    let seed = vec![0; program.shared_data_bytes as usize];
+    native_module(&program, &seed, first, replies, optimize).0
+}
+
+fn native_module(
+    program: &keleusma::bytecode::Module,
+    seed: &[u8],
+    first: i64,
+    replies: &[i64],
+    optimize: bool,
+) -> (Vec<i64>, Vec<u8>) {
+    assert!(!replies.is_empty());
+    let ctx = Context::create();
+    let tm = machine();
+    let module = coroutine::lower(&ctx, program, &tm, 4096).expect("retcon lower");
+    if optimize {
+        module
+            .run_passes(
+                "default<O2>",
+                &tm,
+                inkwell::passes::PassBuilderOptions::create(),
+            )
+            .unwrap();
+        module.verify().unwrap();
+    }
+    let ir = module.print_to_string().to_string();
+    assert!(ir.contains(".resume"), "LLVM must produce continuations");
+    assert!(!ir.contains("call i1 (...) @llvm.coro.suspend"));
+    let entry = format!("kel_chunk_{}", program.entry_point.unwrap());
+    let f = module.get_function(&entry).unwrap();
+    assert_eq!(f.count_params(), 6);
+    assert_eq!(
+        f.get_type()
+            .get_return_type()
+            .unwrap()
+            .into_struct_type()
+            .count_fields(),
+        2
+    );
+    let engine = module
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .unwrap();
+    let float_input = f.get_nth_param(0).unwrap().is_float_value();
+    if float_input {
+        assert_eq!(
+            f.get_nth_param(0)
+                .unwrap()
+                .into_float_value()
+                .get_type()
+                .get_bit_width(),
+            (std::mem::size_of::<NativeFloat>() * 8) as u32
+        );
+    } else {
+        assert_eq!(
+            f.get_nth_param(0)
+                .unwrap()
+                .into_int_value()
+                .get_type()
+                .get_bit_width(),
+            64
+        );
+    }
+    let frame = Guarded::new(4096);
+    let reply = Guarded::new(8);
+    let shared = Guarded::new(program.shared_data_bytes as usize);
+    unsafe { std::slice::from_raw_parts_mut(shared.ptr(), shared.len) }.copy_from_slice(seed);
+    let private = Guarded::new(
+        keleusma::vm::required_persistent_capacity_for(program)
+            + region::persistent_supplement_bytes(program) as usize,
+    );
+    let region = Guarded::new(region::host_arena_supplement_bytes(program) as usize);
+    common::install_private_init_bytes(program, unsafe {
+        std::slice::from_raw_parts_mut(private.ptr(), private.len)
+    });
+    let used = frame.arena.bottom_used();
+    let mut result = Vec::new();
+    let mut step = unsafe {
+        if float_input {
+            engine.get_function::<FloatStart>(&entry).unwrap().call(
+                NativeFloat::from_bits(first as _),
+                shared.ptr(),
+                private.ptr(),
+                region.ptr(),
+                frame.ptr(),
+                reply.ptr(),
+            )
+        } else {
+            engine.get_function::<Start>(&entry).unwrap().call(
+                first,
+                shared.ptr(),
+                private.ptr(),
+                region.ptr(),
+                frame.ptr(),
+                reply.ptr(),
+            )
+        }
+    };
+    for (i, &value) in replies.iter().enumerate() {
+        assert!(!step.next.is_null());
+        result.push(step.value);
+        for storage in [&frame, &reply, &shared, &private, &region] {
+            storage.check();
+        }
+        if i + 1 < replies.len() {
+            unsafe {
+                reply.ptr().cast::<i64>().write(value);
+            }
+            let resume: Resume = unsafe { std::mem::transmute(step.next) };
+            step = unsafe { resume(frame.ptr(), false) };
+        }
+    }
+    let release: Resume = unsafe { std::mem::transmute(step.next) };
+    let end = unsafe { release(frame.ptr(), true) };
+    assert!(end.next.is_null());
+    assert_eq!(frame.arena.bottom_used(), used);
+    for storage in [&frame, &reply, &shared, &private, &region] {
+        storage.check();
+    }
+    (
+        result,
+        unsafe { std::slice::from_raw_parts(shared.ptr(), shared.len) }.to_vec(),
+    )
+}
+
+#[test]
+fn non_tail_yield_preserves_locals_operands_and_reply() {
+    let src =
+        "loop main(a: Word) -> Word { let keep = a + 100; let r = 10 + (yield a); yield r + keep }";
+    let replies = [7, 20, 3, 40, 1, 0];
+    let expected = [5, 122, 20, 133, 40, 151];
+    assert_eq!(common::general_vm_sequence(src, 5, &replies), expected);
+    for optimize in [false, true] {
+        assert_eq!(native(src, 5, &replies, optimize), expected);
+    }
+}
+
+#[test]
+fn nested_branches_and_private_state_match_the_vm() {
+    let src = "private data st { cursor: Word }\nloop main(a: Word) -> Word { st.cursor = st.cursor + 1; if a > 10 { if a > 100 { yield st.cursor * 1000 + a } else { yield st.cursor * 100 + a } } else { yield st.cursor * 10 + a } }";
+    let replies = [200, 75, 25, 1, 200, 0];
+    let expected = [15, 2200, 375, 425, 51, 6200];
+    assert_eq!(common::general_vm_sequence(src, 5, &replies), expected);
+    assert_eq!(native(src, 5, &replies, false), expected);
+}
+
+#[test]
+fn undersized_frame_is_a_compile_time_refusal() {
+    let p = common::build(
+        "loop main(a: Word) -> Word { let keep = a + 100; let r = yield 1; yield r + keep }",
+    );
+    let ctx = Context::create();
+    let err = coroutine::lower(&ctx, &p, &machine(), 8).unwrap_err();
+    assert!(err.to_string().contains("frame exceeds"), "{err}");
+}
+
+#[test]
+fn branch_joins_loop_back_edges_and_calls_resume_correctly() {
+    let shapes = [
+        "loop main(t: Word) -> Word { if t > 0 { let a = yield t; yield a } else { yield 0 } }",
+        "loop main(t: Word) -> Word { let r = yield 1; yield r + t }",
+        "loop main(t: Word) -> Word { (yield t) + (yield t + 1) }",
+        "fn plus(a: Word) -> Word { a + 19 } loop main(t: Word) -> Word { let a = plus(t); let r = yield a; yield plus(r + a) }",
+        "loop main(t: Word) -> Word { for i in 0..3 { yield i + t; } yield t + 100 }",
+    ];
+    let replies: Vec<_> = (0..80).map(|i| if i % 3 == 0 { -i } else { i }).collect();
+    for src in shapes {
+        let expected = common::general_vm_sequence(src, 7, &replies);
+        for optimize in [false, true] {
+            assert_eq!(native(src, 7, &replies, optimize), expected, "{src}");
+        }
+    }
+}
+
+#[test]
+fn lexer_retcon_matches_seeded_vm_tokens_and_shared_writes() {
+    use keleusma::bytecode::{SlotVisibility, Value};
+    use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
+    let program = common::build(&std::fs::read_to_string("../src/selfhost/kel/lexer.kel").unwrap());
+    let text = b"fn add(x: Word, y: Word) -> Word { x + y } loop main(t: Word) -> Word { if t > 10 { yield add(t, 2) } else { yield 0 } }";
+    let layout = program.data_layout.as_ref().unwrap();
+    let offset = |suffix: &str| {
+        let index = layout
+            .slots
+            .iter()
+            .filter(|s| s.visibility == SlotVisibility::Shared)
+            .position(|s| {
+                s.name.ends_with(&format!(".{suffix}"))
+                    || s.name.ends_with(&format!(".{suffix}[0]"))
+                    || s.name == suffix
+            })
+            .unwrap();
+        layout.shared_layout[index].offset as usize
+    };
+    let mut seed = vec![0; program.shared_data_bytes as usize];
+    let len = offset("len");
+    let bytes = offset("bytes");
+    seed[len..len + 8].copy_from_slice(&(text.len() as i64).to_le_bytes());
+    seed[bytes..bytes + text.len()].copy_from_slice(text);
+    let need = required_persistent_capacity_for(&program);
+    let mut arena = keleusma_arena::Arena::with_capacity(
+        auto_arena_capacity_for(&program, &[]).unwrap() + need + 65536,
+    );
+    arena.resize_persistent(need).unwrap();
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    let mut shared = seed.clone();
+    let mut state = vm.call_with_shared(&mut shared, &[Value::Int(0)]).unwrap();
+    let replies: Vec<i64> = (1..401).collect();
+    let mut expected = Vec::new();
+    for (index, &r) in replies.iter().enumerate() {
+        let VmState::Yielded(Value::Int(v)) = state else {
+            panic!("unexpected {state:?}")
+        };
+        expected.push(v);
+        if index + 1 < replies.len() {
+            state = vm.resume_with_shared(&mut shared, Value::Int(r)).unwrap();
+            if matches!(state, VmState::Reset) {
+                state = vm.resume_with_shared(&mut shared, Value::Int(r)).unwrap();
+            }
+        }
+    }
+    let codes: std::collections::BTreeSet<_> = expected.iter().map(|v| v & 255).collect();
+    assert!(codes.len() >= 10, "vacuous lexer drive: {codes:?}");
+    for optimize in [false, true] {
+        let (got, written) = native_module(&program, &seed, 0, &replies, optimize);
+        assert_eq!(got, expected);
+        assert_eq!(written, shared);
+    }
+}
+
+#[test]
+fn two_instances_release_independently_and_reuse_a_frame() {
+    let program = common::build(
+        "loop main(a: Word) -> Word { let keep = a + 100; let r = yield a; yield r + keep }",
+    );
+    let ctx = Context::create();
+    let module = coroutine::lower(&ctx, &program, &machine(), 128).unwrap();
+    let engine = module
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .unwrap();
+    let start = unsafe {
+        engine.get_function::<Start>(&format!("kel_chunk_{}", program.entry_point.unwrap()))
+    }
+    .unwrap();
+    // These programs never touch the ordinary data regions. Non-null zero-size
+    // guarded buffers catch an accidental dependency on the old dispatch state.
+    let unused = Guarded::new(0);
+    let frames = [Guarded::new(128), Guarded::new(128)];
+    let replies = [Guarded::new(8), Guarded::new(8)];
+    let launch = |i: usize, first| unsafe {
+        start.call(
+            first,
+            unused.ptr(),
+            unused.ptr(),
+            unused.ptr(),
+            frames[i].ptr(),
+            replies[i].ptr(),
+        )
+    };
+    let mut a = launch(0, 5);
+    let mut b = launch(1, 99);
+    assert_eq!((a.value, b.value), (5, 99));
+    unsafe {
+        replies[1].ptr().cast::<i64>().write(22);
+    }
+    let resume_b: Resume = unsafe { std::mem::transmute(b.next) };
+    b = unsafe { resume_b(frames[1].ptr(), false) };
+    assert_eq!(b.value, 221);
+    let release_b: Resume = unsafe { std::mem::transmute(b.next) };
+    assert!(unsafe { release_b(frames[1].ptr(), true) }.next.is_null());
+    unsafe {
+        replies[0].ptr().cast::<i64>().write(11);
+    }
+    let resume_a: Resume = unsafe { std::mem::transmute(a.next) };
+    a = unsafe { resume_a(frames[0].ptr(), false) };
+    assert_eq!(a.value, 116);
+    // Reuse released bytes without clearing them. Start must initialise its own
+    // frame rather than inheriting the previous continuation or live locals.
+    b = launch(1, 33);
+    assert_eq!(b.value, 33);
+    for (i, step) in [a, b].into_iter().enumerate() {
+        let release: Resume = unsafe { std::mem::transmute(step.next) };
+        assert!(unsafe { release(frames[i].ptr(), true) }.next.is_null());
+        frames[i].check();
+        replies[i].check();
+    }
+    unused.check();
+}
+
+#[test]
+fn invalid_bytecode_and_composite_escape_remain_refused() {
+    let ctx = Context::create();
+    let tm = machine();
+    let mut invalid = common::build("loop main(a: Word) -> Word { yield a }");
+    let entry = invalid.entry_point.unwrap();
+    invalid.chunks[entry].ops[1] = keleusma::bytecode::Op::GetLocal(u16::MAX);
+    assert!(
+        coroutine::lower(&ctx, &invalid, &tm, 4096)
+            .unwrap_err()
+            .to_string()
+            .contains("verification")
+    );
+    let escaping = common::build(
+        &std::fs::read_to_string("../examples/scripts/13_telemetry_stream.kel").unwrap(),
+    );
+    let baseline = keleusma_native::module_refusals(&escaping, Default::default());
+    assert!(!baseline.is_empty());
+    let error = coroutine::lower(&ctx, &escaping, &tm, 4096).unwrap_err();
+    assert!(
+        baseline
+            .iter()
+            .any(|(_, original)| original.to_string() == error.to_string()),
+        "{error}"
+    );
+}
+
+#[test]
+fn bytecode_coroutine_links_and_runs_from_a_c_host() {
+    use std::process::Command;
+    let program = common::build(
+        "loop main(a: Word) -> Word { let keep = a + 100; let r = yield a; yield r + keep }",
+    );
+    let ctx = Context::create();
+    let tm = machine();
+    let module = coroutine::lower(&ctx, &program, &tm, 128).unwrap();
+    let dir =
+        std::path::PathBuf::from("../tmp").join(format!("retcon-bytecode-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let object = dir.join("coroutine.o");
+    tm.write_to_file(&module, inkwell::targets::FileType::Object, &object)
+        .unwrap();
+    let host = dir.join("host.c");
+    std::fs::write(
+        &host,
+        format!(
+            r#"
+#include <assert.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdalign.h>
+struct step {{ void *next; int64_t value; }};
+typedef struct step (*resume_fn)(void *, bool);
+extern struct step kel_chunk_{entry}(int64_t, void *, void *, void *, void *, void *);
+int main(void) {{
+    alignas(8) unsigned char frame[128] = {{0}};
+    int64_t reply = 0;
+    struct step s = kel_chunk_{entry}(5, 0, 0, 0, frame, &reply);
+    assert(s.next && s.value == 5);
+    reply = 11;
+    s = ((resume_fn)s.next)(frame, false);
+    assert(s.next && s.value == 116);
+    s = ((resume_fn)s.next)(frame, true);
+    assert(!s.next);
+    return 0;
+}}
+"#,
+            entry = program.entry_point.unwrap()
+        ),
+    )
+    .unwrap();
+    let executable = dir.join("host");
+    let linked = Command::new("cc")
+        .arg("-std=c11")
+        .arg(&host)
+        .arg(&object)
+        .arg("-o")
+        .arg(&executable)
+        .output()
+        .unwrap();
+    assert!(
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
+    let run = Command::new(&executable).output().unwrap();
+    assert!(
+        run.status.success(),
+        "{:?}: {}",
+        run.status,
+        String::from_utf8_lossy(&run.stderr)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn scalar_reply_widths_and_kinds_match_the_vm() {
+    use keleusma::bytecode::{TypeTag, Value};
+    use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
+    let cases = [
+        "loop main(t: ()) -> () { yield t; yield t }",
+        "loop main(t: Byte) -> Byte { let q: Byte = t + (1 as Byte); let r = yield t; yield q + r }",
+        "loop main(t: bool) -> bool { let r = yield t; yield (r and t) }",
+        "loop main(t: Fixed) -> Fixed { let r = yield t; yield (r * t) }",
+        "loop main(t: Float) -> Float { let keep = -t; let r = yield t; yield (r + keep) }",
+    ];
+    for src in cases {
+        let p = common::build(src);
+        let tag = p.chunks[p.entry_point.unwrap()].param_types[0];
+        let encode = |v: i64| match tag {
+            TypeTag::Unit => 0,
+            TypeTag::Bool => i64::from(v != 0),
+            TypeTag::Fixed => v * 65536,
+            TypeTag::Float => (v as NativeFloat / 4.0).to_bits() as i64,
+            _ => v,
+        };
+        let value = |bits: i64| match tag {
+            TypeTag::Unit => Value::Unit,
+            TypeTag::Byte => Value::Byte(bits as u8),
+            TypeTag::Bool => Value::Bool(bits != 0),
+            TypeTag::Fixed => Value::Fixed(bits),
+            TypeTag::Float => Value::Float(wide(NativeFloat::from_bits(bits as _))),
+            _ => unreachable!(),
+        };
+        let first = encode(2);
+        let replies: Vec<_> = [1, 3, 0, 2, 1, 0].into_iter().map(encode).collect();
+        let need = required_persistent_capacity_for(&p);
+        let mut arena = keleusma_arena::Arena::with_capacity(
+            auto_arena_capacity_for(&p, &[]).unwrap() + need + 65536,
+        );
+        arena.resize_persistent(need).unwrap();
+        let mut vm = Vm::new(p, &arena).unwrap();
+        let mut state = vm.call(&[value(first)]).unwrap();
+        let mut expected = Vec::new();
+        for (i, &reply) in replies.iter().enumerate() {
+            let VmState::Yielded(yielded) = state.clone() else {
+                panic!("{state:?}")
+            };
+            expected.push(match yielded {
+                Value::Unit => 0,
+                Value::Byte(v) => i64::from(v),
+                Value::Bool(v) => i64::from(v),
+                Value::Fixed(v) => v,
+                Value::Float(v) => {
+                    assert_eq!(
+                        wide(v as NativeFloat),
+                        v,
+                        "fixture must be exact at both widths"
+                    );
+                    (v as NativeFloat).to_bits() as i64
+                }
+                other => panic!("{other:?}"),
+            });
+            if i + 1 < replies.len() {
+                state = vm.resume(value(reply)).unwrap();
+                if matches!(state, VmState::Reset) {
+                    state = vm.resume(value(reply)).unwrap();
+                }
+            }
+        }
+        for optimize in [false, true] {
+            assert_eq!(native(src, first, &replies, optimize), expected, "{src}");
+        }
+    }
+}

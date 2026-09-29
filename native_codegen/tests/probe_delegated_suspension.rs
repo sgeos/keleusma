@@ -9,7 +9,8 @@
 //! The `v0.2.3` line then changed the module (`aaa87a01`), applying the nine-line
 //! refactor this line had requested: `emit_next` became a plain `fn` and `main`
 //! yields what it returns. **`codegen.kel` now lowers with no flag and is not a
-//! delegated-suspension case.** The backend refuses nothing in the corpus.
+//! delegated-suspension case.** The later composite yield-escape refusal is
+//! independent of this historical codegen finding.
 //!
 //! This file is kept because the MECHANISM it measured is still implemented and
 //! still flagged off, and because the synthetic reproducer below is now its only

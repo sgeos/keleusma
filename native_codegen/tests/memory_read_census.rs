@@ -26,6 +26,8 @@
 //! | **stream resume-state word** | **the host's zeroed persistent buffer.** Zero means "the loop top", which is the correct meaning for a fresh instance |
 //! | **composite initialisation word** | **the host's zeroed buffer.** Zero means "never written", and a read of such a slot FAULTS |
 //! | **private slot array** | **the host, installing `region::private_init_image`.** This is the guarantee that did not exist |
+//! | retcon reply cell | the host writes scalar bits before each resume, as specified by `coroutine::lower`; exercised by `retcon_bytecode.rs` |
+//! | retcon latest reply | initialised from the start argument and updated after each suspension; LLVM preserves it in the frame until release |
 //! | **shared data segment** | **the host, by contract.** Out of this backend's reach and deliberately so |
 //!
 //! # Three of the four host-boundary rows are satisfied by a ZEROED buffer
@@ -50,7 +52,8 @@ mod common;
 const READ_FORMS: &[&str] = &["build_load("];
 
 /// Read sites in the emitter, at the stamp.
-const RECORDED_READ_SITES: usize = 16;
+// 16 -> 18 with the retcon reply cell and latest-reply reads described above.
+const RECORDED_READ_SITES: usize = 18;
 // 16 at first derivation, 2026-09-11. Four are on the host-provided boundary —
 // the resume-state word, the composite initialisation word, the private slot
 // array and the shared segment — and the rest read memory this lowering wrote
@@ -75,9 +78,9 @@ fn every_memory_read_has_a_stated_guarantee() {
     println!("  ------------------------------------------------");
     println!("  sites: {}", sites.len());
     println!(
-        "\n  Every read's guarantee is recorded in this file's header. FOUR are on\n  \
+        "\n  Every read's guarantee is recorded in this file's header. FIVE are on\n  \
          the host-provided boundary, and a zeroed buffer satisfies three of\n  \
-         them — which is why the fourth went unnoticed.\n================\n"
+         the original four. Retcon additionally requires a reply before resume.\n================\n"
     );
 
     assert!(

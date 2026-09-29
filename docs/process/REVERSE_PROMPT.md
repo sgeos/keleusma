@@ -3305,3 +3305,21 @@ Codex revalidated the existing lowering and strengthened its regression in
 shortens the bounded brief, archives receipts and relocates the worktree under
 `keleusma-worktrees/` for remote review. No lowering or next increment is added.
 See the V0.3.X brief and archive for verification and integration status.
+
+
+## V0.3.X roadmap sequencing correction, 2026-09-29
+
+Codex selected the next bounded Workstream B slice from the roadmap rather than
+requiring another operator ruling. The bounded brief remains 66 lines. A stale
+absolute corpus claim in the historical codegen probe is corrected. This follow-up
+adds no lowering and is separate from pull request 473 while its checks run.
+
+
+## V0.3.X bytecode retcon increment, 2026-09-29
+
+Codex implements scalar bytecode coroutine lowering with LLVM retcon, arena
+frames and host start, resume and release. Nine new tests pass in both float
+configurations. The initial broad phase found seven maintenance-guard failures,
+now corrected and checked individually. Full native gates remain outstanding.
+Pull request 473 is merged. Workstream B remains active, with delegated suspension
+next. Resume from the bounded V0.3.X brief. Upstream current-state material is preserved.

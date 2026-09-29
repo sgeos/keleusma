@@ -25,6 +25,8 @@
 //! |---|---|---|
 //! | operand slot (`push_w`) | no — dies with the call | nothing needed; an address is the intended content |
 //! | local slot (`SetLocal`, parameters, the resume value) | no — cleared at `Op::Reset` | nothing needed, same reason |
+//! | retcon latest reply | yes, until release | the public lowering admits scalar parameters only; initialised at start and updated on resume |
+//! | retcon local zero and local reset | no, cleared at Reset | resume stores scalar bits; Reset clears locals and restores the latest scalar reply |
 //! | operand spill slice | no — abandoned when the depth goes to zero | nothing needed |
 //! | composite body field | no — the body is itself region-resident | a `Width::Body` operand is MEMCPY'd, never stored as a word |
 //! | **shared data slot, scalar** | **yes** — host buffer | a body operand with no stated placement is REFUSED |
@@ -78,7 +80,9 @@ const MOVE_FORMS: &[&str] = &["build_store(", "build_memcpy("];
 /// Move sites in the emitter, at the stamp.
 ///
 /// **Re-derive rather than transcribe.**
-const RECORDED_MOVE_SITES: usize = 19;
+// 19 -> 24 with two latest-reply stores, one resume-local store, and
+// the two Reset stores. These destinations are classified above.
+const RECORDED_MOVE_SITES: usize = 24;
 // 18 -> 19 on 2026-09-11, when the shared composite slot landed: one body copy
 // into the host's buffer, at the offset and length the module's shared layout
 // STATES. Unlike the persistent pool, nothing here is derived — so there is no
