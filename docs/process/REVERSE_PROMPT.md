@@ -3298,16 +3298,10 @@ Codex absorbed upstream `89fc6aac`. The bounded brief explains the expected stal
 Pull request 472 merged into `v0.3.0` as `2e4a5d36` after run `36518497064` succeeded on `b8269a86`. The final candidate had 27 successful checks, one skipped check and none pending or failing. The merge tree matches that candidate exactly. No push interrupted that final run. The bounded brief now includes the deferred absorption-81 pointer and the completed integration status. The original native addendum and upstream current block remain preserved. Historical full native gates remain stale and are not represented as current verification.
 
 
-## V0.3.X conditional yield increment, 2026-09-29
+## V0.3.X conditional yield increment and review, 2026-09-29
 
-Codex revalidated the requested first Workstream B increment from `d9b6bceb`
-on `feat/nested-if-yield`. The implementation already supports the lexer's
-conditional tail yields. The prior open-item claim was invalid-and-stale.
-The existing nested-tail test now checks persistent state and an explicit
-six-tick sequence. A compiling zero-return mutation fails the new assertion.
-The seeded lexer agrees over 400 ticks and shared bytes. No lowering code changed.
-
-The instruction set architecture and refusal censuses were re-derived. The
-yield-escape gate is already unshadowed. The bounded V0.3.X brief and increment
-record carry the evidence and verification limits. Historical full-gate records
-remain stale. No broader workstream increment, publication or merge was performed.
+Codex revalidated the existing lowering and strengthened its regression in
+`ed212340`. All 25 lexer yields are conditional tails. The review follow-up
+shortens the bounded brief, archives receipts and relocates the worktree under
+`keleusma-worktrees/` for remote review. No lowering or next increment is added.
+See the V0.3.X brief and archive for verification and integration status.

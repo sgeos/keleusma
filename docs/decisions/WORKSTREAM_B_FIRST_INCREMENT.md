@@ -1,55 +1,18 @@
 # Workstream B first increment
 
-**Completed and revalidated on 2026-09-29 against `d9b6bceb` and this increment.**
-The requested conditional `yield` shape was already implemented. This increment
-strengthens its existing regression and corrects the stale resume instructions.
-There is no backend lowering change.
+**Completed and revalidated on 2026-09-29.** The plan's premise was wrong.
+All 25 yields in `lexer.kel`'s entry are conditional tails. A compiled bytecode
+walk reaches Reset after every yield through only delimiters, forward branch
+targets and stack discards. Conditional nesting does not require a resumable
+frame when no live continuation follows the yield.
 
-The previous brief was invalid-and-stale for this task. All 150 archive ancestry
-anchors passed, the archive stamp was four commits behind, and fetching upstream
-left zero unabsorbed V0.2.3 commits. These ancestry facts did not establish the
-brief's capability claims. The full-gate reporter returned the expected
-`UNVERIFIED` result for changed inputs, rather than a recorded test failure.
+The implementation already existed at `d9b6bceb`. Commit `ed212340` strengthens
+its existing sequence regression with private state and explicit expected ticks.
+The seeded lexer agrees over 400 ticks and shared bytes. No lowering changed.
+Verification receipts are in [the archive](../process/handoffs/v0.3.0.md).
+The next Workstream B increment remains an operator decision.
 
-## Established behavior
-
-The conditional leaves in `lexer.kel` end their iteration. The existing
-conditional-tail transformation follows branch targets and lowers the selected
-`yield` to a return. No live continuation must cross that return. Nesting inside
-an `if` alone does not require a resumable frame. The historical warning below
-that this shape necessarily requires real suspension was incorrect.
-
-The existing regression in
-[native_codegen/tests/yield_sequence.rs](../../native_codegen/tests/yield_sequence.rs)
-now also drives conditional tails with private state across six ticks. Both the
-virtual machine and native code must produce `[15, 2200, 375, 425, 51, 6200]`.
-The inputs visit all three leaves and distinguish persistence from reinitialization.
-A temporary mutation making tail yields return zero compiled and failed this
-sequence assertion. The mutation was removed. An initial mutation attempt did
-not compile and supplies no behavioral evidence.
-
-The seeded lexer differential in
-[native_codegen/tests/stage_differential.rs](../../native_codegen/tests/stage_differential.rs)
-compares 400 yielded values and the shared bytes. Its input spans token classes,
-and its existing distinct-value floor excludes the unseeded end-of-source-only
-run. This is finite-input evidence, not an exhaustive claim about every lexer path.
-
-The instruction set architecture census still reports 63 of 66 opcodes lowered
-over 74 compiled modules. The separate refusal census covers 67 modules and
-reports one refusal, `13_telemetry_stream.kel`, for a composite escaping a loop
-through a yield. The yield-escape gate is **unshadowed and load-bearing**.
-The existing frontier test also retains the suspending-callee refusal.
-
-No opcode, bytecode version, root source or root test changed. No broader stream
-capability was added or removed. Complete native gates and the full workspace
-suite were not rerun. Historical gate records remain unchanged and stale.
-
-The exact verification receipt is maintained in the
-[bounded resume brief](../process/handoffs/v0.3.0-BRIEF.md).
-
----
-
-## Historical scope and findings, superseded by the result above
+## Superseded original scope
 
 # SCOPING THE FIRST WORKSTREAM B INCREMENT — from measured facts, not from the roadmap alone
 
