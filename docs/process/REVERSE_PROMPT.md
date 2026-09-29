@@ -10,11 +10,11 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
-**2026-09-28. Handoff review and operator policy clarification.**
+**2026-09-28. The operator has resolved the gate boundary.**
 
-Commit once per prompt. Only feature branches may commit on red. Version branches and `main` must remain green. Use relevant subsets during feature development and complete suites at important integration and release checkpoints. The authoritative workflow documents now record this clarification and remove the previous unresolved commit-frequency conflict.
+Full gates must pass before publication or merging into `main`. Keep version branches green through remote continuous integration. Local checks may remain targeted when they provide high confidence that remote continuous integration will pass. Record the selected checks and their coverage limits. A version-branch merge does not itself require a full local gate. Detached packages need relevant local checks because root continuous integration does not cover them. Their complete gates remain mandatory before publication or merging their changes into `main`.
 
-`HANDOFF.md` now routes V0.3.X sessions to `docs/process/handoffs/v0.3.0-BRIEF.md` on that line. Native reporter and diagnostic-catalogue repairs are developed separately on a feature branch. Their targeted checks do not refresh historical complete-gate records. Publication remains held.
+Commit once per prompt. Only feature branches may commit on red. Pull request 472 carries the native reporter and handoff follow-up. Its historical full-gate records remain stale, which is disclosed separately from its passing targeted checks. No publication or merge into `main` is requested.
 
 Verification for this documentation change is recorded in `TASKLOG.md`.
 

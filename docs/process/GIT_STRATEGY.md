@@ -4,7 +4,7 @@
 
 Version control conventions for Keleusma.
 
-**Operator clarification, 2026-09-28.** Commit once per prompt. Only feature branches may commit on red. Version branches and `main` must remain green. Use relevant subsets of gates while developing a feature, and record both the checks performed and verification still outstanding. Complete suites belong at important integration and release checkpoints. A feature may be revised across prompts or abandoned. This policy supersedes conflicting historical guidance below.
+**Operator clarification, 2026-09-28.** Commit once per prompt. Only feature branches may commit on red. Version branches and `main` must remain green. Full gates must pass before publication or merging into `main`. Keep version branches green through remote continuous integration. Local checks may remain targeted when they provide high confidence that remote continuous integration will pass. Record the selected checks and their coverage limits. A version-branch merge does not itself require a full local gate. Detached packages need relevant local checks because root continuous integration does not cover them. Their complete gates remain mandatory before publication or merging their changes into `main`. A feature may be revised across prompts or abandoned. This policy supersedes conflicting historical guidance below.
 
 
 ## Branch Model
@@ -57,7 +57,7 @@ integration trunk, and feature integration uses merge commits, not rebase-to-lin
   converge, discard the branch (delete it unmerged) and start a new one rather than force an unsound
   approach to green. The version branch is only ever touched by green merges, so a dead-end feature
   branch costs nothing but the branch itself. This is the worst case, and it is a normal one.
-- **Must be all-green before merging back** into the version branch. Use the continuous integration requirements below and the separate gates for any detached package affected by the change. A duplicate local full workspace gate is not required when continuous integration covers it.
+- **Must be all-green before merging back** into the version branch. Use the remote continuous integration requirements below and relevant targeted checks for any detached package affected by the change. A duplicate local full workspace gate is not required when continuous integration covers it.
 - **A PUSH CANCELS THE RUNNING CONTINUOUS-INTEGRATION JOB FOR THAT PULL REQUEST.** The workflow sets
   `cancel-in-progress: true` on a concurrency group keyed by the pull request's ref, which is
   correct for superseding a stale run and fatal for a session that pushes faster than the run
@@ -163,13 +163,9 @@ branch onto the spine without saying so.
 
 ## Definition of Green
 
-Two authorities, with a defined relationship:
+Remote continuous integration establishes the version-branch green requirement. Local checks provide confidence before pushing and may target the affected scope. Full local gates are mandatory before publication or merging into `main`, including complete gates for detached packages. A stale complete-gate record means that complete verification is not current. It does not alone establish a test failure or block version-branch integration supported by green remote checks and relevant local evidence.
 
-- **Local** — the full pre-merge gate `scripts/release-gate.sh` passes (feature matrix, the whole
-  self-host suite, the detached `compiler/` subproject, docs under `-D warnings`, clippy, fmt).
-- **Remote** — the continuous integration run passes.
-
-**CI GATES FEATURE BRANCHES. The local gate is for releases and offline work.** Changed
+**Remote continuous integration gates version-branch merges. Full local gates are required before publication and merges into `main`, and are available for offline work.** Changed
 2026-08-11, because **gate time is the project's bottleneck** and two sessions were serialising on
 one machine.
 
@@ -263,9 +259,8 @@ The operator resolved the previously recorded commit-frequency conflict on 2026-
 
 Before pushing, verify:
 
-- `cargo test` passes with no failures
-- `cargo clippy -- -D warnings` produces zero warnings
-- `cargo fmt --check` reports no formatting issues
+- Relevant targeted tests, lint and formatting checks provide high confidence in a green remote result
+- The receipt identifies checks run and coverage omitted
 - Commit messages follow the conventions above
 - No secrets, credentials, or sensitive data are included in the commit
 
@@ -277,6 +272,6 @@ the detached `compiler/` subproject. The hook does not establish complete integr
 
 ## Integration and release checkpoints
 
-Before merging into a version branch, require green continuous integration on the pull request and the relevant detached-package gates. For a native backend integration checkpoint, run both native float configurations. A targeted feature-branch run establishes only its stated scope and does not substitute for complete integration evidence.
+Before merging into a version branch, require green remote continuous integration on the pull request. Select local checks by affected scope and the confidence needed for that remote result. Native-only changes need relevant native checks because root continuous integration does not exercise the detached package. Both complete native configurations are not mandatory for every version-branch integration.
 
-The local `scripts/release-gate.sh` remains available for offline work and is required before publication with `--miri`. Do not repeat that complete local workspace gate at each feature increment when continuous integration provides the integration coverage. Release preparation still requires an all-green version branch and `main`, and publication requires explicit in-session confirmation.
+Before publication or merging into `main`, full gates must pass against the candidate inputs. Run `scripts/release-gate.sh`, with `--miri` for publication, and the complete gates for affected detached packages. For the native backend, that includes both float configurations with current clean, frozen, passing records. Remote green remains required. Publication requires explicit in-session confirmation.
