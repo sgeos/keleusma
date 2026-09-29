@@ -36,7 +36,9 @@
 /// "nineteen" while the block it described held twenty-nine.
 // 662 -> 663 on 2026-09-28. The reporter fixtures have an independent test
 // entry instead of depending on the unrelated schema-staleness test.
-const RECORDED_TEST_FUNCTIONS: usize = 663;
+// 663 -> 672 with nine retcon bytecode tests. Name comparison against
+// 40acc268 found no removed files or test functions.
+const RECORDED_TEST_FUNCTIONS: usize = 672;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise
@@ -238,7 +240,7 @@ const RECORDED_TEST_FUNCTIONS: usize = 663;
 /// 118 -> 119: `checked_byte_arithmetic.rs` added, none removed.
 ///
 /// 119 -> 120: `operand_variant_sweep.rs` added, none removed.
-const RECORDED_TEST_FILES: usize = 155;
+const RECORDED_TEST_FILES: usize = 156;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")

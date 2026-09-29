@@ -85,6 +85,9 @@ const BUFFER_HARNESSES: &[&str] = &[
     "native_calls.rs",
     "partial_operation_census.rs",
     "reset_region_retention.rs",
+    // Retcon uses the published private and composite bounds with adjacent
+    // sentinels. Its separate frame reservation is checked after LLVM splitting.
+    "retcon_bytecode.rs",
     "rogue_ai_differential.rs",
     "rogue_dungen_differential.rs",
     "shared_composite_slot.rs",

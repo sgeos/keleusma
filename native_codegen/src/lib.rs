@@ -75,6 +75,7 @@
 //! the typed operand-stack verifier already guarantees, so a disagreement here
 //! is a lowering bug and is asserted rather than tolerated.
 
+pub mod coroutine;
 pub mod region;
 
 /// The PACKED width of an operand-stack value, for placing it inside a flat
@@ -1604,6 +1605,7 @@ pub fn lower_chunk<'ctx>(
         DataCtx::default(),
         BodyCfg {
             opts,
+            retcon: false,
             degenerate_yield: None,
             delegated_call: None,
             // No module, so no signature table.
@@ -1663,7 +1665,7 @@ pub fn lower_module<'ctx>(
     program: &Module,
     opts: LowerOptions,
 ) -> Result<Vec<FunctionValue<'ctx>>, LowerError> {
-    lower_module_with(ctx, module, program, opts, None, None)
+    lower_module_with(ctx, module, program, opts, None, None, None)
 }
 
 /// Every chunk-level refusal in `program`, rather than only the first.
@@ -1687,7 +1689,7 @@ pub fn module_refusals(program: &Module, opts: LowerOptions) -> Vec<(String, Low
     let ctx = Context::create();
     let m = ctx.create_module("refusals");
     let mut sink = Vec::new();
-    let outcome = lower_module_with(&ctx, &m, program, opts, Some(&mut sink), None);
+    let outcome = lower_module_with(&ctx, &m, program, opts, Some(&mut sink), None, None);
     // **A MODULE-LEVEL REFUSAL USED TO BE INVISIBLE HERE, and callers read the
     // emptiness of this vector as "the backend accepts it".**
     //
@@ -1763,7 +1765,15 @@ pub fn module_lowered_op_indices(
     let m = ctx.create_module("lowered_ops");
     let mut sink = Vec::new();
     let mut visits = Vec::new();
-    let outcome = lower_module_with(&ctx, &m, program, opts, Some(&mut sink), Some(&mut visits));
+    let outcome = lower_module_with(
+        &ctx,
+        &m,
+        program,
+        opts,
+        Some(&mut sink),
+        Some(&mut visits),
+        None,
+    );
     // A module-level refusal returns BEFORE the chunk loop, so `visits` is short
     // or empty rather than all-`None`. Normalising here keeps the postcondition
     // ("parallel to `program.chunks`") true for every caller, instead of leaving
@@ -1787,6 +1797,7 @@ fn lower_module_with<'ctx>(
     opts: LowerOptions,
     mut refusals: Option<&mut Vec<(String, LowerError)>>,
     mut visits: Option<&mut Vec<Option<Vec<usize>>>>,
+    retcon_bytes: Option<u32>,
 ) -> Result<Vec<FunctionValue<'ctx>>, LowerError> {
     check_word_width(program.word_bits_log2)?;
     let i64t = ctx.i64_type();
@@ -1864,10 +1875,12 @@ fn lower_module_with<'ctx>(
     // **Ten tests passed by the calling convention's good manners rather than by
     // being right.** A signature change is invisible to a harness that names the
     // signature itself, so it must be confined to chunks that actually need it.
-    let needs_region = program.chunks.iter().any(|c| {
-        chunk_builds_composite(c)
-            || (c.block_type == BlockType::Stream && degenerate_stream_yield(c, program).is_none())
-    });
+    let needs_region = retcon_bytes.is_some()
+        || program.chunks.iter().any(|c| {
+            chunk_builds_composite(c)
+                || (c.block_type == BlockType::Stream
+                    && degenerate_stream_yield(c, program).is_none())
+        });
     let data = DataCtx {
         stream_state_off: u32::try_from(keleusma::vm::required_persistent_capacity_for(program))
             .unwrap_or(u32::MAX),
@@ -1962,11 +1975,16 @@ fn lower_module_with<'ctx>(
             } else {
                 i64t.fn_type(&params, false)
             };
-            let f = module.add_function(&format!("kel_chunk_{i}"), fnty, None);
+            let f = if let Some(bytes) = retcon_bytes.filter(|_| c.block_type == BlockType::Stream)
+            {
+                coroutine::declare(ctx, module, i, &params, bytes)?
+            } else {
+                module.add_function(&format!("kel_chunk_{i}"), fnty, None)
+            };
             mark_nounwind(ctx, f);
-            f
+            Ok(f)
         })
-        .collect();
+        .collect::<Result<_, LowerError>>()?;
 
     // A module-level precondition, checked before any body is lowered. Two
     // natives whose names differ but whose SYMBOLS coincide would each bind to
@@ -2125,8 +2143,13 @@ fn lower_module_with<'ctx>(
         }
         let call_regions = region::plan_call_site_regions(program, i);
         let seen = core::cell::RefCell::new(Vec::new());
+        let retcon = retcon_bytes.is_some() && chunk.block_type == BlockType::Stream;
+        if retcon {
+            tail = None;
+        }
         let cfg = BodyCfg {
             opts,
+            retcon,
             degenerate_yield: tail.as_deref(),
             delegated_call,
             own_signature: program.signatures.get(i),
@@ -2451,6 +2474,8 @@ fn chunk_builds_composite(chunk: &Chunk) -> bool {
 /// stay constant for the whole body.
 #[derive(Clone, Copy)]
 struct BodyCfg<'a> {
+    /// LLVM owns suspension state instead of the handwritten stream dispatch.
+    retcon: bool,
     opts: LowerOptions,
     /// Byte width of the runtime's `Float`, from the module header's
     /// `float_bits_log2`.
@@ -3241,6 +3266,7 @@ fn lower_chunk_body<'ctx>(
 ) -> Result<FunctionValue<'ctx>, LowerError> {
     let BodyCfg {
         opts,
+        retcon,
         degenerate_yield,
         delegated_call,
         own_signature,
@@ -3262,6 +3288,28 @@ fn lower_chunk_body<'ctx>(
     let trap_bb = ctx.append_basic_block(func, "trap");
 
     b.position_at_end(entry);
+    let retcon_reply = if retcon {
+        let header = func.get_first_basic_block().unwrap();
+        header.get_terminator().unwrap().erase_from_basic_block();
+        b.position_at_end(header);
+        b.build_unconditional_branch(entry).unwrap();
+        b.position_at_end(entry);
+        Some(func.get_last_param().unwrap().into_pointer_value())
+    } else {
+        None
+    };
+    // The latest reply is distinct from local zero, which user code may assign.
+    let retcon_latest = retcon.then(|| {
+        let slot = b.build_alloca(i64t, "latest_reply").unwrap();
+        let raw = func.get_nth_param(0).unwrap();
+        let bits = if raw.is_float_value() {
+            float_to_bits(&b, raw.into_float_value(), i64t, float_bytes)
+        } else {
+            raw.into_int_value()
+        };
+        b.build_store(slot, bits).unwrap();
+        slot
+    });
 
     // **A RESUMABLE STREAM KEEPS ITS LOCALS IN THE ARENA, NOT ON THE MACHINE
     // STACK.** It RETURNS at each `yield` and re-enters at the same point, and a
@@ -3276,7 +3324,8 @@ fn lower_chunk_body<'ctx>(
     // **EPHEMERAL, and that is deliberate**: `Op::Reset` clears every local, which
     // is what an ephemeral region is for. The resume-state word is the other half
     // of the frame and is `.bss`, so it lives in the PERSISTENT region instead.
-    let stream_frame_base: Option<PointerValue<'ctx>> = if chunk.block_type == BlockType::Stream
+    let stream_frame_base: Option<PointerValue<'ctx>> = if !retcon
+        && chunk.block_type == BlockType::Stream
         && degenerate_yield.is_none()
         && (data.has_data || data.needs_region)
     {
@@ -3297,7 +3346,8 @@ fn lower_chunk_body<'ctx>(
     // A general (non-degenerate) stream re-enters this function once per
     // suspension, so anything emitted unconditionally here runs again on every
     // resume. See the deferral below.
-    let general_stream_frame = chunk.block_type == BlockType::Stream && degenerate_yield.is_none();
+    let general_stream_frame =
+        !retcon && chunk.block_type == BlockType::Stream && degenerate_yield.is_none();
 
     let locals: Vec<_> = (0..chunk.local_count as usize)
         .map(|i| match stream_frame_base {
@@ -3430,7 +3480,8 @@ fn lower_chunk_body<'ctx>(
     // each `Op::Yield` RETURNS, so the instruction after it is a RESUME point
     // reachable only from the entry dispatch — never by fall-through, because
     // the yield terminated its block.
-    let general_stream = chunk.block_type == BlockType::Stream && degenerate_yield.is_none();
+    let general_stream =
+        !retcon && chunk.block_type == BlockType::Stream && degenerate_yield.is_none();
     // **A GENERAL STREAM NEEDS THE FRAME POINTERS, AND `lower_chunk` HAS NONE.**
     //
     // The single-chunk entry point receives no module, so it declares neither the
@@ -3506,7 +3557,7 @@ fn lower_chunk_body<'ctx>(
     // branches to the shared block at the depth the branch edge already carries.
     // See the `Op::Yield` arm.
 
-    let loop_top: Option<usize> = match (general_stream, stream_pos) {
+    let loop_top: Option<usize> = match (general_stream || retcon, stream_pos) {
         (true, Some(p)) if p + 1 < chunk.ops.len() => {
             targets.push(p + 1);
             for &y in &yield_positions {
@@ -3703,7 +3754,7 @@ fn lower_chunk_body<'ctx>(
     // State 0 is the loop top, which is also what an all-zero arena gives on the
     // first call and what `Op::Reset` restores — so a fresh instance and a reset
     // instance take the same path with no distinguished first call.
-    if let Some(top) = loop_top {
+    if let Some(top) = loop_top.filter(|_| !retcon) {
         // **ONE PARAMETER ONLY, REFUSED RATHER THAN GUESSED.** The runtime's
         // resume writes the incoming value into slot 0 and nothing else, so a
         // second parameter has no defined value on re-entry. Lowering one anyway
@@ -3987,9 +4038,10 @@ fn lower_chunk_body<'ctx>(
             // silently mispass the degenerate one, handing the host a double's
             // bit pattern in an `i64` parameter it reads as an integer.
             //
-            // The lowering arm is itself spelled `Op::Yield if general_stream`,
-            // so this guard carries the same condition rather than a weaker one.
-            let float_yield_in_a_general_stream = general_stream && matches!(op, Op::Yield);
+            // Both native stream paths preserve float bits across suspension.
+            // The callback path for a reentrant chunk remains outside this guard.
+            let float_yield_in_a_general_stream =
+                (general_stream || retcon) && matches!(op, Op::Yield);
             let float_aware = float_store_into_a_float_slot
                 || float_into_a_composite_body
                 || float_yield_in_a_general_stream
@@ -6948,7 +7000,7 @@ fn lower_chunk_body<'ctx>(
             Op::Stream | Op::Reset if degenerate_yield.is_some() => {}
             // **`Op::Stream` MARKS THE LOOP TOP AND EMITS NOTHING.** The block
             // after it is entered from the dispatch or by the `Reset` back edge.
-            Op::Stream if general_stream => {}
+            Op::Stream if general_stream || retcon => {}
 
             // **`Op::Yield` SAVES THE RESUME POINT AND RETURNS.**
             //
@@ -6962,6 +7014,55 @@ fn lower_chunk_body<'ctx>(
             // the locals. Together they ARE the coroutine instance, which is why
             // the same lowered code driven with two arenas is two independent
             // streams.
+            Op::Yield if retcon => {
+                if st
+                    .widths
+                    .iter()
+                    .take(st.depth.saturating_sub(1))
+                    .any(|w| matches!(w, Width::Body(_)))
+                {
+                    return Err(LowerError::UnsupportedShape(
+                        "a composite operand survives a coroutine suspension".into(),
+                    ));
+                }
+                let v = st.pop();
+                let suspend = module
+                    .get_function("llvm.coro.suspend.retcon.i1")
+                    .unwrap_or_else(|| {
+                        module.add_function(
+                            "llvm.coro.suspend.retcon.i1",
+                            ctx.bool_type().fn_type(&[], true),
+                            None,
+                        )
+                    });
+                let unwind =
+                    st.b.build_call(suspend, &[v.into()], "suspend")
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_int_value();
+                let cleanup = func
+                    .get_basic_blocks()
+                    .into_iter()
+                    .find(|bb| bb.get_name().to_bytes() == b"retcon.cleanup")
+                    .unwrap();
+                let resume = ctx.append_basic_block(func, &format!("retcon.resume{i}"));
+                st.b.build_conditional_branch(unwind, cleanup, resume)
+                    .unwrap();
+                st.b.position_at_end(resume);
+                let reply =
+                    st.b.build_load(i64t, retcon_reply.unwrap(), "reply")
+                        .unwrap()
+                        .into_int_value();
+                st.b.build_store(retcon_latest.unwrap(), reply).unwrap();
+                st.b.build_store(st.locals[0], reply).unwrap();
+                let (width, kind) = match chunk.param_types[0] {
+                    TypeTag::Float => (Width::Scalar(float_bytes), OperandKind::Float),
+                    TypeTag::Fixed => (Width::Scalar(8), OperandKind::Fixed),
+                    tag => (width_of_tag(tag), OperandKind::Int),
+                };
+                st.push_k(reply, width, kind);
+            }
             Op::Yield if general_stream => {
                 // **SPILLED, NO LONGER REFUSED.** Everything beneath the yielded
                 // value has to survive the return; operands are SSA values and do
@@ -7204,6 +7305,20 @@ fn lower_chunk_body<'ctx>(
             // including the two it closes only indirectly. **Emitting a clear here
             // would buy nothing**: it would pay per iteration to hide bytes
             // nothing can name.
+            Op::Reset if retcon => {
+                st.depth = 0;
+                for l in &st.locals {
+                    st.b.build_store(*l, i64t.const_zero()).unwrap();
+                }
+                let reply =
+                    st.b.build_load(i64t, retcon_latest.unwrap(), "reset_reply")
+                        .unwrap();
+                st.b.build_store(st.locals[0], reply).unwrap();
+                let top = loop_top.unwrap();
+                note!(top, 0);
+                st.b.build_unconditional_branch(blocks[&top]).unwrap();
+                dead = true;
+            }
             Op::Reset if general_stream => {
                 // **TRUNCATE, DO NOT REFUSE — AND THIS CORRECTS A REFUSAL ADDED
                 // EARLIER THE SAME DAY.**
