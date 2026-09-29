@@ -3343,3 +3343,25 @@ frozen narrow broad phase passed 699 tests. Cleared non-Unit parameter reads and
 differing delegated yield signatures remain refused based on virtual-machine checks. The branch is `feat/retcon-stream-calls`, stacked on
 pull request 475. Workstream B remains active at the composite suspension
 boundary. Complete gates remain outstanding. Resume from the bounded native brief.
+
+
+## V0.3.X coroutine reply-type correction, 2026-09-29
+
+A Byte reply produced a native value where the virtual machine faults, in both
+direct and delegated yields. `fix/retcon-reply-types` adds finite scalar-tag
+admission across calls, locals, branches and loop back edges. Four regression
+functions cover the correction. All 22 coroutine tests and both lint modes pass.
+Pull request 474 is merged. Keep 475 and 476 as
+drafts until this correction integrates. Workstream B and complete gates remain
+outstanding. Resume from the bounded native brief. Upstream material is preserved.
+
+
+## V0.3.X coroutine inspection correction, 2026-09-29
+
+Pull request 477 also corrects enum inspection of scalar replies. Converged type
+facts fold false inspections and exclude impossible payload arms from emission.
+Three regression functions cover scalar categories, payload arms, enum and struct
+controls and the explicit mixed-receiver refusal. All 25 coroutine tests and
+all-target lint checks pass in both float configurations. Complete native gates remain
+outstanding. Workstream B remains active at the composite suspension boundary.
+Resume from the bounded native brief. Upstream material is preserved.

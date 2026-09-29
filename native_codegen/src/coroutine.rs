@@ -16,7 +16,9 @@
 //! replies update the entry parameter while preserving callee state until Reset.
 //! A nested stream clears its own locals on Reset. Reads of non-Unit callee
 //! parameters remain refused because the VM does not replenish those slots.
-//! Delegated yields must have the same signature as the entry yield.
+//! Delegated yields must have the same signature as the entry yield. Scalar
+//! admission follows actual host reply tags through control flow and refuses
+//! operations or boundaries whose types cannot be proved.
 //!
 //! The provisional start symbol is `kel_chunk_<entry_point>` with the scalar
 //! argument followed by shared, private, composite-region, frame and reply
@@ -39,6 +41,8 @@ use inkwell::values::{BasicValue, CallSiteValue, FunctionValue, InstructionOpcod
 use keleusma::bytecode::{BlockType, Module, Op, TypeTag};
 
 use crate::{LowerError, LowerOptions};
+
+pub(crate) mod types;
 
 /// Alignment required for the caller-provided coroutine frame.
 pub const FRAME_ALIGN: u32 = 8;
@@ -72,19 +76,8 @@ pub fn lower<'ctx>(
     let entry = program
         .entry_point
         .ok_or_else(|| error("coroutine needs an entry point"))?;
-    // Reuse the established safety refusals, including composite yield escape.
-    // Passing verification alone does not certify fixed-offset native storage.
-    if !program
-        .chunks
-        .iter()
-        .enumerate()
-        .any(|(i, c)| i != entry && c.block_type != BlockType::Func)
-    {
-        let preflight = ctx.create_module("retcon_preflight");
-        crate::lower_module(ctx, &preflight, program, LowerOptions::default())?;
-    }
-    // Suspending calls are admitted by the coroutine emitter itself. Its
-    // confinement checks still apply to every allocation and suspension.
+    // The shared emitter checks allocation confinement for the coroutine
+    // path itself. The legacy preflight cannot use proven unreachable arms.
     let stream = program
         .chunks
         .get(entry)
@@ -133,14 +126,13 @@ pub fn lower<'ctx>(
             ));
         }
     }
-    if !matches!(program.signatures.get(entry).map(|s| &s.ret),
-        Some(keleusma::bytecode::WireShape::Scalar { kind }) if *kind <= keleusma::value_layout::ScalarKind::Float.to_tag())
-    {
-        return Err(error("retcon currently requires a scalar yield signature"));
-    }
     // The host interprets the untagged payload using the entry signature.
     // Equal widths do not suffice, since Byte and Bool have distinct VM tags.
-    let yield_shape = program.signatures[entry].ret;
+    let yield_shape = program
+        .signatures
+        .get(entry)
+        .ok_or_else(|| error("coroutine needs an entry signature"))?
+        .ret;
     for (index, callee) in program.chunks.iter().enumerate() {
         if index != entry
             && callee.block_type != BlockType::Func
@@ -152,6 +144,14 @@ pub fn lower<'ctx>(
             ));
         }
     }
+    let analysis = types::check(program, entry)?;
+    let mut prepared = program.clone();
+    for &(chunk, ip) in &analysis.false_inspections {
+        // Both instructions leave the inspected value in place and push Bool.
+        // Keeping instruction indices preserves all structured branch targets.
+        prepared.chunks[chunk].ops[ip] = Op::PushImmediate(2);
+    }
+    let program = &prepared;
     let module = ctx.create_module("kel_retcon");
     module.set_triple(&machine.get_triple());
     module.set_data_layout(&machine.get_target_data().get_data_layout());
@@ -162,8 +162,13 @@ pub fn lower<'ctx>(
         LowerOptions::default(),
         None,
         None,
-        Some(frame_bytes),
+        Some((frame_bytes, &analysis)),
     )?;
+    if !matches!(program.signatures.get(entry).map(|s| &s.ret),
+        Some(keleusma::bytecode::WireShape::Scalar { kind }) if *kind <= keleusma::value_layout::ScalarKind::Float.to_tag())
+    {
+        return Err(error("retcon currently requires a scalar yield signature"));
+    }
     module.verify().map_err(error)?;
     // The verified call graph is acyclic. Inline suspension-capable callees
     // into the one coroutine before splitting, so LLVM captures each live
