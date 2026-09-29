@@ -5406,17 +5406,9 @@ fn lower_chunk_body<'ctx>(
 
                 let mut args: Vec<_> = (0..*arg_count).map(|_| st.pop()).collect();
                 args.reverse();
-                if suspending
-                    && st
-                        .widths
-                        .iter()
-                        .take(st.depth)
-                        .any(|w| matches!(w, Width::Body(_)))
-                {
-                    return Err(LowerError::UnsupportedShape(
-                        "a composite operand survives a delegated suspension".into(),
-                    ));
-                }
+                // LLVM captures operands across delegated suspension. Body
+                // addresses retain VM aliasing semantics in the caller-owned
+                // regions, whose allocation confinement is checked separately.
                 // **CONVERTED TO THE CALLEE'S DECLARED PARAMETER TYPES.** The
                 // operand stack hands over an `i64` even when the value is a
                 // float's bit pattern, so a float parameter needs the bitcast here
@@ -7152,16 +7144,6 @@ fn lower_chunk_body<'ctx>(
                         st.width_at(0)
                     )));
                 }
-                if st
-                    .widths
-                    .iter()
-                    .take(st.depth.saturating_sub(1))
-                    .any(|w| matches!(w, Width::Body(_)))
-                {
-                    return Err(LowerError::UnsupportedShape(
-                        "a composite operand survives a delegated suspension".into(),
-                    ));
-                }
                 let value = st.pop();
                 let helper = coroutine::delegate_yield(ctx, module)?;
                 let reply =
@@ -7183,16 +7165,6 @@ fn lower_chunk_body<'ctx>(
                 st.push_k(reply, width, kind);
             }
             Op::Yield if retcon => {
-                if st
-                    .widths
-                    .iter()
-                    .take(st.depth.saturating_sub(1))
-                    .any(|w| matches!(w, Width::Body(_)))
-                {
-                    return Err(LowerError::UnsupportedShape(
-                        "a composite operand survives a coroutine suspension".into(),
-                    ));
-                }
                 let v = st.pop();
                 let suspend = module
                     .get_function("llvm.coro.suspend.retcon.i1")

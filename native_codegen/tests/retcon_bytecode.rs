@@ -663,16 +663,15 @@ fn delegated_composite_yields_remain_refused() {
         error.to_string().contains("yield signature changes"),
         "{error}"
     );
-    let p = common::build(
-        "fn pick(p: (Word, Word), a: Word) -> Word { p.0 + a } yield emit(a: Word) -> Word { yield a } loop main(t: Word) -> Word { yield pick((t, t), emit(t)) }",
-    );
-    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("composite operand survives a delegated suspension"),
-        "{error}"
-    );
+    // A live body operand is now admitted. Only the signature mismatch above
+    // remains a refusal, so preserve the former negative as an executed control.
+    let src = "fn pick(p: (Word, Word), a: Word) -> Word { p.0 + a } yield emit(a: Word) -> Word { yield a } loop main(t: Word) -> Word { yield pick((t, t), emit(t)) }";
+    let replies = [7, 20, 3, 40, 1, 0];
+    let expected = [5, 12, 20, 23, 40, 41];
+    assert_eq!(common::general_vm_sequence(src, 5, &replies), expected);
+    for optimize in [false, true] {
+        assert_eq!(native(src, 5, &replies, optimize), expected);
+    }
 }
 
 #[test]
@@ -1260,5 +1259,76 @@ fn coroutine_composite_boundaries_check_declared_extent() {
     // The current verifier already closes implicit-return paths before lowering.
     assert!(keleusma::verify::verify(&p).is_err());
     let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
+    assert!(error.to_string().contains("verification:"), "{error}");
+}
+
+#[test]
+fn composite_operands_survive_direct_and_nested_suspension() {
+    let replies = [7, 20, 3, 40, 1, 0];
+    for src in [
+        "fn pick(p: (Word, Word), a: Word) -> Word { p.0 + a } loop main(t: Word) -> Word { yield pick((t, t), yield t) }",
+        "fn pick(p: (Word, Word), a: Word) -> Word { p.0 + a } yield emit(t: Word) -> Word { pick((t, t), yield t) } loop main(t: Word) -> Word { yield emit(t) }",
+        "fn pick(p: (Word, Word), a: Word) -> Word { p.0 + a } yield emit(t: Word) -> Word { yield t } yield nested(t: Word) -> Word { pick((t, t), emit(t)) } loop main(t: Word) -> Word { yield nested(t) }",
+        "fn pair(t: Word) -> (Word, Word) { (t, t) } fn pick(p: (Word, Word), a: Word) -> Word { p.0 + a } yield emit(t: Word) -> Word { yield t } loop main(t: Word) -> Word { yield pick(pair(t), emit(t)) }",
+    ] {
+        let expected = [5, 12, 20, 23, 40, 41];
+        assert_eq!(common::general_vm_sequence(src, 5, &replies), expected);
+        for optimize in [false, true] {
+            assert_eq!(native(src, 5, &replies, optimize), expected, "{src}");
+        }
+    }
+    let src = "fn pick(p: (Word, Word), a: Word) -> Word { p.0 + a } loop main(t: Word) -> Word { for i in 0..3 { yield pick((t + i, t), yield t); } yield 0 }";
+    let expected = [5, 12, 20, 24, 40, 43];
+    assert_eq!(common::general_vm_sequence(src, 5, &replies), expected);
+    // The common allocation gate still conservatively refuses a body produced
+    // inside a loop and held at Yield. Retcon must not bypass that boundary.
+    let p = common::build(src);
+    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            keleusma_native::LowerError::YieldEscapingLoopComposite { .. }
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn coroutine_body_values_preserve_private_storage_aliasing() {
+    let replies = [7, 20, 3, 40, 1, 0];
+    let expected = [5, 14, 20, 6, 40, 2];
+    let src = "private data st { p: (Word, Word) } loop main(t: Word) -> Word { st.p = (t, t); let keep = st.p; let r: Word = yield t; st.p = (r, r); yield keep.0 + st.p.0 }";
+    assert_eq!(common::general_vm_sequence(src, 5, &replies), expected);
+    for optimize in [false, true] {
+        assert_eq!(native(src, 5, &replies, optimize), expected);
+    }
+    // Private layout records an extent but no composite kind. Passing its
+    // unknown kind into a tuple parameter remains a type-admission boundary.
+    let src = "private data st { p: (Word, Word) } fn pick(p: (Word, Word), a: Word) -> Word { p.0 + a } yield emit(t: Word) -> Word { let r: Word = yield t; st.p = (r, r); r } loop main(t: Word) -> Word { st.p = (t, t); yield pick(st.p, emit(t)) }";
+    assert_eq!(common::general_vm_sequence(src, 5, &replies), expected);
+    let p = common::build(src);
+    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
+    assert!(
+        error.to_string().contains("types are not proven"),
+        "{error}"
+    );
+}
+
+#[test]
+fn live_body_coroutines_require_frame_space_and_verified_arguments() {
+    use keleusma::bytecode::WireShape;
+    let src = "fn pick(p: (Word, Word), a: Word) -> Word { p.0 + p.1 + a } loop main(t: Word) -> Word { yield pick((t, t + 1), yield t) }";
+    let mut p = common::build(src);
+    let ctx = Context::create();
+    let tm = machine();
+    let error = coroutine::lower(&ctx, &p, &tm, 8).unwrap_err();
+    assert!(error.to_string().contains("frame exceeds"), "{error}");
+    let pick = p.chunks.iter().position(|c| c.name == "pick").unwrap();
+    let WireShape::Flat { size, .. } = &mut p.signatures[pick].params[0] else {
+        panic!("flat argument");
+    };
+    *size += 8;
+    assert!(keleusma::verify::verify(&p).is_err());
+    let error = coroutine::lower(&ctx, &p, &tm, 4096).unwrap_err();
     assert!(error.to_string().contains("verification:"), "{error}");
 }

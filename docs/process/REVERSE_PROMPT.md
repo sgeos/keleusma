@@ -3377,3 +3377,16 @@ configurations. Composite inputs, replies and live operands remain refused.
 Full gates for the preceding correction continue on frozen `15b96c2e` in
 `retcon-reply-types`. Workstream B remains active. Resume from the bounded native
 brief. Upstream material is preserved.
+
+
+## V0.3.X live body operands, 2026-09-29
+
+`feat/retcon-live-bodies` admits body operands beneath direct and delegated
+suspensions while preserving virtual-machine aliases and existing confinement
+checks. Three added regression functions pin lifetimes, private aliasing and
+negative boundaries. All 31 coroutine tests and all-target lints pass in both
+float configurations. Composite host inputs and replies remain unimplemented.
+Both complete gates passed on frozen `15b96c2e`. The same tree is now the combined
+head of pull request 475, with remote checks running. Keep that head unchanged.
+Workstream B remains active. Resume from the bounded native brief. Upstream
+material is preserved.

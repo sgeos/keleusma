@@ -3810,6 +3810,6 @@ gate record when resuming this line.
 Attributed to Codex on the V0.3.X line. Scalar bytecode and nested reentrant
 and stream calls now lower through LLVM returned continuations. The bounded
 native brief records scalar reply and enum inspection corrections, followed by
-flat composite yield support with body extent checks. Composite inputs, replies
-and live composite operands remain outside admission. Workstream B
+flat composite yields and live body operands with extent and confinement checks.
+Composite host inputs and replies remain outside admission. Workstream B
 remains active. Upstream task state above is preserved.
