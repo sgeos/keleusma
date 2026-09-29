@@ -3333,3 +3333,13 @@ coroutine tests and both lint configurations pass. Full gates remain outstanding
 The branch is `feat/retcon-delegation`, stacked on pull request 474. Continue from
 the bounded V0.3.X brief. Workstream B remains active, with nested stream callees
 and composite suspension values still refused. Upstream material is preserved.
+
+
+## V0.3.X nested stream increment, 2026-09-29
+
+Codex extends LLVM retcon to nested streams and corrects narrow-float private
+initialisation. Eighteen coroutine tests pass in both float configurations. The
+frozen narrow broad phase passed 699 tests. Cleared non-Unit parameter reads and
+differing delegated yield signatures remain refused based on virtual-machine checks. The branch is `feat/retcon-stream-calls`, stacked on
+pull request 475. Workstream B remains active at the composite suspension
+boundary. Complete gates remain outstanding. Resume from the bounded native brief.

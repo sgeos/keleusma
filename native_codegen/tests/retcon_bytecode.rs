@@ -490,8 +490,12 @@ fn scalar_reply_widths_and_kinds_match_the_vm() {
         "loop main(t: bool) -> bool { let r = yield t; yield (r and t) }",
         "loop main(t: Fixed) -> Fixed { let r = yield t; yield (r * t) }",
         "loop main(t: Float) -> Float { let keep = -t; let r = yield t; yield (r + keep) }",
+        "loop main(t: Float) -> Word { let r = yield (t as Word); yield (r as Word) }",
         "yield emit(a: ()) -> () { yield a; yield a } loop main(t: ()) -> () { emit(t) }",
         "yield emit(a: ()) -> () { yield (); yield () } loop main(t: ()) -> () { emit(t) }",
+        "loop child(a: ()) -> () { yield a; yield a } loop main(t: ()) -> () { child(t) }",
+        "private data st { value: Float = 0.5 } loop child() -> Float { st.value = st.value + 0.25; yield st.value } loop main(t: Float) -> Float { child() }",
+        "private data st { value: Fixed } loop child() -> Fixed { st.value = st.value + (1 as Fixed); yield st.value } loop main(t: Fixed) -> Fixed { child() }",
         "yield emit(a: Byte) -> Byte { let q: Byte = a + (1 as Byte); let r = yield a; yield q + r + a } loop main(t: Byte) -> Byte { emit(t) }",
         "yield emit(a: bool) -> bool { let r = yield a; yield (r and a) } loop main(t: bool) -> bool { emit(t) }",
         "yield emit(a: Fixed) -> Fixed { let r = yield a; yield (r * a) } loop main(t: Fixed) -> Fixed { emit(t) }",
@@ -531,6 +535,7 @@ fn scalar_reply_widths_and_kinds_match_the_vm() {
             };
             expected.push(match yielded {
                 Value::Unit => 0,
+                Value::Int(v) => v,
                 Value::Byte(v) => i64::from(v),
                 Value::Bool(v) => i64::from(v),
                 Value::Fixed(v) => v,
@@ -554,6 +559,38 @@ fn scalar_reply_widths_and_kinds_match_the_vm() {
         for optimize in [false, true] {
             assert_eq!(native(src, first, &replies, optimize), expected, "{src}");
         }
+    }
+    // The VM can expose a callee's distinct scalar tag despite the entry's
+    // return signature. The untagged native payload must refuse that mismatch,
+    // including Byte versus Bool, which have equal native widths.
+    for (src, expected) in [
+        (
+            "loop child() -> bool { yield true } loop main(t: Word) -> Byte { child(); yield (t as Byte) }",
+            Value::Bool(true),
+        ),
+        (
+            "yield emit() -> Float { yield 0.5 } loop main(t: Word) -> Word { emit(); yield t }",
+            Value::Float(0.5),
+        ),
+    ] {
+        let p = common::build(src);
+        keleusma::verify::verify(&p).unwrap();
+        let ctx = Context::create();
+        let error = coroutine::lower(&ctx, &p, &machine(), 4096).unwrap_err();
+        assert!(
+            error.to_string().contains("yield signature changes"),
+            "{error}"
+        );
+        let need = required_persistent_capacity_for(&p);
+        let mut arena = keleusma_arena::Arena::with_capacity(
+            auto_arena_capacity_for(&p, &[]).unwrap() + need + 65536,
+        );
+        arena.resize_persistent(need).unwrap();
+        let mut vm = Vm::new(p, &arena).unwrap();
+        let VmState::Yielded(actual) = vm.call(&[Value::Int(0)]).unwrap() else {
+            panic!("callee must yield its distinct scalar type");
+        };
+        assert_eq!(actual, expected);
     }
 }
 
@@ -611,7 +648,10 @@ fn delegated_composite_yields_remain_refused() {
         "yield emit(a: Word) -> (Word, Word) { yield (a, a) } loop main(t: Word) -> Word { emit(t); yield t }",
     );
     let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
-    assert!(error.to_string().contains("scalar value"), "{error}");
+    assert!(
+        error.to_string().contains("yield signature changes"),
+        "{error}"
+    );
     let p = common::build(
         "fn pick(p: (Word, Word), a: Word) -> Word { p.0 + a } yield emit(a: Word) -> Word { yield a } loop main(t: Word) -> Word { yield pick((t, t), emit(t)) }",
     );
@@ -638,4 +678,118 @@ fn guarded_heads_dispatch_across_suspensions() {
             assert_eq!(native(src, 0, &replies, optimize), expected);
         }
     }
+}
+
+#[test]
+fn nested_stream_calls_preserve_state_across_callee_resets() {
+    let cases = [
+        (
+            "loop child() -> Word { yield 7 } loop main(t: Word) -> Word { child() }",
+            vec![7; 6],
+        ),
+        (
+            "loop child(ignored: Word) -> Word { yield 7 } loop main(t: Word) -> Word { child(t) }",
+            vec![7; 6],
+        ),
+        (
+            "private data st { n: Word } loop child() -> Word { let keep = st.n + 100; st.n = st.n + 1; yield st.n; yield keep + st.n } loop main(t: Word) -> Word { child() }",
+            vec![1, 101, 2, 103, 3, 105],
+        ),
+        (
+            "yield emit(a: Word) -> Word { let keep = a + 100; let r = yield a; yield keep + r } loop child() -> Word { emit(5) } loop middle() -> Word { child() } loop main(t: Word) -> Word { middle() }",
+            vec![5, 112, 5, 108, 5, 135],
+        ),
+    ];
+    let cases = cases.into_iter().chain(std::iter::once((
+        "private data st { xs: [Word; 2] } loop child() -> Word { st.xs[0] = st.xs[0] + 1; st.xs[1] = st.xs[1] + 10; for i in 0..2 { yield st.xs[i] }; yield st.xs[0] } loop main(t: Word) -> Word { child() }",
+        vec![1, 10, 1, 2, 20, 2],
+    )));
+    let replies = [7, 20, 3, 11, 30, 9];
+    for (src, expected) in cases {
+        assert_eq!(common::general_vm_sequence(src, 5, &replies), expected);
+        for optimize in [false, true] {
+            assert_eq!(native(src, 5, &replies, optimize), expected);
+        }
+    }
+}
+
+#[test]
+fn nested_stream_parameter_reads_do_not_silently_turn_unit_into_zero() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
+    let p = common::build(
+        "loop child(a: Word) -> Word { yield a + 1 } loop main(t: Word) -> Word { child(t) }",
+    );
+    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("non-Unit parameter cleared by Reset")
+    );
+    let need = required_persistent_capacity_for(&p);
+    let mut arena = keleusma_arena::Arena::with_capacity(
+        auto_arena_capacity_for(&p, &[]).unwrap() + need + 65536,
+    );
+    arena.resize_persistent(need).unwrap();
+    let mut vm = Vm::new(p, &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(6))
+    ));
+    assert!(matches!(vm.resume(Value::Int(7)).unwrap(), VmState::Reset));
+    let keleusma::vm::VmError::TypeError(fault) = vm.resume(Value::Int(7)).unwrap_err() else {
+        panic!("the cleared parameter must produce a type error");
+    };
+    assert!(fault.contains("Unit") && fault.contains("Int"), "{fault}");
+}
+
+#[test]
+fn nested_stream_release_stops_before_the_next_iteration() {
+    let src = "shared data st { n: Word } loop child() -> Word { st.n = st.n + 1; yield st.n } loop main(t: Word) -> Word { child() }";
+    let p = common::build(src);
+    assert_eq!(common::general_vm_sequence(src, 5, &[9; 4]), [1, 2, 3, 4]);
+    let seed = vec![0; p.shared_data_bytes as usize];
+    for optimize in [false, true] {
+        for count in 1..=4 {
+            let (values, shared) = native_module(&p, &seed, 5, &vec![9; count], optimize);
+            assert_eq!(values, (1..=count as i64).collect::<Vec<_>>());
+            assert_eq!(
+                i64::from_le_bytes(shared[..8].try_into().unwrap()),
+                count as i64
+            );
+        }
+    }
+}
+
+#[test]
+fn coroutine_private_scalar_admission_checks_writes_and_indexed_ranges() {
+    use keleusma::bytecode::ConstValue;
+    let ctx = Context::create();
+    let tm = machine();
+    let mut changed = common::build(
+        "private data st { n: Word } loop main(t: Word) -> Word { st.n = t; yield st.n }",
+    );
+    // Verified bytecode can change a slot's category after load. The native
+    // scalar inference must decline that case instead of trusting the first
+    // value's category for every later read.
+    changed.data_layout.as_mut().unwrap().private_init[0] = ConstValue::Float(0.0);
+    keleusma::verify::verify(&changed).unwrap();
+    let error = coroutine::lower(&ctx, &changed, &tm, 4096).unwrap_err();
+    assert!(
+        error.to_string().contains("private scalar write"),
+        "{error}"
+    );
+
+    let mut indexed = common::build(
+        "private data st { xs: [Word; 2] } loop main(t: Word) -> Word { st.xs[0] = t; yield st.xs[t % 2] }",
+    );
+    indexed.data_layout.as_mut().unwrap().private_init[1] = ConstValue::Float(0.0);
+    keleusma::verify::verify(&indexed).unwrap();
+    let error = coroutine::lower(&ctx, &indexed, &tm, 4096).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("indexed access crosses scalar types"),
+        "{error}"
+    );
 }

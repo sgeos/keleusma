@@ -2,7 +2,7 @@
 //!
 //! The caller owns the frame, reply cell, and the ordinary shared, private and
 //! composite regions as disjoint reservations for the entire lifetime of a suspended instance. Start
-//! returns a continuation and a yielded scalar bits. Before each resume the caller
+//! returns a continuation and yielded scalar bits. Before each resume the caller
 //! writes the next scalar bits to the reply cell, then calls the continuation with
 //! `(frame, false)`. Release calls it with `(frame, true)` and invalidates the
 //! instance. Float bits occupy the low 32 or all 64 bits according to the
@@ -11,9 +11,12 @@
 //!
 //! LLVM manages the continuation and captures live allocas. The emitted module
 //! is accepted only if splitting eliminates every overflow allocator use.
-//! This API currently admits one scalar stream with ordinary or reentrant
-//! callees. Reentrant callees are inlined before splitting. Host replies update
-//! the entry parameter while preserving each callee's own parameters and locals.
+//! This API currently admits one scalar entry stream with ordinary, reentrant
+//! or stream callees. Suspending callees are inlined before splitting. Host
+//! replies update the entry parameter while preserving callee state until Reset.
+//! A nested stream clears its own locals on Reset. Reads of non-Unit callee
+//! parameters remain refused because the VM does not replenish those slots.
+//! Delegated yields must have the same signature as the entry yield.
 //!
 //! The provisional start symbol is `kel_chunk_<entry_point>` with the scalar
 //! argument followed by shared, private, composite-region, frame and reply
@@ -66,21 +69,22 @@ pub fn lower<'ctx>(
     keleusma::verify::verify(program).map_err(|e| error(format!("verification: {e:?}")))?;
     keleusma::vm::auto_arena_capacity_for(program, &[])
         .map_err(|e| error(format!("resource admission: {e:?}")))?;
+    let entry = program
+        .entry_point
+        .ok_or_else(|| error("coroutine needs an entry point"))?;
     // Reuse the established safety refusals, including composite yield escape.
     // Passing verification alone does not certify fixed-offset native storage.
     if !program
         .chunks
         .iter()
-        .any(|c| c.block_type == BlockType::Reentrant)
+        .enumerate()
+        .any(|(i, c)| i != entry && c.block_type != BlockType::Func)
     {
         let preflight = ctx.create_module("retcon_preflight");
         crate::lower_module(ctx, &preflight, program, LowerOptions::default())?;
     }
-    // Reentrant calls are admitted by the coroutine emitter itself. Its
+    // Suspending calls are admitted by the coroutine emitter itself. Its
     // confinement checks still apply to every allocation and suspension.
-    let entry = program
-        .entry_point
-        .ok_or_else(|| error("coroutine needs an entry point"))?;
     let stream = program
         .chunks
         .get(entry)
@@ -104,18 +108,49 @@ pub fn lower<'ctx>(
             "retcon currently requires a one-scalar Stream entry ending in Reset",
         ));
     }
-    if program
-        .chunks
-        .iter()
-        .enumerate()
-        .any(|(i, c)| i != entry && !matches!(c.block_type, BlockType::Func | BlockType::Reentrant))
-    {
-        return Err(error("retcon currently requires Func or Reentrant callees"));
+    for (index, callee) in program.chunks.iter().enumerate() {
+        if index == entry || callee.block_type != BlockType::Stream {
+            continue;
+        }
+        if !matches!(callee.ops.first(), Some(Op::Stream))
+            || !matches!(callee.ops.last(), Some(Op::Reset))
+            || callee.ops.iter().any(|op| matches!(op, Op::Return))
+        {
+            return Err(error(
+                "a nested Stream must begin with Stream and end with Reset",
+            ));
+        }
+        // Reset clears the active callee, while host resume updates only the
+        // entry parameter. Treating a cleared Word as zero would turn the VM's
+        // type fault into a plausible value. Unit parameters retain their type.
+        if callee.ops.iter().any(|op| {
+            matches!(op, Op::GetLocal(slot)
+            if usize::from(*slot) < usize::from(callee.param_count)
+                && callee.param_types.get(usize::from(*slot)) != Some(&TypeTag::Unit))
+        }) {
+            return Err(error(
+                "a nested Stream reads a non-Unit parameter cleared by Reset",
+            ));
+        }
     }
     if !matches!(program.signatures.get(entry).map(|s| &s.ret),
         Some(keleusma::bytecode::WireShape::Scalar { kind }) if *kind <= keleusma::value_layout::ScalarKind::Float.to_tag())
     {
         return Err(error("retcon currently requires a scalar yield signature"));
+    }
+    // The host interprets the untagged payload using the entry signature.
+    // Equal widths do not suffice, since Byte and Bool have distinct VM tags.
+    let yield_shape = program.signatures[entry].ret;
+    for (index, callee) in program.chunks.iter().enumerate() {
+        if index != entry
+            && callee.block_type != BlockType::Func
+            && callee.ops.iter().any(|op| matches!(op, Op::Yield))
+            && program.signatures.get(index).map(|s| s.ret) != Some(yield_shape)
+        {
+            return Err(error(
+                "coroutine yield signature changes across delegated calls",
+            ));
+        }
     }
     let module = ctx.create_module("kel_retcon");
     module.set_triple(&machine.get_triple());
@@ -356,4 +391,38 @@ resume:
     let function = module.get_function("kel_retcon_delegate_yield").unwrap();
     mark_delegate(ctx, function);
     Ok(function)
+}
+
+/// A private scalar's load-time width and numeric category constrain each write.
+/// Indexed accesses require uniform width and category across the declared range.
+pub(crate) fn private_scalar_shape(
+    initializers: &[keleusma::bytecode::ConstValue],
+    first: u32,
+    count: u32,
+    float_bytes: u32,
+) -> Result<Option<(crate::Width, crate::OperandKind)>, LowerError> {
+    use crate::{OperandKind, Width};
+    use keleusma::bytecode::ConstValue;
+    let shape = |value: &ConstValue| match value {
+        ConstValue::Int(_) => Some((Width::Scalar(8), OperandKind::Int)),
+        ConstValue::Byte(_) | ConstValue::Bool(_) => Some((Width::Scalar(1), OperandKind::Int)),
+        ConstValue::Fixed(_) => Some((Width::Scalar(8), OperandKind::Fixed)),
+        ConstValue::Float(_) => Some((Width::Scalar(float_bytes), OperandKind::Float)),
+        _ => None,
+    };
+    let end = first
+        .checked_add(count)
+        .ok_or_else(|| error("private scalar range overflow"))?;
+    let range = initializers
+        .get(first as usize..end as usize)
+        .ok_or_else(|| error("coroutine private slot has no load-time type"))?;
+    let Some(first) = range.first().map(shape) else {
+        return Err(error("empty private scalar range"));
+    };
+    if range.iter().any(|value| shape(value) != first) {
+        return Err(error(
+            "coroutine private indexed access crosses scalar types",
+        ));
+    }
+    Ok(first)
 }
