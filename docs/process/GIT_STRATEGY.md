@@ -257,12 +257,16 @@ The operator resolved the previously recorded commit-frequency conflict on 2026-
 
 ## Pre-Push Checklist
 
-Before pushing, verify:
+Before a push represented as green, each of the following must hold.
 
-- Relevant targeted tests, lint and formatting checks provide high confidence in a green remote result
-- The receipt identifies checks run and coverage omitted
-- Commit messages follow the conventions above
-- No secrets, credentials, or sensitive data are included in the commit
+- The verification receipt names the candidate commit or working-tree diff, every command and feature selector run, and each process exit code. Every selected command must exit zero.
+- Test output must show the intended cases actually ran. Record passed, failed and skipped counts. An empty selection or missing result does not pass.
+- Run formatting checks for changed Rust code with `cargo fmt --all -- --check` in the affected workspace. Run targeted tests and lint for the changed targets, for example `cargo test --test gate_record` and `cargo clippy --test gate_record -- -D warnings` in `native_codegen/`. Record any omitted check and the changed paths that justify omitting it.
+- For documentation-only changes, run `cargo test --test documentation_links --test comment_citations --test gate_ci_correspondence` from the root. Run affected detached-package documentation guards separately.
+- List coverage omitted, including untested feature configurations and full gates not run. Do not describe targeted verification as a complete gate pass.
+- Commit messages follow the conventions above and the staged diff contains no secrets, credentials or sensitive material.
+
+The operator permits targeted local checks when confidence in the remote result is high. The [source ruling](./GATE_POLICY.md) sets that policy. Confidence is an engineering judgment supported by the receipt, not a replacement for the pass conditions above. A work-in-progress feature push may retain explicitly recorded failures. It must not be represented as green or merged into a version branch while required remote checks fail or remain incomplete.
 
 The push itself runs the cargo-husky pre-push hook (the default-feature workspace tests, fmt, clippy,
 doc, markdown links). Per the test tiers (process audit item 1), that hook runs the **routine `quick`

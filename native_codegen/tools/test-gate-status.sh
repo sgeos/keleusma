@@ -57,12 +57,30 @@ check missing_configuration 1 UNVERIFIED
 write_record
 cat "$fixture/one-row" >> "$record"
 check duplicate_configuration 1 UNVERIFIED
-for substitution in 's/clean/dirty(1)/' 's/frozen/MOVED(1)/' 's/PASS/FAIL/' 's/ frozen |//' 's/2026-09-28T00:00:00Z/yesterday/' 's/ |$/ | extra |/'; do
+for substitution in 's/clean/dirty(1)/' 's/frozen/MOVED(1)/' 's/ frozen |//' 's/2026-09-28T00:00:00Z/yesterday/' 's/ |$/ | extra |/'; do
     write_record
     sed "$substitution" "$record" > "$fixture/bad-row"
     cp "$fixture/bad-row" "$record"
     check "$substitution" 1 UNVERIFIED
 done
+# A recorded failure is valid evidence of a failed run, not malformed input.
+write_record
+sed '1s/PASS/FAIL/' "$record" > "$fixture/failed-row"
+cp "$fixture/failed-row" "$record"
+check recorded_failure 1 'FAILED: default features recorded FAIL'
+check display_recorded_failure 0 'FAILED: default features recorded FAIL' --exit-zero
+if grep -Fq 'invalid gate record schema' "$fixture/output"; then
+    echo 'FAIL: a recorded gate failure was misreported as invalid schema' >&2
+    exit 1
+fi
+write_record
+sed '1s/PASS/UNKNOWN/' "$record" > "$fixture/invalid-row"
+cp "$fixture/invalid-row" "$record"
+check invalid_verdict 1 'UNVERIFIED: invalid gate record schema'
+if grep -Fq 'FAILED:' "$fixture/output"; then
+    echo 'FAIL: malformed evidence was misreported as a recorded failure' >&2
+    exit 1
+fi
 write_record
 sed "s/$source_commit/0000000000000000000000000000000000000000/" "$record" > "$fixture/bad-row"
 cp "$fixture/bad-row" "$record"

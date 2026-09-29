@@ -10,13 +10,13 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
-**2026-09-28. The operator has resolved the gate boundary.**
+**2026-09-28. Legacy re-review follow-up.**
 
-Full gates must pass before publication or merging into `main`. Keep version branches green through remote continuous integration. Local checks may remain targeted when they provide high confidence that remote continuous integration will pass. Record the selected checks and their coverage limits. A version-branch merge does not itself require a full local gate. Detached packages need relevant local checks because root continuous integration does not cover them. Their complete gates remain mandatory before publication or merging their changes into `main`.
+The [gate-policy record](./GATE_POLICY.md) quotes the operator messages from this conversation and records which assistant-authored requirement they superseded. `PROMPT.md` remains untouched. The pre-push checklist now requires exact commands, successful exit codes, nonempty intended test selections and explicit omissions for a green receipt.
 
-Commit once per prompt. Only feature branches may commit on red. Pull request 472 carries the native reporter and handoff follow-up. Its historical full-gate records remain stale, which is disclosed separately from its passing targeted checks. No publication or merge into `main` is requested.
+The accumulated historical section of `HANDOFF.md` is restored byte for byte from `c6730025`. Only the current validity block routes to the bounded V0.3.X brief. Archived routing remains historical. Native reporter diagnostics and independent fixture-test registration are being corrected on pull request 472.
 
-Verification for this documentation change is recorded in `TASKLOG.md`.
+Verification is recorded in `TASKLOG.md`. No publication or merge into `main` is requested.
 
 ---
 
@@ -3286,3 +3286,8 @@ Codex prepared `fix/v3-handoff-residuals` from `20decc75`, absorbing upstream `c
 ## V0.3.X gate-boundary resolution, 2026-09-28
 
 Codex absorbed upstream `e3634edb` into the feature branch. The operator requires full gates before publication or merging into `main`. Version-branch integration depends on green remote continuous integration and relevant targeted local checks. Historical full native records remain unchanged. The bounded brief now records the resolved policy rather than leaving the merge-cadence question pending.
+
+
+## V0.3.X legacy re-review corrections, 2026-09-28
+
+Codex absorbed upstream `89fc6aac`. The bounded brief explains the expected stale full-gate report before its first-action command. The reporter distinguishes valid recorded failure from malformed evidence, and the fixture suite has an independent test entry. The archive stamps completed absorption 80 at `aa4db05f`, with absorption 81 described separately through its rehearsal and merge receipt. The original native addendum remains preserved. The bounded brief records verification outcomes. No publication or merge into `main` is requested.

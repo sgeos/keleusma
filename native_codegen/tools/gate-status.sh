@@ -89,7 +89,8 @@ REACH=(
     ../examples
     ../compiler/kel
 )
-# Exit 1 means the full recorded gate evidence is unverified, not that a test failed.
+# Exit 1 means no current verified PASS. Diagnostics distinguish recorded FAIL
+# from invalid, incomplete or stale evidence.
 # --exit-zero is for display-only callers and does not suppress diagnostics.
 exit_zero=false
 case "${1:-}" in
@@ -138,14 +139,16 @@ if ! rows=$(awk -F '|' '
         for (i=2; i<=7; i++) gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
         seen[$2]++
         if (seen[$2] != 1 || length($3) != 40 || $3 ~ /[^0-9a-fA-F]/ ||
-            $4 != "clean" || $5 != "frozen" || $6 != "PASS" ||
+            ($4 != "clean" && $4 !~ /^dirty\([1-9][0-9]*\)$/) ||
+            ($5 != "frozen" && $5 !~ /^MOVED\([1-9][0-9]*\)$/) ||
+            ($6 != "PASS" && $6 != "FAIL") ||
             $7 !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/ ||
             $1 !~ /^[[:space:]]*$/ || $8 !~ /^[[:space:]]*$/) bad=1
         print $2 "|" $3 "|" $4 "|" $5 "|" $6 "|" $7
     }
     END { if (bad || seen["default features"] != 1 || seen["narrow-float-32"] != 1) exit 1 }
 ' "$record"); then
-    echo "UNVERIFIED: require exactly one clean/frozen/PASS row with valid provenance for each configuration"
+    echo "UNVERIFIED: invalid gate record schema; require one valid six-column row per configuration"
     finish 1
 fi
 
@@ -159,6 +162,22 @@ while IFS='|' read -r cfg commit tree phases verdict when; do
         status=1
         continue
     fi
+    row_verified=true
+    if [ "$verdict" = "FAIL" ]; then
+        echo "   FAILED: $cfg recorded FAIL at $commit"
+        row_verified=false
+        status=1
+    fi
+    if [ "$tree" != "clean" ]; then
+        echo "   UNVERIFIED: recorded run used a $tree worktree"
+        row_verified=false
+        status=1
+    fi
+    if [ "$phases" != "frozen" ]; then
+        echo "   UNVERIFIED: recorded phases were $phases"
+        row_verified=false
+        status=1
+    fi
     if ! changed=$(git diff --name-only "$commit" HEAD -- "${REACH[@]}" "$exclude"); then
         echo "   UNVERIFIED: cannot compare recorded inputs with HEAD"
         status=1
@@ -170,6 +189,8 @@ while IFS='|' read -r cfg commit tree phases verdict when; do
         status=1
     elif [ -n "$now_dirt" ]; then
         echo "   reach    committed inputs match, but this worktree is UNVERIFIED"
+    elif ! "$row_verified"; then
+        echo "   reach    no committed input change; recorded run is not a verified PASS"
     else
         echo "   reach    still speaks to HEAD: no backend source changed since"
     fi

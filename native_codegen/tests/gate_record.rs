@@ -221,6 +221,13 @@ fn guard_rejects_a_duplicated_configuration() {
 /// red in the ordinary case.
 #[test]
 fn guard_does_not_enforce_staleness() {
+    let t = row(GOOD_SHA, "clean", "PASS", "2026-09-24T12:00:00Z");
+    assert_eq!(check_record(&t, &all_exist).unwrap(), 1);
+}
+
+/// Exercise the reporter itself against isolated Git histories and negative cases.
+#[test]
+fn gate_status_reporter_passes_isolated_fixtures() {
     // Schema acceptance and current verification are separate contracts. Exercise
     // the actual reporter against isolated Git histories, including failure paths.
     let output = Command::new("bash")
@@ -234,8 +241,6 @@ fn guard_does_not_enforce_staleness() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let t = row(GOOD_SHA, "clean", "PASS", "2026-09-24T12:00:00Z");
-    assert_eq!(check_record(&t, &all_exist).unwrap(), 1);
 }
 
 /// A FAIL row is a legitimate record. The guard reports on the record's honesty,
