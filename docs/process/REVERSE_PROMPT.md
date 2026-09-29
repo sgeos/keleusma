@@ -3291,3 +3291,8 @@ Codex absorbed upstream `e3634edb` into the feature branch. The operator require
 ## V0.3.X legacy re-review corrections, 2026-09-28
 
 Codex absorbed upstream `89fc6aac`. The bounded brief explains the expected stale full-gate report before its first-action command. The reporter distinguishes valid recorded failure from malformed evidence, and the fixture suite has an independent test entry. The archive stamps completed absorption 80 at `aa4db05f`, with absorption 81 described separately through its rehearsal and merge receipt. The original native addendum remains preserved. The bounded brief records verification outcomes. No publication or merge into `main` is requested.
+
+
+## V0.3.X integration receipt, 2026-09-28
+
+Pull request 472 merged into `v0.3.0` as `2e4a5d36` after run `36518497064` succeeded on `b8269a86`. The final candidate had 27 successful checks, one skipped check and none pending or failing. The merge tree matches that candidate exactly. No push interrupted that final run. The bounded brief now includes the deferred absorption-81 pointer and the completed integration status. The original native addendum and upstream current block remain preserved. Historical full native gates remain stale and are not represented as current verification.
