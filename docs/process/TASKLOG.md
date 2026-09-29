@@ -8,13 +8,13 @@ Current sprint source of truth.
 
 ## 2026-09-28 V0.3.X handoff repair
 
-**In progress.** The V0.2.X-owned coverage guard is repaired on
-`fix/native-handoff-readiness`. Two regression controls failed before the correction.
-The fix permits only the native gate's exact step label, while retaining the compiler
-and surrounding-claim controls. Compaction guidance, assistant attribution and channel
-ownership are reconciled. All five guard tests pass in each of the five continuous
-integration feature configurations. Targeted Clippy and all eight documentation-link
-and citation tests pass. Downstream absorption and complete native gates remain pending.
+**Upstream portion complete.** Pull request 470 repairs the V0.2.X-owned coverage
+guard and reconciles compaction guidance, assistant attribution and channel
+ownership. Two regression controls failed before the correction. All five guard
+tests pass in each of the five feature configurations. Targeted Clippy, all eight
+documentation-link and citation tests, and the complete upstream continuous
+integration checks pass. The V0.3.X bounded brief owns the native handoff state
+and its machine-written record owns the gate verdicts.
 
 ## 2026-09-28 Codex setup audit
 
@@ -3782,9 +3782,12 @@ Item 4 (StaticStr to rodata for flat Text fields) is complete end to end on `fea
 ## V0.3.X verification receipt of 2026-09-28
 
 **Attributed to the V0.3.X line.** Handoff routing and verification requirements
-are repaired. Both complete native gates pass on `e6698c5c`, clean and frozen.
+are repaired. Initial native gates passed on `e6698c5c`, clean and frozen. The
+final upstream checkpoint changes a document within the suite's reach and requires
+fresh native records. The machine-written rows and freshness reporter hold the
+current verdicts.
 The bounded native brief records one non-failing runner diagnostic and the
 non-reproducing isolated checks. The upstream current-state entries above are
-preserved. Final integration is subject to root continuous integration and the
-upstream guard repair landing first. Read the native brief and machine-written
+preserved. The upstream guard repair is merged. Final downstream integration is subject to
+root continuous integration on the completed feature branch. Read the native brief and machine-written
 gate record when resuming this line.

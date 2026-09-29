@@ -10,20 +10,19 @@ increment-by-increment reasoning lives in [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.m
 
 # CURRENT STATE — READ THIS BLOCK, THEN STOP
 
-**2026-09-28. V0.3.X handoff repair is in progress.** The root coverage guard now
-separates the native gate label from stale claims about `compiler/`. Regression
-controls reproduce the old false rejection and retain rejection of the compiler
-claim and unrelated surrounding claims. The compaction and attribution instructions
-and shared-channel policy are reconciled in this increment.
+**2026-09-28. The upstream portion of the V0.3.X handoff repair is complete.**
+Pull request 470 repairs the root coverage guard and reconciles compaction,
+assistant attribution and shared-channel ownership instructions. The complete
+upstream continuous integration checks passed before the merge.
 
-The repair belongs to the V0.2.X-owned root tests and must reach that version branch
-through a green pull request before V0.3.X absorbs it. Native gate refresh and private
-setup remain pending downstream. Do not read this checkpoint as a green V0.3.X verdict.
-The preceding audit is in [CODEX_SETUP_AUDIT.md](./CODEX_SETUP_AUDIT.md).
+The V0.3.X line owns its current native verification and integration state in
+`docs/process/handoffs/v0.3.0-BRIEF.md` on that branch. Its machine-written gate
+record and freshness reporter determine whether the native verdicts still apply.
+This upstream checkpoint does not substitute for that line's current handoff.
 
-Existing operator decisions and publication holds are unchanged. The next step is
-to absorb the upstream repair on V0.3.X, preserving its attributed addendum and native
-routing, then run each complete native gate on the committed, stationary tree.
+The preceding [CODEX_SETUP_AUDIT.md](./CODEX_SETUP_AUDIT.md) is a historical baseline.
+Existing operator decisions and publication holds remain unchanged. The repair
+changes the coverage guard and process guidance, with no runtime behavior change.
 
 ---
 

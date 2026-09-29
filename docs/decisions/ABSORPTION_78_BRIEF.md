@@ -33,3 +33,16 @@ The machine-written gate record and freshness reporter hold the final evidence.
 
 This repair does not implement the nested-yield workstream, discharge existing
 backend reports, change the bytecode version or add opcodes. Publication remains held.
+
+## Final absorption after upstream verification
+
+The final rehearsal was computed against `35b6e0bd`, with **2 unabsorbed** commits
+through `c6730025`. `git merge-tree --write-tree HEAD origin/v0.2.3` ran separately
+and returned a conflict-free tree. Pull request 470 is merged. Its merge commit
+and the closing upstream documentation checkpoint complete this absorption.
+
+The checkpoint replaces temporary pending-state prose with a durable pointer to
+the V0.3.X handoff. It changes the shared reverse prompt, which the native suite
+reads. Both native gates therefore need fresh measurements after this absorption,
+even though no backend implementation changes. The gate record and freshness
+reporter remain the verification authorities.
