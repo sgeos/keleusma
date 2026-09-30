@@ -1,3 +1,15 @@
+//! Internal calls transfer scalar bits and three bounded metadata arrays for
+//! ownership, kind and actual length. Every returned field is written before use.
+//! Private body writes use overlap-safe memmove after a capacity guard. Captured
+//! aliases keep their lengths and unwritten trailing bytes remain unchanged.
+//! Private scalar words retain bits. Only a body tag selects the pool address,
+//! so storing a scalar or Unit cannot expose stale body bytes as a new body.
+//!
+//! Value-driven coroutine construction copies each operand at its actual size.
+//! Producer bounds prove the total fits the site reservation. A runtime check
+//! precedes every destination address. Zero-byte operands perform no access.
+//! Struct and enum padding is zeroed only after fields have been copied.
+//!
 //! The fifth delegate-context field stores the bounded yield-site destination.
 //! Each suspension writes its site identifier before returning to the host.
 //! Operand metadata starts at zero before producer facts replace it. Reset
@@ -96,6 +108,7 @@ const MOVE_FORMS: &[&str] = &[
     "build_memcpy(",
     "store i64 ",
     "build_memmove(",
+    "build_memset(",
 ];
 
 /// Move sites in the emitter, at the stamp.
@@ -105,7 +118,8 @@ const MOVE_FORMS: &[&str] = &[
 // the two Reset stores. These destinations are classified above.
 // 24 -> 27, including the coroutine context and parsed intrinsic helper.
 // 27 -> 30 for the stable continuation, reply, and release stores.
-const RECORDED_MOVE_SITES: usize = 59;
+// 59 -> 63 with selected output size, field store, body copy and padding.
+const RECORDED_MOVE_SITES: usize = 71;
 // 18 -> 19 on 2026-09-11, when the shared composite slot landed: one body copy
 // into the host's buffer, at the offset and length the module's shared layout
 // STATES. Unlike the persistent pool, nothing here is derived — so there is no
@@ -131,6 +145,7 @@ fn move_sites() -> Vec<(&'static str, usize, String)> {
         "src/coroutine/host.rs",
         "src/coroutine/ownership.rs",
         "src/coroutine/kinds.rs",
+        "src/coroutine/packing.rs",
     ] {
         let src = std::fs::read_to_string(file).expect("the emitter is readable");
         for (i, line) in src.lines().enumerate() {

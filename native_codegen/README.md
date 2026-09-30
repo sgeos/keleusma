@@ -186,8 +186,13 @@ mixed values retain their selected size in bounded storage. Array bounds use
 that actual size, while field reads require a proven minimum. Reset clears
 runtime metadata with the corresponding locals. Possibly cleared operands have
 kind checks at typed consumers. Equality and enum inspection preserve valid Unit
-behavior. Composite construction from a possibly cleared operand remains a
-measured admission gap because packing requires fixed operand widths.
+behavior. Composite construction packs actual operand sizes within its proven
+reservation. Tuple and array lengths vary with those values. Struct and enum
+padding is zeroed. Variable field reads and host transfers check the selected
+length before access. Internal calls carry actual kinds and extents through
+parameters and returns. Private composite slots preserve actual view lengths,
+including older aliases after shorter writes. Reads and writes preserve Unit
+until a consumer requires a body. Private copies permit overlapping aliases.
 
 | Host control model | Lowering entry |
 |---|---|

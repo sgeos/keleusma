@@ -54,7 +54,9 @@
 // 730 -> 735 with cleared-value consumer checks and equality regressions.
 // The guarded parameter refusal was replaced by executed positive coverage.
 // One new test records the remaining composite-packing admission gap.
-const RECORDED_TEST_FUNCTIONS: usize = 735;
+// 735 -> 744 with packing, call metadata, private aliases and Unit regressions.
+// The former guarded-construction refusal now has executed positive coverage.
+const RECORDED_TEST_FUNCTIONS: usize = 744;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

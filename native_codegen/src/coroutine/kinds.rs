@@ -270,3 +270,14 @@ pub(crate) fn equality<'ctx>(
     let value_equal = b.build_or(is_unit, payload_equal, "equal_value").unwrap();
     b.build_and(same_kind, value_equal, "equal").unwrap()
 }
+
+/// Call metadata contains ownership, kind and actual body size for each value.
+pub(crate) fn call_field<'ctx>(
+    b: &Builder<'ctx>,
+    context: PointerValue<'ctx>,
+    count: usize,
+    index: usize,
+    part: usize,
+) -> PointerValue<'ctx> {
+    super::ownership::field(b, context, part * count + index)
+}

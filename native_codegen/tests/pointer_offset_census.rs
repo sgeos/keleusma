@@ -1,3 +1,14 @@
+//! Internal call metadata addresses use constant indices within three arrays
+//! of arg_count+1 words. Private value words use validated slot offsets and the
+//! existing unsigned indexed-data bound. Body copy sources have producer bounds,
+//! actual lengths are checked against pool capacity, and memmove permits aliases.
+//!
+//! Coroutine packing uses a constant region-site base and runtime field offsets.
+//! Each offset is a prefix of producer-bounded nonnegative lengths. The complete
+//! sum is checked against the reservation before any field address is formed.
+//! Padding starts at that checked sum and ends at the reservation boundary.
+//! Body sources retain their actual extent and are copied only when nonempty.
+//!
 //! Coroutine arrays with joined sizes use the selected runtime extent for
 //! their unsigned index bound. The larger alternative never enlarges that bound.
 //!
@@ -99,7 +110,8 @@
 /// removed.
 // 24 -> 28, including the coroutine context and parsed intrinsic helper.
 // 28 -> 29 for constant header offsets within the declared stable slot.
-const RECORDED_GEP_SITES: usize = 37;
+// 37 -> 41 with the site base and three bounded packing address sites.
+const RECORDED_GEP_SITES: usize = 43;
 // 22 -> 24 on 2026-09-11, when the shared composite slot landed. **Both are
 // compile-time constant.** The body's address is the slot's STATED offset in the
 // host buffer — a field of the layout, not a computed quantity — and the second
@@ -164,6 +176,7 @@ fn gep_sites() -> Vec<(&'static str, usize, String)> {
         "src/coroutine/host.rs",
         "src/coroutine/ownership.rs",
         "src/coroutine/kinds.rs",
+        "src/coroutine/packing.rs",
     ] {
         let src = std::fs::read_to_string(file).expect("the emitter is readable");
         for (i, line) in src.lines().enumerate() {

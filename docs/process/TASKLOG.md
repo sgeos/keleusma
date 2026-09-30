@@ -3889,3 +3889,35 @@ and the [acceptance matrix](../decisions/WORKSTREAM_B_COMPLETION.md) identify it
 as an implementation gap. Continue with value-driven composite packing. Complete
 Workstream B, full final gates and version integration remain outstanding.
 Upstream current state and earlier native reports are preserved.
+
+
+## V0.3.X actual value transfers of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`, following `8c432401`.
+Composite packing now follows actual operand sizes within a bounded reservation.
+Internal calls preserve actual kinds and lengths through parameters and returns.
+Private composite slots retain actual view lengths and Unit values. Older aliases
+keep their captured lengths after shorter writes. Field and host boundary guards
+check actual lengths before access.
+
+All 80 coroutine tests pass in both float configurations. Test-target Clippy
+with warnings denied passes in both. The frozen default non-corpus run completed
+761 tests with 760 passing and one stale Return mutation template failing.
+The template is re-registered without changing its zero-return mutation.
+Both mutation-placement tests pass after that correction, along with 15 native
+citation, handoff and population checks and 13 root documentation checks.
+Neither complete gate is claimed.
+
+Upstream runtime finding, kept separate from native behavior. Private composite
+self-assignment reaches `persist_composite_body` in `src/vm.rs`, which invokes
+`copy_nonoverlapping` with overlapping source and destination. The debug runtime
+aborts on its unsafe precondition. Reproducer is the source in
+`native_private_self_assignment_preserves_the_current_view` in the native tests.
+That test checks the native overlap-safe copy against explicit expected values
+and region sentinels. It deliberately does not execute the undefined runtime
+operation as an oracle. Root runtime sources remain unchanged.
+
+Continue the admission audit with private scalar kind changes and correlated
+numeric kinds at dialogue joins. These remain audit questions, not proven
+refusal boundaries. Full Workstream B, both final gates and version integration
+remain outstanding. Upstream current state and preceding reports are preserved.

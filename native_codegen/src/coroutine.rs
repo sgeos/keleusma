@@ -37,8 +37,11 @@
 //! possibly cleared value before using its otherwise proven kind. Enum inspection
 //! and scalar equality retain the VM's valid Unit behavior. Admission follows
 //! actual reply tags through control flow and refuses unresolved type mixtures.
-//! Composite construction still requires fixed operand widths. Copies require proven
-//! transfer extents. [`lower_with_contracts`] admits native composite results
+//! Composite construction packs actual operand sizes within a proven reservation.
+//! Tuple and array lengths follow those values. Struct and enum slack is zeroed.
+//! Field reads and host transfers check variable extents before access. Internal
+//! calls carry bits, kinds and actual extents. Private body slots retain view
+//! lengths and Unit values. [`lower_with_contracts`] admits native composite results
 //! with an explicit [`NativeBodyReturn`] contract. Snapshot results are copied
 //! into bounded storage; instance borrows retain their aliases. Without a
 //! contract a called native body result remains refused, including modules with
@@ -91,6 +94,7 @@ pub use dialogue::{Dialogue, HostContracts, NativeBodyReturn, YieldSite};
 mod host;
 pub(crate) mod kinds;
 pub(crate) mod ownership;
+pub(crate) mod packing;
 pub(crate) mod types;
 
 /// Alignment required for the caller-provided coroutine frame.

@@ -1,3 +1,9 @@
+//! Internal call metadata is written by the caller before callee reads, and
+//! by the callee before result reads. Each of its three arrays has arg_count+1
+//! words. Private body metadata retains actual length and kind. Zero denotes
+//! unwritten Unit on the coroutine route. Reading Unit itself does not fault.
+//! The private scalar word is initialized by the published private image.
+//!
 //! The yield-site query reads initialized metadata only while the handle is
 //! suspended. The fifth delegate-context pointer names that metadata cell.
 //! Coroutine kind and size metadata is seeded by producers and transported
@@ -68,7 +74,7 @@ const READ_FORMS: &[&str] = &["build_load(", " = load "];
 // 16 -> 18 with the retcon reply cell and latest-reply reads described above.
 // 18 -> 22, including the coroutine context and parsed intrinsic helper.
 // 22 -> 23 for the stable handle continuation, initialized by start.
-const RECORDED_READ_SITES: usize = 32;
+const RECORDED_READ_SITES: usize = 33;
 // 16 at first derivation, 2026-09-11. Four are on the host-provided boundary —
 // the resume-state word, the composite initialisation word, the private slot
 // array and the shared segment — and the rest read memory this lowering wrote
@@ -82,6 +88,7 @@ fn read_sites() -> Vec<(&'static str, usize, String)> {
         "src/coroutine/host.rs",
         "src/coroutine/ownership.rs",
         "src/coroutine/kinds.rs",
+        "src/coroutine/packing.rs",
     ] {
         let src = std::fs::read_to_string(file).expect("the emitter is readable");
         for (i, line) in src.lines().enumerate() {

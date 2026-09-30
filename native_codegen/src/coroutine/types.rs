@@ -4,7 +4,7 @@
 //! Untagged native operands need a stronger admission condition. This pass joins
 //! possible tags at control-flow edges, including back edges and Reset. A state
 //! can only gain bits, so the finite tag lattice makes the worklist terminate.
-//! Body extents have finite producer-derived endpoints. Joins widen these
+//! Body extents are bounded by finite producer reservations. Joins widen these
 //! ranges and discard conflicting predicate provenance. A successful enum test
 //! refines its unchanged receiver binding. Writes invalidate that provenance.
 //! The emitter tracks dynamic kinds and lengths where joined facts need them.
@@ -33,6 +33,29 @@ pub(crate) struct Analysis {
     pub(crate) facts: Vec<BTreeMap<usize, Facts>>,
     pub(crate) false_inspections: BTreeSet<(usize, usize)>,
     pub(crate) branches: Vec<BTreeMap<usize, bool>>,
+    inputs: Vec<Vec<ValueFact>>,
+    results: Vec<ValueFact>,
+    changed: bool,
+    private_bodies: Vec<Flow>,
+}
+#[derive(Clone, Copy)]
+struct ValueFact {
+    tag: u16,
+    width: Width,
+    flow: Flow,
+}
+impl ValueFact {
+    fn join(&mut self, tag: u16, width: Width, mut flow: Flow) -> bool {
+        flow.origin = None;
+        flow.predicate = None;
+        let mut changed = self.tag | tag != self.tag;
+        self.tag |= tag;
+        if self.width != width && self.width != Width::Unknown {
+            self.width = Width::Unknown;
+            changed = true;
+        }
+        changed | self.flow.join(flow)
+    }
 }
 fn scalar(kind: u8) -> u16 {
     if kind == 1 {
@@ -143,6 +166,45 @@ impl BodyExtent {
         }
     }
 }
+/// Producer-derived packed extent, including zero-byte Unit alternatives.
+fn packed_extent(tags: &[u16], flows: &[Flow], float_bytes: u32) -> Option<(u32, u32)> {
+    let mut total_min = 0u32;
+    let mut total_max = 0u32;
+    for (&tag, flow) in tags.iter().zip(flows) {
+        let tag = kind(tag);
+        if tag == 0 || tag & !(UNIT | FALSE | BYTE | WORD | FIXED | FLOAT | BODY) != 0 {
+            return None;
+        }
+        let mut minimum = u32::MAX;
+        let mut maximum = 0;
+        for (mask, bytes) in [
+            (UNIT, 0),
+            (FALSE, 1),
+            (BYTE, 1),
+            (WORD, 8),
+            (FIXED, 8),
+            (FLOAT, float_bytes),
+        ] {
+            if tag & mask != 0 {
+                minimum = minimum.min(bytes);
+                maximum = maximum.max(bytes);
+            }
+        }
+        for (index, extent) in flow.bodies.iter().enumerate() {
+            if tag & (TUPLE << index) != 0 {
+                let BodyExtent::Range { min, max } = extent else {
+                    return None;
+                };
+                minimum = minimum.min(*min);
+                maximum = maximum.max(*max);
+            }
+        }
+        total_min = total_min.checked_add(minimum)?;
+        total_max = total_max.checked_add(maximum)?;
+    }
+    Some((total_min, total_max))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Predicate {
     receiver: usize,
@@ -391,24 +453,58 @@ pub(super) fn check(
             }
         }
     }
+    let float_bytes = 1u32 << m.float_bits_log2 >> 3;
+    let value_fact = |declared: WireShape| {
+        let width = crate::width_of_declared_shape(Some(&declared), float_bytes);
+        ValueFact {
+            tag: shape(declared),
+            width,
+            flow: Flow::new(
+                shape(declared),
+                width,
+                plan.owns_bodies && matches!(width, Width::Body(_)),
+            ),
+        }
+    };
+    let inputs = m
+        .signatures
+        .iter()
+        .map(|signature| signature.params.iter().copied().map(value_fact).collect())
+        .collect();
+    let results = m
+        .signatures
+        .iter()
+        .map(|signature| value_fact(signature.ret))
+        .collect();
     let mut analysis = Analysis {
+        inputs,
+        results,
+        changed: false,
+        private_bodies: Vec::new(),
         plan,
         facts: vec![BTreeMap::new(); m.chunks.len()],
         false_inspections: BTreeSet::new(),
         branches: vec![BTreeMap::new(); m.chunks.len()],
     };
-    // A private body read traps until a write initializes the slot. Infer the
-    // union of kinds of every possible write, including through other slots and
+    // Private slots begin as Unit. Reads preserve that value, and only a
+    // consumer requiring a body traps. Infer all writes, including other slots and
     // calls. This is a finite ascending lattice. It does not assume source types
     // which the bytecode data layout does not record.
     let slot_count = m
         .data_layout
         .as_ref()
         .map_or(0, |layout| layout.slots.len());
+    analysis.private_bodies.resize(slot_count, Flow::default());
     let mut private_kinds = vec![0; slot_count];
+    if let Some(layout) = &m.data_layout {
+        for field in &layout.private_composite_layout {
+            private_kinds[usize::from(field.slot)] = UNIT;
+        }
+    }
     loop {
+        analysis.changed = false;
         let writes = analyze(m, entry, &mut analysis, &private_kinds, false)?;
-        let mut changed = false;
+        let mut changed = analysis.changed;
         for (known, written) in private_kinds.iter_mut().zip(writes) {
             let union = *known | written;
             changed |= union != *known;
@@ -457,14 +553,10 @@ fn analyze(
             guards: BTreeMap::new(),
             flow_locals: vec![Flow::default(); chunk.local_count as usize],
         };
-        for (i, p) in sig.params.iter().enumerate() {
-            initial.locals[i] = shape(*p);
-            initial.extents.locals[i] = declared_width(*p);
-            initial.flow_locals[i] = Flow::new(
-                shape(*p),
-                declared_width(*p),
-                analysis.plan.owns_bodies && matches!(p, WireShape::Flat { .. }),
-            );
+        for (i, value) in analysis.inputs[ci].iter().enumerate() {
+            initial.locals[i] = value.tag;
+            initial.extents.locals[i] = value.width;
+            initial.flow_locals[i] = value.flow;
         }
         let mut states: Vec<Option<Facts>> = vec![None; chunk.ops.len()];
         states[0] = Some(initial);
@@ -554,11 +646,18 @@ fn analyze(
                     }
                 }
                 Op::Call(target, _) => {
-                    let callee = &m.signatures[*target as usize];
-                    for (index, p) in callee.params.iter().enumerate() {
-                        require_arg(index, shape(*p))?;
+                    // Bytecode Call forwards values, not declared parameter
+                    // representations. Preserve the actual kinds and extents.
+                    if !validate {
+                        for index in 0..args.len() {
+                            analysis.changed |= analysis.inputs[*target as usize][index].join(
+                                args[index],
+                                argument_widths[index],
+                                argument_flows[index],
+                            );
+                        }
                     }
-                    out[0] = shape(callee.ret);
+                    out[0] = analysis.results[*target as usize].tag;
                     // A delegated suspension updates the entry parameter, even
                     // when the call's own return value is discarded.
                     if ci == entry
@@ -570,11 +669,16 @@ fn analyze(
                     }
                 }
                 Op::Return => {
-                    require(
-                        *state.stack.last().ok_or_else(fail)?,
-                        shape(sig.ret),
-                        state.stack.len().checked_sub(1),
-                    )?;
+                    let tag = *state.stack.last().ok_or_else(fail)?;
+                    if ci == entry {
+                        require(tag, shape(sig.ret), state.stack.len().checked_sub(1))?;
+                    } else if !validate {
+                        analysis.changed |= analysis.results[ci].join(
+                            tag,
+                            *state.extents.stack.last().ok_or_else(fail)?,
+                            *state.flow_stack.last().ok_or_else(fail)?,
+                        );
+                    }
                 }
                 Op::CheckedAdd
                 | Op::CheckedSub
@@ -691,8 +795,16 @@ fn analyze(
                                 .iter()
                                 .any(|field| u32::from(field.slot) == slot_index)
                             {
-                                require_arg(0, BODY)?;
+                                require_arg(0, UNIT | BOOL | BYTE | WORD | FIXED | FLOAT | BODY)?;
                                 writes[slot_index as usize] |= args[0];
+                                if !validate {
+                                    let mut flow = argument_flows[0];
+                                    flow.origin = None;
+                                    flow.predicate = None;
+                                    flow.owned = false;
+                                    analysis.changed |=
+                                        analysis.private_bodies[slot_index as usize].join(flow);
+                                }
                             } else {
                                 require_arg(0, slot(m, slot_index, private_kinds))?;
                             }
@@ -804,7 +916,7 @@ fn analyze(
                     }
                 }
                 Op::Call(target, _) => {
-                    widths[0] = declared_width(m.signatures[*target as usize].ret);
+                    widths[0] = analysis.results[*target as usize].width;
                     if ci == entry
                         && chunk.block_type == BlockType::Stream
                         && chunk.param_count > 0
@@ -855,6 +967,71 @@ fn analyze(
                 }
                 _ => {}
             }
+            let construction_extent =
+                if let Op::NewComposite(keleusma::bytecode::NewCompositeOperand::Flat {
+                    kind,
+                    byte_size,
+                    ..
+                }) = op
+                {
+                    let extent = packed_extent(&args, &argument_flows, float_bytes)
+                        .filter(|(_, max)| *max <= u32::from(*byte_size))
+                        .map(|(min, max)| {
+                            if matches!(
+                                kind,
+                                keleusma::value_layout::CompositeKind::Struct
+                                    | keleusma::value_layout::CompositeKind::Enum
+                            ) {
+                                BodyExtent::Range {
+                                    min: u32::from(*byte_size),
+                                    max: u32::from(*byte_size),
+                                }
+                            } else {
+                                BodyExtent::Range { min, max }
+                            }
+                        });
+                    if validate && extent.is_none() {
+                        return Err(LowerError::UnsupportedShape(
+                        "coroutine construction has no packed extent within its region reservation"
+                            .into(),
+                    ));
+                    }
+                    let extent = extent.unwrap_or(BodyExtent::Unknown);
+                    widths[0] = extent.exact().map_or(Width::Unknown, Width::Body);
+                    Some(extent)
+                } else {
+                    None
+                };
+            let private_read = match op {
+                Op::GetData(index) => Some((*index, 1)),
+                Op::GetDataIndexed(index, count) => Some((*index, *count)),
+                _ => None,
+            }
+            .filter(|(index, _)| {
+                m.data_layout.as_ref().is_some_and(|layout| {
+                    layout
+                        .private_composite_layout
+                        .iter()
+                        .any(|field| u32::from(field.slot) == *index)
+                })
+            });
+            let private_flow = private_read.map(|(index, count)| {
+                let mut flow = Flow::default();
+                for slot in index..index + count {
+                    flow.join(analysis.private_bodies[slot as usize]);
+                }
+                let extent = flow
+                    .bodies
+                    .iter()
+                    .copied()
+                    .fold(BodyExtent::Absent, BodyExtent::join);
+                widths[0] = if kind(out[0]) & !BODY == 0 {
+                    extent.exact().map_or(Width::Unknown, Width::Body)
+                } else {
+                    Width::Unknown
+                };
+                flow
+            });
             let mut flows: Vec<_> = out
                 .iter()
                 .zip(&widths)
@@ -896,8 +1073,7 @@ fn analyze(
                     }
                 }
                 Op::Call(target, _) => {
-                    flows[0].owned =
-                        analysis.plan.owns_bodies && matches!(widths[0], Width::Body(_));
+                    flows[0] = analysis.results[*target as usize].flow;
                     if ci == entry
                         && chunk.block_type == BlockType::Stream
                         && chunk.param_count > 0
@@ -934,6 +1110,13 @@ fn analyze(
                     }
                 }
                 _ => {}
+            }
+            if let Some(flow) = private_flow {
+                flows[0] = flow;
+            }
+            if let Some(extent) = construction_extent {
+                let index = (out[0].trailing_zeros() - 8) as usize;
+                flows[0].bodies[index] = extent;
             }
             guards.insert(ip, checks.into_inner());
             outputs.insert(

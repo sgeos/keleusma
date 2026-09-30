@@ -1624,15 +1624,302 @@ fn guarded_nested_parameter_uses_execute_before_reset() {
 }
 
 #[test]
-fn guarded_composite_construction_from_a_cleared_parameter_remains_a_gap() {
-    let source = "private data st { first: bool = true } loop child(a: Word) -> Word { if st.first { st.first = false; let pair = (a, a); yield pair.0 } else { yield 0 } } loop main(t: Word) -> Word { child(t) }";
-    assert_eq!(
-        common::general_vm_sequence(source, 5, &[7; 4]),
-        [5, 0, 0, 0]
-    );
+fn guarded_composite_construction_from_a_cleared_parameter_executes() {
+    for (extra, parameter, argument, value) in [
+        ("", "Word", "t", "(a, a).0"),
+        (
+            "fn first(p: (Word, Word)) -> Word { p.0 }",
+            "Word",
+            "t",
+            "first((a, a))",
+        ),
+        ("", "Word", "t", "[a, a][0]"),
+        ("", "Word", "t", "(((a, a), a).0).1"),
+        ("", "Float", "t as Float", "(a, a).0 as Word"),
+        ("", "Byte", "t as Byte", "(a, a).0 as Word"),
+        (
+            "struct S { a: Word, b: Word }",
+            "Word",
+            "t",
+            "S { a: a, b: a }.b",
+        ),
+        (
+            "enum E { A(Word), B(Word, Word) }",
+            "Word",
+            "t",
+            "match E::A(a) { E::A(x) => x, _ => 0 }",
+        ),
+    ] {
+        let source = format!(
+            "{extra} private data st {{ first: bool = true }} loop child(a: {parameter}) -> Word {{ if st.first {{ st.first = false; yield {value} }} else {{ yield 0 }} }} loop main(t: Word) -> Word {{ child({argument}) }}"
+        );
+        let replies = [7; 4];
+        let expected = [5, 0, 0, 0];
+        assert_eq!(
+            common::general_vm_sequence(&source, 5, &replies),
+            expected,
+            "{source}"
+        );
+        for optimize in [false, true] {
+            assert_eq!(native(&source, 5, &replies, optimize), expected, "{source}");
+        }
+    }
+}
+
+#[test]
+fn guarded_variable_body_yields_match_fixed_host_contracts() {
+    let source = "private data st { first: bool = true } loop child(a: Word) -> (Word, Word) { if st.first { st.first = false; yield (a, a) } else { yield (0, 0) } } loop main(t: Word) -> (Word, Word) { child(t) }";
+    let expected: Vec<Vec<u8>> = [(5i64, 5i64), (0, 0), (0, 0), (0, 0)]
+        .into_iter()
+        .map(|(a, b)| [a.to_le_bytes(), b.to_le_bytes()].concat())
+        .collect();
+    assert_eq!(composite_bodies(source, 5, &[7; 4]), expected);
+}
+
+#[test]
+fn private_storage_preserves_actual_body_extents() {
+    for (source, expected) in [
+        (
+            "private data st { saved: (Word, Word) } loop child(a: Word) -> Word { st.saved = (a, 17); yield st.saved.0 } loop main(t: Word) -> Word { child(t) }",
+            vec![5, 17, 17, 17],
+        ),
+        (
+            "private data st { saved: (Word, Word) } loop child(a: Word) -> Word { st.saved = (5, 29); let old = st.saved; st.saved = (a, 17); let now = st.saved; yield old.0; yield old.1; yield now.0 } loop main(t: Word) -> Word { child(t) }",
+            vec![5, 17, 5, 17, 29, 17],
+        ),
+        (
+            "private data st { saved: [(Word, Word); 2] } loop child(a: Word) -> Word { st.saved[0] = (5, 29); st.saved[1] = (a, 17); for i in 0..2 { yield st.saved[i].0; } yield 99 } loop main(t: Word) -> Word { child(t) }",
+            vec![5, 5, 99, 5, 17, 99],
+        ),
+    ] {
+        let replies = vec![7; expected.len()];
+        assert_eq!(
+            common::general_vm_sequence(source, 5, &replies),
+            expected,
+            "{source}"
+        );
+        for optimize in [false, true] {
+            assert_eq!(native(source, 5, &replies, optimize), expected, "{source}");
+        }
+    }
+}
+
+#[test]
+fn native_private_self_assignment_preserves_the_current_view() {
+    // The reference VM uses copy_nonoverlapping on this aliased body and aborts
+    // in debug builds. Do not execute that undefined operation as an oracle.
+    let source = "private data st { saved: (Word, Word) } loop child(a: Word) -> Word { st.saved = (a, 17); st.saved = st.saved; yield st.saved.0 } loop main(t: Word) -> Word { child(t) }";
+    for optimize in [false, true] {
+        assert_eq!(native(source, 5, &[7; 4], optimize), [5, 17, 17, 17]);
+    }
+}
+
+#[test]
+fn private_composite_slots_preserve_unit_values_without_eager_faults() {
+    for (source, expected) in [
+        (
+            "enum E { A, B } private data st { saved: E } loop main(t: Word) -> Word { yield match st.saved { E::A => 1, _ => 0 }; st.saved = E::A; 0 }",
+            [0, 1, 1, 1],
+        ),
+        (
+            "enum E { A, B } private data st { saved: E } loop child(a: E) -> Word { st.saved = a; yield match st.saved { E::A => 1, _ => 0 } } loop main(t: Word) -> Word { child(E::A) }",
+            [1, 0, 0, 0],
+        ),
+    ] {
+        assert_eq!(common::general_vm_sequence(source, 5, &[7; 4]), expected);
+        for optimize in [false, true] {
+            assert_eq!(native(source, 5, &[7; 4], optimize), expected);
+        }
+    }
+}
+
+#[test]
+fn shortened_private_view_traps_while_an_older_long_view_remains_valid() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    let source = "private data st { saved: (Word, Word) } loop child(a: Word) -> Word { st.saved = (5, 29); let old = st.saved; st.saved = (a, 17); let now = st.saved; yield old.1; yield now.1 } loop main(t: Word) -> Word { child(t) }";
     let program = common::build(source);
-    let error = coroutine::lower(&Context::create(), &program, &machine(), 4096).unwrap_err();
-    assert!(error.to_string().contains("width"), "{error}");
+    let capacity = keleusma::vm::required_persistent_capacity_for(&program);
+    let mut arena = keleusma_arena::Arena::with_capacity(capacity + 65536);
+    arena.resize_persistent(capacity).unwrap();
+    let mut vm = Vm::new(program, &arena).unwrap();
+    let mut state = vm.call(&[Value::Int(5)]).unwrap();
+    for (index, value) in [17, 17, 29].into_iter().enumerate() {
+        assert!(matches!(state, VmState::Yielded(Value::Int(v)) if v == value));
+        if index < 2 {
+            state = vm.resume(Value::Int(7)).unwrap();
+            if matches!(state, VmState::Reset) {
+                state = vm.resume(Value::Int(7)).unwrap();
+            }
+        }
+    }
+    assert!(vm.resume(Value::Int(7)).is_err());
+    #[cfg(unix)]
+    require_cleared_kind_trap(
+        "shortened_private_view_traps_while_an_older_long_view_remains_valid",
+        source,
+        &[5],
+        &[17, 17, 29],
+        &[7; 3],
+    );
+}
+
+#[test]
+fn owned_variable_bodies_cross_calls_and_delegated_suspension() {
+    use keleusma::bytecode::Value;
+    let inputs: Vec<_> = [5, 7, 20, -3, -40, 1]
+        .into_iter()
+        .map(|v| Value::array(vec![Value::Int(v), Value::Int(v * 10)]))
+        .collect();
+    for source in [
+        "fn first(p: [Word; 3]) -> Word { p[0] } loop main(t: [Word; 2]) -> Word { let r = yield 5; let p = if t[0] > 0 { r } else { [99, 100, 101] }; yield first(p) }",
+        "fn identity(p: [Word; 3]) -> [Word; 3] { p } fn first(p: [Word; 3]) -> Word { p[0] } loop main(t: [Word; 2]) -> Word { let r = yield 5; let p = if t[0] > 0 { r } else { [99, 100, 101] }; yield first(identity(p)) }",
+    ] {
+        flat_inputs(source, &inputs, &[5, 7, 5, 99, 5, 1]);
+    }
+    flat_inputs(
+        "yield second(p: [Word; 3]) -> Word { yield 9; p[1] } loop main(t: [Word; 2]) -> Word { let r = yield 5; let p = if t[0] > 0 { r } else { [99, 100, 101] }; yield second(p) }",
+        &inputs,
+        &[5, 9, 70, 5, 9, 100],
+    );
+}
+
+#[test]
+fn composite_packing_uses_actual_sizes_after_parameter_reset() {
+    for (extra, parameter, argument, value, first, later) in [
+        ("", "Word", "t", "(a, 17, 29).0", 5, 17),
+        ("", "Word", "t", "((), a, 17).1", 5, 17),
+        ("", "Word", "t", "(a, 17, 29).1", 17, 29),
+        ("", "Word", "t", "(((a, 17), 29, 37).0).1", 17, 29),
+        ("", "(Word, Word)", "(t, t + 1)", "((a, 17, 29).0).0", 5, 17),
+        ("", "Word", "t", "[a, 17, 29][0]", 5, 17),
+        ("", "Word", "t", "[a, 17, 29][1]", 17, 29),
+        (
+            "",
+            "Byte",
+            "t as Byte",
+            "((a, (17 as Byte)).0) as Word",
+            5,
+            17,
+        ),
+        ("", "Float", "t as Float", "((a, 17.25).0) as Word", 5, 17),
+        (
+            "struct S { a: Word, b: Word, c: Word }",
+            "Word",
+            "t",
+            "S { a: a, b: 17, c: 29 }.b",
+            17,
+            29,
+        ),
+        (
+            "struct S { a: Word, b: Word, c: Word }",
+            "Word",
+            "t",
+            "S { a: a, b: 17, c: 29 }.c",
+            29,
+            0,
+        ),
+        (
+            "enum E { A(Word), B(Word, Word) }",
+            "Word",
+            "t",
+            "match E::A(a) { E::A(x) => x, _ => 99 }",
+            5,
+            0,
+        ),
+    ] {
+        let source = format!(
+            "{extra} loop child(a: {parameter}) -> Word {{ yield {value} }} loop main(t: Word) -> Word {{ child({argument}) }}"
+        );
+        let expected = [first, later, later, later];
+        let replies = [7; 4];
+        assert_eq!(
+            common::general_vm_sequence(&source, 5, &replies),
+            expected,
+            "{source}"
+        );
+        for optimize in [false, true] {
+            assert_eq!(native(&source, 5, &replies, optimize), expected, "{source}");
+        }
+    }
+    let source = "loop child(a: Word) -> Word { let p = (a, 17); yield 1; yield p.0 } loop main(t: Word) -> Word { child(t) }";
+    let expected = [1, 5, 1, 17, 1, 17];
+    assert_eq!(common::general_vm_sequence(source, 5, &[7; 6]), expected);
+    for optimize in [false, true] {
+        assert_eq!(native(source, 5, &[7; 6], optimize), expected);
+    }
+}
+
+#[test]
+fn shortened_constructed_tuple_traps_before_an_out_of_bounds_read() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    let source = "loop child(a: Word) -> Word { yield (a, 17, 29).2 } loop main(t: Word) -> Word { child(t) }";
+    let program = common::build(source);
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program, &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(29))
+    ));
+    assert!(matches!(vm.resume(Value::Int(7)).unwrap(), VmState::Reset));
+    assert!(vm.resume(Value::Int(7)).is_err());
+    #[cfg(unix)]
+    require_cleared_kind_trap(
+        "shortened_constructed_tuple_traps_before_an_out_of_bounds_read",
+        source,
+        &[5],
+        &[29],
+        &[7],
+    );
+}
+
+#[test]
+fn internal_calls_preserve_actual_kinds_and_body_extents() {
+    for (extra, expression, expected) in [
+        (
+            "fn first(p: (Word, Word)) -> Word { p.0 }",
+            "first((a, 17))",
+            [5, 17, 17, 17],
+        ),
+        (
+            "fn identity(p: (Word, Word)) -> (Word, Word) { p } fn first(p: (Word, Word)) -> Word { p.0 }",
+            "first(identity((a, 17)))",
+            [5, 17, 17, 17],
+        ),
+        (
+            "fn equal(x: Word) -> Word { if x == x { 1 } else { 0 } }",
+            "equal(a)",
+            [1, 1, 1, 1],
+        ),
+        (
+            "fn identity(x: Word) -> Word { x }",
+            "if identity(a) == 5 { 1 } else { 0 }",
+            [1, 0, 0, 0],
+        ),
+        (
+            "fn identity(x: (Word, Word)) -> (Word, Word) { x }",
+            "(identity((a, 17))).0",
+            [5, 17, 17, 17],
+        ),
+    ] {
+        let source = format!(
+            "{extra} loop child(a: Word) -> Word {{ yield {expression} }} loop main(t: Word) -> Word {{ child(t) }}"
+        );
+        assert_eq!(
+            common::general_vm_sequence(&source, 5, &[7; 4]),
+            expected,
+            "{source}"
+        );
+        for optimize in [false, true] {
+            assert_eq!(native(&source, 5, &[7; 4], optimize), expected, "{source}");
+        }
+    }
+    let source = "fn identity(x: Float) -> Float { x } fn eq(x: Float) -> Word { if x == x { 1 } else { 0 } } loop child(a: Float) -> Word { yield eq(identity(a)) } loop main(t: Word) -> Word { child(t as Float) }";
+    assert_eq!(common::general_vm_sequence(source, 5, &[7; 4]), [1; 4]);
+    for optimize in [false, true] {
+        assert_eq!(native(source, 5, &[7; 4], optimize), [1; 4]);
+    }
 }
 
 #[test]
@@ -1734,13 +2021,36 @@ fn require_cleared_kind_trap(
     prefix: &[i64],
     replies: &[i64],
 ) {
+    let program = common::build(source);
+    require_program_kind_trap(test, &program, None, arguments, prefix, replies, "default");
+}
+
+#[cfg(unix)]
+fn require_program_kind_trap(
+    test: &str,
+    program: &keleusma::bytecode::Module,
+    dialogues: Option<&std::collections::BTreeMap<coroutine::YieldSite, coroutine::Dialogue>>,
+    arguments: &[i64],
+    prefix: &[i64],
+    replies: &[i64],
+    case: &str,
+) {
     use std::os::unix::process::ExitStatusExt;
     type StartTwo = unsafe extern "C" fn(i64, i64, *mut u8, *mut u8, *mut u8, *mut u8) -> Outcome;
     assert_eq!(prefix.len(), replies.len());
     if let Ok(mode) = std::env::var("KEL_CLEARED_KIND_TRAP") {
-        let program = common::build(source);
+        if std::env::var("KEL_KIND_TRAP_CASE").as_deref() != Ok(case) {
+            return;
+        }
+        let program = program.clone();
         let context = Context::create();
-        let module = coroutine::lower(&context, &program, &machine(), 4096).unwrap();
+        let module = match dialogues {
+            Some(dialogues) => {
+                coroutine::lower_with_dialogues(&context, &program, &machine(), 4096, dialogues)
+            }
+            None => coroutine::lower(&context, &program, &machine(), 4096),
+        }
+        .unwrap();
         if mode == "optimized" {
             common::force_optimize(&module);
         }
@@ -1769,6 +2079,9 @@ fn require_cleared_kind_trap(
             let resume = engine
                 .get_function::<HandleResume>(&format!("{name}_resume"))
                 .unwrap();
+            if prefix.is_empty() {
+                println!("CLEARED-KIND-PREFIX-VERIFIED");
+            }
             let mut outcome = match arguments {
                 [a] => engine
                     .get_function::<HandleStart>(&format!("{name}_start"))
@@ -1810,6 +2123,7 @@ fn require_cleared_kind_trap(
         let result = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", test, "--nocapture"])
             .env("KEL_CLEARED_KIND_TRAP", mode)
+            .env("KEL_KIND_TRAP_CASE", case)
             .output()
             .unwrap();
         assert!(
@@ -1944,8 +2258,23 @@ fn coroutine_composite_boundaries_check_declared_extent() {
         }
         // Verification does not establish native body extents from metadata.
         keleusma::verify::verify(&p).unwrap();
-        let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
-        assert!(error.to_string().contains("composite boundary"), "{error}");
+        match coroutine::lower(&Context::create(), &p, &machine(), 4096) {
+            Err(error) => assert!(error.to_string().contains("composite boundary"), "{error}"),
+            Ok(_) => {
+                // The internal return keeps its actual extent. The host's
+                // inflated output contract must trap before exposing that body.
+                #[cfg(unix)]
+                require_program_kind_trap(
+                    "coroutine_composite_boundaries_check_declared_extent",
+                    &p,
+                    None,
+                    &[5],
+                    &[],
+                    &[],
+                    "oversized_host_output",
+                );
+            }
+        }
     }
     let mut p = common::build(
         "fn pair(t: Word) -> (Word, Word) { (t, t) } loop main(t: Word) -> (Word, Word) { yield pair(t); yield pair(t) }",
@@ -3355,6 +3684,16 @@ fn dialogue_body_extents_cover_reads_and_callee_arguments() {
                 }
             }
         }
+        if reassign || source.contains("fn last") {
+            require_short_dialogue_trap(
+                &program,
+                &contracts,
+                5,
+                5,
+                if reassign { "loop_join" } else { "callee_read" },
+            );
+            continue;
+        }
         let error = coroutine::lower_with_dialogues(
             &Context::create(),
             &program,
@@ -3396,16 +3735,52 @@ fn dialogue_body_extents_cover_reads_and_callee_arguments() {
                 )
             })
             .collect();
-        let error = coroutine::lower_with_dialogues(
-            &Context::create(),
+        let first = if sizes[0] == 8 { 5 } else { -5 };
+        let yielded = if first > 0 { 1 } else { 2 };
+        require_short_dialogue_trap(
             &program,
-            &machine(),
-            4096,
             &contracts,
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("body extent"), "{error}");
+            first,
+            yielded,
+            if first > 0 {
+                "then_short"
+            } else {
+                "else_short"
+            },
+        );
     }
+}
+
+fn require_short_dialogue_trap(
+    program: &keleusma::bytecode::Module,
+    contracts: &std::collections::BTreeMap<coroutine::YieldSite, coroutine::Dialogue>,
+    first: i64,
+    yielded: i64,
+    case: &str,
+) {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    assert!(
+        matches!(vm.call(&[Value::Int(first)]).unwrap(), VmState::Yielded(Value::Int(v)) if v == yielded)
+    );
+    assert!(vm.resume(Value::tuple(vec![Value::Int(17)])).is_err());
+    let host = Guarded::new(8);
+    unsafe {
+        std::slice::from_raw_parts_mut(host.ptr(), 8).copy_from_slice(&17i64.to_le_bytes());
+    }
+    #[cfg(unix)]
+    require_program_kind_trap(
+        "dialogue_body_extents_cover_reads_and_callee_arguments",
+        program,
+        Some(contracts),
+        &[first],
+        &[yielded],
+        &[host.ptr() as i64],
+        case,
+    );
+    host.check();
 }
 
 #[test]
