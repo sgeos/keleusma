@@ -26,6 +26,7 @@
 //! | operand slot (`push_w`) | no — dies with the call | nothing needed; an address is the intended content |
 //! | local slot (`SetLocal`, parameters, the resume value) | no — cleared at `Op::Reset` | nothing needed, same reason |
 //! | retcon latest reply | yes, until release | the public lowering admits scalar parameters only; initialised at start and updated on resume |
+//! | retcon delegate context | yes, until release | three pointers refer only to the reply cell or entry locals that LLVM captures in the same frame; helper stores update the same scalar entry parameter and latest reply |
 //! | retcon local zero and local reset | no, cleared at Reset | resume stores scalar bits; Reset clears locals and restores the latest scalar reply |
 //! | operand spill slice | no — abandoned when the depth goes to zero | nothing needed |
 //! | composite body field | no — the body is itself region-resident | a `Width::Body` operand is MEMCPY'd, never stored as a word |
@@ -75,14 +76,15 @@ mod common;
 /// Two forms, and the pair is the point: a word store and a body copy are the
 /// two ways a composite can reach a destination, and a census matching only the
 /// first would be blind to exactly the distinction the defect turned on.
-const MOVE_FORMS: &[&str] = &["build_store(", "build_memcpy("];
+const MOVE_FORMS: &[&str] = &["build_store(", "build_memcpy(", "store i64 "];
 
 /// Move sites in the emitter, at the stamp.
 ///
 /// **Re-derive rather than transcribe.**
 // 19 -> 24 with two latest-reply stores, one resume-local store, and
 // the two Reset stores. These destinations are classified above.
-const RECORDED_MOVE_SITES: usize = 24;
+// 24 -> 27, including the coroutine context and parsed intrinsic helper.
+const RECORDED_MOVE_SITES: usize = 27;
 // 18 -> 19 on 2026-09-11, when the shared composite slot landed: one body copy
 // into the host's buffer, at the offset and length the module's shared layout
 // STATES. Unlike the persistent pool, nothing here is derived — so there is no
@@ -100,21 +102,25 @@ const RECORDED_MOVE_SITES: usize = 24;
 // index, a cleared state word — and are counted because a constant store today
 // is a site someone can route an operand through tomorrow.
 
-fn move_sites() -> Vec<(usize, String)> {
-    let src = std::fs::read_to_string("src/lib.rs").expect("the emitter is readable");
-    src.lines()
-        .enumerate()
-        .filter(|(_, l)| MOVE_FORMS.iter().any(|f| l.contains(f)))
-        .map(|(i, l)| (i + 1, l.trim().to_string()))
-        .collect()
+fn move_sites() -> Vec<(&'static str, usize, String)> {
+    let mut sites = Vec::new();
+    for file in ["src/lib.rs", "src/coroutine.rs"] {
+        let src = std::fs::read_to_string(file).expect("the emitter is readable");
+        for (i, line) in src.lines().enumerate() {
+            if MOVE_FORMS.iter().any(|form| line.contains(form)) {
+                sites.push((file, i + 1, line.trim().to_string()));
+            }
+        }
+    }
+    sites
 }
 
 #[test]
 fn every_operand_move_has_a_classified_destination() {
     let sites = move_sites();
     println!("\n================ OPERAND-MOVE SITES IN THE EMITTER");
-    for (n, l) in &sites {
-        println!("  src/lib.rs:{n}  {}", &l[..l.len().min(72)]);
+    for (file, n, l) in &sites {
+        println!("  {file}:{n}  {}", &l[..l.len().min(72)]);
     }
     println!("  ------------------------------------------------");
     println!("  sites: {}", sites.len());
@@ -130,7 +136,7 @@ fn every_operand_move_has_a_classified_destination() {
     // copy is the other half of the distinction.
     for f in MOVE_FORMS {
         assert!(
-            sites.iter().any(|(_, l)| l.contains(f)),
+            sites.iter().any(|(_, _, l)| l.contains(f)),
             "no site matches {f:?}, so this census is blind to one of the two ways \
              an operand reaches a destination"
         );

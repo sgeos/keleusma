@@ -2,7 +2,7 @@
 //!
 //! The caller owns the frame, reply cell, and the ordinary shared, private and
 //! composite regions as disjoint reservations for the entire lifetime of a suspended instance. Start
-//! returns a continuation and a yielded scalar bits. Before each resume the caller
+//! returns a continuation and yielded scalar bits. Before each resume the caller
 //! writes the next scalar bits to the reply cell, then calls the continuation with
 //! `(frame, false)`. Release calls it with `(frame, true)` and invalidates the
 //! instance. Float bits occupy the low 32 or all 64 bits according to the
@@ -11,7 +11,14 @@
 //!
 //! LLVM manages the continuation and captures live allocas. The emitted module
 //! is accepted only if splitting eliminates every overflow allocator use.
-//! This API currently admits one scalar stream with non-suspending callees.
+//! This API currently admits one scalar entry stream with ordinary, reentrant
+//! or stream callees. Suspending callees are inlined before splitting. Host
+//! replies update the entry parameter while preserving callee state until Reset.
+//! A nested stream clears its own locals on Reset. Reads of non-Unit callee
+//! parameters remain refused because the VM does not replenish those slots.
+//! Delegated yields must have the same signature as the entry yield. Scalar
+//! admission follows actual host reply tags through control flow and refuses
+//! operations or boundaries whose types cannot be proved.
 //!
 //! The provisional start symbol is `kel_chunk_<entry_point>` with the scalar
 //! argument followed by shared, private, composite-region, frame and reply
@@ -22,16 +29,20 @@
 //! initialises the frame itself; its previous bytes need not be cleared.
 //! Never resume a released instance or invoke one continuation concurrently.
 
+use inkwell::attributes::{Attribute, AttributeLoc};
+use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::Module as LlvmModule;
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::TargetMachine;
 use inkwell::types::BasicMetadataTypeEnum;
-use inkwell::values::{BasicValue, FunctionValue, InstructionOpcode};
+use inkwell::values::{BasicValue, CallSiteValue, FunctionValue, InstructionOpcode, PointerValue};
 use keleusma::bytecode::{BlockType, Module, Op, TypeTag};
 
 use crate::{LowerError, LowerOptions};
+
+pub(crate) mod types;
 
 /// Alignment required for the caller-provided coroutine frame.
 pub const FRAME_ALIGN: u32 = 8;
@@ -62,13 +73,11 @@ pub fn lower<'ctx>(
     keleusma::verify::verify(program).map_err(|e| error(format!("verification: {e:?}")))?;
     keleusma::vm::auto_arena_capacity_for(program, &[])
         .map_err(|e| error(format!("resource admission: {e:?}")))?;
-    // Reuse the established safety refusals, including composite yield escape.
-    // Passing verification alone does not certify fixed-offset native storage.
-    let preflight = ctx.create_module("retcon_preflight");
-    crate::lower_module(ctx, &preflight, program, LowerOptions::default())?;
     let entry = program
         .entry_point
         .ok_or_else(|| error("coroutine needs an entry point"))?;
+    // The shared emitter checks allocation confinement for the coroutine
+    // path itself. The legacy preflight cannot use proven unreachable arms.
     let stream = program
         .chunks
         .get(entry)
@@ -92,17 +101,57 @@ pub fn lower<'ctx>(
             "retcon currently requires a one-scalar Stream entry ending in Reset",
         ));
     }
-    if program.chunks.iter().enumerate().any(|(i, c)| {
-        i != entry
-            && (c.block_type != BlockType::Func || c.ops.iter().any(|op| matches!(op, Op::Yield)))
-    }) {
-        return Err(error("retcon currently requires non-suspending callees"));
+    for (index, callee) in program.chunks.iter().enumerate() {
+        if index == entry || callee.block_type != BlockType::Stream {
+            continue;
+        }
+        if !matches!(callee.ops.first(), Some(Op::Stream))
+            || !matches!(callee.ops.last(), Some(Op::Reset))
+            || callee.ops.iter().any(|op| matches!(op, Op::Return))
+        {
+            return Err(error(
+                "a nested Stream must begin with Stream and end with Reset",
+            ));
+        }
+        // Reset clears the active callee, while host resume updates only the
+        // entry parameter. Treating a cleared Word as zero would turn the VM's
+        // type fault into a plausible value. Unit parameters retain their type.
+        if callee.ops.iter().any(|op| {
+            matches!(op, Op::GetLocal(slot)
+            if usize::from(*slot) < usize::from(callee.param_count)
+                && callee.param_types.get(usize::from(*slot)) != Some(&TypeTag::Unit))
+        }) {
+            return Err(error(
+                "a nested Stream reads a non-Unit parameter cleared by Reset",
+            ));
+        }
     }
-    if !matches!(program.signatures.get(entry).map(|s| &s.ret),
-        Some(keleusma::bytecode::WireShape::Scalar { kind }) if *kind <= keleusma::value_layout::ScalarKind::Float.to_tag())
-    {
-        return Err(error("retcon currently requires a scalar yield signature"));
+    // The host interprets the untagged payload using the entry signature.
+    // Equal widths do not suffice, since Byte and Bool have distinct VM tags.
+    let yield_shape = program
+        .signatures
+        .get(entry)
+        .ok_or_else(|| error("coroutine needs an entry signature"))?
+        .ret;
+    for (index, callee) in program.chunks.iter().enumerate() {
+        if index != entry
+            && callee.block_type != BlockType::Func
+            && callee.ops.iter().any(|op| matches!(op, Op::Yield))
+            && program.signatures.get(index).map(|s| s.ret) != Some(yield_shape)
+        {
+            return Err(error(
+                "coroutine yield signature changes across delegated calls",
+            ));
+        }
     }
+    let analysis = types::check(program, entry)?;
+    let mut prepared = program.clone();
+    for &(chunk, ip) in &analysis.false_inspections {
+        // Both instructions leave the inspected value in place and push Bool.
+        // Keeping instruction indices preserves all structured branch targets.
+        prepared.chunks[chunk].ops[ip] = Op::PushImmediate(2);
+    }
+    let program = &prepared;
     let module = ctx.create_module("kel_retcon");
     module.set_triple(&machine.get_triple());
     module.set_data_layout(&machine.get_target_data().get_data_layout());
@@ -113,14 +162,69 @@ pub fn lower<'ctx>(
         LowerOptions::default(),
         None,
         None,
-        Some(frame_bytes),
+        Some((frame_bytes, &analysis)),
     )?;
+    if !matches!(program.signatures.get(entry).map(|s| &s.ret),
+        Some(keleusma::bytecode::WireShape::Scalar { kind }) if *kind <= keleusma::value_layout::ScalarKind::Float.to_tag())
+    {
+        return Err(error("retcon currently requires a scalar yield signature"));
+    }
+    module.verify().map_err(error)?;
+    // The verified call graph is acyclic. Inline suspension-capable callees
+    // into the one coroutine before splitting, so LLVM captures each live
+    // call frame and abnormal resume bypasses every remaining callee effect.
+    module
+        .run_passes(
+            "always-inline,globaldce",
+            machine,
+            PassBuilderOptions::create(),
+        )
+        .map_err(error)?;
+    if module.get_functions().any(is_delegate) {
+        return Err(error("a suspension-capable callee survived inlining"));
+    }
     // mem2reg promotes only entry-block allocas. The intrinsic scaffold
     // precedes the bytecode body, so move its fixed scalar slots to that entry.
     let f = module.get_function(&format!("kel_chunk_{entry}")).unwrap();
+    let cleanup = f
+        .get_basic_blocks()
+        .into_iter()
+        .find(|b| b.get_name().to_bytes() == b"retcon.cleanup")
+        .unwrap();
+    // Retcon requires one fallthrough coro.end. Redirect inlined abnormal
+    // resume exits to the entry's cleanup, before the coroutine passes run.
+    let cleanup_builder = ctx.create_builder();
+    for block in f.get_basic_blocks().into_iter().filter(|b| *b != cleanup) {
+        let ends: Vec<_> = block
+            .get_instructions()
+            .filter(|i| {
+                CallSiteValue::try_from(*i)
+                    .ok()
+                    .and_then(|c| c.get_called_fn_value())
+                    .is_some_and(|callee| callee.get_name().to_bytes() == b"llvm.coro.end")
+            })
+            .collect();
+        for end in ends {
+            let terminal = end
+                .get_next_instruction()
+                .ok_or_else(|| error("coroutine cleanup has no terminator"))?;
+            if terminal.get_opcode() != InstructionOpcode::Unreachable {
+                return Err(error("coroutine cleanup has effects after coro.end"));
+            }
+            terminal.erase_from_basic_block();
+            end.erase_from_basic_block();
+            cleanup_builder.position_at_end(block);
+            cleanup_builder.build_unconditional_branch(cleanup).unwrap();
+        }
+    }
     let header = f.get_first_basic_block().unwrap();
     let builder = ctx.create_builder();
-    builder.position_before(&header.get_first_instruction().unwrap());
+    builder.position_before(
+        &header
+            .get_instructions()
+            .find(|i| i.get_opcode() != InstructionOpcode::Alloca)
+            .unwrap(),
+    );
     let allocas: Vec<_> = f
         .get_basic_blocks()
         .iter()
@@ -136,7 +240,7 @@ pub fn lower<'ctx>(
     // suspension occupy the frame. No handwritten resume dispatch is emitted.
     module
         .run_passes(
-            "function(mem2reg),coro-early,coro-split,coro-cleanup",
+            "function(sroa,mem2reg),coro-early,coro-split,coro-cleanup",
             machine,
             PassBuilderOptions::create(),
         )
@@ -206,4 +310,124 @@ retcon.cleanup:
     let scaffold = ctx.create_module_from_ir(buffer).map_err(error)?;
     module.link_in_module(scaffold).map_err(error)?;
     Ok(module.get_function(&format!("kel_chunk_{index}")).unwrap())
+}
+
+/// Hidden context belongs to the entry instance, never to a callee's locals.
+/// Scalar replacement removes the three pointer slots before frame splitting.
+pub(crate) fn delegate_context<'ctx>(
+    ctx: &'ctx Context,
+    builder: &Builder<'ctx>,
+    reply: PointerValue<'ctx>,
+    entry_parameter: PointerValue<'ctx>,
+    latest_reply: PointerValue<'ctx>,
+) -> PointerValue<'ctx> {
+    let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
+    let ty = ctx.struct_type(&[ptr.into(), ptr.into(), ptr.into()], false);
+    let context = builder.build_alloca(ty, "delegate_context").unwrap();
+    for (index, value) in [reply, entry_parameter, latest_reply]
+        .into_iter()
+        .enumerate()
+    {
+        let field = builder
+            .build_struct_gep(ty, context, index as u32, "context_field")
+            .unwrap();
+        builder.build_store(field, value).unwrap();
+    }
+    context
+}
+
+pub(crate) fn mark_delegate(ctx: &Context, function: FunctionValue<'_>) {
+    function.set_linkage(inkwell::module::Linkage::Internal);
+    function.add_attribute(
+        AttributeLoc::Function,
+        ctx.create_enum_attribute(Attribute::get_named_enum_kind_id("alwaysinline"), 0),
+    );
+    function.add_attribute(
+        AttributeLoc::Function,
+        ctx.create_string_attribute("kel.retcon.delegate", ""),
+    );
+}
+
+pub(crate) fn is_delegate(function: FunctionValue<'_>) -> bool {
+    function
+        .get_string_attribute(AttributeLoc::Function, "kel.retcon.delegate")
+        .is_some()
+}
+
+pub(crate) fn delegate_yield<'ctx>(
+    ctx: &'ctx Context,
+    module: &LlvmModule<'ctx>,
+) -> Result<FunctionValue<'ctx>, LowerError> {
+    if let Some(function) = module.get_function("kel_retcon_delegate_yield") {
+        return Ok(function);
+    }
+    // After inlining, lower redirects this helper's abnormal exit to the
+    // enclosing coroutine's single cleanup block. No helper survives splitting.
+    let ir = r#"
+declare i1 @llvm.coro.suspend.retcon.i1(...)
+declare void @llvm.coro.end(ptr, i1, token)
+define i64 @kel_retcon_delegate_yield(i64 %value, ptr %context) alwaysinline {
+entry:
+  %reply_slot = getelementptr {ptr, ptr, ptr}, ptr %context, i32 0, i32 0
+  %parameter_slot = getelementptr {ptr, ptr, ptr}, ptr %context, i32 0, i32 1
+  %latest_slot = getelementptr {ptr, ptr, ptr}, ptr %context, i32 0, i32 2
+  %reply = load ptr, ptr %reply_slot
+  %parameter = load ptr, ptr %parameter_slot
+  %latest = load ptr, ptr %latest_slot
+  %unwind = call i1 (...) @llvm.coro.suspend.retcon.i1(i64 %value)
+  br i1 %unwind, label %cleanup, label %resume
+cleanup:
+  call void @llvm.coro.end(ptr null, i1 false, token none)
+  unreachable
+resume:
+  %result = load i64, ptr %reply
+  store i64 %result, ptr %parameter
+  store i64 %result, ptr %latest
+  ret i64 %result
+}
+"#;
+    let buffer = MemoryBuffer::create_from_memory_range_copy(
+        format!("{ir}\0").as_bytes(),
+        "delegate scaffold",
+    );
+    module
+        .link_in_module(ctx.create_module_from_ir(buffer).map_err(error)?)
+        .map_err(error)?;
+    let function = module.get_function("kel_retcon_delegate_yield").unwrap();
+    mark_delegate(ctx, function);
+    Ok(function)
+}
+
+/// A private scalar's load-time width and numeric category constrain each write.
+/// Indexed accesses require uniform width and category across the declared range.
+pub(crate) fn private_scalar_shape(
+    initializers: &[keleusma::bytecode::ConstValue],
+    first: u32,
+    count: u32,
+    float_bytes: u32,
+) -> Result<Option<(crate::Width, crate::OperandKind)>, LowerError> {
+    use crate::{OperandKind, Width};
+    use keleusma::bytecode::ConstValue;
+    let shape = |value: &ConstValue| match value {
+        ConstValue::Int(_) => Some((Width::Scalar(8), OperandKind::Int)),
+        ConstValue::Byte(_) | ConstValue::Bool(_) => Some((Width::Scalar(1), OperandKind::Int)),
+        ConstValue::Fixed(_) => Some((Width::Scalar(8), OperandKind::Fixed)),
+        ConstValue::Float(_) => Some((Width::Scalar(float_bytes), OperandKind::Float)),
+        _ => None,
+    };
+    let end = first
+        .checked_add(count)
+        .ok_or_else(|| error("private scalar range overflow"))?;
+    let range = initializers
+        .get(first as usize..end as usize)
+        .ok_or_else(|| error("coroutine private slot has no load-time type"))?;
+    let Some(first) = range.first().map(shape) else {
+        return Err(error("empty private scalar range"));
+    };
+    if range.iter().any(|value| shape(value) != first) {
+        return Err(error(
+            "coroutine private indexed access crosses scalar types",
+        ));
+    }
+    Ok(first)
 }
