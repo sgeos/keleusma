@@ -1,3 +1,9 @@
+//! The yield-site query reads initialized metadata only while the handle is
+//! suspended. The fifth delegate-context pointer names that metadata cell.
+//! Coroutine kind and size metadata is seeded by producers and transported
+//! by local and stack copies. Private body tags share the initialization word.
+//! Enum discriminants are read only after the runtime tag equals Enum.
+//!
 //! Flat-input ownership flags are initialized before local or operand reads.
 //! Call contexts hold one flag per argument plus an initialized return flag.
 //! The delegate context now has a fourth pointer for entry ownership. Its new
@@ -33,7 +39,7 @@
 //! | **composite initialisation word** | **the host's zeroed buffer.** Zero means "never written", and a read of such a slot FAULTS |
 //! | **private slot array** | **the host, installing `region::private_init_image`.** This is the guarantee that did not exist |
 //! | retcon reply cell | the host writes scalar bits or a body pointer before each resume, as specified by `coroutine::lower`; exercised by `retcon_bytecode.rs` |
-//! | retcon delegate context | four pointer fields initialised by the entry before any call, promoted into the frame by LLVM; the helper reads the host reply cell under the same resume contract |
+//! | retcon delegate context | five pointer fields initialised by the entry before any call, promoted into the frame by LLVM; the helper reads the host reply cell under the same resume contract |
 //! | retcon latest reply | initialised from the start argument and updated after each suspension; LLVM preserves it in the frame until release |
 //! | **shared data segment** | **the host, by contract.** Out of this backend's reach and deliberately so |
 //!
@@ -62,7 +68,7 @@ const READ_FORMS: &[&str] = &["build_load(", " = load "];
 // 16 -> 18 with the retcon reply cell and latest-reply reads described above.
 // 18 -> 22, including the coroutine context and parsed intrinsic helper.
 // 22 -> 23 for the stable handle continuation, initialized by start.
-const RECORDED_READ_SITES: usize = 26;
+const RECORDED_READ_SITES: usize = 32;
 // 16 at first derivation, 2026-09-11. Four are on the host-provided boundary —
 // the resume-state word, the composite initialisation word, the private slot
 // array and the shared segment — and the rest read memory this lowering wrote
@@ -75,6 +81,7 @@ fn read_sites() -> Vec<(&'static str, usize, String)> {
         "src/coroutine.rs",
         "src/coroutine/host.rs",
         "src/coroutine/ownership.rs",
+        "src/coroutine/kinds.rs",
     ] {
         let src = std::fs::read_to_string(file).expect("the emitter is readable");
         for (i, line) in src.lines().enumerate() {

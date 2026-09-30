@@ -813,6 +813,12 @@ struct Lower<'ctx> {
     // Host-derived bodies are immutable values. Region bodies retain aliases.
     ownership: Option<coroutine::ownership::Flags<'ctx>>,
     ownership_width_unknown: bool,
+    runtime_kinds: Option<coroutine::kinds::Flags<'ctx>>,
+    borrowed_slots: Vec<bool>,
+    borrowed_locals: Vec<bool>,
+    input_copy_bounds: Vec<Option<u32>>,
+    input_body_sizes: Vec<IntValue<'ctx>>,
+    output_copy_bounds: Vec<Option<u32>>,
 }
 
 impl<'ctx> Lower<'ctx> {
@@ -846,6 +852,14 @@ impl<'ctx> Lower<'ctx> {
                 flags
                     .slots
                     .push(self.b.build_alloca(self.i64t, "owned_operand").unwrap());
+            }
+            if let Some(flags) = &mut self.runtime_kinds {
+                let kind = self.b.build_alloca(self.i64t, "kind_operand").unwrap();
+                let size = self.b.build_alloca(self.i64t, "body_size_operand").unwrap();
+                self.b.build_store(kind, self.i64t.const_zero()).unwrap();
+                self.b.build_store(size, self.i64t.const_zero()).unwrap();
+                flags.slots.push(kind);
+                flags.slot_sizes.push(size);
             }
             if let Some(bb) = resume {
                 self.b.position_at_end(bb);
@@ -931,14 +945,25 @@ impl<'ctx> Lower<'ctx> {
     }
 
     fn owned_at(&self, back: usize) -> IntValue<'ctx> {
+        let Some(index) = self.depth.checked_sub(back + 1) else {
+            // Legacy entry points also accept malformed bytecode. Their stack
+            // and local checks issue the refusal without metadata underflow.
+            return self.i64t.const_zero();
+        };
+        if self.borrowed_slots.get(index) == Some(&true) {
+            return self.i64t.const_zero();
+        }
         self.ownership
             .as_ref()
             .map_or(self.i64t.const_zero(), |flags| {
-                coroutine::ownership::load(&self.b, flags.slots[self.depth - back - 1])
+                coroutine::ownership::load(&self.b, flags.slots[index])
             })
     }
 
     fn owned_local(&self, index: usize) -> IntValue<'ctx> {
+        if self.borrowed_locals.get(index) == Some(&true) {
+            return self.i64t.const_zero();
+        }
         self.ownership
             .as_ref()
             .map_or(self.i64t.const_zero(), |flags| {
@@ -946,14 +971,29 @@ impl<'ctx> Lower<'ctx> {
             })
     }
 
-    fn push_owned(&mut self, v: IntValue<'ctx>, w: Width, k: OperandKind, owned: IntValue<'ctx>) {
+    fn copy_value(
+        &mut self,
+        v: IntValue<'ctx>,
+        w: Width,
+        owned: IntValue<'ctx>,
+        slot: usize,
+        bound: Option<u32>,
+    ) -> IntValue<'ctx> {
         if self.ownership.is_some()
             && w == Width::Unknown
             && owned.get_zero_extended_constant() != Some(0)
         {
+            if let (Some(maximum), Some(flags)) = (bound, &self.runtime_kinds) {
+                let bytes = coroutine::ownership::load(&self.b, flags.slot_sizes[slot]);
+                return coroutine::ownership::copy_bounded(&self.b, v, maximum, bytes, owned);
+            }
             self.ownership_width_unknown = true;
         }
-        let v = coroutine::ownership::copy(&self.b, v, w, owned);
+        coroutine::ownership::copy(&self.b, v, w, owned)
+    }
+    fn push_owned(&mut self, v: IntValue<'ctx>, w: Width, k: OperandKind, owned: IntValue<'ctx>) {
+        let bound = self.output_copy_bounds.get(self.depth).copied().flatten();
+        let v = self.copy_value(v, w, owned, self.depth, bound);
         self.push_k(v, w, k);
         if let Some(flags) = &self.ownership {
             self.b
@@ -1655,7 +1695,7 @@ pub fn lower_chunk<'ctx>(
             retcon_owned_bodies: false,
             retcon_sites: None,
             retcon_native_bodies: None,
-            retcon_extents: None,
+            retcon_facts: None,
             retcon_site_offset: None,
             retcon_resume_type: None,
             retcon_resume_shape: None,
@@ -2247,7 +2287,7 @@ fn lower_module_with<'ctx>(
             retcon_owned_bodies: owned_bodies,
             retcon_sites: retcon_config.map(|(_, facts)| &facts.plan.sites[i]),
             retcon_native_bodies: retcon_config.map(|(_, facts)| &facts.plan.native_body_returns),
-            retcon_extents: retcon_config.map(|(_, facts)| &facts.extents[i]),
+            retcon_facts: retcon_config.map(|(_, facts)| &facts.facts[i]),
             retcon_site_offset: retcon_config.and_then(|(_, facts)| facts.plan.metadata_offset),
             retcon_branches: retcon_config.map(|(_, facts)| &facts.branches[i]),
             retcon_resume_shape: retcon_bytes
@@ -2600,7 +2640,7 @@ struct BodyCfg<'a> {
     /// Track ownership for all flat entry arguments, not only the reply shape.
     retcon_owned_bodies: bool,
     retcon_sites: Option<&'a BTreeMap<usize, (u64, coroutine::Dialogue)>>,
-    retcon_extents: Option<&'a BTreeMap<usize, coroutine::types::Extents>>,
+    retcon_facts: Option<&'a BTreeMap<usize, coroutine::types::Facts>>,
     retcon_native_bodies: Option<&'a BTreeMap<u16, coroutine::NativeBodyReturn>>,
     retcon_site_offset: Option<u32>,
     /// The VM writes host replies to the outer entry parameter even when a
@@ -3354,35 +3394,45 @@ fn guard_array_index<'ctx>(
 ) -> Result<(), LowerError> {
     // Stack shape at an index site is `[.., array, index]`, so the array is one
     // deeper than the top.
-    let body = match st.width_at(1) {
-        Width::Body(n) => u64::from(n),
+    if elem_bytes == 0 {
+        return Err(LowerError::unsupported_op(
+            op,
+            "an array whose element stride is zero, so the element count is not defined"
+                .to_string(),
+        ));
+    }
+    let count = match st.width_at(1) {
+        Width::Body(bytes) => i64t.const_int(u64::from(bytes) / elem_bytes, false),
+        Width::Unknown
+            if st
+                .input_copy_bounds
+                .get(st.depth - 2)
+                .copied()
+                .flatten()
+                .is_some() =>
+        {
+            // A coroutine join can select different bounded array sizes. Read
+            // the producer's selected extent, captured before output metadata
+            // reuses this stack slot. Using a minimum would reject valid indices
+            // in the larger array; using a maximum would permit an overread.
+            let bytes = st.input_body_sizes[st.depth - 2];
+            st.b.build_int_unsigned_div(bytes, i64t.const_int(elem_bytes, false), "array_length")
+                .unwrap()
+        }
         other => {
             return Err(LowerError::unsupported_op(
                 op,
                 format!(
-                    "an array indexed by a runtime value whose body size is not                      tracked ({other:?}), so no bound can be derived. Lowering it                      unguarded returns whatever lies at base + index * stride,                      which is a wrong value rather than a fault"
+                    "an array indexed by a runtime value whose body size is not tracked ({other:?}), so no bound can be derived"
                 ),
             ));
         }
     };
-    if elem_bytes == 0 {
-        return Err(LowerError::unsupported_op(
-            op,
-            "an array whose element stride is zero, so the element count is not              defined"
-                .to_string(),
-        ));
-    }
-    let count = body / elem_bytes;
     let index = st.peek();
     let cont = ctx.append_basic_block(func, "idxinbounds");
     let bad =
-        st.b.build_int_compare(
-            IntPredicate::UGE,
-            index,
-            i64t.const_int(count, false),
-            "idxoob",
-        )
-        .unwrap();
+        st.b.build_int_compare(IntPredicate::UGE, index, count, "idxoob")
+            .unwrap();
     st.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
     st.b.position_at_end(cont);
     Ok(())
@@ -3403,7 +3453,7 @@ fn lower_chunk_body<'ctx>(
         retcon_frame_bytes,
         retcon_owned_bodies: owned_bodies,
         retcon_sites,
-        retcon_extents,
+        retcon_facts,
         retcon_native_bodies,
         retcon_site_offset,
         retcon_resume_type,
@@ -3870,7 +3920,14 @@ fn lower_chunk_body<'ctx>(
         }
     }
 
+    let runtime_kinds = retcon_facts.map(|_| coroutine::kinds::Flags::new(&b, locals.len()));
     let mut st = Lower {
+        runtime_kinds,
+        borrowed_slots: Vec::new(),
+        input_copy_bounds: Vec::new(),
+        input_body_sizes: Vec::new(),
+        output_copy_bounds: Vec::new(),
+        borrowed_locals: Vec::new(),
         ownership,
         ownership_width_unknown: false,
         b,
@@ -4110,14 +4167,38 @@ fn lower_chunk_body<'ctx>(
             continue;
         }
 
-        if let Some(facts) = retcon_extents.and_then(|extents| extents.get(&i)) {
+        if let Some(facts) = retcon_facts.and_then(|extents| extents.get(&i)) {
             if facts.stack.len() != st.depth {
                 return Err(LowerError::Internal(
                     "coroutine extent depth disagrees with verified emission".into(),
                 ));
             }
             st.widths.resize(st.depth, Width::Unknown);
-            st.widths.copy_from_slice(&facts.stack);
+            st.widths.copy_from_slice(&facts.extents.stack);
+            st.kinds = facts
+                .stack
+                .iter()
+                .map(|mask| coroutine::types::operand_kind(*mask))
+                .collect();
+            st.borrowed_slots = facts.flow_stack.iter().map(|flow| !flow.owned).collect();
+            st.borrowed_locals = facts.flow_locals.iter().map(|flow| !flow.owned).collect();
+            st.input_copy_bounds = facts.flow_stack.iter().map(|flow| flow.maximum()).collect();
+            st.output_copy_bounds.clear();
+            for output in &facts.outputs {
+                st.output_copy_bounds.resize(output.slot + 1, None);
+                st.output_copy_bounds[output.slot] = output.flow.maximum();
+            }
+            let (_, delta) = keleusma::verify::op_depth_effect(op, chunk);
+            let needed = st.depth + delta.max(0) as usize;
+            if needed > MAX_STACK {
+                return Err(LowerError::UnsupportedShape(
+                    "coroutine kind stack exceeds lowering capacity".into(),
+                ));
+            }
+            if needed > 0 {
+                st.ensure_slot(needed - 1);
+            }
+            st.input_body_sizes = st.runtime_kinds.as_ref().unwrap().seed(&st.b, facts, op);
         }
         // The op is about to be lowered. See `BodyCfg::visited` for why this is
         // recorded here rather than after the arm, and why only a CLEAN chunk's
@@ -4395,6 +4476,10 @@ fn lower_chunk_body<'ctx>(
         if retcon_resume_type.is_some() {
             // Reply body types are supplied by the host contract, rather than
             // the bytecode signature. Prove every derived read and call copy.
+            let read_width = retcon_facts
+                .and_then(|facts| facts.get(&i))
+                .and_then(|facts| facts.flow_stack.last()?.minimum(*facts.stack.last()?))
+                .map_or(st.width_at(0), Width::Body);
             match op {
                 Op::GetField(keleusma::bytecode::StructField::Flat { offset, kind }) => {
                     let shape = keleusma::bytecode::WireShape::Scalar {
@@ -4406,22 +4491,28 @@ fn lower_chunk_body<'ctx>(
                             "coroutine field has no proven scalar extent".into(),
                         ));
                     };
-                    coroutine::ownership::require_extent(
-                        st.width_at(0),
-                        u32::from(*offset),
-                        bytes,
-                    )?;
+                    coroutine::ownership::require_extent(read_width, u32::from(*offset), bytes)?;
                 }
                 Op::GetField(keleusma::bytecode::StructField::FlatNested {
                     offset, size, ..
                 }) => {
                     coroutine::ownership::require_extent(
-                        st.width_at(0),
+                        read_width,
                         u32::from(*offset),
                         u32::from(*size),
                     )?;
                 }
-                Op::IsEnum(..) => coroutine::ownership::require_extent(st.width_at(0), 0, 8)?,
+                Op::IsEnum(..) => {
+                    let size = retcon_facts
+                        .and_then(|facts| facts.get(&i))
+                        .and_then(|facts| facts.flow_stack.last())
+                        .and_then(|flow| flow.bodies[3].minimum());
+                    coroutine::ownership::require_extent(
+                        size.map_or(Width::Unknown, Width::Body),
+                        0,
+                        8,
+                    )?;
+                }
                 Op::Call(target, count) => {
                     if let Some(signature) = chunk_signatures.get(*target as usize) {
                         for (argument, shape) in signature.params.iter().enumerate() {
@@ -4502,8 +4593,8 @@ fn lower_chunk_body<'ctx>(
                 // a read that textually PRECEDES the write finds no recorded
                 // width and stays unknown, which is the conservative direction.
                 let idx = *n as usize;
-                let w = if let Some(facts) = retcon_extents.and_then(|extents| extents.get(&i)) {
-                    facts.locals[idx]
+                let w = if let Some(facts) = retcon_facts.and_then(|extents| extents.get(&i)) {
+                    facts.extents.locals[idx]
                 } else {
                     match local_write_count.get(&idx).copied().unwrap_or(0) {
                         0 | 1 => st.local_widths.get(idx).copied().unwrap_or(Width::Unknown),
@@ -4520,13 +4611,17 @@ fn lower_chunk_body<'ctx>(
                 // singly-written local carries a trusted tag; anything else is
                 // `Unknown` and refuses at the use rather than being read as an
                 // integer, which is what a float would silently become.
-                let k = match local_write_count.get(&idx).copied().unwrap_or(0) {
-                    0 | 1 => st
-                        .local_kinds
-                        .get(idx)
-                        .copied()
-                        .unwrap_or(OperandKind::Unknown),
-                    _ => OperandKind::Unknown,
+                let k = if let Some(facts) = retcon_facts.and_then(|facts| facts.get(&i)) {
+                    coroutine::types::operand_kind(facts.locals[idx])
+                } else {
+                    match local_write_count.get(&idx).copied().unwrap_or(0) {
+                        0 | 1 => st
+                            .local_kinds
+                            .get(idx)
+                            .copied()
+                            .unwrap_or(OperandKind::Unknown),
+                        _ => OperandKind::Unknown,
+                    }
                 };
                 let owned = st.owned_local(idx);
                 st.push_owned(v, w, k, owned);
@@ -4538,7 +4633,8 @@ fn lower_chunk_body<'ctx>(
                 let k = st.kind_at(0);
                 let owned = st.owned_at(0);
                 let v = st.pop();
-                let v = coroutine::ownership::copy(&st.b, v, w, owned);
+                let bound = st.input_copy_bounds.get(st.depth).copied().flatten();
+                let v = st.copy_value(v, w, owned, st.depth, bound);
                 // **BOUNDED FOR THE SAME REASON `GetLocal` IS.** This one was
                 // missed on the first pass, and the robustness sweep did not
                 // catch the miss because its mutation set corrupted `GetLocal`
@@ -6472,6 +6568,12 @@ fn lower_chunk_body<'ctx>(
                         // write was.
                         let as_int = st.b.build_ptr_to_int(addr, i64t, "poolint").unwrap();
                         st.push_w(as_int, Width::Body(size));
+                        if let Some(flags) = &st.runtime_kinds {
+                            let tag =
+                                st.b.build_load(i64t, init_ptr, "private_body_kind")
+                                    .unwrap();
+                            st.b.build_store(flags.slots[st.depth - 1], tag).unwrap();
+                        }
                     } else {
                         // **The operand's width is cross-checked against the
                         // derived size.** They come from different places — the
@@ -6501,6 +6603,12 @@ fn lower_chunk_body<'ctx>(
                                 });
                             }
                         }
+                        let tag = st
+                            .runtime_kinds
+                            .as_ref()
+                            .map_or(i64t.const_int(1, false), |flags| {
+                                flags.load(&st.b, st.depth - 1)
+                            });
                         let v = st.pop();
                         let src = st
                             .b
@@ -6519,8 +6627,7 @@ fn lower_chunk_body<'ctx>(
                             })?;
                         // Marked AFTER the copy, so a trap inside it cannot leave
                         // the slot claiming to hold a body it does not.
-                        st.b.build_store(init_ptr, i64t.const_int(1, false))
-                            .unwrap();
+                        st.b.build_store(init_ptr, tag).unwrap();
                     }
                     continue;
                 }
@@ -7273,6 +7380,13 @@ fn lower_chunk_body<'ctx>(
                         )));
                     }
                 };
+                if let Some(flags) = &st.runtime_kinds {
+                    let tag = flags.load(&st.b, st.depth - 1);
+                    let value = st.peek();
+                    let result = coroutine::kinds::enum_test(&st.b, value, tag, expected);
+                    st.push_w(result, Width::Scalar(1));
+                    continue;
+                }
                 let addr_int = st.peek();
                 let base =
                     st.b.build_int_to_ptr(addr_int, ctx.ptr_type(AddressSpace::default()), "cenum")
@@ -7829,6 +7943,9 @@ fn lower_chunk_body<'ctx>(
             // nothing can name.
             Op::Reset if retcon_stream => {
                 st.depth = 0;
+                if let Some(flags) = &st.runtime_kinds {
+                    flags.reset(&st.b);
+                }
                 if let Some(flags) = &st.ownership {
                     for flag in &flags.locals {
                         st.b.build_store(*flag, i64t.const_zero()).unwrap();

@@ -80,6 +80,38 @@ pub(crate) fn copy_to<'ctx>(
     owned: IntValue<'ctx>,
     destination: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
+    copy_bytes_to(
+        b,
+        value,
+        value.get_type().const_int(u64::from(bytes), false),
+        owned,
+        destination,
+    )
+}
+
+/// Runtime extents are compiler-produced metadata bounded by the joined facts.
+/// The reservation is static even when the selected value has a different size.
+pub(crate) fn copy_bounded<'ctx>(
+    b: &Builder<'ctx>,
+    value: IntValue<'ctx>,
+    maximum: u32,
+    bytes: IntValue<'ctx>,
+    owned: IntValue<'ctx>,
+) -> IntValue<'ctx> {
+    let ctx = value.get_type().get_context();
+    let destination = b
+        .build_alloca(ctx.i8_type().array_type(maximum.max(1)), "owned_union_body")
+        .unwrap();
+    copy_bytes_to(b, value, bytes, owned, destination)
+}
+
+fn copy_bytes_to<'ctx>(
+    b: &Builder<'ctx>,
+    value: IntValue<'ctx>,
+    bytes: IntValue<'ctx>,
+    owned: IntValue<'ctx>,
+    destination: PointerValue<'ctx>,
+) -> IntValue<'ctx> {
     if owned.get_zero_extended_constant() == Some(0) {
         return value;
     }
@@ -104,14 +136,7 @@ pub(crate) fn copy_to<'ctx>(
     let source = b.build_int_to_ptr(value, ptrt, "host_body_source").unwrap();
     // Exact signature/operand extent, unaligned packed bytes. memmove also
     // defines repeated transfers when LLVM coalesces storage after inlining.
-    b.build_memmove(
-        destination,
-        1,
-        source,
-        1,
-        i64t.const_int(u64::from(bytes), false),
-    )
-    .unwrap();
+    b.build_memmove(destination, 1, source, 1, bytes).unwrap();
     let address = b
         .build_ptr_to_int(destination, i64t, "owned_body_address")
         .unwrap();

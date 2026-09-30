@@ -180,8 +180,12 @@ execution cost. Unused chunks impose no dialogue contracts or native body emissi
 while whole-module verification and resource admission remain mandatory.
 
 Composite reads and transfers require extents proven across control-flow joins.
-Private-slot kinds are inferred from writes. Mixed enum and scalar receiver
-inspection remains an implementation gap, demonstrated against the virtual machine.
+Private-slot kinds are inferred from writes and preserved in runtime metadata.
+Mixed enum and scalar inspection checks the kind before reading a body. Owned
+mixed values retain their selected size in bounded storage. Array bounds use
+that actual size, while field reads require a proven minimum. Reset clears
+runtime metadata with the corresponding locals. Guarded first-iteration parameter
+reads in nested streams remain a demonstrated admission gap.
 
 | Host control model | Lowering entry |
 |---|---|

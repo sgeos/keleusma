@@ -1,3 +1,11 @@
+//! The fifth delegate-context field stores the bounded yield-site destination.
+//! Each suspension writes its site identifier before returning to the host.
+//! Operand metadata starts at zero before producer facts replace it. Reset
+//! clears local kinds to Unit and lengths to zero with the actual local values.
+//! Coroutine tag and extent stores carry scalar metadata, never body addresses.
+//! Owned mixed-body copies use a statically bounded reservation and the selected
+//! runtime extent. Borrowed region aliases retain their original address.
+//!
 //! Flat host values are copied by exact verified extent at value transfers.
 //! Copies and ownership flags have fixed-size allocations hoisted before
 //! inlining, then captured by LLVM when live across suspension. Private and
@@ -97,7 +105,7 @@ const MOVE_FORMS: &[&str] = &[
 // the two Reset stores. These destinations are classified above.
 // 24 -> 27, including the coroutine context and parsed intrinsic helper.
 // 27 -> 30 for the stable continuation, reply, and release stores.
-const RECORDED_MOVE_SITES: usize = 44;
+const RECORDED_MOVE_SITES: usize = 59;
 // 18 -> 19 on 2026-09-11, when the shared composite slot landed: one body copy
 // into the host's buffer, at the offset and length the module's shared layout
 // STATES. Unlike the persistent pool, nothing here is derived — so there is no
@@ -122,6 +130,7 @@ fn move_sites() -> Vec<(&'static str, usize, String)> {
         "src/coroutine.rs",
         "src/coroutine/host.rs",
         "src/coroutine/ownership.rs",
+        "src/coroutine/kinds.rs",
     ] {
         let src = std::fs::read_to_string(file).expect("the emitter is readable");
         for (i, line) in src.lines().enumerate() {

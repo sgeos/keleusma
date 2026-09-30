@@ -1219,33 +1219,403 @@ fn coroutine_inspection_distinguishes_enum_and_struct_bodies() {
 }
 
 #[test]
-fn mixed_enum_receiver_kinds_remain_an_explicit_boundary() {
+fn mixed_enum_receiver_kinds_execute_with_guarded_body_inspection() {
+    // Scalar bits include null and invalid addresses. The false edge must never
+    // interpret them as a body pointer. A successful test also refines payload
+    // reads, including the compiler's Boolean temporary and structured match.
+    for (declaration, branch, pattern, expected_true, enum_on_positive) in [
+        ("A, B", "if t > 0 { E::A } else { r }", "E::A => 1", 1, true),
+        (
+            "A, B",
+            "if t > 0 { r } else { E::A }",
+            "E::A => 1",
+            1,
+            false,
+        ),
+        (
+            "A(Word), B",
+            "if t > 0 { E::A(9) } else { r }",
+            "E::A(x) => x",
+            9,
+            true,
+        ),
+        (
+            "A(Word), B",
+            "if t > 0 { r } else { E::A(9) }",
+            "E::A(x) => x",
+            9,
+            false,
+        ),
+    ] {
+        let src = format!(
+            "enum E {{ {declaration} }} loop main(t: Word) -> Word {{ let r = yield 5; let e = {branch}; yield match e {{ {pattern}, _ => 0 }} }}"
+        );
+        for reply in [7, -7, 0, i64::MIN, i64::MAX] {
+            let expected = if (reply > 0) == enum_on_positive {
+                expected_true
+            } else {
+                0
+            };
+            let replies = [reply, 3, reply, 3];
+            let want = [5, expected, 5, expected];
+            assert_eq!(common::general_vm_sequence(&src, 5, &replies), want);
+            for optimize in [false, true] {
+                assert_eq!(
+                    native(&src, 5, &replies, optimize),
+                    want,
+                    "{src} reply {reply} optimize {optimize}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn mixed_owned_bodies_keep_selected_extents_across_suspension() {
     use keleusma::bytecode::Value;
-    use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
-    let src = "enum E { A, B } loop main(t: Word) -> Word { let r = yield 5; let e = if t > 0 { E::A } else { r }; yield match e { E::A => 1, _ => 0 } }";
-    let p = common::build(src);
-    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
+    let inputs: Vec<_> = [5, 7, 20, 3, -40, 1]
+        .into_iter()
+        .map(|a| {
+            Value::enum_value(
+                "E".into(),
+                "Pair".into(),
+                0,
+                vec![Value::Int(a), Value::Int(a * 10)],
+            )
+        })
+        .collect();
+    for other in ["0", "1.5", "(99, 100)"] {
+        for (condition, expected) in [
+            ("n > 0", [5, 6, 7, 5, 6, 0]),
+            ("n < 0", [5, 6, 0, 5, 6, -40]),
+        ] {
+            let src = format!(
+                "enum E {{ Pair(Word, Word) }} loop main(t: E) -> Word {{ let r = yield 5; let n = match t {{ E::Pair(a, b) => a }}; let e = if {condition} {{ r }} else {{ {other} }}; yield 6; yield match e {{ E::Pair(a, b) => a, _ => 0 }} }}"
+            );
+            flat_inputs(&src, &inputs, &expected);
+        }
+    }
+}
+
+#[test]
+fn enum_field_reads_use_the_minimum_extent_without_overcopying() {
+    use keleusma::bytecode::Value;
+    let inputs: Vec<_> = [5, 7, 20, 3, -40, 1]
+        .into_iter()
+        .map(|a| Value::enum_value("E".into(), "A".into(), 0, vec![Value::Int(a)]))
+        .collect();
+    // Flat enum inspection uses the discriminant, not a boxed nominal name.
+    // The two body sizes join, but each copy retains its actual byte count.
+    flat_inputs(
+        "enum E { A(Word) } enum F { A(Word, Word) } loop main(t: E) -> Word { let r = yield 5; let n = match t { E::A(a) => a }; let e = if n > 0 { r } else { F::A(99, 100) }; yield 6; yield match e { E::A(a) => a, _ => 0 } }",
+        &inputs,
+        &[5, 6, 7, 5, 6, 99],
+    );
+}
+
+#[test]
+fn mixed_array_extents_use_the_selected_runtime_bound() {
+    use keleusma::bytecode::Value;
+    let inputs: Vec<_> = [5, 7, 20, 3, -40, 1]
+        .into_iter()
+        .map(|a| Value::array(vec![Value::Int(a), Value::Int(a * 10)]))
+        .collect();
+    flat_inputs(
+        "loop main(t: [Word; 2]) -> Word { let r = yield 5; let n = t[0]; let e: [Word; 3] = if n > 0 { r } else { [99, 100, 101] }; let i = if n > 0 { 1 } else { 2 }; yield 6; yield e[i] }",
+        &inputs,
+        &[5, 6, 70, 5, 6, 101],
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn mixed_array_extents_trap_before_out_of_bounds_access() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    use std::os::unix::process::ExitStatusExt;
+    let source = "loop main(t: [Word; 2]) -> Word { let r = yield 5; let n = t[1]; let e: [Word; 3] = if n > 0 { r } else { [99, 100, 101] }; let i = t[0]; yield 6; yield e[i] }";
+    let program = common::build(source);
+    if let Ok(case) = std::env::var("KEL_COROUTINE_ARRAY_TRAP") {
+        let fields: Vec<_> = case.split(',').collect();
+        let index: i64 = fields[0].parse().unwrap();
+        let host = Guarded::new(16);
+        unsafe {
+            std::ptr::copy_nonoverlapping([index, 1].as_ptr().cast::<u8>(), host.ptr(), 16);
+        }
+        let pointer = host.ptr() as i64;
+        let mut yielded = 0;
+        native_module_read(
+            &program,
+            &[],
+            pointer,
+            &[pointer; 3],
+            fields[1] == "true",
+            fields[2] == "true",
+            |value, _, _, _| {
+                yielded += 1;
+                if yielded == 2 {
+                    assert_eq!(value, 6);
+                    println!("COROUTINE-ARRAY-RESUMING-INTO-INDEX");
+                }
+                value
+            },
+        );
+        panic!("native indexing returned where the VM faults");
+    }
+    for index in [-1, 2] {
+        let arena = keleusma_arena::Arena::with_capacity(65536);
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        let input = Value::array(vec![Value::Int(index), Value::Int(1)]);
+        assert!(matches!(
+            vm.call(std::slice::from_ref(&input)).unwrap(),
+            VmState::Yielded(Value::Int(5))
+        ));
+        assert!(matches!(
+            vm.resume(input.clone()).unwrap(),
+            VmState::Yielded(Value::Int(6))
+        ));
+        let error = vm.resume(input).unwrap_err();
+        assert!(
+            format!("{error:?}").contains("IndexOutOfBounds"),
+            "{error:?}"
+        );
+        for optimized in [false, true] {
+            for stable in [false, true] {
+                let result = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "mixed_array_extents_trap_before_out_of_bounds_access",
+                        "--nocapture",
+                    ])
+                    .env(
+                        "KEL_COROUTINE_ARRAY_TRAP",
+                        format!("{index},{optimized},{stable}"),
+                    )
+                    .output()
+                    .unwrap();
+                assert!(
+                    String::from_utf8_lossy(&result.stdout)
+                        .contains("COROUTINE-ARRAY-RESUMING-INTO-INDEX"),
+                    "{result:?}"
+                );
+                assert_eq!(
+                    result.status.signal(),
+                    Some(5),
+                    "native bounds guard must raise SIGTRAP: {result:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn enum_refinement_is_invalidated_when_the_receiver_local_changes() {
+    use keleusma::bytecode::{Op, Value};
+    use keleusma::vm::{Vm, VmState};
+    let source = "enum E { A(Word), B } loop main(t: Word) -> Word { let r = yield 5; let e = if t > 0 { E::A(9) } else { r }; yield match e { E::A(x) => x, _ => 0 } }";
+    let mut program = common::build(source);
+    let entry = program.entry_point.unwrap();
+    let ops = &mut program.chunks[entry].ops;
+    let inspection = ops
+        .iter()
+        .position(|op| matches!(op, Op::IsEnum(..)))
+        .unwrap();
+    let Op::GetLocal(receiver) = ops[inspection - 1] else {
+        panic!("receiver local")
+    };
+    // The Boolean fact is saved, then the receiver is overwritten before it is
+    // tested. Reusing the old fact would turn zero into a payload pointer.
+    let insertion = inspection + 3;
+    assert!(matches!(ops[insertion - 1], Op::PopN(1)));
+    for op in ops.iter_mut() {
+        match op {
+            Op::If(target)
+            | Op::Else(target)
+            | Op::Loop(target)
+            | Op::EndLoop(target)
+            | Op::Break(target)
+            | Op::BreakIf(target)
+                if *target as usize >= insertion =>
+            {
+                *target += 2
+            }
+            _ => {}
+        }
+    }
+    ops.splice(
+        insertion..insertion,
+        [Op::PushImmediate(0), Op::SetLocal(receiver)],
+    );
+    keleusma::verify::verify(&program).unwrap();
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(5))
+    ));
+    assert!(vm.resume(Value::Int(7)).is_err());
+    let error = coroutine::lower(&Context::create(), &program, &machine(), 4096).unwrap_err();
+    assert!(
+        error.to_string().contains("types are not proven"),
+        "{error}"
+    );
+}
+
+#[test]
+fn private_body_kind_tracks_the_most_recent_write() {
+    use keleusma::bytecode::{NewCompositeOperand, Op, Value};
+    use keleusma::value_layout::CompositeKind;
+    use keleusma::vm::{Vm, VmState, required_persistent_capacity_for};
+    let source = "enum E { A, B } private data st { p: E } loop main(t: Word) -> Word { st.p = if t > 0 { E::A } else { E::A }; yield 5; yield match st.p { E::A => 1, _ => 0 } }";
+    let mut program = common::build(source);
+    let entry = program.entry_point.unwrap();
+    let Op::NewComposite(NewCompositeOperand::Flat { kind, .. }) = program.chunks[entry]
+        .ops
+        .iter_mut()
+        .filter(|op| matches!(op, Op::NewComposite(_)))
+        .nth(1)
+        .unwrap()
+    else {
+        panic!("constructor")
+    };
+    *kind = CompositeKind::Struct;
+    keleusma::verify::verify(&program).unwrap();
+    let mut arena = keleusma_arena::Arena::with_capacity(65536);
+    arena
+        .resize_persistent(required_persistent_capacity_for(&program))
+        .unwrap();
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    let replies = [7, -5, 7, 3];
+    let expected = [5, 1, 5, 0];
+    let mut state = vm.call(&[Value::Int(5)]).unwrap();
+    for (index, want) in expected.iter().enumerate() {
+        assert!(matches!(state, VmState::Yielded(Value::Int(v)) if v == *want));
+        if index + 1 < expected.len() {
+            state = vm.resume(Value::Int(replies[index])).unwrap();
+            if matches!(state, VmState::Reset) {
+                state = vm.resume(Value::Int(replies[index])).unwrap();
+            }
+        }
+    }
+    for optimize in [false, true] {
+        assert_eq!(
+            native_module(&program, &[], 5, &replies, optimize).0,
+            expected
+        );
+    }
+}
+
+#[test]
+fn reset_clears_runtime_kinds_of_later_entry_parameters() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    type StartTwo = unsafe extern "C" fn(i64, i64, *mut u8, *mut u8, *mut u8, *mut u8) -> Outcome;
+    let source = "enum E { A, B } loop main(a: Word, e: E) -> Word { yield match e { E::A => 1, _ => 0 }; yield 2 }";
+    let program = common::build(source);
+    let expected = [1, 2, 0, 2, 0, 2];
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    let mut state = vm
+        .call(&[
+            Value::Int(5),
+            Value::enum_value("E".into(), "A".into(), 0, vec![]),
+        ])
+        .unwrap();
+    for (index, want) in expected.iter().enumerate() {
+        assert!(matches!(state, VmState::Yielded(Value::Int(value)) if value == *want));
+        if index + 1 < expected.len() {
+            state = vm.resume(Value::Int(7)).unwrap();
+            if matches!(state, VmState::Reset) {
+                state = vm.resume(Value::Int(7)).unwrap();
+            }
+        }
+    }
+    for optimized in [false, true] {
+        let context = Context::create();
+        let module = coroutine::lower(&context, &program, &machine(), 4096).unwrap();
+        if optimized {
+            common::force_optimize(&module);
+        }
+        let engine = module
+            .create_jit_execution_engine(OptimizationLevel::None)
+            .unwrap();
+        let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+        assert_eq!(
+            module
+                .get_function(&format!("{prefix}_start"))
+                .unwrap()
+                .count_params(),
+            6
+        );
+        let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+        let unused = Guarded::new(0);
+        let body = Guarded::new(8);
+        unsafe {
+            let start = engine
+                .get_function::<StartTwo>(&format!("{prefix}_start"))
+                .unwrap();
+            let resume = engine
+                .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                .unwrap();
+            let mut result = start.call(
+                5,
+                body.ptr() as i64,
+                unused.ptr(),
+                unused.ptr(),
+                unused.ptr(),
+                slot.ptr(),
+            );
+            for (index, want) in expected.iter().enumerate() {
+                assert_eq!(
+                    result,
+                    Outcome {
+                        live: 1,
+                        value: *want
+                    }
+                );
+                if index + 1 < expected.len() {
+                    result = resume.call(slot.ptr(), 7);
+                }
+            }
+            engine
+                .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                .unwrap()
+                .call(slot.ptr());
+        }
+        for region in [&slot, &unused, &body] {
+            region.check();
+        }
+    }
+}
+
+#[test]
+fn guarded_nested_parameter_use_remains_a_lowering_gap() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState, required_persistent_capacity_for};
+    let source = "private data st { first: bool = true } loop child(a: Word) -> Word { if st.first { st.first = false; yield a } else { yield 0 } } loop main(t: Word) -> Word { child(t) }";
+    let program = common::build(source);
+    let mut arena = keleusma_arena::Arena::with_capacity(65536);
+    arena
+        .resize_persistent(required_persistent_capacity_for(&program))
+        .unwrap();
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    let mut state = vm.call(&[Value::Int(5)]).unwrap();
+    for want in [5, 0, 0, 0, 0, 0] {
+        assert!(matches!(state, VmState::Yielded(Value::Int(value)) if value == want));
+        state = vm.resume(Value::Int(7)).unwrap();
+        if matches!(state, VmState::Reset) {
+            state = vm.resume(Value::Int(7)).unwrap();
+        }
+    }
+    // This is a valid source program. The parameter is read only before Reset
+    // clears it. Keep the remaining gap explicit until guarded lowering lands.
+    let error = coroutine::lower(&Context::create(), &program, &machine(), 4096).unwrap_err();
     assert!(
         error
             .to_string()
-            .contains("mixed or unknown receiver kinds"),
+            .contains("non-Unit parameter cleared by Reset"),
         "{error}"
     );
-    for (reply, expected) in [(7, 1), (-7, 0)] {
-        let need = required_persistent_capacity_for(&p);
-        let mut arena = keleusma_arena::Arena::with_capacity(
-            auto_arena_capacity_for(&p, &[]).unwrap() + need + 65536,
-        );
-        arena.resize_persistent(need).unwrap();
-        let mut vm = Vm::new(p.clone(), &arena).unwrap();
-        assert!(matches!(
-            vm.call(&[Value::Int(5)]).unwrap(),
-            VmState::Yielded(Value::Int(5))
-        ));
-        assert!(
-            matches!(vm.resume(Value::Int(reply)).unwrap(), VmState::Yielded(Value::Int(v)) if v == expected)
-        );
-    }
 }
 
 fn composite_bodies(src: &str, first: i64, replies: &[i64]) -> Vec<Vec<u8>> {

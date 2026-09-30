@@ -4,7 +4,10 @@
 //! Untagged native operands need a stronger admission condition. This pass joins
 //! possible tags at control-flow edges, including back edges and Reset. A state
 //! can only gain bits, so the finite tag lattice makes the worklist terminate.
-//! The native emitter additionally proves composite read and transfer extents.
+//! Body extents have finite producer-derived endpoints. Joins widen these
+//! ranges and discard conflicting predicate provenance. A successful enum test
+//! refines its unchanged receiver binding. Writes invalidate that provenance.
+//! The emitter tracks dynamic kinds and lengths where joined facts need them.
 
 use crate::{LowerError, Width};
 use keleusma::bytecode::{BlockType, ConstValue, Module, Op, TypeTag, WireShape};
@@ -21,13 +24,13 @@ const FLOAT: u16 = 32;
 const TUPLE: u16 = 256;
 const ARRAY: u16 = 512;
 const STRUCT: u16 = 1024;
-const ENUM: u16 = 2048;
+pub(crate) const ENUM: u16 = 2048;
 const BODY: u16 = TUPLE | ARRAY | STRUCT | ENUM;
 const UNKNOWN: u16 = 8191;
 
 pub(crate) struct Analysis {
     pub(crate) plan: super::dialogue::Plan,
-    pub(crate) extents: Vec<BTreeMap<usize, Extents>>,
+    pub(crate) facts: Vec<BTreeMap<usize, Facts>>,
     pub(crate) false_inspections: BTreeSet<(usize, usize)>,
     pub(crate) branches: Vec<BTreeMap<usize, bool>>,
 }
@@ -43,8 +46,17 @@ fn scalar(kind: u8) -> u16 {
 fn body(kind: u8) -> u16 {
     if kind < 4 { 1 << (8 + kind) } else { BODY }
 }
-fn kind(mask: u16) -> u16 {
+pub(crate) fn kind(mask: u16) -> u16 {
     (mask & !TRUE) | if mask & TRUE != 0 { FALSE } else { 0 }
+}
+
+pub(crate) fn operand_kind(mask: u16) -> crate::OperandKind {
+    match kind(mask) {
+        FLOAT => crate::OperandKind::Float,
+        FIXED => crate::OperandKind::Fixed,
+        one if one.count_ones() == 1 => crate::OperandKind::Int,
+        _ => crate::OperandKind::Unknown,
+    }
 }
 
 fn shape(s: WireShape) -> u16 {
@@ -81,13 +93,131 @@ pub(crate) struct Extents {
     pub stack: Vec<Width>,
     pub locals: Vec<Width>,
 }
-#[derive(Clone)]
-struct State {
-    extents: Extents,
-    stack: Vec<u16>,
-    locals: Vec<u16>,
+/// Body size evidence survives joins with values that are not bodies.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum BodyExtent {
+    #[default]
+    Absent,
+    Range {
+        min: u32,
+        max: u32,
+    },
+    Unknown,
 }
-impl State {
+impl BodyExtent {
+    fn join(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Absent, b) => b,
+            (a, Self::Absent) => a,
+            (Self::Range { min: a, max: b }, Self::Range { min: c, max: d }) => Self::Range {
+                min: a.min(c),
+                max: b.max(d),
+            },
+            _ => Self::Unknown,
+        }
+    }
+    pub fn minimum(self) -> Option<u32> {
+        match self {
+            Self::Range { min, .. } => Some(min),
+            _ => None,
+        }
+    }
+    pub fn exact(self) -> Option<u32> {
+        match self {
+            Self::Range { min, max } if min == max => Some(min),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Predicate {
+    receiver: usize,
+    when: bool,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Flow {
+    pub bodies: [BodyExtent; 4],
+    pub owned: bool,
+    origin: Option<usize>,
+    predicate: Option<Predicate>,
+}
+impl Flow {
+    fn new(mask: u16, width: Width, owned: bool) -> Self {
+        let mut value = Self {
+            owned,
+            ..Self::default()
+        };
+        for (index, extent) in value.bodies.iter_mut().enumerate() {
+            if mask & (TUPLE << index) != 0 {
+                *extent = match width {
+                    Width::Body(n) => BodyExtent::Range { min: n, max: n },
+                    _ => BodyExtent::Unknown,
+                };
+            }
+        }
+        value
+    }
+    pub fn minimum(&self, mask: u16) -> Option<u32> {
+        let index = match mask {
+            TUPLE => 0,
+            ARRAY => 1,
+            STRUCT => 2,
+            ENUM => 3,
+            _ => return None,
+        };
+        self.bodies[index].minimum()
+    }
+    pub fn maximum(&self) -> Option<u32> {
+        let mut maximum = 0;
+        for extent in self.bodies {
+            match extent {
+                BodyExtent::Absent => {}
+                BodyExtent::Range { max, .. } => maximum = maximum.max(max),
+                BodyExtent::Unknown => return None,
+            }
+        }
+        Some(maximum)
+    }
+    fn join(&mut self, other: Self) -> bool {
+        let old = *self;
+        for (a, b) in self.bodies.iter_mut().zip(other.bodies) {
+            *a = a.join(b);
+        }
+        self.owned |= other.owned;
+        if self.origin != other.origin {
+            self.origin = None;
+        }
+        if self.predicate != other.predicate {
+            self.predicate = None;
+        }
+        *self != old
+    }
+    fn invalidate(&mut self, local: usize) {
+        if self.origin == Some(local) {
+            self.origin = None;
+        }
+        if self.predicate.is_some_and(|p| p.receiver == local) {
+            self.predicate = None;
+        }
+    }
+}
+#[derive(Clone)]
+pub(crate) struct Output {
+    pub slot: usize,
+    pub tag: u16,
+    pub width: Width,
+    pub flow: Flow,
+}
+#[derive(Clone)]
+pub(crate) struct Facts {
+    pub extents: Extents,
+    pub stack: Vec<u16>,
+    pub locals: Vec<u16>,
+    pub flow_stack: Vec<Flow>,
+    pub flow_locals: Vec<Flow>,
+    pub outputs: Vec<Output>,
+}
+impl Facts {
     fn join(&mut self, other: &Self) -> bool {
         assert_eq!(self.stack.len(), other.stack.len(), "verified stack depth");
         let mut changed = false;
@@ -113,7 +243,37 @@ impl State {
                 changed = true;
             }
         }
+        for (a, b) in self
+            .flow_stack
+            .iter_mut()
+            .chain(&mut self.flow_locals)
+            .zip(other.flow_stack.iter().chain(&other.flow_locals))
+        {
+            changed |= a.join(*b);
+        }
         changed
+    }
+    fn invalidate(&mut self, local: usize) {
+        for flow in self.flow_stack.iter_mut().chain(&mut self.flow_locals) {
+            flow.invalidate(local);
+        }
+    }
+    fn narrow_enum(&mut self, local: usize) -> bool {
+        if self.locals[local] & ENUM == 0 {
+            return false;
+        }
+        self.locals[local] = ENUM;
+        self.extents.locals[local] = self.flow_locals[local].bodies[3]
+            .exact()
+            .map_or(Width::Unknown, Width::Body);
+        for (index, flow) in self.flow_stack.iter().enumerate() {
+            if flow.origin == Some(local) {
+                self.stack[index] = ENUM;
+                self.extents.stack[index] =
+                    flow.bodies[3].exact().map_or(Width::Unknown, Width::Body);
+            }
+        }
+        true
     }
 }
 fn slot(m: &Module, index: u32, private_kinds: &[u16]) -> u16 {
@@ -218,7 +378,7 @@ pub(super) fn check(
     }
     let mut analysis = Analysis {
         plan,
-        extents: vec![BTreeMap::new(); m.chunks.len()],
+        facts: vec![BTreeMap::new(); m.chunks.len()],
         false_inspections: BTreeSet::new(),
         branches: vec![BTreeMap::new(); m.chunks.len()],
     };
@@ -270,21 +430,30 @@ fn analyze(
             continue;
         }
         let sig = &m.signatures[ci];
-        let mut initial = State {
+        let mut initial = Facts {
             extents: Extents {
                 stack: Vec::new(),
                 locals: vec![Width::Scalar(0); chunk.local_count as usize],
             },
             stack: Vec::new(),
             locals: vec![UNIT; chunk.local_count as usize],
+            flow_stack: Vec::new(),
+            outputs: Vec::new(),
+            flow_locals: vec![Flow::default(); chunk.local_count as usize],
         };
         for (i, p) in sig.params.iter().enumerate() {
             initial.locals[i] = shape(*p);
             initial.extents.locals[i] = declared_width(*p);
+            initial.flow_locals[i] = Flow::new(
+                shape(*p),
+                declared_width(*p),
+                analysis.plan.owns_bodies && matches!(p, WireShape::Flat { .. }),
+            );
         }
-        let mut states: Vec<Option<State>> = vec![None; chunk.ops.len()];
+        let mut states: Vec<Option<Facts>> = vec![None; chunk.ops.len()];
         states[0] = Some(initial);
         let mut work = VecDeque::from([0]);
+        let mut outputs = BTreeMap::new();
         while let Some(ip) = work.pop_front() {
             let mut state = states[ip].clone().unwrap();
             let op = &chunk.ops[ip];
@@ -306,6 +475,7 @@ fn analyze(
             let start = state.stack.len().checked_sub(n).ok_or_else(fail)?;
             let args = state.stack.split_off(start);
             let argument_widths = state.extents.stack.split_off(start);
+            let argument_flows = state.flow_stack.split_off(start);
             let produced = (n as i32 + delta) as usize;
             let mut out = vec![UNKNOWN; produced];
             let same = |allowed: u16| -> Result<u16, LowerError> {
@@ -620,6 +790,99 @@ fn analyze(
                 }
                 _ => {}
             }
+            let mut flows: Vec<_> = out
+                .iter()
+                .zip(&widths)
+                .map(|(tag, width)| Flow::new(*tag, *width, false))
+                .collect();
+            match op {
+                Op::GetLocal(index) => {
+                    flows[0] = state.flow_locals[*index as usize];
+                    flows[0].origin = Some(*index as usize);
+                }
+                Op::SetLocal(index) => {
+                    state.invalidate(*index as usize);
+                    let mut flow = argument_flows[0];
+                    flow.invalidate(*index as usize);
+                    flow.origin = None;
+                    state.flow_locals[*index as usize] = flow;
+                }
+                Op::Dup => flows.fill(argument_flows[0]),
+                Op::Not => {
+                    flows[0].predicate = argument_flows[0]
+                        .predicate
+                        .map(|p| Predicate { when: !p.when, ..p })
+                }
+                Op::IsEnum(..) | Op::IsStruct(..) => {
+                    flows[0] = argument_flows[0];
+                    if matches!(op, Op::IsEnum(..)) {
+                        flows[1].predicate = argument_flows[0].origin.map(|receiver| Predicate {
+                            receiver,
+                            when: true,
+                        });
+                    }
+                }
+                Op::Yield => {
+                    flows[0].owned = matches!(widths[0], Width::Body(_));
+                    if ci == entry && chunk.block_type == BlockType::Stream && chunk.param_count > 0
+                    {
+                        state.invalidate(0);
+                        state.flow_locals[0] = flows[0];
+                    }
+                }
+                Op::Call(target, _) => {
+                    flows[0].owned =
+                        analysis.plan.owns_bodies && matches!(widths[0], Width::Body(_));
+                    if ci == entry
+                        && chunk.block_type == BlockType::Stream
+                        && chunk.param_count > 0
+                        && m.chunks[*target as usize].block_type != BlockType::Func
+                    {
+                        state.invalidate(0);
+                        let shape = m.signatures[entry].params[0];
+                        let width = declared_width(shape);
+                        state.flow_locals[0].join(Flow::new(
+                            reply,
+                            width,
+                            matches!(width, Width::Body(_)),
+                        ));
+                    }
+                }
+                Op::CallVerifiedNative(index, _) | Op::CallExternalNative(index, _) => {
+                    flows[0].owned = analysis.plan.native_body_returns.get(index)
+                        == Some(&super::NativeBodyReturn::Snapshot);
+                }
+                Op::GetField(keleusma::bytecode::StructField::FlatNested { .. })
+                | Op::GetTupleField(keleusma::bytecode::TupleField::FlatNested { .. })
+                | Op::GetEnumField(keleusma::bytecode::EnumField::FlatNested { .. })
+                | Op::GetIndex(keleusma::bytecode::ArrayElem::FlatNested { .. }) => {
+                    flows[0].owned = argument_flows[0].owned
+                }
+                Op::Reset => {
+                    state.flow_stack.clear();
+                    state.flow_locals.fill(Flow::default());
+                    if ci == entry && chunk.block_type == BlockType::Stream && chunk.param_count > 0
+                    {
+                        let width = declared_width(m.signatures[entry].params[0]);
+                        state.flow_locals[0] =
+                            Flow::new(reply, width, matches!(width, Width::Body(_)));
+                    }
+                }
+                _ => {}
+            }
+            outputs.insert(
+                ip,
+                out.iter()
+                    .enumerate()
+                    .map(|(index, tag)| Output {
+                        slot: start + index,
+                        tag: *tag,
+                        width: widths[index],
+                        flow: flows[index],
+                    })
+                    .collect(),
+            );
+            state.flow_stack.extend(flows);
             state.extents.stack.extend(widths);
             state.stack.extend(out);
             let mut successors = vec![ip + 1];
@@ -643,13 +906,23 @@ fn analyze(
                 _ => {}
             }
             for next in successors {
+                let mut outgoing = state.clone();
+                if let Op::If(target) | Op::BreakIf(target) = op {
+                    let taken = (next == *target as usize) == matches!(op, Op::BreakIf(_));
+                    if let Some(predicate) = argument_flows[0].predicate
+                        && taken == predicate.when
+                        && !outgoing.narrow_enum(predicate.receiver)
+                    {
+                        continue;
+                    }
+                }
                 if next >= states.len() {
                     continue;
                 }
                 let changed = if let Some(old) = &mut states[next] {
-                    old.join(&state)
+                    old.join(&outgoing)
                 } else {
-                    states[next] = Some(state.clone());
+                    states[next] = Some(outgoing);
                     true
                 };
                 if changed {
@@ -664,7 +937,9 @@ fn analyze(
         // later loop iteration that brings a different kind to the same site.
         for (ip, state) in states.iter().enumerate() {
             let Some(state) = state else { continue };
-            analysis.extents[ci].insert(ip, state.extents.clone());
+            let mut facts = state.clone();
+            facts.outputs = outputs.remove(&ip).unwrap_or_default();
+            analysis.facts[ci].insert(ip, facts);
             match chunk.ops[ip] {
                 Op::IsEnum(..) | Op::IsStruct(..) => {
                     let inspected = if matches!(chunk.ops[ip], Op::IsEnum(..)) {
@@ -675,6 +950,15 @@ fn analyze(
                     let actual = *state.stack.last().expect("verified inspection operand");
                     if actual & inspected == 0 {
                         analysis.false_inspections.insert((ci, ip));
+                    } else if matches!(chunk.ops[ip], Op::IsEnum(..)) {
+                        if state.flow_stack.last().unwrap().bodies[3]
+                            .minimum()
+                            .is_none_or(|bytes| bytes < 8)
+                        {
+                            return Err(LowerError::UnsupportedShape(
+                                "coroutine body extent does not prove an enum discriminant".into(),
+                            ));
+                        }
                     } else if actual != inspected {
                         return Err(LowerError::UnsupportedShape(
                             "coroutine inspection has mixed or unknown receiver kinds".into(),

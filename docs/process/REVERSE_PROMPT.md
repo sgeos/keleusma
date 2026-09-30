@@ -3469,3 +3469,26 @@ independent instance completion. All 58 coroutine tests and test-target Clippy p
 in both float configurations. Continue with runtime kind tracking for the mixed
 receiver case in the [acceptance matrix](../decisions/WORKSTREAM_B_COMPLETION.md).
 Full native gates and integration remain open. Upstream current state is preserved.
+
+
+## V0.3.X runtime kinds and extents of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`, following `61646c36`.
+Mixed enum receivers now carry runtime kinds, and successful tests refine payload
+reads only while their receiver bindings remain unchanged. Owned mixed values
+retain their selected size inside bounded storage. Field reads use a minimum
+extent, array bounds use the actual selected size, and Reset clears metadata.
+
+All 66 coroutine tests and test-target Clippy with warnings denied pass in both
+float configurations. The default non-corpus suite passes all 747 tests. This is
+one broad phase, not a complete gate. The original broad run exposed metadata
+underflow on malformed input and a census which mistook admission facts for
+emission sites. Both are fixed. The documented upstream confinement-panic
+exception remains unchanged. All 13 targeted root documentation checks pass.
+
+The refusal audit found another valid source case. A private Boolean protects a
+nested stream parameter so it is read only on the first iteration. The virtual
+machine yields 5 then zeros, but native admission rejects the parameter read.
+The tracked reproducer and [acceptance matrix](../decisions/WORKSTREAM_B_COMPLETION.md)
+name that implementation gap. Complete gates, the final audit and integration
+remain outstanding. Upstream current state and previous native reports are preserved.

@@ -11,9 +11,9 @@ Work takes place on `feat/workstream-b-completion`.
 | General suspension and resumption | VM differentials for non-tail yields, branches, bounded loops, live operands and locals | Existing tests need final rerun |
 | Delegated suspension | Nested and guarded reentrant calls preserve caller and callee state | Existing tests need final rerun |
 | Entry shapes | Source-emittable stream and reentrant entries, including completion, supported argument shapes and independent instances | Scalar and flat completion plus zero and multiple arguments tested, remaining shapes to census |
-| Value transfers | Scalar and composite inputs, outputs, replies and completion values with proven extents and lifetimes | Per-site dialogues and native snapshot or instance-borrow results implemented, remaining mixed-kind transfers to audit |
+| Value transfers | Scalar and composite inputs, outputs, replies and completion values with proven extents and lifetimes | Per-site dialogues, native lifetime contracts and bounded mixed-kind copies implemented, final audit outstanding |
 | Host lifecycle | Start, resume, normal completion, early release, repeated release and reuse with stable caller-owned storage | Completion status and result lifetime implemented, final lifecycle sweep outstanding |
-| Admission soundness | Every remaining refusal distinguished as invalid input, unsafe contract, another workstream dependency, or an implementation gap | Mixed receiver inspection remains a demonstrated implementation gap, other refusals still need classification |
+| Admission soundness | Every remaining refusal distinguished as invalid input, unsafe contract, another workstream dependency, or an implementation gap | Mixed receiver and extent support implemented, guarded nested parameter reads remain a demonstrated gap |
 | Integration | Existing public lowering routes and host entry points have a documented, tested selection contract | Explicit route contract documented and tested, no callback fallback |
 | Native deployment | Execute real linked host artifact and optimized/unoptimized differentials, inspect target emission within the roadmap target boundary | Local C snapshot completion runs at both optimization levels, four tier-one object formats and architectures checked, final coverage audit outstanding |
 | Resource preservation | No live machine-stack state across suspension, no hidden allocation, bounded frame reservation, guarded extents and independent regions | Existing checks need completion-path coverage |
@@ -70,14 +70,24 @@ completion storage. Unused chunks no longer impose coroutine lowering contracts,
 and original yield-site identifiers remain unchanged. Both float configurations
 pass 58 coroutine tests and test-target Clippy with warnings denied.
 
-The admission audit identifies a source-emittable gap in
-`mixed_enum_receiver_kinds_remain_an_explicit_boundary`. A branch joins a constructed
-enum with a Word reply, then matches the result. The virtual machine handles both
-paths correctly, while native lowering refuses the mixed receiver. Runtime kind
-tracking and safe conditional body inspection are required before this can count
-as supported. Do not classify that case as invalid input or another workstream.
-Remaining transfer proofs, the full refusal audit and complete final gates remain
+The mixed enum receiver gap now has executed positive coverage in
+`mixed_enum_receiver_kinds_execute_with_guarded_body_inspection`. Runtime tags
+prevent scalar dereferences. Enum-test facts refine payload reads only while the
+receiver binding remains unchanged. Private body slots preserve the stored kind.
+Owned mixed bodies retain their selected extent in statically bounded storage.
+Field reads use a proven minimum while array bounds use the selected actual size.
+Subprocess tests require an observed native bounds trap for negative indices and
+indices outside the smaller array. Targeted verification is recorded in the
+native archive. Remaining refusal classification and complete final gates remain
 outstanding. The current evidence does not establish full completion.
+
+A further source-level counterexample is now explicit in
+`guarded_nested_parameter_use_remains_a_lowering_gap`. A private Boolean permits
+a nested stream to read its Word parameter only on the first iteration. The
+virtual machine yields 5 then zeros. Native lowering rejects every non-Unit
+parameter read in a nested stream, including this valid case. Guarded handling of
+possibly cleared values is the next implementation step. Do not classify the
+whole refusal family as necessarily faulting virtual-machine behavior.
 
 ## Completion rule
 
