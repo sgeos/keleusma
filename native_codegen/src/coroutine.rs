@@ -25,7 +25,10 @@
 //! bytecode callees before splitting. [`lower`] chooses a uniform dialogue from
 //! the entry return shape and first argument shape, or Unit without arguments.
 //! [`lower_with_dialogues`] accepts independent output and reply shapes at each
-//! yield site, including delegated sites. The host queries the suspended site
+//! reachable yield site, including delegated sites. Unused chunks do not impose
+//! dialogue contracts or emit bodies. Original chunk and instruction indices
+//! remain the host site identifiers. Whole-module verification and resource
+//! admission still apply, as they do when constructing a VM. The host queries the suspended site
 //! before interpreting its output or supplying a reply. These are native host
 //! contracts, not restrictions imposed by the source language on reentrants.
 //! Replies update only a Stream entry's first parameter, and must match its
@@ -34,8 +37,11 @@
 //! remain refused because the VM does not replenish those slots. Scalar
 //! admission follows actual host reply tags through control flow and refuses
 //! operations or boundaries whose types cannot be proved. Copies require proven
-//! transfer extents. Native composite results remain refused until their
-//! ownership contract is known, including modules with only scalar host values.
+//! transfer extents. [`lower_with_contracts`] admits native composite results
+//! with an explicit [`NativeBodyReturn`] contract. Snapshot results are copied
+//! into bounded storage; instance borrows retain their aliases. Without a
+//! contract a called native body result remains refused, including modules with
+//! only scalar host values. Native implementations must uphold these lifetimes.
 //!
 //! The provisional start symbol is `kel_chunk_<entry_point>` with the scalar
 //! arguments or i64 body pointers followed by shared, private, composite-region, frame and reply
@@ -80,7 +86,7 @@ use keleusma::bytecode::{BlockType, Module, Op, TypeTag};
 use crate::{LowerError, LowerOptions};
 
 pub(crate) mod dialogue;
-pub use dialogue::{Dialogue, YieldSite};
+pub use dialogue::{Dialogue, HostContracts, NativeBodyReturn, YieldSite};
 mod host;
 pub(crate) mod ownership;
 pub(crate) mod types;
@@ -119,10 +125,18 @@ pub fn lower<'ctx>(
     machine: &TargetMachine,
     frame_bytes: u32,
 ) -> Result<LlvmModule<'ctx>, LowerError> {
-    lower_impl(ctx, program, machine, frame_bytes, None)
+    lower_impl(
+        ctx,
+        program,
+        machine,
+        frame_bytes,
+        None,
+        &Default::default(),
+    )
 }
 
-/// Lower with an explicit contract for every Yield instruction in the module.
+/// Lower with a contract for every Yield in chunks reachable from the entry.
+/// Contracts for unused chunks are permitted but do not affect this instance.
 /// The host reads `kel_coroutine_<entry>_yield_site(slot)` after status one to
 /// select the output and reply shapes. Its result is YieldSite::id(), or
 /// u64::MAX for an inactive slot. Query only an allocated slot initialized by start.
@@ -135,7 +149,35 @@ pub fn lower_with_dialogues<'ctx>(
     frame_bytes: u32,
     dialogues: &std::collections::BTreeMap<YieldSite, Dialogue>,
 ) -> Result<LlvmModule<'ctx>, LowerError> {
-    lower_impl(ctx, program, machine, frame_bytes, Some(dialogues))
+    lower_impl(
+        ctx,
+        program,
+        machine,
+        frame_bytes,
+        Some(dialogues),
+        &Default::default(),
+    )
+}
+
+/// Lower with explicit dialogue and native body lifetime contracts.
+/// Snapshot native results use the same bounded ownership transfers as host
+/// replies. Instance borrows retain their original region aliases. The supplied
+/// native functions must uphold the documented NativeBodyReturn obligations.
+pub fn lower_with_contracts<'ctx>(
+    ctx: &'ctx Context,
+    program: &Module,
+    machine: &TargetMachine,
+    frame_bytes: u32,
+    contracts: &HostContracts,
+) -> Result<LlvmModule<'ctx>, LowerError> {
+    lower_impl(
+        ctx,
+        program,
+        machine,
+        frame_bytes,
+        contracts.dialogues.as_ref(),
+        &contracts.native_body_returns,
+    )
 }
 
 fn lower_impl<'ctx>(
@@ -144,6 +186,7 @@ fn lower_impl<'ctx>(
     machine: &TargetMachine,
     frame_bytes: u32,
     dialogues: Option<&std::collections::BTreeMap<YieldSite, Dialogue>>,
+    native_body_returns: &std::collections::BTreeMap<u16, NativeBodyReturn>,
 ) -> Result<LlvmModule<'ctx>, LowerError> {
     if frame_bytes < FRAME_ALIGN || frame_bytes > i32::MAX as u32 {
         return Err(error(
@@ -184,31 +227,6 @@ fn lower_impl<'ctx>(
             "retcon requires a scalar or flat-input Stream or Reentrant entry; a Stream must end in Reset",
         ));
     }
-    for (index, callee) in program.chunks.iter().enumerate() {
-        if index == entry || callee.block_type != BlockType::Stream {
-            continue;
-        }
-        if !matches!(callee.ops.first(), Some(Op::Stream))
-            || !matches!(callee.ops.last(), Some(Op::Reset))
-            || callee.ops.iter().any(|op| matches!(op, Op::Return))
-        {
-            return Err(error(
-                "a nested Stream must begin with Stream and end with Reset",
-            ));
-        }
-        // Reset clears the active callee, while host resume updates only the
-        // entry parameter. Treating a cleared Word as zero would turn the VM's
-        // type fault into a plausible value. Unit parameters retain their type.
-        if callee.ops.iter().any(|op| {
-            matches!(op, Op::GetLocal(slot)
-            if usize::from(*slot) < usize::from(callee.param_count)
-                && callee.param_types.get(usize::from(*slot)) != Some(&TypeTag::Unit))
-        }) {
-            return Err(error(
-                "a nested Stream reads a non-Unit parameter cleared by Reset",
-            ));
-        }
-    }
     // Completion retains the entry result shape. Explicit dialogue outputs
     // and replies are independent of that signature.
     let result_shape = program
@@ -232,7 +250,32 @@ fn lower_impl<'ctx>(
             ));
         }
     }
-    let plan = dialogue::Plan::new(program, entry, dialogues, frame_bytes)?;
+    let plan = dialogue::Plan::new(program, entry, dialogues, frame_bytes, native_body_returns)?;
+    for (index, callee) in program.chunks.iter().enumerate() {
+        if !plan.reachable[index] || index == entry || callee.block_type != BlockType::Stream {
+            continue;
+        }
+        if !matches!(callee.ops.first(), Some(Op::Stream))
+            || !matches!(callee.ops.last(), Some(Op::Reset))
+            || callee.ops.iter().any(|op| matches!(op, Op::Return))
+        {
+            return Err(error(
+                "a nested Stream must begin with Stream and end with Reset",
+            ));
+        }
+        // Reset clears the active callee, while host resume updates only the
+        // entry parameter. Treating a cleared Word as zero would turn the VM's
+        // type fault into a plausible value. Unit parameters retain their type.
+        if callee.ops.iter().any(|op| {
+            matches!(op, Op::GetLocal(slot)
+            if usize::from(*slot) < usize::from(callee.param_count)
+                && callee.param_types.get(usize::from(*slot)) != Some(&TypeTag::Unit))
+        }) {
+            return Err(error(
+                "a nested Stream reads a non-Unit parameter cleared by Reset",
+            ));
+        }
+    }
     let metadata_offset = plan.metadata_offset;
     // Completion outlives coro.end. Reserve a disjoint tail for owned flat
     // results, outside the bytes LLVM may use for the continuation frame.
@@ -281,7 +324,7 @@ fn lower_impl<'ctx>(
         // Owned host bodies returned by ordinary callees must not escape a
         // machine-stack alloca. Inline every bytecode call before frame capture.
         for index in 0..program.chunks.len() {
-            if index != entry {
+            if index != entry && analysis.plan.reachable[index] {
                 mark_delegate(
                     ctx,
                     module.get_function(&format!("kel_chunk_{index}")).unwrap(),

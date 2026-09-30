@@ -3458,3 +3458,14 @@ read and callee-argument extent checks. All 53 coroutine tests and test-target
 Clippy pass in both float configurations. Continue with the remaining admission
 audit in the [acceptance matrix](../decisions/WORKSTREAM_B_COMPLETION.md). Full
 Workstream B, final gates and integration remain open. Upstream state is preserved.
+
+
+## V0.3.X ownership and reachability cycle of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`. Native snapshot and
+instance-borrow results now have explicit lifetime contracts. Unused helpers no
+longer impose coroutine contracts. Route and C linkage tests pass, including
+independent instance completion. All 58 coroutine tests and test-target Clippy pass
+in both float configurations. Continue with runtime kind tracking for the mixed
+receiver case in the [acceptance matrix](../decisions/WORKSTREAM_B_COMPLETION.md).
+Full native gates and integration remain open. Upstream current state is preserved.

@@ -1654,6 +1654,7 @@ pub fn lower_chunk<'ctx>(
             retcon_frame_bytes: None,
             retcon_owned_bodies: false,
             retcon_sites: None,
+            retcon_native_bodies: None,
             retcon_extents: None,
             retcon_site_offset: None,
             retcon_resume_type: None,
@@ -1694,6 +1695,12 @@ pub fn lower_chunk<'ctx>(
 /// needs metadata a `Chunk` does not carry. Nothing here is externally linked
 /// yet, so an internal, obviously-provisional name is more honest than a
 /// half-implemented mangling that looks authoritative.
+/// For host-driven suspension, use [`coroutine::lower`] or its explicit-contract
+/// variants. This low-level route retains its ordinary function, degenerate-step
+/// and synchronous yield-callback contracts. It does not select the returned-
+/// continuation interface automatically. See `host_control_routes_are_explicit_and_do_not_fall_back_to_callbacks`
+/// in `tests/retcon_bytecode.rs`.
+///
 /// # Precondition: the module must be ADMISSIBLE, and this function does not check it
 ///
 /// **Verified is not enough.** A module can pass [`keleusma::verify::verify`] and
@@ -1853,6 +1860,8 @@ fn lower_module_with<'ctx>(
     retcon_config: Option<(u32, &coroutine::types::Analysis)>,
 ) -> Result<Vec<FunctionValue<'ctx>>, LowerError> {
     let retcon_bytes = retcon_config.map(|(bytes, _)| bytes);
+    let reachable =
+        |index: usize| retcon_config.is_none_or(|(_, facts)| facts.plan.reachable[index]);
     check_word_width(program.word_bits_log2)?;
     let i64t = ctx.i64_type();
     // **The module's float width, hoisted above its first use.** It was computed
@@ -1868,11 +1877,9 @@ fn lower_module_with<'ctx>(
     // declaring a `double` there would be a silently wrong number rather than a
     // fault. Approximating a width is exactly the failure this guard exists for.
     if !float_width_lowered(float_bytes)
-        && let Some((idx, _)) = program
-            .signatures
-            .iter()
-            .enumerate()
-            .find(|(_, sg)| shape_is_float(&sg.ret) || sg.params.iter().any(shape_is_float))
+        && let Some((idx, _)) = program.signatures.iter().enumerate().find(|(index, sg)| {
+            reachable(*index) && (shape_is_float(&sg.ret) || sg.params.iter().any(shape_is_float))
+        })
     {
         return Err(LowerError::unsupported_float_width(
             float_bytes,
@@ -1993,6 +2000,15 @@ fn lower_module_with<'ctx>(
         .iter()
         .enumerate()
         .map(|(i, c)| {
+            if !reachable(i) {
+                // Preserve bytecode chunk indices without declaring an unsupported
+                // ABI for an unused helper. No emitted call can reach this symbol.
+                return Ok(module.add_function(
+                    &format!("kel_chunk_{i}"),
+                    i64t.fn_type(&[], false),
+                    None,
+                ));
+            }
             let sig = program.signatures.get(i);
             // **A FLOAT PARAMETER TAKES A FLOATING-POINT POSITION, so the lowered
             // function uses the platform's floating-point calling convention where
@@ -2146,7 +2162,10 @@ fn lower_module_with<'ctx>(
     if let Some(i) = program
         .native_return_shapes
         .iter()
-        .position(|sh| matches!(sh, keleusma::bytecode::WireShape::Scalar { kind } if *kind == SCALAR_FLOAT_TAG))
+        .enumerate()
+        .find(|(index, sh)| retcon_config.is_none_or(|(_, facts)| u16::try_from(*index).is_ok_and(|index| facts.plan.native_calls.contains(&index)))
+            && matches!(sh, keleusma::bytecode::WireShape::Scalar { kind } if *kind == SCALAR_FLOAT_TAG))
+        .map(|(index, _)| index)
     {
         return Err(LowerError::UnsupportedShape(format!(
             "native {i} declares a Float RETURN SHAPE; its result would reach the \
@@ -2191,6 +2210,9 @@ fn lower_module_with<'ctx>(
     };
 
     for (i, (chunk, func)) in program.chunks.iter().zip(declared.iter()).enumerate() {
+        if !reachable(i) {
+            continue;
+        }
         let mut tail = degenerate_stream_yield(chunk, program);
         let mut delegated_call = None;
         if let Some((entry, callee, call_ix)) = delegated {
@@ -2224,6 +2246,7 @@ fn lower_module_with<'ctx>(
             retcon_frame_bytes: retcon_bytes.filter(|_| retcon),
             retcon_owned_bodies: owned_bodies,
             retcon_sites: retcon_config.map(|(_, facts)| &facts.plan.sites[i]),
+            retcon_native_bodies: retcon_config.map(|(_, facts)| &facts.plan.native_body_returns),
             retcon_extents: retcon_config.map(|(_, facts)| &facts.extents[i]),
             retcon_site_offset: retcon_config.and_then(|(_, facts)| facts.plan.metadata_offset),
             retcon_branches: retcon_config.map(|(_, facts)| &facts.branches[i]),
@@ -2578,6 +2601,7 @@ struct BodyCfg<'a> {
     retcon_owned_bodies: bool,
     retcon_sites: Option<&'a BTreeMap<usize, (u64, coroutine::Dialogue)>>,
     retcon_extents: Option<&'a BTreeMap<usize, coroutine::types::Extents>>,
+    retcon_native_bodies: Option<&'a BTreeMap<u16, coroutine::NativeBodyReturn>>,
     retcon_site_offset: Option<u32>,
     /// The VM writes host replies to the outer entry parameter even when a
     /// reentrant callee is suspended. Its own parameters retain their values.
@@ -3380,6 +3404,7 @@ fn lower_chunk_body<'ctx>(
         retcon_owned_bodies: owned_bodies,
         retcon_sites,
         retcon_extents,
+        retcon_native_bodies,
         retcon_site_offset,
         retcon_resume_type,
         retcon_resume_shape,
@@ -5940,11 +5965,21 @@ fn lower_chunk_body<'ctx>(
                 // corpus today.
                 let w = width_of_declared_shape(native_shapes.get(usize::from(*idx)), float_bytes);
                 if retcon_resume_type.is_some() && matches!(w, Width::Body(_)) {
-                    return Err(LowerError::UnsupportedShape(
-                        "a native body return has no host-value ownership contract".into(),
-                    ));
+                    let contract = retcon_native_bodies
+                        .and_then(|contracts| contracts.get(idx))
+                        .ok_or_else(|| {
+                            LowerError::UnsupportedShape(
+                                "a native body return has no host-value ownership contract".into(),
+                            )
+                        })?;
+                    let owned = i64t.const_int(
+                        u64::from(*contract == coroutine::NativeBodyReturn::Snapshot),
+                        false,
+                    );
+                    st.push_owned(ret, w, OperandKind::Int, owned);
+                } else {
+                    st.push_w(ret, w);
                 }
-                st.push_w(ret, w);
             }
             // `Byte` occupies a full `i64` slot holding a value in `0..=255`.
             // **That invariant is what makes `ByteToWord` free**, and it is the

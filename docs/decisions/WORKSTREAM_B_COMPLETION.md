@@ -11,11 +11,11 @@ Work takes place on `feat/workstream-b-completion`.
 | General suspension and resumption | VM differentials for non-tail yields, branches, bounded loops, live operands and locals | Existing tests need final rerun |
 | Delegated suspension | Nested and guarded reentrant calls preserve caller and callee state | Existing tests need final rerun |
 | Entry shapes | Source-emittable stream and reentrant entries, including completion, supported argument shapes and independent instances | Scalar and flat completion plus zero and multiple arguments tested, remaining shapes to census |
-| Value transfers | Scalar and composite inputs, outputs, replies and completion values with proven extents and lifetimes | Existing flat subset, remaining refusals to classify and resolve |
+| Value transfers | Scalar and composite inputs, outputs, replies and completion values with proven extents and lifetimes | Per-site dialogues and native snapshot or instance-borrow results implemented, remaining mixed-kind transfers to audit |
 | Host lifecycle | Start, resume, normal completion, early release, repeated release and reuse with stable caller-owned storage | Completion status and result lifetime implemented, final lifecycle sweep outstanding |
-| Admission soundness | Every remaining refusal distinguished as invalid input, unsafe contract, another workstream dependency, or an implementation gap | Not yet audited |
-| Integration | Existing public lowering routes and host entry points have a documented, tested selection contract | Not yet audited |
-| Native deployment | Execute real linked host artifact and optimized/unoptimized differentials, inspect target emission within the roadmap target boundary | Existing C linkage, final coverage outstanding |
+| Admission soundness | Every remaining refusal distinguished as invalid input, unsafe contract, another workstream dependency, or an implementation gap | Mixed receiver inspection remains a demonstrated implementation gap, other refusals still need classification |
+| Integration | Existing public lowering routes and host entry points have a documented, tested selection contract | Explicit route contract documented and tested, no callback fallback |
+| Native deployment | Execute real linked host artifact and optimized/unoptimized differentials, inspect target emission within the roadmap target boundary | Local C snapshot completion runs at both optimization levels, four tier-one object formats and architectures checked, final coverage audit outstanding |
 | Resource preservation | No live machine-stack state across suspension, no hidden allocation, bounded frame reservation, guarded extents and independent regions | Existing checks need completion-path coverage |
 | Verification | Both complete native configurations on a frozen final tree, relevant root documentation checks, and green integration continuous integration | Outstanding |
 
@@ -64,10 +64,20 @@ kind inference preserves aliasing while admitting a previously refused call.
 Composite-kind mismatches are checked against virtual-machine faults. Both float
 configurations pass 53 coroutine tests and test-target Clippy with warnings denied.
 
-The remaining admission audit includes unreachable chunks, unknown transfer
-extents and external body ownership. Route selection, deployment coverage and the
-complete final gates remain outstanding. This is still progress toward the full
-objective rather than a completion finding.
+Native flat results now accept explicit snapshot or instance-borrow contracts.
+Execution tests cover host-buffer reuse, callee returns, early release and
+completion storage. Unused chunks no longer impose coroutine lowering contracts,
+and original yield-site identifiers remain unchanged. Both float configurations
+pass 58 coroutine tests and test-target Clippy with warnings denied.
+
+The admission audit identifies a source-emittable gap in
+`mixed_enum_receiver_kinds_remain_an_explicit_boundary`. A branch joins a constructed
+enum with a Word reply, then matches the result. The virtual machine handles both
+paths correctly, while native lowering refuses the mixed receiver. Runtime kind
+tracking and safe conditional body inspection are required before this can count
+as supported. Do not classify that case as invalid input or another workstream.
+Remaining transfer proofs, the full refusal audit and complete final gates remain
+outstanding. The current evidence does not establish full completion.
 
 ## Completion rule
 

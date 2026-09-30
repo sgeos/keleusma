@@ -171,12 +171,29 @@ once start or resume returns. Owned flat completion results survive destruction
 of the continuation frame in a bounded caller-owned tail reservation.
 
 The stable arena handle supports start, resume, completion, release and reuse.
-This interface remains separate from `lower_module`. Composite field reads and
-callee transfers require extents proven across control-flow joins. Composite
-container kinds must agree with their consuming operations. Private-slot kinds
-are inferred from writes. External body results require an ownership contract
-regardless of host input kinds. Unreachable-chunk admission, remaining transfer
-proofs and external body ownership still require review.
+`lower_with_contracts` also accepts native flat result lifetimes. A `Snapshot`
+is copied into bounded instance storage before the host reuses its buffer.
+An `InstanceBorrow` retains aliases into the instance's declared regions.
+The host must uphold the chosen lifetime and packed representation. Calls with
+uncontracted flat results remain refused. These contracts do not attest native
+execution cost. Unused chunks impose no dialogue contracts or native body emission,
+while whole-module verification and resource admission remain mandatory.
+
+Composite reads and transfers require extents proven across control-flow joins.
+Private-slot kinds are inferred from writes. Mixed enum and scalar receiver
+inspection remains an implementation gap, demonstrated against the virtual machine.
+
+| Host control model | Lowering entry |
+|---|---|
+| Atomic function or existing synchronous callback integration | `lower_module` with its documented admission preconditions |
+| Host-driven start, suspension, resume and completion | `coroutine::lower` or an explicit-contract variant |
+| Proven degenerate stream step using the existing step contract | `lower_module`, with the actual degenerate shape checked by that route |
+
+The routes do not select or fall back to one another. The coroutine route accepts
+Stream and Reentrant entries and emits no `kel_yield` callback. The execution suite
+checks these distinctions, links snapshot completion from a C host, and checks
+object emission for the roadmap's four tier-one platform and architecture pairs.
+Cross-target emission does not establish execution or timing on those targets.
 The [completion requirements](../docs/decisions/WORKSTREAM_B_COMPLETION.md) track
 full Workstream B. The bounded baseline merged through
 [pull request 478](https://github.com/sgeos/keleusma/pull/478) as `a1aa53b8`.

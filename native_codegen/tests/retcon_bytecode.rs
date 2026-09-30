@@ -536,18 +536,14 @@ fn invalid_bytecode_and_composite_escape_remain_refused() {
             .any(|(_, original)| original.to_string() == error.to_string()),
         "{error}"
     );
-    // An unrelated reentrant yield with a different signature must also
-    // remain refused without bypassing coroutine boundary admission.
+    // An unrelated reentrant yield must neither add a boundary requirement
+    // nor bypass the reachable composite escape refusal.
     let source = std::fs::read_to_string("../examples/scripts/13_telemetry_stream.kel").unwrap();
     let with_delegate = common::build(&format!(
         "{source}\nyield unused(a: Word) -> Word {{ yield a }}"
     ));
     let delegated_error = coroutine::lower(&ctx, &with_delegate, &tm, 4096).unwrap_err();
-    assert!(
-        delegated_error
-            .to_string()
-            .contains("scalar types are not proven")
-    );
+    assert_eq!(delegated_error.to_string(), error.to_string());
 }
 
 #[test]
@@ -3036,5 +3032,670 @@ fn composite_reply_kinds_must_match_the_consuming_operation() {
     assert_eq!(common::general_vm_sequence(source, 5, &replies), expected);
     for optimize in [false, true] {
         assert_eq!(native(source, 5, &replies, optimize), expected);
+    }
+}
+
+thread_local! {
+    static NATIVE_PAIR_BUFFER: std::cell::RefCell<[i64; 2]> = const { std::cell::RefCell::new([0; 2]) };
+    static NATIVE_PAIR_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+extern "C" fn native_pair_snapshot(value: i64) -> i64 {
+    NATIVE_PAIR_CALLS.with(|calls| calls.set(calls.get() + 1));
+    NATIVE_PAIR_BUFFER.with(|buffer| {
+        let mut body = buffer.borrow_mut();
+        *body = [value, value + 1];
+        body.as_ptr() as i64
+    })
+}
+
+extern "C" fn native_pair_alias(address: i64) -> i64 {
+    address
+}
+
+#[test]
+fn native_snapshot_results_survive_calls_suspension_and_completion() {
+    use coroutine::{Dialogue, HostContracts, NativeBodyReturn, YieldSite};
+    use keleusma::bytecode::{Op, TupleBody, Value, WireShape};
+    use keleusma::vm::{Vm, VmState};
+    use std::collections::BTreeMap;
+    for (delegated, external) in [(0, false), (1, false), (2, false), (1, true), (2, true)] {
+        let source = if delegated == 2 {
+            "use host::pair\nyield make(a: Word) -> (Word, Word) { let p: (Word, Word) = host::pair(a); yield p.0; p } yield main(a: Word) -> (Word, Word) { let keep = make(a); let later = make(a + 11); keep }"
+        } else if delegated == 1 {
+            "use host::pair\nfn make(a: Word) -> (Word, Word) { host::pair(a) } yield main(a: Word) -> (Word, Word) { let keep = make(a); yield keep.0; let later = make(a + 10); yield later.1; keep }"
+        } else {
+            "use host::pair\nyield main(a: Word) -> (Word, Word) { let keep: (Word, Word) = host::pair(a); yield keep.0; let later: (Word, Word) = host::pair(a + 10); yield later.1; keep }"
+        };
+        let source = if external {
+            source.replace("use host::pair", "use external host::pair")
+        } else {
+            source.to_owned()
+        };
+        let mut program = common::build(&source);
+        program.native_return_shapes[0] = WireShape::Flat { kind: 0, size: 16 };
+        let dialogues = program
+            .chunks
+            .iter()
+            .enumerate()
+            .flat_map(|(ci, chunk)| {
+                chunk.ops.iter().enumerate().filter_map(move |(ip, op)| {
+                    matches!(op, Op::Yield).then_some((
+                        YieldSite {
+                            chunk: ci as u32,
+                            instruction: ip as u32,
+                        },
+                        Dialogue {
+                            yielded: WireShape::Scalar { kind: 3 },
+                            reply: WireShape::Scalar { kind: 3 },
+                        },
+                    ))
+                })
+            })
+            .collect();
+        let contracts = HostContracts {
+            dialogues: Some(dialogues),
+            native_body_returns: BTreeMap::from([(0, NativeBodyReturn::Snapshot)]),
+        };
+        let arena = keleusma_arena::Arena::with_capacity(65536);
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        if external {
+            vm.register_external_native(
+                "host::pair",
+                |args| {
+                    let Value::Int(a) = args[0] else {
+                        panic!("expected Word")
+                    };
+                    Ok(Value::tuple(vec![Value::Int(a), Value::Int(a + 1)]))
+                },
+                2,
+            );
+        } else {
+            vm.register_fn("host::pair", |a: i64| (a, a + 1));
+        }
+        assert!(matches!(
+            vm.call(&[Value::Int(5)]).unwrap(),
+            VmState::Yielded(Value::Int(5))
+        ));
+        assert!(matches!(
+            vm.resume(Value::Int(7)).unwrap(),
+            VmState::Yielded(Value::Int(16))
+        ));
+        let VmState::Finished(Value::Tuple(TupleBody::Flat(body))) =
+            vm.resume(Value::Int(0)).unwrap()
+        else {
+            panic!("expected completed pair")
+        };
+        let expected: Vec<_> = body
+            .resolve(&arena)
+            .unwrap()
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|bytes| i64::from_le_bytes(*bytes))
+            .collect();
+        assert_eq!(expected, [5, 6]);
+        for optimized in [false, true] {
+            let context = Context::create();
+            let module =
+                coroutine::lower_with_contracts(&context, &program, &machine(), 4096, &contracts)
+                    .unwrap();
+            if optimized {
+                common::force_optimize(&module);
+            }
+            let engine = module
+                .create_jit_execution_engine(OptimizationLevel::None)
+                .unwrap();
+            let symbol = module
+                .get_function(&keleusma_native::native_symbol("host::pair"))
+                .unwrap();
+            engine.add_global_mapping(&symbol, native_pair_snapshot as *const () as usize);
+            let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+            let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+            let shared = Guarded::new(program.shared_data_bytes as usize);
+            let private = Guarded::new(
+                keleusma::vm::required_persistent_capacity_for(&program)
+                    + region::persistent_supplement_bytes(&program) as usize,
+            );
+            let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+            unsafe {
+                let start = engine
+                    .get_function::<HandleStart>(&format!("{prefix}_start"))
+                    .unwrap();
+                let resume = engine
+                    .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                    .unwrap();
+                let release = engine
+                    .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                    .unwrap();
+                for _ in 0..2 {
+                    NATIVE_PAIR_CALLS.with(|calls| calls.set(0));
+                    assert_eq!(
+                        start.call(5, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr()),
+                        Outcome { live: 1, value: 5 }
+                    );
+                    NATIVE_PAIR_BUFFER.with(|buffer| *buffer.borrow_mut() = [99, 100]);
+                    assert_eq!(resume.call(slot.ptr(), 7), Outcome { live: 1, value: 16 });
+                    NATIVE_PAIR_BUFFER.with(|buffer| *buffer.borrow_mut() = [199, 200]);
+                    let end = resume.call(slot.ptr(), 0);
+                    assert_eq!(end.live, 2);
+                    // Completion lives after LLVM's frame and before site metadata.
+                    assert_eq!(end.value as *mut u8, slot.ptr().add(16 + 4096 - 8 - 16));
+                    std::slice::from_raw_parts_mut(slot.ptr().add(16), 4096 - 8 - 16).fill(0xdd);
+                    assert_eq!(
+                        std::slice::from_raw_parts(end.value as *const i64, 2),
+                        &expected
+                    );
+                    assert_eq!(NATIVE_PAIR_CALLS.with(|calls| calls.get()), 2);
+                    release.call(slot.ptr());
+                }
+                NATIVE_PAIR_CALLS.with(|calls| calls.set(0));
+                assert_eq!(
+                    start
+                        .call(5, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr())
+                        .live,
+                    1
+                );
+                release.call(slot.ptr());
+                assert_eq!(NATIVE_PAIR_CALLS.with(|calls| calls.get()), 1);
+                assert_eq!(resume.call(slot.ptr(), 0), Outcome { live: 0, value: 0 });
+            }
+            for reservation in [&slot, &shared, &private, &bodies] {
+                reservation.check();
+            }
+        }
+        let error = coroutine::lower_with_contracts(
+            &Context::create(),
+            &program,
+            &machine(),
+            32,
+            &contracts,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("frame"), "{error}");
+        let mut bad = contracts.clone();
+        bad.native_body_returns
+            .insert(1, NativeBodyReturn::Snapshot);
+        assert!(
+            coroutine::lower_with_contracts(&Context::create(), &program, &machine(), 4096, &bad)
+                .unwrap_err()
+                .to_string()
+                .contains("bounded flat return signature")
+        );
+        program.native_return_shapes[0] = WireShape::Top;
+        assert!(
+            coroutine::lower_with_contracts(
+                &Context::create(),
+                &program,
+                &machine(),
+                4096,
+                &contracts
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("bounded flat return signature")
+        );
+    }
+}
+
+#[test]
+fn native_instance_borrows_preserve_aliases_while_snapshots_copy() {
+    use coroutine::{HostContracts, NativeBodyReturn};
+    use keleusma::bytecode::{Value, WireShape};
+    use keleusma::vm::{Vm, VmState};
+    use std::collections::BTreeMap;
+    let mut program = common::build(
+        "use host::alias\nprivate data st { pair: (Word, Word) } yield main(a: Word) -> Word { st.pair = (a, a + 1); let keep: (Word, Word) = host::alias(st.pair); yield keep.0; st.pair = (7, 8); keep.1 }",
+    );
+    program.native_return_shapes[0] = WireShape::Flat { kind: 0, size: 16 };
+    for (contract, expected) in [
+        (NativeBodyReturn::InstanceBorrow, 8),
+        (NativeBodyReturn::Snapshot, 6),
+    ] {
+        let mut arena = keleusma_arena::Arena::with_capacity(65536);
+        arena
+            .resize_persistent(keleusma::vm::required_persistent_capacity_for(&program))
+            .unwrap();
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        if contract == NativeBodyReturn::InstanceBorrow {
+            vm.register_native("host::alias", |args| Ok(args[0].clone()));
+        } else {
+            vm.register_fn("host::alias", |pair: (i64, i64)| pair);
+        }
+        assert!(matches!(
+            vm.call(&[Value::Int(5)]).unwrap(),
+            VmState::Yielded(Value::Int(5))
+        ));
+        assert!(
+            matches!(vm.resume(Value::Int(0)).unwrap(), VmState::Finished(Value::Int(result)) if result == expected)
+        );
+        let contracts = HostContracts {
+            dialogues: None,
+            native_body_returns: BTreeMap::from([(0, contract)]),
+        };
+        for optimized in [false, true] {
+            let context = Context::create();
+            let module =
+                coroutine::lower_with_contracts(&context, &program, &machine(), 4096, &contracts)
+                    .unwrap();
+            if optimized {
+                common::force_optimize(&module);
+            }
+            let engine = module
+                .create_jit_execution_engine(OptimizationLevel::None)
+                .unwrap();
+            engine.add_global_mapping(
+                &module
+                    .get_function(&keleusma_native::native_symbol("host::alias"))
+                    .unwrap(),
+                native_pair_alias as *const () as usize,
+            );
+            let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+            let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+            let shared = Guarded::new(program.shared_data_bytes as usize);
+            let private = Guarded::new(
+                keleusma::vm::required_persistent_capacity_for(&program)
+                    + region::persistent_supplement_bytes(&program) as usize,
+            );
+            let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+            unsafe {
+                let start = engine
+                    .get_function::<HandleStart>(&format!("{prefix}_start"))
+                    .unwrap();
+                let resume = engine
+                    .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                    .unwrap();
+                let release = engine
+                    .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                    .unwrap();
+                assert_eq!(
+                    start.call(5, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr()),
+                    Outcome { live: 1, value: 5 }
+                );
+                assert_eq!(
+                    resume.call(slot.ptr(), 0),
+                    Outcome {
+                        live: 2,
+                        value: expected
+                    }
+                );
+                release.call(slot.ptr());
+            }
+            for reservation in [&slot, &shared, &private, &bodies] {
+                reservation.check();
+            }
+        }
+    }
+}
+
+#[test]
+fn unused_chunks_do_not_change_coroutine_admission_or_site_identifiers() {
+    use coroutine::{Dialogue, YieldSite};
+    use keleusma::bytecode::{Op, Value, WireShape};
+    use keleusma::vm::{Vm, VmState};
+    use std::collections::BTreeMap;
+    let source = "use host::unused\nfn unused_native(a: Word) -> Float { host::unused(a) } fn unused_text(x: Text) -> Text { x } loop unused_stream(a: Word) -> Word { yield a } yield unused_yield(a: Byte) -> Byte { yield a } yield helper(a: Word) -> Word { let b = yield a + 1; b + a } yield main(a: Word) -> Word { helper(a) + a }";
+    let mut program = common::build(source);
+    program.native_return_shapes[0] = WireShape::Scalar { kind: 5 };
+    let helper = program
+        .chunks
+        .iter()
+        .position(|chunk| chunk.name == "helper")
+        .unwrap();
+    let site = YieldSite {
+        chunk: helper as u32,
+        instruction: program.chunks[helper]
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::Yield))
+            .unwrap() as u32,
+    };
+    let contract = Dialogue {
+        yielded: WireShape::Scalar { kind: 3 },
+        reply: WireShape::Scalar { kind: 3 },
+    };
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(6))
+    ));
+    assert!(matches!(
+        vm.resume(Value::Int(7)).unwrap(),
+        VmState::Finished(Value::Int(17))
+    ));
+    for optimized in [false, true] {
+        for all_sites in [false, true] {
+            let mut contracts = BTreeMap::from([(site, contract)]);
+            if all_sites {
+                for (ci, chunk) in program.chunks.iter().enumerate() {
+                    if ci == helper {
+                        continue;
+                    }
+                    for (ip, op) in chunk.ops.iter().enumerate() {
+                        if matches!(op, Op::Yield) {
+                            contracts.insert(
+                                YieldSite {
+                                    chunk: ci as u32,
+                                    instruction: ip as u32,
+                                },
+                                Dialogue {
+                                    yielded: WireShape::Top,
+                                    reply: WireShape::Top,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+            let context = Context::create();
+            let module =
+                coroutine::lower_with_dialogues(&context, &program, &machine(), 4096, &contracts)
+                    .unwrap();
+            if optimized {
+                common::force_optimize(&module);
+            }
+            assert!(
+                module
+                    .get_function(&keleusma_native::native_symbol("host::unused"))
+                    .is_none()
+            );
+            let engine = module
+                .create_jit_execution_engine(OptimizationLevel::None)
+                .unwrap();
+            let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+            let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+            let shared = Guarded::new(program.shared_data_bytes as usize);
+            let private = Guarded::new(
+                keleusma::vm::required_persistent_capacity_for(&program)
+                    + region::persistent_supplement_bytes(&program) as usize,
+            );
+            let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+            unsafe {
+                let start = engine
+                    .get_function::<HandleStart>(&format!("{prefix}_start"))
+                    .unwrap();
+                let resume = engine
+                    .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                    .unwrap();
+                let query = engine
+                    .get_function::<unsafe extern "C" fn(*mut u8) -> u64>(&format!(
+                        "{prefix}_yield_site"
+                    ))
+                    .unwrap();
+                assert_eq!(
+                    start.call(5, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr()),
+                    Outcome { live: 1, value: 6 }
+                );
+                assert_eq!(query.call(slot.ptr()), site.id());
+                assert_eq!(resume.call(slot.ptr(), 7), Outcome { live: 2, value: 17 });
+                engine
+                    .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                    .unwrap()
+                    .call(slot.ptr());
+            }
+            for reservation in [&slot, &shared, &private, &bodies] {
+                reservation.check();
+            }
+        }
+    }
+    // Unused signature metadata is unnecessary, but reachable native returns
+    // still pass through the backend's native floating-point ABI boundary.
+    let unused = program
+        .chunks
+        .iter()
+        .position(|chunk| chunk.name == "unused_text")
+        .unwrap();
+    program.signatures[unused].params.clear();
+    coroutine::lower(&Context::create(), &program, &machine(), 4096).unwrap();
+    let mut reachable = common::build(
+        "use host::unused\nfn helper(a: Word) -> Float { host::unused(a) } yield main(a: Word) -> Float { let f = helper(a); yield f; f }",
+    );
+    reachable.native_return_shapes[0] = WireShape::Scalar { kind: 5 };
+    assert!(
+        coroutine::lower(&Context::create(), &reachable, &machine(), 4096)
+            .unwrap_err()
+            .to_string()
+            .contains("Float RETURN SHAPE")
+    );
+}
+
+#[test]
+fn native_snapshot_completion_links_from_c_and_emits_for_tier_one_targets() {
+    use coroutine::{Dialogue, HostContracts, NativeBodyReturn, YieldSite};
+    use inkwell::targets::{FileType, TargetTriple};
+    use inkwell::values::BasicValue;
+    use keleusma::bytecode::{Op, WireShape};
+    use std::collections::BTreeMap;
+    use std::process::Command;
+    let mut program = common::build(
+        "use host::pair\nfn make(a: Word) -> (Word, Word) { host::pair(a) } yield main(a: Word) -> (Word, Word) { let p = make(a); yield p.0; p }",
+    );
+    program.native_return_shapes[0] = WireShape::Flat { kind: 0, size: 16 };
+    let entry = program.entry_point.unwrap();
+    let site = YieldSite {
+        chunk: entry as u32,
+        instruction: program.chunks[entry]
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::Yield))
+            .unwrap() as u32,
+    };
+    let contracts = HostContracts {
+        dialogues: Some(BTreeMap::from([(
+            site,
+            Dialogue {
+                yielded: WireShape::Scalar { kind: 3 },
+                reply: WireShape::Scalar { kind: 0 },
+            },
+        )])),
+        native_body_returns: BTreeMap::from([(0, NativeBodyReturn::Snapshot)]),
+    };
+    let directory = std::path::PathBuf::from("../tmp")
+        .join(format!("retcon-native-completion-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    for optimized in [false, true] {
+        let context = Context::create();
+        let target = machine();
+        let module =
+            coroutine::lower_with_contracts(&context, &program, &target, 4096, &contracts).unwrap();
+        if optimized {
+            common::force_optimize(&module);
+        }
+        let object = directory.join("coroutine.o");
+        target
+            .write_to_file(&module, FileType::Object, &object)
+            .unwrap();
+        let host = directory.join("host.c");
+        std::fs::write(
+            &host,
+            format!(
+                r#"
+#include <assert.h>
+#include <stdint.h>
+#include <stdalign.h>
+#include <string.h>
+struct outcome {{ uint64_t status; int64_t value; }};
+extern struct outcome kel_coroutine_{entry}_start(int64_t, void *, void *, void *, void *);
+extern struct outcome kel_coroutine_{entry}_resume(void *, int64_t);
+extern void kel_coroutine_{entry}_release(void *);
+extern uint64_t kel_coroutine_{entry}_yield_site(void *);
+static int64_t transfer[2];
+int64_t {native}(int64_t a) {{
+    transfer[0] = a; transfer[1] = a + 1;
+    return (int64_t)(uintptr_t)transfer;
+}}
+struct guarded {{ uint64_t before; alignas(8) unsigned char slot[4112]; uint64_t after; }};
+int main(void) {{
+    struct guarded a, b;
+    a.before = b.before = a.after = b.after = UINT64_C(0xa5a5a5a5a5a5a5a5);
+    struct outcome first = kel_coroutine_{entry}_start(5, 0, 0, 0, a.slot);
+    assert(first.status == 1 && first.value == 5);
+    assert(kel_coroutine_{entry}_yield_site(a.slot) == UINT64_C({site}));
+    struct outcome second = kel_coroutine_{entry}_start(20, 0, 0, 0, b.slot);
+    assert(second.status == 1 && second.value == 20);
+    transfer[0] = transfer[1] = 999;
+    first = kel_coroutine_{entry}_resume(a.slot, 0);
+    second = kel_coroutine_{entry}_resume(b.slot, 0);
+    assert(first.status == 2 && second.status == 2);
+    assert(kel_coroutine_{entry}_yield_site(a.slot) == UINT64_MAX);
+    memset(a.slot + 16, 0xdd, 4072);
+    memset(b.slot + 16, 0xdd, 4072);
+    const int64_t *x = (const int64_t *)(uintptr_t)first.value;
+    const int64_t *y = (const int64_t *)(uintptr_t)second.value;
+    assert(x[0] == 5 && x[1] == 6 && y[0] == 20 && y[1] == 21);
+    kel_coroutine_{entry}_release(a.slot);
+    kel_coroutine_{entry}_release(b.slot);
+    first = kel_coroutine_{entry}_resume(a.slot, 0);
+    assert(first.status == 0 && first.value == 0);
+    assert(a.before == UINT64_C(0xa5a5a5a5a5a5a5a5) && a.after == a.before);
+    assert(b.before == a.before && b.after == a.before);
+    return 0;
+}}
+"#,
+                native = keleusma_native::native_symbol("host::pair"),
+                site = site.id()
+            ),
+        )
+        .unwrap();
+        let executable = directory.join("host");
+        let linked = Command::new("cc")
+            .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+            .arg(&host)
+            .arg(&object)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(
+            linked.status.success(),
+            "{}",
+            String::from_utf8_lossy(&linked.stderr)
+        );
+        let run = Command::new(executable).output().unwrap();
+        assert!(
+            run.status.success(),
+            "{:?}: {}",
+            run.status,
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+    // Cross-target object emission is checked separately from host execution.
+    // This establishes no execution or timing result on another platform.
+    Target::initialize_all(&InitializationConfig::default());
+    for name in [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+    ] {
+        let triple = TargetTriple::create(name);
+        let target = Target::from_triple(&triple)
+            .unwrap()
+            .create_target_machine(
+                &triple,
+                "generic",
+                "",
+                OptimizationLevel::Default,
+                RelocMode::PIC,
+                CodeModel::Default,
+            )
+            .unwrap();
+        let context = Context::create();
+        let module =
+            coroutine::lower_with_contracts(&context, &program, &target, 4096, &contracts).unwrap();
+        module
+            .run_passes(
+                "default<O2>",
+                &target,
+                inkwell::passes::PassBuilderOptions::create(),
+            )
+            .unwrap();
+        module.verify().unwrap();
+        let object = target
+            .write_to_memory_buffer(&module, FileType::Object)
+            .unwrap();
+        let bytes = object.as_slice();
+        assert!(bytes.len() > 64, "{name}");
+        assert!(
+            bytes.starts_with(if name.contains("linux") {
+                b"\x7fELF"
+            } else {
+                b"\xcf\xfa\xed\xfe"
+            }),
+            "{name}"
+        );
+        if name.contains("linux") {
+            assert_eq!(
+                u16::from_le_bytes(bytes[18..20].try_into().unwrap()),
+                if name.starts_with("x86_64") { 62 } else { 183 },
+                "{name}"
+            );
+        } else {
+            assert_eq!(
+                u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
+                if name.starts_with("x86_64") {
+                    0x01000007
+                } else {
+                    0x0100000c
+                },
+                "{name}"
+            );
+        }
+        assert!(module.get_function("malloc").is_none());
+        assert!(module.get_function("free").is_none());
+        assert!(
+            module
+                .get_function("kel_retcon_overflow")
+                .is_none_or(|f| f.as_global_value().get_first_use().is_none())
+        );
+    }
+}
+
+#[test]
+fn host_control_routes_are_explicit_and_do_not_fall_back_to_callbacks() {
+    use keleusma_native::{LowerOptions, lower_module};
+    for source in [
+        "fn main(a: Word) -> Word { a + 1 }",
+        "loop main(a: Word) -> Word { yield a + 1 }",
+        "yield main(a: Word) -> Word { yield a + 1; a + 2 }",
+    ] {
+        let program = common::build(source);
+        let entry = program.entry_point.unwrap();
+        let category = program.chunks[entry].block_type;
+        let context = Context::create();
+        let ordinary = context.create_module("ordinary_control");
+        lower_module(&context, &ordinary, &program, LowerOptions::default()).unwrap();
+        ordinary.verify().unwrap();
+        assert!(
+            ordinary
+                .get_function(&format!("kel_coroutine_{entry}_start"))
+                .is_none()
+        );
+        let lowered = coroutine::lower(&context, &program, &machine(), 4096);
+        if category == keleusma::bytecode::BlockType::Func {
+            assert!(
+                lowered
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Stream or Reentrant entry")
+            );
+            assert!(ordinary.get_function("kel_yield").is_none());
+        } else {
+            let lowered = lowered.unwrap();
+            assert!(lowered.get_function("kel_yield").is_none());
+            for suffix in ["start", "resume", "release"] {
+                assert!(
+                    lowered
+                        .get_function(&format!("kel_coroutine_{entry}_{suffix}"))
+                        .is_some()
+                );
+            }
+            assert_eq!(
+                ordinary.get_function("kel_yield").is_some(),
+                category == keleusma::bytecode::BlockType::Reentrant
+            );
+        }
     }
 }

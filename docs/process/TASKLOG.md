@@ -3835,3 +3835,12 @@ contracts and a host site query support differing output, reply and completion
 types. New extent checks close a demonstrated short-body overread. All 53 coroutine
 tests and test-target Clippy pass in both float configurations. Complete gates
 and the remaining Workstream B admission audit are outstanding.
+
+
+## V0.3.X native body ownership of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`. Explicit native result
+lifetimes, entry-reachable emission, route checks and C snapshot-completion linkage
+are implemented. All 58 coroutine tests and test-target Clippy pass in both float
+configurations. Full Workstream B remains active. Mixed enum and scalar receiver
+inspection is a demonstrated remaining gap. Full native gates are outstanding.

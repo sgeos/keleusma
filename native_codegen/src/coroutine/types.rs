@@ -184,18 +184,21 @@ pub(super) fn check(
     entry: usize,
     plan: super::dialogue::Plan,
 ) -> Result<Analysis, LowerError> {
-    if m.signatures.len() != m.chunks.len()
-        || m.chunks
-            .iter()
-            .zip(&m.signatures)
-            .any(|(c, s)| c.ops.is_empty() || s.params.len() != usize::from(c.param_count))
-    {
-        return Err(LowerError::UnsupportedShape(
-            "coroutine scalar admission requires complete signatures".into(),
-        ));
-    }
-    for (c, s) in m.chunks.iter().zip(&m.signatures) {
-        for (tag, declared) in c.param_types.iter().zip(&s.params) {
+    for (index, chunk) in m.chunks.iter().enumerate() {
+        if !plan.reachable[index] {
+            continue;
+        }
+        let signature = m.signatures.get(index).ok_or_else(|| {
+            LowerError::UnsupportedShape(
+                "coroutine scalar admission requires complete signatures".into(),
+            )
+        })?;
+        if chunk.ops.is_empty() || signature.params.len() != usize::from(chunk.param_count) {
+            return Err(LowerError::UnsupportedShape(
+                "coroutine scalar admission requires complete signatures".into(),
+            ));
+        }
+        for (tag, declared) in chunk.param_types.iter().zip(&signature.params) {
             let actual = match tag {
                 TypeTag::Unit => UNIT,
                 TypeTag::Bool => BOOL,
@@ -263,6 +266,9 @@ fn analyze(
     );
     let mut writes = vec![0; private_kinds.len()];
     for (ci, chunk) in m.chunks.iter().enumerate() {
+        if !analysis.plan.reachable[ci] {
+            continue;
+        }
         let sig = &m.signatures[ci];
         let mut initial = State {
             extents: Extents {
