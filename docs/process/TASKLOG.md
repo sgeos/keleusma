@@ -3826,3 +3826,12 @@ in both float configurations. Fourteen native citation and handoff guards pass. 
 documentation, citation and gate-correspondence tests pass.
 Full Workstream B remains active under its [acceptance matrix](../decisions/WORKSTREAM_B_COMPLETION.md).
 Complete native gates and integration remain outstanding. Upstream state above is preserved.
+
+
+## V0.3.X dialogue contracts of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`. Explicit yield-site
+contracts and a host site query support differing output, reply and completion
+types. New extent checks close a demonstrated short-body overread. All 53 coroutine
+tests and test-target Clippy pass in both float configurations. Complete gates
+and the remaining Workstream B admission audit are outstanding.

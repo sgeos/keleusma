@@ -121,3 +121,21 @@ pub(crate) fn copy_to<'ctx>(
     result.add_incoming(&[(&value, source_block), (&address, copying)]);
     result.as_basic_value().into_int_value()
 }
+
+/// A host dialogue shape bounds every native read derived from that body.
+pub(crate) fn require_extent(
+    width: Width,
+    offset: u32,
+    bytes: u32,
+) -> Result<(), crate::LowerError> {
+    if let Width::Body(available) = width
+        && offset
+            .checked_add(bytes)
+            .is_some_and(|end| end <= available)
+    {
+        return Ok(());
+    }
+    Err(crate::LowerError::UnsupportedShape(format!(
+        "coroutine body extent {width:?} does not prove {bytes} bytes at offset {offset}"
+    )))
+}

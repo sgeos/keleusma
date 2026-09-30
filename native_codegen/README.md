@@ -164,13 +164,19 @@ completion status and checked frame reservation. [Execution tests](tests/retcon_
 compare suspension and completion against the virtual machine. Reentrant and
 stream callees share the LLVM continuation. Reentrant entry arguments survive
 resume unchanged. Only a stream entry's first parameter receives each reply.
-Parameterless entries currently use Unit replies. Host buffers may be reused
+The convenience entry selects a uniform dialogue. `lower_with_dialogues` accepts
+independent output and reply shapes at every yield, with a host site query.
+Parameterless reentrants can receive any supported declared reply. Host buffers may be reused
 once start or resume returns. Owned flat completion results survive destruction
 of the continuation frame in a bounded caller-owned tail reservation.
 
 The stable arena handle supports start, resume, completion, release and reuse.
-This interface remains separate from `lower_module`. Differing dialogue types,
-unproved transfer extents and external body ownership remain under review.
+This interface remains separate from `lower_module`. Composite field reads and
+callee transfers require extents proven across control-flow joins. Composite
+container kinds must agree with their consuming operations. Private-slot kinds
+are inferred from writes. External body results require an ownership contract
+regardless of host input kinds. Unreachable-chunk admission, remaining transfer
+proofs and external body ownership still require review.
 The [completion requirements](../docs/decisions/WORKSTREAM_B_COMPLETION.md) track
 full Workstream B. The bounded baseline merged through
 [pull request 478](https://github.com/sgeos/keleusma/pull/478) as `a1aa53b8`.

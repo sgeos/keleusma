@@ -3447,3 +3447,14 @@ The [bounded native brief](./handoffs/v0.3.0-BRIEF.md) now records completed
 integration in past tense. Resume from the [acceptance matrix](../decisions/WORKSTREAM_B_COMPLETION.md),
 starting with explicit reply and yield contracts. Full gates and integration are
 not claimed. Upstream current state and preceding native reports are preserved.
+
+
+## V0.3.X dialogue completion cycle of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`. Per-yield contracts and
+bounded site metadata now handle differing direct and delegated dialogue types.
+An undersized reply regression exposed an accepted field overread, now closed by
+read and callee-argument extent checks. All 53 coroutine tests and test-target
+Clippy pass in both float configurations. Continue with the remaining admission
+audit in the [acceptance matrix](../decisions/WORKSTREAM_B_COMPLETION.md). Full
+Workstream B, final gates and integration remain open. Upstream state is preserved.

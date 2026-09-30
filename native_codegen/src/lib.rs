@@ -1653,6 +1653,9 @@ pub fn lower_chunk<'ctx>(
             retcon: false,
             retcon_frame_bytes: None,
             retcon_owned_bodies: false,
+            retcon_sites: None,
+            retcon_extents: None,
+            retcon_site_offset: None,
             retcon_resume_type: None,
             retcon_resume_shape: None,
             retcon_branches: None,
@@ -1984,15 +1987,7 @@ fn lower_module_with<'ctx>(
     if shared_count > 0 {
         check_target_endianness()?;
     }
-    let owned_bodies = retcon_bytes.is_some()
-        && program
-            .entry_point
-            .and_then(|entry| program.signatures.get(entry))
-            .is_some_and(|sig| {
-                sig.params
-                    .iter()
-                    .any(|sh| matches!(sh, keleusma::bytecode::WireShape::Flat { .. }))
-            });
+    let owned_bodies = retcon_config.is_some_and(|(_, facts)| facts.plan.owns_bodies);
     let declared: Vec<FunctionValue<'ctx>> = program
         .chunks
         .iter()
@@ -2228,6 +2223,9 @@ fn lower_module_with<'ctx>(
             retcon,
             retcon_frame_bytes: retcon_bytes.filter(|_| retcon),
             retcon_owned_bodies: owned_bodies,
+            retcon_sites: retcon_config.map(|(_, facts)| &facts.plan.sites[i]),
+            retcon_extents: retcon_config.map(|(_, facts)| &facts.extents[i]),
+            retcon_site_offset: retcon_config.and_then(|(_, facts)| facts.plan.metadata_offset),
             retcon_branches: retcon_config.map(|(_, facts)| &facts.branches[i]),
             retcon_resume_shape: retcon_bytes
                 .and(program.entry_point)
@@ -2578,6 +2576,9 @@ struct BodyCfg<'a> {
     retcon_frame_bytes: Option<u32>,
     /// Track ownership for all flat entry arguments, not only the reply shape.
     retcon_owned_bodies: bool,
+    retcon_sites: Option<&'a BTreeMap<usize, (u64, coroutine::Dialogue)>>,
+    retcon_extents: Option<&'a BTreeMap<usize, coroutine::types::Extents>>,
+    retcon_site_offset: Option<u32>,
     /// The VM writes host replies to the outer entry parameter even when a
     /// reentrant callee is suspended. Its own parameters retain their values.
     retcon_resume_type: Option<TypeTag>,
@@ -3377,6 +3378,9 @@ fn lower_chunk_body<'ctx>(
         retcon,
         retcon_frame_bytes,
         retcon_owned_bodies: owned_bodies,
+        retcon_sites,
+        retcon_extents,
+        retcon_site_offset,
         retcon_resume_type,
         retcon_resume_shape,
         retcon_branches,
@@ -3527,6 +3531,27 @@ fn lower_chunk_body<'ctx>(
             .unwrap()
             .into_pointer_value()
     });
+    let site_metadata = if retcon {
+        retcon_site_offset.map(|offset| {
+            let frame = func
+                .get_nth_param(func.count_params() - 2)
+                .unwrap()
+                .into_pointer_value();
+            // The dialogue plan reserves an aligned word outside both LLVM's
+            // continuation frame and any completion body, inside frame_bytes.
+            unsafe {
+                b.build_in_bounds_gep(
+                    i8t,
+                    frame,
+                    &[i64t.const_int(u64::from(offset), false)],
+                    "site_metadata",
+                )
+                .unwrap()
+            }
+        })
+    } else {
+        None
+    };
     let delegate_context = if retcon {
         Some(coroutine::delegate_context(
             ctx,
@@ -3541,6 +3566,7 @@ fn lower_chunk_body<'ctx>(
             ownership.as_ref().and_then(|flags| {
                 (retcon_stream && chunk.param_count > 0).then(|| flags.locals[0])
             }),
+            site_metadata,
         ))
     } else if retcon_delegate {
         Some(func.get_last_param().unwrap().into_pointer_value())
@@ -3888,7 +3914,8 @@ fn lower_chunk_body<'ctx>(
     // Two or more writes stay unknown. Joining them would need a real dataflow
     // pass: a LINEAR walk cannot see a back edge, so a local rewritten later in
     // a loop body would be read at the width of the textually earlier write and
-    // packed wrongly on every iteration after the first.
+    // packed wrongly on every iteration after the first. Coroutine lowering now
+    // supplies converged extent facts and overrides this fallback below.
     let mut local_write_count: BTreeMap<usize, u32> = BTreeMap::new();
     for o in &chunk.ops {
         if let Op::SetLocal(n) = o {
@@ -4058,6 +4085,15 @@ fn lower_chunk_body<'ctx>(
             continue;
         }
 
+        if let Some(facts) = retcon_extents.and_then(|extents| extents.get(&i)) {
+            if facts.stack.len() != st.depth {
+                return Err(LowerError::Internal(
+                    "coroutine extent depth disagrees with verified emission".into(),
+                ));
+            }
+            st.widths.resize(st.depth, Width::Unknown);
+            st.widths.copy_from_slice(&facts.stack);
+        }
         // The op is about to be lowered. See `BodyCfg::visited` for why this is
         // recorded here rather than after the arm, and why only a CLEAN chunk's
         // list may be read.
@@ -4331,13 +4367,80 @@ fn lower_chunk_body<'ctx>(
             }
         }
 
+        if retcon_resume_type.is_some() {
+            // Reply body types are supplied by the host contract, rather than
+            // the bytecode signature. Prove every derived read and call copy.
+            match op {
+                Op::GetField(keleusma::bytecode::StructField::Flat { offset, kind }) => {
+                    let shape = keleusma::bytecode::WireShape::Scalar {
+                        kind: kind.to_tag(),
+                    };
+                    let Width::Scalar(bytes) = width_of_declared_shape(Some(&shape), float_bytes)
+                    else {
+                        return Err(LowerError::UnsupportedShape(
+                            "coroutine field has no proven scalar extent".into(),
+                        ));
+                    };
+                    coroutine::ownership::require_extent(
+                        st.width_at(0),
+                        u32::from(*offset),
+                        bytes,
+                    )?;
+                }
+                Op::GetField(keleusma::bytecode::StructField::FlatNested {
+                    offset, size, ..
+                }) => {
+                    coroutine::ownership::require_extent(
+                        st.width_at(0),
+                        u32::from(*offset),
+                        u32::from(*size),
+                    )?;
+                }
+                Op::IsEnum(..) => coroutine::ownership::require_extent(st.width_at(0), 0, 8)?,
+                Op::Call(target, count) => {
+                    if let Some(signature) = chunk_signatures.get(*target as usize) {
+                        for (argument, shape) in signature.params.iter().enumerate() {
+                            if let keleusma::bytecode::WireShape::Flat { size, .. } = shape {
+                                let width = st.width_at(*count as usize - 1 - argument);
+                                if width != Width::Body(*size) {
+                                    return Err(LowerError::UnsupportedShape(format!(
+                                        "coroutine call body extent {width:?} differs from the {size}-byte argument contract"
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if matches!(op, Op::Yield) && (retcon || retcon_delegate) && retcon_site_offset.is_some() {
+            let (site, _) = retcon_sites.unwrap()[&i];
+            let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
+            let ty = ctx.struct_type(&[ptr.into(); 5], false);
+            let field =
+                st.b.build_struct_gep(ty, delegate_context.unwrap(), 4, "site_slot")
+                    .unwrap();
+            let destination =
+                st.b.build_load(ptr, field, "site_destination")
+                    .unwrap()
+                    .into_pointer_value();
+            st.b.build_store(destination, i64t.const_int(site, false))
+                .unwrap();
+        }
+        let boundary_shape = if matches!(op, Op::Yield) {
+            retcon_sites
+                .and_then(|sites| sites.get(&i))
+                .map(|(_, contract)| contract.yielded)
+        } else {
+            own_signature.map(|signature| signature.ret)
+        };
         // Coroutine payloads are untagged. The type pass proves the body kind;
         // the emitter must also prove the exact extent at every boundary,
         // including ordinary callees whose declared return shapes feed callers.
         if retcon_resume_type.is_some()
             && matches!(op, Op::Yield | Op::Return)
-            && let Some(keleusma::bytecode::WireShape::Flat { size, .. }) =
-                own_signature.map(|signature| signature.ret)
+            && let Some(keleusma::bytecode::WireShape::Flat { size, .. }) = boundary_shape
             && st.width_at(0) != Width::Body(size)
         {
             return Err(LowerError::UnsupportedShape(format!(
@@ -4374,15 +4477,19 @@ fn lower_chunk_body<'ctx>(
                 // a read that textually PRECEDES the write finds no recorded
                 // width and stays unknown, which is the conservative direction.
                 let idx = *n as usize;
-                let w = match local_write_count.get(&idx).copied().unwrap_or(0) {
-                    0 | 1 => st.local_widths.get(idx).copied().unwrap_or(Width::Unknown),
-                    // **Trusted when every write agrees**, which is the only case
-                    // the back-edge objection does not reach. See
-                    // [`certified_local_widths`].
-                    _ => certified_widths
-                        .get(&idx)
-                        .copied()
-                        .unwrap_or(Width::Unknown),
+                let w = if let Some(facts) = retcon_extents.and_then(|extents| extents.get(&i)) {
+                    facts.locals[idx]
+                } else {
+                    match local_write_count.get(&idx).copied().unwrap_or(0) {
+                        0 | 1 => st.local_widths.get(idx).copied().unwrap_or(Width::Unknown),
+                        // **Trusted when every write agrees**, which is the only case
+                        // the back-edge objection does not reach. See
+                        // [`certified_local_widths`].
+                        _ => certified_widths
+                            .get(&idx)
+                            .copied()
+                            .unwrap_or(Width::Unknown),
+                    }
                 };
                 // **Restore the kind on the same rule as the width.** Only a
                 // singly-written local carries a trusted tag; anything else is
@@ -5832,7 +5939,7 @@ fn lower_chunk_body<'ctx>(
                 // native still gets, and that is all of them in the shipped
                 // corpus today.
                 let w = width_of_declared_shape(native_shapes.get(usize::from(*idx)), float_bytes);
-                if owned_bodies && matches!(w, Width::Body(_)) {
+                if retcon_resume_type.is_some() && matches!(w, Width::Body(_)) {
                     return Err(LowerError::UnsupportedShape(
                         "a native body return has no host-value ownership contract".into(),
                     ));
@@ -7344,6 +7451,11 @@ fn lower_chunk_body<'ctx>(
             // the same lowered code driven with two arenas is two independent
             // streams.
             Op::Yield if retcon_delegate => {
+                let (site, contract) = retcon_sites.unwrap()[&i];
+                let retcon_resume_shape = Some(contract.reply);
+                let reply_type = coroutine::dialogue::tag(contract.reply);
+                let owned_reply =
+                    matches!(contract.reply, keleusma::bytecode::WireShape::Flat { .. });
                 if !matches!(st.width_at(0), Width::Scalar(_) | Width::Body(_)) {
                     return Err(LowerError::UnsupportedShape(format!(
                         "a coroutine yield needs a scalar or flat value in {} at {i}, found {:?}",
@@ -7352,7 +7464,7 @@ fn lower_chunk_body<'ctx>(
                     )));
                 }
                 let value = st.pop();
-                let helper = coroutine::delegate_yield(ctx, module, retcon_resume_shape)?;
+                let helper = coroutine::delegate_yield(ctx, module, retcon_resume_shape, site)?;
                 let reply =
                     st.b.build_call(
                         helper,
@@ -7363,7 +7475,7 @@ fn lower_chunk_body<'ctx>(
                     .try_as_basic_value()
                     .unwrap_basic()
                     .into_int_value();
-                let (width, kind) = match retcon_resume_type.unwrap() {
+                let (width, kind) = match reply_type {
                     TypeTag::Unit => (Width::Scalar(0), OperandKind::Int),
                     TypeTag::Float => (Width::Scalar(float_bytes), OperandKind::Float),
                     TypeTag::Fixed => (Width::Scalar(8), OperandKind::Fixed),
@@ -7381,6 +7493,11 @@ fn lower_chunk_body<'ctx>(
                 );
             }
             Op::Yield if retcon => {
+                let (_, contract) = retcon_sites.unwrap()[&i];
+                let retcon_resume_shape = Some(contract.reply);
+                let reply_type = coroutine::dialogue::tag(contract.reply);
+                let owned_reply =
+                    matches!(contract.reply, keleusma::bytecode::WireShape::Flat { .. });
                 let v = st.pop();
                 let suspend = module
                     .get_function("llvm.coro.suspend.retcon.i1")
@@ -7411,7 +7528,7 @@ fn lower_chunk_body<'ctx>(
                         .unwrap()
                         .into_int_value();
 
-                let (width, kind) = match retcon_resume_type.unwrap() {
+                let (width, kind) = match reply_type {
                     TypeTag::Unit => (Width::Scalar(0), OperandKind::Int),
                     TypeTag::Float => (Width::Scalar(float_bytes), OperandKind::Float),
                     TypeTag::Fixed => (Width::Scalar(8), OperandKind::Fixed),

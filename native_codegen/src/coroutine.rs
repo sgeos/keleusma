@@ -8,11 +8,11 @@
 //! instance. Float bits occupy the low 32 or all 64 bits according to the
 //! module width. Byte and Boolean inputs must be in their declared ranges.
 //! Read a yielded flat body before the next resume or release. Its declared
-//! byte size is carried by the entry signature, and its storage belongs to the
+//! byte size is carried by its dialogue contract, and its storage belongs to the
 //! instance regions, including the coroutine frame for copied host values.
-//! A flat input is an i64 pointer to the entry signature's exact packed body.
-//! The host supplies that many readable bytes, with the declared layout and
-//! valid field values, for each start or resume call. The buffer may be reused
+//! A flat argument is an i64 pointer to its signature's exact packed body.
+//! A flat reply uses the selected dialogue's body extent. The host supplies
+//! readable bytes with the declared layout and valid field values at each call. The buffer may be reused
 //! immediately after that call returns. It must be disjoint from instance
 //! storage. Host-derived values are copied into bounded storage when transferred;
 //! ordinary region and private-data references preserve VM aliasing semantics.
@@ -22,16 +22,20 @@
 //! is accepted only if splitting eliminates every overflow allocator use.
 //! This API admits scalar or flat arguments to a Stream or Reentrant entry,
 //! with ordinary, reentrant or stream callees. Flat-input modules inline all
-//! bytecode callees before splitting. The reply shape is the first argument
-//! shape, or Unit for parameterless entries. Replies update only a Stream
-//! entry's first parameter. Reentrant entries retain their original arguments.
-//! A nested stream clears its own locals on Reset. Reads of non-Unit callee
-//! parameters remain refused because the VM does not replenish those slots.
-//! Delegated yields must have the same signature as the entry yield. Scalar
+//! bytecode callees before splitting. [`lower`] chooses a uniform dialogue from
+//! the entry return shape and first argument shape, or Unit without arguments.
+//! [`lower_with_dialogues`] accepts independent output and reply shapes at each
+//! yield site, including delegated sites. The host queries the suspended site
+//! before interpreting its output or supplying a reply. These are native host
+//! contracts, not restrictions imposed by the source language on reentrants.
+//! Replies update only a Stream entry's first parameter, and must match its
+//! declared shape. Reentrant entries retain their original arguments. A nested
+//! stream clears its own locals on Reset. Reads of non-Unit callee parameters
+//! remain refused because the VM does not replenish those slots. Scalar
 //! admission follows actual host reply tags through control flow and refuses
 //! operations or boundaries whose types cannot be proved. Copies require proven
-//! transfer extents. Native composite results remain refused for flat-input
-//! modules until their ownership contract is known.
+//! transfer extents. Native composite results remain refused until their
+//! ownership contract is known, including modules with only scalar host values.
 //!
 //! The provisional start symbol is `kel_chunk_<entry_point>` with the scalar
 //! arguments or i64 body pointers followed by shared, private, composite-region, frame and reply
@@ -75,6 +79,8 @@ use keleusma::bytecode::{BlockType, Module, Op, TypeTag};
 
 use crate::{LowerError, LowerOptions};
 
+pub(crate) mod dialogue;
+pub use dialogue::{Dialogue, YieldSite};
 mod host;
 pub(crate) mod ownership;
 pub(crate) mod types;
@@ -112,6 +118,32 @@ pub fn lower<'ctx>(
     program: &Module,
     machine: &TargetMachine,
     frame_bytes: u32,
+) -> Result<LlvmModule<'ctx>, LowerError> {
+    lower_impl(ctx, program, machine, frame_bytes, None)
+}
+
+/// Lower with an explicit contract for every Yield instruction in the module.
+/// The host reads `kel_coroutine_<entry>_yield_site(slot)` after status one to
+/// select the output and reply shapes. Its result is YieldSite::id(), or
+/// u64::MAX for an inactive slot. Query only an allocated slot initialized by start.
+/// The raw interface stores this identifier in the final aligned eight bytes
+/// of frame_bytes. This storage is excluded from LLVM's continuation frame.
+pub fn lower_with_dialogues<'ctx>(
+    ctx: &'ctx Context,
+    program: &Module,
+    machine: &TargetMachine,
+    frame_bytes: u32,
+    dialogues: &std::collections::BTreeMap<YieldSite, Dialogue>,
+) -> Result<LlvmModule<'ctx>, LowerError> {
+    lower_impl(ctx, program, machine, frame_bytes, Some(dialogues))
+}
+
+fn lower_impl<'ctx>(
+    ctx: &'ctx Context,
+    program: &Module,
+    machine: &TargetMachine,
+    frame_bytes: u32,
+    dialogues: Option<&std::collections::BTreeMap<YieldSite, Dialogue>>,
 ) -> Result<LlvmModule<'ctx>, LowerError> {
     if frame_bytes < FRAME_ALIGN || frame_bytes > i32::MAX as u32 {
         return Err(error(
@@ -177,38 +209,13 @@ pub fn lower<'ctx>(
             ));
         }
     }
-    // The host interprets the untagged payload using the entry signature.
-    // Equal widths do not suffice, since Byte and Bool have distinct VM tags.
-    let yield_shape = program
+    // Completion retains the entry result shape. Explicit dialogue outputs
+    // and replies are independent of that signature.
+    let result_shape = program
         .signatures
         .get(entry)
         .ok_or_else(|| error("coroutine needs an entry signature"))?
         .ret;
-    for (index, callee) in program.chunks.iter().enumerate() {
-        if index != entry
-            && callee.block_type != BlockType::Func
-            && callee.ops.iter().any(|op| matches!(op, Op::Yield))
-            && program.signatures.get(index).map(|s| s.ret) != Some(yield_shape)
-        {
-            return Err(error(
-                "coroutine yield signature changes across delegated calls",
-            ));
-        }
-    }
-    // Completion outlives coro.end. Reserve a disjoint tail for owned flat
-    // results, outside the bytes LLVM may use for the continuation frame.
-    let completion_bytes = match (stream.block_type, yield_shape) {
-        (BlockType::Reentrant, keleusma::bytecode::WireShape::Flat { size, .. }) => size.max(1),
-        _ => 0,
-    };
-    let continuation_bytes = frame_bytes
-        .checked_sub(completion_bytes)
-        .filter(|bytes| *bytes >= FRAME_ALIGN)
-        .ok_or_else(|| error("coroutine frame is too small for its completion reservation"))?;
-    let owns_inputs = program.signatures[entry]
-        .params
-        .iter()
-        .any(|shape| matches!(shape, keleusma::bytecode::WireShape::Flat { .. }));
     for (tag, shape) in stream
         .param_types
         .iter()
@@ -225,7 +232,21 @@ pub fn lower<'ctx>(
             ));
         }
     }
-    let analysis = types::check(program, entry)?;
+    let plan = dialogue::Plan::new(program, entry, dialogues, frame_bytes)?;
+    let metadata_offset = plan.metadata_offset;
+    // Completion outlives coro.end. Reserve a disjoint tail for owned flat
+    // results, outside the bytes LLVM may use for the continuation frame.
+    let completion_bytes = match (stream.block_type, result_shape) {
+        (BlockType::Reentrant, keleusma::bytecode::WireShape::Flat { size, .. }) => size.max(1),
+        _ => 0,
+    };
+    let continuation_bytes = metadata_offset
+        .unwrap_or(frame_bytes)
+        .checked_sub(completion_bytes)
+        .filter(|bytes| *bytes >= FRAME_ALIGN)
+        .ok_or_else(|| error("coroutine frame is too small for its completion reservation"))?;
+    let owns_host_values = plan.owns_bodies;
+    let analysis = types::check(program, entry, plan)?;
     let mut prepared = program.clone();
     for &(chunk, ip) in &analysis.false_inspections {
         // Both instructions leave the inspected value in place and push Bool.
@@ -248,13 +269,15 @@ pub fn lower<'ctx>(
     if !matches!(program.signatures.get(entry).map(|s| &s.ret),
         Some(keleusma::bytecode::WireShape::Scalar { kind }) if *kind <= keleusma::value_layout::ScalarKind::Float.to_tag())
         && !matches!(
-            yield_shape,
+            result_shape,
             keleusma::bytecode::WireShape::Flat { kind: 0..=3, .. }
         )
     {
-        return Err(error("retcon requires a scalar or flat yield signature"));
+        return Err(error(
+            "retcon requires a scalar or flat entry result signature",
+        ));
     }
-    if owns_inputs {
+    if owns_host_values {
         // Owned host bodies returned by ordinary callees must not escape a
         // machine-stack alloca. Inline every bytecode call before frame capture.
         for index in 0..program.chunks.len() {
@@ -360,6 +383,7 @@ pub fn lower<'ctx>(
         f,
         entry,
         stream.block_type == BlockType::Reentrant,
+        metadata_offset,
     );
     module.verify().map_err(error)?;
     Ok(module)
@@ -435,7 +459,7 @@ retcon.cleanup:
 }
 
 /// Hidden context belongs to the entry instance, never to a callee's locals.
-/// Scalar replacement removes the four pointer slots before frame splitting.
+/// Scalar replacement removes these pointer slots before frame splitting.
 pub(crate) fn delegate_context<'ctx>(
     ctx: &'ctx Context,
     builder: &Builder<'ctx>,
@@ -443,15 +467,21 @@ pub(crate) fn delegate_context<'ctx>(
     entry_parameter: PointerValue<'ctx>,
     latest_reply: PointerValue<'ctx>,
     entry_owned: Option<PointerValue<'ctx>>,
+    site: Option<PointerValue<'ctx>>,
 ) -> PointerValue<'ctx> {
     let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
-    let ty = ctx.struct_type(&[ptr.into(), ptr.into(), ptr.into(), ptr.into()], false);
+    let ty = ctx.struct_type(&[ptr.into(); 5], false);
     let context = builder.build_alloca(ty, "delegate_context").unwrap();
     for (index, value) in [
         reply,
         entry_parameter,
         latest_reply,
-        entry_owned.unwrap_or(ptr.const_null()),
+        entry_owned.unwrap_or_else(|| {
+            builder
+                .build_alloca(ctx.i64_type(), "unused_entry_ownership")
+                .unwrap()
+        }),
+        site.unwrap_or(ptr.const_null()),
     ]
     .into_iter()
     .enumerate()
@@ -486,8 +516,10 @@ pub(crate) fn delegate_yield<'ctx>(
     ctx: &'ctx Context,
     module: &LlvmModule<'ctx>,
     resume_shape: Option<keleusma::bytecode::WireShape>,
+    site: u64,
 ) -> Result<FunctionValue<'ctx>, LowerError> {
-    if let Some(function) = module.get_function("kel_retcon_delegate_yield") {
+    let name = format!("kel_retcon_delegate_yield_{site}");
+    if let Some(function) = module.get_function(&name) {
         return Ok(function);
     }
     // After inlining, lower redirects this helper's abnormal exit to the
@@ -515,6 +547,9 @@ resume:
   ret i64 %result
 }
 "#;
+    let ir = ir
+        .replace("kel_retcon_delegate_yield", &name)
+        .replace("{ptr, ptr, ptr, ptr}", "{ptr, ptr, ptr, ptr, ptr}");
     let buffer = MemoryBuffer::create_from_memory_range_copy(
         format!("{ir}\0").as_bytes(),
         "delegate scaffold",
@@ -522,7 +557,7 @@ resume:
     module
         .link_in_module(ctx.create_module_from_ir(buffer).map_err(error)?)
         .map_err(error)?;
-    let function = module.get_function("kel_retcon_delegate_yield").unwrap();
+    let function = module.get_function(&name).unwrap();
     if let Some(keleusma::bytecode::WireShape::Flat { size, .. }) = resume_shape {
         let resume = function
             .get_basic_blocks()
@@ -539,7 +574,7 @@ resume:
         b.position_at_end(resume);
         let context = function.get_nth_param(1).unwrap().into_pointer_value();
         let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
-        let ty = ctx.struct_type(&[ptr.into(); 4], false);
+        let ty = ctx.struct_type(&[ptr.into(); 5], false);
         let bits = result.try_into().unwrap();
         for index in [1, 2] {
             let slot = b

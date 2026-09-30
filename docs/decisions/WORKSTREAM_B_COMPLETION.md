@@ -53,12 +53,21 @@ Both float configurations passed all 46 coroutine tests and test-target Clippy.
 The implicit-completion negative test confirms that the current verifier rejects
 fallthrough before lowering. The native archive records the commands and limits.
 
-The next implementation issue is the dialogue contract. The current interface
-chooses reply shape from argument zero, or Unit without arguments, and yield shape
-from the return signature. The source language does not impose those restrictions
-on reentrant replies or yielded values. This is an implementation gap to resolve,
-not a language guarantee. Unreachable-chunk admission and external body ownership
-also need classification before completion can be claimed.
+Explicit contracts now describe each yield site's output and reply separately
+from the entry result. A bounded metadata word identifies the suspended site.
+Tests cover heterogeneous direct and delegated dialogues, all scalar completion
+kinds, changing flat reply extents, host-buffer reuse and completion-body lifetime.
+An undersized reply negative test exposed an accepted field overread before the
+new read and call-boundary extent checks. That unsafe contract is now refused.
+Extent analysis converges across branch joins and loop backedges. Private-slot
+kind inference preserves aliasing while admitting a previously refused call.
+Composite-kind mismatches are checked against virtual-machine faults. Both float
+configurations pass 53 coroutine tests and test-target Clippy with warnings denied.
+
+The remaining admission audit includes unreachable chunks, unknown transfer
+extents and external body ownership. Route selection, deployment coverage and the
+complete final gates remain outstanding. This is still progress toward the full
+objective rather than a completion finding.
 
 ## Completion rule
 

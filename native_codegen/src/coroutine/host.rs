@@ -90,6 +90,7 @@ pub(super) fn emit<'ctx>(
     entry: FunctionValue<'ctx>,
     index: usize,
     completes: bool,
+    metadata_offset: Option<u32>,
 ) {
     let ptr = ctx.ptr_type(AddressSpace::default());
     let word = ctx.i64_type();
@@ -101,6 +102,38 @@ pub(super) fn emit<'ctx>(
     let continuation = raw_result.fn_type(&[ptr.into(), ctx.bool_type().into()], false);
     let result = ctx.struct_type(&[word.into(), word.into()], false);
     let prefix = format!("kel_coroutine_{index}");
+    if let Some(bytes) = metadata_offset {
+        let query = module.add_function(
+            &format!("{prefix}_yield_site"),
+            word.fn_type(&[ptr.into()], false),
+            None,
+        );
+        let builder = ctx.create_builder();
+        let begin = ctx.append_basic_block(query, "begin");
+        let active = ctx.append_basic_block(query, "active");
+        let inactive = ctx.append_basic_block(query, "inactive");
+        builder.position_at_end(begin);
+        let slot = query.get_first_param().unwrap().into_pointer_value();
+        let next = builder
+            .build_load(ptr, slot, "current")
+            .unwrap()
+            .into_pointer_value();
+        let live = builder.build_is_not_null(next, "live").unwrap();
+        builder
+            .build_conditional_branch(live, active, inactive)
+            .unwrap();
+        builder.position_at_end(inactive);
+        builder.build_return(Some(&word.const_all_ones())).unwrap();
+        builder.position_at_end(active);
+        let site = builder
+            .build_load(
+                word,
+                offset(ctx, &builder, slot, HEADER_BYTES + bytes),
+                "yield_site",
+            )
+            .unwrap();
+        builder.build_return(Some(&site)).unwrap();
+    }
     // Replace the raw frame and reply parameters with the one stable slot.
     let ordinary_params = entry.count_params() as usize - 2;
     let mut parameters: Vec<BasicMetadataTypeEnum<'ctx>> = entry
