@@ -3807,13 +3807,11 @@ gate record when resuming this line.
 
 ## V0.3.X Workstream B progress of 2026-09-29
 
-Attributed to Codex on the V0.3.X line. Scalar bytecode and nested reentrant
-and stream calls now lower through LLVM returned continuations. The bounded
-native brief records scalar reply and enum inspection corrections, followed by
-flat composite yields, live body operands, stable arena handles and bounded flat
-host inputs. Host buffers can be reused while older values remain live. Unproved
-transfer extents and external native body ownership remain refused. Both complete
-gates passed on the stable-handle commit. The flat-input default gate exposed
-stale mutation registrations, now repaired. Pull request 475 is integrated.
-Complete gates and integration of the remaining stack are outstanding. Upstream
-task state above is preserved.
+Attributed to Codex on the V0.3.X line. Verified streams now lower through LLVM
+returned continuations with nested suspension, live scalar and flat values,
+bounded instance storage and stable host start, resume and release operations.
+Both complete native gates passed on clean, frozen `5a0fec1d`. The earlier
+mutation-placement failure remains recorded. Admission boundaries are documented
+in the native README and archive. Pull request 475 is integrated. Pull request
+478 tracks consolidation and green version integration of the remaining stack.
+Upstream task state above is preserved.

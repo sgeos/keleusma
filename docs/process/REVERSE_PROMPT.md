@@ -3425,3 +3425,13 @@ correction. Complete native gates still need rerunning. Pull request 475 merged
 as `ff124db9` after green remote checks, with its tree identical to the tested
 head. The canonical version worktree is synchronized. Pull requests 478 through
 481 remain stacked. Workstream B remains active. Upstream material is preserved.
+
+
+## V0.3.X Workstream B verification, 2026-09-29
+
+Both complete native gates passed on clean, frozen `5a0fec1d`. The bounded
+sub-coroutine implementation is verified. Pull request 478 tracks consolidation
+of 478 through 481 and version integration after green remote checks. Preserve
+the combined head during those checks and compare its tree with the merge.
+The 64-line native brief holds the resume sequence and admission boundaries.
+Upstream material is preserved.

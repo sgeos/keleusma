@@ -168,5 +168,7 @@ and unproved transfer extents remain refused. Host input buffers may be reused
 once start or resume returns. Bounded copies preserve older live values while
 private-data references retain aliasing. The stable arena handle stores the
 current continuation and supports release and reuse. This interface is separate
-from `lower_module`. Workstream B remains active pending complete verification
-and version integration.
+from `lower_module`. Both complete native gates passed on clean, frozen
+`5a0fec1d`. [Pull request 478](https://github.com/sgeos/keleusma/pull/478) tracks
+version integration. Full-language widening, final host packaging and native
+cost attestation remain separate roadmap milestones.
