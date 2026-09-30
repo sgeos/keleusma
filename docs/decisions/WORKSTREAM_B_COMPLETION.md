@@ -13,7 +13,7 @@ Work takes place on `feat/workstream-b-completion`.
 | Entry shapes | Source-emittable stream and reentrant entries, including completion, supported argument shapes and independent instances | Scalar and flat completion plus zero and multiple arguments tested, remaining shapes to census |
 | Value transfers | Scalar and composite inputs, outputs, replies and completion values with proven extents and lifetimes | Per-site dialogues, native lifetime contracts and bounded mixed-kind copies implemented, final audit outstanding |
 | Host lifecycle | Start, resume, normal completion, early release, repeated release and reuse with stable caller-owned storage | Completion status and result lifetime implemented, final lifecycle sweep outstanding |
-| Admission soundness | Every remaining refusal distinguished as invalid input, unsafe contract, another workstream dependency, or an implementation gap | Packing, internal calls and private composite storage carry actual values, remaining admission audit outstanding |
+| Admission soundness | Every remaining refusal distinguished as invalid input, unsafe contract, another workstream dependency, or an implementation gap | Private scalar kinds and numeric ordering now execute, correlated arithmetic remains a measured gap |
 | Integration | Existing public lowering routes and host entry points have a documented, tested selection contract | Explicit route contract documented and tested, no callback fallback |
 | Native deployment | Execute real linked host artifact and optimized/unoptimized differentials, inspect target emission within the roadmap target boundary | Local C snapshot completion runs at both optimization levels, four tier-one object formats and architectures checked, final coverage audit outstanding |
 | Resource preservation | No live machine-stack state across suspension, no hidden allocation, bounded frame reservation, guarded extents and independent regions | Existing checks need completion-path coverage |
@@ -104,9 +104,23 @@ The debug runtime aborts. Native self-assignment is checked against explicit
 expected values with region sentinels, without executing that undefined runtime
 operation as an oracle. Root runtime sources remain unchanged.
 
-Remaining audit subjects include private scalar kind changes and correlated
-numeric kinds through dialogue joins. These are open audit questions rather
-than established completion or justified refusal boundaries.
+Private scalar slots now retain actual kinds in persistent metadata. Reads
+select their load-time kind only until the first write. The checked metadata
+range fits between the native private body pool and the existing resume-state
+offset. No additional host allocation is required. A fresh private region must
+be zeroed before installing its initialization image. Kind metadata survives
+frame destruction and reuse with the private payloads.
+
+Ordered comparisons now select the actual numeric kind and reject unequal
+kinds. Differential tests cover correlated Word, Byte, Fixed and Float paths,
+including the virtual machine's NaN ordering behavior. Typed consumers check
+joined kinds at execution instead of imposing a transfer-time refusal.
+
+`correlated_numeric_arithmetic_remains_a_measured_gap` records the next concrete
+frontier. Both operands take Byte values on one path and Word values on another.
+Their addition succeeds in the virtual machine, but native admission still
+requires one static numeric kind at `CheckedAdd`. Runtime arithmetic selection
+and the rest of the admission audit remain outstanding.
 
 ## Completion rule
 

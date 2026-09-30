@@ -193,6 +193,12 @@ length before access. Internal calls carry actual kinds and extents through
 parameters and returns. Private composite slots preserve actual view lengths,
 including older aliases after shorter writes. Reads and writes preserve Unit
 until a consumer requires a body. Private copies permit overlapping aliases.
+Private scalar values retain their actual kinds across suspension and release.
+Zero a fresh private region before installing its initialization image. Preserve
+that region when reusing a frame with existing private values. Scalar kind
+metadata fits within the checked existing reservation. Ordering selects the
+runtime numeric kind and rejects unequal kinds. Arithmetic still requires one
+proven numeric kind at each operation.
 
 | Host control model | Lowering entry |
 |---|---|

@@ -103,6 +103,9 @@ fn shape(s: WireShape) -> u16 {
         _ => UNKNOWN,
     }
 }
+pub(crate) fn initial_kind(c: &ConstValue) -> u16 {
+    kind(constant(c))
+}
 fn constant(c: &ConstValue) -> u16 {
     match c {
         ConstValue::Unit => UNIT,
@@ -364,21 +367,9 @@ fn slot(m: &Module, index: u32, private_kinds: &[u16]) -> u16 {
             body(s.kind & !keleusma::bytecode::SHARED_SLOT_COMPOSITE_FLAG)
         };
     }
-    if d.private_composite_layout
-        .iter()
-        .any(|s| u32::from(s.slot) == index)
-    {
-        return private_kinds[index as usize];
-    }
-    d.private_init
-        .get(index as usize - d.shared_layout.len())
-        .map(|c| {
-            if matches!(c, ConstValue::Bool(_)) {
-                BOOL
-            } else {
-                constant(c)
-            }
-        })
+    private_kinds
+        .get(index as usize)
+        .copied()
         .unwrap_or(UNKNOWN)
 }
 
@@ -497,8 +488,12 @@ pub(super) fn check(
     analysis.private_bodies.resize(slot_count, Flow::default());
     let mut private_kinds = vec![0; slot_count];
     if let Some(layout) = &m.data_layout {
-        for field in &layout.private_composite_layout {
-            private_kinds[usize::from(field.slot)] = UNIT;
+        let shared = layout.shared_layout.len();
+        for (index, value) in layout.private_init.iter().enumerate() {
+            let slot = private_kinds.get_mut(shared + index).ok_or_else(|| {
+                LowerError::UnsupportedShape("private initializer exceeds slot table".into())
+            })?;
+            *slot = constant(value);
         }
     }
     loop {
@@ -577,13 +572,12 @@ fn analyze(
                 if !validate || (actual != 0 && actual & !allowed == 0) {
                     return Ok(());
                 }
-                // Reset can add Unit to an otherwise proven kind. Check that
-                // alternative at the consuming operation, not at GetLocal,
-                // because inspecting Unit as an enum is a valid false result.
-                let narrowed = actual & !UNIT;
-                if actual & UNIT != 0
+                // Preserve values at transfers and check the selected kind at
+                // a typed consumer. Joins can retain a slot's load-time kind
+                // even when the executing path overwrote it with another kind.
+                let narrowed = actual & allowed;
+                if actual & !(UNIT | BOOL | BYTE | WORD | FIXED | FLOAT | BODY) == 0
                     && narrowed != 0
-                    && narrowed & !allowed == 0
                     && let Some(index) = index
                 {
                     checks
@@ -721,7 +715,15 @@ fn analyze(
                     out[0] = BOOL;
                 }
                 Op::CmpLt | Op::CmpGt | Op::CmpLe | Op::CmpGe => {
-                    same(BYTE | WORD | FIXED | FLOAT)?;
+                    let common = kind(args[0]) & kind(args[1]) & (BYTE | WORD | FIXED | FLOAT);
+                    if validate && common == 0 {
+                        return Err(fail());
+                    }
+                    for (index, actual) in args.iter().enumerate() {
+                        require(kind(*actual), common, Some(start + index))?;
+                    }
+                    // Runtime tags must still agree when both sides have more
+                    // than one possible numeric kind after a control-flow join.
                     out[0] = BOOL;
                 }
                 Op::Not => {
@@ -779,6 +781,22 @@ fn analyze(
                     if end as usize > m.data_layout.as_ref().map_or(0, |d| d.slots.len()) {
                         return Err(fail());
                     }
+                    let layout = m.data_layout.as_ref().unwrap();
+                    let is_body = |slot| {
+                        layout
+                            .private_composite_layout
+                            .iter()
+                            .any(|field| u32::from(field.slot) == slot)
+                    };
+                    if *i as usize >= layout.shared_layout.len()
+                        && !is_body(*i)
+                        && (*i..end).any(is_body)
+                    {
+                        return Err(LowerError::UnsupportedShape(
+                            "coroutine indexed access crosses private scalar and body placements"
+                                .into(),
+                        ));
+                    }
                     let mut kinds = 0;
                     for s in *i..end {
                         kinds |= slot(m, s, private_kinds);
@@ -805,6 +823,13 @@ fn analyze(
                                     analysis.changed |=
                                         analysis.private_bodies[slot_index as usize].join(flow);
                                 }
+                            } else if slot_index as usize
+                                >= m.data_layout.as_ref().unwrap().shared_layout.len()
+                            {
+                                // A private scalar slot stores the actual value. Its
+                                // initializer does not impose a runtime kind check.
+                                require_arg(0, UNIT | BOOL | BYTE | WORD | FIXED | FLOAT)?;
+                                writes[slot_index as usize] |= args[0];
                             } else {
                                 require_arg(0, slot(m, slot_index, private_kinds))?;
                             }

@@ -56,7 +56,9 @@
 // One new test records the remaining composite-packing admission gap.
 // 735 -> 744 with packing, call metadata, private aliases and Unit regressions.
 // The former guarded-construction refusal now has executed positive coverage.
-const RECORDED_TEST_FUNCTIONS: usize = 744;
+// 744 -> 751 with private scalar kinds, lifecycle, ordering and arithmetic-gap
+// coverage. The old initializer-refusal test now executes both changed inputs.
+const RECORDED_TEST_FUNCTIONS: usize = 751;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

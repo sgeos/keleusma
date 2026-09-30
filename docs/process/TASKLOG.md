@@ -3921,3 +3921,26 @@ Continue the admission audit with private scalar kind changes and correlated
 numeric kinds at dialogue joins. These remain audit questions, not proven
 refusal boundaries. Full Workstream B, both final gates and version integration
 remain outstanding. Upstream current state and preceding reports are preserved.
+
+
+## V0.3.X private kinds and ordering of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`, following `335a939f`.
+Private scalar slots now retain actual kinds in checked persistent metadata.
+Kinds survive frame release and reuse with private payloads. Ordered comparisons
+select the runtime numeric kind, reject unequal kinds and preserve the virtual
+machine's NaN ordering. Transfer-time refusals were replaced with typed-consumer
+checks where the actual kind can be tested safely.
+
+All 87 coroutine tests and test-target Clippy with warnings denied pass in both
+float configurations. A frozen default non-corpus phase passed all 767 tests
+before the final indexed-placement guard. After that guard, all three lowering
+robustness tests pass. Neither complete native gate is claimed.
+
+The next measured gap is `correlated_numeric_arithmetic_remains_a_measured_gap`.
+Its two operands are both Byte or both Word depending on the same branch.
+The virtual machine adds them successfully, but native admission rejects
+`CheckedAdd`. Continue with actual-kind arithmetic selection and the remaining
+[acceptance matrix](../decisions/WORKSTREAM_B_COMPLETION.md). Full Workstream B,
+final gates and version integration remain outstanding. Upstream current state
+and preceding native reports are preserved.

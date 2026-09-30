@@ -2392,8 +2392,8 @@ fn lower_module_with<'ctx>(
 /// reason a call is: the information required to resolve it was never supplied.
 #[derive(Default, Clone, Copy)]
 struct DataCtx<'a> {
-    /// Load-time scalar categories for private slots. Retcon preserves these categories
-    /// through slot writes so scalar yields need not guess their payload width.
+    /// Load-time values for private slots. Coroutine reads use their kinds until
+    /// the first write, then load the actual kind from persistent metadata.
     private_init: &'a [ConstValue],
     /// Number of shared slots. Shared slots occupy the low indices, so this is
     /// also the boundary above which a slot is private.
@@ -5237,19 +5237,35 @@ fn lower_chunk_body<'ctx>(
             // matches it. The result is 0 or 1 in an i64, which is the flat
             // representation of the VM's tagged `Bool`.
             Op::CmpEq | Op::CmpNe | Op::CmpLt | Op::CmpGt | Op::CmpLe | Op::CmpGe => {
-                if st.runtime_kinds.is_some() && matches!(op, Op::CmpEq | Op::CmpNe) {
+                if st.runtime_kinds.is_some() {
                     let tags = [st.input_tags[st.depth - 2], st.input_tags[st.depth - 1]];
                     let rhs = st.pop();
                     let lhs = st.pop();
-                    let equal =
-                        coroutine::kinds::equality(&st.b, [lhs, rhs], tags, float_bytes, trap_bb);
-                    let result = if matches!(op, Op::CmpNe) {
-                        st.b.build_not(equal, "not_equal").unwrap()
+                    let result = if matches!(op, Op::CmpEq | Op::CmpNe) {
+                        let equal = coroutine::kinds::equality(
+                            &st.b,
+                            [lhs, rhs],
+                            tags,
+                            float_bytes,
+                            trap_bb,
+                        );
+                        if matches!(op, Op::CmpNe) {
+                            st.b.build_not(equal, "not_equal").unwrap()
+                        } else {
+                            equal
+                        }
                     } else {
-                        equal
+                        coroutine::kinds::ordering(
+                            &st.b,
+                            [lhs, rhs],
+                            tags,
+                            float_bytes,
+                            op,
+                            trap_bb,
+                        )
                     };
                     let value =
-                        st.b.build_int_z_extend(result, i64t, "equal_value")
+                        st.b.build_int_z_extend(result, i64t, "comparison_value")
                             .unwrap();
                     st.push_w(value, Width::Scalar(1));
                     continue;
@@ -7201,23 +7217,6 @@ fn lower_chunk_body<'ctx>(
                     }
                     let base = private_base.expect("has_data implies the private pointer");
                     let rel = slot - data.shared_count;
-                    let retcon_scalar = if retcon_resume_type.is_some() {
-                        let count = if indexed { bound } else { 1 };
-                        coroutine::private_scalar_shape(data.private_init, rel, count, float_bytes)?
-                    } else {
-                        None
-                    };
-                    if !is_read && let Some((width, kind)) = retcon_scalar {
-                        let incoming_kind = st.kind_at(0);
-                        let compatible_kind = incoming_kind == kind
-                            || (kind == OperandKind::Int && incoming_kind == OperandKind::Unknown);
-                        if st.width_at(0) != width || !compatible_kind {
-                            return Err(LowerError::UnsupportedDataSlot {
-                                slot,
-                                why: "a coroutine private scalar write changes or obscures its declared type".into(),
-                            });
-                        }
-                    }
                     let byte_index =
                         st.b.build_int_mul(
                             match index {
@@ -7250,6 +7249,25 @@ fn lower_chunk_body<'ctx>(
                     // caller passing a `Vec<u8>` base, whose alignment contract
                     // is one byte, violates this; the harness allocates a word
                     // slice for exactly that reason.
+                    let private_kind = if st.runtime_kinds.is_some() {
+                        let relative = match index {
+                            Some(ix) => {
+                                st.b.build_int_add(
+                                    ix,
+                                    i64t.const_int(u64::from(rel), false),
+                                    "private_relative_slot",
+                                )
+                                .unwrap()
+                            }
+                            None => i64t.const_int(u64::from(rel), false),
+                        };
+                        Some((
+                            coroutine::private::pointer(&st.b, base, &data, relative)?,
+                            relative,
+                        ))
+                    } else {
+                        None
+                    };
                     if is_read {
                         let load = st.b.build_load(i64t, addr, "pdataload").unwrap();
                         load.into_int_value()
@@ -7257,12 +7275,29 @@ fn lower_chunk_body<'ctx>(
                             .expect("a load is an instruction")
                             .set_alignment(PRIVATE_SLOT_BYTES)
                             .expect("PRIVATE_SLOT_BYTES is a power of two");
-                        if let Some((width, kind)) = retcon_scalar {
-                            st.push_k(load.into_int_value(), width, kind);
+                        if let Some((pointer, relative)) = private_kind {
+                            let tag =
+                                coroutine::private::load(&st.b, module, pointer, &data, relative);
+                            let flags = st.runtime_kinds.as_ref().unwrap();
+                            st.b.build_store(flags.slots[st.depth], tag).unwrap();
+                            st.b.build_store(flags.slot_sizes[st.depth], i64t.const_zero())
+                                .unwrap();
+                            let output = &retcon_facts.unwrap()[&i].outputs[0];
+                            st.push_k(
+                                load.into_int_value(),
+                                output.width,
+                                coroutine::types::operand_kind(output.tag),
+                            );
                         } else {
                             st.push(load.into_int_value());
                         }
                     } else {
+                        if let Some((pointer, _)) = private_kind {
+                            st.b.build_store(pointer, st.input_tags[st.depth - 1])
+                                .unwrap()
+                                .set_alignment(1)
+                                .unwrap();
+                        }
                         let v = st.pop();
                         let store = st.b.build_store(addr, v).unwrap();
                         store

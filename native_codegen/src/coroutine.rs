@@ -41,7 +41,11 @@
 //! Tuple and array lengths follow those values. Struct and enum slack is zeroed.
 //! Field reads and host transfers check variable extents before access. Internal
 //! calls carry bits, kinds and actual extents. Private body slots retain view
-//! lengths and Unit values. [`lower_with_contracts`] admits native composite results
+//! lengths and Unit values. Private scalar kinds persist with their payloads,
+//! including across frame release. Zero a fresh private region before installing
+//! its private initialization image. Ordering selects the actual numeric kind
+//! and traps on unequal kinds. Arithmetic still requires one proven kind.
+//! [`lower_with_contracts`] admits native composite results
 //! with an explicit [`NativeBodyReturn`] contract. Snapshot results are copied
 //! into bounded storage; instance borrows retain their aliases. Without a
 //! contract a called native body result remains refused, including modules with
@@ -95,6 +99,7 @@ mod host;
 pub(crate) mod kinds;
 pub(crate) mod ownership;
 pub(crate) mod packing;
+pub(crate) mod private;
 pub(crate) mod types;
 
 /// Alignment required for the caller-provided coroutine frame.
@@ -642,38 +647,4 @@ resume:
     }
     mark_delegate(ctx, function);
     Ok(function)
-}
-
-/// A private scalar's load-time width and numeric category constrain each write.
-/// Indexed accesses require uniform width and category across the declared range.
-pub(crate) fn private_scalar_shape(
-    initializers: &[keleusma::bytecode::ConstValue],
-    first: u32,
-    count: u32,
-    float_bytes: u32,
-) -> Result<Option<(crate::Width, crate::OperandKind)>, LowerError> {
-    use crate::{OperandKind, Width};
-    use keleusma::bytecode::ConstValue;
-    let shape = |value: &ConstValue| match value {
-        ConstValue::Int(_) => Some((Width::Scalar(8), OperandKind::Int)),
-        ConstValue::Byte(_) | ConstValue::Bool(_) => Some((Width::Scalar(1), OperandKind::Int)),
-        ConstValue::Fixed(_) => Some((Width::Scalar(8), OperandKind::Fixed)),
-        ConstValue::Float(_) => Some((Width::Scalar(float_bytes), OperandKind::Float)),
-        _ => None,
-    };
-    let end = first
-        .checked_add(count)
-        .ok_or_else(|| error("private scalar range overflow"))?;
-    let range = initializers
-        .get(first as usize..end as usize)
-        .ok_or_else(|| error("coroutine private slot has no load-time type"))?;
-    let Some(first) = range.first().map(shape) else {
-        return Err(error("empty private scalar range"));
-    };
-    if range.iter().any(|value| shape(value) != first) {
-        return Err(error(
-            "coroutine private indexed access crosses scalar types",
-        ));
-    }
-    Ok(first)
 }

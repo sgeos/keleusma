@@ -281,3 +281,62 @@ pub(crate) fn call_field<'ctx>(
 ) -> PointerValue<'ctx> {
     super::ownership::field(b, context, part * count + index)
 }
+
+/// Ordering requires equal numeric kinds. Float NaNs compare as Equal in the VM.
+pub(crate) fn ordering<'ctx>(
+    b: &Builder<'ctx>,
+    values: [IntValue<'ctx>; 2],
+    tags: [IntValue<'ctx>; 2],
+    float_bytes: u32,
+    op: &Op,
+    trap: inkwell::basic_block::BasicBlock<'ctx>,
+) -> IntValue<'ctx> {
+    let i64t = values[0].get_type();
+    let ctx = i64t.get_context();
+    let function = b.get_insert_block().unwrap().get_parent().unwrap();
+    let same_kind = b
+        .build_int_compare(IntPredicate::EQ, tags[0], tags[1], "ordering_same_kind")
+        .unwrap();
+    let accepted = ctx.append_basic_block(function, "ordering_kinds_checked");
+    // Admission or the preceding consumer guards already establish numeric kinds.
+    b.build_conditional_branch(same_kind, accepted, trap)
+        .unwrap();
+    b.position_at_end(accepted);
+    let pred = match op {
+        Op::CmpLt => IntPredicate::SLT,
+        Op::CmpGt => IntPredicate::SGT,
+        Op::CmpLe => IntPredicate::SLE,
+        Op::CmpGe => IntPredicate::SGE,
+        _ => unreachable!("ordering op"),
+    };
+    let integer = b
+        .build_int_compare(pred, values[0], values[1], "ordering_integer")
+        .unwrap();
+    let is_float = b
+        .build_int_compare(
+            IntPredicate::EQ,
+            tags[0],
+            i64t.const_int(u64::from(super::types::FLOAT), false),
+            "ordering_float_kind",
+        )
+        .unwrap();
+    let float_type = if float_bytes == 8 {
+        ctx.f64_type()
+    } else {
+        ctx.f32_type()
+    };
+    let floats = values.map(|value| crate::bits_to_float(b, value, float_type, float_bytes));
+    let pred = match op {
+        Op::CmpLt => inkwell::FloatPredicate::OLT,
+        Op::CmpGt => inkwell::FloatPredicate::OGT,
+        Op::CmpLe => inkwell::FloatPredicate::ULE,
+        Op::CmpGe => inkwell::FloatPredicate::UGE,
+        _ => unreachable!("ordering op"),
+    };
+    let float = b
+        .build_float_compare(pred, floats[0], floats[1], "ordering_float")
+        .unwrap();
+    b.build_select(is_float, float, integer, "ordering_value")
+        .unwrap()
+        .into_int_value()
+}

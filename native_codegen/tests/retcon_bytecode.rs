@@ -897,34 +897,49 @@ fn nested_stream_release_stops_before_the_next_iteration() {
 }
 
 #[test]
-fn coroutine_private_scalar_admission_checks_writes_and_indexed_ranges() {
-    use keleusma::bytecode::ConstValue;
-    let ctx = Context::create();
-    let tm = machine();
-    let mut changed = common::build(
-        "private data st { n: Word } loop main(t: Word) -> Word { st.n = t; yield st.n }",
-    );
-    // Verified bytecode can change a slot's category after load. The native
-    // scalar inference must decline that case instead of trusting the first
-    // value's category for every later read.
-    changed.data_layout.as_mut().unwrap().private_init[0] = ConstValue::Float(0.0);
-    keleusma::verify::verify(&changed).unwrap();
-    let error = coroutine::lower(&ctx, &changed, &tm, 4096).unwrap_err();
-    assert!(
-        error.to_string().contains("coroutine scalar types"),
-        "{error}"
-    );
-
-    let mut indexed = common::build(
-        "private data st { xs: [Word; 2] } loop main(t: Word) -> Word { st.xs[0] = t; yield st.xs[t % 2] }",
-    );
-    indexed.data_layout.as_mut().unwrap().private_init[1] = ConstValue::Float(0.0);
-    keleusma::verify::verify(&indexed).unwrap();
-    let error = coroutine::lower(&ctx, &indexed, &tm, 4096).unwrap_err();
-    assert!(
-        error.to_string().contains("coroutine scalar types"),
-        "{error}"
-    );
+fn private_scalar_initializers_do_not_constrain_later_values() {
+    use keleusma::bytecode::{ConstValue, Value};
+    use keleusma::vm::{Vm, VmState};
+    for (source, slot, first, replies, expected) in [
+        (
+            "private data st { n: Word } loop main(t: Word) -> Word { st.n = t; yield st.n }",
+            0,
+            5,
+            [7, 0, 1, 0],
+            [5, 7, 0, 1],
+        ),
+        (
+            "private data st { xs: [Word; 2] } loop main(t: Word) -> Word { st.xs[0] = t; yield if st.xs[t % 2] == 0 { 1 } else { 0 } }",
+            1,
+            0,
+            [1, 2, 0, 0],
+            [1, 0, 0, 1],
+        ),
+    ] {
+        let mut program = common::build(source);
+        program.data_layout.as_mut().unwrap().private_init[slot] = ConstValue::Float(0.0);
+        keleusma::verify::verify(&program).unwrap();
+        let capacity = keleusma::vm::required_persistent_capacity_for(&program);
+        let mut arena = keleusma_arena::Arena::with_capacity(capacity + 65536);
+        arena.resize_persistent(capacity).unwrap();
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        let mut state = vm.call(&[Value::Int(first)]).unwrap();
+        for (i, value) in expected.into_iter().enumerate() {
+            assert!(matches!(state, VmState::Yielded(Value::Int(v)) if v == value));
+            if i + 1 < expected.len() {
+                state = vm.resume(Value::Int(replies[i])).unwrap();
+                if matches!(state, VmState::Reset) {
+                    state = vm.resume(Value::Int(replies[i])).unwrap();
+                }
+            }
+        }
+        for optimize in [false, true] {
+            assert_eq!(
+                native_module(&program, &[], first, &replies, optimize).0,
+                expected
+            );
+        }
+    }
 }
 
 #[test]
@@ -991,11 +1006,26 @@ fn reply_tags_are_checked_through_calls_and_branch_joins() {
     ] {
         let p = common::build(src);
         keleusma::verify::verify(&p).unwrap();
-        let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
-        assert!(
-            error.to_string().contains("coroutine scalar types"),
-            "{error}"
-        );
+        match coroutine::lower(&Context::create(), &p, &machine(), 4096) {
+            Err(error) => assert!(
+                error.to_string().contains("coroutine scalar types"),
+                "{error}"
+            ),
+            Ok(_) => {
+                // The VM can yield Byte, but this host dialogue promises Word.
+                // A joined value is checked before crossing that boundary.
+                #[cfg(unix)]
+                require_program_kind_trap(
+                    "reply_tags_are_checked_through_calls_and_branch_joins",
+                    &p,
+                    None,
+                    &[5],
+                    &[5],
+                    &[7],
+                    src,
+                );
+            }
+        }
         let need = required_persistent_capacity_for(&p);
         let mut arena = keleusma_arena::Arena::with_capacity(
             auto_arena_capacity_for(&p, &[]).unwrap() + need + 65536,
@@ -1078,8 +1108,16 @@ fn scalar_reply_admission_reaches_a_later_loop_iteration() {
     }
     ops.splice(edge..edge, [Op::PushImmediate(1), Op::SetLocal(0)]);
     keleusma::verify::verify(&p).unwrap();
-    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
-    assert!(error.to_string().contains("CheckedAdd"), "{error}");
+    #[cfg(unix)]
+    require_program_kind_trap(
+        "scalar_reply_admission_reaches_a_later_loop_iteration",
+        &p,
+        None,
+        &[5],
+        &[6],
+        &[7],
+        "later-loop",
+    );
     let need = required_persistent_capacity_for(&p);
     let mut arena = keleusma_arena::Arena::with_capacity(
         auto_arena_capacity_for(&p, &[]).unwrap() + need + 65536,
@@ -1712,6 +1750,443 @@ fn native_private_self_assignment_preserves_the_current_view() {
     for optimize in [false, true] {
         assert_eq!(native(source, 5, &[7; 4], optimize), [5, 17, 17, 17]);
     }
+}
+
+#[test]
+fn private_scalar_slots_preserve_cleared_values() {
+    for (parameter, argument, declaration, write, condition) in [
+        (
+            "Word",
+            "t",
+            "saved: Word = 99",
+            "st.saved = a",
+            "st.saved == st.saved",
+        ),
+        (
+            "Float",
+            "t as Float",
+            "saved: Float = 99.0",
+            "st.saved = a",
+            "st.saved == st.saved",
+        ),
+        (
+            "Byte",
+            "t as Byte",
+            "saved: Byte = 0",
+            "st.saved = a",
+            "st.saved == st.saved",
+        ),
+        (
+            "Word",
+            "t",
+            "small: (Byte, Byte, Byte), saved: Word = 99",
+            "st.small = (1 as Byte, 2 as Byte, 3 as Byte); st.saved = a",
+            "st.saved == st.saved and st.small.2 == (3 as Byte)",
+        ),
+        (
+            "Word",
+            "t",
+            "saved: [Word; 2]",
+            "st.saved[1] = a",
+            "st.saved[1] == st.saved[1]",
+        ),
+    ] {
+        let source = format!(
+            "private data st {{ {declaration} }} loop child(a: {parameter}) -> Word {{ {write}; yield if {condition} {{ 1 }} else {{ 0 }} }} loop main(t: Word) -> Word {{ child({argument}) }}"
+        );
+        assert_eq!(common::general_vm_sequence(&source, 5, &[7; 4]), [1; 4]);
+        for optimize in [false, true] {
+            assert_eq!(native(&source, 5, &[7; 4], optimize), [1; 4]);
+        }
+    }
+}
+
+#[test]
+fn correlated_numeric_branches_use_the_actual_comparison_kind() {
+    use keleusma::bytecode::{Op, Value, WireShape};
+    use keleusma::value_layout::ScalarKind;
+    use keleusma::vm::{Vm, VmState};
+    use std::collections::BTreeMap;
+    for (operator, normal, reversed, unordered) in [
+        ("<", 1, 0, 0),
+        (">", 0, 1, 0),
+        ("<=", 1, 0, 1),
+        (">=", 0, 1, 1),
+    ] {
+        let source = format!(
+            "yield main(a: Word) -> Word {{ let x = if a > 0 {{ yield 1 }} else {{ 2 }}; let y = if a > 0 {{ yield 2 }} else {{ 3 }}; if x {operator} y {{ 1 }} else {{ 0 }} }}"
+        );
+        let program = common::build(&source);
+        for (kind, replies, bits, expected) in [
+            (
+                ScalarKind::Byte,
+                [Value::Byte(7), Value::Byte(9)],
+                [7, 9],
+                normal,
+            ),
+            (
+                ScalarKind::Byte,
+                [Value::Byte(9), Value::Byte(7)],
+                [9, 7],
+                reversed,
+            ),
+            (
+                ScalarKind::Fixed,
+                [Value::Fixed(-9), Value::Fixed(-7)],
+                [-9, -7],
+                normal,
+            ),
+            (
+                ScalarKind::Float,
+                [Value::Float(-9.0), Value::Float(-7.0)],
+                [
+                    (-9.0 as NativeFloat).to_bits() as i64,
+                    (-7.0 as NativeFloat).to_bits() as i64,
+                ],
+                normal,
+            ),
+            (
+                ScalarKind::Float,
+                [Value::Float(f64::NAN), Value::Float(7.0)],
+                [
+                    NativeFloat::NAN.to_bits() as i64,
+                    (7.0 as NativeFloat).to_bits() as i64,
+                ],
+                unordered,
+            ),
+        ] {
+            let dialogues: BTreeMap<_, _> = program
+                .chunks
+                .iter()
+                .enumerate()
+                .flat_map(|(ci, chunk)| {
+                    chunk.ops.iter().enumerate().filter_map(move |(ip, op)| {
+                        matches!(op, Op::Yield).then_some((
+                            coroutine::YieldSite {
+                                chunk: ci as u32,
+                                instruction: ip as u32,
+                            },
+                            coroutine::Dialogue {
+                                yielded: WireShape::Scalar {
+                                    kind: ScalarKind::Int.to_tag(),
+                                },
+                                reply: WireShape::Scalar {
+                                    kind: kind.to_tag(),
+                                },
+                            },
+                        ))
+                    })
+                })
+                .collect();
+            assert_eq!(dialogues.len(), 2);
+            let arena = keleusma_arena::Arena::with_capacity(65536);
+            let mut vm = Vm::new(program.clone(), &arena).unwrap();
+            assert!(matches!(
+                vm.call(&[Value::Int(5)]).unwrap(),
+                VmState::Yielded(Value::Int(1))
+            ));
+            assert!(matches!(
+                vm.resume(replies[0].clone()).unwrap(),
+                VmState::Yielded(Value::Int(2))
+            ));
+            assert!(
+                matches!(vm.resume(replies[1].clone()).unwrap(), VmState::Finished(Value::Int(v)) if v == expected)
+            );
+            for optimize in [false, true] {
+                let ctx = Context::create();
+                let module =
+                    coroutine::lower_with_dialogues(&ctx, &program, &machine(), 4096, &dialogues)
+                        .unwrap();
+                if optimize {
+                    common::force_optimize(&module);
+                }
+                let engine = module
+                    .create_jit_execution_engine(OptimizationLevel::None)
+                    .unwrap();
+                let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+                let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+                let private = Guarded::new(
+                    keleusma::vm::required_persistent_capacity_for(&program)
+                        + region::persistent_supplement_bytes(&program) as usize,
+                );
+                let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+                let shared = Guarded::new(0);
+                unsafe {
+                    let start = engine
+                        .get_function::<HandleStart>(&format!("{prefix}_start"))
+                        .unwrap();
+                    let resume = engine
+                        .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                        .unwrap();
+                    let release = engine
+                        .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                        .unwrap();
+                    assert_eq!(
+                        start.call(5, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr()),
+                        Outcome { live: 1, value: 1 }
+                    );
+                    assert_eq!(
+                        resume.call(slot.ptr(), bits[0]),
+                        Outcome { live: 1, value: 2 }
+                    );
+                    assert_eq!(
+                        resume.call(slot.ptr(), bits[1]),
+                        Outcome {
+                            live: 2,
+                            value: expected
+                        }
+                    );
+                    release.call(slot.ptr());
+                    assert_eq!(
+                        start.call(0, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr()),
+                        Outcome {
+                            live: 2,
+                            value: normal
+                        }
+                    );
+                    release.call(slot.ptr());
+                }
+                for region in [&slot, &private, &bodies, &shared] {
+                    region.check();
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn correlated_numeric_arithmetic_remains_a_measured_gap() {
+    use keleusma::bytecode::{Op, Value, WireShape};
+    use keleusma::value_layout::ScalarKind;
+    use keleusma::vm::{Vm, VmState};
+    let source = "yield main(a: Word) -> Word { let x = if a > 0 { yield 1 } else { 2 }; let y = if a > 0 { yield 2 } else { 3 }; let z = x + y; if z > x { 1 } else { 0 } }";
+    let program = common::build(source);
+    let dialogues = program
+        .chunks
+        .iter()
+        .enumerate()
+        .flat_map(|(ci, chunk)| {
+            chunk.ops.iter().enumerate().filter_map(move |(ip, op)| {
+                matches!(op, Op::Yield).then_some((
+                    coroutine::YieldSite {
+                        chunk: ci as u32,
+                        instruction: ip as u32,
+                    },
+                    coroutine::Dialogue {
+                        yielded: WireShape::Scalar {
+                            kind: ScalarKind::Int.to_tag(),
+                        },
+                        reply: WireShape::Scalar {
+                            kind: ScalarKind::Byte.to_tag(),
+                        },
+                    },
+                ))
+            })
+        })
+        .collect();
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(1))
+    ));
+    assert!(matches!(
+        vm.resume(Value::Byte(7)).unwrap(),
+        VmState::Yielded(Value::Int(2))
+    ));
+    assert!(matches!(
+        vm.resume(Value::Byte(9)).unwrap(),
+        VmState::Finished(Value::Int(1))
+    ));
+    let error =
+        coroutine::lower_with_dialogues(&Context::create(), &program, &machine(), 4096, &dialogues)
+            .unwrap_err();
+    assert!(error.to_string().contains("CheckedAdd"), "{error}");
+}
+
+#[test]
+fn runtime_ordering_rejects_different_selected_numeric_kinds() {
+    use keleusma::bytecode::{Op, Value, WireShape};
+    use keleusma::value_layout::ScalarKind;
+    use keleusma::vm::{Vm, VmState};
+    let source = "yield main(a: Word) -> Word { let x = if a > 0 { yield 1 } else { 2 }; let y = if a <= 0 { yield 2 } else { 3 }; if x < y { 1 } else { 0 } }";
+    let program = common::build(source);
+    let dialogues = program
+        .chunks
+        .iter()
+        .enumerate()
+        .flat_map(|(ci, chunk)| {
+            chunk.ops.iter().enumerate().filter_map(move |(ip, op)| {
+                matches!(op, Op::Yield).then_some((
+                    coroutine::YieldSite {
+                        chunk: ci as u32,
+                        instruction: ip as u32,
+                    },
+                    coroutine::Dialogue {
+                        yielded: WireShape::Scalar {
+                            kind: ScalarKind::Int.to_tag(),
+                        },
+                        reply: WireShape::Scalar {
+                            kind: ScalarKind::Byte.to_tag(),
+                        },
+                    },
+                ))
+            })
+        })
+        .collect();
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(1))
+    ));
+    assert!(vm.resume(Value::Byte(7)).is_err());
+    #[cfg(unix)]
+    require_program_kind_trap(
+        "runtime_ordering_rejects_different_selected_numeric_kinds",
+        &program,
+        Some(&dialogues),
+        &[5],
+        &[1],
+        &[7],
+        "mixed-numeric-ordering",
+    );
+}
+
+#[test]
+fn private_scalar_indexed_ranges_cannot_cross_composite_placements() {
+    use keleusma::bytecode::Op;
+    let mut program = common::build(
+        "struct P { a: Word } private data st { xs: [Word; 2], p: P } loop main(t: Word) -> Word { st.p = P { a: 5 }; yield if st.xs[t] == st.xs[t] { 1 } else { 0 } }",
+    );
+    let mut changed = 0;
+    for chunk in &mut program.chunks {
+        for op in &mut chunk.ops {
+            if let Op::GetDataIndexed(_, count) = op {
+                assert_eq!(*count, 2);
+                *count = 3;
+                changed += 1;
+            }
+        }
+    }
+    assert_eq!(changed, 2);
+    // The verifier permits this range, but source arrays do not cross a
+    // separately placed composite field. Scalar metadata cannot describe it.
+    keleusma::verify::verify(&program).unwrap();
+    let error = coroutine::lower(&Context::create(), &program, &machine(), 4096).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("crosses private scalar and body placements"),
+        "{error}"
+    );
+}
+
+#[test]
+fn private_scalar_kinds_survive_release_and_frame_reuse() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    let source = "private data st { saved: Word = 0 } loop child(a: Word) -> Word { st.saved = a; yield 1 } loop main(t: Word) -> Word { if t > 0 { child(t) } else { yield if st.saved == 0 { 3 } else { 4 } } }";
+    let program = common::build(source);
+    let capacity = keleusma::vm::required_persistent_capacity_for(&program);
+    let mut arena = keleusma_arena::Arena::with_capacity(capacity + 65536);
+    arena.resize_persistent(capacity).unwrap();
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(1))
+    ));
+    let state = vm.resume(Value::Int(7)).unwrap();
+    assert!(matches!(state, VmState::Reset));
+    assert!(matches!(
+        vm.resume(Value::Int(7)).unwrap(),
+        VmState::Yielded(Value::Int(1))
+    ));
+    assert!(matches!(
+        vm.call(&[Value::Int(0)]).unwrap(),
+        VmState::Yielded(Value::Int(4))
+    ));
+    assert_eq!(common::general_vm_sequence(source, 0, &[0; 2]), [3, 3]);
+    for optimize in [false, true] {
+        let ctx = Context::create();
+        let module = coroutine::lower(&ctx, &program, &machine(), 4096).unwrap();
+        if optimize {
+            common::force_optimize(&module);
+        }
+        let engine = module
+            .create_jit_execution_engine(OptimizationLevel::None)
+            .unwrap();
+        let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+        let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+        let shared = Guarded::new(0);
+        let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+        let private = [
+            Guarded::new(capacity + region::persistent_supplement_bytes(&program) as usize),
+            Guarded::new(capacity + region::persistent_supplement_bytes(&program) as usize),
+        ];
+        for region in &private {
+            common::install_private_init_bytes(&program, unsafe {
+                std::slice::from_raw_parts_mut(region.ptr(), region.len)
+            });
+        }
+        unsafe {
+            let start = engine
+                .get_function::<HandleStart>(&format!("{prefix}_start"))
+                .unwrap();
+            let resume = engine
+                .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                .unwrap();
+            let release = engine
+                .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                .unwrap();
+            assert_eq!(
+                start.call(5, shared.ptr(), private[0].ptr(), bodies.ptr(), slot.ptr()),
+                Outcome { live: 1, value: 1 }
+            );
+            assert_eq!(resume.call(slot.ptr(), 7), Outcome { live: 1, value: 1 });
+            release.call(slot.ptr());
+            std::slice::from_raw_parts_mut(slot.ptr(), slot.len).fill(0xcc);
+            assert_eq!(
+                start.call(0, shared.ptr(), private[0].ptr(), bodies.ptr(), slot.ptr()),
+                Outcome { live: 1, value: 4 }
+            );
+            release.call(slot.ptr());
+            assert_eq!(
+                start.call(0, shared.ptr(), private[1].ptr(), bodies.ptr(), slot.ptr()),
+                Outcome { live: 1, value: 3 }
+            );
+            release.call(slot.ptr());
+        }
+        for region in [&slot, &shared, &bodies, &private[0], &private[1]] {
+            region.check();
+        }
+    }
+}
+
+#[test]
+fn private_scalar_consumption_traps_after_a_valid_unit_store() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    let source = "private data st { saved: Word = 99 } loop child(a: Word) -> Word { st.saved = a; yield st.saved + 1 } loop main(t: Word) -> Word { child(t) }";
+    let program = common::build(source);
+    let capacity = keleusma::vm::required_persistent_capacity_for(&program);
+    let mut arena = keleusma_arena::Arena::with_capacity(capacity + 65536);
+    arena.resize_persistent(capacity).unwrap();
+    let mut vm = Vm::new(program, &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(6))
+    ));
+    assert!(matches!(vm.resume(Value::Int(7)).unwrap(), VmState::Reset));
+    assert!(vm.resume(Value::Int(7)).is_err());
+    #[cfg(unix)]
+    require_cleared_kind_trap(
+        "private_scalar_consumption_traps_after_a_valid_unit_store",
+        source,
+        &[5],
+        &[6],
+        &[7],
+    );
 }
 
 #[test]

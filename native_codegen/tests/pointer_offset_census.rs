@@ -1,3 +1,9 @@
+//! Private scalar kind metadata follows the native private body pool. Checked
+//! arithmetic proves all metadata fits before the existing resume-state offset.
+//! Direct indices are constants. Indexed data guards bound runtime indices
+//! before both metadata and immutable initial-kind table addresses are formed.
+//! Packed pool ends need not be aligned, so metadata accesses use alignment one.
+//!
 //! Internal call metadata addresses use constant indices within three arrays
 //! of arg_count+1 words. Private value words use validated slot offsets and the
 //! existing unsigned indexed-data bound. Body copy sources have producer bounds,
@@ -111,7 +117,7 @@
 // 24 -> 28, including the coroutine context and parsed intrinsic helper.
 // 28 -> 29 for constant header offsets within the declared stable slot.
 // 37 -> 41 with the site base and three bounded packing address sites.
-const RECORDED_GEP_SITES: usize = 43;
+const RECORDED_GEP_SITES: usize = 45;
 // 22 -> 24 on 2026-09-11, when the shared composite slot landed. **Both are
 // compile-time constant.** The body's address is the slot's STATED offset in the
 // host buffer — a field of the layout, not a computed quantity — and the second
@@ -177,6 +183,7 @@ fn gep_sites() -> Vec<(&'static str, usize, String)> {
         "src/coroutine/ownership.rs",
         "src/coroutine/kinds.rs",
         "src/coroutine/packing.rs",
+        "src/coroutine/private.rs",
     ] {
         let src = std::fs::read_to_string(file).expect("the emitter is readable");
         for (i, line) in src.lines().enumerate() {

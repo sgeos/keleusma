@@ -1,3 +1,8 @@
+//! Private scalar writes retain payload bits and their runtime kinds. Kind
+//! words occupy a checked range after the private body pool, before the existing
+//! resume-state offset. They survive Reset and frame release with private data.
+//! A fresh private region is zeroed before the published image is installed.
+//!
 //! Internal calls transfer scalar bits and three bounded metadata arrays for
 //! ownership, kind and actual length. Every returned field is written before use.
 //! Private body writes use overlap-safe memmove after a capacity guard. Captured
@@ -119,7 +124,7 @@ const MOVE_FORMS: &[&str] = &[
 // 24 -> 27, including the coroutine context and parsed intrinsic helper.
 // 27 -> 30 for the stable continuation, reply, and release stores.
 // 59 -> 63 with selected output size, field store, body copy and padding.
-const RECORDED_MOVE_SITES: usize = 71;
+const RECORDED_MOVE_SITES: usize = 74;
 // 18 -> 19 on 2026-09-11, when the shared composite slot landed: one body copy
 // into the host's buffer, at the offset and length the module's shared layout
 // STATES. Unlike the persistent pool, nothing here is derived — so there is no
@@ -146,6 +151,7 @@ fn move_sites() -> Vec<(&'static str, usize, String)> {
         "src/coroutine/ownership.rs",
         "src/coroutine/kinds.rs",
         "src/coroutine/packing.rs",
+        "src/coroutine/private.rs",
     ] {
         let src = std::fs::read_to_string(file).expect("the emitter is readable");
         for (i, line) in src.lines().enumerate() {
