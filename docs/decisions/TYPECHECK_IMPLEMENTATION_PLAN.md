@@ -8,6 +8,13 @@ run. Both have. Written 2026-08-14.
 
 Status: **BUILT. Full verdict agreement on the corpus, 2026-08-14.**
 
+**Currency, 2026-09-29.** The six input channels that previously excluded `parse.kel` and
+`wire.kel` now have 640-row caps. The measured stage-source test fits and checks all twelve real
+sources. The selected increase is 7,168 words, or 56 KiB, across the stage's shared and private
+tables. This closes the current capacity gap. It does not move extraction into Keleusma: Rust still
+walks the reference parser's abstract syntax tree to supply the stage's facts, so the Order-1
+self-hosting gate remains open.
+
 The stage rejects all sixteen ill-typed programs and accepts all seven well-typed ones. Six slices,
 each merged on a green gate: the harness with an accepting checker, operand agreement, call arity and
 argument types, name resolution, conditions and structural claims, and the last two shapes.

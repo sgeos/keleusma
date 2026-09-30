@@ -1974,11 +1974,11 @@ fn stage_verdict_counting(input: &StageInput<'_>) -> (bool, usize) {
     }
     const DN_SLOT: usize = MEMBER_SLOT + 256;
     const DPARAMS_SLOT: usize = DN_SLOT + 1;
-    const CSN_SLOT: usize = DPARAMS_SLOT + 128;
+    const CSN_SLOT: usize = DPARAMS_SLOT + 640;
     const CSITE_SLOT: usize = CSN_SLOT + 1;
-    const CARGS_SLOT: usize = CSITE_SLOT + 128;
+    const CARGS_SLOT: usize = CSITE_SLOT + 640;
     assert!(
-        dparams.len() <= 128 && sites.len() <= 128,
+        dparams.len() <= 640 && sites.len() <= 640,
         "declaration tables overflow"
     );
     vm.set_shared(
@@ -2015,7 +2015,7 @@ fn stage_verdict_counting(input: &StageInput<'_>) -> (bool, usize) {
         )
         .expect("cargs");
     }
-    const STN_SLOT: usize = CARGS_SLOT + 128;
+    const STN_SLOT: usize = CARGS_SLOT + 640;
     const SFIRST_SLOT: usize = STN_SLOT + 1;
     const SCOUNT_SLOT: usize = SFIRST_SLOT + 64;
     const SFIELD_SLOT: usize = SCOUNT_SLOT + 64;
@@ -2084,14 +2084,14 @@ fn stage_verdict_counting(input: &StageInput<'_>) -> (bool, usize) {
     const HIT_SLOT: usize = ANAME_SLOT + 256;
     const DNN_SLOT: usize = HIT_SLOT + 1;
     const DNAME_SLOT: usize = DNN_SLOT + 1;
-    const ON_SLOT: usize = DNAME_SLOT + 128;
+    const ON_SLOT: usize = DNAME_SLOT + 640;
     const ONAME_SLOT: usize = ON_SLOT + 1;
-    const OLOCAL_SLOT: usize = ONAME_SLOT + 256;
-    const OCALL_SLOT: usize = OLOCAL_SLOT + 256;
-    const OSKIP_SLOT: usize = OCALL_SLOT + 256;
+    const OLOCAL_SLOT: usize = ONAME_SLOT + 640;
+    const OCALL_SLOT: usize = OLOCAL_SLOT + 640;
+    const OSKIP_SLOT: usize = OCALL_SLOT + 640;
     let (declared, occurrences, wildcard) = occ;
     assert!(
-        declared.len() <= 128 && occurrences.len() <= 256,
+        declared.len() <= 640 && occurrences.len() <= 640,
         "occurrence tables overflow"
     );
     vm.set_shared(
@@ -2142,21 +2142,21 @@ fn stage_verdict_counting(input: &StageInput<'_>) -> (bool, usize) {
     .expect("oskip");
     const EN_SLOT: usize = OSKIP_SLOT + 1;
     const EKIND_SLOT: usize = EN_SLOT + 1;
-    const EA_SLOT: usize = EKIND_SLOT + 256;
-    const EB_SLOT: usize = EA_SLOT + 256;
+    const EA_SLOT: usize = EKIND_SLOT + 640;
+    const EB_SLOT: usize = EA_SLOT + 640;
     // Appended after `eb`, matching the stage's declaration order exactly. A
     // slot chain is the defect source this file already carries two notes about,
     // so these are derived from the previous constant rather than written out.
-    const BN_SLOT: usize = EB_SLOT + 256;
+    const BN_SLOT: usize = EB_SLOT + 640;
     const BNAME_SLOT: usize = BN_SLOT + 1;
-    const BTAG_SLOT: usize = BNAME_SLOT + 128;
-    const BFORM_SLOT: usize = BTAG_SLOT + 128;
-    const ALIAS_SLOT: usize = BFORM_SLOT + 128;
+    const BTAG_SLOT: usize = BNAME_SLOT + 640;
+    const BFORM_SLOT: usize = BTAG_SLOT + 640;
+    const ALIAS_SLOT: usize = BFORM_SLOT + 640;
     const EAF_SLOT: usize = ALIAS_SLOT + 1;
-    const EBF_SLOT: usize = EAF_SLOT + 256;
+    const EBF_SLOT: usize = EAF_SLOT + 640;
     // SLICE 7, appended after `ebf` and derived from it for the same reason every
     // constant above is derived from its predecessor.
-    const SFTAG_SLOT: usize = EBF_SLOT + 256;
+    const SFTAG_SLOT: usize = EBF_SLOT + 640;
     const SBN_SLOT: usize = SFTAG_SLOT + 256;
     const SBNAME_SLOT: usize = SBN_SLOT + 1;
     const SBVAL_SLOT: usize = SBNAME_SLOT + 128;
@@ -2171,7 +2171,7 @@ fn stage_verdict_counting(input: &StageInput<'_>) -> (bool, usize) {
         Some(rows) => rows.to_vec(),
         None => nodes.iter().map(|(k, a, b)| (*k, *a, 0, *b, 0)).collect(),
     };
-    assert!(widened.len() <= 256, "the expression table overflows");
+    assert!(widened.len() <= 640, "the expression table overflows");
     vm.set_shared(
         &mut shared,
         EN_SLOT,
@@ -2204,7 +2204,7 @@ fn stage_verdict_counting(input: &StageInput<'_>) -> (bool, usize) {
     }
     // The binding table, appended after the expression channel to match the
     // stage's slot order.
-    assert!(bindings.len() <= 128, "the binding table overflows");
+    assert!(bindings.len() <= 640, "the binding table overflows");
     vm.set_shared(
         &mut shared,
         BN_SLOT,
@@ -5080,15 +5080,15 @@ fn real_source_channel_rows(ast: &keleusma::ast::Program) -> Vec<(&'static str, 
     let (declared, occurrences, _wildcard) = dedup_occurrences(&occurrence_rows(ast));
     vec![
         ("operand pairs", arg_pairs.len(), 256),
-        ("declared params", dparams.len(), 128),
-        ("call sites", sites.len(), 128),
+        ("declared params", dparams.len(), 640),
+        ("call sites", sites.len(), 640),
         ("struct types", sfirst.len(), 64),
         ("declared fields", sfield.len(), 256),
         ("field accesses", accesses.len(), 256),
-        ("declared names", declared.len(), 128),
-        ("name occurrences", occurrences.len(), 256),
-        ("expression nodes", nodes.len(), 256),
-        ("bindings", bindings.len(), 128),
+        ("declared names", declared.len(), 640),
+        ("name occurrences", occurrences.len(), 640),
+        ("expression nodes", nodes.len(), 640),
+        ("bindings", bindings.len(), 640),
         ("struct bindings", frc.sbinds.len(), 128),
         ("field reads", frc.reads.len(), 128),
         ("pattern binds", frc.pattern_binds.len(), 128),
@@ -5555,106 +5555,98 @@ fn eliding_inert_expression_rows_changes_no_verdict() {
     );
 }
 
-/// **WHAT SIZING THE CHANNELS TO THE REAL CORPUS WOULD COST, IN WORDS.**
+/// **THE SELECTED CAPACITY PRICE, IN WORDS.**
 ///
-/// # Why this number and not the multiple
-///
-/// [`the_stage_is_measured_against_the_real_stage_sources`] reports that two of
-/// twelve real sources fit and that `parse.kel` needs twenty-two times the
-/// expression-node cap. **A multiple is not actionable.** The caps are shared-data
-/// array lengths, so the price of closing the gap is words of shared data, which
-/// is worst-case memory usage — the thing this project exists to bound.
-///
-/// The shared ceiling is sixteen megabytes, so nothing here is architecturally
-/// blocked. **This is a price, and it was unknown.**
-///
-/// # This is a measurement, not a proposal
-///
-/// Sizing shared data upward is a worst-case-memory change and is the operator's
-/// decision. Nothing in this increment changes a capacity; a measurement and the
-/// change it argues for should not land together, or neither can be judged on its
-/// own.
-///
-/// # Where the multiplier comes from, because getting it wrong ruins the number
-///
-/// A channel is a NAME, and several names cover more than one parallel array: the
-/// occurrence channel is three arrays sharing one cap, the expression channel is
-/// five. Growing a channel costs the row delta times its array count. The counts
-/// below are read off the stage's data block and checked against it by
-/// [`the_channel_array_counts_match_the_stage_data_block`], so a name added there
-/// without updating this table fails rather than quietly skewing the total.
+/// Six channels that exceeded their previous caps were raised to 640 rows. This
+/// test records the worst-case-memory increase and checks the chosen caps against
+/// all twelve real stage sources.
 #[cfg(feature = "self-host")]
 #[test]
 fn the_price_of_a_corpus_sized_input_path_is_measured_in_words() {
-    // `(channel, current cap, parallel arrays sharing it)`.
+    // `(channel, selected cap, parallel arrays sharing it)`.
     const CHANNELS: &[(&str, usize, usize)] = &[
-        ("operand pairs", 256, 2),    // lhs, rhs
-        ("call arity", 128, 2),       // cdecl, cact
-        ("claims", 256, 2),           // qact, qreq
-        ("membership", 256, 1),       // member
-        ("declared params", 128, 1),  // dparams
-        ("call sites", 128, 2),       // csite, cargs
-        ("struct types", 64, 2),      // sfirst, scount
-        ("declared fields", 256, 2),  // sfield, sftag
-        ("field accesses", 256, 2),   // atype, aname
-        ("declared names", 128, 1),   // dname
-        ("name occurrences", 256, 3), // oname, olocal, ocall
-        ("expression nodes", 256, 5), // ekind, ea, eb, eaf, ebf
-        ("bindings", 128, 4),         // bname, btag, bform, and tyb.bres
-        ("struct bindings", 128, 3),  // sbname, sbval, sbform
-        ("field reads", 128, 2),      // fbbase, fbfield
-        ("pattern binds", 128, 4),    // pbname, pbenum, pbvar, pbpos
-        ("payload decls", 128, 4),    // epenum, epvar, eppos, epty
+        ("operand pairs", 256, 2),
+        ("call arity", 128, 2),
+        ("claims", 256, 2),
+        ("membership", 256, 1),
+        ("declared params", 640, 1),
+        ("call sites", 640, 2),
+        ("struct types", 64, 2),
+        ("declared fields", 256, 2),
+        ("field accesses", 256, 2),
+        ("declared names", 640, 1),
+        ("name occurrences", 640, 3),
+        ("expression nodes", 640, 5),
+        ("bindings", 640, 4),
+        ("struct bindings", 128, 3),
+        ("field reads", 128, 2),
+        ("pattern binds", 128, 4),
+        ("payload decls", 128, 4),
+    ];
+    const PREVIOUS_CAPS: &[(&str, usize)] = &[
+        ("declared params", 128),
+        ("call sites", 128),
+        ("declared names", 128),
+        ("name occurrences", 256),
+        ("expression nodes", 256),
+        ("bindings", 128),
     ];
 
-    // The corpus maximum per channel, MEASURED from the sources rather than
-    // restated: a hardcoded figure is one that goes stale the moment a stage grows.
     let mut needed: std::collections::BTreeMap<&str, usize> =
-        CHANNELS.iter().map(|(n, _, _)| (*n, 0)).collect();
+        CHANNELS.iter().map(|(name, _, _)| (*name, 0)).collect();
     for (_, src) in REAL_STAGE_SOURCES {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
         for (name, rows, _) in real_source_channel_rows(&program) {
-            let e = needed.entry(name).or_insert(0);
-            *e = (*e).max(rows);
+            let max_rows = needed.entry(name).or_insert(0);
+            *max_rows = (*max_rows).max(rows);
         }
     }
 
-    let current: usize = CHANNELS.iter().map(|(_, cap, arrays)| cap * arrays).sum();
-    let sized: usize = CHANNELS
+    let selected_words: usize = CHANNELS.iter().map(|(_, cap, arrays)| cap * arrays).sum();
+    let previous_words: usize = CHANNELS
         .iter()
         .map(|(name, cap, arrays)| {
-            let want = needed.get(name).copied().unwrap_or(0).max(*cap);
-            want * arrays
+            let old_cap = PREVIOUS_CAPS
+                .iter()
+                .find(|(old_name, _)| old_name == name)
+                .map(|(_, old_cap)| *old_cap)
+                .unwrap_or(*cap);
+            old_cap * arrays
+        })
+        .sum();
+    let corpus_minimum_words: usize = CHANNELS
+        .iter()
+        .map(|(name, _, arrays)| {
+            let old_cap = PREVIOUS_CAPS
+                .iter()
+                .find(|(old_name, _)| old_name == name)
+                .map(|(_, old_cap)| *old_cap)
+                .unwrap_or(0);
+            needed.get(name).copied().unwrap_or(0).max(old_cap) * arrays
         })
         .sum();
 
-    std::eprintln!("CORPUS-SIZED INPUT PATH");
-    for (name, cap, arrays) in CHANNELS {
-        let want = needed.get(name).copied().unwrap_or(0);
-        if want > *cap {
-            std::eprintln!(
-                "  {name}: {cap} -> {want} rows x{arrays} arrays = +{} words",
-                (want - cap) * arrays
-            );
-        }
-    }
     std::eprintln!(
-        "  TOTAL: {current} words now, {sized} words corpus-sized ({:.1}x), \
-         +{} words = +{} KiB at 8 bytes a word",
-        sized as f64 / current as f64,
-        sized - current,
-        (sized - current) * 8 / 1024
+        "SELECTED INPUT-PATH CAPACITY: previous={previous_words} words, \
+         selected={selected_words} words, increase={} words ({} KiB), \
+         corpus minimum={corpus_minimum_words} words",
+        selected_words - previous_words,
+        (selected_words - previous_words) * 8 / 1024,
     );
-
-    // NON-VACUITY. A run where nothing needs growing would mean the corpus does not
-    // exceed the caps, which contradicts the capacity measurement this exists to
-    // price.
-    assert!(
-        sized > current,
-        "no channel needs growing, which contradicts the capacity result. Either \
-         the caps were raised -- in which case price the NEW gap -- or this is not \
-         reading the sources"
-    );
+    assert_eq!(selected_words - previous_words, 7_168);
+    assert_eq!((selected_words - previous_words) * 8 / 1024, 56);
+    assert!(corpus_minimum_words <= selected_words);
+    for (name, rows) in &needed {
+        let cap = CHANNELS
+            .iter()
+            .find(|(channel, _, _)| channel == name)
+            .unwrap()
+            .1;
+        assert!(
+            *rows <= cap,
+            "{name}: measured {rows} rows exceeds selected cap {cap}"
+        );
+    }
 }
 
 /// **THE ARRAY COUNTS ABOVE ARE CHECKED, NOT ASSERTED.**
@@ -5728,10 +5720,10 @@ fn the_channel_array_counts_match_the_stage_data_block() {
 ///
 /// # What this measures FIRST, and why that order
 ///
-/// The input channels are capped between 64 and 256 rows. `parse.kel` is three
-/// hundred kilobytes. Most of these programs will not fit, and the driver asserts
-/// on overflow rather than truncating -- correctly, because **a verdict from a
-/// stage fed a truncated table proves nothing**.
+/// Six input channels were raised to 640 rows after the measured `parse.kel` and
+/// `wire.kel` requirements exceeded their previous caps. The driver asserts on
+/// overflow rather than truncating, because **a verdict from a stage fed a
+/// truncated table proves nothing**.
 ///
 /// **The figures here move with the input path, and the binding constraint has now
 /// moved four times**: `parse`'s expression table at twenty-two times its cap, then
@@ -5854,9 +5846,8 @@ fn the_stage_is_measured_against_the_real_stage_sources() {
         );
     }
 
-    // NON-VACUITY. A run where nothing fits and nothing overflows would mean the
-    // corpus is empty; one where everything fits would mean the caps are not what
-    // this test believes.
+    // Every source is either listed as fitting or its overflowing channels are
+    // retained above. The pinned fitting list below records the expected result.
     assert!(
         !fits.is_empty() || !overflows.is_empty(),
         "no stage source was measured at all"
@@ -5870,27 +5861,14 @@ fn the_stage_is_measured_against_the_real_stage_sources() {
     fitting.sort_unstable();
     assert_eq!(
         fitting,
-        // **TEN OF TWELVE, MEASURED 2026-09-12.** The sequence: I predicted ZERO,
-        // the first run found two, the inert-row elision took it to three,
-        // deduplicating occurrences took it to seven, the call, pair and expression
-        // channels to eight, and the binding channel to ten.
-        //
-        // All ten are ACCEPTED by the stage, asserted above -- an over-rejection
-        // result covering most of the real corpus rather than a corner of it.
-        //
-        // **What is left is not more of the same.** `parse` is over by a little on
-        // four channels (the worst 162 against 128) and `wire` by about four times
-        // on six. Both are dominated by the DECLARATION-INDEXED tables, which no
-        // deduplication reaches: `wire` declares 492 functions and 499 top-level
-        // names. Closing the last two is a capacity decision, not another
-        // reduction.
-        //
-        // **This pin moving is the intended outcome.** It is how a capacity change
-        // announces itself, and it has now done so four times.
+        // All twelve sources now fit after selecting 640 rows for the six channels
+        // that exceeded their previous caps. Each fit source is also run through
+        // the checker below to catch false rejection on real stage programs.
         vec![
             "analyze",
             "codegen",
             "lexer",
+            "parse",
             "reconstruct",
             "verify_datalayout",
             "verify_depth",
@@ -5898,6 +5876,7 @@ fn the_stage_is_measured_against_the_real_stage_sources() {
             "verify_typed",
             "verify_types",
             "verify_yield",
+            "wire",
         ],
         "the set of real stage sources whose tables fit the input channels changed. \
          A stage JOINING it is progress in capacity worth recording; one LEAVING it \

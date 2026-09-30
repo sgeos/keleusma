@@ -117,10 +117,10 @@ shared data ty {
     // block is addressed by SLOT, and every field after the insertion point
     // silently shifted.
     dn: Word,
-    dparams: [Word; 128],
+    dparams: [Word; 640],
     csn: Word,
-    csite: [Word; 128],
-    cargs: [Word; 128],
+    csite: [Word; 640],
+    cargs: [Word; 640],
     // PART 2 SLICE b: struct field sets and field accesses arrive SEPARATELY
     // and the stage SEARCHES.
     //
@@ -164,11 +164,11 @@ shared data ty {
     //
     // Appended last.
     dnn: Word,
-    dname: [Word; 128],
+    dname: [Word; 640],
     on: Word,
-    oname: [Word; 256],
-    olocal: [Word; 256],
-    ocall: [Word; 256],
+    oname: [Word; 640],
+    olocal: [Word; 640],
+    ocall: [Word; 640],
     // A program the collector could not decide about at all, for instance one
     // with a wildcard import bringing in names it cannot enumerate. The stage
     // then makes no resolution claim, because a name it cannot see is not
@@ -195,9 +195,9 @@ shared data ty {
     //
     // Appended last.
     en: Word,
-    ekind: [Word; 256],
-    ea: [Word; 256],
-    eb: [Word; 256],
+    ekind: [Word; 640],
+    ea: [Word; 640],
+    eb: [Word; 640],
     // SLICE 6: LOCAL RESOLUTION. Until this, `ea`/`eb` were always tags, so a
     // rule could only fire where the operand was a literal. Every ill-typed case
     // in the corpus placed its operands as literals, so that limit was invisible
@@ -217,8 +217,8 @@ shared data ty {
     //
     // Appended last.
     bn: Word,
-    bname: [Word; 128],
-    btag: [Word; 128],
+    bname: [Word; 640],
+    btag: [Word; 640],
     // The FORM of each binding row, so an initialiser that is not a literal can
     // still be reported syntactically:
     //   0  `btag[b]` is a tag        -- `fn f(a: Word)`, `let b = true`
@@ -228,10 +228,10 @@ shared data ty {
     // that `a` takes whatever `g` returns; turning that into a TAG needs `g`'s
     // declared return row as well, and performing that join host-side is exactly
     // what this slice moved into the stage.
-    bform: [Word; 128],
+    bform: [Word; 640],
     alias: Word,
-    eaf: [Word; 256],
-    ebf: [Word; 256],
+    eaf: [Word; 640],
+    ebf: [Word; 640],
     // SLICE 7: A FIELD READ AS AN INITIALISER.
     //
     // `let a = p.x` was the last initialiser shape in the corpus whose operand
@@ -371,7 +371,7 @@ fn ty_occurrences() -> Word {
 // Whether a top-level declaration carries this name.
 fn ty_declared(f: Word) -> Word {
     ty.hit = 0;
-    for i in 0..ty_bounded128(ty.dnn) limit 128 {
+    for i in 0..ty_bounded640(ty.dnn) limit 640 {
         ty.hit = if ty.dname[i] == f { 1 } else { ty.hit };
     }
     ty.hit
@@ -379,6 +379,10 @@ fn ty_declared(f: Word) -> Word {
 
 fn ty_bounded128(v: Word) -> Word {
     if v > 128 { 0 } else { v }
+}
+
+fn ty_bounded640(v: Word) -> Word {
+    if v > 640 { 0 } else { v }
 }
 
 // The two refusals, derived rather than received.
@@ -453,7 +457,7 @@ fn ty_node_bad(k: Word, a: Word, b: Word) -> Word {
 // it saves -- the same reasoning `intern_run`'s batch-local scan records.
 fn ty_direct(v: Word) -> Word {
     ty.hit = ty_unknown();
-    for b in 0..ty.bn limit 128 {
+    for b in 0..ty.bn limit 640 {
         ty.hit = if ty.bname[b] == v {
             // Form 0 states a tag outright. Form 2 is a DERIVED initialiser whose
             // tag the solver proved before the fold began; both are direct as far
@@ -472,7 +476,7 @@ fn ty_direct(v: Word) -> Word {
 
 fn ty_alias_of(v: Word) -> Word {
     ty.alias = 0;
-    for b in 0..ty.bn limit 128 {
+    for b in 0..ty.bn limit 640 {
         ty.alias = if ty.bname[b] == v {
             if ty.bform[b] == 1 { ty.btag[b] } else { ty.alias }
         } else { ty.alias };
@@ -487,7 +491,7 @@ fn ty_alias_of(v: Word) -> Word {
 // SYNTAX, and a conclusion it could write here is exactly the join this stage
 // exists to perform.
 private data tyb {
-    bres: [Word; 128],
+    bres: [Word; 640],
     // Set when a round proved something it had not proved before, so the loop can
     // stop early on a fixpoint instead of always running its full cap.
     moved: Word,
@@ -513,7 +517,7 @@ fn tyb_rounds() -> Word { 4 }
 // The tag of binding `b` as the solver has proved it, or 0.
 fn tyb_of(v: Word) -> Word {
     ty.hit = ty_unknown();
-    for b in 0..ty.bn limit 128 {
+    for b in 0..ty.bn limit 640 {
         ty.hit = if ty.bname[b] == v {
             if tyb.bres[b] != 0 { tyb.bres[b] } else { ty.hit }
         } else { ty.hit };
@@ -663,14 +667,14 @@ fn tyb_field_tag(k: Word) -> Word {
 // and `let b = a + 1` only after `a`. Each round walks every binding once; a
 // round that proves nothing new stops the loop.
 fn tyb_solve() -> Word {
-    for b in 0..ty.bn limit 128 {
+    for b in 0..ty.bn limit 640 {
         tyb.bres[b] = 0;
     }
     tyb.moved = 1;
     for r in 0..tyb_rounds() limit 8 {
         if tyb.moved == 1 {
             tyb.moved = 0;
-            for b in 0..ty.bn limit 128 {
+            for b in 0..ty.bn limit 640 {
                 if ty.bform[b] == 2 andalso tyb.bres[b] == 0 {
                     tyb.bres[b] = tyb_node_tag(ty.btag[b]);
                     tyb.moved = if tyb.bres[b] != 0 { 1 } else { tyb.moved };
@@ -848,7 +852,7 @@ fn ty_step() -> Word {
     // the one part of this stage that is not row-at-a-time. That is inherent
     // rather than incidental: a derived binding's tag depends on operands that
     // may be bound later in the table, so no forward pass over rows can prove it.
-    // The cost is bounded by `tyb_rounds()` passes over at most 128 bindings.
+    // The cost is bounded by `tyb_rounds()` passes over at most 640 bindings.
     //
     // Guarded on `phase == 0 andalso i == 0` rather than on a "did I run" flag,
     // because the host may refill the tables and restart the fold, and a flag
@@ -892,7 +896,7 @@ fn ty_step() -> Word {
 // counting the run -- the `v0.3.0` differential drives 60 ticks and does the
 // latter, refusing a subject that does not reach a verdict rather than comparing
 // a prefix of a fold.
-fn ty_max_steps() -> Word { 256 + 128 + 128 + 256 + 256 + 256 + 256 + 256 + 8 + 1 }
+fn ty_max_steps() -> Word { 256 + 128 + 640 + 640 + 640 + 256 + 256 + 256 + 8 + 1 }
 
 // `resume` is unused: this stage has one job and no commands. It is named rather
 // than dropped because a Stream function's parameter slot is rewritten on every

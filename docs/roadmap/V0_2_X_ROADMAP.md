@@ -346,6 +346,16 @@ The gaps to close, from the current subset to the full grammar:
 - **Generics and monomorphization.** The full monomorphizer (Workstream A's deferred half):
   generic functions, structs, and enums, const generics, trait bounds, and specialization.
 
+## Current Order-1 status, 2026-09-29
+
+The type-rejection stage now has capacity for all twelve real stage sources. Six tables use a
+640-row cap, adding 7,168 words or 56 KiB across their parallel arrays. The stage accepts all
+twelve sources in the differential test. This resolves the measured capacity gap only. The host
+still derives input facts by walking the reference parser's abstract syntax tree, and the Order-1
+gate remains open until the required pipeline integration and self-hosted input path are complete.
+See [`TYPECHECK_IMPLEMENTATION_PLAN.md`](../decisions/TYPECHECK_IMPLEMENTATION_PLAN.md) for the
+implementation status.
+
 ## Dependency ordering and indicative release mapping
 
 The workstreams are not independent. The ordering below is by dependency; the version

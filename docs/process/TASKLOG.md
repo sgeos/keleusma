@@ -6,7 +6,27 @@ Current sprint source of truth.
 
 ---
 
-## 2026-09-28 Legacy re-review follow-up
+## 2026-09-29 V0.2.X Order-1 capacity increment
+
+Resumed on `feat/v02-order1-next` from the V0.2.X handoff while the V0.3.X line remained untouched.
+The handoff ancestry check passed, but freshness was nine commits and its content checks were not
+all complete. The handoff is therefore **invalid-and-stale** for current state. In particular, the
+workspace nextest run was interrupted after 2,009 passes, four in-flight tests received SIGINT, and
+920 tests did not run. A no-fetch audit against the local advisory database exited successfully but
+did not refresh that database.
+
+The operator selected 640 rows for the six overflowing type-check input channels. The stage and
+host seeder now use those capacities, including the binding-table private results and corrected
+slot offsets. The max-step bound includes the expanded call-site, occurrence, and expression phases.
+The real-source differential now fits and accepts all twelve stage programs. Capacity cost is
+7,168 words or 56 KiB. `cargo test --features self-host --test selfhost_typecheck` passed 72 tests;
+`forward_data_reference` and `selfhost_chunk_names` passed 5 and 3 tests. Documentation links,
+comment citations and claimed counts passed 21 tests. `cargo fmt --check` and
+`cargo clippy --tests --features signatures,shell,self-host -- -D warnings` passed. The targeted
+self-host chunk-name run took 190 seconds. The full workspace suite remains incomplete.
+
+The Order-1 gate remains open because Rust still extracts the facts supplied to the Keleusma stage.
+The next V0.2.X work remains Order 1 in roadmap priority; no V0.3.X work was merged or switched into.
 
 Restored the accumulated historical section of `HANDOFF.md` exactly from `c6730025`, retaining the bounded route only in the current block. The old route in the archived fourth validity block remains historical. Recorded the operator conversation excerpts in [GATE_POLICY.md](./GATE_POLICY.md) and made the pre-push criteria falsifiable through exact commands, exit codes, executed-test counts and documented omissions. Native diagnostics and handoff follow-up remain on pull request 472. All 13 root documentation-link, citation and gate-correspondence tests passed. A byte comparison against `c6730025` confirms the entire historical suffix is unchanged.
 
