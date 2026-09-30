@@ -155,7 +155,13 @@ pub(super) fn check(m: &Module, entry: usize) -> Result<Analysis, LowerError> {
         false_inspections: BTreeSet::new(),
         branches: vec![BTreeMap::new(); m.chunks.len()],
     };
-    let reply = shape(m.signatures[entry].params[0]);
+    let reply = shape(
+        m.signatures[entry]
+            .params
+            .first()
+            .copied()
+            .unwrap_or(WireShape::Scalar { kind: 0 }),
+    );
     let output = shape(m.signatures[entry].ret);
     for (ci, chunk) in m.chunks.iter().enumerate() {
         let sig = &m.signatures[ci];
@@ -217,7 +223,8 @@ pub(super) fn check(m: &Module, entry: usize) -> Result<Analysis, LowerError> {
                 Op::Yield => {
                     require(args[0], output)?;
                     out[0] = reply;
-                    if ci == entry {
+                    if ci == entry && chunk.block_type == BlockType::Stream && chunk.param_count > 0
+                    {
                         state.locals[0] = reply;
                     }
                 }
@@ -229,7 +236,11 @@ pub(super) fn check(m: &Module, entry: usize) -> Result<Analysis, LowerError> {
                     out[0] = shape(callee.ret);
                     // A delegated suspension updates the entry parameter, even
                     // when the call's own return value is discarded.
-                    if ci == entry && m.chunks[*target as usize].block_type != BlockType::Func {
+                    if ci == entry
+                        && chunk.block_type == BlockType::Stream
+                        && chunk.param_count > 0
+                        && m.chunks[*target as usize].block_type != BlockType::Func
+                    {
                         state.locals[0] |= reply;
                     }
                 }
@@ -386,7 +397,8 @@ pub(super) fn check(m: &Module, entry: usize) -> Result<Analysis, LowerError> {
                 Op::Reset => {
                     state.stack.clear();
                     state.locals.fill(UNIT);
-                    if ci == entry {
+                    if ci == entry && chunk.block_type == BlockType::Stream && chunk.param_count > 0
+                    {
                         state.locals[0] = reply;
                     }
                 }

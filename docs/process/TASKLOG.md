@@ -3815,3 +3815,14 @@ mutation-placement failure remains recorded. Admission boundaries are documented
 in the native README and archive. Pull request 475 is integrated. Pull request
 478 tracks consolidation and green version integration of the remaining stack.
 Upstream task state above is preserved.
+
+
+## V0.3.X Workstream B completion progress of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`. Reentrant completion,
+multiple and zero arguments, and bounded flat completion lifetime now have
+virtual-machine differentials. All 46 coroutine tests and test-target Clippy pass
+in both float configurations. Fourteen native citation and handoff guards pass. All 13 targeted root
+documentation, citation and gate-correspondence tests pass.
+Full Workstream B remains active under its [acceptance matrix](../decisions/WORKSTREAM_B_COMPLETION.md).
+Complete native gates and integration remain outstanding. Upstream state above is preserved.

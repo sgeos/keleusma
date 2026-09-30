@@ -1954,3 +1954,370 @@ fn flat_host_copies_require_bounded_signatures_and_frame_space() {
         "{error}"
     );
 }
+
+#[test]
+fn reentrant_entries_report_completion_once_and_reuse_the_slot() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    let cases = [
+        (
+            "yield main(a: Word) -> Word { let keep = a + 100; let b = yield a; let c = yield keep + b; keep + c + a }",
+            vec![7, 11],
+            vec![(1, 5), (1, 112), (2, 121)],
+        ),
+        (
+            "yield main(a: Word) -> Word { if a > 0 { a + 3 } else { yield a } }",
+            vec![],
+            vec![(2, 8)],
+        ),
+        (
+            "yield helper(a: Word) -> Word { let r = yield a + 1; r + a } yield main(a: Word) -> Word { let v = helper(a + 2); v + a }",
+            vec![13],
+            vec![(1, 8), (2, 25)],
+        ),
+    ];
+    for (source, replies, expected) in cases {
+        let program = common::build(source);
+        let arena = keleusma_arena::Arena::with_capacity(65536);
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        let mut state = vm.call(&[Value::Int(5)]).unwrap();
+        let mut observed = Vec::new();
+        for reply in replies.iter().copied().map(Some).chain([None]) {
+            match state {
+                VmState::Yielded(Value::Int(value)) => observed.push((1, value)),
+                VmState::Finished(Value::Int(value)) => observed.push((2, value)),
+                other => panic!("unexpected VM outcome {other:?}"),
+            }
+            if let Some(reply) = reply {
+                state = vm.resume(Value::Int(reply)).unwrap();
+            } else {
+                break;
+            }
+        }
+        assert_eq!(observed, expected, "independent completion oracle");
+        for optimized in [false, true] {
+            let context = Context::create();
+            let module = coroutine::lower(&context, &program, &machine(), 4096).unwrap();
+            if optimized {
+                common::force_optimize(&module);
+            }
+            let engine = module
+                .create_jit_execution_engine(OptimizationLevel::None)
+                .unwrap();
+            let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+            let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+            let shared = Guarded::new(program.shared_data_bytes as usize);
+            let private = Guarded::new(
+                keleusma::vm::required_persistent_capacity_for(&program)
+                    + region::persistent_supplement_bytes(&program) as usize,
+            );
+            let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+            unsafe {
+                let start = engine
+                    .get_function::<HandleStart>(&format!("{prefix}_start"))
+                    .unwrap();
+                let resume = engine
+                    .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                    .unwrap();
+                let release = engine
+                    .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                    .unwrap();
+                for _ in 0..2 {
+                    let initial =
+                        start.call(5, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr());
+                    let mut observed = vec![(initial.live, initial.value)];
+                    for &reply in &replies {
+                        let next = resume.call(slot.ptr(), reply);
+                        observed.push((next.live, next.value));
+                    }
+                    assert_eq!(observed, expected, "optimized={optimized}");
+                    assert_eq!(resume.call(slot.ptr(), 99), Outcome { live: 0, value: 0 });
+                    release.call(slot.ptr());
+                    release.call(slot.ptr());
+                }
+            }
+            for reservation in [&slot, &shared, &private, &bodies] {
+                reservation.check();
+            }
+        }
+    }
+}
+
+#[test]
+fn completed_host_bodies_outlive_the_continuation_frame() {
+    use keleusma::bytecode::{TupleBody, Value};
+    use keleusma::vm::{Vm, VmState};
+    type StartTwo = unsafe extern "C" fn(i64, i64, *mut u8, *mut u8, *mut u8, *mut u8) -> Outcome;
+    for multiple in [false, true] {
+        let program = if multiple {
+            common::build(
+                "yield main(n: Word, a: (Word, Word)) -> (Word, Word) { let old = a; yield a; old }",
+            )
+        } else {
+            common::build(
+                "yield main(a: (Word, Word)) -> (Word, Word) { let old = a; let reply: (Word, Word) = yield a; old }",
+            )
+        };
+        let arena = keleusma_arena::Arena::with_capacity(65536);
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        let tuple = |a, b| {
+            Value::Tuple(TupleBody::Boxed(Box::new(vec![
+                Value::Int(a),
+                Value::Int(b),
+            ])))
+        };
+        let read_vm = |value: Value| {
+            let Value::Tuple(TupleBody::Flat(body)) = value else {
+                panic!("expected flat tuple")
+            };
+            let bytes = body.resolve(&arena).unwrap();
+            [
+                i64::from_le_bytes(bytes[..8].try_into().unwrap()),
+                i64::from_le_bytes(bytes[8..16].try_into().unwrap()),
+            ]
+        };
+        let arguments = if multiple {
+            vec![Value::Int(9), tuple(5, 6)]
+        } else {
+            vec![tuple(5, 6)]
+        };
+        let VmState::Yielded(value) = vm.call(&arguments).unwrap() else {
+            panic!("expected yield")
+        };
+        assert_eq!(read_vm(value), [5, 6]);
+        let VmState::Finished(value) = vm
+            .resume(if multiple {
+                Value::Int(21)
+            } else {
+                tuple(21, 22)
+            })
+            .unwrap()
+        else {
+            panic!("expected completion")
+        };
+        assert_eq!(read_vm(value), [5, 6]);
+        for optimized in [false, true] {
+            let context = Context::create();
+            let module = coroutine::lower(&context, &program, &machine(), 4096).unwrap();
+            if optimized {
+                common::force_optimize(&module);
+            }
+            let engine = module
+                .create_jit_execution_engine(OptimizationLevel::None)
+                .unwrap();
+            let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+            let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+            let shared = Guarded::new(program.shared_data_bytes as usize);
+            let private = Guarded::new(
+                keleusma::vm::required_persistent_capacity_for(&program)
+                    + region::persistent_supplement_bytes(&program) as usize,
+            );
+            let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+            let input = Guarded::new(16);
+            unsafe {
+                let resume = engine
+                    .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                    .unwrap();
+                let release = engine
+                    .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                    .unwrap();
+                for _ in 0..2 {
+                    let source = std::slice::from_raw_parts_mut(input.ptr(), 16);
+                    source[..8].copy_from_slice(&5_i64.to_le_bytes());
+                    source[8..].copy_from_slice(&6_i64.to_le_bytes());
+                    let yielded = if multiple {
+                        engine
+                            .get_function::<StartTwo>(&format!("{prefix}_start"))
+                            .unwrap()
+                            .call(
+                                9,
+                                input.ptr() as i64,
+                                shared.ptr(),
+                                private.ptr(),
+                                bodies.ptr(),
+                                slot.ptr(),
+                            )
+                    } else {
+                        engine
+                            .get_function::<HandleStart>(&format!("{prefix}_start"))
+                            .unwrap()
+                            .call(
+                                input.ptr() as i64,
+                                shared.ptr(),
+                                private.ptr(),
+                                bodies.ptr(),
+                                slot.ptr(),
+                            )
+                    };
+                    assert_eq!(yielded.live, 1);
+                    source[..8].copy_from_slice(&21_i64.to_le_bytes());
+                    source[8..].copy_from_slice(&22_i64.to_le_bytes());
+                    let finished =
+                        resume.call(slot.ptr(), if multiple { 21 } else { input.ptr() as i64 });
+                    assert_eq!(finished.live, 2);
+                    // The result must survive both host input reuse and destruction
+                    // of every byte LLVM could use for the continuation frame.
+                    source.fill(0xdd);
+                    let result = finished.value as *const u8;
+                    assert_eq!(result, slot.ptr().add(16 + 4096 - 16));
+                    std::slice::from_raw_parts_mut(slot.ptr().add(16), 4096 - 16).fill(0xaa);
+                    let bytes = std::slice::from_raw_parts(result, 16);
+                    assert_eq!(i64::from_le_bytes(bytes[..8].try_into().unwrap()), 5);
+                    assert_eq!(i64::from_le_bytes(bytes[8..].try_into().unwrap()), 6);
+                    assert_eq!(resume.call(slot.ptr(), 0), Outcome { live: 0, value: 0 });
+                    release.call(slot.ptr());
+                }
+            }
+            for reservation in [&slot, &shared, &private, &bodies, &input] {
+                reservation.check();
+            }
+        }
+        let error = coroutine::lower(&Context::create(), &program, &machine(), 16).unwrap_err();
+        assert!(
+            error.to_string().contains("completion reservation"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn zero_and_multiple_entry_arguments_preserve_host_contracts() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    type StartZero = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) -> Outcome;
+    type StartTwo = unsafe extern "C" fn(i64, i64, *mut u8, *mut u8, *mut u8, *mut u8) -> Outcome;
+    let cases = [
+        (
+            "yield main() -> Word { yield 42; 7 }",
+            vec![],
+            Value::Unit,
+            [(1, 42), (2, 7)],
+        ),
+        (
+            "loop main() -> Word { yield 42; yield 43 }",
+            vec![],
+            Value::Unit,
+            [(1, 42), (1, 43)],
+        ),
+        (
+            "yield main(a: Word, b: Word) -> Word { let r = yield a + b; a + b + r }",
+            vec![Value::Int(5), Value::Int(7)],
+            Value::Int(11),
+            [(1, 12), (2, 23)],
+        ),
+        (
+            "loop main(a: Word, b: Word) -> Word { yield a; yield a }",
+            vec![Value::Int(5), Value::Int(7)],
+            Value::Int(11),
+            [(1, 5), (1, 11)],
+        ),
+    ];
+    for (source, arguments, reply, expected) in cases {
+        let program = common::build(source);
+        let arena = keleusma_arena::Arena::with_capacity(65536);
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        let first = vm.call(&arguments).unwrap();
+        let second = vm.resume(reply.clone()).unwrap();
+        let observe = |state| match state {
+            VmState::Yielded(Value::Int(v)) => (1, v),
+            VmState::Finished(Value::Int(v)) => (2, v),
+            other => panic!("unexpected {other:?}"),
+        };
+        assert_eq!([observe(first), observe(second)], expected);
+        for optimized in [false, true] {
+            let context = Context::create();
+            let module = coroutine::lower(&context, &program, &machine(), 4096).unwrap();
+            if optimized {
+                common::force_optimize(&module);
+            }
+            let engine = module
+                .create_jit_execution_engine(OptimizationLevel::None)
+                .unwrap();
+            let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+            let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+            let shared = Guarded::new(program.shared_data_bytes as usize);
+            let private = Guarded::new(
+                keleusma::vm::required_persistent_capacity_for(&program)
+                    + region::persistent_supplement_bytes(&program) as usize,
+            );
+            let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+            unsafe {
+                let first = if arguments.is_empty() {
+                    engine
+                        .get_function::<StartZero>(&format!("{prefix}_start"))
+                        .unwrap()
+                        .call(shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr())
+                } else {
+                    engine
+                        .get_function::<StartTwo>(&format!("{prefix}_start"))
+                        .unwrap()
+                        .call(5, 7, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr())
+                };
+                let resume = engine
+                    .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                    .unwrap();
+                let bits = if arguments.is_empty() { 0 } else { 11 };
+                let second = resume.call(slot.ptr(), bits);
+                assert_eq!(
+                    [(first.live, first.value), (second.live, second.value)],
+                    expected,
+                    "{source}, optimized={optimized}"
+                );
+                if arguments.is_empty() && second.live == 1 {
+                    assert_eq!(resume.call(slot.ptr(), 0), Outcome { live: 1, value: 42 });
+                }
+                engine
+                    .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                    .unwrap()
+                    .call(slot.ptr());
+            }
+            for reservation in [&slot, &shared, &private, &bodies] {
+                reservation.check();
+            }
+        }
+    }
+}
+
+#[test]
+fn stream_reset_does_not_replenish_later_parameters() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    let program = common::build("loop main(a: Word, b: Word) -> Word { yield a + b; yield a + b }");
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5), Value::Int(7)]).unwrap(),
+        VmState::Yielded(Value::Int(12))
+    ));
+    assert!(matches!(
+        vm.resume(Value::Int(11)).unwrap(),
+        VmState::Yielded(Value::Int(18))
+    ));
+    assert!(matches!(vm.resume(Value::Int(13)).unwrap(), VmState::Reset));
+    assert!(
+        vm.resume(Value::Int(13)).is_err(),
+        "Reset cleared parameter b to Unit"
+    );
+    let error = coroutine::lower(&Context::create(), &program, &machine(), 4096).unwrap_err();
+    assert!(
+        error.to_string().contains("scalar types are not proven"),
+        "{error}"
+    );
+}
+
+#[test]
+fn implicit_reentrant_completion_cannot_bypass_body_extent_checks() {
+    use keleusma::bytecode::{Op, WireShape};
+    let mut program =
+        common::build("yield main(a: (Word, Word)) -> (Word, Word) { if false { yield a; } a }");
+    let entry = program.entry_point.unwrap();
+    assert!(matches!(program.chunks[entry].ops.pop(), Some(Op::Return)));
+    let WireShape::Flat { size, .. } = &mut program.signatures[entry].ret else {
+        panic!("flat fixture required")
+    };
+    *size += 8;
+    let verified = keleusma::verify::verify(&program);
+    let error = coroutine::lower(&Context::create(), &program, &machine(), 4096).unwrap_err();
+    assert!(verified.is_err());
+    assert!(error.to_string().contains("verification:"), "{error}");
+}

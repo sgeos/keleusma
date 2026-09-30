@@ -158,17 +158,20 @@ that owns the step.
 ## Bytecode coroutines
 
 `coroutine::lower` provides the Workstream B retcon path for verified streams
-with scalar or flat inputs and outputs. Its [module documentation](src/coroutine.rs) describes the provisional
-host contract and checked frame reservation. [Execution tests](tests/retcon_bytecode.rs)
-compare suspension sequences and seeded lexer state with the virtual machine.
-Reentrant and stream callees suspend through the same LLVM continuation,
-including nested calls and guarded heads. Nested streams clear their own locals
-at Reset. Cleared non-Unit parameter reads, differing delegated yield signatures
-and unproved transfer extents remain refused. Host input buffers may be reused
-once start or resume returns. Bounded copies preserve older live values while
-private-data references retain aliasing. The stable arena handle stores the
-current continuation and supports release and reuse. This interface is separate
-from `lower_module`. Both complete native gates passed on clean, frozen
-`5a0fec1d`. [Pull request 478](https://github.com/sgeos/keleusma/pull/478) tracks
-version integration. Full-language widening, final host packaging and native
-cost attestation remain separate roadmap milestones.
+and reentrant entries with scalar or flat arguments. Its
+[module documentation](src/coroutine.rs) specifies the provisional host contract,
+completion status and checked frame reservation. [Execution tests](tests/retcon_bytecode.rs)
+compare suspension and completion against the virtual machine. Reentrant and
+stream callees share the LLVM continuation. Reentrant entry arguments survive
+resume unchanged. Only a stream entry's first parameter receives each reply.
+Parameterless entries currently use Unit replies. Host buffers may be reused
+once start or resume returns. Owned flat completion results survive destruction
+of the continuation frame in a bounded caller-owned tail reservation.
+
+The stable arena handle supports start, resume, completion, release and reuse.
+This interface remains separate from `lower_module`. Differing dialogue types,
+unproved transfer extents and external body ownership remain under review.
+The [completion requirements](../docs/decisions/WORKSTREAM_B_COMPLETION.md) track
+full Workstream B. The bounded baseline merged through
+[pull request 478](https://github.com/sgeos/keleusma/pull/478) as `a1aa53b8`.
+Historical complete native gates cover `5a0fec1d`, not subsequent trees.

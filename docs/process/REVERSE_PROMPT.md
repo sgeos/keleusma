@@ -3435,3 +3435,15 @@ of 478 through 481 and version integration after green remote checks. Preserve
 the combined head during those checks and compare its tree with the merge.
 The 64-line native brief holds the resume sequence and admission boundaries.
 Upstream material is preserved.
+
+
+## V0.3.X completion cycle of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion` in the prescribed sibling
+worktree. The full Workstream B objective remains active. This increment adds
+reentrant completion, general entry arity and bounded owned completion storage.
+All 46 coroutine tests and test-target Clippy pass in both float configurations.
+The [bounded native brief](./handoffs/v0.3.0-BRIEF.md) now records completed
+integration in past tense. Resume from the [acceptance matrix](../decisions/WORKSTREAM_B_COMPLETION.md),
+starting with explicit reply and yield contracts. Full gates and integration are
+not claimed. Upstream current state and preceding native reports are preserved.

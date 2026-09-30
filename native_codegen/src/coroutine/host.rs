@@ -1,7 +1,8 @@
 //! Provisional host operations on a stable caller-owned arena slot.
 //!
 //! The first eight bytes reserve the current continuation pointer, the next
-//! eight hold reply bits, and the remaining bytes are the retcon frame. All
+//! eight hold reply or completion bits, and the remaining bytes reserve the
+//! retcon frame and any owned completion body. All
 //! offsets are constants within `slot_bytes(frame_bytes)`. Start initializes
 //! the continuation before either operation may read it. Released slots retain
 //! a null continuation until reused by start.
@@ -40,6 +41,7 @@ fn finish_step<'ctx>(
     slot: PointerValue<'ctx>,
     raw: StructValue<'ctx>,
     result: StructType<'ctx>,
+    completes: bool,
 ) {
     let next = builder
         .build_extract_value(raw, 0, "next")
@@ -51,13 +53,27 @@ fn finish_step<'ctx>(
         .into_int_value();
     builder.build_store(slot, next).unwrap();
     let live = builder.build_is_not_null(next, "live").unwrap();
+    let word = ctx.i64_type();
     let status = builder
-        .build_int_z_extend(live, ctx.i64_type(), "status")
+        .build_select(
+            live,
+            word.const_int(1, false),
+            word.const_int(if completes { 2 } else { 0 }, false),
+            "status",
+        )
         .unwrap();
-    // An abnormal or completed continuation has no defined payload. Do not
-    // expose that field when the status is zero.
+    // The raw completion payload is undefined. Finite entries write the
+    // result into the caller's reply cell before coro.end instead.
+    let completed = if completes {
+        builder
+            .build_load(word, offset(ctx, builder, slot, 8), "completed_value")
+            .unwrap()
+            .into_int_value()
+    } else {
+        word.const_zero()
+    };
     let value = builder
-        .build_select(live, value, ctx.i64_type().const_zero(), "payload")
+        .build_select(live, value, completed, "payload")
         .unwrap();
     let answer = builder
         .build_insert_value(result.const_zero(), status, 0, "answer")
@@ -73,6 +89,7 @@ pub(super) fn emit<'ctx>(
     module: &Module<'ctx>,
     entry: FunctionValue<'ctx>,
     index: usize,
+    completes: bool,
 ) {
     let ptr = ctx.ptr_type(AddressSpace::default());
     let word = ctx.i64_type();
@@ -85,11 +102,12 @@ pub(super) fn emit<'ctx>(
     let result = ctx.struct_type(&[word.into(), word.into()], false);
     let prefix = format!("kel_coroutine_{index}");
     // Replace the raw frame and reply parameters with the one stable slot.
+    let ordinary_params = entry.count_params() as usize - 2;
     let mut parameters: Vec<BasicMetadataTypeEnum<'ctx>> = entry
         .get_type()
         .get_param_types()
         .into_iter()
-        .take(4)
+        .take(ordinary_params)
         .collect();
     parameters.push(ptr.into());
     let start = module.add_function(
@@ -100,7 +118,14 @@ pub(super) fn emit<'ctx>(
     let builder = ctx.create_builder();
     builder.position_at_end(ctx.append_basic_block(start, "start"));
     let slot = start.get_last_param().unwrap().into_pointer_value();
-    let mut args: Vec<_> = start.get_param_iter().take(4).map(Into::into).collect();
+    builder
+        .build_store(offset(ctx, &builder, slot, 8), word.const_zero())
+        .unwrap();
+    let mut args: Vec<_> = start
+        .get_param_iter()
+        .take(ordinary_params)
+        .map(Into::into)
+        .collect();
     args.push(offset(ctx, &builder, slot, HEADER_BYTES).into());
     args.push(offset(ctx, &builder, slot, 8).into());
     let raw = builder
@@ -109,7 +134,7 @@ pub(super) fn emit<'ctx>(
         .try_as_basic_value()
         .unwrap_basic()
         .into_struct_value();
-    finish_step(ctx, &builder, slot, raw, result);
+    finish_step(ctx, &builder, slot, raw, result, completes);
 
     for release in [false, true] {
         let name = format!("{prefix}_{}", if release { "release" } else { "resume" });
@@ -164,7 +189,7 @@ pub(super) fn emit<'ctx>(
             builder.build_store(slot, ptr.const_null()).unwrap();
             builder.build_return(None).unwrap();
         } else {
-            finish_step(ctx, &builder, slot, raw, result);
+            finish_step(ctx, &builder, slot, raw, result, completes);
         }
     }
 }

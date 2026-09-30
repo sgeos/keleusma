@@ -1,4 +1,4 @@
-//! Returned-continuation lowering of bytecode streams.
+//! Returned-continuation lowering of bytecode streams and reentrant entries.
 //!
 //! The caller owns the frame, reply cell, and the ordinary shared, private and
 //! composite regions as disjoint reservations for the entire lifetime of a suspended instance. Start
@@ -20,9 +20,11 @@
 //!
 //! LLVM manages the continuation and captures live allocas. The emitted module
 //! is accepted only if splitting eliminates every overflow allocator use.
-//! This API admits one scalar or flat-input entry stream with ordinary, reentrant
-//! or stream callees. Flat-input modules inline all bytecode callees before splitting. Host
-//! replies update the entry parameter while preserving callee state until Reset.
+//! This API admits scalar or flat arguments to a Stream or Reentrant entry,
+//! with ordinary, reentrant or stream callees. Flat-input modules inline all
+//! bytecode callees before splitting. The reply shape is the first argument
+//! shape, or Unit for parameterless entries. Replies update only a Stream
+//! entry's first parameter. Reentrant entries retain their original arguments.
 //! A nested stream clears its own locals on Reset. Reads of non-Unit callee
 //! parameters remain refused because the VM does not replenish those slots.
 //! Delegated yields must have the same signature as the entry yield. Scalar
@@ -32,9 +34,14 @@
 //! modules until their ownership contract is known.
 //!
 //! The provisional start symbol is `kel_chunk_<entry_point>` with the scalar
-//! argument or i64 body pointer followed by shared, private, composite-region, frame and reply
+//! arguments or i64 body pointers followed by shared, private, composite-region, frame and reply
 //! pointers. It returns `{ptr, i64}`. Continuations take `(ptr, i1)` and return
 //! that same pair. The value field is meaningful only with a non-null pointer.
+//! Normal Reentrant completion returns a null continuation and writes its
+//! final value into the reply cell. Owned flat results occupy a reserved tail
+//! inside frame_bytes, outside LLVM's continuation storage. Borrowed results
+//! retain their original region aliases. Read completed bodies before release
+//! or the next start, while all supplied regions remain allocated and unchanged.
 //! Keep the emitted code and instance buffers alive until release. Initialise the
 //! ordinary data regions using their existing contracts before start. LLVM
 //! initialises the frame itself; its previous bytes need not be cleared.
@@ -42,10 +49,12 @@
 //!
 //! Stable arena handles use `kel_coroutine_<entry>_start`, `_resume` and `_release`.
 //! Reserve [`slot_bytes`] bytes aligned to [`FRAME_ALIGN`]. Start takes the normal
-//! scalar argument or body pointer, shared, private and composite-region pointers, then the slot.
+//! scalar arguments or body pointers, shared, private and composite-region pointers, then the slot.
 //! Resume takes the same slot and an i64 reply bit pattern or body pointer. Both return
-//! `{i64 live, i64 value}`. A live status of one marks a yielded value; zero
-//! returns a zero payload. Release takes the slot and returns nothing. It clears
+//! `{i64 status, i64 value}`. Status one marks a yielded value. Status two
+//! reports normal Reentrant completion exactly once, with its final value.
+//! Status zero returns a zero payload for an inactive instance. Release takes
+//! the slot and returns nothing. It clears
 //! the continuation, is idempotent, and makes subsequent resume return zeros.
 //! Start may reuse a released slot but must never overwrite a live one. The slot
 //! needs no prior initialization before start and must remain allocated and
@@ -88,10 +97,12 @@ fn error(message: impl ToString) -> LowerError {
     LowerError::UnsupportedShape(message.to_string())
 }
 
-/// Emit and split a verified, resource-bounded stream for `machine`.
+/// Emit and split a verified, resource-bounded coroutine for `machine`.
 ///
 /// `frame_bytes` is the exact caller reservation, not an estimate of LLVM's
-/// internal frame. An insufficient reservation is a lowering error. Buffer
+/// internal frame. A flat Reentrant result reserves its declared byte size,
+/// or one byte for an empty body, at the tail of this reservation. LLVM may use
+/// only the remaining bytes. An insufficient reservation is a lowering error. Buffer
 /// bounds for shared, private and composite storage remain those published by
 /// [`crate::region`]. They are additional to this frame and the eight-byte
 /// reply cell. The returned module owns all emitted functions. Do not execute
@@ -119,24 +130,26 @@ pub fn lower<'ctx>(
         .chunks
         .get(entry)
         .ok_or_else(|| error("coroutine entry is out of range"))?;
-    if stream.block_type != BlockType::Stream
-        || !matches!(
-            stream.param_types.as_slice(),
-            [TypeTag::Word
-                | TypeTag::Byte
-                | TypeTag::Bool
-                | TypeTag::Fixed
-                | TypeTag::Float
-                | TypeTag::Unit
-                | TypeTag::Composite]
-        )
-        || stream.param_count != 1
-        || !matches!(stream.ops.first(), Some(Op::Stream))
-        || !matches!(stream.ops.last(), Some(Op::Reset))
-        || stream.ops.iter().any(|op| matches!(op, Op::Return))
+    if !matches!(stream.block_type, BlockType::Stream | BlockType::Reentrant)
+        || stream.param_types.iter().any(|tag| {
+            !matches!(
+                tag,
+                TypeTag::Word
+                    | TypeTag::Byte
+                    | TypeTag::Bool
+                    | TypeTag::Fixed
+                    | TypeTag::Float
+                    | TypeTag::Unit
+                    | TypeTag::Composite
+            )
+        })
+        || (stream.block_type == BlockType::Stream
+            && (!matches!(stream.ops.first(), Some(Op::Stream))
+                || !matches!(stream.ops.last(), Some(Op::Reset))
+                || stream.ops.iter().any(|op| matches!(op, Op::Return))))
     {
         return Err(error(
-            "retcon currently requires a one-value Stream entry ending in Reset",
+            "retcon requires a scalar or flat-input Stream or Reentrant entry; a Stream must end in Reset",
         ));
     }
     for (index, callee) in program.chunks.iter().enumerate() {
@@ -182,16 +195,35 @@ pub fn lower<'ctx>(
             ));
         }
     }
-    let input_shape = program.signatures[entry].params.first().copied();
-    if stream.param_types[0] == TypeTag::Composite
-        && !matches!(
-            input_shape,
-            Some(keleusma::bytecode::WireShape::Flat { kind: 0..=3, .. })
-        )
+    // Completion outlives coro.end. Reserve a disjoint tail for owned flat
+    // results, outside the bytes LLVM may use for the continuation frame.
+    let completion_bytes = match (stream.block_type, yield_shape) {
+        (BlockType::Reentrant, keleusma::bytecode::WireShape::Flat { size, .. }) => size.max(1),
+        _ => 0,
+    };
+    let continuation_bytes = frame_bytes
+        .checked_sub(completion_bytes)
+        .filter(|bytes| *bytes >= FRAME_ALIGN)
+        .ok_or_else(|| error("coroutine frame is too small for its completion reservation"))?;
+    let owns_inputs = program.signatures[entry]
+        .params
+        .iter()
+        .any(|shape| matches!(shape, keleusma::bytecode::WireShape::Flat { .. }));
+    for (tag, shape) in stream
+        .param_types
+        .iter()
+        .zip(&program.signatures[entry].params)
     {
-        return Err(error(
-            "retcon requires a bounded flat composite input signature",
-        ));
+        if *tag == TypeTag::Composite
+            && !matches!(
+                shape,
+                keleusma::bytecode::WireShape::Flat { kind: 0..=3, .. }
+            )
+        {
+            return Err(error(
+                "retcon requires a bounded flat composite input signature",
+            ));
+        }
     }
     let analysis = types::check(program, entry)?;
     let mut prepared = program.clone();
@@ -211,7 +243,7 @@ pub fn lower<'ctx>(
         LowerOptions::default(),
         None,
         None,
-        Some((frame_bytes, &analysis)),
+        Some((continuation_bytes, &analysis)),
     )?;
     if !matches!(program.signatures.get(entry).map(|s| &s.ret),
         Some(keleusma::bytecode::WireShape::Scalar { kind }) if *kind <= keleusma::value_layout::ScalarKind::Float.to_tag())
@@ -222,10 +254,7 @@ pub fn lower<'ctx>(
     {
         return Err(error("retcon requires a scalar or flat yield signature"));
     }
-    if matches!(
-        input_shape,
-        Some(keleusma::bytecode::WireShape::Flat { .. })
-    ) {
+    if owns_inputs {
         // Owned host bodies returned by ordinary callees must not escape a
         // machine-stack alloca. Inline every bytecode call before frame capture.
         for index in 0..program.chunks.len() {
@@ -325,7 +354,13 @@ pub fn lower<'ctx>(
             "coroutine or dynamic-stack intrinsic survived splitting",
         ));
     }
-    host::emit(ctx, &module, f, entry);
+    host::emit(
+        ctx,
+        &module,
+        f,
+        entry,
+        stream.block_type == BlockType::Reentrant,
+    );
     module.verify().map_err(error)?;
     Ok(module)
 }

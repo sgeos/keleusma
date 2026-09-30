@@ -64,14 +64,30 @@ pub(crate) fn copy<'ctx>(
     if owned.get_zero_extended_constant() == Some(0) {
         return value;
     }
+    let ctx = value.get_type().get_context();
+    let destination = b
+        .build_alloca(ctx.i8_type().array_type(bytes.max(1)), "owned_body")
+        .unwrap();
+    copy_to(b, value, bytes, owned, destination)
+}
+
+/// Copy owned bodies to storage whose lifetime is supplied by the caller.
+/// Borrowed region aliases retain their identity and are never relocated.
+pub(crate) fn copy_to<'ctx>(
+    b: &Builder<'ctx>,
+    value: IntValue<'ctx>,
+    bytes: u32,
+    owned: IntValue<'ctx>,
+    destination: PointerValue<'ctx>,
+) -> IntValue<'ctx> {
+    if owned.get_zero_extended_constant() == Some(0) {
+        return value;
+    }
     let i64t = value.get_type();
     let ctx = i64t.get_context();
     let ptrt = ctx.ptr_type(inkwell::AddressSpace::default());
     let source_block = b.get_insert_block().unwrap();
     let function = source_block.get_parent().unwrap();
-    let destination = b
-        .build_alloca(ctx.i8_type().array_type(bytes.max(1)), "owned_body")
-        .unwrap();
     let copying = ctx.append_basic_block(function, "copy_host_body");
     let done = ctx.append_basic_block(function, "body_transfer_done");
     let condition = b

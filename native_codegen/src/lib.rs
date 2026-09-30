@@ -1651,6 +1651,8 @@ pub fn lower_chunk<'ctx>(
         BodyCfg {
             opts,
             retcon: false,
+            retcon_frame_bytes: None,
+            retcon_owned_bodies: false,
             retcon_resume_type: None,
             retcon_resume_shape: None,
             retcon_branches: None,
@@ -1986,8 +1988,11 @@ fn lower_module_with<'ctx>(
         && program
             .entry_point
             .and_then(|entry| program.signatures.get(entry))
-            .and_then(|sig| sig.params.first())
-            .is_some_and(|sh| matches!(sh, keleusma::bytecode::WireShape::Flat { .. }));
+            .is_some_and(|sig| {
+                sig.params
+                    .iter()
+                    .any(|sh| matches!(sh, keleusma::bytecode::WireShape::Flat { .. }))
+            });
     let declared: Vec<FunctionValue<'ctx>> = program
         .chunks
         .iter()
@@ -2221,14 +2226,25 @@ fn lower_module_with<'ctx>(
         let cfg = BodyCfg {
             opts,
             retcon,
+            retcon_frame_bytes: retcon_bytes.filter(|_| retcon),
+            retcon_owned_bodies: owned_bodies,
             retcon_branches: retcon_config.map(|(_, facts)| &facts.branches[i]),
             retcon_resume_shape: retcon_bytes
                 .and(program.entry_point)
                 .and_then(|entry| program.signatures.get(entry))
-                .and_then(|sig| sig.params.first().copied()),
-            retcon_resume_type: retcon_bytes
-                .and(program.entry_point)
-                .and_then(|entry| program.chunks[entry].param_types.first().copied()),
+                .map(|sig| {
+                    sig.params
+                        .first()
+                        .copied()
+                        .unwrap_or(keleusma::bytecode::WireShape::Scalar { kind: 0 })
+                }),
+            retcon_resume_type: retcon_bytes.and(program.entry_point).map(|entry| {
+                program.chunks[entry]
+                    .param_types
+                    .first()
+                    .copied()
+                    .unwrap_or(TypeTag::Unit)
+            }),
             degenerate_yield: tail.as_deref(),
             delegated_call,
             own_signature: program.signatures.get(i),
@@ -2558,6 +2574,10 @@ fn chunk_builds_composite(chunk: &Chunk) -> bool {
 struct BodyCfg<'a> {
     /// LLVM owns suspension state instead of the handwritten stream dispatch.
     retcon: bool,
+    /// LLVM continuation bytes, excluding the caller-owned completion tail.
+    retcon_frame_bytes: Option<u32>,
+    /// Track ownership for all flat entry arguments, not only the reply shape.
+    retcon_owned_bodies: bool,
     /// The VM writes host replies to the outer entry parameter even when a
     /// reentrant callee is suspended. Its own parameters retain their values.
     retcon_resume_type: Option<TypeTag>,
@@ -3355,6 +3375,8 @@ fn lower_chunk_body<'ctx>(
     let BodyCfg {
         opts,
         retcon,
+        retcon_frame_bytes,
+        retcon_owned_bodies: owned_bodies,
         retcon_resume_type,
         retcon_resume_shape,
         retcon_branches,
@@ -3370,7 +3392,7 @@ fn lower_chunk_body<'ctx>(
         visited,
         float_bytes,
     } = cfg;
-    let owned_bodies = matches!(
+    let owned_reply = matches!(
         retcon_resume_shape,
         Some(keleusma::bytecode::WireShape::Flat { .. })
     );
@@ -3395,10 +3417,43 @@ fn lower_chunk_body<'ctx>(
     } else {
         None
     };
+    let retcon_completion = match (
+        retcon_frame_bytes,
+        chunk.block_type,
+        own_signature.map(|signature| signature.ret),
+    ) {
+        (
+            Some(offset),
+            BlockType::Reentrant,
+            Some(keleusma::bytecode::WireShape::Flat { size, .. }),
+        ) => {
+            let frame = func
+                .get_nth_param(func.count_params() - 2)
+                .unwrap()
+                .into_pointer_value();
+            // lower() reserves size.max(1) bytes after the LLVM frame, inside
+            // the caller's frame_bytes reservation. This tail survives coro.end.
+            let destination = unsafe {
+                b.build_in_bounds_gep(
+                    i8t,
+                    frame,
+                    &[i64t.const_int(u64::from(offset), false)],
+                    "completion_body",
+                )
+                .unwrap()
+            };
+            Some((destination, size))
+        }
+        _ => None,
+    };
     // The latest reply is distinct from local zero, which user code may assign.
     let retcon_latest = retcon.then(|| {
         let slot = b.build_alloca(i64t, "latest_reply").unwrap();
-        let raw = func.get_nth_param(0).unwrap();
+        let raw = if chunk.param_count == 0 {
+            i64t.const_zero().into()
+        } else {
+            func.get_nth_param(0).unwrap()
+        };
         let bits = if raw.is_float_value() {
             float_to_bits(&b, raw.into_float_value(), i64t, float_bytes)
         } else {
@@ -3408,7 +3463,7 @@ fn lower_chunk_body<'ctx>(
             &b,
             bits,
             width_of_declared_shape(retcon_resume_shape.as_ref(), float_bytes),
-            i64t.const_int(u64::from(owned_bodies), false),
+            i64t.const_int(u64::from(owned_reply), false),
         );
         b.build_store(slot, bits).unwrap();
         slot
@@ -3477,9 +3532,15 @@ fn lower_chunk_body<'ctx>(
             ctx,
             &b,
             retcon_reply.unwrap(),
-            locals[0],
+            if retcon_stream && chunk.param_count > 0 {
+                locals[0]
+            } else {
+                retcon_latest.unwrap()
+            },
             retcon_latest.unwrap(),
-            ownership.as_ref().map(|flags| flags.locals[0]),
+            ownership.as_ref().and_then(|flags| {
+                (retcon_stream && chunk.param_count > 0).then(|| flags.locals[0])
+            }),
         ))
     } else if retcon_delegate {
         Some(func.get_last_param().unwrap().into_pointer_value())
@@ -7316,7 +7377,7 @@ fn lower_chunk_body<'ctx>(
                     reply,
                     width,
                     kind,
-                    i64t.const_int(u64::from(owned_bodies), false),
+                    i64t.const_int(u64::from(owned_reply), false),
                 );
             }
             Op::Yield if retcon => {
@@ -7350,7 +7411,7 @@ fn lower_chunk_body<'ctx>(
                         .unwrap()
                         .into_int_value();
 
-                let (width, kind) = match chunk.param_types[0] {
+                let (width, kind) = match retcon_resume_type.unwrap() {
                     TypeTag::Unit => (Width::Scalar(0), OperandKind::Int),
                     TypeTag::Float => (Width::Scalar(float_bytes), OperandKind::Float),
                     TypeTag::Fixed => (Width::Scalar(8), OperandKind::Fixed),
@@ -7360,13 +7421,15 @@ fn lower_chunk_body<'ctx>(
                     ),
                     tag => (width_of_tag(tag), OperandKind::Int),
                 };
-                let owned = i64t.const_int(u64::from(owned_bodies), false);
+                let owned = i64t.const_int(u64::from(owned_reply), false);
                 let latest = coroutine::ownership::copy(&st.b, reply, width, owned);
                 st.b.build_store(retcon_latest.unwrap(), latest).unwrap();
-                let parameter = coroutine::ownership::copy(&st.b, reply, width, owned);
-                st.b.build_store(st.locals[0], parameter).unwrap();
-                if let Some(flags) = &st.ownership {
-                    st.b.build_store(flags.locals[0], owned).unwrap();
+                if retcon_stream && chunk.param_count > 0 {
+                    let parameter = coroutine::ownership::copy(&st.b, reply, width, owned);
+                    st.b.build_store(st.locals[0], parameter).unwrap();
+                    if let Some(flags) = &st.ownership {
+                        st.b.build_store(flags.locals[0], owned).unwrap();
+                    }
                 }
                 st.push_owned(reply, width, kind, owned);
             }
@@ -7624,11 +7687,11 @@ fn lower_chunk_body<'ctx>(
                 }
                 // A nested Stream does not receive the host reply in its own
                 // parameter slot. Only the entry restores the latest reply.
-                if retcon {
+                if retcon && chunk.param_count > 0 {
                     let reply =
                         st.b.build_load(i64t, retcon_latest.unwrap(), "reset_reply")
                             .unwrap();
-                    let owned = i64t.const_int(u64::from(owned_bodies), false);
+                    let owned = i64t.const_int(u64::from(owned_reply), false);
                     let reply = coroutine::ownership::copy(
                         &st.b,
                         reply.into_int_value(),
@@ -7732,6 +7795,23 @@ fn lower_chunk_body<'ctx>(
                 };
                 st.push(resumed);
             }
+            Op::Return if retcon => {
+                // Retcon completion payloads are undefined. Persist the final
+                // result in the caller's reply cell before destroying the frame.
+                let owned = st.owned_at(0);
+                let value = st.pop();
+                let value = retcon_completion.map_or(value, |(destination, size)| {
+                    coroutine::ownership::copy_to(&st.b, value, size, owned, destination)
+                });
+                st.b.build_store(retcon_reply.unwrap(), value).unwrap();
+                let cleanup = func
+                    .get_basic_blocks()
+                    .into_iter()
+                    .find(|bb| bb.get_name().to_bytes() == b"retcon.cleanup")
+                    .unwrap();
+                st.b.build_unconditional_branch(cleanup).unwrap();
+                dead = true;
+            }
             Op::Return => {
                 if let Some(context) = ownership_context {
                     let flag = st.owned_at(0);
@@ -7753,13 +7833,12 @@ fn lower_chunk_body<'ctx>(
         }
     }
 
-    // A chunk whose ops end without `Op::Return`. `verify()` ADMITS this: both
-    // `verify_stack_depth` and `check_chunk_seeded` compute the region's
-    // terminal depth and then discard it with `.map(|_| ())`. The VM defines the
-    // case as returning `Unit` (`src/vm.rs:4801`), and without a terminator here
-    // the function is malformed IR rather than merely wrong -- which nothing
-    // caught, because `lower_module` never verified its own output either (see
-    // the `verify` call added below).
+    // A chunk whose ops end without `Op::Return`. The current verifier rejects
+    // this shape, but lower_module may receive unverified input. Historically
+    // verification admitted it. The VM pops a result, or uses Unit if its entire
+    // stack is empty, without truncating the departing frame. The legacy native
+    // route retains its historical behavior here. Coroutine lowering refuses
+    // this path, preserving the verified completion contract.
     //
     // Zero is this backend's `Unit`. `st.depth > 0` is guarded because `pop`
     // decrements a `usize` unconditionally and would underflow on an empty
@@ -7771,6 +7850,13 @@ fn lower_chunk_body<'ctx>(
     // under-count reported to the runtime owner. Reproducing a defect for
     // fidelity would be the wrong call; revisit if the VM side is fixed.
     if !dead && st.b.get_insert_block().unwrap().get_terminator().is_none() {
+        if retcon {
+            // coroutine::lower verifies first. The current verifier requires
+            // every reachable path to terminate through Return, Trap or Reset.
+            return Err(LowerError::UnsupportedShape(
+                "coroutine completion requires an explicit Return".into(),
+            ));
+        }
         let v = if st.depth > 0 {
             st.pop()
         } else {
