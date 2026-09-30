@@ -46,7 +46,8 @@
 // 689 -> 692 with three flat coroutine yield controls. No names removed.
 // 692 -> 695 with three live-body coroutine controls. No names removed.
 // 695 -> 697 with stable-handle lifecycle and C-linkage tests. No names removed.
-const RECORDED_TEST_FUNCTIONS: usize = 697;
+// 697 -> 705 with eight flat host-input lifetime and refusal tests. No names removed.
+const RECORDED_TEST_FUNCTIONS: usize = 705;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

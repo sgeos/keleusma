@@ -1,3 +1,9 @@
+//! Flat host values are copied by exact verified extent at value transfers.
+//! Copies and ownership flags have fixed-size allocations hoisted before
+//! inlining, then captured by LLVM when live across suspension. Private and
+//! ordinary-region references keep false ownership flags and retain aliases.
+//! The matcher includes memmove and the ownership helper explicitly.
+//!
 //! **EVERY PLACE THE EMITTER MOVES AN OPERAND, AND WHAT THE DESTINATION
 //! OUTLIVES.**
 //!
@@ -77,7 +83,12 @@ mod common;
 /// Two forms, and the pair is the point: a word store and a body copy are the
 /// two ways a composite can reach a destination, and a census matching only the
 /// first would be blind to exactly the distinction the defect turned on.
-const MOVE_FORMS: &[&str] = &["build_store(", "build_memcpy(", "store i64 "];
+const MOVE_FORMS: &[&str] = &[
+    "build_store(",
+    "build_memcpy(",
+    "store i64 ",
+    "build_memmove(",
+];
 
 /// Move sites in the emitter, at the stamp.
 ///
@@ -86,7 +97,7 @@ const MOVE_FORMS: &[&str] = &["build_store(", "build_memcpy(", "store i64 "];
 // the two Reset stores. These destinations are classified above.
 // 24 -> 27, including the coroutine context and parsed intrinsic helper.
 // 27 -> 30 for the stable continuation, reply, and release stores.
-const RECORDED_MOVE_SITES: usize = 30;
+const RECORDED_MOVE_SITES: usize = 44;
 // 18 -> 19 on 2026-09-11, when the shared composite slot landed: one body copy
 // into the host's buffer, at the offset and length the module's shared layout
 // STATES. Unlike the persistent pool, nothing here is derived — so there is no
@@ -106,7 +117,12 @@ const RECORDED_MOVE_SITES: usize = 30;
 
 fn move_sites() -> Vec<(&'static str, usize, String)> {
     let mut sites = Vec::new();
-    for file in ["src/lib.rs", "src/coroutine.rs", "src/coroutine/host.rs"] {
+    for file in [
+        "src/lib.rs",
+        "src/coroutine.rs",
+        "src/coroutine/host.rs",
+        "src/coroutine/ownership.rs",
+    ] {
         let src = std::fs::read_to_string(file).expect("the emitter is readable");
         for (i, line) in src.lines().enumerate() {
             if MOVE_FORMS.iter().any(|form| line.contains(form)) {
