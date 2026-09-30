@@ -86,6 +86,70 @@ LIB = os.path.join(ROOT, "src", "lib.rs")
 # `old` must occur exactly once in `src/lib.rs`; the driver asserts that and
 # refuses to run a mutation it cannot place, so a silent no-op is impossible.
 # ---------------------------------------------------------------------------
+# Re-registered after flat-input ownership changed these arms. The copy flags
+# remain intact. Dup still zeros its second result in round one and both
+# results in round two; Return still replaces the returned value with zero.
+DUP_ARM = """Op::Dup => {
+                let w = st.width_at(0);
+                let k = st.kind_at(0);
+                let owned = st.owned_at(0);
+                let v = st.pop();
+                if owned_bodies {
+                    st.push_owned(v, w, k, owned);
+                    st.push_owned(v, w, k, owned);
+                } else {
+                    st.push(v);
+                    st.push(v);
+                }
+            }"""
+RETURN_ARM = """Op::Return => {
+                if let Some(context) = ownership_context {
+                    let flag = st.owned_at(0);
+                    st.b.build_store(
+                        coroutine::ownership::field(&st.b, context, usize::from(chunk.param_count)),
+                        flag,
+                    )
+                    .unwrap();
+                }
+                let v = st.pop();
+                build_typed_return(&st.b, func, v);
+            }"""
+
+def replace_in_mutant(text, old, new, expected):
+    """Refuse a stale mutation recipe rather than deriving a partial no-op."""
+    found = text.count(old)
+    if found != expected:
+        raise ValueError(f"mutation recipe expected {expected} matches, found {found}: {old!r}")
+    return text.replace(old, new)
+
+
+DUP_SECOND_ZERO = replace_in_mutant(
+    replace_in_mutant(
+        DUP_ARM,
+        "st.push_owned(v, w, k, owned);\n                } else",
+        "st.push_owned(i64t.const_zero(), w, k, owned);\n                } else",
+        1,
+    ),
+    "st.push(v);\n                }",
+    "st.push(i64t.const_zero());\n                }",
+    1,
+)
+DUP_BOTH_ZERO = replace_in_mutant(
+    replace_in_mutant(
+        replace_in_mutant(DUP_ARM, "let v = st.pop();", "let _v = st.pop();", 1),
+        "st.push_owned(v, w, k, owned);",
+        "st.push_owned(i64t.const_zero(), w, k, owned);",
+        2,
+    ),
+    "st.push(v);", "st.push(i64t.const_zero());", 2,
+)
+RETURN_ZERO = replace_in_mutant(
+    replace_in_mutant(RETURN_ARM, "let v = st.pop();", "let _v = st.pop();", 1),
+    "build_typed_return(&st.b, func, v);",
+    "build_typed_return(&st.b, func, i64t.const_zero());",
+    1,
+)
+
 MUTATIONS = {
     # --- comparisons: predicate swaps, boundary and inversion -------------
     "CmpEq": ("Op::CmpEq => IntPredicate::EQ,", "Op::CmpEq => IntPredicate::NE,"),
@@ -157,10 +221,7 @@ MUTATIONS = {
         '                    return Err(LowerError::MalformedInput(format!(\n'
         '                        "SetLocal names slot {n} in a chunk with {} locals",',
     ),
-    "Dup": (
-        "Op::Dup => {\n                let v = st.pop();\n                st.push(v);\n                st.push(v);",
-        "Op::Dup => {\n                let v = st.pop();\n                st.push(v);\n                st.push(i64t.const_zero());",
-    ),
+    "Dup": (DUP_ARM, DUP_SECOND_ZERO),
     "Const": (
         "ConstValue::Int(i) => (*i, Width::Scalar(8)),",
         "ConstValue::Int(i) => (i.wrapping_add(1), Width::Scalar(8)),",
@@ -191,8 +252,8 @@ MUTATIONS = {
         #
         # The replacement returns a constant zero instead of the popped value,
         # which is the same DISCRIMINATING shape the original had.
-        "Op::Return => {\n                let v = st.pop();\n                build_typed_return(&st.b, func, v);",
-        "Op::Return => {\n                let _v = st.pop();\n                build_typed_return(&st.b, func, i64t.const_zero().into());",
+        RETURN_ARM,
+        RETURN_ZERO,
     ),
     # --- conversions -------------------------------------------------------
     "ByteToWord": (
@@ -240,10 +301,7 @@ MUTATIONS_STRONG = {
         "let c = st.b.build_int_compare(pred, lhs, rhs, \"cmp\").unwrap();",
         "let c = st.b.build_int_compare(if matches!(op, Op::CmpNe) { IntPredicate::EQ } else { pred }, lhs, rhs, \"cmp\").unwrap();",
     ),
-    "Dup": (
-        "Op::Dup => {\n                let v = st.pop();\n                st.push(v);\n                st.push(v);",
-        "Op::Dup => {\n                let v = st.pop();\n                let _ = v;\n                st.push(i64t.const_zero());\n                st.push(i64t.const_zero());",
-    ),
+    "Dup": (DUP_ARM, DUP_BOTH_ZERO),
     "PushImmediate": ("                    1 => 1,", "                    1 => 0,"),
 }
 

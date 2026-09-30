@@ -3813,5 +3813,7 @@ native brief records scalar reply and enum inspection corrections, followed by
 flat composite yields, live body operands, stable arena handles and bounded flat
 host inputs. Host buffers can be reused while older values remain live. Unproved
 transfer extents and external native body ownership remain refused. Both complete
-gates passed on the stable-handle commit. The flat-input increment and version
-integration remain outstanding. Upstream task state above is preserved.
+gates passed on the stable-handle commit. The flat-input default gate exposed
+stale mutation registrations, now repaired. Pull request 475 is integrated.
+Complete gates and integration of the remaining stack are outstanding. Upstream
+task state above is preserved.

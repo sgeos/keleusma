@@ -3414,3 +3414,14 @@ Both complete gates passed on clean, frozen `360d3295`. The flat-input changes
 still need complete native gates. Pull request 475 has two remote test jobs
 running and its head remains unchanged. Workstream B remains active. Resume from
 the bounded native brief. Upstream material is preserved.
+
+
+## V0.3.X mutation registrations and integration, 2026-09-29
+
+The default gate on `d487eb07` failed only on three stale mutation registrations.
+Their original zero-result perturbations now place again, with checked recipe
+replacements. The failure record is preserved. No lowering code changed in this
+correction. Complete native gates still need rerunning. Pull request 475 merged
+as `ff124db9` after green remote checks, with its tree identical to the tested
+head. The canonical version worktree is synchronized. Pull requests 478 through
+481 remain stacked. Workstream B remains active. Upstream material is preserved.
