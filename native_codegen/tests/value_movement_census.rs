@@ -1,3 +1,41 @@
+//! Latest-reply state stores payload, ownership, kind and actual body size.
+//! Direct and delegated yields copy immutable host bodies before returning.
+//! Entry parameter metadata and latest metadata remain independent. Reset
+//! copies the selected length into a statically bounded reservation and restores
+//! its metadata. Scalars have zero length and are never read as pointers.
+//! Existing parsed-IR scalar stores remain active. Flat payloads replace those
+//! stores with owned copies, and builder stores update metadata on both paths.
+//!
+//! Arithmetic outputs store their selected scalar kind and a zero body length
+//! in operand metadata. These two sites store no addresses. LLVM captures the
+//! metadata with its value when it survives suspension. The pure arithmetic
+//! helper performs no memory access or pointer formation.
+//!
+//! Private scalar writes retain payload bits and their runtime kinds. Kind
+//! words occupy a checked range after the private body pool, before the existing
+//! resume-state offset. They survive Reset and frame release with private data.
+//! A fresh private region is zeroed before the published image is installed.
+//!
+//! Internal calls transfer scalar bits and three bounded metadata arrays for
+//! ownership, kind and actual length. Every returned field is written before use.
+//! Private body writes use overlap-safe memmove after a capacity guard. Captured
+//! aliases keep their lengths and unwritten trailing bytes remain unchanged.
+//! Private scalar words retain bits. Only a body tag selects the pool address,
+//! so storing a scalar or Unit cannot expose stale body bytes as a new body.
+//!
+//! Value-driven coroutine construction copies each operand at its actual size.
+//! Producer bounds prove the total fits the site reservation. A runtime check
+//! precedes every destination address. Zero-byte operands perform no access.
+//! Struct and enum padding is zeroed only after fields have been copied.
+//!
+//! The fifth delegate-context field stores the bounded yield-site destination.
+//! Each suspension writes its site identifier before returning to the host.
+//! Operand metadata starts at zero before producer facts replace it. Reset
+//! clears local kinds to Unit and lengths to zero with the actual local values.
+//! Coroutine tag and extent stores carry scalar metadata, never body addresses.
+//! Owned mixed-body copies use a statically bounded reservation and the selected
+//! runtime extent. Borrowed region aliases retain their original address.
+//!
 //! Flat host values are copied by exact verified extent at value transfers.
 //! Copies and ownership flags have fixed-size allocations hoisted before
 //! inlining, then captured by LLVM when live across suspension. Private and
@@ -88,6 +126,7 @@ const MOVE_FORMS: &[&str] = &[
     "build_memcpy(",
     "store i64 ",
     "build_memmove(",
+    "build_memset(",
 ];
 
 /// Move sites in the emitter, at the stamp.
@@ -97,7 +136,8 @@ const MOVE_FORMS: &[&str] = &[
 // the two Reset stores. These destinations are classified above.
 // 24 -> 27, including the coroutine context and parsed intrinsic helper.
 // 27 -> 30 for the stable continuation, reply, and release stores.
-const RECORDED_MOVE_SITES: usize = 44;
+// 59 -> 63 with selected output size, field store, body copy and padding.
+const RECORDED_MOVE_SITES: usize = 80;
 // 18 -> 19 on 2026-09-11, when the shared composite slot landed: one body copy
 // into the host's buffer, at the offset and length the module's shared layout
 // STATES. Unlike the persistent pool, nothing here is derived — so there is no
@@ -122,6 +162,10 @@ fn move_sites() -> Vec<(&'static str, usize, String)> {
         "src/coroutine.rs",
         "src/coroutine/host.rs",
         "src/coroutine/ownership.rs",
+        "src/coroutine/kinds.rs",
+        "src/coroutine/packing.rs",
+        "src/coroutine/arithmetic.rs",
+        "src/coroutine/private.rs",
     ] {
         let src = std::fs::read_to_string(file).expect("the emitter is readable");
         for (i, line) in src.lines().enumerate() {

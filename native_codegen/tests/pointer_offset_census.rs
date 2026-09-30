@@ -1,6 +1,36 @@
+//! Delegate metadata uses ten statically allocated pointer fields. Initialization
+//! enumerates exactly those fields. Yield updates use fixed index tuples
+//! one/three/five/six and two/seven/eight/nine. Field four remains the site pointer.
+//! One generalized builder address replaces separate flat destination addresses.
+//!
+//! Private scalar kind metadata follows the native private body pool. Checked
+//! arithmetic proves all metadata fits before the existing resume-state offset.
+//! Direct indices are constants. Indexed data guards bound runtime indices
+//! before both metadata and immutable initial-kind table addresses are formed.
+//! Packed pool ends need not be aligned, so metadata accesses use alignment one.
+//!
+//! Internal call metadata addresses use constant indices within three arrays
+//! of arg_count+1 words. Private value words use validated slot offsets and the
+//! existing unsigned indexed-data bound. Body copy sources have producer bounds,
+//! actual lengths are checked against pool capacity, and memmove permits aliases.
+//!
+//! Coroutine packing uses a constant region-site base and runtime field offsets.
+//! Each offset is a prefix of producer-bounded nonnegative lengths. The complete
+//! sum is checked against the reservation before any field address is formed.
+//! Padding starts at that checked sum and ends at the reservation boundary.
+//! Body sources retain their actual extent and are copied only when nonempty.
+//!
+//! Coroutine arrays with joined sizes use the selected runtime extent for
+//! their unsigned index bound. The larger alternative never enlarges that bound.
+//!
+//! Dialogue metadata addresses use a fixed aligned frame-tail offset. The
+//! delegate context stores that address in field four of its five-pointer layout.
+//! Guarded enum inspection casts an address only after its Enum tag matches.
+//! Its discriminant uses offset zero with a proven eight-byte minimum extent.
+//!
 //! Flat-input contexts use fixed field indices bounded by their allocated
 //! argument count plus one return flag. Delegate context fields are indices
-//! one through three in a four-pointer structure. Body copy pointers retain
+//! one through four in a five-pointer structure. Body copy pointers retain
 //! the exact verified operand or signature extent and require that many
 //! readable host bytes during start or resume. No input buffer is retained.
 //!
@@ -91,7 +121,8 @@
 /// removed.
 // 24 -> 28, including the coroutine context and parsed intrinsic helper.
 // 28 -> 29 for constant header offsets within the declared stable slot.
-const RECORDED_GEP_SITES: usize = 33;
+// 37 -> 41 with the site base and three bounded packing address sites.
+const RECORDED_GEP_SITES: usize = 44;
 // 22 -> 24 on 2026-09-11, when the shared composite slot landed. **Both are
 // compile-time constant.** The body's address is the slot's STATED offset in the
 // host buffer — a field of the layout, not a computed quantity — and the second
@@ -155,6 +186,10 @@ fn gep_sites() -> Vec<(&'static str, usize, String)> {
         "src/coroutine.rs",
         "src/coroutine/host.rs",
         "src/coroutine/ownership.rs",
+        "src/coroutine/kinds.rs",
+        "src/coroutine/packing.rs",
+        "src/coroutine/arithmetic.rs",
+        "src/coroutine/private.rs",
     ] {
         let src = std::fs::read_to_string(file).expect("the emitter is readable");
         for (i, line) in src.lines().enumerate() {

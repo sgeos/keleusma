@@ -158,17 +158,67 @@ that owns the step.
 ## Bytecode coroutines
 
 `coroutine::lower` provides the Workstream B retcon path for verified streams
-with scalar or flat inputs and outputs. Its [module documentation](src/coroutine.rs) describes the provisional
-host contract and checked frame reservation. [Execution tests](tests/retcon_bytecode.rs)
-compare suspension sequences and seeded lexer state with the virtual machine.
-Reentrant and stream callees suspend through the same LLVM continuation,
-including nested calls and guarded heads. Nested streams clear their own locals
-at Reset. Cleared non-Unit parameter reads, differing delegated yield signatures
-and unproved transfer extents remain refused. Host input buffers may be reused
-once start or resume returns. Bounded copies preserve older live values while
-private-data references retain aliasing. The stable arena handle stores the
-current continuation and supports release and reuse. This interface is separate
-from `lower_module`. Both complete native gates passed on clean, frozen
-`5a0fec1d`. [Pull request 478](https://github.com/sgeos/keleusma/pull/478) tracks
-version integration. Full-language widening, final host packaging and native
-cost attestation remain separate roadmap milestones.
+and reentrant entries with scalar or flat arguments. Its
+[module documentation](src/coroutine.rs) specifies the provisional host contract,
+completion status and checked frame reservation. [Execution tests](tests/retcon_bytecode.rs)
+compare suspension and completion against the virtual machine. Reentrant and
+stream callees share the LLVM continuation. Reentrant entry arguments survive
+resume unchanged. Only a stream entry's first parameter receives each reply.
+The convenience entry selects a uniform dialogue. `lower_with_dialogues` accepts
+independent output and reply shapes at every yield, with a host site query.
+Parameterless reentrants can receive any supported declared reply. Host buffers may be reused
+once start or resume returns. Owned flat completion results survive destruction
+of the continuation frame in a bounded caller-owned tail reservation.
+
+The stable arena handle supports start, resume, completion, release and reuse.
+`lower_with_contracts` also accepts native flat result lifetimes. A `Snapshot`
+is copied into bounded instance storage before the host reuses its buffer.
+An `InstanceBorrow` retains aliases into the instance's declared regions.
+The host must uphold the chosen lifetime and packed representation. Calls with
+uncontracted flat results remain refused. These contracts do not attest native
+execution cost. Unused chunks impose no dialogue contracts or native body emission,
+while whole-module verification and resource admission remain mandatory.
+
+Composite reads and transfers require extents proven across control-flow joins.
+Private-slot kinds are inferred from writes and preserved in runtime metadata.
+Mixed enum and scalar inspection checks the kind before reading a body. Owned
+mixed values retain their selected size in bounded storage. Array bounds use
+that actual size, while field reads require a proven minimum. Reset clears
+runtime metadata with the corresponding locals. Possibly cleared operands have
+kind checks at typed consumers. Equality and enum inspection preserve valid Unit
+behavior. Composite construction packs actual operand sizes within its proven
+reservation. Tuple and array lengths vary with those values. Struct and enum
+padding is zeroed. Variable field reads and host transfers check the selected
+length before access. Internal calls carry actual kinds and extents through
+parameters and returns. Private composite slots preserve actual view lengths,
+including older aliases after shorter writes. Reads and writes preserve Unit
+until a consumer requires a body. Private copies permit overlapping aliases.
+Private scalar values retain their actual kinds across suspension and release.
+Zero a fresh private region before installing its initialization image. Preserve
+that region when reusing a frame with existing private values. Scalar kind
+metadata fits within the checked existing reservation. Ordering selects the
+runtime numeric kind and rejects unequal kinds. Checked and bare arithmetic
+also select actual numeric kinds. Checked outputs preserve the virtual machine's
+low value, high value and status classification. Bare integer zero division traps.
+Stream replies obey the virtual machine's scalar type checks. Composite stream
+parameters may receive other bounded flat shapes or scalar replies through
+explicit dialogues. Actual reply kind, length and ownership survive delegated
+yields and Reset. Typed consumers check the selected value before reading it.
+
+| Host control model | Lowering entry |
+|---|---|
+| Atomic function or existing synchronous callback integration | `lower_module` with its documented admission preconditions |
+| Host-driven start, suspension, resume and completion | `coroutine::lower` or an explicit-contract variant |
+| Proven degenerate stream step using the existing step contract | `lower_module`, with the actual degenerate shape checked by that route |
+
+The routes do not select or fall back to one another. The coroutine route accepts
+Stream and Reentrant entries and emits no `kel_yield` callback. The execution suite
+checks these distinctions, links snapshot completion from a C host, and checks
+object emission for the roadmap's four tier-one platform and architecture pairs.
+Cross-target emission does not establish execution or timing on those targets.
+The [completion requirements](../docs/decisions/WORKSTREAM_B_COMPLETION.md) track
+full Workstream B. The bounded baseline merged through
+[pull request 478](https://github.com/sgeos/keleusma/pull/478) as `a1aa53b8`.
+Both complete native gates pass at clean, frozen `5695ab1f`. Later verification
+receipts are checked separately. [Pull request 482](https://github.com/sgeos/keleusma/pull/482)
+tracks version integration. Consult its current merge and check state.

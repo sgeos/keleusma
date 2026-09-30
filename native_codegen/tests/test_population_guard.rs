@@ -47,7 +47,18 @@
 // 692 -> 695 with three live-body coroutine controls. No names removed.
 // 695 -> 697 with stable-handle lifecycle and C-linkage tests. No names removed.
 // 697 -> 705 with eight flat host-input lifetime and refusal tests. No names removed.
-const RECORDED_TEST_FUNCTIONS: usize = 705;
+// 705 -> 730 across the Workstream B completion series. The mixed receiver
+// refusal test was replaced by its executed positive successor. No test files
+// were removed. The new tests cover completion, dialogues, native ownership,
+// mixed kinds, predicate invalidation, varying extents and bounds traps.
+// 730 -> 735 with cleared-value consumer checks and equality regressions.
+// The guarded parameter refusal was replaced by executed positive coverage.
+// One new test records the remaining composite-packing admission gap.
+// 735 -> 744 with packing, call metadata, private aliases and Unit regressions.
+// The former guarded-construction refusal now has executed positive coverage.
+// 744 -> 751 with private scalar kinds, lifecycle, ordering and arithmetic-gap
+// coverage. The old initializer-refusal test now executes both changed inputs.
+const RECORDED_TEST_FUNCTIONS: usize = 759;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

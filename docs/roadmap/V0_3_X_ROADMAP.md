@@ -107,6 +107,13 @@ The load-bearing primitive. A Keleusma `loop`/`yield`/`resume` coroutine lowers 
 coroutine so a host can call coroutine-driven native functions whose state machines LLVM
 manages. This is the piece the V0.4.0 strategy identifies as where the risk concentrates.
 
+Implementation and native verification reached `5695ab1f` on 2026-09-30.
+The [acceptance record](../decisions/WORKSTREAM_B_COMPLETION.md) maps suspension,
+delegation, completion, ownership and resource checks to executed evidence and
+classifies remaining shared-backend dependencies. Both complete native float
+configurations passed on that clean, frozen commit. [Pull request 482](https://github.com/sgeos/keleusma/pull/482)
+tracks version integration. These results do not complete Workstreams A, C or D.
+
 > **MEASURED QUALIFICATION (2026-08-10): most of the corpus routes AROUND this workstream.**
 >
 > The paragraph above remains correct for the general case and is not withdrawn. What the

@@ -813,6 +813,13 @@ struct Lower<'ctx> {
     // Host-derived bodies are immutable values. Region bodies retain aliases.
     ownership: Option<coroutine::ownership::Flags<'ctx>>,
     ownership_width_unknown: bool,
+    runtime_kinds: Option<coroutine::kinds::Flags<'ctx>>,
+    borrowed_slots: Vec<bool>,
+    borrowed_locals: Vec<bool>,
+    input_copy_bounds: Vec<Option<u32>>,
+    input_body_sizes: Vec<IntValue<'ctx>>,
+    input_tags: Vec<IntValue<'ctx>>,
+    output_copy_bounds: Vec<Option<u32>>,
 }
 
 impl<'ctx> Lower<'ctx> {
@@ -846,6 +853,14 @@ impl<'ctx> Lower<'ctx> {
                 flags
                     .slots
                     .push(self.b.build_alloca(self.i64t, "owned_operand").unwrap());
+            }
+            if let Some(flags) = &mut self.runtime_kinds {
+                let kind = self.b.build_alloca(self.i64t, "kind_operand").unwrap();
+                let size = self.b.build_alloca(self.i64t, "body_size_operand").unwrap();
+                self.b.build_store(kind, self.i64t.const_zero()).unwrap();
+                self.b.build_store(size, self.i64t.const_zero()).unwrap();
+                flags.slots.push(kind);
+                flags.slot_sizes.push(size);
             }
             if let Some(bb) = resume {
                 self.b.position_at_end(bb);
@@ -931,14 +946,25 @@ impl<'ctx> Lower<'ctx> {
     }
 
     fn owned_at(&self, back: usize) -> IntValue<'ctx> {
+        let Some(index) = self.depth.checked_sub(back + 1) else {
+            // Legacy entry points also accept malformed bytecode. Their stack
+            // and local checks issue the refusal without metadata underflow.
+            return self.i64t.const_zero();
+        };
+        if self.borrowed_slots.get(index) == Some(&true) {
+            return self.i64t.const_zero();
+        }
         self.ownership
             .as_ref()
             .map_or(self.i64t.const_zero(), |flags| {
-                coroutine::ownership::load(&self.b, flags.slots[self.depth - back - 1])
+                coroutine::ownership::load(&self.b, flags.slots[index])
             })
     }
 
     fn owned_local(&self, index: usize) -> IntValue<'ctx> {
+        if self.borrowed_locals.get(index) == Some(&true) {
+            return self.i64t.const_zero();
+        }
         self.ownership
             .as_ref()
             .map_or(self.i64t.const_zero(), |flags| {
@@ -946,14 +972,29 @@ impl<'ctx> Lower<'ctx> {
             })
     }
 
-    fn push_owned(&mut self, v: IntValue<'ctx>, w: Width, k: OperandKind, owned: IntValue<'ctx>) {
+    fn copy_value(
+        &mut self,
+        v: IntValue<'ctx>,
+        w: Width,
+        owned: IntValue<'ctx>,
+        slot: usize,
+        bound: Option<u32>,
+    ) -> IntValue<'ctx> {
         if self.ownership.is_some()
             && w == Width::Unknown
             && owned.get_zero_extended_constant() != Some(0)
         {
+            if let (Some(maximum), Some(flags)) = (bound, &self.runtime_kinds) {
+                let bytes = coroutine::ownership::load(&self.b, flags.slot_sizes[slot]);
+                return coroutine::ownership::copy_bounded(&self.b, v, maximum, bytes, owned);
+            }
             self.ownership_width_unknown = true;
         }
-        let v = coroutine::ownership::copy(&self.b, v, w, owned);
+        coroutine::ownership::copy(&self.b, v, w, owned)
+    }
+    fn push_owned(&mut self, v: IntValue<'ctx>, w: Width, k: OperandKind, owned: IntValue<'ctx>) {
+        let bound = self.output_copy_bounds.get(self.depth).copied().flatten();
+        let v = self.copy_value(v, w, owned, self.depth, bound);
         self.push_k(v, w, k);
         if let Some(flags) = &self.ownership {
             self.b
@@ -1651,6 +1692,13 @@ pub fn lower_chunk<'ctx>(
         BodyCfg {
             opts,
             retcon: false,
+            retcon_frame_bytes: None,
+            retcon_owned_bodies: false,
+            retcon_sites: None,
+            retcon_native_bodies: None,
+            retcon_facts: None,
+            retcon_reply_body_maximum: 0,
+            retcon_site_offset: None,
             retcon_resume_type: None,
             retcon_resume_shape: None,
             retcon_branches: None,
@@ -1689,6 +1737,12 @@ pub fn lower_chunk<'ctx>(
 /// needs metadata a `Chunk` does not carry. Nothing here is externally linked
 /// yet, so an internal, obviously-provisional name is more honest than a
 /// half-implemented mangling that looks authoritative.
+/// For host-driven suspension, use [`coroutine::lower`] or its explicit-contract
+/// variants. This low-level route retains its ordinary function, degenerate-step
+/// and synchronous yield-callback contracts. It does not select the returned-
+/// continuation interface automatically. See `host_control_routes_are_explicit_and_do_not_fall_back_to_callbacks`
+/// in `tests/retcon_bytecode.rs`.
+///
 /// # Precondition: the module must be ADMISSIBLE, and this function does not check it
 ///
 /// **Verified is not enough.** A module can pass [`keleusma::verify::verify`] and
@@ -1848,6 +1902,8 @@ fn lower_module_with<'ctx>(
     retcon_config: Option<(u32, &coroutine::types::Analysis)>,
 ) -> Result<Vec<FunctionValue<'ctx>>, LowerError> {
     let retcon_bytes = retcon_config.map(|(bytes, _)| bytes);
+    let reachable =
+        |index: usize| retcon_config.is_none_or(|(_, facts)| facts.plan.reachable[index]);
     check_word_width(program.word_bits_log2)?;
     let i64t = ctx.i64_type();
     // **The module's float width, hoisted above its first use.** It was computed
@@ -1863,11 +1919,9 @@ fn lower_module_with<'ctx>(
     // declaring a `double` there would be a silently wrong number rather than a
     // fault. Approximating a width is exactly the failure this guard exists for.
     if !float_width_lowered(float_bytes)
-        && let Some((idx, _)) = program
-            .signatures
-            .iter()
-            .enumerate()
-            .find(|(_, sg)| shape_is_float(&sg.ret) || sg.params.iter().any(shape_is_float))
+        && let Some((idx, _)) = program.signatures.iter().enumerate().find(|(index, sg)| {
+            reachable(*index) && (shape_is_float(&sg.ret) || sg.params.iter().any(shape_is_float))
+        })
     {
         return Err(LowerError::unsupported_float_width(
             float_bytes,
@@ -1982,18 +2036,23 @@ fn lower_module_with<'ctx>(
     if shared_count > 0 {
         check_target_endianness()?;
     }
-    let owned_bodies = retcon_bytes.is_some()
-        && program
-            .entry_point
-            .and_then(|entry| program.signatures.get(entry))
-            .and_then(|sig| sig.params.first())
-            .is_some_and(|sh| matches!(sh, keleusma::bytecode::WireShape::Flat { .. }));
+    let owned_bodies = retcon_config.is_some_and(|(_, facts)| facts.plan.owns_bodies);
     let declared: Vec<FunctionValue<'ctx>> = program
         .chunks
         .iter()
         .enumerate()
         .map(|(i, c)| {
+            if !reachable(i) {
+                // Preserve bytecode chunk indices without declaring an unsupported
+                // ABI for an unused helper. No emitted call can reach this symbol.
+                return Ok(module.add_function(
+                    &format!("kel_chunk_{i}"),
+                    i64t.fn_type(&[], false),
+                    None,
+                ));
+            }
             let sig = program.signatures.get(i);
+            let retcon_internal = retcon_config.is_some() && Some(i) != program.entry_point;
             // **A FLOAT PARAMETER TAKES A FLOATING-POINT POSITION, so the lowered
             // function uses the platform's floating-point calling convention where
             // the signature says it should.**
@@ -2006,7 +2065,9 @@ fn lower_module_with<'ctx>(
             // REFUSED until this existed.
             let mut params: Vec<_> = (0..c.param_count as usize)
                 .map(|p| match sig.and_then(|s| s.params.get(p)) {
-                    Some(sh) if shape_is_float(sh) => float_type(ctx, float_bytes).into(),
+                    Some(sh) if shape_is_float(sh) && !retcon_internal => {
+                        float_type(ctx, float_bytes).into()
+                    }
                     _ => i64t.into(),
                 })
                 .collect();
@@ -2026,8 +2087,8 @@ fn lower_module_with<'ctx>(
                 // into memory the host scoped.
                 params.push(ptrt.into()); // composite body region
             }
-            if owned_bodies && Some(i) != program.entry_point {
-                params.push(ptrt.into()); // parameter and return ownership flags
+            if retcon_internal {
+                params.push(ptrt.into()); // ownership, kind and body-size metadata
             }
             let retcon_delegate = retcon_bytes.is_some()
                 && Some(i) != program.entry_point
@@ -2039,7 +2100,7 @@ fn lower_module_with<'ctx>(
             // this at all — a chunk carries its parameter types but NOT its
             // return type, which lives only in the module-level signature — which
             // is why the entry ABI is a module-level feature.
-            let fnty = if sig.is_some_and(|s| shape_is_float(&s.ret)) {
+            let fnty = if !retcon_internal && sig.is_some_and(|s| shape_is_float(&s.ret)) {
                 float_type(ctx, float_bytes).fn_type(&params, false)
             } else {
                 i64t.fn_type(&params, false)
@@ -2051,6 +2112,8 @@ fn lower_module_with<'ctx>(
             };
             if retcon_delegate {
                 coroutine::mark_delegate(ctx, f);
+            } else if retcon_internal {
+                f.set_linkage(inkwell::module::Linkage::Internal);
             }
             mark_nounwind(ctx, f);
             Ok(f)
@@ -2146,7 +2209,10 @@ fn lower_module_with<'ctx>(
     if let Some(i) = program
         .native_return_shapes
         .iter()
-        .position(|sh| matches!(sh, keleusma::bytecode::WireShape::Scalar { kind } if *kind == SCALAR_FLOAT_TAG))
+        .enumerate()
+        .find(|(index, sh)| retcon_config.is_none_or(|(_, facts)| u16::try_from(*index).is_ok_and(|index| facts.plan.native_calls.contains(&index)))
+            && matches!(sh, keleusma::bytecode::WireShape::Scalar { kind } if *kind == SCALAR_FLOAT_TAG))
+        .map(|(index, _)| index)
     {
         return Err(LowerError::UnsupportedShape(format!(
             "native {i} declares a Float RETURN SHAPE; its result would reach the \
@@ -2191,6 +2257,9 @@ fn lower_module_with<'ctx>(
     };
 
     for (i, (chunk, func)) in program.chunks.iter().zip(declared.iter()).enumerate() {
+        if !reachable(i) {
+            continue;
+        }
         let mut tail = degenerate_stream_yield(chunk, program);
         let mut delegated_call = None;
         if let Some((entry, callee, call_ix)) = delegated {
@@ -2221,14 +2290,31 @@ fn lower_module_with<'ctx>(
         let cfg = BodyCfg {
             opts,
             retcon,
+            retcon_frame_bytes: retcon_bytes.filter(|_| retcon),
+            retcon_owned_bodies: owned_bodies,
+            retcon_reply_body_maximum: retcon_config
+                .map_or(0, |(_, facts)| facts.reply_body_maximum),
+            retcon_sites: retcon_config.map(|(_, facts)| &facts.plan.sites[i]),
+            retcon_native_bodies: retcon_config.map(|(_, facts)| &facts.plan.native_body_returns),
+            retcon_facts: retcon_config.map(|(_, facts)| &facts.facts[i]),
+            retcon_site_offset: retcon_config.and_then(|(_, facts)| facts.plan.metadata_offset),
             retcon_branches: retcon_config.map(|(_, facts)| &facts.branches[i]),
             retcon_resume_shape: retcon_bytes
                 .and(program.entry_point)
                 .and_then(|entry| program.signatures.get(entry))
-                .and_then(|sig| sig.params.first().copied()),
-            retcon_resume_type: retcon_bytes
-                .and(program.entry_point)
-                .and_then(|entry| program.chunks[entry].param_types.first().copied()),
+                .map(|sig| {
+                    sig.params
+                        .first()
+                        .copied()
+                        .unwrap_or(keleusma::bytecode::WireShape::Scalar { kind: 0 })
+                }),
+            retcon_resume_type: retcon_bytes.and(program.entry_point).map(|entry| {
+                program.chunks[entry]
+                    .param_types
+                    .first()
+                    .copied()
+                    .unwrap_or(TypeTag::Unit)
+            }),
             degenerate_yield: tail.as_deref(),
             delegated_call,
             own_signature: program.signatures.get(i),
@@ -2309,8 +2395,8 @@ fn lower_module_with<'ctx>(
 /// reason a call is: the information required to resolve it was never supplied.
 #[derive(Default, Clone, Copy)]
 struct DataCtx<'a> {
-    /// Load-time scalar categories for private slots. Retcon preserves these categories
-    /// through slot writes so scalar yields need not guess their payload width.
+    /// Load-time values for private slots. Coroutine reads use their kinds until
+    /// the first write, then load the actual kind from persistent metadata.
     private_init: &'a [ConstValue],
     /// Number of shared slots. Shared slots occupy the low indices, so this is
     /// also the boundary above which a slot is private.
@@ -2558,6 +2644,15 @@ fn chunk_builds_composite(chunk: &Chunk) -> bool {
 struct BodyCfg<'a> {
     /// LLVM owns suspension state instead of the handwritten stream dispatch.
     retcon: bool,
+    /// LLVM continuation bytes, excluding the caller-owned completion tail.
+    retcon_frame_bytes: Option<u32>,
+    /// Track ownership for all flat entry arguments, not only the reply shape.
+    retcon_owned_bodies: bool,
+    retcon_reply_body_maximum: u32,
+    retcon_sites: Option<&'a BTreeMap<usize, (u64, coroutine::Dialogue)>>,
+    retcon_facts: Option<&'a BTreeMap<usize, coroutine::types::Facts>>,
+    retcon_native_bodies: Option<&'a BTreeMap<u16, coroutine::NativeBodyReturn>>,
+    retcon_site_offset: Option<u32>,
     /// The VM writes host replies to the outer entry parameter even when a
     /// reentrant callee is suspended. Its own parameters retain their values.
     retcon_resume_type: Option<TypeTag>,
@@ -3266,6 +3361,76 @@ fn build_typed_return<'ctx>(b: &Builder<'ctx>, func: FunctionValue<'ctx>, v: Int
     }
 }
 
+/// Fixed-layout host transfers check a variable body's actual length.
+fn guard_body_contract<'ctx>(
+    ctx: &'ctx Context,
+    st: &mut Lower<'ctx>,
+    trap: BasicBlock<'ctx>,
+    slot: usize,
+    bytes: u32,
+) -> Result<(), LowerError> {
+    let width = st.widths[slot];
+    if width == Width::Body(bytes) {
+        return Ok(());
+    }
+    if width != Width::Unknown || st.input_copy_bounds[slot].is_none_or(|maximum| maximum < bytes) {
+        return Err(LowerError::UnsupportedShape(format!(
+            "coroutine composite boundary body extent {width:?} differs from the {bytes}-byte contract"
+        )));
+    }
+    let valid =
+        st.b.build_int_compare(
+            IntPredicate::EQ,
+            st.input_body_sizes[slot],
+            ctx.i64_type().const_int(u64::from(bytes), false),
+            "body_contract_fits",
+        )
+        .unwrap();
+    let function = st.b.get_insert_block().unwrap().get_parent().unwrap();
+    let accepted = ctx.append_basic_block(function, "body_contract_checked");
+    st.b.build_conditional_branch(valid, accepted, trap)
+        .unwrap();
+    st.b.position_at_end(accepted);
+    st.widths[slot] = Width::Body(bytes);
+    Ok(())
+}
+
+/// A variable body must contain the complete field before its address is used.
+fn guard_body_read<'ctx>(
+    ctx: &'ctx Context,
+    st: &mut Lower<'ctx>,
+    trap: BasicBlock<'ctx>,
+    minimum: Width,
+    offset: u32,
+    bytes: u32,
+) -> Result<(), LowerError> {
+    if coroutine::ownership::require_extent(minimum, offset, bytes).is_ok() {
+        return Ok(());
+    }
+    let required = offset
+        .checked_add(bytes)
+        .ok_or_else(|| LowerError::UnsupportedShape("coroutine field extent overflows".into()))?;
+    let maximum = st.input_copy_bounds.last().copied().flatten();
+    if st.width_at(0) != Width::Unknown || maximum.is_none_or(|maximum| maximum < required) {
+        return coroutine::ownership::require_extent(minimum, offset, bytes);
+    }
+    let actual = *st.input_body_sizes.last().unwrap();
+    let valid =
+        st.b.build_int_compare(
+            IntPredicate::UGE,
+            actual,
+            ctx.i64_type().const_int(u64::from(required), false),
+            "body_read_fits",
+        )
+        .unwrap();
+    let function = st.b.get_insert_block().unwrap().get_parent().unwrap();
+    let accepted = ctx.append_basic_block(function, "body_read_checked");
+    st.b.build_conditional_branch(valid, accepted, trap)
+        .unwrap();
+    st.b.position_at_end(accepted);
+    Ok(())
+}
+
 /// Trap when a runtime array index is out of range, or REFUSE when the range is
 /// not statically known.
 ///
@@ -3309,35 +3474,45 @@ fn guard_array_index<'ctx>(
 ) -> Result<(), LowerError> {
     // Stack shape at an index site is `[.., array, index]`, so the array is one
     // deeper than the top.
-    let body = match st.width_at(1) {
-        Width::Body(n) => u64::from(n),
+    if elem_bytes == 0 {
+        return Err(LowerError::unsupported_op(
+            op,
+            "an array whose element stride is zero, so the element count is not defined"
+                .to_string(),
+        ));
+    }
+    let count = match st.width_at(1) {
+        Width::Body(bytes) => i64t.const_int(u64::from(bytes) / elem_bytes, false),
+        Width::Unknown
+            if st
+                .input_copy_bounds
+                .get(st.depth - 2)
+                .copied()
+                .flatten()
+                .is_some() =>
+        {
+            // A coroutine join can select different bounded array sizes. Read
+            // the producer's selected extent, captured before output metadata
+            // reuses this stack slot. Using a minimum would reject valid indices
+            // in the larger array; using a maximum would permit an overread.
+            let bytes = st.input_body_sizes[st.depth - 2];
+            st.b.build_int_unsigned_div(bytes, i64t.const_int(elem_bytes, false), "array_length")
+                .unwrap()
+        }
         other => {
             return Err(LowerError::unsupported_op(
                 op,
                 format!(
-                    "an array indexed by a runtime value whose body size is not                      tracked ({other:?}), so no bound can be derived. Lowering it                      unguarded returns whatever lies at base + index * stride,                      which is a wrong value rather than a fault"
+                    "an array indexed by a runtime value whose body size is not tracked ({other:?}), so no bound can be derived"
                 ),
             ));
         }
     };
-    if elem_bytes == 0 {
-        return Err(LowerError::unsupported_op(
-            op,
-            "an array whose element stride is zero, so the element count is not              defined"
-                .to_string(),
-        ));
-    }
-    let count = body / elem_bytes;
     let index = st.peek();
     let cont = ctx.append_basic_block(func, "idxinbounds");
     let bad =
-        st.b.build_int_compare(
-            IntPredicate::UGE,
-            index,
-            i64t.const_int(count, false),
-            "idxoob",
-        )
-        .unwrap();
+        st.b.build_int_compare(IntPredicate::UGE, index, count, "idxoob")
+            .unwrap();
     st.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
     st.b.position_at_end(cont);
     Ok(())
@@ -3355,6 +3530,13 @@ fn lower_chunk_body<'ctx>(
     let BodyCfg {
         opts,
         retcon,
+        retcon_frame_bytes,
+        retcon_owned_bodies: owned_bodies,
+        retcon_reply_body_maximum,
+        retcon_sites,
+        retcon_facts,
+        retcon_native_bodies,
+        retcon_site_offset,
         retcon_resume_type,
         retcon_resume_shape,
         retcon_branches,
@@ -3370,7 +3552,7 @@ fn lower_chunk_body<'ctx>(
         visited,
         float_bytes,
     } = cfg;
-    let owned_bodies = matches!(
+    let owned_reply = matches!(
         retcon_resume_shape,
         Some(keleusma::bytecode::WireShape::Flat { .. })
     );
@@ -3395,10 +3577,42 @@ fn lower_chunk_body<'ctx>(
     } else {
         None
     };
+    let retcon_completion = match (
+        retcon_frame_bytes,
+        chunk.block_type,
+        own_signature.map(|signature| signature.ret),
+    ) {
+        (
+            Some(offset),
+            BlockType::Reentrant,
+            Some(keleusma::bytecode::WireShape::Flat { size, .. }),
+        ) => {
+            let frame = func
+                .get_nth_param(func.count_params() - 2)
+                .unwrap()
+                .into_pointer_value();
+            // lower() reserves size.max(1) bytes after the LLVM frame, inside
+            // the caller's frame_bytes reservation. This tail survives coro.end.
+            let destination = unsafe {
+                b.build_in_bounds_gep(
+                    i8t,
+                    frame,
+                    &[i64t.const_int(u64::from(offset), false)],
+                    "completion_body",
+                )
+                .unwrap()
+            };
+            Some((destination, size))
+        }
+        _ => None,
+    };
     // The latest reply is distinct from local zero, which user code may assign.
     let retcon_latest = retcon.then(|| {
-        let slot = b.build_alloca(i64t, "latest_reply").unwrap();
-        let raw = func.get_nth_param(0).unwrap();
+        let raw = if chunk.param_count == 0 {
+            i64t.const_zero().into()
+        } else {
+            func.get_nth_param(0).unwrap()
+        };
         let bits = if raw.is_float_value() {
             float_to_bits(&b, raw.into_float_value(), i64t, float_bytes)
         } else {
@@ -3408,10 +3622,13 @@ fn lower_chunk_body<'ctx>(
             &b,
             bits,
             width_of_declared_shape(retcon_resume_shape.as_ref(), float_bytes),
-            i64t.const_int(u64::from(owned_bodies), false),
+            i64t.const_int(u64::from(owned_reply), false),
         );
-        b.build_store(slot, bits).unwrap();
-        slot
+        coroutine::ReplyState::new(
+            &b,
+            bits,
+            retcon_resume_shape.unwrap_or(keleusma::bytecode::WireShape::Scalar { kind: 0 }),
+        )
     });
 
     // **A RESUMABLE STREAM KEEPS ITS LOCALS IN THE ARENA, NOT ON THE MACHINE
@@ -3467,19 +3684,81 @@ fn lower_chunk_body<'ctx>(
         })
         .collect();
     let ownership = owned_bodies.then(|| coroutine::ownership::Flags::new(&b, locals.len()));
-    let ownership_context = (owned_bodies && !retcon).then(|| {
+    let runtime_kinds = retcon_facts.map(|_| coroutine::kinds::Flags::new(&b, locals.len()));
+    if retcon {
+        let flags = runtime_kinds.as_ref().unwrap();
+        for (index, shape) in own_signature.unwrap().params.iter().copied().enumerate() {
+            b.build_store(
+                flags.locals[index],
+                i64t.const_int(
+                    u64::from(coroutine::types::kind(coroutine::types::shape(shape))),
+                    false,
+                ),
+            )
+            .unwrap();
+            let size = match shape {
+                keleusma::bytecode::WireShape::Flat { size, .. } => size,
+                _ => 0,
+            };
+            b.build_store(
+                flags.local_sizes[index],
+                i64t.const_int(u64::from(size), false),
+            )
+            .unwrap();
+        }
+    }
+    let ownership_context = (retcon_facts.is_some() && !retcon).then(|| {
         func.get_nth_param(u32::from(chunk.param_count) + 3)
             .unwrap()
             .into_pointer_value()
     });
+    let site_metadata = if retcon {
+        retcon_site_offset.map(|offset| {
+            let frame = func
+                .get_nth_param(func.count_params() - 2)
+                .unwrap()
+                .into_pointer_value();
+            // The dialogue plan reserves an aligned word outside both LLVM's
+            // continuation frame and any completion body, inside frame_bytes.
+            unsafe {
+                b.build_in_bounds_gep(
+                    i8t,
+                    frame,
+                    &[i64t.const_int(u64::from(offset), false)],
+                    "site_metadata",
+                )
+                .unwrap()
+            }
+        })
+    } else {
+        None
+    };
     let delegate_context = if retcon {
+        let latest = retcon_latest.as_ref().unwrap();
+        let entry_metadata = if retcon_stream && chunk.param_count > 0 {
+            let flags = runtime_kinds.as_ref().unwrap();
+            [
+                ownership
+                    .as_ref()
+                    .map_or(latest.owned, |flags| flags.locals[0]),
+                flags.locals[0],
+                flags.local_sizes[0],
+            ]
+        } else {
+            [latest.owned, latest.kind, latest.bytes]
+        };
         Some(coroutine::delegate_context(
             ctx,
             &b,
             retcon_reply.unwrap(),
-            locals[0],
-            retcon_latest.unwrap(),
-            ownership.as_ref().map(|flags| flags.locals[0]),
+            if retcon_stream && chunk.param_count > 0 {
+                locals[0]
+            } else {
+                latest.value
+            },
+            latest,
+            entry_metadata,
+            site_metadata,
         ))
     } else if retcon_delegate {
         Some(func.get_last_param().unwrap().into_pointer_value())
@@ -3512,7 +3791,13 @@ fn lower_chunk_body<'ctx>(
                 false,
             ),
         };
-        let stored = coroutine::ownership::copy(&b, stored, width, flag);
+        // Internal parameters borrow the caller's immutable snapshot. Owned
+        // bytecode calls are inlined before suspension frame capture.
+        let stored = if ownership_context.is_some() {
+            stored
+        } else {
+            coroutine::ownership::copy(&b, stored, width, flag)
+        };
         b.build_store(*local, stored).unwrap();
         if let Some(flags) = &ownership {
             b.build_store(flags.locals[i], flag).unwrap();
@@ -3758,7 +4043,25 @@ fn lower_chunk_body<'ctx>(
         }
     }
 
+    if let (Some(context), Some(flags)) = (ownership_context, &runtime_kinds) {
+        let count = usize::from(chunk.param_count) + 1;
+        for index in 0..usize::from(chunk.param_count) {
+            for (part, destination) in [(1, flags.locals[index]), (2, flags.local_sizes[index])] {
+                let source = coroutine::kinds::call_field(&b, context, count, index, part);
+                b.build_store(destination, coroutine::ownership::load(&b, source))
+                    .unwrap();
+            }
+        }
+    }
+
     let mut st = Lower {
+        runtime_kinds,
+        borrowed_slots: Vec::new(),
+        input_copy_bounds: Vec::new(),
+        input_body_sizes: Vec::new(),
+        input_tags: Vec::new(),
+        output_copy_bounds: Vec::new(),
+        borrowed_locals: Vec::new(),
         ownership,
         ownership_width_unknown: false,
         b,
@@ -3827,7 +4130,8 @@ fn lower_chunk_body<'ctx>(
     // Two or more writes stay unknown. Joining them would need a real dataflow
     // pass: a LINEAR walk cannot see a back edge, so a local rewritten later in
     // a loop body would be read at the width of the textually earlier write and
-    // packed wrongly on every iteration after the first.
+    // packed wrongly on every iteration after the first. Coroutine lowering now
+    // supplies converged extent facts and overrides this fallback below.
     let mut local_write_count: BTreeMap<usize, u32> = BTreeMap::new();
     for o in &chunk.ops {
         if let Op::SetLocal(n) = o {
@@ -3997,6 +4301,61 @@ fn lower_chunk_body<'ctx>(
             continue;
         }
 
+        if let Some(facts) = retcon_facts.and_then(|extents| extents.get(&i)) {
+            if facts.stack.len() != st.depth {
+                return Err(LowerError::Internal(
+                    "coroutine extent depth disagrees with verified emission".into(),
+                ));
+            }
+            st.widths.resize(st.depth, Width::Unknown);
+            st.widths.copy_from_slice(&facts.extents.stack);
+            st.kinds = facts
+                .stack
+                .iter()
+                .map(|mask| coroutine::types::operand_kind(*mask))
+                .collect();
+            st.borrowed_slots = facts.flow_stack.iter().map(|flow| !flow.owned).collect();
+            st.borrowed_locals = facts.flow_locals.iter().map(|flow| !flow.owned).collect();
+            st.input_copy_bounds = facts.flow_stack.iter().map(|flow| flow.maximum()).collect();
+            st.output_copy_bounds.clear();
+            for output in &facts.outputs {
+                st.output_copy_bounds.resize(output.slot + 1, None);
+                st.output_copy_bounds[output.slot] = output.flow.maximum();
+            }
+            let (_, delta) = keleusma::verify::op_depth_effect(op, chunk);
+            let needed = st.depth + delta.max(0) as usize;
+            if needed > MAX_STACK {
+                return Err(LowerError::UnsupportedShape(
+                    "coroutine kind stack exceeds lowering capacity".into(),
+                ));
+            }
+            if needed > 0 {
+                st.ensure_slot(needed - 1);
+            }
+            let input = st.runtime_kinds.as_ref().unwrap().seed(&st.b, facts, op);
+            st.input_body_sizes = input.sizes;
+            st.input_tags = input.tags;
+            for (&slot, &mask) in &facts.guards {
+                let selected =
+                    st.b.build_and(
+                        st.input_tags[slot],
+                        i64t.const_int(u64::from(coroutine::types::kind(mask)), false),
+                        "accepted_kind",
+                    )
+                    .unwrap();
+                let valid = st
+                    .b
+                    .build_int_compare(IntPredicate::NE, selected, i64t.const_zero(), "kind_valid")
+                    .unwrap();
+                let accepted = ctx.append_basic_block(func, "kind_checked");
+                st.b.build_conditional_branch(valid, accepted, trap_bb)
+                    .unwrap();
+                st.b.position_at_end(accepted);
+                st.kinds[slot] = coroutine::types::operand_kind(mask);
+                st.widths[slot] =
+                    coroutine::types::guarded_width(mask, &facts.flow_stack[slot], float_bytes);
+            }
+        }
         // The op is about to be lowered. See `BodyCfg::visited` for why this is
         // recorded here rather than after the arm, and why only a CLEAN chunk's
         // list may be read.
@@ -4187,7 +4546,13 @@ fn lower_chunk_body<'ctx>(
             // The callback path for a reentrant chunk remains outside this guard.
             let float_yield_in_a_general_stream =
                 (general_stream || retcon || retcon_delegate) && matches!(op, Op::Yield);
-            let float_aware = float_store_into_a_float_slot
+            let runtime_checked_arithmetic = st.runtime_kinds.is_some()
+                && matches!(
+                    op,
+                    Op::CheckedAdd | Op::CheckedSub | Op::CheckedMul(_) | Op::CheckedDiv(_)
+                );
+            let float_aware = runtime_checked_arithmetic
+                || float_store_into_a_float_slot
                 || float_into_a_composite_body
                 || float_yield_in_a_general_stream
                 || matches!(
@@ -4228,6 +4593,7 @@ fn lower_chunk_body<'ctx>(
             // The positional half of the `Op::Call` admission.
             if let Op::Call(idx, arg_count) = op
                 && consumes_float
+                && retcon_facts.is_none()
             {
                 let n = usize::from(*arg_count);
                 let params = callees
@@ -4270,20 +4636,92 @@ fn lower_chunk_body<'ctx>(
             }
         }
 
+        if retcon_resume_type.is_some() {
+            // Reply body types are supplied by the host contract, rather than
+            // the bytecode signature. Prove every derived read and call copy.
+            let read_width = retcon_facts
+                .and_then(|facts| facts.get(&i))
+                .and_then(|facts| {
+                    let slot = facts.stack.len().checked_sub(1)?;
+                    facts.flow_stack[slot].minimum(
+                        facts
+                            .guards
+                            .get(&slot)
+                            .copied()
+                            .unwrap_or(facts.stack[slot]),
+                    )
+                })
+                .map_or(st.width_at(0), Width::Body);
+            match op {
+                Op::GetField(keleusma::bytecode::StructField::Flat { offset, kind }) => {
+                    let shape = keleusma::bytecode::WireShape::Scalar {
+                        kind: kind.to_tag(),
+                    };
+                    let Width::Scalar(bytes) = width_of_declared_shape(Some(&shape), float_bytes)
+                    else {
+                        return Err(LowerError::UnsupportedShape(
+                            "coroutine field has no proven scalar extent".into(),
+                        ));
+                    };
+                    guard_body_read(ctx, &mut st, trap_bb, read_width, u32::from(*offset), bytes)?;
+                }
+                Op::GetField(keleusma::bytecode::StructField::FlatNested {
+                    offset, size, ..
+                }) => {
+                    guard_body_read(
+                        ctx,
+                        &mut st,
+                        trap_bb,
+                        read_width,
+                        u32::from(*offset),
+                        u32::from(*size),
+                    )?;
+                }
+                Op::IsEnum(..) => {
+                    let size = retcon_facts
+                        .and_then(|facts| facts.get(&i))
+                        .and_then(|facts| facts.flow_stack.last())
+                        .and_then(|flow| flow.bodies[3].minimum());
+                    coroutine::ownership::require_extent(
+                        size.map_or(Width::Unknown, Width::Body),
+                        0,
+                        8,
+                    )?;
+                }
+                _ => {}
+            }
+        }
+        if matches!(op, Op::Yield) && (retcon || retcon_delegate) && retcon_site_offset.is_some() {
+            let (site, _) = retcon_sites.unwrap()[&i];
+            let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
+            let ty = ctx.struct_type(&[ptr.into(); 10], false);
+            let field =
+                st.b.build_struct_gep(ty, delegate_context.unwrap(), 4, "site_slot")
+                    .unwrap();
+            let destination =
+                st.b.build_load(ptr, field, "site_destination")
+                    .unwrap()
+                    .into_pointer_value();
+            st.b.build_store(destination, i64t.const_int(site, false))
+                .unwrap();
+        }
+        let boundary_shape = if matches!(op, Op::Yield) {
+            retcon_sites
+                .and_then(|sites| sites.get(&i))
+                .map(|(_, contract)| contract.yielded)
+        } else {
+            own_signature.map(|signature| signature.ret)
+        };
         // Coroutine payloads are untagged. The type pass proves the body kind;
-        // the emitter must also prove the exact extent at every boundary,
-        // including ordinary callees whose declared return shapes feed callers.
+        // the emitter must check the exact extent at host boundaries. Internal
+        // callees transport actual lengths through their metadata context.
         if retcon_resume_type.is_some()
-            && matches!(op, Op::Yield | Op::Return)
-            && let Some(keleusma::bytecode::WireShape::Flat { size, .. }) =
-                own_signature.map(|signature| signature.ret)
+            && (matches!(op, Op::Yield) || (retcon && matches!(op, Op::Return)))
+            && let Some(keleusma::bytecode::WireShape::Flat { size, .. }) = boundary_shape
             && st.width_at(0) != Width::Body(size)
         {
-            return Err(LowerError::UnsupportedShape(format!(
-                "coroutine composite boundary requires {size} body bytes in {} at {i}, found {:?}",
-                chunk.name,
-                st.width_at(0)
-            )));
+            let slot = st.depth - 1;
+            guard_body_contract(ctx, &mut st, trap_bb, slot, size)?;
         }
         match op {
             Op::GetLocal(n) => {
@@ -4313,27 +4751,35 @@ fn lower_chunk_body<'ctx>(
                 // a read that textually PRECEDES the write finds no recorded
                 // width and stays unknown, which is the conservative direction.
                 let idx = *n as usize;
-                let w = match local_write_count.get(&idx).copied().unwrap_or(0) {
-                    0 | 1 => st.local_widths.get(idx).copied().unwrap_or(Width::Unknown),
-                    // **Trusted when every write agrees**, which is the only case
-                    // the back-edge objection does not reach. See
-                    // [`certified_local_widths`].
-                    _ => certified_widths
-                        .get(&idx)
-                        .copied()
-                        .unwrap_or(Width::Unknown),
+                let w = if let Some(facts) = retcon_facts.and_then(|extents| extents.get(&i)) {
+                    facts.extents.locals[idx]
+                } else {
+                    match local_write_count.get(&idx).copied().unwrap_or(0) {
+                        0 | 1 => st.local_widths.get(idx).copied().unwrap_or(Width::Unknown),
+                        // **Trusted when every write agrees**, which is the only case
+                        // the back-edge objection does not reach. See
+                        // [`certified_local_widths`].
+                        _ => certified_widths
+                            .get(&idx)
+                            .copied()
+                            .unwrap_or(Width::Unknown),
+                    }
                 };
                 // **Restore the kind on the same rule as the width.** Only a
                 // singly-written local carries a trusted tag; anything else is
                 // `Unknown` and refuses at the use rather than being read as an
                 // integer, which is what a float would silently become.
-                let k = match local_write_count.get(&idx).copied().unwrap_or(0) {
-                    0 | 1 => st
-                        .local_kinds
-                        .get(idx)
-                        .copied()
-                        .unwrap_or(OperandKind::Unknown),
-                    _ => OperandKind::Unknown,
+                let k = if let Some(facts) = retcon_facts.and_then(|facts| facts.get(&i)) {
+                    coroutine::types::operand_kind(facts.locals[idx])
+                } else {
+                    match local_write_count.get(&idx).copied().unwrap_or(0) {
+                        0 | 1 => st
+                            .local_kinds
+                            .get(idx)
+                            .copied()
+                            .unwrap_or(OperandKind::Unknown),
+                        _ => OperandKind::Unknown,
+                    }
                 };
                 let owned = st.owned_local(idx);
                 st.push_owned(v, w, k, owned);
@@ -4345,7 +4791,8 @@ fn lower_chunk_body<'ctx>(
                 let k = st.kind_at(0);
                 let owned = st.owned_at(0);
                 let v = st.pop();
-                let v = coroutine::ownership::copy(&st.b, v, w, owned);
+                let bound = st.input_copy_bounds.get(st.depth).copied().flatten();
+                let v = st.copy_value(v, w, owned, st.depth, bound);
                 // **BOUNDED FOR THE SAME REASON `GetLocal` IS.** This one was
                 // missed on the first pass, and the robustness sweep did not
                 // catch the miss because its mutation set corrupted `GetLocal`
@@ -4391,6 +4838,75 @@ fn lower_chunk_body<'ctx>(
             // unchecked opcodes for `Byte`, `Fixed` and `Float`. Verified
             // against `src/compiler.rs` and the VM's dispatch arms, which raise
             // a type error on an `Int` reaching `Op::Add`.
+            Op::Add
+            | Op::Sub
+            | Op::Mul
+            | Op::Div
+            | Op::Mod
+            | Op::Neg
+            | Op::CheckedAdd
+            | Op::CheckedSub
+            | Op::CheckedMul(_)
+            | Op::CheckedDiv(_)
+            | Op::CheckedMod
+            | Op::CheckedNeg
+                if st.runtime_kinds.is_some() =>
+            {
+                let count = if matches!(op, Op::CheckedNeg | Op::Neg) {
+                    1
+                } else {
+                    2
+                };
+                let base = st.depth - count;
+                let tags = st.input_tags[base..st.depth].to_vec();
+                let mut values: Vec<_> = (0..count).map(|_| st.pop()).collect();
+                values.reverse();
+                let plain = matches!(
+                    op,
+                    Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Mod | Op::Neg
+                );
+                if plain {
+                    let low = coroutine::arithmetic::plain(
+                        &st.b,
+                        &values,
+                        &tags,
+                        float_bytes,
+                        op,
+                        trap_bb,
+                    )?;
+                    // Keep the converged producer facts, including a known
+                    // packed width. Joined widths still use the actual tag at
+                    // consumers, but a singular width must not be discarded.
+                    let output =
+                        &retcon_facts.expect("runtime arithmetic has facts")[&i].outputs[0];
+                    st.push_k(
+                        low,
+                        output.width,
+                        coroutine::types::operand_kind(output.tag),
+                    );
+                } else {
+                    let triple = coroutine::arithmetic::checked(
+                        &st.b,
+                        &values,
+                        &tags,
+                        float_bytes,
+                        op,
+                        trap_bb,
+                    )?;
+                    st.push_triple(ctx, func, trap_bb, opts, triple);
+                }
+                let flags = st.runtime_kinds.as_ref().unwrap();
+                for offset in 0..if plain { 1 } else { 3 } {
+                    let tag = if offset == 2 {
+                        i64t.const_int(u64::from(coroutine::types::WORD), false)
+                    } else {
+                        tags[0]
+                    };
+                    st.b.build_store(flags.slots[base + offset], tag).unwrap();
+                    st.b.build_store(flags.slot_sizes[base + offset], i64t.const_zero())
+                        .unwrap();
+                }
+            }
             Op::CheckedAdd | Op::CheckedSub => {
                 // **A `Byte` OPERAND TAKES A DIFFERENT ARM IN THE RUNTIME**, and
                 // taking the integer one returned an untruncated value: `200 + 100`
@@ -4836,6 +5352,39 @@ fn lower_chunk_body<'ctx>(
             // matches it. The result is 0 or 1 in an i64, which is the flat
             // representation of the VM's tagged `Bool`.
             Op::CmpEq | Op::CmpNe | Op::CmpLt | Op::CmpGt | Op::CmpLe | Op::CmpGe => {
+                if st.runtime_kinds.is_some() {
+                    let tags = [st.input_tags[st.depth - 2], st.input_tags[st.depth - 1]];
+                    let rhs = st.pop();
+                    let lhs = st.pop();
+                    let result = if matches!(op, Op::CmpEq | Op::CmpNe) {
+                        let equal = coroutine::kinds::equality(
+                            &st.b,
+                            [lhs, rhs],
+                            tags,
+                            float_bytes,
+                            trap_bb,
+                        );
+                        if matches!(op, Op::CmpNe) {
+                            st.b.build_not(equal, "not_equal").unwrap()
+                        } else {
+                            equal
+                        }
+                    } else {
+                        coroutine::kinds::ordering(
+                            &st.b,
+                            [lhs, rhs],
+                            tags,
+                            float_bytes,
+                            op,
+                            trap_bb,
+                        )
+                    };
+                    let value =
+                        st.b.build_int_z_extend(result, i64t, "comparison_value")
+                            .unwrap();
+                    st.push_w(value, Width::Scalar(1));
+                    continue;
+                }
                 // **FLOAT COMPARISON MATCHES THE REFERENCE, WHICH IS NOT IEEE.**
                 //
                 // The virtual machine compares floats with
@@ -5508,7 +6057,7 @@ fn lower_chunk_body<'ctx>(
                 let declared = callee.count_params()
                     - trailing_ptrs(&data)
                     - u32::from(suspending)
-                    - u32::from(owned_bodies);
+                    - u32::from(retcon_facts.is_some());
                 if u32::from(*arg_count) != declared {
                     return Err(LowerError::MalformedInput(format!(
                         "Call({idx}, {arg_count}) passes {arg_count} arguments to a chunk \
@@ -5517,15 +6066,30 @@ fn lower_chunk_body<'ctx>(
                     )));
                 }
 
-                let call_ownership = owned_bodies.then(|| {
-                    let context = st
-                        .b
-                        .build_alloca(i64t.array_type(u32::from(*arg_count) + 1), "call_ownership")
+                let call_ownership = retcon_facts.is_some().then(|| {
+                    let context =
+                        st.b.build_alloca(
+                            i64t.array_type((u32::from(*arg_count) + 1) * 3),
+                            "call_metadata",
+                        )
                         .unwrap();
                     for parameter in 0..usize::from(*arg_count) {
                         let flag = st.owned_at(usize::from(*arg_count) - parameter - 1);
                         let field = coroutine::ownership::field(&st.b, context, parameter);
                         st.b.build_store(field, flag).unwrap();
+                        let slot = st.depth - usize::from(*arg_count) + parameter;
+                        for (part, value) in
+                            [(1, st.input_tags[slot]), (2, st.input_body_sizes[slot])]
+                        {
+                            let destination = coroutine::kinds::call_field(
+                                &st.b,
+                                context,
+                                usize::from(*arg_count) + 1,
+                                parameter,
+                                part,
+                            );
+                            st.b.build_store(destination, value).unwrap();
+                        }
                     }
                     st.b.build_store(
                         coroutine::ownership::field(&st.b, context, usize::from(*arg_count)),
@@ -5669,6 +6233,30 @@ fn lower_chunk_body<'ctx>(
                             coroutine::ownership::field(&st.b, context, usize::from(*arg_count)),
                         )
                     });
+                    let (w, k) = if let Some(context) = call_ownership {
+                        let flags = st.runtime_kinds.as_ref().unwrap();
+                        let count = usize::from(*arg_count) + 1;
+                        for (part, destination) in
+                            [(1, flags.slots[st.depth]), (2, flags.slot_sizes[st.depth])]
+                        {
+                            let source = coroutine::kinds::call_field(
+                                &st.b,
+                                context,
+                                count,
+                                usize::from(*arg_count),
+                                part,
+                            );
+                            st.b.build_store(
+                                destination,
+                                coroutine::ownership::load(&st.b, source),
+                            )
+                            .unwrap();
+                        }
+                        let output = &retcon_facts.unwrap()[&i].outputs[0];
+                        (output.width, coroutine::types::operand_kind(output.tag))
+                    } else {
+                        (w, k)
+                    };
                     st.push_owned(ret, w, k, owned);
                 }
             }
@@ -5771,12 +6359,22 @@ fn lower_chunk_body<'ctx>(
                 // native still gets, and that is all of them in the shipped
                 // corpus today.
                 let w = width_of_declared_shape(native_shapes.get(usize::from(*idx)), float_bytes);
-                if owned_bodies && matches!(w, Width::Body(_)) {
-                    return Err(LowerError::UnsupportedShape(
-                        "a native body return has no host-value ownership contract".into(),
-                    ));
+                if retcon_resume_type.is_some() && matches!(w, Width::Body(_)) {
+                    let contract = retcon_native_bodies
+                        .and_then(|contracts| contracts.get(idx))
+                        .ok_or_else(|| {
+                            LowerError::UnsupportedShape(
+                                "a native body return has no host-value ownership contract".into(),
+                            )
+                        })?;
+                    let owned = i64t.const_int(
+                        u64::from(*contract == coroutine::NativeBodyReturn::Snapshot),
+                        false,
+                    );
+                    st.push_owned(ret, w, OperandKind::Int, owned);
+                } else {
+                    st.push_w(ret, w);
                 }
-                st.push_w(ret, w);
             }
             // `Byte` occupies a full `i64` slot holding a value in `0..=255`.
             // **That invariant is what makes `ByteToWord` free**, and it is the
@@ -6203,8 +6801,10 @@ fn lower_chunk_body<'ctx>(
                     };
                     // **THE INITIALISATION WORD FOR THIS SLOT.**
                     //
-                    // A composite slot's load-time value is `Unit`, and the
-                    // reference FAULTS on a read of an unwritten one. The pool is
+                    // A composite slot's load-time value is `Unit`. A body
+                    // consumer faults on an unwritten slot. The legacy route
+                    // guards eagerly here. Coroutines preserve Unit on reads
+                    // and defer the fault to the consumer. The pool is
                     // bytes, so zeros are indistinguishable from a written body of
                     // zeros, and this backend answered `0` where the reference
                     // faulted — measured on a slot written on one branch and read
@@ -6242,7 +6842,7 @@ fn lower_chunk_body<'ctx>(
                         st.b.build_in_bounds_gep(i8t, base, &[init_byte], "initp")
                             .unwrap()
                     };
-                    if is_read {
+                    if is_read && st.runtime_kinds.is_none() {
                         // **FAULT WHERE THE REFERENCE FAULTS.** One load and one
                         // compare, both at fixed offsets, so the worst-case cost
                         // moves by a constant and nothing dynamic is introduced.
@@ -6262,19 +6862,122 @@ fn lower_chunk_body<'ctx>(
                         st.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
                         st.b.position_at_end(cont);
                     }
+                    let scalar_ptr = if st.runtime_kinds.is_some() {
+                        let relative = i64t.const_int(u64::from(slot - data.shared_count), false);
+                        let relative = index.map_or(relative, |ix| {
+                            st.b.build_int_add(relative, ix, "private_value_index")
+                                .unwrap()
+                        });
+                        let offset =
+                            st.b.build_int_mul(
+                                relative,
+                                i64t.const_int(8, false),
+                                "private_value_offset",
+                            )
+                            .unwrap();
+                        Some(unsafe {
+                            st.b.build_in_bounds_gep(i8t, base, &[offset], "private_value_pointer")
+                                .unwrap()
+                        })
+                    } else {
+                        None
+                    };
                     if is_read {
                         // The pool address IS the body, so it is pushed as a
                         // `Body` at the derived size: every downstream field and
                         // element offset is then bounded by the same figure the
                         // write was.
                         let as_int = st.b.build_ptr_to_int(addr, i64t, "poolint").unwrap();
-                        st.push_w(as_int, Width::Body(size));
+                        let width = retcon_facts
+                            .map_or(Width::Body(size), |facts| facts[&i].outputs[0].width);
+                        let mut value = as_int;
+                        if let Some(flags) = &st.runtime_kinds {
+                            let metadata =
+                                st.b.build_load(i64t, init_ptr, "private_body_metadata")
+                                    .unwrap()
+                                    .into_int_value();
+                            let tag =
+                                st.b.build_and(
+                                    metadata,
+                                    i64t.const_int(0xffff, false),
+                                    "private_body_kind",
+                                )
+                                .unwrap();
+                            let bytes =
+                                st.b.build_right_shift(
+                                    metadata,
+                                    i64t.const_int(32, false),
+                                    false,
+                                    "private_body_size",
+                                )
+                                .unwrap();
+                            let tag =
+                                st.b.build_select(
+                                    st.b.build_int_compare(
+                                        IntPredicate::EQ,
+                                        tag,
+                                        i64t.const_zero(),
+                                        "private_unwritten",
+                                    )
+                                    .unwrap(),
+                                    i64t.const_int(u64::from(coroutine::types::UNIT), false),
+                                    tag,
+                                    "private_actual_kind",
+                                )
+                                .unwrap()
+                                .into_int_value();
+                            let scalar =
+                                st.b.build_load(i64t, scalar_ptr.unwrap(), "private_scalar_bits")
+                                    .unwrap()
+                                    .into_int_value();
+                            let body =
+                                st.b.build_int_compare(
+                                    IntPredicate::UGE,
+                                    tag,
+                                    i64t.const_int(u64::from(coroutine::types::TUPLE), false),
+                                    "private_is_body",
+                                )
+                                .unwrap();
+                            value =
+                                st.b.build_select(body, as_int, scalar, "private_value")
+                                    .unwrap()
+                                    .into_int_value();
+                            st.b.build_store(flags.slots[st.depth], tag).unwrap();
+                            st.b.build_store(flags.slot_sizes[st.depth], bytes).unwrap();
+                        }
+                        st.push_w(value, width);
                     } else {
                         // **The operand's width is cross-checked against the
                         // derived size.** They come from different places — the
                         // operand's from the producing op, the size from the
                         // module's table — so a disagreement means one of them is
                         // wrong and neither may be used to size a copy.
+                        if st.runtime_kinds.is_some() {
+                            let operand = st.depth - 1;
+                            if st.input_copy_bounds[operand].is_none() {
+                                return Err(LowerError::UnsupportedDataSlot {
+                                    slot,
+                                    why: "private body extent has no producer bound".into(),
+                                });
+                            }
+                            let tag = st.input_tags[operand];
+                            let bytes = st.input_body_sizes[operand];
+                            let bits = st.pop();
+                            coroutine::packing::store_private(
+                                &st.b,
+                                addr,
+                                init_ptr,
+                                scalar_ptr.unwrap(),
+                                coroutine::packing::Operand {
+                                    bits,
+                                    tag,
+                                    body_bytes: bytes,
+                                },
+                                size,
+                                trap_bb,
+                            );
+                            continue;
+                        }
                         let w = st.width_at(0);
                         match w {
                             Width::Body(n) if n == size => {}
@@ -6298,6 +7001,12 @@ fn lower_chunk_body<'ctx>(
                                 });
                             }
                         }
+                        let tag = st
+                            .runtime_kinds
+                            .as_ref()
+                            .map_or(i64t.const_int(1, false), |flags| {
+                                flags.load(&st.b, st.depth - 1)
+                            });
                         let v = st.pop();
                         let src = st
                             .b
@@ -6316,8 +7025,7 @@ fn lower_chunk_body<'ctx>(
                             })?;
                         // Marked AFTER the copy, so a trap inside it cannot leave
                         // the slot claiming to hold a body it does not.
-                        st.b.build_store(init_ptr, i64t.const_int(1, false))
-                            .unwrap();
+                        st.b.build_store(init_ptr, tag).unwrap();
                     }
                     continue;
                 }
@@ -6624,23 +7332,6 @@ fn lower_chunk_body<'ctx>(
                     }
                     let base = private_base.expect("has_data implies the private pointer");
                     let rel = slot - data.shared_count;
-                    let retcon_scalar = if retcon_resume_type.is_some() {
-                        let count = if indexed { bound } else { 1 };
-                        coroutine::private_scalar_shape(data.private_init, rel, count, float_bytes)?
-                    } else {
-                        None
-                    };
-                    if !is_read && let Some((width, kind)) = retcon_scalar {
-                        let incoming_kind = st.kind_at(0);
-                        let compatible_kind = incoming_kind == kind
-                            || (kind == OperandKind::Int && incoming_kind == OperandKind::Unknown);
-                        if st.width_at(0) != width || !compatible_kind {
-                            return Err(LowerError::UnsupportedDataSlot {
-                                slot,
-                                why: "a coroutine private scalar write changes or obscures its declared type".into(),
-                            });
-                        }
-                    }
                     let byte_index =
                         st.b.build_int_mul(
                             match index {
@@ -6673,6 +7364,25 @@ fn lower_chunk_body<'ctx>(
                     // caller passing a `Vec<u8>` base, whose alignment contract
                     // is one byte, violates this; the harness allocates a word
                     // slice for exactly that reason.
+                    let private_kind = if st.runtime_kinds.is_some() {
+                        let relative = match index {
+                            Some(ix) => {
+                                st.b.build_int_add(
+                                    ix,
+                                    i64t.const_int(u64::from(rel), false),
+                                    "private_relative_slot",
+                                )
+                                .unwrap()
+                            }
+                            None => i64t.const_int(u64::from(rel), false),
+                        };
+                        Some((
+                            coroutine::private::pointer(&st.b, base, &data, relative)?,
+                            relative,
+                        ))
+                    } else {
+                        None
+                    };
                     if is_read {
                         let load = st.b.build_load(i64t, addr, "pdataload").unwrap();
                         load.into_int_value()
@@ -6680,12 +7390,29 @@ fn lower_chunk_body<'ctx>(
                             .expect("a load is an instruction")
                             .set_alignment(PRIVATE_SLOT_BYTES)
                             .expect("PRIVATE_SLOT_BYTES is a power of two");
-                        if let Some((width, kind)) = retcon_scalar {
-                            st.push_k(load.into_int_value(), width, kind);
+                        if let Some((pointer, relative)) = private_kind {
+                            let tag =
+                                coroutine::private::load(&st.b, module, pointer, &data, relative);
+                            let flags = st.runtime_kinds.as_ref().unwrap();
+                            st.b.build_store(flags.slots[st.depth], tag).unwrap();
+                            st.b.build_store(flags.slot_sizes[st.depth], i64t.const_zero())
+                                .unwrap();
+                            let output = &retcon_facts.unwrap()[&i].outputs[0];
+                            st.push_k(
+                                load.into_int_value(),
+                                output.width,
+                                coroutine::types::operand_kind(output.tag),
+                            );
                         } else {
                             st.push(load.into_int_value());
                         }
                     } else {
+                        if let Some((pointer, _)) = private_kind {
+                            st.b.build_store(pointer, st.input_tags[st.depth - 1])
+                                .unwrap()
+                                .set_alignment(1)
+                                .unwrap();
+                        }
                         let v = st.pop();
                         let store = st.b.build_store(addr, v).unwrap();
                         store
@@ -6779,6 +7506,54 @@ fn lower_chunk_body<'ctx>(
                 // Widths, in OPERAND order. `width_at(0)` is the top of the
                 // stack, which is the LAST operand, so the run is reversed.
                 let n = *count as usize;
+                if st.runtime_kinds.is_some() {
+                    let start = st.depth - n;
+                    let mut values: Vec<_> = (0..n).map(|_| st.pop()).collect();
+                    values.reverse();
+                    let inputs: Vec<_> = values
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, bits)| coroutine::packing::Operand {
+                            bits,
+                            tag: st.input_tags[start + index],
+                            body_bytes: st.input_body_sizes[start + index],
+                        })
+                        .collect();
+                    let base = unsafe {
+                        st.b.build_in_bounds_gep(
+                            i8t,
+                            region,
+                            &[i64t.const_int(u64::from(site.offset), false)],
+                            "packed_body",
+                        )
+                        .unwrap()
+                    };
+                    let padded = matches!(
+                        chunk.ops[i],
+                        Op::NewComposite(keleusma::bytecode::NewCompositeOperand::Flat {
+                            kind: keleusma::value_layout::CompositeKind::Struct
+                                | keleusma::value_layout::CompositeKind::Enum,
+                            ..
+                        })
+                    );
+                    let bytes = coroutine::packing::pack(
+                        &st.b,
+                        base,
+                        &inputs,
+                        float_bytes,
+                        padded,
+                        u32::from(*byte_size),
+                        trap_bb,
+                    );
+                    st.b.build_store(st.runtime_kinds.as_ref().unwrap().slot_sizes[start], bytes)
+                        .unwrap();
+                    let bits =
+                        st.b.build_ptr_to_int(base, i64t, "packed_body_bits")
+                            .unwrap();
+                    let width = retcon_facts.unwrap()[&i].outputs[0].width;
+                    st.push_w(bits, width);
+                    continue;
+                }
                 let mut widths: Vec<Width> = Vec::with_capacity(n);
                 for back in (0..n).rev() {
                     // An unknown width cannot be placed. Refusing is the whole
@@ -7070,6 +7845,13 @@ fn lower_chunk_body<'ctx>(
                         )));
                     }
                 };
+                if let Some(flags) = &st.runtime_kinds {
+                    let tag = flags.load(&st.b, st.depth - 1);
+                    let value = st.peek();
+                    let result = coroutine::kinds::enum_test(&st.b, value, tag, expected);
+                    st.push_w(result, Width::Scalar(1));
+                    continue;
+                }
                 let addr_int = st.peek();
                 let base =
                     st.b.build_int_to_ptr(addr_int, ctx.ptr_type(AddressSpace::default()), "cenum")
@@ -7283,6 +8065,11 @@ fn lower_chunk_body<'ctx>(
             // the same lowered code driven with two arenas is two independent
             // streams.
             Op::Yield if retcon_delegate => {
+                let (site, contract) = retcon_sites.unwrap()[&i];
+                let retcon_resume_shape = Some(contract.reply);
+                let reply_type = coroutine::dialogue::tag(contract.reply);
+                let owned_reply =
+                    matches!(contract.reply, keleusma::bytecode::WireShape::Flat { .. });
                 if !matches!(st.width_at(0), Width::Scalar(_) | Width::Body(_)) {
                     return Err(LowerError::UnsupportedShape(format!(
                         "a coroutine yield needs a scalar or flat value in {} at {i}, found {:?}",
@@ -7291,7 +8078,7 @@ fn lower_chunk_body<'ctx>(
                     )));
                 }
                 let value = st.pop();
-                let helper = coroutine::delegate_yield(ctx, module, retcon_resume_shape)?;
+                let helper = coroutine::delegate_yield(ctx, module, retcon_resume_shape, site)?;
                 let reply =
                     st.b.build_call(
                         helper,
@@ -7302,7 +8089,7 @@ fn lower_chunk_body<'ctx>(
                     .try_as_basic_value()
                     .unwrap_basic()
                     .into_int_value();
-                let (width, kind) = match retcon_resume_type.unwrap() {
+                let (width, kind) = match reply_type {
                     TypeTag::Unit => (Width::Scalar(0), OperandKind::Int),
                     TypeTag::Float => (Width::Scalar(float_bytes), OperandKind::Float),
                     TypeTag::Fixed => (Width::Scalar(8), OperandKind::Fixed),
@@ -7316,10 +8103,15 @@ fn lower_chunk_body<'ctx>(
                     reply,
                     width,
                     kind,
-                    i64t.const_int(u64::from(owned_bodies), false),
+                    i64t.const_int(u64::from(owned_reply), false),
                 );
             }
             Op::Yield if retcon => {
+                let (_, contract) = retcon_sites.unwrap()[&i];
+                let retcon_resume_shape = Some(contract.reply);
+                let reply_type = coroutine::dialogue::tag(contract.reply);
+                let owned_reply =
+                    matches!(contract.reply, keleusma::bytecode::WireShape::Flat { .. });
                 let v = st.pop();
                 let suspend = module
                     .get_function("llvm.coro.suspend.retcon.i1")
@@ -7350,7 +8142,7 @@ fn lower_chunk_body<'ctx>(
                         .unwrap()
                         .into_int_value();
 
-                let (width, kind) = match chunk.param_types[0] {
+                let (width, kind) = match reply_type {
                     TypeTag::Unit => (Width::Scalar(0), OperandKind::Int),
                     TypeTag::Float => (Width::Scalar(float_bytes), OperandKind::Float),
                     TypeTag::Fixed => (Width::Scalar(8), OperandKind::Fixed),
@@ -7360,13 +8152,35 @@ fn lower_chunk_body<'ctx>(
                     ),
                     tag => (width_of_tag(tag), OperandKind::Int),
                 };
-                let owned = i64t.const_int(u64::from(owned_bodies), false);
+                let owned = i64t.const_int(u64::from(owned_reply), false);
                 let latest = coroutine::ownership::copy(&st.b, reply, width, owned);
-                st.b.build_store(retcon_latest.unwrap(), latest).unwrap();
-                let parameter = coroutine::ownership::copy(&st.b, reply, width, owned);
-                st.b.build_store(st.locals[0], parameter).unwrap();
-                if let Some(flags) = &st.ownership {
-                    st.b.build_store(flags.locals[0], owned).unwrap();
+                retcon_latest
+                    .as_ref()
+                    .unwrap()
+                    .store(&st.b, latest, contract.reply);
+                if retcon_stream && chunk.param_count > 0 {
+                    let parameter = coroutine::ownership::copy(&st.b, reply, width, owned);
+                    st.b.build_store(st.locals[0], parameter).unwrap();
+                    let flags = st.runtime_kinds.as_ref().unwrap();
+                    st.b.build_store(
+                        flags.locals[0],
+                        i64t.const_int(
+                            u64::from(coroutine::types::kind(coroutine::types::shape(
+                                contract.reply,
+                            ))),
+                            false,
+                        ),
+                    )
+                    .unwrap();
+                    let size = match width {
+                        Width::Body(size) => size,
+                        _ => 0,
+                    };
+                    st.b.build_store(flags.local_sizes[0], i64t.const_int(u64::from(size), false))
+                        .unwrap();
+                    if let Some(flags) = &st.ownership {
+                        st.b.build_store(flags.locals[0], owned).unwrap();
+                    }
                 }
                 st.push_owned(reply, width, kind, owned);
             }
@@ -7614,6 +8428,9 @@ fn lower_chunk_body<'ctx>(
             // nothing can name.
             Op::Reset if retcon_stream => {
                 st.depth = 0;
+                if let Some(flags) = &st.runtime_kinds {
+                    flags.reset(&st.b);
+                }
                 if let Some(flags) = &st.ownership {
                     for flag in &flags.locals {
                         st.b.build_store(*flag, i64t.const_zero()).unwrap();
@@ -7624,18 +8441,23 @@ fn lower_chunk_body<'ctx>(
                 }
                 // A nested Stream does not receive the host reply in its own
                 // parameter slot. Only the entry restores the latest reply.
-                if retcon {
-                    let reply =
-                        st.b.build_load(i64t, retcon_latest.unwrap(), "reset_reply")
-                            .unwrap();
-                    let owned = i64t.const_int(u64::from(owned_bodies), false);
-                    let reply = coroutine::ownership::copy(
+                if retcon && chunk.param_count > 0 {
+                    let latest = retcon_latest.as_ref().unwrap();
+                    let reply = coroutine::ownership::load(&st.b, latest.value);
+                    let owned = coroutine::ownership::load(&st.b, latest.owned);
+                    let kind = coroutine::ownership::load(&st.b, latest.kind);
+                    let bytes = coroutine::ownership::load(&st.b, latest.bytes);
+                    let reply = coroutine::ownership::copy_bounded(
                         &st.b,
-                        reply.into_int_value(),
-                        width_of_declared_shape(retcon_resume_shape.as_ref(), float_bytes),
+                        reply,
+                        retcon_reply_body_maximum,
+                        bytes,
                         owned,
                     );
                     st.b.build_store(st.locals[0], reply).unwrap();
+                    let flags = st.runtime_kinds.as_ref().unwrap();
+                    st.b.build_store(flags.locals[0], kind).unwrap();
+                    st.b.build_store(flags.local_sizes[0], bytes).unwrap();
                     if let Some(flags) = &st.ownership {
                         st.b.build_store(flags.locals[0], owned).unwrap();
                     }
@@ -7732,8 +8554,34 @@ fn lower_chunk_body<'ctx>(
                 };
                 st.push(resumed);
             }
+            Op::Return if retcon => {
+                // Retcon completion payloads are undefined. Persist the final
+                // result in the caller's reply cell before destroying the frame.
+                let owned = st.owned_at(0);
+                let value = st.pop();
+                let value = retcon_completion.map_or(value, |(destination, size)| {
+                    coroutine::ownership::copy_to(&st.b, value, size, owned, destination)
+                });
+                st.b.build_store(retcon_reply.unwrap(), value).unwrap();
+                let cleanup = func
+                    .get_basic_blocks()
+                    .into_iter()
+                    .find(|bb| bb.get_name().to_bytes() == b"retcon.cleanup")
+                    .unwrap();
+                st.b.build_unconditional_branch(cleanup).unwrap();
+                dead = true;
+            }
             Op::Return => {
                 if let Some(context) = ownership_context {
+                    let count = usize::from(chunk.param_count) + 1;
+                    for (part, value) in [
+                        (1, st.input_tags[st.depth - 1]),
+                        (2, st.input_body_sizes[st.depth - 1]),
+                    ] {
+                        let destination =
+                            coroutine::kinds::call_field(&st.b, context, count, count - 1, part);
+                        st.b.build_store(destination, value).unwrap();
+                    }
                     let flag = st.owned_at(0);
                     st.b.build_store(
                         coroutine::ownership::field(&st.b, context, usize::from(chunk.param_count)),
@@ -7753,13 +8601,12 @@ fn lower_chunk_body<'ctx>(
         }
     }
 
-    // A chunk whose ops end without `Op::Return`. `verify()` ADMITS this: both
-    // `verify_stack_depth` and `check_chunk_seeded` compute the region's
-    // terminal depth and then discard it with `.map(|_| ())`. The VM defines the
-    // case as returning `Unit` (`src/vm.rs:4801`), and without a terminator here
-    // the function is malformed IR rather than merely wrong -- which nothing
-    // caught, because `lower_module` never verified its own output either (see
-    // the `verify` call added below).
+    // A chunk whose ops end without `Op::Return`. The current verifier rejects
+    // this shape, but lower_module may receive unverified input. Historically
+    // verification admitted it. The VM pops a result, or uses Unit if its entire
+    // stack is empty, without truncating the departing frame. The legacy native
+    // route retains its historical behavior here. Coroutine lowering refuses
+    // this path, preserving the verified completion contract.
     //
     // Zero is this backend's `Unit`. `st.depth > 0` is guarded because `pop`
     // decrements a `usize` unconditionally and would underflow on an empty
@@ -7771,6 +8618,13 @@ fn lower_chunk_body<'ctx>(
     // under-count reported to the runtime owner. Reproducing a defect for
     // fidelity would be the wrong call; revisit if the VM side is fixed.
     if !dead && st.b.get_insert_block().unwrap().get_terminator().is_none() {
+        if retcon {
+            // coroutine::lower verifies first. The current verifier requires
+            // every reachable path to terminate through Return, Trap or Reset.
+            return Err(LowerError::UnsupportedShape(
+                "coroutine completion requires an explicit Return".into(),
+            ));
+        }
         let v = if st.depth > 0 {
             st.pop()
         } else {

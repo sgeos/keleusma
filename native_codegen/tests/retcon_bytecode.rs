@@ -536,18 +536,14 @@ fn invalid_bytecode_and_composite_escape_remain_refused() {
             .any(|(_, original)| original.to_string() == error.to_string()),
         "{error}"
     );
-    // An unrelated reentrant yield with a different signature must also
-    // remain refused without bypassing coroutine boundary admission.
+    // An unrelated reentrant yield must neither add a boundary requirement
+    // nor bypass the reachable composite escape refusal.
     let source = std::fs::read_to_string("../examples/scripts/13_telemetry_stream.kel").unwrap();
     let with_delegate = common::build(&format!(
         "{source}\nyield unused(a: Word) -> Word {{ yield a }}"
     ));
     let delegated_error = coroutine::lower(&ctx, &with_delegate, &tm, 4096).unwrap_err();
-    assert!(
-        delegated_error
-            .to_string()
-            .contains("yield signature changes")
-    );
+    assert_eq!(delegated_error.to_string(), error.to_string());
 }
 
 #[test]
@@ -716,7 +712,7 @@ fn scalar_reply_widths_and_kinds_match_the_vm() {
         let ctx = Context::create();
         let error = coroutine::lower(&ctx, &p, &machine(), 4096).unwrap_err();
         assert!(
-            error.to_string().contains("yield signature changes"),
+            error.to_string().contains("scalar types are not proven"),
             "{error}"
         );
         let need = required_persistent_capacity_for(&p);
@@ -787,7 +783,7 @@ fn delegated_composite_yields_remain_refused() {
     );
     let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
     assert!(
-        error.to_string().contains("yield signature changes"),
+        error.to_string().contains("scalar types are not proven"),
         "{error}"
     );
     // A live body operand is now admitted. Only the signature mismatch above
@@ -854,15 +850,9 @@ fn nested_stream_calls_preserve_state_across_callee_resets() {
 fn nested_stream_parameter_reads_do_not_silently_turn_unit_into_zero() {
     use keleusma::bytecode::Value;
     use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
-    let p = common::build(
-        "loop child(a: Word) -> Word { yield a + 1 } loop main(t: Word) -> Word { child(t) }",
-    );
-    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("non-Unit parameter cleared by Reset")
-    );
+    let source =
+        "loop child(a: Word) -> Word { yield a + 1 } loop main(t: Word) -> Word { child(t) }";
+    let p = common::build(source);
     let need = required_persistent_capacity_for(&p);
     let mut arena = keleusma_arena::Arena::with_capacity(
         auto_arena_capacity_for(&p, &[]).unwrap() + need + 65536,
@@ -878,6 +868,14 @@ fn nested_stream_parameter_reads_do_not_silently_turn_unit_into_zero() {
         panic!("the cleared parameter must produce a type error");
     };
     assert!(fault.contains("Unit") && fault.contains("Int"), "{fault}");
+    #[cfg(unix)]
+    require_cleared_kind_trap(
+        "nested_stream_parameter_reads_do_not_silently_turn_unit_into_zero",
+        source,
+        &[5],
+        &[6],
+        &[7],
+    );
 }
 
 #[test]
@@ -899,34 +897,49 @@ fn nested_stream_release_stops_before_the_next_iteration() {
 }
 
 #[test]
-fn coroutine_private_scalar_admission_checks_writes_and_indexed_ranges() {
-    use keleusma::bytecode::ConstValue;
-    let ctx = Context::create();
-    let tm = machine();
-    let mut changed = common::build(
-        "private data st { n: Word } loop main(t: Word) -> Word { st.n = t; yield st.n }",
-    );
-    // Verified bytecode can change a slot's category after load. The native
-    // scalar inference must decline that case instead of trusting the first
-    // value's category for every later read.
-    changed.data_layout.as_mut().unwrap().private_init[0] = ConstValue::Float(0.0);
-    keleusma::verify::verify(&changed).unwrap();
-    let error = coroutine::lower(&ctx, &changed, &tm, 4096).unwrap_err();
-    assert!(
-        error.to_string().contains("coroutine scalar types"),
-        "{error}"
-    );
-
-    let mut indexed = common::build(
-        "private data st { xs: [Word; 2] } loop main(t: Word) -> Word { st.xs[0] = t; yield st.xs[t % 2] }",
-    );
-    indexed.data_layout.as_mut().unwrap().private_init[1] = ConstValue::Float(0.0);
-    keleusma::verify::verify(&indexed).unwrap();
-    let error = coroutine::lower(&ctx, &indexed, &tm, 4096).unwrap_err();
-    assert!(
-        error.to_string().contains("coroutine scalar types"),
-        "{error}"
-    );
+fn private_scalar_initializers_do_not_constrain_later_values() {
+    use keleusma::bytecode::{ConstValue, Value};
+    use keleusma::vm::{Vm, VmState};
+    for (source, slot, first, replies, expected) in [
+        (
+            "private data st { n: Word } loop main(t: Word) -> Word { st.n = t; yield st.n }",
+            0,
+            5,
+            [7, 0, 1, 0],
+            [5, 7, 0, 1],
+        ),
+        (
+            "private data st { xs: [Word; 2] } loop main(t: Word) -> Word { st.xs[0] = t; yield if st.xs[t % 2] == 0 { 1 } else { 0 } }",
+            1,
+            0,
+            [1, 2, 0, 0],
+            [1, 0, 0, 1],
+        ),
+    ] {
+        let mut program = common::build(source);
+        program.data_layout.as_mut().unwrap().private_init[slot] = ConstValue::Float(0.0);
+        keleusma::verify::verify(&program).unwrap();
+        let capacity = keleusma::vm::required_persistent_capacity_for(&program);
+        let mut arena = keleusma_arena::Arena::with_capacity(capacity + 65536);
+        arena.resize_persistent(capacity).unwrap();
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        let mut state = vm.call(&[Value::Int(first)]).unwrap();
+        for (i, value) in expected.into_iter().enumerate() {
+            assert!(matches!(state, VmState::Yielded(Value::Int(v)) if v == value));
+            if i + 1 < expected.len() {
+                state = vm.resume(Value::Int(replies[i])).unwrap();
+                if matches!(state, VmState::Reset) {
+                    state = vm.resume(Value::Int(replies[i])).unwrap();
+                }
+            }
+        }
+        for optimize in [false, true] {
+            assert_eq!(
+                native_module(&program, &[], first, &replies, optimize).0,
+                expected
+            );
+        }
+    }
 }
 
 #[test]
@@ -993,11 +1006,26 @@ fn reply_tags_are_checked_through_calls_and_branch_joins() {
     ] {
         let p = common::build(src);
         keleusma::verify::verify(&p).unwrap();
-        let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
-        assert!(
-            error.to_string().contains("coroutine scalar types"),
-            "{error}"
-        );
+        match coroutine::lower(&Context::create(), &p, &machine(), 4096) {
+            Err(error) => assert!(
+                error.to_string().contains("coroutine scalar types"),
+                "{error}"
+            ),
+            Ok(_) => {
+                // The VM can yield Byte, but this host dialogue promises Word.
+                // A joined value is checked before crossing that boundary.
+                #[cfg(unix)]
+                require_program_kind_trap(
+                    "reply_tags_are_checked_through_calls_and_branch_joins",
+                    &p,
+                    None,
+                    &[5],
+                    &[5],
+                    &[7],
+                    src,
+                );
+            }
+        }
         let need = required_persistent_capacity_for(&p);
         let mut arena = keleusma_arena::Arena::with_capacity(
             auto_arena_capacity_for(&p, &[]).unwrap() + need + 65536,
@@ -1080,8 +1108,16 @@ fn scalar_reply_admission_reaches_a_later_loop_iteration() {
     }
     ops.splice(edge..edge, [Op::PushImmediate(1), Op::SetLocal(0)]);
     keleusma::verify::verify(&p).unwrap();
-    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
-    assert!(error.to_string().contains("CheckedAdd"), "{error}");
+    #[cfg(unix)]
+    require_program_kind_trap(
+        "scalar_reply_admission_reaches_a_later_loop_iteration",
+        &p,
+        None,
+        &[5],
+        &[6],
+        &[7],
+        "later-loop",
+    );
     let need = required_persistent_capacity_for(&p);
     let mut arena = keleusma_arena::Arena::with_capacity(
         auto_arena_capacity_for(&p, &[]).unwrap() + need + 65536,
@@ -1223,31 +1259,2120 @@ fn coroutine_inspection_distinguishes_enum_and_struct_bodies() {
 }
 
 #[test]
-fn mixed_enum_receiver_kinds_remain_an_explicit_boundary() {
+fn mixed_enum_receiver_kinds_execute_with_guarded_body_inspection() {
+    // Scalar bits include null and invalid addresses. The false edge must never
+    // interpret them as a body pointer. A successful test also refines payload
+    // reads, including the compiler's Boolean temporary and structured match.
+    for (declaration, branch, pattern, expected_true, enum_on_positive) in [
+        ("A, B", "if t > 0 { E::A } else { r }", "E::A => 1", 1, true),
+        (
+            "A, B",
+            "if t > 0 { r } else { E::A }",
+            "E::A => 1",
+            1,
+            false,
+        ),
+        (
+            "A(Word), B",
+            "if t > 0 { E::A(9) } else { r }",
+            "E::A(x) => x",
+            9,
+            true,
+        ),
+        (
+            "A(Word), B",
+            "if t > 0 { r } else { E::A(9) }",
+            "E::A(x) => x",
+            9,
+            false,
+        ),
+    ] {
+        let src = format!(
+            "enum E {{ {declaration} }} loop main(t: Word) -> Word {{ let r = yield 5; let e = {branch}; yield match e {{ {pattern}, _ => 0 }} }}"
+        );
+        for reply in [7, -7, 0, i64::MIN, i64::MAX] {
+            let expected = if (reply > 0) == enum_on_positive {
+                expected_true
+            } else {
+                0
+            };
+            let replies = [reply, 3, reply, 3];
+            let want = [5, expected, 5, expected];
+            assert_eq!(common::general_vm_sequence(&src, 5, &replies), want);
+            for optimize in [false, true] {
+                assert_eq!(
+                    native(&src, 5, &replies, optimize),
+                    want,
+                    "{src} reply {reply} optimize {optimize}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn mixed_owned_bodies_keep_selected_extents_across_suspension() {
     use keleusma::bytecode::Value;
-    use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
-    let src = "enum E { A, B } loop main(t: Word) -> Word { let r = yield 5; let e = if t > 0 { E::A } else { r }; yield match e { E::A => 1, _ => 0 } }";
-    let p = common::build(src);
-    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
+    let inputs: Vec<_> = [5, 7, 20, 3, -40, 1]
+        .into_iter()
+        .map(|a| {
+            Value::enum_value(
+                "E".into(),
+                "Pair".into(),
+                0,
+                vec![Value::Int(a), Value::Int(a * 10)],
+            )
+        })
+        .collect();
+    for other in ["0", "1.5", "(99, 100)"] {
+        for (condition, expected) in [
+            ("n > 0", [5, 6, 7, 5, 6, 0]),
+            ("n < 0", [5, 6, 0, 5, 6, -40]),
+        ] {
+            let src = format!(
+                "enum E {{ Pair(Word, Word) }} loop main(t: E) -> Word {{ let r = yield 5; let n = match t {{ E::Pair(a, b) => a }}; let e = if {condition} {{ r }} else {{ {other} }}; yield 6; yield match e {{ E::Pair(a, b) => a, _ => 0 }} }}"
+            );
+            flat_inputs(&src, &inputs, &expected);
+        }
+    }
+}
+
+#[test]
+fn enum_field_reads_use_the_minimum_extent_without_overcopying() {
+    use keleusma::bytecode::Value;
+    let inputs: Vec<_> = [5, 7, 20, 3, -40, 1]
+        .into_iter()
+        .map(|a| Value::enum_value("E".into(), "A".into(), 0, vec![Value::Int(a)]))
+        .collect();
+    // Flat enum inspection uses the discriminant, not a boxed nominal name.
+    // The two body sizes join, but each copy retains its actual byte count.
+    flat_inputs(
+        "enum E { A(Word) } enum F { A(Word, Word) } loop main(t: E) -> Word { let r = yield 5; let n = match t { E::A(a) => a }; let e = if n > 0 { r } else { F::A(99, 100) }; yield 6; yield match e { E::A(a) => a, _ => 0 } }",
+        &inputs,
+        &[5, 6, 7, 5, 6, 99],
+    );
+}
+
+#[test]
+fn mixed_array_extents_use_the_selected_runtime_bound() {
+    use keleusma::bytecode::Value;
+    let inputs: Vec<_> = [5, 7, 20, 3, -40, 1]
+        .into_iter()
+        .map(|a| Value::array(vec![Value::Int(a), Value::Int(a * 10)]))
+        .collect();
+    flat_inputs(
+        "loop main(t: [Word; 2]) -> Word { let r = yield 5; let n = t[0]; let e: [Word; 3] = if n > 0 { r } else { [99, 100, 101] }; let i = if n > 0 { 1 } else { 2 }; yield 6; yield e[i] }",
+        &inputs,
+        &[5, 6, 70, 5, 6, 101],
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn mixed_array_extents_trap_before_out_of_bounds_access() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    use std::os::unix::process::ExitStatusExt;
+    let source = "loop main(t: [Word; 2]) -> Word { let r = yield 5; let n = t[1]; let e: [Word; 3] = if n > 0 { r } else { [99, 100, 101] }; let i = t[0]; yield 6; yield e[i] }";
+    let program = common::build(source);
+    if let Ok(case) = std::env::var("KEL_COROUTINE_ARRAY_TRAP") {
+        let fields: Vec<_> = case.split(',').collect();
+        let index: i64 = fields[0].parse().unwrap();
+        let host = Guarded::new(16);
+        unsafe {
+            std::ptr::copy_nonoverlapping([index, 1].as_ptr().cast::<u8>(), host.ptr(), 16);
+        }
+        let pointer = host.ptr() as i64;
+        let mut yielded = 0;
+        native_module_read(
+            &program,
+            &[],
+            pointer,
+            &[pointer; 3],
+            fields[1] == "true",
+            fields[2] == "true",
+            |value, _, _, _| {
+                yielded += 1;
+                if yielded == 2 {
+                    assert_eq!(value, 6);
+                    println!("COROUTINE-ARRAY-RESUMING-INTO-INDEX");
+                }
+                value
+            },
+        );
+        panic!("native indexing returned where the VM faults");
+    }
+    for index in [-1, 2] {
+        let arena = keleusma_arena::Arena::with_capacity(65536);
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        let input = Value::array(vec![Value::Int(index), Value::Int(1)]);
+        assert!(matches!(
+            vm.call(std::slice::from_ref(&input)).unwrap(),
+            VmState::Yielded(Value::Int(5))
+        ));
+        assert!(matches!(
+            vm.resume(input.clone()).unwrap(),
+            VmState::Yielded(Value::Int(6))
+        ));
+        let error = vm.resume(input).unwrap_err();
+        assert!(
+            format!("{error:?}").contains("IndexOutOfBounds"),
+            "{error:?}"
+        );
+        for optimized in [false, true] {
+            for stable in [false, true] {
+                let result = std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "mixed_array_extents_trap_before_out_of_bounds_access",
+                        "--nocapture",
+                    ])
+                    .env(
+                        "KEL_COROUTINE_ARRAY_TRAP",
+                        format!("{index},{optimized},{stable}"),
+                    )
+                    .output()
+                    .unwrap();
+                assert!(
+                    String::from_utf8_lossy(&result.stdout)
+                        .contains("COROUTINE-ARRAY-RESUMING-INTO-INDEX"),
+                    "{result:?}"
+                );
+                assert_eq!(
+                    result.status.signal(),
+                    Some(5),
+                    "native bounds guard must raise SIGTRAP: {result:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn enum_refinement_is_invalidated_when_the_receiver_local_changes() {
+    use keleusma::bytecode::{Op, Value};
+    use keleusma::vm::{Vm, VmState};
+    let source = "enum E { A(Word), B } loop main(t: Word) -> Word { let r = yield 5; let e = if t > 0 { E::A(9) } else { r }; yield match e { E::A(x) => x, _ => 0 } }";
+    let mut program = common::build(source);
+    let entry = program.entry_point.unwrap();
+    let ops = &mut program.chunks[entry].ops;
+    let inspection = ops
+        .iter()
+        .position(|op| matches!(op, Op::IsEnum(..)))
+        .unwrap();
+    let Op::GetLocal(receiver) = ops[inspection - 1] else {
+        panic!("receiver local")
+    };
+    // The Boolean fact is saved, then the receiver is overwritten before it is
+    // tested. Reusing the old fact would turn zero into a payload pointer.
+    let insertion = inspection + 3;
+    assert!(matches!(ops[insertion - 1], Op::PopN(1)));
+    for op in ops.iter_mut() {
+        match op {
+            Op::If(target)
+            | Op::Else(target)
+            | Op::Loop(target)
+            | Op::EndLoop(target)
+            | Op::Break(target)
+            | Op::BreakIf(target)
+                if *target as usize >= insertion =>
+            {
+                *target += 2
+            }
+            _ => {}
+        }
+    }
+    ops.splice(
+        insertion..insertion,
+        [Op::PushImmediate(0), Op::SetLocal(receiver)],
+    );
+    keleusma::verify::verify(&program).unwrap();
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(5))
+    ));
+    assert!(vm.resume(Value::Int(7)).is_err());
+    let error = coroutine::lower(&Context::create(), &program, &machine(), 4096).unwrap_err();
+    assert!(
+        error.to_string().contains("types are not proven"),
+        "{error}"
+    );
+}
+
+#[test]
+fn private_body_kind_tracks_the_most_recent_write() {
+    use keleusma::bytecode::{NewCompositeOperand, Op, Value};
+    use keleusma::value_layout::CompositeKind;
+    use keleusma::vm::{Vm, VmState, required_persistent_capacity_for};
+    let source = "enum E { A, B } private data st { p: E } loop main(t: Word) -> Word { st.p = if t > 0 { E::A } else { E::A }; yield 5; yield match st.p { E::A => 1, _ => 0 } }";
+    let mut program = common::build(source);
+    let entry = program.entry_point.unwrap();
+    let Op::NewComposite(NewCompositeOperand::Flat { kind, .. }) = program.chunks[entry]
+        .ops
+        .iter_mut()
+        .filter(|op| matches!(op, Op::NewComposite(_)))
+        .nth(1)
+        .unwrap()
+    else {
+        panic!("constructor")
+    };
+    *kind = CompositeKind::Struct;
+    keleusma::verify::verify(&program).unwrap();
+    let mut arena = keleusma_arena::Arena::with_capacity(65536);
+    arena
+        .resize_persistent(required_persistent_capacity_for(&program))
+        .unwrap();
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    let replies = [7, -5, 7, 3];
+    let expected = [5, 1, 5, 0];
+    let mut state = vm.call(&[Value::Int(5)]).unwrap();
+    for (index, want) in expected.iter().enumerate() {
+        assert!(matches!(state, VmState::Yielded(Value::Int(v)) if v == *want));
+        if index + 1 < expected.len() {
+            state = vm.resume(Value::Int(replies[index])).unwrap();
+            if matches!(state, VmState::Reset) {
+                state = vm.resume(Value::Int(replies[index])).unwrap();
+            }
+        }
+    }
+    for optimize in [false, true] {
+        assert_eq!(
+            native_module(&program, &[], 5, &replies, optimize).0,
+            expected
+        );
+    }
+}
+
+#[test]
+fn reset_clears_runtime_kinds_of_later_entry_parameters() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    type StartTwo = unsafe extern "C" fn(i64, i64, *mut u8, *mut u8, *mut u8, *mut u8) -> Outcome;
+    let source = "enum E { A, B } loop main(a: Word, e: E) -> Word { yield match e { E::A => 1, _ => 0 }; yield 2 }";
+    let program = common::build(source);
+    let expected = [1, 2, 0, 2, 0, 2];
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    let mut state = vm
+        .call(&[
+            Value::Int(5),
+            Value::enum_value("E".into(), "A".into(), 0, vec![]),
+        ])
+        .unwrap();
+    for (index, want) in expected.iter().enumerate() {
+        assert!(matches!(state, VmState::Yielded(Value::Int(value)) if value == *want));
+        if index + 1 < expected.len() {
+            state = vm.resume(Value::Int(7)).unwrap();
+            if matches!(state, VmState::Reset) {
+                state = vm.resume(Value::Int(7)).unwrap();
+            }
+        }
+    }
+    for optimized in [false, true] {
+        let context = Context::create();
+        let module = coroutine::lower(&context, &program, &machine(), 4096).unwrap();
+        if optimized {
+            common::force_optimize(&module);
+        }
+        let engine = module
+            .create_jit_execution_engine(OptimizationLevel::None)
+            .unwrap();
+        let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+        assert_eq!(
+            module
+                .get_function(&format!("{prefix}_start"))
+                .unwrap()
+                .count_params(),
+            6
+        );
+        let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+        let unused = Guarded::new(0);
+        let body = Guarded::new(8);
+        unsafe {
+            let start = engine
+                .get_function::<StartTwo>(&format!("{prefix}_start"))
+                .unwrap();
+            let resume = engine
+                .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                .unwrap();
+            let mut result = start.call(
+                5,
+                body.ptr() as i64,
+                unused.ptr(),
+                unused.ptr(),
+                unused.ptr(),
+                slot.ptr(),
+            );
+            for (index, want) in expected.iter().enumerate() {
+                assert_eq!(
+                    result,
+                    Outcome {
+                        live: 1,
+                        value: *want
+                    }
+                );
+                if index + 1 < expected.len() {
+                    result = resume.call(slot.ptr(), 7);
+                }
+            }
+            engine
+                .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                .unwrap()
+                .call(slot.ptr());
+        }
+        for region in [&slot, &unused, &body] {
+            region.check();
+        }
+    }
+}
+
+#[test]
+fn guarded_nested_parameter_uses_execute_before_reset() {
+    let replies = [7; 6];
+    for (extra, parameter, argument, body, first) in [
+        ("", "Word", "t", "a", 5),
+        ("", "Word", "t", "a + 1", 6),
+        (
+            "fn plus(x: Word) -> Word { x + 2 }",
+            "Word",
+            "t",
+            "plus(a)",
+            7,
+        ),
+        ("", "Word", "t", "(a as Byte) as Word", 5),
+        ("", "Word", "t", "if a > 0 { a } else { 0 }", 5),
+        ("", "bool", "t > 0", "if a { 1 } else { 0 }", 1),
+        ("", "Float", "t as Float", "(a + 0.5) as Word", 5),
+        ("", "Fixed", "t as Fixed", "(a + (1 as Fixed)) as Word", 6),
+        ("", "Byte", "t as Byte", "(a + (1 as Byte)) as Word", 6),
+        ("", "(Word, Word)", "(t, t + 1)", "a.0 + a.1", 11),
+        ("", "[Word; 2]", "[t, t + 1]", "a[1]", 6),
+    ] {
+        let source = format!(
+            "{extra} private data st {{ first: bool = true }} loop child(a: {parameter}) -> Word {{ if st.first {{ st.first = false; yield {body} }} else {{ yield 0 }} }} loop main(t: Word) -> Word {{ child({argument}) }}"
+        );
+        let expected = [first, 0, 0, 0, 0, 0];
+        assert_eq!(common::general_vm_sequence(&source, 5, &replies), expected);
+        for optimize in [false, true] {
+            assert_eq!(native(&source, 5, &replies, optimize), expected, "{source}");
+        }
+    }
+}
+
+#[test]
+fn guarded_composite_construction_from_a_cleared_parameter_executes() {
+    for (extra, parameter, argument, value) in [
+        ("", "Word", "t", "(a, a).0"),
+        (
+            "fn first(p: (Word, Word)) -> Word { p.0 }",
+            "Word",
+            "t",
+            "first((a, a))",
+        ),
+        ("", "Word", "t", "[a, a][0]"),
+        ("", "Word", "t", "(((a, a), a).0).1"),
+        ("", "Float", "t as Float", "(a, a).0 as Word"),
+        ("", "Byte", "t as Byte", "(a, a).0 as Word"),
+        (
+            "struct S { a: Word, b: Word }",
+            "Word",
+            "t",
+            "S { a: a, b: a }.b",
+        ),
+        (
+            "enum E { A(Word), B(Word, Word) }",
+            "Word",
+            "t",
+            "match E::A(a) { E::A(x) => x, _ => 0 }",
+        ),
+    ] {
+        let source = format!(
+            "{extra} private data st {{ first: bool = true }} loop child(a: {parameter}) -> Word {{ if st.first {{ st.first = false; yield {value} }} else {{ yield 0 }} }} loop main(t: Word) -> Word {{ child({argument}) }}"
+        );
+        let replies = [7; 4];
+        let expected = [5, 0, 0, 0];
+        assert_eq!(
+            common::general_vm_sequence(&source, 5, &replies),
+            expected,
+            "{source}"
+        );
+        for optimize in [false, true] {
+            assert_eq!(native(&source, 5, &replies, optimize), expected, "{source}");
+        }
+    }
+}
+
+#[test]
+fn guarded_variable_body_yields_match_fixed_host_contracts() {
+    let source = "private data st { first: bool = true } loop child(a: Word) -> (Word, Word) { if st.first { st.first = false; yield (a, a) } else { yield (0, 0) } } loop main(t: Word) -> (Word, Word) { child(t) }";
+    let expected: Vec<Vec<u8>> = [(5i64, 5i64), (0, 0), (0, 0), (0, 0)]
+        .into_iter()
+        .map(|(a, b)| [a.to_le_bytes(), b.to_le_bytes()].concat())
+        .collect();
+    assert_eq!(composite_bodies(source, 5, &[7; 4]), expected);
+}
+
+#[test]
+fn private_storage_preserves_actual_body_extents() {
+    for (source, expected) in [
+        (
+            "private data st { saved: (Word, Word) } loop child(a: Word) -> Word { st.saved = (a, 17); yield st.saved.0 } loop main(t: Word) -> Word { child(t) }",
+            vec![5, 17, 17, 17],
+        ),
+        (
+            "private data st { saved: (Word, Word) } loop child(a: Word) -> Word { st.saved = (5, 29); let old = st.saved; st.saved = (a, 17); let now = st.saved; yield old.0; yield old.1; yield now.0 } loop main(t: Word) -> Word { child(t) }",
+            vec![5, 17, 5, 17, 29, 17],
+        ),
+        (
+            "private data st { saved: [(Word, Word); 2] } loop child(a: Word) -> Word { st.saved[0] = (5, 29); st.saved[1] = (a, 17); for i in 0..2 { yield st.saved[i].0; } yield 99 } loop main(t: Word) -> Word { child(t) }",
+            vec![5, 5, 99, 5, 17, 99],
+        ),
+    ] {
+        let replies = vec![7; expected.len()];
+        assert_eq!(
+            common::general_vm_sequence(source, 5, &replies),
+            expected,
+            "{source}"
+        );
+        for optimize in [false, true] {
+            assert_eq!(native(source, 5, &replies, optimize), expected, "{source}");
+        }
+    }
+}
+
+#[test]
+fn native_private_self_assignment_preserves_the_current_view() {
+    // The reference VM uses copy_nonoverlapping on this aliased body and aborts
+    // in debug builds. Do not execute that undefined operation as an oracle.
+    let source = "private data st { saved: (Word, Word) } loop child(a: Word) -> Word { st.saved = (a, 17); st.saved = st.saved; yield st.saved.0 } loop main(t: Word) -> Word { child(t) }";
+    for optimize in [false, true] {
+        assert_eq!(native(source, 5, &[7; 4], optimize), [5, 17, 17, 17]);
+    }
+}
+
+#[test]
+fn private_scalar_slots_preserve_cleared_values() {
+    for (parameter, argument, declaration, write, condition) in [
+        (
+            "Word",
+            "t",
+            "saved: Word = 99",
+            "st.saved = a",
+            "st.saved == st.saved",
+        ),
+        (
+            "Float",
+            "t as Float",
+            "saved: Float = 99.0",
+            "st.saved = a",
+            "st.saved == st.saved",
+        ),
+        (
+            "Byte",
+            "t as Byte",
+            "saved: Byte = 0",
+            "st.saved = a",
+            "st.saved == st.saved",
+        ),
+        (
+            "Word",
+            "t",
+            "small: (Byte, Byte, Byte), saved: Word = 99",
+            "st.small = (1 as Byte, 2 as Byte, 3 as Byte); st.saved = a",
+            "st.saved == st.saved and st.small.2 == (3 as Byte)",
+        ),
+        (
+            "Word",
+            "t",
+            "saved: [Word; 2]",
+            "st.saved[1] = a",
+            "st.saved[1] == st.saved[1]",
+        ),
+    ] {
+        let source = format!(
+            "private data st {{ {declaration} }} loop child(a: {parameter}) -> Word {{ {write}; yield if {condition} {{ 1 }} else {{ 0 }} }} loop main(t: Word) -> Word {{ child({argument}) }}"
+        );
+        assert_eq!(common::general_vm_sequence(&source, 5, &[7; 4]), [1; 4]);
+        for optimize in [false, true] {
+            assert_eq!(native(&source, 5, &[7; 4], optimize), [1; 4]);
+        }
+    }
+}
+
+#[test]
+fn correlated_numeric_branches_use_the_actual_comparison_kind() {
+    use keleusma::bytecode::{Op, Value, WireShape};
+    use keleusma::value_layout::ScalarKind;
+    use keleusma::vm::{Vm, VmState};
+    use std::collections::BTreeMap;
+    for (operator, normal, reversed, unordered) in [
+        ("<", 1, 0, 0),
+        (">", 0, 1, 0),
+        ("<=", 1, 0, 1),
+        (">=", 0, 1, 1),
+    ] {
+        let source = format!(
+            "yield main(a: Word) -> Word {{ let x = if a > 0 {{ yield 1 }} else {{ 2 }}; let y = if a > 0 {{ yield 2 }} else {{ 3 }}; if x {operator} y {{ 1 }} else {{ 0 }} }}"
+        );
+        let program = common::build(&source);
+        for (kind, replies, bits, expected) in [
+            (
+                ScalarKind::Byte,
+                [Value::Byte(7), Value::Byte(9)],
+                [7, 9],
+                normal,
+            ),
+            (
+                ScalarKind::Byte,
+                [Value::Byte(9), Value::Byte(7)],
+                [9, 7],
+                reversed,
+            ),
+            (
+                ScalarKind::Fixed,
+                [Value::Fixed(-9), Value::Fixed(-7)],
+                [-9, -7],
+                normal,
+            ),
+            (
+                ScalarKind::Float,
+                [Value::Float(-9.0), Value::Float(-7.0)],
+                [
+                    (-9.0 as NativeFloat).to_bits() as i64,
+                    (-7.0 as NativeFloat).to_bits() as i64,
+                ],
+                normal,
+            ),
+            (
+                ScalarKind::Float,
+                [Value::Float(f64::NAN), Value::Float(7.0)],
+                [
+                    NativeFloat::NAN.to_bits() as i64,
+                    (7.0 as NativeFloat).to_bits() as i64,
+                ],
+                unordered,
+            ),
+        ] {
+            let dialogues: BTreeMap<_, _> = program
+                .chunks
+                .iter()
+                .enumerate()
+                .flat_map(|(ci, chunk)| {
+                    chunk.ops.iter().enumerate().filter_map(move |(ip, op)| {
+                        matches!(op, Op::Yield).then_some((
+                            coroutine::YieldSite {
+                                chunk: ci as u32,
+                                instruction: ip as u32,
+                            },
+                            coroutine::Dialogue {
+                                yielded: WireShape::Scalar {
+                                    kind: ScalarKind::Int.to_tag(),
+                                },
+                                reply: WireShape::Scalar {
+                                    kind: kind.to_tag(),
+                                },
+                            },
+                        ))
+                    })
+                })
+                .collect();
+            assert_eq!(dialogues.len(), 2);
+            let arena = keleusma_arena::Arena::with_capacity(65536);
+            let mut vm = Vm::new(program.clone(), &arena).unwrap();
+            assert!(matches!(
+                vm.call(&[Value::Int(5)]).unwrap(),
+                VmState::Yielded(Value::Int(1))
+            ));
+            assert!(matches!(
+                vm.resume(replies[0].clone()).unwrap(),
+                VmState::Yielded(Value::Int(2))
+            ));
+            assert!(
+                matches!(vm.resume(replies[1].clone()).unwrap(), VmState::Finished(Value::Int(v)) if v == expected)
+            );
+            for optimize in [false, true] {
+                let ctx = Context::create();
+                let module =
+                    coroutine::lower_with_dialogues(&ctx, &program, &machine(), 4096, &dialogues)
+                        .unwrap();
+                if optimize {
+                    common::force_optimize(&module);
+                }
+                let engine = module
+                    .create_jit_execution_engine(OptimizationLevel::None)
+                    .unwrap();
+                let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+                let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+                let private = Guarded::new(
+                    keleusma::vm::required_persistent_capacity_for(&program)
+                        + region::persistent_supplement_bytes(&program) as usize,
+                );
+                let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+                let shared = Guarded::new(0);
+                unsafe {
+                    let start = engine
+                        .get_function::<HandleStart>(&format!("{prefix}_start"))
+                        .unwrap();
+                    let resume = engine
+                        .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                        .unwrap();
+                    let release = engine
+                        .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                        .unwrap();
+                    assert_eq!(
+                        start.call(5, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr()),
+                        Outcome { live: 1, value: 1 }
+                    );
+                    assert_eq!(
+                        resume.call(slot.ptr(), bits[0]),
+                        Outcome { live: 1, value: 2 }
+                    );
+                    assert_eq!(
+                        resume.call(slot.ptr(), bits[1]),
+                        Outcome {
+                            live: 2,
+                            value: expected
+                        }
+                    );
+                    release.call(slot.ptr());
+                    assert_eq!(
+                        start.call(0, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr()),
+                        Outcome {
+                            live: 2,
+                            value: normal
+                        }
+                    );
+                    release.call(slot.ptr());
+                }
+                for region in [&slot, &private, &bodies, &shared] {
+                    region.check();
+                }
+            }
+        }
+    }
+}
+
+// Values are compared with independent expected replies inside the program.
+// Only Word results cross this helper's host ABI. Every suspension and the
+// final result is observed, with fresh guarded regions at both optimizations.
+fn checked_dialogue_case(
+    program: &keleusma::bytecode::Module,
+    replies: &[(
+        keleusma::bytecode::Value,
+        keleusma::value_layout::ScalarKind,
+        i64,
+    )],
+    expected: i64,
+) {
+    use keleusma::bytecode::{Op, Value, WireShape};
+    use keleusma::value_layout::ScalarKind;
+    use keleusma::vm::{Vm, VmState};
+    let sites: Vec<_> = program
+        .chunks
+        .iter()
+        .enumerate()
+        .flat_map(|(ci, chunk)| {
+            chunk.ops.iter().enumerate().filter_map(move |(ip, op)| {
+                matches!(op, Op::Yield).then_some(coroutine::YieldSite {
+                    chunk: ci as u32,
+                    instruction: ip as u32,
+                })
+            })
+        })
+        .collect();
+    assert_eq!(sites.len(), replies.len());
+    let dialogues = sites
+        .iter()
+        .zip(replies)
+        .map(|(site, (_, kind, _))| {
+            (
+                *site,
+                coroutine::Dialogue {
+                    yielded: WireShape::Scalar {
+                        kind: ScalarKind::Int.to_tag(),
+                    },
+                    reply: WireShape::Scalar {
+                        kind: kind.to_tag(),
+                    },
+                },
+            )
+        })
+        .collect();
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(1))
+    ));
+    for (index, (reply, _, _)) in replies.iter().enumerate() {
+        let state = vm.resume(reply.clone()).unwrap();
+        if index + 1 == replies.len() {
+            assert!(
+                matches!(state, VmState::Finished(Value::Int(v)) if v == expected),
+                "{state:?}"
+            );
+        } else {
+            assert!(
+                matches!(state, VmState::Yielded(Value::Int(v)) if v == index as i64 + 2),
+                "{state:?}"
+            );
+        }
+    }
+    for optimize in [false, true] {
+        let ctx = Context::create();
+        let module =
+            coroutine::lower_with_dialogues(&ctx, program, &machine(), 4096, &dialogues).unwrap();
+        if optimize {
+            common::force_optimize(&module);
+        }
+        let engine = module
+            .create_jit_execution_engine(OptimizationLevel::None)
+            .unwrap();
+        let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+        let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+        let private = Guarded::new(
+            keleusma::vm::required_persistent_capacity_for(program)
+                + region::persistent_supplement_bytes(program) as usize,
+        );
+        let bodies = Guarded::new(region::host_arena_supplement_bytes(program) as usize);
+        let shared = Guarded::new(0);
+        unsafe {
+            let start = engine
+                .get_function::<HandleStart>(&format!("{prefix}_start"))
+                .unwrap();
+            let resume = engine
+                .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                .unwrap();
+            let release = engine
+                .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                .unwrap();
+            assert_eq!(
+                start.call(5, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr()),
+                Outcome { live: 1, value: 1 }
+            );
+            for (index, (_, _, bits)) in replies.iter().enumerate() {
+                let wanted = if index + 1 == replies.len() {
+                    Outcome {
+                        live: 2,
+                        value: expected,
+                    }
+                } else {
+                    Outcome {
+                        live: 1,
+                        value: index as i64 + 2,
+                    }
+                };
+                assert_eq!(
+                    resume.call(slot.ptr(), *bits),
+                    wanted,
+                    "optimize={optimize}, reply={index}"
+                );
+            }
+            release.call(slot.ptr());
+        }
+        for region in [&slot, &private, &bodies, &shared] {
+            region.check();
+        }
+    }
+}
+
+#[test]
+fn correlated_numeric_arithmetic_uses_the_actual_kind() {
+    use keleusma::bytecode::Value;
+    use keleusma::value_layout::ScalarKind;
+    let program = common::build(
+        "yield main(a: Word) -> Word { let x = if a > 0 { yield 1 } else { 2 }; let y = if a > 0 { yield 2 } else { 3 }; let z = x + y; if z > x { 1 } else { 0 } }",
+    );
+    checked_dialogue_case(
+        &program,
+        &[
+            (Value::Byte(7), ScalarKind::Byte, 7),
+            (Value::Byte(9), ScalarKind::Byte, 9),
+        ],
+        1,
+    );
+}
+
+#[test]
+fn checked_numeric_dispatch_preserves_low_high_and_flags() {
+    use keleusma::bytecode::{Op, Value};
+    use keleusma::value_layout::ScalarKind;
+    fn wire(value: Value) -> (Value, ScalarKind, i64) {
+        let (kind, bits) = match value {
+            Value::Int(v) => (ScalarKind::Int, v),
+            Value::Byte(v) => (ScalarKind::Byte, i64::from(v)),
+            Value::Fixed(v) => (ScalarKind::Fixed, v),
+            Value::Float(v) => (ScalarKind::Float, (v as NativeFloat).to_bits() as i64),
+            _ => unreachable!(),
+        };
+        (value, kind, bits)
+    }
+    #[cfg(feature = "narrow-float-32")]
+    let largest_float = f64::from(f32::MAX);
+    #[cfg(not(feature = "narrow-float-32"))]
+    let largest_float = f64::MAX;
+    // Hardcoded triples exercise signed high halves, unsigned underflow,
+    // wrapping Fixed results, nonzero baked fractions with Word operands,
+    // zero divisors, signed-minimum division and rounded Float classification.
+    for (op, left, right, low, high, flag) in [
+        (
+            Op::CheckedNeg,
+            Value::Int(i64::MIN),
+            Value::Int(3),
+            Value::Int(i64::MIN),
+            Value::Int(0),
+            1,
+        ),
+        (
+            Op::CheckedNeg,
+            Value::Fixed(i64::MIN),
+            Value::Int(3),
+            Value::Fixed(i64::MIN),
+            Value::Fixed(0),
+            1,
+        ),
+        (
+            Op::CheckedNeg,
+            Value::Int(7),
+            Value::Int(3),
+            Value::Int(-7),
+            Value::Int(-1),
+            0,
+        ),
+        (
+            Op::CheckedNeg,
+            Value::Fixed(7),
+            Value::Int(3),
+            Value::Fixed(-7),
+            Value::Fixed(0),
+            0,
+        ),
+        (
+            Op::CheckedAdd,
+            Value::Int(-7),
+            Value::Int(2),
+            Value::Int(-5),
+            Value::Int(-1),
+            0,
+        ),
+        (
+            Op::CheckedAdd,
+            Value::Int(i64::MAX),
+            Value::Int(1),
+            Value::Int(i64::MIN),
+            Value::Int(0),
+            1,
+        ),
+        (
+            Op::CheckedSub,
+            Value::Int(i64::MIN),
+            Value::Int(1),
+            Value::Int(i64::MAX),
+            Value::Int(-1),
+            2,
+        ),
+        (
+            Op::CheckedAdd,
+            Value::Byte(200),
+            Value::Byte(100),
+            Value::Byte(44),
+            Value::Byte(0),
+            1,
+        ),
+        (
+            Op::CheckedSub,
+            Value::Byte(7),
+            Value::Byte(9),
+            Value::Byte(254),
+            Value::Byte(0),
+            2,
+        ),
+        (
+            Op::CheckedMul(7),
+            Value::Byte(200),
+            Value::Byte(100),
+            Value::Byte(32),
+            Value::Byte(0),
+            1,
+        ),
+        (
+            Op::CheckedAdd,
+            Value::Fixed(-7),
+            Value::Fixed(2),
+            Value::Fixed(-5),
+            Value::Fixed(0),
+            0,
+        ),
+        (
+            Op::CheckedSub,
+            Value::Fixed(i64::MIN),
+            Value::Fixed(1),
+            Value::Fixed(i64::MAX),
+            Value::Fixed(0),
+            2,
+        ),
+        (
+            Op::CheckedMul(0),
+            Value::Fixed(7),
+            Value::Fixed(-3),
+            Value::Fixed(-21),
+            Value::Fixed(0),
+            0,
+        ),
+        (
+            Op::CheckedMul(2),
+            Value::Fixed(7),
+            Value::Fixed(-3),
+            Value::Fixed(-6),
+            Value::Fixed(0),
+            0,
+        ),
+        (
+            Op::CheckedMul(2),
+            Value::Int(7),
+            Value::Int(-3),
+            Value::Int(-21),
+            Value::Int(-1),
+            0,
+        ),
+        (
+            Op::CheckedDiv(3),
+            Value::Int(i64::MIN),
+            Value::Int(-1),
+            Value::Int(i64::MIN),
+            Value::Int(0),
+            1,
+        ),
+        (
+            Op::CheckedMod,
+            Value::Int(i64::MIN),
+            Value::Int(-1),
+            Value::Int(0),
+            Value::Int(0),
+            0,
+        ),
+        (
+            Op::CheckedMod,
+            Value::Int(-7),
+            Value::Int(3),
+            Value::Int(-1),
+            Value::Int(-1),
+            0,
+        ),
+        (
+            Op::CheckedDiv(3),
+            Value::Fixed(-7),
+            Value::Fixed(2),
+            Value::Fixed(-28),
+            Value::Fixed(0),
+            0,
+        ),
+        (
+            Op::CheckedDiv(63),
+            Value::Fixed(i64::MIN),
+            Value::Fixed(-1),
+            Value::Fixed(0),
+            Value::Fixed(0),
+            1,
+        ),
+        (
+            Op::CheckedMod,
+            Value::Fixed(-7),
+            Value::Fixed(3),
+            Value::Fixed(-1),
+            Value::Fixed(0),
+            0,
+        ),
+        (
+            Op::CheckedDiv(0),
+            Value::Byte(7),
+            Value::Byte(2),
+            Value::Byte(3),
+            Value::Byte(0),
+            0,
+        ),
+        (
+            Op::CheckedMod,
+            Value::Byte(7),
+            Value::Byte(2),
+            Value::Byte(1),
+            Value::Byte(0),
+            0,
+        ),
+        (
+            Op::CheckedDiv(0),
+            Value::Byte(7),
+            Value::Byte(0),
+            Value::Byte(7),
+            Value::Byte(0),
+            3,
+        ),
+        (
+            Op::CheckedMod,
+            Value::Fixed(-7),
+            Value::Fixed(0),
+            Value::Fixed(-7),
+            Value::Fixed(0),
+            3,
+        ),
+        (
+            Op::CheckedDiv(5),
+            Value::Int(-7),
+            Value::Int(0),
+            Value::Int(-7),
+            Value::Int(0),
+            3,
+        ),
+        (
+            Op::CheckedDiv(5),
+            Value::Fixed(-7),
+            Value::Fixed(0),
+            Value::Fixed(-7),
+            Value::Fixed(0),
+            3,
+        ),
+        (
+            Op::CheckedAdd,
+            Value::Float(7.0),
+            Value::Float(2.0),
+            Value::Float(9.0),
+            Value::Float(0.0),
+            0,
+        ),
+        (
+            Op::CheckedSub,
+            Value::Float(7.0),
+            Value::Float(2.0),
+            Value::Float(5.0),
+            Value::Float(0.0),
+            0,
+        ),
+        (
+            Op::CheckedMul(3),
+            Value::Float(7.0),
+            Value::Float(2.0),
+            Value::Float(14.0),
+            Value::Float(0.0),
+            0,
+        ),
+        (
+            Op::CheckedMul(0),
+            Value::Float(largest_float),
+            Value::Float(2.0),
+            Value::Float(f64::INFINITY),
+            Value::Float(0.0),
+            1,
+        ),
+        (
+            Op::CheckedDiv(0),
+            Value::Float(-7.0),
+            Value::Float(0.0),
+            Value::Float(f64::NEG_INFINITY),
+            Value::Float(0.0),
+            2,
+        ),
+        (
+            Op::CheckedDiv(0),
+            Value::Float(0.0),
+            Value::Float(0.0),
+            Value::Float(f64::NAN),
+            Value::Float(0.0),
+            4,
+        ),
+    ] {
+        for (part, wanted) in [low, high, Value::Int(flag)].into_iter().enumerate() {
+            let comparison = if matches!(wanted, Value::Float(v) if v.is_nan()) {
+                "!="
+            } else {
+                "=="
+            };
+            let expression = if matches!(op, Op::CheckedNeg) {
+                "-x"
+            } else {
+                "x + y"
+            };
+            let mut program = common::build(&format!(
+                "yield main(a: Word) -> Word {{ let x = if a > 0 {{ yield 1 }} else {{ 2 }}; let y = if a > 0 {{ yield 2 }} else {{ 3 }}; let result = {expression}; let wanted = yield 3; if result {comparison} wanted {{ 1 }} else {{ 0 }} }}"
+            ));
+            let chunk = &mut program.chunks[program.entry_point.unwrap() as usize];
+            let index = chunk
+                .ops
+                .iter()
+                .position(|op| matches!(op, Op::CheckedAdd | Op::CheckedNeg))
+                .unwrap();
+            assert!(matches!(chunk.ops[index + 1], Op::PopN(2)));
+            chunk.ops[index] = op;
+            // The verified bytecode already has a local zero. Reuse it after
+            // both branch tests to expose each triple component without casts.
+            let added = match part {
+                0 => 0,
+                1 => 3,
+                2 => 2,
+                _ => unreachable!(),
+            };
+            for instruction in &mut chunk.ops {
+                if let Op::If(target)
+                | Op::Else(target)
+                | Op::Loop(target)
+                | Op::EndLoop(target)
+                | Op::Break(target)
+                | Op::BreakIf(target) = instruction
+                    && usize::from(*target) > index + 1
+                {
+                    *target += added;
+                }
+            }
+            match part {
+                0 => (),
+                1 => {
+                    chunk.ops.splice(
+                        index + 1..index + 2,
+                        [Op::PopN(1), Op::SetLocal(0), Op::PopN(1), Op::GetLocal(0)],
+                    );
+                }
+                2 => {
+                    chunk.ops.splice(
+                        index + 1..index + 2,
+                        [Op::SetLocal(0), Op::PopN(2), Op::GetLocal(0)],
+                    );
+                }
+                _ => unreachable!(),
+            }
+            checked_dialogue_case(
+                &program,
+                &[wire(left.clone()), wire(right.clone()), wire(wanted)],
+                1,
+            );
+        }
+    }
+}
+
+#[test]
+fn bare_numeric_dispatch_preserves_selected_kinds() {
+    use keleusma::bytecode::{Op, Value};
+    use keleusma::value_layout::ScalarKind;
+    let wire = |value: Value| {
+        let (kind, bits) = match value {
+            Value::Int(v) => (ScalarKind::Int, v),
+            Value::Byte(v) => (ScalarKind::Byte, i64::from(v)),
+            Value::Fixed(v) => (ScalarKind::Fixed, v),
+            Value::Float(v) => (ScalarKind::Float, (v as NativeFloat).to_bits() as i64),
+            _ => unreachable!(),
+        };
+        (value, kind, bits)
+    };
+    for (op, left, right, wanted) in [
+        (Op::Add, Value::Byte(200), Value::Byte(100), Value::Byte(44)),
+        (
+            Op::Add,
+            Value::Fixed(i64::MAX),
+            Value::Fixed(1),
+            Value::Fixed(i64::MIN),
+        ),
+        (
+            Op::Add,
+            Value::Float(7.0),
+            Value::Float(2.0),
+            Value::Float(9.0),
+        ),
+        (Op::Sub, Value::Byte(7), Value::Byte(9), Value::Byte(254)),
+        (Op::Sub, Value::Fixed(-7), Value::Fixed(2), Value::Fixed(-9)),
+        (
+            Op::Sub,
+            Value::Float(-7.0),
+            Value::Float(2.0),
+            Value::Float(-9.0),
+        ),
+        (Op::Mul, Value::Byte(200), Value::Byte(100), Value::Byte(32)),
+        (
+            Op::Mul,
+            Value::Fixed(7),
+            Value::Fixed(-3),
+            Value::Fixed(-21),
+        ),
+        (
+            Op::Mul,
+            Value::Float(7.0),
+            Value::Float(2.0),
+            Value::Float(14.0),
+        ),
+        (Op::Neg, Value::Byte(7), Value::Byte(2), Value::Byte(249)),
+        (
+            Op::Neg,
+            Value::Fixed(i64::MIN),
+            Value::Fixed(2),
+            Value::Fixed(i64::MIN),
+        ),
+        (
+            Op::Neg,
+            Value::Float(7.0),
+            Value::Float(2.0),
+            Value::Float(-7.0),
+        ),
+        (
+            Op::Div,
+            Value::Int(i64::MIN),
+            Value::Int(-1),
+            Value::Int(i64::MIN),
+        ),
+        (Op::Div, Value::Byte(7), Value::Byte(2), Value::Byte(3)),
+        (
+            Op::Div,
+            Value::Float(7.0),
+            Value::Float(2.0),
+            Value::Float(3.5),
+        ),
+        (
+            Op::Div,
+            Value::Float(-7.0),
+            Value::Float(0.0),
+            Value::Float(f64::NEG_INFINITY),
+        ),
+        (Op::Mod, Value::Int(-7), Value::Int(3), Value::Int(-1)),
+        (Op::Mod, Value::Byte(7), Value::Byte(2), Value::Byte(1)),
+        (
+            Op::Mod,
+            Value::Float(7.5),
+            Value::Float(2.0),
+            Value::Float(1.5),
+        ),
+        (
+            Op::Mod,
+            Value::Float(0.0),
+            Value::Float(0.0),
+            Value::Float(f64::NAN),
+        ),
+    ] {
+        let comparison = if matches!(wanted, Value::Float(v) if v.is_nan()) {
+            "!="
+        } else {
+            "=="
+        };
+        let expression = if matches!(op, Op::Neg) { "-x" } else { "x + y" };
+        // Byte else-branches and Float replies require genuine multi-kind
+        // dispatch. Word alternatives on bare Add would instead be invalid.
+        let mut program = common::build(&format!(
+            "yield main(a: Word) -> Word {{ let x = if a > 0 {{ yield 1 }} else {{ 2 }}; let y = if a > 0 {{ yield 2 }} else {{ 3 }}; let result = {expression}; let wanted = yield 3; if result {comparison} wanted {{ 1 }} else {{ 0 }} }}"
+        ));
+        let chunk = &mut program.chunks[program.entry_point.unwrap()];
+        let index = chunk
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::CheckedAdd | Op::CheckedNeg))
+            .unwrap();
+        assert!(matches!(chunk.ops[index + 1], Op::PopN(2)));
+        chunk.ops[index] = op;
+        chunk.ops.remove(index + 1);
+        let mut follows_else = false;
+        for instruction in &mut chunk.ops {
+            let change = follows_else;
+            follows_else = matches!(instruction, Op::Else(_));
+            match instruction {
+                Op::If(target)
+                | Op::Else(target)
+                | Op::Loop(target)
+                | Op::EndLoop(target)
+                | Op::Break(target)
+                | Op::BreakIf(target)
+                    if usize::from(*target) > index + 1 =>
+                {
+                    *target -= 1
+                }
+                // Preserve two valid kinds at joins for every Float case.
+                Op::Const(index) if change => {
+                    let value = match chunk.constants[*index as usize] {
+                        keleusma::bytecode::ConstValue::Int(v) => v as u8,
+                        ref other => panic!("unexpected alternative {other:?}"),
+                    };
+                    chunk
+                        .constants
+                        .push(keleusma::bytecode::ConstValue::Byte(value));
+                    *instruction = Op::Const((chunk.constants.len() - 1) as u16);
+                }
+                Op::PushImmediate(6) if change => {
+                    chunk
+                        .constants
+                        .push(keleusma::bytecode::ConstValue::Byte(2));
+                    *instruction = Op::Const((chunk.constants.len() - 1) as u16);
+                }
+                Op::PushImmediate(7) if change => {
+                    chunk
+                        .constants
+                        .push(keleusma::bytecode::ConstValue::Byte(3));
+                    *instruction = Op::Const((chunk.constants.len() - 1) as u16);
+                }
+                _ => (),
+            }
+        }
+        checked_dialogue_case(&program, &[wire(left), wire(right), wire(wanted)], 1);
+    }
+}
+
+#[test]
+fn runtime_ordering_rejects_different_selected_numeric_kinds() {
+    use keleusma::bytecode::{Op, Value, WireShape};
+    use keleusma::value_layout::ScalarKind;
+    use keleusma::vm::{Vm, VmState};
+    let source = "yield main(a: Word) -> Word { let x = if a > 0 { yield 1 } else { 2 }; let y = if a <= 0 { yield 2 } else { 3 }; if x < y { 1 } else { 0 } }";
+    let program = common::build(source);
+    let dialogues = program
+        .chunks
+        .iter()
+        .enumerate()
+        .flat_map(|(ci, chunk)| {
+            chunk.ops.iter().enumerate().filter_map(move |(ip, op)| {
+                matches!(op, Op::Yield).then_some((
+                    coroutine::YieldSite {
+                        chunk: ci as u32,
+                        instruction: ip as u32,
+                    },
+                    coroutine::Dialogue {
+                        yielded: WireShape::Scalar {
+                            kind: ScalarKind::Int.to_tag(),
+                        },
+                        reply: WireShape::Scalar {
+                            kind: ScalarKind::Byte.to_tag(),
+                        },
+                    },
+                ))
+            })
+        })
+        .collect();
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(1))
+    ));
+    assert!(vm.resume(Value::Byte(7)).is_err());
+    #[cfg(unix)]
+    require_program_kind_trap(
+        "runtime_ordering_rejects_different_selected_numeric_kinds",
+        &program,
+        Some(&dialogues),
+        &[5],
+        &[1],
+        &[7],
+        "mixed-numeric-ordering",
+    );
+}
+
+#[test]
+fn runtime_checked_arithmetic_rejects_different_selected_kinds() {
+    use keleusma::bytecode::{Op, Value, WireShape};
+    use keleusma::value_layout::ScalarKind;
+    use keleusma::vm::{Vm, VmState};
+    let source = "yield main(a: Word) -> Word { let x = if a > 0 { yield 1 } else { 2 }; let y = if a <= 0 { yield 2 } else { 3 }; let result = x + y; if result > x { 1 } else { 0 } }";
+    let program = common::build(source);
+    let dialogues = program
+        .chunks
+        .iter()
+        .enumerate()
+        .flat_map(|(ci, chunk)| {
+            chunk.ops.iter().enumerate().filter_map(move |(ip, op)| {
+                matches!(op, Op::Yield).then_some((
+                    coroutine::YieldSite {
+                        chunk: ci as u32,
+                        instruction: ip as u32,
+                    },
+                    coroutine::Dialogue {
+                        yielded: WireShape::Scalar {
+                            kind: ScalarKind::Int.to_tag(),
+                        },
+                        reply: WireShape::Scalar {
+                            kind: ScalarKind::Byte.to_tag(),
+                        },
+                    },
+                ))
+            })
+        })
+        .collect();
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(1))
+    ));
+    assert!(vm.resume(Value::Byte(7)).is_err());
+    #[cfg(unix)]
+    require_program_kind_trap(
+        "runtime_checked_arithmetic_rejects_different_selected_kinds",
+        &program,
+        Some(&dialogues),
+        &[5],
+        &[1],
+        &[7],
+        "mixed-numeric-ordering",
+    );
+}
+
+#[test]
+fn bare_integer_division_and_remainder_trap_on_zero() {
+    use keleusma::bytecode::{Op, Value};
+    use keleusma::vm::{Vm, VmState};
+    for op in [Op::Div, Op::Mod] {
+        let mut program = common::build(
+            "yield main(a: Word) -> Word { let x = yield 1; let y = yield 2; x + y }",
+        );
+        let chunk = &mut program.chunks[program.entry_point.unwrap()];
+        let index = chunk
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::CheckedAdd))
+            .unwrap();
+        assert!(matches!(chunk.ops[index + 1], Op::PopN(2)));
+        chunk.ops[index] = op;
+        chunk.ops.remove(index + 1);
+        assert!(
+            !chunk
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::If(_) | Op::Else(_) | Op::Loop(_)))
+        );
+        let arena = keleusma_arena::Arena::with_capacity(65536);
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        assert!(matches!(
+            vm.call(&[Value::Int(5)]).unwrap(),
+            VmState::Yielded(Value::Int(1))
+        ));
+        assert!(matches!(
+            vm.resume(Value::Int(7)).unwrap(),
+            VmState::Yielded(Value::Int(2))
+        ));
+        assert!(matches!(
+            vm.resume(Value::Int(0)),
+            Err(keleusma::vm::VmError::DivisionByZero)
+        ));
+        #[cfg(unix)]
+        require_program_kind_trap(
+            "bare_integer_division_and_remainder_trap_on_zero",
+            &program,
+            None,
+            &[5],
+            &[1, 2],
+            &[7, 0],
+            &format!("bare-zero-{op:?}"),
+        );
+    }
+}
+
+#[test]
+fn checked_negation_rejects_byte_and_float_values() {
+    use keleusma::bytecode::{Op, Value, WireShape};
+    use keleusma::value_layout::ScalarKind;
+    use keleusma::vm::{Vm, VmState};
+    let program = common::build(
+        "yield main(a: Word) -> Word { let x = if a > 0 { yield 1 } else { 2 }; -x }",
+    );
+    for (reply, kind, bits) in [
+        (Value::Byte(7), ScalarKind::Byte, 7),
+        (
+            Value::Float(7.0),
+            ScalarKind::Float,
+            (7.0 as NativeFloat).to_bits() as i64,
+        ),
+    ] {
+        let dialogues = program
+            .chunks
+            .iter()
+            .enumerate()
+            .flat_map(|(ci, chunk)| {
+                chunk.ops.iter().enumerate().filter_map(move |(ip, op)| {
+                    matches!(op, Op::Yield).then_some((
+                        coroutine::YieldSite {
+                            chunk: ci as u32,
+                            instruction: ip as u32,
+                        },
+                        coroutine::Dialogue {
+                            yielded: WireShape::Scalar {
+                                kind: ScalarKind::Int.to_tag(),
+                            },
+                            reply: WireShape::Scalar {
+                                kind: kind.to_tag(),
+                            },
+                        },
+                    ))
+                })
+            })
+            .collect();
+        let arena = keleusma_arena::Arena::with_capacity(65536);
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        assert!(matches!(
+            vm.call(&[Value::Int(5)]).unwrap(),
+            VmState::Yielded(Value::Int(1))
+        ));
+        assert!(vm.resume(reply).is_err());
+        #[cfg(unix)]
+        require_program_kind_trap(
+            "checked_negation_rejects_byte_and_float_values",
+            &program,
+            Some(&dialogues),
+            &[5],
+            &[1],
+            &[bits],
+            &format!("checked-neg-{kind:?}"),
+        );
+    }
+}
+
+#[test]
+fn private_scalar_indexed_ranges_cannot_cross_composite_placements() {
+    use keleusma::bytecode::Op;
+    let mut program = common::build(
+        "struct P { a: Word } private data st { xs: [Word; 2], p: P } loop main(t: Word) -> Word { st.p = P { a: 5 }; yield if st.xs[t] == st.xs[t] { 1 } else { 0 } }",
+    );
+    let mut changed = 0;
+    for chunk in &mut program.chunks {
+        for op in &mut chunk.ops {
+            if let Op::GetDataIndexed(_, count) = op {
+                assert_eq!(*count, 2);
+                *count = 3;
+                changed += 1;
+            }
+        }
+    }
+    assert_eq!(changed, 2);
+    // The verifier permits this range, but source arrays do not cross a
+    // separately placed composite field. Scalar metadata cannot describe it.
+    keleusma::verify::verify(&program).unwrap();
+    let error = coroutine::lower(&Context::create(), &program, &machine(), 4096).unwrap_err();
     assert!(
         error
             .to_string()
-            .contains("mixed or unknown receiver kinds"),
+            .contains("crosses private scalar and body placements"),
         "{error}"
     );
-    for (reply, expected) in [(7, 1), (-7, 0)] {
-        let need = required_persistent_capacity_for(&p);
-        let mut arena = keleusma_arena::Arena::with_capacity(
-            auto_arena_capacity_for(&p, &[]).unwrap() + need + 65536,
+}
+
+#[test]
+fn private_scalar_kinds_survive_release_and_frame_reuse() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    let source = "private data st { saved: Word = 0 } loop child(a: Word) -> Word { st.saved = a; yield 1 } loop main(t: Word) -> Word { if t > 0 { child(t) } else { yield if st.saved == 0 { 3 } else { 4 } } }";
+    let program = common::build(source);
+    let capacity = keleusma::vm::required_persistent_capacity_for(&program);
+    let mut arena = keleusma_arena::Arena::with_capacity(capacity + 65536);
+    arena.resize_persistent(capacity).unwrap();
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(1))
+    ));
+    let state = vm.resume(Value::Int(7)).unwrap();
+    assert!(matches!(state, VmState::Reset));
+    assert!(matches!(
+        vm.resume(Value::Int(7)).unwrap(),
+        VmState::Yielded(Value::Int(1))
+    ));
+    assert!(matches!(
+        vm.call(&[Value::Int(0)]).unwrap(),
+        VmState::Yielded(Value::Int(4))
+    ));
+    assert_eq!(common::general_vm_sequence(source, 0, &[0; 2]), [3, 3]);
+    for optimize in [false, true] {
+        let ctx = Context::create();
+        let module = coroutine::lower(&ctx, &program, &machine(), 4096).unwrap();
+        if optimize {
+            common::force_optimize(&module);
+        }
+        let engine = module
+            .create_jit_execution_engine(OptimizationLevel::None)
+            .unwrap();
+        let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+        let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+        let shared = Guarded::new(0);
+        let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+        let private = [
+            Guarded::new(capacity + region::persistent_supplement_bytes(&program) as usize),
+            Guarded::new(capacity + region::persistent_supplement_bytes(&program) as usize),
+        ];
+        for region in &private {
+            common::install_private_init_bytes(&program, unsafe {
+                std::slice::from_raw_parts_mut(region.ptr(), region.len)
+            });
+        }
+        unsafe {
+            let start = engine
+                .get_function::<HandleStart>(&format!("{prefix}_start"))
+                .unwrap();
+            let resume = engine
+                .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                .unwrap();
+            let release = engine
+                .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                .unwrap();
+            assert_eq!(
+                start.call(5, shared.ptr(), private[0].ptr(), bodies.ptr(), slot.ptr()),
+                Outcome { live: 1, value: 1 }
+            );
+            assert_eq!(resume.call(slot.ptr(), 7), Outcome { live: 1, value: 1 });
+            release.call(slot.ptr());
+            std::slice::from_raw_parts_mut(slot.ptr(), slot.len).fill(0xcc);
+            assert_eq!(
+                start.call(0, shared.ptr(), private[0].ptr(), bodies.ptr(), slot.ptr()),
+                Outcome { live: 1, value: 4 }
+            );
+            release.call(slot.ptr());
+            assert_eq!(
+                start.call(0, shared.ptr(), private[1].ptr(), bodies.ptr(), slot.ptr()),
+                Outcome { live: 1, value: 3 }
+            );
+            release.call(slot.ptr());
+        }
+        for region in [&slot, &shared, &bodies, &private[0], &private[1]] {
+            region.check();
+        }
+    }
+}
+
+#[test]
+fn private_scalar_consumption_traps_after_a_valid_unit_store() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    let source = "private data st { saved: Word = 99 } loop child(a: Word) -> Word { st.saved = a; yield st.saved + 1 } loop main(t: Word) -> Word { child(t) }";
+    let program = common::build(source);
+    let capacity = keleusma::vm::required_persistent_capacity_for(&program);
+    let mut arena = keleusma_arena::Arena::with_capacity(capacity + 65536);
+    arena.resize_persistent(capacity).unwrap();
+    let mut vm = Vm::new(program, &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(6))
+    ));
+    assert!(matches!(vm.resume(Value::Int(7)).unwrap(), VmState::Reset));
+    assert!(vm.resume(Value::Int(7)).is_err());
+    #[cfg(unix)]
+    require_cleared_kind_trap(
+        "private_scalar_consumption_traps_after_a_valid_unit_store",
+        source,
+        &[5],
+        &[6],
+        &[7],
+    );
+}
+
+#[test]
+fn private_composite_slots_preserve_unit_values_without_eager_faults() {
+    for (source, expected) in [
+        (
+            "enum E { A, B } private data st { saved: E } loop main(t: Word) -> Word { yield match st.saved { E::A => 1, _ => 0 }; st.saved = E::A; 0 }",
+            [0, 1, 1, 1],
+        ),
+        (
+            "enum E { A, B } private data st { saved: E } loop child(a: E) -> Word { st.saved = a; yield match st.saved { E::A => 1, _ => 0 } } loop main(t: Word) -> Word { child(E::A) }",
+            [1, 0, 0, 0],
+        ),
+    ] {
+        assert_eq!(common::general_vm_sequence(source, 5, &[7; 4]), expected);
+        for optimize in [false, true] {
+            assert_eq!(native(source, 5, &[7; 4], optimize), expected);
+        }
+    }
+}
+
+#[test]
+fn shortened_private_view_traps_while_an_older_long_view_remains_valid() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    let source = "private data st { saved: (Word, Word) } loop child(a: Word) -> Word { st.saved = (5, 29); let old = st.saved; st.saved = (a, 17); let now = st.saved; yield old.1; yield now.1 } loop main(t: Word) -> Word { child(t) }";
+    let program = common::build(source);
+    let capacity = keleusma::vm::required_persistent_capacity_for(&program);
+    let mut arena = keleusma_arena::Arena::with_capacity(capacity + 65536);
+    arena.resize_persistent(capacity).unwrap();
+    let mut vm = Vm::new(program, &arena).unwrap();
+    let mut state = vm.call(&[Value::Int(5)]).unwrap();
+    for (index, value) in [17, 17, 29].into_iter().enumerate() {
+        assert!(matches!(state, VmState::Yielded(Value::Int(v)) if v == value));
+        if index < 2 {
+            state = vm.resume(Value::Int(7)).unwrap();
+            if matches!(state, VmState::Reset) {
+                state = vm.resume(Value::Int(7)).unwrap();
+            }
+        }
+    }
+    assert!(vm.resume(Value::Int(7)).is_err());
+    #[cfg(unix)]
+    require_cleared_kind_trap(
+        "shortened_private_view_traps_while_an_older_long_view_remains_valid",
+        source,
+        &[5],
+        &[17, 17, 29],
+        &[7; 3],
+    );
+}
+
+#[test]
+fn owned_variable_bodies_cross_calls_and_delegated_suspension() {
+    use keleusma::bytecode::Value;
+    let inputs: Vec<_> = [5, 7, 20, -3, -40, 1]
+        .into_iter()
+        .map(|v| Value::array(vec![Value::Int(v), Value::Int(v * 10)]))
+        .collect();
+    for source in [
+        "fn first(p: [Word; 3]) -> Word { p[0] } loop main(t: [Word; 2]) -> Word { let r = yield 5; let p = if t[0] > 0 { r } else { [99, 100, 101] }; yield first(p) }",
+        "fn identity(p: [Word; 3]) -> [Word; 3] { p } fn first(p: [Word; 3]) -> Word { p[0] } loop main(t: [Word; 2]) -> Word { let r = yield 5; let p = if t[0] > 0 { r } else { [99, 100, 101] }; yield first(identity(p)) }",
+    ] {
+        flat_inputs(source, &inputs, &[5, 7, 5, 99, 5, 1]);
+    }
+    flat_inputs(
+        "yield second(p: [Word; 3]) -> Word { yield 9; p[1] } loop main(t: [Word; 2]) -> Word { let r = yield 5; let p = if t[0] > 0 { r } else { [99, 100, 101] }; yield second(p) }",
+        &inputs,
+        &[5, 9, 70, 5, 9, 100],
+    );
+}
+
+#[test]
+fn composite_packing_uses_actual_sizes_after_parameter_reset() {
+    for (extra, parameter, argument, value, first, later) in [
+        ("", "Word", "t", "(a, 17, 29).0", 5, 17),
+        ("", "Word", "t", "((), a, 17).1", 5, 17),
+        ("", "Word", "t", "(a, 17, 29).1", 17, 29),
+        ("", "Word", "t", "(((a, 17), 29, 37).0).1", 17, 29),
+        ("", "(Word, Word)", "(t, t + 1)", "((a, 17, 29).0).0", 5, 17),
+        ("", "Word", "t", "[a, 17, 29][0]", 5, 17),
+        ("", "Word", "t", "[a, 17, 29][1]", 17, 29),
+        (
+            "",
+            "Byte",
+            "t as Byte",
+            "((a, (17 as Byte)).0) as Word",
+            5,
+            17,
+        ),
+        ("", "Float", "t as Float", "((a, 17.25).0) as Word", 5, 17),
+        (
+            "struct S { a: Word, b: Word, c: Word }",
+            "Word",
+            "t",
+            "S { a: a, b: 17, c: 29 }.b",
+            17,
+            29,
+        ),
+        (
+            "struct S { a: Word, b: Word, c: Word }",
+            "Word",
+            "t",
+            "S { a: a, b: 17, c: 29 }.c",
+            29,
+            0,
+        ),
+        (
+            "enum E { A(Word), B(Word, Word) }",
+            "Word",
+            "t",
+            "match E::A(a) { E::A(x) => x, _ => 99 }",
+            5,
+            0,
+        ),
+    ] {
+        let source = format!(
+            "{extra} loop child(a: {parameter}) -> Word {{ yield {value} }} loop main(t: Word) -> Word {{ child({argument}) }}"
         );
-        arena.resize_persistent(need).unwrap();
-        let mut vm = Vm::new(p.clone(), &arena).unwrap();
-        assert!(matches!(
-            vm.call(&[Value::Int(5)]).unwrap(),
-            VmState::Yielded(Value::Int(5))
-        ));
+        let expected = [first, later, later, later];
+        let replies = [7; 4];
+        assert_eq!(
+            common::general_vm_sequence(&source, 5, &replies),
+            expected,
+            "{source}"
+        );
+        for optimize in [false, true] {
+            assert_eq!(native(&source, 5, &replies, optimize), expected, "{source}");
+        }
+    }
+    let source = "loop child(a: Word) -> Word { let p = (a, 17); yield 1; yield p.0 } loop main(t: Word) -> Word { child(t) }";
+    let expected = [1, 5, 1, 17, 1, 17];
+    assert_eq!(common::general_vm_sequence(source, 5, &[7; 6]), expected);
+    for optimize in [false, true] {
+        assert_eq!(native(source, 5, &[7; 6], optimize), expected);
+    }
+}
+
+#[test]
+fn shortened_constructed_tuple_traps_before_an_out_of_bounds_read() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    let source = "loop child(a: Word) -> Word { yield (a, 17, 29).2 } loop main(t: Word) -> Word { child(t) }";
+    let program = common::build(source);
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program, &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(29))
+    ));
+    assert!(matches!(vm.resume(Value::Int(7)).unwrap(), VmState::Reset));
+    assert!(vm.resume(Value::Int(7)).is_err());
+    #[cfg(unix)]
+    require_cleared_kind_trap(
+        "shortened_constructed_tuple_traps_before_an_out_of_bounds_read",
+        source,
+        &[5],
+        &[29],
+        &[7],
+    );
+}
+
+#[test]
+fn internal_calls_preserve_actual_kinds_and_body_extents() {
+    for (extra, expression, expected) in [
+        (
+            "fn first(p: (Word, Word)) -> Word { p.0 }",
+            "first((a, 17))",
+            [5, 17, 17, 17],
+        ),
+        (
+            "fn identity(p: (Word, Word)) -> (Word, Word) { p } fn first(p: (Word, Word)) -> Word { p.0 }",
+            "first(identity((a, 17)))",
+            [5, 17, 17, 17],
+        ),
+        (
+            "fn equal(x: Word) -> Word { if x == x { 1 } else { 0 } }",
+            "equal(a)",
+            [1, 1, 1, 1],
+        ),
+        (
+            "fn identity(x: Word) -> Word { x }",
+            "if identity(a) == 5 { 1 } else { 0 }",
+            [1, 0, 0, 0],
+        ),
+        (
+            "fn identity(x: (Word, Word)) -> (Word, Word) { x }",
+            "(identity((a, 17))).0",
+            [5, 17, 17, 17],
+        ),
+    ] {
+        let source = format!(
+            "{extra} loop child(a: Word) -> Word {{ yield {expression} }} loop main(t: Word) -> Word {{ child(t) }}"
+        );
+        assert_eq!(
+            common::general_vm_sequence(&source, 5, &[7; 4]),
+            expected,
+            "{source}"
+        );
+        for optimize in [false, true] {
+            assert_eq!(native(&source, 5, &[7; 4], optimize), expected, "{source}");
+        }
+    }
+    let source = "fn identity(x: Float) -> Float { x } fn eq(x: Float) -> Word { if x == x { 1 } else { 0 } } loop child(a: Float) -> Word { yield eq(identity(a)) } loop main(t: Word) -> Word { child(t as Float) }";
+    assert_eq!(common::general_vm_sequence(source, 5, &[7; 4]), [1; 4]);
+    for optimize in [false, true] {
+        assert_eq!(native(source, 5, &[7; 4], optimize), [1; 4]);
+    }
+}
+
+#[test]
+fn cleared_nested_body_access_traps_before_dereferencing_unit() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    let source = "loop child(a: [Word; 2]) -> Word { yield a[0] } loop main(t: Word) -> Word { child([t, t + 1]) }";
+    let program = common::build(source);
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program, &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(5))
+    ));
+    assert!(matches!(vm.resume(Value::Int(7)).unwrap(), VmState::Reset));
+    let error = vm.resume(Value::Int(7)).unwrap_err();
+    assert!(format!("{error:?}").contains("Unit"), "{error:?}");
+    #[cfg(unix)]
+    require_cleared_kind_trap(
+        "cleared_nested_body_access_traps_before_dereferencing_unit",
+        source,
+        &[5],
+        &[5],
+        &[7],
+    );
+}
+
+#[test]
+fn nested_cleared_enum_inspection_remains_false_without_a_type_fault() {
+    let source = "enum E { A, B } loop child(a: E) -> Word { yield match a { E::A => 1, _ => 0 } } loop main(t: Word) -> Word { child(E::A) }";
+    let replies = [7; 5];
+    let expected = [1, 0, 0, 0, 0];
+    assert_eq!(common::general_vm_sequence(source, 5, &replies), expected);
+    for optimize in [false, true] {
+        assert_eq!(native(source, 5, &replies, optimize), expected);
+    }
+}
+
+#[test]
+fn equality_of_cleared_values_matches_vm_partial_eq() {
+    for (parameter, argument, condition, initial) in [
+        ("Word", "t", "a == a", 1),
+        ("Word", "t", "a == 5", 1),
+        ("Word", "t", "a != 5", 0),
+        ("Byte", "t as Byte", "a == a", 1),
+        ("Fixed", "t as Fixed", "a == a", 1),
+        ("bool", "true", "a == a", 1),
+        ("Float", "t as Float", "a == a", 1),
+        ("Float", "0.0 / 0.0", "a == a", 0),
+        ("Float", "-0.0", "a == 0.0", 1),
+    ] {
+        let source = format!(
+            "loop child(a: {parameter}) -> Word {{ yield if {condition} {{ 1 }} else {{ 0 }} }} loop main(t: Word) -> Word {{ child({argument}) }}"
+        );
+        let after_reset = i64::from(condition == "a == a" || condition == "a != 5");
+        let expected = [initial, after_reset, after_reset, after_reset];
+        let replies = [7; 4];
+        assert_eq!(
+            common::general_vm_sequence(&source, 5, &replies),
+            expected,
+            "{source}"
+        );
+        for optimize in [false, true] {
+            assert_eq!(native(&source, 5, &replies, optimize), expected, "{source}");
+        }
+    }
+}
+
+#[test]
+fn cleared_ordered_comparison_traps_at_consumption() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    let source = "loop child(a: Word) -> Word { yield if a > 0 { 1 } else { 0 } } loop main(t: Word) -> Word { child(t) }";
+    let program = common::build(source);
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program, &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(1))
+    ));
+    assert!(matches!(vm.resume(Value::Int(7)).unwrap(), VmState::Reset));
+    assert!(vm.resume(Value::Int(7)).is_err());
+    #[cfg(unix)]
+    require_cleared_kind_trap(
+        "cleared_ordered_comparison_traps_at_consumption",
+        source,
+        &[5],
+        &[1],
+        &[7],
+    );
+}
+
+/// A child must first execute the correct prefix, then fault at the checked use.
+#[cfg(unix)]
+fn require_cleared_kind_trap(
+    test: &str,
+    source: &str,
+    arguments: &[i64],
+    prefix: &[i64],
+    replies: &[i64],
+) {
+    let program = common::build(source);
+    require_program_kind_trap(test, &program, None, arguments, prefix, replies, "default");
+}
+
+#[cfg(unix)]
+fn require_program_kind_trap(
+    test: &str,
+    program: &keleusma::bytecode::Module,
+    dialogues: Option<&std::collections::BTreeMap<coroutine::YieldSite, coroutine::Dialogue>>,
+    arguments: &[i64],
+    prefix: &[i64],
+    replies: &[i64],
+    case: &str,
+) {
+    use std::os::unix::process::ExitStatusExt;
+    type StartTwo = unsafe extern "C" fn(i64, i64, *mut u8, *mut u8, *mut u8, *mut u8) -> Outcome;
+    assert_eq!(prefix.len(), replies.len());
+    if let Ok(mode) = std::env::var("KEL_CLEARED_KIND_TRAP") {
+        if std::env::var("KEL_KIND_TRAP_CASE").as_deref() != Ok(case) {
+            return;
+        }
+        let program = program.clone();
+        let context = Context::create();
+        let module = match dialogues {
+            Some(dialogues) => {
+                coroutine::lower_with_dialogues(&context, &program, &machine(), 4096, dialogues)
+            }
+            None => coroutine::lower(&context, &program, &machine(), 4096),
+        }
+        .unwrap();
+        if mode == "optimized" {
+            common::force_optimize(&module);
+        }
+        let name = format!("kel_coroutine_{}", program.entry_point.unwrap());
+        assert_eq!(
+            module
+                .get_function(&format!("{name}_start"))
+                .unwrap()
+                .count_params() as usize,
+            arguments.len() + 4
+        );
+        let engine = module
+            .create_jit_execution_engine(OptimizationLevel::None)
+            .unwrap();
+        let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+        let shared = Guarded::new(program.shared_data_bytes as usize);
+        let private = Guarded::new(
+            keleusma::vm::required_persistent_capacity_for(&program)
+                + region::persistent_supplement_bytes(&program) as usize,
+        );
+        let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+        common::install_private_init_bytes(&program, unsafe {
+            std::slice::from_raw_parts_mut(private.ptr(), private.len)
+        });
+        unsafe {
+            let resume = engine
+                .get_function::<HandleResume>(&format!("{name}_resume"))
+                .unwrap();
+            if prefix.is_empty() {
+                println!("CLEARED-KIND-PREFIX-VERIFIED");
+            }
+            let mut outcome = match arguments {
+                [a] => engine
+                    .get_function::<HandleStart>(&format!("{name}_start"))
+                    .unwrap()
+                    .call(*a, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr()),
+                [a, b] => engine
+                    .get_function::<StartTwo>(&format!("{name}_start"))
+                    .unwrap()
+                    .call(
+                        *a,
+                        *b,
+                        shared.ptr(),
+                        private.ptr(),
+                        bodies.ptr(),
+                        slot.ptr(),
+                    ),
+                _ => panic!("fixture arity"),
+            };
+            for (index, value) in prefix.iter().enumerate() {
+                assert_eq!(
+                    outcome,
+                    Outcome {
+                        live: 1,
+                        value: *value
+                    }
+                );
+                if index + 1 == prefix.len() {
+                    for region in [&slot, &shared, &private, &bodies] {
+                        region.check();
+                    }
+                    println!("CLEARED-KIND-PREFIX-VERIFIED");
+                }
+                outcome = resume.call(slot.ptr(), replies[index]);
+            }
+        }
+        panic!("native execution survived the VM fault");
+    }
+    for mode in ["unoptimized", "optimized"] {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture"])
+            .env("KEL_CLEARED_KIND_TRAP", mode)
+            .env("KEL_KIND_TRAP_CASE", case)
+            .output()
+            .unwrap();
         assert!(
-            matches!(vm.resume(Value::Int(reply)).unwrap(), VmState::Yielded(Value::Int(v)) if v == expected)
+            String::from_utf8_lossy(&result.stdout).contains("CLEARED-KIND-PREFIX-VERIFIED"),
+            "{result:?}"
+        );
+        assert_eq!(
+            result.status.signal(),
+            Some(5),
+            "expected the kind guard's SIGTRAP: {result:?}"
         );
     }
 }
@@ -1372,8 +3497,23 @@ fn coroutine_composite_boundaries_check_declared_extent() {
         }
         // Verification does not establish native body extents from metadata.
         keleusma::verify::verify(&p).unwrap();
-        let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
-        assert!(error.to_string().contains("composite boundary"), "{error}");
+        match coroutine::lower(&Context::create(), &p, &machine(), 4096) {
+            Err(error) => assert!(error.to_string().contains("composite boundary"), "{error}"),
+            Ok(_) => {
+                // The internal return keeps its actual extent. The host's
+                // inflated output contract must trap before exposing that body.
+                #[cfg(unix)]
+                require_program_kind_trap(
+                    "coroutine_composite_boundaries_check_declared_extent",
+                    &p,
+                    None,
+                    &[5],
+                    &[],
+                    &[],
+                    "oversized_host_output",
+                );
+            }
+        }
     }
     let mut p = common::build(
         "fn pair(t: Word) -> (Word, Word) { (t, t) } loop main(t: Word) -> (Word, Word) { yield pair(t); yield pair(t) }",
@@ -1430,16 +3570,13 @@ fn coroutine_body_values_preserve_private_storage_aliasing() {
     for optimize in [false, true] {
         assert_eq!(native(src, 5, &replies, optimize), expected);
     }
-    // Private layout records an extent but no composite kind. Passing its
-    // unknown kind into a tuple parameter remains a type-admission boundary.
+    // Slot kinds are inferred from writes, including the delegated write.
+    // Passing an alias before suspension must still observe the later write.
     let src = "private data st { p: (Word, Word) } fn pick(p: (Word, Word), a: Word) -> Word { p.0 + a } yield emit(t: Word) -> Word { let r: Word = yield t; st.p = (r, r); r } loop main(t: Word) -> Word { st.p = (t, t); yield pick(st.p, emit(t)) }";
     assert_eq!(common::general_vm_sequence(src, 5, &replies), expected);
-    let p = common::build(src);
-    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
-    assert!(
-        error.to_string().contains("types are not proven"),
-        "{error}"
-    );
+    for optimize in [false, true] {
+        assert_eq!(native(src, 5, &replies, optimize), expected);
+    }
 }
 
 #[test]
@@ -1925,10 +4062,26 @@ fn flat_host_copies_require_bounded_signatures_and_frame_space() {
     keleusma::verify::verify(&native).unwrap();
     let error = coroutine::lower(&Context::create(), &native, &machine(), 4096).unwrap_err();
     assert!(error.to_string().contains("ownership contract"), "{error}");
+}
 
-    // The current emitter cannot certify this multiply-written local's extent.
-    // A missing copy size must refuse, rather than preserve a pointer to a
-    // fixed transfer buffer which a later loop iteration can overwrite.
+#[test]
+fn native_body_lifetimes_require_a_contract_even_with_scalar_host_values() {
+    use keleusma::bytecode::WireShape;
+    let mut program = common::build(
+        "use host::pair\nloop main(t: Word) -> Word { let p: (Word, Word) = host::pair(t); yield p.0; yield p.1 }",
+    );
+    program.native_return_shapes[0] = WireShape::Flat { kind: 0, size: 16 };
+    keleusma::verify::verify(&program).unwrap();
+    let error = coroutine::lower(&Context::create(), &program, &machine(), 4096).unwrap_err();
+    assert!(error.to_string().contains("ownership contract"), "{error}");
+}
+
+#[test]
+fn repeated_flat_local_assignments_keep_their_proven_extent() {
+    use keleusma::bytecode::{TupleBody, Value};
+    use keleusma::vm::{Vm, VmState};
+    // Both writes have the same extent. The saved value must remain independent
+    // of the host input buffer after that buffer is reused for a reply.
     let mut p = common::build(
         "loop main(t: (Word, Word)) -> Word { let keep = t; let replacement = t; yield 0; yield keep.0 }",
     );
@@ -1948,9 +4101,2052 @@ fn flat_host_copies_require_bounded_signatures_and_frame_space() {
     assert_eq!(writes.len(), 2);
     p.chunks[entry].ops[writes[1].0] = keleusma::bytecode::Op::SetLocal(writes[0].1);
     keleusma::verify::verify(&p).unwrap();
-    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(p.clone(), &arena).unwrap();
+    let pair = |a, b| {
+        Value::Tuple(TupleBody::Boxed(Box::new(vec![
+            Value::Int(a),
+            Value::Int(b),
+        ])))
+    };
+    assert!(matches!(
+        vm.call(&[pair(5, 6)]).unwrap(),
+        VmState::Yielded(Value::Int(0))
+    ));
+    assert!(matches!(
+        vm.resume(pair(7, 8)).unwrap(),
+        VmState::Yielded(Value::Int(5))
+    ));
+    for optimized in [false, true] {
+        for stable in [false, true] {
+            let host = Guarded::new(16);
+            unsafe {
+                std::ptr::copy_nonoverlapping([5i64, 6].as_ptr().cast::<u8>(), host.ptr(), 16);
+            }
+            let pointer = host.ptr() as i64;
+            let (observed, _) = native_module_read(
+                &p,
+                &vec![0; p.shared_data_bytes as usize],
+                pointer,
+                &[pointer, pointer],
+                optimized,
+                stable,
+                |bits, _, _, _| {
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            [7i64, 8].as_ptr().cast::<u8>(),
+                            host.ptr(),
+                            16,
+                        );
+                    }
+                    bits
+                },
+            );
+            assert_eq!(observed, [0, 5]);
+            host.check();
+        }
+    }
+}
+
+#[test]
+fn reentrant_entries_report_completion_once_and_reuse_the_slot() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    let cases = [
+        (
+            "yield main(a: Word) -> Word { let keep = a + 100; let b = yield a; let c = yield keep + b; keep + c + a }",
+            vec![7, 11],
+            vec![(1, 5), (1, 112), (2, 121)],
+        ),
+        (
+            "yield main(a: Word) -> Word { if a > 0 { a + 3 } else { yield a } }",
+            vec![],
+            vec![(2, 8)],
+        ),
+        (
+            "yield helper(a: Word) -> Word { let r = yield a + 1; r + a } yield main(a: Word) -> Word { let v = helper(a + 2); v + a }",
+            vec![13],
+            vec![(1, 8), (2, 25)],
+        ),
+    ];
+    for (source, replies, expected) in cases {
+        let program = common::build(source);
+        let arena = keleusma_arena::Arena::with_capacity(65536);
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        let mut state = vm.call(&[Value::Int(5)]).unwrap();
+        let mut observed = Vec::new();
+        for reply in replies.iter().copied().map(Some).chain([None]) {
+            match state {
+                VmState::Yielded(Value::Int(value)) => observed.push((1, value)),
+                VmState::Finished(Value::Int(value)) => observed.push((2, value)),
+                other => panic!("unexpected VM outcome {other:?}"),
+            }
+            if let Some(reply) = reply {
+                state = vm.resume(Value::Int(reply)).unwrap();
+            } else {
+                break;
+            }
+        }
+        assert_eq!(observed, expected, "independent completion oracle");
+        for optimized in [false, true] {
+            let context = Context::create();
+            let module = coroutine::lower(&context, &program, &machine(), 4096).unwrap();
+            if optimized {
+                common::force_optimize(&module);
+            }
+            let engine = module
+                .create_jit_execution_engine(OptimizationLevel::None)
+                .unwrap();
+            let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+            let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+            let shared = Guarded::new(program.shared_data_bytes as usize);
+            let private = Guarded::new(
+                keleusma::vm::required_persistent_capacity_for(&program)
+                    + region::persistent_supplement_bytes(&program) as usize,
+            );
+            let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+            unsafe {
+                let start = engine
+                    .get_function::<HandleStart>(&format!("{prefix}_start"))
+                    .unwrap();
+                let resume = engine
+                    .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                    .unwrap();
+                let release = engine
+                    .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                    .unwrap();
+                for _ in 0..2 {
+                    let initial =
+                        start.call(5, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr());
+                    let mut observed = vec![(initial.live, initial.value)];
+                    for &reply in &replies {
+                        let next = resume.call(slot.ptr(), reply);
+                        observed.push((next.live, next.value));
+                    }
+                    assert_eq!(observed, expected, "optimized={optimized}");
+                    assert_eq!(resume.call(slot.ptr(), 99), Outcome { live: 0, value: 0 });
+                    release.call(slot.ptr());
+                    release.call(slot.ptr());
+                }
+            }
+            for reservation in [&slot, &shared, &private, &bodies] {
+                reservation.check();
+            }
+        }
+    }
+}
+
+#[test]
+fn completed_host_bodies_outlive_the_continuation_frame() {
+    use keleusma::bytecode::{TupleBody, Value};
+    use keleusma::vm::{Vm, VmState};
+    type StartTwo = unsafe extern "C" fn(i64, i64, *mut u8, *mut u8, *mut u8, *mut u8) -> Outcome;
+    for multiple in [false, true] {
+        let program = if multiple {
+            common::build(
+                "yield main(n: Word, a: (Word, Word)) -> (Word, Word) { let old = a; yield a; old }",
+            )
+        } else {
+            common::build(
+                "yield main(a: (Word, Word)) -> (Word, Word) { let old = a; let reply: (Word, Word) = yield a; old }",
+            )
+        };
+        let arena = keleusma_arena::Arena::with_capacity(65536);
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        let tuple = |a, b| {
+            Value::Tuple(TupleBody::Boxed(Box::new(vec![
+                Value::Int(a),
+                Value::Int(b),
+            ])))
+        };
+        let read_vm = |value: Value| {
+            let Value::Tuple(TupleBody::Flat(body)) = value else {
+                panic!("expected flat tuple")
+            };
+            let bytes = body.resolve(&arena).unwrap();
+            [
+                i64::from_le_bytes(bytes[..8].try_into().unwrap()),
+                i64::from_le_bytes(bytes[8..16].try_into().unwrap()),
+            ]
+        };
+        let arguments = if multiple {
+            vec![Value::Int(9), tuple(5, 6)]
+        } else {
+            vec![tuple(5, 6)]
+        };
+        let VmState::Yielded(value) = vm.call(&arguments).unwrap() else {
+            panic!("expected yield")
+        };
+        assert_eq!(read_vm(value), [5, 6]);
+        let VmState::Finished(value) = vm
+            .resume(if multiple {
+                Value::Int(21)
+            } else {
+                tuple(21, 22)
+            })
+            .unwrap()
+        else {
+            panic!("expected completion")
+        };
+        assert_eq!(read_vm(value), [5, 6]);
+        for (optimized, explicit) in [(false, false), (true, false), (false, true), (true, true)] {
+            let context = Context::create();
+            let module = if explicit {
+                let entry = program.entry_point.unwrap();
+                let contracts = program
+                    .chunks
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(ci, chunk)| {
+                        let signature = &program.signatures[entry];
+                        chunk.ops.iter().enumerate().filter_map(move |(ip, op)| {
+                            matches!(op, keleusma::bytecode::Op::Yield).then_some((
+                                coroutine::YieldSite {
+                                    chunk: ci as u32,
+                                    instruction: ip as u32,
+                                },
+                                coroutine::Dialogue {
+                                    yielded: signature.ret,
+                                    reply: signature.params[0],
+                                },
+                            ))
+                        })
+                    })
+                    .collect();
+                coroutine::lower_with_dialogues(&context, &program, &machine(), 4096, &contracts)
+                    .unwrap()
+            } else {
+                coroutine::lower(&context, &program, &machine(), 4096).unwrap()
+            };
+            let continuation_bytes = 4096 - 16 - if explicit { 8 } else { 0 };
+            if optimized {
+                common::force_optimize(&module);
+            }
+            let engine = module
+                .create_jit_execution_engine(OptimizationLevel::None)
+                .unwrap();
+            let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+            let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+            let shared = Guarded::new(program.shared_data_bytes as usize);
+            let private = Guarded::new(
+                keleusma::vm::required_persistent_capacity_for(&program)
+                    + region::persistent_supplement_bytes(&program) as usize,
+            );
+            let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+            let input = Guarded::new(16);
+            unsafe {
+                let resume = engine
+                    .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                    .unwrap();
+                let release = engine
+                    .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                    .unwrap();
+                for _ in 0..2 {
+                    let source = std::slice::from_raw_parts_mut(input.ptr(), 16);
+                    source[..8].copy_from_slice(&5_i64.to_le_bytes());
+                    source[8..].copy_from_slice(&6_i64.to_le_bytes());
+                    let yielded = if multiple {
+                        engine
+                            .get_function::<StartTwo>(&format!("{prefix}_start"))
+                            .unwrap()
+                            .call(
+                                9,
+                                input.ptr() as i64,
+                                shared.ptr(),
+                                private.ptr(),
+                                bodies.ptr(),
+                                slot.ptr(),
+                            )
+                    } else {
+                        engine
+                            .get_function::<HandleStart>(&format!("{prefix}_start"))
+                            .unwrap()
+                            .call(
+                                input.ptr() as i64,
+                                shared.ptr(),
+                                private.ptr(),
+                                bodies.ptr(),
+                                slot.ptr(),
+                            )
+                    };
+                    assert_eq!(yielded.live, 1);
+                    source[..8].copy_from_slice(&21_i64.to_le_bytes());
+                    source[8..].copy_from_slice(&22_i64.to_le_bytes());
+                    let finished =
+                        resume.call(slot.ptr(), if multiple { 21 } else { input.ptr() as i64 });
+                    assert_eq!(finished.live, 2);
+                    // The result must survive both host input reuse and destruction
+                    // of every byte LLVM could use for the continuation frame.
+                    source.fill(0xdd);
+                    let result = finished.value as *const u8;
+                    assert_eq!(result, slot.ptr().add(16 + continuation_bytes));
+                    std::slice::from_raw_parts_mut(slot.ptr().add(16), continuation_bytes)
+                        .fill(0xaa);
+                    let bytes = std::slice::from_raw_parts(result, 16);
+                    assert_eq!(i64::from_le_bytes(bytes[..8].try_into().unwrap()), 5);
+                    assert_eq!(i64::from_le_bytes(bytes[8..].try_into().unwrap()), 6);
+                    assert_eq!(resume.call(slot.ptr(), 0), Outcome { live: 0, value: 0 });
+                    release.call(slot.ptr());
+                }
+            }
+            for reservation in [&slot, &shared, &private, &bodies, &input] {
+                reservation.check();
+            }
+        }
+        let error = coroutine::lower(&Context::create(), &program, &machine(), 16).unwrap_err();
+        assert!(
+            error.to_string().contains("completion reservation"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn zero_and_multiple_entry_arguments_preserve_host_contracts() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    type StartZero = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) -> Outcome;
+    type StartTwo = unsafe extern "C" fn(i64, i64, *mut u8, *mut u8, *mut u8, *mut u8) -> Outcome;
+    let cases = [
+        (
+            "yield main() -> Word { yield 42; 7 }",
+            vec![],
+            Value::Unit,
+            [(1, 42), (2, 7)],
+        ),
+        (
+            "loop main() -> Word { yield 42; yield 43 }",
+            vec![],
+            Value::Unit,
+            [(1, 42), (1, 43)],
+        ),
+        (
+            "yield main(a: Word, b: Word) -> Word { let r = yield a + b; a + b + r }",
+            vec![Value::Int(5), Value::Int(7)],
+            Value::Int(11),
+            [(1, 12), (2, 23)],
+        ),
+        (
+            "loop main(a: Word, b: Word) -> Word { yield a; yield a }",
+            vec![Value::Int(5), Value::Int(7)],
+            Value::Int(11),
+            [(1, 5), (1, 11)],
+        ),
+    ];
+    for (source, arguments, reply, expected) in cases {
+        let program = common::build(source);
+        let arena = keleusma_arena::Arena::with_capacity(65536);
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        let first = vm.call(&arguments).unwrap();
+        let second = vm.resume(reply.clone()).unwrap();
+        let observe = |state| match state {
+            VmState::Yielded(Value::Int(v)) => (1, v),
+            VmState::Finished(Value::Int(v)) => (2, v),
+            other => panic!("unexpected {other:?}"),
+        };
+        assert_eq!([observe(first), observe(second)], expected);
+        for optimized in [false, true] {
+            let context = Context::create();
+            let module = coroutine::lower(&context, &program, &machine(), 4096).unwrap();
+            if optimized {
+                common::force_optimize(&module);
+            }
+            let engine = module
+                .create_jit_execution_engine(OptimizationLevel::None)
+                .unwrap();
+            let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+            let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+            let shared = Guarded::new(program.shared_data_bytes as usize);
+            let private = Guarded::new(
+                keleusma::vm::required_persistent_capacity_for(&program)
+                    + region::persistent_supplement_bytes(&program) as usize,
+            );
+            let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+            unsafe {
+                let first = if arguments.is_empty() {
+                    engine
+                        .get_function::<StartZero>(&format!("{prefix}_start"))
+                        .unwrap()
+                        .call(shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr())
+                } else {
+                    engine
+                        .get_function::<StartTwo>(&format!("{prefix}_start"))
+                        .unwrap()
+                        .call(5, 7, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr())
+                };
+                let resume = engine
+                    .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                    .unwrap();
+                let bits = if arguments.is_empty() { 0 } else { 11 };
+                let second = resume.call(slot.ptr(), bits);
+                assert_eq!(
+                    [(first.live, first.value), (second.live, second.value)],
+                    expected,
+                    "{source}, optimized={optimized}"
+                );
+                if arguments.is_empty() && second.live == 1 {
+                    assert_eq!(resume.call(slot.ptr(), 0), Outcome { live: 1, value: 42 });
+                }
+                engine
+                    .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                    .unwrap()
+                    .call(slot.ptr());
+            }
+            for reservation in [&slot, &shared, &private, &bodies] {
+                reservation.check();
+            }
+        }
+    }
+}
+
+#[test]
+fn stream_reset_does_not_replenish_later_parameters() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    let source = "loop main(a: Word, b: Word) -> Word { yield a + b; yield a + b }";
+    let program = common::build(source);
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5), Value::Int(7)]).unwrap(),
+        VmState::Yielded(Value::Int(12))
+    ));
+    assert!(matches!(
+        vm.resume(Value::Int(11)).unwrap(),
+        VmState::Yielded(Value::Int(18))
+    ));
+    assert!(matches!(vm.resume(Value::Int(13)).unwrap(), VmState::Reset));
     assert!(
-        error.to_string().contains("proven transfer extent"),
-        "{error}"
+        vm.resume(Value::Int(13)).is_err(),
+        "Reset cleared parameter b to Unit"
     );
+    #[cfg(unix)]
+    require_cleared_kind_trap(
+        "stream_reset_does_not_replenish_later_parameters",
+        source,
+        &[5, 7],
+        &[12, 18],
+        &[11, 13],
+    );
+}
+
+#[test]
+fn implicit_reentrant_completion_cannot_bypass_body_extent_checks() {
+    use keleusma::bytecode::{Op, WireShape};
+    let mut program =
+        common::build("yield main(a: (Word, Word)) -> (Word, Word) { if false { yield a; } a }");
+    let entry = program.entry_point.unwrap();
+    assert!(matches!(program.chunks[entry].ops.pop(), Some(Op::Return)));
+    let WireShape::Flat { size, .. } = &mut program.signatures[entry].ret else {
+        panic!("flat fixture required")
+    };
+    *size += 8;
+    let verified = keleusma::verify::verify(&program);
+    let error = coroutine::lower(&Context::create(), &program, &machine(), 4096).unwrap_err();
+    assert!(verified.is_err());
+    assert!(error.to_string().contains("verification:"), "{error}");
+}
+
+#[test]
+fn per_site_dialogues_distinguish_yields_replies_and_completion() {
+    use coroutine::{Dialogue, YieldSite};
+    use keleusma::bytecode::{Op, Value, WireShape};
+    use keleusma::vm::{Vm, VmState};
+    use std::collections::BTreeMap;
+    type Site = unsafe extern "C" fn(*mut u8) -> u64;
+    let program = common::build(
+        "yield helper(a: Word) -> Word { let r: Word = yield true; a + r } yield main(a: Word) -> Word { let b: Byte = yield a; let n = helper(a + (b as Word)); let d: Float = yield (n as Byte); n + (d as Word) }",
+    );
+    let mut contracts = BTreeMap::new();
+    let mut main_sites = Vec::new();
+    let mut helper_site = None;
+    for (ci, chunk) in program.chunks.iter().enumerate() {
+        for (ip, op) in chunk.ops.iter().enumerate() {
+            if !matches!(op, Op::Yield) {
+                continue;
+            }
+            let site = YieldSite {
+                chunk: ci as u32,
+                instruction: ip as u32,
+            };
+            let (yielded, reply) = if chunk.name == "helper" {
+                helper_site = Some(site);
+                (1, 3)
+            } else {
+                let first = main_sites.is_empty();
+                main_sites.push(site);
+                if first { (3, 2) } else { (2, 5) }
+            };
+            contracts.insert(
+                site,
+                Dialogue {
+                    yielded: WireShape::Scalar { kind: yielded },
+                    reply: WireShape::Scalar { kind: reply },
+                },
+            );
+        }
+    }
+    let sites = [main_sites[0], helper_site.unwrap(), main_sites[1]];
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(5))
+    ));
+    assert!(matches!(
+        vm.resume(Value::Byte(2)).unwrap(),
+        VmState::Yielded(Value::Bool(true))
+    ));
+    assert!(matches!(
+        vm.resume(Value::Int(7)).unwrap(),
+        VmState::Yielded(Value::Byte(14))
+    ));
+    assert!(matches!(
+        vm.resume(Value::Float(3.0)).unwrap(),
+        VmState::Finished(Value::Int(17))
+    ));
+    for optimized in [false, true] {
+        let context = Context::create();
+        let module =
+            coroutine::lower_with_dialogues(&context, &program, &machine(), 4096, &contracts)
+                .unwrap();
+        if optimized {
+            common::force_optimize(&module);
+        }
+        let engine = module
+            .create_jit_execution_engine(OptimizationLevel::None)
+            .unwrap();
+        let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+        let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+        let shared = Guarded::new(program.shared_data_bytes as usize);
+        let private = Guarded::new(
+            keleusma::vm::required_persistent_capacity_for(&program)
+                + region::persistent_supplement_bytes(&program) as usize,
+        );
+        let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+        unsafe {
+            let start = engine
+                .get_function::<HandleStart>(&format!("{prefix}_start"))
+                .unwrap();
+            let resume = engine
+                .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                .unwrap();
+            let site = engine
+                .get_function::<Site>(&format!("{prefix}_yield_site"))
+                .unwrap();
+            let first = start.call(5, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr());
+            assert_eq!(first, Outcome { live: 1, value: 5 });
+            assert_eq!(site.call(slot.ptr()), sites[0].id());
+            assert_eq!(resume.call(slot.ptr(), 2), Outcome { live: 1, value: 1 });
+            assert_eq!(site.call(slot.ptr()), sites[1].id());
+            assert_eq!(resume.call(slot.ptr(), 7), Outcome { live: 1, value: 14 });
+            assert_eq!(site.call(slot.ptr()), sites[2].id());
+            assert_eq!(
+                resume.call(slot.ptr(), NativeFloat::to_bits(3.0) as i64),
+                Outcome { live: 2, value: 17 }
+            );
+            assert_eq!(site.call(slot.ptr()), u64::MAX);
+            engine
+                .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                .unwrap()
+                .call(slot.ptr());
+        }
+        for reservation in [&slot, &shared, &private, &bodies] {
+            reservation.check();
+        }
+    }
+    let mut incomplete = contracts.clone();
+    incomplete.remove(&sites[0]);
+    assert!(
+        coroutine::lower_with_dialogues(
+            &Context::create(),
+            &program,
+            &machine(),
+            4096,
+            &incomplete
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("missing dialogue")
+    );
+    let mut wrong = contracts.clone();
+    wrong.get_mut(&sites[1]).unwrap().yielded = WireShape::Scalar { kind: 2 };
+    assert!(
+        coroutine::lower_with_dialogues(&Context::create(), &program, &machine(), 4096, &wrong)
+            .unwrap_err()
+            .to_string()
+            .contains("scalar types are not proven")
+    );
+    let mut extra = contracts.clone();
+    extra.insert(
+        YieldSite {
+            chunk: 0,
+            instruction: u32::MAX,
+        },
+        contracts[&sites[0]],
+    );
+    assert!(
+        coroutine::lower_with_dialogues(&Context::create(), &program, &machine(), 4096, &extra)
+            .unwrap_err()
+            .to_string()
+            .contains("non-yield site")
+    );
+}
+
+fn reassign_yield_reply_to_first_local(program: &mut keleusma::bytecode::Module) {
+    use keleusma::bytecode::Op;
+    let entry = program.entry_point.unwrap();
+    let ops = &mut program.chunks[entry].ops;
+    let destination = ops
+        .iter()
+        .find_map(|op| match op {
+            Op::SetLocal(slot) => Some(*slot),
+            _ => None,
+        })
+        .unwrap();
+    let reply = ops.iter().position(|op| matches!(op, Op::Yield)).unwrap() + 1;
+    assert!(matches!(ops[reply], Op::SetLocal(_)));
+    ops[reply] = Op::SetLocal(destination);
+    keleusma::verify::verify(program).unwrap();
+}
+
+#[test]
+fn explicit_flat_replies_survive_reuse_and_delegated_entry_completion() {
+    use coroutine::{Dialogue, YieldSite};
+    use keleusma::bytecode::{Op, TupleBody, Value, WireShape};
+    use keleusma::vm::{Vm, VmState};
+    use std::collections::BTreeMap;
+    let pair = WireShape::Flat { kind: 0, size: 16 };
+    let triple = WireShape::Flat { kind: 0, size: 24 };
+    let cases = [
+        (
+            "yield main(a: Word) -> Word { let keep = (a, a); for i in 0..2 { let replacement = yield keep.1; }; keep.0 }",
+            vec![(WireShape::Scalar { kind: 3 }, pair)],
+            vec![vec![5], vec![8]],
+            vec![vec![7, 8], vec![9, 10]],
+            9,
+            true,
+        ),
+        (
+            "yield main(a: Word) -> Word { let r: (Word, Word) = yield (a, a + 1); let s: (Word, Word, Word) = yield r; r.0 + s.2 + a }",
+            vec![(pair, pair), (pair, triple)],
+            vec![vec![5, 6], vec![11, 12]],
+            vec![vec![11, 12], vec![31, 32, 33]],
+            49,
+            false,
+        ),
+        (
+            "yield helper(a: Word) -> Word { let p: (Word, Word) = yield true; p.0 + p.1 + a } yield main(a: Word) -> Word { helper(a) }",
+            vec![(WireShape::Scalar { kind: 1 }, pair)],
+            vec![vec![1]],
+            vec![vec![11, 12]],
+            28,
+            false,
+        ),
+    ];
+    for (source, shapes, outputs, replies, expected, reassign) in cases {
+        let mut program = common::build(source);
+        if reassign {
+            reassign_yield_reply_to_first_local(&mut program);
+        }
+        let mut contracts = BTreeMap::new();
+        let mut next = shapes.iter();
+        for (ci, chunk) in program.chunks.iter().enumerate() {
+            for (ip, op) in chunk.ops.iter().enumerate() {
+                if matches!(op, Op::Yield) {
+                    let &(yielded, reply) = next.next().unwrap();
+                    contracts.insert(
+                        YieldSite {
+                            chunk: ci as u32,
+                            instruction: ip as u32,
+                        },
+                        Dialogue { yielded, reply },
+                    );
+                }
+            }
+        }
+        assert!(next.next().is_none());
+        let arena = keleusma_arena::Arena::with_capacity(65536);
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        let mut state = vm.call(&[Value::Int(5)]).unwrap();
+        for (output, reply) in outputs.iter().zip(&replies) {
+            let VmState::Yielded(value) = state else {
+                panic!("expected yield")
+            };
+            let actual: Vec<i64> = match value {
+                Value::Bool(value) => vec![i64::from(value)],
+                Value::Int(value) => vec![value],
+                Value::Tuple(TupleBody::Flat(body)) => body
+                    .resolve(&arena)
+                    .unwrap()
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|bytes| i64::from_le_bytes(*bytes))
+                    .collect(),
+                other => panic!("unexpected {other:?}"),
+            };
+            assert_eq!(&actual, output);
+            state = vm
+                .resume(Value::Tuple(TupleBody::Boxed(Box::new(
+                    reply.iter().copied().map(Value::Int).collect(),
+                ))))
+                .unwrap();
+        }
+        assert!(matches!(state, VmState::Finished(Value::Int(value)) if value == expected));
+        for optimized in [false, true] {
+            let context = Context::create();
+            // Odd reservations also test alignment of the metadata tail.
+            let module =
+                coroutine::lower_with_dialogues(&context, &program, &machine(), 4099, &contracts)
+                    .unwrap();
+            if optimized {
+                common::force_optimize(&module);
+            }
+            let engine = module
+                .create_jit_execution_engine(OptimizationLevel::None)
+                .unwrap();
+            let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+            let slot = Guarded::new(coroutine::slot_bytes(4099).unwrap() as usize);
+            let shared = Guarded::new(program.shared_data_bytes as usize);
+            let private = Guarded::new(
+                keleusma::vm::required_persistent_capacity_for(&program)
+                    + region::persistent_supplement_bytes(&program) as usize,
+            );
+            let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+            let host = Guarded::new(24);
+            unsafe {
+                let start = engine
+                    .get_function::<HandleStart>(&format!("{prefix}_start"))
+                    .unwrap();
+                let resume = engine
+                    .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                    .unwrap();
+                let release = engine
+                    .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                    .unwrap();
+                let mut state =
+                    start.call(5, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr());
+                for ((output, reply), &(yielded, _)) in
+                    outputs.iter().zip(&replies).zip(shapes.iter().cycle())
+                {
+                    assert_eq!(state.live, 1);
+                    let actual: Vec<i64> = if let WireShape::Flat { size, .. } = yielded {
+                        std::slice::from_raw_parts(state.value as *const u8, size as usize)
+                            .as_chunks::<8>()
+                            .0
+                            .iter()
+                            .map(|bytes| i64::from_le_bytes(*bytes))
+                            .collect()
+                    } else {
+                        vec![state.value]
+                    };
+                    assert_eq!(&actual, output);
+                    let bytes = std::slice::from_raw_parts_mut(host.ptr(), host.len);
+                    bytes.fill(0xdd);
+                    for (destination, value) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(reply) {
+                        destination.copy_from_slice(&value.to_le_bytes());
+                    }
+                    state = resume.call(slot.ptr(), host.ptr() as i64);
+                }
+                assert_eq!(
+                    state,
+                    Outcome {
+                        live: 2,
+                        value: expected
+                    }
+                );
+                release.call(slot.ptr());
+            }
+            for reservation in [&slot, &shared, &private, &bodies, &host] {
+                reservation.check();
+            }
+        }
+    }
+}
+
+#[test]
+fn dialogue_body_extents_cover_reads_and_callee_arguments() {
+    use coroutine::{Dialogue, YieldSite};
+    use keleusma::bytecode::{Op, WireShape};
+    use std::collections::BTreeMap;
+    for (source, kind, size, reassign) in [
+        (
+            "yield main(a: Word) -> Word { let keep = (a, a); for i in 0..2 { let replacement = yield keep.1; }; keep.0 }",
+            0,
+            8,
+            true,
+        ),
+        (
+            "yield main(a: Word) -> Word { let p: (Word, Word) = yield a; p.1 }",
+            0,
+            8,
+            false,
+        ),
+        (
+            "fn last(p: (Word, Word)) -> Word { p.1 } yield main(a: Word) -> Word { let p: (Word, Word) = yield a; last(p) }",
+            0,
+            8,
+            false,
+        ),
+        (
+            "struct W { pair: (Word, Word) } yield main(a: Word) -> Word { let p: W = yield a; p.pair.1 }",
+            2,
+            8,
+            false,
+        ),
+        (
+            "enum E { Pair(Word, Word) } yield main(a: Word) -> Word { let p: E = yield a; match p { E::Pair(x, y) => x + y } }",
+            3,
+            4,
+            false,
+        ),
+    ] {
+        let mut program = common::build(source);
+        if reassign {
+            reassign_yield_reply_to_first_local(&mut program);
+        }
+        let mut contracts = BTreeMap::new();
+        for (ci, chunk) in program.chunks.iter().enumerate() {
+            for (ip, op) in chunk.ops.iter().enumerate() {
+                if matches!(op, Op::Yield) {
+                    contracts.insert(
+                        YieldSite {
+                            chunk: ci as u32,
+                            instruction: ip as u32,
+                        },
+                        Dialogue {
+                            yielded: WireShape::Scalar { kind: 3 },
+                            reply: WireShape::Flat { kind, size },
+                        },
+                    );
+                }
+            }
+        }
+        if reassign || source.contains("fn last") {
+            require_short_dialogue_trap(
+                &program,
+                &contracts,
+                5,
+                5,
+                if reassign { "loop_join" } else { "callee_read" },
+            );
+            continue;
+        }
+        let error = coroutine::lower_with_dialogues(
+            &Context::create(),
+            &program,
+            &machine(),
+            4096,
+            &contracts,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("body extent"),
+            "{source}: {error}"
+        );
+    }
+    // A join must not adopt the last emitted branch's larger body extent.
+    let program = common::build(
+        "yield main(a: Word) -> Word { let p: (Word, Word) = if a > 0 { yield 1 } else { yield 2 }; p.1 }",
+    );
+    let entry = program.entry_point.unwrap();
+    for sizes in [[8, 16], [16, 8]] {
+        let contracts = program.chunks[entry]
+            .ops
+            .iter()
+            .enumerate()
+            .filter(|(_, op)| matches!(op, Op::Yield))
+            .enumerate()
+            .map(|(ordinal, (ip, _))| {
+                (
+                    YieldSite {
+                        chunk: entry as u32,
+                        instruction: ip as u32,
+                    },
+                    Dialogue {
+                        yielded: WireShape::Scalar { kind: 3 },
+                        reply: WireShape::Flat {
+                            kind: 0,
+                            size: sizes[ordinal],
+                        },
+                    },
+                )
+            })
+            .collect();
+        let first = if sizes[0] == 8 { 5 } else { -5 };
+        let yielded = if first > 0 { 1 } else { 2 };
+        require_short_dialogue_trap(
+            &program,
+            &contracts,
+            first,
+            yielded,
+            if first > 0 {
+                "then_short"
+            } else {
+                "else_short"
+            },
+        );
+    }
+}
+
+fn require_short_dialogue_trap(
+    program: &keleusma::bytecode::Module,
+    contracts: &std::collections::BTreeMap<coroutine::YieldSite, coroutine::Dialogue>,
+    first: i64,
+    yielded: i64,
+    case: &str,
+) {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    assert!(
+        matches!(vm.call(&[Value::Int(first)]).unwrap(), VmState::Yielded(Value::Int(v)) if v == yielded)
+    );
+    assert!(vm.resume(Value::tuple(vec![Value::Int(17)])).is_err());
+    let host = Guarded::new(8);
+    unsafe {
+        std::slice::from_raw_parts_mut(host.ptr(), 8).copy_from_slice(&17i64.to_le_bytes());
+    }
+    #[cfg(unix)]
+    require_program_kind_trap(
+        "dialogue_body_extents_cover_reads_and_callee_arguments",
+        program,
+        Some(contracts),
+        &[first],
+        &[yielded],
+        &[host.ptr() as i64],
+        case,
+    );
+    host.check();
+}
+
+fn stream_dialogue_sequence(
+    source: &str,
+    replies: [keleusma::bytecode::WireShape; 2],
+    inputs: &[(keleusma::bytecode::Value, Vec<i64>)],
+    expected: &[i64],
+) {
+    use keleusma::bytecode::{Op, Value, WireShape};
+    use keleusma::vm::{Vm, VmState};
+    let program = common::build(source);
+    let entry = program.entry_point.unwrap();
+    let dialogues = program
+        .chunks
+        .iter()
+        .enumerate()
+        .flat_map(|(ci, chunk)| {
+            chunk
+                .ops
+                .iter()
+                .enumerate()
+                .filter_map(move |(ip, op)| matches!(op, Op::Yield).then_some((ci, ip)))
+        })
+        .enumerate()
+        .map(|(site, (ci, ip))| {
+            (
+                coroutine::YieldSite {
+                    chunk: ci as u32,
+                    instruction: ip as u32,
+                },
+                coroutine::Dialogue {
+                    yielded: WireShape::Scalar { kind: 3 },
+                    reply: replies[site],
+                },
+            )
+        })
+        .collect();
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    let mut state = vm.call(&[inputs[0].0.clone()]).unwrap();
+    for (index, expected) in expected.iter().enumerate() {
+        assert!(
+            matches!(state, VmState::Yielded(Value::Int(v)) if v == *expected),
+            "{state:?}"
+        );
+        if index + 1 < inputs.len() {
+            state = vm.resume(inputs[index + 1].0.clone()).unwrap();
+            if matches!(state, VmState::Reset) {
+                state = vm.resume(inputs[index + 1].0.clone()).unwrap();
+            }
+        }
+    }
+    for optimize in [false, true] {
+        let ctx = Context::create();
+        let module =
+            coroutine::lower_with_dialogues(&ctx, &program, &machine(), 4096, &dialogues).unwrap();
+        if optimize {
+            common::force_optimize(&module);
+        }
+        let engine = module
+            .create_jit_execution_engine(OptimizationLevel::None)
+            .unwrap();
+        let prefix = format!("kel_coroutine_{entry}");
+        let frame = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+        let private = Guarded::new(
+            keleusma::vm::required_persistent_capacity_for(&program)
+                + region::persistent_supplement_bytes(&program) as usize,
+        );
+        let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+        let shared = Guarded::new(0);
+        let host = Guarded::new(24);
+        unsafe {
+            let start = engine
+                .get_function::<HandleStart>(&format!("{prefix}_start"))
+                .unwrap();
+            let resume = engine
+                .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                .unwrap();
+            let release = engine
+                .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                .unwrap();
+            for (index, (value, words)) in inputs.iter().enumerate() {
+                let bytes = std::slice::from_raw_parts_mut(host.ptr(), host.len);
+                bytes.fill(0xdd);
+                for (slot, word) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(words) {
+                    slot.copy_from_slice(&word.to_le_bytes());
+                }
+                let bits = match value {
+                    Value::Int(v) | Value::Fixed(v) => *v,
+                    Value::Byte(v) => i64::from(*v),
+                    Value::Bool(v) => i64::from(*v),
+                    Value::Float(v) => (*v as NativeFloat).to_bits() as i64,
+                    Value::Unit => 0,
+                    _ => host.ptr() as i64,
+                };
+                let result = if index == 0 {
+                    start.call(bits, shared.ptr(), private.ptr(), bodies.ptr(), frame.ptr())
+                } else {
+                    resume.call(frame.ptr(), bits)
+                };
+                assert_eq!(
+                    result,
+                    Outcome {
+                        live: 1,
+                        value: expected[index]
+                    }
+                );
+                bytes.fill(0xee);
+                for region in [&frame, &private, &bodies, &shared, &host] {
+                    region.check();
+                }
+            }
+            release.call(frame.ptr());
+        }
+    }
+}
+
+#[test]
+fn stream_composite_replies_keep_their_actual_extents() {
+    use keleusma::bytecode::{Value, WireShape};
+    let inputs: Vec<_> = [
+        vec![5, 6],
+        vec![7, 8, 9],
+        vec![21],
+        vec![31, 32, 33],
+        vec![41],
+    ]
+    .into_iter()
+    .map(|words| {
+        (
+            Value::array(words.iter().map(|v| Value::Int(*v)).collect()),
+            words,
+        )
+    })
+    .collect();
+    for source in [
+        "loop main(a: [Word; 2]) -> Word { let saved = a; yield a[0]; yield saved[0] + a[0] }",
+        "yield child(v: [Word; 2]) -> Word { yield v[0]; v[0] } loop main(a: [Word; 2]) -> Word { let first = child(a); yield first + a[0] }",
+        "yield child(v: [Word; 2]) -> Word { yield v[0]; v[0] } yield middle(v: [Word; 2]) -> Word { child(v) } loop main(a: [Word; 2]) -> Word { let first = middle(a); yield first + a[0] }",
+    ] {
+        stream_dialogue_sequence(
+            source,
+            [
+                WireShape::Flat { kind: 1, size: 24 },
+                WireShape::Flat { kind: 1, size: 8 },
+            ],
+            &inputs,
+            &[5, 12, 21, 52, 41],
+        );
+    }
+}
+
+#[test]
+fn composite_stream_parameters_preserve_scalar_and_empty_replies() {
+    use keleusma::bytecode::{Value, WireShape};
+    for (kind, scalar) in [
+        (0, Value::Unit),
+        (1, Value::Bool(true)),
+        (2, Value::Byte(7)),
+        (3, Value::Int(7)),
+        (4, Value::Fixed(7)),
+        (5, Value::Float(7.0)),
+    ] {
+        for words in [vec![], vec![0]] {
+            let array = Value::array(words.iter().map(|v| Value::Int(*v)).collect());
+            let inputs = [
+                (
+                    Value::enum_value("E".into(), "A".into(), 0, vec![Value::Int(5)]),
+                    vec![0, 5],
+                ),
+                (scalar.clone(), vec![]),
+                (array.clone(), words.clone()),
+                (scalar.clone(), vec![]),
+                (array, words.clone()),
+            ];
+            for source in [
+                "enum E { A(Word), B } loop main(a: E) -> Word { yield match a { E::A(n) => n, _ => 99 }; yield match a { E::A(n) => n, _ => 99 } }",
+                "enum E { A(Word), B } yield child(v: E) -> Word { yield match v { E::A(n) => n, _ => 99 }; 0 } loop main(a: E) -> Word { child(a); yield match a { E::A(n) => n, _ => 99 } }",
+            ] {
+                stream_dialogue_sequence(
+                    source,
+                    [
+                        WireShape::Scalar { kind },
+                        WireShape::Flat {
+                            kind: 1,
+                            size: words.len() as u32 * 8,
+                        },
+                    ],
+                    &inputs,
+                    &[5, 99, 99, 99, 99],
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn shortened_stream_reply_traps_before_an_out_of_bounds_read() {
+    use keleusma::bytecode::{Op, Value, WireShape};
+    use keleusma::vm::{Vm, VmState};
+    for (source, after_reset) in [
+        (
+            "loop main(a: [Word; 2]) -> Word { yield a[0]; yield a[0] }",
+            false,
+        ),
+        ("loop main(a: [Word; 2]) -> Word { yield a[0] }", true),
+    ] {
+        let program = common::build(source);
+        let entry = program.entry_point.unwrap();
+        let dialogues = program.chunks[entry]
+            .ops
+            .iter()
+            .enumerate()
+            .filter_map(|(ip, op)| {
+                matches!(op, Op::Yield).then_some((
+                    coroutine::YieldSite {
+                        chunk: entry as u32,
+                        instruction: ip as u32,
+                    },
+                    coroutine::Dialogue {
+                        yielded: WireShape::Scalar { kind: 3 },
+                        reply: WireShape::Flat { kind: 1, size: 0 },
+                    },
+                ))
+            })
+            .collect();
+        let arena = keleusma_arena::Arena::with_capacity(65536);
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        assert!(matches!(
+            vm.call(&[Value::array(vec![Value::Int(5), Value::Int(6)])])
+                .unwrap(),
+            VmState::Yielded(Value::Int(5))
+        ));
+        let state = vm.resume(Value::array(vec![]));
+        if after_reset {
+            assert!(matches!(state.unwrap(), VmState::Reset));
+            assert!(vm.resume(Value::array(vec![])).is_err());
+        } else {
+            assert!(state.is_err());
+        }
+        let initial = Guarded::new(16);
+        let reply = Guarded::new(0);
+        unsafe { std::slice::from_raw_parts_mut(initial.ptr(), 8) }
+            .copy_from_slice(&5i64.to_le_bytes());
+        #[cfg(unix)]
+        require_program_kind_trap(
+            "shortened_stream_reply_traps_before_an_out_of_bounds_read",
+            &program,
+            Some(&dialogues),
+            &[initial.ptr() as i64],
+            &[5],
+            &[reply.ptr() as i64],
+            source,
+        );
+        initial.check();
+        reply.check();
+    }
+}
+
+#[test]
+fn parameterless_dialogues_complete_with_each_scalar_kind() {
+    use coroutine::{Dialogue, YieldSite};
+    use keleusma::bytecode::{Op, Value, WireShape};
+    use keleusma::vm::{Vm, VmState};
+    use std::collections::BTreeMap;
+    type StartZero = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) -> Outcome;
+    for (declaration, kind, value, bits) in [
+        ("()", 0, Value::Unit, 0),
+        ("bool", 1, Value::Bool(true), 1),
+        ("Byte", 2, Value::Byte(9), 9),
+        ("Word", 3, Value::Int(-11), -11),
+        ("Fixed", 4, Value::Fixed(65536), 65536),
+        (
+            "Float",
+            5,
+            Value::Float(7.25),
+            NativeFloat::to_bits(7.25) as i64,
+        ),
+    ] {
+        let program = common::build(&format!(
+            "yield main() -> {declaration} {{ let r: {declaration} = yield false; r }}"
+        ));
+        let entry = program.entry_point.unwrap();
+        let ip = program.chunks[entry]
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::Yield))
+            .unwrap();
+        let contracts = BTreeMap::from([(
+            YieldSite {
+                chunk: entry as u32,
+                instruction: ip as u32,
+            },
+            Dialogue {
+                yielded: WireShape::Scalar { kind: 1 },
+                reply: WireShape::Scalar { kind },
+            },
+        )]);
+        let arena = keleusma_arena::Arena::with_capacity(65536);
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        assert!(matches!(
+            vm.call(&[]).unwrap(),
+            VmState::Yielded(Value::Bool(false))
+        ));
+        let VmState::Finished(actual) = vm.resume(value.clone()).unwrap() else {
+            panic!("expected completion")
+        };
+        assert_eq!(actual, value);
+        for optimized in [false, true] {
+            let context = Context::create();
+            let module =
+                coroutine::lower_with_dialogues(&context, &program, &machine(), 4096, &contracts)
+                    .unwrap();
+            if optimized {
+                common::force_optimize(&module);
+            }
+            let engine = module
+                .create_jit_execution_engine(OptimizationLevel::None)
+                .unwrap();
+            let prefix = format!("kel_coroutine_{entry}");
+            let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+            let unused = Guarded::new(0);
+            unsafe {
+                let start = engine
+                    .get_function::<StartZero>(&format!("{prefix}_start"))
+                    .unwrap();
+                let resume = engine
+                    .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                    .unwrap();
+                assert_eq!(
+                    start.call(unused.ptr(), unused.ptr(), unused.ptr(), slot.ptr()),
+                    Outcome { live: 1, value: 0 }
+                );
+                assert_eq!(
+                    resume.call(slot.ptr(), bits),
+                    Outcome {
+                        live: 2,
+                        value: bits
+                    }
+                );
+                engine
+                    .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                    .unwrap()
+                    .call(slot.ptr());
+            }
+            slot.check();
+            unused.check();
+        }
+    }
+    let program = common::build("loop main(a: Word) -> Word { yield a }");
+    let entry = program.entry_point.unwrap();
+    let ip = program.chunks[entry]
+        .ops
+        .iter()
+        .position(|op| matches!(op, Op::Yield))
+        .unwrap();
+    let contracts = BTreeMap::from([(
+        YieldSite {
+            chunk: entry as u32,
+            instruction: ip as u32,
+        },
+        Dialogue {
+            yielded: WireShape::Scalar { kind: 3 },
+            reply: WireShape::Scalar { kind: 2 },
+        },
+    )]);
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    vm.call(&[Value::Int(5)]).unwrap();
+    assert!(vm.resume(Value::Byte(7)).is_err());
+    assert!(
+        coroutine::lower_with_dialogues(&Context::create(), &program, &machine(), 4096, &contracts)
+            .unwrap_err()
+            .to_string()
+            .contains("stream dialogue reply")
+    );
+}
+
+#[test]
+fn composite_reply_kinds_must_match_the_consuming_operation() {
+    use coroutine::{Dialogue, YieldSite};
+    use keleusma::bytecode::{ArrayBody, Op, TupleBody, Value, WireShape};
+    use keleusma::vm::{Vm, VmState};
+    use std::collections::BTreeMap;
+    for (source, reply_kind) in [
+        (
+            "yield main(a: Word) -> Word { let p: (Word, Word) = yield a; p.0 }",
+            1,
+        ),
+        (
+            "yield main(a: Word) -> Word { let p: [Word; 2] = yield a; p[0] }",
+            0,
+        ),
+        (
+            "struct P { x: Word, y: Word } yield main(a: Word) -> Word { let p: P = yield a; p.x }",
+            0,
+        ),
+        (
+            "private data st { p: (Word, Word) } yield main(a: Word) -> Word { let p: (Word, Word) = yield a; st.p = p; st.p.0 }",
+            1,
+        ),
+        (
+            "private data st { p: (Word, Word), q: (Word, Word) } yield main(a: Word) -> Word { let p: (Word, Word) = yield a; st.p = p; st.q = st.p; st.q.0 }",
+            1,
+        ),
+    ] {
+        let program = common::build(source);
+        let mut arena = keleusma_arena::Arena::with_capacity(65536);
+        arena
+            .resize_persistent(keleusma::vm::required_persistent_capacity_for(&program))
+            .unwrap();
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        assert!(matches!(
+            vm.call(&[Value::Int(5)]).unwrap(),
+            VmState::Yielded(Value::Int(5))
+        ));
+        let fields = Box::new(vec![Value::Int(7), Value::Int(8)]);
+        let reply = if reply_kind == 0 {
+            Value::Tuple(TupleBody::Boxed(fields))
+        } else {
+            Value::Array(ArrayBody::Boxed(fields))
+        };
+        assert!(vm.resume(reply).is_err(), "{source}");
+        let entry = program.entry_point.unwrap();
+        let ip = program.chunks[entry]
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::Yield))
+            .unwrap();
+        let contracts = BTreeMap::from([(
+            YieldSite {
+                chunk: entry as u32,
+                instruction: ip as u32,
+            },
+            Dialogue {
+                yielded: WireShape::Scalar { kind: 3 },
+                reply: WireShape::Flat {
+                    kind: reply_kind,
+                    size: 16,
+                },
+            },
+        )]);
+        let error = coroutine::lower_with_dialogues(
+            &Context::create(),
+            &program,
+            &machine(),
+            4096,
+            &contracts,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("types are not proven"),
+            "{source}: {error}"
+        );
+    }
+    // Chained private writes require more than one pass through the slot-kind
+    // equations. Correct inference preserves the storage aliases across yield.
+    let source = "private data st { p: (Word, Word), q: (Word, Word) } loop main(a: Word) -> Word { st.p = (a, a + 1); st.q = st.p; let keep = st.q; yield keep.0; yield keep.1 }";
+    let replies = [7, 20, 3, 40];
+    let expected = [5, 6, 20, 21];
+    assert_eq!(common::general_vm_sequence(source, 5, &replies), expected);
+    for optimize in [false, true] {
+        assert_eq!(native(source, 5, &replies, optimize), expected);
+    }
+}
+
+thread_local! {
+    static NATIVE_PAIR_BUFFER: std::cell::RefCell<[i64; 2]> = const { std::cell::RefCell::new([0; 2]) };
+    static NATIVE_PAIR_CALLS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+extern "C" fn native_pair_snapshot(value: i64) -> i64 {
+    NATIVE_PAIR_CALLS.with(|calls| calls.set(calls.get() + 1));
+    NATIVE_PAIR_BUFFER.with(|buffer| {
+        let mut body = buffer.borrow_mut();
+        *body = [value, value + 1];
+        body.as_ptr() as i64
+    })
+}
+
+extern "C" fn native_pair_alias(address: i64) -> i64 {
+    address
+}
+
+#[test]
+fn native_snapshot_results_survive_calls_suspension_and_completion() {
+    use coroutine::{Dialogue, HostContracts, NativeBodyReturn, YieldSite};
+    use keleusma::bytecode::{Op, TupleBody, Value, WireShape};
+    use keleusma::vm::{Vm, VmState};
+    use std::collections::BTreeMap;
+    for (delegated, external) in [(0, false), (1, false), (2, false), (1, true), (2, true)] {
+        let source = if delegated == 2 {
+            "use host::pair\nyield make(a: Word) -> (Word, Word) { let p: (Word, Word) = host::pair(a); yield p.0; p } yield main(a: Word) -> (Word, Word) { let keep = make(a); let later = make(a + 11); keep }"
+        } else if delegated == 1 {
+            "use host::pair\nfn make(a: Word) -> (Word, Word) { host::pair(a) } yield main(a: Word) -> (Word, Word) { let keep = make(a); yield keep.0; let later = make(a + 10); yield later.1; keep }"
+        } else {
+            "use host::pair\nyield main(a: Word) -> (Word, Word) { let keep: (Word, Word) = host::pair(a); yield keep.0; let later: (Word, Word) = host::pair(a + 10); yield later.1; keep }"
+        };
+        let source = if external {
+            source.replace("use host::pair", "use external host::pair")
+        } else {
+            source.to_owned()
+        };
+        let mut program = common::build(&source);
+        program.native_return_shapes[0] = WireShape::Flat { kind: 0, size: 16 };
+        let dialogues = program
+            .chunks
+            .iter()
+            .enumerate()
+            .flat_map(|(ci, chunk)| {
+                chunk.ops.iter().enumerate().filter_map(move |(ip, op)| {
+                    matches!(op, Op::Yield).then_some((
+                        YieldSite {
+                            chunk: ci as u32,
+                            instruction: ip as u32,
+                        },
+                        Dialogue {
+                            yielded: WireShape::Scalar { kind: 3 },
+                            reply: WireShape::Scalar { kind: 3 },
+                        },
+                    ))
+                })
+            })
+            .collect();
+        let contracts = HostContracts {
+            dialogues: Some(dialogues),
+            native_body_returns: BTreeMap::from([(0, NativeBodyReturn::Snapshot)]),
+        };
+        let arena = keleusma_arena::Arena::with_capacity(65536);
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        if external {
+            vm.register_external_native(
+                "host::pair",
+                |args| {
+                    let Value::Int(a) = args[0] else {
+                        panic!("expected Word")
+                    };
+                    Ok(Value::tuple(vec![Value::Int(a), Value::Int(a + 1)]))
+                },
+                2,
+            );
+        } else {
+            vm.register_fn("host::pair", |a: i64| (a, a + 1));
+        }
+        assert!(matches!(
+            vm.call(&[Value::Int(5)]).unwrap(),
+            VmState::Yielded(Value::Int(5))
+        ));
+        assert!(matches!(
+            vm.resume(Value::Int(7)).unwrap(),
+            VmState::Yielded(Value::Int(16))
+        ));
+        let VmState::Finished(Value::Tuple(TupleBody::Flat(body))) =
+            vm.resume(Value::Int(0)).unwrap()
+        else {
+            panic!("expected completed pair")
+        };
+        let expected: Vec<_> = body
+            .resolve(&arena)
+            .unwrap()
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|bytes| i64::from_le_bytes(*bytes))
+            .collect();
+        assert_eq!(expected, [5, 6]);
+        for optimized in [false, true] {
+            let context = Context::create();
+            let module =
+                coroutine::lower_with_contracts(&context, &program, &machine(), 4096, &contracts)
+                    .unwrap();
+            if optimized {
+                common::force_optimize(&module);
+            }
+            let engine = module
+                .create_jit_execution_engine(OptimizationLevel::None)
+                .unwrap();
+            let symbol = module
+                .get_function(&keleusma_native::native_symbol("host::pair"))
+                .unwrap();
+            engine.add_global_mapping(&symbol, native_pair_snapshot as *const () as usize);
+            let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+            let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+            let shared = Guarded::new(program.shared_data_bytes as usize);
+            let private = Guarded::new(
+                keleusma::vm::required_persistent_capacity_for(&program)
+                    + region::persistent_supplement_bytes(&program) as usize,
+            );
+            let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+            unsafe {
+                let start = engine
+                    .get_function::<HandleStart>(&format!("{prefix}_start"))
+                    .unwrap();
+                let resume = engine
+                    .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                    .unwrap();
+                let release = engine
+                    .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                    .unwrap();
+                for _ in 0..2 {
+                    NATIVE_PAIR_CALLS.with(|calls| calls.set(0));
+                    assert_eq!(
+                        start.call(5, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr()),
+                        Outcome { live: 1, value: 5 }
+                    );
+                    NATIVE_PAIR_BUFFER.with(|buffer| *buffer.borrow_mut() = [99, 100]);
+                    assert_eq!(resume.call(slot.ptr(), 7), Outcome { live: 1, value: 16 });
+                    NATIVE_PAIR_BUFFER.with(|buffer| *buffer.borrow_mut() = [199, 200]);
+                    let end = resume.call(slot.ptr(), 0);
+                    assert_eq!(end.live, 2);
+                    // Completion lives after LLVM's frame and before site metadata.
+                    assert_eq!(end.value as *mut u8, slot.ptr().add(16 + 4096 - 8 - 16));
+                    std::slice::from_raw_parts_mut(slot.ptr().add(16), 4096 - 8 - 16).fill(0xdd);
+                    assert_eq!(
+                        std::slice::from_raw_parts(end.value as *const i64, 2),
+                        &expected
+                    );
+                    assert_eq!(NATIVE_PAIR_CALLS.with(|calls| calls.get()), 2);
+                    release.call(slot.ptr());
+                }
+                NATIVE_PAIR_CALLS.with(|calls| calls.set(0));
+                assert_eq!(
+                    start
+                        .call(5, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr())
+                        .live,
+                    1
+                );
+                release.call(slot.ptr());
+                assert_eq!(NATIVE_PAIR_CALLS.with(|calls| calls.get()), 1);
+                assert_eq!(resume.call(slot.ptr(), 0), Outcome { live: 0, value: 0 });
+            }
+            for reservation in [&slot, &shared, &private, &bodies] {
+                reservation.check();
+            }
+        }
+        let error = coroutine::lower_with_contracts(
+            &Context::create(),
+            &program,
+            &machine(),
+            32,
+            &contracts,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("frame"), "{error}");
+        let mut bad = contracts.clone();
+        bad.native_body_returns
+            .insert(1, NativeBodyReturn::Snapshot);
+        assert!(
+            coroutine::lower_with_contracts(&Context::create(), &program, &machine(), 4096, &bad)
+                .unwrap_err()
+                .to_string()
+                .contains("bounded flat return signature")
+        );
+        program.native_return_shapes[0] = WireShape::Top;
+        assert!(
+            coroutine::lower_with_contracts(
+                &Context::create(),
+                &program,
+                &machine(),
+                4096,
+                &contracts
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("bounded flat return signature")
+        );
+    }
+}
+
+#[test]
+fn native_instance_borrows_preserve_aliases_while_snapshots_copy() {
+    use coroutine::{HostContracts, NativeBodyReturn};
+    use keleusma::bytecode::{Value, WireShape};
+    use keleusma::vm::{Vm, VmState};
+    use std::collections::BTreeMap;
+    let mut program = common::build(
+        "use host::alias\nprivate data st { pair: (Word, Word) } yield main(a: Word) -> Word { st.pair = (a, a + 1); let keep: (Word, Word) = host::alias(st.pair); yield keep.0; st.pair = (7, 8); keep.1 }",
+    );
+    program.native_return_shapes[0] = WireShape::Flat { kind: 0, size: 16 };
+    for (contract, expected) in [
+        (NativeBodyReturn::InstanceBorrow, 8),
+        (NativeBodyReturn::Snapshot, 6),
+    ] {
+        let mut arena = keleusma_arena::Arena::with_capacity(65536);
+        arena
+            .resize_persistent(keleusma::vm::required_persistent_capacity_for(&program))
+            .unwrap();
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        if contract == NativeBodyReturn::InstanceBorrow {
+            vm.register_native("host::alias", |args| Ok(args[0].clone()));
+        } else {
+            vm.register_fn("host::alias", |pair: (i64, i64)| pair);
+        }
+        assert!(matches!(
+            vm.call(&[Value::Int(5)]).unwrap(),
+            VmState::Yielded(Value::Int(5))
+        ));
+        assert!(
+            matches!(vm.resume(Value::Int(0)).unwrap(), VmState::Finished(Value::Int(result)) if result == expected)
+        );
+        let contracts = HostContracts {
+            dialogues: None,
+            native_body_returns: BTreeMap::from([(0, contract)]),
+        };
+        for optimized in [false, true] {
+            let context = Context::create();
+            let module =
+                coroutine::lower_with_contracts(&context, &program, &machine(), 4096, &contracts)
+                    .unwrap();
+            if optimized {
+                common::force_optimize(&module);
+            }
+            let engine = module
+                .create_jit_execution_engine(OptimizationLevel::None)
+                .unwrap();
+            engine.add_global_mapping(
+                &module
+                    .get_function(&keleusma_native::native_symbol("host::alias"))
+                    .unwrap(),
+                native_pair_alias as *const () as usize,
+            );
+            let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+            let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+            let shared = Guarded::new(program.shared_data_bytes as usize);
+            let private = Guarded::new(
+                keleusma::vm::required_persistent_capacity_for(&program)
+                    + region::persistent_supplement_bytes(&program) as usize,
+            );
+            let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+            unsafe {
+                let start = engine
+                    .get_function::<HandleStart>(&format!("{prefix}_start"))
+                    .unwrap();
+                let resume = engine
+                    .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                    .unwrap();
+                let release = engine
+                    .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                    .unwrap();
+                assert_eq!(
+                    start.call(5, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr()),
+                    Outcome { live: 1, value: 5 }
+                );
+                assert_eq!(
+                    resume.call(slot.ptr(), 0),
+                    Outcome {
+                        live: 2,
+                        value: expected
+                    }
+                );
+                release.call(slot.ptr());
+            }
+            for reservation in [&slot, &shared, &private, &bodies] {
+                reservation.check();
+            }
+        }
+    }
+}
+
+#[test]
+fn unused_chunks_do_not_change_coroutine_admission_or_site_identifiers() {
+    use coroutine::{Dialogue, YieldSite};
+    use keleusma::bytecode::{Op, Value, WireShape};
+    use keleusma::vm::{Vm, VmState};
+    use std::collections::BTreeMap;
+    let source = "use host::unused\nfn unused_native(a: Word) -> Float { host::unused(a) } fn unused_text(x: Text) -> Text { x } loop unused_stream(a: Word) -> Word { yield a } yield unused_yield(a: Byte) -> Byte { yield a } yield helper(a: Word) -> Word { let b = yield a + 1; b + a } yield main(a: Word) -> Word { helper(a) + a }";
+    let mut program = common::build(source);
+    program.native_return_shapes[0] = WireShape::Scalar { kind: 5 };
+    let helper = program
+        .chunks
+        .iter()
+        .position(|chunk| chunk.name == "helper")
+        .unwrap();
+    let site = YieldSite {
+        chunk: helper as u32,
+        instruction: program.chunks[helper]
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::Yield))
+            .unwrap() as u32,
+    };
+    let contract = Dialogue {
+        yielded: WireShape::Scalar { kind: 3 },
+        reply: WireShape::Scalar { kind: 3 },
+    };
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(6))
+    ));
+    assert!(matches!(
+        vm.resume(Value::Int(7)).unwrap(),
+        VmState::Finished(Value::Int(17))
+    ));
+    for optimized in [false, true] {
+        for all_sites in [false, true] {
+            let mut contracts = BTreeMap::from([(site, contract)]);
+            if all_sites {
+                for (ci, chunk) in program.chunks.iter().enumerate() {
+                    if ci == helper {
+                        continue;
+                    }
+                    for (ip, op) in chunk.ops.iter().enumerate() {
+                        if matches!(op, Op::Yield) {
+                            contracts.insert(
+                                YieldSite {
+                                    chunk: ci as u32,
+                                    instruction: ip as u32,
+                                },
+                                Dialogue {
+                                    yielded: WireShape::Top,
+                                    reply: WireShape::Top,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+            let context = Context::create();
+            let module =
+                coroutine::lower_with_dialogues(&context, &program, &machine(), 4096, &contracts)
+                    .unwrap();
+            if optimized {
+                common::force_optimize(&module);
+            }
+            assert!(
+                module
+                    .get_function(&keleusma_native::native_symbol("host::unused"))
+                    .is_none()
+            );
+            let engine = module
+                .create_jit_execution_engine(OptimizationLevel::None)
+                .unwrap();
+            let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+            let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+            let shared = Guarded::new(program.shared_data_bytes as usize);
+            let private = Guarded::new(
+                keleusma::vm::required_persistent_capacity_for(&program)
+                    + region::persistent_supplement_bytes(&program) as usize,
+            );
+            let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+            unsafe {
+                let start = engine
+                    .get_function::<HandleStart>(&format!("{prefix}_start"))
+                    .unwrap();
+                let resume = engine
+                    .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                    .unwrap();
+                let query = engine
+                    .get_function::<unsafe extern "C" fn(*mut u8) -> u64>(&format!(
+                        "{prefix}_yield_site"
+                    ))
+                    .unwrap();
+                assert_eq!(
+                    start.call(5, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr()),
+                    Outcome { live: 1, value: 6 }
+                );
+                assert_eq!(query.call(slot.ptr()), site.id());
+                assert_eq!(resume.call(slot.ptr(), 7), Outcome { live: 2, value: 17 });
+                engine
+                    .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                    .unwrap()
+                    .call(slot.ptr());
+            }
+            for reservation in [&slot, &shared, &private, &bodies] {
+                reservation.check();
+            }
+        }
+    }
+    // Unused signature metadata is unnecessary, but reachable native returns
+    // still pass through the backend's native floating-point ABI boundary.
+    let unused = program
+        .chunks
+        .iter()
+        .position(|chunk| chunk.name == "unused_text")
+        .unwrap();
+    program.signatures[unused].params.clear();
+    coroutine::lower(&Context::create(), &program, &machine(), 4096).unwrap();
+    let mut reachable = common::build(
+        "use host::unused\nfn helper(a: Word) -> Float { host::unused(a) } yield main(a: Word) -> Float { let f = helper(a); yield f; f }",
+    );
+    reachable.native_return_shapes[0] = WireShape::Scalar { kind: 5 };
+    assert!(
+        coroutine::lower(&Context::create(), &reachable, &machine(), 4096)
+            .unwrap_err()
+            .to_string()
+            .contains("Float RETURN SHAPE")
+    );
+}
+
+#[test]
+fn native_snapshot_completion_links_from_c_and_emits_for_tier_one_targets() {
+    use coroutine::{Dialogue, HostContracts, NativeBodyReturn, YieldSite};
+    use inkwell::targets::{FileType, TargetTriple};
+    use inkwell::values::BasicValue;
+    use keleusma::bytecode::{Op, WireShape};
+    use std::collections::BTreeMap;
+    use std::process::Command;
+    let mut program = common::build(
+        "use host::pair\nfn make(a: Word) -> (Word, Word) { host::pair(a) } yield main(a: Word) -> (Word, Word) { let p = make(a); yield p.0; p }",
+    );
+    program.native_return_shapes[0] = WireShape::Flat { kind: 0, size: 16 };
+    let entry = program.entry_point.unwrap();
+    let site = YieldSite {
+        chunk: entry as u32,
+        instruction: program.chunks[entry]
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::Yield))
+            .unwrap() as u32,
+    };
+    let contracts = HostContracts {
+        dialogues: Some(BTreeMap::from([(
+            site,
+            Dialogue {
+                yielded: WireShape::Scalar { kind: 3 },
+                reply: WireShape::Scalar { kind: 0 },
+            },
+        )])),
+        native_body_returns: BTreeMap::from([(0, NativeBodyReturn::Snapshot)]),
+    };
+    let directory = std::path::PathBuf::from("../tmp")
+        .join(format!("retcon-native-completion-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    for optimized in [false, true] {
+        let context = Context::create();
+        let target = machine();
+        let module =
+            coroutine::lower_with_contracts(&context, &program, &target, 4096, &contracts).unwrap();
+        if optimized {
+            common::force_optimize(&module);
+        }
+        let object = directory.join("coroutine.o");
+        target
+            .write_to_file(&module, FileType::Object, &object)
+            .unwrap();
+        let host = directory.join("host.c");
+        std::fs::write(
+            &host,
+            format!(
+                r#"
+#include <assert.h>
+#include <stdint.h>
+#include <stdalign.h>
+#include <string.h>
+struct outcome {{ uint64_t status; int64_t value; }};
+extern struct outcome kel_coroutine_{entry}_start(int64_t, void *, void *, void *, void *);
+extern struct outcome kel_coroutine_{entry}_resume(void *, int64_t);
+extern void kel_coroutine_{entry}_release(void *);
+extern uint64_t kel_coroutine_{entry}_yield_site(void *);
+static int64_t transfer[2];
+int64_t {native}(int64_t a) {{
+    transfer[0] = a; transfer[1] = a + 1;
+    return (int64_t)(uintptr_t)transfer;
+}}
+struct guarded {{ uint64_t before; alignas(8) unsigned char slot[4112]; uint64_t after; }};
+int main(void) {{
+    struct guarded a, b;
+    a.before = b.before = a.after = b.after = UINT64_C(0xa5a5a5a5a5a5a5a5);
+    struct outcome first = kel_coroutine_{entry}_start(5, 0, 0, 0, a.slot);
+    assert(first.status == 1 && first.value == 5);
+    assert(kel_coroutine_{entry}_yield_site(a.slot) == UINT64_C({site}));
+    struct outcome second = kel_coroutine_{entry}_start(20, 0, 0, 0, b.slot);
+    assert(second.status == 1 && second.value == 20);
+    transfer[0] = transfer[1] = 999;
+    first = kel_coroutine_{entry}_resume(a.slot, 0);
+    second = kel_coroutine_{entry}_resume(b.slot, 0);
+    assert(first.status == 2 && second.status == 2);
+    assert(kel_coroutine_{entry}_yield_site(a.slot) == UINT64_MAX);
+    memset(a.slot + 16, 0xdd, 4072);
+    memset(b.slot + 16, 0xdd, 4072);
+    const int64_t *x = (const int64_t *)(uintptr_t)first.value;
+    const int64_t *y = (const int64_t *)(uintptr_t)second.value;
+    assert(x[0] == 5 && x[1] == 6 && y[0] == 20 && y[1] == 21);
+    kel_coroutine_{entry}_release(a.slot);
+    kel_coroutine_{entry}_release(b.slot);
+    first = kel_coroutine_{entry}_resume(a.slot, 0);
+    assert(first.status == 0 && first.value == 0);
+    assert(a.before == UINT64_C(0xa5a5a5a5a5a5a5a5) && a.after == a.before);
+    assert(b.before == a.before && b.after == a.before);
+    return 0;
+}}
+"#,
+                native = keleusma_native::native_symbol("host::pair"),
+                site = site.id()
+            ),
+        )
+        .unwrap();
+        let executable = directory.join("host");
+        let linked = Command::new("cc")
+            .args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+            .arg(&host)
+            .arg(&object)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(
+            linked.status.success(),
+            "{}",
+            String::from_utf8_lossy(&linked.stderr)
+        );
+        let run = Command::new(executable).output().unwrap();
+        assert!(
+            run.status.success(),
+            "{:?}: {}",
+            run.status,
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+    // Cross-target object emission is checked separately from host execution.
+    // This establishes no execution or timing result on another platform.
+    Target::initialize_all(&InitializationConfig::default());
+    for name in [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+    ] {
+        let triple = TargetTriple::create(name);
+        let target = Target::from_triple(&triple)
+            .unwrap()
+            .create_target_machine(
+                &triple,
+                "generic",
+                "",
+                OptimizationLevel::Default,
+                RelocMode::PIC,
+                CodeModel::Default,
+            )
+            .unwrap();
+        let context = Context::create();
+        let module =
+            coroutine::lower_with_contracts(&context, &program, &target, 4096, &contracts).unwrap();
+        module
+            .run_passes(
+                "default<O2>",
+                &target,
+                inkwell::passes::PassBuilderOptions::create(),
+            )
+            .unwrap();
+        module.verify().unwrap();
+        let object = target
+            .write_to_memory_buffer(&module, FileType::Object)
+            .unwrap();
+        let bytes = object.as_slice();
+        assert!(bytes.len() > 64, "{name}");
+        assert!(
+            bytes.starts_with(if name.contains("linux") {
+                b"\x7fELF"
+            } else {
+                b"\xcf\xfa\xed\xfe"
+            }),
+            "{name}"
+        );
+        if name.contains("linux") {
+            assert_eq!(
+                u16::from_le_bytes(bytes[18..20].try_into().unwrap()),
+                if name.starts_with("x86_64") { 62 } else { 183 },
+                "{name}"
+            );
+        } else {
+            assert_eq!(
+                u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
+                if name.starts_with("x86_64") {
+                    0x01000007
+                } else {
+                    0x0100000c
+                },
+                "{name}"
+            );
+        }
+        assert!(module.get_function("malloc").is_none());
+        assert!(module.get_function("free").is_none());
+        assert!(
+            module
+                .get_function("kel_retcon_overflow")
+                .is_none_or(|f| f.as_global_value().get_first_use().is_none())
+        );
+    }
+}
+
+#[test]
+fn host_control_routes_are_explicit_and_do_not_fall_back_to_callbacks() {
+    use keleusma_native::{LowerOptions, lower_module};
+    for source in [
+        "fn main(a: Word) -> Word { a + 1 }",
+        "loop main(a: Word) -> Word { yield a + 1 }",
+        "yield main(a: Word) -> Word { yield a + 1; a + 2 }",
+    ] {
+        let program = common::build(source);
+        let entry = program.entry_point.unwrap();
+        let category = program.chunks[entry].block_type;
+        let context = Context::create();
+        let ordinary = context.create_module("ordinary_control");
+        lower_module(&context, &ordinary, &program, LowerOptions::default()).unwrap();
+        ordinary.verify().unwrap();
+        assert!(
+            ordinary
+                .get_function(&format!("kel_coroutine_{entry}_start"))
+                .is_none()
+        );
+        let lowered = coroutine::lower(&context, &program, &machine(), 4096);
+        if category == keleusma::bytecode::BlockType::Func {
+            assert!(
+                lowered
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Stream or Reentrant entry")
+            );
+            assert!(ordinary.get_function("kel_yield").is_none());
+        } else {
+            let lowered = lowered.unwrap();
+            assert!(lowered.get_function("kel_yield").is_none());
+            for suffix in ["start", "resume", "release"] {
+                assert!(
+                    lowered
+                        .get_function(&format!("kel_coroutine_{entry}_{suffix}"))
+                        .is_some()
+                );
+            }
+            assert_eq!(
+                ordinary.get_function("kel_yield").is_some(),
+                category == keleusma::bytecode::BlockType::Reentrant
+            );
+        }
+    }
 }

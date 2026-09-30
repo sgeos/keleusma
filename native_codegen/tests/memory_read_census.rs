@@ -1,3 +1,27 @@
+//! The ten-field delegate context is initialized before use. Fields five and
+//! six point to entry kind and size. Seven through nine point to latest-reply
+//! ownership, kind and size. Start initializes all latest metadata and every
+//! direct or delegated yield updates it before Reset restores local zero.
+//! The common ownership load helper serves all four Reset metadata reads.
+//! Generalized builder loads replace the separate flat ownership destination.
+//!
+//! Coroutine private scalar kind reads use a zeroed persistent metadata word.
+//! Zero selects a compiler-emitted immutable table of load-time kinds. Writes
+//! store actual nonzero kinds. The table and metadata have one word per private
+//! slot, and the published private image initializes each scalar payload.
+//!
+//! Internal call metadata is written by the caller before callee reads, and
+//! by the callee before result reads. Each of its three arrays has arg_count+1
+//! words. Private body metadata retains actual length and kind. Zero denotes
+//! unwritten Unit on the coroutine route. Reading Unit itself does not fault.
+//! The private scalar word is initialized by the published private image.
+//!
+//! The yield-site query reads initialized metadata only while the handle is
+//! suspended. The fifth delegate-context pointer names that metadata cell.
+//! Coroutine kind and size metadata is seeded by producers and transported
+//! by local and stack copies. Private body tags share the initialization word.
+//! Enum discriminants are read only after the runtime tag equals Enum.
+//!
 //! Flat-input ownership flags are initialized before local or operand reads.
 //! Call contexts hold one flag per argument plus an initialized return flag.
 //! The delegate context now has a fourth pointer for entry ownership. Its new
@@ -33,7 +57,7 @@
 //! | **composite initialisation word** | **the host's zeroed buffer.** Zero means "never written", and a read of such a slot FAULTS |
 //! | **private slot array** | **the host, installing `region::private_init_image`.** This is the guarantee that did not exist |
 //! | retcon reply cell | the host writes scalar bits or a body pointer before each resume, as specified by `coroutine::lower`; exercised by `retcon_bytecode.rs` |
-//! | retcon delegate context | four pointer fields initialised by the entry before any call, promoted into the frame by LLVM; the helper reads the host reply cell under the same resume contract |
+//! | retcon delegate context | five pointer fields initialised by the entry before any call, promoted into the frame by LLVM; the helper reads the host reply cell under the same resume contract |
 //! | retcon latest reply | initialised from the start argument and updated after each suspension; LLVM preserves it in the frame until release |
 //! | **shared data segment** | **the host, by contract.** Out of this backend's reach and deliberately so |
 //!
@@ -62,7 +86,7 @@ const READ_FORMS: &[&str] = &["build_load(", " = load "];
 // 16 -> 18 with the retcon reply cell and latest-reply reads described above.
 // 18 -> 22, including the coroutine context and parsed intrinsic helper.
 // 22 -> 23 for the stable handle continuation, initialized by start.
-const RECORDED_READ_SITES: usize = 26;
+const RECORDED_READ_SITES: usize = 33;
 // 16 at first derivation, 2026-09-11. Four are on the host-provided boundary —
 // the resume-state word, the composite initialisation word, the private slot
 // array and the shared segment — and the rest read memory this lowering wrote
@@ -75,6 +99,10 @@ fn read_sites() -> Vec<(&'static str, usize, String)> {
         "src/coroutine.rs",
         "src/coroutine/host.rs",
         "src/coroutine/ownership.rs",
+        "src/coroutine/kinds.rs",
+        "src/coroutine/packing.rs",
+        "src/coroutine/arithmetic.rs",
+        "src/coroutine/private.rs",
     ] {
         let src = std::fs::read_to_string(file).expect("the emitter is readable");
         for (i, line) in src.lines().enumerate() {

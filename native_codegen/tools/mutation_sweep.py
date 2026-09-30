@@ -102,8 +102,19 @@ DUP_ARM = """Op::Dup => {
                     st.push(v);
                 }
             }"""
+# Re-registered for actual return kind and extent metadata. Preserve those
+# stores so the mutation still changes only the returned payload to zero.
 RETURN_ARM = """Op::Return => {
                 if let Some(context) = ownership_context {
+                    let count = usize::from(chunk.param_count) + 1;
+                    for (part, value) in [
+                        (1, st.input_tags[st.depth - 1]),
+                        (2, st.input_body_sizes[st.depth - 1]),
+                    ] {
+                        let destination =
+                            coroutine::kinds::call_field(&st.b, context, count, count - 1, part);
+                        st.b.build_store(destination, value).unwrap();
+                    }
                     let flag = st.owned_at(0);
                     st.b.build_store(
                         coroutine::ownership::field(&st.b, context, usize::from(chunk.param_count)),

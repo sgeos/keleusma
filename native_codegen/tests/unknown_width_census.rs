@@ -99,6 +99,19 @@ fn source() -> String {
 /// Bare `push` sites, mapped to the opcode arm that encloses them.
 fn bare_push_arms() -> Vec<(usize, String)> {
     let src = source();
+    // Width facts in admission, CFG analysis and opcode normalization are not
+    // pushes. Restrict classification to the emitting match. The previous
+    // whole-file scan attributed those facts to whichever textual Op arm it
+    // happened to encounter last, even in a different function.
+    let start = src
+        .find("        match op {\n            Op::GetLocal(n) => {")
+        .expect("the opcode emitter match exists");
+    let end = src[start..]
+        .find("    // A chunk whose ops end without")
+        .map(|offset| start + offset)
+        .expect("the emitter postconditions exist");
+    let source_line = src[..start].lines().count();
+    let src = &src[start..end];
     let mut arm = String::new();
     let mut out = Vec::new();
     for (i, line) in src.lines().enumerate() {
@@ -128,7 +141,7 @@ fn bare_push_arms() -> Vec<(usize, String)> {
         // three times over. Found because the stale half of the check fired.
         let comment = t.starts_with("//");
         if !comment && (line.contains("st.push(") || line.contains("Width::Unknown")) {
-            out.push((i + 1, arm.clone()));
+            out.push((source_line + i + 1, arm.clone()));
         }
     }
     out

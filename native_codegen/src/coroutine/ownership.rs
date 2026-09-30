@@ -64,14 +64,62 @@ pub(crate) fn copy<'ctx>(
     if owned.get_zero_extended_constant() == Some(0) {
         return value;
     }
+    let ctx = value.get_type().get_context();
+    let destination = b
+        .build_alloca(ctx.i8_type().array_type(bytes.max(1)), "owned_body")
+        .unwrap();
+    copy_to(b, value, bytes, owned, destination)
+}
+
+/// Copy owned bodies to storage whose lifetime is supplied by the caller.
+/// Borrowed region aliases retain their identity and are never relocated.
+pub(crate) fn copy_to<'ctx>(
+    b: &Builder<'ctx>,
+    value: IntValue<'ctx>,
+    bytes: u32,
+    owned: IntValue<'ctx>,
+    destination: PointerValue<'ctx>,
+) -> IntValue<'ctx> {
+    copy_bytes_to(
+        b,
+        value,
+        value.get_type().const_int(u64::from(bytes), false),
+        owned,
+        destination,
+    )
+}
+
+/// Runtime extents are compiler-produced metadata bounded by the joined facts.
+/// The reservation is static even when the selected value has a different size.
+pub(crate) fn copy_bounded<'ctx>(
+    b: &Builder<'ctx>,
+    value: IntValue<'ctx>,
+    maximum: u32,
+    bytes: IntValue<'ctx>,
+    owned: IntValue<'ctx>,
+) -> IntValue<'ctx> {
+    let ctx = value.get_type().get_context();
+    let destination = b
+        .build_alloca(ctx.i8_type().array_type(maximum.max(1)), "owned_union_body")
+        .unwrap();
+    copy_bytes_to(b, value, bytes, owned, destination)
+}
+
+fn copy_bytes_to<'ctx>(
+    b: &Builder<'ctx>,
+    value: IntValue<'ctx>,
+    bytes: IntValue<'ctx>,
+    owned: IntValue<'ctx>,
+    destination: PointerValue<'ctx>,
+) -> IntValue<'ctx> {
+    if owned.get_zero_extended_constant() == Some(0) {
+        return value;
+    }
     let i64t = value.get_type();
     let ctx = i64t.get_context();
     let ptrt = ctx.ptr_type(inkwell::AddressSpace::default());
     let source_block = b.get_insert_block().unwrap();
     let function = source_block.get_parent().unwrap();
-    let destination = b
-        .build_alloca(ctx.i8_type().array_type(bytes.max(1)), "owned_body")
-        .unwrap();
     let copying = ctx.append_basic_block(function, "copy_host_body");
     let done = ctx.append_basic_block(function, "body_transfer_done");
     let condition = b
@@ -88,14 +136,7 @@ pub(crate) fn copy<'ctx>(
     let source = b.build_int_to_ptr(value, ptrt, "host_body_source").unwrap();
     // Exact signature/operand extent, unaligned packed bytes. memmove also
     // defines repeated transfers when LLVM coalesces storage after inlining.
-    b.build_memmove(
-        destination,
-        1,
-        source,
-        1,
-        i64t.const_int(u64::from(bytes), false),
-    )
-    .unwrap();
+    b.build_memmove(destination, 1, source, 1, bytes).unwrap();
     let address = b
         .build_ptr_to_int(destination, i64t, "owned_body_address")
         .unwrap();
@@ -104,4 +145,22 @@ pub(crate) fn copy<'ctx>(
     let result = b.build_phi(i64t, "body_value").unwrap();
     result.add_incoming(&[(&value, source_block), (&address, copying)]);
     result.as_basic_value().into_int_value()
+}
+
+/// A host dialogue shape bounds every native read derived from that body.
+pub(crate) fn require_extent(
+    width: Width,
+    offset: u32,
+    bytes: u32,
+) -> Result<(), crate::LowerError> {
+    if let Width::Body(available) = width
+        && offset
+            .checked_add(bytes)
+            .is_some_and(|end| end <= available)
+    {
+        return Ok(());
+    }
+    Err(crate::LowerError::UnsupportedShape(format!(
+        "coroutine body extent {width:?} does not prove {bytes} bytes at offset {offset}"
+    )))
 }
