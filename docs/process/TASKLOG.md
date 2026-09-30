@@ -3812,6 +3812,8 @@ returned continuations with nested suspension, live scalar and flat values,
 bounded instance storage and stable host start, resume and release operations.
 Both complete native gates passed on clean, frozen `5a0fec1d`. The earlier
 mutation-placement failure remains recorded. Admission boundaries are documented
-in the native README and archive. Pull request 475 is integrated. Pull request
-478 tracks consolidation and green version integration of the remaining stack.
+in the native README and archive. Pull request 478 merged as `a1aa53b8` after
+green pull-request checks. Its tree equals that checked head, not the complete
+native-gate tree. The bounded slice is integrated. Workstream B widening remains
+open. Check the separate post-merge workflow before another version integration.
 Upstream task state above is preserved.

@@ -3435,3 +3435,15 @@ of 478 through 481 and version integration after green remote checks. Preserve
 the combined head during those checks and compare its tree with the merge.
 The 64-line native brief holds the resume sequence and admission boundaries.
 Upstream material is preserved.
+
+
+## V0.3.X integration receipt correction, 2026-09-29
+
+The bounded slice merged as `a1aa53b8`. Its tree equals the pull-request head
+`b7548464`, not native-gate commit `5a0fec1d`. The gate reporter correctly marks
+the later documentation inputs unverified by the complete gates. The brief now
+records completed integration and leaves Workstream B widening open. Check
+post-merge run `36673486533` before another version integration. All 15 targeted
+handoff, channel and provenance guards passed. Complete gates were not rerun
+for this documentation correction. Upstream material and historical native
+reports are preserved.
