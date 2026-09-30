@@ -850,15 +850,9 @@ fn nested_stream_calls_preserve_state_across_callee_resets() {
 fn nested_stream_parameter_reads_do_not_silently_turn_unit_into_zero() {
     use keleusma::bytecode::Value;
     use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
-    let p = common::build(
-        "loop child(a: Word) -> Word { yield a + 1 } loop main(t: Word) -> Word { child(t) }",
-    );
-    let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("non-Unit parameter cleared by Reset")
-    );
+    let source =
+        "loop child(a: Word) -> Word { yield a + 1 } loop main(t: Word) -> Word { child(t) }";
+    let p = common::build(source);
     let need = required_persistent_capacity_for(&p);
     let mut arena = keleusma_arena::Arena::with_capacity(
         auto_arena_capacity_for(&p, &[]).unwrap() + need + 65536,
@@ -874,6 +868,14 @@ fn nested_stream_parameter_reads_do_not_silently_turn_unit_into_zero() {
         panic!("the cleared parameter must produce a type error");
     };
     assert!(fault.contains("Unit") && fault.contains("Int"), "{fault}");
+    #[cfg(unix)]
+    require_cleared_kind_trap(
+        "nested_stream_parameter_reads_do_not_silently_turn_unit_into_zero",
+        source,
+        &[5],
+        &[6],
+        &[7],
+    );
 }
 
 #[test]
@@ -1589,33 +1591,237 @@ fn reset_clears_runtime_kinds_of_later_entry_parameters() {
 }
 
 #[test]
-fn guarded_nested_parameter_use_remains_a_lowering_gap() {
-    use keleusma::bytecode::Value;
-    use keleusma::vm::{Vm, VmState, required_persistent_capacity_for};
-    let source = "private data st { first: bool = true } loop child(a: Word) -> Word { if st.first { st.first = false; yield a } else { yield 0 } } loop main(t: Word) -> Word { child(t) }";
-    let program = common::build(source);
-    let mut arena = keleusma_arena::Arena::with_capacity(65536);
-    arena
-        .resize_persistent(required_persistent_capacity_for(&program))
-        .unwrap();
-    let mut vm = Vm::new(program.clone(), &arena).unwrap();
-    let mut state = vm.call(&[Value::Int(5)]).unwrap();
-    for want in [5, 0, 0, 0, 0, 0] {
-        assert!(matches!(state, VmState::Yielded(Value::Int(value)) if value == want));
-        state = vm.resume(Value::Int(7)).unwrap();
-        if matches!(state, VmState::Reset) {
-            state = vm.resume(Value::Int(7)).unwrap();
+fn guarded_nested_parameter_uses_execute_before_reset() {
+    let replies = [7; 6];
+    for (extra, parameter, argument, body, first) in [
+        ("", "Word", "t", "a", 5),
+        ("", "Word", "t", "a + 1", 6),
+        (
+            "fn plus(x: Word) -> Word { x + 2 }",
+            "Word",
+            "t",
+            "plus(a)",
+            7,
+        ),
+        ("", "Word", "t", "(a as Byte) as Word", 5),
+        ("", "Word", "t", "if a > 0 { a } else { 0 }", 5),
+        ("", "bool", "t > 0", "if a { 1 } else { 0 }", 1),
+        ("", "Float", "t as Float", "(a + 0.5) as Word", 5),
+        ("", "Fixed", "t as Fixed", "(a + (1 as Fixed)) as Word", 6),
+        ("", "Byte", "t as Byte", "(a + (1 as Byte)) as Word", 6),
+        ("", "(Word, Word)", "(t, t + 1)", "a.0 + a.1", 11),
+        ("", "[Word; 2]", "[t, t + 1]", "a[1]", 6),
+    ] {
+        let source = format!(
+            "{extra} private data st {{ first: bool = true }} loop child(a: {parameter}) -> Word {{ if st.first {{ st.first = false; yield {body} }} else {{ yield 0 }} }} loop main(t: Word) -> Word {{ child({argument}) }}"
+        );
+        let expected = [first, 0, 0, 0, 0, 0];
+        assert_eq!(common::general_vm_sequence(&source, 5, &replies), expected);
+        for optimize in [false, true] {
+            assert_eq!(native(&source, 5, &replies, optimize), expected, "{source}");
         }
     }
-    // This is a valid source program. The parameter is read only before Reset
-    // clears it. Keep the remaining gap explicit until guarded lowering lands.
-    let error = coroutine::lower(&Context::create(), &program, &machine(), 4096).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("non-Unit parameter cleared by Reset"),
-        "{error}"
+}
+
+#[test]
+fn guarded_composite_construction_from_a_cleared_parameter_remains_a_gap() {
+    let source = "private data st { first: bool = true } loop child(a: Word) -> Word { if st.first { st.first = false; let pair = (a, a); yield pair.0 } else { yield 0 } } loop main(t: Word) -> Word { child(t) }";
+    assert_eq!(
+        common::general_vm_sequence(source, 5, &[7; 4]),
+        [5, 0, 0, 0]
     );
+    let program = common::build(source);
+    let error = coroutine::lower(&Context::create(), &program, &machine(), 4096).unwrap_err();
+    assert!(error.to_string().contains("width"), "{error}");
+}
+
+#[test]
+fn cleared_nested_body_access_traps_before_dereferencing_unit() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    let source = "loop child(a: [Word; 2]) -> Word { yield a[0] } loop main(t: Word) -> Word { child([t, t + 1]) }";
+    let program = common::build(source);
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program, &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(5))
+    ));
+    assert!(matches!(vm.resume(Value::Int(7)).unwrap(), VmState::Reset));
+    let error = vm.resume(Value::Int(7)).unwrap_err();
+    assert!(format!("{error:?}").contains("Unit"), "{error:?}");
+    #[cfg(unix)]
+    require_cleared_kind_trap(
+        "cleared_nested_body_access_traps_before_dereferencing_unit",
+        source,
+        &[5],
+        &[5],
+        &[7],
+    );
+}
+
+#[test]
+fn nested_cleared_enum_inspection_remains_false_without_a_type_fault() {
+    let source = "enum E { A, B } loop child(a: E) -> Word { yield match a { E::A => 1, _ => 0 } } loop main(t: Word) -> Word { child(E::A) }";
+    let replies = [7; 5];
+    let expected = [1, 0, 0, 0, 0];
+    assert_eq!(common::general_vm_sequence(source, 5, &replies), expected);
+    for optimize in [false, true] {
+        assert_eq!(native(source, 5, &replies, optimize), expected);
+    }
+}
+
+#[test]
+fn equality_of_cleared_values_matches_vm_partial_eq() {
+    for (parameter, argument, condition, initial) in [
+        ("Word", "t", "a == a", 1),
+        ("Word", "t", "a == 5", 1),
+        ("Word", "t", "a != 5", 0),
+        ("Byte", "t as Byte", "a == a", 1),
+        ("Fixed", "t as Fixed", "a == a", 1),
+        ("bool", "true", "a == a", 1),
+        ("Float", "t as Float", "a == a", 1),
+        ("Float", "0.0 / 0.0", "a == a", 0),
+        ("Float", "-0.0", "a == 0.0", 1),
+    ] {
+        let source = format!(
+            "loop child(a: {parameter}) -> Word {{ yield if {condition} {{ 1 }} else {{ 0 }} }} loop main(t: Word) -> Word {{ child({argument}) }}"
+        );
+        let after_reset = i64::from(condition == "a == a" || condition == "a != 5");
+        let expected = [initial, after_reset, after_reset, after_reset];
+        let replies = [7; 4];
+        assert_eq!(
+            common::general_vm_sequence(&source, 5, &replies),
+            expected,
+            "{source}"
+        );
+        for optimize in [false, true] {
+            assert_eq!(native(&source, 5, &replies, optimize), expected, "{source}");
+        }
+    }
+}
+
+#[test]
+fn cleared_ordered_comparison_traps_at_consumption() {
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{Vm, VmState};
+    let source = "loop child(a: Word) -> Word { yield if a > 0 { 1 } else { 0 } } loop main(t: Word) -> Word { child(t) }";
+    let program = common::build(source);
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program, &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(1))
+    ));
+    assert!(matches!(vm.resume(Value::Int(7)).unwrap(), VmState::Reset));
+    assert!(vm.resume(Value::Int(7)).is_err());
+    #[cfg(unix)]
+    require_cleared_kind_trap(
+        "cleared_ordered_comparison_traps_at_consumption",
+        source,
+        &[5],
+        &[1],
+        &[7],
+    );
+}
+
+/// A child must first execute the correct prefix, then fault at the checked use.
+#[cfg(unix)]
+fn require_cleared_kind_trap(
+    test: &str,
+    source: &str,
+    arguments: &[i64],
+    prefix: &[i64],
+    replies: &[i64],
+) {
+    use std::os::unix::process::ExitStatusExt;
+    type StartTwo = unsafe extern "C" fn(i64, i64, *mut u8, *mut u8, *mut u8, *mut u8) -> Outcome;
+    assert_eq!(prefix.len(), replies.len());
+    if let Ok(mode) = std::env::var("KEL_CLEARED_KIND_TRAP") {
+        let program = common::build(source);
+        let context = Context::create();
+        let module = coroutine::lower(&context, &program, &machine(), 4096).unwrap();
+        if mode == "optimized" {
+            common::force_optimize(&module);
+        }
+        let name = format!("kel_coroutine_{}", program.entry_point.unwrap());
+        assert_eq!(
+            module
+                .get_function(&format!("{name}_start"))
+                .unwrap()
+                .count_params() as usize,
+            arguments.len() + 4
+        );
+        let engine = module
+            .create_jit_execution_engine(OptimizationLevel::None)
+            .unwrap();
+        let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+        let shared = Guarded::new(program.shared_data_bytes as usize);
+        let private = Guarded::new(
+            keleusma::vm::required_persistent_capacity_for(&program)
+                + region::persistent_supplement_bytes(&program) as usize,
+        );
+        let bodies = Guarded::new(region::host_arena_supplement_bytes(&program) as usize);
+        common::install_private_init_bytes(&program, unsafe {
+            std::slice::from_raw_parts_mut(private.ptr(), private.len)
+        });
+        unsafe {
+            let resume = engine
+                .get_function::<HandleResume>(&format!("{name}_resume"))
+                .unwrap();
+            let mut outcome = match arguments {
+                [a] => engine
+                    .get_function::<HandleStart>(&format!("{name}_start"))
+                    .unwrap()
+                    .call(*a, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr()),
+                [a, b] => engine
+                    .get_function::<StartTwo>(&format!("{name}_start"))
+                    .unwrap()
+                    .call(
+                        *a,
+                        *b,
+                        shared.ptr(),
+                        private.ptr(),
+                        bodies.ptr(),
+                        slot.ptr(),
+                    ),
+                _ => panic!("fixture arity"),
+            };
+            for (index, value) in prefix.iter().enumerate() {
+                assert_eq!(
+                    outcome,
+                    Outcome {
+                        live: 1,
+                        value: *value
+                    }
+                );
+                if index + 1 == prefix.len() {
+                    for region in [&slot, &shared, &private, &bodies] {
+                        region.check();
+                    }
+                    println!("CLEARED-KIND-PREFIX-VERIFIED");
+                }
+                outcome = resume.call(slot.ptr(), replies[index]);
+            }
+        }
+        panic!("native execution survived the VM fault");
+    }
+    for mode in ["unoptimized", "optimized"] {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture"])
+            .env("KEL_CLEARED_KIND_TRAP", mode)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("CLEARED-KIND-PREFIX-VERIFIED"),
+            "{result:?}"
+        );
+        assert_eq!(
+            result.status.signal(),
+            Some(5),
+            "expected the kind guard's SIGTRAP: {result:?}"
+        );
+    }
 }
 
 fn composite_bodies(src: &str, first: i64, replies: &[i64]) -> Vec<Vec<u8>> {
@@ -2729,7 +2935,8 @@ fn zero_and_multiple_entry_arguments_preserve_host_contracts() {
 fn stream_reset_does_not_replenish_later_parameters() {
     use keleusma::bytecode::Value;
     use keleusma::vm::{Vm, VmState};
-    let program = common::build("loop main(a: Word, b: Word) -> Word { yield a + b; yield a + b }");
+    let source = "loop main(a: Word, b: Word) -> Word { yield a + b; yield a + b }";
+    let program = common::build(source);
     let arena = keleusma_arena::Arena::with_capacity(65536);
     let mut vm = Vm::new(program.clone(), &arena).unwrap();
     assert!(matches!(
@@ -2745,10 +2952,13 @@ fn stream_reset_does_not_replenish_later_parameters() {
         vm.resume(Value::Int(13)).is_err(),
         "Reset cleared parameter b to Unit"
     );
-    let error = coroutine::lower(&Context::create(), &program, &machine(), 4096).unwrap_err();
-    assert!(
-        error.to_string().contains("scalar types are not proven"),
-        "{error}"
+    #[cfg(unix)]
+    require_cleared_kind_trap(
+        "stream_reset_does_not_replenish_later_parameters",
+        source,
+        &[5, 7],
+        &[12, 18],
+        &[11, 13],
     );
 }
 

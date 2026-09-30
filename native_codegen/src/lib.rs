@@ -818,6 +818,7 @@ struct Lower<'ctx> {
     borrowed_locals: Vec<bool>,
     input_copy_bounds: Vec<Option<u32>>,
     input_body_sizes: Vec<IntValue<'ctx>>,
+    input_tags: Vec<IntValue<'ctx>>,
     output_copy_bounds: Vec<Option<u32>>,
 }
 
@@ -3926,6 +3927,7 @@ fn lower_chunk_body<'ctx>(
         borrowed_slots: Vec::new(),
         input_copy_bounds: Vec::new(),
         input_body_sizes: Vec::new(),
+        input_tags: Vec::new(),
         output_copy_bounds: Vec::new(),
         borrowed_locals: Vec::new(),
         ownership,
@@ -4198,7 +4200,29 @@ fn lower_chunk_body<'ctx>(
             if needed > 0 {
                 st.ensure_slot(needed - 1);
             }
-            st.input_body_sizes = st.runtime_kinds.as_ref().unwrap().seed(&st.b, facts, op);
+            let input = st.runtime_kinds.as_ref().unwrap().seed(&st.b, facts, op);
+            st.input_body_sizes = input.sizes;
+            st.input_tags = input.tags;
+            for (&slot, &mask) in &facts.guards {
+                let selected =
+                    st.b.build_and(
+                        st.input_tags[slot],
+                        i64t.const_int(u64::from(coroutine::types::kind(mask)), false),
+                        "accepted_kind",
+                    )
+                    .unwrap();
+                let valid = st
+                    .b
+                    .build_int_compare(IntPredicate::NE, selected, i64t.const_zero(), "kind_valid")
+                    .unwrap();
+                let accepted = ctx.append_basic_block(func, "kind_checked");
+                st.b.build_conditional_branch(valid, accepted, trap_bb)
+                    .unwrap();
+                st.b.position_at_end(accepted);
+                st.kinds[slot] = coroutine::types::operand_kind(mask);
+                st.widths[slot] =
+                    coroutine::types::guarded_width(mask, &facts.flow_stack[slot], float_bytes);
+            }
         }
         // The op is about to be lowered. See `BodyCfg::visited` for why this is
         // recorded here rather than after the arm, and why only a CLEAN chunk's
@@ -4478,7 +4502,16 @@ fn lower_chunk_body<'ctx>(
             // the bytecode signature. Prove every derived read and call copy.
             let read_width = retcon_facts
                 .and_then(|facts| facts.get(&i))
-                .and_then(|facts| facts.flow_stack.last()?.minimum(*facts.stack.last()?))
+                .and_then(|facts| {
+                    let slot = facts.stack.len().checked_sub(1)?;
+                    facts.flow_stack[slot].minimum(
+                        facts
+                            .guards
+                            .get(&slot)
+                            .copied()
+                            .unwrap_or(facts.stack[slot]),
+                    )
+                })
                 .map_or(st.width_at(0), Width::Body);
             match op {
                 Op::GetField(keleusma::bytecode::StructField::Flat { offset, kind }) => {
@@ -5125,6 +5158,23 @@ fn lower_chunk_body<'ctx>(
             // matches it. The result is 0 or 1 in an i64, which is the flat
             // representation of the VM's tagged `Bool`.
             Op::CmpEq | Op::CmpNe | Op::CmpLt | Op::CmpGt | Op::CmpLe | Op::CmpGe => {
+                if st.runtime_kinds.is_some() && matches!(op, Op::CmpEq | Op::CmpNe) {
+                    let tags = [st.input_tags[st.depth - 2], st.input_tags[st.depth - 1]];
+                    let rhs = st.pop();
+                    let lhs = st.pop();
+                    let equal =
+                        coroutine::kinds::equality(&st.b, [lhs, rhs], tags, float_bytes, trap_bb);
+                    let result = if matches!(op, Op::CmpNe) {
+                        st.b.build_not(equal, "not_equal").unwrap()
+                    } else {
+                        equal
+                    };
+                    let value =
+                        st.b.build_int_z_extend(result, i64t, "equal_value")
+                            .unwrap();
+                    st.push_w(value, Width::Scalar(1));
+                    continue;
+                }
                 // **FLOAT COMPARISON MATCHES THE REFERENCE, WHICH IS NOT IEEE.**
                 //
                 // The virtual machine compares floats with

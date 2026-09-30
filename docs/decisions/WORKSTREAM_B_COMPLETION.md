@@ -13,7 +13,7 @@ Work takes place on `feat/workstream-b-completion`.
 | Entry shapes | Source-emittable stream and reentrant entries, including completion, supported argument shapes and independent instances | Scalar and flat completion plus zero and multiple arguments tested, remaining shapes to census |
 | Value transfers | Scalar and composite inputs, outputs, replies and completion values with proven extents and lifetimes | Per-site dialogues, native lifetime contracts and bounded mixed-kind copies implemented, final audit outstanding |
 | Host lifecycle | Start, resume, normal completion, early release, repeated release and reuse with stable caller-owned storage | Completion status and result lifetime implemented, final lifecycle sweep outstanding |
-| Admission soundness | Every remaining refusal distinguished as invalid input, unsafe contract, another workstream dependency, or an implementation gap | Mixed receiver and extent support implemented, guarded nested parameter reads remain a demonstrated gap |
+| Admission soundness | Every remaining refusal distinguished as invalid input, unsafe contract, another workstream dependency, or an implementation gap | Mixed receiver and extent support implemented, guarded nested parameter reads now execute, composite packing with possibly cleared operands remains a demonstrated gap |
 | Integration | Existing public lowering routes and host entry points have a documented, tested selection contract | Explicit route contract documented and tested, no callback fallback |
 | Native deployment | Execute real linked host artifact and optimized/unoptimized differentials, inspect target emission within the roadmap target boundary | Local C snapshot completion runs at both optimization levels, four tier-one object formats and architectures checked, final coverage audit outstanding |
 | Resource preservation | No live machine-stack state across suspension, no hidden allocation, bounded frame reservation, guarded extents and independent regions | Existing checks need completion-path coverage |
@@ -81,13 +81,19 @@ indices outside the smaller array. Targeted verification is recorded in the
 native archive. Remaining refusal classification and complete final gates remain
 outstanding. The current evidence does not establish full completion.
 
-A further source-level counterexample is now explicit in
-`guarded_nested_parameter_use_remains_a_lowering_gap`. A private Boolean permits
-a nested stream to read its Word parameter only on the first iteration. The
-virtual machine yields 5 then zeros. Native lowering rejects every non-Unit
-parameter read in a nested stream, including this valid case. Guarded handling of
-possibly cleared values is the next implementation step. Do not classify the
-whole refusal family as necessarily faulting virtual-machine behavior.
+Guarded parameter reads in nested streams now execute. Consumer checks trap only
+when a cleared value reaches an operation requiring its original kind. Equality
+preserves Unit comparisons and IEEE floating-point equality. Ordered comparisons
+require numeric operands. Subprocess tests observe the correct native prefix
+before a type trap, including cleared body access.
+
+The next measured gap is
+`guarded_composite_construction_from_a_cleared_parameter_remains_a_gap`.
+A private Boolean restricts tuple construction from a nested stream parameter to
+its first iteration. The virtual machine yields 5 then zeros. Native packing
+still refuses its joined Word-or-Unit operand width. Construction cannot simply
+trap on Unit because the virtual machine packs tuple and array lengths from
+actual values. The continuing audit must account for this value-driven behavior.
 
 ## Completion rule
 

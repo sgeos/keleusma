@@ -13,17 +13,17 @@ use crate::{LowerError, Width};
 use keleusma::bytecode::{BlockType, ConstValue, Module, Op, TypeTag, WireShape};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-const UNIT: u16 = 1;
+pub(crate) const UNIT: u16 = 1;
 const FALSE: u16 = 2;
 const TRUE: u16 = 4096;
 const BOOL: u16 = FALSE | TRUE;
 const BYTE: u16 = 4;
 const WORD: u16 = 8;
 const FIXED: u16 = 16;
-const FLOAT: u16 = 32;
-const TUPLE: u16 = 256;
-const ARRAY: u16 = 512;
-const STRUCT: u16 = 1024;
+pub(crate) const FLOAT: u16 = 32;
+pub(crate) const TUPLE: u16 = 256;
+pub(crate) const ARRAY: u16 = 512;
+pub(crate) const STRUCT: u16 = 1024;
 pub(crate) const ENUM: u16 = 2048;
 const BODY: u16 = TUPLE | ARRAY | STRUCT | ENUM;
 const UNKNOWN: u16 = 8191;
@@ -56,6 +56,20 @@ pub(crate) fn operand_kind(mask: u16) -> crate::OperandKind {
         FIXED => crate::OperandKind::Fixed,
         one if one.count_ones() == 1 => crate::OperandKind::Int,
         _ => crate::OperandKind::Unknown,
+    }
+}
+
+pub(crate) fn guarded_width(mask: u16, flow: &Flow, float_bytes: u32) -> Width {
+    match kind(mask) {
+        UNIT => Width::Scalar(0),
+        FALSE | BYTE => Width::Scalar(1),
+        WORD | FIXED => Width::Scalar(8),
+        FLOAT => Width::Scalar(float_bytes),
+        one if one.count_ones() == 1 && one & BODY != 0 => flow.bodies
+            [(one.trailing_zeros() - 8) as usize]
+            .exact()
+            .map_or(Width::Unknown, Width::Body),
+        _ => Width::Unknown,
     }
 }
 
@@ -216,6 +230,7 @@ pub(crate) struct Facts {
     pub flow_stack: Vec<Flow>,
     pub flow_locals: Vec<Flow>,
     pub outputs: Vec<Output>,
+    pub guards: BTreeMap<usize, u16>,
 }
 impl Facts {
     fn join(&mut self, other: &Self) -> bool {
@@ -439,6 +454,7 @@ fn analyze(
             locals: vec![UNIT; chunk.local_count as usize],
             flow_stack: Vec::new(),
             outputs: Vec::new(),
+            guards: BTreeMap::new(),
             flow_locals: vec![Flow::default(); chunk.local_count as usize],
         };
         for (i, p) in sig.params.iter().enumerate() {
@@ -454,6 +470,7 @@ fn analyze(
         states[0] = Some(initial);
         let mut work = VecDeque::from([0]);
         let mut outputs = BTreeMap::new();
+        let mut guards = BTreeMap::new();
         while let Some(ip) = work.pop_front() {
             let mut state = states[ip].clone().unwrap();
             let op = &chunk.ops[ip];
@@ -463,12 +480,28 @@ fn analyze(
                     chunk.name
                 ))
             };
-            let require = |actual: u16, allowed: u16| {
+            let checks = std::cell::RefCell::new(BTreeMap::new());
+            let require = |actual: u16, allowed: u16, index: Option<usize>| {
                 if !validate || (actual != 0 && actual & !allowed == 0) {
-                    Ok(())
-                } else {
-                    Err(fail())
+                    return Ok(());
                 }
+                // Reset can add Unit to an otherwise proven kind. Check that
+                // alternative at the consuming operation, not at GetLocal,
+                // because inspecting Unit as an enum is a valid false result.
+                let narrowed = actual & !UNIT;
+                if actual & UNIT != 0
+                    && narrowed != 0
+                    && narrowed & !allowed == 0
+                    && let Some(index) = index
+                {
+                    checks
+                        .borrow_mut()
+                        .entry(index)
+                        .and_modify(|mask| *mask &= narrowed)
+                        .or_insert(narrowed);
+                    return Ok(());
+                }
+                Err(fail())
             };
             let (n, delta) = keleusma::verify::op_depth_effect(op, chunk);
             let n = n as usize;
@@ -478,13 +511,22 @@ fn analyze(
             let argument_flows = state.flow_stack.split_off(start);
             let produced = (n as i32 + delta) as usize;
             let mut out = vec![UNKNOWN; produced];
+            let require_arg =
+                |index: usize, allowed: u16| require(args[index], allowed, Some(start + index));
             let same = |allowed: u16| -> Result<u16, LowerError> {
-                let a = kind(args[0]);
-                require(a, kind(allowed))?;
-                if validate && (a.count_ones() != 1 || args.iter().any(|b| kind(*b) != a)) {
-                    return Err(fail());
+                let common = args
+                    .iter()
+                    .fold(kind(allowed), |mask, actual| mask & kind(*actual));
+                if common.count_ones() != 1 {
+                    if validate {
+                        return Err(fail());
+                    }
+                    return Ok(kind(args[0]));
                 }
-                Ok(a)
+                for (index, actual) in args.iter().enumerate() {
+                    require(kind(*actual), common, Some(start + index))?;
+                }
+                Ok(common)
             };
             match op {
                 Op::Const(i) => out[0] = constant(&chunk.constants[*i as usize]),
@@ -504,7 +546,7 @@ fn analyze(
                 Op::Yield => {
                     let contract = analysis.plan.sites[ci][&ip].1;
                     let reply = shape(contract.reply);
-                    require(args[0], shape(contract.yielded))?;
+                    require_arg(0, shape(contract.yielded))?;
                     out[0] = reply;
                     if ci == entry && chunk.block_type == BlockType::Stream && chunk.param_count > 0
                     {
@@ -513,8 +555,8 @@ fn analyze(
                 }
                 Op::Call(target, _) => {
                     let callee = &m.signatures[*target as usize];
-                    for (a, p) in args.iter().zip(&callee.params) {
-                        require(*a, shape(*p))?;
+                    for (index, p) in callee.params.iter().enumerate() {
+                        require_arg(index, shape(*p))?;
                     }
                     out[0] = shape(callee.ret);
                     // A delegated suspension updates the entry parameter, even
@@ -528,7 +570,11 @@ fn analyze(
                     }
                 }
                 Op::Return => {
-                    require(*state.stack.last().ok_or_else(fail)?, shape(sig.ret))?;
+                    require(
+                        *state.stack.last().ok_or_else(fail)?,
+                        shape(sig.ret),
+                        state.stack.len().checked_sub(1),
+                    )?;
                 }
                 Op::CheckedAdd
                 | Op::CheckedSub
@@ -545,25 +591,44 @@ fn analyze(
                     // Native checked multiply/divide select their Word/Byte
                     // or Fixed implementation using this baked fraction count.
                     if let Op::CheckedMul(frac) | Op::CheckedDiv(frac) = op {
-                        require(k, if *frac == 0 { WORD | BYTE } else { FIXED })?;
+                        require(k, if *frac == 0 { WORD | BYTE } else { FIXED }, None)?;
                     }
                     out.copy_from_slice(&[k, k, WORD]);
                 }
                 Op::Add | Op::Sub | Op::Mul | Op::Neg => out[0] = same(BYTE | FIXED | FLOAT)?,
                 Op::Div | Op::Mod => out[0] = same(WORD | BYTE | FLOAT)?,
-                Op::CmpEq | Op::CmpNe | Op::CmpLt | Op::CmpGt | Op::CmpLe | Op::CmpGe => {
-                    same(UNIT | BOOL | BYTE | WORD | FIXED | FLOAT)?;
+                Op::CmpEq | Op::CmpNe => {
+                    // PartialEq accepts unlike kinds and Unit. It must not
+                    // acquire the consuming type guards used by arithmetic.
+                    for index in 0..2 {
+                        require_arg(
+                            index,
+                            UNIT | BOOL
+                                | BYTE
+                                | WORD
+                                | FIXED
+                                | FLOAT
+                                | TUPLE
+                                | ARRAY
+                                | STRUCT
+                                | ENUM,
+                        )?;
+                    }
+                    out[0] = BOOL;
+                }
+                Op::CmpLt | Op::CmpGt | Op::CmpLe | Op::CmpGe => {
+                    same(BYTE | WORD | FIXED | FLOAT)?;
                     out[0] = BOOL;
                 }
                 Op::Not => {
-                    require(args[0], BOOL)?;
+                    require_arg(0, BOOL)?;
                     out[0] = if args[0] & TRUE != 0 { FALSE } else { 0 }
                         | if args[0] & FALSE != 0 { TRUE } else { 0 };
                 }
                 Op::BitAnd | Op::BitOr | Op::BitXor => out[0] = same(WORD)?,
                 Op::Shl | Op::Shr => {
-                    require(args[0], WORD)?;
-                    require(args[1], WORD)?;
+                    require_arg(0, WORD)?;
+                    require_arg(1, WORD)?;
                     out[0] = args[0];
                 }
                 Op::FixedMul(_) | Op::FixedDiv(_) => {
@@ -571,31 +636,31 @@ fn analyze(
                     out[0] = FIXED;
                 }
                 Op::FixedToWord(_) => {
-                    require(args[0], FIXED)?;
+                    require_arg(0, FIXED)?;
                     out[0] = WORD;
                 }
                 Op::WordToFixed(_) => {
-                    require(args[0], WORD)?;
+                    require_arg(0, WORD)?;
                     out[0] = FIXED;
                 }
                 Op::IntToFloat => {
-                    require(args[0], WORD)?;
+                    require_arg(0, WORD)?;
                     out[0] = FLOAT;
                 }
                 Op::FloatToInt => {
-                    require(args[0], FLOAT)?;
+                    require_arg(0, FLOAT)?;
                     out[0] = WORD;
                 }
                 Op::WordToByte => {
-                    require(args[0], WORD)?;
+                    require_arg(0, WORD)?;
                     out[0] = BYTE;
                 }
                 Op::ByteToWord => {
-                    require(args[0], BYTE)?;
+                    require_arg(0, BYTE)?;
                     out[0] = WORD;
                 }
                 Op::BoundsCheck(_) => {
-                    require(args[0], WORD)?;
+                    require_arg(0, WORD)?;
                     out[0] = WORD;
                 }
                 Op::GetData(i)
@@ -615,7 +680,7 @@ fn analyze(
                         kinds |= slot(m, s, private_kinds);
                     }
                     if matches!(op, Op::GetDataIndexed(..) | Op::SetDataIndexed(..)) {
-                        require(*args.last().ok_or_else(fail)?, WORD)?;
+                        require_arg(args.len().checked_sub(1).ok_or_else(fail)?, WORD)?;
                     }
                     if out.is_empty() {
                         for slot_index in *i..end {
@@ -626,10 +691,10 @@ fn analyze(
                                 .iter()
                                 .any(|field| u32::from(field.slot) == slot_index)
                             {
-                                require(args[0], BODY)?;
+                                require_arg(0, BODY)?;
                                 writes[slot_index as usize] |= args[0];
                             } else {
-                                require(args[0], slot(m, slot_index, private_kinds))?;
+                                require_arg(0, slot(m, slot_index, private_kinds))?;
                             }
                         }
                     } else {
@@ -640,8 +705,8 @@ fn analyze(
                 Op::GetField(keleusma::bytecode::StructField::Flat { kind, .. })
                 | Op::GetTupleField(keleusma::bytecode::TupleField::Flat { kind, .. })
                 | Op::GetEnumField(keleusma::bytecode::EnumField::Flat { kind, .. }) => {
-                    require(
-                        args[0],
+                    require_arg(
+                        0,
                         match op {
                             Op::GetField(_) => STRUCT,
                             Op::GetTupleField(_) => TUPLE,
@@ -655,8 +720,8 @@ fn analyze(
                     variant, ..
                 })
                 | Op::GetEnumField(keleusma::bytecode::EnumField::FlatNested { variant, .. }) => {
-                    require(
-                        args[0],
+                    require_arg(
+                        0,
                         match op {
                             Op::GetField(_) => STRUCT,
                             Op::GetTupleField(_) => TUPLE,
@@ -667,8 +732,8 @@ fn analyze(
                 }
                 Op::GetField(_) | Op::GetTupleField(_) | Op::GetEnumField(_) => return Err(fail()),
                 Op::GetIndex(kind) => {
-                    require(args[0], ARRAY)?;
-                    require(args[1], WORD)?;
+                    require_arg(0, ARRAY)?;
+                    require_arg(1, WORD)?;
                     out[0] = match kind {
                         keleusma::bytecode::ArrayElem::Flat { kind } => scalar(kind.to_tag()),
                         keleusma::bytecode::ArrayElem::FlatNested { variant, .. } => {
@@ -705,7 +770,7 @@ fn analyze(
                         out[1] = WORD;
                     }
                 }
-                Op::If(_) | Op::BreakIf(_) => require(args[0], BOOL)?,
+                Op::If(_) | Op::BreakIf(_) => require_arg(0, BOOL)?,
                 Op::Reset => {
                     state.stack.clear();
                     state.locals.fill(UNIT);
@@ -870,6 +935,7 @@ fn analyze(
                 }
                 _ => {}
             }
+            guards.insert(ip, checks.into_inner());
             outputs.insert(
                 ip,
                 out.iter()
@@ -939,6 +1005,7 @@ fn analyze(
             let Some(state) = state else { continue };
             let mut facts = state.clone();
             facts.outputs = outputs.remove(&ip).unwrap_or_default();
+            facts.guards = guards.remove(&ip).unwrap_or_default();
             analysis.facts[ci].insert(ip, facts);
             match chunk.ops[ip] {
                 Op::IsEnum(..) | Op::IsStruct(..) => {

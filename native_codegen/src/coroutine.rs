@@ -33,10 +33,11 @@
 //! contracts, not restrictions imposed by the source language on reentrants.
 //! Replies update only a Stream entry's first parameter, and must match its
 //! declared shape. Reentrant entries retain their original arguments. A nested
-//! stream clears its own locals on Reset. Reads of non-Unit callee parameters
-//! remain refused because the VM does not replenish those slots. Scalar
-//! admission follows actual host reply tags through control flow and refuses
-//! operations or boundaries whose types cannot be proved. Copies require proven
+//! stream clears its own locals on Reset. A consuming operation checks a
+//! possibly cleared value before using its otherwise proven kind. Enum inspection
+//! and scalar equality retain the VM's valid Unit behavior. Admission follows
+//! actual reply tags through control flow and refuses unresolved type mixtures.
+//! Composite construction still requires fixed operand widths. Copies require proven
 //! transfer extents. [`lower_with_contracts`] admits native composite results
 //! with an explicit [`NativeBodyReturn`] contract. Snapshot results are copied
 //! into bounded storage; instance borrows retain their aliases. Without a
@@ -262,18 +263,6 @@ fn lower_impl<'ctx>(
         {
             return Err(error(
                 "a nested Stream must begin with Stream and end with Reset",
-            ));
-        }
-        // Reset clears the active callee, while host resume updates only the
-        // entry parameter. Treating a cleared Word as zero would turn the VM's
-        // type fault into a plausible value. Unit parameters retain their type.
-        if callee.ops.iter().any(|op| {
-            matches!(op, Op::GetLocal(slot)
-            if usize::from(*slot) < usize::from(callee.param_count)
-                && callee.param_types.get(usize::from(*slot)) != Some(&TypeTag::Unit))
-        }) {
-            return Err(error(
-                "a nested Stream reads a non-Unit parameter cleared by Reset",
             ));
         }
     }

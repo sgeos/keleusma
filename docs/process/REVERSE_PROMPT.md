@@ -3492,3 +3492,25 @@ machine yields 5 then zeros, but native admission rejects the parameter read.
 The tracked reproducer and [acceptance matrix](../decisions/WORKSTREAM_B_COMPLETION.md)
 name that implementation gap. Complete gates, the final audit and integration
 remain outstanding. Upstream current state and previous native reports are preserved.
+
+
+## V0.3.X cleared-value consumers of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`, following `1fda7a04`.
+Nested stream parameters may now be read on paths where their original values
+remain valid. Bounded kind checks at typed consumers trap on cleared Unit values.
+Equality and enum inspection preserve their valid Unit behavior. Equality also
+retains floating-point NaN and signed-zero semantics. Native fault subprocesses
+must execute the expected prefix before the trap.
+
+All 71 coroutine tests pass in both float configurations. Test-target Clippy
+with warnings denied passes in both. The default non-corpus native phase passes
+all 752 tests with a frozen verdict. The 13 targeted root documentation checks
+pass. These results do not constitute either complete native gate.
+
+A further valid source case remains refused. Guarded tuple construction from a
+nested parameter encounters a joined Word-or-Unit width. The tracked reproducer
+and the [acceptance matrix](../decisions/WORKSTREAM_B_COMPLETION.md) identify it
+as an implementation gap. Continue with value-driven composite packing. Complete
+Workstream B, full final gates and version integration remain outstanding.
+Upstream current state and earlier native reports are preserved.

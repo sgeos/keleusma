@@ -184,8 +184,10 @@ Private-slot kinds are inferred from writes and preserved in runtime metadata.
 Mixed enum and scalar inspection checks the kind before reading a body. Owned
 mixed values retain their selected size in bounded storage. Array bounds use
 that actual size, while field reads require a proven minimum. Reset clears
-runtime metadata with the corresponding locals. Guarded first-iteration parameter
-reads in nested streams remain a demonstrated admission gap.
+runtime metadata with the corresponding locals. Possibly cleared operands have
+kind checks at typed consumers. Equality and enum inspection preserve valid Unit
+behavior. Composite construction from a possibly cleared operand remains a
+measured admission gap because packing requires fixed operand widths.
 
 | Host control model | Lowering entry |
 |---|---|

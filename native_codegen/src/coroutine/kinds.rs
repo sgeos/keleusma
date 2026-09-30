@@ -7,6 +7,11 @@ use inkwell::builder::Builder;
 use inkwell::values::{IntValue, PointerValue};
 use keleusma::bytecode::Op;
 
+pub(crate) struct Inputs<'ctx> {
+    pub sizes: Vec<IntValue<'ctx>>,
+    pub tags: Vec<IntValue<'ctx>>,
+}
+
 pub(crate) struct Flags<'ctx> {
     pub locals: Vec<PointerValue<'ctx>>,
     pub slots: Vec<PointerValue<'ctx>>,
@@ -49,7 +54,7 @@ impl<'ctx> Flags<'ctx> {
     pub fn load(&self, b: &Builder<'ctx>, index: usize) -> IntValue<'ctx> {
         super::ownership::load(b, self.slots[index])
     }
-    pub fn seed(&self, b: &Builder<'ctx>, facts: &Facts, op: &Op) -> Vec<IntValue<'ctx>> {
+    pub fn seed(&self, b: &Builder<'ctx>, facts: &Facts, op: &Op) -> Inputs<'ctx> {
         let i64t = b.get_insert_block().unwrap().get_context().i64_type();
         for (slot, mask) in self
             .slots
@@ -73,6 +78,12 @@ impl<'ctx> Flags<'ctx> {
         }
         let input_sizes = self
             .slot_sizes
+            .iter()
+            .take(facts.stack.len())
+            .map(|slot| super::ownership::load(b, *slot))
+            .collect();
+        let input_tags = self
+            .slots
             .iter()
             .take(facts.stack.len())
             .map(|slot| super::ownership::load(b, *slot))
@@ -119,7 +130,10 @@ impl<'ctx> Flags<'ctx> {
                 .unwrap();
             }
         }
-        input_sizes
+        Inputs {
+            sizes: input_sizes,
+            tags: input_tags,
+        }
     }
 }
 
@@ -187,4 +201,72 @@ fn seed_size(b: &Builder<'_>, slot: PointerValue<'_>, width: crate::Width) {
     let i64t = b.get_insert_block().unwrap().get_context().i64_type();
     b.build_store(slot, i64t.const_int(u64::from(bytes), false))
         .unwrap();
+}
+
+/// VM equality compares kind before payload. Unit equals Unit regardless of
+/// stale payload bits. Two untyped flat bodies fault without dereferencing.
+pub(crate) fn equality<'ctx>(
+    b: &Builder<'ctx>,
+    values: [IntValue<'ctx>; 2],
+    tags: [IntValue<'ctx>; 2],
+    float_bytes: u32,
+    trap: inkwell::basic_block::BasicBlock<'ctx>,
+) -> IntValue<'ctx> {
+    use super::types::{ARRAY, ENUM, FLOAT, STRUCT, TUPLE, UNIT};
+    let i64t = values[0].get_type();
+    let ctx = i64t.get_context();
+    let body_mask = i64t.const_int(u64::from(ARRAY | ENUM | STRUCT | TUPLE), false);
+    let bodies = tags.map(|tag| {
+        let selected = b.build_and(tag, body_mask, "equality_body_kind").unwrap();
+        b.build_int_compare(IntPredicate::NE, selected, i64t.const_zero(), "is_body")
+            .unwrap()
+    });
+    let both_bodies = b.build_and(bodies[0], bodies[1], "untyped_bodies").unwrap();
+    let function = b.get_insert_block().unwrap().get_parent().unwrap();
+    let accepted = ctx.append_basic_block(function, "equality_kinds_checked");
+    b.build_conditional_branch(both_bodies, trap, accepted)
+        .unwrap();
+    b.position_at_end(accepted);
+    let same_kind = b
+        .build_int_compare(IntPredicate::EQ, tags[0], tags[1], "equal_kind")
+        .unwrap();
+    let is_unit = b
+        .build_int_compare(
+            IntPredicate::EQ,
+            tags[0],
+            i64t.const_int(u64::from(UNIT), false),
+            "equal_unit",
+        )
+        .unwrap();
+    let is_float = b
+        .build_int_compare(
+            IntPredicate::EQ,
+            tags[0],
+            i64t.const_int(u64::from(FLOAT), false),
+            "equal_float_kind",
+        )
+        .unwrap();
+    let bits_equal = b
+        .build_int_compare(IntPredicate::EQ, values[0], values[1], "equal_bits")
+        .unwrap();
+    let float_type = if float_bytes == 8 {
+        ctx.f64_type()
+    } else {
+        ctx.f32_type()
+    };
+    let floats = values.map(|value| crate::bits_to_float(b, value, float_type, float_bytes));
+    let float_equal = b
+        .build_float_compare(
+            inkwell::FloatPredicate::OEQ,
+            floats[0],
+            floats[1],
+            "equal_float",
+        )
+        .unwrap();
+    let payload_equal = b
+        .build_select(is_float, float_equal, bits_equal, "equal_payload")
+        .unwrap()
+        .into_int_value();
+    let value_equal = b.build_or(is_unit, payload_equal, "equal_value").unwrap();
+    b.build_and(same_kind, value_equal, "equal").unwrap()
 }
