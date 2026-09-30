@@ -356,6 +356,12 @@ gate remains open until the required pipeline integration and self-hosted input 
 See [`TYPECHECK_IMPLEMENTATION_PLAN.md`](../decisions/TYPECHECK_IMPLEMENTATION_PLAN.md) for the
 implementation status.
 
+The type-rejection stage also now compiles through the Keleusma pipeline. Moving its private
+solver storage before the first function that reads it removes its forward data reference.
+The complete artifact assembled by `self_host_compile_scratch` matches the reference. All twelve
+stage sources now have byte-identity tests. General forward data references remain unsupported,
+and this source-order change does not close the type-input extraction gap.
+
 ## Dependency ordering and indicative release mapping
 
 The workstreams are not independent. The ordering below is by dependency; the version

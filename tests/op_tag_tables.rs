@@ -478,7 +478,7 @@ fn the_name_correspondence_is_total_over_the_stage_table() {
 // set that lacks the feature, which is how four continuous-integration jobs went red last session.
 // ---------------------------------------------------------------------------
 
-/// The twelve stage sources. `verify_types.kel` is the one with no byte-identity test.
+/// The twelve stage sources, all covered by the byte-identity corpus.
 const STAGE_SOURCES: &[(&str, &str)] = &[
     ("analyze", include_str!("../src/selfhost/kel/analyze.kel")),
     ("codegen", include_str!("../src/selfhost/kel/codegen.kel")),

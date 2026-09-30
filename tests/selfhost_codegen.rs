@@ -4811,6 +4811,33 @@ fn self_host_compiles_verify_typed_kel_byte_identically() {
     );
 }
 
+/// The type-rejection stage must compile through the pipeline with the same
+/// artifact as the reference. With `self-host`, also check the production driver
+/// that assembles every module field from pipeline output without a reference
+/// scaffold, including the shared and private data layout.
+#[test]
+fn self_host_compiles_verify_types_kel_byte_identically() {
+    let src = include_str!("../src/selfhost/kel/verify_types.kel");
+    let module = assert_self_host_byte_identical(src);
+    let reference = compile_src(src);
+    assert!(
+        module.to_bytes().expect("self-hosted artifact")
+            == reference.to_bytes().expect("reference artifact"),
+        "verify_types.kel artifacts differ beyond the checked chunk bodies"
+    );
+    #[cfg(feature = "self-host")]
+    {
+        let scratch = keleusma::selfhost::self_host_compile_scratch(src);
+        assert!(
+            scratch
+                .to_bytes()
+                .expect("artifact assembled from pipeline output")
+                == reference.to_bytes().expect("reference artifact"),
+            "verify_types.kel artifact assembled without the reference scaffold differs"
+        );
+    }
+}
+
 #[test]
 fn self_host_compiles_verify_yield_kel_byte_identically() {
     assert_stage_byte_identical(

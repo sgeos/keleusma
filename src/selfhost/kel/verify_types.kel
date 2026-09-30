@@ -308,6 +308,24 @@ shared data ty {
     epfound: Word,
 }
 
+// Keep solver storage before its first use. The streaming parser resolves data
+// fields from declarations already encountered when it parses a function body.
+// THE DERIVED-OPERAND SOLVER'S SCRATCH.
+//
+// `bres[b]` is the tag the solver has proved for binding `b`, or 0 for "not
+// proved". PRIVATE, for the same reason the cursors below are: the host supplies
+// SYNTAX, and a conclusion it could write here is exactly the join this stage
+// exists to perform.
+private data tyb {
+    bres: [Word; 640],
+    // Set when a round proved something it had not proved before, so the loop can
+    // stop early on a fixpoint instead of always running its full cap.
+    moved: Word,
+    // Scratch for one node's two operand tags while a round resolves them.
+    la: Word,
+    lb: Word,
+}
+
 // The verdict constants, named rather than spelled as bare integers at the call sites, so a later
 // slice adding a rejection code cannot collide with the accept value by accident.
 fn ty_accept() -> Word { 0 }
@@ -482,22 +500,6 @@ fn ty_alias_of(v: Word) -> Word {
         } else { ty.alias };
     }
     ty.alias
-}
-
-// THE DERIVED-OPERAND SOLVER'S SCRATCH.
-//
-// `bres[b]` is the tag the solver has proved for binding `b`, or 0 for "not
-// proved". PRIVATE, for the same reason the cursors below are: the host supplies
-// SYNTAX, and a conclusion it could write here is exactly the join this stage
-// exists to perform.
-private data tyb {
-    bres: [Word; 640],
-    // Set when a round proved something it had not proved before, so the loop can
-    // stop early on a fixpoint instead of always running its full cap.
-    moved: Word,
-    // Scratch for one node's two operand tags while a round resolves them.
-    la: Word,
-    lb: Word,
 }
 
 // HOW MANY ROUNDS THE DERIVED-OPERAND SOLVER RUNS.

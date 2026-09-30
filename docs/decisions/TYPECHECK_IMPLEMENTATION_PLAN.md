@@ -15,6 +15,13 @@ tables. This closes the current capacity gap. It does not move extraction into K
 walks the reference parser's abstract syntax tree to supply the stage's facts, so the Order-1
 self-hosting gate remains open.
 
+**Further progress, 2026-09-29.** `verify_types.kel` now declares its private solver storage before
+its first use. It compiles through both the test pipeline and the production driver that builds
+all module fields from pipeline output. Both serialized artifacts match the reference. Restoring
+the old declaration order reproduces the original refusal at `ty_direct` while leaving the
+reference artifact unchanged. This closes the twelfth stage's compilation gap within the existing
+parser subset. General forward data references and the input extraction residuals remain open.
+
 The stage rejects all sixteen ill-typed programs and accepts all seven well-typed ones. Six slices,
 each merged on a green gate: the harness with an accepting checker, operand agreement, call arity and
 argument types, name resolution, conditions and structural claims, and the last two shapes.

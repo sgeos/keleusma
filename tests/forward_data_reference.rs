@@ -1,41 +1,16 @@
-//! **THE TWELFTH STAGE DOES NOT SELF-COMPILE, AND THIS IS EXACTLY WHY.**
+//! Forward data references remain outside the streaming parser's supported subset.
 //!
-//! `verify_types.kel` is the only one of the twelve stage sources with no byte-identity test.
-//! Nothing in the tree recorded a reason, so the absence read as an oversight. **It is not.**
+//! The parser resolves `block.field` using data declarations already encountered.
+//! A function reading a later block produces an unresolved operand, which the
+//! reconstruction stage refuses. The reference accepts both declaration orders.
 //!
-//! # The cause, bisected to four lines
+//! `verify_types.kel` formerly hit this limit at `ty_direct`. Its solver storage
+//! now precedes its first use, so the stage joins the byte-identity corpus without
+//! requiring a two-pass parser. The mutation below restores the old ordering and
+//! checks both the unchanged reference artifact and the pipeline refusal.
 //!
-//! The self-hosted parser resolves a body's `block.field` against a layout table it accumulates
-//! **as it encounters each `data` block**. A function that reads a block declared LATER in the
-//! file therefore finds nothing, emits an unresolved operand, and `reconstruct.kel` refuses the
-//! chunk because the record range does not reduce to a single root.
-//!
-//! `verify_types.kel` hits this at `ty_direct`, which reads `tyb.bres[b]` while `tyb` is declared
-//! thirty lines further down.
-//!
-//! # Three hypotheses failed before the structural one succeeded
-//!
-//! `ty_direct` contains a doubly nested `if` EXPRESSION assigned to a data field, inside a
-//! `for ... limit` loop, reading indexed arrays from two different blocks. Every one of those
-//! looked like the culprit and **none of them is**: probes carrying each shape, and up to four
-//! copies of the whole shape, all compile byte-identically. What separated the cases was
-//! DECLARATION ORDER, which none of the shapes mention.
-//!
-//! **Tally consistent with the rest of this programme: guessing failed three times here and
-//! prefix/structural bisection succeeded.** The lesson from the `wire.kel` chain applied
-//! unchanged — reduce against the REAL file, not a simplified stand-in, and choose the predicate
-//! deliberately.
-//!
-//! # What this file pins, and what it deliberately does not
-//!
-//! It pins the reproduction, the control, and the fact that the corpus is eleven of twelve. It
-//! does **not** attempt the repair: resolving a forward reference needs the stage to collect data
-//! declarations before parsing bodies, which is a two-pass restructuring of a single-pass
-//! streaming parser, not a defect fix.
-//!
-//! **PROPORTIONALITY.** The reference compiler accepts forward references, and the self-hosted
-//! compiler REFUSES loudly rather than mis-compiling. `self_hosted_compile` cross-checks against
-//! the reference besides. No user receives a wrong module from this.
+//! The four-line witness remains useful because compiling the reordered stage
+//! does not establish support for arbitrary forward data references.
 
 #![cfg(all(feature = "self-host", feature = "compile"))]
 
@@ -94,9 +69,8 @@ fn a_data_block_referenced_before_its_declaration_is_refused() {
     );
 
     let msg = refusal(FORWARD).expect(
-        "the forward-ordered program now self-compiles. THIS IS A GAP CLOSING, NOT A \
-         REGRESSION: add `verify_types.kel` to the byte-identity corpus in \
-         tests/selfhost_codegen.rs, take the corpus to twelve, and retire this file",
+        "the forward-ordered program now self-compiles. Revisit this documented parser \
+         limitation and the mutation below; verify_types.kel already belongs to the corpus",
     );
     assert!(
         msg.contains("did not reduce to exactly one node"),
@@ -105,56 +79,42 @@ fn a_data_block_referenced_before_its_declaration_is_refused() {
     );
 }
 
-/// **`verify_types.kel` FAILS FOR THE SAME REASON, AT `ty_direct`.**
-///
-/// The link between the four-line witness and the real stage is asserted rather than assumed:
-/// the refusal names the chunk, and `ty_direct` is the function that reads `tyb` before `tyb` is
-/// declared.
+/// Restoring the former declaration order preserves the reference artifact but
+/// reintroduces the pipeline refusal. This checks the actual stage, including its
+/// shared and private layouts, rather than inferring equivalence from a snippet.
 #[test]
-fn verify_types_kel_is_refused_at_the_chunk_that_reads_a_later_block() {
-    let msg = refusal(VERIFY_TYPES).expect(
-        "`verify_types.kel` now self-compiles. THIS IS A GAP CLOSING: check byte identity and \
-         add it to the corpus as the twelfth stage",
-    );
-    assert!(
-        msg.contains("ty_direct"),
-        "the twelfth stage is still refused, but no longer at `ty_direct`. The cause this file \
-         documents may have been replaced by another: {msg}"
-    );
+fn moving_solver_storage_after_first_use_reproduces_stage_refusal() {
+    let source = code_only(VERIFY_TYPES);
+    let start = source.find("private data tyb {").expect("solver storage");
+    let end = start + source[start..].find("\n}").expect("solver storage end") + 2;
+    let block = &source[start..end];
+    let mut forward = source.clone();
+    forward.replace_range(start..end, "");
+    let after_use = forward.find("fn tyb_rounds(").expect("solver round bound");
+    forward.insert_str(after_use, &format!("{block}\n\n"));
 
-    // The structural claim the diagnosis rests on, checked against the source rather than
-    // remembered: `ty_direct` reads `tyb`, and `tyb` is declared after it.
-    // **THE ORDERING CLAIM BELOW IS THE REASON THIS STRIPS FIRST.** These positions feed an
-    // `at_fn < at_blk` assertion, so a comment naming either anchor does not merely break an
-    // extraction -- it moves a position and can change which declaration appears to come first.
-    // That would make this test assert the wrong thing about the stage rather than fail loudly.
-    let verify_types = code_only(VERIFY_TYPES);
-    let at_fn = verify_types
-        .find("fn ty_direct(")
-        .expect("verify_types.kel declares ty_direct");
-    let at_blk = verify_types
-        .find("private data tyb {")
-        .expect("verify_types.kel declares the tyb block");
+    let reference_bytes = |src: &str| {
+        let ast =
+            keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex")).expect("parse");
+        keleusma::compiler::compile(&ast)
+            .expect("reference compilation")
+            .to_bytes()
+            .expect("reference artifact")
+    };
     assert!(
-        at_fn < at_blk,
-        "`tyb` is no longer declared after `ty_direct`, so the mechanism recorded here cannot \
-         be what refuses this file"
+        reference_bytes(VERIFY_TYPES) == reference_bytes(&forward),
+        "moving solver storage changes the reference artifact"
     );
-    let body_end = verify_types[at_fn..]
-        .find("\n}")
-        .expect("ty_direct has a body");
+    let msg = refusal(&forward).expect("the restored forward reference must be refused");
     assert!(
-        verify_types[at_fn..at_fn + body_end].contains("tyb."),
-        "`ty_direct` no longer reads the `tyb` block"
+        msg.contains("ty_direct") && msg.contains("did not reduce to exactly one node"),
+        "the mutation is refused for a different reason: {msg}"
     );
 }
 
-/// **THE BYTE-IDENTITY CORPUS IS ELEVEN OF THE TWELVE STAGES, AND THE MISSING ONE IS NAMED.**
-///
-/// Derived from the oracle's own test names rather than restated, so the two cannot part. The
-/// absence was previously unexplained anywhere in the tree, which is how it read as an oversight.
+/// Every stage source has a named test in the byte-identity corpus.
 #[test]
-fn the_corpus_covers_every_stage_except_the_one_this_file_explains() {
+fn the_corpus_covers_every_stage() {
     const ORACLE: &str = include_str!("selfhost_codegen.rs");
     let stages = [
         "analyze",
@@ -175,12 +135,9 @@ fn the_corpus_covers_every_stage_except_the_one_this_file_explains() {
         .copied()
         .filter(|s| !ORACLE.contains(&format!("fn self_host_compiles_{s}_kel_byte_identically")))
         .collect();
-    assert_eq!(
-        missing,
-        vec!["verify_types"],
-        "the set of stages outside the byte-identity corpus has changed. If `verify_types` has \
-         JOINED it, this whole file is retired; if another stage has LEFT it, that is a \
-         regression and needs its own explanation"
+    assert!(
+        missing.is_empty(),
+        "stage sources missing from the byte-identity corpus: {missing:?}"
     );
 }
 

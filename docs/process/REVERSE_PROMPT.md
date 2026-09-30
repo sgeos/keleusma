@@ -2,44 +2,48 @@
 
 > **Navigation**: [Process](./README.md) | [Documentation Root](../README.md)
 
-AI-to-human handoff, overwritten for the latest session.
+## Current state
 
-# CURRENT STATE
+2026-09-29. V0.2.X work remains on `feat/v02-order1-next`, following roadmap Order 1.
+The preceding capacity increment is `3fefccc0`. Its six 640-row caps remain in place.
 
-**2026-09-29. V0.2.X Order-1 capacity increment.**
+`verify_types.kel` now compiles through the Keleusma pipeline. Its private solver data block
+precedes the first function reading it. Data-block order and function order are preserved.
+The new byte-identity test first failed at `ty_direct`, then passed after the move. Both the
+existing test pipeline and `self_host_compile_scratch` produce the same complete serialized
+artifact as the reference. The scratch driver builds every module field from pipeline output.
+All twelve real stage sources now have byte-identity tests.
 
-Work is on feature branch `feat/v02-order1-next`. The V0.3.X Codex line was left untouched.
-The V0.2.X roadmap is being followed in priority order, starting with Order 1.
+A mutation restoring the former declaration order leaves the reference artifact unchanged and
+reproduces the pipeline refusal. General forward data references remain unsupported. This change
+does not move type-input extraction out of the reference parser's abstract syntax tree.
 
-## Handoff validity
+## Verification
 
-The V0.2.X handoff ancestry check passed, but `git rev-list --count e84d7cfa..HEAD` measured nine
-commits, so its content claims were re-derived rather than carried forward. The required full checks
-were incomplete. The full workspace `cargo nextest run --workspace` was interrupted after 2,009
-passed; four in-flight tests received SIGINT and 920 did not run. The local no-fetch `cargo audit`
-exited successfully using a copied advisory database dated 2026-09-28, but it did not refresh the
-database. **Classify the handoff as invalid-and-stale.** The fingerprint, twelve-source inventory,
-self-host source diff, shellcheck, and RTOS test checks were separately re-derived during resume.
+All commands below exited successfully. Cargo test and Clippy invocations used `RUSTC_WRAPPER=`. The new artifact and
+selected stage tests used `KEL_SELFHOST_CACHE=0`.
 
-## Current V0.2.X work
+- `cargo test --features self-host --test selfhost_codegen self_host_compiles_verify_types_kel_byte_identically -- --exact` passed one test, including the scratch artifact comparison.
+- `cargo test --test selfhost_codegen self_host_compiles_verify_types_kel_byte_identically -- --exact` passed one test with default features.
+- `cargo test --features self-host --test forward_data_reference` passed five tests.
+- `cargo test --features self-host --test selfhost_typecheck the_stage_` passed five tests, including the rejection corpus and acceptance of all twelve real sources.
+- `cargo test --test documentation_links --test comment_citations --test claimed_counts` passed 21 tests.
+- `cargo fmt --check`, `git diff --check`, and `cargo clippy --tests --features signatures,shell,self-host -- -D warnings` passed.
 
-The operator selected a 640-row cap for six type-check input channels. `verify_types.kel` and its
-host test seeder now agree on the expanded tables and slot offsets. The bounded fold's maximum-step
-expression includes the expanded call-site, occurrence, and expression phases. The capacity price
-is 7,168 words, or 56 KiB, across the parallel tables.
+The full workspace suite and fresh network advisory scan remain unverified. The previous
+workspace run was interrupted after 2,009 passes, with four tests interrupted and 920 not run.
+The previous no-fetch advisory scan exited successfully against a local database dated
+2026-09-28. The old handoff remains invalid-and-stale as recorded in the previous increment.
 
-The real-source differential now fits and accepts all twelve stage sources. The focused test file
-passed with 72 tests under `--features self-host`. This only closes the capacity gap. Rust still
-walks the reference parser's abstract syntax tree to extract the facts passed to the Keleusma stage,
-so the Order-1 gate remains open.
+## Next Order-1 work
 
-## Next work
+Complete the type-input path and production integration before advancing to Order 2.
+`src/selfhost/mod.rs` already provides four partial extraction helpers and
+`expression_rows_from_pipeline` covers four of eight expression kinds. Read their documented
+residuals and the differential tests in `tests/selfhost_typecheck.rs` before choosing the next
+slice. The expression records discard explicit-else presence and struct-literal identity.
+Projection errors can be refused during reconstruction before an expression row exists.
+These distinct cases need separate treatment to preserve acceptance and rejection behavior.
 
-Continue with the V0.2.X roadmap in priority order. Keep the next increment on Order 1 and use
-`docs/decisions/TYPECHECK_IMPLEMENTATION_PLAN.md` and
-`docs/decisions/WIRE_FORMAT_SELFHOST_PLAN.md` to identify the next integration step. Do not move to
-Order 2 while Order 1 remains unmet. Do not switch to or merge from the concurrent V0.3.X line.
-
-Before relying on a green handoff, rerun the complete workspace nextest suite and refresh the cargo
-audit advisory database when network access is available. The full nextest result remains unverified
-in this session.
+The V0.3.X line remains concurrent in its own worktree. Bytecode version and opcode count remain
+subject to the operator constraints in `CLAUDE.md`.

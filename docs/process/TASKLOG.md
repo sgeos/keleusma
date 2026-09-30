@@ -6,6 +6,23 @@ Current sprint source of truth.
 
 ---
 
+## 2026-09-29 V0.2.X twelfth-stage compilation
+
+Moved `verify_types.kel` solver storage before its first use, retaining data-block order and
+function order. The new byte-identity test first reproduced the refusal at `ty_direct`, then
+passed after the move. It compares both the existing test pipeline and the production
+`self_host_compile_scratch` artifact against the reference. The latter assembles every module
+field from pipeline output. Restoring the former declaration order produces the same reference
+artifact but reproduces the pipeline refusal. All twelve stages now have byte-identity tests.
+
+Targeted checks passed with the test cache disabled. The new artifact test passed under
+`self-host` and default features. All five forward-reference tests and five selected type-stage
+tests passed, including the rejection corpus and all twelve real-source verdicts. Documentation
+checks passed 21 tests. Formatting, diff whitespace checks and Clippy with
+`--tests --features signatures,shell,self-host -- -D warnings` passed. Exact commands are recorded
+in `REVERSE_PROMPT.md`. Full workspace verification remains incomplete from the preceding increment. This closes a prerequisite within Order 1. The stage's
+input extraction and production type-rejection integration remain open.
+
 ## 2026-09-29 V0.2.X Order-1 capacity increment
 
 Resumed on `feat/v02-order1-next` from the V0.2.X handoff while the V0.3.X line remained untouched.
@@ -27,6 +44,8 @@ self-host chunk-name run took 190 seconds. The full workspace suite remains inco
 
 The Order-1 gate remains open because Rust still extracts the facts supplied to the Keleusma stage.
 The next V0.2.X work remains Order 1 in roadmap priority; no V0.3.X work was merged or switched into.
+
+## 2026-09-28 Legacy re-review follow-up
 
 Restored the accumulated historical section of `HANDOFF.md` exactly from `c6730025`, retaining the bounded route only in the current block. The old route in the archived fourth validity block remains historical. Recorded the operator conversation excerpts in [GATE_POLICY.md](./GATE_POLICY.md) and made the pre-push criteria falsifiable through exact commands, exit codes, executed-test counts and documented omissions. Native diagnostics and handoff follow-up remain on pull request 472. All 13 root documentation-link, citation and gate-correspondence tests passed. A byte comparison against `c6730025` confirms the entire historical suffix is unchanged.
 
