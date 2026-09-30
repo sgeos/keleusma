@@ -200,6 +200,10 @@ metadata fits within the checked existing reservation. Ordering selects the
 runtime numeric kind and rejects unequal kinds. Checked and bare arithmetic
 also select actual numeric kinds. Checked outputs preserve the virtual machine's
 low value, high value and status classification. Bare integer zero division traps.
+Stream replies obey the virtual machine's scalar type checks. Composite stream
+parameters may receive other bounded flat shapes or scalar replies through
+explicit dialogues. Actual reply kind, length and ownership survive delegated
+yields and Reset. Typed consumers check the selected value before reading it.
 
 | Host control model | Lowering entry |
 |---|---|

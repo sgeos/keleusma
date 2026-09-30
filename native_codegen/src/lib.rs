@@ -1697,6 +1697,7 @@ pub fn lower_chunk<'ctx>(
             retcon_sites: None,
             retcon_native_bodies: None,
             retcon_facts: None,
+            retcon_reply_body_maximum: 0,
             retcon_site_offset: None,
             retcon_resume_type: None,
             retcon_resume_shape: None,
@@ -2291,6 +2292,8 @@ fn lower_module_with<'ctx>(
             retcon,
             retcon_frame_bytes: retcon_bytes.filter(|_| retcon),
             retcon_owned_bodies: owned_bodies,
+            retcon_reply_body_maximum: retcon_config
+                .map_or(0, |(_, facts)| facts.reply_body_maximum),
             retcon_sites: retcon_config.map(|(_, facts)| &facts.plan.sites[i]),
             retcon_native_bodies: retcon_config.map(|(_, facts)| &facts.plan.native_body_returns),
             retcon_facts: retcon_config.map(|(_, facts)| &facts.facts[i]),
@@ -2645,6 +2648,7 @@ struct BodyCfg<'a> {
     retcon_frame_bytes: Option<u32>,
     /// Track ownership for all flat entry arguments, not only the reply shape.
     retcon_owned_bodies: bool,
+    retcon_reply_body_maximum: u32,
     retcon_sites: Option<&'a BTreeMap<usize, (u64, coroutine::Dialogue)>>,
     retcon_facts: Option<&'a BTreeMap<usize, coroutine::types::Facts>>,
     retcon_native_bodies: Option<&'a BTreeMap<u16, coroutine::NativeBodyReturn>>,
@@ -3528,6 +3532,7 @@ fn lower_chunk_body<'ctx>(
         retcon,
         retcon_frame_bytes,
         retcon_owned_bodies: owned_bodies,
+        retcon_reply_body_maximum,
         retcon_sites,
         retcon_facts,
         retcon_native_bodies,
@@ -3603,7 +3608,6 @@ fn lower_chunk_body<'ctx>(
     };
     // The latest reply is distinct from local zero, which user code may assign.
     let retcon_latest = retcon.then(|| {
-        let slot = b.build_alloca(i64t, "latest_reply").unwrap();
         let raw = if chunk.param_count == 0 {
             i64t.const_zero().into()
         } else {
@@ -3620,8 +3624,11 @@ fn lower_chunk_body<'ctx>(
             width_of_declared_shape(retcon_resume_shape.as_ref(), float_bytes),
             i64t.const_int(u64::from(owned_reply), false),
         );
-        b.build_store(slot, bits).unwrap();
-        slot
+        coroutine::ReplyState::new(
+            &b,
+            bits,
+            retcon_resume_shape.unwrap_or(keleusma::bytecode::WireShape::Scalar { kind: 0 }),
+        )
     });
 
     // **A RESUMABLE STREAM KEEPS ITS LOCALS IN THE ARENA, NOT ON THE MACHINE
@@ -3677,6 +3684,29 @@ fn lower_chunk_body<'ctx>(
         })
         .collect();
     let ownership = owned_bodies.then(|| coroutine::ownership::Flags::new(&b, locals.len()));
+    let runtime_kinds = retcon_facts.map(|_| coroutine::kinds::Flags::new(&b, locals.len()));
+    if retcon {
+        let flags = runtime_kinds.as_ref().unwrap();
+        for (index, shape) in own_signature.unwrap().params.iter().copied().enumerate() {
+            b.build_store(
+                flags.locals[index],
+                i64t.const_int(
+                    u64::from(coroutine::types::kind(coroutine::types::shape(shape))),
+                    false,
+                ),
+            )
+            .unwrap();
+            let size = match shape {
+                keleusma::bytecode::WireShape::Flat { size, .. } => size,
+                _ => 0,
+            };
+            b.build_store(
+                flags.local_sizes[index],
+                i64t.const_int(u64::from(size), false),
+            )
+            .unwrap();
+        }
+    }
     let ownership_context = (retcon_facts.is_some() && !retcon).then(|| {
         func.get_nth_param(u32::from(chunk.param_count) + 3)
             .unwrap()
@@ -3704,6 +3734,19 @@ fn lower_chunk_body<'ctx>(
         None
     };
     let delegate_context = if retcon {
+        let latest = retcon_latest.as_ref().unwrap();
+        let entry_metadata = if retcon_stream && chunk.param_count > 0 {
+            let flags = runtime_kinds.as_ref().unwrap();
+            [
+                ownership
+                    .as_ref()
+                    .map_or(latest.owned, |flags| flags.locals[0]),
+                flags.locals[0],
+                flags.local_sizes[0],
+            ]
+        } else {
+            [latest.owned, latest.kind, latest.bytes]
+        };
         Some(coroutine::delegate_context(
             ctx,
             &b,
@@ -3711,12 +3754,10 @@ fn lower_chunk_body<'ctx>(
             if retcon_stream && chunk.param_count > 0 {
                 locals[0]
             } else {
-                retcon_latest.unwrap()
+                latest.value
             },
-            retcon_latest.unwrap(),
-            ownership.as_ref().and_then(|flags| {
-                (retcon_stream && chunk.param_count > 0).then(|| flags.locals[0])
-            }),
+            latest,
+            entry_metadata,
             site_metadata,
         ))
     } else if retcon_delegate {
@@ -4002,7 +4043,6 @@ fn lower_chunk_body<'ctx>(
         }
     }
 
-    let runtime_kinds = retcon_facts.map(|_| coroutine::kinds::Flags::new(&b, locals.len()));
     if let (Some(context), Some(flags)) = (ownership_context, &runtime_kinds) {
         let count = usize::from(chunk.param_count) + 1;
         for index in 0..usize::from(chunk.param_count) {
@@ -4654,7 +4694,7 @@ fn lower_chunk_body<'ctx>(
         if matches!(op, Op::Yield) && (retcon || retcon_delegate) && retcon_site_offset.is_some() {
             let (site, _) = retcon_sites.unwrap()[&i];
             let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
-            let ty = ctx.struct_type(&[ptr.into(); 5], false);
+            let ty = ctx.struct_type(&[ptr.into(); 10], false);
             let field =
                 st.b.build_struct_gep(ty, delegate_context.unwrap(), 4, "site_slot")
                     .unwrap();
@@ -8114,10 +8154,30 @@ fn lower_chunk_body<'ctx>(
                 };
                 let owned = i64t.const_int(u64::from(owned_reply), false);
                 let latest = coroutine::ownership::copy(&st.b, reply, width, owned);
-                st.b.build_store(retcon_latest.unwrap(), latest).unwrap();
+                retcon_latest
+                    .as_ref()
+                    .unwrap()
+                    .store(&st.b, latest, contract.reply);
                 if retcon_stream && chunk.param_count > 0 {
                     let parameter = coroutine::ownership::copy(&st.b, reply, width, owned);
                     st.b.build_store(st.locals[0], parameter).unwrap();
+                    let flags = st.runtime_kinds.as_ref().unwrap();
+                    st.b.build_store(
+                        flags.locals[0],
+                        i64t.const_int(
+                            u64::from(coroutine::types::kind(coroutine::types::shape(
+                                contract.reply,
+                            ))),
+                            false,
+                        ),
+                    )
+                    .unwrap();
+                    let size = match width {
+                        Width::Body(size) => size,
+                        _ => 0,
+                    };
+                    st.b.build_store(flags.local_sizes[0], i64t.const_int(u64::from(size), false))
+                        .unwrap();
                     if let Some(flags) = &st.ownership {
                         st.b.build_store(flags.locals[0], owned).unwrap();
                     }
@@ -8382,17 +8442,22 @@ fn lower_chunk_body<'ctx>(
                 // A nested Stream does not receive the host reply in its own
                 // parameter slot. Only the entry restores the latest reply.
                 if retcon && chunk.param_count > 0 {
-                    let reply =
-                        st.b.build_load(i64t, retcon_latest.unwrap(), "reset_reply")
-                            .unwrap();
-                    let owned = i64t.const_int(u64::from(owned_reply), false);
-                    let reply = coroutine::ownership::copy(
+                    let latest = retcon_latest.as_ref().unwrap();
+                    let reply = coroutine::ownership::load(&st.b, latest.value);
+                    let owned = coroutine::ownership::load(&st.b, latest.owned);
+                    let kind = coroutine::ownership::load(&st.b, latest.kind);
+                    let bytes = coroutine::ownership::load(&st.b, latest.bytes);
+                    let reply = coroutine::ownership::copy_bounded(
                         &st.b,
-                        reply.into_int_value(),
-                        width_of_declared_shape(retcon_resume_shape.as_ref(), float_bytes),
+                        reply,
+                        retcon_reply_body_maximum,
+                        bytes,
                         owned,
                     );
                     st.b.build_store(st.locals[0], reply).unwrap();
+                    let flags = st.runtime_kinds.as_ref().unwrap();
+                    st.b.build_store(flags.locals[0], kind).unwrap();
+                    st.b.build_store(flags.local_sizes[0], bytes).unwrap();
                     if let Some(flags) = &st.ownership {
                         st.b.build_store(flags.locals[0], owned).unwrap();
                     }

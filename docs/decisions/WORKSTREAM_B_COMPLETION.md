@@ -1,138 +1,86 @@
 # Workstream B completion requirements
 
 The active objective is full Workstream B in the V0.3.X roadmap. The bounded
-coroutine slice merged at `a1aa53b8` is the baseline, not the completion claim.
-Work takes place on `feat/workstream-b-completion`.
+coroutine slice merged at `a1aa53b8` is the baseline. Implementation and acceptance
+work continue on `feat/workstream-b-completion`. Final gates and version
+integration remain outstanding. This document does not yet claim completion.
 
 ## Acceptance matrix
 
-| Requirement | Evidence needed | Current disposition |
-|---|---|---|
-| General suspension and resumption | VM differentials for non-tail yields, branches, bounded loops, live operands and locals | Existing tests need final rerun |
-| Delegated suspension | Nested and guarded reentrant calls preserve caller and callee state | Existing tests need final rerun |
-| Entry shapes | Source-emittable stream and reentrant entries, including completion, supported argument shapes and independent instances | Scalar and flat completion plus zero and multiple arguments tested, remaining shapes to census |
-| Value transfers | Scalar and composite inputs, outputs, replies and completion values with proven extents and lifetimes | Per-site dialogues, native lifetime contracts and bounded mixed-kind copies implemented, final audit outstanding |
-| Host lifecycle | Start, resume, normal completion, early release, repeated release and reuse with stable caller-owned storage | Completion status and result lifetime implemented, final lifecycle sweep outstanding |
-| Admission soundness | Every remaining refusal distinguished as invalid input, unsafe contract, another workstream dependency, or an implementation gap | Private kinds, ordering and arithmetic execute, remaining refusal classification is outstanding |
-| Integration | Existing public lowering routes and host entry points have a documented, tested selection contract | Explicit route contract documented and tested, no callback fallback |
-| Native deployment | Execute real linked host artifact and optimized/unoptimized differentials, inspect target emission within the roadmap target boundary | Local C snapshot completion runs at both optimization levels, four tier-one object formats and architectures checked, final coverage audit outstanding |
-| Resource preservation | No live machine-stack state across suspension, no hidden allocation, bounded frame reservation, guarded extents and independent regions | Existing checks need completion-path coverage |
-| Verification | Both complete native configurations on a frozen final tree, relevant root documentation checks, and green integration continuous integration | Outstanding |
+The named tests are in
+[`retcon_bytecode.rs`](../../native_codegen/tests/retcon_bytecode.rs).
+They execute virtual-machine comparisons and independent expectations, with
+exceptions and deployment limits stated below.
 
-## Scope boundaries
+| Requirement | Current evidence | Disposition |
+|---|---|---|
+| General suspension and resumption | `non_tail_yield_preserves_locals_operands_and_reply`, branch joins, loop backedges, private state and seeded lexer checks | Implemented, final gates pending |
+| Delegated suspension | Nested calls, guarded heads, nested stream Reset, preserved callee arguments and release inside a callee | Implemented, final gates pending |
+| Entry shapes | Zero and multiple arguments, all six scalar kinds, bounded flat structures, tuples, arrays and enums, independent instances | Implemented within the native representation boundary below |
+| Value transfers | Per-site dialogues, actual kinds and lengths through packing, calls, private storage, direct and delegated replies, snapshot and instance-borrow contracts | Implemented, final gates pending |
+| Host lifecycle | `reentrant_entries_report_completion_once_and_reuse_the_slot`, completion without yielding, inert resume after completion, repeated release, early release and independent slot reuse | Implemented, final gates pending |
+| Admission soundness | Refusal classification below, runtime type and extent checks, negative subprocess tests requiring a valid prefix before a fault | Audited within stated boundaries, final gates pending |
+| Integration | `host_control_routes_are_explicit_and_do_not_fall_back_to_callbacks` and documented explicit coroutine route | Implemented, version integration pending |
+| Native deployment | Linked C hosts at both optimization levels, native snapshot completion, object emission for four tier-one target configurations | Local execution and target emission checked, foreign execution unverified |
+| Resource preservation | Bounded caller reservation, compile-time oversized-frame refusal, completion tail outside the ended frame, allocation and intrinsic postconditions | Implemented, final gates pending |
+| Verification | 95 coroutine tests and test-target Clippy in each float configuration, frozen default non-corpus run of 776 tests | Both complete native gates and green version integration remain outstanding |
+
+## Refusal classification
+
+The audit covers admission in `coroutine.rs`, `coroutine/dialogue.rs`,
+`coroutine/types.rs`, `coroutine/ownership.rs` and the shared emitter it invokes.
+A passing corpus count does not establish coverage of every program.
+
+| Refusal family | Classification and reason |
+|---|---|
+| Failed bytecode verification or resource admission, missing entry or signatures, malformed stream layout, invalid slot ranges | Invalid input to this lowering route |
+| Missing per-site dialogue, a contract naming a non-yield site, incompatible scalar stream replies | Invalid host contract. The virtual machine also rejects scalar reply type mismatches |
+| Unknown transfer extent, undersized body, construction exceeding its reservation, unproved native body lifetime | Unsafe contract. Bounded flat transfers, snapshots and instance borrows have positive execution coverage |
+| Too little frame space, completion or metadata reservation overflow, persistent private metadata overflow | Insufficient explicit memory reservation |
+| Suspension-capable call or coroutine intrinsic surviving splitting, unexpected deallocator or dynamic stack intrinsic | Failed lowering postcondition. Refusal prevents exposing an invalid artifact |
+| Numeric or body operation with no admissible selected kind | Invalid operand use. Mixed values with an admissible selected kind use runtime checks |
+| Text-bearing and opaque host representations, legacy boxed field and index forms | Native representation dependencies. The coroutine route supports the shared scalar and bounded flat representation, not a new string or opaque-handle contract |
+| `Len` and surviving `IsStruct` | Shared opcode dependencies in Workstream A. `Len` has no current compiler emission path. The compiler records no `IsStruct` producer found by its bounded search. Hand-built bytecode still reaches the explicit backend refusal |
+| Indexed access spanning private scalar and composite placements | Shared placement dependency. The negative test constructs verified bytecode spanning placements rather than a compiler-emitted homogeneous array |
+
+The former composite stream reply restriction was an implementation gap, not a
+necessary refusal. The virtual machine admits differing bounded bodies and scalar
+values through its Composite parameter category. This now executes with actual
+kind, ownership and length preserved through direct yields, transitive delegation
+and Reset. Smaller bodies trap before an out-of-bounds consumer read.
+
+The audit has not identified another suspension-specific implementation gap.
+This is an engineering conclusion from the inspected paths and executed tests,
+not a proof that all possible bytecode programs have been enumerated.
+
+## Resource and verification limits
+
+Lowering inlines suspension-capable callees before coroutine splitting and
+rejects any survivor. It verifies the generated module, rejects retained
+coroutine or dynamic-stack intrinsics and unexpected deallocator uses, and
+rejects any frame exceeding its caller reservation. Completion bodies occupy a
+disjoint tail that remains readable after deliberate overwriting of the ended
+continuation frame. External pointers and declared readable extents remain host
+obligations. These checks do not attest native worst-case execution time.
+
+Private composite self-assignment exposes an upstream virtual-machine defect.
+Its overlapping `copy_nonoverlapping` operation aborts in the debug runtime.
+The native regression uses explicit expected values and region sentinels rather
+than executing undefined reference behavior. Root runtime sources remain unchanged.
+
+Fault subprocess checks currently observe the local AArch64 trap signal.
+Object emission for other targets does not establish their runtime behavior or
+signal convention. Complete gates must run separately on a clean frozen commit.
+Historical gates at `5a0fec1d` do not cover these changes. Receipt updates after a
+run must not be described as the identical tested tree.
+
+## Scope and completion rule
 
 The roadmap separates coroutine lowering from arena pool packaging, general host
-packaging, and native timing attestation. Implement the ownership and host
-mechanisms necessary for correct coroutine behavior here. Record dependencies
-rather than declaring the whole language implemented from a corpus count.
+packaging and native timing attestation. Future source syntax for nested arena
+instances and cross-thread snapshots is not a prerequisite for current-language
+suspension. These boundaries do not make the whole native backend complete.
 
-Future source syntax for nested arena instances and cross-thread snapshot
-communication is not a prerequisite for lowering the current language. Do not
-add opcodes or change the bytecode version. Root runtime and verifier sources
-remain owned by V0.2.X. A runtime discrepancy must be recorded with a reproducer.
-
-## Current evidence
-
-On resume the native worktree was clean at `a1aa53b8`. All 150 handoff ancestry
-anchors passed. The archive stamp was 23 commits behind, the brief still named
-completed integration as pending, and the complete-gate reporter returned
-UNVERIFIED for three documentation inputs changed after `5a0fec1d`. The handoff
-is invalid-and-stale. The version-branch run `36673486533` completed successfully
-at `a1aa53b8`. After fetching, the upstream version-branch backlog was zero.
-
-The initial new differential requires a reentrant entry to report two yields
-and its final result, to complete without yielding on a branch that does not yield,
-and to complete after delegated suspension. Each result is checked against a
-hardcoded expectation and the virtual machine. Slot reuse and inert operations
-after completion are part of the same lifecycle test.
-
-The current native differentials cover original reentrant parameters, delegated
-completion, exactly-once completion, slot reuse, multiple arguments and owned flat
-results after input reuse and deliberate overwriting of the ended LLVM frame.
-Both float configurations passed all 46 coroutine tests and test-target Clippy.
-The implicit-completion negative test confirms that the current verifier rejects
-fallthrough before lowering. The native archive records the commands and limits.
-
-Explicit contracts now describe each yield site's output and reply separately
-from the entry result. A bounded metadata word identifies the suspended site.
-Tests cover heterogeneous direct and delegated dialogues, all scalar completion
-kinds, changing flat reply extents, host-buffer reuse and completion-body lifetime.
-An undersized reply negative test exposed an accepted field overread before the
-new read and call-boundary extent checks. That unsafe contract is now refused.
-Extent analysis converges across branch joins and loop backedges. Private-slot
-kind inference preserves aliasing while admitting a previously refused call.
-Composite-kind mismatches are checked against virtual-machine faults. Both float
-configurations pass 53 coroutine tests and test-target Clippy with warnings denied.
-
-Native flat results now accept explicit snapshot or instance-borrow contracts.
-Execution tests cover host-buffer reuse, callee returns, early release and
-completion storage. Unused chunks no longer impose coroutine lowering contracts,
-and original yield-site identifiers remain unchanged. Both float configurations
-pass 58 coroutine tests and test-target Clippy with warnings denied.
-
-The mixed enum receiver gap now has executed positive coverage in
-`mixed_enum_receiver_kinds_execute_with_guarded_body_inspection`. Runtime tags
-prevent scalar dereferences. Enum-test facts refine payload reads only while the
-receiver binding remains unchanged. Private body slots preserve the stored kind.
-Owned mixed bodies retain their selected extent in statically bounded storage.
-Field reads use a proven minimum while array bounds use the selected actual size.
-Subprocess tests require an observed native bounds trap for negative indices and
-indices outside the smaller array. Targeted verification is recorded in the
-native archive. Remaining refusal classification and complete final gates remain
-outstanding. The current evidence does not establish full completion.
-
-Guarded parameter reads in nested streams now execute. Consumer checks trap only
-when a cleared value reaches an operation requiring its original kind. Equality
-preserves Unit comparisons and IEEE floating-point equality. Ordered comparisons
-require numeric operands. Subprocess tests observe the correct native prefix
-before a type trap, including cleared body access.
-
-Composite construction now packs actual operand sizes into a producer-bounded
-reservation. Tuple and array lengths follow their values. Struct and enum
-padding is zeroed. Runtime extent checks precede variable-size field reads and
-fixed-layout host transfers. The former guarded construction gap now executes.
-
-Internal calls now transfer actual kinds and lengths through parameters and
-returns, including delegated suspension. Private composite storage copies the
-actual body with an overlap-safe operation. Older aliases retain their own
-lengths. Unit remains a valid stored value until a body consumer requires more.
-The earlier variable-call and private-storage counterexamples now execute.
-
-A private composite self-assignment exposes an upstream virtual-machine defect.
-The runtime uses `copy_nonoverlapping` on aliased source and destination bytes.
-The debug runtime aborts. Native self-assignment is checked against explicit
-expected values with region sentinels, without executing that undefined runtime
-operation as an oracle. Root runtime sources remain unchanged.
-
-Private scalar slots now retain actual kinds in persistent metadata. Reads
-select their load-time kind only until the first write. The checked metadata
-range fits between the native private body pool and the existing resume-state
-offset. No additional host allocation is required. A fresh private region must
-be zeroed before installing its initialization image. Kind metadata survives
-frame destruction and reuse with the private payloads.
-
-Ordered comparisons now select the actual numeric kind and reject unequal
-kinds. Differential tests cover correlated Word, Byte, Fixed and Float paths,
-including the virtual machine's NaN ordering behavior. Typed consumers check
-joined kinds at execution instead of imposing a transfer-time refusal.
-
-The former correlated-arithmetic refusal now executes in
-`correlated_numeric_arithmetic_uses_the_actual_kind`. Checked and bare numeric
-operations select actual kinds and reject unequal selected kinds. Differential
-checks observe all three checked outputs across suspension, including Byte
-underflow, Fixed scaling, signed high halves and floating-point status flags.
-Checked negation accepts only Word and Fixed, matching the virtual machine.
-Bare integer zero division and remainder trap before exposing a result.
-
-Both float configurations pass 92 coroutine tests and test-target Clippy with
-warnings denied. The remaining admission audit must distinguish stream reply
-constraints carefully. Scalar reply mismatches are rejected by the virtual
-machine at resume. Composite parameters use a broader runtime category, so
-bounded differing reply extents remain an audit question. Complete final gates
-and version integration remain outstanding.
-
-## Completion rule
-
-Every row needs current evidence. A smaller passing subset, a plausible refusal,
-or a historical green run does not establish completion. This document records
-requirements and unresolved work, not permission to narrow the goal.
+Every matrix row needs current evidence and every remaining dependency must stay
+explicit. Do not infer completion from a smaller passing subset or a historical
+run. No opcode or bytecode version changes are authorized by this workstream.

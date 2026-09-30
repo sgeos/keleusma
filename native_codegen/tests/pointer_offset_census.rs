@@ -1,3 +1,8 @@
+//! Delegate metadata uses ten statically allocated pointer fields. Initialization
+//! enumerates exactly those fields. Yield updates use fixed index tuples
+//! one/three/five/six and two/seven/eight/nine. Field four remains the site pointer.
+//! One generalized builder address replaces separate flat destination addresses.
+//!
 //! Private scalar kind metadata follows the native private body pool. Checked
 //! arithmetic proves all metadata fits before the existing resume-state offset.
 //! Direct indices are constants. Indexed data guards bound runtime indices
@@ -117,7 +122,7 @@
 // 24 -> 28, including the coroutine context and parsed intrinsic helper.
 // 28 -> 29 for constant header offsets within the declared stable slot.
 // 37 -> 41 with the site base and three bounded packing address sites.
-const RECORDED_GEP_SITES: usize = 45;
+const RECORDED_GEP_SITES: usize = 44;
 // 22 -> 24 on 2026-09-11, when the shared composite slot landed. **Both are
 // compile-time constant.** The body's address is the slot's STATED offset in the
 // host buffer — a field of the layout, not a computed quantity — and the second

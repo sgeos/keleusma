@@ -37,6 +37,9 @@ pub(crate) struct Analysis {
     results: Vec<ValueFact>,
     changed: bool,
     private_bodies: Vec<Flow>,
+    reply: ValueFact,
+    suspends: Vec<bool>,
+    pub reply_body_maximum: u32,
 }
 #[derive(Clone, Copy)]
 struct ValueFact {
@@ -96,7 +99,7 @@ pub(crate) fn guarded_width(mask: u16, flow: &Flow, float_bytes: u32) -> Width {
     }
 }
 
-fn shape(s: WireShape) -> u16 {
+pub(crate) fn shape(s: WireShape) -> u16 {
     match s {
         WireShape::Scalar { kind } => scalar(kind),
         WireShape::Flat { kind, .. } => body(kind),
@@ -467,9 +470,44 @@ pub(super) fn check(
         .iter()
         .map(|signature| value_fact(signature.ret))
         .collect();
+    let mut reply = value_fact(
+        m.signatures[entry]
+            .params
+            .first()
+            .copied()
+            .unwrap_or(WireShape::Scalar { kind: 0 }),
+    );
+    for (_, contract) in plan.sites.iter().flat_map(|sites| sites.values()) {
+        let value = value_fact(contract.reply);
+        reply.join(value.tag, value.width, value.flow);
+    }
+    let reply_body_maximum = reply.flow.maximum().ok_or_else(|| {
+        LowerError::UnsupportedShape("coroutine replies need a bounded body extent".into())
+    })?;
+    let mut suspends: Vec<_> = plan.sites.iter().map(|sites| !sites.is_empty()).collect();
+    loop {
+        let mut changed = false;
+        for (index, chunk) in m.chunks.iter().enumerate() {
+            if !suspends[index]
+                && chunk
+                    .ops
+                    .iter()
+                    .any(|op| matches!(op, Op::Call(target, _) if suspends[*target as usize]))
+            {
+                suspends[index] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
     let mut analysis = Analysis {
         inputs,
         results,
+        reply,
+        reply_body_maximum,
+        suspends,
         changed: false,
         private_bodies: Vec::new(),
         plan,
@@ -523,13 +561,7 @@ fn analyze(
     let float_bytes = 1u32 << m.float_bits_log2 >> 3;
     let declared_width =
         |shape: WireShape| crate::width_of_declared_shape(Some(&shape), float_bytes);
-    let reply = shape(
-        m.signatures[entry]
-            .params
-            .first()
-            .copied()
-            .unwrap_or(WireShape::Scalar { kind: 0 }),
-    );
+    let reply = analysis.reply;
     let mut writes = vec![0; private_kinds.len()];
     for (ci, chunk) in m.chunks.iter().enumerate() {
         if !analysis.plan.reachable[ci] {
@@ -667,9 +699,9 @@ fn analyze(
                     if ci == entry
                         && chunk.block_type == BlockType::Stream
                         && chunk.param_count > 0
-                        && m.chunks[*target as usize].block_type != BlockType::Func
+                        && analysis.suspends[*target as usize]
                     {
-                        state.locals[0] |= reply;
+                        state.locals[0] |= reply.tag;
                     }
                 }
                 Op::Return => {
@@ -920,7 +952,7 @@ fn analyze(
                     state.locals.fill(UNIT);
                     if ci == entry && chunk.block_type == BlockType::Stream && chunk.param_count > 0
                     {
-                        state.locals[0] = reply;
+                        state.locals[0] = reply.tag;
                     }
                 }
                 Op::Stream
@@ -952,12 +984,10 @@ fn analyze(
                     if ci == entry
                         && chunk.block_type == BlockType::Stream
                         && chunk.param_count > 0
-                        && m.chunks[*target as usize].block_type != BlockType::Func
+                        && analysis.suspends[*target as usize]
+                        && state.extents.locals[0] != reply.width
                     {
-                        let reply = declared_width(m.signatures[entry].params[0]);
-                        if state.extents.locals[0] != reply {
-                            state.extents.locals[0] = Width::Unknown;
-                        }
+                        state.extents.locals[0] = Width::Unknown;
                     }
                 }
                 Op::CallVerifiedNative(index, _) | Op::CallExternalNative(index, _) => {
@@ -994,7 +1024,7 @@ fn analyze(
                     state.extents.locals.fill(Width::Scalar(0));
                     if ci == entry && chunk.block_type == BlockType::Stream && chunk.param_count > 0
                     {
-                        state.extents.locals[0] = declared_width(m.signatures[entry].params[0]);
+                        state.extents.locals[0] = reply.width;
                     }
                 }
                 _ => {}
@@ -1109,16 +1139,10 @@ fn analyze(
                     if ci == entry
                         && chunk.block_type == BlockType::Stream
                         && chunk.param_count > 0
-                        && m.chunks[*target as usize].block_type != BlockType::Func
+                        && analysis.suspends[*target as usize]
                     {
                         state.invalidate(0);
-                        let shape = m.signatures[entry].params[0];
-                        let width = declared_width(shape);
-                        state.flow_locals[0].join(Flow::new(
-                            reply,
-                            width,
-                            matches!(width, Width::Body(_)),
-                        ));
+                        state.flow_locals[0].join(reply.flow);
                     }
                 }
                 Op::CallVerifiedNative(index, _) | Op::CallExternalNative(index, _) => {
@@ -1136,9 +1160,7 @@ fn analyze(
                     state.flow_locals.fill(Flow::default());
                     if ci == entry && chunk.block_type == BlockType::Stream && chunk.param_count > 0
                     {
-                        let width = declared_width(m.signatures[entry].params[0]);
-                        state.flow_locals[0] =
-                            Flow::new(reply, width, matches!(width, Width::Body(_)));
+                        state.flow_locals[0] = reply.flow;
                     }
                 }
                 _ => {}

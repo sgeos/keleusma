@@ -1,3 +1,10 @@
+//! The ten-field delegate context is initialized before use. Fields five and
+//! six point to entry kind and size. Seven through nine point to latest-reply
+//! ownership, kind and size. Start initializes all latest metadata and every
+//! direct or delegated yield updates it before Reset restores local zero.
+//! The common ownership load helper serves all four Reset metadata reads.
+//! Generalized builder loads replace the separate flat ownership destination.
+//!
 //! Coroutine private scalar kind reads use a zeroed persistent metadata word.
 //! Zero selects a compiler-emitted immutable table of load-time kinds. Writes
 //! store actual nonzero kinds. The table and metadata have one word per private
@@ -79,7 +86,7 @@ const READ_FORMS: &[&str] = &["build_load(", " = load "];
 // 16 -> 18 with the retcon reply cell and latest-reply reads described above.
 // 18 -> 22, including the coroutine context and parsed intrinsic helper.
 // 22 -> 23 for the stable handle continuation, initialized by start.
-const RECORDED_READ_SITES: usize = 35;
+const RECORDED_READ_SITES: usize = 33;
 // 16 at first derivation, 2026-09-11. Four are on the host-provided boundary —
 // the resume-state word, the composite initialisation word, the private slot
 // array and the shared segment — and the rest read memory this lowering wrote

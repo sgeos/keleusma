@@ -1,3 +1,11 @@
+//! Latest-reply state stores payload, ownership, kind and actual body size.
+//! Direct and delegated yields copy immutable host bodies before returning.
+//! Entry parameter metadata and latest metadata remain independent. Reset
+//! copies the selected length into a statically bounded reservation and restores
+//! its metadata. Scalars have zero length and are never read as pointers.
+//! Existing parsed-IR scalar stores remain active. Flat payloads replace those
+//! stores with owned copies, and builder stores update metadata on both paths.
+//!
 //! Arithmetic outputs store their selected scalar kind and a zero body length
 //! in operand metadata. These two sites store no addresses. LLVM captures the
 //! metadata with its value when it survives suspension. The pure arithmetic
@@ -129,7 +137,7 @@ const MOVE_FORMS: &[&str] = &[
 // 24 -> 27, including the coroutine context and parsed intrinsic helper.
 // 27 -> 30 for the stable continuation, reply, and release stores.
 // 59 -> 63 with selected output size, field store, body copy and padding.
-const RECORDED_MOVE_SITES: usize = 76;
+const RECORDED_MOVE_SITES: usize = 80;
 // 18 -> 19 on 2026-09-11, when the shared composite slot landed: one body copy
 // into the host's buffer, at the offset and length the module's shared layout
 // STATES. Unlike the persistent pool, nothing here is derived — so there is no

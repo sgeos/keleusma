@@ -501,6 +501,61 @@ retcon.cleanup:
     Ok(module.get_function(&format!("kel_chunk_{index}")).unwrap())
 }
 
+/// The latest host value survives local assignment and Reset. Its metadata
+/// travels with the payload, including when a delegated yield updates it.
+pub(crate) struct ReplyState<'ctx> {
+    pub value: PointerValue<'ctx>,
+    pub owned: PointerValue<'ctx>,
+    pub kind: PointerValue<'ctx>,
+    pub bytes: PointerValue<'ctx>,
+}
+impl<'ctx> ReplyState<'ctx> {
+    pub fn new(
+        b: &Builder<'ctx>,
+        value: inkwell::values::IntValue<'ctx>,
+        shape: keleusma::bytecode::WireShape,
+    ) -> Self {
+        let ty = value.get_type();
+        let state = Self {
+            value: b.build_alloca(ty, "latest_reply").unwrap(),
+            owned: b.build_alloca(ty, "latest_owned").unwrap(),
+            kind: b.build_alloca(ty, "latest_kind").unwrap(),
+            bytes: b.build_alloca(ty, "latest_bytes").unwrap(),
+        };
+        state.store(b, value, shape);
+        state
+    }
+    pub fn store(
+        &self,
+        b: &Builder<'ctx>,
+        value: inkwell::values::IntValue<'ctx>,
+        shape: keleusma::bytecode::WireShape,
+    ) {
+        let ty = value.get_type();
+        let bytes = match shape {
+            keleusma::bytecode::WireShape::Flat { size, .. } => size,
+            _ => 0,
+        };
+        for (slot, bits) in [
+            (self.value, value),
+            (
+                self.owned,
+                ty.const_int(
+                    u64::from(matches!(shape, keleusma::bytecode::WireShape::Flat { .. })),
+                    false,
+                ),
+            ),
+            (
+                self.kind,
+                ty.const_int(u64::from(types::kind(types::shape(shape))), false),
+            ),
+            (self.bytes, ty.const_int(u64::from(bytes), false)),
+        ] {
+            b.build_store(slot, bits).unwrap();
+        }
+    }
+}
+
 /// Hidden context belongs to the entry instance, never to a callee's locals.
 /// Scalar replacement removes these pointer slots before frame splitting.
 pub(crate) fn delegate_context<'ctx>(
@@ -508,23 +563,24 @@ pub(crate) fn delegate_context<'ctx>(
     builder: &Builder<'ctx>,
     reply: PointerValue<'ctx>,
     entry_parameter: PointerValue<'ctx>,
-    latest_reply: PointerValue<'ctx>,
-    entry_owned: Option<PointerValue<'ctx>>,
+    latest: &ReplyState<'ctx>,
+    entry_metadata: [PointerValue<'ctx>; 3],
     site: Option<PointerValue<'ctx>>,
 ) -> PointerValue<'ctx> {
     let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
-    let ty = ctx.struct_type(&[ptr.into(); 5], false);
+    let ty = ctx.struct_type(&[ptr.into(); 10], false);
     let context = builder.build_alloca(ty, "delegate_context").unwrap();
     for (index, value) in [
         reply,
         entry_parameter,
-        latest_reply,
-        entry_owned.unwrap_or_else(|| {
-            builder
-                .build_alloca(ctx.i64_type(), "unused_entry_ownership")
-                .unwrap()
-        }),
+        latest.value,
+        entry_metadata[0],
         site.unwrap_or(ptr.const_null()),
+        entry_metadata[1],
+        entry_metadata[2],
+        latest.owned,
+        latest.kind,
+        latest.bytes,
     ]
     .into_iter()
     .enumerate()
@@ -572,9 +628,9 @@ declare i1 @llvm.coro.suspend.retcon.i1(...)
 declare void @llvm.coro.end(ptr, i1, token)
 define i64 @kel_retcon_delegate_yield(i64 %value, ptr %context) alwaysinline {
 entry:
-  %reply_slot = getelementptr {ptr, ptr, ptr, ptr}, ptr %context, i32 0, i32 0
-  %parameter_slot = getelementptr {ptr, ptr, ptr, ptr}, ptr %context, i32 0, i32 1
-  %latest_slot = getelementptr {ptr, ptr, ptr, ptr}, ptr %context, i32 0, i32 2
+  %reply_slot = getelementptr {ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr}, ptr %context, i32 0, i32 0
+  %parameter_slot = getelementptr {ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr}, ptr %context, i32 0, i32 1
+  %latest_slot = getelementptr {ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr}, ptr %context, i32 0, i32 2
   %reply = load ptr, ptr %reply_slot
   %parameter = load ptr, ptr %parameter_slot
   %latest = load ptr, ptr %latest_slot
@@ -590,9 +646,7 @@ resume:
   ret i64 %result
 }
 "#;
-    let ir = ir
-        .replace("kel_retcon_delegate_yield", &name)
-        .replace("{ptr, ptr, ptr, ptr}", "{ptr, ptr, ptr, ptr, ptr}");
+    let ir = ir.replace("kel_retcon_delegate_yield", &name);
     let buffer = MemoryBuffer::create_from_memory_range_copy(
         format!("{ir}\0").as_bytes(),
         "delegate scaffold",
@@ -601,51 +655,64 @@ resume:
         .link_in_module(ctx.create_module_from_ir(buffer).map_err(error)?)
         .map_err(error)?;
     let function = module.get_function(&name).unwrap();
-    if let Some(keleusma::bytecode::WireShape::Flat { size, .. }) = resume_shape {
-        let resume = function
-            .get_basic_blocks()
-            .into_iter()
-            .find(|b| b.get_name().to_bytes() == b"resume")
-            .unwrap();
-        // Replace the scalar stores after the reply load with distinct owned
-        // values for the entry parameter and latest-reply slot.
-        let result = resume.get_first_instruction().unwrap();
+    let resume = function
+        .get_basic_blocks()
+        .into_iter()
+        .find(|b| b.get_name().to_bytes() == b"resume")
+        .unwrap();
+    let result = resume.get_first_instruction().unwrap();
+    let shape = resume_shape.unwrap_or(keleusma::bytecode::WireShape::Scalar { kind: 0 });
+    let flat = matches!(shape, keleusma::bytecode::WireShape::Flat { .. });
+    if flat {
+        // Preserve the established scalar scaffold. Only flat payloads replace
+        // its raw stores with owned copies before returning to the host.
         while let Some(next) = result.get_next_instruction() {
             next.erase_from_basic_block();
         }
-        let b = ctx.create_builder();
-        b.position_at_end(resume);
-        let context = function.get_nth_param(1).unwrap().into_pointer_value();
-        let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
-        let ty = ctx.struct_type(&[ptr.into(); 5], false);
-        let bits = result.try_into().unwrap();
-        for index in [1, 2] {
+    } else {
+        resume.get_terminator().unwrap().erase_from_basic_block();
+    }
+    let b = ctx.create_builder();
+    b.position_at_end(resume);
+    let context = function.get_nth_param(1).unwrap().into_pointer_value();
+    let ptr = ctx.ptr_type(inkwell::AddressSpace::default());
+    let ty = ctx.struct_type(&[ptr.into(); 10], false);
+    let bits = result.try_into().unwrap();
+    let size = match shape {
+        keleusma::bytecode::WireShape::Flat { size, .. } => size,
+        _ => 0,
+    };
+    let owned = ctx.i64_type().const_int(
+        u64::from(matches!(shape, keleusma::bytecode::WireShape::Flat { .. })),
+        false,
+    );
+    let tag = ctx
+        .i64_type()
+        .const_int(u64::from(types::kind(types::shape(shape))), false);
+    // Each destination is initialized by the entry. It points either into the
+    // entry metadata or the separate latest-reply state in the same frame.
+    for (value_index, owned_index, kind_index, size_index) in [(1, 3, 5, 6), (2, 7, 8, 9)] {
+        let payload = flat.then(|| ownership::copy(&b, bits, crate::Width::Body(size), owned));
+        for (index, value) in [
+            payload.map(|value| (value_index, value)),
+            Some((owned_index, owned)),
+            Some((kind_index, tag)),
+            Some((size_index, ctx.i64_type().const_int(u64::from(size), false))),
+        ]
+        .into_iter()
+        .flatten()
+        {
             let slot = b
-                .build_struct_gep(ty, context, index, "owned_reply_slot")
+                .build_struct_gep(ty, context, index, "reply_destination_slot")
                 .unwrap();
-            let dst = b
-                .build_load(ptr, slot, "owned_reply_destination")
+            let destination = b
+                .build_load(ptr, slot, "reply_destination")
                 .unwrap()
                 .into_pointer_value();
-            let value = ownership::copy(
-                &b,
-                bits,
-                crate::Width::Body(size),
-                ctx.i64_type().const_int(1, false),
-            );
-            b.build_store(dst, value).unwrap();
+            b.build_store(destination, value).unwrap();
         }
-        let slot = b
-            .build_struct_gep(ty, context, 3, "entry_ownership_slot")
-            .unwrap();
-        let dst = b
-            .build_load(ptr, slot, "entry_ownership")
-            .unwrap()
-            .into_pointer_value();
-        b.build_store(dst, ctx.i64_type().const_int(1, false))
-            .unwrap();
-        b.build_return(Some(&bits)).unwrap();
     }
+    b.build_return(Some(&bits)).unwrap();
     mark_delegate(ctx, function);
     Ok(function)
 }

@@ -172,6 +172,10 @@ impl Plan {
                 }
                 if m.chunks[entry].block_type == BlockType::Stream
                     && let Some(input) = signature.params.first()
+                    && !matches!(
+                        m.chunks[entry].param_types.first(),
+                        Some(TypeTag::Composite)
+                    )
                     && contract.reply != *input
                 {
                     return Err(error(

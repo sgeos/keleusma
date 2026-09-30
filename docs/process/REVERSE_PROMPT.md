@@ -3588,3 +3588,21 @@ This is a source-level audit question requiring an executable differential.
 Root runtime sources remain unchanged. The earlier private self-assignment
 runtime finding remains recorded above. Upstream current state and preceding
 native reports are preserved.
+
+
+## V0.3.X composite stream replies of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`, following `b007a6dc`.
+Composite stream parameters now accept bounded differing reply shapes with actual
+kind, length and ownership preserved through direct yields, delegation and Reset.
+The initial refusal was verified against a successful virtual-machine sequence.
+All 95 coroutine tests and test-target Clippy pass in both float configurations.
+The archive records the memory-site classification. Verification assertions remain
+intact. Root runtime sources and earlier native reports are preserved.
+
+The default non-corpus run passed all 776 tests with frozen inputs. The final
+acceptance audit classifies remaining refusals and records the shared opcode and
+representation dependencies. No further suspension-specific gap was identified.
+Next, run both complete native gates separately on the final clean commit, then
+complete green version integration. The earlier private self-assignment runtime
+defect remains recorded above. This is not a full completion claim.
