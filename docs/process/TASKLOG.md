@@ -3981,3 +3981,23 @@ representation dependencies. No further suspension-specific gap was identified.
 Next, run both complete native gates separately on the final clean commit, then
 complete green version integration. The earlier private self-assignment runtime
 defect remains recorded above. This is not a full completion claim.
+
+
+## V0.3.X Workstream B verified implementation of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`, following `5695ab1f`.
+Both complete native gates passed separately at that clean, frozen commit.
+Each ran formatting, all-target lint, 776 non-corpus tests, ten corpus tests and
+776 optimized non-corpus tests. The generated gate record preserves provenance.
+One default-phase object-linkage test passed with a non-failing nextest diagnostic.
+The archive records its qualification. Subsequent receipt edits receive targeted
+checks and must not be called the identical tested tree.
+
+The acceptance matrix and roadmap record the implementation evidence and shared
+backend dependencies. Pull request 482 tracks version integration. Read its live
+merge and check state before taking action. The active goal remains open until
+green version integration is verified. Publication remains held. Root runtime
+sources, root tests, the upstream current block and older native reports remain
+unchanged. The earlier private self-assignment runtime defect remains recorded.
+The receipt diff passed 13 root and 23 native documentation and record checks,
+with zero failures or skips and exit zero. No Rust source or tests changed.

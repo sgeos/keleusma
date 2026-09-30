@@ -219,4 +219,6 @@ Cross-target emission does not establish execution or timing on those targets.
 The [completion requirements](../docs/decisions/WORKSTREAM_B_COMPLETION.md) track
 full Workstream B. The bounded baseline merged through
 [pull request 478](https://github.com/sgeos/keleusma/pull/478) as `a1aa53b8`.
-Historical complete native gates cover `5a0fec1d`, not subsequent trees.
+Both complete native gates pass at clean, frozen `5695ab1f`. Later verification
+receipts are checked separately. [Pull request 482](https://github.com/sgeos/keleusma/pull/482)
+tracks version integration. Consult its current merge and check state.
