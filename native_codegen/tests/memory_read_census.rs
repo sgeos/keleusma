@@ -1,3 +1,8 @@
+//! Flat-input ownership flags are initialized before local or operand reads.
+//! Call contexts hold one flag per argument plus an initialized return flag.
+//! The delegate context now has a fourth pointer for entry ownership. Its new
+//! destination reads use fields initialized by start before any suspension.
+//!
 //! **EVERY PLACE THE EMITTER READS MEMORY IT DID NOT WRITE, AND WHAT GUARANTEES
 //! THE CONTENTS.**
 //!
@@ -18,6 +23,7 @@
 //!
 //! | read | what guarantees the contents |
 //! |---|---|
+//! | stable handle continuation | start writes it before use, resume replaces it, and release clears it; the slot remains caller-owned until release |
 //! | operand slot (`peek`, `pop`) | a push earlier in the same call |
 //! | local slot (`GetLocal`) | zeroed on first entry, cleared at `Op::Reset`; the runtime's `Unit` is this backend's zero |
 //! | operand spill slot | written at the `yield` that suspended, read only by that yield's resume block |
@@ -26,8 +32,8 @@
 //! | **stream resume-state word** | **the host's zeroed persistent buffer.** Zero means "the loop top", which is the correct meaning for a fresh instance |
 //! | **composite initialisation word** | **the host's zeroed buffer.** Zero means "never written", and a read of such a slot FAULTS |
 //! | **private slot array** | **the host, installing `region::private_init_image`.** This is the guarantee that did not exist |
-//! | retcon reply cell | the host writes scalar bits before each resume, as specified by `coroutine::lower`; exercised by `retcon_bytecode.rs` |
-//! | retcon delegate context | three pointer fields initialised by the entry before any call, promoted into the frame by LLVM; the helper reads the host reply cell under the same resume contract |
+//! | retcon reply cell | the host writes scalar bits or a body pointer before each resume, as specified by `coroutine::lower`; exercised by `retcon_bytecode.rs` |
+//! | retcon delegate context | four pointer fields initialised by the entry before any call, promoted into the frame by LLVM; the helper reads the host reply cell under the same resume contract |
 //! | retcon latest reply | initialised from the start argument and updated after each suspension; LLVM preserves it in the frame until release |
 //! | **shared data segment** | **the host, by contract.** Out of this backend's reach and deliberately so |
 //!
@@ -55,7 +61,8 @@ const READ_FORMS: &[&str] = &["build_load(", " = load "];
 /// Read sites in the emitter, at the stamp.
 // 16 -> 18 with the retcon reply cell and latest-reply reads described above.
 // 18 -> 22, including the coroutine context and parsed intrinsic helper.
-const RECORDED_READ_SITES: usize = 22;
+// 22 -> 23 for the stable handle continuation, initialized by start.
+const RECORDED_READ_SITES: usize = 26;
 // 16 at first derivation, 2026-09-11. Four are on the host-provided boundary —
 // the resume-state word, the composite initialisation word, the private slot
 // array and the shared segment — and the rest read memory this lowering wrote
@@ -63,7 +70,12 @@ const RECORDED_READ_SITES: usize = 22;
 
 fn read_sites() -> Vec<(&'static str, usize, String)> {
     let mut sites = Vec::new();
-    for file in ["src/lib.rs", "src/coroutine.rs"] {
+    for file in [
+        "src/lib.rs",
+        "src/coroutine.rs",
+        "src/coroutine/host.rs",
+        "src/coroutine/ownership.rs",
+    ] {
         let src = std::fs::read_to_string(file).expect("the emitter is readable");
         for (i, line) in src.lines().enumerate() {
             if READ_FORMS.iter().any(|form| line.contains(form)) {
