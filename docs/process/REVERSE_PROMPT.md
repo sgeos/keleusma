@@ -3377,3 +3377,61 @@ configurations. Composite inputs, replies and live operands remain refused.
 Full gates for the preceding correction continue on frozen `15b96c2e` in
 `retcon-reply-types`. Workstream B remains active. Resume from the bounded native
 brief. Upstream material is preserved.
+
+
+## V0.3.X live body operands, 2026-09-29
+
+`feat/retcon-live-bodies` admits body operands beneath direct and delegated
+suspensions while preserving virtual-machine aliases and existing confinement
+checks. Three added regression functions pin lifetimes, private aliasing and
+negative boundaries. All 31 coroutine tests and all-target lints pass in both
+float configurations. Composite host inputs and replies remain unimplemented.
+Both complete gates passed on frozen `15b96c2e`. The same tree is now the combined
+head of pull request 475, with remote checks running. Keep that head unchanged.
+Workstream B remains active. Resume from the bounded native brief. Upstream
+material is preserved.
+
+
+## V0.3.X stable arena handles, 2026-09-29
+
+`feat/retcon-stable-handle` stores the current continuation inside a bounded
+caller-owned slot through provisional start, resume and release entry points.
+Existing VM differentials now exercise both interfaces. Two new tests cover
+independent slots, release, reuse and C linkage. All 33 coroutine tests and
+all-target lints pass in both float configurations. Composite host inputs and replies
+remain outside admission. Pull request 475 continues remote checks unchanged.
+Workstream B and combined native gates remain outstanding. Resume from the
+bounded native brief. Upstream material is preserved.
+
+
+## V0.3.X bounded flat host values, 2026-09-29
+
+`feat/retcon-flat-inputs` copies host-derived bodies at bounded value transfers
+while preserving private-data aliases. Its eight new tests cover buffer reuse,
+delegation, nested packed fields, frame-resident yields and refusal boundaries.
+All 41 coroutine tests and all-target lints pass in both float configurations.
+Both complete gates passed on clean, frozen `360d3295`. The flat-input changes
+still need complete native gates. Pull request 475 has two remote test jobs
+running and its head remains unchanged. Workstream B remains active. Resume from
+the bounded native brief. Upstream material is preserved.
+
+
+## V0.3.X mutation registrations and integration, 2026-09-29
+
+The default gate on `d487eb07` failed only on three stale mutation registrations.
+Their original zero-result perturbations now place again, with checked recipe
+replacements. The failure record is preserved. No lowering code changed in this
+correction. Complete native gates still need rerunning. Pull request 475 merged
+as `ff124db9` after green remote checks, with its tree identical to the tested
+head. The canonical version worktree is synchronized. Pull requests 478 through
+481 remain stacked. Workstream B remains active. Upstream material is preserved.
+
+
+## V0.3.X Workstream B verification, 2026-09-29
+
+Both complete native gates passed on clean, frozen `5a0fec1d`. The bounded
+sub-coroutine implementation is verified. Pull request 478 tracks consolidation
+of 478 through 481 and version integration after green remote checks. Preserve
+the combined head during those checks and compare its tree with the merge.
+The 64-line native brief holds the resume sequence and admission boundaries.
+Upstream material is preserved.

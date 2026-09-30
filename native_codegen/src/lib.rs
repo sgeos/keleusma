@@ -810,6 +810,9 @@ struct Lower<'ctx> {
     /// Kind most recently stored into each local, so `GetLocal` restores what
     /// `SetLocal` put there — the same round-trip the widths already make.
     local_kinds: Vec<OperandKind>,
+    // Host-derived bodies are immutable values. Region bodies retain aliases.
+    ownership: Option<coroutine::ownership::Flags<'ctx>>,
+    ownership_width_unknown: bool,
 }
 
 impl<'ctx> Lower<'ctx> {
@@ -839,6 +842,11 @@ impl<'ctx> Lower<'ctx> {
                 None => self.b.position_at_end(self.entry),
             }
             let p = self.b.build_alloca(self.i64t, &name).unwrap();
+            if let Some(flags) = &mut self.ownership {
+                flags
+                    .slots
+                    .push(self.b.build_alloca(self.i64t, "owned_operand").unwrap());
+            }
             if let Some(bb) = resume {
                 self.b.position_at_end(bb);
             }
@@ -902,6 +910,11 @@ impl<'ctx> Lower<'ctx> {
         }
         let slot = self.slot(self.depth);
         self.b.build_store(slot, v).unwrap();
+        if let Some(flags) = &self.ownership {
+            self.b
+                .build_store(flags.slots[self.depth], self.i64t.const_zero())
+                .unwrap();
+        }
         if self.widths.len() <= self.depth {
             self.widths.resize(self.depth + 1, Width::Unknown);
         }
@@ -915,6 +928,38 @@ impl<'ctx> Lower<'ctx> {
         self.kinds[self.depth] = OperandKind::Int;
         self.widths[self.depth] = w;
         self.depth += 1;
+    }
+
+    fn owned_at(&self, back: usize) -> IntValue<'ctx> {
+        self.ownership
+            .as_ref()
+            .map_or(self.i64t.const_zero(), |flags| {
+                coroutine::ownership::load(&self.b, flags.slots[self.depth - back - 1])
+            })
+    }
+
+    fn owned_local(&self, index: usize) -> IntValue<'ctx> {
+        self.ownership
+            .as_ref()
+            .map_or(self.i64t.const_zero(), |flags| {
+                coroutine::ownership::load(&self.b, flags.locals[index])
+            })
+    }
+
+    fn push_owned(&mut self, v: IntValue<'ctx>, w: Width, k: OperandKind, owned: IntValue<'ctx>) {
+        if self.ownership.is_some()
+            && w == Width::Unknown
+            && owned.get_zero_extended_constant() != Some(0)
+        {
+            self.ownership_width_unknown = true;
+        }
+        let v = coroutine::ownership::copy(&self.b, v, w, owned);
+        self.push_k(v, w, k);
+        if let Some(flags) = &self.ownership {
+            self.b
+                .build_store(flags.slots[self.depth - 1], owned)
+                .unwrap();
+        }
     }
 
     /// Read the top operand WITHOUT consuming it.
@@ -1607,6 +1652,7 @@ pub fn lower_chunk<'ctx>(
             opts,
             retcon: false,
             retcon_resume_type: None,
+            retcon_resume_shape: None,
             retcon_branches: None,
             degenerate_yield: None,
             delegated_call: None,
@@ -1936,6 +1982,12 @@ fn lower_module_with<'ctx>(
     if shared_count > 0 {
         check_target_endianness()?;
     }
+    let owned_bodies = retcon_bytes.is_some()
+        && program
+            .entry_point
+            .and_then(|entry| program.signatures.get(entry))
+            .and_then(|sig| sig.params.first())
+            .is_some_and(|sh| matches!(sh, keleusma::bytecode::WireShape::Flat { .. }));
     let declared: Vec<FunctionValue<'ctx>> = program
         .chunks
         .iter()
@@ -1973,6 +2025,9 @@ fn lower_module_with<'ctx>(
                 // allocates and never frees; it writes at compile-time offsets
                 // into memory the host scoped.
                 params.push(ptrt.into()); // composite body region
+            }
+            if owned_bodies && Some(i) != program.entry_point {
+                params.push(ptrt.into()); // parameter and return ownership flags
             }
             let retcon_delegate = retcon_bytes.is_some()
                 && Some(i) != program.entry_point
@@ -2167,6 +2222,10 @@ fn lower_module_with<'ctx>(
             opts,
             retcon,
             retcon_branches: retcon_config.map(|(_, facts)| &facts.branches[i]),
+            retcon_resume_shape: retcon_bytes
+                .and(program.entry_point)
+                .and_then(|entry| program.signatures.get(entry))
+                .and_then(|sig| sig.params.first().copied()),
             retcon_resume_type: retcon_bytes
                 .and(program.entry_point)
                 .and_then(|entry| program.chunks[entry].param_types.first().copied()),
@@ -2502,6 +2561,7 @@ struct BodyCfg<'a> {
     /// The VM writes host replies to the outer entry parameter even when a
     /// reentrant callee is suspended. Its own parameters retain their values.
     retcon_resume_type: Option<TypeTag>,
+    retcon_resume_shape: Option<keleusma::bytecode::WireShape>,
     /// Proven outcomes after the coroutine type analysis reaches a fixed point.
     retcon_branches: Option<&'a BTreeMap<usize, bool>>,
     opts: LowerOptions,
@@ -3296,6 +3356,7 @@ fn lower_chunk_body<'ctx>(
         opts,
         retcon,
         retcon_resume_type,
+        retcon_resume_shape,
         retcon_branches,
         degenerate_yield,
         delegated_call,
@@ -3309,6 +3370,10 @@ fn lower_chunk_body<'ctx>(
         visited,
         float_bytes,
     } = cfg;
+    let owned_bodies = matches!(
+        retcon_resume_shape,
+        Some(keleusma::bytecode::WireShape::Flat { .. })
+    );
     let retcon_delegate = coroutine::is_delegate(func);
     let retcon_stream = (retcon || retcon_delegate) && chunk.block_type == BlockType::Stream;
     let i64t = ctx.i64_type();
@@ -3339,6 +3404,12 @@ fn lower_chunk_body<'ctx>(
         } else {
             raw.into_int_value()
         };
+        let bits = coroutine::ownership::copy(
+            &b,
+            bits,
+            width_of_declared_shape(retcon_resume_shape.as_ref(), float_bytes),
+            i64t.const_int(u64::from(owned_bodies), false),
+        );
         b.build_store(slot, bits).unwrap();
         slot
     });
@@ -3395,6 +3466,12 @@ fn lower_chunk_body<'ctx>(
             None => b.build_alloca(i64t, &format!("l{i}")).unwrap(),
         })
         .collect();
+    let ownership = owned_bodies.then(|| coroutine::ownership::Flags::new(&b, locals.len()));
+    let ownership_context = (owned_bodies && !retcon).then(|| {
+        func.get_nth_param(u32::from(chunk.param_count) + 3)
+            .unwrap()
+            .into_pointer_value()
+    });
     let delegate_context = if retcon {
         Some(coroutine::delegate_context(
             ctx,
@@ -3402,6 +3479,7 @@ fn lower_chunk_body<'ctx>(
             retcon_reply.unwrap(),
             locals[0],
             retcon_latest.unwrap(),
+            ownership.as_ref().map(|flags| flags.locals[0]),
         ))
     } else if retcon_delegate {
         Some(func.get_last_param().unwrap().into_pointer_value())
@@ -3423,7 +3501,22 @@ fn lower_chunk_body<'ctx>(
         } else {
             raw.into_int_value()
         };
+        let width =
+            width_of_declared_shape(own_signature.and_then(|sig| sig.params.get(i)), float_bytes);
+        let flag = match ownership_context {
+            Some(context) => {
+                coroutine::ownership::load(&b, coroutine::ownership::field(&b, context, i))
+            }
+            None => i64t.const_int(
+                u64::from(owned_bodies && matches!(width, Width::Body(_))),
+                false,
+            ),
+        };
+        let stored = coroutine::ownership::copy(&b, stored, width, flag);
         b.build_store(*local, stored).unwrap();
+        if let Some(flags) = &ownership {
+            b.build_store(flags.locals[i], flag).unwrap();
+        }
     }
     // Non-parameter locals start DEFINED in the VM: `Op::Call` pushes
     // `local_count - arg_count` copies of `GenericValue::Unit` into the callee's
@@ -3498,11 +3591,12 @@ fn lower_chunk_body<'ctx>(
             (None, None, None)
         };
 
+    let prologue_end = b.get_insert_block().unwrap();
     let trapfn = trap_declaration(ctx, module);
     b.position_at_end(trap_bb);
     b.build_call(trapfn, &[], "").unwrap();
     b.build_unreachable().unwrap();
-    b.position_at_end(entry);
+    b.position_at_end(prologue_end);
 
     // One basic block per jump target. Keleusma's structured control flow means
     // the target set is exactly the operands of If and Else.
@@ -3665,6 +3759,8 @@ fn lower_chunk_body<'ctx>(
     }
 
     let mut st = Lower {
+        ownership,
+        ownership_width_unknown: false,
         b,
         i64t,
         entry,
@@ -4239,14 +4335,17 @@ fn lower_chunk_body<'ctx>(
                         .unwrap_or(OperandKind::Unknown),
                     _ => OperandKind::Unknown,
                 };
-                st.push_k(v, w, k);
+                let owned = st.owned_local(idx);
+                st.push_owned(v, w, k, owned);
             }
             Op::SetLocal(n) => {
                 // Read the width BEFORE popping; `pop` lowers the depth and
                 // `width_at` is relative to it.
                 let w = st.width_at(0);
                 let k = st.kind_at(0);
+                let owned = st.owned_at(0);
                 let v = st.pop();
+                let v = coroutine::ownership::copy(&st.b, v, w, owned);
                 // **BOUNDED FOR THE SAME REASON `GetLocal` IS.** This one was
                 // missed on the first pass, and the robustness sweep did not
                 // catch the miss because its mutation set corrupted `GetLocal`
@@ -4262,6 +4361,9 @@ fn lower_chunk_body<'ctx>(
                 };
                 st.b.build_store(slot, v).unwrap();
                 let idx = *n as usize;
+                if let Some(flags) = &st.ownership {
+                    st.b.build_store(flags.locals[idx], owned).unwrap();
+                }
                 if local_write_count.get(&idx).copied().unwrap_or(0) == 1 {
                     if st.local_widths.len() <= idx {
                         st.local_widths.resize(idx + 1, Width::Unknown);
@@ -5188,9 +5290,17 @@ fn lower_chunk_body<'ctx>(
                 );
             }
             Op::Dup => {
+                let w = st.width_at(0);
+                let k = st.kind_at(0);
+                let owned = st.owned_at(0);
                 let v = st.pop();
-                st.push(v);
-                st.push(v);
+                if owned_bodies {
+                    st.push_owned(v, w, k, owned);
+                    st.push_owned(v, w, k, owned);
+                } else {
+                    st.push(v);
+                    st.push(v);
+                }
             }
             // Scalar constants only. The compiler routes most literals here
             // rather than through `PushImmediate`, including the bounds and
@@ -5395,7 +5505,10 @@ fn lower_chunk_body<'ctx>(
                 // rather than approximated: an arity mismatch here would produce
                 // a call LLVM accepts and the VM does not agree with.
                 let suspending = coroutine::is_delegate(callee);
-                let declared = callee.count_params() - trailing_ptrs(&data) - u32::from(suspending);
+                let declared = callee.count_params()
+                    - trailing_ptrs(&data)
+                    - u32::from(suspending)
+                    - u32::from(owned_bodies);
                 if u32::from(*arg_count) != declared {
                     return Err(LowerError::MalformedInput(format!(
                         "Call({idx}, {arg_count}) passes {arg_count} arguments to a chunk \
@@ -5404,19 +5517,28 @@ fn lower_chunk_body<'ctx>(
                     )));
                 }
 
+                let call_ownership = owned_bodies.then(|| {
+                    let context = st
+                        .b
+                        .build_alloca(i64t.array_type(u32::from(*arg_count) + 1), "call_ownership")
+                        .unwrap();
+                    for parameter in 0..usize::from(*arg_count) {
+                        let flag = st.owned_at(usize::from(*arg_count) - parameter - 1);
+                        let field = coroutine::ownership::field(&st.b, context, parameter);
+                        st.b.build_store(field, flag).unwrap();
+                    }
+                    st.b.build_store(
+                        coroutine::ownership::field(&st.b, context, usize::from(*arg_count)),
+                        i64t.const_zero(),
+                    )
+                    .unwrap();
+                    context
+                });
                 let mut args: Vec<_> = (0..*arg_count).map(|_| st.pop()).collect();
                 args.reverse();
-                if suspending
-                    && st
-                        .widths
-                        .iter()
-                        .take(st.depth)
-                        .any(|w| matches!(w, Width::Body(_)))
-                {
-                    return Err(LowerError::UnsupportedShape(
-                        "a composite operand survives a delegated suspension".into(),
-                    ));
-                }
+                // LLVM captures operands across delegated suspension. Body
+                // addresses retain VM aliasing semantics in the caller-owned
+                // regions, whose allocation confinement is checked separately.
                 // **CONVERTED TO THE CALLEE'S DECLARED PARAMETER TYPES.** The
                 // operand stack hands over an `i64` even when the value is a
                 // float's bit pattern, so a float parameter needs the bitcast here
@@ -5469,6 +5591,9 @@ fn lower_chunk_body<'ctx>(
                     }
                 }
 
+                if let Some(context) = call_ownership {
+                    args.push(context.into());
+                }
                 if suspending {
                     let context = delegate_context.ok_or_else(|| {
                         LowerError::UnsupportedShape("suspending call outside a coroutine".into())
@@ -5538,7 +5663,13 @@ fn lower_chunk_body<'ctx>(
                     } else {
                         OperandKind::Unknown
                     };
-                    st.push_k(ret, w, k);
+                    let owned = call_ownership.map_or(i64t.const_zero(), |context| {
+                        coroutine::ownership::load(
+                            &st.b,
+                            coroutine::ownership::field(&st.b, context, usize::from(*arg_count)),
+                        )
+                    });
+                    st.push_owned(ret, w, k, owned);
                 }
             }
             // A call out to a host-registered native, as a direct call to an
@@ -5640,6 +5771,11 @@ fn lower_chunk_body<'ctx>(
                 // native still gets, and that is all of them in the shipped
                 // corpus today.
                 let w = width_of_declared_shape(native_shapes.get(usize::from(*idx)), float_bytes);
+                if owned_bodies && matches!(w, Width::Body(_)) {
+                    return Err(LowerError::UnsupportedShape(
+                        "a native body return has no host-value ownership contract".into(),
+                    ));
+                }
                 st.push_w(ret, w);
             }
             // `Byte` occupies a full `i64` slot holding a value in `0..=255`.
@@ -6969,6 +7105,7 @@ fn lower_chunk_body<'ctx>(
             // the machine: it says how to interpret bytes, which only the reader
             // of a scalar field needs.
             Op::GetField(keleusma::bytecode::StructField::FlatNested { offset, size, .. }) => {
+                let owned = st.owned_at(0);
                 let parent = st.pop();
                 let addr =
                     st.b.build_int_add(
@@ -6977,7 +7114,7 @@ fn lower_chunk_body<'ctx>(
                         "cnestoff",
                     )
                     .unwrap();
-                st.push_w(addr, Width::Body(u32::from(*size)));
+                st.push_owned(addr, Width::Body(u32::from(*size)), OperandKind::Int, owned);
             }
             // The same, indexed: the element offset is `index * size`.
             // **THE NESTED ARM HAD THE SAME UNGUARDED SHAPE.** It produces an
@@ -6994,13 +7131,14 @@ fn lower_chunk_body<'ctx>(
                     u64::from(*size),
                     "GetIndex",
                 )?;
+                let owned = st.owned_at(1);
                 let index = st.pop();
                 let parent = st.pop();
                 let byte =
                     st.b.build_int_mul(index, i64t.const_int(u64::from(*size), false), "cnstride")
                         .unwrap();
                 let addr = st.b.build_int_add(parent, byte, "cnestidx").unwrap();
-                st.push_w(addr, Width::Body(u32::from(*size)));
+                st.push_owned(addr, Width::Body(u32::from(*size)), OperandKind::Int, owned);
             }
             // Flat field read: a constant offset from the body address and one
             // unaligned typed load, which is what `GetData` already does.
@@ -7152,18 +7290,8 @@ fn lower_chunk_body<'ctx>(
                         st.width_at(0)
                     )));
                 }
-                if st
-                    .widths
-                    .iter()
-                    .take(st.depth.saturating_sub(1))
-                    .any(|w| matches!(w, Width::Body(_)))
-                {
-                    return Err(LowerError::UnsupportedShape(
-                        "a composite operand survives a delegated suspension".into(),
-                    ));
-                }
                 let value = st.pop();
-                let helper = coroutine::delegate_yield(ctx, module)?;
+                let helper = coroutine::delegate_yield(ctx, module, retcon_resume_shape)?;
                 let reply =
                     st.b.build_call(
                         helper,
@@ -7178,21 +7306,20 @@ fn lower_chunk_body<'ctx>(
                     TypeTag::Unit => (Width::Scalar(0), OperandKind::Int),
                     TypeTag::Float => (Width::Scalar(float_bytes), OperandKind::Float),
                     TypeTag::Fixed => (Width::Scalar(8), OperandKind::Fixed),
+                    TypeTag::Composite => (
+                        width_of_declared_shape(retcon_resume_shape.as_ref(), float_bytes),
+                        OperandKind::Int,
+                    ),
                     tag => (width_of_tag(tag), OperandKind::Int),
                 };
-                st.push_k(reply, width, kind);
+                st.push_owned(
+                    reply,
+                    width,
+                    kind,
+                    i64t.const_int(u64::from(owned_bodies), false),
+                );
             }
             Op::Yield if retcon => {
-                if st
-                    .widths
-                    .iter()
-                    .take(st.depth.saturating_sub(1))
-                    .any(|w| matches!(w, Width::Body(_)))
-                {
-                    return Err(LowerError::UnsupportedShape(
-                        "a composite operand survives a coroutine suspension".into(),
-                    ));
-                }
                 let v = st.pop();
                 let suspend = module
                     .get_function("llvm.coro.suspend.retcon.i1")
@@ -7222,15 +7349,26 @@ fn lower_chunk_body<'ctx>(
                     st.b.build_load(i64t, retcon_reply.unwrap(), "reply")
                         .unwrap()
                         .into_int_value();
-                st.b.build_store(retcon_latest.unwrap(), reply).unwrap();
-                st.b.build_store(st.locals[0], reply).unwrap();
+
                 let (width, kind) = match chunk.param_types[0] {
                     TypeTag::Unit => (Width::Scalar(0), OperandKind::Int),
                     TypeTag::Float => (Width::Scalar(float_bytes), OperandKind::Float),
                     TypeTag::Fixed => (Width::Scalar(8), OperandKind::Fixed),
+                    TypeTag::Composite => (
+                        width_of_declared_shape(retcon_resume_shape.as_ref(), float_bytes),
+                        OperandKind::Int,
+                    ),
                     tag => (width_of_tag(tag), OperandKind::Int),
                 };
-                st.push_k(reply, width, kind);
+                let owned = i64t.const_int(u64::from(owned_bodies), false);
+                let latest = coroutine::ownership::copy(&st.b, reply, width, owned);
+                st.b.build_store(retcon_latest.unwrap(), latest).unwrap();
+                let parameter = coroutine::ownership::copy(&st.b, reply, width, owned);
+                st.b.build_store(st.locals[0], parameter).unwrap();
+                if let Some(flags) = &st.ownership {
+                    st.b.build_store(flags.locals[0], owned).unwrap();
+                }
+                st.push_owned(reply, width, kind, owned);
             }
             Op::Yield if general_stream => {
                 // **SPILLED, NO LONGER REFUSED.** Everything beneath the yielded
@@ -7476,6 +7614,11 @@ fn lower_chunk_body<'ctx>(
             // nothing can name.
             Op::Reset if retcon_stream => {
                 st.depth = 0;
+                if let Some(flags) = &st.ownership {
+                    for flag in &flags.locals {
+                        st.b.build_store(*flag, i64t.const_zero()).unwrap();
+                    }
+                }
                 for l in &st.locals {
                     st.b.build_store(*l, i64t.const_zero()).unwrap();
                 }
@@ -7485,7 +7628,17 @@ fn lower_chunk_body<'ctx>(
                     let reply =
                         st.b.build_load(i64t, retcon_latest.unwrap(), "reset_reply")
                             .unwrap();
+                    let owned = i64t.const_int(u64::from(owned_bodies), false);
+                    let reply = coroutine::ownership::copy(
+                        &st.b,
+                        reply.into_int_value(),
+                        width_of_declared_shape(retcon_resume_shape.as_ref(), float_bytes),
+                        owned,
+                    );
                     st.b.build_store(st.locals[0], reply).unwrap();
+                    if let Some(flags) = &st.ownership {
+                        st.b.build_store(flags.locals[0], owned).unwrap();
+                    }
                 }
                 let top = loop_top.unwrap();
                 note!(top, 0);
@@ -7580,6 +7733,14 @@ fn lower_chunk_body<'ctx>(
                 st.push(resumed);
             }
             Op::Return => {
+                if let Some(context) = ownership_context {
+                    let flag = st.owned_at(0);
+                    st.b.build_store(
+                        coroutine::ownership::field(&st.b, context, usize::from(chunk.param_count)),
+                        flag,
+                    )
+                    .unwrap();
+                }
                 let v = st.pop();
                 build_typed_return(&st.b, func, v);
             }
@@ -7621,6 +7782,11 @@ fn lower_chunk_body<'ctx>(
     // Checked once at the end rather than at each push, because the slot array
     // is a provisioning decision and the useful diagnostic is the depth the
     // chunk actually needed.
+    if st.ownership_width_unknown {
+        return Err(LowerError::UnsupportedShape(
+            "a potentially owned host body has no proven transfer extent".into(),
+        ));
+    }
     if let Some(needed) = st.stack_overflow {
         return Err(LowerError::OperandStackTooDeep {
             needed: needed + 1,
