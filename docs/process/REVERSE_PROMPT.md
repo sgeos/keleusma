@@ -3562,10 +3562,29 @@ float configurations. A frozen default non-corpus phase passed all 767 tests
 before the final indexed-placement guard. After that guard, all three lowering
 robustness tests pass. Neither complete native gate is claimed.
 
-The next measured gap is `correlated_numeric_arithmetic_remains_a_measured_gap`.
-Its two operands are both Byte or both Word depending on the same branch.
-The virtual machine adds them successfully, but native admission rejects
-`CheckedAdd`. Continue with actual-kind arithmetic selection and the remaining
+The measured gap at that increment is now covered by
+`correlated_numeric_arithmetic_uses_the_actual_kind`. Its operands are both Byte
+or both Word depending on the same branch. The virtual machine added them
+successfully, while native admission then rejected `CheckedAdd`. Continue with actual-kind arithmetic selection and the remaining
 [acceptance matrix](../decisions/WORKSTREAM_B_COMPLETION.md). Full Workstream B,
 final gates and version integration remain outstanding. Upstream current state
 and preceding native reports are preserved.
+
+
+## V0.3.X runtime arithmetic of 2026-09-30
+
+Attributed to Codex on `feat/workstream-b-completion`, following `ad184d07`.
+Checked and bare arithmetic now select actual numeric kinds after branch joins.
+All 92 coroutine tests and test-target Clippy with warnings denied pass in both
+float configurations. The former correlated-arithmetic refusal now executes.
+The corrected default non-corpus run passed all 773 tests with frozen inputs.
+The archive records two preceding guard failures and their corrections.
+No complete native gate or full Workstream B completion is claimed.
+
+Continue the acceptance-matrix audit with bounded differing composite stream
+reply extents. The virtual machine rejects scalar reply type mismatches, but its
+Composite category admits more than the current native dialogue constraint.
+This is a source-level audit question requiring an executable differential.
+Root runtime sources remain unchanged. The earlier private self-assignment
+runtime finding remains recorded above. Upstream current state and preceding
+native reports are preserved.

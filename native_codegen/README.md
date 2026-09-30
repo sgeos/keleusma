@@ -197,8 +197,9 @@ Private scalar values retain their actual kinds across suspension and release.
 Zero a fresh private region before installing its initialization image. Preserve
 that region when reusing a frame with existing private values. Scalar kind
 metadata fits within the checked existing reservation. Ordering selects the
-runtime numeric kind and rejects unequal kinds. Arithmetic still requires one
-proven numeric kind at each operation.
+runtime numeric kind and rejects unequal kinds. Checked and bare arithmetic
+also select actual numeric kinds. Checked outputs preserve the virtual machine's
+low value, high value and status classification. Bare integer zero division traps.
 
 | Host control model | Lowering entry |
 |---|---|

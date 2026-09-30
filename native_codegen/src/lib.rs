@@ -4506,7 +4506,13 @@ fn lower_chunk_body<'ctx>(
             // The callback path for a reentrant chunk remains outside this guard.
             let float_yield_in_a_general_stream =
                 (general_stream || retcon || retcon_delegate) && matches!(op, Op::Yield);
-            let float_aware = float_store_into_a_float_slot
+            let runtime_checked_arithmetic = st.runtime_kinds.is_some()
+                && matches!(
+                    op,
+                    Op::CheckedAdd | Op::CheckedSub | Op::CheckedMul(_) | Op::CheckedDiv(_)
+                );
+            let float_aware = runtime_checked_arithmetic
+                || float_store_into_a_float_slot
                 || float_into_a_composite_body
                 || float_yield_in_a_general_stream
                 || matches!(
@@ -4792,6 +4798,75 @@ fn lower_chunk_body<'ctx>(
             // unchecked opcodes for `Byte`, `Fixed` and `Float`. Verified
             // against `src/compiler.rs` and the VM's dispatch arms, which raise
             // a type error on an `Int` reaching `Op::Add`.
+            Op::Add
+            | Op::Sub
+            | Op::Mul
+            | Op::Div
+            | Op::Mod
+            | Op::Neg
+            | Op::CheckedAdd
+            | Op::CheckedSub
+            | Op::CheckedMul(_)
+            | Op::CheckedDiv(_)
+            | Op::CheckedMod
+            | Op::CheckedNeg
+                if st.runtime_kinds.is_some() =>
+            {
+                let count = if matches!(op, Op::CheckedNeg | Op::Neg) {
+                    1
+                } else {
+                    2
+                };
+                let base = st.depth - count;
+                let tags = st.input_tags[base..st.depth].to_vec();
+                let mut values: Vec<_> = (0..count).map(|_| st.pop()).collect();
+                values.reverse();
+                let plain = matches!(
+                    op,
+                    Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Mod | Op::Neg
+                );
+                if plain {
+                    let low = coroutine::arithmetic::plain(
+                        &st.b,
+                        &values,
+                        &tags,
+                        float_bytes,
+                        op,
+                        trap_bb,
+                    )?;
+                    // Keep the converged producer facts, including a known
+                    // packed width. Joined widths still use the actual tag at
+                    // consumers, but a singular width must not be discarded.
+                    let output =
+                        &retcon_facts.expect("runtime arithmetic has facts")[&i].outputs[0];
+                    st.push_k(
+                        low,
+                        output.width,
+                        coroutine::types::operand_kind(output.tag),
+                    );
+                } else {
+                    let triple = coroutine::arithmetic::checked(
+                        &st.b,
+                        &values,
+                        &tags,
+                        float_bytes,
+                        op,
+                        trap_bb,
+                    )?;
+                    st.push_triple(ctx, func, trap_bb, opts, triple);
+                }
+                let flags = st.runtime_kinds.as_ref().unwrap();
+                for offset in 0..if plain { 1 } else { 3 } {
+                    let tag = if offset == 2 {
+                        i64t.const_int(u64::from(coroutine::types::WORD), false)
+                    } else {
+                        tags[0]
+                    };
+                    st.b.build_store(flags.slots[base + offset], tag).unwrap();
+                    st.b.build_store(flags.slot_sizes[base + offset], i64t.const_zero())
+                        .unwrap();
+                }
+            }
             Op::CheckedAdd | Op::CheckedSub => {
                 // **A `Byte` OPERAND TAKES A DIFFERENT ARM IN THE RUNTIME**, and
                 // taking the integer one returned an untruncated value: `200 + 100`

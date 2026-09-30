@@ -183,6 +183,7 @@ fn gep_sites() -> Vec<(&'static str, usize, String)> {
         "src/coroutine/ownership.rs",
         "src/coroutine/kinds.rs",
         "src/coroutine/packing.rs",
+        "src/coroutine/arithmetic.rs",
         "src/coroutine/private.rs",
     ] {
         let src = std::fs::read_to_string(file).expect("the emitter is readable");

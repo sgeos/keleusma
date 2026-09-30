@@ -13,7 +13,7 @@ Work takes place on `feat/workstream-b-completion`.
 | Entry shapes | Source-emittable stream and reentrant entries, including completion, supported argument shapes and independent instances | Scalar and flat completion plus zero and multiple arguments tested, remaining shapes to census |
 | Value transfers | Scalar and composite inputs, outputs, replies and completion values with proven extents and lifetimes | Per-site dialogues, native lifetime contracts and bounded mixed-kind copies implemented, final audit outstanding |
 | Host lifecycle | Start, resume, normal completion, early release, repeated release and reuse with stable caller-owned storage | Completion status and result lifetime implemented, final lifecycle sweep outstanding |
-| Admission soundness | Every remaining refusal distinguished as invalid input, unsafe contract, another workstream dependency, or an implementation gap | Private scalar kinds and numeric ordering now execute, correlated arithmetic remains a measured gap |
+| Admission soundness | Every remaining refusal distinguished as invalid input, unsafe contract, another workstream dependency, or an implementation gap | Private kinds, ordering and arithmetic execute, remaining refusal classification is outstanding |
 | Integration | Existing public lowering routes and host entry points have a documented, tested selection contract | Explicit route contract documented and tested, no callback fallback |
 | Native deployment | Execute real linked host artifact and optimized/unoptimized differentials, inspect target emission within the roadmap target boundary | Local C snapshot completion runs at both optimization levels, four tier-one object formats and architectures checked, final coverage audit outstanding |
 | Resource preservation | No live machine-stack state across suspension, no hidden allocation, bounded frame reservation, guarded extents and independent regions | Existing checks need completion-path coverage |
@@ -116,11 +116,20 @@ kinds. Differential tests cover correlated Word, Byte, Fixed and Float paths,
 including the virtual machine's NaN ordering behavior. Typed consumers check
 joined kinds at execution instead of imposing a transfer-time refusal.
 
-`correlated_numeric_arithmetic_remains_a_measured_gap` records the next concrete
-frontier. Both operands take Byte values on one path and Word values on another.
-Their addition succeeds in the virtual machine, but native admission still
-requires one static numeric kind at `CheckedAdd`. Runtime arithmetic selection
-and the rest of the admission audit remain outstanding.
+The former correlated-arithmetic refusal now executes in
+`correlated_numeric_arithmetic_uses_the_actual_kind`. Checked and bare numeric
+operations select actual kinds and reject unequal selected kinds. Differential
+checks observe all three checked outputs across suspension, including Byte
+underflow, Fixed scaling, signed high halves and floating-point status flags.
+Checked negation accepts only Word and Fixed, matching the virtual machine.
+Bare integer zero division and remainder trap before exposing a result.
+
+Both float configurations pass 92 coroutine tests and test-target Clippy with
+warnings denied. The remaining admission audit must distinguish stream reply
+constraints carefully. Scalar reply mismatches are rejected by the virtual
+machine at resume. Composite parameters use a broader runtime category, so
+bounded differing reply extents remain an audit question. Complete final gates
+and version integration remain outstanding.
 
 ## Completion rule
 

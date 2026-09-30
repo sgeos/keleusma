@@ -1954,34 +1954,50 @@ fn correlated_numeric_branches_use_the_actual_comparison_kind() {
     }
 }
 
-#[test]
-fn correlated_numeric_arithmetic_remains_a_measured_gap() {
+// Values are compared with independent expected replies inside the program.
+// Only Word results cross this helper's host ABI. Every suspension and the
+// final result is observed, with fresh guarded regions at both optimizations.
+fn checked_dialogue_case(
+    program: &keleusma::bytecode::Module,
+    replies: &[(
+        keleusma::bytecode::Value,
+        keleusma::value_layout::ScalarKind,
+        i64,
+    )],
+    expected: i64,
+) {
     use keleusma::bytecode::{Op, Value, WireShape};
     use keleusma::value_layout::ScalarKind;
     use keleusma::vm::{Vm, VmState};
-    let source = "yield main(a: Word) -> Word { let x = if a > 0 { yield 1 } else { 2 }; let y = if a > 0 { yield 2 } else { 3 }; let z = x + y; if z > x { 1 } else { 0 } }";
-    let program = common::build(source);
-    let dialogues = program
+    let sites: Vec<_> = program
         .chunks
         .iter()
         .enumerate()
         .flat_map(|(ci, chunk)| {
             chunk.ops.iter().enumerate().filter_map(move |(ip, op)| {
-                matches!(op, Op::Yield).then_some((
-                    coroutine::YieldSite {
-                        chunk: ci as u32,
-                        instruction: ip as u32,
-                    },
-                    coroutine::Dialogue {
-                        yielded: WireShape::Scalar {
-                            kind: ScalarKind::Int.to_tag(),
-                        },
-                        reply: WireShape::Scalar {
-                            kind: ScalarKind::Byte.to_tag(),
-                        },
-                    },
-                ))
+                matches!(op, Op::Yield).then_some(coroutine::YieldSite {
+                    chunk: ci as u32,
+                    instruction: ip as u32,
+                })
             })
+        })
+        .collect();
+    assert_eq!(sites.len(), replies.len());
+    let dialogues = sites
+        .iter()
+        .zip(replies)
+        .map(|(site, (_, kind, _))| {
+            (
+                *site,
+                coroutine::Dialogue {
+                    yielded: WireShape::Scalar {
+                        kind: ScalarKind::Int.to_tag(),
+                    },
+                    reply: WireShape::Scalar {
+                        kind: kind.to_tag(),
+                    },
+                },
+            )
         })
         .collect();
     let arena = keleusma_arena::Arena::with_capacity(65536);
@@ -1990,18 +2006,608 @@ fn correlated_numeric_arithmetic_remains_a_measured_gap() {
         vm.call(&[Value::Int(5)]).unwrap(),
         VmState::Yielded(Value::Int(1))
     ));
-    assert!(matches!(
-        vm.resume(Value::Byte(7)).unwrap(),
-        VmState::Yielded(Value::Int(2))
-    ));
-    assert!(matches!(
-        vm.resume(Value::Byte(9)).unwrap(),
-        VmState::Finished(Value::Int(1))
-    ));
-    let error =
-        coroutine::lower_with_dialogues(&Context::create(), &program, &machine(), 4096, &dialogues)
-            .unwrap_err();
-    assert!(error.to_string().contains("CheckedAdd"), "{error}");
+    for (index, (reply, _, _)) in replies.iter().enumerate() {
+        let state = vm.resume(reply.clone()).unwrap();
+        if index + 1 == replies.len() {
+            assert!(
+                matches!(state, VmState::Finished(Value::Int(v)) if v == expected),
+                "{state:?}"
+            );
+        } else {
+            assert!(
+                matches!(state, VmState::Yielded(Value::Int(v)) if v == index as i64 + 2),
+                "{state:?}"
+            );
+        }
+    }
+    for optimize in [false, true] {
+        let ctx = Context::create();
+        let module =
+            coroutine::lower_with_dialogues(&ctx, program, &machine(), 4096, &dialogues).unwrap();
+        if optimize {
+            common::force_optimize(&module);
+        }
+        let engine = module
+            .create_jit_execution_engine(OptimizationLevel::None)
+            .unwrap();
+        let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
+        let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
+        let private = Guarded::new(
+            keleusma::vm::required_persistent_capacity_for(program)
+                + region::persistent_supplement_bytes(program) as usize,
+        );
+        let bodies = Guarded::new(region::host_arena_supplement_bytes(program) as usize);
+        let shared = Guarded::new(0);
+        unsafe {
+            let start = engine
+                .get_function::<HandleStart>(&format!("{prefix}_start"))
+                .unwrap();
+            let resume = engine
+                .get_function::<HandleResume>(&format!("{prefix}_resume"))
+                .unwrap();
+            let release = engine
+                .get_function::<HandleRelease>(&format!("{prefix}_release"))
+                .unwrap();
+            assert_eq!(
+                start.call(5, shared.ptr(), private.ptr(), bodies.ptr(), slot.ptr()),
+                Outcome { live: 1, value: 1 }
+            );
+            for (index, (_, _, bits)) in replies.iter().enumerate() {
+                let wanted = if index + 1 == replies.len() {
+                    Outcome {
+                        live: 2,
+                        value: expected,
+                    }
+                } else {
+                    Outcome {
+                        live: 1,
+                        value: index as i64 + 2,
+                    }
+                };
+                assert_eq!(
+                    resume.call(slot.ptr(), *bits),
+                    wanted,
+                    "optimize={optimize}, reply={index}"
+                );
+            }
+            release.call(slot.ptr());
+        }
+        for region in [&slot, &private, &bodies, &shared] {
+            region.check();
+        }
+    }
+}
+
+#[test]
+fn correlated_numeric_arithmetic_uses_the_actual_kind() {
+    use keleusma::bytecode::Value;
+    use keleusma::value_layout::ScalarKind;
+    let program = common::build(
+        "yield main(a: Word) -> Word { let x = if a > 0 { yield 1 } else { 2 }; let y = if a > 0 { yield 2 } else { 3 }; let z = x + y; if z > x { 1 } else { 0 } }",
+    );
+    checked_dialogue_case(
+        &program,
+        &[
+            (Value::Byte(7), ScalarKind::Byte, 7),
+            (Value::Byte(9), ScalarKind::Byte, 9),
+        ],
+        1,
+    );
+}
+
+#[test]
+fn checked_numeric_dispatch_preserves_low_high_and_flags() {
+    use keleusma::bytecode::{Op, Value};
+    use keleusma::value_layout::ScalarKind;
+    fn wire(value: Value) -> (Value, ScalarKind, i64) {
+        let (kind, bits) = match value {
+            Value::Int(v) => (ScalarKind::Int, v),
+            Value::Byte(v) => (ScalarKind::Byte, i64::from(v)),
+            Value::Fixed(v) => (ScalarKind::Fixed, v),
+            Value::Float(v) => (ScalarKind::Float, (v as NativeFloat).to_bits() as i64),
+            _ => unreachable!(),
+        };
+        (value, kind, bits)
+    }
+    #[cfg(feature = "narrow-float-32")]
+    let largest_float = f64::from(f32::MAX);
+    #[cfg(not(feature = "narrow-float-32"))]
+    let largest_float = f64::MAX;
+    // Hardcoded triples exercise signed high halves, unsigned underflow,
+    // wrapping Fixed results, nonzero baked fractions with Word operands,
+    // zero divisors, signed-minimum division and rounded Float classification.
+    for (op, left, right, low, high, flag) in [
+        (
+            Op::CheckedNeg,
+            Value::Int(i64::MIN),
+            Value::Int(3),
+            Value::Int(i64::MIN),
+            Value::Int(0),
+            1,
+        ),
+        (
+            Op::CheckedNeg,
+            Value::Fixed(i64::MIN),
+            Value::Int(3),
+            Value::Fixed(i64::MIN),
+            Value::Fixed(0),
+            1,
+        ),
+        (
+            Op::CheckedNeg,
+            Value::Int(7),
+            Value::Int(3),
+            Value::Int(-7),
+            Value::Int(-1),
+            0,
+        ),
+        (
+            Op::CheckedNeg,
+            Value::Fixed(7),
+            Value::Int(3),
+            Value::Fixed(-7),
+            Value::Fixed(0),
+            0,
+        ),
+        (
+            Op::CheckedAdd,
+            Value::Int(-7),
+            Value::Int(2),
+            Value::Int(-5),
+            Value::Int(-1),
+            0,
+        ),
+        (
+            Op::CheckedAdd,
+            Value::Int(i64::MAX),
+            Value::Int(1),
+            Value::Int(i64::MIN),
+            Value::Int(0),
+            1,
+        ),
+        (
+            Op::CheckedSub,
+            Value::Int(i64::MIN),
+            Value::Int(1),
+            Value::Int(i64::MAX),
+            Value::Int(-1),
+            2,
+        ),
+        (
+            Op::CheckedAdd,
+            Value::Byte(200),
+            Value::Byte(100),
+            Value::Byte(44),
+            Value::Byte(0),
+            1,
+        ),
+        (
+            Op::CheckedSub,
+            Value::Byte(7),
+            Value::Byte(9),
+            Value::Byte(254),
+            Value::Byte(0),
+            2,
+        ),
+        (
+            Op::CheckedMul(7),
+            Value::Byte(200),
+            Value::Byte(100),
+            Value::Byte(32),
+            Value::Byte(0),
+            1,
+        ),
+        (
+            Op::CheckedAdd,
+            Value::Fixed(-7),
+            Value::Fixed(2),
+            Value::Fixed(-5),
+            Value::Fixed(0),
+            0,
+        ),
+        (
+            Op::CheckedSub,
+            Value::Fixed(i64::MIN),
+            Value::Fixed(1),
+            Value::Fixed(i64::MAX),
+            Value::Fixed(0),
+            2,
+        ),
+        (
+            Op::CheckedMul(0),
+            Value::Fixed(7),
+            Value::Fixed(-3),
+            Value::Fixed(-21),
+            Value::Fixed(0),
+            0,
+        ),
+        (
+            Op::CheckedMul(2),
+            Value::Fixed(7),
+            Value::Fixed(-3),
+            Value::Fixed(-6),
+            Value::Fixed(0),
+            0,
+        ),
+        (
+            Op::CheckedMul(2),
+            Value::Int(7),
+            Value::Int(-3),
+            Value::Int(-21),
+            Value::Int(-1),
+            0,
+        ),
+        (
+            Op::CheckedDiv(3),
+            Value::Int(i64::MIN),
+            Value::Int(-1),
+            Value::Int(i64::MIN),
+            Value::Int(0),
+            1,
+        ),
+        (
+            Op::CheckedMod,
+            Value::Int(i64::MIN),
+            Value::Int(-1),
+            Value::Int(0),
+            Value::Int(0),
+            0,
+        ),
+        (
+            Op::CheckedMod,
+            Value::Int(-7),
+            Value::Int(3),
+            Value::Int(-1),
+            Value::Int(-1),
+            0,
+        ),
+        (
+            Op::CheckedDiv(3),
+            Value::Fixed(-7),
+            Value::Fixed(2),
+            Value::Fixed(-28),
+            Value::Fixed(0),
+            0,
+        ),
+        (
+            Op::CheckedDiv(63),
+            Value::Fixed(i64::MIN),
+            Value::Fixed(-1),
+            Value::Fixed(0),
+            Value::Fixed(0),
+            1,
+        ),
+        (
+            Op::CheckedMod,
+            Value::Fixed(-7),
+            Value::Fixed(3),
+            Value::Fixed(-1),
+            Value::Fixed(0),
+            0,
+        ),
+        (
+            Op::CheckedDiv(0),
+            Value::Byte(7),
+            Value::Byte(2),
+            Value::Byte(3),
+            Value::Byte(0),
+            0,
+        ),
+        (
+            Op::CheckedMod,
+            Value::Byte(7),
+            Value::Byte(2),
+            Value::Byte(1),
+            Value::Byte(0),
+            0,
+        ),
+        (
+            Op::CheckedDiv(0),
+            Value::Byte(7),
+            Value::Byte(0),
+            Value::Byte(7),
+            Value::Byte(0),
+            3,
+        ),
+        (
+            Op::CheckedMod,
+            Value::Fixed(-7),
+            Value::Fixed(0),
+            Value::Fixed(-7),
+            Value::Fixed(0),
+            3,
+        ),
+        (
+            Op::CheckedDiv(5),
+            Value::Int(-7),
+            Value::Int(0),
+            Value::Int(-7),
+            Value::Int(0),
+            3,
+        ),
+        (
+            Op::CheckedDiv(5),
+            Value::Fixed(-7),
+            Value::Fixed(0),
+            Value::Fixed(-7),
+            Value::Fixed(0),
+            3,
+        ),
+        (
+            Op::CheckedAdd,
+            Value::Float(7.0),
+            Value::Float(2.0),
+            Value::Float(9.0),
+            Value::Float(0.0),
+            0,
+        ),
+        (
+            Op::CheckedSub,
+            Value::Float(7.0),
+            Value::Float(2.0),
+            Value::Float(5.0),
+            Value::Float(0.0),
+            0,
+        ),
+        (
+            Op::CheckedMul(3),
+            Value::Float(7.0),
+            Value::Float(2.0),
+            Value::Float(14.0),
+            Value::Float(0.0),
+            0,
+        ),
+        (
+            Op::CheckedMul(0),
+            Value::Float(largest_float),
+            Value::Float(2.0),
+            Value::Float(f64::INFINITY),
+            Value::Float(0.0),
+            1,
+        ),
+        (
+            Op::CheckedDiv(0),
+            Value::Float(-7.0),
+            Value::Float(0.0),
+            Value::Float(f64::NEG_INFINITY),
+            Value::Float(0.0),
+            2,
+        ),
+        (
+            Op::CheckedDiv(0),
+            Value::Float(0.0),
+            Value::Float(0.0),
+            Value::Float(f64::NAN),
+            Value::Float(0.0),
+            4,
+        ),
+    ] {
+        for (part, wanted) in [low, high, Value::Int(flag)].into_iter().enumerate() {
+            let comparison = if matches!(wanted, Value::Float(v) if v.is_nan()) {
+                "!="
+            } else {
+                "=="
+            };
+            let expression = if matches!(op, Op::CheckedNeg) {
+                "-x"
+            } else {
+                "x + y"
+            };
+            let mut program = common::build(&format!(
+                "yield main(a: Word) -> Word {{ let x = if a > 0 {{ yield 1 }} else {{ 2 }}; let y = if a > 0 {{ yield 2 }} else {{ 3 }}; let result = {expression}; let wanted = yield 3; if result {comparison} wanted {{ 1 }} else {{ 0 }} }}"
+            ));
+            let chunk = &mut program.chunks[program.entry_point.unwrap() as usize];
+            let index = chunk
+                .ops
+                .iter()
+                .position(|op| matches!(op, Op::CheckedAdd | Op::CheckedNeg))
+                .unwrap();
+            assert!(matches!(chunk.ops[index + 1], Op::PopN(2)));
+            chunk.ops[index] = op;
+            // The verified bytecode already has a local zero. Reuse it after
+            // both branch tests to expose each triple component without casts.
+            let added = match part {
+                0 => 0,
+                1 => 3,
+                2 => 2,
+                _ => unreachable!(),
+            };
+            for instruction in &mut chunk.ops {
+                if let Op::If(target)
+                | Op::Else(target)
+                | Op::Loop(target)
+                | Op::EndLoop(target)
+                | Op::Break(target)
+                | Op::BreakIf(target) = instruction
+                    && usize::from(*target) > index + 1
+                {
+                    *target += added;
+                }
+            }
+            match part {
+                0 => (),
+                1 => {
+                    chunk.ops.splice(
+                        index + 1..index + 2,
+                        [Op::PopN(1), Op::SetLocal(0), Op::PopN(1), Op::GetLocal(0)],
+                    );
+                }
+                2 => {
+                    chunk.ops.splice(
+                        index + 1..index + 2,
+                        [Op::SetLocal(0), Op::PopN(2), Op::GetLocal(0)],
+                    );
+                }
+                _ => unreachable!(),
+            }
+            checked_dialogue_case(
+                &program,
+                &[wire(left.clone()), wire(right.clone()), wire(wanted)],
+                1,
+            );
+        }
+    }
+}
+
+#[test]
+fn bare_numeric_dispatch_preserves_selected_kinds() {
+    use keleusma::bytecode::{Op, Value};
+    use keleusma::value_layout::ScalarKind;
+    let wire = |value: Value| {
+        let (kind, bits) = match value {
+            Value::Int(v) => (ScalarKind::Int, v),
+            Value::Byte(v) => (ScalarKind::Byte, i64::from(v)),
+            Value::Fixed(v) => (ScalarKind::Fixed, v),
+            Value::Float(v) => (ScalarKind::Float, (v as NativeFloat).to_bits() as i64),
+            _ => unreachable!(),
+        };
+        (value, kind, bits)
+    };
+    for (op, left, right, wanted) in [
+        (Op::Add, Value::Byte(200), Value::Byte(100), Value::Byte(44)),
+        (
+            Op::Add,
+            Value::Fixed(i64::MAX),
+            Value::Fixed(1),
+            Value::Fixed(i64::MIN),
+        ),
+        (
+            Op::Add,
+            Value::Float(7.0),
+            Value::Float(2.0),
+            Value::Float(9.0),
+        ),
+        (Op::Sub, Value::Byte(7), Value::Byte(9), Value::Byte(254)),
+        (Op::Sub, Value::Fixed(-7), Value::Fixed(2), Value::Fixed(-9)),
+        (
+            Op::Sub,
+            Value::Float(-7.0),
+            Value::Float(2.0),
+            Value::Float(-9.0),
+        ),
+        (Op::Mul, Value::Byte(200), Value::Byte(100), Value::Byte(32)),
+        (
+            Op::Mul,
+            Value::Fixed(7),
+            Value::Fixed(-3),
+            Value::Fixed(-21),
+        ),
+        (
+            Op::Mul,
+            Value::Float(7.0),
+            Value::Float(2.0),
+            Value::Float(14.0),
+        ),
+        (Op::Neg, Value::Byte(7), Value::Byte(2), Value::Byte(249)),
+        (
+            Op::Neg,
+            Value::Fixed(i64::MIN),
+            Value::Fixed(2),
+            Value::Fixed(i64::MIN),
+        ),
+        (
+            Op::Neg,
+            Value::Float(7.0),
+            Value::Float(2.0),
+            Value::Float(-7.0),
+        ),
+        (
+            Op::Div,
+            Value::Int(i64::MIN),
+            Value::Int(-1),
+            Value::Int(i64::MIN),
+        ),
+        (Op::Div, Value::Byte(7), Value::Byte(2), Value::Byte(3)),
+        (
+            Op::Div,
+            Value::Float(7.0),
+            Value::Float(2.0),
+            Value::Float(3.5),
+        ),
+        (
+            Op::Div,
+            Value::Float(-7.0),
+            Value::Float(0.0),
+            Value::Float(f64::NEG_INFINITY),
+        ),
+        (Op::Mod, Value::Int(-7), Value::Int(3), Value::Int(-1)),
+        (Op::Mod, Value::Byte(7), Value::Byte(2), Value::Byte(1)),
+        (
+            Op::Mod,
+            Value::Float(7.5),
+            Value::Float(2.0),
+            Value::Float(1.5),
+        ),
+        (
+            Op::Mod,
+            Value::Float(0.0),
+            Value::Float(0.0),
+            Value::Float(f64::NAN),
+        ),
+    ] {
+        let comparison = if matches!(wanted, Value::Float(v) if v.is_nan()) {
+            "!="
+        } else {
+            "=="
+        };
+        let expression = if matches!(op, Op::Neg) { "-x" } else { "x + y" };
+        // Byte else-branches and Float replies require genuine multi-kind
+        // dispatch. Word alternatives on bare Add would instead be invalid.
+        let mut program = common::build(&format!(
+            "yield main(a: Word) -> Word {{ let x = if a > 0 {{ yield 1 }} else {{ 2 }}; let y = if a > 0 {{ yield 2 }} else {{ 3 }}; let result = {expression}; let wanted = yield 3; if result {comparison} wanted {{ 1 }} else {{ 0 }} }}"
+        ));
+        let chunk = &mut program.chunks[program.entry_point.unwrap()];
+        let index = chunk
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::CheckedAdd | Op::CheckedNeg))
+            .unwrap();
+        assert!(matches!(chunk.ops[index + 1], Op::PopN(2)));
+        chunk.ops[index] = op;
+        chunk.ops.remove(index + 1);
+        let mut follows_else = false;
+        for instruction in &mut chunk.ops {
+            let change = follows_else;
+            follows_else = matches!(instruction, Op::Else(_));
+            match instruction {
+                Op::If(target)
+                | Op::Else(target)
+                | Op::Loop(target)
+                | Op::EndLoop(target)
+                | Op::Break(target)
+                | Op::BreakIf(target)
+                    if usize::from(*target) > index + 1 =>
+                {
+                    *target -= 1
+                }
+                // Preserve two valid kinds at joins for every Float case.
+                Op::Const(index) if change => {
+                    let value = match chunk.constants[*index as usize] {
+                        keleusma::bytecode::ConstValue::Int(v) => v as u8,
+                        ref other => panic!("unexpected alternative {other:?}"),
+                    };
+                    chunk
+                        .constants
+                        .push(keleusma::bytecode::ConstValue::Byte(value));
+                    *instruction = Op::Const((chunk.constants.len() - 1) as u16);
+                }
+                Op::PushImmediate(6) if change => {
+                    chunk
+                        .constants
+                        .push(keleusma::bytecode::ConstValue::Byte(2));
+                    *instruction = Op::Const((chunk.constants.len() - 1) as u16);
+                }
+                Op::PushImmediate(7) if change => {
+                    chunk
+                        .constants
+                        .push(keleusma::bytecode::ConstValue::Byte(3));
+                    *instruction = Op::Const((chunk.constants.len() - 1) as u16);
+                }
+                _ => (),
+            }
+        }
+        checked_dialogue_case(&program, &[wire(left), wire(right), wire(wanted)], 1);
+    }
 }
 
 #[test]
@@ -2051,6 +2657,164 @@ fn runtime_ordering_rejects_different_selected_numeric_kinds() {
         &[7],
         "mixed-numeric-ordering",
     );
+}
+
+#[test]
+fn runtime_checked_arithmetic_rejects_different_selected_kinds() {
+    use keleusma::bytecode::{Op, Value, WireShape};
+    use keleusma::value_layout::ScalarKind;
+    use keleusma::vm::{Vm, VmState};
+    let source = "yield main(a: Word) -> Word { let x = if a > 0 { yield 1 } else { 2 }; let y = if a <= 0 { yield 2 } else { 3 }; let result = x + y; if result > x { 1 } else { 0 } }";
+    let program = common::build(source);
+    let dialogues = program
+        .chunks
+        .iter()
+        .enumerate()
+        .flat_map(|(ci, chunk)| {
+            chunk.ops.iter().enumerate().filter_map(move |(ip, op)| {
+                matches!(op, Op::Yield).then_some((
+                    coroutine::YieldSite {
+                        chunk: ci as u32,
+                        instruction: ip as u32,
+                    },
+                    coroutine::Dialogue {
+                        yielded: WireShape::Scalar {
+                            kind: ScalarKind::Int.to_tag(),
+                        },
+                        reply: WireShape::Scalar {
+                            kind: ScalarKind::Byte.to_tag(),
+                        },
+                    },
+                ))
+            })
+        })
+        .collect();
+    let arena = keleusma_arena::Arena::with_capacity(65536);
+    let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    assert!(matches!(
+        vm.call(&[Value::Int(5)]).unwrap(),
+        VmState::Yielded(Value::Int(1))
+    ));
+    assert!(vm.resume(Value::Byte(7)).is_err());
+    #[cfg(unix)]
+    require_program_kind_trap(
+        "runtime_checked_arithmetic_rejects_different_selected_kinds",
+        &program,
+        Some(&dialogues),
+        &[5],
+        &[1],
+        &[7],
+        "mixed-numeric-ordering",
+    );
+}
+
+#[test]
+fn bare_integer_division_and_remainder_trap_on_zero() {
+    use keleusma::bytecode::{Op, Value};
+    use keleusma::vm::{Vm, VmState};
+    for op in [Op::Div, Op::Mod] {
+        let mut program = common::build(
+            "yield main(a: Word) -> Word { let x = yield 1; let y = yield 2; x + y }",
+        );
+        let chunk = &mut program.chunks[program.entry_point.unwrap()];
+        let index = chunk
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::CheckedAdd))
+            .unwrap();
+        assert!(matches!(chunk.ops[index + 1], Op::PopN(2)));
+        chunk.ops[index] = op;
+        chunk.ops.remove(index + 1);
+        assert!(
+            !chunk
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::If(_) | Op::Else(_) | Op::Loop(_)))
+        );
+        let arena = keleusma_arena::Arena::with_capacity(65536);
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        assert!(matches!(
+            vm.call(&[Value::Int(5)]).unwrap(),
+            VmState::Yielded(Value::Int(1))
+        ));
+        assert!(matches!(
+            vm.resume(Value::Int(7)).unwrap(),
+            VmState::Yielded(Value::Int(2))
+        ));
+        assert!(matches!(
+            vm.resume(Value::Int(0)),
+            Err(keleusma::vm::VmError::DivisionByZero)
+        ));
+        #[cfg(unix)]
+        require_program_kind_trap(
+            "bare_integer_division_and_remainder_trap_on_zero",
+            &program,
+            None,
+            &[5],
+            &[1, 2],
+            &[7, 0],
+            &format!("bare-zero-{op:?}"),
+        );
+    }
+}
+
+#[test]
+fn checked_negation_rejects_byte_and_float_values() {
+    use keleusma::bytecode::{Op, Value, WireShape};
+    use keleusma::value_layout::ScalarKind;
+    use keleusma::vm::{Vm, VmState};
+    let program = common::build(
+        "yield main(a: Word) -> Word { let x = if a > 0 { yield 1 } else { 2 }; -x }",
+    );
+    for (reply, kind, bits) in [
+        (Value::Byte(7), ScalarKind::Byte, 7),
+        (
+            Value::Float(7.0),
+            ScalarKind::Float,
+            (7.0 as NativeFloat).to_bits() as i64,
+        ),
+    ] {
+        let dialogues = program
+            .chunks
+            .iter()
+            .enumerate()
+            .flat_map(|(ci, chunk)| {
+                chunk.ops.iter().enumerate().filter_map(move |(ip, op)| {
+                    matches!(op, Op::Yield).then_some((
+                        coroutine::YieldSite {
+                            chunk: ci as u32,
+                            instruction: ip as u32,
+                        },
+                        coroutine::Dialogue {
+                            yielded: WireShape::Scalar {
+                                kind: ScalarKind::Int.to_tag(),
+                            },
+                            reply: WireShape::Scalar {
+                                kind: kind.to_tag(),
+                            },
+                        },
+                    ))
+                })
+            })
+            .collect();
+        let arena = keleusma_arena::Arena::with_capacity(65536);
+        let mut vm = Vm::new(program.clone(), &arena).unwrap();
+        assert!(matches!(
+            vm.call(&[Value::Int(5)]).unwrap(),
+            VmState::Yielded(Value::Int(1))
+        ));
+        assert!(vm.resume(reply).is_err());
+        #[cfg(unix)]
+        require_program_kind_trap(
+            "checked_negation_rejects_byte_and_float_values",
+            &program,
+            Some(&dialogues),
+            &[5],
+            &[1],
+            &[bits],
+            &format!("checked-neg-{kind:?}"),
+        );
+    }
 }
 
 #[test]

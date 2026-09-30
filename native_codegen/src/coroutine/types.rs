@@ -17,9 +17,9 @@ pub(crate) const UNIT: u16 = 1;
 const FALSE: u16 = 2;
 const TRUE: u16 = 4096;
 const BOOL: u16 = FALSE | TRUE;
-const BYTE: u16 = 4;
-const WORD: u16 = 8;
-const FIXED: u16 = 16;
+pub(crate) const BYTE: u16 = 4;
+pub(crate) const WORD: u16 = 8;
+pub(crate) const FIXED: u16 = 16;
 pub(crate) const FLOAT: u16 = 32;
 pub(crate) const TUPLE: u16 = 256;
 pub(crate) const ARRAY: u16 = 512;
@@ -614,6 +614,16 @@ fn analyze(
                 }
                 Ok(common)
             };
+            let numeric = |allowed: u16| -> Result<u16, LowerError> {
+                let common = args.iter().fold(allowed, |mask, tag| mask & kind(*tag));
+                if validate && common == 0 {
+                    return Err(fail());
+                }
+                for (index, actual) in args.iter().enumerate() {
+                    require(kind(*actual), common, Some(start + index))?;
+                }
+                Ok(common)
+            };
             match op {
                 Op::Const(i) => out[0] = constant(&chunk.constants[*i as usize]),
                 Op::PushImmediate(i) => {
@@ -680,21 +690,18 @@ fn analyze(
                 | Op::CheckedDiv(_)
                 | Op::CheckedMod
                 | Op::CheckedNeg => {
-                    let allowed = if matches!(op, Op::CheckedMod) {
-                        WORD | BYTE | FIXED
-                    } else {
-                        WORD | BYTE | FIXED | FLOAT
+                    let allowed = match op {
+                        Op::CheckedNeg => WORD | FIXED,
+                        Op::CheckedMod => WORD | BYTE | FIXED,
+                        _ => WORD | BYTE | FIXED | FLOAT,
                     };
-                    let k = same(allowed)?;
-                    // Native checked multiply/divide select their Word/Byte
-                    // or Fixed implementation using this baked fraction count.
-                    if let Op::CheckedMul(frac) | Op::CheckedDiv(frac) = op {
-                        require(k, if *frac == 0 { WORD | BYTE } else { FIXED }, None)?;
-                    }
+                    let k = numeric(allowed)?;
+                    // Actual tags must agree at execution. Fraction counts
+                    // affect Fixed operands only, as in the virtual machine.
                     out.copy_from_slice(&[k, k, WORD]);
                 }
-                Op::Add | Op::Sub | Op::Mul | Op::Neg => out[0] = same(BYTE | FIXED | FLOAT)?,
-                Op::Div | Op::Mod => out[0] = same(WORD | BYTE | FLOAT)?,
+                Op::Add | Op::Sub | Op::Mul | Op::Neg => out[0] = numeric(BYTE | FIXED | FLOAT)?,
+                Op::Div | Op::Mod => out[0] = numeric(WORD | BYTE | FLOAT)?,
                 Op::CmpEq | Op::CmpNe => {
                     // PartialEq accepts unlike kinds and Unit. It must not
                     // acquire the consuming type guards used by arithmetic.

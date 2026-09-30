@@ -93,6 +93,7 @@ use keleusma::bytecode::{BlockType, Module, Op, TypeTag};
 
 use crate::{LowerError, LowerOptions};
 
+pub(crate) mod arithmetic;
 pub(crate) mod dialogue;
 pub use dialogue::{Dialogue, HostContracts, NativeBodyReturn, YieldSite};
 mod host;
