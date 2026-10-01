@@ -124,4 +124,4 @@ else
 fi
 echo "================"
 rm -f "$_fr_out"
-exit $rc
+exit "$rc"

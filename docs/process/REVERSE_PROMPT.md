@@ -3626,3 +3626,9 @@ sources, root tests, the upstream current block and older native reports remain
 unchanged. The earlier private self-assignment runtime defect remains recorded.
 The receipt diff passed 13 root and 23 native documentation and record checks,
 with zero failures or skips and exit zero. No Rust source or tests changed.
+
+## Native audit follow-up of 2026-10-01
+
+Fixed both native gate shell findings on `fix/native-gate-shell`. ShellCheck, failure-path checks,
+30 reporter fixtures, 13 root and 23 native documentation checks pass. Full gates were not repeated.
+A scratch native workflow proposal awaits operator approval for its per-push cost. No job is activated.

@@ -69,7 +69,7 @@
 #
 # Usage:  tools/backend-gate.sh [--narrow]      (default: default features)
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 feat=()
 label="default features"
