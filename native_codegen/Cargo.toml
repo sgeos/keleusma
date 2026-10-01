@@ -25,9 +25,9 @@ edition = "2024"
 # checked too, not just the library. The 14.5s runtime looked too fast to trust, which is
 # why the artifacts were counted rather than the exit status believed.
 #
-# What this buys is small and worth stating: continuous integration never builds this
-# package and it is `publish = false`, so no consumer contract rests on the figure. The
-# pin turns a confusing failure on an older toolchain into a clear one.
+# Native continuous integration uses stable Rust, not this minimum version.
+# This package is `publish = false`. The pin turns a confusing failure on an older
+# toolchain into a clear one; it does not establish ongoing minimum-version coverage.
 rust-version = "1.88"
 publish = false
 description = "LLVM native code generation for verified Keleusma bytecode (V0.3.x)."

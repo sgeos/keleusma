@@ -1,0 +1,75 @@
+name: Native smoke
+
+on:
+  push:
+    branches: [main, 'v0.3.0']
+  pull_request:
+    branches: [main, 'v0.3.0']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    name: Native default features
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: native_codegen
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Native provenance tests inspect historical commits.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Install and verify LLVM 22
+        run: |
+          test "$(uname -m)" = arm64
+          brew install llvm@22 shellcheck
+          native_llvm_prefix="$(brew --prefix llvm@22)"
+          case "$("$native_llvm_prefix/bin/llvm-config" --version)" in
+            22.1.*) ;;
+            *) echo 'Expected LLVM 22.1' >&2; exit 1 ;;
+          esac
+          # Existing stack-bound tests use this absolute tool path.
+          # Fail on an existing path rather than replace an installation.
+          test ! -e /opt/local/libexec/llvm-22
+          test ! -L /opt/local/libexec/llvm-22
+          sudo mkdir -p /opt/local/libexec
+          sudo ln -s "$native_llvm_prefix" /opt/local/libexec/llvm-22
+          /opt/local/libexec/llvm-22/bin/llc --version
+          /opt/local/libexec/llvm-22/bin/llvm-readobj --version
+          cc --version
+          {
+            echo "LLVM_SYS_221_PREFIX=$native_llvm_prefix"
+            echo "KEL_LLVM_BIN=$native_llvm_prefix/bin"
+            echo "RUSTFLAGS=-L native=$(brew --prefix)/lib"
+            echo "SDKROOT=$(xcrun --show-sdk-path)"
+          } >> "$GITHUB_ENV"
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Shell analysis
+        run: shellcheck tools/*.sh
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Non-corpus tests
+        run: cargo nextest run --locked --no-fail-fast --test-threads 2 -E 'not binary(corpus_differential)'
+      - name: Optimized non-corpus tests
+        env:
+          KEL_OPTIMIZE: '1'
+        run: cargo nextest run --locked --no-fail-fast --test-threads 2 -E 'not binary(corpus_differential)'
