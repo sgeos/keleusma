@@ -62,6 +62,15 @@ The parent's `cargo test --workspace` therefore does not build this, and
 `scripts/release-gate.sh` runs it as a separate step that **skips loudly** when
 LLVM is absent.
 
+## Continuous integration
+
+The dedicated [native workflow](../.github/workflows/native.yml) runs on pull requests
+and pushes targeting `v0.3.0` and `main`. One ARM64 macOS job checks formatting,
+ShellCheck, all-target Clippy and default-feature non-corpus tests, both with and
+without native optimization. It installs LLVM 22.1 and fetches full history for
+provenance checks. The corpus and narrow-float configuration remain in the complete
+native gates. This subset does not update `GATE_RECORD.md` or replace those gates.
+
 ## Requirements
 
 - LLVM **22.1** development install, with headers and libraries.

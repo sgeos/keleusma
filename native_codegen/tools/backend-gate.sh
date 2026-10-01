@@ -4,9 +4,10 @@
 # WHY THIS EXISTS
 #
 # `native_codegen` is a detached package. The workspace gate does not build it and
-# continuous integration does not run it, so the local run is the ONLY gate this
-# backend has -- and until now it was a set of commands retyped from memory each
-# time, with three facts living only in a session's scrollback:
+# dedicated continuous integration now covers default-feature non-corpus tests.
+# This script remains the complete native gate, including corpus and narrow-float
+# coverage. It originally replaced commands retyped from memory, with three facts
+# living only in a session's scrollback:
 #
 #   1. THE SUITE MUST BE SPLIT. `corpus_differential` alone takes ~390s and the
 #      rest ~140s. Run together they exceed the harness's ten-minute background
@@ -64,12 +65,13 @@
 # mandatory before a merge to the release line; this covers the detached backend
 # only, and neither substitutes for the other.
 #
-# **Not a continuous-integration job.** Adding one is a per-push cost, and the
-# `v0.2.3` line has recorded that such costs are the operator's call.
+# **Not the continuous-integration subset.** The operator approved the dedicated
+# default-feature job on 2026-10-01. It does not run this complete gate or write
+# GATE_RECORD.md. Both complete configurations retain their existing gate policy.
 #
 # Usage:  tools/backend-gate.sh [--narrow]      (default: default features)
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 feat=()
 label="default features"

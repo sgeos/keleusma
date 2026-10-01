@@ -6,8 +6,9 @@
 //! integration does not mention it (zero occurrences across the workflow's
 //! EVERY job — the count is deliberately not quoted, having gone stale twice in two
 //! absorptions), and the shared pre-push hook runs a `--workspace` selector,
-//! which cannot reach a detached package. `tools/backend-gate.sh` is therefore the
-//! only instrument covering this code, and it runs only when a human chooses to.
+//! which cannot reach a detached package. At that date `tools/backend-gate.sh` was
+//! the only gate covering this code. Since 2026-10-01 a dedicated workflow covers
+//! default-feature non-corpus tests. Complete native gates remain separate.
 //!
 //! That made the line's most-repeated claim -- "green in both float
 //! configurations" -- unverifiable from the tree. `GATE_RECORD.md` makes it a
@@ -117,7 +118,7 @@ fn record_text() -> String {
     let p = concat!(env!("CARGO_MANIFEST_DIR"), "/GATE_RECORD.md");
     std::fs::read_to_string(p).unwrap_or_else(|e| {
         panic!(
-            "the backend's only instrument must leave a record in the tree, but \
+            "the complete backend gate must leave a record in the tree, but \
              {p} could not be read: {e}. Run tools/backend-gate.sh."
         )
     })

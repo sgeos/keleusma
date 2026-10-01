@@ -12,9 +12,9 @@
 //!
 //! # Skips rather than fails when the toolchain is absent
 //!
-//! Continuous integration runs on hosted runners with no MacPorts LLVM. A test
-//! that required it would turn a missing optional tool into a red build, so this
-//! reports and returns instead. **A skip that is silent is a test that quietly
+//! Local hosts may lack the optional LLVM tools, so this test reports and returns
+//! when they are absent. The dedicated native workflow provisions and checks the
+//! tools before running the suite. **A skip that is silent is a test that quietly
 //! stops testing**, so the skip prints its reason.
 
 use inkwell::context::Context;
