@@ -20,12 +20,12 @@ Full-language support remains Order 6. Existing supported programs must retain t
 |---|---|---|
 | Compile the complete stage corpus | Complete artifact identity against the reference for every current stage source, with a corpus inventory check | All twelve complete serialized artifacts from the production compiler match the reference after the call and alias changes. The new artifact corpus also checks directory inventory. Both sides still use the Rust serializer. |
 | Avoid reference scaffold borrowing | Production compilation assembles module fields from pipeline output | `self_host_compile_scratch` provides this path. Preserve it through integration. |
-| Derive type inputs from the self-hosted pipeline | Production rejection receives facts without walking the reference parser's abstract syntax tree or borrowing inferred types | Four extraction helpers are partial. Expressions cover only part of the required shapes. Close the residuals and move the production input path. |
-| Reject ill-typed subset programs | Independent pipeline rejection agrees with the reference on the rejection corpus, valid controls, and the rule-versus-form census | The scoped pipeline harness exercises all twenty rejection cases and seven valid controls without reference-first masking. The separate sixteen-cell rule-versus-form census now runs through that path with eight valid controls. Its required test now passes after preserving match-arm guards. Parser source diagnostics and type-stage verdicts remain distinct from unsupported syntax, capacity and execution failures. The shipping driver still calls the reference first. |
+| Derive type inputs from the self-hosted pipeline | Production rejection receives facts without walking the reference parser's abstract syntax tree or borrowing inferred types | The production input path now derives scoped scalar constraints from Keleusma parser and reconstruction output. Composite facts, complete binder/occurrence coverage and general admission remain incomplete. |
+| Reject ill-typed subset programs | Independent pipeline rejection agrees with the reference on the rejection corpus, valid controls, and the rule-versus-form census | The scoped pipeline harness exercises all twenty rejection cases and seven valid controls without reference-first masking. The separate sixteen-cell rule-versus-form census now runs through that path with eight valid controls. Its required test now passes after preserving match-arm guards. Parser source diagnostics and type-stage verdicts remain distinct from unsupported syntax, capacity and execution failures. The shipping driver now obtains the independent verdict first. Production corpus and census checks assert PipelineRejected so reference rejection cannot mask missing stage coverage. |
 | Preserve the first-pass monomorphization result | Every stage remains unchanged by monomorphization, with a control that does change | The corpus now lists all twelve sources. Identity, changing control and directory inventory tests passed again after the parser and alias changes on 2026-10-04. Repeat if stage sources change. |
 | Preserve independence from inferred expression types | The current stage corpus compiles identically with recorded expression types absent | Refresh the existing inference-independence evidence for all current sources. |
 | Emit complete artifacts through Keleusma | Production output uses the Keleusma wire emitter for framing, opcode records, operand pools, auxiliary regions and integrity fields | Region coverage tests exist, but they do not establish production serialization. `Module::to_bytes` remains on current artifact paths. Preserve the wire plan's encoder and decoder obligations. |
-| Reach the shipping tool | An end-to-end command emits the independently assembled artifact and reports type rejection through the new path | The shipping self-hosted backend exists. Integrate the remaining paths and test the command itself. |
+| Reach the shipping tool | An end-to-end command emits the independently assembled artifact and reports type rejection through the new path | The command emits the same artifact as the production library, executes a valid result of seven, and independently rejects three invalid sources without emitting files. Serialization still uses Rust, so the complete shipping requirement remains open. |
 | Establish current verification | Relevant differential and failure-path tests, complete workspace checks and applicable integration gates pass on the final tree | Prior full workspace verification is incomplete. Narrow checks cannot establish this requirement. |
 | Participate in the shadow pilot | Diagnostic and completion-claim samples retain baseline judgments, reviewed payloads, outcomes and explicit service status | Capture is installed for this line. Judgments are advisory and do not alter gates. |
 
@@ -80,7 +80,7 @@ Local pilot capture and compiler work can continue independently.
 ## Production integration evidence
 
 Inspection on 2026-10-04 confirmed that `compile_source_with_target` in the command-line tool
-selects `self_hosted_compile`, while the unsigned artifact path still calls `module.to_bytes()`.
+selects `self_hosted_compile`, now with independent type checking before the reference, while the unsigned artifact path still calls `module.to_bytes()`.
 The wire stage already exposes framing and sealing commands through `dispatch_frame`.
 Routing region payloads alone does not close the remaining complete-artifact emission work.
 
@@ -241,3 +241,23 @@ explicit expected result, independent of agreement between compilers.
 
 These checks close measured admission and scope gaps. They do not establish complete composite
 facts, occurrence coverage, production type rejection, production wire emission or final gates.
+
+## Production type rejection
+
+The production transport in `src/selfhost/typecheck.rs` compiles the embedded rejection stage
+for bootstrap, derives shared-column ranges from its compiled layout and obtains verdict values
+and execution bounds from stage functions. It does not compile the user source with the reference
+before obtaining its independent verdict. Each source-head batch uses a fresh arena and shared
+buffer. Source diagnostics and stage rejection are distinct from unavailable parser input,
+malformed facts, capacity failures and execution errors.
+
+Production checks cover the twenty-negative, seven-control corpus and sixteen rule-versus-form
+cells with eight controls. All twelve stages pass both the existing test transport and the new
+production transport. Boundary tests accept 640 and refuse 641 for declarations, call sites,
+combined expression/argument rows and bindings. Eight malformed encodings return protocol errors.
+These observations establish the scoped integration, not complete composite typing or admission.
+
+The command-line probe initially compared different inputs. The Rust backend prepends native
+signature declarations while the self-hosted backend uses the user source directly. The maintained
+command test instead compares with the production library artifact, then runs it and asserts seven.
+The complete all-stage differential remains the artifact oracle. Full Order 1 remains open.

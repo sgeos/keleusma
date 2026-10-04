@@ -13,15 +13,14 @@ Status: **BUILT. Full verdict agreement on the corpus, 2026-08-14.**
 else presence. Reconstruction preserves it and expression extraction emits conditional
 branch pairs only for written else branches. Empty branches contribute unknown tails.
 Match-arm pairs now come from the reconstructed integer and enum arm tables. Composite
-extraction gaps remain open. This does not complete
-the production input path or the full Order 1 gate.
+extraction gaps remain open. The scoped production input path is now integrated. Composite coverage and the full Order 1 gate remain incomplete.
 
 Declared struct field counts now travel in parser metadata. The driver pairs each
 count with the following construction record and supplies expression kind 7 to the type stage.
 The equal-size, unequal-field-count witness now distinguishes the cases through metadata.
 Six expression kinds are emitted by the legacy inventory. The scoped path now also preserves
 match guards and explicit scalar field/index rejection paths. Unary `not` now emits the same boolean-operand requirement as an `if`
-condition, covering another previously omitted syntactic form. The production input path remains open.
+condition, covering another previously omitted syntactic form. The production runner now consumes these scoped facts.
 
 Expression extraction reconstructs each source head separately, preserving its parameter names,
 local bindings and return requirement before dispatch construction. Guard subexpressions remain
@@ -34,7 +33,7 @@ function return declarations. Independent batches cover each source head's guard
 All twelve stage sources fit the approved caps with maxima of 67 sites, 88 arguments and
 62 bindings per batch. Call checks accept those batches. Alias lookup is bounded by the number
 of binding rows and reaches longer chains while leaving cycles and missing targets unknown.
-Composite arguments remain incomplete, and production rejection remains open.
+Composite arguments remain incomplete. Scoped production rejection now precedes the reference.
 
 The scoped path now shares an expression-constraint walk with the legacy projection. Synthetic
 result identities connect computed operands to calls, local bindings and return requirements.
@@ -42,13 +41,13 @@ Result rules distinguish comparisons from arithmetic, asymmetric shifts, boolean
 numeric unary operators, scalar casts and branch results. Literal values remain syntax facts;
 the stage performs bounded Byte coercion for binary operands. An earlier combined corpus recorded maxima of 299 expression rows and 288 bindings.
 Those figures predate loop constraints. The current all-stage checks establish fit within the
-approved caps, but these historical maxima must not be reused as current measurements. Source annotations, composite reads and production integration remain open.
+approved caps, but these historical maxima must not be reused as current measurements. General source annotations and composite reads remain incomplete.
 
 The scoped rejection corpus now reaches all twenty negative cases and seven valid controls
 without reference-first rejection. Parser diagnostics cover unresolved identifiers, unknown
 struct fields, unsupported function values and calls through values, and declared-scalar
 projections. Unsupported syntax and resource failures remain separate outcomes. General source
-annotation compatibility, unannotated projection facts and production wiring remain incomplete.
+annotation compatibility, unannotated projection facts and full composite coverage remain incomplete.
 The same rule census now also runs through scoped pipeline inputs. Its required test passes
 after match-arm guards were preserved through compilation and execution. Scalar let annotation agreement,
 scalar data assignment agreement and Word index requirements now reach the stage. Annotated
@@ -58,10 +57,10 @@ to distinguish these checks from binary operands' contextual literal conversion.
 
 Branch-local names no longer leak into sibling branches. Frame slots remain monotonic, the
 per-function named-binding cap has a separate total counter and reused name entries have their
-composite metadata cleared. Match-arm scopes now restore their binding names too. Both loop forms now restore names at exit, with artifact and execution controls. The latest stage suite has one hundred and one passing type tests,
+composite metadata cleared. Match-arm scopes now restore their binding names too. Both loop forms now restore names at exit, with artifact and execution controls. The latest stage suite has one hundred and three passing type tests,
 including the scoped census and twelve guard-type cases. Scalar enum-payload bindings obtain
 source-declared tags from EnumBind records. Composite facts, complete occurrence coverage,
-general syntax admission and production integration remain required. Integer and enum match
+general syntax admission and complete composite coverage remain required. Integer and enum match
 coverage now has explicit parser diagnostics that exclude guarded arms and distinguish capacity
 from source errors. Range-loop variable facts and bound requirements reach the scoped type stage.
 

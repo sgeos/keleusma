@@ -366,21 +366,18 @@ frame slot. Per-range batches fit the selected 640-row limits across all twelve 
 now include scalar expression results, connecting computed arguments, local initializers and
 returns to the same identities. The stage handles their result rules and contextual Byte
 literal coercion. Parser lookup prefers locals and retains xor's operand restriction before
-lowering. Composite types and production integration remain incomplete.
+lowering. Composite types remain incomplete. The production compiler now obtains the scoped independent type verdict before the reference check.
 
 The sixteen-cell rule-versus-form census now also runs through scoped pipeline facts with
 eight valid controls. Scalar annotations, data stores and index requirements close three of
 its four initial failures. Match-guard preservation closes the fourth, and the required census
 now passes. Fourteen artifact-and-execution controls cover guard fallthrough and ordering.
-Branch and match-arm scopes restore local names, including payload bindings. Loop scopes,
-composite facts, complete admission coverage and production integration remain open. Order 1
+Branch and match-arm scopes restore local names, including payload bindings. Loop scopes now restore bindings on exit. Composite facts and complete admission coverage remain open. Order 1
 is not complete.
 
 The type-rejection stage now has capacity for all twelve real stage sources. Six tables use a
 640-row cap, adding 7,168 words or 56 KiB across their parallel arrays. The stage accepts all
-twelve sources in the differential test. This resolves the measured capacity gap only. The host
-still derives input facts by walking the reference parser's abstract syntax tree, and the Order-1
-gate remains open until the required pipeline integration and self-hosted input path are complete.
+twelve sources in the differential test. This resolves the measured capacity gap only. The production path now derives scoped facts from Keleusma parser and reconstruction output. The legacy test harness still retains its reference-syntax path for comparison. Composite coverage and production wire emission keep the Order-1 gate open.
 See [`TYPECHECK_IMPLEMENTATION_PLAN.md`](../decisions/TYPECHECK_IMPLEMENTATION_PLAN.md) for the
 implementation status.
 
@@ -389,6 +386,11 @@ solver storage before the first function that reads it removes its forward data 
 The complete artifact assembled by `self_host_compile_scratch` matches the reference. All twelve
 stage sources now have byte-identity tests. General forward data references remain unsupported,
 and this source-order change does not close the type-input extraction gap.
+
+Production tests cover the independent rejection corpus and rule census through the shipping
+library entry. Capacity and protocol failures remain distinct from invalid-source verdicts.
+The command-line tests assert independent rejection without an output artifact and valid artifact
+execution returning seven. These results do not complete Keleusma wire serialization or final gates.
 
 ## Dependency ordering and indicative release mapping
 

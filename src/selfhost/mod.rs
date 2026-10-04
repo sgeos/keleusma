@@ -15,18 +15,14 @@
 //!
 //! [`crate::selfhost::self_hosted_compile`] is the shipping entry: it host-guards the target and maps any
 //! out-of-subset panic to a clean [`crate::selfhost::SelfHostError`] (the `keleusma-cli` `--compiler
-//! self-hosted` backend). All ten Rust-read stage sources are embedded via `include_str!`
+//! self-hosted` backend). All twelve stage sources are embedded via `include_str!`
 //! from `src/selfhost/kel/` (this crate is their canonical home; the detached `compiler/`
 //! subproject re-exports this module and its `main.rs`/tests drive it). `prelude.kel` is
 //! not read by the Rust host and stays in `compiler/kel/`.
 //!
-//! `src/selfhost/kel/` also holds **`wire.kel`, which is not one of those ten**. It is the
-//! wire format written in Keleusma (step 6 of the wire-format programme), and it IS in the
-//! `read_stage` table: it joined when the driver gained a path that emits through it, which
-//! is `wire_names_via_kel` below. This paragraph said the opposite — "deliberately absent
-//! from the `read_stage` table" — for as long as the entry existed fifty lines below it, so
-//! the file contradicted itself and a reader could not tell which half to trust. See
-//! `docs/decisions/WIRE_FORMAT_SELFHOST_PLAN.md`.
+//! `wire.kel` supplies the wire-format emitters. `verify_types.kel` supplies the
+//! independent source-rejection stage used before the reference comparison.
+//! Complete production artifact serialization remains a separate integration step.
 
 use alloc::boxed::Box;
 use alloc::format;
@@ -43,15 +39,12 @@ use crate::value_layout::{CompositeKind, ScalarKind};
 use crate::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 use crate::{Arena, compiler::compile, lexer::tokenize, parser::parse};
 
-/// Read a stage source by basename, resolving the two ownership families from either
-/// the subproject directory or the workspace root.
-///
-/// The four pipeline stages moved into the parent crate at `src/selfhost/kel/`; the
-/// subproject-only sources stay in `compiler/kel/`. `rel` is a `kel/<name>.kel` path;
-/// only its basename is significant. Each candidate is tried in order; the first that
-/// reads wins.
+mod typecheck;
+pub use typecheck::{TypeCheckError, type_check_inputs_via_kel, type_check_source_via_kel};
+
+/// Read an embedded stage source by basename without filesystem access.
 fn read_stage(rel: &str) -> String {
-    // All ten Rust-read stage sources are embedded in the crate at `src/selfhost/kel/`
+    // All twelve stage sources are embedded in the crate at `src/selfhost/kel/`
     // (beside this module) via `include_str!`, so the driver needs no filesystem access
     // and works in an installed binary. `rel` is a `kel/<name>.kel` path; only the
     // basename is significant.
@@ -67,6 +60,7 @@ fn read_stage(rel: &str) -> String {
         "verify_depth.kel" => include_str!("kel/verify_depth.kel"),
         "verify_typed.kel" => include_str!("kel/verify_typed.kel"),
         "verify_datalayout.kel" => include_str!("kel/verify_datalayout.kel"),
+        "verify_types.kel" => include_str!("kel/verify_types.kel"),
         // JOINED THE TABLE when the driver gained a path that emits through it
         // (`wire_names_via_kel` below). The criterion this module has carried
         // since step 6 was "when it produces bytes rather than a checksum"; it
@@ -5639,6 +5633,17 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
 /// suggesting `--compiler rust`.
 #[derive(Debug, Clone)]
 pub enum SelfHostError {
+    /// The pipeline's source facts or Keleusma type stage rejected the program before
+    /// the Rust reference compiler inspected it.
+    PipelineRejected {
+        /// Independent pipeline rejection diagnostic.
+        detail: String,
+    },
+    /// The independent type stage could not produce a verdict. This is not source rejection.
+    TypeCheckUnavailable {
+        /// Capacity, transport or execution failure preventing a verdict.
+        detail: String,
+    },
     /// The requested target differs from the host width. The self-hosted pipeline is only
     /// validated byte-identical to the reference at host word/address/float widths, so a
     /// cross-width compile is refused rather than emitting an unverified module.
@@ -5666,20 +5671,28 @@ impl SelfHostError {
     /// Whether retrying the compile with the Rust reference backend (`--compiler rust`)
     /// would help. True for a self-hosted-subset limitation ([`Unsupported`]) and for a
     /// cross-width target ([`NonHostTarget`], which the reference compiler supports). False
-    /// for a genuine source error ([`ReferenceRejected`]), where the reference reports the
-    /// identical error and the hint would only mislead.
+    /// for source rejection by either the pipeline or the reference.
     ///
     /// [`Unsupported`]: SelfHostError::Unsupported
     /// [`NonHostTarget`]: SelfHostError::NonHostTarget
     /// [`ReferenceRejected`]: SelfHostError::ReferenceRejected
     pub fn rust_backend_would_help(&self) -> bool {
-        !matches!(self, SelfHostError::ReferenceRejected { .. })
+        !matches!(
+            self,
+            SelfHostError::ReferenceRejected { .. } | SelfHostError::PipelineRejected { .. }
+        )
     }
 }
 
 impl core::fmt::Display for SelfHostError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            SelfHostError::PipelineRejected { detail } => {
+                write!(f, "pipeline type rejection ({detail})")
+            }
+            SelfHostError::TypeCheckUnavailable { detail } => {
+                write!(f, "self-hosted type checking unavailable ({detail})")
+            }
             SelfHostError::NonHostTarget => write!(
                 f,
                 "the self-hosted compiler supports only the host target width"
@@ -8068,21 +8081,12 @@ fn name_unsupported_construct(src: &str) -> Option<(String, u32)> {
 /// Compile a whole program with the self-hosted pipeline, returning a self-hosted-built
 /// [`Module`] for an in-subset program at the host target.
 ///
-/// This is the shipping entry behind `keleusma-cli --compiler self-hosted`. It:
-/// 1. refuses a non-host `target` (the pipeline is only validated at host width);
-/// 2. recovers any out-of-subset pipeline panic into [`SelfHostError::Unsupported`]
-///    rather than aborting the process; and
-/// 3. cross-checks the self-hosted output against the reference compiler and rejects it
-///    if they diverge.
-///
-/// Step 3 is what makes the backend fail loudly on the whole subset boundary rather than
-/// only on constructs that crash a stage: the self-hosted pipeline silently mis-compiles
-/// some out-of-subset programs (for example float arithmetic) to a valid-but-wrong
-/// module, which neither a panic nor a load-time verify would catch. The reference is
-/// used ONLY as the correctness oracle — the returned module is the self-hosted one, so
-/// the emitted bytecode is genuinely self-hosted; when the two agree (an in-subset
-/// program) that agreement is the [construct-support boundary]'s guarantee. On any
-/// divergence the CLI prints a clean error suggesting `--compiler rust`.
+/// This is the shipping entry behind `keleusma-cli --compiler self-hosted`.
+/// It checks the target, obtains a pipeline type verdict before the reference sees
+/// the user source, then compares the independently assembled module with the reference.
+/// Source rejection, unavailable type evidence and unsupported constructs are distinct
+/// errors. The reference still gates successful compilation because composite type
+/// coverage is incomplete. Artifact serialization remains a separate operation.
 ///
 /// "Oracle" here means the yardstick this check compares against, not an implementation
 /// assumed correct. A divergence establishes that the two disagree and not which is wrong;
@@ -8098,10 +8102,34 @@ pub fn self_hosted_compile(
     {
         return Err(SelfHostError::NonHostTarget);
     }
-    // The reference compile is the correctness oracle. If the reference itself rejects the
-    // program it is a plain compile error (the self-hosted compiler cannot do better), so
-    // surface it; otherwise its chunks are the yardstick for the divergence check below.
+    // Obtain an independent verdict before the reference sees the source. Unknown facts
+    // still require the reference gate, but cannot mask rejection-stage coverage tests.
+    let type_result = type_check_source_via_kel(src);
+    if matches!(type_result, Ok(false)) {
+        return Err(SelfHostError::PipelineRejected {
+            detail: "source facts rejected by the parser or Keleusma type stage".into(),
+        });
+    }
     let reference = compile_reference(src)?;
+    if let Err(error) = type_result {
+        let detail = error.to_string();
+        let unsupported = matches!(&error,
+            TypeCheckError::Parse(crate::selfhost_host::ParseRecordError::Diagnostic { code, .. })
+            if matches!(crate::selfhost_host::PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(18..=21)));
+        if unsupported || matches!(&error, TypeCheckError::ExtractionPanic(_)) {
+            if let Some((what, line)) = name_unsupported_construct(src) {
+                return Err(SelfHostError::Unsupported {
+                    detail: format!(
+                        "{what} at line {line} is outside the self-hosted subset. The stage reported: {detail}"
+                    ),
+                });
+            }
+            if unsupported {
+                return Err(SelfHostError::Unsupported { detail });
+            }
+        }
+        return Err(SelfHostError::TypeCheckUnavailable { detail });
+    }
     // The pipeline `panic!`s on some out-of-subset constructs. Recover those into a clean
     // error; suppress the default panic output for the duration.
     let prev = std::panic::take_hook();
@@ -8540,8 +8568,7 @@ mod typecheck_input_feasibility {
 mod construct_naming_guard {
     use super::{name_unsupported_construct, parse, read_stage, self_hosted_compile, tokenize};
 
-    /// The eleven stage sources the driver reads. `verify_types.kel` is embedded by its own
-    /// tests rather than by `read_stage`, so it is not reachable here.
+    /// Every stage source embedded by the driver.
     const STAGES: &[&str] = &[
         "lexer.kel",
         "parse.kel",
@@ -8553,6 +8580,7 @@ mod construct_naming_guard {
         "verify_depth.kel",
         "verify_typed.kel",
         "verify_datalayout.kel",
+        "verify_types.kel",
         "wire.kel",
     ];
 

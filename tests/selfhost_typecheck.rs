@@ -10759,3 +10759,59 @@ fn a_divergence_refusal_localises_and_does_not_assign_fault() {
         );
     }
 }
+
+/// Public production checking must reach the same negative and positive populations.
+#[cfg(feature = "self-host")]
+#[test]
+fn production_types_reach_corpus_and_rule_form_census() {
+    use keleusma::selfhost::{SelfHostError, self_hosted_compile, type_check_source_via_kel};
+    use keleusma::target::Target;
+    assert_eq!((ILL_TYPED.len(), WELL_TYPED.len()), (20, 7));
+    assert_eq!((RULE_FORM_CELLS.len(), RULE_FORM_CONTROLS.len()), (16, 8));
+    for (label, source) in ILL_TYPED.iter().copied().chain(
+        RULE_FORM_CELLS
+            .iter()
+            .map(|&(shape, _, source)| (shape, source)),
+    ) {
+        assert!(!reference_accepts(source), "negative {label}");
+        assert!(
+            !type_check_source_via_kel(source).expect(label),
+            "missed {label}"
+        );
+        assert!(
+            matches!(
+                self_hosted_compile(source, &Target::host()),
+                Err(SelfHostError::PipelineRejected { .. })
+            ),
+            "reference masked {label}"
+        );
+    }
+    for &(label, source) in WELL_TYPED.iter().chain(RULE_FORM_CONTROLS) {
+        assert!(reference_accepts(source), "positive {label}");
+        assert!(
+            type_check_source_via_kel(source).expect(label),
+            "false rejection {label}"
+        );
+    }
+}
+
+/// Compare production seeding with the independent test transport over every stage.
+#[cfg(feature = "self-host")]
+#[test]
+fn production_types_accept_all_stage_inputs() {
+    use keleusma::selfhost::{call_type_inputs_from_pipeline, type_check_inputs_via_kel};
+    assert_eq!(REAL_STAGE_SOURCES.len(), 12);
+    for &(name, source) in REAL_STAGE_SOURCES {
+        let inputs = call_type_inputs_from_pipeline(source);
+        assert!(!inputs.batches.is_empty(), "empty {name}");
+        assert!(call_inputs_verdict(&inputs), "test transport {name}");
+        assert!(
+            type_check_inputs_via_kel(&inputs).expect(name),
+            "production {name}"
+        );
+        eprintln!(
+            "production type stage accepted {name} with {} batches",
+            inputs.batches.len()
+        );
+    }
+}

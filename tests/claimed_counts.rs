@@ -331,16 +331,21 @@ fn the_stage_source_count_claim_matches_the_directory() {
             rest.find(".kel\")").map(|end| &rest[..end])
         })
         .collect();
-    assert!(
-        embedded.len() < on_disk,
-        "the driver embeds all {on_disk} stage sources. The instructions say one is embedded by \
-         its tests instead, so that sentence is stale.",
+    let disk_names: BTreeSet<String> = std::fs::read_dir(dir)
+        .expect("read stage inventory")
+        .map(|entry| entry.expect("read stage entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "kel"))
+        .map(|path| path.file_stem().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        embedded
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>(),
+        disk_names,
+        "the driver must embed every stage named by the directory inventory"
     );
-    assert!(
-        !embedded.contains("verify_types"),
-        "`verify_types.kel` is now embedded in the driver. It is the twelfth stage, the one that \
-         does not self-compile, and the instructions describe it as embedded by its tests."
-    );
+    assert!(INSTRUCTIONS.contains("all twelve embedded in the driver"));
 }
 
 /// **EVERY WORKSPACE MEMBER IS NAMED IN THE ORIENTATION DOCUMENT.**

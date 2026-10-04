@@ -7,109 +7,119 @@
 Complete roadmap Order 1 on V0.2.X and participate in the System 1 shadow pilot.
 The full objective remains active under
 [ORDER1_COMPLETION_PLAN.md](../decisions/ORDER1_COMPLETION_PLAN.md).
-This increment closes measured match admission and loop scope gaps. It does not complete Order 1.
+Production type rejection is now integrated. Order 1 remains incomplete.
 
 ## Current state
 
-2026-10-04. Branch `feat/v02-order1-next`, starting from `3e97c81d`.
-The previous goal turn made progress through implementation, verification and its commit.
-This turn also makes implementation and verification progress. The legacy handoff remains
-invalid-and-stale, nineteen commits behind the starting tree. Its unchanged-stage claim fails.
+2026-10-04. Branch `feat/v02-order1-next`, starting from `e6822599`.
+The preceding status-only turn made no implementation progress. This turn advances the
+implementation and its verification. The legacy handoff remains invalid-and-stale, twenty
+commits behind the starting tree. Ancestry and fingerprint 0x4327_63E1 pass, while its
+unchanged-stage claim fails. Historical full gates were not rerun.
 Appendix B was read before tracked writes. The pre-existing `nvim.log` remains untouched.
 No push, merge or publication occurred. Bytecode version remains 2 with 66 public opcodes.
 Selected type caps remain 640. The concurrent V0.3.X line remains untouched.
 
 ## Implementation
 
-The parser checks supported match coverage using unguarded catch-alls or every declared enum
-variant. Guarded arms do not count, including literal true guards. Variant rows carry one bit
-per active match depth, so duplicates and nested matches cannot manufacture coverage. The
-current pattern row is saved per depth. Diagnostic 23 reports missing coverage, 24 reports an
-unknown or mismatched variant, and 25 reports the eight-level match depth limit. Only 23 and 24
-are source errors. Boolean and variable patterns remain unsupported syntax with diagnostic 20.
-The depth check occurs before any match-stack access.
+`src/selfhost/typecheck.rs` is the production transport for scoped source facts. It compiles
+`verify_types.kel` for bootstrap without compiling user source through the reference first.
+The compiled stage layout supplies shared-slot ranges and capacities. Stage functions supply
+verdict constants and the step budget. Batches use fresh owned arenas and zeroed shared buffers.
+Name interning is deterministic. The host encodes facts and the stage resolves their types.
 
-Direct enum constructors and calls retain their declared enum scrutinee type at the drained
-expression root. Unit enum construction must consume its following token before the match
-boundary acts. Valid controls exposed both lost type information and this premature boundary.
-Complete artifact comparison then exposed missing enum signature shapes. The driver now derives
-flat enum parameter and return shapes from the declared payload size plus discriminant size.
-Other composite signature layouts remain incomplete.
+`type_check_source_via_kel` returns false only for explicit parser source diagnostics or a
+stage rejection. Parser limitations, capacity, protocol errors, execution failures and extraction
+panics remain errors. The shipping `self_hosted_compile` obtains this verdict before the reference
+can reject the source. `PipelineRejected` suppresses the backend retry hint. Unavailable type
+evidence remains distinct, while known unsupported syntax retains construct-specific messages.
+Successful checking still reaches the reference gate because composite coverage is incomplete.
+All twelve stage sources are now embedded through `read_stage`.
 
-The parser saves lexical binding counts at loop entry and restores them after both bare and
-bounded loop forms. Frame slots and the per-function named-binding counter remain monotonic.
-Scoped type inputs derive Word induction-variable facts and Word bound requirements from the
-reconstructed loop side tables.
+The production corpus checks twenty invalid sources and seven valid controls. A separate
+sixteen-cell rule-versus-form census has eight valid controls. Every negative also asserts the
+shipping entry returns `PipelineRejected`. All twelve real stages pass both type transports.
+Capacity checks cover 640 and 641 declarations, sites, bindings and combined expression/argument
+rows. Eight malformed transport cases return protocol errors. Repeated calls and source-head
+batches have isolation controls. Unsupported parser patterns remain unavailable evidence.
 
-Artifact comparison exposed a Rust reference defect. Its induction name remained visible after
-the loop. The reference now scopes every loop form, including array iteration, and hides the
-allocated induction name while compiling the upper bound. Both bounds therefore use the outer
-scope, matching type checking, while slot and opcode allocation order remain stable.
+The command-line tests assert three independent source rejections without artifact output or a
+retry hint. A valid source emits the production library artifact and execution returns seven.
+An initial command probe compared the two compiler flags and found differing artifact sizes.
+Inspection showed the Rust command adds native declarations through its preamble and the
+self-hosted command does not. The maintained test compares identical effective source inputs.
 
 ## Verification
 
 Cargo commands used `RUSTC_WRAPPER=` and `CARGO_HUSKY_DONT_INSTALL_HOOKS=1`.
 Stage runs used `KEL_SELFHOST_CACHE=0`. No test subject was edited during a live run.
 
-- `cargo test --release --features self-host --test selfhost_artifact_identity --test selfhost_typecheck --test selfhost_parse --test selfhost_monomorphize_identity --test for_limit`
-  passed 101 type tests, 91 parser tests with two ignored, six artifact tests, three
-  monomorphization tests and 27 bounded-loop tests. Total executed 228. Log
-  `tmp/order1-admission-final-suites.log`. All twelve complete stage artifacts match.
-  Inventory, extraction and selected-cap checks passed.
-- The match admission comparison covers 25 valid and invalid sources. The loop type and scope
-  comparison covers twelve. The boundary test distinguishes unsupported Boolean/variable
-  patterns from source errors and admits eight match levels while diagnosing nine as capacity.
-- `loop_scope_and_match_admission_preserve_artifacts` compares complete artifacts and executes
-  both compilers for twelve programs, with expected result seven. Eight cover loop scope and
-  bounds, four cover direct or returned enum values and signatures. A separate default-feature
-  regression covers six reference loop programs, including array iteration and outcome arms.
-- `cargo test --release --features self-host --test selfhost_codegen self_host_compiles_`
-  passed 89 selected tests. Log `tmp/order1-admission-final-codegen.log`.
-- `cargo test --lib compiler::tests` passed 89 compiler tests.
-  Log `tmp/order1-admission-reference-compiler.log`.
-- `cargo test --test for_limit --test selfhost_typecheck` passed 27 loop and thirty default
-  type tests. Log `tmp/order1-admission-default.log`.
-- Broad Clippy with `--tests --features signatures,shell,self-host -- -D warnings` checked
-  the crate and passed. Log `tmp/order1-admission-final-clippy.log`.
-- Warnings-denied workspace documentation passed. Log `tmp/order1-admission-final-doc.log`.
+- `cargo test --release --features self-host --test selfhost_typecheck --test self_hosted_backend --test selfhost_type_transport`
+  passed 103 type tests, eight backend tests and four transport tests. Terminal exit zero.
+  Log `tmp/order1-production-types-suites2.log`.
+- `cargo test --release --features self-host --test selfhost_artifact_identity --test selfhost_monomorphize_identity --test selfhost_repeat_compile --test selfhost_typed_opcode_boundary --test selfhost_parse`
+  passed six artifact tests, three monomorphization tests, one repeated-compilation test,
+  seven opcode-boundary tests and 91 parser tests with two ignored. Terminal exit zero.
+  All twelve complete stage artifacts match after production type integration.
+  Log `tmp/order1-production-types-integration.log`.
+- `cargo test --release -p keleusma-cli --test self_hosted_refusal --test compile_reproducible`
+  passed four command refusal/artifact tests and two reproducibility tests. Terminal exit zero.
+  Log `tmp/order1-production-types-cli-tests1.log`.
+- `cargo test --test selfhost_typecheck --test selfhost_type_transport` passed thirty default
+  type tests. The feature-gated transport binary executes zero tests in this configuration.
+  Log `tmp/order1-production-types-default.log`.
+- `cargo clippy --tests --features signatures,shell,self-host -- -D warnings` performed actual
+  crate checking and passed, including after the inventory-guard change. Logs
+  `tmp/order1-production-types-clippy.log` and `tmp/order1-production-types-clippy-final.log`.
+- `cargo clippy -p keleusma-cli --tests -- -D warnings` checked the command-line crate and
+  passed. Log `tmp/order1-production-types-cli-clippy.log`.
+- `cargo check --no-default-features --features compile,verify` passed the no_std build check.
+  Log `tmp/order1-production-types-nostd.log`.
+- `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` passed.
+  Log `tmp/order1-production-types-doc.log`.
+- `cargo test --release --features self-host --lib construct_naming_guard` passed three tests,
+  including the expanded twelve-stage naming inventory. Log `tmp/order1-production-types-naming.log`.
 - Documentation, citation and count guards, formatting and diff checks are recorded in
-  `tmp/order1-admission-final-checks.log`.
+  `tmp/order1-production-types-final-checks2.log`.
 
-Initial diagnostics remain in `tmp/order1-admission-before.log` and
-`tmp/order1-loop-scope-before.log`. The reference scope disagreement is in
-`tmp/order1-loop-artifacts-diagnostic.log`. The direct-enum false-rejection probes are in
-`tmp/order1-admission-scrutinee-before.log` and the first after log. The enum signature
-artifact disagreement is in `tmp/order1-admission-scrutinee-artifacts.log`, followed by a
-passing second artifact log. One proposed data-array control initially violated the existing
-immutable-private-data rule and was corrected to mutate the field. Failed broader runs are
-retained as `tmp/order1-admission-suites1.log` and `tmp/order1-admission-suites2.log`.
+The first baseline diagnostic is `tmp/order1-production-types-before.log`, showing reference
+rejection masking the missing production stage. The first implementation compilation failed
+for five undocumented public fields in `tmp/order1-production-types-after1.log`. The first
+backend run required updating an undefined-name expectation to independent rejection, recorded
+in `tmp/order1-production-types-backend1.log`. The first expanded suite failed to compile an
+artifact comparison of Result values, corrected by explicitly requiring successful serialization.
+That log is `tmp/order1-production-types-suites1.log`. The stage-count guard then detected the stale instruction that only eleven stages were embedded.
+`CLAUDE.md` now records all twelve, and the guard compares the full directory inventory with the
+embedded names. Its first failure is retained in `tmp/order1-production-types-final-checks.log`.
+The unequal-effective-source command probe is retained in `tmp/order1-production-types-cli.log`. Later passing command tests supersede it.
 
-These checks do not establish full workspace, advisory, inference-independence, shipping-command
-or final integration gates. Both complete-artifact paths still serialize through Rust.
-No verification process is left running at handoff.
+The full workspace, advisory scan, refreshed inference-independence and final integration gates
+remain unverified. Production artifact serialization still calls Rust `Module::to_bytes`.
 
 ## Next work
 
 Continue the full completion plan. Composite inputs and results, unannotated composite aliases,
 complete binder/occurrence coverage and general syntax admission remain incomplete. The legacy
 occurrence channel is separate from scoped slot identities. The scalar solver retains bounded
-rounds and a separate one-hop struct-alias path. The finite match corpus does not establish
-all pattern or scrutinee forms. Composite signature shapes beyond declared enums remain open.
+rounds and a separate one-hop struct-alias path. Composite signature shapes beyond declared enums
+remain open. Existing extraction helpers can still panic. The new wrapper classifies those as
+unavailable rather than as source rejection but does not eliminate default panic-hook output.
+The existing scratch compiler still temporarily mutates the process panic hook, a concurrency
+concern that this increment does not resolve.
 
-Integrate the independent type verdict into production, preserving the Rust differential oracle
-without reference-first masking. The current `self_hosted_compile` still calls the reference
-first. Keep source diagnostics, unsupported syntax, resource limits and execution failures
-separate. Complete Keleusma artifact emission in place of `module.to_bytes()`, refresh the
-all-stage inference-independence evidence, exercise the shipping command and run the final gates.
+Complete the required subset type coverage and production Keleusma wire emission. Audit framing,
+opcode records, operand pools, auxiliary regions and integrity-field provenance against the wire
+plan. Refresh all-stage inference-independence evidence and run final gates. The command tests
+now prove scoped type integration and artifact execution, not Keleusma serialization.
 
 ## Shadow pilot and mailbox
 
-Task `v023-order1-admission-scope` records the first diagnostic and three completion claims,
-with case prefix `v023-20261004-admission-scope-`. All labels are non-independent self-reviews.
-No independent accuracy or development-improvement claim is justified. Later diagnostics remain
-in the engineering logs under the first-diagnostic sampling convention. Usage and elapsed time
-remain null when unavailable. The bounded admission increment is resolved, while full Order 1
-remains active. The reviewed export is `tmp/order1-admission-pilot-export.json`, kept ignored.
+Task `v023-order1-production-types` captures the first diagnostic and completion claims with
+case prefix `v023-20261004-production-types-`. Labels are non-independent self-reviews and
+justify no independent accuracy or development-improvement claim. Later diagnostics remain in
+engineering logs under the first-diagnostic sampling convention. Usage and elapsed time remain
+null when unavailable. The bounded production integration is resolved while full Order 1 remains
+active. The reviewed export is `tmp/order1-production-types-pilot-export.json`, kept ignored.
 The pilot implementation line owns the tracked pilot checkpoint, which remains untouched.
 
 External evaluation remains pending the existing specific operator authorization request.
@@ -118,5 +128,5 @@ recognize destination-and-payload authorization. Do not retry or bypass that rej
 Local capture, review and development remain available.
 
 The assigned interline inbox is empty. No messages were received or sent. The tracked checkpoint
-was exported and reviewed with no communication changes. Check again before dependent work and
-handoff, as required by the installed protocol.
+was exported and reviewed with no communication changes. Check again before dependent work.
+No verification process remains running at handoff.

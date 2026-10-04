@@ -13,6 +13,30 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-04 A production verdict must precede its oracle
+
+The first integration test rejected an invalid program through the Rust reference, demonstrating
+that the shipping entry could mask a missing independent verdict. The new production runner
+uses scoped Keleusma parser and reconstruction facts. The reference compiler bootstraps the
+embedded rejection stage, but does not inspect the user source before the independent verdict.
+Successful scoped checks still require the reference gate because composite coverage is incomplete.
+
+The transport derives field offsets and capacities from named compiled slots. Stage functions
+supply verdict constants and the execution bound. A fresh owned arena and zeroed shared buffer
+per batch prevent private solver state from crossing source heads. Protocol, capacity and virtual
+machine errors do not become source rejection. Existing extraction panics are caught as unavailable
+evidence. This does not eliminate upstream panic paths or their default panic-hook output.
+
+Tests distinguish twenty invalid sources and seven valid controls, plus sixteen rule/form cases
+and eight controls. A separate twelve-stage comparison reaches both transports. Boundary and
+malformed-input controls establish that an unavailable verdict cannot masquerade as a type error.
+
+The command probe initially compared the two backend flags on the same file and found different
+artifact sizes. Inspection established different effective sources. The Rust command adds native
+signature declarations while the self-hosted command does not. The maintained command test compares
+with the corresponding production library artifact, then executes it and asserts the result.
+Artifact agreement and execution are separate observations. Neither establishes wire-emitter provenance.
+
 ## 2026-10-04 Admission checks exposed scope defects in both compilers
 
 Guarded match arms cannot establish coverage even when their condition is a literal true.

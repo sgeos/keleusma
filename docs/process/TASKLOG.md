@@ -6,6 +6,23 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Production type rejection
+
+The shipping compiler now obtains an independent pipeline type verdict before invoking the Rust
+reference on user source. The production transport derives column ranges from the embedded
+stage layout, reads protocol constants from its functions and isolates each source-head batch.
+Explicit rejection is distinct from unavailable syntax, capacity, malformed transport and execution
+failures. The reference still gates acceptance while composite coverage remains incomplete.
+
+The existing rejection corpus and rule census now exercise the production path. All twelve stages
+pass both type transports. Boundary checks cover 640 and 641 rows, including combined expression
+and argument rows. Command-line tests check independent rejection without artifact output and
+compare a valid artifact with the library before executing it with expected result seven.
+
+The shadow pilot captures the first diagnostic and bounded completion claims locally. Labels
+are non-independent. The reverse prompt records exact verification and remaining work.
+Full Order 1 remains active, including composite coverage, wire emission and final gates.
+
 ## 2026-10-04 Order 1 match admission and loop scopes
 
 The admission audit found nine non-exhaustive matches accepted by the pipeline. The parser now
