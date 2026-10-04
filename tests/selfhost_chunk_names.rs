@@ -156,6 +156,8 @@ fn the_self_hosted_compiler_can_now_compile_wire_kel() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
 
     let module = keleusma::selfhost::self_host_compile(WIRE);
+    // 497 since 2026-10-04. Five framing functions add begin, feed, finish,
+    // read-begin and read-finish to the previous 492 chunks.
     // **492 SINCE 2026-09-11, UP FROM 486.** The name-aware slot, variant and enum-layout streams added six
     // functions to this stage -- three begin/step pairs -- and a function is a chunk, so the
     // figure moved by exactly six.
@@ -166,7 +168,7 @@ fn the_self_hosted_compiler_can_now_compile_wire_kel() {
     // reason, and this is the chunk count.
     assert_eq!(
         module.chunks.len(),
-        492,
+        497,
         "`wire.kel`'s chunk count moved. A function is a chunk, so this figure moves whenever \
          the stage gains or loses one -- update it WITH the cause, as the comment above does"
     );

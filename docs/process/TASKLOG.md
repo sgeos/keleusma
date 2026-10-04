@@ -6,6 +6,30 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Streaming framing and module-driven auxiliary assembly
+
+Keleusma now derives complete unsigned framing and checksums across 65,536-byte windows.
+Five internal commands add four private words without changing the public format or opcode set.
+The wire stage has 497 chunks and uses 47,442 of 49,152 input bytes. All three chunk-count pins
+now record the five-function increase. Selected type-stage caps remain 640.
+
+The new auxiliary driver takes only Module facts. All twelve current stage containers match
+the reference without borrowed region positions, lengths or payloads. Actual stream output
+lengths determine placement. Signature numbering and scalar metadata remain host supplied.
+Unintegrated record forms fail explicitly. The shipping command still serializes through Rust.
+Complete encoder and decoder integration and remaining type coverage keep Order 1 active.
+
+The targeted wire and artifact suites pass 204 tests. Protocol and inference tests pass two
+and four tests respectively, with 41,227 recorded expression types removed without artifact
+changes. The full workspace diagnostic run reports 3,037 passes, three stale count-pin failures
+and five ignored. After those pins were updated, all three affected suites pass 97 tests with
+two ignored under workspace feature unification. The whole workspace was not rerun after that
+repair. Final Clippy, documentation build and compile-and-verify no_std checks pass.
+
+The shadow task retains the initial capacity-pin diagnostic and three bounded claims locally.
+Self-review labels are non-independent. External evaluation remains unavailable under the prior
+automatic approval rejection. Commands, complete logs and next work are in the reverse prompt.
+
 ## 2026-10-04 Admission repair and refreshed independence evidence
 
 The complete workspace run exposed eight failures across seven targets. The repairs distinguish

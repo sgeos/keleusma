@@ -3043,23 +3043,24 @@ fn no_other_file_restates_the_shared_layout() {
 ///
 /// # What still does NOT work, stated so the 486 is not over-read
 ///
-/// `wire.kel` parses; it does not yet self-compile. `self_host_compile` reaches
-/// a capacity limit further down the pipeline. **That is a different failure
-/// from the one this file tracked** — a bound rather than a mis-parse — and it
-/// is the next thing between `wire.kel` and the byte-identity corpus.
+/// The earlier capacity refusal is historical. `wire.kel` now self-compiles
+/// byte-identically in the separate code-generation corpus. This test checks
+/// declaration boundaries and the current chunk count only.
 #[cfg(feature = "self-host")]
 #[test]
 fn wire_kel_parses_correctly_now_that_the_bare_loop_form_is_supported() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
     let parsed = keleusma::selfhost::try_parse_functions(WIRE)
         .expect("wire.kel must parse now that the bare `for` form is lowered");
+    // 497 since 2026-10-04. Five framing functions add begin, feed, finish,
+    // read-begin and read-finish to the previous 492 chunks.
     // **492 SINCE 2026-09-11, UP FROM 486.** The name-aware slot, variant and enum-layout streams added six
     // functions to `wire.kel`, and a function is a chunk. The same figure is pinned in
     // `tests/selfhost_chunk_names.rs`, from the COMPILED module rather than the parsed source;
     // both moved together, which is what a figure with two independent derivations should do.
     assert_eq!(
         parsed.functions.len(),
-        492,
+        497,
         "`wire.kel` parsed to {} chunks. The count is pinned because it is the corpus worst \
          case and the thing the chunk cap is sized against: PARSE_CHUNK_CAP is {}, so a \
          stage growing toward it is visible here rather than at the wall.",

@@ -8,7 +8,7 @@ The standing inference-independence tests in
 [the compiler test module](../../src/compiler/inference_independence.rs) cover all twelve
 current stage sources and check their directory inventory. The intervention clears the
 populated expression-type table after the recording pass and before emission. Clearing
-40,824 entries leaves every complete serialized artifact unchanged. A deliberately changed
+41,227 entries leaves every complete serialized artifact unchanged. A deliberately changed
 array type changes emission, proving that the hook reaches a consulted table. An invalid
 source fails before the hook, preserving admission. The comparisons use complete bytes.
 

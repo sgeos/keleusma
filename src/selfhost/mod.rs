@@ -39,6 +39,14 @@ use crate::value_layout::{CompositeKind, ScalarKind};
 use crate::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 use crate::{Arena, compiler::compile, lexer::tokenize, parser::parse};
 
+mod wire_auxiliary;
+pub use wire_auxiliary::wire_auxiliary_from_module_via_kel;
+mod wire_framing;
+pub use wire_framing::{
+    wire_artifact_from_sections_via_kel, wire_container_from_regions_via_kel,
+    wire_framing_is_intact_via_kel,
+};
+
 mod typecheck;
 pub use typecheck::{TypeCheckError, type_check_inputs_via_kel, type_check_source_via_kel};
 

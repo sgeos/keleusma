@@ -6,10 +6,42 @@
 
 The driver-capacity test now inventories all twelve stage sources. Earlier versions of that
 test used ten sources and omitted wire and verify_types. The current maxima belong to
-different stages. Parse uses 776 of 1,024 names. Wire uses 45,297 of 49,152 input bytes.
-The remaining wire input margin is 3,855 bytes. No input cap changed. These measurements
+different stages. Parse uses 776 of 1,024 names. Wire uses 47,442 of 49,152 input bytes.
+The remaining wire input margin is 1,710 bytes. No input cap changed. These measurements
 establish input residency for the corpus, not complete production serialization.
 Both encoding and decoding remain within the original wire-format scope.
+
+## Module-driven framing and auxiliary assembly, 2026-10-04
+
+Five new internal commands provide framing begin, feed, finish and the two reader endpoints.
+They add four private words, or 32 bytes at the host word width. The stage now has 497 chunks
+and highest command 192. Public bytecode version remains 2 and the opcode count remains 66.
+The dispatch chain and remaining input margin require measurement before further stage growth.
+
+The framing driver obtains offsets and total length from Keleusma, copies opaque sections into
+those positions and streams the integrity calculation in windows of at most 65,536 bytes.
+The reader checks the canonical unsigned envelope and complete checksum across windows.
+It does not decode opcode, operand-pool or auxiliary-record semantics.
+
+The new auxiliary driver takes only Module data. It emits the complete auxiliary container
+for all twelve current stages without reference bytes, reference region positions or a reference
+artifact length. Names and string-pool bytes come from the stage interner. Record streams
+return their actual lengths, and the stage derives the triplicated directory and padded layout.
+Header fields include actual flags, resource values and schema hash. Chunk records retain actual
+opcode counts and offsets. Empty mandatory tables retain their directory entries.
+
+This is incomplete production serialization. Rust still supplies signature-table numbering,
+parameter tags, record presence and scalar metadata. Native records, templates, debug pools,
+composite constants, private composite slots and nonempty non-elided initializer pools remain
+explicitly unsupported by this new helper. The shipping command still uses Module::to_bytes.
+No existing shipping behavior was narrowed. Complete opcode and pool production, remaining
+auxiliary forms, semantic decoding and shipping integration remain required.
+
+Seven integration tests compare all twelve auxiliary containers and framed artifacts, exercise
+multiwindow payloads and directory capacity, preserve nonzero metadata, refuse oversized
+packer inputs and reject corrupted envelopes even after a valid checksum is recomputed.
+Two private protocol tests cover field widths, the u32 framing limit, exact stream lengths,
+wrong-mode calls and accumulator preservation on refusal. See the reverse prompt for run receipts.
 
 Scoping for the Order-1 residual "self-host wire-format serialization". Probed 2026-08-03,
 **re-scoped 2026-08-08**.

@@ -13,6 +13,38 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-04 Actual emitted lengths replace borrowed auxiliary positions
+
+The former windowed driver accepted artifact size and region positions supplied by its caller.
+Those inputs came from the reference artifact in the comparison tests. Complete region byte
+coverage therefore did not establish independent artifact construction. The new auxiliary path
+accepts only Module facts, collects the bytes each record stream actually reports and asks the
+existing Keleusma directory emitter to derive placement. Names and string-pool content retain
+the existing stage interner. Header fields and opcode positions now carry actual module values.
+
+A separate framing protocol validates field widths and size arithmetic before writing the header.
+It stores the expected and consumed byte counts across coroutine resets. Every feed is bounded
+by the 65,536-byte transport window and remaining length. A refused call preserves the accumulator.
+Legacy commands cannot overwrite an active stream. The reader folds the complete artifact and
+checks the standard checksum residue, while semantic decoding remains an explicit open obligation.
+
+The auxiliary comparison reaches all twelve stages. It does not make host-supplied signature
+numbering independently derived, and the framed artifact comparison still borrows opcode and
+operand bytes. Missing auxiliary forms fail explicitly. They must be integrated before replacing
+the shipping serializer, which is unchanged. Input guards protect the new path from the historical
+packer's infallible name and count conversions.
+
+The first broad diagnostic was a changed capacity pin. Wire input grew from 45,297 to 47,442
+bytes, leaving 1,710 below the unchanged cap. A later container-test compilation failed because
+the reference builder was named Builder rather than WireBuilder. The full workspace then found
+three old chunk-count pins. Five framing functions changed 492 to 497 in all three derivations.
+The full run reports 3,037 passes, three failures and five ignored. All three repaired targets
+subsequently pass 97 tests with two ignored. No production source changed after the full run.
+
+The pilot records the first diagnostic and three bounded claims with non-independent labels.
+No external evaluation succeeded for this task. Full Order 1 remains active, including complete
+production encoding and decoding, remaining type coverage and final integration gates.
+
 ## 2026-10-04 Admission boundaries and corpus evidence
 
 The inference intervention must run after the recording pass. Clearing the parsed input map

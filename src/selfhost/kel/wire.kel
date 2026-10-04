@@ -157,6 +157,15 @@ private data crc {
     acc: Word,
 }
 
+// Framing stream state survives coroutine RESET. Mode 1 writes a trailer and
+// mode 2 validates a complete artifact including its trailer.
+private data framing {
+    mode: Word,
+    expected: Word,
+    seen: Word,
+    bad: Word,
+}
+
 // Scratch for the disagreement scan, which needs an accumulator across loop
 // iterations for the same reason the checksum does.
 private data st {
@@ -4674,7 +4683,12 @@ fn dispatch_window(cmd: Word) -> Word {
     if cmd == 185 { ev_name_step() } else {
     if cmd == 186 { el_name_begin() } else {
     if cmd == 187 { el_name_step() } else {
-    0 - 97 }}}}}}}}}}}}}}}}}}
+    if cmd == 188 { frame_begin() } else {
+    if cmd == 189 { frame_feed() } else {
+    if cmd == 190 { frame_finish() } else {
+    if cmd == 191 { frame_read_begin() } else {
+    if cmd == 192 { frame_read_finish() } else {
+    0 - 97 }}}}}}}}}}}}}}}}}}}}}}}
 }
 
 fn dispatch_driver2(cmd: Word) -> Word {
@@ -4857,7 +4871,98 @@ fn el_name_step() -> Word {
     } }
 }
 
-fn highest_command() -> Word { 187 }
+// Complete unsigned framing from semantic header fields and section lengths.
+// fin[0..4] holds width bytes and flags; fin[4..10] holds the six resource
+// fields; fin[10..13] holds opcode, operand-pool and auxiliary byte lengths.
+// On success fin[0..3] returns total length, pool offset and auxiliary offset.
+fn frame_begin() -> Word {
+    framing.mode = 0;
+    framing.bad = 0;
+    for i in 0..13 limit 13 {
+        let bound = if i < 4 { 255 } else { 0xFFFFFFFF };
+        if wire.fin[i] < 0 orelse wire.fin[i] > bound { framing.bad = 1; }
+    }
+    if framing.bad != 0 { 0 - 263 } else {
+    if wire.fin[10] % 4 != 0 orelse wire.fin[11] % 8 != 0 { 0 - 265 } else {
+        let op_len = wire.fin[10];
+        let pool_len = wire.fin[11];
+        let aux_len = wire.fin[12];
+        let pool_at = ((64 + op_len + 7) / 8) * 8;
+        let aux_at = ((pool_at + pool_len + 7) / 8) * 8;
+        let total = aux_at + aux_len + 4;
+        if total > 0xFFFFFFFF { 0 - 264 } else {
+            emit_framing_header(total, wire.fin[0], wire.fin[1], wire.fin[2]);
+            wire.bytes[15] = wire.fin[3] as Byte;
+            for i in 0..4 limit 4 { put_u32(16 + i * 4, wire.fin[4 + i]); }
+            put_u32(56, wire.fin[8]);
+            put_u32(60, wire.fin[9]);
+            set_section(32, 36, 64, op_len);
+            set_section(40, 44, pool_at, pool_len);
+            set_section(48, 52, aux_at, aux_len);
+            wire.fin[0] = total;
+            wire.fin[1] = pool_at;
+            wire.fin[2] = aux_at;
+            framing.expected = total - 4;
+            framing.seen = 0;
+            crc_begin();
+            framing.mode = 1;
+            64
+        }
+    } }
+}
+
+// Validation is deliberately scoped to the unsigned envelope and checksum.
+// Opcode, pool and auxiliary semantics remain separate decoder obligations.
+fn frame_read_begin() -> Word {
+    framing.mode = 0;
+    let total = wire.warg;
+    if total < 68 orelse total > 0xFFFFFFFF { 0 } else {
+    if fh_magic_ok() == 0 orelse fh_version_ok() == 0 { 0 } else {
+    if fh_u16(6) != 64 orelse fh_u32(8) != total { 0 } else {
+        let op_len = fh_u32(36);
+        let pool_len = fh_u32(44);
+        let pool_at = ((64 + op_len + 7) / 8) * 8;
+        let aux_at = ((pool_at + pool_len + 7) / 8) * 8;
+        if op_len % 4 != 0 orelse pool_len % 8 != 0 { 0 } else {
+        if fh_u32(32) != 64 orelse fh_u32(40) != pool_at orelse fh_u32(48) != aux_at { 0 } else {
+        if aux_at + fh_u32(52) + 4 != total { 0 } else {
+            framing.expected = total;
+            framing.seen = 0;
+            crc_begin();
+            framing.mode = 2;
+            1
+        } } }
+    } } }
+}
+
+fn frame_feed() -> Word {
+    if framing.mode == 0 { 0 - 260 } else {
+    if wire.warg <= 0 orelse wire.warg > 65536 { 0 - 261 } else {
+    if wire.warg > framing.expected - framing.seen { 0 - 261 } else {
+        for i in 0..wire.warg limit 65536 { crc_fold(wire.bytes[i] as Word); }
+        framing.seen = framing.seen + wire.warg;
+        framing.seen
+    } } }
+}
+
+fn frame_finish() -> Word {
+    if framing.mode != 1 { 0 - 260 } else {
+    if framing.seen != framing.expected { 0 - 262 } else {
+        put_u32(0, crc_end());
+        framing.mode = 0;
+        4
+    } }
+}
+
+fn frame_read_finish() -> Word {
+    if framing.mode != 2 { 0 - 260 } else {
+    if framing.seen != framing.expected { 0 - 262 } else {
+        framing.mode = 0;
+        if crc_end() == crc32_residue() { 1 } else { 0 }
+    } }
+}
+
+fn highest_command() -> Word { 192 }
 
 // --- THE ENTRY, AS A COROUTINE ----------------------------------------------
 //
@@ -4879,6 +4984,7 @@ fn highest_command() -> Word { 187 }
 // resume by the Stream parameter-slot update, so a resumed command sees the same
 // number it was entered with.
 fn dispatch(cmd: Word) -> Word {
+    if framing.mode != 0 andalso cmd < 188 { 0 - 260 } else {
     if cmd < 13 { dispatch_container(cmd) } else {
     if cmd < 26 { dispatch_schema(cmd) } else {
     if cmd < 38 { dispatch_consts(cmd) } else {
@@ -4892,6 +4998,7 @@ fn dispatch(cmd: Word) -> Word {
     if cmd < 115 { dispatch_frame(cmd) } else {
     if cmd < 134 { dispatch_emit(cmd) } else {
     if cmd < 152 { dispatch_driver(cmd) } else { dispatch_driver2(cmd) } } } } } } } } } } } } }
+}
 }
 
 loop main(cmd: Word) -> Word {
