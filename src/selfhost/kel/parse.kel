@@ -1470,8 +1470,8 @@ fn step_local(v: Word) -> Word {
     Node::Local() as Word + ps.found * 64
 }
 
-// Resolve a plain identifier that is neither a chunk, data block, const block, enum, nor
-// struct name. If it is a struct-typed PARAMETER not shadowed by a `let` binding, emit its
+// Resolve a local identifier, including one shadowing a global name. If it is a
+// struct-typed PARAMETER not shadowed by a `let` binding, emit its
 // Local and arm the field-access postfix (a following `.f` becomes a FieldAccess); a `let`
 // binding (whose struct type is not tracked) and a non-struct parameter both read as an
 // ordinary Local. Held in its own function so step_ident's five-deep name-lookup chain is not
@@ -1655,10 +1655,21 @@ fn resolve_plain_ident(v: Word) -> Word {
     }
 }
 
-// An identifier in operand position: a chunk (function) name opens a call, a data-block
-// name a `data.field` read; any other identifier is a Local (a `let` binding or a
-// parameter).
+// Local scope takes precedence over global declarations. Keep the scans outside the
+// global lookup chain so its bounded conditional depth does not increase.
 fn step_ident(v: Word) -> Word {
+    ps.found_flag = 0;
+    for i in 0..stmt.let_count limit 64 {
+        if stmt.let_names[i] == v { ps.found_flag = 1; }
+    }
+    for i in 0..ps.pcount limit 32 {
+        if ps.pnames[i] == v { ps.found_flag = 1; }
+    }
+    if ps.found_flag == 1 { resolve_plain_ident(v) } else { step_global_ident(v) }
+}
+
+// A global function opens a call; other global namespaces select their postfix parser.
+fn step_global_ident(v: Word) -> Word {
     ps.found_flag = 0;
     for i in 0..toks.chunk_count limit 1024 {
         if toks.chunks[i] == v {

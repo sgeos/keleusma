@@ -29,6 +29,13 @@ in the walk. The Rust reference currently accepts a Word-valued function guard, 
 boolean requirement on that root is introduced here. Match guards have a separate reference
 check but are discarded by the self-hosted parser. These are distinct remaining concerns.
 
+Call argument extraction now retains scalar literal facts, scoped local identities and referenced
+function return declarations. Independent batches cover each source head's guard and body.
+All twelve stage sources fit the approved caps with maxima of 67 sites, 88 arguments and
+62 bindings per batch. Call checks accept those batches. Alias lookup is bounded by the number
+of binding rows and reaches longer chains while leaving cycles and missing targets unknown.
+Computed and composite arguments remain incomplete, and production rejection remains open.
+
 **Currency, 2026-09-29.** The six input channels that previously excluded `parse.kel` and
 `wire.kel` now have 640-row caps. The measured stage-source test fits and checks all twelve real
 sources. The selected increase is 7,168 words, or 56 KiB, across the stage's shared and private

@@ -6,6 +6,33 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Order 1 call arguments and scope
+
+The pipeline now extracts actual call arguments together with declared parameter tags.
+Local identities include source head, guard or body range and frame slot. Function returns
+use separate identities. Per-range batches retain every call and import only referenced return
+bindings. All twelve stage sources fit the approved 640-row caps. The largest measured batch
+has 67 call sites, 88 argument requirements and 62 bindings. The call stage accepts every batch.
+Computed arguments, composite types and the remaining production input channels remain open.
+
+Regression cases found three additional issues. The parser selected a global function before
+a same-named local parameter. Alias resolution stopped after one hop. The production module
+assembler emitted empty data-layout regions that the reference omitted. Local lookup now takes
+precedence, alias traversal is bounded by binding-table length, and absent slots produce no layout.
+Controls exercise local shadowing, alias chains through the 640-row boundary, cycles, absent
+targets, guard calls, later source-head failures and complete artifacts for valid shadowing.
+
+Release-profile verification passed 88 type tests, 90 parser tests with two ignored, 89 selected
+compilation tests and three monomorphization tests. A new inventory-checked corpus compares
+complete serialized artifacts from the production compiler for all twelve stages. Both of its
+tests passed. Default-feature type tests passed 30. Default and broad-feature Clippy passed with
+actual crate checking. The reverse prompt records final reruns and exact receipts. Full workspace,
+inference-independence refresh, production rejection and Keleusma wire integration remain open.
+
+The shadow pilot retains the first missing-documentation diagnostic and up to three completion
+claims. Self-reviews are marked non-independent. External evaluation remains pending the existing
+specific approval request. The interline inbox is empty. Full Order 1 remains active.
+
 ## 2026-10-04 Order 1 match comparisons and source heads
 
 Expression extraction now compares integer and enum match arms. Ten source cases produce

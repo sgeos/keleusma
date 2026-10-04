@@ -18,11 +18,11 @@ Full-language support remains Order 6. Existing supported programs must retain t
 
 | Requirement | Evidence required | Current evidence and remaining work |
 |---|---|---|
-| Compile the complete stage corpus | Complete artifact identity against the reference for every current stage source, with a corpus inventory check | Twelve stage tests exist. Repeat after the pipeline changes. |
+| Compile the complete stage corpus | Complete artifact identity against the reference for every current stage source, with a corpus inventory check | All twelve complete serialized artifacts from the production compiler match the reference after the call and alias changes. The new artifact corpus also checks directory inventory. Both sides still use the Rust serializer. |
 | Avoid reference scaffold borrowing | Production compilation assembles module fields from pipeline output | `self_host_compile_scratch` provides this path. Preserve it through integration. |
 | Derive type inputs from the self-hosted pipeline | Production rejection receives facts without walking the reference parser's abstract syntax tree or borrowing inferred types | Four extraction helpers are partial. Expressions cover only part of the required shapes. Close the residuals and move the production input path. |
 | Reject ill-typed subset programs | Independent pipeline rejection agrees with the reference on the rejection corpus, valid controls, and the rule-versus-form census | The current test harness feeds reference syntax to `verify_types.kel`. The shipping driver calls the reference first. Neither proves independent production type rejection. |
-| Preserve the first-pass monomorphization result | Every stage remains unchanged by monomorphization, with a control that does change | The corpus now lists all twelve sources. Identity, changing control and directory inventory tests passed on 2026-10-04. Repeat if stage sources change. |
+| Preserve the first-pass monomorphization result | Every stage remains unchanged by monomorphization, with a control that does change | The corpus now lists all twelve sources. Identity, changing control and directory inventory tests passed again after the parser and alias changes on 2026-10-04. Repeat if stage sources change. |
 | Preserve independence from inferred expression types | The current stage corpus compiles identically with recorded expression types absent | Refresh the existing inference-independence evidence for all current sources. |
 | Emit complete artifacts through Keleusma | Production output uses the Keleusma wire emitter for framing, opcode records, operand pools, auxiliary regions and integrity fields | Region coverage tests exist, but they do not establish production serialization. `Module::to_bytes` remains on current artifact paths. Preserve the wire plan's encoder and decoder obligations. |
 | Reach the shipping tool | An end-to-end command emits the independently assembled artifact and reports type rejection through the new path | The shipping self-hosted backend exists. Integrate the remaining paths and test the command itself. |
@@ -54,7 +54,7 @@ Bytecode version remains 2. No new bytecode opcode is authorized. The internal p
 changes required by this plan do not authorize changing the public artifact format.
 The V0.3.X workstream remains separate. Publication requires in-session confirmation.
 
-The legacy handoff is invalid-and-stale. Its stamp is thirteen commits behind the starting
+The legacy handoff is invalid-and-stale. Its stamp is fourteen commits behind the starting
 tree, its ancestry check passes, and its unchanged-stage-source claim is contradicted by
 `verify_types.kel`. Its full-suite and advisory checks have not been rerun for this increment.
 
@@ -83,3 +83,26 @@ Separate reconstruction of each source head recovers its return row and its own 
 Function guard expressions are still traversed. A probe found that the Rust reference accepts
 `fn f(x: Word) -> Word when 1 { 1 } fn f(y: Word) -> Word { 2 }`.
 No new root boolean requirement is imposed while that reference behavior remains unresolved.
+
+## Call extraction evidence
+
+Call argument requirements now come from reconstructed argument indices. Scalar literals,
+parameter declarations, local aliases and called-function return declarations retain source
+facts without reference syntax or inferred types. Local identities include the source head,
+guard or body range and frame slot. Function return identities occupy a separate namespace.
+Each range has its own batch and imports only the function returns it references.
+
+The aggregate wire-stage input initially contained 831 bindings, exceeding the approved
+640-row limit. Across all twelve stages, separate batches reduce the measured maxima to
+67 call sites, 88 argument requirements and 62 bindings. The call checks accept every batch.
+The largest declaration table has 492 entries. No array capacity increased.
+This establishes the call channel's capacity and valid-stage controls, not complete type rejection.
+
+A parameter sharing a function name exposed global lookup preceding local lookup in the parser.
+Local bindings now take precedence. Alias resolution also follows chains within the binding-table
+bound, including cycles and absent targets that remain unknown. Computed arguments, field and
+index results, non-scalar declarations and the other input channels still need integration.
+
+Complete artifact comparison on a valid shadowing program found another assembly discrepancy.
+The pipeline supplied an empty data layout where the reference supplied no layout. Both assembly
+helpers now omit the layout when there are no slots, preserving the artifact's region set.

@@ -1029,7 +1029,7 @@ pub fn lex_token_count(src: &str) -> usize {
 /// One binding row for the type channel: `(name, tag, form, target)`.
 ///
 /// `form` matches the stage's `ty.bform`: **0** the value is a TAG, **1** it is
-/// another NAME the stage resolves through one alias hop. `target` is that name
+/// another NAME the stage resolves through bounded alias traversal. `target` is that name
 /// for form 1 and empty otherwise.
 ///
 /// # Why the target is a string
@@ -2181,77 +2181,170 @@ pub type DeclRow = (String, i64, Vec<i64>);
 /// answering it".
 pub type CallSiteRow = (String, i64);
 
-/// The declaration and call-site halves of the type channel's input, from the PIPELINE.
+/// Call declarations, sites and argument requirements from the self-hosted parser.
+/// Argument rows pair a declared scalar tag with a source operand for stage resolution.
+#[derive(Debug)]
+pub struct CallTypeInputs {
+    /// Source declarations in order, including each function head.
+    pub declarations: Vec<DeclRow>,
+    /// Independent source-head ranges, retaining every call and argument.
+    pub batches: Vec<CallTypeBatch>,
+}
+
+/// Call facts for one source head's guard or body.
+/// Bindings include local slots and only referenced function return declarations.
+#[derive(Debug)]
+pub struct CallTypeBatch {
+    /// Calls carrying callee names and supplied argument counts.
+    pub sites: Vec<CallSiteRow>,
+    /// Declared parameter tags paired with actual operands at corresponding positions.
+    pub arguments: Vec<(i64, ExprOperand)>,
+    /// Scoped bindings for these argument operands. Do not substitute unscoped binding rows.
+    pub bindings: Vec<BindingRow>,
+}
+
+/// Extract call input facts without reference syntax or inferred expression types.
 ///
-/// # What this moves, and what it does not
-///
-/// `decl_call_rows` in `tests/selfhost_typecheck.rs` returns three things: declared arities,
-/// call sites, and a per-argument pair of (declared parameter tag, ACTUAL ARGUMENT tag).
-/// **The first two move here; the third does not.** The actual-argument tag requires
-/// classifying an arbitrary expression, which is a node classifier rather than a
-/// re-projection of data already in hand — so it is left, and said so, rather than
-/// half-built.
-///
-/// # Why it is a re-projection at all
-///
-/// The driver already holds every input: `ParsedFn` carries the declared arity and each
-/// parameter's type-name id from the header records, and a `Call` node carries the callee's
-/// chunk index. Nothing here re-walks the source.
-pub fn decl_call_rows_from_pipeline(src: &str) -> (Vec<DeclRow>, Vec<CallSiteRow>) {
+/// Arguments retain scalar literal tags, local identities and called-function identities. Other
+/// expressions remain unknown. The type stage resolves named operands through bindings.
+/// Local identities include the source head, guard or body range, and frame slot. Function
+/// return identities occupy a separate namespace. Equal spellings cannot alias across heads.
+/// Repeated function heads use the final declaration's parameter tags, matching the
+/// reference input builder. Arity remains separate, so extra or missing arguments are
+/// reported by the stage rather than concealed by the positional zip.
+#[must_use]
+pub fn call_type_inputs_from_pipeline(src: &str) -> CallTypeInputs {
     let (fns, names, ..) = parse_functions_fused(src);
     let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
-
-    // The SAME tag mapping the binding rows use, and now literally the same function
-    // rather than a restatement of it: it already encodes the casing rule that an earlier
-    // revision got backwards, where `bool` is the primitive and `Bool` an ordinary named type.
-    let tag_of = |type_name_id: i64| -> i64 {
-        scalar_tag_of_type_name(names.get(type_name_id as usize).map(String::as_str))
-    };
-
-    let mut decls: Vec<DeclRow> = Vec::new();
+    let tag_of = |id: i64| scalar_tag_of_type_name(names.get(id as usize).map(String::as_str));
+    let mut declarations = Vec::new();
     for f in &fns {
-        let Some(n) = name_of(f.name) else { continue };
-        let tags: Vec<i64> = (0..f.params)
-            .map(|i| f.param_types.get(i).copied().map_or(0, tag_of))
-            .collect();
-        decls.push((n, f.params as i64, tags));
-    }
-
-    // Call sites come from the reconstructed forest, which is the validated walker. A second
-    // walk written here is the mistake the `v0.3.0` line recorded when an independently
-    // written one reported 365 of 386 loops disagreeing.
-    let chunk_names = chunk_names_from_pipeline(src);
-    let mut sites: Vec<CallSiteRow> = Vec::new();
-    let mut i = 0usize;
-    while i < fns.len() {
-        let Some(group_name) = name_of(fns[i].name) else {
-            i += 1;
+        let Some(name) = name_of(f.name) else {
             continue;
         };
-        let mut group: Vec<&ParsedFn> = vec![&fns[i]];
-        let mut j = i + 1;
-        while j < fns.len() && name_of(fns[j].name).as_deref() == Some(group_name.as_str()) {
-            group.push(&fns[j]);
-            j += 1;
-        }
-        i = j;
-        let pc = group[0].params;
-        let body = if is_multihead_group(&group) {
-            reconstruct_via_kel_multihead(&group, pc, &group_name)
-        } else {
-            let category = reconstruct_category(group[0].cat);
-            reconstruct_via_kel(&group[0].body, category, pc, &group_name)
-        };
-        for node in &body.nodes {
-            if node.kind == 7
-                && let Some(callee) = chunk_names.get(node.arg as usize)
-            {
-                sites.push((callee.clone(), node.rhs));
-            }
+        let tags = (0..f.params)
+            .map(|i| f.param_types.get(i).copied().map_or(0, tag_of))
+            .collect();
+        declarations.push((name, f.params as i64, tags));
+    }
+    let parameters: alloc::collections::BTreeMap<&str, &Vec<i64>> = declarations
+        .iter()
+        .map(|(name, _, tags)| (name.as_str(), tags))
+        .collect();
+    let chunk_names = chunk_names_from_pipeline(src);
+    let return_names: Vec<_> = chunk_names
+        .iter()
+        .map(|name| format!("#function:{name}"))
+        .collect();
+    let mut returns = alloc::collections::BTreeMap::new();
+    for f in &fns {
+        if let Some(name) = name_of(f.name) {
+            returns.insert(format!("#function:{name}"), tag_of(f.return_type));
         }
     }
+    let mut batches = Vec::new();
+    for (head, f) in fns.iter().enumerate() {
+        let Some(name) = name_of(f.name) else {
+            continue;
+        };
+        let source_slots = source_head_slot_names(f, &names);
+        for (range, records) in [&f.guard, &f.body].into_iter().enumerate() {
+            if records.is_empty() {
+                continue;
+            }
+            let mut sites = Vec::new();
+            let mut arguments = Vec::new();
+            let mut bindings = Vec::new();
+            let slot_names: alloc::collections::BTreeMap<_, _> = source_slots
+                .keys()
+                .map(|&slot| (slot, format!("#local:{head}:{range}:{slot}")))
+                .collect();
+            for (slot, &type_name) in f.param_types.iter().enumerate() {
+                if let Some(identity) = slot_names.get(&(slot as i64)) {
+                    let tag = tag_of(type_name);
+                    if tag != 0 {
+                        bindings.push((identity.clone(), tag, 0, String::new()));
+                    }
+                }
+            }
+            let body = reconstruct_via_kel(records, reconstruct_category(f.cat), f.params, &name);
+            for node in &body.nodes {
+                if node.kind == NODE_LET_IN
+                    && let Some(identity) = slot_names.get(&node.arg)
+                {
+                    let (value, form, target) =
+                        source_operand(&body, node.lhs, &slot_names, &return_names);
+                    bindings.push((identity.clone(), value, form, target));
+                }
+                if node.kind != NODE_CALL {
+                    continue;
+                }
+                let Some(callee) = chunk_names.get(node.arg as usize) else {
+                    continue;
+                };
+                sites.push((callee.clone(), node.rhs));
+                let Some(tags) = parameters.get(callee.as_str()) else {
+                    continue;
+                };
+                let start = usize::try_from(node.lhs).expect("negative call argument offset");
+                let count = usize::try_from(node.rhs).expect("negative call argument count");
+                let end = start
+                    .checked_add(count)
+                    .expect("call argument range overflow");
+                let actual = body
+                    .call_args
+                    .get(start..end)
+                    .expect("call arguments outside side table");
+                for (&declared, &index) in tags.iter().zip(actual) {
+                    arguments.push((
+                        declared,
+                        source_operand(&body, index, &slot_names, &return_names),
+                    ));
+                }
+            }
+            // Select declaration dependencies without resolving a type on the host. Local
+            // aliases remain in the batch for the stage's bounded fixpoint to resolve.
+            let targets: alloc::collections::BTreeSet<_> = arguments
+                .iter()
+                .filter_map(|(_, (_, form, target))| (*form == 1).then_some(target))
+                .chain(
+                    bindings
+                        .iter()
+                        .filter_map(|(_, _, form, target)| (*form == 1).then_some(target)),
+                )
+                .filter_map(|target| returns.get(target).map(|&tag| (target.clone(), tag)))
+                .collect();
+            bindings.extend(
+                targets
+                    .into_iter()
+                    .map(|(name, tag)| (name, tag, 0, String::new())),
+            );
+            batches.push(CallTypeBatch {
+                sites,
+                arguments,
+                bindings,
+            });
+        }
+    }
+    CallTypeInputs {
+        declarations,
+        batches,
+    }
+}
 
-    (decls, sites)
+/// Declarations and call sites from the same extraction that supplies actual arguments.
+/// Use [`call_type_inputs_from_pipeline`] when the argument requirements are also needed.
+#[must_use]
+pub fn decl_call_rows_from_pipeline(src: &str) -> (Vec<DeclRow>, Vec<CallSiteRow>) {
+    let inputs = call_type_inputs_from_pipeline(src);
+    (
+        inputs.declarations,
+        inputs
+            .batches
+            .into_iter()
+            .flat_map(|batch| batch.sites)
+            .collect(),
+    )
 }
 
 /// The top-level DECLARED NAMES a program introduces, from the PIPELINE.
@@ -2430,6 +2523,48 @@ pub fn occurrence_rows_from_pipeline(src: &str) -> Vec<OccurrenceRow> {
     out
 }
 
+/// Source names indexed by the slots of one head, before dispatch remapping.
+fn source_head_slot_names(
+    function: &ParsedFn,
+    names: &[String],
+) -> alloc::collections::BTreeMap<i64, String> {
+    let mut slots = alloc::collections::BTreeMap::new();
+    for (slot, &id) in function.param_names.iter().enumerate() {
+        if let Some(name) = names.get(id as usize) {
+            slots.insert(slot as i64, name.clone());
+        }
+    }
+    for &(slot, id) in &function.let_names {
+        if let Some(name) = names.get(id as usize) {
+            slots.insert(slot, name.clone());
+        }
+    }
+    slots
+}
+
+/// Restate scalar literals and names from the forest without inferring a type.
+fn source_operand(
+    body: &Body,
+    index: i64,
+    slots: &alloc::collections::BTreeMap<i64, String>,
+    chunks: &[String],
+) -> ExprOperand {
+    match body.nodes.get(index as usize) {
+        Some(node) if node.kind == NODE_LITERAL => (1, 0, String::new()),
+        Some(node) if node.kind == NODE_UNIT && (node.arg == 1 || node.arg == 2) => {
+            (2, 0, String::new())
+        }
+        Some(node) if node.kind == NODE_UNIT && node.arg == 0 => (6, 0, String::new()),
+        Some(node) if node.kind == 2 => slots
+            .get(&node.arg)
+            .map_or((0, 0, String::new()), |name| (0, 1, name.clone())),
+        Some(node) if node.kind == NODE_CALL => chunks
+            .get(node.arg as usize)
+            .map_or((0, 0, String::new()), |name| (0, 1, name.clone())),
+        _ => (0, 0, String::new()),
+    }
+}
+
 /// Whether a forest node is a BINARY OPERATOR as the reference counts one.
 ///
 /// **FOUR FOREST KINDS, NOT ONE, AND THE FIRST REVISION OF THIS SLICE SAW ONLY THE FIRST.**
@@ -2551,20 +2686,7 @@ pub fn expression_rows_from_pipeline(src: &str) -> (Vec<ExprRow>, Vec<(String, u
             assert!(given >= 0, "unpaired struct field-count metadata");
             rows.push((7, (declared, 0, String::new()), (given, 0, String::new())));
         }
-        // Slot to name, the same convention `binding_rows_from_pipeline` uses: parameters take
-        // the low slots in order, and `let_names` carries `(slot, name)` looked up BY SLOT.
-        let mut slot_name: alloc::collections::BTreeMap<i64, String> =
-            alloc::collections::BTreeMap::new();
-        for (slot, &pid) in f.param_names.iter().enumerate() {
-            if let Some(n) = name_of(pid) {
-                slot_name.insert(slot as i64, n);
-            }
-        }
-        for &(slot, nid) in &f.let_names {
-            if let Some(n) = name_of(nid) {
-                slot_name.insert(slot, n);
-            }
-        }
+        let slot_name = source_head_slot_names(f, &names);
 
         for (records, is_guard) in [(&f.guard, true), (&f.body, false)] {
             if is_guard && records.is_empty() {
@@ -2573,27 +2695,7 @@ pub fn expression_rows_from_pipeline(src: &str) -> (Vec<ExprRow>, Vec<(String, u
             let category = reconstruct_category(f.cat);
             let body = reconstruct_via_kel(records, category, f.params, &function_name);
 
-            // One operand, classified exactly as the reference classifies one: a literal is a TAG, an
-            // identifier or a call is a NAME, anything else is unknown and never rejects.
-            let operand = |idx: i64| -> ExprOperand {
-                match body.nodes.get(idx as usize) {
-                    // The forest's literals are always integers -- `codegen.kel` interns every other
-                    // scalar elsewhere -- so the tag is the Word tag.
-                    Some(n) if n.kind == NODE_LITERAL => (1, 0, String::new()),
-                    // Booleans ride the unit kind, whose payload is 0 unit, 1 true, 2 false.
-                    Some(n) if n.kind == NODE_UNIT && (n.arg == 1 || n.arg == 2) => {
-                        (2, 0, String::new())
-                    }
-                    Some(n) if n.kind == NODE_UNIT && n.arg == 0 => (6, 0, String::new()),
-                    Some(n) if n.kind == 2 => slot_name
-                        .get(&n.arg)
-                        .map_or((0, 0, String::new()), |s| (0, 1, s.clone())),
-                    Some(n) if n.kind == NODE_CALL => chunk_names
-                        .get(n.arg as usize)
-                        .map_or((0, 0, String::new()), |s| (0, 1, s.clone())),
-                    _ => (0, 0, String::new()),
-                }
-            };
+            let operand = |index| source_operand(&body, index, &slot_name, &chunk_names);
 
             // The rows, and the LetIn bindings whose initialiser is one of them.
             let mut row_of_node: alloc::collections::BTreeMap<i64, usize> =
@@ -2796,7 +2898,7 @@ pub fn field_sets_from_pipeline(src: &str) -> Vec<FieldSetRow> {
 /// Returns `(name, tag, form)` triples with names as STRINGS rather than interned
 /// ids, so a caller can compare them against an extraction built over a different id
 /// space. `form` matches the stage's `ty.bform`: 0 the value is a tag, 1 it is
-/// another name the stage resolves through one alias hop.
+/// another name the stage resolves through bounded alias traversal.
 ///
 /// # What this replaces, and why it could not be written until now
 ///
@@ -4982,8 +5084,8 @@ pub fn self_host_compile_full(src: &str) -> Module {
     let mut module = self_host_compile(src);
     let (fns, names, data_records, enum_records) = parse_functions_fused(src);
     let dl = assemble_data_layout(&data_records, &names);
-    module.schema_hash = crate::bytecode::compute_schema_hash(Some(&dl));
-    module.data_layout = Some(dl);
+    module.data_layout = (!dl.slots.is_empty()).then_some(dl);
+    module.schema_hash = crate::bytecode::compute_schema_hash(module.data_layout.as_ref());
     module.enum_layouts = assemble_enum_layouts(&enum_records, &names);
     module.signatures = assemble_signatures(&fns, &names);
     // Self-assemble each source chunk's param_count, block_type, and param_types (the last
@@ -5147,7 +5249,10 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
         .count() as u32;
     let private_data_bytes =
         private_slot_count.saturating_mul(crate::bytecode::VALUE_SLOT_SIZE_BYTES);
-    let schema_hash = crate::bytecode::compute_schema_hash(Some(&dl));
+    // An absent data segment has no layout regions in the artifact. An empty
+    // layout would encode extra regions and differ from the reference.
+    let data_layout = (!dl.slots.is_empty()).then_some(dl);
+    let schema_hash = crate::bytecode::compute_schema_hash(data_layout.as_ref());
 
     let enum_layouts = assemble_enum_layouts(&enum_records, &names);
     let signatures = assemble_signatures(&fns, &names);
@@ -5160,7 +5265,7 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
         chunks,
         native_names,
         entry_point,
-        data_layout: Some(dl),
+        data_layout,
         word_bits_log2: target.word_bits_log2,
         addr_bits_log2: target.addr_bits_log2,
         float_bits_log2: target.float_bits_log2,

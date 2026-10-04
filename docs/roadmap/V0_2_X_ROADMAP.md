@@ -360,6 +360,11 @@ Integer and enum match-arm comparisons now come from the reconstructed arm table
 extraction also reconstructs each source head separately, preserving individual return checks
 and binding names before dispatch construction. Match guards remain an input gap.
 
+Call arguments now have a pipeline input channel with identities separated by source head and
+frame slot. Per-range batches fit the selected 640-row limits across all twelve stages and pass
+the call checks. Parser lookup now prefers local bindings over global declarations. Computed
+arguments and composite types remain incomplete, and production integration is still required.
+
 The type-rejection stage now has capacity for all twelve real stage sources. Six tables use a
 640-row cap, adding 7,168 words or 56 KiB across their parallel arrays. The stage accepts all
 twelve sources in the differential test. This resolves the measured capacity gap only. The host

@@ -509,7 +509,7 @@ fn ty_alias_of(v: Word) -> Word {
 // derived bindings: `let a = 1 + 2; let b = a + 1; let c = b + 1` needs three.
 // Four is what the corpus needs plus margin; a program with a longer chain
 // resolves to UNKNOWN and is therefore ACCEPTED, which is the safe direction and
-// the same one `ty_resolve`'s single alias hop already takes.
+// the same one an unresolved alias cycle takes.
 //
 // **This must never become "as many rounds as it takes".** The language is total
 // and every loop needs a static bound; a fixpoint that runs until nothing moves
@@ -705,17 +705,17 @@ fn ty_resolve(f: Word, v: Word) -> Word {
     if f == 2 { ty_field_operand(v) } else {
         ty.hit = ty_direct(v);
         if ty.hit == 0 {
-            // ONE ALIAS HOP, AND THE BOUND IS DELIBERATE. `let a = g()` binds
-            // `a` to the name `g`, whose declared return type is a direct row,
-            // so one hop reaches it. A longer chain -- `let a = g(); let c = a;`
-            // -- resolves to UNKNOWN and therefore ACCEPTS, which is the safe
-            // direction: this stage may not refuse a program it cannot type.
-            //
-            // A bounded hop count rather than a fixpoint because the language is
-            // total and every loop needs a static cap. Raising the bound is a
-            // decision about how much chaining to admit, not a bug fix.
-            ty.alias = ty_alias_of(v);
-            if ty.alias == 0 { ty_unknown() } else { ty_direct(ty.alias) }
+            // At most bn edges reach every acyclic alias chain in this table.
+            // Cycles and missing targets remain unknown. Once a declared or
+            // solver-proved tag is found, later iterations do no more lookups.
+            ty.alias = v;
+            for hop in 0..ty.bn limit 640 {
+                if ty.hit == 0 andalso ty.alias != 0 {
+                    ty.alias = ty_alias_of(ty.alias);
+                    if ty.alias != 0 { ty.hit = ty_direct(ty.alias); }
+                }
+            }
+            ty.hit
         } else { ty.hit }
     } }
 }

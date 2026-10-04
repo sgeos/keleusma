@@ -43,15 +43,15 @@
 //!   programs. This project has four recorded instances of a suite whose
 //!   coverage was a property of its cases rather than of the thing under test,
 //!   and one of them was this corpus.
-//! - **Tags reach what the source declares or literally initialises**, one alias
-//!   hop for a `let` bound to a call, an ARITHMETIC result through a bounded
+//! - **Tags reach what the source declares or literally initialises**, bounded alias
+//!   chains for locals and calls, an ARITHMETIC result through a bounded
 //!   fixpoint (`a_derived_operand_is_now_reached_and_the_chain_has_no_depth_limit`),
 //!   and a FIELD READ whose base is a plain name the source types
 //!   (`a_field_read_initialiser_is_now_reached`). An operand whose type comes from
 //!   an INDEX, or from a field read whose base is an array element or a match
 //!   binding, is still unknown and still accepted;
 //!   `the_field_read_channel_records_what_it_does_not_reach` pins that edge.
-//!   The hop bound is a decision rather than a limit of the approach.
+//!   Alias traversal is bounded by the binding table length; cycles remain unknown.
 //! - **Unknown never rejects, by design.** A stage that cannot type an operand
 //!   accepts it, because rejecting a valid program is a language change rather
 //!   than a conservative choice. The well-typed controls are the half that can
@@ -6852,10 +6852,10 @@ fn a_named_type_called_bool_is_not_the_boolean_primitive() {
 ///
 /// # What is NOT moved, said plainly
 ///
-/// `decl_call_rows` also returns a per-argument pair of (declared parameter tag, ACTUAL
-/// ARGUMENT tag). The actual-argument tag needs an expression classifier, which is a new
-/// piece of work rather than a re-projection of data the driver already holds. It stays in
-/// Rust and this test does not pretend otherwise.
+/// This legacy interface returns declarations and arities only. The separate
+/// `call_type_inputs_from_pipeline` interface also supplies argument requirements and
+/// scoped bindings. Its own differential and verdict tests cover literals, parameters,
+/// aliases and declared call returns. Computed and composite operands remain incomplete.
 #[cfg(feature = "self-host")]
 #[test]
 fn the_declaration_and_call_rows_agree_between_the_pipeline_and_the_reference() {
@@ -6961,6 +6961,381 @@ fn the_declaration_and_call_rows_agree_between_the_pipeline_and_the_reference() 
     );
 }
 
+/// Positional argument requirements use the declared parameter tag and actual source operand.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_call_inputs_include_actual_arguments() {
+    let inputs = keleusma::selfhost::call_type_inputs_from_pipeline(
+        "fn take(number: Word, flag: bool) -> Word { number } fn main() -> Word { take(true, 1) }",
+    );
+    assert_eq!(
+        inputs
+            .batches
+            .iter()
+            .flat_map(|b| b.sites.clone())
+            .collect::<Vec<_>>(),
+        vec![("take".into(), 2)]
+    );
+    assert_eq!(
+        inputs
+            .batches
+            .iter()
+            .flat_map(|b| b.arguments.clone())
+            .collect::<Vec<_>>(),
+        vec![(1, (2, 0, String::new())), (2, (1, 0, String::new()))]
+    );
+}
+
+/// The literal projection matches reference syntax while richer operands retain names.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_call_argument_tags_agree_with_reference_syntax() {
+    let mut compared = 0;
+    for src in [
+        "fn take(n: Word, b: bool) -> Word { n } fn main() -> Word { take(1, true) }",
+        "fn take(n: Word, b: bool) -> Word { n } fn main() -> Word { take(true, 1) }",
+        "fn zzz(n: Word) -> Word { n } fn aaa() -> Word { zzz(1) } fn main() -> Word { aaa() }",
+        "fn take(n: Word) -> Word { n } fn main(x: Word) -> Word { take(x) + take(1 + 2) }",
+        "fn take(n: Word) -> Word { n } fn get() -> Word { 1 } fn main() -> Word { take(get()) }",
+        "fn take(n: Word) -> Word { n } fn main() -> Word { take(1, true) }",
+        "fn take(n: Word) -> Word { n } fn main() -> Word { take() }",
+        "fn take(0) -> Word { 1 } fn take(n: Word) -> Word { n } fn main() -> Word { take(true) }",
+        "fn take(n: Byte) -> Byte { n } fn main() -> Byte { take(1 as Byte) }",
+    ] {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (_, _, mut expected) = decl_call_rows(&ast);
+        let actual = keleusma::selfhost::call_type_inputs_from_pipeline(src);
+        let mut projected: Vec<_> = actual
+            .batches
+            .iter()
+            .flat_map(|batch| &batch.arguments)
+            .map(|(declared, operand)| (*declared, if operand.1 == 0 { operand.0 } else { 0 }))
+            .collect();
+        expected.sort_unstable();
+        projected.sort_unstable();
+        assert_eq!(projected, expected, "argument facts for {src}");
+        compared += expected.len();
+    }
+    assert_eq!(compared, 11);
+}
+
+/// All fact inputs come from the pipeline; the Keleusma stage resolves their names.
+#[cfg(feature = "self-host")]
+fn pipeline_call_verdict(src: &str) -> bool {
+    call_inputs_verdict(&keleusma::selfhost::call_type_inputs_from_pipeline(src))
+}
+
+#[cfg(feature = "self-host")]
+fn call_inputs_verdict(inputs: &keleusma::selfhost::CallTypeInputs) -> bool {
+    use std::collections::BTreeMap;
+    let declarations: BTreeMap<_, _> = inputs
+        .declarations
+        .iter()
+        .enumerate()
+        .map(|(at, (name, _, _))| (name, at as i64))
+        .collect();
+    let arities: Vec<_> = inputs
+        .declarations
+        .iter()
+        .map(|(_, arity, _)| *arity)
+        .collect();
+    inputs.batches.iter().all(|batch| {
+        let raw_bindings = &batch.bindings;
+        let mut names = BTreeMap::new();
+        for (name, _, form, target) in raw_bindings {
+            let next = names.len() as i64 + 1;
+            names.entry(name.clone()).or_insert(next);
+            if *form == 1 {
+                let next = names.len() as i64 + 1;
+                names.entry(target.clone()).or_insert(next);
+            }
+        }
+        for (_, (_, form, name)) in &batch.arguments {
+            if *form == 1 {
+                let next = names.len() as i64 + 1;
+                names.entry(name.clone()).or_insert(next);
+            }
+        }
+        let bindings: Vec<_> = raw_bindings
+            .iter()
+            .map(|(name, value, form, target)| {
+                (
+                    names[name],
+                    if *form == 1 { names[target] } else { *value },
+                    *form,
+                )
+            })
+            .collect();
+        let nodes: Vec<_> = batch
+            .arguments
+            .iter()
+            .map(|(declared, (value, form, name))| {
+                (
+                    8,
+                    *declared,
+                    0,
+                    if *form == 1 { names[name] } else { *value },
+                    *form,
+                )
+            })
+            .collect();
+        let sites: Vec<_> = batch
+            .sites
+            .iter()
+            .map(|(name, count)| (declarations[name], *count))
+            .collect();
+        stage_verdict(&StageInput {
+            dparams: &arities,
+            sites: &sites,
+            nodes_resolvable: Some(&nodes),
+            bindings: &bindings,
+            ..Default::default()
+        })
+    })
+}
+
+/// Both arity and resolved argument types must reject errors and retain valid controls.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_call_inputs_drive_type_rejection() {
+    for (src, accepts) in [
+        (
+            "fn take(n: Word, b: bool) -> Word { n } fn main() -> Word { take(1, true) }",
+            true,
+        ),
+        (
+            "fn take(n: Word, b: bool) -> Word { n } fn main() -> Word { take(true, 1) }",
+            false,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn main() -> Word { take() }",
+            false,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn main() -> Word { take(1, 2) }",
+            false,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn main(x: Word) -> Word { take(x) }",
+            true,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn main(x: bool) -> Word { take(x) }",
+            false,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn main() -> Word { let a = 1; take(a) }",
+            true,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn main() -> Word { let a = true; take(a) }",
+            false,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn get() -> Word { 1 } fn main() -> Word { take(get()) }",
+            true,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn get() -> bool { true } fn main() -> Word { take(get()) }",
+            false,
+        ),
+        (
+            "fn take(0) -> Word { 1 } fn take(n: Word) -> Word { n } fn main() -> Word { take(2) }",
+            true,
+        ),
+        (
+            "fn take(0) -> Word { 1 } fn take(n: Word) -> Word { n } fn main() -> Word { take(true) }",
+            false,
+        ),
+        (
+            "fn take(n: Byte) -> Byte { n } fn main() -> Byte { take(1 as Byte) }",
+            true,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn main() -> Word { take(1 + 2) }",
+            true,
+        ),
+    ] {
+        assert_eq!(reference_accepts(src), accepts, "reference for {src}");
+        assert_eq!(
+            pipeline_call_verdict(src),
+            accepts,
+            "pipeline inputs for {src}"
+        );
+    }
+}
+
+/// Identical spellings in different functions must not share an argument type.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_call_bindings_are_scoped_to_each_source_head() {
+    for (src, accepts) in [
+        (
+            "fn take(n: Word) -> Word { n } fn f(x: Word) -> Word { take(x) } fn other(x: bool) -> bool { x } fn main() -> Word { f(1) }",
+            true,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn f(x: bool) -> Word { take(x) } fn other(x: Word) -> Word { x } fn main() -> Word { f(true) }",
+            false,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn get() -> Word { 1 } fn main(get: bool) -> Word { take(get) }",
+            false,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn get() -> Word { 1 } fn main() -> Word { let get = true; take(get) }",
+            false,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn get() -> bool { true } fn main() -> Word { let a = get(); let b = a; take(b) }",
+            false,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn main() -> Word { let x = true; let x = 1; take(x) }",
+            true,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn main() -> Word { let x = 1; let x = true; take(x) }",
+            false,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn main() -> Word { let a = 1; let b = a; take(b) }",
+            true,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn main() -> Word { let a = true; let b = a; take(b) }",
+            false,
+        ),
+    ] {
+        assert_eq!(reference_accepts(src), accepts, "reference for {src}");
+        assert_eq!(
+            pipeline_call_verdict(src),
+            accepts,
+            "scoped arguments for {src}"
+        );
+    }
+}
+
+/// Local precedence must preserve complete artifacts for valid shadowing programs.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_call_shadowing_preserves_artifact_identity() {
+    for src in [
+        "fn take(n: Word) -> Word { n } fn get() -> Word { 1 } fn main(get: Word) -> Word { take(get) }",
+        "fn take(n: Word) -> Word { n } fn get() -> Word { 1 } fn main() -> Word { let get = 2; take(get) }",
+    ] {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let reference = compile(&ast).expect("reference accepts");
+        let actual = keleusma::selfhost::self_host_compile_scratch(src);
+        assert!(
+            actual.to_bytes().expect("pipeline bytes")
+                == reference.to_bytes().expect("reference bytes"),
+            "complete artifact differs for {src}"
+        );
+        assert!(pipeline_call_verdict(src));
+    }
+}
+
+/// Every source-head range retains its own calls, including guard calls and later errors.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_call_batches_retain_guards_and_later_heads() {
+    let src = "fn ready(x: Word) -> bool { true } fn take(x: Word) -> Word { x } fn f(x: Word) -> Word when ready(x) { take(x) } fn f(x: Word) -> Word { take(true) } fn main() -> Word { f(1) }";
+    let inputs = keleusma::selfhost::call_type_inputs_from_pipeline(src);
+    let sites: Vec<_> = inputs
+        .batches
+        .iter()
+        .flat_map(|batch| batch.sites.clone())
+        .collect();
+    assert_eq!(
+        sites,
+        vec![
+            ("ready".into(), 1),
+            ("take".into(), 1),
+            ("take".into(), 1),
+            ("f".into(), 1)
+        ]
+    );
+    assert_eq!(
+        inputs
+            .batches
+            .iter()
+            .map(|batch| batch.arguments.len())
+            .sum::<usize>(),
+        4
+    );
+    assert!(!reference_accepts(src));
+    assert!(!call_inputs_verdict(&inputs));
+}
+
+/// Alias traversal reaches the table boundary and terminates on cycles or absent targets.
+#[test]
+fn call_alias_chains_are_bounded_by_the_binding_table() {
+    for length in [2, 5, 640] {
+        for (tag, accepts) in [(1, true), (2, false)] {
+            let mut bindings: Vec<_> = (1..length).map(|name| (name, name + 1, 1)).collect();
+            bindings.push((length, tag, 0));
+            // Reverse order prevents table order from accidentally propagating the result.
+            bindings.reverse();
+            assert_eq!(
+                stage_verdict(&StageInput {
+                    nodes_resolvable: Some(&[(8, 1, 0, 1, 1)]),
+                    bindings: &bindings,
+                    ..Default::default()
+                }),
+                accepts,
+                "chain length {length}, terminal tag {tag}"
+            );
+        }
+    }
+    for bindings in [vec![(1, 2, 1), (2, 1, 1)], vec![(1, 2, 1)]] {
+        assert!(
+            stage_verdict(&StageInput {
+                nodes_resolvable: Some(&[(8, 1, 0, 1, 1)]),
+                bindings: &bindings,
+                ..Default::default()
+            }),
+            "an unresolved cycle or absent target must remain unknown"
+        );
+    }
+}
+
+/// Measure the new argument and identity tables on the actual stage sources.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_call_inputs_fit_type_stage_capacity() {
+    for &(name, src) in REAL_STAGE_SOURCES {
+        let inputs = keleusma::selfhost::call_type_inputs_from_pipeline(src);
+        let maxima = inputs.batches.iter().fold((0, 0, 0), |(s, a, b), batch| {
+            (
+                s.max(batch.sites.len()),
+                a.max(batch.arguments.len()),
+                b.max(batch.bindings.len()),
+            )
+        });
+        eprintln!(
+            "{name}: declarations {}, batches {}, maximum sites {}, arguments {}, bindings {}",
+            inputs.declarations.len(),
+            inputs.batches.len(),
+            maxima.0,
+            maxima.1,
+            maxima.2
+        );
+        assert!(
+            inputs.declarations.len() <= 640,
+            "{name} declarations overflow"
+        );
+        assert!(
+            maxima.0 <= 640 && maxima.1 <= 640 && maxima.2 <= 640,
+            "{name} call facts exceed type stage capacity"
+        );
+        assert!(
+            call_inputs_verdict(&inputs),
+            "{name} call facts falsely reject a stage"
+        );
+    }
+}
+
 /// **FOUR OF THE FIVE TYPE-CHANNEL EXTRACTIONS ARE MOVED, AND THE FIGURE IS DERIVED.**
 ///
 /// The file header names all five. This counts how many have a pipeline analogue rather than
@@ -6977,7 +7352,7 @@ fn the_declaration_and_call_rows_agree_between_the_pipeline_and_the_reference() 
 ///
 /// | extraction | what did NOT move |
 /// |---|---|
-/// | `decl_call_rows` | the ACTUAL-ARGUMENT tag, which needs an expression classifier |
+/// | `decl_call_rows` | computed arguments, field/index operands and non-scalar parameter types |
 /// | `field_sets` | the field ACCESSES, which need a classifier over the body forest |
 /// | `occurrence_rows` | `data`-block identifiers and `for` loop variables |
 ///

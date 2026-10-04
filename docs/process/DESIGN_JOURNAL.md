@@ -13,6 +13,36 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-04 Call arguments and bounded scope
+
+Reconstructed call nodes already carry argument indices. Extraction now pairs those operands
+with declared parameter tags, preserving local and called-function identities for resolution in
+the Keleusma type stage. Arity remains a separate channel so positional pairing cannot conceal
+extra or missing arguments. Shared operand classification also serves expression extraction.
+
+A flat binding namespace first falsely rejected a valid program whose functions reused a
+parameter name. Source-head, range and frame-slot identities remove that collision. A second
+witness still accepted an invalid parameter named after a global function. The parser was
+selecting the global function first. Local lookup now precedes global namespace lookup.
+The initial implementation used unsupported local mutation syntax twice before being corrected
+to use the parser's existing state field. Both failed runs are retained under ignored tmp.
+
+The aggregate wire-stage facts exceeded the selected cap with 831 bindings. Separate guard
+and body batches retain local dependencies and import only referenced function return facts.
+No cap increase is necessary for the measured corpus. A call followed by two local aliases
+then exposed the stage's single-hop limit. Traversal now has at most one hop per binding row,
+so every acyclic chain fits and cycles terminate. The 640-row boundary is exercised directly.
+
+A complete artifact control found an unrelated assembly discrepancy that chunk-operation
+comparisons had missed. The pipeline encoded an empty data layout and the reference omitted
+it. The assembly helpers now use absence when the slot table is empty. A new complete-artifact
+corpus compares all module bytes from the production compiler and checks its directory inventory.
+Both sides still use Rust serialization, so this is not evidence of Keleusma wire integration.
+
+The shadow pilot's first sample remains the initial missing-field-documentation diagnostic.
+Later failures are recorded as engineering evidence without replacing that sample. External
+evaluation remains pending the existing specific authorization request.
+
 ## 2026-10-04 Match comparisons and source-head extraction
 
 The initial differential produced no match comparison where reference syntax produced one.
