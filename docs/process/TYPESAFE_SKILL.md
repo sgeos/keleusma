@@ -95,3 +95,7 @@ and proposed pilot. It establishes narrow observed performance and low service
 cost. Production integration, net subscription savings and end-to-end error
 reduction remain unverified. Use its research runner only for the documented
 experiment, not as a production gate.
+
+The subsequently authorized [shadow pilot](./JEV_SHADOW_PILOT.md) supplies the
+development-line adapter, reviewed input workflow and portable checkpoint.
+It runs alongside existing gates and records judgments without changing them.

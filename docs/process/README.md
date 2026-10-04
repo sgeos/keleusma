@@ -14,6 +14,7 @@ Development workflow, communication protocol, and task tracking for Keleusma.
 | [COMMUNICATION.md](./COMMUNICATION.md) | Bidirectional human-AI communication protocol |
 | [INTERLINE_PROTOCOL.md](./INTERLINE_PROTOCOL.md) | Local Codex and Claude Code mail with explicit receipts and recovery |
 | [TYPESAFE_SKILL.md](./TYPESAFE_SKILL.md) | TypeSafe Jev skill installation, project use and new-machine recovery |
+| [JEV_SHADOW_PILOT.md](./JEV_SHADOW_PILOT.md) | Advisory Jev pilot for V0.2.X and optional V0.3.X, blind review and portable evidence |
 | [PARALLEL_DEVELOPMENT.md](./PARALLEL_DEVELOPMENT.md) | Running multiple agents at once: worktree isolation, per-branch channels, merge serialization, gate discipline |
 | [GIT_STRATEGY.md](./GIT_STRATEGY.md) | Version control conventions |
 | [RELEASE_PROCESS.md](./RELEASE_PROCESS.md) | How to cut and publish a workspace release: the verification gate (including `cargo doc`), registry-publishability, the audit hold, and publish order |

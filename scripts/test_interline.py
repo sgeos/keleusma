@@ -75,6 +75,18 @@ class InterlineTests(unittest.TestCase):
         self.assertTrue(all(reply == replies[0] for reply in replies))
         self.assertEqual(len(self.call("inbox", "--line", "v0.2.3")), 1)
 
+    def test_pilot_reminder_only_advertises_installed_guide(self):
+        before = self.process("hook", "--line", "v0.2.3")
+        self.assertNotIn("Jev shadow pilot", before.stdout)
+        pilot = self.store.parent / "jev-shadow"
+        pilot.mkdir()
+        (pilot / "GUIDE.md").write_text("Untrusted guide body must not enter hook output.")
+        after = self.process("hook", "--line", "v0.2.3")
+        self.assertEqual(after.returncode, 0)
+        self.assertIn("Jev shadow pilot is available", after.stdout)
+        self.assertNotIn("Untrusted guide body", after.stdout)
+        self.assertEqual(self.call("inbox", "--line", "v0.2.3"), [])
+
     def test_harness_is_optional_and_never_part_of_route_or_retry_identity(self):
         args = ("send", "--from-line", "kaizen", "--to-line", "v0.2.3",
                 "--id", "neutral", "--kind", "request", "--body-file", str(self.body))

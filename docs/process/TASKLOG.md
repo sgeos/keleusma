@@ -6,6 +6,20 @@ Current sprint source of truth.
 
 ---
 
+## Jev shadow pilot on feat/kaizen-jev-shadow-pilot
+
+2026-10-04. Implemented and locally installed the authorized
+[shadow pilot](./JEV_SHADOW_PILOT.md) for V0.2.X and optional V0.3.X work.
+The adapter preserves initial judgments and source provenance, sends only
+reviewed excerpts, hides answers until task completion and blind labelling,
+and reports comparisons without changing development gates. Concurrent lines
+share transactional call reservations and a portable reviewed checkpoint.
+Existing hook configurations and peer tracked worktrees remain unchanged.
+The [setup receipt](./kaizen/2026-10-04-jev-shadow-pilot-setup.md) records 23 pilot
+tests, 19 interline tests, fourteen document checks and two successful synthetic
+live requests. No development samples or subscription benefit are claimed.
+The kaizen handoff records continuation on this feature branch.
+
 ## Jev development-flow spike on research/kaizen-jev-development-flow
 
 2026-10-04. Completed the [research spike](./kaizen/2026-10-04-jev-development-flow-spike.md)

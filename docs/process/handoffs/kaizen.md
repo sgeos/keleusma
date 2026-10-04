@@ -4,6 +4,33 @@
 
 ## Current increment on 2026-10-04
 
+The operator authorized shadow-pilot setup for V0.2.X and possible V0.3.X work.
+The [guide](../JEV_SHADOW_PILOT.md), adapter, service client, examples and portable
+checkpoint are implemented. The [setup receipt](../kaizen/2026-10-04-jev-shadow-pilot-setup.md)
+records installation for both development worktrees and the kaizen worktree.
+The shared local installation is `secret/jev-shadow/` below the primary checkout.
+Existing interline reminders advertise its guide without new hook configuration.
+
+Current branch is `feat/kaizen-jev-shadow-pilot`, based on `19893dc1`, in
+project-local `.worktrees/kaizen/`. Validate this handoff by checking that
+`19893dc1` is an ancestor and reviewing commits above it. Appendix B was read
+before tracked changes. No peer tracked file, publication or integration branch
+was changed. No message was sent and no push or merge occurred.
+
+Twenty-three pilot tests, nineteen interline tests and fourteen document checks
+passed. Two synthetic live requests succeeded. The checkpoint preserves them
+but excludes them from the default development report. No real development
+samples, independent accuracy result or subscription saving is claimed.
+
+The lines can begin collecting according to the guide. Keep judgments hidden
+until task outcomes and blind labels are recorded, retain existing gates, and
+record missing service or usage data explicitly. Kaizen owns checkpoint export
+and review before handoff. Clone continuation requires the tracked pilot commit
+and checkpoint, fresh local installation and separately provisioned credentials.
+The fresh-clone test does not depend on the old private or temporary trees.
+
+## Preceding research spike on 2026-10-04
+
 The operator requested research into Jev delegation to stretch System 2
 subscription usage and reduce errors. The
 [spike report](../kaizen/2026-10-04-jev-development-flow-spike.md) and its tracked

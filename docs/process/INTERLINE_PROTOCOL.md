@@ -102,6 +102,11 @@ path. They never inject message bodies into privileged hook context and never
 acknowledge mail. They do not wake a stopped session or interrupt active work.
 Manual checks remain required if a hook is unavailable or untrusted.
 
+When the [Jev shadow pilot](./JEV_SHADOW_PILOT.md) is installed beside the mailbox,
+the reminder also reports its guide path to participating lines. It never copies
+guide text, sample data or model judgments into hook output, and makes no model
+request. Existing hook commands remain the same.
+
 Codex loads project hooks from `.codex/hooks.json` in a trusted project layer.
 New or changed hooks require review through `/hooks`. This trust decision cannot
 be manufactured by writing a configuration file.
