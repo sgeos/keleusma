@@ -46,7 +46,32 @@ const STAGES: &[(&str, &str)] = &[
         "verify_datalayout",
         include_str!("../src/selfhost/kel/verify_datalayout.kel"),
     ),
+    (
+        "verify_types",
+        include_str!("../src/selfhost/kel/verify_types.kel"),
+    ),
+    ("wire", include_str!("../src/selfhost/kel/wire.kel")),
 ];
+
+/// The identity claim must cover every stage, including newly added sources.
+#[test]
+fn the_identity_corpus_contains_every_stage_source() {
+    let actual: std::collections::BTreeSet<_> = std::fs::read_dir("src/selfhost/kel")
+        .expect("stage directory")
+        .map(|entry| entry.expect("stage entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "kel"))
+        .map(|path| {
+            path.file_stem()
+                .expect("stage name")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    let listed: std::collections::BTreeSet<_> =
+        STAGES.iter().map(|(name, _)| (*name).to_owned()).collect();
+    assert!(!actual.is_empty(), "the stage inventory must not be empty");
+    assert_eq!(listed, actual);
+}
 
 /// Parse and type-check, mirroring what `compile_with_options` does before it
 /// calls the monomorphizer.

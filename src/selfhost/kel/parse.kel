@@ -12,7 +12,8 @@
 //
 // An If node (kind 4) holds the condition in arg and the branches in lhs/rhs. A branch is
 // a full statement block folded, like the body, into a cons-list. An absent `else`
-// synthesizes an empty Unit branch. A completed If that a statement-starter follows was a
+// synthesizes an empty Unit branch and marks the If record argument as 1. A written
+// else uses argument 0. A completed If that a statement-starter follows was a
 // statement, committed as an ExprStmt (kind 21); a terminator leaves it the block tail.
 //
 // Record wire and token vocabulary are unchanged from increment 2.
@@ -1087,6 +1088,8 @@ private data stmt {
 // before the branch opened and must keep spanning the built If).
 private data branch {
     if_phase: [Word; 33],
+    // One when the else branch was synthesized, zero when written. Reset per context.
+    if_implicit: [Word; 33],
     if_stmt_start: [Word; 33],
     if_opbase: [Word; 33],
     if_seq: [Word; 33],
@@ -4345,6 +4348,7 @@ fn step_op(k: Word) -> Word {
 fn step_if(k: Word) -> Word {
     if k == Tok::If() as Word {
         branch.if_phase[branch.if_sp] = 1;
+        branch.if_implicit[branch.if_sp] = 0;
         branch.if_sp = if_push(branch.if_sp);
         ops.expect_operand = 1;
         0
@@ -4408,6 +4412,7 @@ fn step_if(k: Word) -> Word {
 // follows, synthesize an empty else block whose Unit tail the fold wraps into the If, and
 // push the triggering token back for reprocessing.
 fn synth_empty_else() -> Word {
+    branch.if_implicit[branch.if_sp - 1] = 1;
     ps.cursor = ps.cursor - 1;
     branch.if_phase[branch.if_sp - 1] = 5;
     branch.if_stmt_start[branch.if_sp - 1] = stmt.stmt_count;
@@ -5536,7 +5541,7 @@ fn step_folding() -> Word {
             branch.if_sp = branch.if_sp - 1;
             ops.expect_operand = 0;
             stmt.blockform = 1;
-            Node::If() as Word
+            Node::If() as Word + branch.if_implicit[branch.if_sp] * 64
         } else {
             // fold_cont == 3: the `for` body is folded; its value rests on the host stack.
             // Start the ForLimit parts emission.

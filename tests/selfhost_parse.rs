@@ -639,7 +639,7 @@ fn flatten(
                 ),
                 None => out.push((20, 0)), // synthesized empty else: a Unit
             }
-            out.push((4, 0));
+            out.push((4, i64::from(else_block.is_none())));
         }
         Expr::Yield { value, .. } => {
             // `yield e` is a unary YieldExpr (kind 24) over its operand.
@@ -1336,7 +1336,7 @@ fn an_if_without_else_synthesizes_a_unit() {
     // cond; a [then]; Unit [synth else]; If.
     assert_eq!(
         got.funcs[0].3,
-        vec![(2, 0), (1, 0), (3, 9), (2, 0), (20, 0), (4, 0)]
+        vec![(2, 0), (1, 0), (3, 9), (2, 0), (20, 0), (4, 1)]
     );
 }
 
@@ -3647,29 +3647,10 @@ fn stage_source_token_counts() {
     }
 }
 
-/// **A WRITTEN EMPTY ELSE AND AN IMPLICIT ONE ARE THE SAME RECORD STREAM.**
-///
-/// `a_one_armed_conditional_is_why_the_branch_pair_does_not_move` in
-/// `tests/selfhost_typecheck.rs` explains that the branch-pair row is withheld because
-/// `push_if` visits an else arm unconditionally, so the pipeline carries one even where
-/// the source wrote none. Its comment used to say a tag-based heuristic "could not be
-/// shown safe". **This test establishes the stronger fact: no heuristic can work,
-/// because the distinguishing information is not in the stream.**
-///
-/// The reference's criterion is `else_block.is_some()`. A written `else { }` satisfies it
-/// and an implicit arm does not, so the reference separates the two shapes. The parse
-/// stage emits the SAME records for both. A heuristic can only read what the stream
-/// carries, so the separation the reference makes is unavailable on this side at any
-/// level of cleverness.
-///
-/// **This is a statement about the records, not about the tag.** The earlier argument
-/// reasoned about whether UNIT and UNKNOWN happen to separate the cases. That question is
-/// moot: the two sources are already identical before any tag is computed.
-///
-/// The empty else is not a contrived shape. It is accepted by the reference compiler, as
-/// the first assertion below establishes rather than assumes.
+/// Parser records retain whether the source supplied an else branch, including an empty one.
+/// The two accepted witnesses differ only in that presence bit.
 #[test]
-fn an_empty_else_is_indistinguishable_from_an_implicit_one() {
+fn an_empty_else_is_distinguished_from_an_implicit_one() {
     use keleusma::ast::{Expr, Stmt};
     use keleusma::visitor::Visitor;
 
@@ -3731,17 +3712,27 @@ fn an_empty_else_is_indistinguishable_from_an_implicit_one() {
          the impossibility claimed here would not follow"
     );
 
-    // THE WITNESS: the pipeline cannot make that separation, because it does not receive it.
     let mut n1 = Vec::new();
     let mut n2 = Vec::new();
     let implicit = run_parse(IMPLICIT, &mut n1);
     let empty = run_parse(EMPTY, &mut n2);
-    assert_eq!(
-        implicit, empty,
-        "the parse stage now distinguishes a written empty else from an implicit arm; if that \
-         is deliberate, the branch-pair row may be implementable after all and the withholding \
-         recorded in tests/selfhost_typecheck.rs should be revisited"
-    );
+    assert_ne!(implicit, empty, "else presence must survive parsing");
+    let implicit_if: Vec<_> = implicit
+        .funcs
+        .iter()
+        .flat_map(|f| &f.3)
+        .filter(|(k, _)| *k == 4)
+        .copied()
+        .collect();
+    let empty_if: Vec<_> = empty
+        .funcs
+        .iter()
+        .flat_map(|f| &f.3)
+        .filter(|(k, _)| *k == 4)
+        .copied()
+        .collect();
+    assert_eq!(implicit_if, vec![(4, 1)]);
+    assert_eq!(empty_if, vec![(4, 0)]);
 
     // NON-VACUITY: the streams must not be empty, or the comparison holds trivially.
     assert!(

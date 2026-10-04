@@ -13,6 +13,33 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-04 Explicit else presence for Order 1
+
+The parser emitted identical records for an omitted else and a written empty else.
+The new parser witness failed before the change. The parser now carries one presence bit
+per active conditional and emits it with the If record. Reconstruction encodes an omitted
+else as the negative condition index minus one. Node indices are nonnegative and bounded,
+so this preserves the distinction without another node kind or bytecode opcode.
+Code generation decodes the condition and emits the same executable instructions.
+
+Branch-pair extraction follows the recorded presence and walks each block to its tail.
+An empty or statement-only block contributes an unknown operand, matching the reference
+extraction. Guessing from a synthesized unit would conflate omitted and written else branches.
+The branch corpus includes nested and sequential conditionals to exercise context reuse.
+Match-arm pairs remain outside this extraction even though they share expression kind 4.
+
+The complete type suite caught its stale four-kind inventory assertion after branch pairs
+became reachable. The inventory now names five emitted kinds and explicitly distinguishes
+kind coverage from coverage of every syntactic form. The monomorphization evidence had a
+separate omission, covering ten of twelve stage sources. It now includes the two missing
+sources and compares the list with the stage directory.
+
+The shadow pilot captured the first build diagnostic and two completion claims. The network
+attempt failed at transport. Automatic approval review rejected the escalated evaluation,
+so a specific payload and destination approval request remains pending. An initial excerpt
+had omitted the permission detail and was superseded by a separate complete diagnostic
+record. Local labels are self-review and make no independent-accuracy claim.
+
 ## 2026-09-27 — session 67, increment 9: the class was closed for one file
 
 **The finding is about a guard, not a document.** `tests/release_process_crate_list.rs` exists

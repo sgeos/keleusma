@@ -342,7 +342,11 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             };
             ctx.nodes.push(Node {
                 kind: 4,
-                arg: cond,
+                arg: if else_block.is_none() {
+                    -cond - 1
+                } else {
+                    cond
+                },
                 lhs: t,
                 rhs: el,
             });
@@ -2510,7 +2514,7 @@ fn reconstruct_into(
                 let cond = stack.pop().expect("if cond");
                 nodes.push(Node {
                     kind: 4,
-                    arg: cond,
+                    arg: if arg == 1 { -cond - 1 } else { cond },
                     lhs: th,
                     rhs: el,
                 });
@@ -5372,6 +5376,21 @@ fn reconstruct_kel_matches_rust_for_atomic_and_if_bodies() {
     ];
     for src in cases {
         assert_reconstruct_kel_matches(src);
+    }
+}
+
+// Else presence must survive reconstruction without changing executable bytecode.
+#[test]
+fn explicit_and_implicit_else_compile_byte_identically() {
+    let cases = [
+        "private data d { q: Word } fn f(c: bool) -> Word { if c { d.q = 1; } d.q }",
+        "private data d { q: Word } fn f(c: bool) -> Word { if c { d.q = 1; } else {} d.q }",
+        "private data d { q: Word } fn f(c: bool) -> Word { if c { if c { d.q = 1; } } else { d.q = 2; } d.q }",
+        "private data d { q: Word } fn f(c: bool) -> Word { if c { d.q = 1; } if c { 2 } else { 3 } }",
+    ];
+    for src in cases {
+        assert_reconstruct_kel_matches(src);
+        assert_self_host_byte_identical(src);
     }
 }
 

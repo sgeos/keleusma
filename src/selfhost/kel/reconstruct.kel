@@ -692,8 +692,8 @@ fn build_struct_eq_nested(a: Word) -> Word {
 }
 
 // Process one record, folding it into a node and leaving that node's index on the
-// stack. An If (4) pops its else, then, and cond children, storing cond in `arg` and
-// the branches in lhs/rhs.
+// stack. An If (4) pops its else, then, and cond children. Its arg is cond for
+// a written else and -(cond + 1) for an omitted else; lhs/rhs hold the branches.
 fn step(k: Word, a: Word) -> Word {
     if is_leaf(k) == 1 {
         if k == 2 {
@@ -715,7 +715,10 @@ fn step(k: Word, a: Word) -> Word {
         let el = pop();
         let th = pop();
         let cond = pop();
-        emit(4, cond, th, el)
+        // A negative condition encodes an omitted else as -(condition + 1).
+        // All node indices are nonnegative and bounded by rc_cap_node().
+        let tagged = if a == 1 { 0 - cond - 1 } else { cond };
+        emit(4, tagged, th, el)
     } else {
     if k == 36 {
         // IndexStore signal: fold the value (top) and index into a kind-15 node

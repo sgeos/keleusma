@@ -8,6 +8,13 @@ run. Both have. Written 2026-08-14.
 
 Status: **BUILT. Full verdict agreement on the corpus, 2026-08-14.**
 
+**Currency, 2026-10-04.** The active completion effort is tracked in
+[ORDER1_COMPLETION_PLAN.md](./ORDER1_COMPLETION_PLAN.md). Parser records now retain explicit
+else presence. Reconstruction preserves it and expression extraction emits conditional
+branch pairs only for written else branches. Empty branches contribute unknown tails.
+Match-arm pairs and the composite extraction gaps remain open. This does not complete
+the production input path or the full Order 1 gate.
+
 **Currency, 2026-09-29.** The six input channels that previously excluded `parse.kel` and
 `wire.kel` now have 640-row caps. The measured stage-source test fits and checks all twelve real
 sources. The selected increase is 7,168 words, or 56 KiB, across the stage's shared and private

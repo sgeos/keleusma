@@ -792,7 +792,7 @@ fn push_byte_shift(p: Word) -> Word {
 
 // If-expression (kind 4): emit the condition ops, an If marker, the then-branch
 // ops, an Else marker, the else-branch ops, then EndIf. The If/Else targets are
-// backpatched in `emit_op`. Node: args = cond, lhs = then, rhs = else. Push in
+// backpatched in `emit_op`. Node args tags cond by else presence, lhs/rhs are branches. Push in
 // reverse so the LIFO drain emits them in order.
 fn push_if(p: Word) -> Word {
     push_emit(wire.endif);
@@ -800,7 +800,9 @@ fn push_if(p: Word) -> Word {
     push_emit(wire.els);
     push_visit(ast.lhs[p]);
     push_emit(wire.iff);
-    push_visit(ast.args[p])
+    // Reconstruct tags an omitted else with -(condition + 1).
+    let cond = if ast.args[p] < 0 { 0 - ast.args[p] - 1 } else { ast.args[p] };
+    push_visit(cond)
 }
 
 // LetIn (kind 5): `let <slot> = <value>; <cont>`. Emit the value ops,

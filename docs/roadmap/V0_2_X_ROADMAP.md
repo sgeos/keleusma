@@ -346,7 +346,13 @@ The gaps to close, from the current subset to the full grammar:
 - **Generics and monomorphization.** The full monomorphizer (Workstream A's deferred half):
   generic functions, structs, and enums, const generics, trait bounds, and specialization.
 
-## Current Order-1 status, 2026-09-29
+## Current Order-1 status, 2026-10-04
+
+The full completion requirements and current evidence are tracked in
+[ORDER1_COMPLETION_PLAN.md](../decisions/ORDER1_COMPLETION_PLAN.md). Explicit else presence
+now survives parser records and reconstruction, enabling conditional branch-pair extraction.
+The remaining type-input and production wire-emission integrations keep Order 1 open.
+The monomorphization identity corpus now covers all twelve sources and checks its inventory.
 
 The type-rejection stage now has capacity for all twelve real stage sources. Six tables use a
 640-row cap, adding 7,168 words or 56 KiB across their parallel arrays. The stage accepts all

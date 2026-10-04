@@ -7726,18 +7726,8 @@ type ExprRowKey = (
 /// One of the eight expression kinds. It shares a forest node with the branch pair: `push_if`
 /// keeps the condition in `args` and the branches in `lhs`/`rhs`.
 ///
-/// # THIS DOC USED TO CLAIM THE BRANCH PAIR TOO, AND THE TEST NEVER COMPARED IT
-///
-/// The heading said "the condition AND BRANCH-PAIR rows agree" and a whole section described
-/// following a branch's statement chain to its tail — while the comparison below filters on
-/// `k == 3` and nothing else. **The branch pair was withheld deliberately** (see
-/// `a_one_armed_conditional_is_why_the_branch_pair_does_not_move`), so the doc was asserting
-/// agreement for exactly the row this slice refused to emit.
-///
-/// It is corrected rather than deleted because the shape recurs: the prose was written while
-/// the branch pair was still expected to ship, and survived the decision not to ship it. **A
-/// doc comment is not re-read when the code under it is cut**, which is how a test came to
-/// claim coverage it did not have. Found while adding kind 8 to the same file.
+/// This test filters kind 3. Branch-pair coverage is separately checked by
+/// `branch_pair_rows_follow_explicit_else_presence`.
 ///
 /// # The corpus still asserts its own coverage
 ///
@@ -7826,103 +7816,96 @@ fn the_condition_rows_agree_between_the_pipeline_and_the_reference() {
     );
 }
 
-/// **A ONE-ARMED CONDITIONAL IS WHY THE BRANCH PAIR DOES NOT MOVE.**
-///
-/// The branch-pair row was implemented and then withheld. This is the witness.
-///
-/// `push_if` visits an else arm unconditionally, so the forest carries one even for a conditional
-/// that has none in the source. The pipeline therefore cannot tell a synthesised arm from a
-/// written one, while the reference contributes a pair row **only** when `else_block` is present.
-///
-/// # No heuristic can work, and this is now established rather than suspected
-///
-/// This section used to argue that the synthesised arm yields the UNIT tag while a real
-/// statement-only else yields UNKNOWN, so the tag *appears* to separate them, and that the
-/// separation **could not be shown safe**. That was a hedge, and checking it replaced it with
-/// something stronger.
-///
-/// `an_empty_else_is_indistinguishable_from_an_implicit_one` in `tests/selfhost_parse.rs`
-/// establishes that a written `else { }` and an implicit arm produce **the same parse record
-/// stream**, while the reference separates them (its criterion, `else_block.is_some()`, counts
-/// the written empty else and not the implicit arm). **The distinguishing information never
-/// reaches this side.** A heuristic can only read what the stream carries, so the question of
-/// which tag a case yields is moot: the two sources are already identical before any tag exists.
-///
-/// The stakes remain asymmetric, which is why the withholding is the right response rather than
-/// a guess in either direction:
-///
-/// - a SPURIOUS pair row feeds `ty_node_bad`'s equality branch and can make the stage **reject a
-///   correct program**;
-/// - a DROPPED pair row makes the stage **miss a disagreement it exists to catch**.
-///
-/// Both directions are unsound, so no row is emitted and the gap is named here instead.
-///
-/// **PROPORTIONALITY.** This is a channel the type checker consumes, not code generation. Nothing
-/// here reaches a compiled module.
+/// Branch pairs follow written else presence and compare block tails with the reference.
+/// Empty and statement-only branches have unknown tails, not literal unit operands.
 #[cfg(feature = "self-host")]
 #[test]
-fn a_one_armed_conditional_is_why_the_branch_pair_does_not_move() {
-    use keleusma::ast::{Expr, Stmt};
-    use keleusma::visitor::Visitor;
-
-    const ONE_ARMED: &str = "private data d { q: Word }\n\
-                             fn f(c: bool) -> Word { if c { d.q = 1; } d.q }\n\
-                             fn main() -> Word { f(true) }";
-    const TWO_ARMED: &str = "fn f(c: bool) -> Word { if c { 1 } else { 2 } }\n\
-                             fn main() -> Word { f(true) }";
-
-    // The reference's own criterion, read from its syntax tree rather than assumed.
-    fn reference_pairs(src: &str) -> usize {
+fn branch_pair_rows_follow_explicit_else_presence() {
+    use std::collections::BTreeMap;
+    const SOURCES: &[&str] = &[
+        "private data d { q: Word } fn f(c: bool) -> Word { if c { d.q = 1; } d.q }",
+        "private data d { q: Word } fn f(c: bool) -> Word { if c { d.q = 1; } else {} d.q }",
+        "fn f(c: bool) -> Word { if c { 1 } else { 2 } }",
+        "fn f(c: bool) -> Word { if c { 1 } else { true } }",
+        "fn f(c: bool) -> Word { if c { let a = 1; a } else { 2 } }",
+        "fn f(c: bool) -> Word { if c { if c { 1 } else { 2 } } else { 3 } }",
+        "private data d { q: Word } fn f(c: bool) -> Word { if c { if c { d.q = 1; } } else { d.q = 2; } d.q }",
+        "private data d { q: Word } fn f(c: bool) -> Word { if c { d.q = 1; } if c { 2 } else { 3 } }",
+    ];
+    let mut compared = 0;
+    let mut saw_implicit = false;
+    for src in SOURCES {
         let ast = parse(&tokenize(src).expect("lex")).expect("parse");
-        struct V {
-            n: usize,
-        }
-        impl Visitor for V {
-            fn visit_expr(&mut self, e: &Expr) {
-                if let Expr::If { else_block, .. } = e
-                    && else_block.is_some()
-                {
-                    self.n += 1;
-                }
-                self.walk_expr(e);
+        let (names, _) = binding_rows(&ast);
+        let (nodes, _) = expression_nodes_and_derived(&ast, &names);
+        let by_id: BTreeMap<i64, String> = names.iter().map(|(k, v)| (*v, k.clone())).collect();
+        let render = |v: i64, f: i64| -> keleusma::selfhost::ExprOperand {
+            if f == 0 {
+                (v, 0, String::new())
+            } else {
+                (0, 1, by_id.get(&v).cloned().unwrap_or_default())
             }
-            fn visit_stmt(&mut self, s: &Stmt) {
-                self.walk_stmt(s);
+        };
+        let mut want: BTreeMap<ExprRowKey, usize> = BTreeMap::new();
+        for (k, a, af, b, bf) in nodes {
+            if k == 4 {
+                *want.entry((k, render(a, af), render(b, bf))).or_insert(0) += 1;
             }
         }
-        let mut v = V { n: 0 };
-        for f in &ast.functions {
-            v.visit_block(&f.body);
-        }
-        v.n
-    }
-
-    // CONTROL: the reference really does distinguish the two shapes. Without this the claim below
-    // would be about a difference that does not exist.
-    assert_eq!(
-        reference_pairs(ONE_ARMED),
-        0,
-        "the reference now pairs a one-armed conditional"
-    );
-    assert_eq!(
-        reference_pairs(TWO_ARMED),
-        1,
-        "the reference no longer pairs a two-armed one"
-    );
-
-    // The pipeline emits NO pair rows at all, for either shape. If it ever does, the withholding
-    // decision has been revisited and this pin should be revisited with it.
-    for (label, src) in [("one-armed", ONE_ARMED), ("two-armed", TWO_ARMED)] {
         let (rows, _) = keleusma::selfhost::expression_rows_from_pipeline(src);
-        assert!(
-            !rows.is_empty(),
-            "{label}: non-vacuity -- the pipeline produced no rows at all, so the absence of pair \
-             rows below establishes nothing"
+        let mut got: BTreeMap<ExprRowKey, usize> = BTreeMap::new();
+        for row in rows.into_iter().filter(|(k, _, _)| *k == 4) {
+            *got.entry(row).or_insert(0) += 1;
+        }
+        assert_eq!(got, want, "branch rows for {src}");
+        compared += want.values().sum::<usize>();
+        saw_implicit |= want.is_empty();
+    }
+    assert!(
+        compared >= 8,
+        "the nested and sequential witnesses must contribute pairs"
+    );
+    assert!(saw_implicit, "an omitted else must contribute no pair");
+}
+
+/// Feed pipeline branch rows to the Keleusma rejection stage. The negative differs only
+/// in the else tail's type, and the empty-else control must remain accepted.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_branch_pairs_drive_type_rejection() {
+    for (src, accepts) in [
+        ("fn f(c: bool) -> Word { if c { 1 } else { 2 } }", true),
+        ("fn f(c: bool) -> Word { if c { 1 } else { true } }", false),
+        (
+            "private data d { q: Word } fn f(c: bool) -> Word { if c { d.q = 1; } else {} d.q }",
+            true,
+        ),
+    ] {
+        assert_eq!(
+            reference_accepts(src),
+            accepts,
+            "reference witness for {src}"
         );
-        assert!(
-            rows.iter().all(|(k, _, _)| *k != 4),
-            "{label}: the pipeline now emits branch-pair rows. THAT IS A DECISION BEING REVISITED, \
-             not a regression: confirm a one-armed conditional yields none before keeping them."
+        let (rows, _) = keleusma::selfhost::expression_rows_from_pipeline(src);
+        let pairs: Vec<_> = rows
+            .into_iter()
+            .filter(|(k, _, _)| *k == 4)
+            .map(|(k, a, b)| {
+                assert_eq!((a.1, b.1), (0, 0));
+                (k, a.0, b.0)
+            })
+            .collect();
+        assert_eq!(
+            pairs.len(),
+            1,
+            "each witness must reach one branch comparison"
+        );
+        assert_eq!(
+            stage_verdict(&StageInput {
+                nodes: &pairs,
+                ..Default::default()
+            }),
+            accepts
         );
     }
 }
@@ -8142,7 +8125,7 @@ fn the_tail_versus_return_rows_agree_between_the_pipeline_and_the_reference() {
 
 /// **A BODY WITH NO TAIL EXPRESSION YIELDS THE SYNTHESISED UNIT.** Measured, not assumed.
 ///
-/// This is one half of why kind 8 could move where the branch pair could not. The forest puts
+/// The forest puts
 /// a payload-0 `Unit` in the continuation slot for a block that ends in a statement, and a
 /// real value where the source has a tail expression. The two programs below differ by one
 /// token and the pipeline emits a row for exactly one of them.
@@ -8596,27 +8579,16 @@ fn a_struct_literal_does_not_carry_which_struct_it_constructs() {
     );
 }
 
-/// **EVERY REMAINING EXPRESSION KIND IS BLOCKED ON THE RECORD STREAM OR ON A SYNTHESISED NODE,
-/// AND NOT ON WORK IN THE DRIVER.** This is the frontier statement for the extraction.
+/// Pin the expression kinds reached by this corpus. Conditional branch pairs now use the
+/// explicit else marker. Kind 4 still lacks match-arm extraction, so a kind count is not
+/// evidence that every syntactic form is covered.
 ///
-/// | kind | why it has not moved |
-/// |---|---|
-/// | branch pair | the forest synthesises an else arm; a spurious row can reject a valid program |
-/// | field on value | needs a `let`'s type annotation, which the record stream does not carry |
-/// | index on value | the same annotation |
-/// | struct literal | needs the struct's identity, which the record does not carry |
-///
-/// **THE FOUR THAT MOVED NEEDED NO STAGE CHANGE. NONE OF THE FOUR REMAINING CAN AVOID ONE**
-/// (except the branch pair, which needs a different forest, not a different record). That is a
-/// real boundary in the work rather than a pause, and it is worth stating plainly so a resuming
-/// session does not spend another increment looking for a cheap slice that is not there.
-///
-/// This test asserts only what it can check from the tree: that the two witnesses above exist and
-/// that the four moved kinds are the ones the extraction emits. **The table is prose and is not
-/// checked**; it is here because the reader who needs it will be reading this file.
+/// Field and index failures are refused before reconstruction yields a forest. Struct-literal
+/// field counts still require identity that the record discards. Their witnesses below remain
+/// separate from this emitted-kind inventory.
 #[cfg(feature = "self-host")]
 #[test]
-fn the_moved_expression_kinds_are_exactly_four() {
+fn the_emitted_expression_kinds_are_exactly_five() {
     use std::collections::BTreeSet;
 
     const CORPUS: &[&str] = &[
@@ -8636,7 +8608,7 @@ fn the_moved_expression_kinds_are_exactly_four() {
 
     assert_eq!(
         kinds,
-        BTreeSet::from([1, 2, 3, 8]),
+        BTreeSet::from([1, 2, 3, 4, 8]),
         "the set of expression kinds the pipeline emits has changed. If a kind was ADDED, the \
          blockers recorded in this file should be re-read and the stale one removed; if one was \
          LOST, a check the type channel used to make is gone."
@@ -8657,8 +8629,7 @@ fn the_moved_expression_kinds_are_exactly_four() {
 /// **accepts one and rejects the other**, and it rejects it for exactly the field-count reason
 /// kind 7 exists to carry. No function of that record can therefore reproduce the reference's
 /// verdict: emitting a row would either reject `A`, which is a correct program, or accept `B`,
-/// which loses the check. **Both directions are unsound**, which is the same shape that withheld
-/// the branch pair.
+/// which loses the check. Neither direction preserves the required verdict agreement.
 ///
 /// The collision is arranged rather than stumbled on. `A` has one `Word` field and `B` has eight
 /// `Byte` fields, so both composites are eight bytes wide while their declared field counts are

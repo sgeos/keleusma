@@ -1127,8 +1127,7 @@ fn is_statement_continuation(kind: i64) -> bool {
 /// A block with no tail expression gets a **synthesised `Unit` continuation** — measured, not
 /// assumed: `fn s() -> Word { let a = 1; }` reconstructs to `[Literal, Unit, LetIn]` with the
 /// `Unit` in the `LetIn`'s `rhs`, where `fn main() -> Word { let a = 1; a }` puts a `Local`.
-/// That is exactly the shape that made the BRANCH PAIR unshippable: `push_if` synthesises an
-/// else arm, and the pipeline cannot tell a synthesised one from a written one.
+/// An omitted else also synthesizes a unit branch, but now has an explicit presence marker.
 ///
 /// **The difference here is that the ambiguity does not exist.** The only source expression
 /// that would also land on `Unit` with payload 0 is a written `()` tail, and `reconstruct.kel`
@@ -1142,7 +1141,12 @@ fn is_statement_continuation(kind: i64) -> bool {
 ///
 /// A payload of 1 or 2 is a boolean literal riding the same kind and is a real tail.
 fn body_tail_node(body: &Body) -> Option<i64> {
-    let mut at = body.root;
+    block_tail_node(body, body.root)
+}
+
+/// Find a tail from any block root with the same bounded descent as a function body.
+fn block_tail_node(body: &Body, root: i64) -> Option<i64> {
+    let mut at = root;
     for _ in 0..body.nodes.len() {
         let n = body.nodes.get(usize::try_from(at).ok()?)?;
         if is_statement_continuation(n.kind) {
@@ -2455,39 +2459,21 @@ pub type ExprRow = (i64, ExprOperand, ExprOperand);
 /// the reference's line count, its visitor discipline, and the forest's child channels. The
 /// requirement lives at the boundary, not in either implementation.
 ///
-/// # What moves, and what does not
+/// # Coverage
 ///
-/// **FOUR OF THE EIGHT KINDS.** Kind 1, the binary operator — all of it, across the four
-/// forest kinds the lowering splits it into (see `is_binary_operator`); kind 3, the CONDITION a
-/// conditional tests; kind 8, the TAIL-VERSUS-RETURN claim; and kind 2, the ARRAY ELEMENTS.
+/// Five of the eight kinds are extracted here. They are binary operators, array elements,
+/// conditions, explicit conditional branch pairs, and tail-versus-return claims.
+/// `branch_pair_rows_follow_explicit_else_presence` compares written branch pairs against
+/// reference syntax, including empty, statement-only, nested and sequential branches.
 ///
-/// Kind 1 is the one `tyb_node_tag` resolves, so it is what makes `let d = 1 + 2` reach the
-/// bounded fixpoint. Kind 8 is the row that refuses `fn f() -> Word { true }`; it reaches the
-/// tail through `body_tail_node`, whose doc carries the argument for why a synthesised unit
-/// continuation is distinguishable here when the synthesised ELSE ARM below is not.
+/// Parser If records use argument 1 for an omitted else and 0 for a written else.
+/// Reconstruction carries an omitted else as `-(condition_index + 1)` in the If argument.
+/// Code generation decodes that index without changing emitted bytecode. Branch comparison
+/// follows the presence marker instead of guessing from the synthesized branch's value.
+/// `an_empty_else_is_distinguished_from_an_implicit_one` pins the parser distinction.
 ///
-/// # THE BRANCH PAIR WAS BUILT, MEASURED, AND WITHHELD
-///
-/// Kind 4 looked free: `push_if` keeps the condition in `args` and the branches in `lhs`/`rhs`, so
-/// one node yields both. It was implemented, and a probe found it **wrong for a one-armed
-/// conditional**: the forest synthesises an else arm, so the pipeline emitted a pair row where the
-/// reference emits none.
-///
-/// **That direction is the dangerous one.** A pair row feeds `ty_node_bad`'s EQUALITY branch, so a
-/// spurious row can make the stage reject a correct program, and the opposite error — dropping a
-/// real pair — would let the stage miss a disagreement it exists to catch. **Both directions are
-/// unsound, so the row is not emitted at all**, and
-/// `a_one_armed_conditional_is_why_the_branch_pair_does_not_move` pins the witness.
-///
-/// **A HEURISTIC ON THE SYNTHESISED ARM'S UNIT TAG CANNOT WORK**, which is stronger than the
-/// earlier wording here that it "could not be shown safe". A written `else { }` and an implicit
-/// arm produce the SAME parse record stream, while the reference separates them by
-/// `else_block.is_some()`. The distinguishing information never reaches this side, so which tag a
-/// case yields is moot. Established by
-/// `an_empty_else_is_indistinguishable_from_an_implicit_one` in `tests/selfhost_parse.rs`.
-///
-/// **Four do not move**: the branch pair above, and the three composite kinds — field access,
-/// index access and struct literals. Kind 2 was the last non-composite one.
+/// Field access, index access and struct literals remain incomplete below. Match-arm pairs
+/// are also not extracted here, although the reference includes them in branch-pair kind 4.
 ///
 /// # THE THREE COMPOSITE KINDS, EACH WITH A MEASURED VERDICT
 ///
@@ -2517,7 +2503,7 @@ pub type ExprRow = (i64, ExprOperand, ExprOperand);
 /// So a size-to-count rule — the obvious use of the datum that IS carried — is wrong on that
 /// pair, and no other function of the record can do better, because the record is the same.
 /// Emitting a row would reject a correct program or lose the check; **both directions are
-/// unsound**, the same shape that withheld the branch pair.
+/// unsound**, so the struct-literal row remains withheld.
 /// `a_struct_literal_record_cannot_separate_a_correct_program_from_a_field_count_error` pins it.
 ///
 /// **What would unblock kind 7 is a record naming the literal's struct.** `parse.kel` resolves
@@ -2611,14 +2597,20 @@ pub fn expression_rows_from_pipeline(src: &str) -> (Vec<ExprRow>, Vec<(String, u
                 row_of_node.insert(at as i64, rows.len());
                 rows.push((1, operand(node.lhs), operand(node.rhs)));
             } else if node.kind == 4 {
-                // The condition tested. Its second operand is unused, exactly as the reference
-                // leaves it.
-                //
-                // **THE BRANCH PAIR IS DELIBERATELY NOT EMITTED. SEE THE DOC ABOVE.** The forest
-                // synthesises an else arm for a one-armed conditional, so the pipeline cannot tell
-                // it from a written one, and a spurious pair row feeds an EQUALITY predicate in
-                // the stage -- it could reject a correct program.
-                rows.push((3, operand(node.arg), nothing.clone()));
+                // The parser marks an absent else, and reconstruction preserves it as a
+                // negative condition index. Empty written branches still contribute a pair.
+                let condition = if node.arg < 0 {
+                    -node.arg - 1
+                } else {
+                    node.arg
+                };
+                rows.push((3, operand(condition), nothing.clone()));
+                if node.arg >= 0 {
+                    let branch_tail = |root| {
+                        block_tail_node(&body, root).map_or_else(|| nothing.clone(), operand)
+                    };
+                    rows.push((4, branch_tail(node.lhs), branch_tail(node.rhs)));
+                }
             } else if node.kind == NODE_ARRAY_LIT {
                 // --- THE ARRAY-ELEMENT CLAIM, KIND 2 ---------------------------------------
                 //

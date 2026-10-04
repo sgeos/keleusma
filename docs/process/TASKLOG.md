@@ -6,6 +6,34 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Order 1 explicit else extraction
+
+The active operator goal is full Order 1 completion with System 1 shadow-pilot participation.
+[ORDER1_COMPLETION_PLAN.md](../decisions/ORDER1_COMPLETION_PLAN.md) records the full gate,
+including production type rejection, complete artifact emission and final verification.
+
+Parser records now preserve explicit else presence. Reconstruction carries the distinction
+without a new node kind, and code generation preserves executable byte identity. Expression
+extraction compares written branch tails, including empty, statement-only, nested and sequential
+branches. The five-kind inventory records that match-arm pairs remain incomplete.
+The monomorphization corpus now covers all twelve stage sources and checks its directory inventory.
+
+Verification passed with `RUSTC_WRAPPER=` and `CARGO_HUSKY_DONT_INSTALL_HOOKS=1` after the first
+build-hook installation was denied by the sandbox. The parser suite passed 90 tests with two
+ignored. The corrected type suite passed 73. Selected compilation tests passed 89, including
+all twelve stage sources. The four-case else reconstruction and byte-identity test passed.
+Monomorphization passed three tests. Documentation checks passed 21 tests before the final
+handoff edit, with a final rerun recorded in the reverse prompt. Formatting, whitespace and
+Clippy checks passed. The stage checks used `KEL_SELFHOST_CACHE=0`.
+Full workspace and release verification remain incomplete.
+
+The pilot recorded the first diagnostic and two completion claims. One network attempt failed
+at transport. Automatic approval review rejected escalation, and the operator approval request
+for reviewed excerpts to TypeSafe remains pending. Local labels are explicitly non-independent.
+No pilot judgment changed a development gate. The local export is
+`tmp/jev-shadow-order1-else-checkpoint.json`; the shared pilot checkpoint remains owned by the
+pilot implementation line. The reviewed interline checkpoint contains four routes and no messages.
+
 ## 2026-09-29 V0.2.X twelfth-stage compilation
 
 Moved `verify_types.kel` solver storage before its first use, retaining data-block order and
