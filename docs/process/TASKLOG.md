@@ -6,6 +6,25 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Order 1 struct field counts and unary not
+
+Parser metadata now supplies each struct literal's declared field count. The driver pairs it
+with the construction's supplied count before reconstruction. The type stage compares the two.
+Nested and reordered literals agree with reference extraction, and the equal-size counterexample
+now carries distinct metadata. The expression-kind inventory is six. Unary `not` also now emits
+its missing boolean-operand requirement. Both new differentials failed before their changes.
+
+The final type suite passed 75 tests. The default-feature parser suite passed 67, the metadata-tag
+check passed one and the selected compilation differential passed 89, including all twelve
+stages. The byte-identity run preceded the final unary-condition addition to the extraction helper.
+The parser and compiler stages did not change after that run. Final broad-feature Clippy passed.
+Documentation and monomorphization checks are recorded in the reverse prompt. Full workspace,
+production integration and release verification remain open.
+
+The shadow pilot captured the first assertion failure and three passing-count claims locally.
+Self-review labels are marked non-independent. No external evaluation was retried while the
+previous approval request remains unanswered. The interline inbox was empty.
+
 ## 2026-10-04 Order 1 explicit else extraction
 
 The active operator goal is full Order 1 completion with System 1 shadow-pilot participation.

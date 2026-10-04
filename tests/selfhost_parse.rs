@@ -362,7 +362,8 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     // for it and must not let it into a sequence pinned against the
                     // reference. The tag comes from the driver so there is one source
                     // of truth for the number.
-                    c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG => {}
+                    c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG
+                        || c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG => {}
                     _ => cur
                         .as_mut()
                         .expect("body node before START")
@@ -374,7 +375,8 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     0 => {}                 // PENDING
                     15 => in_guard = false, // the guard's Done ends guard mode
                     35 => {}                // FieldPos: reorder marker, skipped (see above)
-                    c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG => {}
+                    c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG
+                        || c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG => {}
                     _ => cur
                         .as_mut()
                         .expect("guard node before START")

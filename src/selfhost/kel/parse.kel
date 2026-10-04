@@ -1426,6 +1426,8 @@ private data structdefs {
     sc_pending: Word,
     sc_phase: Word,
     sc_closing: Word,
+    // Delayed construction record after its declared-field-count metadata.
+    sc_record: Word,
 }
 
 // Resolve an identifier to its frame slot: the `let` bindings first (most recent wins),
@@ -4200,7 +4202,14 @@ fn step_cdraining() -> Word {
 // count as `byte_size * 1024 + count`. The field-expression nodes precede it in postorder,
 // exactly as a Call's arguments precede the Call. The reconstruct stage reads the byte size
 // directly, so a mixed-scalar struct (a `Byte` beside a `Word`) is sized correctly.
+// Metadata tag, outside the node vocabulary. The next record is its StructInit.
+fn tag_struct_fields() -> Word { 91 }
+
 fn step_sc_closing() -> Word {
+    if structdefs.sc_closing == 2 {
+        structdefs.sc_closing = 0;
+        structdefs.sc_record
+    } else {
     if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::StructMark() as Word {
         ops.opsp = op_pop(ops.opsp);
         let op = ops.opstack[ops.opsp];
@@ -4222,8 +4231,11 @@ fn step_sc_closing() -> Word {
     stmt.pending_carray_arr = 0;
     stmt.pending_carray_arrbytes = 0;
         stmt.pending_cenum = 0;
-        Node::StructInit() as Word + (structdefs.sd_bytesize[structdefs.sc_name[structdefs.sc_sp]] * 1024 + structdefs.sc_count[structdefs.sc_sp]) * 64
-    }
+        structdefs.sc_record = Node::StructInit() as Word + (structdefs.sd_bytesize[structdefs.sc_name[structdefs.sc_sp]] * 1024 + structdefs.sc_count[structdefs.sc_sp]) * 64;
+        structdefs.sc_closing = 2;
+        ps.emit_arg = structdefs.sd_fcount[structdefs.sc_name[structdefs.sc_sp]];
+        tag_struct_fields()
+    } }
 }
 
 // An operator or statement token.
@@ -5574,7 +5586,7 @@ fn body_step() -> Word {
     if ops.closing == 1 {
         step_closing()
     } else {
-    if structdefs.sc_closing == 1 {
+    if structdefs.sc_closing > 0 {
         step_sc_closing()
     } else {
     if da.iclosing == 1 {

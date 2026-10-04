@@ -13,6 +13,27 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-04 Struct field counts and unary conditions
+
+The parser already resolves a struct literal to its declaration. It now emits that
+resolved declaration's field count as metadata immediately before the existing construction
+record. A single private word holds the delayed construction record. The driver consumes the
+metadata before reconstruction, so it adds no expression node and does not reduce the node budget.
+The existing construction record supplies the given count. The type stage performs the comparison.
+
+This avoids guessing declared fields from byte size. The equal-size witness retains identical
+construction records and now has different metadata. Nested and reordered literals preserve their
+own counts. The first differential failed with no emitted kind-7 row and passed after wiring.
+The kind inventory now includes six kinds, with remaining syntactic forms stated separately.
+
+Review of those forms found that condition extraction handled `if` but omitted unary `not`.
+The expanded differential failed on a valid `not true` source because its condition row was
+missing. The extraction now emits that requirement and direct stage checks include `not 1`.
+
+The shadow pilot captured the first diagnostic and completion claims locally. Live evaluation
+was not retried because the previous automatic approval rejection remains unresolved. Local
+self-review labels do not support an independent classification-accuracy claim.
+
 ## 2026-10-04 Explicit else presence for Order 1
 
 The parser emitted identical records for an omitted else and a written empty else.

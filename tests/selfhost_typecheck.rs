@@ -7758,6 +7758,10 @@ fn the_condition_rows_agree_between_the_pipeline_and_the_reference() {
         // Nested conditionals: two conditions and two branch pairs from one body.
         "fn f(c: bool, d: bool) -> Word { if c { if d { 1 } else { 2 } } else { 3 } }\n\
          fn main() -> Word { f(true, false) }",
+        // Unary boolean negation has the same operand requirement as an if condition.
+        "fn f() -> bool { not true }",
+        "fn f() -> bool { not 1 }",
+        "fn f(c: bool) -> bool { not c }",
     ];
 
     let mut compared = 0usize;
@@ -7806,7 +7810,7 @@ fn the_condition_rows_agree_between_the_pipeline_and_the_reference() {
     }
 
     assert!(
-        compared >= 5,
+        compared >= 8,
         "only {compared} condition rows were compared"
     );
     assert!(
@@ -7903,6 +7907,39 @@ fn pipeline_branch_pairs_drive_type_rejection() {
         assert_eq!(
             stage_verdict(&StageInput {
                 nodes: &pairs,
+                ..Default::default()
+            }),
+            accepts
+        );
+    }
+}
+
+/// Pipeline condition rows must enforce unary not without borrowing reference type tags.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_unary_not_rows_drive_type_rejection() {
+    for (src, accepts) in [
+        ("fn f() -> bool { not true }", true),
+        ("fn f() -> bool { not 1 }", false),
+    ] {
+        assert_eq!(reference_accepts(src), accepts);
+        let (rows, _) = keleusma::selfhost::expression_rows_from_pipeline(src);
+        let conditions: Vec<_> = rows
+            .into_iter()
+            .filter(|(k, ..)| *k == 3)
+            .map(|(k, a, b)| {
+                assert_eq!((a.1, b.1), (0, 0));
+                (k, a.0, b.0)
+            })
+            .collect();
+        assert_eq!(
+            conditions.len(),
+            1,
+            "one unary not must produce one requirement"
+        );
+        assert_eq!(
+            stage_verdict(&StageInput {
+                nodes: &conditions,
                 ..Default::default()
             }),
             accepts
@@ -8584,11 +8621,11 @@ fn a_struct_literal_does_not_carry_which_struct_it_constructs() {
 /// evidence that every syntactic form is covered.
 ///
 /// Field and index failures are refused before reconstruction yields a forest. Struct-literal
-/// field counts still require identity that the record discards. Their witnesses below remain
+/// field counts now have dedicated parser metadata. Their witnesses below remain
 /// separate from this emitted-kind inventory.
 #[cfg(feature = "self-host")]
 #[test]
-fn the_emitted_expression_kinds_are_exactly_five() {
+fn the_emitted_expression_kinds_are_exactly_six() {
     use std::collections::BTreeSet;
 
     const CORPUS: &[&str] = &[
@@ -8608,43 +8645,91 @@ fn the_emitted_expression_kinds_are_exactly_five() {
 
     assert_eq!(
         kinds,
-        BTreeSet::from([1, 2, 3, 4, 8]),
+        BTreeSet::from([1, 2, 3, 4, 7, 8]),
         "the set of expression kinds the pipeline emits has changed. If a kind was ADDED, the \
          blockers recorded in this file should be re-read and the stale one removed; if one was \
          LOST, a check the type channel used to make is gone."
     );
 }
 
-/// **KIND 7, THE STRUCT LITERAL: WITHHELD, AND THIS IS THE PROOF RATHER THAN THE REASON.**
-///
-/// The reference emits `(STRUCT_LIT, declared_field_count, given_field_count)` and the stage
-/// rejects when the two differ. The pipeline's struct-literal record carries the constructed
-/// composite's **flat size in bytes** and the **given** field count. It does not carry the
-/// struct's identity, so the DECLARED count is not available, and the size is not a substitute
-/// for it.
-///
-/// # Why this is a proof and not a survey
-///
-/// Two programs below produce a **byte-identical struct-literal record** while the reference
-/// **accepts one and rejects the other**, and it rejects it for exactly the field-count reason
-/// kind 7 exists to carry. No function of that record can therefore reproduce the reference's
-/// verdict: emitting a row would either reject `A`, which is a correct program, or accept `B`,
-/// which loses the check. Neither direction preserves the required verdict agreement.
-///
-/// The collision is arranged rather than stumbled on. `A` has one `Word` field and `B` has eight
-/// `Byte` fields, so both composites are eight bytes wide while their declared field counts are
-/// one and eight. A size-to-count rule — the obvious way to use the datum that IS carried — is
-/// wrong on exactly this pair.
-///
-/// # What would unblock it
-///
-/// A record naming the literal's struct. `parse.kel` already resolves it, because the field
-/// records that precede the literal carry field INDICES rather than names, and only a resolved
-/// declaration can produce an index. The identity is discarded after resolution rather than
-/// unavailable. That is a record-stream change and the operator's call, not a defect.
+/// Declared and supplied struct field counts come from parser metadata, including nested
+/// and reordered constructions. Equal byte sizes must not erase different declared counts.
 #[cfg(feature = "self-host")]
 #[test]
-fn a_struct_literal_record_cannot_separate_a_correct_program_from_a_field_count_error() {
+fn pipeline_struct_literal_counts_drive_type_rejection() {
+    use std::collections::BTreeMap;
+    let cases = [
+        (
+            "struct A { a: Word } fn f() -> Word { let p = A { a: 1 }; 0 }",
+            true,
+        ),
+        (
+            "struct B { a: Byte, b: Byte, c: Byte, d: Byte, e: Byte, f: Byte, g: Byte, h: Byte } fn f() -> Word { let p = B { a: 1 }; 0 }",
+            false,
+        ),
+        (
+            "struct A { a: Word } struct B { a: A, b: Word } fn f() -> Word { let p = B { b: 2, a: A { a: 1 } }; 0 }",
+            true,
+        ),
+        (
+            "struct P { a: Word, b: Word } fn f() -> Word { let p = P { a: 1 }; 0 }",
+            false,
+        ),
+        (
+            "struct P { a: Word, b: Word } fn f() -> Word { let p = P { b: 2, a: 1 }; 0 }",
+            true,
+        ),
+    ];
+    let mut compared = 0;
+    for (src, accepts) in cases {
+        assert_eq!(
+            reference_accepts(src),
+            accepts,
+            "reference witness for {src}"
+        );
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (names, _) = binding_rows(&ast);
+        let (reference, _) = expression_nodes_and_derived(&ast, &names);
+        let mut want = BTreeMap::new();
+        for (k, a, af, b, bf) in reference.into_iter().filter(|(k, ..)| *k == 7) {
+            assert_eq!((af, bf), (0, 0));
+            *want.entry((k, a, b)).or_insert(0usize) += 1;
+        }
+        let (rows, _) = keleusma::selfhost::expression_rows_from_pipeline(src);
+        let actual: Vec<_> = rows
+            .into_iter()
+            .filter(|(k, ..)| *k == 7)
+            .map(|(k, a, b)| {
+                assert_eq!((a.1, b.1), (0, 0));
+                (k, a.0, b.0)
+            })
+            .collect();
+        let mut got = BTreeMap::new();
+        for row in &actual {
+            *got.entry(*row).or_insert(0usize) += 1;
+        }
+        assert!(!want.is_empty(), "each witness must reach a struct count");
+        assert_eq!(got, want, "struct field counts for {src}");
+        assert_eq!(
+            stage_verdict(&StageInput {
+                nodes: &actual,
+                ..Default::default()
+            }),
+            accepts
+        );
+        compared += actual.len();
+    }
+    assert_eq!(
+        compared, 6,
+        "the nested construction must contribute its own row"
+    );
+}
+
+/// Equal-size literals retain identical construction records, but their declared-field
+/// metadata distinguishes the valid construction from a field-count error.
+#[cfg(feature = "self-host")]
+#[test]
+fn struct_field_metadata_separates_equal_size_literals() {
     // One `Word` field: eight bytes wide, one field declared, one field given. Well typed.
     const ACCEPTED: &str = "struct A { a: Word }\nfn f() -> Word { let p = A { a: 1 }; 0 }\n";
     // Eight `Byte` fields: also eight bytes wide, EIGHT declared, one given. Ill typed, and
@@ -8715,11 +8800,24 @@ fn a_struct_literal_record_cannot_separate_a_correct_program_from_a_field_count_
 
     assert_eq!(
         accepted_records, rejected_records,
-        "the struct-literal record now DISTINGUISHES a correct program from a field-count error. \
-         That is the thing kind 7 was withheld for lacking, so this is good news and not a \
-         regression: re-read the blocker above, and if the record now carries the struct's \
-         identity or its declared field count, kind 7 can move."
+        "construction size stays identical"
     );
+    for (src, declared) in [(ACCEPTED, 1), (REJECTED, 8)] {
+        let (_, records) = keleusma::selfhost::parse_record_trace(src);
+        let metadata: Vec<_> = records
+            .iter()
+            .enumerate()
+            .filter(|(_, (k, _, _))| *k == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG)
+            .collect();
+        assert_eq!(metadata.len(), 1);
+        let (at, (_, count, _)) = metadata[0];
+        assert_eq!(*count, declared);
+        assert_eq!(
+            records[at + 1].0,
+            27,
+            "the count must immediately precede its literal"
+        );
+    }
 }
 
 /// **KINDS 5 AND 6, FIELD AND INDEX ON A VALUE: WITHHELD, AND FOR A BLUNTER REASON THAN KIND 7.**

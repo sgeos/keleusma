@@ -15,6 +15,13 @@ branch pairs only for written else branches. Empty branches contribute unknown t
 Match-arm pairs and the composite extraction gaps remain open. This does not complete
 the production input path or the full Order 1 gate.
 
+Declared struct field counts now travel in parser metadata. The driver pairs each
+count with the following construction record and supplies expression kind 7 to the type stage.
+The equal-size, unequal-field-count witness now distinguishes the cases through metadata.
+Six expression kinds are emitted, with match-arm coverage and the field/index rejection paths
+still incomplete. Unary `not` now emits the same boolean-operand requirement as an `if`
+condition, covering another previously omitted syntactic form. The production input path remains open.
+
 **Currency, 2026-09-29.** The six input channels that previously excluded `parse.kel` and
 `wire.kel` now have 640-row caps. The measured stage-source test fits and checks all twelve real
 sources. The selected increase is 7,168 words, or 56 KiB, across the stage's shared and private

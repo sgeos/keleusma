@@ -5,81 +5,85 @@
 ## Active goal
 
 Complete roadmap Order 1 on V0.2.X and participate in the System 1 shadow pilot.
-The goal remains active. Do not treat the completed branch-pair increment as completion.
-The full requirements and evidence are in
+The goal remains active. The complete requirements are in
 [ORDER1_COMPLETION_PLAN.md](../decisions/ORDER1_COMPLETION_PLAN.md).
+The previous goal turn and this increment both made concrete implementation progress.
 
 ## Current state
 
-2026-10-04. Branch `feat/v02-order1-next`, starting from `563cc273`.
-The selected 640-row type-input capacities remain in place.
-The legacy handoff is invalid-and-stale, eleven commits behind that starting tree.
+2026-10-04. Branch `feat/v02-order1-next`, starting from `778bfb35`.
+The legacy handoff is invalid-and-stale, twelve commits behind that starting tree.
 Its ancestry check passes, but its unchanged-stage-source claim is false and its full
-verification receipt has not been refreshed.
+verification receipt has not been refreshed. Appendix B was read before tracked writes.
 
-Parser If records now distinguish omitted else branches with argument 1 from written branches
-with argument 0. Reconstruction stores an omitted else as `-(condition_index + 1)`.
-Code generation decodes it. No bytecode opcode or version changed.
-Expression extraction emits conditional branch pairs only for written else branches and
-compares block tails against the reference. Empty branches contribute unknown operands.
-The emitted-kind inventory is five, but kind 4 still lacks match-arm extraction.
-The monomorphization identity test now includes all twelve stages and checks the file inventory.
+The parser emits metadata tag 91 immediately before each struct construction. Its payload is
+the resolved declaration's field count. A private word holds the delayed construction record.
+The production driver consumes the metadata into `ParsedFn::struct_counts`, pairs it with the
+supplied count in record 27, and removes it before reconstruction. No new expression node,
+bytecode opcode or bytecode version is involved. Parser test drivers divert it consistently.
+
+Expression extraction now emits kind 7 from these counts. Nested and reordered literals agree
+with reference syntax. Equal-size literals with different declared field counts remain identical
+as construction records but differ in metadata. Kind 3 also now covers unary `not`, whose boolean
+requirement was previously omitted. The emitted-kind inventory is six. Match-arm pairs and the
+field/index rejection paths remain incomplete, along with other documented input-channel gaps.
+The selected 640-row capacities and explicit else markers from preceding commits remain in place.
 
 ## Verification
 
 Cargo invocations used `RUSTC_WRAPPER=` and `CARGO_HUSKY_DONT_INSTALL_HOOKS=1`.
-The latter avoids reinstalling Git hooks after the sandbox denied that build-script write.
 Self-hosted stage checks also used `KEL_SELFHOST_CACHE=0`.
 
-- `cargo test --features self-host --test selfhost_parse --test selfhost_typecheck` completed
-  the parser suite with 90 passed and two ignored. Its initial type run had 72 passed and one
-  failure because the emitted-kind inventory still expected four kinds.
-- `cargo test --features self-host --test selfhost_typecheck` passed all 73 after updating
-  that inventory to five and documenting the remaining match-arm gap.
+- `cargo test --features self-host --test selfhost_typecheck` passed 74 after the struct-count
+  change and 75 after the unary-condition change.
+- `cargo test --test selfhost_parse` passed 67 with default features.
+- `cargo test --features self-host --lib the_struct_field_tag_matches_the_stage` passed one.
 - `cargo test --features self-host --test selfhost_codegen self_host_compiles_` passed 89
-  selected tests, including all twelve stage sources. These are the existing compilation
-  differentials, not a new proof of complete production serialization.
-- `cargo test --test selfhost_codegen explicit_and_implicit_else_compile_byte_identically -- --exact`
-  passed one test with four reconstruction and byte-identity witnesses.
-- `cargo test --test selfhost_monomorphize_identity` passed three tests.
-- `cargo test --test documentation_links --test comment_citations --test claimed_counts`
-  passed 21 tests. The final combined rerun with `--test selfhost_monomorphize_identity`
-  passed all 24 after the handoff update.
-- `cargo clippy --tests --features signatures,shell,self-host -- -D warnings` passed with an
-  actual `Checking keleusma` line after the code changes. Formatting and diff checks passed.
+  selected tests, including all twelve stage sources. That run preceded the final unary-condition
+  addition in the type-input extraction helper. Parser and compiler stage sources stayed unchanged.
+- `cargo clippy --tests --features signatures,shell,self-host -- -D warnings` passed after the
+  final code change with an actual `Checking keleusma` line.
+- The final combined documentation, citation, count and monomorphization command is
+  `cargo test --test documentation_links --test comment_citations --test claimed_counts --test selfhost_monomorphize_identity`.
+  It passed 24 tests. Its receipt is `tmp/order1-struct-final-checks.log`. Formatting and
+  diff checks passed.
 
-The first parser witness failed before implementation because both record streams were identical.
-A missing test-local import and the stale four-kind pin were corrected during development.
+The struct-count test first failed because kind 7 was absent. The expanded condition comparison
+then failed on `not true` because its requirement row was absent. Both controls remain in the tests.
 Full workspace checks, fresh advisory scanning, remote integration and release gates remain
-unverified. No publication or V0.3.X integration occurred. The pre-existing untracked `nvim.log`
+unverified. No publication or V0.3.X integration occurred. The existing untracked `nvim.log`
 was left untouched.
 
 ## Next work
 
-Preserve struct-literal identity or its declared field count through the parser record stream.
-`step_sc_closing` already resolves `structdefs.sc_name` but emits only flat byte size and supplied
-field count. The equal-size, unequal-field-count witness in `tests/selfhost_typecheck.rs` pins
-why size cannot replace identity. Then close the other type-input residuals and production
-rejection integration. Keep complete production wire emission in the same Order 1 objective.
+Close the remaining source-fact extraction gaps and integrate independent production rejection.
+Match-arm comparisons are a concrete next gap. Reconstruction kind 22 uses `match_parts` with
+`[temporary, wildcard, literal, result, ...]`. Kind 39 uses a 20-word entry per enum arm and an
+explicit wildcard-presence flag after the entries. Compare the first source arm against later
+arms as the reference extractor does. Probe empty blocks, nested matches, arm binders and guards
+before claiming every form is reached. Do not infer source presence from synthesized nodes.
+
+Other gaps include actual call arguments, binder and occurrence coverage, and field/index inputs
+refused during reconstruction. Keep the full scope in the completion plan. The command-line
+unsigned artifact path still invokes `module.to_bytes()` after selecting the self-hosted backend.
+The existing Keleusma wire stage has framing and sealing commands, but complete production
+artifact emission is still required. Six expression kinds are not six completed input channels.
 
 ## Shadow pilot and mailbox
 
-The mailbox was empty. Its reviewed tracked checkpoint contains four registered routes and
-no messages. Recheck it before dependent work and handoff using the installed protocol.
+Mailbox checks were empty. The tracked interline checkpoint was exported and reviewed.
+It contains four registered routes and no messages.
 
-Pilot task `v023-order1-else-presence` is recorded as a completed increment, while Order 1 is
-still open. Case prefix is `v023-20261004-else-`.
-The short `hook-triage` excerpt was superseded before evaluation because it omitted the
-permission detail. `hook-triage-full` records the complete sanitized diagnostic and has a
-transport-error result with HTTP status 0. Its self-review label is environment.
-`hook-triage-network` is the same reviewed payload, but automatic approval review rejected
-execution before the network retry. A specific approval question to the operator is pending.
-Do not bypass that rejection. The request digest is
-`ebae2eeac5dd3fa6c2dae478a60655ad69419838f09185cd5233557cb7787531`.
+Pilot task `v023-order1-struct-counts` holds the current increment. Case prefix is
+`v023-20261004-struct-`. `counts-triage` contains the initial struct-count assertion failure.
+`type-claim`, `byte-claim` and `final-type-claim` contain the 74, 89 and 75 passing-test summaries.
+All are local development records. Self-review labels are explicitly non-independent.
+No classification accuracy or development improvement is claimed.
 
-`monomorphize-claim` and `stage-byte-identity-claim` hold two narrow passing-test-count claims.
-They are captured and self-labelled, with no live evaluation yet. No independent reviewer was
-used and no classification accuracy is claimed. No pilot result altered a gate.
-The reviewed local export is `tmp/jev-shadow-order1-else-checkpoint.json`.
-Do not overwrite the shared pilot implementation line's tracked checkpoint without coordinating
-ownership. The local records remain available in the installed pilot store.
+Live evaluation remains pending the operator answer to the previous specific approval question.
+Automatic approval review rejected sending reviewed excerpts to `api.typesafe.ai` because it did
+not recognize authorization for the destination and payload. Do not retry through another route.
+The previous task `v023-order1-else-presence` retains its transport failure and pending retry.
+The reviewed local export is `tmp/jev-shadow-order1-struct-checkpoint.json`. Its payloads and
+source references were reviewed without revealing unfinished peer judgments. The tracked pilot checkpoint belongs to the pilot
+implementation line and must not be overwritten concurrently.

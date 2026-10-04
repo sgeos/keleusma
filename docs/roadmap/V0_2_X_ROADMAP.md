@@ -353,6 +353,9 @@ The full completion requirements and current evidence are tracked in
 now survives parser records and reconstruction, enabling conditional branch-pair extraction.
 The remaining type-input and production wire-emission integrations keep Order 1 open.
 The monomorphization identity corpus now covers all twelve sources and checks its inventory.
+Declared struct field counts also now travel in parser metadata, allowing the type stage to
+compare them with supplied counts for nested and reordered constructions. This closes that
+extraction gap without completing the remaining input channels or production integration.
 
 The type-rejection stage now has capacity for all twelve real stage sources. Six tables use a
 640-row cap, adding 7,168 words or 56 KiB across their parallel arrays. The stage accepts all

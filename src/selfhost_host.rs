@@ -158,6 +158,10 @@ pub fn drive_parse_records_with<F, B>(
 /// had already mis-read.
 pub const PARSE_LET_NAME_TAG: i64 = 90;
 
+/// Declared field count for the StructInit record immediately following this metadata.
+/// The driver consumes it before reconstruction, so it does not occupy a node slot.
+pub const PARSE_STRUCT_FIELDS_TAG: i64 = 91;
+
 /// The tag at or below which a word yielded by `reconstruct.kel` is a diagnostic rather
 /// than a node count. Node counts are non-negative, so no legitimate count can collide.
 ///

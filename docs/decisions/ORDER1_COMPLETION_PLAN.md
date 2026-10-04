@@ -31,8 +31,10 @@ Full-language support remains Order 6. Existing supported programs must retain t
 
 ## Work sequence
 
-1. Preserve explicit else presence and struct-literal identity through parser records.
-   Compare branch tails and declared struct field counts against reference syntax.
+1. Preserve explicit else presence and struct-literal identity or declared field count through
+   parser records. Both metadata paths now exist, with reference comparisons for branch tails
+   and struct field counts. The struct path emits declared count metadata immediately before
+   the construction record and retains nested and reordered literals.
 2. Close remaining declaration, call argument, occurrence, binding and expression extraction
    gaps. Treat field and index failures during reconstruction as explicit rejection paths.
    Preserve match-arm comparisons and valid controls rather than narrowing the supported set.
@@ -58,3 +60,10 @@ The first shadow evaluation failed with a transport error. An escalated evaluati
 rejected by automatic approval review because it did not recognize authorization for the
 external destination and payload. A specific operator approval request is pending.
 Local pilot capture and compiler work can continue independently.
+
+## Production integration evidence
+
+Inspection on 2026-10-04 confirmed that `compile_source_with_target` in the command-line tool
+selects `self_hosted_compile`, while the unsigned artifact path still calls `module.to_bytes()`.
+The wire stage already exposes framing and sealing commands through `dispatch_frame`.
+Routing region payloads alone does not close the remaining complete-artifact emission work.

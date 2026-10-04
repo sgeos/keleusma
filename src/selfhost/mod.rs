@@ -139,6 +139,8 @@ pub struct ParsedFn {
     /// reference, so a new record kind inside it would change both. Diverting the
     /// binding-name record here leaves the node stream byte-for-byte as it was.
     let_names: Vec<(i64, i64)>,
+    // Declared and supplied field counts from consecutive parser metadata/StructInit records.
+    struct_counts: Vec<(i64, i64)>,
 }
 
 impl ParsedFn {
@@ -258,7 +260,7 @@ use crate::selfhost_host::{
     BR_LEX_ICOUNT, BR_LEX_ILEN, BR_LEX_ISTART, BR_P_AND_ID, BR_P_AT, BR_P_BASE, BR_P_BOOL_ID,
     BR_P_BYTE_ID, BR_P_CHUNK_COUNT, BR_P_CHUNKS, BR_P_FALSE_ID, BR_P_LEN, BR_P_LIMIT_ID,
     BR_P_OR_ID, BR_P_PACKED, BR_P_REQUIRE_ID, BR_P_TRUE_ID, BR_P_WORD_ID, PARSE_CHUNK_CAP,
-    PARSE_LET_NAME_TAG, PARSE_TOKEN_CAP,
+    PARSE_LET_NAME_TAG, PARSE_STRUCT_FIELDS_TAG, PARSE_TOKEN_CAP,
 };
 
 fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
@@ -1757,6 +1759,25 @@ fn parse_functions_impl(
         budget,
         |code, val| {
             on_record(code, val, cursor_at.get());
+            if (in_body || in_guard) && code == PARSE_STRUCT_FIELDS_TAG {
+                let f = open_decl(&mut cur, code, val);
+                assert!(val >= 0, "negative declared struct field count");
+                assert!(
+                    f.struct_counts.last().is_none_or(|(_, given)| *given >= 0),
+                    "unpaired struct field-count metadata"
+                );
+                f.struct_counts.push((val, -1));
+                return ControlFlow::Continue(());
+            }
+            if (in_body || in_guard) && code == 27 {
+                let f = open_decl(&mut cur, code, val);
+                let (_, given) = f
+                    .struct_counts
+                    .last_mut()
+                    .expect("StructInit without field-count metadata");
+                assert_eq!(*given, -1, "StructInit reused field-count metadata");
+                *given = val % 1024;
+            }
             if in_body {
                 match code {
                     0 => {}
@@ -1828,6 +1849,7 @@ fn parse_functions_impl(
                             body: Vec::new(),
                             param_names: Vec::new(),
                             let_names: Vec::new(),
+                            struct_counts: Vec::new(),
                         })
                     }
                     4 => {
@@ -2461,8 +2483,8 @@ pub type ExprRow = (i64, ExprOperand, ExprOperand);
 ///
 /// # Coverage
 ///
-/// Five of the eight kinds are extracted here. They are binary operators, array elements,
-/// conditions, explicit conditional branch pairs, and tail-versus-return claims.
+/// Six of the eight kinds are extracted here. They are binary operators, array elements,
+/// conditions, explicit conditional branch pairs, struct field counts, and tail-versus-return claims.
 /// `branch_pair_rows_follow_explicit_else_presence` compares written branch pairs against
 /// reference syntax, including empty, statement-only, nested and sequential branches.
 ///
@@ -2472,10 +2494,10 @@ pub type ExprRow = (i64, ExprOperand, ExprOperand);
 /// follows the presence marker instead of guessing from the synthesized branch's value.
 /// `an_empty_else_is_distinguished_from_an_implicit_one` pins the parser distinction.
 ///
-/// Field access, index access and struct literals remain incomplete below. Match-arm pairs
+/// Field access and index access remain incomplete below. Match-arm pairs
 /// are also not extracted here, although the reference includes them in branch-pair kind 4.
 ///
-/// # THE THREE COMPOSITE KINDS, EACH WITH A MEASURED VERDICT
+/// # Composite extraction
 ///
 /// This block previously said only that "the two representations disagree about what a node IS",
 /// carried over from the occurrences slice. That was a reason to look, not a finding. Both
@@ -2493,23 +2515,12 @@ pub type ExprRow = (i64, ExprOperand, ExprOperand);
 /// reference's own error, so a program the reference rejects never reaches the pipeline, and it
 /// wraps the pipeline in `catch_unwind` besides. Exposure is to direct callers of this API.
 ///
-/// **KIND 7 — THE STRUCT LITERAL — has the datum it needs discarded, and the one that survives
-/// is not a substitute.** The record carries the composite's flat SIZE and the GIVEN field count;
-/// the reference's row needs the DECLARED count, which requires knowing which struct is being
-/// built. Two programs produce a **byte-identical** struct-literal record while the reference
-/// accepts one and rejects the other for exactly the field-count reason: a struct of one `Word`
-/// and a struct of eight `Byte`s are both eight bytes wide.
-///
-/// So a size-to-count rule — the obvious use of the datum that IS carried — is wrong on that
-/// pair, and no other function of the record can do better, because the record is the same.
-/// Emitting a row would reject a correct program or lose the check; **both directions are
-/// unsound**, so the struct-literal row remains withheld.
-/// `a_struct_literal_record_cannot_separate_a_correct_program_from_a_field_count_error` pins it.
-///
-/// **What would unblock kind 7 is a record naming the literal's struct.** `parse.kel` resolves
-/// the identity already — the field records preceding a literal carry INDICES, and only a
-/// resolved declaration yields an index — and then drops it. That is a record-stream change and
-/// the operator's call, not a defect.
+/// Kind 7 comes from metadata emitted by `parse.kel` after it resolves the literal's struct.
+/// The metadata carries the declared field count. The following construction record carries
+/// the supplied count. The driver pairs them before reconstruction, and the type stage checks
+/// equality. `struct_field_metadata_separates_equal_size_literals` pins why byte size alone
+/// cannot provide the declared count. Nested and reordered literals are covered by
+/// `pipeline_struct_literal_counts_drive_type_rejection`.
 ///
 /// **THIS FUNCTION CARRIED A NARROWER NAME FOR ONE INCREMENT**, naming only the binary operator.
 /// Covering conditions made that name false, and a name that lies is precisely what several
@@ -2542,6 +2553,12 @@ pub fn expression_rows_from_pipeline(src: &str) -> (Vec<ExprRow>, Vec<(String, u
             j += 1;
         }
         i = j;
+        for f in &group {
+            for &(declared, given) in &f.struct_counts {
+                assert!(given >= 0, "unpaired struct field-count metadata");
+                rows.push((7, (declared, 0, String::new()), (given, 0, String::new())));
+            }
+        }
         let pc = group[0].params;
         let body = if is_multihead_group(&group) {
             reconstruct_via_kel_multihead(&group, pc, &group_name)
@@ -2596,6 +2613,9 @@ pub fn expression_rows_from_pipeline(src: &str) -> (Vec<ExprRow>, Vec<(String, u
             if is_binary_operator(node.kind) {
                 row_of_node.insert(at as i64, rows.len());
                 rows.push((1, operand(node.lhs), operand(node.rhs)));
+            } else if node.kind == 6 {
+                // Unary not requires a boolean operand, just as a condition does.
+                rows.push((3, operand(node.lhs), nothing.clone()));
             } else if node.kind == 4 {
                 // The parser marks an absent else, and reconstruction preserves it as a
                 // negative condition index. Empty written branches still contribute a pair.
@@ -8020,6 +8040,20 @@ mod typecheck_input_feasibility {
             "a binding was never paired with its `LetIn`, so its slot is still the \
              unpaired sentinel: {got:?}"
         );
+    }
+
+    #[test]
+    fn the_struct_field_tag_matches_the_stage() {
+        let declared: i64 = include_str!("kel/parse.kel")
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("fn tag_struct_fields() -> Word {"))
+            .and_then(|l| l.split('{').nth(1))
+            .and_then(|t| t.split('}').next())
+            .and_then(|n| n.trim().parse().ok())
+            .expect("declared struct field metadata tag");
+        assert_eq!(declared, PARSE_STRUCT_FIELDS_TAG);
+        assert_ne!(declared, PARSE_LET_NAME_TAG);
     }
 
     /// The driver's tag is the stage's, checked rather than assumed.
