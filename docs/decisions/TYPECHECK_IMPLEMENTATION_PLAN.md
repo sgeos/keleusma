@@ -49,7 +49,18 @@ without reference-first rejection. Parser diagnostics cover unresolved identifie
 struct fields, unsupported function values and calls through values, and declared-scalar
 projections. Unsupported syntax and resource failures remain separate outcomes. General source
 annotation compatibility, unannotated projection facts and production wiring remain incomplete.
-The older reference-input rule census remains a separate obligation.
+The same rule census now also runs through scoped pipeline inputs. Its required test remains
+red on match-arm guards, which the parser still discards. Scalar let annotation agreement,
+scalar data assignment agreement and Word index requirements now reach the stage. Annotated
+binding results use the existing agreement row, and data declarations use bounded slot ranges
+in parser declaration order. The focused corpus includes valid Byte stores and explicit casts
+to distinguish these checks from binary operands' contextual literal conversion.
+
+Branch-local names no longer leak into sibling branches. Frame slots remain monotonic, the
+per-function named-binding cap has a separate total counter and reused name entries have their
+composite metadata cleared. Loop and match scope restoration remain unestablished. The latest
+stage suite has ninety-five passing type tests and the one failing scoped census. Composite
+facts, occurrence coverage and production integration remain required.
 
 **Currency, 2026-09-29.** The six input channels that previously excluded `parse.kel` and
 `wire.kel` now have 640-row caps. The measured stage-source test fits and checks all twelve real

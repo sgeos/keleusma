@@ -4100,50 +4100,51 @@ fn the_declared_against_actual_rules_do_not_reject_valid_programs() {
 /// on. **Widening is the more dangerous of the two**: a name wrongly believed
 /// scalar makes a valid projection a rejection, and nothing in the rejection
 /// corpus would show it.
+const RULE_FORM_CONTROLS: &[(&str, &str)] = &[
+    (
+        "a match guard that is bool",
+        "enum E { A, B }\n\
+         fn main(e: E, c: bool) -> Word { match e { E::A when c => 1, _ => 0 } }",
+    ),
+    (
+        "`not` on a bool",
+        "fn main(c: bool) -> Word { if not c { 1 } else { 0 } }",
+    ),
+    (
+        "logical operators on bools",
+        "fn main(a: bool, b: bool) -> bool { a andalso b }",
+    ),
+    (
+        // BITWISE, NOT LOGICAL. `band` on two words is valid, and a bool
+        // requirement applied to the wrong operator family would refuse it.
+        "a bitwise operator on words",
+        "fn main(a: Word, b: Word) -> Word { a band b }",
+    ),
+    (
+        // THE WIDENED SCALAR SET, both new sources. Neither name is projected,
+        // so both programs are valid and must stay accepted.
+        "a declared primitive parameter used as a value",
+        "fn main(n: Word) -> Word { n + 1 }",
+    ),
+    (
+        "a let bound to a literal used as a value",
+        "fn main() -> Word { let n = 1; n + 1 }",
+    ),
+    (
+        // A COMPOSITE PARAMETER IS NOT IN THE WIDENED SET, which is what keeps
+        // the projection rule from firing on a legitimate field read.
+        "a struct parameter projected",
+        "struct P { x: Word }\nfn main(p: P) -> Word { p.x }",
+    ),
+    (
+        "an array let indexed",
+        "fn main() -> Word { let a = [1, 2]; a[0] }",
+    ),
+];
+
 #[test]
 fn the_rules_the_census_added_do_not_reject_valid_programs() {
-    const CASES: &[(&str, &str)] = &[
-        (
-            "a match guard that is bool",
-            "enum E { A, B }\n\
-             fn main(e: E, c: bool) -> Word { match e { E::A when c => 1, _ => 0 } }",
-        ),
-        (
-            "`not` on a bool",
-            "fn main(c: bool) -> Word { if not c { 1 } else { 0 } }",
-        ),
-        (
-            "logical operators on bools",
-            "fn main(a: bool, b: bool) -> bool { a andalso b }",
-        ),
-        (
-            // BITWISE, NOT LOGICAL. `band` on two words is valid, and a bool
-            // requirement applied to the wrong operator family would refuse it.
-            "a bitwise operator on words",
-            "fn main(a: Word, b: Word) -> Word { a band b }",
-        ),
-        (
-            // THE WIDENED SCALAR SET, both new sources. Neither name is projected,
-            // so both programs are valid and must stay accepted.
-            "a declared primitive parameter used as a value",
-            "fn main(n: Word) -> Word { n + 1 }",
-        ),
-        (
-            "a let bound to a literal used as a value",
-            "fn main() -> Word { let n = 1; n + 1 }",
-        ),
-        (
-            // A COMPOSITE PARAMETER IS NOT IN THE WIDENED SET, which is what keeps
-            // the projection rule from firing on a legitimate field read.
-            "a struct parameter projected",
-            "struct P { x: Word }\nfn main(p: P) -> Word { p.x }",
-        ),
-        (
-            "an array let indexed",
-            "fn main() -> Word { let a = [1, 2]; a[0] }",
-        ),
-    ];
-    for (label, src) in CASES {
+    for (label, src) in RULE_FORM_CONTROLS {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
         assert!(
             compile(&program).is_ok(),
@@ -6076,6 +6077,93 @@ fn every_input_channel_is_measured_for_whether_a_verdict_depends_on_it() {
     );
 }
 
+#[cfg(feature = "self-host")]
+const RULE_FORM_CELLS: &[(&str, &str, &str)] = &[
+    (
+        "must be bool",
+        "if condition",
+        "fn main(n: Word) -> Word { if n { 1 } else { 0 } }",
+    ),
+    (
+        "must be bool",
+        "match arm guard",
+        "enum E { A, B }\n\
+         fn main(e: E, n: Word) -> Word { match e { E::A when n => 1, _ => 0 } }",
+    ),
+    (
+        "must be bool",
+        "`not` operand",
+        "fn main() -> Word { let b = not 1; 0 }",
+    ),
+    (
+        // AGREEING AND BOTH WRONG. The binop agreement rule accepts this,
+        // because two `Word` operands agree; only a bool REQUIREMENT rejects it.
+        "must be bool",
+        "logical operator operands",
+        "fn main(n: Word, m: Word) -> bool { n andalso m }",
+    ),
+    (
+        "two must agree",
+        "binary operator",
+        "fn main() -> Word { 1 + true }",
+    ),
+    (
+        "two must agree",
+        "array literal elements",
+        "fn main() -> Word { let a = [1, true]; 0 }",
+    ),
+    (
+        "two must agree",
+        "if branches",
+        "fn main(c: bool) -> Word { if c { 1 } else { true } }",
+    ),
+    (
+        "two must agree",
+        "match arms",
+        "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, E::B => true } }",
+    ),
+    (
+        "two must agree",
+        "function tail against declared return",
+        "fn g() -> Word { true }\nfn main() -> Word { 0 }",
+    ),
+    (
+        "two must agree",
+        "let annotation against initialiser",
+        "fn main() -> Word { let a: Word = true; 0 }",
+    ),
+    (
+        "two must agree",
+        "assignment target against value",
+        "shared data d { v: Word }\nfn main() -> Word { d.v = true; 0 }",
+    ),
+    (
+        "a scalar cannot be projected",
+        "field access",
+        "fn main(n: Word) -> Word { n.x }",
+    ),
+    (
+        "a scalar cannot be projected",
+        "array index",
+        "fn main(n: Word) -> Word { n[0] }",
+    ),
+    (
+        "a scalar cannot be projected",
+        "tuple index",
+        "fn main(n: Word) -> Word { n.0 }",
+    ),
+    (
+        "must be a word",
+        "array index expression",
+        "fn main() -> Word { let a = [1, 2]; a[true] }",
+    ),
+    (
+        "must not be bool",
+        "negation operand",
+        "fn main() -> Word { let b = -true; 0 }",
+    ),
+];
+
 /// **A CENSUS OF ONE RULE SHAPE AGAINST THE SYNTACTIC FORMS IT SHOULD GOVERN.**
 ///
 /// # Why this exists
@@ -6108,96 +6196,11 @@ fn every_input_channel_is_measured_for_whether_a_verdict_depends_on_it() {
 #[test]
 fn the_rule_shapes_are_censused_against_the_forms_they_should_govern() {
     // `(shape, form, source)`.
-    const CELLS: &[(&str, &str, &str)] = &[
-        (
-            "must be bool",
-            "if condition",
-            "fn main(n: Word) -> Word { if n { 1 } else { 0 } }",
-        ),
-        (
-            "must be bool",
-            "match arm guard",
-            "enum E { A, B }\n\
-             fn main(e: E, n: Word) -> Word { match e { E::A when n => 1, _ => 0 } }",
-        ),
-        (
-            "must be bool",
-            "`not` operand",
-            "fn main() -> Word { let b = not 1; 0 }",
-        ),
-        (
-            // AGREEING AND BOTH WRONG. The binop agreement rule accepts this,
-            // because two `Word` operands agree; only a bool REQUIREMENT rejects it.
-            "must be bool",
-            "logical operator operands",
-            "fn main(n: Word, m: Word) -> bool { n andalso m }",
-        ),
-        (
-            "two must agree",
-            "binary operator",
-            "fn main() -> Word { 1 + true }",
-        ),
-        (
-            "two must agree",
-            "array literal elements",
-            "fn main() -> Word { let a = [1, true]; 0 }",
-        ),
-        (
-            "two must agree",
-            "if branches",
-            "fn main(c: bool) -> Word { if c { 1 } else { true } }",
-        ),
-        (
-            "two must agree",
-            "match arms",
-            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, E::B => true } }",
-        ),
-        (
-            "two must agree",
-            "function tail against declared return",
-            "fn g() -> Word { true }\nfn main() -> Word { 0 }",
-        ),
-        (
-            "two must agree",
-            "let annotation against initialiser",
-            "fn main() -> Word { let a: Word = true; 0 }",
-        ),
-        (
-            "two must agree",
-            "assignment target against value",
-            "shared data d { v: Word }\nfn main() -> Word { d.v = true; 0 }",
-        ),
-        (
-            "a scalar cannot be projected",
-            "field access",
-            "fn main(n: Word) -> Word { n.x }",
-        ),
-        (
-            "a scalar cannot be projected",
-            "array index",
-            "fn main(n: Word) -> Word { n[0] }",
-        ),
-        (
-            "a scalar cannot be projected",
-            "tuple index",
-            "fn main(n: Word) -> Word { n.0 }",
-        ),
-        (
-            "must be a word",
-            "array index expression",
-            "fn main() -> Word { let a = [1, 2]; a[true] }",
-        ),
-        (
-            "must not be bool",
-            "negation operand",
-            "fn main() -> Word { let b = -true; 0 }",
-        ),
-    ];
 
     let mut covered: Vec<(&str, &str)> = Vec::new();
     let mut gaps: Vec<(&str, &str)> = Vec::new();
 
-    for (shape, form, src) in CELLS {
+    for (shape, form, src) in RULE_FORM_CELLS {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
         assert!(
             compile(&program).is_err(),
@@ -6291,6 +6294,39 @@ fn the_rule_shapes_are_censused_against_the_forms_they_should_govern() {
         "the census result changed. Every gap must be named here with what closing \
          it would need, and a cell that has CLOSED must be removed from this list \
          rather than left asserting a gap that is gone"
+    );
+}
+
+/// The same rule-versus-form cells must reject through pipeline facts alone.
+#[cfg(feature = "self-host")]
+#[test]
+fn scoped_pipeline_reaches_the_rule_form_census() {
+    let mut gaps = Vec::new();
+    let mut unavailable = Vec::new();
+    for &(shape, form, source) in RULE_FORM_CELLS {
+        assert!(
+            !reference_accepts(source),
+            "negative control {shape} / {form}"
+        );
+        match std::panic::catch_unwind(|| pipeline_call_verdict(source)) {
+            Ok(false) => eprintln!("covered {shape} / {form}"),
+            Ok(true) => {
+                eprintln!("accepted {shape} / {form}");
+                gaps.push((shape, form));
+            }
+            Err(_) => {
+                eprintln!("unavailable {shape} / {form}");
+                unavailable.push((shape, form));
+            }
+        }
+    }
+    for &(label, source) in RULE_FORM_CONTROLS {
+        assert!(reference_accepts(source), "positive control {label}");
+        assert!(pipeline_call_verdict(source), "false rejection {label}");
+    }
+    assert!(
+        gaps.is_empty() && unavailable.is_empty(),
+        "accepted {gaps:?}; unavailable {unavailable:?}"
     );
 }
 
@@ -9385,57 +9421,138 @@ fn the_array_element_rows_agree_between_the_pipeline_and_the_reference() {
     );
 }
 
-/// **A `let`'s TYPE ANNOTATION IS INVISIBLE IN THE RECORD STREAM, WHICH BLOCKS TWO KINDS.**
-///
-/// The reference emits the field-on-value and index-on-value rows (kinds 5 and 6) exactly when
-/// the object is a name bound by a `let` carrying an explicit PRIMITIVE type annotation. Those
-/// rows are the misuse detector: a field access on something declared `Word` is a rejection.
-///
-/// **The pipeline cannot see that annotation at all.** `let a: Word = 1` and `let a = 1` produce
-/// the identical sequence of non-zero records, and so does `let a: Byte = 1` — the annotation
-/// advances the parser's cursor and emits nothing. So the driver has no way to build the set the
-/// reference calls `scalars`, and no amount of work in the driver changes that.
-///
-/// # This is a STAGE-SHAPED gap, not a driver-shaped one
-///
-/// Closing it means `parse.kel` emitting a record for the annotation, which changes the record
-/// stream the byte-identity oracle pins. That is a different order of increment from the four
-/// kinds that moved, every one of which needed no stage change.
-///
-/// # PINNED IN THE FAILING DIRECTION
-///
-/// If the stream ever does carry the annotation, this test fails and its reader should revisit
-/// kinds 5 and 6 rather than leaving them recorded as blocked. A gap that silently stops being a
-/// gap is how a stale exclusion outlives its cause.
+/// Source annotation metadata is separate from the executable node stream.
 #[cfg(feature = "self-host")]
 #[test]
-fn a_let_type_annotation_is_invisible_in_the_record_stream() {
-    let meaningful = |src: &str| -> Vec<(i64, i64)> {
-        let (_, recs) = keleusma::selfhost::parse_record_trace(src);
-        recs.iter()
-            .filter(|(code, _, _)| *code != 0)
-            .map(|(code, val, _)| (*code, *val))
-            .collect()
-    };
-
-    let bare = meaningful("fn main() -> Word { let a = 1; a }");
-    assert!(
-        !bare.is_empty(),
-        "the record trace is empty, so this test would pass over any pair of programs"
+fn let_type_annotations_survive_the_record_stream() {
+    use keleusma::selfhost_host::{PARSE_LET_NAME_TAG, PARSE_LET_TYPE_TAG};
+    let source = "fn main() -> Word { let a: Word = 1; let b: bool = true; a }";
+    let (names, records) = keleusma::selfhost::parse_record_trace(source);
+    let annotations: Vec<_> = records
+        .iter()
+        .enumerate()
+        .filter(|(_, (kind, _, _))| *kind == PARSE_LET_TYPE_TAG)
+        .map(|(at, (_, name, _))| {
+            assert_eq!(records[at - 1].0, PARSE_LET_NAME_TAG);
+            assert_eq!(records[at + 1].0, 5, "LetIn follows metadata");
+            names[*name as usize].as_str()
+        })
+        .collect();
+    assert_eq!(
+        annotations,
+        ["bool", "Word"],
+        "bindings fold in reverse order"
     );
+    let (_, bare) = keleusma::selfhost::parse_record_trace("fn main() -> Word { let a = 1; a }");
+    assert!(bare.iter().all(|(kind, _, _)| *kind != PARSE_LET_TYPE_TAG));
+}
 
-    for annotated in [
-        "fn main() -> Word { let a: Word = 1; a }",
-        "fn main() -> Word { let a: Byte = 1; a }",
-        "fn main() -> Word { let a: bool = 1; a }",
+/// Explicit declarations and index requirements must reach literals, names and computed values.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_declarations_and_indices_agree_with_reference() {
+    for (source, accepts) in [
+        (
+            "fn main() -> Word { if true { let x: Word = 1; x } else { x } }",
+            false,
+        ),
+        (
+            "fn main() -> Word { if true { let x: Word = 1; x }; x }",
+            false,
+        ),
+        ("fn main() -> Word { let x: Word = true; 0 }", false),
+        ("fn main() -> Word { let x: Byte = 1; 0 }", false),
+        ("fn main() -> Byte { let x: Byte = 1 as Byte; x }", true),
+        ("fn main(n: Word) -> Word { let x: bool = n; 0 }", false),
+        (
+            "fn main(c: bool) -> Word { let x: Word = if c { let y: Word = 1; y } else { 2 }; x }",
+            true,
+        ),
+        ("fn main() -> Word { let x: Word = 1 < 2; 0 }", false),
+        (
+            "fn main() -> Word { let x: bool = 1 < 2; if x { 1 } else { 0 } }",
+            true,
+        ),
+        (
+            "shared data d { x: Word } fn main(c: bool) -> Word { d.x = c; 0 }",
+            false,
+        ),
+        (
+            "shared data d { x: Word } fn main() -> Word { d.x = 1 < 2; 0 }",
+            false,
+        ),
+        (
+            "shared data d { x: Byte } fn main() -> Word { d.x = 1; 0 }",
+            false,
+        ),
+        (
+            "shared data d { x: Byte } fn main(b: Byte) -> Byte { d.x = b; d.x }",
+            true,
+        ),
+        (
+            "private data d { x: Word } fn main() -> Word { d.x = true; 0 }",
+            false,
+        ),
+        (
+            "private data d { x: Word } fn main() -> Word { d.x = 2; d.x }",
+            true,
+        ),
+        (
+            "shared data d { x: [Word; 2] } fn main() -> Word { d.x[0] = true; 0 }",
+            false,
+        ),
+        (
+            "shared data d { x: [Word; 2] } fn main() -> Word { d.x[0] = 1; d.x[0] }",
+            true,
+        ),
+        (
+            "shared data d { x: [Word; 2] } fn main() -> Word { d.x[true] = 1; 0 }",
+            false,
+        ),
+        (
+            "shared data d { x: [Word; 2] } fn main() -> Word { d.x[true] }",
+            false,
+        ),
+        ("fn main(c: bool) -> Word { let xs = [1, 2]; xs[c] }", false),
+        ("fn main() -> Word { let xs = [1, 2]; xs[1 < 2] }", false),
+        (
+            "fn main(n: Word) -> Word { let xs = [1, 2]; xs[n + 0] }",
+            true,
+        ),
+        (
+            "struct P { x: Word } fn main(c: bool) -> Word { let xs = [P { x: 1 }]; xs[c].x }",
+            false,
+        ),
+        (
+            "struct P { x: Word } fn main() -> Word { let xs = [P { x: 1 }]; xs[0].x }",
+            true,
+        ),
+        (
+            "shared data d { xs: [Word; 2], flag: bool } fn main() -> Word { d.flag = 1; 0 }",
+            false,
+        ),
+        (
+            "shared data d { xs: [Word; 2], flag: bool } fn main() -> Word { d.flag = true; if d.flag { d.xs[0] } else { 0 } }",
+            true,
+        ),
+        (
+            "const data c { unused: Word = 1 } shared data d { x: Word } fn main() -> Word { d.x = true; 0 }",
+            false,
+        ),
+        (
+            "fn main() -> Word { let x: Word = 1; if true { let x: bool = false; if x { 0 } else { 1 } } else { x } }",
+            true,
+        ),
     ] {
         assert_eq!(
-            meaningful(annotated),
-            bare,
-            "{annotated:?} now produces a different record stream from the unannotated form. \
-             The annotation has become visible to the driver, so the field-on-value and \
-             index-on-value rows may be reachable after all -- revisit them rather than leaving \
-             them recorded as blocked."
+            reference_accepts(source),
+            accepts,
+            "reference control {source}"
+        );
+        assert_eq!(
+            pipeline_call_verdict(source),
+            accepts,
+            "pipeline verdict {source}"
         );
     }
 }

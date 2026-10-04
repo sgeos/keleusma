@@ -6,6 +6,32 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Order 1 declaration and index constraints
+
+The sixteen-cell rule-versus-form census now runs through scoped pipeline inputs and shares
+its negative sources and eight valid controls with the reference-input harness. Initially four
+negatives were accepted. Scalar let annotations, scalar data stores and Word index constraints
+now reach the stage. Match-arm guards remain accepted, so the required census test remains red
+on the feature branch. The full completion objective is unchanged.
+
+Source type metadata is paired with the annotated binding slot. Data facts use declared slot
+ranges without expanding arrays. Existing agreement rows check annotations and stores without
+implicit integer-to-Byte conversion. A valid control exposed branch-local names leaking into
+sibling branches. Branch exit now restores names, clears reused composite metadata and preserves
+both monotonic frame slots and the total-per-function binding cap.
+
+The release stage suites passed ninety-five type tests, ninety parser tests with two ignored,
+three monomorphization tests and two artifact tests covering all twelve stages. Only the census
+failed. Later focused tests passed three branch-scope artifact controls, the disjoint-scope cap
+boundary and twenty-eight declaration/index cases. Selected compilation tests passed eighty-nine.
+Default type tests passed thirty. Broad Clippy checked the crate and passed, as did documentation
+with warnings denied. The reverse prompt records exact commands, logs and verification limits.
+
+The shadow pilot captured the initial diagnostic and three bounded completion claims. Labels are
+non-independent self-reviews, and its task outcome is unresolved because the census still fails.
+External evaluation remains pending the existing authorization question. No interline messages
+were received or sent. Full Order 1 remains active.
+
 ## 2026-10-04 Order 1 explicit source rejection
 
 The scoped pipeline now rejects all twenty existing negative corpus cases and accepts all

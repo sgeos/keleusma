@@ -139,6 +139,8 @@ pub struct ParsedFn {
     /// reference, so a new record kind inside it would change both. Diverting the
     /// binding-name record here leaves the node stream byte-for-byte as it was.
     let_names: Vec<(i64, i64)>,
+    // (guard range, frame slot, source annotation type-name id).
+    let_annotations: Vec<(bool, i64, i64)>,
     // Declared and supplied field counts from consecutive parser metadata/StructInit records.
     struct_counts: Vec<(i64, i64)>,
 }
@@ -1786,6 +1788,27 @@ fn try_parse_functions_impl(
         budget,
         |code, val| {
             on_record(code, val, cursor_at.get());
+            if (in_body || in_guard) && code == crate::selfhost_host::PARSE_LET_TYPE_TAG {
+                let f = open_decl(&mut cur, code, val);
+                assert!(val >= 0, "negative source annotation name id");
+                assert!(
+                    f.let_annotations
+                        .last()
+                        .is_none_or(|(_, slot, _)| *slot >= 0),
+                    "unpaired source annotation"
+                );
+                f.let_annotations.push((in_guard, -1, val));
+                return ControlFlow::Continue(());
+            }
+            if (in_body || in_guard) && code == NODE_LET_IN {
+                let f = open_decl(&mut cur, code, val);
+                if let Some((guard, slot, _)) = f.let_annotations.last_mut()
+                    && *slot == -1
+                {
+                    assert_eq!(*guard, in_guard, "annotation crossed source ranges");
+                    *slot = val;
+                }
+            }
             if (in_body || in_guard) && code == PARSE_STRUCT_FIELDS_TAG {
                 let f = open_decl(&mut cur, code, val);
                 assert!(val >= 0, "negative declared struct field count");
@@ -1876,6 +1899,7 @@ fn try_parse_functions_impl(
                             body: Vec::new(),
                             param_names: Vec::new(),
                             let_names: Vec::new(),
+                            let_annotations: Vec::new(),
                             struct_counts: Vec::new(),
                         })
                     }
@@ -2232,6 +2256,39 @@ pub struct CallTypeBatch {
     pub expressions: Vec<ExprRow>,
 }
 
+/// Source-declared data types keyed by parser slot ranges, in declaration order.
+/// Ranges avoid expanding large arrays just to look up the few fields a body uses.
+fn source_data_type_ranges(records: &[(i64, i64)], names: &[String]) -> Vec<(i64, i64, i64)> {
+    let mut fields = Vec::new();
+    let mut visibility = 2;
+    for &(kind, value) in records {
+        match kind {
+            9 => visibility = value % 4,
+            4 => fields.push((visibility, None, 1i64)),
+            6 => fields.last_mut().expect("data type without field").1 = Some(value),
+            8 => fields.last_mut().expect("data length without field").2 = value,
+            _ => {}
+        }
+    }
+    let mut base = 0i64;
+    let mut ranges = Vec::new();
+    for (visibility, type_id, count) in fields {
+        if visibility > 1 {
+            continue;
+        }
+        assert!(count >= 0, "negative data field length");
+        let end = base.checked_add(count).expect("data slot range overflow");
+        let tag = scalar_tag_of_type_name(
+            type_id
+                .and_then(|id| names.get(id as usize))
+                .map(String::as_str),
+        );
+        ranges.push((base, end, tag));
+        base = end;
+    }
+    ranges
+}
+
 /// Extract call input facts without reference syntax or inferred expression types.
 ///
 /// Operands retain literal values, local identities, called-function identities and synthetic
@@ -2254,10 +2311,11 @@ pub fn try_call_type_inputs_from_pipeline(
     src: &str,
 ) -> Result<CallTypeInputs, crate::selfhost_host::ParseRecordError> {
     let mut fns = Vec::new();
-    let (names, ..) =
+    let (names, data_records, ..) =
         try_parse_functions_impl(src, true, &mut |_, f| fns.push(f), &mut |_, _, _| {})?;
     let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
     let tag_of = |id: i64| scalar_tag_of_type_name(names.get(id as usize).map(String::as_str));
+    let data_types = source_data_type_ranges(&data_records, &names);
     let mut declarations = Vec::new();
     for f in &fns {
         let Some(name) = name_of(f.name) else {
@@ -2316,6 +2374,24 @@ pub fn try_call_type_inputs_from_pipeline(
                 .filter(|(_, node)| scalar_result_node(node))
                 .map(|(at, _)| (at as i64, format!("#expression:{head}:{range}:{at}")))
                 .collect();
+            let data_names: alloc::collections::BTreeMap<_, _> = body
+                .nodes
+                .iter()
+                .filter_map(|node| match node.kind {
+                    11 | 12 => Some(node.arg),
+                    13 | 14 => Some(node.arg % 16777216),
+                    _ => None,
+                })
+                .map(|slot| (slot, format!("#data:{slot}")))
+                .collect();
+            for (&slot, identity) in &data_names {
+                if let Some(&(_, _, tag)) = data_types
+                    .iter()
+                    .find(|&&(first, end, _)| slot >= first && slot < end)
+                {
+                    bindings.push((identity.clone(), tag, 0, String::new()));
+                }
+            }
             let operand = |index| {
                 if let Some(identity) = computed_names.get(&index) {
                     (0, 1, identity.clone())
@@ -2324,6 +2400,15 @@ pub fn try_call_type_inputs_from_pipeline(
                 {
                     // Preserve literal syntax for the stage's contextual Byte coercion.
                     (node.arg, 3, String::new())
+                } else if let Some(node) = body.nodes.get(index as usize)
+                    && matches!(node.kind, 11 | 13)
+                {
+                    let slot = if node.kind == 13 {
+                        node.arg % 16777216
+                    } else {
+                        node.arg
+                    };
+                    (0, 1, data_names[&slot].clone())
                 } else {
                     source_operand(&body, index, &slot_names, &return_names)
                 }
@@ -2343,10 +2428,35 @@ pub fn try_call_type_inputs_from_pipeline(
                 if node.kind == NODE_LET_IN
                     && let Some(identity) = slot_names.get(&node.arg)
                 {
-                    let (value, form, target) = operand(node.lhs);
-                    // Binding forms have a different namespace from operand forms.
-                    let (value, form) = if form == 3 { (1, 0) } else { (value, form) };
-                    bindings.push((identity.clone(), value, form, target));
+                    if let Some(&(_, _, declared)) = f
+                        .let_annotations
+                        .iter()
+                        .find(|&&(guard, slot, _)| guard == (range == 0) && slot == node.arg)
+                    {
+                        let row = expressions.len();
+                        expressions.push((
+                            8,
+                            operand(node.lhs),
+                            (tag_of(declared), 0, String::new()),
+                        ));
+                        bindings.push((identity.clone(), row as i64, 2, String::new()));
+                    } else {
+                        let (value, form, target) = operand(node.lhs);
+                        // Binding and operand forms have separate namespaces.
+                        let (value, form) = if form == 3 { (1, 0) } else { (value, form) };
+                        bindings.push((identity.clone(), value, form, target));
+                    }
+                }
+                if matches!(node.kind, 12 | 14) {
+                    let (slot, value) = if node.kind == 12 {
+                        (node.arg, node.lhs)
+                    } else {
+                        let store =
+                            &body.nodes[usize::try_from(node.lhs).expect("negative store node")];
+                        assert_eq!(store.kind, 15, "indexed assignment without store node");
+                        (node.arg % 16777216, store.lhs)
+                    };
+                    expressions.push((8, operand(value), (0, 1, data_names[&slot].clone())));
                 }
                 if node.kind != NODE_CALL {
                     continue;
@@ -2822,6 +2932,12 @@ fn expression_rows_from_body<F: Fn(i64) -> ExprOperand>(
     let nothing: ExprOperand = (0, 0, String::new());
 
     for (at, node) in body.nodes.iter().enumerate() {
+        if scalar_results && matches!(node.kind, 13 | 15 | 31 | 43) {
+            // Indexed data reads carry the index in lhs. Stores and value-array
+            // reads carry it in rhs. No host-side type inference is needed.
+            let index = if node.kind == 13 { node.lhs } else { node.rhs };
+            rows.push((8, operand(index), (1, 0, String::new())));
+        }
         if is_binary_operator(node.kind) {
             row_of_node.insert(at as i64, rows.len());
             rows.push((

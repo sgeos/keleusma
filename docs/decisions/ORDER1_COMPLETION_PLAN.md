@@ -21,7 +21,7 @@ Full-language support remains Order 6. Existing supported programs must retain t
 | Compile the complete stage corpus | Complete artifact identity against the reference for every current stage source, with a corpus inventory check | All twelve complete serialized artifacts from the production compiler match the reference after the call and alias changes. The new artifact corpus also checks directory inventory. Both sides still use the Rust serializer. |
 | Avoid reference scaffold borrowing | Production compilation assembles module fields from pipeline output | `self_host_compile_scratch` provides this path. Preserve it through integration. |
 | Derive type inputs from the self-hosted pipeline | Production rejection receives facts without walking the reference parser's abstract syntax tree or borrowing inferred types | Four extraction helpers are partial. Expressions cover only part of the required shapes. Close the residuals and move the production input path. |
-| Reject ill-typed subset programs | Independent pipeline rejection agrees with the reference on the rejection corpus, valid controls, and the rule-versus-form census | The scoped pipeline harness now exercises all twenty rejection cases and seven valid controls without reference-first masking. Parser source diagnostics and type-stage verdicts are distinguished from unsupported syntax, capacity and execution failures. The shipping driver still calls the reference first, and the rule-versus-form census is not yet migrated. |
+| Reject ill-typed subset programs | Independent pipeline rejection agrees with the reference on the rejection corpus, valid controls, and the rule-versus-form census | The scoped pipeline harness exercises all twenty rejection cases and seven valid controls without reference-first masking. The separate sixteen-cell rule-versus-form census now runs through that path with eight valid controls. Its required test still fails on match-arm guards. Parser source diagnostics and type-stage verdicts remain distinct from unsupported syntax, capacity and execution failures. The shipping driver still calls the reference first. |
 | Preserve the first-pass monomorphization result | Every stage remains unchanged by monomorphization, with a control that does change | The corpus now lists all twelve sources. Identity, changing control and directory inventory tests passed again after the parser and alias changes on 2026-10-04. Repeat if stage sources change. |
 | Preserve independence from inferred expression types | The current stage corpus compiles identically with recorded expression types absent | Refresh the existing inference-independence evidence for all current sources. |
 | Emit complete artifacts through Keleusma | Production output uses the Keleusma wire emitter for framing, opcode records, operand pools, auxiliary regions and integrity fields | Region coverage tests exist, but they do not establish production serialization. `Module::to_bytes` remains on current artifact paths. Preserve the wire plan's encoder and decoder obligations. |
@@ -54,7 +54,7 @@ Bytecode version remains 2. No new bytecode opcode is authorized. The internal p
 changes required by this plan do not authorize changing the public artifact format.
 The V0.3.X workstream remains separate. Publication requires in-session confirmation.
 
-The legacy handoff is invalid-and-stale. Its stamp is fifteen commits behind the starting
+The legacy handoff is invalid-and-stale. Its stamp is seventeen commits behind the starting
 tree, its ancestry check passes, and its unchanged-stage-source claim is contradicted by
 `verify_types.kel`. Its full-suite and advisory checks have not been rerun for this increment.
 
@@ -134,8 +134,8 @@ The scoped input path retains parser diagnostic tags and payloads in a structure
 Unknown local names and struct fields no longer substitute slot zero or the first field.
 Bare function references and calls through values are explicitly refused. Primitive parameter
 and local annotations support field and index rejection before reconstruction. Composite
-annotations remain distinct from their scalar element names. Annotation compatibility itself
-is still not checked through this channel.
+annotations remain distinct from their scalar element names. Scalar annotation compatibility
+now reaches this channel through the later increment below. Composite annotations remain incomplete.
 
 Method syntax, const parameters, unsupported patterns, assertions and unresolved imported
 or qualified names retain separate unsupported diagnostics. The first lexer pass reports
@@ -148,3 +148,31 @@ The fallible interface covers parser record diagnostics and resume failures. Sta
 lexing, reconstruction and callback failures still have panic paths. None of those panics counts
 as a source rejection. The complete artifact and capacity checks passed again after these parser changes. All twelve
 stage artifacts still match the reference, and their scoped inputs remain within the selected caps.
+
+## Source annotations, stores and index requirements
+
+The reference-input and pipeline-input census now share the same sixteen negative sources
+and eight valid controls. Initially the scoped pipeline accepted four negatives. Explicit
+scalar let annotations, scalar data stores and Word index requirements now reach the type
+stage. Only the match-arm guard negative remains accepted. The census test requires every
+cell to reject and remains failing on the feature branch. It has no expected-gap allowance.
+
+Parser metadata retains the source type name before each annotated LetIn record. The host
+associates that fact with its source range and frame slot. The existing agreement row compares
+the initializer with the declaration and supplies the binding result. Data facts follow parser
+declaration order, omit const slots and represent arrays with ranges. Index checks cover data
+reads, data stores and scalar or nested value-array access. Annotation and store checks do not
+apply binary operators' contextual Byte literal conversion.
+
+A valid nested-shadowing control exposed a parser scope leak from the then branch into its
+else branch. Branch exit now restores live binding names while keeping frame slots monotonic.
+A separate counter preserves the total-per-function binding cap. Reused lexical-name slots
+have their composite metadata cleared. Focused checks cover sibling branches, implicit else,
+composite-name reuse, inaccessible branch locals and the exact binding-cap boundary.
+Loop and match scope restoration remain unestablished.
+
+The final stage suites passed ninety-five type tests, ninety parser tests with two ignored,
+three monomorphization tests and both inventory and complete-artifact tests for all twelve
+stages. The sole failure was the required scoped census. Later focused tests passed the
+branch-scope artifact controls, disjoint-scope binding cap and expanded declaration controls.
+These results do not establish production type rejection or complete input coverage.

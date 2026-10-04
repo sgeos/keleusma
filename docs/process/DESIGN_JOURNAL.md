@@ -13,6 +13,42 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-04 Declaration constraints expose branch scope
+
+Moving the rule-versus-form census onto pipeline inputs exposed four accepted negatives. The
+reference-input harness had concealed missing transport for annotations, stores and indices.
+The same source tables now drive both harnesses. The pipeline census has no expected-gap list.
+It remains red on the fourth case, a match-arm guard discarded during parsing.
+
+An annotated local needs two facts. Its initializer must agree with its declared type, and uses
+of the binding must retain that declaration. Parser metadata tag 92 records the source type name
+before the existing LetIn record. Pending statement frames preserve outer annotations through
+nested initializer bindings. Existing type row 8 checks agreement and provides the binding result.
+No public bytecode opcode or version changes. The initial temptation to reuse contextual Byte
+literal conversion was rejected after inspecting the reference statement checker. That conversion
+belongs to binary operators and comparisons, not declarations or assignments.
+
+Data reads and stores use source declaration ranges in parser slot order. Const fields take no
+runtime slots. Array ranges carry their element tag without allocating one row per element.
+The assembly path has a different shared-first order, so its offsets are not suitable for this
+source-fact lookup. Scalar and nested value-array indices and indexed data operations produce
+Word requirements through the shared expression walk. Composite result types remain incomplete.
+
+A nested-shadowing positive control failed after these constraints became visible. The parser
+kept then-branch names alive while reading the else branch. Restoring the live-name stack alone
+would have relaxed the per-function binding cap and retained obsolete composite shape metadata.
+The fix therefore keeps a separate total binding counter and clears reused shape entries. Frame
+slots stay monotonic. Tests establish sibling and implicit-else artifact identity, absence of
+out-of-scope names and the original total cap across disjoint branches. Loop and match scopes
+still require their own coverage and are not claimed complete.
+
+All twelve complete stage artifacts still match the reference after these changes. The scoped
+census remains the sole failing test in the selected stage suites. Match guards need preservation
+through parser, reconstruction, type inputs and code generation. Merely extracting a guard while
+continuing to discard its runtime behavior would not satisfy that obligation. The pilot retains
+the first diagnostic and three exact-command execution claims with non-independent self-labels.
+No external evaluation occurred while its specific approval request remains pending.
+
 ## 2026-10-04 Parser failures as rejection evidence
 
 The full scoped rejection corpus exposed six failures that the earlier scalar witnesses did

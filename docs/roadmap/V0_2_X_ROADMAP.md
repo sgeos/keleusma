@@ -367,6 +367,12 @@ returns to the same identities. The stage handles their result rules and context
 literal coercion. Parser lookup prefers locals and retains xor's operand restriction before
 lowering. Composite types and production integration remain incomplete.
 
+The sixteen-cell rule-versus-form census now also runs through scoped pipeline facts with
+eight valid controls. Scalar annotations, data stores and index requirements close three of
+its four initial failures. Match-arm guards remain discarded and keep the required census
+test red. Branch-scope restoration also repairs a valid nested-shadowing program exposed by
+the new checks. Loop and match scopes still need coverage. Order 1 remains open.
+
 The type-rejection stage now has capacity for all twelve real stage sources. Six tables use a
 640-row cap, adding 7,168 words or 56 KiB across their parallel arrays. The stage accepts all
 twelve sources in the differential test. This resolves the measured capacity gap only. The host

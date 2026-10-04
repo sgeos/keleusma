@@ -363,7 +363,8 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     // reference. The tag comes from the driver so there is one source
                     // of truth for the number.
                     c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG
-                        || c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG => {}
+                        || c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                        || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG => {}
                     _ => cur
                         .as_mut()
                         .expect("body node before START")
@@ -376,7 +377,8 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     15 => in_guard = false, // the guard's Done ends guard mode
                     35 => {}                // FieldPos: reorder marker, skipped (see above)
                     c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG
-                        || c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG => {}
+                        || c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                        || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG => {}
                     _ => cur
                         .as_mut()
                         .expect("guard node before START")
@@ -2820,6 +2822,31 @@ fn too_many_local_bindings_is_named_and_the_boundary_holds() {
             && msg.contains(&cap.to_string()),
         "the refusal was {msg:?}, which does not name both the count reached and the cap. \
          It used to be `IndexOutOfBounds(64, 64)`."
+    );
+}
+
+/// Releasing lexical names at branch exit must not reset the per-function cap.
+#[cfg(feature = "self-host")]
+#[test]
+fn local_binding_cap_counts_disjoint_branch_scopes() {
+    let source = |count| {
+        let mut text = String::from("fn main() -> Word { ");
+        for i in 0..count {
+            text.push_str(&format!(
+                "if true {{ let x{i}: Word = {i}; x{i} }} else {{ 0 }}; "
+            ));
+        }
+        text.push_str("0 }");
+        text
+    };
+    let cap = keleusma::selfhost_host::PARSE_LOCALS_CAP;
+    assert!(refusal(&source(cap)).is_none(), "exact binding cap");
+    let message = refusal(&source(cap + 1)).expect("total binding cap must still apply");
+    assert!(
+        message.contains("local bindings")
+            && message.contains(&(cap + 1).to_string())
+            && message.contains(&cap.to_string()),
+        "unexpected refusal {message}"
     );
 }
 

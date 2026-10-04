@@ -421,6 +421,7 @@ private data ps {
     pbyte: [Word; 33],
     pscalar: [Word; 33],
     scalar_postfix: Word,
+    named_local_count: Word,
     scalar_field_at: Word,
     unresolved_name: Word,
     unresolved_pending: Word,
@@ -729,6 +730,10 @@ fn op_pop(sp: Word) -> Word {
 }
 
 fn let_push(n: Word) -> Word {
+    // The live name stack can shrink at a branch boundary. Preserve the existing
+    // total-per-function binding cap independently of that lexical scope stack.
+    if ps.named_local_count <= pe_cap_let() { ps.named_local_count = ps.named_local_count + 1; }
+    if ps.named_local_count > pe_cap_let() { perr(pe_locals(), ps.named_local_count); }
     if n + 1 > pe_cap_let() {
         perr(pe_locals(), n + 1);
         pe_cap_let()
@@ -820,6 +825,7 @@ private data stmt {
     break_pending: Word,
     pending_let_name: Word,
     pending_let_scalar: Word,
+    pending_let_type: Word,
     let_annotation_phase: Word,
     let_scalar: [Word; 65],
     let_names: [Word; 65],
@@ -1074,6 +1080,7 @@ private data stmt {
     // Sized with its family, so `the_parse_guard_caps_match_their_arrays` fails by
     // name if it is ever left narrow.
     stmt_name: [Word; 257],
+    stmt_type: [Word; 257],
     // Set while a `let` fold owes its NAME record, so the next step emits the
     // binding without advancing the cursor twice. The same two-phase shape `step`
     // already uses for the Option E payload word.
@@ -1087,6 +1094,7 @@ private data stmt {
     pstmt_kind: [Word; 32],
     pstmt_name: [Word; 32],
     pstmt_scalar: [Word; 32],
+    pstmt_type: [Word; 32],
     pstmt_arg: [Word; 32],
     pstmt_sp: Word,
     stmt_base: Word,
@@ -1116,6 +1124,7 @@ private data branch {
     // One when the else branch was synthesized, zero when written. Reset per context.
     if_implicit: [Word; 33],
     if_stmt_start: [Word; 33],
+    if_let_base: [Word; 33],
     if_opbase: [Word; 33],
     if_seq: [Word; 33],
     if_sp: Word,
@@ -1457,6 +1466,19 @@ private data structdefs {
 
 // Resolve an identifier to its frame slot: the `let` bindings first (most recent wins),
 // then the parameters.
+// A reused lexical-name slot must not retain an earlier binding's composite shape.
+fn clear_let_shape(at: Word) -> Word {
+    stmt.let_tuple[at] = 0;
+    stmt.let_struct[at] = 0;
+    stmt.let_array[at] = 0;
+    stmt.let_array_struct[at] = 0;
+    stmt.let_array_size[at] = 0;
+    stmt.let_array_arr[at] = 0;
+    stmt.let_array_arrbytes[at] = 0;
+    stmt.let_enum[at] = 0;
+    0
+}
+
 fn step_local(v: Word) -> Word {
     ps.found = 0;
     ps.found_flag = 0;
@@ -2183,6 +2205,7 @@ fn step_mpat(k: Word, v: Word) -> Word {
             let fi = enums.evfstart[mat.mpat_vrow] + mat.mpat_pcount;
             let slot = ps.pcount + stmt.slot_count;
             stmt.slot_count = stmt.slot_count + 1;
+            clear_let_shape(stmt.let_count);
             stmt.let_names[stmt.let_count] = v;
             stmt.scope_slot[stmt.let_count] = slot;
             stmt.let_scalar[stmt.let_count] = 0;
@@ -4406,6 +4429,7 @@ fn step_op(k: Word) -> Word {
 fn step_if(k: Word) -> Word {
     if k == Tok::If() as Word {
         branch.if_phase[branch.if_sp] = 1;
+        branch.if_let_base[branch.if_sp] = stmt.let_count;
         branch.if_implicit[branch.if_sp] = 0;
         branch.if_sp = if_push(branch.if_sp);
         ops.expect_operand = 1;
@@ -4654,6 +4678,7 @@ fn step_forheader(k: Word, v: Word) -> Word {
         0
     } else {
         if k == Tok::LBrace() as Word {
+            clear_let_shape(stmt.let_count);
             stmt.let_names[stmt.let_count] = forst.for_var[fp];
             stmt.scope_slot[stmt.let_count] = forst.for_vslot[fp];
             stmt.let_scalar[stmt.let_count] = 1;
@@ -5086,7 +5111,10 @@ fn record_let_annotation(k: Word, v: Word) -> Word {
     } else {
         if stmt.let_annotation_phase == 1 {
             stmt.let_annotation_phase = 2;
-            if k == Tok::Ident() as Word { stmt.pending_let_scalar = scalar_type_name(v); }
+            if k == Tok::Ident() as Word {
+                stmt.pending_let_scalar = scalar_type_name(v);
+                stmt.pending_let_type = v + 1;
+            }
         }
     }
     0
@@ -5188,6 +5216,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
             stmt.pstmt_kind[stmt.pstmt_sp] = 0;
             stmt.pstmt_name[stmt.pstmt_sp] = stmt.pending_let_name;
             stmt.pstmt_scalar[stmt.pstmt_sp] = stmt.pending_let_scalar;
+            stmt.pstmt_type[stmt.pstmt_sp] = stmt.pending_let_type;
             stmt.pstmt_sp = stmt.pstmt_sp + 1;
             ops.expect_operand = 1;
             // Begin tracking this `let` value's root composite type fresh.
@@ -5205,6 +5234,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         if k == Tok::Ident() as Word {
             stmt.pending_let_name = v;
             stmt.pending_let_scalar = 0;
+            stmt.pending_let_type = 0;
             stmt.let_annotation_phase = 0;
             stmt.let_phase = 2;
         }
@@ -5397,6 +5427,8 @@ fn step_draining() -> Word {
                     // knows it. Recovering it later from the slot is impossible: slots
                     // are reused across scopes and names are not.
                     stmt.stmt_name[stmt.stmt_count] = stmt.pstmt_name[stmt.pstmt_sp];
+                    stmt.stmt_type[stmt.stmt_count] = stmt.pstmt_type[stmt.pstmt_sp];
+                    clear_let_shape(stmt.let_count);
                     stmt.let_names[stmt.let_count] = stmt.pstmt_name[stmt.pstmt_sp];
                     stmt.scope_slot[stmt.let_count] = slot;
                     stmt.let_scalar[stmt.let_count] = stmt.pstmt_scalar[stmt.pstmt_sp];
@@ -5591,6 +5623,7 @@ fn step_draining() -> Word {
             let bfp = forst.for_sp - 1;
             forst.for_end_slot[bfp] = ps.pcount + stmt.slot_count;
             stmt.slot_count = stmt.slot_count + 1;
+            clear_let_shape(stmt.let_count);
             stmt.let_names[stmt.let_count] = forst.for_var[bfp];
             stmt.scope_slot[stmt.let_count] = forst.for_vslot[bfp];
             stmt.let_scalar[stmt.let_count] = 1;
@@ -5629,6 +5662,8 @@ fn step_draining() -> Word {
 // off the reconstruct and codegen paths, and why the body-record sequences the
 // parse tests pin are unchanged.
 fn tag_let_name() -> Word { 90 }
+// Source type-name metadata following a binding name, before its LetIn record.
+fn tag_let_type() -> Word { 92 }
 
 // Emit one folded statement record.
 //
@@ -5651,11 +5686,15 @@ fn fold_record(i: Word) -> Word {
 }
 
 fn step_folding() -> Word {
-    if stmt.name_pending == 1 {
-        // The name went out last step; emit the binding it belongs to now, without
-        // advancing the cursor a second time.
-        stmt.name_pending = 0;
-        fold_record(stmt.fold_i)
+    if stmt.name_pending > 0 {
+        if stmt.name_pending == 1 andalso stmt.stmt_type[stmt.fold_i] > 0 {
+            stmt.name_pending = 2;
+            ps.emit_arg = stmt.stmt_type[stmt.fold_i] - 1;
+            tag_let_type()
+        } else {
+            stmt.name_pending = 0;
+            fold_record(stmt.fold_i)
+        }
     } else {
     if stmt.fold_i > stmt.fold_start {
         stmt.fold_i = stmt.fold_i - 1;
@@ -5679,10 +5718,12 @@ fn step_folding() -> Word {
             Node::Done() as Word
         } else {
         if stmt.fold_cont == 1 {
+            stmt.let_count = branch.if_let_base[branch.if_sp - 1];
             branch.if_phase[branch.if_sp - 1] = 3;
             0
         } else {
         if stmt.fold_cont == 2 {
+            stmt.let_count = branch.if_let_base[branch.if_sp - 1];
             branch.if_sp = branch.if_sp - 1;
             ops.expect_operand = 0;
             stmt.blockform = 1;
@@ -5792,6 +5833,7 @@ fn arm_body() -> Word {
     stmt.let_phase = 0;
     stmt.break_pending = 0;
     stmt.let_count = 0;
+    ps.named_local_count = 0;
     stmt.slot_count = 0;
     stmt.stmt_count = 0;
     stmt.pstmt_sp = 0;

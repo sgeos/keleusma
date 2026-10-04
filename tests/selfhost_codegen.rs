@@ -2248,7 +2248,8 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
                 match code {
                     0 => {}
                     15 => in_body = false,
-                    c if c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG => {}
+                    c if c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                        || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG => {}
                     _ => records.push((code, val)),
                 }
             } else if in_guard {
@@ -2337,6 +2338,7 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
         .filter(|(k, _)| {
             *k != keleusma::selfhost_host::PARSE_LET_NAME_TAG
                 && *k != keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                && *k != keleusma::selfhost_host::PARSE_LET_TYPE_TAG
         })
         .collect();
     let records: &[(i64, i64)] = &records;
@@ -4146,14 +4148,16 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
                 match code {
                     0 => {}
                     15 => in_body = false,
-                    c if c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG => {}
+                    c if c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                        || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG => {}
                     _ => cur.as_mut().unwrap().body.push((code, val)),
                 }
             } else if in_guard {
                 match code {
                     0 => {}
                     15 => in_guard = false,
-                    c if c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG => {}
+                    c if c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                        || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG => {}
                     _ => cur.as_mut().unwrap().guard.push((code, val)),
                 }
             } else if in_data {

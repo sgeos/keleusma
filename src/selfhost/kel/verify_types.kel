@@ -573,9 +573,10 @@ fn tyb_node_tag(e: Word) -> Word {
     if ty.ekind[e] == 3 orelse ty.ekind[e] == 9 orelse ty.ekind[e] == 13 { 2 } else {
     if ty.ekind[e] == 10 orelse ty.ekind[e] == 12 { tyb.la } else {
     if ty.ekind[e] == 15 { tyb.lb } else {
+    if ty.ekind[e] == 8 { if tyb.lb != 0 { tyb.lb } else { tyb.la } } else {
     if ty.ekind[e] == 1 orelse ty.ekind[e] == 4 orelse ty.ekind[e] == 14 {
         if tyb.la != 0 andalso tyb.la == tyb.lb { tyb.la } else { ty_unknown() }
-    } else { ty_unknown() } } } }
+    } else { ty_unknown() } } } } }
 }
 
 // An unknown operand remains undecided. The scalar subset permits Word or Byte.

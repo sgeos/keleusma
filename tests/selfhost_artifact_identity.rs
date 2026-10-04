@@ -93,3 +93,23 @@ fn production_compiler_matches_every_complete_stage_artifact() {
         "complete artifact differences {differences:?}"
     );
 }
+
+/// Branch-local names and shapes must not alter a sibling branch's bindings.
+#[test]
+fn branch_scope_restoration_preserves_complete_artifacts() {
+    for source in [
+        "fn main() -> Word { let x: Word = 1; if true { let x: bool = false; if x { 0 } else { 1 } } else { x } }",
+        "struct P { x: Word } fn main() -> Word { if true { let p = P { x: 3 }; p.x } else { let p: Word = 4; p + 1 } }",
+        "fn main() -> Word { let x: Word = 1; if true { let x: bool = false; if x { 0 } else { 1 } }; x }",
+    ] {
+        let tokens = keleusma::lexer::tokenize(source).expect("reference lex");
+        let ast = keleusma::parser::parse(&tokens).expect("reference parse");
+        let reference = keleusma::compiler::compile(&ast).expect("reference compile");
+        let actual = keleusma::selfhost::self_host_compile_scratch(source);
+        assert_eq!(
+            actual.to_bytes().expect("pipeline artifact"),
+            reference.to_bytes().expect("reference artifact"),
+            "branch scope {source}"
+        );
+    }
+}
