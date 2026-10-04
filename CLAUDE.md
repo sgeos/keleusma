@@ -101,6 +101,16 @@ A knowledge graph is maintained in `docs/`. Start at [`docs/README.md`](docs/REA
 
 ## Development Process
 
+For communication between development lines, read
+[`docs/process/INTERLINE_PROTOCOL.md`](docs/process/INTERLINE_PROTOCOL.md).
+Address the owning line without assuming its harness. On a fresh clone, the
+tracked installer reconstructs the local mailbox from the tracked checkpoint.
+Check the assigned line inbox at startup and before handoff. After communication
+changes, checkpoint the queue into the branch carrying the handoff and include
+the reviewed checkpoint in the prompt's commit. Mailbox continuation does not
+depend on pre-existing `tmp/` or `secret/` contents. Other operator-held prerequisites,
+including Appendix B, still require their own private provisioning.
+
 See `docs/process/PROCESS_STRATEGY.md` for the library engineering approach and agentic development loop.
 
 **Session startup protocol**:

@@ -4,6 +4,30 @@
 
 ## Current increment on 2026-10-04
 
+The operator clarified that the protocol document must live in the project and
+that a clone must support continuation without the old `tmp/` or `secret/` trees.
+The kaizen checkout has moved from system temporary storage to `.worktrees/kaizen/`
+under the primary project. Its tracked protocol path remains
+`docs/process/INTERLINE_PROTOCOL.md` on `feat/kaizen-interline-protocol`.
+This increment is based on `806e0afa`. Check ancestry and review commits above it.
+
+The protocol now addresses lines independently of their harness. Harness names
+are optional metadata, including for receipts and retries after a client change.
+The tracked [checkpoint](../interline/checkpoint.json) reconstructs registered
+lines, messages and receipts on a fresh clone. The installer defaults to the
+current worktree and restores only when the local database is absent.
+Run `python3 -B scripts/install_interline.py --line kaizen` from the cloned root.
+No former-machine path is needed. Appendix B still needs private provisioning.
+
+The Python suite includes a fresh Git clone test with pending mail and receipts.
+The [portability receipt](../kaizen/2026-10-04-interline-portability-receipt.md)
+records the completed checks and boundaries. At the next handoff, export and
+review the queue checkpoint before committing if communication has changed.
+No live model consumption or automatic wakeup is claimed. No push or merge has
+occurred, so remote cloning requires making this branch's commits available first.
+
+## Preceding initial protocol installation on 2026-10-04
+
 The operator requested bidirectional Codex and Claude Code communication
 protocols. The [interline protocol](../INTERLINE_PROTOCOL.md) is implemented by
 `scripts/interline.py` and `scripts/install_interline.py`. Its shared local store

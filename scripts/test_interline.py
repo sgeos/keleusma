@@ -4,6 +4,7 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -73,6 +74,87 @@ class InterlineTests(unittest.TestCase):
             replies = list(pool.map(lambda _: self.send(), range(16)))
         self.assertTrue(all(reply == replies[0] for reply in replies))
         self.assertEqual(len(self.call("inbox", "--line", "v0.2.3")), 1)
+
+    def test_harness_is_optional_and_never_part_of_route_or_retry_identity(self):
+        args = ("send", "--from-line", "kaizen", "--to-line", "v0.2.3",
+                "--id", "neutral", "--kind", "request", "--body-file", str(self.body))
+        original = self.call(*args)
+        self.assertEqual(original["harness"], "unspecified")
+        self.assertEqual(self.call(*args, "--harness", "another-client"), original)
+        receipt = self.call("ack", "--id", "neutral", "--line", "v0.2.3")
+        self.assertIsNotNone(receipt["acknowledged"])
+        reply = self.send("neutral-reply", "v0.2.3", "kaizen", "unknown-client", ("--reply-to", "neutral"))
+        self.assertEqual(reply["recipient"], "kaizen")
+
+    def test_checkpoint_restores_pending_mail_receipts_and_retries(self):
+        self.send("read-message")
+        self.call("ack", "--id", "read-message", "--line", "v0.2.3")
+        self.send("pending-reply", "v0.2.3", "kaizen", "unspecified", ("--reply-to", "read-message"))
+        before = [self.call("show", "--id", name) for name in ("read-message", "pending-reply")]
+        snapshot = self.root / "checkpoint.json"
+        self.call("checkpoint", "--output", str(snapshot))
+        first_bytes = snapshot.read_bytes()
+        self.call("checkpoint", "--output", str(snapshot))
+        self.assertEqual(snapshot.read_bytes(), first_bytes)
+        self.reject("restore", "--checkpoint", str(snapshot))
+        (self.store / "mail.sqlite3").rename(self.store / "original.sqlite3")
+        self.call("restore", "--checkpoint", str(snapshot))
+        self.assertEqual([self.call("show", "--id", name) for name in ("read-message", "pending-reply")], before)
+        self.assertEqual(self.call("inbox", "--line", "v0.2.3"), [])
+        self.assertEqual(len(self.call("inbox", "--line", "kaizen")), 1)
+        self.assertEqual(self.send("read-message", harness="new-harness"), before[0])
+
+    def test_invalid_checkpoint_never_publishes_partial_database(self):
+        self.send()
+        snapshot = self.root / "checkpoint.json"
+        self.call("checkpoint", "--output", str(snapshot))
+        valid = json.loads(snapshot.read_text())
+        (self.store / "mail.sqlite3").rename(self.store / "original.sqlite3")
+        mutations = [
+            lambda state: state.update(protocol=3),
+            lambda state: state.update(lines=["kaizen", "kaizen"]),
+            lambda state: state["messages"][0].update(recipient="missing"),
+            lambda state: state["messages"][0].update(body="x" * 16385),
+            lambda state: state["messages"][0].update(created="not-a-time"),
+            lambda state: state["messages"][0].update(acknowledged_by="invented-receipt"),
+            lambda state: state["messages"][0].update(reply_to="absent"),
+            lambda state: state["messages"].append(state["messages"][0].copy()),
+        ]
+        for mutate in mutations:
+            with self.subTest(mutation=mutate):
+                state = json.loads(json.dumps(valid))
+                mutate(state)
+                snapshot.write_text(json.dumps(state))
+                self.reject("restore", "--checkpoint", str(snapshot))
+                self.assertFalse((self.store / "mail.sqlite3").exists())
+
+    def test_fresh_clone_bootstraps_without_ignored_state_or_known_harness(self):
+        self.send("clone-pending", harness="unspecified")
+        self.send("clone-read", harness="unspecified")
+        self.call("ack", "--id", "clone-read", "--line", "v0.2.3")
+        origin = self.root / "origin"
+        clone = self.root / "clone"
+        source = SCRIPT.parent.parent
+        for name in ("scripts/interline.py", "scripts/install_interline.py", "docs/process/INTERLINE_PROTOCOL.md"):
+            target = origin / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source / name, target)
+        snapshot = origin / "docs/process/interline/checkpoint.json"
+        self.call("checkpoint", "--output", str(snapshot))
+        for args in (("init", "--quiet"), ("add", "."),
+                     ("-c", "user.name=Protocol Test", "-c", "user.email=protocol@example.invalid",
+                      "commit", "--quiet", "-m", "Fixture")):
+            subprocess.run(["git", "-C", str(origin), *args], check=True, capture_output=True)
+        subprocess.run(["git", "clone", "--quiet", str(origin), str(clone)], check=True, capture_output=True)
+        self.assertFalse((clone / "secret").exists())
+        self.assertFalse((clone / "tmp").exists())
+        subprocess.run([sys.executable, "-B", "scripts/install_interline.py", "--line", "v0.2.3"],
+                       cwd=clone, check=True, capture_output=True)
+        base = [sys.executable, str(clone / "scripts/interline.py"), "--store", str(clone / "secret/interline")]
+        inbox = json.loads(subprocess.check_output(base + ["inbox", "--line", "v0.2.3"], text=True))
+        self.assertEqual([row["id"] for row in inbox], ["clone-pending"])
+        subprocess.run(base + ["ack", "--line", "v0.2.3", "--id", "clone-pending"], check=True, capture_output=True)
+        self.assertEqual(json.loads(subprocess.check_output(base + ["inbox", "--line", "v0.2.3"], text=True)), [])
 
     def test_concurrent_distinct_messages_are_preserved(self):
         with ThreadPoolExecutor(max_workers=8) as pool:

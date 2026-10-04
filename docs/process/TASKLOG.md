@@ -8,6 +8,14 @@ Current sprint source of truth.
 
 ## Kaizen interline communication on feat/kaizen-interline-protocol
 
+2026-10-04 follow-up. Moved the kaizen checkout into project-local
+`.worktrees/kaizen/` and made protocol version 2 independent of required harness
+metadata. Added a tracked checkpoint and validated restoration of pending mail
+and receipts in a fresh Git clone lacking the old ignored directories.
+The installer now supports `--line` alone at the cloned root. The
+[portability receipt](./kaizen/2026-10-04-interline-portability-receipt.md) records
+the checks. This extends the initial installation described below.
+
 2026-10-04. Implemented the operator-requested
 [bidirectional interline protocol](./INTERLINE_PROTOCOL.md) for Codex and Claude
 Code. The local SQLite mailbox provides stable identifiers, retry deduplication,

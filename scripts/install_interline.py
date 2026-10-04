@@ -9,25 +9,10 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
-import tempfile
 
-from interline import identifier
+from interline import atomic_write, identifier, read_checkpoint
 
 SOURCE = Path(__file__).resolve().parent.parent
-
-
-def atomic_write(path, content):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix=".interline-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as target:
-            target.write(content)
-            target.flush()
-            os.fsync(target.fileno())
-        os.replace(name, path)
-    finally:
-        if os.path.exists(name):
-            os.unlink(name)
 
 
 def configure(path, command, prefix):
@@ -69,8 +54,12 @@ def install(store, worktree, line):
         ["git", "-C", str(worktree), "rev-parse", "--path-format=absolute", "--git-common-dir"],
         text=True,
     ).strip())
+    if store is None:
+        store = common.parent / "secret" / "interline"
     if store != common.parent / "secret" / "interline":
         raise ValueError("store must be secret/interline under the primary checkout")
+    checkpoint = SOURCE / "docs/process/interline/checkpoint.json"
+    read_checkpoint(checkpoint)
     client = store / "interline.py"
     base = [sys.executable, str(client), "--store", str(store)]
     command = shlex.join(base + ["hook", "--line", line])
@@ -81,7 +70,7 @@ def install(store, worktree, line):
     atomic_write(client, (SOURCE / "scripts/interline.py").read_bytes())
     atomic_write(store / "PROTOCOL.md", (SOURCE / "docs/process/INTERLINE_PROTOCOL.md").read_bytes())
     if not (store / "mail.sqlite3").exists():
-        subprocess.run(base + ["init"], check=True, capture_output=True)
+        subprocess.run(base + ["restore", "--checkpoint", str(checkpoint)], check=True, capture_output=True)
     subprocess.run(base + ["register", "--line", line], check=True, capture_output=True)
     # Keep local configuration out of all branch diffs without changing tracked ignore files.
     exclude = common / "info/exclude"
@@ -107,8 +96,8 @@ def install(store, worktree, line):
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--store", type=lambda p: Path(p).resolve(), required=True)
-    parser.add_argument("--worktree", type=lambda p: Path(p).resolve(), required=True)
+    parser.add_argument("--store", type=lambda p: Path(p).resolve())
+    parser.add_argument("--worktree", type=lambda p: Path(p).resolve(), default=Path.cwd().resolve())
     parser.add_argument("--line", type=identifier, required=True)
     args = parser.parse_args()
     try:
