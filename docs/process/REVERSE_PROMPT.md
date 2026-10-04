@@ -5,112 +5,115 @@
 ## Active goal
 
 Complete roadmap Order 1 on V0.2.X and participate in the System 1 shadow pilot.
-The goal remains active. The complete requirements remain in
+The full goal remains active. Requirements remain in
 [ORDER1_COMPLETION_PLAN.md](../decisions/ORDER1_COMPLETION_PLAN.md).
-This increment implements call inputs and strengthens complete-artifact evidence.
+This increment unifies scoped scalar expression facts with call requirements.
 
 ## Current state
 
-2026-10-04. Branch `feat/v02-order1-next`, starting from `e65069b4`.
-The legacy handoff is invalid-and-stale, fourteen commits behind this starting tree.
-Ancestry passes, but stage sources changed. Its full verification receipt is historical.
-Appendix B was read before tracked writes. The existing `nvim.log` remains untouched.
+2026-10-04. Branch `feat/v02-order1-next`, starting from `303547bd`.
+The legacy handoff is invalid-and-stale, fifteen commits behind this starting tree.
+Its ancestry check passes but stage sources changed. Its full verification receipt remains
+historical. Appendix B was read before tracked writes. The existing `nvim.log` is untouched.
 No push, merge or publication occurred. Bytecode version remains 2 and the opcode count 66.
 
-`call_type_inputs_from_pipeline` returns declarations and independent `CallTypeBatch` ranges.
-Each source head's guard and body retains its own sites, argument requirements and bindings.
-Arguments come from reconstructed call indices. Literal tags, declared scalar parameters,
-local aliases and declared function returns are available without reference syntax or inferred
-expression types. Locals use source-head, range and frame-slot identities. Function returns
-use a separate namespace. Each batch imports only referenced function return declarations.
-The legacy declaration-and-site helper flattens the sites without changing its signature.
-Expression extraction reuses the same source operand classifier and slot-name helper.
+`CallTypeBatch` now includes expression rows. Synthetic identities include source head,
+guard or body range and node index. Form-2 bindings address expression result rows within
+that same batch. Calls, local initializers and return requirements share these identities.
+The forest constraint walk is factored into `expression_rows_from_body`, also used by the
+legacy expression projection. That projection retains its original row shapes and raw names.
+Do not mix its bindings with the scoped batch bindings.
 
-The aggregate wire input initially contained 831 bindings and exceeded the selected cap.
-Across all twelve stage sources, batches now have maxima of 67 sites, 88 arguments and
-62 bindings. The largest declaration table has 492 entries. All call batches pass the type
-stage. No capacity increased. This is call-channel evidence, not complete type rejection.
+The Keleusma stage derives scalar results for arithmetic, comparisons, asymmetric shifts,
+boolean operators, numeric unary operators, Word and Byte casts, conditional branches and
+match results. Host extraction reports shapes and source literal values. Operand form 3 is
+an integer literal, distinct from binding form 3, which denotes a field read. The stage applies
+Byte coercion from 0 through 255 for numeric binary operators and comparisons only. Calls
+and shifts do not use that coercion. Literal local initializers remain ordinary Word bindings.
 
-Three further regression failures are corrected. The parser now resolves locals before global
-function and data names. Scalar alias resolution follows at most one edge per binding row,
-reaching all acyclic chains in the table while cycles and absent targets remain unknown.
-The two module assembly helpers omit the data layout when there are no slots, avoiding extra
-artifact regions that the reference does not emit. Valid shadowing controls compare complete
-artifacts, and a new inventory-checked corpus covers all twelve production stage artifacts.
+The parser previously erased xor into the inequality operator tag. It now retains operator
+tag 33 until code generation maps it to the existing comparison instruction. This allows the
+type stage to require boolean operands without changing emitted bytecode. Type-input row
+kinds are separate from bytecode opcodes and do not add an opcode.
+
+The differential covers 33 scalar sources and two 16-link computed chains, including valid
+controls and batch-local row-index checks. All twelve stages fit and pass the combined
+expression and call channel. Maximum combined expression and argument rows are 299, bindings
+288, sites 67 and declarations 492. All remain within the selected 640-row caps.
 
 ## Verification
 
 Cargo used `RUSTC_WRAPPER=` and `CARGO_HUSKY_DONT_INSTALL_HOOKS=1`.
-Stage runs used `KEL_SELFHOST_CACHE=0`. Release-profile tests were used for the larger corpus.
-No test subject was edited during its run.
+Stage tests used `KEL_SELFHOST_CACHE=0`. Large corpora used the release profile.
+No test subject was edited while its run was active.
 
 - Final `cargo test --release --features self-host --test selfhost_typecheck --test selfhost_artifact_identity --test selfhost_monomorphize_identity`
-  passed 88 type tests, two artifact tests and three monomorphization tests. The artifact test
-  compares complete bytes from `self_host_compile_scratch` for all twelve stages and checks
-  the directory inventory. Both sides still serialize through Rust. The type run includes
-  both all-stage extraction tests. Log `tmp/order1-call-final-suites.log`.
-- `cargo test --release --features self-host --test selfhost_typecheck --test selfhost_parse --test selfhost_monomorphize_identity`
-  passed 88, 90 with two ignored, and three respectively. Log `tmp/order1-call-suites.log`.
-  This preceded comment-only edits in the driver and type test. Parser stage code was unchanged.
-- `cargo test --release --features self-host --test selfhost_artifact_identity --test selfhost_codegen self_host_compiles_`
-  passed 89 selected compilation tests, including all twelve stages. The name filter selected
-  zero artifact tests. The separate artifact run and final combined command above executed both.
-  Log `tmp/order1-call-stage-identity.log`.
-- `cargo test --test selfhost_typecheck --test selfhost_artifact_identity` passed 30 type tests.
-  Artifact tests correctly compile out without `self-host`. Log `tmp/order1-call-default.log`.
-- Broad-feature Clippy with `--tests --features signatures,shell,self-host -- -D warnings`
-  and default-feature Clippy with `--test selfhost_typecheck --test selfhost_artifact_identity -- -D warnings`
-  passed with actual crate checking. Logs `tmp/order1-call-clippy.log` and
-  `tmp/order1-call-default-clippy.log`.
+  passed 90 type tests, two artifact tests and three monomorphization tests. Artifact identity
+  covers complete bytes from the production compiler for all twelve stages and checks the
+  directory inventory. Both sides still serialize through Rust. The type suite includes both
+  all-stage extraction tests. Log `tmp/order1-expr-call-final-suites.log`.
+- The earlier combined command also selected `--test selfhost_parse`. It passed 90 parser tests
+  with two ignored, alongside the same 90, two and three tests. Log
+  `tmp/order1-expr-call-suites.log`. Later changes were a collapsed Rust conditional and comments.
+- `cargo test --release --features self-host --test selfhost_codegen self_host_compiles_`
+  passed 89 selected tests, including every stage. Log `tmp/order1-expr-call-codegen.log`.
+  Parser and code-generation behavior did not change afterward.
+- Final `cargo test --test selfhost_typecheck` passed 30 without warnings.
+  Log `tmp/order1-expr-call-default-final.log`.
+- Broad Clippy with `--tests --features signatures,shell,self-host -- -D warnings` passed.
+  Default Clippy with `--test selfhost_typecheck -- -D warnings` passed. Both printed actual
+  crate checking. Logs `tmp/order1-expr-call-clippy-final.log` and
+  `tmp/order1-expr-call-default-clippy.log`.
 - `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps` passed.
-  Log `tmp/order1-call-doc-build.log`.
+  Log `tmp/order1-expr-call-doc-build.log`.
 - Final documentation, citation and count guards, formatting and diff checks are recorded in
-  `tmp/order1-call-final-checks.log`.
+  `tmp/order1-expr-call-final-checks.log`.
 
-The first diagnostic was missing documentation on three new fields, before tests executed.
-Later failures exposed empty argument rows, cross-function name collision, local-versus-global
-precedence, aggregate capacity, alias chaining and empty data-layout regions. Two parser edits
-also failed because they used unsupported local mutation syntax before being corrected to the
-existing parser state field. Logs are retained under `tmp/order1-call-*`.
-Full workspace, advisory and release gates have not been rerun. Inference-independence evidence
-still needs refreshing. No verification process remains running at this handoff.
+The first test failed because `take(1 < 2)` was accepted for a Word parameter. The generic
+walk initially failed Rust compilation because a closure was moved instead of borrowed.
+Clippy then flagged a collapsible conditional in singleton-match result extraction. Both were
+corrected before the final runs. Logs remain under `tmp/order1-expr-call-*`.
+Full workspace, advisory, inference-independence refresh and release gates remain outstanding.
+No verification process remains running at this handoff.
 
 ## Remaining work
 
-Complete the pipeline type-input path. Computed call arguments and composite types remain
-unknown. The call channel now uses scoped identities, but the legacy expression and binding
-helpers still expose raw names. Do not combine those tables as though their identities match.
-Unifying expression-derived facts and call requirements within the same source-head batches is
-one concrete next step. Preserve arity checks and valid controls while extending operand forms.
+The unified batches are a stronger input path, not independent production type rejection.
+Source annotations, composite reads and results, declared data-field types, pattern payloads,
+array element types, binder and occurrence coverage still need work. Run the complete rejection
+and valid-control corpus through this path to identify its next missing facts. Avoid inferring
+completion from the scalar case count. Empty tails and unsupported syntax also deserve explicit
+coverage while extending rejection beyond the existing extraction tests.
 
-Source annotations, field and index rejection before reconstruction, binder and occurrence
-coverage, array and payload types remain incomplete. The parser still discards match guards.
-The reference accepts a Word-valued function guard, so no extra root boolean requirement was
-introduced. Unknown-name fallback to local slot zero remains a separate parser concern.
-The call extraction repeats lexical work for chunk-name lookup; reuse the existing ordering
-algorithm rather than deriving another one.
+The parser discards match guards. Function guard roots have different reference behavior, so
+no extra boolean requirement was added there. Unknown-name fallback to slot zero remains a
+separate parser concern. The legacy expression and binding helpers still expose raw names.
+The type solver retains bounded rounds and a separate one-hop struct-alias path. Scalar alias
+chains use the binding-table bound. Composite derivation must not be inferred from scalar tests.
 
-Integrate rejection without reference-first masking. The shipping driver still calls the Rust
-reference first. Complete production emission through the Keleusma wire implementation instead
-of `module.to_bytes()`, refresh inference independence, exercise the shipping command and run
-final workspace and integration gates. Complete artifact identity now has direct all-stage
-production evidence, but it must be repeated after subsequent pipeline changes.
+Production rejection must run without reference-first masking. The shipping driver still
+calls the Rust reference first. Complete production emission through Keleusma instead of
+`module.to_bytes()`, refresh inference independence, exercise the shipping command and run
+final workspace and integration gates. Complete artifact identity has direct all-stage evidence
+but must be repeated after later pipeline changes. No full Order 1 requirement is retired merely
+because this increment passes.
 
 ## Shadow pilot and mailbox
 
-Pilot task `v023-order1-call-inputs` has four local development cases with prefix
-`v023-20261004-call-`. They are `triage`, `clippy-claim`, `type-claim` and `artifact-claim`.
-The claims describe the completed Clippy command and final passing counts. All labels are
-non-independent self-reviews. No accuracy or development improvement is claimed.
-Later diagnostics were omitted under the first-diagnostic sampling convention.
+Pilot task `v023-order1-expression-call-facts` has four local cases with prefix
+`v023-20261004-expr-call-`. They are `triage`, `type-claim`, `artifact-claim` and `clippy-claim`.
+The diagnostic is the original wrong call verdict. Claims describe the final executed checks.
+All labels are non-independent self-reviews. No accuracy or development improvement is claimed.
+Later diagnostics were omitted under the first-diagnostic convention. The Clippy claim uses a
+reviewed excerpt with the workspace path removed and retains the original log as provenance.
 
-Live evaluation remains pending the operator answer to the existing specific approval question.
-Automatic approval review previously rejected sending excerpts to `api.typesafe.ai` because it
-did not recognize authorization for the destination and payload. Do not retry through another
-route. Local capture and compiler work continue independently. The pilot outcome resolves this
+External evaluation remains pending the operator answer to the existing specific approval
+question. Automatic approval review previously rejected sending excerpts to `api.typesafe.ai`
+because it did not recognize destination-and-payload authorization. Do not retry through another
+route. Local capture and implementation remain available. The task outcome resolves this
 increment only and explicitly leaves full Order 1 active. The reviewed local export is
-`tmp/jev-shadow-order1-call-checkpoint.json`. The tracked pilot checkpoint belongs to the pilot
-implementation line and was not overwritten here.
+`tmp/jev-shadow-order1-expr-call-checkpoint.json`. The pilot implementation line owns the tracked
+pilot checkpoint, which was not overwritten here.
 
 The interline inbox is empty. The tracked checkpoint was exported and reviewed. It contains
 four routes and no messages. No interline messages were sent.

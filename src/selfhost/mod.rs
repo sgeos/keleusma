@@ -1030,7 +1030,8 @@ pub fn lex_token_count(src: &str) -> usize {
 ///
 /// `form` matches the stage's `ty.bform`: **0** the value is a TAG, **1** it is
 /// another NAME the stage resolves through bounded alias traversal. `target` is that name
-/// for form 1 and empty otherwise.
+/// for form 1 and empty otherwise. Form 2 addresses an expression row in the same
+/// scoped batch through `value`; the stage derives its result tag.
 ///
 /// # Why the target is a string
 ///
@@ -2181,7 +2182,7 @@ pub type DeclRow = (String, i64, Vec<i64>);
 /// answering it".
 pub type CallSiteRow = (String, i64);
 
-/// Call declarations, sites and argument requirements from the self-hosted parser.
+/// Scoped scalar constraints, call sites and argument requirements from the pipeline.
 /// Argument rows pair a declared scalar tag with a source operand for stage resolution.
 #[derive(Debug)]
 pub struct CallTypeInputs {
@@ -2191,7 +2192,7 @@ pub struct CallTypeInputs {
     pub batches: Vec<CallTypeBatch>,
 }
 
-/// Call facts for one source head's guard or body.
+/// Call and expression facts for one source head's guard or body.
 /// Bindings include local slots and only referenced function return declarations.
 #[derive(Debug)]
 pub struct CallTypeBatch {
@@ -2201,12 +2202,15 @@ pub struct CallTypeBatch {
     pub arguments: Vec<(i64, ExprOperand)>,
     /// Scoped bindings for these argument operands. Do not substitute unscoped binding rows.
     pub bindings: Vec<BindingRow>,
+    /// Expression constraints addressed by form-2 bindings in this same batch.
+    pub expressions: Vec<ExprRow>,
 }
 
 /// Extract call input facts without reference syntax or inferred expression types.
 ///
-/// Arguments retain scalar literal tags, local identities and called-function identities. Other
-/// expressions remain unknown. The type stage resolves named operands through bindings.
+/// Operands retain literal values, local identities, called-function identities and synthetic
+/// identities for scalar expression results. The stage resolves those results through expression
+/// rows and form-2 bindings. Composite reads and other unsupported shapes remain unknown.
 /// Local identities include the source head, guard or body range, and frame slot. Function
 /// return identities occupy a separate namespace. Equal spellings cannot alias across heads.
 /// Repeated function heads use the final declaration's parameter tags, matching the
@@ -2268,12 +2272,43 @@ pub fn call_type_inputs_from_pipeline(src: &str) -> CallTypeInputs {
                 }
             }
             let body = reconstruct_via_kel(records, reconstruct_category(f.cat), f.params, &name);
+            let computed_names: alloc::collections::BTreeMap<_, _> = body
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| scalar_result_node(node))
+                .map(|(at, _)| (at as i64, format!("#expression:{head}:{range}:{at}")))
+                .collect();
+            let operand = |index| {
+                if let Some(identity) = computed_names.get(&index) {
+                    (0, 1, identity.clone())
+                } else if let Some(node) = body.nodes.get(index as usize)
+                    && node.kind == NODE_LITERAL
+                {
+                    // Preserve literal syntax for the stage's contextual Byte coercion.
+                    (node.arg, 3, String::new())
+                } else {
+                    source_operand(&body, index, &slot_names, &return_names)
+                }
+            };
+            let mut expressions = Vec::new();
+            let result_rows = expression_rows_from_body(&body, operand, &mut expressions, true);
+            if range == 1 {
+                for &(declared, given) in &f.struct_counts {
+                    assert!(given >= 0, "unpaired struct field-count metadata");
+                    expressions.push((7, (declared, 0, String::new()), (given, 0, String::new())));
+                }
+                if let Some(tail) = body_tail_node(&body) {
+                    expressions.push((8, operand(tail), (tag_of(f.return_type), 0, String::new())));
+                }
+            }
             for node in &body.nodes {
                 if node.kind == NODE_LET_IN
                     && let Some(identity) = slot_names.get(&node.arg)
                 {
-                    let (value, form, target) =
-                        source_operand(&body, node.lhs, &slot_names, &return_names);
+                    let (value, form, target) = operand(node.lhs);
+                    // Binding forms have a different namespace from operand forms.
+                    let (value, form) = if form == 3 { (1, 0) } else { (value, form) };
                     bindings.push((identity.clone(), value, form, target));
                 }
                 if node.kind != NODE_CALL {
@@ -2296,17 +2331,23 @@ pub fn call_type_inputs_from_pipeline(src: &str) -> CallTypeInputs {
                     .get(start..end)
                     .expect("call arguments outside side table");
                 for (&declared, &index) in tags.iter().zip(actual) {
-                    arguments.push((
-                        declared,
-                        source_operand(&body, index, &slot_names, &return_names),
-                    ));
+                    arguments.push((declared, operand(index)));
                 }
+            }
+            for (node, row) in result_rows {
+                bindings.push((computed_names[&node].clone(), row as i64, 2, String::new()));
             }
             // Select declaration dependencies without resolving a type on the host. Local
             // aliases remain in the batch for the stage's bounded fixpoint to resolve.
             let targets: alloc::collections::BTreeSet<_> = arguments
                 .iter()
                 .filter_map(|(_, (_, form, target))| (*form == 1).then_some(target))
+                .chain(
+                    expressions
+                        .iter()
+                        .flat_map(|(_, a, b)| [a, b])
+                        .filter_map(|(_, form, target)| (*form == 1).then_some(target)),
+                )
                 .chain(
                     bindings
                         .iter()
@@ -2323,6 +2364,7 @@ pub fn call_type_inputs_from_pipeline(src: &str) -> CallTypeInputs {
                 sites,
                 arguments,
                 bindings,
+                expressions,
             });
         }
     }
@@ -2593,9 +2635,10 @@ fn is_binary_operator(kind: i64) -> bool {
 /// One operand of an expression row: `(value, form, name)`.
 ///
 /// Form 0 means `value` is a scalar TAG and `name` is empty. Form 1 means `name` is the
-/// identifier the operand mentions and `value` is unused — **a string rather than an id, for the
-/// third slice running**, because the reference interns into its own space and the pipeline into
-/// another, so an id could only be compared by comparing the numberings.
+/// identifier the operand mentions and `value` is unused. Form 3 retains a source integer
+/// literal in `value` for contextual Byte coercion. Operand forms and binding forms are separate.
+/// Names are strings because the reference and pipeline use different intern tables.
+/// Comparing their numeric ids would compare the numberings instead of the source facts.
 pub type ExprOperand = (i64, i64, String);
 
 /// One expression row as the type channel consumes it: `(kind, left, right)`.
@@ -2697,102 +2740,7 @@ pub fn expression_rows_from_pipeline(src: &str) -> (Vec<ExprRow>, Vec<(String, u
 
             let operand = |index| source_operand(&body, index, &slot_name, &chunk_names);
 
-            // The rows, and the LetIn bindings whose initialiser is one of them.
-            let mut row_of_node: alloc::collections::BTreeMap<i64, usize> =
-                alloc::collections::BTreeMap::new();
-            let nothing: ExprOperand = (0, 0, String::new());
-
-            for (at, node) in body.nodes.iter().enumerate() {
-                if is_binary_operator(node.kind) {
-                    row_of_node.insert(at as i64, rows.len());
-                    rows.push((1, operand(node.lhs), operand(node.rhs)));
-                } else if node.kind == 6 {
-                    // Unary not requires a boolean operand, just as a condition does.
-                    rows.push((3, operand(node.lhs), nothing.clone()));
-                } else if node.kind == 4 {
-                    // The parser marks an absent else, and reconstruction preserves it as a
-                    // negative condition index. Empty written branches still contribute a pair.
-                    let condition = if node.arg < 0 {
-                        -node.arg - 1
-                    } else {
-                        node.arg
-                    };
-                    rows.push((3, operand(condition), nothing.clone()));
-                    if node.arg >= 0 {
-                        let branch_tail = |root| {
-                            block_tail_node(&body, root).map_or_else(|| nothing.clone(), operand)
-                        };
-                        rows.push((4, branch_tail(node.lhs), branch_tail(node.rhs)));
-                    }
-                } else if node.kind == 22 || node.kind == 39 {
-                    // Match arms compare their first result with every subsequent result.
-                    // The integer form always carries its wildcard result; the enum form
-                    // carries an explicit presence flag after its fixed-stride arm entries.
-                    let base = usize::try_from(node.arg).expect("negative match-parts offset");
-                    let count = usize::try_from(node.rhs).expect("negative match arm count");
-                    let stride = if node.kind == 22 { 2 } else { 20 };
-                    let result_offset = if node.kind == 22 { 3 } else { 4 };
-                    let mut first: Option<ExprOperand> = None;
-                    for arm in 0..count {
-                        let result = operand(body.match_parts[base + arm * stride + result_offset]);
-                        if let Some(head) = &first {
-                            rows.push((4, head.clone(), result));
-                        } else {
-                            first = Some(result);
-                        }
-                    }
-                    let wildcard = if node.kind == 22 {
-                        Some(body.match_parts[base + 1])
-                    } else if body.match_parts[base + 2 + count * stride] == 1 {
-                        Some(body.match_parts[base + 3 + count * stride])
-                    } else {
-                        None
-                    };
-                    if let (Some(head), Some(wildcard)) = (first, wildcard) {
-                        rows.push((4, head, operand(wildcard)));
-                    }
-                } else if node.kind == NODE_ARRAY_LIT {
-                    // --- THE ARRAY-ELEMENT CLAIM, KIND 2 ---------------------------------------
-                    //
-                    // The reference pairs element ZERO against every LATER element, so a literal of
-                    // n elements contributes n-1 rows and one of n <= 1 contributes none. Kind 2 is
-                    // an equality kind, so the pairing must match exactly. An unknown first element
-                    // suppresses each first-versus-rest disagreement. Adjacent pairing could still
-                    // compare two later known elements and reject the same input.
-                    //
-                    // **THE ELEMENTS COME FROM `call_args`, SLICED BY THIS NODE'S OWN `lhs`/`rhs`.**
-                    // That channel is shared with `Node::Call`; a scan would read call arguments as
-                    // array elements.
-                    //
-                    // Measured before it was written: on every probe the count of kind-17 nodes
-                    // equalled the count of the reference's array-literal expressions, INCLUDING the
-                    // nested-index shape that once mis-parsed as a literal. That was the one
-                    // direction capable of rejecting a correct program.
-                    //
-                    // **THE `count >= 2` GUARD IS BELT-AND-BRACES AND MUTATING IT PROVES NOTHING.**
-                    // The loop below runs `1..count`, which is already empty at a count of one, so
-                    // relaxing the guard to `>= 1` is an EQUIVALENT MUTANT: it changes no output and
-                    // its survival is not a gap in the tests. Recorded because a surviving mutant
-                    // left unexplained reads as a missing guard, and the next reader would go looking
-                    // for one. The guard earns its place by making the intent legible and by keeping
-                    // the `call_args` read below off a slice that a zero-count node does not own.
-                    let start = node.lhs;
-                    let count = node.rhs;
-                    if count >= 2
-                        && let Some(&head) = body.call_args.get(usize::try_from(start).unwrap_or(0))
-                    {
-                        let first = operand(head);
-                        for k in 1..count {
-                            let Ok(at) = usize::try_from(start + k) else {
-                                continue;
-                            };
-                            if let Some(&elem) = body.call_args.get(at) {
-                                rows.push((2, first.clone(), operand(elem)));
-                            }
-                        }
-                    }
-                }
-            }
+            let row_of_node = expression_rows_from_body(&body, operand, &mut rows, false);
             for node in &body.nodes {
                 if node.kind == NODE_LET_IN
                     && let Some(&row) = row_of_node.get(&node.lhs)
@@ -2828,6 +2776,164 @@ pub fn expression_rows_from_pipeline(src: &str) -> (Vec<ExprRow>, Vec<(String, u
     }
 
     (rows, derived)
+}
+
+/// Shared constraint extraction. Precise scalar rows retain the operator result rule.
+fn expression_rows_from_body<F: Fn(i64) -> ExprOperand>(
+    body: &Body,
+    operand: F,
+    rows: &mut Vec<ExprRow>,
+    scalar_results: bool,
+) -> alloc::collections::BTreeMap<i64, usize> {
+    let mut row_of_node: alloc::collections::BTreeMap<i64, usize> =
+        alloc::collections::BTreeMap::new();
+    let nothing: ExprOperand = (0, 0, String::new());
+
+    for (at, node) in body.nodes.iter().enumerate() {
+        if is_binary_operator(node.kind) {
+            row_of_node.insert(at as i64, rows.len());
+            rows.push((
+                if scalar_results {
+                    binary_fact_kind(node)
+                } else {
+                    1
+                },
+                operand(node.lhs),
+                operand(node.rhs),
+            ));
+        } else if node.kind == 6 {
+            // Unary not requires a boolean operand and yields bool.
+            if scalar_results {
+                row_of_node.insert(at as i64, rows.len());
+            }
+            rows.push((3, operand(node.lhs), nothing.clone()));
+        } else if scalar_results && matches!(node.kind, 8 | 9 | 68) {
+            row_of_node.insert(at as i64, rows.len());
+            rows.push((13, operand(node.lhs), operand(node.rhs)));
+        } else if scalar_results && matches!(node.kind, 10 | 65 | 66) {
+            row_of_node.insert(at as i64, rows.len());
+            rows.push((12, operand(node.lhs), nothing.clone()));
+        } else if scalar_results && node.kind == 26 {
+            row_of_node.insert(at as i64, rows.len());
+            let target = if node.arg == 1 { 3 } else { 1 };
+            rows.push((15, operand(node.lhs), (target, 0, String::new())));
+        } else if node.kind == 4 {
+            // The parser marks an absent else, and reconstruction preserves it as a
+            // negative condition index. Empty written branches still contribute a pair.
+            let condition = if node.arg < 0 {
+                -node.arg - 1
+            } else {
+                node.arg
+            };
+            rows.push((3, operand(condition), nothing.clone()));
+            if node.arg >= 0 {
+                let branch_tail =
+                    |root| block_tail_node(body, root).map_or_else(|| nothing.clone(), &operand);
+                if scalar_results {
+                    row_of_node.insert(at as i64, rows.len());
+                }
+                rows.push((4, branch_tail(node.lhs), branch_tail(node.rhs)));
+            }
+        } else if node.kind == 22 || node.kind == 39 {
+            // Match arms compare their first result with every subsequent result.
+            // The integer form always carries its wildcard result; the enum form
+            // carries an explicit presence flag after its fixed-stride arm entries.
+            let base = usize::try_from(node.arg).expect("negative match-parts offset");
+            let count = usize::try_from(node.rhs).expect("negative match arm count");
+            let stride = if node.kind == 22 { 2 } else { 20 };
+            let result_offset = if node.kind == 22 { 3 } else { 4 };
+            let first_row = rows.len();
+            let mut first: Option<ExprOperand> = None;
+            for arm in 0..count {
+                let result = operand(body.match_parts[base + arm * stride + result_offset]);
+                if let Some(head) = &first {
+                    rows.push((4, head.clone(), result));
+                } else {
+                    first = Some(result);
+                }
+            }
+            let wildcard = if node.kind == 22 {
+                Some(body.match_parts[base + 1])
+            } else if body.match_parts[base + 2 + count * stride] == 1 {
+                Some(body.match_parts[base + 3 + count * stride])
+            } else {
+                None
+            };
+            if let (Some(head), Some(wildcard)) = (&first, wildcard) {
+                rows.push((4, head.clone(), operand(wildcard)));
+            }
+            if scalar_results {
+                if rows.len() == first_row
+                    && let Some(single) = first.or_else(|| wildcard.map(&operand))
+                {
+                    rows.push((4, single.clone(), single));
+                }
+                if rows.len() > first_row {
+                    row_of_node.insert(at as i64, first_row);
+                }
+            }
+        } else if node.kind == NODE_ARRAY_LIT {
+            // --- THE ARRAY-ELEMENT CLAIM, KIND 2 ---------------------------------------
+            //
+            // The reference pairs element ZERO against every LATER element, so a literal of
+            // n elements contributes n-1 rows and one of n <= 1 contributes none. Kind 2 is
+            // an equality kind, so the pairing must match exactly. An unknown first element
+            // suppresses each first-versus-rest disagreement. Adjacent pairing could still
+            // compare two later known elements and reject the same input.
+            //
+            // **THE ELEMENTS COME FROM `call_args`, SLICED BY THIS NODE'S OWN `lhs`/`rhs`.**
+            // That channel is shared with `Node::Call`; a scan would read call arguments as
+            // array elements.
+            //
+            // Measured before it was written: on every probe the count of kind-17 nodes
+            // equalled the count of the reference's array-literal expressions, INCLUDING the
+            // nested-index shape that once mis-parsed as a literal. That was the one
+            // direction capable of rejecting a correct program.
+            //
+            // **THE `count >= 2` GUARD IS BELT-AND-BRACES AND MUTATING IT PROVES NOTHING.**
+            // The loop below runs `1..count`, which is already empty at a count of one, so
+            // relaxing the guard to `>= 1` is an EQUIVALENT MUTANT: it changes no output and
+            // its survival is not a gap in the tests. Recorded because a surviving mutant
+            // left unexplained reads as a missing guard, and the next reader would go looking
+            // for one. The guard earns its place by making the intent legible and by keeping
+            // the `call_args` read below off a slice that a zero-count node does not own.
+            let start = node.lhs;
+            let count = node.rhs;
+            if count >= 2
+                && let Some(&head) = body.call_args.get(usize::try_from(start).unwrap_or(0))
+            {
+                let first = operand(head);
+                for k in 1..count {
+                    let Ok(at) = usize::try_from(start + k) else {
+                        continue;
+                    };
+                    if let Some(&elem) = body.call_args.get(at) {
+                        rows.push((2, first.clone(), operand(elem)));
+                    }
+                }
+            }
+        }
+    }
+    row_of_node
+}
+
+fn scalar_result_node(node: &Node) -> bool {
+    is_binary_operator(node.kind)
+        || matches!(node.kind, 6 | 8 | 9 | 10 | 22 | 26 | 39 | 65 | 66 | 68)
+        || (node.kind == 4 && node.arg >= 0)
+}
+
+/// Parser operator numbers describe syntax; the stage decides their operand and result types.
+fn binary_fact_kind(node: &Node) -> i64 {
+    if node.kind == 3 && node.arg == 33 {
+        13
+    } else if node.kind == 3 && (6..=11).contains(&node.arg) {
+        9
+    } else if node.kind == 60 || (node.kind == 3 && (27..=29).contains(&node.arg)) {
+        10
+    } else {
+        14
+    }
 }
 
 /// One struct's declared field set: the type's name and its field names, in declaration order.

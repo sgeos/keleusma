@@ -13,6 +13,36 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-04 Scoped scalar expression results
+
+The initial witness passed a comparison result to a Word parameter. Reference compilation
+rejected it, but the pipeline call channel accepted because computed operands were unknown.
+The batch now includes expression constraints and form-2 result bindings. Synthetic identities
+include the source head, range and node index, so calls, local initializers and return rows can
+refer to the same computed value. The expression walk is shared with the legacy projection.
+
+A result rule cannot treat every binary operator as returning its operands' type. Comparisons
+produce bool and shifts preserve only the left type. Boolean operators, numeric unary operators,
+scalar casts and branch results also have distinct rules. All joins and coercion decisions remain
+in the Keleusma stage. The host supplies operator shapes and source literal values.
+
+The reference coerces integer literals from 0 through 255 to Byte in binary arithmetic and
+comparisons, but not in shifts or calls. A new operand form retains that literal syntax, and
+binding forms remain a separate namespace. The parser also erased xor's restriction by emitting
+the inequality operator tag. It now retains xor until code generation maps it to the existing
+comparison instruction. No public opcode or bytecode version changes.
+
+The corpus exercises 33 valid and invalid scalar cases plus two 16-link computed chains. It
+checks result-row indices within their own batch. All twelve stages fit and pass with maxima
+of 299 combined expression and argument rows and 288 bindings. Composite reads, source
+annotations and production rejection still need work. The initial generic helper moved its
+operand closure into a nested closure; borrowing it corrected the Rust compile failure.
+Clippy then identified a collapsible conditional in singleton-match extraction, now corrected.
+
+The shadow pilot captured the first failed verdict and retains local non-independent labels.
+Later diagnostics are preserved in engineering logs without replacing the first sample.
+External evaluation remains pending the existing specific authorization request.
+
 ## 2026-10-04 Call arguments and bounded scope
 
 Reconstructed call nodes already carry argument indices. Extraction now pairs those operands

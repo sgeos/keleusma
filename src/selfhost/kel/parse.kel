@@ -360,8 +360,8 @@ enum OpCode {
     Or = 32,
     // P11 precedence P1: `xor` is now its OWN OpCode (was folded onto `NotEq`), so it can carry the
     // logical-band precedence (4, below comparison) that fixes `a xor b == c` and `a and b xor c`.
-    // It still LOWERS exactly like `!=`: `emit_op` maps it to a BinOp(NotEq) node, so codegen emits
-    // the same CmpNe wire op and the output stays byte-identical to the reference.
+    // The BinOp retains this tag for type checking; codegen maps it to CmpNe, preserving
+    // byte identity with the reference while retaining xor's boolean operand restriction.
     Xor = 33,
 }
 
@@ -4004,10 +4004,9 @@ fn emit_op(op: Word) -> Word {
             OpCode::Andalso() => Node::Andalso() as Word,
             OpCode::Orelse() => Node::Orelse() as Word,
             OpCode::YieldMark() => Node::YieldExpr() as Word,
-            // P11 precedence P1: `xor` lowers exactly like `!=` -- emit a BinOp(NotEq) node so codegen
-            // produces the same CmpNe wire op. Only its precedence differs from a plain `!=` (logical
-            // band, set in `prec_of`), which is what fixes the `xor`-vs-comparison folding.
-            OpCode::Xor() => Node::BinOp() as Word + OpCode::NotEq() as Word * 64,
+            // Preserve xor's operand restriction for type extraction. Code generation maps
+            // its operator tag to the same CmpNe instruction as inequality.
+            OpCode::Xor() => Node::BinOp() as Word + op * 64,
             _ => Node::BinOp() as Word + op * 64,
         }
     } } } } } } } } } } } }

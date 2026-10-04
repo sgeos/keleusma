@@ -700,6 +700,7 @@ fn push_binop(p: Word) -> Word {
         14 => wire.bitxor,
         27 => wire.shl,
         28 => wire.shr,
+        33 => wire.cmpne,
         _ => opc + 5,
     };
     if opc < 4 {

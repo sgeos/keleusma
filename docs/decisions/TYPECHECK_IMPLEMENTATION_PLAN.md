@@ -34,7 +34,15 @@ function return declarations. Independent batches cover each source head's guard
 All twelve stage sources fit the approved caps with maxima of 67 sites, 88 arguments and
 62 bindings per batch. Call checks accept those batches. Alias lookup is bounded by the number
 of binding rows and reaches longer chains while leaving cycles and missing targets unknown.
-Computed and composite arguments remain incomplete, and production rejection remains open.
+Composite arguments remain incomplete, and production rejection remains open.
+
+The scoped path now shares an expression-constraint walk with the legacy projection. Synthetic
+result identities connect computed operands to calls, local bindings and return requirements.
+Result rules distinguish comparisons from arithmetic, asymmetric shifts, boolean operators,
+numeric unary operators, scalar casts and branch results. Literal values remain syntax facts;
+the stage performs bounded Byte coercion for binary operands. All twelve sources fit and pass
+with maxima of 299 combined expression rows and 288 bindings. These replace the call-only
+measurements above. Source annotations, composite reads and production integration remain open.
 
 **Currency, 2026-09-29.** The six input channels that previously excluded `parse.kel` and
 `wire.kel` now have 640-row caps. The measured stage-source test fits and checks all twelve real

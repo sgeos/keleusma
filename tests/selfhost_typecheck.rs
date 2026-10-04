@@ -6982,7 +6982,7 @@ fn pipeline_call_inputs_include_actual_arguments() {
             .iter()
             .flat_map(|b| b.arguments.clone())
             .collect::<Vec<_>>(),
-        vec![(1, (2, 0, String::new())), (2, (1, 0, String::new()))]
+        vec![(1, (2, 0, String::new())), (2, (1, 3, String::new()))]
     );
 }
 
@@ -7009,7 +7009,16 @@ fn pipeline_call_argument_tags_agree_with_reference_syntax() {
             .batches
             .iter()
             .flat_map(|batch| &batch.arguments)
-            .map(|(declared, operand)| (*declared, if operand.1 == 0 { operand.0 } else { 0 }))
+            .map(|(declared, operand)| {
+                (
+                    *declared,
+                    match operand.1 {
+                        0 => operand.0,
+                        3 => 1,
+                        _ => 0,
+                    },
+                )
+            })
             .collect();
         expected.sort_unstable();
         projected.sort_unstable();
@@ -7050,7 +7059,12 @@ fn call_inputs_verdict(inputs: &keleusma::selfhost::CallTypeInputs) -> bool {
                 names.entry(target.clone()).or_insert(next);
             }
         }
-        for (_, (_, form, name)) in &batch.arguments {
+        for (_, form, name) in batch
+            .arguments
+            .iter()
+            .map(|(_, operand)| operand)
+            .chain(batch.expressions.iter().flat_map(|(_, a, b)| [a, b]))
+        {
             if *form == 1 {
                 let next = names.len() as i64 + 1;
                 names.entry(name.clone()).or_insert(next);
@@ -7066,19 +7080,22 @@ fn call_inputs_verdict(inputs: &keleusma::selfhost::CallTypeInputs) -> bool {
                 )
             })
             .collect();
-        let nodes: Vec<_> = batch
-            .arguments
+        let encode = |(value, form, name): &keleusma::selfhost::ExprOperand| {
+            (if *form == 1 { names[name] } else { *value }, *form)
+        };
+        let mut nodes: Vec<_> = batch
+            .expressions
             .iter()
-            .map(|(declared, (value, form, name))| {
-                (
-                    8,
-                    *declared,
-                    0,
-                    if *form == 1 { names[name] } else { *value },
-                    *form,
-                )
+            .map(|(kind, a, b)| {
+                let (av, af) = encode(a);
+                let (bv, bf) = encode(b);
+                (*kind, av, af, bv, bf)
             })
             .collect();
+        nodes.extend(batch.arguments.iter().map(|(declared, operand)| {
+            let (value, form) = encode(operand);
+            (8, *declared, 0, value, form)
+        }));
         let sites: Vec<_> = batch
             .sites
             .iter()
@@ -7162,6 +7179,120 @@ fn pipeline_call_inputs_drive_type_rejection() {
             accepts,
             "pipeline inputs for {src}"
         );
+    }
+}
+
+/// Computed operands must be typed in the stage, including nested calls and returns.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_call_computed_operands_require_resolved_types() {
+    for (src, accepts) in [
+        (
+            "fn take(n: Word) -> Word { n } fn main() -> Word { take(1 < 2) }",
+            false,
+        ),
+        (
+            "fn take(n: bool) -> bool { n } fn main() -> bool { take(1 < 2) }",
+            true,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn main() -> Word { take(1 + 2) }",
+            true,
+        ),
+        (
+            "fn take(n: bool) -> bool { n } fn main() -> bool { take(1 + 2) }",
+            false,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn main() -> Word { let a = 1 + 2; take(a) }",
+            true,
+        ),
+        (
+            "fn take(n: bool) -> bool { n } fn main() -> bool { let a = 1 + 2; take(a) }",
+            false,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn main() -> Word { take((1 + 2) + (3 < 4)) }",
+            false,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn main() -> Word { take((1 + 2) + (3 * 4)) }",
+            true,
+        ),
+        ("fn main() -> bool { 1 + 2 }", false),
+        ("fn main() -> bool { 1 < 2 }", true),
+        ("fn main() -> bool { true + false }", false),
+        ("fn main() -> bool { not false }", true),
+        (
+            "fn take(n: Word) -> Word { n } fn main() -> Word { take(not false) }",
+            false,
+        ),
+        ("fn main() -> Word { -true }", false),
+        ("fn main() -> Word { -1 }", true),
+        ("fn main() -> bool { true and false }", true),
+        ("fn main() -> bool { 1 and 2 }", false),
+        ("fn main() -> bool { true orelse false }", true),
+        ("fn main() -> bool { 1 orelse 2 }", false),
+        ("fn main() -> bool { true xor false }", true),
+        ("fn main() -> bool { 1 xor 2 }", false),
+        ("fn main(x: Byte) -> Byte { x + 255 }", true),
+        ("fn main(x: Byte) -> Byte { x + 256 }", false),
+        ("fn main(x: Byte) -> bool { x == 255 }", true),
+        ("fn main(x: Byte) -> bool { x == 256 }", false),
+        ("fn main(x: Byte) -> Byte { x lsl 1 }", true),
+        ("fn main(x: Byte) -> Byte { x lsl true }", false),
+        ("fn main() -> Byte { 1 as Byte }", true),
+        ("fn main() -> Byte { true as Byte }", false),
+        (
+            "fn take(n: Word) -> Word { n } fn main() -> Word { take(if true { true } else { false }) }",
+            false,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn main() -> Word { take(if true { 1 } else { 2 }) }",
+            true,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn main(x: Word) -> Word { take(match x { 0 => true, _ => false }) }",
+            false,
+        ),
+        (
+            "fn take(n: Word) -> Word { n } fn main(x: Word) -> Word { take(match x { 0 => 1, _ => 2 }) }",
+            true,
+        ),
+    ] {
+        assert_eq!(reference_accepts(src), accepts, "reference {src}");
+        assert_eq!(pipeline_call_verdict(src), accepts, "pipeline {src}");
+    }
+}
+
+/// Source order and function scope must not change computed-operand resolution.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_call_computed_chains_keep_scope_and_indices() {
+    for (parameter, accepts) in [("Word", true), ("bool", false)] {
+        let mut source = format!(
+            "fn take(n: {parameter}) -> {parameter} {{ n }} fn other(x: bool) -> bool {{ not x }} fn main() -> {parameter} {{ let x0 = 1 + 2;"
+        );
+        for i in 1..16 {
+            source.push_str(&format!("let x{i} = x{} + 1;", i - 1));
+        }
+        source.push_str("take(x15) }");
+        assert_eq!(reference_accepts(&source), accepts);
+        let inputs = keleusma::selfhost::call_type_inputs_from_pipeline(&source);
+        let mut derived = 0;
+        for batch in &inputs.batches {
+            for (_, row, form, _) in &batch.bindings {
+                if *form == 2 {
+                    assert!(*row >= 0 && (*row as usize) < batch.expressions.len());
+                    derived += 1;
+                }
+            }
+        }
+        assert!(
+            derived >= 17,
+            "all arithmetic nodes and the other function's not must be represented"
+        );
+        assert_eq!(call_inputs_verdict(&inputs), accepts);
     }
 }
 
@@ -7309,12 +7440,12 @@ fn pipeline_call_inputs_fit_type_stage_capacity() {
         let maxima = inputs.batches.iter().fold((0, 0, 0), |(s, a, b), batch| {
             (
                 s.max(batch.sites.len()),
-                a.max(batch.arguments.len()),
+                a.max(batch.arguments.len() + batch.expressions.len()),
                 b.max(batch.bindings.len()),
             )
         });
         eprintln!(
-            "{name}: declarations {}, batches {}, maximum sites {}, arguments {}, bindings {}",
+            "{name}: declarations {}, batches {}, maximum sites {}, combined expressions {}, bindings {}",
             inputs.declarations.len(),
             inputs.batches.len(),
             maxima.0,

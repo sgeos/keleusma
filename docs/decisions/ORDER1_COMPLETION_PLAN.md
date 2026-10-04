@@ -54,7 +54,7 @@ Bytecode version remains 2. No new bytecode opcode is authorized. The internal p
 changes required by this plan do not authorize changing the public artifact format.
 The V0.3.X workstream remains separate. Publication requires in-session confirmation.
 
-The legacy handoff is invalid-and-stale. Its stamp is fourteen commits behind the starting
+The legacy handoff is invalid-and-stale. Its stamp is fifteen commits behind the starting
 tree, its ancestry check passes, and its unchanged-stage-source claim is contradicted by
 `verify_types.kel`. Its full-suite and advisory checks have not been rerun for this increment.
 
@@ -100,9 +100,30 @@ This establishes the call channel's capacity and valid-stage controls, not compl
 
 A parameter sharing a function name exposed global lookup preceding local lookup in the parser.
 Local bindings now take precedence. Alias resolution also follows chains within the binding-table
-bound, including cycles and absent targets that remain unknown. Computed arguments, field and
-index results, non-scalar declarations and the other input channels still need integration.
+bound, including cycles and absent targets that remain unknown. Field and index results, non-scalar declarations and the other input channels still need
+integration. Scalar computed arguments are covered by the later increment below.
 
 Complete artifact comparison on a valid shadowing program found another assembly discrepancy.
 The pipeline supplied an empty data layout where the reference supplied no layout. Both assembly
 helpers now omit the layout when there are no slots, preserving the artifact's region set.
+
+## Unified scalar expression facts
+
+The scoped batches now contain expression constraints and synthetic result identities. Call
+requirements, local initializers and return requirements use the same identities. A shared
+forest walk supplies both the legacy expression projection and this scoped path, while the
+Keleusma stage resolves result tags. Arithmetic, comparisons, boolean operators, scalar unary
+operators, Word and Byte casts, conditional branches and match results have direct controls.
+Composite results and reads remain outside this scalar result channel.
+
+Literal operands retain their integer value in a separate operand form. The stage applies the
+reference's contextual Byte coercion to binary arithmetic and comparisons only, bounded to
+0 through 255. Shift amounts and call arguments do not use that coercion. This distinction
+prevents rejecting valid Byte arithmetic or accepting an invalid implicit call conversion.
+The parser retains xor's operator tag for its boolean restriction. Code generation maps it to
+the existing comparison instruction, with no new bytecode opcode or version change.
+
+Across all twelve stages, the combined expression and argument rows have a measured batch
+maximum of 299. Bindings have a maximum of 288. The declaration maximum remains 492, and all
+batches pass the stage. These measurements retain the approved 640-row limits. Production
+integration, source annotations, occurrence coverage and composite facts remain incomplete.

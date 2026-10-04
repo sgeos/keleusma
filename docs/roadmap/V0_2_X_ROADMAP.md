@@ -361,9 +361,11 @@ extraction also reconstructs each source head separately, preserving individual 
 and binding names before dispatch construction. Match guards remain an input gap.
 
 Call arguments now have a pipeline input channel with identities separated by source head and
-frame slot. Per-range batches fit the selected 640-row limits across all twelve stages and pass
-the call checks. Parser lookup now prefers local bindings over global declarations. Computed
-arguments and composite types remain incomplete, and production integration is still required.
+frame slot. Per-range batches fit the selected 640-row limits across all twelve stages. They
+now include scalar expression results, connecting computed arguments, local initializers and
+returns to the same identities. The stage handles their result rules and contextual Byte
+literal coercion. Parser lookup prefers locals and retains xor's operand restriction before
+lowering. Composite types and production integration remain incomplete.
 
 The type-rejection stage now has capacity for all twelve real stage sources. Six tables use a
 640-row cap, adding 7,168 words or 56 KiB across their parallel arrays. The stage accepts all

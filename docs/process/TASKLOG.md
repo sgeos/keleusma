@@ -6,6 +6,27 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Order 1 computed scalar operands
+
+Scoped batches now connect expression results, call requirements, local bindings and return
+requirements. A shared forest walk emits the constraints. The Keleusma type stage resolves
+arithmetic, comparisons, asymmetric shifts, booleans, numeric unary operators, Word and Byte
+casts, conditionals and match results. Literal operands preserve values for contextual Byte
+coercion. The parser retains xor's operand restriction until code generation. No bytecode
+opcode or version changed, and no array capacity increased.
+
+Thirty-three scalar controls and two long-chain cases check valid and invalid programs and
+batch-local result indices. All twelve stages pass the combined constraints within 640-row
+caps. Measured maxima are 299 expression and argument rows and 288 bindings per batch.
+The broader type suite passed 90 tests, parser tests passed 90 with two ignored, selected
+compilation tests passed 89 and monomorphization passed three. Complete production artifact
+identity passed for all twelve stages. Final reruns and lint receipts are in the reverse prompt.
+
+The shadow pilot captures the initial missing computed-argument rejection and completion
+claims with non-independent self-reviews. External evaluation remains pending authorization.
+The interline inbox is empty. Full Order 1 remains active with source annotations, composite
+facts, occurrence coverage, production rejection, wire emission and final gates outstanding.
+
 ## 2026-10-04 Order 1 call arguments and scope
 
 The pipeline now extracts actual call arguments together with declared parameter tags.
