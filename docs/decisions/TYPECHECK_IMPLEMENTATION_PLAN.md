@@ -11,17 +11,17 @@ Status: **BUILT. Full verdict agreement on the corpus, 2026-08-14.**
 **Production composite facts, 2026-10-04.** Struct constructor names and field requirements now
 reach the stage. Declared nominal struct and enum tags are distinct from scalar-array tags, which
 retain element type and length. Expression kind 16 derives literal-array tags in Keleusma.
-Function headers retain parameter positions across unrecorded tuple types. Direct struct-returning
+Function headers preserve parameter positions and structural type records. Direct struct-returning
 calls and literals now arm field access, and whole composite fields retain their representation.
 Scalar-array signatures preserve the outer shape. The sixteen-source audit and fourteen valid
-controls pass. Complete tuple/nested-array facts, composite payload details, array let
-annotations and nominal struct signatures remain open. Full Order 1 is not complete.
+controls pass. Arbitrary nested type syntax, composite projections, array let annotations
+and nominal struct signatures remain open. Full Order 1 is not complete.
 
 **Enum construction facts, 2026-10-04.** Parser metadata now preserves declaration-order
 variant identity. Scalar, named and scalar-array payload requirements reach the independent
 type stage. A nineteen-source comparison agrees with the reference, including fourteen
-shipping rejections that must precede reference checking. Tuple payloads retain their field
-position but remain unknown. Eleven artifact and execution controls cover payload access and
+shipping rejections that must precede reference checking. The later member increment also
+retains tuple payload types and their match-bound variables. Eleven artifact and execution controls cover payload access and
 enum-to-Word casts. The cast controls exposed missing variant dispatch and enum alias facts,
 both now repaired. This does not establish complete composite typing or full syntax admission.
 
@@ -266,3 +266,20 @@ array let annotations, whole-composite projection identity, complete binder and 
 coverage or general syntax admission. Mixed-scalar tuple runtime layout and nominal struct
 signatures remain incomplete. Production serialization still uses Rust Module::to_bytes.
 The complete Order 1 objective remains active.
+
+## Composite member and payload binding input, 2026-10-04
+
+Constructor requirements now retain structural source records for enum tuple payloads and
+struct tuple and array fields. The host emits existing construction and agreement rows while
+the Keleusma stage derives identities. Byte layout is not used as type identity.
+
+Parser metadata 97 precedes each EnumBind and carries variant index times 1024 plus payload
+position. The driver pairs it with the following record's frame slot and source range, checks
+pairing counts, and imports that member's source type into the scoped binding table. Missing,
+reused or invalid coordinates fail extraction rather than becoming a source rejection verdict.
+The scalar layout-kind fallback for payload bindings is removed. Nested-match metadata and
+complete-value argument controls distinguish this from scalar projection support.
+
+The twenty-eight-source comparison contains eighteen invalid and ten valid programs. Eight
+complete artifact and execution controls cover the supported member forms. General nested
+syntax and composite projections still require work. No type-stage capacity changed.

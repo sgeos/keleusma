@@ -13,6 +13,20 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-04 Composite payload identity follows source coordinates
+
+Tuple declarations previously retained byte layout but omitted member type records. Struct
+array fields deliberately discarded their element tag when the length arrived. The initial
+comparison found twelve missed constructor rejections. Preserving written structural records
+lets the existing Keleusma solver enforce those requirements without deriving identity from size.
+
+Constructor repair alone did not type a match-bound payload name. Five further negatives
+exposed the scalar layout-kind fallback on tuple, array and nominal values. Metadata now joins
+the source variant and payload position to the allocated frame slot. Pairing is checked in each
+source range. Nested matches have a direct record trace, and calls taking complete tuple and
+array payloads have artifact and execution controls. This advances binder coverage without
+claiming complete occurrence or projection coverage. The reverse prompt records verification.
+
 ## 2026-10-04 Structural tuple and nested-array facts
 
 Source type metadata now retains flat tuple members and the existing nested-array header

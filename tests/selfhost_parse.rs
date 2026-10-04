@@ -366,7 +366,8 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG
                         || c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
                         || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
-                        || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG => {}
+                        || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
+                        || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG => {}
                     _ => cur
                         .as_mut()
                         .expect("body node before START")
@@ -381,7 +382,8 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG
                         || c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
                         || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
-                        || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG => {}
+                        || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
+                        || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG => {}
                     _ => cur
                         .as_mut()
                         .expect("guard node before START")

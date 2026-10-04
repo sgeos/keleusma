@@ -326,3 +326,22 @@ array let annotations, whole-composite projection identity, complete binder and 
 coverage or general syntax admission. Mixed-scalar tuple runtime layout and nominal struct
 signatures remain incomplete. Production serialization still uses Rust Module::to_bytes.
 The complete Order 1 objective remains active.
+
+## Composite member declarations and payload bindings, 2026-10-04
+
+Enum tuple payloads and struct tuple fields now retain their ordered source type records.
+Struct array fields retain their element type and length. Constructor constraints use the
+existing exact structural solver. The initial twenty-source comparison found twelve missed
+rejections, now closed. An expanded twenty-eight-source comparison includes eighteen negatives
+and ten valid controls. Every negative requires independent shipping rejection.
+
+Five added negatives exposed unknown composite types on match-bound payload names. Metadata
+record 97 now pairs declaration-order variant and payload position with each EnumBind slot.
+The driver joins those source coordinates to declared member types, preserving tuple, array
+and nominal facts in calls, aliases and returns. A nested-match trace checks metadata adjacency
+and coordinates across two enum declarations. Eight artifact and execution controls cover
+member construction, access, field order, aliases and calls receiving complete payload values.
+
+Arbitrary nested declaration grammar, whole-composite projection identities, array let
+annotations, remaining occurrence coverage, general admission and nominal struct signatures
+remain incomplete. Production wire emission and the final integration requirements remain open.

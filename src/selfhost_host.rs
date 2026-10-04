@@ -229,6 +229,10 @@ pub const PARSE_LET_TYPE_TAG: i64 = 92;
 /// Declaration-order variant index for the EnumInit following this metadata.
 pub const PARSE_ENUM_VARIANT_TAG: i64 = 93;
 
+/// Variant index times 1024 plus payload position for the following EnumBind.
+/// These source coordinates identify its declared type independently of byte layout.
+pub const PARSE_ENUM_PAYLOAD_BIND_TAG: i64 = 97;
+
 /// The tag at or below which a word yielded by `reconstruct.kel` is a diagnostic rather
 /// than a node count. Node counts are non-negative, so no legitimate count can collide.
 ///

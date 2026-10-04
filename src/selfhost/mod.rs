@@ -145,6 +145,8 @@ pub struct ParsedFn {
     struct_types: Vec<(bool, i64)>,
     // Declaration-order variant identities, in postorder and separated by source range.
     enum_variants: Vec<(bool, i64)>,
+    // Source range, allocated frame slot, and variant/payload coordinates.
+    enum_payload_bindings: Vec<(bool, i64, i64)>,
 }
 
 impl ParsedFn {
@@ -1819,6 +1821,29 @@ fn try_parse_functions_impl(
                     .push((in_guard, val));
                 return ControlFlow::Continue(());
             }
+            if (in_body || in_guard) && code == crate::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG {
+                assert!(val >= 0, "negative source payload coordinates");
+                let f = open_decl(&mut cur, code, val);
+                assert!(
+                    f.enum_payload_bindings
+                        .last()
+                        .is_none_or(|(_, slot, _)| *slot >= 0),
+                    "unpaired payload binding metadata"
+                );
+                f.enum_payload_bindings.push((in_guard, -1, val));
+                return ControlFlow::Continue(());
+            }
+            if (in_body || in_guard) && code == 42 {
+                let f = open_decl(&mut cur, code, val);
+                let (guard, slot, _) = f
+                    .enum_payload_bindings
+                    .last_mut()
+                    .expect("payload binding without metadata");
+                assert_eq!(*guard, in_guard, "payload binding crossed source ranges");
+                assert_eq!(*slot, -1, "payload metadata reused");
+                assert!(val >= 0, "negative payload binding record");
+                *slot = val / 4294967296;
+            }
             if (in_body || in_guard) && code == crate::selfhost_host::PARSE_LET_TYPE_TAG {
                 let f = open_decl(&mut cur, code, val);
                 assert!(val >= 0, "negative source annotation name id");
@@ -1938,6 +1963,7 @@ fn try_parse_functions_impl(
                             struct_counts: Vec::new(),
                             struct_types: Vec::new(),
                             enum_variants: Vec::new(),
+                            enum_payload_bindings: Vec::new(),
                         })
                     }
                     4 => {
@@ -2462,10 +2488,10 @@ pub fn try_call_type_inputs_from_pipeline(
             scalar_tag_of_type_name(names.get(id as usize).map(String::as_str))
         }
     };
-    // Variant order is supplied by parser declarations and constructor metadata.
-    // Scalar/named payloads emit PTYPE, arrays add ASIZE, and tuples reserve
-    // an unknown field. No layout size is treated as a nominal type identity.
-    let mut enum_variants: Vec<(i64, Vec<i64>)> = Vec::new();
+    // Variant order and written payload types come from parser declarations.
+    // Preserve each field's syntax so structural identities are derived by the stage.
+    type MemberTypes = Vec<Vec<(i64, i64)>>;
+    let mut enum_variants: Vec<(i64, MemberTypes)> = Vec::new();
     let mut current_enum = None;
     for &(kind, value) in &enum_records {
         match kind {
@@ -2474,24 +2500,22 @@ pub fn try_call_type_inputs_from_pipeline(
                 current_enum.expect("variant without enum declaration"),
                 Vec::new(),
             )),
-            4 | 6 => enum_variants
+            6 | 94 => enum_variants
                 .last_mut()
                 .expect("payload without variant")
                 .1
-                .push(if kind == 6 { tag_of(value) } else { 0 }),
-            8 => {
-                let field = enum_variants
-                    .last_mut()
-                    .expect("array payload without variant")
-                    .1
-                    .last_mut()
-                    .expect("array length without element type");
-                *field = scalar_array_tag(*field, value);
-            }
+                .push(vec![(kind, value)]),
+            8 | 95 | 96 => enum_variants
+                .last_mut()
+                .expect("payload metadata without variant")
+                .1
+                .last_mut()
+                .expect("payload metadata without field")
+                .push((kind, value)),
             _ => {}
         }
     }
-    let mut field_types: alloc::collections::BTreeMap<i64, Vec<i64>> =
+    let mut field_types: alloc::collections::BTreeMap<i64, MemberTypes> =
         alloc::collections::BTreeMap::new();
     let mut current_struct = None;
     for &(kind, value) in &struct_records {
@@ -2500,20 +2524,16 @@ pub fn try_call_type_inputs_from_pipeline(
                 current_struct = Some(value);
                 field_types.insert(value, Vec::new());
             }
-            4 => {
-                field_types
-                    .get_mut(&current_struct.expect("field without struct"))
-                    .unwrap()
-                    .push(0);
-            }
-            6 | 8 => {
-                let fields = field_types
-                    .get_mut(&current_struct.expect("type without struct"))
-                    .unwrap();
-                if let Some(field) = fields.last_mut() {
-                    *field = if kind == 6 { tag_of(value) } else { 0 };
-                }
-            }
+            4 => field_types
+                .get_mut(&current_struct.expect("field without struct"))
+                .unwrap()
+                .push(Vec::new()),
+            6 | 8 | 94..=96 => field_types
+                .get_mut(&current_struct.expect("type without struct"))
+                .unwrap()
+                .last_mut()
+                .expect("struct type without field")
+                .push((kind, value)),
             _ => {}
         }
     }
@@ -2588,15 +2608,28 @@ pub fn try_call_type_inputs_from_pipeline(
                     bindings.push((identity.clone(), value, form, target));
                 }
             }
-            // EnumBind records retain source-declared scalar field kinds and frame slots.
-            for &(kind, packed) in records {
-                if kind == 42 {
-                    let slot = packed / 4294967296;
-                    let tag = scalar_tag_of_layout_kind((packed / 65536) % 65536);
-                    if let Some(identity) = slot_names.get(&slot) {
-                        bindings.push((identity.clone(), tag, 0, String::new()));
-                    }
-                }
+            // Bind payload names using source declaration coordinates, never layout size.
+            let payload_bindings: Vec<_> = f
+                .enum_payload_bindings
+                .iter()
+                .filter(|(guard, _, _)| *guard == (range == 0))
+                .collect();
+            assert_eq!(
+                payload_bindings.len(),
+                records.iter().filter(|(kind, _)| *kind == 42).count(),
+                "payload metadata count"
+            );
+            for &&(_, slot, coordinates) in &payload_bindings {
+                let variant = usize::try_from(coordinates / 1024).expect("negative variant index");
+                let position =
+                    usize::try_from(coordinates % 1024).expect("negative payload position");
+                let source_type = &enum_variants[variant].1[position];
+                let identity = slot_names
+                    .get(&slot)
+                    .expect("payload binding without frame slot");
+                let (value, form, target) =
+                    declared_type_operand(source_type, tag_of, &mut expressions, &mut bindings);
+                bindings.push((identity.clone(), value, form, target));
             }
             // Range-loop induction variables are Word in both supported loop forms.
             for node in &body.nodes {
@@ -2739,28 +2772,30 @@ pub fn try_call_type_inputs_from_pipeline(
                 let node = &body.nodes[index as usize];
                 let first = usize::try_from(node.lhs).expect("negative struct child offset");
                 let count = usize::try_from(node.rhs).expect("negative struct child count");
-                if let Some(tags) = field_types.get(name) {
-                    for (&declared, &child) in
-                        tags.iter().zip(&body.call_args[first..first + count])
+                if let Some(types) = field_types.get(name) {
+                    for (records, &child) in types.iter().zip(&body.call_args[first..first + count])
                     {
-                        expressions.push((8, operand(child), (declared, 0, String::new())));
+                        let required =
+                            declared_type_operand(records, tag_of, &mut expressions, &mut bindings);
+                        expressions.push((8, operand(child), required));
                     }
                 }
             }
-            for (&index, (_, tags)) in &enum_nodes {
+            for (&index, (_, types)) in &enum_nodes {
                 let node = &body.nodes[index as usize];
                 let first = usize::try_from(node.lhs).expect("negative enum child offset");
                 let count = usize::try_from(node.rhs).expect("negative enum child count");
                 assert!(count > 0, "enum constructor without discriminant");
                 expressions.push((
                     7,
-                    (tags.len() as i64, 0, String::new()),
+                    (types.len() as i64, 0, String::new()),
                     (node.rhs - 1, 0, String::new()),
                 ));
-                for (&declared, &child) in
-                    tags.iter().zip(&body.call_args[first + 1..first + count])
+                for (records, &child) in types.iter().zip(&body.call_args[first + 1..first + count])
                 {
-                    expressions.push((8, operand(child), (declared, 0, String::new())));
+                    let required =
+                        declared_type_operand(records, tag_of, &mut expressions, &mut bindings);
+                    expressions.push((8, operand(child), required));
                 }
             }
             for (index, node) in body.nodes.iter().enumerate() {

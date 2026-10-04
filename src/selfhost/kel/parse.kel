@@ -1178,6 +1178,8 @@ private data forst {
 // `match_temp` the reserved scrutinee slot, `match_argcount` the total arm count, `match_sp` the
 // nesting depth, `match_build` the pending build signal.
 private data mat {
+    // Saved EnumBind emitted immediately after its source payload coordinates.
+    pending_bind: Word,
     match_phase: [Word; 8],
     match_temp: [Word; 8],
     match_argcount: [Word; 8],
@@ -1968,7 +1970,7 @@ fn step_enum_payload(k: Word, v: Word) -> Word {
             tupledefs.tup_ekind[base + ei] = scalar_kind_of(v);
             tupledefs.tup_ecount[li] = ei + 1;
             ps.epf_off = ps.epf_off + type_byte_size(v);
-            0
+            type_tuple_record(95, v)
         } else {
         if k == Tok::RParen() as Word {
             let li = ps.epf_layout - 1;
@@ -1978,7 +1980,7 @@ fn step_enum_payload(k: Word, v: Word) -> Word {
             enums.evfcount[vi] = enums.evfcount[vi] + 1;
             enums.epayload[vi] = enums.epayload[vi] + ps.epf_off;
             ps.epf = 0;
-            0
+            type_tuple_record(96, 0)
         } else {
             0
         } }
@@ -2017,8 +2019,8 @@ fn step_enum_payload(k: Word, v: Word) -> Word {
             tupledefs.tup_estart[tupledefs.tup_count] = tupledefs.tup_ecursor;
             tupledefs.tup_ecount[tupledefs.tup_count] = 0;
             tupledefs.tup_count = tupledefs.tup_count + 1;
-            // Reserve one unknown tuple field, preserving subsequent payload positions.
-            4
+            // Preserve the tuple field as one source type with ordered members.
+            type_tuple_record(94, 0)
         } else {
         if k == Tok::LBracket() as Word {
             // Open an ARRAY payload field: record its offset, enter epf 2 (element type then size).
@@ -2158,6 +2160,7 @@ fn step_enum(k: Word, v: Word) -> Word {
 
 // Metadata outside the node vocabulary. Its payload indexes variants in declaration order.
 fn tag_enum_variant() -> Word { 93 }
+fn tag_enum_payload_bind() -> Word { 97 }
 
 // Unit values emit metadata and then EnumInit. Payload constructors reuse phase two to emit
 // their saved EnumInit immediately after the metadata, without consuming another source token.
@@ -2315,8 +2318,11 @@ fn step_mpat(k: Word, v: Word) -> Word {
             stmt.let_array_struct[stmt.let_count] = 0;
             stmt.let_enum[stmt.let_count] = 0;
             stmt.let_count = let_push(stmt.let_count);
+            // The record retains source coordinates independently of flat byte offsets.
+            ps.emit_arg = mat.mpat_vrow * 1024 + mat.mpat_pcount;
             mat.mpat_pcount = mat.mpat_pcount + 1;
-            Node::EnumBind() as Word + (enums.evfoff[fi] + enums.evfkind[fi] * 65536 + slot * 4294967296) * 64
+            mat.pending_bind = Node::EnumBind() as Word + (enums.evfoff[fi] + enums.evfkind[fi] * 65536 + slot * 4294967296) * 64;
+            tag_enum_payload_bind()
         } else {
         if k == Tok::Comma() as Word {
             0
@@ -6590,8 +6596,8 @@ fn field_size_and_kind(fidx: Word, v: Word) -> Word {
 
 // A token inside a struct field's tuple type `(T, T, ...)`. A type ident sums its size into the
 // running tuple-field size; the `)` records the field's total size, advances the struct byte
-// size (so a following field's flat offset is correct), and ends the scan. Emits no record, so
-// the declaration record stream is unchanged; only the internal layout gains the field's size.
+// size (so a following field's flat offset is correct), and ends the scan. Struct declarations
+// also emit tuple member and closing metadata for independent source type constraints.
 // The field's ScalarKind is left 0 (a whole-tuple field read would use the FlatNested form, a
 // later increment); only sizing is needed here.
 fn step_struct_tuple_field(k: Word, v: Word) -> Word {
@@ -6618,7 +6624,7 @@ fn step_struct_tuple_field(k: Word, v: Word) -> Word {
             tupledefs.tup_ecount[li] = ei + 1;
         }
         ps.tf_size = ps.tf_size + type_byte_size(v);
-        0
+        if ps.dvis == 3 { type_tuple_record(95, v) } else { 0 }
     } else {
     if k == Tok::RParen() as Word {
         if ps.dvis == 3 {
@@ -6631,7 +6637,7 @@ fn step_struct_tuple_field(k: Word, v: Word) -> Word {
             tupledefs.tup_ecursor = tupledefs.tup_estart[li] + tupledefs.tup_ecount[li];
         }
         ps.tf = 0;
-        0
+        if ps.dvis == 3 { type_tuple_record(96, 0) } else { 0 }
     } else {
         0
     } }
@@ -6720,8 +6726,8 @@ fn header_field(k: Word, v: Word) -> Word {
                 tupledefs.tup_count = li + 1;
                 structdefs.sd_ftuple[fidx] = li + 1;
             }
-        }
-        0
+            if ps.dvis == 3 { type_tuple_record(94, 0) } else { 0 }
+        } else { 0 }
     } else {
     if k == 12 {
         if ps.arr == 2 {
@@ -7084,6 +7090,11 @@ fn header_sig(k: Word, v: Word) -> Word {
 }
 
 fn step_body() -> Word {
+    if mat.pending_bind != 0 {
+        let record = mat.pending_bind;
+        mat.pending_bind = 0;
+        record
+    } else {
     if ps.pend_end == 1 {
         ps.pend_end = 0;
         ps.mode = 0;
@@ -7113,7 +7124,7 @@ fn step_body() -> Word {
             ps.cursor = ps.cursor + 1;
             header_step(k, v)
         }
-    } } }
+    } } } }
 }
 
 // P11 Option E: the two-phase record emitter. Phase 0 computes the record (via `step_body`)

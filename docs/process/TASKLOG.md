@@ -6,6 +6,18 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Composite member requirements and payload bindings
+
+Enum tuple payloads and struct tuple and array fields now retain declared structural types.
+The initial twenty-source comparison found twelve missed constructor rejections. Extending it
+to twenty-eight sources found five more missed rejections on match-bound composite values.
+Those bindings now receive types through explicit variant and payload-position metadata.
+
+The expanded corpus has eighteen negatives and ten valid controls. Eight artifact and execution
+controls cover member construction, access, ordering, aliases and complete payload arguments.
+The shadow pilot retains the initial diagnostic and bounded completion claims locally. Full
+Order 1 remains active. See the reverse prompt for verification and remaining work.
+
 ## 2026-10-04 Structural tuple and nested-array facts
 
 Source type metadata now retains flat tuple members and the existing nested-array header

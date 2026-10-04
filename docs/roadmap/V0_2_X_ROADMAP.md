@@ -348,6 +348,12 @@ The gaps to close, from the current subset to the full grammar:
 
 ## Current Order-1 status, 2026-10-04
 
+Composite member requirements now reach enum tuple constructors and struct tuple and array
+fields. Match-bound payload names retain tuple, array and nominal source types through explicit
+variant and field coordinates. The twenty-eight-source comparison and eight artifact controls
+advance composite and binder coverage. General projection and syntax coverage, production wire
+emission and final verification still keep Order 1 open.
+
 Tuple and nested-array type facts now use exact structural identities in the Keleusma stage.
 The current increment extends parameter, call, alias and return constraints, and preserves
 structural signatures for six artifact and execution controls. General composite coverage,
@@ -363,8 +369,8 @@ final verification still keep Order 1 open.
 Enum constructor identities and scalar, named and scalar-array payload requirements now reach
 production rejection. The nineteen-source comparison closes fourteen missed rejections.
 Eleven artifact and execution controls also close enum-to-Word dispatch and enum alias gaps.
-Tuple payload types remain unknown, with their positions preserved. This progress does not
-complete the composite coverage, wire emission or final gates required by Order 1.
+Tuple payload types and their match bindings now retain structural source facts through the
+subsequent member increment. Composite projections, wire emission and final gates remain open.
 
 The full completion requirements and current evidence are tracked in
 [ORDER1_COMPLETION_PLAN.md](../decisions/ORDER1_COMPLETION_PLAN.md). Explicit else presence
