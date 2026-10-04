@@ -137,8 +137,10 @@ pub struct ParsedFn {
     /// reference, so a new record kind inside it would change both. Diverting the
     /// binding-name record here leaves the node stream byte-for-byte as it was.
     let_names: Vec<(i64, i64)>,
-    // (guard range, frame slot, source annotation type-name id).
+    // (guard range, frame slot, name id or negative composite annotation id minus one).
     let_annotations: Vec<(bool, i64, i64)>,
+    annotation_records: alloc::collections::BTreeMap<(bool, i64), Vec<(i64, i64)>>,
+    active_annotation: Option<(bool, i64)>,
     // Declared and supplied field counts from consecutive parser metadata/StructInit records.
     struct_counts: Vec<(i64, i64)>,
     // Constructor identities in postorder, with their guard/body range.
@@ -1063,7 +1065,7 @@ const NODE_LET_IN: i64 = 5;
 /// through `intern_int`, so no other scalar reaches this kind.
 const NODE_LITERAL: i64 = 1;
 
-/// `Node::Unit`, whose payload is the `PushImmediate` operand — `0` Unit, `1`
+/// `Node::Unit`, whose payload is `0` synthesized Unit, `3` written Unit, `1`
 /// true, `2` false. Boolean literals ride this kind rather than a new one.
 const NODE_UNIT: i64 = 20;
 
@@ -1165,17 +1167,10 @@ fn is_statement_continuation(kind: i64) -> bool {
 /// `Unit` in the `LetIn`'s `rhs`, where `fn main() -> Word { let a = 1; a }` puts a `Local`.
 /// An omitted else also synthesizes a unit branch, but now has an explicit presence marker.
 ///
-/// **The difference here is that the ambiguity does not exist.** The only source expression
-/// that would also land on `Unit` with payload 0 is a written `()` tail, and `reconstruct.kel`
-/// REFUSES `()` as an expression outright — so within the subset the pipeline accepts, a
-/// payload-0 `Unit` in tail position is always the synthesised one. Both halves of that
-/// argument are pinned:
-/// `a_written_unit_expression_is_refused_by_the_pipeline` and
-/// `a_body_with_no_tail_expression_yields_the_synthesised_unit`. If the first ever starts
-/// passing — if `()` becomes admissible — this function becomes unsound and that test fails
-/// rather than going quiet.
-///
-/// A payload of 1 or 2 is a boolean literal riding the same kind and is a real tail.
+/// A written `()` has internal payload 3, preserving its source presence through
+/// reconstruction. Only payload 0 means a synthesized continuation. Code generation
+/// lowers both unit forms to the existing unit immediate. Boolean payloads 1 and 2
+/// are also real source tails.
 fn body_tail_node(body: &Body) -> Option<i64> {
     block_tail_node(body, body.root)
 }
@@ -1815,6 +1810,49 @@ fn try_parse_functions_impl(
         budget,
         |code, val| {
             on_record(code, val, cursor_at.get());
+            if (in_body || in_guard) && matches!(code, 94..=96 | 99..=101 | 103) {
+                use crate::selfhost_host::{
+                    PARSE_ANNOTATION_ARRAY_TAG, PARSE_ANNOTATION_END_TAG,
+                    PARSE_ANNOTATION_START_TAG,
+                };
+                let f = open_decl(&mut cur, code, val);
+                match code {
+                    PARSE_ANNOTATION_START_TAG => {
+                        assert!(
+                            val >= 0 && f.active_annotation.is_none(),
+                            "invalid annotation start"
+                        );
+                        let key = (in_guard, val);
+                        assert!(
+                            f.annotation_records.insert(key, Vec::new()).is_none(),
+                            "duplicate annotation id"
+                        );
+                        f.active_annotation = Some(key);
+                    }
+                    PARSE_ANNOTATION_END_TAG => {
+                        assert_eq!(
+                            f.active_annotation.take(),
+                            Some((in_guard, val)),
+                            "unpaired annotation end"
+                        );
+                    }
+                    _ => {
+                        let key = f.active_annotation.expect("type record outside annotation");
+                        assert_eq!(key.0, in_guard, "annotation crossed source ranges");
+                        let kind = if code == PARSE_ANNOTATION_ARRAY_TAG {
+                            8
+                        } else {
+                            code
+                        };
+                        assert!(val >= 0, "negative annotation payload");
+                        f.annotation_records
+                            .get_mut(&key)
+                            .expect("missing annotation")
+                            .push((kind, val));
+                    }
+                }
+                return ControlFlow::Continue(());
+            }
             if (in_body || in_guard) && code == crate::selfhost_host::PARSE_STRUCT_PROJECTION_TAG {
                 assert!(val >= 0, "negative source field coordinates");
                 open_decl(&mut cur, code, val)
@@ -1852,7 +1890,13 @@ fn try_parse_functions_impl(
                 assert!(val >= 0, "negative payload binding record");
                 *slot = val / 4294967296;
             }
-            if (in_body || in_guard) && code == crate::selfhost_host::PARSE_LET_TYPE_TAG {
+            if (in_body || in_guard)
+                && matches!(
+                    code,
+                    crate::selfhost_host::PARSE_LET_TYPE_TAG
+                        | crate::selfhost_host::PARSE_ANNOTATION_REF_TAG
+                )
+            {
                 let f = open_decl(&mut cur, code, val);
                 assert!(val >= 0, "negative source annotation name id");
                 assert!(
@@ -1861,7 +1905,22 @@ fn try_parse_functions_impl(
                         .is_none_or(|(_, slot, _)| *slot >= 0),
                     "unpaired source annotation"
                 );
-                f.let_annotations.push((in_guard, -1, val));
+                assert!(
+                    f.active_annotation.is_none(),
+                    "unfinished source annotation"
+                );
+                let declared = if code == crate::selfhost_host::PARSE_ANNOTATION_REF_TAG {
+                    assert!(
+                        f.annotation_records.contains_key(&(in_guard, val)),
+                        "missing composite annotation"
+                    );
+                    val.checked_add(1)
+                        .and_then(i64::checked_neg)
+                        .expect("annotation id overflow")
+                } else {
+                    val
+                };
+                f.let_annotations.push((in_guard, -1, declared));
                 return ControlFlow::Continue(());
             }
             if (in_body || in_guard) && code == NODE_LET_IN {
@@ -1968,6 +2027,8 @@ fn try_parse_functions_impl(
                             param_names: Vec::new(),
                             let_names: Vec::new(),
                             let_annotations: Vec::new(),
+                            annotation_records: alloc::collections::BTreeMap::new(),
+                            active_annotation: None,
                             struct_counts: Vec::new(),
                             struct_types: Vec::new(),
                             enum_variants: Vec::new(),
@@ -2395,6 +2456,23 @@ fn declared_type_operand(
                     tail = structural_type_row(17, element, tail, rows, bindings);
                 }
                 stack.push(Some(tail));
+            }
+            crate::selfhost_host::PARSE_ANNOTATION_GROUP_TAG => {
+                if value == 1 {
+                    assert!(
+                        stack.pop().expect("unit without open").is_none(),
+                        "nonempty unit type"
+                    );
+                    stack.push(Some((6, 0, String::new())));
+                } else {
+                    assert_eq!(value, 0, "invalid grouped type marker");
+                    let inner = stack.pop().flatten().expect("empty grouped type");
+                    assert!(
+                        stack.pop().expect("group without open").is_none(),
+                        "multiple grouped types"
+                    );
+                    stack.push(Some(inner));
+                }
             }
             8 => {
                 let element = stack.pop().flatten().expect("array type without element");
@@ -2864,12 +2942,17 @@ pub fn try_call_type_inputs_from_pipeline(
                         .iter()
                         .find(|&&(guard, slot, _)| guard == (range == 0) && slot == node.arg)
                     {
+                        let required = if declared >= 0 {
+                            (tag_of(declared), 0, String::new())
+                        } else {
+                            let records = f
+                                .annotation_records
+                                .get(&(range == 0, -declared - 1))
+                                .expect("missing annotation source type");
+                            declared_type_operand(records, tag_of, &mut expressions, &mut bindings)
+                        };
                         let row = expressions.len();
-                        expressions.push((
-                            8,
-                            operand(node.lhs),
-                            (tag_of(declared), 0, String::new()),
-                        ));
+                        expressions.push((8, operand(node.lhs), required));
                         bindings.push((identity.clone(), row as i64, 2, String::new()));
                     } else {
                         let (value, form, target) = operand(node.lhs);
@@ -3184,7 +3267,7 @@ fn source_operand(
         Some(node) if node.kind == NODE_UNIT && (node.arg == 1 || node.arg == 2) => {
             (2, 0, String::new())
         }
-        Some(node) if node.kind == NODE_UNIT && node.arg == 0 => (6, 0, String::new()),
+        Some(node) if node.kind == NODE_UNIT && matches!(node.arg, 0 | 3) => (6, 0, String::new()),
         Some(node) if node.kind == 2 => slots
             .get(&node.arg)
             .map_or((0, 0, String::new()), |name| (0, 1, name.clone())),

@@ -13,6 +13,43 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-04 Source annotations survive until their folded bindings
+
+Composite let annotations were skipped before initializer parsing. Eleven invalid programs
+therefore reached independent checking without their written requirements. Streaming bounded
+source-type records avoids introducing a Rust annotation parser or inferring requirements from
+runtime byte layout. An absolute source token position links each annotation to its folded let
+node. Source range and frame slot preserve branch-local binding identity.
+
+Expanded controls separated grouped types from tuples and unit from an empty tuple chain.
+A full-width dimension record avoids tag-radix truncation. The reference parser refuses nesting
+above its own recursion bound, so the iterative stage's 32-level storage test uses its direct
+input path. Neither implementation's capacity failure is an invalid-source verdict.
+
+Artifact controls exposed two independent parser omissions. Empty parentheses produced no unit
+node, and a let-bound array of tuples lost the element layout needed by a following tuple read.
+Existing node kinds now carry both. The latter retains the current all-Word tuple layout limit.
+Tuple layout allocation gained checks before writes and controls for all three storage limits.
+The host annotation table uses deterministic ordered keys. Type resolution remains in Keleusma.
+
+The broad suite then fired two deliberate unit-support boundary pins. Treating a written unit
+like a synthesized empty continuation would silently drop its return requirement. Written unit
+therefore carries internal payload 3 until code generation normalizes it to the existing unit
+immediate. Replacement tests require the written tail row and independent rejection of a unit
+body declared to return Word. The construct-support table now includes unit.
+
+Running the complete code-generation file instead of only the 89 named self-compilation cases
+exposed seven additional failures. The Rust test reconstruction mirror lacked current wildcard
+and guard records. Its function-count pin still expected 76 where all 78 current functions
+compiled identically. The boundary-count guard coupled a live table to the historical handoff.
+The mirror and count checks are now updated, and the live count is recorded in the roadmap.
+A first source-text count missed two entries with intervening comments. The executable table
+reported 102 cases, confirming the source file's existing warning about that counting method.
+
+The first diagnostic was captured for the shadow pilot before repair. Labels remain explicitly
+non-independent and external evaluation remains pending the existing authorization request.
+The complete Order 1 objective remains active.
+
 ## 2026-10-04 Projection identity is separate from byte layout
 
 Scalar access records already supplied scalar kinds, but whole composite fields and array

@@ -2027,7 +2027,8 @@ fn self_compile_codegen_atomic_functions() {
     // 76 with `push_arr_scalar_inner`, the per-element GetIndex compare body of a nested scalar-ARRAY
     // block (`eq/nested_array_subfield`), factored so the depth-1 array field and the nested array
     // block share one emission form (75 -> 76).
-    const EXPECTED_SELF_COMPILE: usize = 76;
+    // Guarded match results and enum cast dispatch added two helpers, both checked above.
+    const EXPECTED_SELF_COMPILE: usize = 78;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -2252,7 +2253,8 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
                         || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
                         || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
                         || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
-                        || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG => {}
+                        || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
+                        || matches!(c, 94..=96 | 99..=103) => {}
                     _ => records.push((code, val)),
                 }
             } else if in_guard {
@@ -2345,6 +2347,7 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
                 && *k != keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
                 && *k != keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
                 && *k != keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
+                && !matches!(*k, 94..=96 | 99..=103)
         })
         .collect();
     let records: &[(i64, i64)] = &records;
@@ -2389,6 +2392,10 @@ fn reconstruct_into(
     // in declaration order (a construction may write fields out of order).
     let mut pending_fp: Vec<i64> = Vec::new();
     for &(kind, arg) in records {
+        if kind == 72 {
+            stack.push(-1); // A wildcard is an ordered pattern sentinel, not a value node.
+            continue;
+        }
         // A SlotRecord (32) carries a frame slot for the pending `for` loop, and a
         // ForBuild (33) assembles the 12-word limit_parts entry from the five
         // collected slots and the seven loop nodes on the stack. Neither is a node.
@@ -2437,7 +2444,7 @@ fn reconstruct_into(
                 });
                 (nodes.len() - 1) as i64
             }
-            3 | 5 | 8 | 9 | 12 | 14 | 21 | 31 => {
+            3 | 5 | 8 | 9 | 12 | 14 | 21 | 31 | 71 => {
                 let r = stack.pop().expect("binary rhs");
                 let l = stack.pop().expect("binary lhs");
                 nodes.push(Node {
@@ -2477,16 +2484,19 @@ fn reconstruct_into(
                 (nodes.len() - 1) as i64
             }
             34 => {
-                // MatchBuild signal: arg packs `temp*1024 + lit_count`. The stack
-                // holds the scrutinee, then a (literal, result) pair per literal arm,
-                // then the wildcard result on top. Assemble the match_parts entry
-                // (temp, wildcard, then the literal/result pairs) and build the
-                // MatchIn node (kind 22): arg = entry start, lhs = scrutinee, rhs =
-                // literal-arm count. Unlike the for loop, the build signal itself
-                // produces the value node.
+                // Each ordered arm has a pattern/result pair. Compact a final
+                // wildcard into the trailer while retaining earlier wildcard positions.
                 let temp = arg.div_euclid(1024);
-                let lit_count = arg.rem_euclid(1024);
-                let wc = stack.pop().expect("match wildcard result");
+                let total = arg.rem_euclid(1024);
+                let has_wildcard = total > 0 && stack[stack.len() - 2] < 0;
+                let lit_count = total - i64::from(has_wildcard);
+                let wc = if has_wildcard {
+                    let result = stack.pop().expect("wildcard result");
+                    assert_eq!(stack.pop(), Some(-1));
+                    result
+                } else {
+                    -1
+                };
                 let mut pairs: Vec<(i64, i64)> = Vec::new();
                 for _ in 0..lit_count {
                     let res = stack.pop().expect("match arm result");
@@ -4158,7 +4168,8 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
                         || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
                         || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
                         || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
-                        || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG => {}
+                        || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
+                        || matches!(c, 94..=96 | 99..=103) => {}
                     _ => cur.as_mut().unwrap().body.push((code, val)),
                 }
             } else if in_guard {
@@ -4169,7 +4180,8 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
                         || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
                         || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
                         || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
-                        || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG => {}
+                        || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
+                        || matches!(c, 94..=96 | 99..=103) => {}
                     _ => cur.as_mut().unwrap().guard.push((code, val)),
                 }
             } else if in_data {
@@ -8374,6 +8386,11 @@ fn the_boundary_tables_thin_families_are_the_ones_on_record() {
 fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
     use Support::{Diverges, Ok as SOk, RefRejects, Refuses};
     &[
+        (
+            "scalar/unit_literal",
+            SOk,
+            "fn f() -> Word { let x = (); 7 }",
+        ),
         // --- scalars -------------------------------------------------------------
         //
         // RADIX-PREFIXED LITERALS. Absent from this table until 2026-08-26, which is why
@@ -9763,7 +9780,7 @@ fn the_residue_named_here_matches_the_census_file() {
 /// # Both sides derived, neither pinned
 ///
 /// The actual counts come from calling `boundary_cases` — no text extraction, so there is no
-/// parser to be wrong. The expected counts are read out of the handoff. A branch that adds a case
+/// parser to be wrong. The expected counts are read out of the current roadmap. A branch that adds a case
 /// stays green provided the document moves with it, which is the property wanted; a branch that
 /// adds one silently does not.
 ///
@@ -9781,8 +9798,8 @@ fn the_residue_named_here_matches_the_census_file() {
 /// changed without its name changing would be a name that lies**, which this repository has
 /// already had to correct once in a doc comment this session.
 #[test]
-fn the_boundary_table_counts_match_the_handoff_and_the_names_match_the_labels() {
-    const HANDOFF: &str = include_str!("../docs/process/HANDOFF.md");
+fn the_boundary_table_counts_match_the_roadmap_and_the_names_match_the_labels() {
+    const ROADMAP: &str = include_str!("../docs/roadmap/V0_2_X_ROADMAP.md");
 
     let mut ok = 0usize;
     let mut diverges = 0usize;
@@ -9833,14 +9850,13 @@ fn the_boundary_table_counts_match_the_handoff_and_the_names_match_the_labels() 
 
     let stated =
         format!("{ok} SOk / {refuses} Refuses / {diverges} Diverges / {rejects} RefRejects");
-    let occurrences = HANDOFF.matches(stated.as_str()).count();
+    let occurrences = ROADMAP.matches(stated.as_str()).count();
     assert!(
-        occurrences >= 2,
-        "the handoff states the construct-support boundary in two places and neither now reads \
-         `{stated}`; found {occurrences} occurrence(s). The table moved and the document did not."
+        occurrences == 1,
+        "the current roadmap must state `{stated}` once for {total} cases; found {occurrences} occurrences"
     );
     assert!(
-        HANDOFF.contains(&format!("{total} cases")) || HANDOFF.contains(&format!("{total}\n")),
-        "the handoff does not state the boundary case total of {total}"
+        ROADMAP.contains(&format!("{total} cases")),
+        "the roadmap does not state the boundary case total of {total}"
     );
 }

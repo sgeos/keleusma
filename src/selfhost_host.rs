@@ -235,6 +235,16 @@ pub const PARSE_ENUM_PAYLOAD_BIND_TAG: i64 = 97;
 
 /// Struct source name id times 1024 plus field position for the following field read.
 pub const PARSE_STRUCT_PROJECTION_TAG: i64 = 98;
+/// Start a source let annotation, keyed by its absolute colon token position.
+pub const PARSE_ANNOTATION_START_TAG: i64 = 99;
+/// Postfix array dimension in a source let annotation, without payload packing.
+pub const PARSE_ANNOTATION_ARRAY_TAG: i64 = 100;
+/// End a source let annotation before its initializer.
+pub const PARSE_ANNOTATION_END_TAG: i64 = 101;
+/// Reference a complete composite annotation immediately before a folded let node.
+pub const PARSE_ANNOTATION_REF_TAG: i64 = 102;
+/// Close a grouped source type with payload zero, or an empty unit type with payload one.
+pub const PARSE_ANNOTATION_GROUP_TAG: i64 = 103;
 
 /// The tag at or below which a word yielded by `reconstruct.kel` is a diagnostic rather
 /// than a node count. Node counts are non-negative, so no legitimate count can collide.
@@ -387,6 +397,11 @@ pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
         24 => format!("unknown or mismatched enum variant with name id {detail} in parse.kel"),
         25 => format!("match nesting depth {detail} exceeds the parse.kel limit of 8"),
         26 => format!("empty enum constructor requires {detail} payload fields in parse.kel"),
+        27 => format!("unsupported let annotation syntax at token {detail} in parse.kel"),
+        28 => format!(
+            "let annotation nesting depth {detail} exceeds the parse.kel limit of {PARSE_ANNOTATION_DEPTH_CAP}"
+        ),
+        29 => format!("literal tuple layout capacity exhausted with {detail} members in parse.kel"),
         other => format!(
             "parse.kel reported diagnostic code {other} (detail {detail}), which this driver \
              does not know. The stage has grown a cause that `describe_parse_diagnostic` was \
@@ -417,6 +432,8 @@ pub const PARSE_VARIANTS_CAP: usize = 256;
 pub const PARSE_CALL_DEPTH_CAP: usize = 8;
 /// Data-block fields **across the whole program**, not per block. See [`PARSE_OPSTACK_CAP`].
 pub const PARSE_FIELDS_CAP: usize = 512;
+/// Let annotation nesting. Pushes are checked before writing the stage arrays.
+pub const PARSE_ANNOTATION_DEPTH_CAP: usize = 32;
 
 /// Control-flow class and target for one opcode, as `analyze.kel` consumes them.
 ///

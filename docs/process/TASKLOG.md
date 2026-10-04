@@ -6,6 +6,18 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Composite let annotations
+
+Source let annotations now retain tuple, array, grouping and unit structure through independent
+production type checking. The initial seventeen-source comparison found eleven missed
+rejections. The expanded twenty-three-source corpus includes fourteen negatives and nine valid
+controls. Seven artifact and execution controls exposed and now cover missing unit emission and
+let-bound array-of-tuple projection layout. Parser annotation and literal tuple storage limits
+have explicit unavailable diagnostics and boundary tests.
+
+The shadow pilot retains the initial diagnostic and bounded completion claims locally. Full
+Order 1 remains active. The reverse prompt records verification and remaining work.
+
 ## 2026-10-04 Composite projection identities
 
 Struct field reads now retain source declaration coordinates and member types. Composite

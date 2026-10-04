@@ -675,6 +675,10 @@ fn pe_match_coverage() -> Word { 23 }
 fn pe_match_variant() -> Word { 24 }
 fn pe_match_depth() -> Word { 25 }
 fn pe_enum_payload() -> Word { 26 }
+fn pe_annotation_syntax() -> Word { 27 }
+fn pe_annotation_depth() -> Word { 28 }
+fn pe_cap_annotation() -> Word { 32 }
+fn pe_tuple_layout() -> Word { 29 }
 // **CODE 12 IS RETIRED AND DELIBERATELY NOT REUSED.** It named the bare `for` form as an
 // unsupported construct -- the only such code among eleven capacity limits -- and existed for
 // exactly as long as the form was unsupported, raised at phase 4 where the lowering now hooks
@@ -861,6 +865,7 @@ private data stmt {
     // let-binding analogue of an array-of-struct parameter).
     let_array_struct: [Word; 65],
     let_array_size: [Word; 65],
+    let_array_tuple: [Word; 65],
     // A let-bound array whose ELEMENT IS ITSELF AN ARRAY. `let_array_arr` holds the inner
     // element's scalar kind plus one (0 = this binding is not an array of arrays) and
     // `let_array_arrbytes` the inner array's byte size, which together are what
@@ -1069,6 +1074,7 @@ private data stmt {
     // its byte size, so a `let a = [P{..}, ..]` binding records the struct-array element type.
     pending_carray_struct: Word,
     pending_carray_size: Word,
+    pending_carray_tuple: Word,
     // The array-of-array analogue of `pending_carray_struct`/`pending_carray_size`: the inner
     // element kind plus one, and the inner array's byte size, carried from an array literal's
     // close to the `let` that binds it.
@@ -1509,6 +1515,7 @@ fn clear_let_shape(at: Word) -> Word {
     stmt.let_array[at] = 0;
     stmt.let_array_struct[at] = 0;
     stmt.let_array_size[at] = 0;
+    stmt.let_array_tuple[at] = 0;
     stmt.let_array_arr[at] = 0;
     stmt.let_array_arrbytes[at] = 0;
     stmt.let_enum[at] = 0;
@@ -1607,6 +1614,15 @@ fn resolve_plain_ident(v: Word) -> Word {
             ops.expect_operand = 0;
             Node::Local() as Word + stmt.scope_slot[ps.let_hit] * 64
         } else {
+        if stmt.let_array_tuple[ps.let_hit] > 0 {
+            ps.sa_tuple = stmt.let_array_tuple[ps.let_hit] - 1;
+            ps.sa_len = 0;
+            ps.sa_size = stmt.let_array_size[ps.let_hit];
+            ps.sa_variant = 0;
+            ps.sa_phase = 1;
+            ops.expect_operand = 0;
+            Node::Local() as Word + stmt.scope_slot[ps.let_hit] * 64
+        } else {
         if stmt.let_array_arr[ps.let_hit] > 0 {
             // A let-bound array of ARRAYS: arm the same postfix an array-of-struct uses, with
             // variant 1 (Array) rather than 2 (Struct). `step_structarrayaccess` is already
@@ -1645,7 +1661,7 @@ fn resolve_plain_ident(v: Word) -> Word {
                 stmt.pending_cenum = stmt.let_enum[ps.let_hit];
             }
             ln
-        } } } } }
+        } } } } } }
     } else {
         ps.found_flag = 0;
         for i in 0..ps.pcount limit 32 {
@@ -2179,6 +2195,7 @@ fn step_enum_unit_finalize() -> Word {
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
     stmt.pending_carray_arr = 0;
+    stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = call.en_unit_ename + 1;
     // Mark this whole value as an enum so a following `==`/`!=` captures it as the LEFT operand's
@@ -2444,6 +2461,7 @@ fn step_iclosing() -> Word {
             stmt.pending_cstruct = 0;
             stmt.pending_carray_struct = 0;
     stmt.pending_carray_arr = 0;
+    stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
             stmt.pending_carray_size = 0;
             stmt.pending_cenum = 0;
@@ -2469,6 +2487,11 @@ fn step_iclosing() -> Word {
                 stmt.pending_carray_struct = elem_struct;
                 stmt.pending_carray_size = my_elem;
             } else {
+            if elem_tuple > 0 {
+                stmt.pending_carray = 0;
+                stmt.pending_carray_tuple = elem_tuple;
+                stmt.pending_carray_size = my_elem;
+            } else {
             if elem_array_bytes > 0 {
                 // OUR ELEMENT IS ITSELF AN ARRAY. `stmt.pending_carray` still holds what the
                 // INNER array's own close recorded (its element kind plus one), because nothing
@@ -2480,7 +2503,7 @@ fn step_iclosing() -> Word {
                 stmt.pending_carray = 0;
             } else {
                 stmt.pending_carray = 3 + 1;
-            } }
+            } } }
             Node::ArrayLit() as Word + (count * my_elem * 1024 + count) * 64
         } else {
             ops.opsp = op_pop(ops.opsp);
@@ -2660,6 +2683,7 @@ fn struct_eq_start(op: Word) -> Word {
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
     stmt.pending_carray_arr = 0;
+    stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
@@ -2691,6 +2715,7 @@ fn tuple_eq_start(op: Word) -> Word {
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
     stmt.pending_carray_arr = 0;
+    stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
@@ -2722,6 +2747,7 @@ fn array_eq_start(op: Word) -> Word {
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
     stmt.pending_carray_arr = 0;
+    stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     let tb = ps.pcount + stmt.slot_count;
@@ -2758,6 +2784,7 @@ fn array_of_struct_eq_start(op: Word) -> Word {
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
     stmt.pending_carray_arr = 0;
+    stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
@@ -2806,6 +2833,7 @@ fn array_of_tuple_eq_start(op: Word) -> Word {
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
     stmt.pending_carray_arr = 0;
+    stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
@@ -2869,6 +2897,7 @@ fn array_of_array_eq_start(op: Word) -> Word {
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
     stmt.pending_carray_arr = 0;
+    stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     let tb = ps.pcount + stmt.slot_count;
@@ -3507,6 +3536,7 @@ fn struct_eq_nested_start_kind(op: Word, is_tuple: Word) -> Word {
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
     stmt.pending_carray_arr = 0;
+    stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
@@ -3900,6 +3930,7 @@ fn enum_eq_start(op: Word) -> Word {
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
     stmt.pending_carray_arr = 0;
+    stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
@@ -3950,6 +3981,7 @@ fn array_of_enum_eq_start(op: Word) -> Word {
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
     stmt.pending_carray_arr = 0;
+    stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
@@ -4089,6 +4121,7 @@ fn emit_op(op: Word) -> Word {
     stmt.pending_carray = 0;
     stmt.pending_carray_struct = 0;
     stmt.pending_carray_arr = 0;
+    stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
     stmt.pending_cenum = 0;
     // A bitwise op (band/bor/bxor) on two BYTE operands lowers promote-operate-truncate (a Byte
@@ -4240,10 +4273,11 @@ fn step_closing() -> Word {
     if ops.opsp > 0 {
         let top = ops.opstack[ops.opsp - 1];
         if top == OpCode::Paren() as Word {
+            let empty = ops.expect_operand;
             ops.opsp = op_pop(ops.opsp);
             ops.closing = 0;
             ops.expect_operand = 0;
-            0
+            if empty == 1 { Node::Unit() as Word + 3 * 64 } else { 0 }
         } else {
         if top == OpCode::CallMark() as Word {
             ops.opsp = op_pop(ops.opsp);
@@ -4288,6 +4322,7 @@ fn step_closing() -> Word {
             stmt.pending_carray = 0;
             stmt.pending_carray_struct = 0;
     stmt.pending_carray_arr = 0;
+    stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
             stmt.pending_cenum = call.en_ename[call.en_sp] + 1;
             // Mark this whole value as an enum so a following `==`/`!=` captures it as the LEFT
@@ -4318,6 +4353,7 @@ fn step_closing() -> Word {
             stmt.pending_carray = 0;
             stmt.pending_carray_struct = 0;
     stmt.pending_carray_arr = 0;
+    stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
             stmt.pending_cenum = 0;
             Node::TupleInit() as Word + (call.tp_count[call.tp_sp] * 8 * 1024 + call.tp_count[call.tp_sp]) * 64
@@ -4418,6 +4454,7 @@ fn step_sc_closing() -> Word {
         stmt.pending_carray = 0;
         stmt.pending_carray_struct = 0;
     stmt.pending_carray_arr = 0;
+    stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
         stmt.pending_cenum = 0;
         structdefs.sc_record = Node::StructInit() as Word + (structdefs.sd_bytesize[structdefs.sc_name[structdefs.sc_sp]] * 1024 + structdefs.sc_count[structdefs.sc_sp]) * 64;
@@ -5330,25 +5367,128 @@ fn step_structarrayaccess(k: Word, v: Word) -> Word {
     }
 }
 
-// Preserve only a primitive annotation's outer type. A composite annotation starts
-// with another token and remains unclassified here even if it contains Word or Byte.
+// Literal tuple layout currently supports the all-Word representation. Bounds are
+// checked before extending either table. Other header layout paths have their own limits.
+fn word_tuple_layout(count: Word) -> Word {
+    if count < 1 orelse count > 32 orelse tupledefs.tup_count >= 32 orelse tupledefs.tup_ecursor + count > 256 {
+        perr(pe_tuple_layout(), count);
+        0
+    } else {
+        let li = tupledefs.tup_count;
+        tupledefs.tup_estart[li] = tupledefs.tup_ecursor;
+        tupledefs.tup_ecount[li] = count;
+        for e in 0..count limit 32 {
+            tupledefs.tup_eoffset[tupledefs.tup_ecursor + e] = e * 8;
+            tupledefs.tup_ekind[tupledefs.tup_ecursor + e] = 3;
+        }
+        tupledefs.tup_ecursor = tupledefs.tup_ecursor + count;
+        tupledefs.tup_count = li + 1;
+        li + 1
+    }
+}
+
 fn scalar_type_name(v: Word) -> Word {
     if v == toks.word_id orelse v == toks.byte_id orelse v == toks.bool_id { 1 } else { 0 }
 }
 
-fn record_let_annotation(k: Word, v: Word) -> Word {
-    if stmt.let_annotation_phase == 0 andalso k == Tok::Colon() as Word {
-        stmt.let_annotation_phase = 1;
+// Annotation nesting is bounded independently of expression nesting. Every push is
+// guarded BEFORE writing, so these arrays do not need the expression stacks' spare slot.
+private data ann {
+    id: Word,
+    depth: Word,
+    kind: [Word; 32],
+    phase: [Word; 32],
+    length: [Word; 32],
+}
+
+fn annotation_open(kind: Word) -> Word {
+    if ann.depth >= pe_cap_annotation() {
+        perr(pe_annotation_depth(), ann.depth + 1)
     } else {
-        if stmt.let_annotation_phase == 1 {
-            stmt.let_annotation_phase = 2;
-            if k == Tok::Ident() as Word {
-                stmt.pending_let_scalar = scalar_type_name(v);
-                stmt.pending_let_type = v + 1;
+        ann.kind[ann.depth] = kind;
+        ann.phase[ann.depth] = 0;
+        ann.length[ann.depth] = 0;
+        ann.depth = ann.depth + 1;
+        if kind == 2 { type_tuple_record(94, 0) } else { 0 }
+    }
+}
+
+fn annotation_close() -> Word {
+    ann.depth = ann.depth - 1;
+    let kind = ann.kind[ann.depth];
+    let length = ann.length[ann.depth];
+    let phase = ann.phase[ann.depth];
+    if ann.depth > 0 { ann.phase[ann.depth - 1] = 1; }
+    if kind == 2 {
+        if length == 0 {
+            if phase == 0 { type_tuple_record(103, 1) } else { type_tuple_record(103, 0) }
+        } else { type_tuple_record(96, 0) }
+    } else { type_tuple_record(100, length) }
+}
+
+fn annotation_member(k: Word, v: Word) -> Word {
+    let i = ann.depth - 1;
+    if ann.phase[i] == 0 {
+        if k == Tok::Ident() as Word {
+            ann.phase[i] = 1;
+            type_tuple_record(95, v)
+        } else {
+        if k == Tok::LBracket() as Word { annotation_open(1) } else {
+        if k == Tok::LParen() as Word { annotation_open(2) } else {
+        if ann.kind[i] == 2 andalso (ann.length[i] == 0 orelse ann.length[i] >= 2) andalso k == Tok::RParen() as Word { annotation_close() } else {
+            perr(pe_annotation_syntax(), toks.at)
+        }}}}
+    } else {
+    if ann.kind[i] == 2 {
+        if k == Tok::Comma() as Word { ann.phase[i] = 0; ann.length[i] = ann.length[i] + 1; 0 } else {
+        if k == Tok::RParen() as Word { annotation_close() } else {
+            perr(pe_annotation_syntax(), toks.at)
+        }}
+    } else {
+        if ann.phase[i] == 1 andalso k == Tok::Semi() as Word {
+            ann.phase[i] = 2;
+            0
+        } else {
+        if ann.phase[i] == 2 andalso k == Tok::IntLit() as Word {
+            ann.length[i] = v;
+            ann.phase[i] = 3;
+            0
+        } else {
+        if ann.phase[i] == 3 andalso k == Tok::RBracket() as Word { annotation_close() } else {
+            perr(pe_annotation_syntax(), toks.at)
+        }}}
+    }}
+}
+
+fn record_let_annotation(k: Word, v: Word) -> Word {
+    if stmt.let_annotation_phase == 0 {
+        if k == Tok::Colon() as Word {
+            stmt.let_annotation_phase = 1;
+            ann.id = toks.at;
+            ann.depth = 0;
+            type_tuple_record(99, ann.id)
+        } else { 0 }
+    } else {
+    if stmt.let_annotation_phase == 1 {
+        stmt.let_annotation_phase = 2;
+        if k == Tok::Ident() as Word {
+            stmt.pending_let_scalar = scalar_type_name(v);
+            stmt.pending_let_type = v + 1;
+            type_tuple_record(95, v)
+        } else {
+            stmt.pending_let_type = -ann.id - 1;
+            if k == Tok::LBracket() as Word { annotation_open(1) } else {
+            if k == Tok::LParen() as Word { annotation_open(2) } else {
+                perr(pe_annotation_syntax(), toks.at)
+            }}
+        }
+    } else {
+        if ann.depth > 0 { annotation_member(k, v) } else {
+            if k == Tok::Eq() as Word { type_tuple_record(101, ann.id) } else {
+                perr(pe_annotation_syntax(), toks.at)
             }
         }
-    }
-    0
+    }}
 }
 
 // A declared scalar cannot have a field or element. Push any ordinary operator
@@ -5441,7 +5581,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         0
     } else {
     if stmt.let_phase == 2 {
-        record_let_annotation(k, v);
+        let annotation = record_let_annotation(k, v);
         if k == Tok::Eq() as Word {
             stmt.let_phase = 0;
             stmt.pstmt_kind[stmt.pstmt_sp] = 0;
@@ -5456,10 +5596,11 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
             stmt.pending_carray = 0;
             stmt.pending_carray_struct = 0;
     stmt.pending_carray_arr = 0;
+    stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
             stmt.pending_cenum = 0;
         }
-        0
+        annotation
     } else {
     if stmt.let_phase == 1 {
         if k == Tok::Ident() as Word {
@@ -5718,6 +5859,10 @@ fn step_draining() -> Word {
                         stmt.let_array_struct[stmt.let_count] = stmt.pending_carray_struct;
                         stmt.let_array_size[stmt.let_count] = stmt.pending_carray_size;
                     } else {
+                    if stmt.pending_carray_tuple > 0 {
+                        stmt.let_array_tuple[stmt.let_count] = word_tuple_layout(stmt.pending_carray_tuple);
+                        stmt.let_array_size[stmt.let_count] = stmt.pending_carray_size;
+                    } else {
                     if stmt.pending_carray_arr > 0 {
                         // An array-of-ARRAY literal: record the inner element kind and the inner
                         // array's byte size, the two things `GetIndex(FlatNested{size, Array})`
@@ -5726,16 +5871,7 @@ fn step_draining() -> Word {
                         stmt.let_array_arrbytes[stmt.let_count] = stmt.pending_carray_arrbytes;
                     } else {
                     if stmt.pending_ctuple > 0 {
-                        let li = tupledefs.tup_count;
-                        tupledefs.tup_estart[li] = tupledefs.tup_ecursor;
-                        tupledefs.tup_ecount[li] = stmt.pending_ctuple;
-                        for e in 0..stmt.pending_ctuple limit 32 {
-                            tupledefs.tup_eoffset[tupledefs.tup_ecursor + e] = e * 8;
-                            tupledefs.tup_ekind[tupledefs.tup_ecursor + e] = 3;
-                        }
-                        tupledefs.tup_ecursor = tupledefs.tup_ecursor + stmt.pending_ctuple;
-                        tupledefs.tup_count = li + 1;
-                        stmt.let_tuple[stmt.let_count] = li + 1;
+                        stmt.let_tuple[stmt.let_count] = word_tuple_layout(stmt.pending_ctuple);
                     } else {
                         if stmt.pending_cstruct > 0 {
                             stmt.let_struct[stmt.let_count] = stmt.pending_cstruct;
@@ -5751,11 +5887,13 @@ fn step_draining() -> Word {
                     }
                     }
                     }
+                    }
                     stmt.pending_ctuple = 0;
                     stmt.pending_cstruct = 0;
                     stmt.pending_carray = 0;
                     stmt.pending_carray_struct = 0;
     stmt.pending_carray_arr = 0;
+    stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
                     stmt.pending_carray_size = 0;
                     stmt.pending_cenum = 0;
@@ -5967,10 +6105,15 @@ fn fold_record(i: Word) -> Word {
 
 fn step_folding() -> Word {
     if stmt.name_pending > 0 {
-        if stmt.name_pending == 1 andalso stmt.stmt_type[stmt.fold_i] > 0 {
+        if stmt.name_pending == 1 andalso stmt.stmt_type[stmt.fold_i] != 0 {
             stmt.name_pending = 2;
-            ps.emit_arg = stmt.stmt_type[stmt.fold_i] - 1;
-            tag_let_type()
+            if stmt.stmt_type[stmt.fold_i] > 0 {
+                ps.emit_arg = stmt.stmt_type[stmt.fold_i] - 1;
+                tag_let_type()
+            } else {
+                ps.emit_arg = -stmt.stmt_type[stmt.fold_i] - 1;
+                102
+            }
         } else {
             stmt.name_pending = 0;
             fold_record(stmt.fold_i)

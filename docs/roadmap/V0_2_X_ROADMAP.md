@@ -348,6 +348,12 @@ The gaps to close, from the current subset to the full grammar:
 
 ## Current Order-1 status, 2026-10-04
 
+Composite let annotations now preserve named, tuple, array, grouping and unit requirements.
+The twenty-three-source comparison includes fourteen negatives and nine valid controls, with
+seven artifact and execution controls. Parser capacity and unsupported annotation syntax remain
+distinct from source rejection. Remaining input and projection coverage, production wire
+emission, refreshed inference-independence evidence and final gates keep Order 1 open.
+
 Struct field and composite array projections now preserve source type identity through calls,
 aliases and returns. The eighteen-source comparison closes eleven missed rejections, and six
 artifact and execution controls cover the runtime path. Remaining type coverage, production
@@ -420,6 +426,16 @@ Production tests cover the independent rejection corpus and rule census through 
 library entry. Capacity and protocol failures remain distinct from invalid-source verdicts.
 The command-line tests assert independent rejection without an output artifact and valid artifact
 execution returning seven. These results do not complete Keleusma wire serialization or final gates.
+
+## Current construct-support boundary, 2026-10-04
+
+The executable table in `tests/selfhost_codegen.rs` contains 102 cases with
+97 SOk / 1 Refuses / 3 Diverges / 1 RefRejects.
+SOk denotes byte identity with the reference, Refuses denotes pipeline refusal,
+Diverges denotes different artifacts, and RefRejects denotes reference rejection.
+This measures the enumerated cases, including the newly admitted unit literal.
+It does not establish complete language support. The count guard reads this current
+section because the legacy handoff is a historical record.
 
 ## Dependency ordering and indicative release mapping
 

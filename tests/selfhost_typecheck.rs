@@ -9156,50 +9156,18 @@ fn pipeline_unary_not_rows_drive_type_rejection() {
     }
 }
 
-/// **THE UNIT LITERAL IS REFUSED BY THE SELF-HOSTED PIPELINE, AND THE REFERENCE ACCEPTS IT.**
-///
-/// Found while probing whether a real else could yield the unit tag. The construct-support
-/// boundary does not record `()` and nothing else pinned it, so this was an unrecorded gap.
-///
-/// `reconstruct.kel` refuses with a NAMED cause — an empty work-stack underflow — which is the
-/// failure mode this programme added in an earlier session doing exactly its job: a named refusal
-/// rather than a silent wrong answer.
-///
-/// **PROPORTIONALITY.** A loud refusal, not a mis-compile. `self_hosted_compile` cross-checks
-/// against the reference and refuses on divergence, so no user receives a wrong module from this.
-///
-/// **This pin fires in the FAILING direction if the gap closes**, which is the signal to add `()`
-/// to the construct-support boundary rather than absorb the change silently.
+/// Written unit values now reach independent type checking and artifact generation.
 #[cfg(feature = "self-host")]
 #[test]
-fn the_unit_literal_is_refused_by_the_pipeline_and_accepted_by_the_reference() {
+fn the_unit_literal_is_accepted_by_both_compilers() {
     const SRC: &str = "fn f(c: bool) -> Word { let _x = if c { () } else { () }; 0 }\n\
                        fn main() -> Word { f(true) }";
-
-    // CONTROL: the reference accepts it, so the refusal below is a divergence rather than a
-    // malformed probe. Five probes on this line have measured a malformed input instead.
-    let ast = parse(&tokenize(SRC).expect("lex")).expect("the reference must parse the unit probe");
-    keleusma::compiler::compile(&ast).expect("the reference must compile the unit probe");
-
-    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        keleusma::selfhost::expression_rows_from_pipeline(SRC)
-    }));
-    let message = match caught {
-        Ok(_) => panic!(
-            "the self-hosted pipeline now accepts the unit literal. THIS IS A GAP CLOSING: add \
-             `()` to the construct-support boundary and retire this pin."
-        ),
-        Err(e) => e
-            .downcast_ref::<String>()
-            .cloned()
-            .or_else(|| e.downcast_ref::<&str>().map(|s| (*s).to_string()))
-            .unwrap_or_default(),
-    };
-    assert!(
-        message.contains("EMPTY work stack"),
-        "the unit literal is still refused, but by a DIFFERENT cause than the underflow recorded \
-         here, so the mechanism may have changed: {message}"
-    );
+    let ast = parse(&tokenize(SRC).expect("lex")).expect("parse");
+    let reference = keleusma::compiler::compile(&ast).expect("reference unit control");
+    assert!(keleusma::selfhost::type_check_source_via_kel(SRC).unwrap());
+    let actual =
+        keleusma::selfhost::self_hosted_compile(SRC, &keleusma::target::Target::host()).unwrap();
+    assert_eq!(actual.to_bytes().unwrap(), reference.to_bytes().unwrap());
 }
 
 /// **THE TAIL-VERSUS-RETURN ROWS AGREE BETWEEN THE PIPELINE AND THE REFERENCE.**
@@ -9406,35 +9374,33 @@ fn a_body_with_no_tail_expression_yields_the_synthesised_unit() {
     }
 }
 
-/// **A WRITTEN `()` EXPRESSION IS REFUSED BY THE PIPELINE, AND KIND 8'S SOUNDNESS RESTS ON IT.**
-///
-/// The tail descent treats a payload-0 `Unit` in tail position as "this body has no tail
-/// expression". That inference is only valid while no SOURCE expression can produce one. The
-/// single candidate is a written `()`, and `reconstruct.kel` refuses it.
-///
-/// **THIS TEST IS PINNED IN THE FAILING DIRECTION ON PURPOSE.** If `()` ever becomes
-/// admissible, `body_tail_node` starts silently reporting "no tail" for a function that has
-/// one — a lost check rather than a wrong rejection, but a loss the tree should not absorb
-/// quietly. Closing the gap must therefore fail here and force the descent to be revisited.
-///
-/// The reference COMPILES the same program, so this is a genuine construct-support gap rather
-/// than a statement about the language.
+/// A written unit tail must retain its return requirement, unlike synthesized unit.
 #[cfg(feature = "self-host")]
 #[test]
-fn a_written_unit_expression_is_refused_by_the_pipeline() {
-    const SRC: &str = "fn s() -> () { () }\nfn main() -> Word { s(); 0 }";
-
-    parse(&tokenize(SRC).expect("lex")).expect("the reference parses a written unit expression");
-
-    let refused = std::panic::catch_unwind(|| {
-        let _ = keleusma::selfhost::expression_rows_from_pipeline(SRC);
-    })
-    .is_err();
-    assert!(
-        refused,
-        "the pipeline now accepts a written `()` expression. `body_tail_node` reads a \
-         payload-0 unit in tail position as the SYNTHESISED continuation, which is only sound \
-         while no source expression can produce one. Revisit that descent before relaxing this."
+fn a_written_unit_expression_remains_a_real_tail() {
+    const SRC: &str = "fn s() -> Word { () }";
+    let ast = parse(&tokenize(SRC).expect("lex")).expect("parse");
+    assert!(keleusma::compiler::compile(&ast).is_err());
+    let (rows, _) = keleusma::selfhost::expression_rows_from_pipeline(SRC);
+    let tails: Vec<_> = rows.iter().filter(|(kind, _, _)| *kind == 8).collect();
+    assert_eq!(
+        tails.len(),
+        1,
+        "written unit cannot disappear as a missing tail"
+    );
+    assert_eq!((tails[0].1.0, tails[0].2.0), (6, 1));
+    assert!(!keleusma::selfhost::type_check_source_via_kel(SRC).unwrap());
+    assert!(matches!(
+        keleusma::selfhost::self_hosted_compile(SRC, &keleusma::target::Target::host()),
+        Err(keleusma::selfhost::SelfHostError::PipelineRejected { .. })
+    ));
+    let (_, records) = keleusma::selfhost::parse_record_trace(SRC);
+    assert_eq!(
+        records
+            .iter()
+            .filter(|(kind, arg, _)| *kind == 20 && *arg == 3)
+            .count(),
+        1
     );
 }
 

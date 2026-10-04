@@ -301,3 +301,50 @@ requirements and invalid bases. The new expression kind is not a public bytecode
 The eighteen-source comparison has eleven negatives and seven valid controls. All negatives
 require independent shipping rejection. Six artifact and execution controls and a nested-field
 metadata trace cover the new path. No type-stage array or capacity changed.
+
+## Composite let annotation input, 2026-10-04
+
+The Keleusma parser now streams source let annotations independently of executable nodes.
+Named members, tuple boundaries, grouped and unit types, and literal array dimensions survive
+until the folded binding receives its annotation reference. The host transports these source
+records into the existing structural construction and agreement rows. Keleusma still resolves
+the actual types. Named annotation metadata retains its earlier binding adjacency contract.
+
+The initial seventeen-source comparison found eleven missed rejections. The expanded comparison
+contains twenty-three sources with fourteen negatives and nine valid controls. Every negative
+also requires independent PipelineRejected from the shipping entry. Seven complete artifact and
+execution controls cover unit values, arrays, nested arrays, tuples, arrays of tuples and nominal
+values, and branch-local shadowing. Both compiler outputs return seven.
+
+The valid controls exposed missing empty-parenthesis unit emission and missing tuple-element
+layout on let-bound arrays. Both now use existing executable nodes. Literal tuple layout remains
+limited to the existing all-Word representation. Its allocation now checks layout count, member
+count and total field storage before writing. These limits and the new annotation depth limit
+produce unavailable evidence rather than source rejection. Tests exercise each boundary.
+
+Annotation nesting uses three 32-word arrays and two scalar words. Tuple-array binding facts
+add one 65-word array and one scalar word. The combined private-state increase is 164 words,
+or 1,312 bytes at eight bytes per word. The selected type-stage caps remain 640. Annotation
+metadata 99 through 103 and parser diagnostics 27 through 29 are internal protocol additions.
+Public bytecode version remains 2 with 66 public opcodes.
+
+The broad type suite exposed two deliberate unit-support boundary pins. Written unit nodes now
+carry internal payload 3, while synthesized continuations retain payload 0. Type extraction keeps
+a written unit tail and its return requirement. Code generation maps payload 3 to the existing
+unit immediate. The replacement tests require independent rejection of a Word-returning function
+with a written unit tail, retain valid branch-unit artifact identity and add unit to the construct
+support table. The public immediate encoding is unchanged.
+
+The annotation scanner accepts named types, grouping, unit, tuples and arrays with literal
+dimensions. A valid constant-expression dimension remains explicitly unsupported. Boundary tests
+check the iterative scanner at depths 31, 32 and 33 independently of the reference parser's
+lower recursion limit. A metadata trace preserves an array length of 1,099,511,627,776 without
+packing it into a tag. This finite corpus does not establish arbitrary header grammar, complete
+occurrence and binder coverage, general tuple projections, empty-array inference, mixed-scalar
+tuple runtime layout or nominal struct signatures. Production wire emission, refreshed inference
+independence and final full gates remain required for Order 1.
+
+The full code-generation test run also exposed a stale Rust test reconstruction mirror and
+stale inventory assertions. The mirror now handles ordered wildcard patterns and guarded match
+results. All 78 current code-generation functions are required to compile identically. The
+construct-support count guard reads the current roadmap instead of the historical handoff.
