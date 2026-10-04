@@ -13,6 +13,20 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-04 Projection identity is separate from byte layout
+
+Scalar access records already supplied scalar kinds, but whole composite fields and array
+elements lost their source identity. Eleven invalid programs in an eighteen-source comparison
+were consequently accepted by independent type checking. The field repair carries declaration
+coordinates alongside the existing runtime read, and checks receiver identity as well as
+result type. The array repair queries the Keleusma structural pool instead of guessing from
+byte width. Array indexing and field identity remain separate constraints.
+
+Six artifact and execution controls preserve the runtime path. A direct metadata trace checks
+nested source coordinates and adjacency before the corresponding field nodes. Direct transport
+controls distinguish known non-arrays from unknown facts. These bounded results do not establish
+general tuple projection support or complete syntax admission. The reverse prompt records gates.
+
 ## 2026-10-04 Composite payload identity follows source coordinates
 
 Tuple declarations previously retained byte layout but omitted member type records. Struct

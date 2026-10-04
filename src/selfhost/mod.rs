@@ -147,6 +147,7 @@ pub struct ParsedFn {
     enum_variants: Vec<(bool, i64)>,
     // Source range, allocated frame slot, and variant/payload coordinates.
     enum_payload_bindings: Vec<(bool, i64, i64)>,
+    field_projections: Vec<(bool, i64)>,
 }
 
 impl ParsedFn {
@@ -1814,6 +1815,13 @@ fn try_parse_functions_impl(
         budget,
         |code, val| {
             on_record(code, val, cursor_at.get());
+            if (in_body || in_guard) && code == crate::selfhost_host::PARSE_STRUCT_PROJECTION_TAG {
+                assert!(val >= 0, "negative source field coordinates");
+                open_decl(&mut cur, code, val)
+                    .field_projections
+                    .push((in_guard, val));
+                return ControlFlow::Continue(());
+            }
             if (in_body || in_guard) && code == crate::selfhost_host::PARSE_ENUM_VARIANT_TAG {
                 assert!(val >= 0, "negative source enum variant index");
                 open_decl(&mut cur, code, val)
@@ -1964,6 +1972,7 @@ fn try_parse_functions_impl(
                             struct_types: Vec::new(),
                             enum_variants: Vec::new(),
                             enum_payload_bindings: Vec::new(),
+                            field_projections: Vec::new(),
                         })
                     }
                     4 => {
@@ -2798,6 +2807,32 @@ pub fn try_call_type_inputs_from_pipeline(
                     expressions.push((8, operand(child), required));
                 }
             }
+            let field_nodes: Vec<_> = body
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| matches!(node.kind, 28 | 30))
+                .collect();
+            let field_sources: Vec<_> = f
+                .field_projections
+                .iter()
+                .filter(|(guard, _)| *guard == (range == 0))
+                .collect();
+            assert_eq!(
+                field_nodes.len(),
+                field_sources.len(),
+                "field projection metadata count"
+            );
+            for ((index, node), &(_, coordinates)) in field_nodes.into_iter().zip(field_sources) {
+                let name = coordinates / 1024;
+                let position =
+                    usize::try_from(coordinates % 1024).expect("negative field position");
+                let source_type = &field_types[&name][position];
+                expressions.push((8, operand(node.lhs), (tag_of(name), 0, String::new())));
+                let (value, form, target) =
+                    declared_type_operand(source_type, tag_of, &mut expressions, &mut bindings);
+                bindings.push((computed_names[&(index as i64)].clone(), value, form, target));
+            }
             for (index, node) in body.nodes.iter().enumerate() {
                 if node.kind == 19 {
                     let first = usize::try_from(node.lhs).expect("negative tuple child offset");
@@ -3382,6 +3417,9 @@ fn expression_rows_from_body<F: Fn(i64) -> ExprOperand>(
             row_of_node.insert(at as i64, rows.len());
             let target = if node.arg == 1 { 3 } else { 1 };
             rows.push((15, operand(node.lhs), (target, 0, String::new())));
+        } else if scalar_results && node.kind == 43 {
+            row_of_node.insert(at as i64, rows.len());
+            rows.push((18, operand(node.lhs), nothing.clone()));
         } else if node.kind == 71 {
             // Guarded match-arm wrapper. Its result is compared by the parent match.
             rows.push((3, operand(node.lhs), nothing.clone()));
@@ -3502,7 +3540,7 @@ fn typed_result_node(node: &Node) -> bool {
     is_binary_operator(node.kind)
         || matches!(
             node.kind,
-            6 | 8 | 9 | 10 | 17 | 19 | 22 | 26 | 39 | 65 | 66 | 68
+            6 | 8 | 9 | 10 | 17 | 19 | 22 | 26 | 28 | 30 | 39 | 43 | 65 | 66 | 68
         )
         || (node.kind == 4 && node.arg >= 0)
 }

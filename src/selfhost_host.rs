@@ -233,6 +233,9 @@ pub const PARSE_ENUM_VARIANT_TAG: i64 = 93;
 /// These source coordinates identify its declared type independently of byte layout.
 pub const PARSE_ENUM_PAYLOAD_BIND_TAG: i64 = 97;
 
+/// Struct source name id times 1024 plus field position for the following field read.
+pub const PARSE_STRUCT_PROJECTION_TAG: i64 = 98;
+
 /// The tag at or below which a word yielded by `reconstruct.kel` is a diagnostic rather
 /// than a node count. Node counts are non-negative, so no legitimate count can collide.
 ///

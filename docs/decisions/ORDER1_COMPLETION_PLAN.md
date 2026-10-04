@@ -345,3 +345,21 @@ member construction, access, field order, aliases and calls receiving complete p
 Arbitrary nested declaration grammar, whole-composite projection identities, array let
 annotations, remaining occurrence coverage, general admission and nominal struct signatures
 remain incomplete. Production wire emission and the final integration requirements remain open.
+
+## Composite field and array projections, 2026-10-04
+
+The eighteen-source comparison found eleven missed rejections on complete values obtained
+from struct fields or composite array elements. Field metadata now carries source struct and
+member coordinates. The driver checks its count against reconstructed field-read nodes, joins
+the declared member type and emits a receiver identity requirement. Field results retain their
+source type through calls, aliases and returns. This is independent of the emitted byte layout.
+
+Expression kind 18 asks the Keleusma stage for an array element's exact type. It handles compact
+scalar-array identities and interned composite arrays, with guarded pool access and known
+non-array rejection. The production extractor emits it for nested array reads. Existing index
+requirements remain separate. Six complete artifact and execution controls cover nested-array
+aliases, array-of-tuple parameters, whole array and tuple fields, and nested nominal fields.
+
+General tuple projections, arbitrary nested declaration grammar, array let annotations,
+remaining occurrence and binder coverage, syntax admission and nominal struct signatures
+remain incomplete. Production wire emission and final integration requirements remain open.

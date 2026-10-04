@@ -348,6 +348,11 @@ The gaps to close, from the current subset to the full grammar:
 
 ## Current Order-1 status, 2026-10-04
 
+Struct field and composite array projections now preserve source type identity through calls,
+aliases and returns. The eighteen-source comparison closes eleven missed rejections, and six
+artifact and execution controls cover the runtime path. Remaining type coverage, production
+wire emission and final verification still keep Order 1 open.
+
 Composite member requirements now reach enum tuple constructors and struct tuple and array
 fields. Match-bound payload names retain tuple, array and nominal source types through explicit
 variant and field coordinates. The twenty-eight-source comparison and eight artifact controls

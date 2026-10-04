@@ -86,7 +86,7 @@ fn production_transport_rejects_malformed_facts_as_errors() {
             5 => batch.bindings.push(("b".into(), 0, 2, String::new())),
             6 => batch
                 .expressions
-                .push((18, (0, 0, String::new()), (0, 0, String::new()))),
+                .push((19, (0, 0, String::new()), (0, 0, String::new()))),
             7 => batch.bindings.push(("b".into(), -1, 0, String::new())),
             _ => unreachable!(),
         }
@@ -277,5 +277,40 @@ fn projection_rules_admit_composite_identity_classes() {
                 "kind {kind}, tag {tag}"
             );
         }
+    }
+}
+
+/// Element projection follows structural identity rather than scalar layout width.
+#[test]
+fn array_projection_resolves_exact_element_types() {
+    for element in [1, 2, 3, 24, 49] {
+        let mut batch = empty_batch();
+        batch
+            .expressions
+            .push((16, (element, 0, String::new()), (2, 0, String::new())));
+        batch.bindings.push(("array".into(), 0, 2, String::new()));
+        batch
+            .expressions
+            .push((18, (0, 1, "array".into()), (0, 0, String::new())));
+        batch.bindings.push(("element".into(), 1, 2, String::new()));
+        batch.arguments.push((element, (0, 1, "element".into())));
+        let mut inputs = input(batch);
+        assert!(type_check_inputs_via_kel(&inputs).unwrap());
+        inputs.batches[0].arguments[0].0 = element + 16;
+        assert!(
+            !type_check_inputs_via_kel(&inputs).unwrap(),
+            "element {element}"
+        );
+    }
+    for base in [0, 1, 2, 3, 20, 22, 24, 25] {
+        let mut batch = empty_batch();
+        batch
+            .expressions
+            .push((18, (base, 0, String::new()), (0, 0, String::new())));
+        assert_eq!(
+            type_check_inputs_via_kel(&input(batch)).unwrap(),
+            base == 0,
+            "base {base}"
+        );
     }
 }

@@ -6,6 +6,16 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Composite projection identities
+
+Struct field reads now retain source declaration coordinates and member types. Composite
+array reads obtain their element identity from the Keleusma structural pool. The eighteen-source
+comparison closes eleven missed rejections and retains seven valid controls. Six complete
+artifact and execution controls cover nested arrays, whole fields and nested nominal access.
+
+The shadow pilot retains the initial diagnostic and bounded completion claims locally. Full
+Order 1 remains active. See the reverse prompt for verification and remaining work.
+
 ## 2026-10-04 Composite member requirements and payload bindings
 
 Enum tuple payloads and struct tuple and array fields now retain declared structural types.

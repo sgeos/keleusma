@@ -372,6 +372,9 @@ enum OpCode {
 
 // The merged parser state.
 private data ps {
+    // Source struct/field coordinates and the read emitted after their metadata.
+    field_type: Word,
+    field_record: Word,
     cursor: Word,
     mode: Word,
     // P11 Option E (two-word record transport). Each record is emitted as a (tag, payload)
@@ -5094,8 +5097,16 @@ fn step_normal(k: Word, v: Word) -> Word {
 // packing the GetField operand as offset + kind * 65536. Held in its own function so the
 // dispatch chain is not deepened (the parser's own conditional stack is bounded).
 // A whole composite field retains its container representation even without a postfix.
+fn tag_struct_projection() -> Word { 98 }
+
+fn typed_field_record(record: Word) -> Word {
+    ps.field_record = record;
+    ps.emit_arg = ps.field_type;
+    tag_struct_projection()
+}
+
 fn field_value_record() -> Word {
-    if structdefs.sd_farraylen[structdefs.sc_fieldpos] > 0 {
+    let record = if structdefs.sd_farraylen[structdefs.sc_fieldpos] > 0 {
         Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536 + 4294967296) * 64
     } else {
     if ps.fa_fstruct > 0 {
@@ -5108,7 +5119,8 @@ fn field_value_record() -> Word {
         Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536 + 3 * 4294967296) * 64
     } else {
         Node::FieldAccess() as Word + (ps.fa_off + ps.fa_kind * 65536) * 64
-    } } } }
+    } } } };
+    typed_field_record(record)
 }
 
 fn step_fieldaccess(k: Word, v: Word) -> Word {
@@ -5147,6 +5159,7 @@ fn step_fieldaccess(k: Word, v: Word) -> Word {
                 ps.unresolved_name = v;
                 ps.fa_phase = 4;
             } else {
+            ps.field_type = structdefs.sd_name[ps.fa_struct] * 1024 + structdefs.sc_fieldpos - structdefs.sd_fstart[ps.fa_struct];
             ps.fa_off = structdefs.sd_foffset[structdefs.sc_fieldpos];
             ps.fa_kind = structdefs.sd_fkind[structdefs.sc_fieldpos];
             ps.fa_size = structdefs.sd_fsize[structdefs.sc_fieldpos];
@@ -5183,7 +5196,7 @@ fn step_fieldaccess(k: Word, v: Word) -> Word {
             ops.opstack[ops.opsp] = OpCode::IndexMark() as Word;
             ops.opsp = op_push(ops.opsp);
             ops.expect_operand = 1;
-            Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536 + 4294967296) * 64
+            typed_field_record(Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536 + 4294967296) * 64)
         } else {
         if k == Tok::Dot() as Word {
             if ps.fa_ftuple > 0 {
@@ -5193,14 +5206,14 @@ fn step_fieldaccess(k: Word, v: Word) -> Word {
                 ps.fa_phase = 0;
                 ps.ta_phase = 2;
                 ps.ta_tuple = ps.fa_ftuple - 1;
-                Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536) * 64
+                typed_field_record(Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536) * 64)
             } else {
                 // Nested struct field `p.inner.x`: emit the FlatNested field read of `inner` (the
                 // whole nested struct value, Struct-variant 2), then re-enter field-access mode with
                 // the inner struct as the base so the following field name resolves into it.
                 ps.fa_struct = ps.fa_fstruct - 1;
                 ps.fa_phase = 2;
-                Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536 + 2 * 4294967296) * 64
+                typed_field_record(Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536 + 2 * 4294967296) * 64)
             }
         } else {
             // Scalar read `p.f`: emit the flat GetField and push the token back for the normal
@@ -7090,6 +7103,11 @@ fn header_sig(k: Word, v: Word) -> Word {
 }
 
 fn step_body() -> Word {
+    if ps.field_record != 0 {
+        let record = ps.field_record;
+        ps.field_record = 0;
+        record
+    } else {
     if mat.pending_bind != 0 {
         let record = mat.pending_bind;
         mat.pending_bind = 0;
@@ -7124,7 +7142,7 @@ fn step_body() -> Word {
             ps.cursor = ps.cursor + 1;
             header_step(k, v)
         }
-    } } } }
+    } } } } }
 }
 
 // P11 Option E: the two-phase record emitter. Phase 0 computes the record (via `step_body`)

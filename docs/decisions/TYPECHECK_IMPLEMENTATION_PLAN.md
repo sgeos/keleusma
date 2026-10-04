@@ -283,3 +283,21 @@ complete-value argument controls distinguish this from scalar projection support
 The twenty-eight-source comparison contains eighteen invalid and ten valid programs. Eight
 complete artifact and execution controls cover the supported member forms. General nested
 syntax and composite projections still require work. No type-stage capacity changed.
+
+## Composite projection input, 2026-10-04
+
+Internal parser metadata 98 precedes each struct field read. Its payload is source struct
+name id times 1024 plus field position. The saved read is emitted without consuming another
+token. Source coordinates survive nested struct, tuple and array postfix handling. The driver
+pairs metadata with reconstructed field nodes separately for each source range, checks counts,
+imports the declared member type and checks the receiver against the stated nominal type.
+
+Type-input expression kind 18 derives an array element identity in Keleusma. Compact scalar
+arrays expose their scalar class, while composite arrays consult the exact structural pool.
+Access checks the pool bound and entry kind. Known non-arrays reject, and unknown remains
+undecided. Direct controls check scalar, nominal and nested-array element tags, mismatching
+requirements and invalid bases. The new expression kind is not a public bytecode opcode.
+
+The eighteen-source comparison has eleven negatives and seven valid controls. All negatives
+require independent shipping rejection. Six artifact and execution controls and a nested-field
+metadata trace cover the new path. No type-stage array or capacity changed.
