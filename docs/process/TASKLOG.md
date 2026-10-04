@@ -6,6 +6,17 @@ Current sprint source of truth.
 
 ---
 
+## Kaizen policy propagation on docs/kaizen-policy-propagation
+
+2026-10-04. Prepared the [policy-propagation proposal](./kaizen/2026-10-04-policy-propagation-proposal.md)
+and an exact nine-file patch against `89fc6aac`. The candidate passed 26 selected
+document checks through direct Rust test compilation. Shell syntax and ShellCheck
+passed. All executable shell lines are unchanged. The patch applies cleanly to the
+current primary checkout in a read-only check. No peer branch was edited.
+The kaizen mailbox records the disposition awaiting the owning line. The merge
+helper's missing remote-check enforcement remains an explicit behavioral limitation.
+The proposal worktree passed 14 additional document checks.
+
 ## Kaizen delta review on docs/kaizen-delta-20260928
 
 2026-10-04. Completed the [process delta review](./kaizen/2026-10-04-process-delta-audit.md)

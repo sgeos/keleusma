@@ -4,34 +4,40 @@
 
 ## Current increment on 2026-10-04
 
-The [delta audit](../kaizen/2026-10-04-process-delta-audit.md) compares the original
-`802e72d3` baseline with trunk commit `89fc6aac` on 2026-09-28. Proposals one, two,
-four, six and seven have partial implementations. No full adoption is demonstrated.
-The report preserves the original audit and makes no new process ruling.
+The [policy-propagation proposal](../kaizen/2026-10-04-policy-propagation-proposal.md)
+contains an exact nine-file patch for the V0.2.X owning line. It reconciles gate
+boundaries, contributor routing and assistant attribution with existing policy.
+The [preceding delta audit](../kaizen/2026-10-04-process-delta-audit.md) remains
+unchanged at commit `e13906d1`.
 
-Work is on `docs/kaizen-delta-20260928`, cut from kaizen commit `8e06e55f`, in the
-isolated worktree `/private/tmp/keleusma-kaizen-delta-20260928`. This location is within
-the session's writable scope. The primary checkout remains on the peer's compiler
-feature branch and the existing kaizen integration worktree remains unchanged.
+Work is on `docs/kaizen-policy-propagation`, cut from `e13906d1`, in the isolated
+worktree `/private/tmp/keleusma-kaizen-delta-20260928`. The primary checkout remains
+on the peer's compiler feature branch. Validate this feature by checking that
+`e13906d1` is an ancestor and reviewing `git log --oneline e13906d1..HEAD`.
+The original kaizen ancestry checks remain applicable. No remote refresh occurred.
+Appendix B was read before tracked edits.
 
-The kaizen ancestry and content checks below passed against local refs. No remote
-refresh was performed. Validate this feature by checking that `8e06e55f` is an
-ancestor and reviewing `git log --oneline 8e06e55f..HEAD`. Appendix B was read in
-the primary checkout before tracked edits.
+The candidate is an export of trunk commit `89fc6aac` plus the patch. It passed
+26 document checks through direct Rust test compilation. Shell syntax and
+ShellCheck passed. All executable shell lines are unchanged. A second export
+accepted the patch and matched the candidate byte for byte. The primary checkout
+at `563cc273` also accepted a read-only application check. No peer files were edited.
+The proposal's verification evidence records commands and limitations.
+The kaizen worktree passed 14 additional document checks.
 
-Selected document checks over an exported endpoint snapshot passed 26 cases.
-The direct Rust invocations, rejected empty runs and corrected feature selections
-are retained in the report's evidence. They do not constitute a Cargo or runtime gate.
-Final document checks passed 14 cases on this feature worktree. Their commands and
-limits are recorded in the same verification evidence.
-No push, merge or publication is part of this increment.
+### To the V0.2.X owning line
 
-The intended next increment is a proposal to reconcile the remaining current-facing
-gate and attribution instructions with the already recorded operator policy. The
-owning line would integrate any repair. The other proposal rulings remain open.
+The proposal is ready for review and integration on a feature branch, using the
+owning line's verification receipt and required green remote results. No push,
+merge or publication has occurred. No ruling is requested on the already settled
+policy. Record whether the owning line accepts, revises or declines the patch.
 
-Everything below records the preceding integration-branch handoff. Its statement that
-the delta audit is merely a candidate is superseded by this current block.
+The merge helper still lacks remote-result enforcement. The patch identifies it as
+legacy tooling and does not alter its executable behavior. A behavioral repair
+remains a separately scoped candidate increment.
+
+Everything below records the preceding integration-branch handoff. Current work
+is described by this block and the linked proposal.
 
 The kaizen line's mailbox and its self-contained resume prompt in one file, following the
 per-branch practice of [`PARALLEL_DEVELOPMENT.md`](../PARALLEL_DEVELOPMENT.md) as the proof

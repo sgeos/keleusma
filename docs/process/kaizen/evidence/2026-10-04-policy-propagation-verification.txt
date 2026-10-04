@@ -1,0 +1,164 @@
+Measured 2026-10-04. Candidate is 89fc6aac87b94c4cad53392097386a857c51a8d1 plus the proposal patch.
+Patch SHA-256 efba00f749d224b0265faebea3db178f5eb55aeb59a15a8870e4c6e451aca226
+rustc 1.99.0 (b940084d7 2026-09-28)
+CARGO_MANIFEST_DIR=<candidate>; <out> is the isolated checks directory.
+
+$ rustc --edition=2024 --cfg 'feature="compile"' --test <candidate>/tests/documentation_links.rs -o <out>/documentation_links
+
+compile exit 0
+$ <out>/documentation_links --test-threads=1
+
+running 2 tests
+test every_documentation_anchor_resolves ... ok
+test every_relative_documentation_link_resolves ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+
+test exit 0
+
+$ rustc --edition=2024 --cfg 'feature="compile"' --test <candidate>/tests/comment_citations.rs -o <out>/comment_citations
+
+compile exit 0
+$ <out>/comment_citations --test-threads=1
+
+running 6 tests
+test a_name_only_a_comment_mentions_does_not_resolve ... ok
+test an_inline_function_parameter_is_a_defined_name ... ok
+test every_comment_citation_resolves_or_is_a_recorded_debt ... ok
+test no_allow_list_entry_is_stale ... ok
+test the_current_claim_documents_cite_nothing_that_does_not_exist ... ok
+test the_unresolved_backlog_is_recorded ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.00s
+
+
+test exit 0
+
+$ rustc --edition=2024 --cfg 'feature="compile"' --test <candidate>/tests/gate_ci_correspondence.rs -o <out>/gate_ci_correspondence
+
+compile exit 0
+$ <out>/gate_ci_correspondence --test-threads=1
+
+running 5 tests
+test every_release_gate_command_has_a_continuous_integration_counterpart ... ok
+test native_gate_label_does_not_claim_compiler_coverage ... ok
+test native_label_does_not_exempt_other_lines_or_documents ... ok
+test nothing_claims_the_gate_is_a_superset_or_that_ci_skips_the_subproject ... ok
+test unsupported_global_coverage_claims_remain_detected ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+test exit 0
+
+$ rustc --edition=2024 --cfg 'feature="compile"' --test <candidate>/tests/claimed_counts.rs -o <out>/claimed_counts
+
+compile exit 0
+$ <out>/claimed_counts --test-threads=1
+
+running 13 tests
+test every_file_the_comment_matching_sweep_names_still_exists ... ok
+test every_workspace_member_is_named_in_the_instructions ... ok
+test the_arena_integration_test_claim_matches_the_directory ... ok
+test the_census_group_table_adds_up_to_its_stated_totals ... ok
+test the_instructions_do_not_misstate_the_integration_test_counts ... ok
+test the_instructions_state_the_feature_sets_ci_actually_runs ... ok
+test the_instructions_state_the_structural_numbers_the_source_owns ... ok
+test the_invalid_bytecode_census_still_describes_the_tree ... ok
+test the_narrow_runtime_coverage_claim_still_describes_the_tree ... ok
+test the_only_test_gated_out_of_every_ci_configuration_is_the_known_one ... ok
+test the_source_listing_is_exhaustive_or_marked_partial ... ok
+test the_stage_source_count_claim_matches_the_directory ... ok
+test the_stated_figures_say_how_they_were_measured ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+
+test exit 0
+Candidate total 26 passed, 0 failed, 0 ignored. Case counts checked explicitly. This is direct compilation, not a Cargo or runtime gate.
+
+$ sh -n .cargo-husky/hooks/pre-push
+
+exit 0
+
+$ bash -n scripts/fast-check.sh
+
+exit 0
+
+$ bash -n scripts/merge-to-trunk.sh
+
+exit 0
+
+$ shellcheck .cargo-husky/hooks/pre-push scripts/fast-check.sh scripts/merge-to-trunk.sh
+
+exit 0
+
+Fresh archive application evidence
+git archive 89fc6aac exported to /private/tmp/keleusma-policy-propagation-apply-check.
+git apply --check <patch> exited 0. git apply <patch> exited 0.
+All nine resulting files matched the tested preview byte for byte.
+All nonblank noncomment shell lines matched the baseline in .cargo-husky/hooks/pre-push, scripts/fast-check.sh and scripts/merge-to-trunk.sh.
+The three shell scripts were not executed.
+
+Read-only applicability check at primary HEAD 563cc273
+$ git apply --check <patch>
+
+exit 0
+$ git diff --quiet 89fc6aac..563cc273 -- .cargo-husky/hooks/pre-push .github/PULL_REQUEST_TEMPLATE.md CONTRIBUTING.md docs/process/AUTONOMOUS_IMPLEMENTATION_LOOP.md docs/process/GIT_STRATEGY.md docs/process/PARALLEL_DEVELOPMENT.md docs/process/PROCESS_STRATEGY.md scripts/fast-check.sh scripts/merge-to-trunk.sh
+exit 0
+The target file population is identical between these two commits.
+No remote refresh, Cargo build, runtime suite, full gate, merge helper execution, push or merge was performed.
+
+Kaizen artifact checks on base e13906d1 plus the six-file proposal diff.
+Reused standalone test binaries compiled from the unchanged kaizen test sources with rustc --edition=2024 --cfg 'feature="compile"' --test. Their CARGO_MANIFEST_DIR points at this audit worktree.
+
+$ <kaizen-out>/documentation_links --test-threads=1
+
+running 2 tests
+test every_documentation_anchor_resolves ... ok
+test every_relative_documentation_link_resolves ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+exit 0
+
+$ <kaizen-out>/comment_citations --test-threads=1
+
+running 6 tests
+test a_name_only_a_comment_mentions_does_not_resolve ... ok
+test an_inline_function_parameter_is_a_defined_name ... ok
+test every_comment_citation_resolves_or_is_a_recorded_debt ... ok
+test no_allow_list_entry_is_stale ... ok
+test the_current_claim_documents_cite_nothing_that_does_not_exist ... ok
+test the_unresolved_backlog_is_recorded ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.72s
+
+exit 0
+
+$ <kaizen-out>/claimed_counts --test-threads=1
+
+running 6 tests
+test every_workspace_member_is_named_in_the_instructions ... ok
+test the_instructions_do_not_misstate_the_integration_test_counts ... ok
+test the_invalid_bytecode_census_still_describes_the_tree ... ok
+test the_source_listing_is_exhaustive_or_marked_partial ... ok
+test the_stage_source_count_claim_matches_the_directory ... ok
+test the_stated_figures_say_how_they_were_measured ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+exit 0
+
+Artifact total 14 passed, 0 failed, 0 ignored.
+Proposal prose scan includes all non-code lines, including blockquotes, with table rows and reference definitions exempt. It strips inline code and link destinations and checks for colons, semicolons, parentheses and long dashes. No findings. This is a bounded punctuation check.
+git diff --check exited 0.
+
+Artifact correction before finalizing the local commit
+The initial unstaged git diff --check did not include the then-untracked patch file.
+The staged check found 38 blank context markers in the unified patch as trailing whitespace.
+The combined check-and-stat shell command returned the final stat status, so its zero did not establish the check passed.
+Normalized space-only context lines to empty context lines, which git apply accepts.
+Re-ran git apply --check at the primary checkout and checked and applied to a fresh 89fc6aac archive. All exited 0.
+All nine applied files again matched the tested candidate byte for byte. No candidate text changed.
