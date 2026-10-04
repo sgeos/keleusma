@@ -6,6 +6,24 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Order 1 match admission and loop scopes
+
+The admission audit found nine non-exhaustive matches accepted by the pipeline. The parser now
+tracks unguarded catch-alls and declared enum variants independently for each nesting depth.
+Unknown or mismatched variants are explicit source errors. Unsupported patterns and depth
+limits remain distinct outcomes. Direct enum constructors and declared enum-returning calls
+retain their scrutinee type after valid controls exposed lost type information.
+
+Loop bodies and induction variables now leave lexical scope at loop exit. Range bounds and
+induction variables have Word constraints in scoped type inputs. Artifact comparison exposed
+a reference compiler defect that left the induction name visible after the loop and during
+upper-bound evaluation. Its scope handling now agrees with type checking. Execution controls
+assert the expected value independently of compiler agreement.
+
+The shadow pilot records the first diagnostic and completion evidence locally, with explicitly
+non-independent labels. External evaluation remains pending the existing approval request.
+The reverse prompt records final commands, counts and limitations. Full Order 1 remains active.
+
 ## 2026-10-04 Order 1 scalar access facts
 
 The scoped pipeline now carries Word, Byte and bool facts from reconstructed scalar field,

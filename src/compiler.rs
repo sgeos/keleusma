@@ -7527,8 +7527,12 @@ fn compile_for_limit(
     let var_slot = fc.declare_local(&for_stmt.var);
     fc.emit(Op::SetLocal(var_slot));
 
-    // mx = max (the runtime range end).
-    compile_expr(fc, end)?;
+    // Both bounds resolve before the induction variable enters lexical scope.
+    // Reserve its slot in the established order, but hide the name for the end expression.
+    let variable = fc.locals.pop().expect("just declared induction variable");
+    let end_result = compile_expr(fc, end);
+    fc.locals.push(variable);
+    end_result?;
     let end_slot = fc.declare_local("__for_end");
     fc.emit(Op::SetLocal(end_slot));
 
@@ -7748,6 +7752,15 @@ fn compile_loop_outcome_dispatch(
 }
 
 fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileError> {
+    // The induction variable and generated temporaries belong to the loop, just
+    // as in type checking. Keep allocated frame slots monotonic across this scope.
+    fc.begin_scope();
+    let result = compile_for_scoped(fc, for_stmt);
+    fc.end_scope();
+    result
+}
+
+fn compile_for_scoped(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileError> {
     if let Some(limit) = &for_stmt.limit {
         let Iterable::Range(start, end) = &for_stmt.iterable else {
             return Err(CompileError {
@@ -7765,7 +7778,10 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             let var_slot = fc.declare_local(&for_stmt.var);
             fc.emit(Op::SetLocal(var_slot));
 
-            compile_expr(fc, end)?;
+            let variable = fc.locals.pop().expect("just declared induction variable");
+            let end_result = compile_expr(fc, end);
+            fc.locals.push(variable);
+            end_result?;
             let end_slot = fc.declare_local("__for_end");
             fc.emit(Op::SetLocal(end_slot));
 

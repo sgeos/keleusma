@@ -512,3 +512,8 @@ Scalar struct-field, tuple-field and array-element facts now reach the scoped ty
 reconstructed source layouts. Twenty-six programs agree with the reference, closing nine
 missed rejections in that comparison. Composite facts, remaining scope and admission checks,
 production type rejection and complete Keleusma wire emission still precede the Order 1 gate.
+
+The subsequent admission audit adds unguarded integer and enum coverage checks, checked match
+depth and loop scope restoration. Direct enum scrutinees retain their declared types. Loop
+variable and bound facts reach the scoped checker. These measured gaps are closed within the
+supported syntax, while composite coverage and production integration remain Order 1 work.

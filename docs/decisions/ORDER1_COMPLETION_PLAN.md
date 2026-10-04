@@ -90,8 +90,8 @@ The match comparison corpus includes nested integer and enum dispatch, wildcard-
 explicit enum coverage, later mismatched arms, named operands and an unresolved payload binder.
 The latter remains unknown on both input paths, so comparison agreement does not establish
 payload-type resolution. Bare block expressions in match results are rejected by the reference
-parser. The guard increment preserves match conditions through reconstruction and execution. Integer
-match exhaustiveness still needs a separate admission audit before production integration.
+parser. The guard increment preserves match conditions through reconstruction and execution. The later admission increment below audits integer and enum match coverage. Other syntax and
+composite admission remain incomplete before production integration.
 
 Separate reconstruction of each source head recovers its return row and its own binding names.
 Function guard expressions are still traversed. A probe found that the Rust reference accepts
@@ -216,3 +216,28 @@ All twelve complete stage artifacts and the monomorphization corpus still agree 
 reference. The selected type suite now passes ninety-seven tests. This closes the measured
 match-guard gap. It does not establish complete syntax admission or replace the remaining
 production type-input, wire-emission and final-gate requirements.
+
+## Match admission and loop scope
+
+The parser now requires an unguarded catch-all for supported scalar matches, or unguarded
+coverage of every declared enum variant. It tracks declaration rows with one bit per active
+match depth, so duplicate variants and nested matches cannot manufacture coverage. Unknown
+variants and variants from the wrong enum have explicit source diagnostics. Guarded arms do
+not count, including a literal true guard. Boolean and variable patterns remain unsupported
+syntax, with a distinct diagnostic rather than a claim that the source is invalid. Match
+nesting has an explicit eight-level capacity diagnostic checked before indexing the stacks.
+
+Direct enum constructors and declared enum-returning calls now retain their scrutinee type.
+The unit constructor consumes its pending token before the match boundary is handled. Complete artifact comparison additionally exposed missing enum signature shapes.
+They now use declared discriminant and payload sizes without reference inference. These
+controls exposed false rejections in the first coverage implementation and are retained.
+
+Both parser loop forms restore lexical names after the loop while preserving allocated frame
+slots. Scoped type inputs obtain Word induction-variable facts and Word bound requirements
+from reconstructed loop tables. Complete artifact comparison exposed a separate Rust compiler
+scope defect. The reference now limits induction names and generated temporaries to the loop
+and resolves the upper bound before exposing the induction name. Execution controls use an
+explicit expected result, independent of agreement between compilers.
+
+These checks close measured admission and scope gaps. They do not establish complete composite
+facts, occurrence coverage, production type rejection, production wire emission or final gates.

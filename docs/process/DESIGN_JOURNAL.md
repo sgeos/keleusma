@@ -13,6 +13,31 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-04 Admission checks exposed scope defects in both compilers
+
+Guarded match arms cannot establish coverage even when their condition is a literal true.
+The parser now records unguarded catch-alls and declaration-row coverage. A bit per active
+match depth preserves outer coverage across nested guards and results. A checked eight-level
+limit prevents indexing past the match stacks. Pattern syntax outside this path remains an
+unsupported diagnostic rather than being reported as invalid source.
+
+The first coverage implementation rejected valid direct enum scrutinees. Unit construction
+needed the following token to finish, but the match boundary consumed that token first.
+Declared constructor and call result types now reach match selection after the expression
+finishes. Complete artifact comparison additionally exposed missing enum signature shapes.
+They now use declared discriminant and payload sizes without reference inference. Valid controls caught this error direction, which a negative corpus could not reveal.
+
+Restoring parser loop scopes produced an artifact disagreement with the reference. Inspection
+showed the reference retaining its induction variable in the enclosing scope. A source with an
+outer value of seven consequently read the loop slot at the tail. The reference now opens a
+scope around every loop form. It also hides the allocated induction name while compiling the
+upper bound, matching the type checker's scope order while preserving slot allocation order.
+Execution assertions establish the expected value independently of artifact agreement.
+
+Scoped input extraction also obtains induction-variable and bound constraints from the loop
+side tables. These are source-defined Word facts and do not borrow reference inference. The
+remaining composite and production paths remain separate completion obligations.
+
 ## 2026-10-04 Scalar access facts already existed in the layout records
 
 Inspection of code generation established three distinct scalar access record shapes. Struct

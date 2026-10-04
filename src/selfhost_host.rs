@@ -75,7 +75,7 @@ impl ParseRecordError {
     /// retired codes, capacity limits and transport failures never do.
     #[must_use]
     pub fn is_source_rejection(&self) -> bool {
-        matches!(self, Self::Diagnostic { code, .. } if matches!(PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(2 | 13..=17 | 22)))
+        matches!(self, Self::Diagnostic { code, .. } if matches!(PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(2 | 13..=17 | 22..=24)))
     }
 }
 
@@ -373,6 +373,9 @@ pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
             "unresolved qualified, imported or unsupported syntax with name id {detail} in parse.kel"
         ),
         22 => format!("call through a value at token {detail} is not supported in parse.kel"),
+        23 => format!("non-exhaustive match in parse.kel, missing coverage at {detail}"),
+        24 => format!("unknown or mismatched enum variant with name id {detail} in parse.kel"),
+        25 => format!("match nesting depth {detail} exceeds the parse.kel limit of 8"),
         other => format!(
             "parse.kel reported diagnostic code {other} (detail {detail}), which this driver \
              does not know. The stage has grown a cause that `describe_parse_diagnostic` was \

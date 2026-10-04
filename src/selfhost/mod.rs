@@ -2395,6 +2395,17 @@ pub fn try_call_type_inputs_from_pipeline(
                     }
                 }
             }
+            // Range-loop induction variables are Word in both supported loop forms.
+            for node in &body.nodes {
+                let slot = match node.kind {
+                    16 => Some(body.for_parts[node.arg as usize]),
+                    23 => Some(body.limit_parts[node.arg as usize]),
+                    _ => None,
+                };
+                if let Some(identity) = slot.and_then(|slot| slot_names.get(&slot)) {
+                    bindings.push((identity.clone(), 1, 0, String::new()));
+                }
+            }
             let computed_names: alloc::collections::BTreeMap<_, _> = body
                 .nodes
                 .iter()
@@ -2972,6 +2983,17 @@ fn expression_rows_from_body<F: Fn(i64) -> ExprOperand>(
     let nothing: ExprOperand = (0, 0, String::new());
 
     for (at, node) in body.nodes.iter().enumerate() {
+        if scalar_results && matches!(node.kind, 16 | 23) {
+            let base = usize::try_from(node.arg).expect("negative loop-parts offset");
+            let bounds = if node.kind == 16 {
+                &body.for_parts[base + 2..base + 4]
+            } else {
+                &body.limit_parts[base + 5..base + 7]
+            };
+            for &bound in bounds {
+                rows.push((8, operand(bound), (1, 0, String::new())));
+            }
+        }
         if scalar_results && matches!(node.kind, 13 | 15 | 31 | 43) {
             // Indexed data reads carry the index in lhs. Stores and value-array
             // reads carry it in rhs. No host-side type inference is needed.
@@ -5257,21 +5279,35 @@ fn assemble_enum_layouts(
 }
 
 /// The flat shape of a stage boundary type: `Word` -> Int scalar (tag 3), `Byte` ->
-/// Byte scalar (tag 2), bool scalar (tag 1), anything else the conservative `Top` recorded for
-/// an unresolvable type.
-fn wire_shape_of(type_id: i64, names: &[String]) -> crate::bytecode::WireShape {
+/// Byte scalar (tag 2), bool scalar (tag 1), or a declared enum's flat size.
+/// Other composite layouts remain unresolved and use `Top`.
+fn wire_shape_of(
+    type_id: i64,
+    names: &[String],
+    enums: &[crate::bytecode::EnumLayout],
+) -> crate::bytecode::WireShape {
     use crate::bytecode::WireShape;
     match names.get(type_id as usize).map(String::as_str) {
         Some("Word") => WireShape::Scalar { kind: 3 },
         Some("Byte") => WireShape::Scalar { kind: 2 },
         Some("bool") => WireShape::Scalar { kind: 1 },
-        _ => WireShape::Top,
+        Some(name) => enums
+            .iter()
+            .find(|layout| layout.type_name == name)
+            // The parser's host-width layout includes an eight-byte discriminant.
+            .and_then(|layout| layout.min_payload.checked_add(8))
+            .map_or(WireShape::Top, |size| WireShape::Flat { kind: 3, size }),
+        None => WireShape::Top,
     }
 }
 
 /// Assemble the per-chunk signature table from the parsed functions, grouping
 /// same-named heads into one chunk and ordering by chunk name to match the module.
-fn assemble_signatures(fns: &[ParsedFn], names: &[String]) -> Vec<crate::bytecode::ChunkSignature> {
+fn assemble_signatures(
+    fns: &[ParsedFn],
+    names: &[String],
+    enums: &[crate::bytecode::EnumLayout],
+) -> Vec<crate::bytecode::ChunkSignature> {
     use crate::bytecode::{ChunkSignature, WireShape};
     let mut chunks: Vec<(String, ChunkSignature)> = Vec::new();
     let mut i = 0;
@@ -5287,9 +5323,9 @@ fn assemble_signatures(fns: &[ParsedFn], names: &[String]) -> Vec<crate::bytecod
         let params: Vec<WireShape> = first
             .param_types
             .iter()
-            .map(|&t| wire_shape_of(t, names))
+            .map(|&t| wire_shape_of(t, names, enums))
             .collect();
-        let ret = wire_shape_of(first.return_type, names);
+        let ret = wire_shape_of(first.return_type, names, enums);
         // Only a `loop` (category 3, a Stream chunk) resumes with its first parameter.
         let resume = if first.cat == 3 {
             params.first().copied().unwrap_or(WireShape::Top)
@@ -5396,7 +5432,7 @@ pub fn self_host_compile_full(src: &str) -> Module {
     module.data_layout = (!dl.slots.is_empty()).then_some(dl);
     module.schema_hash = crate::bytecode::compute_schema_hash(module.data_layout.as_ref());
     module.enum_layouts = assemble_enum_layouts(&enum_records, &names);
-    module.signatures = assemble_signatures(&fns, &names);
+    module.signatures = assemble_signatures(&fns, &names, &module.enum_layouts);
     // Self-assemble each source chunk's param_count, block_type, and param_types (the last
     // per-chunk scaffold field). A native chunk (absent for the stages) is not in `meta` and
     // keeps the reference's metadata.
@@ -5564,7 +5600,7 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
     let schema_hash = crate::bytecode::compute_schema_hash(data_layout.as_ref());
 
     let enum_layouts = assemble_enum_layouts(&enum_records, &names);
-    let signatures = assemble_signatures(&fns, &names);
+    let signatures = assemble_signatures(&fns, &names, &enum_layouts);
 
     // The scalar bit widths are the host target's, matching the reference `compile`, which
     // compiles with `Target::host()`.

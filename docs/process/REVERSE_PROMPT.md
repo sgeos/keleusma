@@ -7,149 +7,116 @@
 Complete roadmap Order 1 on V0.2.X and participate in the System 1 shadow pilot.
 The full objective remains active under
 [ORDER1_COMPLETION_PLAN.md](../decisions/ORDER1_COMPLETION_PLAN.md).
-This commit closes the measured match-guard gap and adds scalar access facts. It does not complete Order 1.
+This increment closes measured match admission and loop scope gaps. It does not complete Order 1.
 
 ## Current state
 
-2026-10-04. Branch `feat/v02-order1-next`, starting from `1102cf9d`.
-The preceding status turn collected a terminal verification receipt and confirmed the next work.
-This turn adds scalar access coverage, verifies the combined changes and prepares one scoped commit.
-The legacy handoff is invalid-and-stale, eighteen commits behind the starting tree. Its ancestry
-check passes, the fingerprint remains `0x4327_63E1`, and the unchanged-stage claim fails.
-Historical full-suite, advisory, shell and detached-package gates were not rerun. Appendix B
-was read before tracked writes. The pre-existing `nvim.log` remains untouched. No push, merge
-or publication occurred. Bytecode version remains 2 with 66 public opcodes. Selected type
-caps remain 640. The concurrent V0.3.X line remains untouched.
+2026-10-04. Branch `feat/v02-order1-next`, starting from `3e97c81d`.
+The previous goal turn made progress through implementation, verification and its commit.
+This turn also makes implementation and verification progress. The legacy handoff remains
+invalid-and-stale, nineteen commits behind the starting tree. Its unchanged-stage claim fails.
+Appendix B was read before tracked writes. The pre-existing `nvim.log` remains untouched.
+No push, merge or publication occurred. Bytecode version remains 2 with 66 public opcodes.
+Selected type caps remain 640. The concurrent V0.3.X line remains untouched.
 
 ## Implementation
 
-The lexer emits token 64 for `when`, distinct from the return arrow's token 4. Both reference
-adapters were updated, and a lexer control distinguishes the keyword, arrow and `whenx` name.
-Function guards now use the distinct token. Match parser phase 5 reads the guard as an ordinary
-expression and drains it at the fat arrow. Phase 4 reads the result. Record 71 then wraps the
-guard and result into one binary forest node. These are internal records, not bytecode opcodes.
+The parser checks supported match coverage using unguarded catch-alls or every declared enum
+variant. Guarded arms do not count, including literal true guards. Variant rows carry one bit
+per active match depth, so duplicates and nested matches cannot manufacture coverage. The
+current pattern row is saved per depth. Diagnostic 23 reports missing coverage, 24 reports an
+unknown or mismatched variant, and 25 reports the eight-level match depth limit. Only 23 and 24
+are source errors. Boolean and variable patterns remain unsupported syntax with diagnostic 20.
+The depth check occurs before any match-stack access.
 
-Wildcards remain in source order. Record 72 pushes a negative integer-pattern sentinel during
-reconstruction. Record 73 supplies an enum wildcard descriptor. A final wildcard compacts into
-the existing trailer, preserving the previous table capacity. Earlier wildcards stay in the
-ordered arm table. The MatchBuild count includes every source arm. Reconstructed node counts
-exclude a compacted final wildcard. Existing parser differential projections now match that
-record protocol, including guard wrappers.
+Direct enum constructors and calls retain their declared enum scrutinee type at the drained
+expression root. Unit enum construction must consume its following token before the match
+boundary acts. Valid controls exposed both lost type information and this premature boundary.
+Complete artifact comparison then exposed missing enum signature shapes. The driver now derives
+flat enum parameter and return shapes from the declared payload size plus discriminant size.
+Other composite signature layouts remain incomplete.
 
-Code generation's `push_match_result` emits the guard after pattern binding, with the arm Break
-inside the guard If. False guards therefore continue to later arms. `MatchMark` separates the
-outer operator context. `match_boundary` checks grouping markers and nested block context so
-commas and braces inside calls, arrays, tuples, structs or conditionals cannot close the arm.
-Match-arm exit restores binding names to the match baseline. Frame slots and the total named
-binding count remain monotonic. Loop scope restoration remains unestablished.
+The parser saves lexical binding counts at loop entry and restores them after both bare and
+bounded loop forms. Frame slots and the per-function named-binding counter remain monotonic.
+Scoped type inputs derive Word induction-variable facts and Word bound requirements from the
+reconstructed loop side tables.
 
-The type walk emits a bool requirement for node 71 and compares its result child across arms.
-Scoped slots include reconstructed local references. EnumBind records supply declared scalar
-payload tags and frame slots. Word, Byte and bool payloads are recognized. Composite payloads
-remain unknown. The legacy occurrence/name channel still omits some binders and is separate
-from this scoped slot path.
-
-Complete artifact comparison found two additional omissions. Enum declaration END records now
-carry the declared maximum payload byte size, already computed by `enum_bytesize`. The driver
-preserves it as `EnumLayout.min_payload`. Boolean parameters now retain both `TypeTag::Bool`
-and scalar verifier shape kind 1. Source-based assembly remains independent of the reference.
-
-
-Scalar access facts now reach the scoped operand adapter. Struct and tuple fields carry
-an offset plus scalar kind, and scalar array-element nodes carry the kind directly. The
-adapter maps Word, Byte and bool without reference inference. Nested composite access kinds
-remain separate. A twenty-six-program comparison initially found nine invalid programs
-accepted by the pipeline. All now agree with the reference, including valid container
-arguments, aliases, tuple offsets and contextual Byte arithmetic. No stage capacity changed.
+Artifact comparison exposed a Rust reference defect. Its induction name remained visible after
+the loop. The reference now scopes every loop form, including array iteration, and hides the
+allocated induction name while compiling the upper bound. Both bounds therefore use the outer
+scope, matching type checking, while slot and opcode allocation order remain stable.
 
 ## Verification
 
 Cargo commands used `RUSTC_WRAPPER=` and `CARGO_HUSKY_DONT_INSTALL_HOOKS=1`.
 Stage runs used `KEL_SELFHOST_CACHE=0`. No test subject was edited during a live run.
 
-- `cargo test --release --features self-host --test selfhost_artifact_identity --test selfhost_typecheck --test selfhost_parse --test selfhost_monomorphize_identity`
-  passed 98 type tests, 91 parser tests with two ignored, five artifact tests and three
-  monomorphization tests. All twelve complete stage artifacts match the reference. Inventory,
-  all-stage extraction and selected-cap checks passed. Log `tmp/order1-scalar-access-final-suites.log`.
-- `match_guards_preserve_complete_artifacts_and_execution` covers fourteen valid sources,
-  compares complete artifacts and executes both compilers' output. Controls include false
-  fallthrough, repeated patterns, guarded wildcards, payload binding, nested match/if guards,
-  calls, outer operators, skipped trapping results and guard side effects. A separate twelve-
-  variant case checks final-wildcard capacity. Both are in the artifact suite above.
-- `pipeline_match_guard_types_agree_with_reference` covers twelve valid and invalid sources,
-  including literal, parameter, computed, called-function and scalar-payload guards. The scoped
-  census now rejects all sixteen negatives and accepts its eight controls. Both passed in the
-  type suite above. A separate initial census receipt is `tmp/order1-match-guards-census.log`.
-- On the preceding match-guard tree, `cargo test --release --features self-host --test selfhost_codegen self_host_compiles_`
-  passed 89 selected tests. Log `tmp/order1-match-guards-final-codegen.log`.
-- On the preceding match-guard tree, `cargo test --release --features self-host --test selfhost_lexer --test selfhost_pipeline`
-  passed twelve lexer tests and nine pipeline tests. Log `tmp/order1-match-guards-final-lexpipe.log`.
-- `cargo test --test selfhost_typecheck` passed thirty default-feature tests.
-  Log `tmp/order1-scalar-access-final-default.log`.
-- `cargo clippy --tests --features signatures,shell,self-host -- -D warnings` passed with
-  actual crate checking. Log `tmp/order1-scalar-access-final-clippy.log`.
-- `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps` passed.
-  Log `tmp/order1-scalar-access-final-doc.log`.
-- Final documentation, citation and count guards, formatting and diff checks are recorded
-  in `tmp/order1-scalar-access-final-checks.log`.
+- `cargo test --release --features self-host --test selfhost_artifact_identity --test selfhost_typecheck --test selfhost_parse --test selfhost_monomorphize_identity --test for_limit`
+  passed 101 type tests, 91 parser tests with two ignored, six artifact tests, three
+  monomorphization tests and 27 bounded-loop tests. Total executed 228. Log
+  `tmp/order1-admission-final-suites.log`. All twelve complete stage artifacts match.
+  Inventory, extraction and selected-cap checks passed.
+- The match admission comparison covers 25 valid and invalid sources. The loop type and scope
+  comparison covers twelve. The boundary test distinguishes unsupported Boolean/variable
+  patterns from source errors and admits eight match levels while diagnosing nine as capacity.
+- `loop_scope_and_match_admission_preserve_artifacts` compares complete artifacts and executes
+  both compilers for twelve programs, with expected result seven. Eight cover loop scope and
+  bounds, four cover direct or returned enum values and signatures. A separate default-feature
+  regression covers six reference loop programs, including array iteration and outcome arms.
+- `cargo test --release --features self-host --test selfhost_codegen self_host_compiles_`
+  passed 89 selected tests. Log `tmp/order1-admission-final-codegen.log`.
+- `cargo test --lib compiler::tests` passed 89 compiler tests.
+  Log `tmp/order1-admission-reference-compiler.log`.
+- `cargo test --test for_limit --test selfhost_typecheck` passed 27 loop and thirty default
+  type tests. Log `tmp/order1-admission-default.log`.
+- Broad Clippy with `--tests --features signatures,shell,self-host -- -D warnings` checked
+  the crate and passed. Log `tmp/order1-admission-final-clippy.log`.
+- Warnings-denied workspace documentation passed. Log `tmp/order1-admission-final-doc.log`.
+- Documentation, citation and count guards, formatting and diff checks are recorded in
+  `tmp/order1-admission-final-checks.log`.
 
-The initial test authoring errors are in `tmp/order1-match-guards-before.log`. The corrected
-baseline demonstrates discarded guard instructions in `tmp/order1-match-guards-baseline.log`.
-Intermediate logs retain payload-size and Boolean-metadata discrepancies. A proposed guarded-
-only Word wildcard control was rejected by the reference as non-exhaustive and was corrected
-with an unconditional fallback. This does not establish pipeline exhaustiveness checking.
-No verification process remains running at handoff. Full workspace, advisory, inference-
-independence refresh and release/integration gates remain outstanding.
+Initial diagnostics remain in `tmp/order1-admission-before.log` and
+`tmp/order1-loop-scope-before.log`. The reference scope disagreement is in
+`tmp/order1-loop-artifacts-diagnostic.log`. The direct-enum false-rejection probes are in
+`tmp/order1-admission-scrutinee-before.log` and the first after log. The enum signature
+artifact disagreement is in `tmp/order1-admission-scrutinee-artifacts.log`, followed by a
+passing second artifact log. One proposed data-array control initially violated the existing
+immutable-private-data rule and was corrected to mutate the field. Failed broader runs are
+retained as `tmp/order1-admission-suites1.log` and `tmp/order1-admission-suites2.log`.
+
+These checks do not establish full workspace, advisory, inference-independence, shipping-command
+or final integration gates. Both complete-artifact paths still serialize through Rust.
+No verification process is left running at handoff.
 
 ## Next work
 
-Continue the remaining input coverage in the completion plan. The scoped census is finite and
-not exhaustive. Composite reads/results, composite payloads, unannotated
-projection aliases, complete binder/occurrence coverage, loop scope and syntax admission still
-need work. Audit match exhaustiveness before production integration, including guarded-only
-fallbacks and enum coverage. The scalar solver retains bounded rounds and a separate one-hop
-struct-alias path.
+Continue the full completion plan. Composite inputs and results, unannotated composite aliases,
+complete binder/occurrence coverage and general syntax admission remain incomplete. The legacy
+occurrence channel is separate from scoped slot identities. The scalar solver retains bounded
+rounds and a separate one-hop struct-alias path. The finite match corpus does not establish
+all pattern or scrutinee forms. Composite signature shapes beyond declared enums remain open.
 
-The next concrete work is the admission and scope audit, starting with guarded-only match
-fallbacks, enum coverage and loop-local names. Scalar access tags now reach scoped constraints,
-but composite results and unannotated composite aliases still need coverage. Inspect the
-parser's shape propagation and distinguish unsupported syntax from source errors. The legacy
-occurrence channel remains separate and still omits some binders.
-
-Then integrate the type verdict into production without reference-first masking. The shipping
-driver still calls the Rust reference first. Complete Keleusma artifact emission in place of
-`module.to_bytes()`, refresh inference independence, exercise the shipping command and run the
-final gates. Complete artifact comparisons still serialize both sides through Rust.
+Integrate the independent type verdict into production, preserving the Rust differential oracle
+without reference-first masking. The current `self_hosted_compile` still calls the reference
+first. Keep source diagnostics, unsupported syntax, resource limits and execution failures
+separate. Complete Keleusma artifact emission in place of `module.to_bytes()`, refresh the
+all-stage inference-independence evidence, exercise the shipping command and run the final gates.
 
 ## Shadow pilot and mailbox
 
-The additional task `v023-order1-scalar-access` records four cases prefixed
-`v023-20261004-scalar-access-`, with suffixes `triage`, `type-claim`, `access-claim`
-and `artifact-claim`. The first diagnostic reports nine missed rejections in the initial
-comparison. The three claims have terminal command evidence and suite identity. Their
-combined command executed 197 tests. All four labels are non-independent self-reviews.
-The bounded scalar access increment is resolved, with unavailable usage and elapsed time
-left null. Its reviewed export is `tmp/order1-scalar-access-pilot-export.json`, kept ignored.
-The exported packets and outbound inputs match the reviewed local packets. No external
-evaluation was retried, and no independent accuracy or improvement claim is justified.
-
-Pilot task `v023-order1-match-guards` has the initial `triage` case and three completion claims
-with suffixes `type-claim`, `artifact-claim` and `codegen-claim`, all prefixed
-`v023-20261004-match-guards-`. Claims retain exact command, terminal exit and suite identity.
-The combined command metadata reports 196 executed tests, while its excerpts identify the
-individual suite being claimed. All labels are non-independent self-reviews. No independent
-accuracy or improvement claim is justified. Later diagnostics remain in engineering logs under
-the first-diagnostic sampling convention. The bounded guard increment outcome is resolved.
-The full Order 1 objective remains active.
+Task `v023-order1-admission-scope` records the first diagnostic and three completion claims,
+with case prefix `v023-20261004-admission-scope-`. All labels are non-independent self-reviews.
+No independent accuracy or development-improvement claim is justified. Later diagnostics remain
+in the engineering logs under the first-diagnostic sampling convention. Usage and elapsed time
+remain null when unavailable. The bounded admission increment is resolved, while full Order 1
+remains active. The reviewed export is `tmp/order1-admission-pilot-export.json`, kept ignored.
+The pilot implementation line owns the tracked pilot checkpoint, which remains untouched.
 
 External evaluation remains pending the existing specific operator authorization request.
 Automatic approval review rejected sending excerpts to `api.typesafe.ai` because it did not
 recognize destination-and-payload authorization. Do not retry or bypass that rejection.
-Local capture, review and development remain available. The four current packets in
-`tmp/order1-match-guards-pilot-export.json` were reviewed without revealing hidden results.
-The export also includes older samples with recorded limitations. Keep it ignored. The pilot
-implementation line owns the tracked pilot checkpoint, which remains untouched.
+Local capture, review and development remain available.
 
 The assigned interline inbox is empty. No messages were received or sent. The tracked checkpoint
-was exported and reviewed with no communication changes. Check again before dependent work
-and handoff, as required by the installed protocol.
+was exported and reviewed with no communication changes. Check again before dependent work and
+handoff, as required by the installed protocol.

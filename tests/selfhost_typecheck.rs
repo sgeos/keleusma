@@ -6330,6 +6330,203 @@ fn scoped_pipeline_reaches_the_rule_form_census() {
     );
 }
 
+/// Guarded arms do not establish coverage, and duplicate variants cannot cover a missing one.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_match_exhaustiveness_agrees_with_reference() {
+    let cases = [
+        (
+            "enum E { A, B } fn main() -> Word { match E::A() { E::A => 7, E::B => 2 } }",
+            true,
+        ),
+        (
+            "enum E { A(Word), B } fn main() -> Word { match E::A(7) { E::A(n) => n, E::B => 2 } }",
+            true,
+        ),
+        (
+            "enum E { A, B } fn make() -> E { E::A() } fn main() -> Word { match make() { E::A => 7, E::B => 2 } }",
+            true,
+        ),
+        (
+            "enum E { A, B } fn make() -> E { E::A() } fn main() -> Word { match make() { E::A => 7, E::B when true => 2 } }",
+            false,
+        ),
+        (
+            "enum E { A, B } fn main() -> Word { match E::A() { E::A => 7 } }",
+            false,
+        ),
+        (
+            "enum E { A, B } fn main() -> Word { match E::A() as Word { E::A => 7, _ => 2 } }",
+            true,
+        ),
+        ("fn main(n: Word) -> Word { match n { 1 => 2 } }", false),
+        (
+            "fn main(n: Word) -> Word { match n { _ when true => 2 } }",
+            false,
+        ),
+        (
+            "fn main(n: Word) -> Word { match n { 1 => 2, _ when false => 3 } }",
+            false,
+        ),
+        ("fn main(n: Word) -> Word { match n { _ => 2 } }", true),
+        (
+            "fn main(n: Word) -> Word { match n { _ when false => 2, _ => 3 } }",
+            true,
+        ),
+        (
+            "fn main(n: Word) -> Word { match n { _ => 2, 1 => 3 } }",
+            true,
+        ),
+        (
+            "enum E { A, B } fn main(e: E) -> Word { match e { E::A => 1 } }",
+            false,
+        ),
+        (
+            "enum E { A, B } fn main(e: E) -> Word { match e { E::A => 1, E::A => 2 } }",
+            false,
+        ),
+        (
+            "enum E { A, B } fn main(e: E) -> Word { match e { E::A => 1, E::B when true => 2 } }",
+            false,
+        ),
+        (
+            "enum E { A, B } fn main(e: E) -> Word { match e { E::B => 2, E::A => 1 } }",
+            true,
+        ),
+        (
+            "enum E { A, B } fn main(e: E) -> Word { match e { E::A when false => 1, E::A => 2, E::B => 3 } }",
+            true,
+        ),
+        (
+            "enum E { A, B } fn main(e: E) -> Word { match e { _ => 1 } }",
+            true,
+        ),
+        (
+            "enum E { A, B } fn main(e: E) -> Word { match e { _ when true => 1 } }",
+            false,
+        ),
+        (
+            "enum E { A(Word), B } fn main(e: E) -> Word { match e { E::A(n) => n, E::B => 0 } }",
+            true,
+        ),
+        (
+            "enum E { A(Word), B } fn main(e: E) -> Word { match e { E::A(n) when n > 0 => n, E::B => 0 } }",
+            false,
+        ),
+        (
+            "enum E { A, B } fn main(e: E) -> Word { match e { E::A => match e { E::A => 1, E::B => 2 }, E::B => 3 } }",
+            true,
+        ),
+        (
+            "enum E { A, B } fn main(e: E) -> Word { match e { E::A => match e { E::A => 1, E::B => 2 } } }",
+            false,
+        ),
+        (
+            "enum E { A, B } fn main(e: E) -> Word { match e { E::Missing => 1, _ => 0 } }",
+            false,
+        ),
+        (
+            "enum E { A, B } enum F { A, B } fn main(e: E) -> Word { match e { F::A => 1, _ => 0 } }",
+            false,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (source, accepts) in cases {
+        assert_eq!(reference_accepts(source), accepts, "reference {source}");
+        match std::panic::catch_unwind(|| pipeline_call_verdict(source)) {
+            Ok(actual) if actual == accepts => {}
+            other => failures.push((source, accepts, format!("{other:?}"))),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "exhaustiveness disagreements {failures:#?}"
+    );
+}
+
+/// A loop's induction variable and body locals do not remain visible after it ends.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_loop_scopes_agree_with_reference() {
+    for (source, accepts) in [
+        ("fn main() -> Word { for i in 0..2 limit 2 {} i }", false),
+        ("fn main() -> Word { for i in 0..2 {} i }", false),
+        (
+            "fn main() -> Word { for i in 0..2 limit 2 { let x = i; } x }",
+            false,
+        ),
+        (
+            "fn main() -> Word { for i in 0..2 { let x = i; } x }",
+            false,
+        ),
+        (
+            "fn main() -> bool { let x = true; for i in 0..2 limit 2 { let x = i; } x }",
+            true,
+        ),
+        (
+            "fn main() -> bool { let x = true; for i in 0..2 { let x = i; } x }",
+            true,
+        ),
+        (
+            "fn main() -> bool { let i = true; for i in 0..2 limit 2 {} i }",
+            true,
+        ),
+        (
+            "fn main() -> bool { let i = true; for i in 0..2 {} i }",
+            true,
+        ),
+        (
+            "fn main() -> Word { for i in 0..2 limit 2 { if i {} } 0 }",
+            false,
+        ),
+        ("fn main() -> Word { for i in 0..2 { if i {} } 0 }", false),
+        (
+            "fn main() -> Word { for i in false..2 limit 2 {} 0 }",
+            false,
+        ),
+        ("fn main() -> Word { for i in 0..true {} 0 }", false),
+    ] {
+        assert_eq!(reference_accepts(source), accepts, "reference {source}");
+        assert_eq!(pipeline_call_verdict(source), accepts, "pipeline {source}");
+    }
+}
+
+/// Unsupported patterns and exhausted parser capacity cannot become source rejection evidence.
+#[cfg(feature = "self-host")]
+#[test]
+fn match_admission_distinguishes_source_errors_from_subset_limits() {
+    use keleusma::selfhost::try_call_type_inputs_from_pipeline;
+    use keleusma::selfhost_host::{PARSE_DIAG_TAG_BASE, ParseRecordError};
+    for source in [
+        "fn main(c: bool) -> Word { match c { true => 1, false => 0 } }",
+        "fn main(n: Word) -> Word { match n { x => x } }",
+    ] {
+        assert!(reference_accepts(source));
+        let error = try_call_type_inputs_from_pipeline(source).expect_err(source);
+        assert!(!error.is_source_rejection(), "{error}");
+        assert!(
+            matches!(error, ParseRecordError::Diagnostic { code, .. } if code == PARSE_DIAG_TAG_BASE - 20)
+        );
+    }
+    for depth in [8, 9] {
+        let mut expression = "1".to_owned();
+        for _ in 0..depth {
+            expression = format!("match 0 {{ _ => {expression} }}");
+        }
+        let source = format!("fn main() -> Word {{ {expression} }}");
+        assert!(reference_accepts(&source));
+        if depth == 8 {
+            assert!(pipeline_call_verdict(&source));
+        } else {
+            let error = try_call_type_inputs_from_pipeline(&source).expect_err("depth cap");
+            assert!(!error.is_source_rejection());
+            assert!(
+                matches!(error, ParseRecordError::Diagnostic { code, detail: 9 } if code == PARSE_DIAG_TAG_BASE - 25)
+            );
+        }
+    }
+}
+
 /// Scalar access facts must reach constraints without typing their composite containers as scalars.
 #[cfg(feature = "self-host")]
 #[test]

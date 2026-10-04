@@ -40,9 +40,9 @@ The scoped path now shares an expression-constraint walk with the legacy project
 result identities connect computed operands to calls, local bindings and return requirements.
 Result rules distinguish comparisons from arithmetic, asymmetric shifts, boolean operators,
 numeric unary operators, scalar casts and branch results. Literal values remain syntax facts;
-the stage performs bounded Byte coercion for binary operands. All twelve sources fit and pass
-with maxima of 299 combined expression rows and 288 bindings. These replace the call-only
-measurements above. Source annotations, composite reads and production integration remain open.
+the stage performs bounded Byte coercion for binary operands. An earlier combined corpus recorded maxima of 299 expression rows and 288 bindings.
+Those figures predate loop constraints. The current all-stage checks establish fit within the
+approved caps, but these historical maxima must not be reused as current measurements. Source annotations, composite reads and production integration remain open.
 
 The scoped rejection corpus now reaches all twenty negative cases and seven valid controls
 without reference-first rejection. Parser diagnostics cover unresolved identifiers, unknown
@@ -58,11 +58,12 @@ to distinguish these checks from binary operands' contextual literal conversion.
 
 Branch-local names no longer leak into sibling branches. Frame slots remain monotonic, the
 per-function named-binding cap has a separate total counter and reused name entries have their
-composite metadata cleared. Match-arm scopes now restore their binding names too. Loop scope
-restoration remains unestablished. The latest stage suite has ninety-eight passing type tests,
+composite metadata cleared. Match-arm scopes now restore their binding names too. Both loop forms now restore names at exit, with artifact and execution controls. The latest stage suite has one hundred and one passing type tests,
 including the scoped census and twelve guard-type cases. Scalar enum-payload bindings obtain
 source-declared tags from EnumBind records. Composite facts, complete occurrence coverage,
-match exhaustiveness and production integration remain required.
+general syntax admission and production integration remain required. Integer and enum match
+coverage now has explicit parser diagnostics that exclude guarded arms and distinguish capacity
+from source errors. Range-loop variable facts and bound requirements reach the scoped type stage.
 
 The scoped operand adapter now also reads scalar struct-field, tuple-field and array-element
 layout kinds. A twenty-six-program comparison agrees with the reference after closing nine

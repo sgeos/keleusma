@@ -63,6 +63,57 @@ fn complete_artifact_corpus_covers_every_stage_source() {
     assert_eq!(listed, actual);
 }
 
+/// Loop scopes and enum scrutinee admission must preserve artifacts and execution.
+#[test]
+fn loop_scope_and_match_admission_preserve_artifacts() {
+    use keleusma::Arena;
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
+    for source in [
+        "enum E { A, B } fn main() -> Word { match E::A() { E::A => 7, E::B => 2 } }",
+        "enum E { A(Word), B } fn main() -> Word { match E::A(7) { E::A(n) => n, E::B => 2 } }",
+        "enum E { A, B } fn make() -> E { E::A() } fn main() -> Word { match make() { E::A => 7, E::B => 2 } }",
+        "enum E { A(Word), B } fn make() -> E { E::A(7) } fn choose(e: E) -> Word { match e { E::A(n) => n, E::B => 2 } } fn main() -> Word { choose(make()) }",
+        "fn main() -> Word { let i = 7; for i in 0..2 limit 2 {} i }",
+        "fn main() -> Word { let i = 7; for i in 0..2 {} i }",
+        "fn main() -> Word { let x = 7; for i in 0..2 limit 2 { let x = i; } x }",
+        "fn main() -> Word { let x = 7; for i in 0..2 { let x = i; } x }",
+        "fn main() -> Word { let x = 7; for i in 0..0 limit 2 { let x = i; } x }",
+        "fn main() -> Word { let x = 7; for x in 0..2 limit 2 { for x in 0..2 limit 2 {} let y = x; } x }",
+        "struct P { x: Word } fn main() -> Word { let p = P { x: 7 }; for i in 0..2 limit 2 { let p = 1; } p.x }",
+        "private data d { n: Word } fn main() -> Word { let i = 2; for i in 0..i limit 2 { d.n = d.n + 1; } d.n + 5 }",
+    ] {
+        let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(source).unwrap()).unwrap();
+        let reference = keleusma::compiler::compile(&ast).expect("valid reference control");
+        let actual = keleusma::selfhost::self_host_compile_scratch(source);
+        for (pipeline, expected) in actual.chunks.iter().zip(&reference.chunks) {
+            assert_eq!(pipeline.ops, expected.ops, "{source}");
+        }
+        if actual.to_bytes().unwrap() != reference.to_bytes().unwrap() {
+            eprintln!("pipeline {actual:#?}\nreference {reference:#?}");
+        }
+        assert_eq!(
+            actual.to_bytes().unwrap(),
+            reference.to_bytes().unwrap(),
+            "{source}"
+        );
+        for module in [reference, actual] {
+            let persistent = required_persistent_capacity_for(&module);
+            let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + persistent);
+            arena.resize_persistent(persistent).unwrap();
+            let entry = module.chunks.iter().position(|c| c.name == "main").unwrap();
+            let mut vm = Vm::new(module, &arena).expect("verified loop control");
+            assert!(
+                matches!(
+                    vm.call_function(entry, &[]).unwrap(),
+                    VmState::Finished(Value::Int(7))
+                ),
+                "{source}"
+            );
+        }
+    }
+}
+
 #[test]
 fn production_compiler_matches_every_complete_stage_artifact() {
     let mut differences = Vec::new();

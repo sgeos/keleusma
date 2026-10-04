@@ -667,6 +667,9 @@ fn pe_method_syntax() -> Word { 19 }
 fn pe_pattern_syntax() -> Word { 20 }
 fn pe_unresolved_syntax() -> Word { 21 }
 fn pe_value_call() -> Word { 22 }
+fn pe_match_coverage() -> Word { 23 }
+fn pe_match_variant() -> Word { 24 }
+fn pe_match_depth() -> Word { 25 }
 // **CODE 12 IS RETIRED AND DELIBERATELY NOT REUSED.** It named the bare `for` form as an
 // unsupported construct -- the only such code among eleven capacity limits -- and existed for
 // exactly as long as the form was unsupported, raised at phase 4 where the lowering now hooks
@@ -1165,6 +1168,7 @@ private data forst {
     forin_count: Word,
     for_emit: Word,
     for_emit_i: Word,
+    for_let_base: [Word; 9],
 }
 
 // The `match scrut { arms }` context stack: `match_phase` per pending match (1 the
@@ -1205,6 +1209,11 @@ private data mat {
     match_for_base: [Word; 8],
     match_struct_base: [Word; 8],
     match_opbase: [Word; 8],
+    match_catchall: [Word; 8],
+    // -2 is a literal pattern, -1 a wildcard, otherwise the declaration's variant row.
+    match_variant: [Word; 8],
+    // One bit per active match depth. Nested matches cannot overwrite outer coverage.
+    covered: [Word; 257],
 }
 
 // The data-field layout table, accumulated by the header as each `data` block is parsed
@@ -2149,11 +2158,19 @@ fn step_mpat(k: Word, v: Word) -> Word {
             mat.mpat_vname = v;
             mat.enum_disc = 0;
             mat.mpat_vrow = 0;
+            ps.found_flag = 0;
             for i in 0..enums.enum_count limit 256 {
                 if enums.edata[i] == mat.enum_name andalso enums.evar[i] == v {
                     mat.enum_disc = enums.edisc[i];
                     mat.mpat_vrow = i;
+                    ps.found_flag = 1;
                 }
+            }
+            if ps.found_flag == 0 { perr(pe_match_variant(), v); }
+            let sp = mat.match_sp - 1;
+            mat.match_variant[sp] = mat.mpat_vrow;
+            if mat.match_isenum[sp] == 1 andalso mat.enum_name != mat.match_ename[sp] {
+                perr(pe_match_variant(), v);
             }
             mat.mpat_phase = 3;
         }
@@ -4340,11 +4357,60 @@ fn semi_terminates_nothing() -> Word {
         andalso ops.opsp == base { 1 } else { 0 }
 }
 
+// Check depth before indexing match stacks. Clear only this depth's coverage bits.
+fn start_match() -> Word {
+    if mat.match_sp >= 8 {
+        perr(pe_match_depth(), mat.match_sp + 1);
+        0
+    } else {
+        // `match` opens a scrutinee-then-arms context; its scrutinee is an operand.
+        mat.match_phase[mat.match_sp] = 1;
+        mat.match_argcount[mat.match_sp] = 0;
+        mat.match_isenum[mat.match_sp] = 0;
+        mat.match_haswc[mat.match_sp] = 0;
+        mat.match_guarded[mat.match_sp] = 0;
+        mat.match_catchall[mat.match_sp] = 0;
+        mat.match_variant[mat.match_sp] = 0 - 2;
+        stmt.pending_cenum = 0;
+        let bit = 1 lsl mat.match_sp;
+        for i in 0..enums.enum_count limit 256 {
+            mat.covered[i] = mat.covered[i] band (bnot bit);
+        }
+        mat.match_let_base[mat.match_sp] = stmt.let_count;
+        mat.match_if_base[mat.match_sp] = branch.if_sp;
+        mat.match_for_base[mat.match_sp] = forst.for_sp;
+        mat.match_struct_base[mat.match_sp] = structdefs.sc_sp;
+        mat.match_opbase[mat.match_sp] = ops.opsp;
+        ops.opstack[ops.opsp] = OpCode::MatchMark() as Word;
+        ops.opsp = op_push(ops.opsp);
+        mat.match_sp = mat.match_sp + 1;
+        ops.expect_operand = 1;
+        0
+    }
+}
+
+// Only unguarded arms establish coverage. Variant rows, not discriminants or
+// arm counts, keep repeated patterns from hiding a missing variant.
+fn check_match_coverage(sp: Word) -> Word {
+    if mat.match_catchall[sp] == 0 {
+        if mat.match_isenum[sp] == 1 {
+            let bit = 1 lsl sp;
+            for i in 0..enums.enum_count limit 256 {
+                if enums.edata[i] == mat.match_ename[sp] andalso (mat.covered[i] band bit) == 0 {
+                    perr(pe_match_coverage(), enums.evar[i]);
+                }
+            }
+        } else { perr(pe_match_coverage(), toks.at); }
+    }
+    0
+}
+
 fn step_op(k: Word) -> Word {
     if k == Tok::For() as Word {
         // Push a fresh loop context; a nested loop stacks above the enclosing one.
         forst.for_phase[forst.for_sp] = 1;
         forst.for_bare[forst.for_sp] = 0;
+        forst.for_let_base[forst.for_sp] = stmt.let_count;
         forst.for_sp = for_push(forst.for_sp);
         0
     } else {
@@ -4388,22 +4454,7 @@ fn step_op(k: Word) -> Word {
         0
     } else {
     if k == Tok::Match() as Word {
-        // `match` opens a scrutinee-then-arms context; its scrutinee is an operand.
-        mat.match_phase[mat.match_sp] = 1;
-        mat.match_argcount[mat.match_sp] = 0;
-        mat.match_isenum[mat.match_sp] = 0;
-        mat.match_haswc[mat.match_sp] = 0;
-        mat.match_guarded[mat.match_sp] = 0;
-        mat.match_let_base[mat.match_sp] = stmt.let_count;
-        mat.match_if_base[mat.match_sp] = branch.if_sp;
-        mat.match_for_base[mat.match_sp] = forst.for_sp;
-        mat.match_struct_base[mat.match_sp] = structdefs.sc_sp;
-        mat.match_opbase[mat.match_sp] = ops.opsp;
-        ops.opstack[ops.opsp] = OpCode::MatchMark() as Word;
-        ops.opsp = op_push(ops.opsp);
-        mat.match_sp = mat.match_sp + 1;
-        ops.expect_operand = 1;
-        0
+        start_match()
     } else {
     if k == Tok::Not() as Word {
         ops.opstack[ops.opsp] = OpCode::Not() as Word;
@@ -4553,11 +4604,13 @@ fn step_match(k: Word, v: Word) -> Word {
     if mp == 2 {
         if k == Tok::IntLit() as Word {
             mat.match_argcount[sp] = mat.match_argcount[sp] + 1;
+            mat.match_variant[sp] = 0 - 2;
             mat.match_phase[sp] = 3;
             Node::Literal() as Word + v * 64
         } else {
         if k == Tok::Underscore() as Word {
             mat.match_phase[sp] = 3;
+            mat.match_variant[sp] = 0 - 1;
             // Wildcards remain in source order, including guarded fallthrough arms.
             mat.match_argcount[sp] = mat.match_argcount[sp] + 1;
             ps.emit_arg = 0;
@@ -4581,7 +4634,8 @@ fn step_match(k: Word, v: Word) -> Word {
             }
             0
         } else {
-            mat.match_build = 1;
+            if k == Tok::RBrace() as Word { mat.match_build = 1; }
+            else { perr(pe_pattern_syntax(), v); }
             0
         } } }
     } else {
@@ -4619,6 +4673,13 @@ fn step_match(k: Word, v: Word) -> Word {
 fn finish_match_arm() -> Word {
     let sp = mat.match_sp - 1;
     stmt.let_count = mat.match_let_base[sp];
+    if mat.match_guarded[sp] == 0 {
+        let variant = mat.match_variant[sp];
+        if variant == 0 - 1 { mat.match_catchall[sp] = 1; }
+        if variant >= 0 {
+            mat.covered[variant] = mat.covered[variant] bor (1 lsl sp);
+        }
+    }
     if mat.match_guarded[sp] == 1 {
         mat.match_guarded[sp] = 0;
         ps.emit_arg = 0;
@@ -4634,6 +4695,7 @@ fn step_match_build() -> Word {
     let sp = mat.match_sp - 1;
     let temp = mat.match_temp[sp];
     let ac = mat.match_argcount[sp];
+    check_match_coverage(sp);
     mat.match_sp = sp;
     stmt.let_count = mat.match_let_base[sp];
     ops.opsp = op_pop(ops.opsp);
@@ -4794,6 +4856,7 @@ fn step_for_emit() -> Word {
         stmt.stmt_count = stmt_push(stmt.stmt_count);
         forst.forlimit_count = forst.forlimit_count + 1;
         forst.for_emit = 0;
+        stmt.let_count = forst.for_let_base[fp];
         forst.for_sp = forst.for_sp - 1;
         ops.expect_operand = 1;
         0
@@ -4835,6 +4898,7 @@ fn step_forin_emit(fp: Word) -> Word {
         stmt.stmt_count = stmt_push(stmt.stmt_count);
         forst.forin_count = forst.forin_count + 1;
         forst.for_emit = 0;
+        stmt.let_count = forst.for_let_base[fp];
         forst.for_sp = forst.for_sp - 1;
         ops.expect_operand = 1;
         0
@@ -5425,12 +5489,13 @@ fn step_body_dispatch(k: Word, v: Word) -> Word {
             // An open enum-variant match pattern (`Name::Variant()`) consumes its tokens.
             step_mpat(k, v)
         } else {
-        if mat.match_sp > 0 andalso da.da_phase == 0 {
+        if mat.match_sp > 0 andalso da.da_phase == 0 andalso mat.enum_phase == 0 {
             // Route the match structural tokens (a pattern, `=>`, the scrutinee's `{`, the
             // arms' `}`, or a match-level `,`) to step_match; the scrutinee and arm results
             // dispatch normally. A pending data-field read (da_phase nonzero) must flush
             // first, so the scrutinee or arm-result DataRead lands before the match drain;
             // step_daindex emits it and pushes the boundary token back for reinterpretation.
+            // Unit enum construction also needs the following token to finish before a boundary.
             if match_boundary(k) == 1 {
                 step_match(k, v)
             } else {
@@ -5662,6 +5727,11 @@ fn step_draining() -> Word {
         } else {
         if ops.drain_reason == 8 {
             // The match scrutinee is drained; reserve its temp slot and read arm patterns.
+            // A constructor or call carries its declared enum result at the expression root.
+            if stmt.pending_cenum > 0 {
+                mat.match_isenum[mat.match_sp - 1] = 1;
+                mat.match_ename[mat.match_sp - 1] = stmt.pending_cenum - 1;
+            }
             mat.match_temp[mat.match_sp - 1] = ps.pcount + stmt.slot_count;
             stmt.slot_count = stmt.slot_count + 1;
             mat.match_phase[mat.match_sp - 1] = 2;
