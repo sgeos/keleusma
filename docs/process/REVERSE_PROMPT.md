@@ -7,124 +7,124 @@
 Complete roadmap Order 1 on V0.2.X and participate in the System 1 shadow pilot.
 The full objective remains active under
 [ORDER1_COMPLETION_PLAN.md](../decisions/ORDER1_COMPLETION_PLAN.md).
-This increment closes measured enum construction and cast gaps. Order 1 is not complete.
+This increment adds structural tuple and nested-array facts. Order 1 is not complete.
 
 ## Current state
 
-2026-10-04. Branch `feat/v02-order1-next`, starting from `1c6247fc`.
-The previous goal turn made progress by committing the nominal and scalar-array increment.
-This turn makes implementation and verification progress. The legacy handoff remains
-invalid-and-stale, twenty-two commits behind the starting tree. Its unchanged-stage claim
-fails. The fingerprint remains 0x4327_63E1. Historical full gates were not rerun.
+2026-10-04. Branch `feat/v02-order1-next`, starting from `6dffc924`.
+The preceding status turn found a resource-accounting failure in the completed verification
+log, changing the next action. This turn repairs that failure and a newly measured projection
+classification failure. The legacy handoff is invalid-and-stale, twenty-three commits behind
+the starting tree. Its unchanged-stage claim fails. Its historical full gates were not rerun.
 Appendix B was read before tracked writes. The pre-existing `nvim.log` remains untouched.
 No push, merge or publication occurred. Bytecode version remains 2 with 66 public opcodes.
 Selected type caps remain 640. The concurrent V0.3.X line remains untouched.
 
-## Implementation
+## Implementation and evidence
 
-The initial nineteen-source enum comparison found fourteen invalid programs accepted by the
-independent pipeline. The negatives include nominal identity, payload types and arity, unknown
-variants, constructor returns and aliases. All nineteen now agree with the reference, and every
-negative must produce PipelineRejected from the shipping entry.
+The initial fifteen-source structural comparison found eleven invalid programs accepted by the
+independent pipeline. The expanded comparison contains nineteen sources, with thirteen negatives
+and six valid controls. Every negative also requires independent PipelineRejected from the
+shipping entry. Six complete artifact and execution controls cover tuple, nested-array and
+array-of-tuple parameters and returns, with both compiler outputs returning seven.
 
-Parser metadata tag 93 carries the declaration-order variant index immediately before EnumInit.
-A parallel construction stack preserves that identity through nested payload parsing. The driver
-consumes metadata before reconstruction and pairs its guard/body postorder with enum nodes.
-Both metadata and node counts are checked. Enum declaration records now carry scalar and named
-payload types through PTYPE and scalar-array lengths through ASIZE. Tuple payloads reserve one
-unknown field, preserving subsequent field positions. Extraction emits existing arity and
-agreement constraints. Nominal identity is never inferred from byte size.
+Parser metadata records 94, 95 and 96 retain tuple opening, named members and closing.
+Opening distinguishes parameter and return headers. Array sizes remain postfix records,
+including both dimensions of the existing nested-array header form. The driver preserves
+these records for type constraints, signatures and chunk parameter metadata. These are
+internal metadata kinds, not public opcodes.
 
-Unknown constructors use the existing enum-variant source diagnostic. Empty constructors requiring
-payloads use diagnostic 26, including the direct enum-to-Word folding path. This is classified as
-source rejection rather than unavailable evidence. Other payload arity is checked by the type
-stage. The host parser decoders in the parser and code-generation tests now skip metadata tag 93.
+The driver translates source types and tuple literals into construction rows. Expression
+kind 17 forms tuple cons cells and kind 16 now also forms composite-element arrays. The
+Keleusma stage interns exact structural keys, preserving member order, array dimensions and
+nominal element identities independently of byte size. A private pool holds at most 640
+entries. Exhaustion returns unavailable evidence rather than a source rejection. The bounded
+solver permits 640 rounds, with productive rounds resolving previously unknown bindings.
+Direct transport controls cover exact identity, reverse dependencies and 639, 640 and 641 rows.
 
-The artifact controls exposed an enum value cast being emitted as ByteToWord. The reference
-instead evaluates the value once and emits a variant-dispatch loop. Parser record 74 now builds
-this dispatch through the existing enum-arm protocol. Reconstruction retains it in the existing
-Cast node, with the dispatch table base plus two in its argument and the variant count in rhs.
-Code generation shares the enum-match emitter with the cast-specific EnumVariantUnmapped trap.
-Neither record 74 nor metadata tag 93 is a public opcode.
+Array-of-tuple literals now retain their tuple element byte width. Return-header scanning
+uses its own array-tuple layout index and does not write a parameter table for a return type.
+This avoids indexing a nonexistent parameter on zero-parameter functions. Signature assembly
+uses checked byte-size arithmetic for structural types. The six artifact controls use Word
+members. General mixed-scalar and nested tuple layout remains unestablished.
 
-Expanded controls exposed missing enum facts on parser aliases. Parameter and local enum facts
-now propagate into subsequent bindings. Scalar literals and Byte casts clear stale enum facts,
-and calls retain their declared enum return fact. Eleven complete artifact and execution controls
-cover enum parameters, scalar/struct/array payload access, explicit discriminants, aliases,
-returned values, payload constructor casts and a scalar cast following an enum value. Both
-compiler outputs return seven in every control. A metadata control checks variant order across
-two declarations and adjacency before each constructor.
+The first broad run failed because the accounting table priced 42 arrays while the stage
+held 45. The new pool adds 1,920 words, fifteen KiB on an eight-byte word, beyond the earlier
+56 KiB selected-cap increase. The guards now share one price table and compare capacity
+multisets as well as counts. The reported input-corpus lower bound does not measure private
+pool occupancy. Projection rules also still treated every known tag as scalar. A focused
+negative control exposed that failure, and the rules now recognize the nominal and structural
+composite classes while retaining scalar rejection.
 
 ## Verification
 
 Cargo commands used `RUSTC_WRAPPER=` and `CARGO_HUSKY_DONT_INSTALL_HOOKS=1`.
-Stage runs used `KEL_SELFHOST_CACHE=0`. No test subject was edited during a live run.
+Stage runs used `KEL_SELFHOST_CACHE=0`. Final verification subjects remained unchanged while
+runs were live. The early after1 diagnostic may overlap a formatter and is not gate evidence.
 
-- `cargo test --release --features self-host --test selfhost_enum_types --test selfhost_composite_types --test selfhost_artifact_identity --test selfhost_monomorphize_identity --test selfhost_parse --test selfhost_typecheck --test selfhost_type_transport --test self_hosted_backend`
-  passed three enum tests, three composite tests, six artifact tests, three monomorphization
-  tests, 91 parser tests with two existing ignored, 103 type tests, five transport tests and
-  eight backend tests. Total executed 222. Terminal exit zero. All twelve complete stage
-  artifacts match. Log `tmp/order1-enum-types-final-suites.log`.
+- `cargo test --release --features self-host --test selfhost_structural_types --test selfhost_enum_types --test selfhost_composite_types --test selfhost_type_transport --test selfhost_artifact_identity --test selfhost_monomorphize_identity --test selfhost_parse --test selfhost_typecheck --test self_hosted_backend`
+  passed 228 tests with two existing parser tests ignored. The component counts are two
+  structural, three enum, three composite, nine transport, six artifact, three monomorphization,
+  91 parser, 103 type and eight backend tests. All twelve complete stage artifacts match.
+  Terminal exit zero. Log `tmp/order1-structural-types-final-suites.log`.
+- The focused structural, transport and type suites passed 2, 9 and 103 tests, respectively.
+  Log `tmp/order1-structural-types-final-focused.log`. A later edit only clarifies the
+  resource test's comment and output label, so the final broad run supersedes this evidence.
 - `cargo test --release --features self-host --test selfhost_codegen self_host_compiles_`
-  passed 89 selected tests with sixty filtered. Log `tmp/order1-enum-types-final-codegen.log`.
-- `cargo test --test selfhost_typecheck --test selfhost_enum_types`
-  passed thirty default type tests. The enum binary is feature-gated and executes zero tests
-  in this configuration. Log `tmp/order1-enum-types-final-default.log`.
+  passed 89 selected tests with sixty filtered. Terminal exit zero.
+  Log `tmp/order1-structural-types-final-codegen.log`.
+- `cargo test --test selfhost_typecheck --test selfhost_structural_types` passed thirty
+  default type tests. The structural binary is feature-gated and executes zero tests here.
+  Terminal exit zero. Log `tmp/order1-structural-types-final-default.log`.
 - `cargo clippy --tests --features signatures,shell,self-host -- -D warnings` performed
-  actual crate checking and passed. Log `tmp/order1-enum-types-final-clippy.log`.
+  actual crate checking and passed. Log `tmp/order1-structural-types-final-clippy.log`.
 - `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` passed.
-  Log `tmp/order1-enum-types-final-doc.log`.
+  Log `tmp/order1-structural-types-final-doc.log`.
 - `cargo test --release -p keleusma-cli --test self_hosted_refusal --test compile_reproducible`
-  passed four refusal/artifact tests and two reproducibility tests.
-  Log `tmp/order1-enum-types-cli.log`.
+  passed four refusal/artifact tests and two reproducibility tests. Terminal exit zero.
+  Log `tmp/order1-structural-types-final-cli.log`.
 - `cargo check --no-default-features --features compile,verify` passed.
-  Log `tmp/order1-enum-types-nostd.log`.
-- Documentation, citation and count guards, formatting and diff checks are recorded in
-  `tmp/order1-enum-types-final-checks.log`.
+  Log `tmp/order1-structural-types-final-nostd.log`.
+- Documentation, citation and count guards passed 21 tests. Final formatting and diff checks
+  passed. Log `tmp/order1-structural-types-final-checks.log`.
 
-The first diagnostic remains in `tmp/order1-enum-types-before.log`. The first type repair passed
-in `tmp/order1-enum-types-after1.log`. The expanded suite stopped at the enum-cast artifact
-failure in `tmp/order1-enum-types-suites1.log`. The isolated source diagnostic is
-`tmp/order1-enum-types-artifact-diagnostic.log`. The dispatch repair passed the first five
-artifact controls in `tmp/order1-enum-types-after2.log`. Expanded alias controls failed in
-`tmp/order1-enum-types-controls.log`, with an isolated reproduction in
-`tmp/order1-enum-types-controls-diagnostic.log`. The alias repair and all eleven artifact controls
-passed in `tmp/order1-enum-types-after3.log`, before the final broad suite above.
+Retained diagnostics include `tmp/order1-structural-types-before.log`, after1, after2, after3
+and suites1 with the same prefix. The initial artifact controls found an array-of-tuple byte
+width mismatch in after2. The first broad run in suites1 failed only its array-accounting test
+within the type binary. The projection failure is `tmp/order1-structural-projection-before.log`.
+These failures remain evidence rather than being overwritten by passing logs.
 
 The complete workspace, advisory scan, refreshed inference-independence and final integration
 gates remain unverified. Production artifact serialization still calls Rust Module::to_bytes.
 
 ## Next work
 
-Continue the full completion plan. Complete tuple and nested-array facts, tuple and other composite
-payload requirements, array let annotations, composite projection aliases, complete occurrence/binder
-coverage and general syntax admission remain incomplete. Whole composite field records retain
-correct runtime representation but do not yet carry full source type identity into type operands.
-Nominal struct and tuple signatures still need source layout facts. Scalar-array signatures are
-covered. The scalar solver retains bounded rounds and a separate one-hop struct-alias path.
-General cast admission and large enum-dispatch capacities have not been exhaustively established.
+Continue the full completion plan. Tuple and other composite payload requirements, arbitrary
+nested declaration syntax, array let annotations, composite projection aliases, complete
+occurrence and binder coverage and general syntax admission remain incomplete. Whole composite
+field records do not yet carry full source type identity into type operands. Nominal struct
+signatures still need source layout facts. The legacy struct-alias path remains one hop.
+General cast admission and large enum-dispatch capacities are not exhaustively established.
 
-Production type checking is independent before the reference, but the reference remains the
-acceptance gate while coverage is incomplete. Existing extraction helpers can still panic and
-are reported as unavailable evidence rather than source rejection. Continue complete Keleusma
-wire emission, audit framing/opcode/pool/auxiliary/integrity provenance, refresh inference
-independence for all twelve stages and run the final gates. Preserve the full Order 1 objective.
+Production type checking is independent before the reference. The reference remains the
+acceptance gate while coverage is incomplete. Extraction assertions can still report malformed
+or unsupported records as unavailable evidence. Continue complete Keleusma wire emission,
+audit framing, opcode, pool, auxiliary and integrity provenance, refresh inference independence
+for all twelve stages and run the final gates. Preserve the full Order 1 objective.
 
 ## Shadow pilot and mailbox
 
-Task `v023-order1-enum-types` captures the first diagnostic and three bounded completion claims
-with case prefix `v023-20261004-enum-types-`. All labels are non-independent self-reviews.
-No independent accuracy or development-improvement claim is justified. Later cast and alias
-diagnostics remain in engineering logs under the first-diagnostic sampling convention. Usage
-and elapsed time remain null when unavailable. The bounded increment is resolved while full
-Order 1 remains active. The reviewed export is `tmp/order1-enum-types-pilot-export.json`, kept
-ignored. The pilot implementation line owns the tracked pilot checkpoint, which remains untouched.
+Task `v023-order1-structural-types` captures the first diagnostic and three completion claims
+under case prefix `v023-20261004-structural-types-`. Blind exports preceded non-independent
+self-labels. No independent accuracy or development-improvement claim is justified. Later
+artifact, accounting and projection diagnostics remain engineering logs under the first-diagnostic
+sampling convention. Usage and elapsed time are null where unavailable. The bounded increment
+is resolved while the full Order 1 goal remains active. The reviewed pilot export is
+`tmp/order1-structural-types-pilot-export.json`, kept ignored. External evaluation
+remains pending the existing specific operator authorization request. Automatic approval review
+rejected sending excerpts to api.typesafe.ai because it did not recognize destination-and-payload
+authorization. Do not retry or bypass that rejection. Local capture and development continue.
+The pilot implementation line owns the tracked pilot checkpoint, which remains untouched.
 
-External evaluation remains pending the existing specific operator authorization request.
-Automatic approval review rejected sending excerpts to api.typesafe.ai because it did not
-recognize destination-and-payload authorization. Do not retry or bypass that rejection.
-Local capture, review and development remain available.
-
-The assigned interline inbox is empty. No messages were received or sent. The tracked checkpoint
-was exported and reviewed with no communication changes. Check again before dependent work.
-No verification process remains running at handoff.
+The assigned inbox is empty. No messages were received or sent. The tracked checkpoint was
+exported and reviewed with no communication changes. No verification process remains running.

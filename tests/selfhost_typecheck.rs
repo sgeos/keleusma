@@ -3598,7 +3598,7 @@ fn a_derived_operand_is_now_reached_and_the_chain_has_no_depth_limit() {
 
     // A CHAIN OF ANY DEPTH, AND THE ROUND CAP IS NOT WHAT ALLOWS IT.
     //
-    // Measured, because the obvious reading is wrong: `tyb_rounds()` is 4, so the
+    // Measured when the solver used four rounds, because the obvious reading was wrong: the
     // natural claim is "chains up to four". Setting it to 1 rejects every depth
     // below just the same. **Scoping forces `let` bindings into dependency order**
     // -- `let v3 = v2 + 1` cannot precede `v2` -- so one pass over the table in
@@ -5549,34 +5549,38 @@ fn eliding_inert_expression_rows_changes_no_verdict() {
     );
 }
 
+// Input columns and private solver arrays, priced together.
+#[cfg(feature = "self-host")]
+const TYPE_STAGE_ARRAY_GROUPS: &[(&str, usize, usize)] = &[
+    ("operand pairs", 256, 2),
+    ("call arity", 128, 2),
+    ("claims", 256, 2),
+    ("membership", 256, 1),
+    ("declared params", 640, 1),
+    ("call sites", 640, 2),
+    ("struct types", 64, 2),
+    ("declared fields", 256, 2),
+    ("field accesses", 256, 2),
+    ("declared names", 640, 1),
+    ("name occurrences", 640, 3),
+    ("expression nodes", 640, 5),
+    ("bindings", 640, 4),
+    ("struct bindings", 128, 3),
+    ("field reads", 128, 2),
+    ("pattern binds", 128, 4),
+    ("payload decls", 128, 4),
+    ("structural types", 640, 3),
+];
+
 /// **THE SELECTED CAPACITY PRICE, IN WORDS.**
 ///
-/// Six channels that exceeded their previous caps were raised to 640 rows. This
-/// test records the worst-case-memory increase and checks the chosen caps against
+/// Six channels that exceeded their previous caps were raised to 640 rows. The
+/// structural identity pool adds three more 640-word arrays. This test records
+/// the combined worst-case-memory increase and checks the chosen input caps against
 /// all twelve real stage sources.
 #[cfg(feature = "self-host")]
 #[test]
 fn the_price_of_a_corpus_sized_input_path_is_measured_in_words() {
-    // `(channel, selected cap, parallel arrays sharing it)`.
-    const CHANNELS: &[(&str, usize, usize)] = &[
-        ("operand pairs", 256, 2),
-        ("call arity", 128, 2),
-        ("claims", 256, 2),
-        ("membership", 256, 1),
-        ("declared params", 640, 1),
-        ("call sites", 640, 2),
-        ("struct types", 64, 2),
-        ("declared fields", 256, 2),
-        ("field accesses", 256, 2),
-        ("declared names", 640, 1),
-        ("name occurrences", 640, 3),
-        ("expression nodes", 640, 5),
-        ("bindings", 640, 4),
-        ("struct bindings", 128, 3),
-        ("field reads", 128, 2),
-        ("pattern binds", 128, 4),
-        ("payload decls", 128, 4),
-    ];
     const PREVIOUS_CAPS: &[(&str, usize)] = &[
         ("declared params", 128),
         ("call sites", 128),
@@ -5584,10 +5588,13 @@ fn the_price_of_a_corpus_sized_input_path_is_measured_in_words() {
         ("name occurrences", 256),
         ("expression nodes", 256),
         ("bindings", 128),
+        ("structural types", 0),
     ];
 
-    let mut needed: std::collections::BTreeMap<&str, usize> =
-        CHANNELS.iter().map(|(name, _, _)| (*name, 0)).collect();
+    let mut needed: std::collections::BTreeMap<&str, usize> = TYPE_STAGE_ARRAY_GROUPS
+        .iter()
+        .map(|(name, _, _)| (*name, 0))
+        .collect();
     for (_, src) in REAL_STAGE_SOURCES {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
         for (name, rows, _) in real_source_channel_rows(&program) {
@@ -5596,8 +5603,11 @@ fn the_price_of_a_corpus_sized_input_path_is_measured_in_words() {
         }
     }
 
-    let selected_words: usize = CHANNELS.iter().map(|(_, cap, arrays)| cap * arrays).sum();
-    let previous_words: usize = CHANNELS
+    let selected_words: usize = TYPE_STAGE_ARRAY_GROUPS
+        .iter()
+        .map(|(_, cap, arrays)| cap * arrays)
+        .sum();
+    let previous_words: usize = TYPE_STAGE_ARRAY_GROUPS
         .iter()
         .map(|(name, cap, arrays)| {
             let old_cap = PREVIOUS_CAPS
@@ -5608,7 +5618,7 @@ fn the_price_of_a_corpus_sized_input_path_is_measured_in_words() {
             old_cap * arrays
         })
         .sum();
-    let corpus_minimum_words: usize = CHANNELS
+    let corpus_minimum_words: usize = TYPE_STAGE_ARRAY_GROUPS
         .iter()
         .map(|(name, _, arrays)| {
             let old_cap = PREVIOUS_CAPS
@@ -5623,15 +5633,15 @@ fn the_price_of_a_corpus_sized_input_path_is_measured_in_words() {
     std::eprintln!(
         "SELECTED INPUT-PATH CAPACITY: previous={previous_words} words, \
          selected={selected_words} words, increase={} words ({} KiB), \
-         corpus minimum={corpus_minimum_words} words",
+         input corpus lower bound={corpus_minimum_words} words",
         selected_words - previous_words,
         (selected_words - previous_words) * 8 / 1024,
     );
-    assert_eq!(selected_words - previous_words, 7_168);
-    assert_eq!((selected_words - previous_words) * 8 / 1024, 56);
+    assert_eq!(selected_words - previous_words, 7_168 + 1_920);
+    assert_eq!((selected_words - previous_words) * 8 / 1024, 71);
     assert!(corpus_minimum_words <= selected_words);
     for (name, rows) in &needed {
-        let cap = CHANNELS
+        let cap = TYPE_STAGE_ARRAY_GROUPS
             .iter()
             .find(|(channel, _, _)| channel == name)
             .unwrap()
@@ -5647,7 +5657,7 @@ fn the_price_of_a_corpus_sized_input_path_is_measured_in_words() {
 ///
 /// The price depends on how many parallel arrays share each capacity, and a name
 /// added to the stage's data block without updating that table would skew the
-/// total silently. So the shared block's own array declarations are counted here
+/// total silently. Shared and private array declarations are counted here
 /// and compared against the sum the price table claims.
 ///
 /// **Read from the stage source rather than from a copy**, for the reason
@@ -5655,7 +5665,7 @@ fn the_price_of_a_corpus_sized_input_path_is_measured_in_words() {
 #[cfg(feature = "self-host")]
 #[test]
 fn the_channel_array_counts_match_the_stage_data_block() {
-    // Every `name: [Word; N],` line in the shared block, as `(name, N)`.
+    // Every array declaration in shared and private blocks, as `(name, N)`.
     let declared: Vec<(String, usize)> = TYPES_KEL
         .lines()
         .filter_map(|l| {
@@ -5685,7 +5695,10 @@ fn the_channel_array_counts_match_the_stage_data_block() {
     // The lesson is narrow and worth keeping: **a count is only comparable to
     // another count when both sides are drawn from the same population**, and here
     // one side was "shared arrays" while the other was "arrays".
-    let priced: usize = 2 + 2 + 2 + 1 + 1 + 2 + 2 + 2 + 2 + 1 + 3 + 5 + 4 + 3 + 2 + 4 + 4;
+    let priced: usize = TYPE_STAGE_ARRAY_GROUPS
+        .iter()
+        .map(|(_, _, count)| count)
+        .sum();
     assert_eq!(
         priced,
         declared.len(),
@@ -5696,6 +5709,14 @@ fn the_channel_array_counts_match_the_stage_data_block() {
         declared.len(),
         declared.iter().map(|(n, _)| n).collect::<Vec<_>>()
     );
+    let mut actual_caps: Vec<usize> = declared.iter().map(|(_, cap)| *cap).collect();
+    let mut priced_caps: Vec<usize> = TYPE_STAGE_ARRAY_GROUPS
+        .iter()
+        .flat_map(|(_, cap, count)| core::iter::repeat_n(*cap, *count))
+        .collect();
+    actual_caps.sort_unstable();
+    priced_caps.sort_unstable();
+    assert_eq!(actual_caps, priced_caps, "array capacities must also match");
 }
 
 /// **THE STAGE AGAINST TWELVE REAL PROGRAMS, NOT TWELVE SNIPPETS.**

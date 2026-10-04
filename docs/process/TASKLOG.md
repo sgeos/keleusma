@@ -6,6 +6,32 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Structural tuple and nested-array facts
+
+Source type metadata now retains flat tuple members and the existing nested-array header
+forms. The driver turns declared types and tuple literals into bounded construction rows.
+The Keleusma type stage interns exact tuple and array structures, preserving member order,
+element types and dimensions independently of byte size. Parameters, calls, aliases and
+returns share these identities. The solver now permits up to 640 productive rounds, bounded
+by its binding table. Pool exhaustion is unavailable evidence rather than source rejection.
+
+The initial fifteen-source comparison found eleven missed rejections. The expanded corpus
+contains nineteen sources, including thirteen negatives and six valid controls. Six complete
+artifact and execution controls cover tuple, nested-array and array-of-tuple parameters and
+returns. Array-of-tuple literals now retain their tuple element byte width. Return-header
+layout no longer indexes a nonexistent parameter in zero-parameter functions.
+
+The structural pool adds three 640-word arrays, or 1,920 words. At eight bytes per word this
+is fifteen KiB beyond the earlier 56 KiB selected-cap increase. The accounting tests share one
+price table and compare actual array capacities as well as counts. Projection scalar-exclusion
+rules now recognize known nominal and structural composites, with direct transport controls.
+
+This does not establish arbitrary nested type grammar, composite payload requirements,
+array let annotations, whole-composite projection identity, complete binder and occurrence
+coverage or general syntax admission. Mixed-scalar tuple runtime layout and nominal struct
+signatures remain incomplete. Production serialization still uses Rust Module::to_bytes.
+The complete Order 1 objective remains active.
+
 ## 2026-10-04 Enum constructors, payloads and casts
 
 The nineteen-source enum comparison initially found fourteen invalid programs accepted by the

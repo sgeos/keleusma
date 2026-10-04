@@ -86,7 +86,7 @@ fn production_transport_rejects_malformed_facts_as_errors() {
             5 => batch.bindings.push(("b".into(), 0, 2, String::new())),
             6 => batch
                 .expressions
-                .push((17, (0, 0, String::new()), (0, 0, String::new()))),
+                .push((18, (0, 0, String::new()), (0, 0, String::new()))),
             7 => batch.bindings.push(("b".into(), -1, 0, String::new())),
             _ => unreachable!(),
         }
@@ -151,6 +151,130 @@ fn production_array_type_tags_retain_element_and_length() {
             assert!(
                 !type_check_inputs_via_kel(&inputs).unwrap(),
                 "element {element}"
+            );
+        }
+    }
+}
+
+/// Equal byte sizes cannot identify tuples, arrays or differently nested arrays.
+#[test]
+fn structural_type_identities_are_exact() {
+    fn row(
+        batch: &mut CallTypeBatch,
+        kind: i64,
+        a: keleusma::selfhost::ExprOperand,
+        b: keleusma::selfhost::ExprOperand,
+    ) -> keleusma::selfhost::ExprOperand {
+        let index = batch.expressions.len();
+        let name = format!("type{index}");
+        batch.expressions.push((kind, a, b));
+        batch
+            .bindings
+            .push((name.clone(), index as i64, 2, String::new()));
+        (0, 1, name)
+    }
+    let atom = |tag| (tag, 0, String::new());
+    for changed in [false, true] {
+        let mut batch = empty_batch();
+        let tail = row(&mut batch, 17, atom(2), atom(7));
+        let first = row(&mut batch, 17, atom(1), tail);
+        let tail = row(&mut batch, 17, atom(if changed { 1 } else { 2 }), atom(7));
+        let second = row(&mut batch, 17, atom(1), tail);
+        batch.expressions.push((8, first, second));
+        assert_eq!(type_check_inputs_via_kel(&input(batch)).unwrap(), !changed);
+    }
+    for changed in [false, true] {
+        let mut batch = empty_batch();
+        let inner = row(&mut batch, 16, atom(1), atom(2));
+        let first = row(&mut batch, 16, inner, atom(3));
+        let inner = row(&mut batch, 16, atom(1), atom(if changed { 3 } else { 2 }));
+        let second = row(&mut batch, 16, inner, atom(if changed { 2 } else { 3 }));
+        batch.expressions.push((8, first, second));
+        assert_eq!(type_check_inputs_via_kel(&input(batch)).unwrap(), !changed);
+    }
+    let mut batch = empty_batch();
+    let tail = row(&mut batch, 17, atom(1), atom(7));
+    let tuple = row(&mut batch, 17, atom(1), tail);
+    let array = row(&mut batch, 16, atom(1), atom(2));
+    batch.expressions.push((8, tuple, array));
+    assert!(!type_check_inputs_via_kel(&input(batch)).unwrap());
+}
+
+/// Source-independent ordering can require more than four productive solver rounds.
+#[test]
+fn structural_dependencies_resolve_in_reverse_order() {
+    let mut batch = empty_batch();
+    for index in 0..24 {
+        let tail = if index == 23 {
+            (7, 0, String::new())
+        } else {
+            (0, 1, format!("b{}", index + 1))
+        };
+        batch.expressions.push((17, (1, 0, String::new()), tail));
+        batch
+            .bindings
+            .push((format!("b{index}"), index, 2, String::new()));
+    }
+    batch.arguments.push((24 * 16 + 4, (0, 1, "b0".into())));
+    let mut inputs = input(batch);
+    assert!(type_check_inputs_via_kel(&inputs).unwrap());
+    inputs.batches[0].arguments[0].0 = 1;
+    assert!(
+        !type_check_inputs_via_kel(&inputs).unwrap(),
+        "unknown would incorrectly accept"
+    );
+}
+
+#[test]
+fn structural_construction_rows_obey_the_selected_capacity() {
+    for count in [639, 640, 641] {
+        let mut batch = empty_batch();
+        for index in 0..count {
+            batch.expressions.push((
+                17,
+                (index * 16 + 8, 0, String::new()),
+                (7, 0, String::new()),
+            ));
+            batch
+                .bindings
+                .push((format!("b{index}"), index, 2, String::new()));
+        }
+        let mut inputs = input(batch);
+        if count == 641 {
+            assert!(matches!(
+                type_check_inputs_via_kel(&inputs),
+                Err(TypeCheckError::Capacity {
+                    actual: 641,
+                    maximum: 640,
+                    ..
+                })
+            ));
+        } else {
+            assert!(type_check_inputs_via_kel(&inputs).unwrap());
+            if count == 639 {
+                inputs.batches[0].arguments.push((1, (0, 1, "b638".into())));
+                assert!(
+                    !type_check_inputs_via_kel(&inputs).unwrap(),
+                    "last constructed identity must be known"
+                );
+            }
+        }
+    }
+}
+
+/// Projection rules must distinguish known composites from known scalar operands.
+#[test]
+fn projection_rules_admit_composite_identity_classes() {
+    for kind in [5, 6] {
+        for tag in [0, 1, 2, 3, 4, 17, 18, 19, 20, 22, 24, 25] {
+            let mut batch = empty_batch();
+            batch
+                .expressions
+                .push((kind, (tag, 0, String::new()), (0, 0, String::new())));
+            assert_eq!(
+                type_check_inputs_via_kel(&input(batch)).unwrap(),
+                tag == 0 || tag >= 16,
+                "kind {kind}, tag {tag}"
             );
         }
     }

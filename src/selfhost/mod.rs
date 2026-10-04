@@ -117,8 +117,10 @@ pub struct ParsedFn {
     // the return (the RETTYPE record), for the driver's own chunk-signature assembly.
     param_types: Vec<i64>,
     return_type: i64,
-    param_array_lengths: Vec<Option<i64>>,
-    return_array_length: Option<i64>,
+    // Source type records preserve tuple members and every array dimension in postfix order.
+    param_type_records: Vec<Vec<(i64, i64)>>,
+    return_type_records: Vec<(i64, i64)>,
+    tuple_header_is_return: bool,
     guard: Vec<(i64, i64)>,
     body: Vec<(i64, i64)>,
     /// Each value parameter's interned name id, in declaration order.
@@ -1925,8 +1927,9 @@ fn try_parse_functions_impl(
                             params: 0,
                             param_types: Vec::new(),
                             return_type: -1,
-                            param_array_lengths: Vec::new(),
-                            return_array_length: None,
+                            param_type_records: Vec::new(),
+                            return_type_records: Vec::new(),
+                            tuple_header_is_return: false,
                             guard: Vec::new(),
                             body: Vec::new(),
                             param_names: Vec::new(),
@@ -1943,24 +1946,41 @@ fn try_parse_functions_impl(
                         f.param_names.push(val);
                         // Composite tuple headers may emit no PTYPE. Reserve the slot now.
                         f.param_types.push(-1);
-                        f.param_array_lengths.push(None);
+                        f.param_type_records.push(Vec::new());
                     }
                     6 => {
-                        *open_decl(&mut cur, code, val)
-                            .param_types
+                        let f = open_decl(&mut cur, code, val);
+                        f.param_type_records.last_mut().unwrap().push((6, val));
+                        *f.param_types
                             .last_mut()
                             .expect("parameter type without parameter") = val
                     }
-                    7 => open_decl(&mut cur, code, val).return_type = val,
+                    7 => {
+                        let f = open_decl(&mut cur, code, val);
+                        f.return_type = val;
+                        f.return_type_records.push((6, val));
+                    }
                     8 => {
                         let f = open_decl(&mut cur, code, val);
-                        if f.return_type >= 0 {
-                            f.return_array_length = Some(val);
+                        if !f.return_type_records.is_empty() {
+                            f.return_type_records.push((8, val));
                         } else {
-                            *f.param_array_lengths
-                                .last_mut()
-                                .expect("array size without parameter") = Some(val);
+                            f.param_type_records.last_mut().unwrap().push((8, val));
                         }
+                    }
+                    94..=96 => {
+                        let f = open_decl(&mut cur, code, val);
+                        if code == 94 {
+                            f.tuple_header_is_return = val == 1;
+                        }
+                        let target = if f.tuple_header_is_return {
+                            &mut f.return_type_records
+                        } else {
+                            f.param_type_records
+                                .last_mut()
+                                .expect("tuple without parameter")
+                        };
+                        target.push((code, val));
                     }
                     9 => {
                         in_data = true;
@@ -2308,6 +2328,64 @@ pub struct CallTypeBatch {
     pub expressions: Vec<ExprRow>,
 }
 
+fn structural_type_row(
+    kind: i64,
+    left: ExprOperand,
+    right: ExprOperand,
+    rows: &mut Vec<ExprRow>,
+    bindings: &mut Vec<BindingRow>,
+) -> ExprOperand {
+    let row = rows.len();
+    let identity = format!("#structural:{row}");
+    rows.push((kind, left, right));
+    bindings.push((identity.clone(), row as i64, 2, String::new()));
+    (0, 1, identity)
+}
+
+/// Encode written type syntax as stage construction rows. This does not resolve operands.
+fn declared_type_operand(
+    records: &[(i64, i64)],
+    tag_of: impl Fn(i64) -> i64,
+    rows: &mut Vec<ExprRow>,
+    bindings: &mut Vec<BindingRow>,
+) -> ExprOperand {
+    let mut stack: Vec<Option<ExprOperand>> = Vec::new();
+    for &(kind, value) in records {
+        match kind {
+            6 | 95 => stack.push(Some((tag_of(value), 0, String::new()))),
+            94 => stack.push(None),
+            96 => {
+                let mut tail = (7, 0, String::new());
+                while let Some(element) = stack.pop().expect("tuple type without open") {
+                    tail = structural_type_row(17, element, tail, rows, bindings);
+                }
+                stack.push(Some(tail));
+            }
+            8 => {
+                let element = stack.pop().flatten().expect("array type without element");
+                let scalar = if element.1 == 0 {
+                    scalar_array_tag(element.0, value)
+                } else {
+                    0
+                };
+                let array = if scalar != 0 {
+                    (scalar, 0, String::new())
+                } else {
+                    structural_type_row(16, element, (value, 0, String::new()), rows, bindings)
+                };
+                stack.push(Some(array));
+            }
+            _ => panic!("unknown source type record {kind}"),
+        }
+    }
+    if records.is_empty() {
+        (0, 0, String::new())
+    } else {
+        assert_eq!(stack.len(), 1, "unbalanced source type records");
+        stack.pop().flatten().expect("unclosed source tuple type")
+    }
+}
+
 /// Source-declared data types keyed by parser slot ranges, in declaration order.
 /// Ranges avoid expanding large arrays just to look up the few fields a body uses.
 fn source_data_type_ranges(records: &[(i64, i64)], names: &[String]) -> Vec<(i64, i64, i64)> {
@@ -2445,20 +2523,26 @@ pub fn try_call_type_inputs_from_pipeline(
         let Some(name) = name_of(f.name) else {
             continue;
         };
-        let tags = (0..f.params)
-            .map(|i| {
-                if let Some(length) = f.param_array_lengths[i] {
-                    scalar_array_tag(f.param_types.get(i).copied().map_or(0, tag_of), length)
-                } else {
-                    f.param_types.get(i).copied().map_or(0, tag_of)
+        let tags = f
+            .param_type_records
+            .iter()
+            .map(|records| {
+                let mut tag = 0;
+                for &(kind, value) in records {
+                    match kind {
+                        6 => tag = tag_of(value),
+                        8 => tag = scalar_array_tag(tag, value),
+                        _ => return 0,
+                    }
                 }
+                tag
             })
             .collect();
         declarations.push((name, f.params as i64, tags));
     }
-    let parameters: alloc::collections::BTreeMap<&str, &Vec<i64>> = declarations
+    let parameters: alloc::collections::BTreeMap<_, _> = fns
         .iter()
-        .map(|(name, _, tags)| (name.as_str(), tags))
+        .filter_map(|f| name_of(f.name).map(|name| (name, &f.param_type_records)))
         .collect();
     let chunk_names = chunk_names_from_pipeline(src);
     let return_names: Vec<_> = chunk_names
@@ -2468,14 +2552,7 @@ pub fn try_call_type_inputs_from_pipeline(
     let mut returns = alloc::collections::BTreeMap::new();
     for f in &fns {
         if let Some(name) = name_of(f.name) {
-            returns.insert(
-                format!("#function:{name}"),
-                if let Some(length) = f.return_array_length {
-                    scalar_array_tag(tag_of(f.return_type), length)
-                } else {
-                    tag_of(f.return_type)
-                },
-            );
+            returns.insert(format!("#function:{name}"), &f.return_type_records);
         }
     }
     let mut batches = Vec::new();
@@ -2491,6 +2568,7 @@ pub fn try_call_type_inputs_from_pipeline(
             let mut sites = Vec::new();
             let mut arguments = Vec::new();
             let mut bindings = Vec::new();
+            let mut expressions = Vec::new();
             let body = reconstruct_via_kel(records, reconstruct_category(f.cat), f.params, &name);
             let slot_names: alloc::collections::BTreeMap<_, _> = source_slots
                 .keys()
@@ -2503,16 +2581,11 @@ pub fn try_call_type_inputs_from_pipeline(
                 )
                 .map(|slot| (slot, format!("#local:{head}:{range}:{slot}")))
                 .collect();
-            for (slot, &type_name) in f.param_types.iter().enumerate() {
+            for (slot, records) in f.param_type_records.iter().enumerate() {
                 if let Some(identity) = slot_names.get(&(slot as i64)) {
-                    let tag = if let Some(length) = f.param_array_lengths[slot] {
-                        scalar_array_tag(tag_of(type_name), length)
-                    } else {
-                        tag_of(type_name)
-                    };
-                    if tag != 0 {
-                        bindings.push((identity.clone(), tag, 0, String::new()));
-                    }
+                    let (value, form, target) =
+                        declared_type_operand(records, tag_of, &mut expressions, &mut bindings);
+                    bindings.push((identity.clone(), value, form, target));
                 }
             }
             // EnumBind records retain source-declared scalar field kinds and frame slots.
@@ -2646,7 +2719,6 @@ pub fn try_call_type_inputs_from_pipeline(
                     source_operand(&body, index, &slot_names, &return_names)
                 }
             };
-            let mut expressions = Vec::new();
             let result_rows = expression_rows_from_body(&body, operand, &mut expressions, true);
             if range == 1 {
                 for &(declared, given) in &f.struct_counts {
@@ -2654,19 +2726,13 @@ pub fn try_call_type_inputs_from_pipeline(
                     expressions.push((7, (declared, 0, String::new()), (given, 0, String::new())));
                 }
                 if let Some(tail) = body_tail_node(&body) {
-                    expressions.push((
-                        8,
-                        operand(tail),
-                        (
-                            if let Some(length) = f.return_array_length {
-                                scalar_array_tag(tag_of(f.return_type), length)
-                            } else {
-                                tag_of(f.return_type)
-                            },
-                            0,
-                            String::new(),
-                        ),
-                    ));
+                    let required = declared_type_operand(
+                        &f.return_type_records,
+                        tag_of,
+                        &mut expressions,
+                        &mut bindings,
+                    );
+                    expressions.push((8, operand(tail), required));
                 }
             }
             for (&index, name) in &struct_nodes {
@@ -2695,6 +2761,28 @@ pub fn try_call_type_inputs_from_pipeline(
                     tags.iter().zip(&body.call_args[first + 1..first + count])
                 {
                     expressions.push((8, operand(child), (declared, 0, String::new())));
+                }
+            }
+            for (index, node) in body.nodes.iter().enumerate() {
+                if node.kind == 19 {
+                    let first = usize::try_from(node.lhs).expect("negative tuple child offset");
+                    let count = usize::try_from(node.rhs).expect("negative tuple child count");
+                    let mut tail = (7, 0, String::new());
+                    for &child in body.call_args[first..first + count].iter().rev() {
+                        tail = structural_type_row(
+                            17,
+                            operand(child),
+                            tail,
+                            &mut expressions,
+                            &mut bindings,
+                        );
+                    }
+                    bindings.push((
+                        computed_names[&(index as i64)].clone(),
+                        tail.0,
+                        tail.1,
+                        tail.2,
+                    ));
                 }
             }
             for node in &body.nodes {
@@ -2738,7 +2826,7 @@ pub fn try_call_type_inputs_from_pipeline(
                     continue;
                 };
                 sites.push((callee.clone(), node.rhs));
-                let Some(tags) = parameters.get(callee.as_str()) else {
+                let Some(types) = parameters.get(callee.as_str()) else {
                     continue;
                 };
                 let start = usize::try_from(node.lhs).expect("negative call argument offset");
@@ -2750,8 +2838,14 @@ pub fn try_call_type_inputs_from_pipeline(
                     .call_args
                     .get(start..end)
                     .expect("call arguments outside side table");
-                for (&declared, &index) in tags.iter().zip(actual) {
-                    arguments.push((declared, operand(index)));
+                for (records, &index) in types.iter().zip(actual) {
+                    let required =
+                        declared_type_operand(records, tag_of, &mut expressions, &mut bindings);
+                    if required.1 == 0 {
+                        arguments.push((required.0, operand(index)));
+                    } else {
+                        expressions.push((8, operand(index), required));
+                    }
                 }
             }
             for (node, row) in result_rows {
@@ -2773,13 +2867,17 @@ pub fn try_call_type_inputs_from_pipeline(
                         .iter()
                         .filter_map(|(_, _, form, target)| (*form == 1).then_some(target)),
                 )
-                .filter_map(|target| returns.get(target).map(|&tag| (target.clone(), tag)))
+                .filter_map(|target| {
+                    returns
+                        .get(target)
+                        .map(|&records| (target.clone(), records))
+                })
                 .collect();
-            bindings.extend(
-                targets
-                    .into_iter()
-                    .map(|(name, tag)| (name, tag, 0, String::new())),
-            );
+            for (name, records) in targets {
+                let (value, form, target) =
+                    declared_type_operand(records, tag_of, &mut expressions, &mut bindings);
+                bindings.push((name, value, form, target));
+            }
             batches.push(CallTypeBatch {
                 sites,
                 arguments,
@@ -3367,7 +3465,10 @@ fn expression_rows_from_body<F: Fn(i64) -> ExprOperand>(
 
 fn typed_result_node(node: &Node) -> bool {
     is_binary_operator(node.kind)
-        || matches!(node.kind, 6 | 8 | 9 | 10 | 17 | 22 | 26 | 39 | 65 | 66 | 68)
+        || matches!(
+            node.kind,
+            6 | 8 | 9 | 10 | 17 | 19 | 22 | 26 | 39 | 65 | 66 | 68
+        )
         || (node.kind == 4 && node.arg >= 0)
 }
 
@@ -5532,26 +5633,54 @@ fn wire_shape_of(
     }
 }
 
-/// Preserve a source array's outer shape rather than the element's scalar signature.
+/// Preserve the outer shape and checked flat size of written structural types.
 fn declared_wire_shape(
-    type_id: i64,
-    length: Option<i64>,
+    records: &[(i64, i64)],
     names: &[String],
     enums: &[crate::bytecode::EnumLayout],
 ) -> crate::bytecode::WireShape {
     use crate::bytecode::WireShape;
-    let element = wire_shape_of(type_id, names, enums);
-    let Some(length) = length else { return element };
-    let width = match element {
-        WireShape::Scalar { kind: 1 | 2 } => 1,
-        WireShape::Scalar { kind: 3 } => 8,
-        WireShape::Flat { size, .. } => size,
-        _ => return WireShape::Top,
+    let size_of = |shape| match shape {
+        WireShape::Scalar { kind: 1 | 2 } => Some(1u32),
+        WireShape::Scalar { kind: 3 } => Some(8),
+        WireShape::Flat { size, .. } => Some(size),
+        _ => None,
     };
-    u32::try_from(length)
-        .ok()
-        .and_then(|n| n.checked_mul(width))
-        .map_or(WireShape::Top, |size| WireShape::Flat { kind: 1, size })
+    let mut stack: Vec<Option<WireShape>> = Vec::new();
+    for &(kind, value) in records {
+        match kind {
+            6 | 95 => stack.push(Some(wire_shape_of(value, names, enums))),
+            94 => stack.push(None),
+            96 => {
+                let mut size = Some(0u32);
+                while let Some(element) = stack.pop().expect("tuple signature without open") {
+                    size = size.and_then(|n| size_of(element).and_then(|s| n.checked_add(s)));
+                }
+                stack.push(Some(
+                    size.map_or(WireShape::Top, |size| WireShape::Flat { kind: 0, size }),
+                ));
+            }
+            8 => {
+                let element = stack
+                    .pop()
+                    .flatten()
+                    .expect("array signature without element");
+                let size = u32::try_from(value)
+                    .ok()
+                    .and_then(|length| size_of(element).and_then(|s| length.checked_mul(s)));
+                stack.push(Some(
+                    size.map_or(WireShape::Top, |size| WireShape::Flat { kind: 1, size }),
+                ));
+            }
+            _ => panic!("unknown signature type record {kind}"),
+        }
+    }
+    if records.is_empty() {
+        WireShape::Top
+    } else {
+        assert_eq!(stack.len(), 1, "unbalanced signature type records");
+        stack.pop().flatten().expect("unclosed tuple signature")
+    }
 }
 
 /// Assemble the per-chunk signature table from the parsed functions, grouping
@@ -5574,12 +5703,11 @@ fn assemble_signatures(
         }
         i = j;
         let params: Vec<WireShape> = first
-            .param_types
+            .param_type_records
             .iter()
-            .enumerate()
-            .map(|(i, &t)| declared_wire_shape(t, first.param_array_lengths[i], names, enums))
+            .map(|records| declared_wire_shape(records, names, enums))
             .collect();
-        let ret = declared_wire_shape(first.return_type, first.return_array_length, names, enums);
+        let ret = declared_wire_shape(&first.return_type_records, names, enums);
         // Only a `loop` (category 3, a Stream chunk) resumes with its first parameter.
         let resume = if first.cat == 3 {
             params.first().copied().unwrap_or(WireShape::Top)
@@ -5664,7 +5792,10 @@ fn assemble_chunk_metadata(
             .iter()
             .enumerate()
             .map(|(i, &t)| {
-                if first.param_array_lengths[i].is_some() {
+                if first.param_type_records[i]
+                    .iter()
+                    .any(|(kind, _)| matches!(kind, 8 | 94))
+                {
                     TypeTag::Composite
                 } else {
                     tag_of(t)

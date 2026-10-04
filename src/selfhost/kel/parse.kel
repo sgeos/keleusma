@@ -408,6 +408,7 @@ private data ps {
     epf_esize: Word,
     arr: Word,
     arr_ret: Word,
+    array_tuple_layout: Word,
     dvis: Word,
     init: Word,
     idepth: Word,
@@ -1886,14 +1887,21 @@ fn scalar_kind_of(v: Word) -> Word {
 // A token inside a return-type tuple `-> (T, T, ...)` during the signature scan. Counts the
 // elements and tracks whether all are `Word`; the `)` records the count for the current chunk (so
 // a let bound to a call of this function arms `x.N` access) only when the tuple is all-Word. Emits
-// no signature record, matching the prior (skipped) handling of a tuple return type.
+// tuple metadata for source type checking and signature assembly.
+// Tuple type metadata is outside the node vocabulary. Open carries the return flag,
+// element carries a source name id, and close terminates the declared tuple.
+fn type_tuple_record(kind: Word, value: Word) -> Word {
+    ps.emit_arg = value;
+    kind
+}
+
 fn step_ret_tuple_type(k: Word, v: Word) -> Word {
     if k == Tok::Ident() as Word {
         ps.rtts_count = ps.rtts_count + 1;
         if v != toks.word_id {
             ps.rtts_allword = 0;
         }
-        0
+        type_tuple_record(95, v)
     } else {
     if k == Tok::RParen() as Word {
         if ps.rtts_allword == 1 {
@@ -1901,7 +1909,7 @@ fn step_ret_tuple_type(k: Word, v: Word) -> Word {
         }
         ps.rtts = 0;
         ps.rtype = 0;
-        0
+        type_tuple_record(96, 0)
     } else {
         0
     } }
@@ -1910,7 +1918,7 @@ fn step_ret_tuple_type(k: Word, v: Word) -> Word {
 // A token inside a tuple parameter type `(T, T, ...)` during the signature scan. A type ident
 // records the element's running flat byte offset and ScalarKind into the current tuple layout;
 // the `)` advances the flat element cursor and ends the scan. A `,` (and any other token) is
-// ignored. Emits no signature record.
+// ignored. Emits tuple metadata for source type checking and signature assembly.
 fn step_tuple_type(k: Word, v: Word) -> Word {
     if k == Tok::Ident() as Word {
         let li = ps.ptuple[ps.pcount - 1] - 1;
@@ -1929,14 +1937,14 @@ fn step_tuple_type(k: Word, v: Word) -> Word {
         }
         tupledefs.tup_ecount[li] = ei + 1;
         ps.tts_off = ps.tts_off + type_byte_size(v);
-        0
+        type_tuple_record(95, v)
     } else {
     if k == Tok::RParen() as Word {
         let li = ps.ptuple[ps.pcount - 1] - 1;
         tupledefs.tup_ecursor = tupledefs.tup_estart[li] + tupledefs.tup_ecount[li];
         ps.tts = 0;
         ps.ptype = 0;
-        0
+        type_tuple_record(96, 0)
     } else {
         0
     } }
@@ -2414,6 +2422,7 @@ fn step_iclosing() -> Word {
             // binding records the element struct type. Otherwise the elements are all-Word (element
             // ScalarKind Int = 3, byte_size = count * 8).
             let elem_struct = stmt.pending_cstruct;
+            let elem_tuple = stmt.pending_ctuple;
             // **THE ELEMENT SIZE OF A NESTED ARRAY, READ FROM THIS LEVEL'S OWN SLOT.**
             // Written by an inner array's close into this level while it was open, so it
             // cannot leak from a sibling the way a single flat flag does.
@@ -2433,7 +2442,9 @@ fn step_iclosing() -> Word {
             let my_elem = if elem_struct > 0 {
                 structdefs.sd_bytesize[elem_struct - 1]
             } else {
-                if elem_array_bytes > 0 { elem_array_bytes } else { 8 }
+                if elem_tuple > 0 { elem_tuple * 8 } else {
+                    if elem_array_bytes > 0 { elem_array_bytes } else { 8 }
+                }
             };
             // Hand our byte size to the ENCLOSING array, if there is one, so it sizes its
             // elements by us rather than by the eight bytes a `Word` takes. Our own slot is
@@ -6804,9 +6815,9 @@ fn header_sig(k: Word, v: Word) -> Word {
     if k == 1 {
         if ps.arr == 3 {
             // A tuple element type inside an array-of-tuple parameter `[(T, T, ...); N]`: append it
-            // to the element tuple layout at the running byte offset. Emits no record (the layout
-            // is the payload); the closing `)` finalizes the element size.
-            let li = ps.parray_tuple[ps.pcount - 1] - 1;
+            // to the element tuple layout at the running byte offset and emit source metadata.
+            // The closing `)` finalizes the element size.
+            let li = ps.array_tuple_layout;
             let base = tupledefs.tup_estart[li];
             let ei = tupledefs.tup_ecount[li];
             tupledefs.tup_eoffset[base + ei] = ps.tts_off;
@@ -6823,16 +6834,16 @@ fn header_sig(k: Word, v: Word) -> Word {
             }
             tupledefs.tup_ecount[li] = ei + 1;
             ps.tts_off = ps.tts_off + type_byte_size(v);
-            0
+            type_tuple_record(95, v)
         } else {
         if ps.arr == 8 {
             // The inner element type of an array-of-array parameter `[[T; N]; M]`: record the inner
             // element ScalarKind (plus one) and stash its byte size in `tts_off` to multiply by the
             // inner length at the `; N` (arr 9).
-            ps.parray_arr[ps.pcount - 1] = scalar_kind_of(v) + 1;
+            if ps.arr_ret == 0 { ps.parray_arr[ps.pcount - 1] = scalar_kind_of(v) + 1; }
             ps.tts_off = type_byte_size(v);
             ps.arr = 9;
-            0
+            if ps.arr_ret == 0 { 6 + v * 64 } else { 7 + v * 64 }
         } else {
         if ps.arr == 1 {
             ps.arr = 2;
@@ -6963,9 +6974,9 @@ fn header_sig(k: Word, v: Word) -> Word {
         if ps.arr == 9 {
             // The inner length of an array-of-array parameter `[[T; N]; M]`: the inner array byte
             // size is element_size (stashed in `tts_off`) * N; await the inner `]` (arr 10).
-            ps.parray_size[ps.pcount - 1] = ps.tts_off * v;
+            if ps.arr_ret == 0 { ps.parray_size[ps.pcount - 1] = ps.tts_off * v; }
             ps.arr = 10;
-            0
+            8 + v * 64
         } else {
         if ps.arr == 2 {
             ps.arr = 0;
@@ -6985,13 +6996,14 @@ fn header_sig(k: Word, v: Word) -> Word {
             // A `(` opening the tuple element type of an array-of-tuple parameter `[(T, ...); N]`:
             // open a fresh tuple layout bound to the parameter (`parray_tuple`), scan its element
             // types in the k==1 `arr == 3` branch, and finalize the element size at the closing `)`.
-            ps.parray_tuple[ps.pcount - 1] = tupledefs.tup_count + 1;
+            ps.array_tuple_layout = tupledefs.tup_count;
+            if ps.arr_ret == 0 { ps.parray_tuple[ps.pcount - 1] = tupledefs.tup_count + 1; }
             tupledefs.tup_estart[tupledefs.tup_count] = tupledefs.tup_ecursor;
             tupledefs.tup_ecount[tupledefs.tup_count] = 0;
             tupledefs.tup_count = tupledefs.tup_count + 1;
             ps.tts_off = 0;
             ps.arr = 3;
-            0
+            type_tuple_record(94, ps.arr_ret)
         } else {
         if ps.ptype == 1 andalso ps.pdepth == 1 {
             // A tuple parameter type `(T, T, ...)`: open a fresh tuple layout entry, bind it to the
@@ -7003,7 +7015,7 @@ fn header_sig(k: Word, v: Word) -> Word {
             tupledefs.tup_count = tupledefs.tup_count + 1;
             ps.tts = 1;
             ps.tts_off = 0;
-            0
+            type_tuple_record(94, 0)
         } else {
         if ps.rtype == 1 andalso ps.pdepth == 0 {
             // A return-type tuple `-> (T, T, ...)`: count its all-Word elements in
@@ -7011,7 +7023,7 @@ fn header_sig(k: Word, v: Word) -> Word {
             ps.rtts = 1;
             ps.rtts_count = 0;
             ps.rtts_allword = 1;
-            0
+            type_tuple_record(94, 1)
         } else {
             ps.pdepth = ps.pdepth + 1;
             if ps.pdepth == 1 {
@@ -7027,11 +7039,11 @@ fn header_sig(k: Word, v: Word) -> Word {
             // The `)` closing an array-of-tuple parameter's element type: finalize the element
             // tuple layout and record the element byte size (the running offset), then await the
             // array size (`; N`, k==12 with arr==2) as a scalar array would.
-            let li = ps.parray_tuple[ps.pcount - 1] - 1;
+            let li = ps.array_tuple_layout;
             tupledefs.tup_ecursor = tupledefs.tup_estart[li] + tupledefs.tup_ecount[li];
-            ps.parray_size[ps.pcount - 1] = ps.tts_off;
+            if ps.arr_ret == 0 { ps.parray_size[ps.pcount - 1] = ps.tts_off; }
             ps.arr = 2;
-            0
+            type_tuple_record(96, 0)
         } else {
         ps.pdepth = ps.pdepth - 1;
         if ps.pdepth == 0 {

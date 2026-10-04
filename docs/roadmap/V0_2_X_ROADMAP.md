@@ -348,6 +348,12 @@ The gaps to close, from the current subset to the full grammar:
 
 ## Current Order-1 status, 2026-10-04
 
+Tuple and nested-array type facts now use exact structural identities in the Keleusma stage.
+The current increment extends parameter, call, alias and return constraints, and preserves
+structural signatures for six artifact and execution controls. General composite coverage,
+production wire emission and final verification still keep Order 1 open. The completion plan
+records the supported forms and remaining limits.
+
 Production type checking now retains nominal struct identity and field requirements, plus
 scalar-array element types and lengths. A sixteen-source comparison closes twelve missed
 rejections and one false rejection. Fourteen valid controls and three artifact/execution controls
