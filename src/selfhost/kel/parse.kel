@@ -4177,6 +4177,10 @@ fn step_closing() -> Word {
             stmt.pending_carray_struct = chunkret.ret_array_struct[call.call_chunk[call.call_sp]];
             stmt.pending_carray_size = chunkret.ret_array_size[call.call_chunk[call.call_sp]];
             stmt.pending_cenum = chunkret.ret_enum[call.call_chunk[call.call_sp]];
+            if stmt.pending_cstruct > 0 {
+                ps.fa_struct = stmt.pending_cstruct - 1;
+                ps.fa_phase = 1;
+            }
             Node::Call() as Word + (call.call_chunk[call.call_sp] + call.call_count[call.call_sp] * call_chunk_radix()) * 64
         } else {
         if top == OpCode::EnumMark() as Word {
@@ -4302,6 +4306,8 @@ fn tag_struct_fields() -> Word { 91 }
 fn step_sc_closing() -> Word {
     if structdefs.sc_closing == 2 {
         structdefs.sc_closing = 0;
+        ps.fa_struct = stmt.pending_cstruct - 1;
+        ps.fa_phase = 1;
         structdefs.sc_record
     } else {
     if ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] != OpCode::StructMark() as Word {
@@ -4327,7 +4333,7 @@ fn step_sc_closing() -> Word {
         stmt.pending_cenum = 0;
         structdefs.sc_record = Node::StructInit() as Word + (structdefs.sd_bytesize[structdefs.sc_name[structdefs.sc_sp]] * 1024 + structdefs.sc_count[structdefs.sc_sp]) * 64;
         structdefs.sc_closing = 2;
-        ps.emit_arg = structdefs.sd_fcount[structdefs.sc_name[structdefs.sc_sp]];
+        ps.emit_arg = structdefs.sd_fcount[structdefs.sc_name[structdefs.sc_sp]] + structdefs.sd_name[structdefs.sc_name[structdefs.sc_sp]] * 1024;
         tag_struct_fields()
     } }
 }
@@ -4999,6 +5005,24 @@ fn step_normal(k: Word, v: Word) -> Word {
 // the parameter's struct, and emits a FieldAccess (kind 28) that pops the parameter Local,
 // packing the GetField operand as offset + kind * 65536. Held in its own function so the
 // dispatch chain is not deepened (the parser's own conditional stack is bounded).
+// A whole composite field retains its container representation even without a postfix.
+fn field_value_record() -> Word {
+    if structdefs.sd_farraylen[structdefs.sc_fieldpos] > 0 {
+        Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536 + 4294967296) * 64
+    } else {
+    if ps.fa_fstruct > 0 {
+        Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536 + 2 * 4294967296) * 64
+    } else {
+    if ps.fa_ftuple > 0 {
+        Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536) * 64
+    } else {
+    if structdefs.sd_fenum[structdefs.sc_fieldpos] > 0 {
+        Node::FieldAccessNested() as Word + (ps.fa_off + ps.fa_size * 65536 + 3 * 4294967296) * 64
+    } else {
+        Node::FieldAccess() as Word + (ps.fa_off + ps.fa_kind * 65536) * 64
+    } } } }
+}
+
 fn step_fieldaccess(k: Word, v: Word) -> Word {
     if ps.fa_phase == 4 {
         if k == Tok::LParen() as Word {
@@ -5096,7 +5120,7 @@ fn step_fieldaccess(k: Word, v: Word) -> Word {
             ps.fa_phase = 0;
             ps.cursor = ps.cursor - 1;
             ops.expect_operand = 0;
-            Node::FieldAccess() as Word + (ps.fa_off + ps.fa_kind * 65536) * 64
+            field_value_record()
         } }
     } }
 } }

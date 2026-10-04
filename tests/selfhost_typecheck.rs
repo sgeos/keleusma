@@ -10170,7 +10170,7 @@ fn struct_field_metadata_separates_equal_size_literals() {
             .collect();
         assert_eq!(metadata.len(), 1);
         let (at, (_, count, _)) = metadata[0];
-        assert_eq!(*count, declared);
+        assert_eq!(*count % 1024, declared);
         assert_eq!(
             records[at + 1].0,
             27,

@@ -117,6 +117,8 @@ pub struct ParsedFn {
     // the return (the RETTYPE record), for the driver's own chunk-signature assembly.
     param_types: Vec<i64>,
     return_type: i64,
+    param_array_lengths: Vec<Option<i64>>,
+    return_array_length: Option<i64>,
     guard: Vec<(i64, i64)>,
     body: Vec<(i64, i64)>,
     /// Each value parameter's interned name id, in declaration order.
@@ -137,6 +139,8 @@ pub struct ParsedFn {
     let_annotations: Vec<(bool, i64, i64)>,
     // Declared and supplied field counts from consecutive parser metadata/StructInit records.
     struct_counts: Vec<(i64, i64)>,
+    // Constructor identities in postorder, with their guard/body range.
+    struct_types: Vec<(bool, i64)>,
 }
 
 impl ParsedFn {
@@ -1094,6 +1098,17 @@ fn scalar_tag_of_type_name(name: Option<&str>) -> i64 {
     }
 }
 
+/// Canonical tag for a declared scalar array. Low four bits retain the scalar tag.
+/// Nominal types use low bits eight or nine, so equal byte sizes cannot alias type identities.
+/// The bound keeps the encoding representable on the stage's minimum 32-bit Word.
+fn scalar_array_tag(element: i64, length: i64) -> i64 {
+    if (1..=3).contains(&element) && (0..=134_217_726).contains(&length) {
+        (length + 1) * 16 + element
+    } else {
+        0
+    }
+}
+
 /// Translate a source layout's scalar kind into the first-pass type vocabulary.
 /// Composite access records must never pass their size or variant here.
 fn scalar_tag_of_layout_kind(kind: i64) -> i64 {
@@ -1821,7 +1836,8 @@ fn try_parse_functions_impl(
                     f.struct_counts.last().is_none_or(|(_, given)| *given >= 0),
                     "unpaired struct field-count metadata"
                 );
-                f.struct_counts.push((val, -1));
+                f.struct_counts.push((val % 1024, -1));
+                f.struct_types.push((in_guard, val / 1024));
                 return ControlFlow::Continue(());
             }
             if (in_body || in_guard) && code == 27 {
@@ -1899,22 +1915,43 @@ fn try_parse_functions_impl(
                             name: val,
                             params: 0,
                             param_types: Vec::new(),
-                            return_type: 0,
+                            return_type: -1,
+                            param_array_lengths: Vec::new(),
+                            return_array_length: None,
                             guard: Vec::new(),
                             body: Vec::new(),
                             param_names: Vec::new(),
                             let_names: Vec::new(),
                             let_annotations: Vec::new(),
                             struct_counts: Vec::new(),
+                            struct_types: Vec::new(),
                         })
                     }
                     4 => {
                         let f = open_decl(&mut cur, code, val);
                         f.params += 1;
                         f.param_names.push(val);
+                        // Composite tuple headers may emit no PTYPE. Reserve the slot now.
+                        f.param_types.push(-1);
+                        f.param_array_lengths.push(None);
                     }
-                    6 => open_decl(&mut cur, code, val).param_types.push(val),
+                    6 => {
+                        *open_decl(&mut cur, code, val)
+                            .param_types
+                            .last_mut()
+                            .expect("parameter type without parameter") = val
+                    }
                     7 => open_decl(&mut cur, code, val).return_type = val,
+                    8 => {
+                        let f = open_decl(&mut cur, code, val);
+                        if f.return_type >= 0 {
+                            f.return_array_length = Some(val);
+                        } else {
+                            *f.param_array_lengths
+                                .last_mut()
+                                .expect("array size without parameter") = Some(val);
+                        }
+                    }
                     9 => {
                         in_data = true;
                         data_records.push((9, val));
@@ -2237,7 +2274,7 @@ pub type DeclRow = (String, i64, Vec<i64>);
 /// answering it".
 pub type CallSiteRow = (String, i64);
 
-/// Scoped scalar constraints, call sites and argument requirements from the pipeline.
+/// Scoped type constraints, call sites and argument requirements from the pipeline.
 /// Argument rows pair a declared scalar tag with a source operand for stage resolution.
 #[derive(Debug)]
 pub struct CallTypeInputs {
@@ -2316,10 +2353,53 @@ pub fn try_call_type_inputs_from_pipeline(
     src: &str,
 ) -> Result<CallTypeInputs, crate::selfhost_host::ParseRecordError> {
     let mut fns = Vec::new();
-    let (names, data_records, ..) =
+    let (names, data_records, enum_records, struct_records) =
         try_parse_functions_impl(src, true, &mut |_, f| fns.push(f), &mut |_, _, _| {})?;
+    let nominal_names: alloc::collections::BTreeMap<_, _> = enum_records
+        .iter()
+        .filter(|(kind, _)| *kind == 12)
+        .map(|(_, name)| (*name, 9))
+        .chain(
+            struct_records
+                .iter()
+                .filter(|(kind, _)| *kind == 18)
+                .map(|(_, name)| (*name, 8)),
+        )
+        .collect();
     let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
-    let tag_of = |id: i64| scalar_tag_of_type_name(names.get(id as usize).map(String::as_str));
+    let tag_of = |id: i64| {
+        if let Some(kind) = nominal_names.get(&id) {
+            (id + 1) * 16 + kind
+        } else {
+            scalar_tag_of_type_name(names.get(id as usize).map(String::as_str))
+        }
+    };
+    let mut field_types: alloc::collections::BTreeMap<i64, Vec<i64>> =
+        alloc::collections::BTreeMap::new();
+    let mut current_struct = None;
+    for &(kind, value) in &struct_records {
+        match kind {
+            18 => {
+                current_struct = Some(value);
+                field_types.insert(value, Vec::new());
+            }
+            4 => {
+                field_types
+                    .get_mut(&current_struct.expect("field without struct"))
+                    .unwrap()
+                    .push(0);
+            }
+            6 | 8 => {
+                let fields = field_types
+                    .get_mut(&current_struct.expect("type without struct"))
+                    .unwrap();
+                if let Some(field) = fields.last_mut() {
+                    *field = if kind == 6 { tag_of(value) } else { 0 };
+                }
+            }
+            _ => {}
+        }
+    }
     let data_types = source_data_type_ranges(&data_records, &names);
     let mut declarations = Vec::new();
     for f in &fns {
@@ -2327,7 +2407,13 @@ pub fn try_call_type_inputs_from_pipeline(
             continue;
         };
         let tags = (0..f.params)
-            .map(|i| f.param_types.get(i).copied().map_or(0, tag_of))
+            .map(|i| {
+                if let Some(length) = f.param_array_lengths[i] {
+                    scalar_array_tag(f.param_types.get(i).copied().map_or(0, tag_of), length)
+                } else {
+                    f.param_types.get(i).copied().map_or(0, tag_of)
+                }
+            })
             .collect();
         declarations.push((name, f.params as i64, tags));
     }
@@ -2343,7 +2429,14 @@ pub fn try_call_type_inputs_from_pipeline(
     let mut returns = alloc::collections::BTreeMap::new();
     for f in &fns {
         if let Some(name) = name_of(f.name) {
-            returns.insert(format!("#function:{name}"), tag_of(f.return_type));
+            returns.insert(
+                format!("#function:{name}"),
+                if let Some(length) = f.return_array_length {
+                    scalar_array_tag(tag_of(f.return_type), length)
+                } else {
+                    tag_of(f.return_type)
+                },
+            );
         }
     }
     let mut batches = Vec::new();
@@ -2373,7 +2466,11 @@ pub fn try_call_type_inputs_from_pipeline(
                 .collect();
             for (slot, &type_name) in f.param_types.iter().enumerate() {
                 if let Some(identity) = slot_names.get(&(slot as i64)) {
-                    let tag = tag_of(type_name);
+                    let tag = if let Some(length) = f.param_array_lengths[slot] {
+                        scalar_array_tag(tag_of(type_name), length)
+                    } else {
+                        tag_of(type_name)
+                    };
                     if tag != 0 {
                         bindings.push((identity.clone(), tag, 0, String::new()));
                     }
@@ -2404,7 +2501,7 @@ pub fn try_call_type_inputs_from_pipeline(
                 .nodes
                 .iter()
                 .enumerate()
-                .filter(|(_, node)| scalar_result_node(node))
+                .filter(|(_, node)| typed_result_node(node))
                 .map(|(at, _)| (at as i64, format!("#expression:{head}:{range}:{at}")))
                 .collect();
             let data_names: alloc::collections::BTreeMap<_, _> = body
@@ -2425,8 +2522,30 @@ pub fn try_call_type_inputs_from_pipeline(
                     bindings.push((identity.clone(), tag, 0, String::new()));
                 }
             }
+            let struct_nodes: alloc::collections::BTreeMap<_, _> = body
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| node.kind == 27)
+                .zip(
+                    f.struct_types
+                        .iter()
+                        .filter(|(guard, _)| *guard == (range == 0)),
+                )
+                .map(|((index, _), (_, name))| (index as i64, *name))
+                .collect();
+            assert_eq!(
+                struct_nodes.len(),
+                f.struct_types
+                    .iter()
+                    .filter(|(guard, _)| *guard == (range == 0))
+                    .count(),
+                "constructor identity count"
+            );
             let operand = |index| {
-                if let Some(identity) = computed_names.get(&index) {
+                if let Some(name) = struct_nodes.get(&index) {
+                    (tag_of(*name), 0, String::new())
+                } else if let Some(identity) = computed_names.get(&index) {
                     (0, 1, identity.clone())
                 } else if let Some(node) = body.nodes.get(index as usize)
                     && node.kind == NODE_LITERAL
@@ -2466,7 +2585,31 @@ pub fn try_call_type_inputs_from_pipeline(
                     expressions.push((7, (declared, 0, String::new()), (given, 0, String::new())));
                 }
                 if let Some(tail) = body_tail_node(&body) {
-                    expressions.push((8, operand(tail), (tag_of(f.return_type), 0, String::new())));
+                    expressions.push((
+                        8,
+                        operand(tail),
+                        (
+                            if let Some(length) = f.return_array_length {
+                                scalar_array_tag(tag_of(f.return_type), length)
+                            } else {
+                                tag_of(f.return_type)
+                            },
+                            0,
+                            String::new(),
+                        ),
+                    ));
+                }
+            }
+            for (&index, name) in &struct_nodes {
+                let node = &body.nodes[index as usize];
+                let first = usize::try_from(node.lhs).expect("negative struct child offset");
+                let count = usize::try_from(node.rhs).expect("negative struct child count");
+                if let Some(tags) = field_types.get(name) {
+                    for (&declared, &child) in
+                        tags.iter().zip(&body.call_args[first..first + count])
+                    {
+                        expressions.push((8, operand(child), (declared, 0, String::new())));
+                    }
                 }
             }
             for node in &body.nodes {
@@ -2826,7 +2969,7 @@ fn is_binary_operator(kind: i64) -> bool {
 
 /// One operand of an expression row: `(value, form, name)`.
 ///
-/// Form 0 means `value` is a scalar TAG and `name` is empty. Form 1 means `name` is the
+/// Form 0 means `value` is a type TAG and `name` is empty. Form 1 means `name` is the
 /// identifier the operand mentions and `value` is unused. Form 3 retains a source integer
 /// literal in `value` for contextual Byte coercion. Operand forms and binding forms are separate.
 /// Names are strings because the reference and pipeline use different intern tables.
@@ -3110,6 +3253,15 @@ fn expression_rows_from_body<F: Fn(i64) -> ExprOperand>(
             // the `call_args` read below off a slice that a zero-count node does not own.
             let start = node.lhs;
             let count = node.rhs;
+            if scalar_results {
+                let element = if count > 0 {
+                    operand(body.call_args[usize::try_from(start).expect("negative array offset")])
+                } else {
+                    nothing.clone()
+                };
+                row_of_node.insert(at as i64, rows.len());
+                rows.push((16, element, (count, 0, String::new())));
+            }
             if count >= 2
                 && let Some(&head) = body.call_args.get(usize::try_from(start).unwrap_or(0))
             {
@@ -3128,9 +3280,9 @@ fn expression_rows_from_body<F: Fn(i64) -> ExprOperand>(
     row_of_node
 }
 
-fn scalar_result_node(node: &Node) -> bool {
+fn typed_result_node(node: &Node) -> bool {
     is_binary_operator(node.kind)
-        || matches!(node.kind, 6 | 8 | 9 | 10 | 22 | 26 | 39 | 65 | 66 | 68)
+        || matches!(node.kind, 6 | 8 | 9 | 10 | 17 | 22 | 26 | 39 | 65 | 66 | 68)
         || (node.kind == 4 && node.arg >= 0)
 }
 
@@ -5295,6 +5447,28 @@ fn wire_shape_of(
     }
 }
 
+/// Preserve a source array's outer shape rather than the element's scalar signature.
+fn declared_wire_shape(
+    type_id: i64,
+    length: Option<i64>,
+    names: &[String],
+    enums: &[crate::bytecode::EnumLayout],
+) -> crate::bytecode::WireShape {
+    use crate::bytecode::WireShape;
+    let element = wire_shape_of(type_id, names, enums);
+    let Some(length) = length else { return element };
+    let width = match element {
+        WireShape::Scalar { kind: 1 | 2 } => 1,
+        WireShape::Scalar { kind: 3 } => 8,
+        WireShape::Flat { size, .. } => size,
+        _ => return WireShape::Top,
+    };
+    u32::try_from(length)
+        .ok()
+        .and_then(|n| n.checked_mul(width))
+        .map_or(WireShape::Top, |size| WireShape::Flat { kind: 1, size })
+}
+
 /// Assemble the per-chunk signature table from the parsed functions, grouping
 /// same-named heads into one chunk and ordering by chunk name to match the module.
 fn assemble_signatures(
@@ -5317,9 +5491,10 @@ fn assemble_signatures(
         let params: Vec<WireShape> = first
             .param_types
             .iter()
-            .map(|&t| wire_shape_of(t, names, enums))
+            .enumerate()
+            .map(|(i, &t)| declared_wire_shape(t, first.param_array_lengths[i], names, enums))
             .collect();
-        let ret = wire_shape_of(first.return_type, names, enums);
+        let ret = declared_wire_shape(first.return_type, first.return_array_length, names, enums);
         // Only a `loop` (category 3, a Stream chunk) resumes with its first parameter.
         let resume = if first.cat == 3 {
             params.first().copied().unwrap_or(WireShape::Top)
@@ -5399,7 +5574,18 @@ fn assemble_chunk_metadata(
             2 => BlockType::Reentrant,
             _ => BlockType::Stream,
         };
-        let param_types: Vec<TypeTag> = first.param_types.iter().map(|&t| tag_of(t)).collect();
+        let param_types: Vec<TypeTag> = first
+            .param_types
+            .iter()
+            .enumerate()
+            .map(|(i, &t)| {
+                if first.param_array_lengths[i].is_some() {
+                    TypeTag::Composite
+                } else {
+                    tag_of(t)
+                }
+            })
+            .collect();
         chunks.push((name, first.params as u8, block_type, param_types));
     }
     chunks.sort_by(|a, b| a.0.cmp(&b.0));

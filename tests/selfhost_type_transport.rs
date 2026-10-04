@@ -86,7 +86,7 @@ fn production_transport_rejects_malformed_facts_as_errors() {
             5 => batch.bindings.push(("b".into(), 0, 2, String::new())),
             6 => batch
                 .expressions
-                .push((16, (0, 0, String::new()), (0, 0, String::new()))),
+                .push((17, (0, 0, String::new()), (0, 0, String::new()))),
             7 => batch.bindings.push(("b".into(), -1, 0, String::new())),
             _ => unreachable!(),
         }
@@ -125,5 +125,33 @@ fn production_types_preserve_unavailable_parser_diagnostics() {
     match type_check_source_via_kel(source) {
         Err(TypeCheckError::Parse(error)) => assert!(!error.is_source_rejection()),
         other => panic!("expected unsupported pattern diagnostic, got {other:?}"),
+    }
+}
+
+/// A known scalar array must retain both dimensions, including the 32-bit encoding boundary.
+#[test]
+fn production_array_type_tags_retain_element_and_length() {
+    for element in [1, 2, 3] {
+        for length in [0, 1, 2, 134_217_726] {
+            let mut batch = empty_batch();
+            batch
+                .expressions
+                .push((16, (element, 0, String::new()), (length, 0, String::new())));
+            batch.bindings.push(("array".into(), 0, 2, String::new()));
+            let expected = (length + 1) * 16 + element;
+            batch.arguments.push((expected, (0, 1, "array".into())));
+            let mut inputs = input(batch);
+            assert!(type_check_inputs_via_kel(&inputs).unwrap());
+            inputs.batches[0].arguments[0].0 = expected + 16;
+            assert!(
+                !type_check_inputs_via_kel(&inputs).unwrap(),
+                "length {length}, element {element}"
+            );
+            inputs.batches[0].arguments[0].0 = (length + 1) * 16 + (element % 3 + 1);
+            assert!(
+                !type_check_inputs_via_kel(&inputs).unwrap(),
+                "element {element}"
+            );
+        }
     }
 }

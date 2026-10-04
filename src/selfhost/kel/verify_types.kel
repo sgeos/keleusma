@@ -568,15 +568,22 @@ fn tyb_pair(e: Word) -> Word {
 
 // These are type-input row kinds, not bytecode opcodes. A comparison yields
 // bool; a shift retains its left operand type; arithmetic retains matching tags.
+fn ty_array_tag(element: Word, length: Word) -> Word {
+    if element >= 1 andalso element <= 3 andalso length >= 0 andalso length <= 134217726 {
+        (length + 1) * 16 + element
+    } else { ty_unknown() }
+}
+
 fn tyb_node_tag(e: Word) -> Word {
     tyb_pair(e);
+    if ty.ekind[e] == 16 { ty_array_tag(tyb.la, tyb.lb) } else {
     if ty.ekind[e] == 3 orelse ty.ekind[e] == 9 orelse ty.ekind[e] == 13 { 2 } else {
     if ty.ekind[e] == 10 orelse ty.ekind[e] == 12 { tyb.la } else {
     if ty.ekind[e] == 15 { tyb.lb } else {
     if ty.ekind[e] == 8 { if tyb.lb != 0 { tyb.lb } else { tyb.la } } else {
     if ty.ekind[e] == 1 orelse ty.ekind[e] == 4 orelse ty.ekind[e] == 14 {
         if tyb.la != 0 andalso tyb.la == tyb.lb { tyb.la } else { ty_unknown() }
-    } else { ty_unknown() } } } } }
+    } else { ty_unknown() } } } } } }
 }
 
 // An unknown operand remains undecided. The scalar subset permits Word or Byte.
@@ -587,7 +594,10 @@ fn ty_scalar_numeric_bad(tag: Word) -> Word {
 fn ty_expression_bad(e: Word) -> Word {
     tyb_pair(e);
     if ty.ekind[e] == 12 orelse ty.ekind[e] == 15 {
-        ty_scalar_numeric_bad(tyb.la)
+        // A source-declared enum may be cast to its Word discriminant.
+        if ty.ekind[e] == 15 andalso tyb.la > 0 andalso tyb.la % 16 == 9 andalso tyb.lb == 1 {
+            0
+        } else { ty_scalar_numeric_bad(tyb.la) }
     } else {
     if ty.ekind[e] == 13 {
         if ty_pair_disagrees(tyb.la, 2) == 1 { 1 } else { ty_pair_disagrees(tyb.lb, 2) }

@@ -6,6 +6,28 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Nominal and scalar-array type facts
+
+The production composite audit initially found twelve missed rejections and one false rejection
+among sixteen sources. Struct identities now survive constructor metadata, and declared fields
+supply their own type requirements in declaration order. Nominal struct and enum tags occupy
+separate low-bit classes. Scalar-array tags retain element type and length, with the stage deriving
+literal-array results through expression kind 16. Array declarations retain their outer shape.
+Tuple headers that emit no type record no longer shift the following parameter's type.
+
+A valid direct field read from a struct-returning call exposed missing postfix arming. Calls and
+struct literals now enter field access after emission. Another valid control exposed entire array
+fields emitted as scalar fields. Whole composite fields now retain their flat container kind.
+Scalar-array signatures and chunk parameter tags also retain the outer array shape. Three complete
+artifact-and-execution controls agree with the reference and return seven.
+
+The initial sixteen-source corpus now agrees, with each negative also asserting independent
+production rejection. Fourteen further valid controls cover aliases, reordered and nested fields,
+Byte and Boolean arrays, computed elements, conditional arrays and enum-to-Word casts. Transport
+checks cover array tag element/length separation through the 32-bit encoding boundary. These
+measurements do not establish complete composite typing. The reverse prompt records verification,
+remaining work and shadow-pilot participation. Full Order 1 remains active.
+
 ## 2026-10-04 Production type rejection
 
 The shipping compiler now obtains an independent pipeline type verdict before invoking the Rust

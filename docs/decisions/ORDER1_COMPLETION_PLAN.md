@@ -261,3 +261,20 @@ The command-line probe initially compared different inputs. The Rust backend pre
 signature declarations while the self-hosted backend uses the user source directly. The maintained
 command test instead compares with the production library artifact, then runs it and asserts seven.
 The complete all-stage differential remains the artifact oracle. Full Order 1 remains open.
+
+## Nominal and scalar-array facts
+
+The production checker now distinguishes declared struct and enum identities from scalar-array
+identities. Struct construction metadata retains the declared name and field count, and field
+requirements follow declaration order even for reordered literals. Scalar-array declarations
+retain length. Their literal results are derived by the stage after resolving element facts.
+The representation supports lengths through 134217726 within a 32-bit Word. Non-scalar element
+shapes and larger lengths remain unknown rather than wrapping or colliding with nominal identities.
+
+Sixteen initial sources now agree with the reference after twelve missed rejections and one false
+rejection were observed. Fourteen further positive controls cover aliases, nested and reordered
+fields, enum casts and scalar-array expressions. Each negative in the initial corpus must produce
+PipelineRejected in the shipping entry. Array signatures and whole-field reads have three complete
+artifact-and-execution controls with result seven. This extends the required type coverage without
+closing complete tuple/nested-array facts, enum constructor payloads, array let annotations or
+nominal struct signatures. Production wire emission and the final completion audit remain open.

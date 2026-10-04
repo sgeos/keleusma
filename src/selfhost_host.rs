@@ -219,7 +219,7 @@ where
 /// had already mis-read.
 pub const PARSE_LET_NAME_TAG: i64 = 90;
 
-/// Declared field count for the StructInit record immediately following this metadata.
+/// Struct name id times 1024 plus declared field count for the following StructInit.
 /// The driver consumes it before reconstruction, so it does not occupy a node slot.
 pub const PARSE_STRUCT_FIELDS_TAG: i64 = 91;
 

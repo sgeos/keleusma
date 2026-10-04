@@ -8,6 +8,15 @@ run. Both have. Written 2026-08-14.
 
 Status: **BUILT. Full verdict agreement on the corpus, 2026-08-14.**
 
+**Production composite facts, 2026-10-04.** Struct constructor names and field requirements now
+reach the stage. Declared nominal struct and enum tags are distinct from scalar-array tags, which
+retain element type and length. Expression kind 16 derives literal-array tags in Keleusma.
+Function headers retain parameter positions across unrecorded tuple types. Direct struct-returning
+calls and literals now arm field access, and whole composite fields retain their representation.
+Scalar-array signatures preserve the outer shape. The sixteen-source audit and fourteen valid
+controls pass. Complete tuple/nested-array facts, enum constructor payload facts, array let
+annotations and nominal struct signatures remain open. Full Order 1 is not complete.
+
 **Currency, 2026-10-04.** The active completion effort is tracked in
 [ORDER1_COMPLETION_PLAN.md](./ORDER1_COMPLETION_PLAN.md). Parser records now retain explicit
 else presence. Reconstruction preserves it and expression extraction emits conditional

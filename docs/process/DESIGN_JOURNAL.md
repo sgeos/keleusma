@@ -13,6 +13,34 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-04 Composite identity must survive representation lowering
+
+The independent production checker made previously hidden composite gaps observable. The first
+sixteen-source comparison found twelve invalid programs accepted and one valid program rejected.
+The false rejection was an unknown-name diagnostic after a direct struct-returning call, whose
+return declaration was known but whose field postfix had not been armed.
+
+Constructor byte size cannot establish nominal identity. Two distinct structs may have the same
+size and field count. The parser's existing struct metadata now carries the source name id above
+the count. Extraction pairs these postorder identities with reconstructed constructors and checks
+their fields against source declarations. Function headers reserve every parameter position before
+reading its type, so tuple headers that emit no type record cannot shift later scalar declarations.
+
+Scalar-array types use the element tag in the low four bits and the length above it. Nominal
+structs and enums use distinct low-bit classes, preventing accidental agreement with an array of
+the same storage size. The stage derives a literal array's tag after resolving its element facts.
+The supported length bound keeps this representation within a 32-bit Word. Larger lengths and
+non-scalar elements remain unknown in this channel. Nominal enum tags exposed a valid enum-to-Word
+cast that needed an explicit stage rule. A proposed empty-array control was invalid under the
+reference compiler and was removed from the positive population.
+
+The broader scalar-access corpus exposed an entire array field being lowered as a scalar read.
+The previous unknown array parameter type had concealed that representation error. Whole composite
+fields now emit the existing nested-field operation. Array parameter and return signatures also
+needed their outer shape retained. Complete artifact comparison and execution returning seven
+cover that correction independently of the type verdict. Named struct signatures, complete tuple
+and nested-array typing, composite aliases and enum constructor payload facts remain incomplete.
+
 ## 2026-10-04 A production verdict must precede its oracle
 
 The first integration test rejected an invalid program through the Rust reference, demonstrating
