@@ -2,6 +2,21 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
+## Current evidence, 2026-10-04
+
+The standing inference-independence tests in
+[the compiler test module](../../src/compiler/inference_independence.rs) cover all twelve
+current stage sources and check their directory inventory. The intervention clears the
+populated expression-type table after the recording pass and before emission. Clearing
+40,824 entries leaves every complete serialized artifact unchanged. A deliberately changed
+array type changes emission, proving that the hook reaches a consulted table. An invalid
+source fails before the hook, preserving admission. The comparisons use complete bytes.
+
+This establishes independence from recorded expression tables for this corpus. It does not
+remove reference checking, replace monomorphization or establish full-language independence.
+The first-pass completion obligations remain in [the completion plan](./ORDER1_COMPLETION_PLAN.md).
+The ten-stage measurements below are historical.
+
 Scoping for the two Order-1 blockers that had no plan document. Written 2026-08-09.
 
 Status: **SCOPED. Spikes A and B are both RUN and RESOLVED, and both Order-1 obligations shrank.**

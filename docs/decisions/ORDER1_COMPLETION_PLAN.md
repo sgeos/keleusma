@@ -23,10 +23,10 @@ Full-language support remains Order 6. Existing supported programs must retain t
 | Derive type inputs from the self-hosted pipeline | Production rejection receives facts without walking the reference parser's abstract syntax tree or borrowing inferred types | The production input path now derives scoped scalar constraints from Keleusma parser and reconstruction output. Composite facts, complete binder/occurrence coverage and general admission remain incomplete. |
 | Reject ill-typed subset programs | Independent pipeline rejection agrees with the reference on the rejection corpus, valid controls, and the rule-versus-form census | The scoped pipeline harness exercises all twenty rejection cases and seven valid controls without reference-first masking. The separate sixteen-cell rule-versus-form census now runs through that path with eight valid controls. Its required test now passes after preserving match-arm guards. Parser source diagnostics and type-stage verdicts remain distinct from unsupported syntax, capacity and execution failures. The shipping driver now obtains the independent verdict first. Production corpus and census checks assert PipelineRejected so reference rejection cannot mask missing stage coverage. |
 | Preserve the first-pass monomorphization result | Every stage remains unchanged by monomorphization, with a control that does change | The corpus now lists all twelve sources. Identity, changing control and directory inventory tests passed again after the parser and alias changes on 2026-10-04. Repeat if stage sources change. |
-| Preserve independence from inferred expression types | The current stage corpus compiles identically with recorded expression types absent | Refresh the existing inference-independence evidence for all current sources. |
+| Preserve independence from inferred expression types | The current stage corpus compiles identically with recorded expression types absent | Four standing tests cover all twelve sources with a directory inventory, a populated-table intervention after recording, a changed-emission control and an admission control. On 2026-10-04, clearing 40,824 recorded types leaves all twelve complete artifacts unchanged. This does not remove reference admission or establish full-language independence. |
 | Emit complete artifacts through Keleusma | Production output uses the Keleusma wire emitter for framing, opcode records, operand pools, auxiliary regions and integrity fields | Region coverage tests exist, but they do not establish production serialization. `Module::to_bytes` remains on current artifact paths. Preserve the wire plan's encoder and decoder obligations. |
 | Reach the shipping tool | An end-to-end command emits the independently assembled artifact and reports type rejection through the new path | The command emits the same artifact as the production library, executes a valid result of seven, and independently rejects three invalid sources without emitting files. Serialization still uses Rust, so the complete shipping requirement remains open. |
-| Establish current verification | Relevant differential and failure-path tests, complete workspace checks and applicable integration gates pass on the final tree | Prior full workspace verification is incomplete. Narrow checks cannot establish this requirement. |
+| Establish current verification | Relevant differential and failure-path tests, complete workspace checks and applicable integration gates pass on the final tree | The 2026-10-04 release workspace run passes 3,031 tests with five ignored. Clippy, documentation and compile-and-verify no_std checks pass. The separate feature configurations and final integration gates still require verification after the remaining implementation. |
 | Participate in the shadow pilot | Diagnostic and completion-claim samples retain baseline judgments, reviewed payloads, outcomes and explicit service status | Capture is installed for this line. Judgments are advisory and do not alter gates. |
 
 ## Work sequence
@@ -410,3 +410,28 @@ The full code-generation test run also exposed a stale Rust test reconstruction 
 stale inventory assertions. The mirror now handles ordered wildcard patterns and guarded match
 results. All 78 current code-generation functions are required to compile identically. The
 construct-support count guard reads the current roadmap instead of the historical handoff.
+
+
+## Workspace admission and corpus audit, 2026-10-04
+
+The complete workspace run exposed eight failures across seven targets. Investigation found
+stale diagnostic and opcode expectations, an outdated reconstruction-stack argument, header
+metadata omitted from the test driver and a documentation scan entering peer worktrees.
+The repairs preserve structured unsupported diagnostics, check wildcard stack boundaries,
+explicitly discard composite signature metadata in the historical scalar scaffold and exclude
+private state and peer worktrees from public-document scanning. Shipping signature assembly
+retains its own composite metadata. The textual driver guard does not establish semantic parity.
+
+The named example corpus also exposed invalid-source verdicts for valid unsupported syntax.
+The parser now refuses non-range iteration, unsupported declaration names, destructuring lets
+and unsupported expression blocks before their interior names can become unknown-local errors.
+Methods retain their existing unsupported diagnostic. Six named examples receive unsupported
+results through the shipping entry, with reference compilation controls. Genuine undefined
+names still reject independently. Supported loop, branch and struct controls retain artifact
+identity. These finite controls do not establish complete syntax admission.
+
+The capacity audit now includes all twelve sources. Parse uses 776 of 1,024 name slots.
+Wire uses 45,297 of 49,152 input bytes, leaving 3,855 bytes. Neither cap increased.
+The stage opcode census now leaves fifteen internal tags unexercised, because CheckedNeg
+is reached. Adding the named example corpus reduces the residue to three Byte arithmetic tags.
+Complete production wire encoding and decoding, remaining type coverage and final gates stay open.

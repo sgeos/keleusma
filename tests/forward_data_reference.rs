@@ -1,8 +1,8 @@
 //! Forward data references remain outside the streaming parser's supported subset.
 //!
 //! The parser resolves `block.field` using data declarations already encountered.
-//! A function reading a later block produces an unresolved operand, which the
-//! reconstruction stage refuses. The reference accepts both declaration orders.
+//! A function reading a later block receives a structured unsupported-syntax
+//! diagnostic before reconstruction. The reference accepts both declaration orders.
 //!
 //! `verify_types.kel` formerly hit this limit at `ty_direct`. Its solver storage
 //! now precedes its first use, so the stage joins the byte-identity corpus without
@@ -28,19 +28,26 @@ const BACKWARD: &str = "private data t { hit: Word }\n\
 
 const VERIFY_TYPES: &str = include_str!("../src/selfhost/kel/verify_types.kel");
 
-fn refusal(src: &str) -> Option<String> {
-    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        keleusma::selfhost::self_host_compile(src)
-    }));
-    match caught {
-        Ok(_) => None,
-        Err(e) => Some(
-            e.downcast_ref::<String>()
-                .cloned()
-                .or_else(|| e.downcast_ref::<&str>().map(|s| (*s).to_string()))
-                .unwrap_or_else(|| "non-string panic".into()),
-        ),
-    }
+fn assert_forward_refusal(src: &str) {
+    use keleusma::selfhost::{
+        SelfHostError, self_hosted_compile, try_call_type_inputs_from_pipeline,
+    };
+    use keleusma::selfhost_host::{PARSE_DIAG_TAG_BASE, ParseRecordError};
+    let error =
+        try_call_type_inputs_from_pipeline(src).expect_err("forward reference must be unavailable");
+    assert!(
+        !error.is_source_rejection(),
+        "valid source must not become an invalid-source verdict"
+    );
+    assert!(
+        matches!(error, ParseRecordError::Diagnostic { code, detail }
+        if code == PARSE_DIAG_TAG_BASE - 21 && detail >= 0),
+        "{error}"
+    );
+    assert!(matches!(
+        self_hosted_compile(src, &keleusma::target::Target::host()),
+        Err(SelfHostError::Unsupported { .. })
+    ));
 }
 
 /// **THE REFERENCE ACCEPTS BOTH ORDERS.** Without this the pair below would be measuring the
@@ -62,21 +69,9 @@ fn the_reference_accepts_a_forward_data_reference() {
 /// complaint.
 #[test]
 fn a_data_block_referenced_before_its_declaration_is_refused() {
-    assert!(
-        refusal(BACKWARD).is_none(),
-        "CONTROL FAILED: the backward-ordered program must self-compile, or the comparison \
-         below is not about declaration order at all"
-    );
-
-    let msg = refusal(FORWARD).expect(
-        "the forward-ordered program now self-compiles. Revisit this documented parser \
-         limitation and the mutation below; verify_types.kel already belongs to the corpus",
-    );
-    assert!(
-        msg.contains("did not reduce to exactly one node"),
-        "the forward reference is still refused but by a DIFFERENT cause, so the mechanism \
-         recorded in this file's header may no longer be the one operating: {msg}"
-    );
+    keleusma::selfhost::self_hosted_compile(BACKWARD, &keleusma::target::Target::host())
+        .expect("backward-ordered control must compile through the shipping entry");
+    assert_forward_refusal(FORWARD);
 }
 
 /// Restoring the former declaration order preserves the reference artifact but
@@ -105,11 +100,7 @@ fn moving_solver_storage_after_first_use_reproduces_stage_refusal() {
         reference_bytes(VERIFY_TYPES) == reference_bytes(&forward),
         "moving solver storage changes the reference artifact"
     );
-    let msg = refusal(&forward).expect("the restored forward reference must be refused");
-    assert!(
-        msg.contains("ty_direct") && msg.contains("did not reduce to exactly one node"),
-        "the mutation is refused for a different reason: {msg}"
-    );
+    assert_forward_refusal(&forward);
 }
 
 /// Every stage source has a named test in the byte-identity corpus.

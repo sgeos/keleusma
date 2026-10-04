@@ -24,7 +24,7 @@
 //!
 //! The exposure is therefore the tags the corpus does NOT exercise, which is this project's
 //! standing lesson in a new costume: anything the corpus does not contain is unverified by
-//! construction. `the_stage_corpus_leaves_sixteen_op_tags_unexercised_and_names_them` measures that set.
+//! construction. `the_stage_corpus_names_every_unexercised_op_tag` measures that set.
 //!
 //! **PROPORTIONALITY.** `self_hosted_compile` cross-checks against the reference compiler and
 //! refuses on divergence, so a table defect yields a loud error rather than a wrong module. The
@@ -528,11 +528,11 @@ fn corpus_stages() -> Vec<&'static str> {
         .collect()
 }
 
-/// **THE STAGE CORPUS CANNOT SEE A TRANSPOSITION AMONG SIXTEEN OF THE SIXTY-THREE TAGS.**
+/// **THE STAGE CORPUS CANNOT SEE A TRANSPOSITION AMONG FIFTEEN OF THE SIXTY-THREE TAGS.**
 ///
-/// The byte-identity oracle compiles eleven stage sources and compares bytes, so it checks a tag
-/// only if some stage emits it. Sixteen tags decode to operations that appear **nowhere** in any
-/// of the eleven — the entire composite family, the unchecked arithmetic, and `CheckedNeg`. For
+/// The byte-identity oracle compiles twelve stage sources and compares bytes, so it checks a tag
+/// only if some stage emits it. Fifteen tags decode to operations that appear **nowhere** in any
+/// of the twelve — the entire composite family, the unchecked arithmetic. For
 /// those, a transposition in the emitter produces no byte difference to detect, and this is the
 /// project's standing lesson in a new costume: **anything the corpus does not contain is
 /// unverified by construction.**
@@ -541,7 +541,7 @@ fn corpus_stages() -> Vec<&'static str> {
 /// tests in `tests/selfhost_codegen.rs` compile struct constructions, array indexing, enum
 /// payloads and tuple fields through the self-hosted compiler, so the composite family is not
 /// unchecked in general. That is a **different population**, this test does not measure it, and
-/// reading this as "sixteen tags are unchecked" would overstate it.
+/// reading this as "fifteen tags are unchecked" would overstate it.
 ///
 /// The direction of the assertion is the useful one: a tag LEAVING this list means the stage
 /// corpus grew to cover it, which is a gain and should be recorded rather than absorbed silently.
@@ -553,14 +553,33 @@ fn corpus_stages() -> Vec<&'static str> {
 /// population and still unmeasured, and saying so remains accurate.
 #[test]
 #[cfg(feature = "compile")]
-fn the_stage_corpus_leaves_sixteen_op_tags_unexercised_and_names_them() {
+fn the_stage_corpus_names_every_unexercised_op_tag() {
     use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 
     let stages = corpus_stages();
+    let actual: BTreeSet<String> = std::fs::read_dir(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/selfhost/kel"),
+    )
+    .expect("stage directory")
+    .map(|entry| entry.expect("stage entry").path())
+    .filter(|path| path.extension().is_some_and(|ext| ext == "kel"))
+    .map(|path| {
+        path.file_stem()
+            .expect("stage name")
+            .to_string_lossy()
+            .into_owned()
+    })
+    .collect();
+    let listed: BTreeSet<String> = stages.iter().map(|name| (*name).to_owned()).collect();
+    assert!(!actual.is_empty());
     assert_eq!(
         stages.len(),
-        11,
-        "the byte-identity corpus size moved; it is pinned at eleven stages elsewhere too"
+        STAGE_SOURCES.len(),
+        "every listed stage needs an oracle"
+    );
+    assert_eq!(
+        listed, actual,
+        "the op-tag corpus must cover every current stage source"
     );
 
     let mut present = BTreeSet::new();
@@ -601,6 +620,10 @@ fn the_stage_corpus_leaves_sixteen_op_tags_unexercised_and_names_them() {
         .map(|(name, _)| name.as_str())
         .collect();
 
+    assert!(
+        present.contains("CheckedNeg"),
+        "the current corpus exercises checked negation"
+    );
     let expected: BTreeSet<&str> = EXPECTED_UNEXERCISED.iter().copied().collect();
     assert_eq!(
         unexercised, expected,
@@ -613,13 +636,12 @@ fn the_stage_corpus_leaves_sixteen_op_tags_unexercised_and_names_them() {
     );
 }
 
-/// The tags no stage source exercises, measured 2026-08-28 over the eleven-stage corpus.
+/// The tags no stage source exercises, measured 2026-10-04 over the twelve-stage corpus.
 ///
 /// Not a design choice — a measurement, and the reason it is written out rather than counted is
 /// that the NAMES are the deliverable. They are where a transposition would hide from the oracle.
 const EXPECTED_UNEXERCISED: &[&str] = &[
     "addop",
-    "checkedneg",
     "getenumfield",
     "getenumfieldnested",
     "getfield",
@@ -638,8 +660,8 @@ const EXPECTED_UNEXERCISED: &[&str] = &[
 
 /// **A SECOND POPULATION, BECAUSE THE FIRST CENSUS NAMED A LIMIT IT DID NOT MEASURE.**
 ///
-/// `the_stage_corpus_leaves_sixteen_op_tags_unexercised_and_names_them` reports which tags the
-/// eleven-stage byte-identity corpus cannot check, and says in its own words that the
+/// `the_stage_corpus_names_every_unexercised_op_tag` reports which tags the
+/// twelve-stage byte-identity corpus cannot check, and says in its own words that the
 /// per-construct tests are "a different population, this test does not measure it". **That
 /// caveat was honest and it left the interesting question open.**
 ///
@@ -819,44 +841,11 @@ const CENSUS_EXAMPLES: &[&str] = &[
 
 /// Of the sixteen tags no stage source reaches, the four the shipped examples miss too.
 ///
-/// Measured 2026-08-28. **The shipped examples cover twelve of the sixteen** — the entire
-/// composite family, which the stage corpus never touches because the stages are written in a
-/// restricted subset that constructs no struct, tuple or enum value. That is a substantially
-/// better position than the first census alone suggested, and it is why a second population was
-/// worth measuring rather than assuming.
-///
-/// **What remains is one coherent group and not a scattering.** `addop`, `subop` and `mulop` are
-/// the UNCHECKED arithmetic — the lowering `Byte` operands take through promote-operate-truncate,
-/// where `Word` arithmetic lowers to the `checked*` tags that both corpora exercise heavily. So
-/// the residue is "byte arithmetic and unary negation", which reads as a corpus gap with a shape
-/// rather than as noise.
-///
-/// **THIS CONSTANT IS ABOUT THE SHIPPED EXAMPLES AND STAYS AT FOUR. THE OVERALL RESIDUE IS
-/// THREE.** A later increment measured the THIRD population this file names below and had not
-/// measured — the per-construct boundary table — and it **reaches `addop`**, through
-/// `scalar/byte_arith` and `scope/float_arith__GAP`, both of the shape `a + b`. See
-/// `the_boundary_table_is_the_third_op_tag_population_and_leaves_the_same_four` in
-/// `tests/selfhost_codegen.rs`.
-///
-/// So `addop` was exercised by a corpus, and what no corpus reached was `subop`, `mulop` and
-/// `checkedneg`. **Both witnesses were ADDITION, which is exactly why one of the four escaped and
-/// the other three did not** — and that shape said how to close them. Two byte-identical cases
-/// were added to the boundary table, `scalar/byte_sub_mul` and `scalar/word_unary_neg`, and **the
-/// residue over all three populations is now EMPTY.**
-///
-/// **THIS CONSTANT IS STILL FOUR AND MUST STAY FOUR.** It records what the SHIPPED EXAMPLES miss,
-/// and they miss all four exactly as before. The closed claim is "no corpus reaches these"; this
-/// one is "the shipped examples do not". Collapsing the two would make this file assert something
-/// it never measured.
-///
-/// **The earlier wording said this was where a transposition hides from every oracle this project
-/// runs. That was true of four tags when two populations had been measured and is true of three
-/// now.** It is corrected rather than deleted, because the correction is the argument for
-/// measuring a population instead of describing it.
-///
-/// That closure needed no change to any guard here, no language change and no stage change — only
-/// two source snippets in a corpus that had never carried a `Byte` subtraction.
-const SHIPPED_EXAMPLES_ALSO_MISS: &[&str] = &["addop", "checkedneg", "mulop", "subop"];
+/// Measured 2026-10-04. The named examples remove twelve of the fifteen
+/// stage-corpus gaps. The combined residue is unchecked Byte arithmetic.
+/// CheckedNeg is now reached by the stage corpus itself. Per-construct tests
+/// provide a third population and are not measured by this constant.
+const SHIPPED_EXAMPLES_ALSO_MISS: &[&str] = &["addop", "mulop", "subop"];
 
 /// **`Op::Neg` IS OUTSIDE THE SELF-HOSTED SUBSET, WHICH IS STRONGER THAN BEING UNTAGGED.**
 ///
@@ -864,8 +853,8 @@ const SHIPPED_EXAMPLES_ALSO_MISS: &[&str] = &["addop", "checkedneg", "mulop", "s
 /// recorded here as a CHECK rather than as prose, because it is exactly the kind of claim that
 /// goes stale silently.
 ///
-/// The census reports `checkedneg` among the tags no corpus reaches. Investigating why their
-/// witness program covered the other three but not that one turned up the real statement:
+/// The historical census left checked negation uncovered. That gap is now closed,
+/// but investigating it exposed a separate limitation that remains:
 /// **`codegen.kel` emits `checkedneg` for source-level unary negation and the decoder has no arm
 /// producing `Op::Neg` at all.** So the self-hosted compiler cannot emit `Neg` from any source,
 /// and that is a property of the SUBSET rather than of any corpus.

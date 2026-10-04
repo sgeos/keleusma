@@ -1,67 +1,25 @@
-//! What the self-hosted front end refuses out of the SHIPPED example corpus, by
-//! name, and through the entry point that returns rather than aborts.
-//!
-//! # Why this is pinned rather than described
-//!
-//! The `v0.3.0` line reported from the outside that `parse_functions` panics on
-//! **four of the eleven** example scripts, naming `02_struct_field.kel`,
-//! `08_method_dispatch.kel`, `09_big_numbers.kel` and `10_multbyte.kel`, and
-//! offering the hypothesis that a top-level `struct` declaration was the shared
-//! cause. That report was correct when it was made and carried honestly as a
-//! hypothesis rather than a diagnosis.
-//!
-//! **Re-measured here, it is two, and the cause has changed.** The
-//! struct/trait/impl skip state closed the first two. The surviving two do not
-//! reach the declaration path at all — they fail inside `parse.kel` with an
-//! index fault — so "a top-level `struct`" no longer explains either of them.
-//!
-//! A count that lives only in prose drifts silently in both directions: it was
-//! quoted as four after two of the four were fixed. This test is where the
-//! number lives now, so closing either remaining refusal FAILS here and forces
-//! the claim to be restated.
-//!
-//! # What a passing run does NOT establish
-//!
-//! Nothing about whether the two refusals are cheap to fix, and nothing about
-//! any source outside `examples/scripts/`. It also does not establish that the
-//! self-hosted front end COMPILES the nine it parses — parsing is the first
-//! stage of several, and this test stops there.
+//! Named example admission through the fallible self-hosted parser.
+//! Parsing alone does not establish compilation or execution. Every refused
+//! example is accepted by the reference and must remain unavailable evidence,
+//! rather than an invalid-source verdict, in the shipping compiler.
 
 #![cfg(feature = "self-host")]
 
 use keleusma::selfhost::try_parse_functions;
 use std::path::PathBuf;
 
-/// The scripts refused today, with the fault each reports.
-///
-/// Kept as a table rather than a count so a changed CAUSE fails as loudly as a
-/// changed set. The standing report's other two entries were repaired without
-/// the prose count moving, which is the failure this shape prevents.
-const REFUSED: &[(&str, &str)] = &[
-    ("09_big_numbers.kel", "IndexOutOfBounds(-1, 65)"),
-    ("10_multbyte.kel", "IndexOutOfBounds(-1, 65)"),
+/// Unsupported examples paired with their structured diagnostic code.
+const REFUSED: &[(&str, i64)] = &[
+    ("04_for_in.kel", 31),
+    ("07_refinement.kel", 21),
+    ("08_method_dispatch.kel", 19),
+    ("09_big_numbers.kel", 30),
+    ("10_multbyte.kel", 20),
+    ("11_signed.kel", 21),
 ];
 
-/// The eleven scripts this claim is about, NAMED.
-///
-/// # Why named rather than "whatever is in the directory"
-///
-/// **`examples/scripts/` is a directory the `v0.3.0` line GROWS and this line's
-/// tests assert over.** They add opcode-witness scripts there — that route took
-/// their instruction-set census from 64 to 66 witnessed opcodes — and every one
-/// of them broke a size-pinned assertion here the moment they absorbed. The
-/// failure appeared only on their tree, where their corpus meets this test, and
-/// was invisible from here.
-///
-/// Pinning the COUNT coupled a claim about ELEVEN SPECIFIC SCRIPTS to another
-/// line's unrelated work. The claim was never about the directory's size; it was
-/// about which shipped examples the self-hosted front end refuses, correcting a
-/// figure that had been quoted as four when it was two. Naming them says that,
-/// and additions are simply outside the set rather than a breakage.
-///
-/// **This does not weaken the test.** Every name below must still be PRESENT and
-/// must still be classified, so a removal or rename fails here rather than
-/// silently shrinking what is checked.
+/// The eleven named scripts in the original survey. Other development lines may
+/// add examples independently. Removals still fail the explicit path checks.
 const CORPUS: &[&str] = &[
     "01_arithmetic.kel",
     "02_struct_field.kel",
@@ -125,17 +83,17 @@ fn every_shipped_example_is_parsed_or_refused_by_name() {
         refused_names, expected_names,
         "the set of refused example scripts moved. If a refusal was CLOSED, \
          update this table and say so where the count is published; if a new \
-         one appeared, that is a regression in the self-hosted front end."
+         one appeared, investigate its admission and execution behavior."
     );
 
-    for ((name, message), (_, expected_fault)) in refused.iter().zip(REFUSED) {
-        assert!(
-            message.contains(expected_fault),
-            "{name} is still refused but the fault changed: expected a message \
-             containing {expected_fault:?}, got {message:?}. A changed cause \
-             matters even when the verdict does not, because the recorded \
-             diagnosis is what the next reader acts on."
-        );
+    for ((name, _message), (_, expected_code)) in refused.iter().zip(REFUSED) {
+        let source = std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("examples/scripts")
+                .join(name),
+        )
+        .unwrap();
+        assert_unavailable(&source, *expected_code);
     }
 
     // Non-vacuity. A front end that accepted everything and produced nothing
@@ -176,4 +134,79 @@ fn a_refusal_is_returned_rather_than_ending_the_process() {
         err.message,
         "Display must show the message, since that is the whole payload"
     );
+}
+
+fn assert_unavailable(source: &str, expected_code: i64) {
+    use keleusma::selfhost::{
+        SelfHostError, self_hosted_compile, try_call_type_inputs_from_pipeline,
+    };
+    use keleusma::selfhost_host::{PARSE_DIAG_TAG_BASE, ParseRecordError};
+    let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(source).unwrap()).unwrap();
+    keleusma::compiler::compile(&ast).expect("reference accepts the unsupported control");
+    let error = try_call_type_inputs_from_pipeline(source).expect_err("unsupported syntax");
+    assert!(!error.is_source_rejection(), "{error}");
+    assert!(
+        matches!(error, ParseRecordError::Diagnostic { code, .. }
+        if code == PARSE_DIAG_TAG_BASE - expected_code),
+        "{error}"
+    );
+    assert!(matches!(
+        self_hosted_compile(source, &keleusma::target::Target::host()),
+        Err(SelfHostError::Unsupported { .. })
+    ));
+}
+
+#[test]
+fn unsupported_syntax_is_not_an_undefined_binding_verdict() {
+    for (source, code) in [
+        ("signed fn main() -> Word { 7 }", 21),
+        (
+            "fn main() -> Word { let xs = [1, 2]; for x in xs { let y = x + 1; } 7 }",
+            31,
+        ),
+        (
+            "newtype Count = Word; fn main() -> Word { Count(7) as Word }",
+            21,
+        ),
+        (
+            "fn main() -> Word { 1 + 2 { ok(v) => v, overflow(_, l) => l, underflow(_, l) => l } }",
+            30,
+        ),
+        (
+            "fn main() -> Word { if true { 1 + 2 { ok(v) => v, overflow(_, l) => l, underflow(_, l) => l } } else { 7 } }",
+            30,
+        ),
+        ("fn main() -> Word { let (x, y) = (3, 4); x + y }", 20),
+    ] {
+        assert_unavailable(source, code);
+    }
+}
+
+#[test]
+fn supported_loop_and_branch_controls_keep_complete_artifacts() {
+    for source in [
+        "fn main() -> Word { for i in 0..4 { let x = i + 1; } 7 }",
+        "fn main() -> Word { for i in 0..4 limit 4 { let x = i + 1; } 7 }",
+        "fn main() -> Word { if true { if false { 2 } else { 7 } } else { 3 } }",
+        "struct P { x: Word } fn main() -> Word { let p = P { x: 7 }; p.x }",
+    ] {
+        let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(source).unwrap()).unwrap();
+        let reference = keleusma::compiler::compile(&ast).unwrap();
+        let actual =
+            keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host())
+                .unwrap();
+        assert_eq!(actual.to_bytes().unwrap(), reference.to_bytes().unwrap());
+    }
+}
+
+#[test]
+fn genuinely_undefined_names_still_reject_independently() {
+    use keleusma::selfhost::{SelfHostError, self_hosted_compile};
+    let source = "fn main() -> Word { missing + 1 }";
+    let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(source).unwrap()).unwrap();
+    assert!(keleusma::compiler::compile(&ast).is_err());
+    assert!(matches!(
+        self_hosted_compile(source, &keleusma::target::Target::host()),
+        Err(SelfHostError::PipelineRejected { .. })
+    ));
 }

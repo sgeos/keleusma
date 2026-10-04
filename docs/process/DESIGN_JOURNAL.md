@@ -13,6 +13,38 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-04 Admission boundaries and corpus evidence
+
+The inference intervention must run after the recording pass. Clearing the parsed input map
+would measure an initially empty table that checking subsequently repopulates. A private hook
+now permits test-only removal and poisoning while public entry points retain their normal
+behavior. The changed-emission control proves the hook reaches a table emission consults.
+The invalid-source control proves the intervention does not bypass admission.
+
+The workspace audit found source classification errors hidden behind a stale example count.
+Array iteration, checked expression blocks and destructuring lets could enter ordinary parsing
+and turn their interior bindings into unknown-name errors. Unsupported declarations could be
+misread as function headers. Explicit parser diagnostics now stop those paths. Signed source
+also receives an unsupported result because the existing assembler does not preserve its flag.
+These are admission corrections, not new implementation of those language forms.
+
+Several failures concerned the instruments themselves. The public-document scan traversed a
+peer worktree. A reconstruction invariant assumed every stack push allocated a node, which
+wildcard sentinels invalidate. The capacity inventory omitted two stages. Exact boundary and
+inventory controls now replace those assumptions. Including wire reveals the byte maximum is
+45,297, while parse holds the distinct name maximum of 776. The input margin must be measured
+again as wire integration adds code.
+
+CheckedNeg now appears in the stage corpus. The resulting smaller opcode residue required
+updating both censuses and their consistency check. The boundary corpus retains its independent
+checked-negation witness. Explicitly ignored composite header metadata in the historical scalar
+scaffold preserves its current scope, while the shipping driver retains structural signatures.
+The textual parity guard still establishes arm coverage rather than semantic equivalence.
+
+The final release workspace run passes 3,031 tests with five ignored. This configuration unifies
+shell, signatures, encryption and self-host through the command-line crate. It is not evidence
+for every separate feature configuration. The full Order 1 goal remains open.
+
 ## 2026-10-04 Source annotations survive until their folded bindings
 
 Composite let annotations were skipped before initializer parsing. Eleven invalid programs

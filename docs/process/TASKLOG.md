@@ -6,6 +6,27 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Admission repair and refreshed independence evidence
+
+The complete workspace run exposed eight failures across seven targets. The repairs distinguish
+valid unsupported syntax from invalid-source verdicts, update corpus and metadata expectations,
+exercise wildcard stack boundaries and scope the documentation scan to the current public tree.
+A later census-consistency failure was repaired without dropping the checked-negation witness.
+The final release workspace run passes 3,031 tests with five ignored. Clippy, documentation and
+the compile-and-verify no_std check pass. Other feature configurations and integration gates remain.
+
+Four standing compiler tests establish recorded-expression-table independence for all twelve
+stage sources, including inventory and intervention controls. Clearing 40,824 entries leaves
+complete artifacts unchanged. Admission still runs. This does not establish full-language
+independence or remove reference checking. All twelve pipeline artifacts and monomorphization
+controls also pass. The capacity audit now includes wire and verify_types. Parse reaches
+776 names against 1,024, and wire reaches 45,297 input bytes against 49,152.
+
+Two local shadow tasks retain eight development samples and non-independent self-labels.
+External evaluation remains unavailable under the prior automatic approval rejection.
+Complete production wire encoding and decoding, remaining type coverage and final gates
+keep the full Order 1 goal open. See the reverse prompt for commands, logs and the next work.
+
 ## 2026-10-04 Composite let annotations
 
 Source let annotations now retain tuple, array, grouping and unit structure through independent

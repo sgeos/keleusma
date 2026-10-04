@@ -352,7 +352,9 @@ Composite let annotations now preserve named, tuple, array, grouping and unit re
 The twenty-three-source comparison includes fourteen negatives and nine valid controls, with
 seven artifact and execution controls. Parser capacity and unsupported annotation syntax remain
 distinct from source rejection. Remaining input and projection coverage, production wire
-emission, refreshed inference-independence evidence and final gates keep Order 1 open.
+emission and final gates keep Order 1 open. Standing inference-independence evidence now
+covers all twelve stages, clearing 40,824 recorded types without changing complete artifacts.
+The intervention and admission controls also pass.
 
 Struct field and composite array projections now preserve source type identity through calls,
 aliases and returns. The eighteen-source comparison closes eleven missed rejections, and six

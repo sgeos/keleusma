@@ -410,27 +410,23 @@ fn exhausting_the_node_arrays_names_itself() {
     );
 }
 
-/// Code 2 is UNREACHABLE, and this pins the invariant that makes it so.
-///
-/// `push` has exactly one caller, inside `emit`, and `emit`'s node guard fires first.
-/// Since `sp` never exceeds `node_count`, the work stack cannot fill before the node
-/// arrays do. **A guard that cannot fire is worse than none**, so the honest options were
-/// to delete it or to pin the reason. Pinning is chosen because a second `push` caller
-/// would make the guard live, and this test fails the moment one is added.
+/// Wildcard sentinels push without allocating nodes. Their stack occupancy is
+/// bounded by the record range, independently of the node-allocation bound.
 #[test]
-fn the_work_stack_cannot_overflow_before_the_node_array() {
-    let calls = STAGE
-        .lines()
-        .filter(|l| {
-            let t = l.trim();
-            !t.starts_with("//") && t.contains("push(") && !t.contains("push_fp(")
-        })
-        .count();
+fn wildcard_work_stack_is_bounded_by_the_record_range() {
+    let cap = RECONSTRUCT_NODE_CAP;
+    let (_, code, detail) = drive(&vec![(72, 0); cap]);
     assert_eq!(
-        calls, 2,
-        "`push` no longer has exactly one definition and one call site. If a second caller \
-         was added, the work-stack guard is now reachable and needs a provoking input"
+        code, 5,
+        "a full stack fits and then fails the single-root requirement"
     );
+    assert_eq!(detail, cap as i64);
+    let (_, code, detail) = drive(&vec![(72, 0); cap + 1]);
+    assert_eq!(
+        code, 4,
+        "the range guard refuses before an extra stack push"
+    );
+    assert_eq!(detail, cap as i64 + 1);
 }
 
 // ---------------------------------------------------------------------------

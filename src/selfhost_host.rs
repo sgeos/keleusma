@@ -388,7 +388,7 @@ pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
             "generic signature or call syntax at token {detail} is outside the parse.kel subset"
         ),
         19 => format!("method call at token {detail} is outside the parse.kel subset"),
-        20 => format!("binding pattern with name id {detail} is outside the parse.kel subset"),
+        20 => format!("binding pattern is outside the parse.kel subset, detail {detail}"),
         21 => format!(
             "unresolved qualified, imported or unsupported syntax with name id {detail} in parse.kel"
         ),
@@ -402,6 +402,8 @@ pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
             "let annotation nesting depth {detail} exceeds the parse.kel limit of {PARSE_ANNOTATION_DEPTH_CAP}"
         ),
         29 => format!("literal tuple layout capacity exhausted with {detail} members in parse.kel"),
+        30 => format!("expression block at token {detail} is outside the parse.kel subset"),
+        31 => format!("non-range for iterable at token {detail} is outside the parse.kel subset"),
         other => format!(
             "parse.kel reported diagnostic code {other} (detail {detail}), which this driver \
              does not know. The stage has grown a cause that `describe_parse_diagnostic` was \

@@ -679,6 +679,8 @@ fn pe_annotation_syntax() -> Word { 27 }
 fn pe_annotation_depth() -> Word { 28 }
 fn pe_cap_annotation() -> Word { 32 }
 fn pe_tuple_layout() -> Word { 29 }
+fn pe_block_syntax() -> Word { 30 }
+fn pe_for_iterable() -> Word { 31 }
 // **CODE 12 IS RETIRED AND DELIBERATELY NOT REUSED.** It named the bare `for` form as an
 // unsupported construct -- the only such code among eleven capacity limits -- and existed for
 // exactly as long as the form was unsupported, raised at phase 4 where the lowering now hooks
@@ -4644,6 +4646,7 @@ fn step_if(k: Word) -> Word {
                 ops.drain_reason = 2;
                 ops.draining = 1;
             } else {
+            if branch.if_phase[branch.if_sp - 1] == 4 {
                 branch.if_phase[branch.if_sp - 1] = 5;
                 branch.if_stmt_start[branch.if_sp - 1] = stmt.stmt_count;
                 branch.if_opbase[branch.if_sp - 1] = ops.opsp;
@@ -4653,7 +4656,14 @@ fn step_if(k: Word) -> Word {
                 stmt.pbase_sp = stmt.pbase_sp + 1;
                 stmt.stmt_base = stmt.pstmt_sp;
                 ops.expect_operand = 1;
+            } else {
+                perr(pe_block_syntax(), toks.at);
             }
+            }
+        } else {
+            // Checked arithmetic arms and standalone blocks need their own binder
+            // protocol. Do not continue into their body as ordinary expressions.
+            perr(pe_block_syntax(), toks.at);
         }
         0
     } else {
@@ -4869,8 +4879,12 @@ fn step_forheader(k: Word, v: Word) -> Word {
             ops.draining = 1;
             0
         } else {
+        if k == Tok::LBrace() as Word {
+            perr(pe_for_iterable(), toks.at);
+            0
+        } else {
             step_normal(k, v)
-        }
+        } }
     } else {
     if forst.for_phase[fp] == 4 {
         if k == Tok::Ident() as Word andalso v == toks.limit_id {
@@ -5609,6 +5623,8 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
             stmt.pending_let_type = 0;
             stmt.let_annotation_phase = 0;
             stmt.let_phase = 2;
+        } else {
+            perr(pe_pattern_syntax(), v);
         }
         0
     } else {
@@ -6382,6 +6398,12 @@ fn header_step(k: Word, v: Word) -> Word {
             ps.mode = 20;
             0
         } else {
+        if k == Tok::Ident() as Word {
+            // Unsupported declarations such as newtype are identifiers in this
+            // token vocabulary. They must not become fictitious function headers.
+            perr(pe_unresolved_syntax(), v);
+            0
+        } else {
             if k == 5 {
                 ps.dkind = 2;
             } else {
@@ -6392,7 +6414,7 @@ fn header_step(k: Word, v: Word) -> Word {
             } }
             ps.mode = 1;
             0
-        } } } } } } } } } }
+        } } } } } } } } } } }
     } else {
     if ps.mode == 1 {
         if k == 1 {

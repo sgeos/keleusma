@@ -2,6 +2,15 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
+## Current capacity evidence, 2026-10-04
+
+The driver-capacity test now inventories all twelve stage sources. Earlier versions of that
+test used ten sources and omitted wire and verify_types. The current maxima belong to
+different stages. Parse uses 776 of 1,024 names. Wire uses 45,297 of 49,152 input bytes.
+The remaining wire input margin is 3,855 bytes. No input cap changed. These measurements
+establish input residency for the corpus, not complete production serialization.
+Both encoding and decoding remain within the original wire-format scope.
+
 Scoping for the Order-1 residual "self-host wire-format serialization". Probed 2026-08-03,
 **re-scoped 2026-08-08**.
 

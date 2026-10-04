@@ -933,17 +933,11 @@ impl std::error::Error for SelfHostParseError {}
 /// question and a separate one. The process panic hook also still runs, so the
 /// message appears on standard error even when it is returned here.
 ///
-/// # What actually fails today, MEASURED rather than recalled
-///
-/// Of the eleven scripts in `examples/scripts/`, **two** are refused:
-/// `09_big_numbers.kel` and `10_multbyte.kel`, both with
-/// `IndexOutOfBounds(-1, 65)` out of `parse.kel`. **This corrects a standing
-/// report of FOUR**, whose other two — `02_struct_field.kel` and
-/// `08_method_dispatch.kel` — were fixed by the struct/trait/impl skip state and
-/// now parse. It also corrects the CAUSE: the surviving two do not reach
-/// `open_decl` at all, so "a top-level `struct`" no longer explains them.
-/// `every_shipped_example_is_parsed_or_refused_by_name` pins the set, so the
-/// count cannot drift again without a test saying so.
+/// The named example corpus and its current refusals are checked in
+/// `tests/selfhost_parse_refusals.rs`. The parser explicitly refuses array iteration,
+/// newtype declarations, method calls, checked expression blocks, destructuring lets
+/// and signed declarations. These are unsupported syntax, not invalid-source verdicts.
+/// Parsing an example still does not establish complete compilation or execution.
 pub fn try_parse_functions(src: &str) -> Result<ParsedProgram, SelfHostParseError> {
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parse_functions(src)));
     match caught {
@@ -8673,7 +8667,7 @@ pub fn self_hosted_compile(
         let detail = error.to_string();
         let unsupported = matches!(&error,
             TypeCheckError::Parse(crate::selfhost_host::ParseRecordError::Diagnostic { code, .. })
-            if matches!(crate::selfhost_host::PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(18..=21)));
+            if matches!(crate::selfhost_host::PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(18..=21 | 30..=31)));
         if unsupported || matches!(&error, TypeCheckError::ExtractionPanic(_)) {
             if let Some((what, line)) = name_unsupported_construct(src) {
                 return Err(SelfHostError::Unsupported {

@@ -3221,6 +3221,20 @@ pub fn compile_with_options(
     target: &crate::target::Target,
     options: &CompileOptions,
 ) -> Result<(Module, Vec<CompileWarning>), CompileError> {
+    compile_with_recorded_type_hook(program, target, options, |_| {})
+}
+
+// The hook receives only the recorded expression table, after all admission and
+// recording passes. Production entry points preserve it. Tests can remove or alter
+// it here to measure the emitter's structural fallback without bypassing checking.
+type RecordedExpressionTypes = BTreeMap<String, BTreeMap<crate::token::Span, TypeExpr>>;
+
+fn compile_with_recorded_type_hook(
+    program: &Program,
+    target: &crate::target::Target,
+    options: &CompileOptions,
+    before_emission: impl FnOnce(&mut RecordedExpressionTypes),
+) -> Result<(Module, Vec<CompileWarning>), CompileError> {
     let mut warnings: Vec<CompileWarning> = Vec::new();
     target.validate_against_runtime()?;
     // ONE GUARD, RUN ONCE, OVER EVERY DECLARATION POSITION.
@@ -3314,6 +3328,7 @@ pub fn compile_with_options(
     // `Op::CallIndirect`). The type checker rejects
     // `Expr::Closure` before the program reaches this point, so
     // no closure-shaped expressions survive into compilation.
+    before_emission(&mut owned.fn_expr_types);
     let program = &owned;
 
     let mut native_names: Vec<String> = Vec::new();
@@ -11849,6 +11864,9 @@ fn compile_pattern_bind_typed(
     }
     Ok(())
 }
+
+#[cfg(all(test, feature = "verify"))]
+mod inference_independence;
 
 #[cfg(test)]
 mod tests {
