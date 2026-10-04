@@ -2,6 +2,37 @@
 
 > **Navigation**: [Handoffs](./README.md) | [Process](../README.md)
 
+## Current increment on 2026-10-04
+
+The [delta audit](../kaizen/2026-10-04-process-delta-audit.md) compares the original
+`802e72d3` baseline with trunk commit `89fc6aac` on 2026-09-28. Proposals one, two,
+four, six and seven have partial implementations. No full adoption is demonstrated.
+The report preserves the original audit and makes no new process ruling.
+
+Work is on `docs/kaizen-delta-20260928`, cut from kaizen commit `8e06e55f`, in the
+isolated worktree `/private/tmp/keleusma-kaizen-delta-20260928`. This location is within
+the session's writable scope. The primary checkout remains on the peer's compiler
+feature branch and the existing kaizen integration worktree remains unchanged.
+
+The kaizen ancestry and content checks below passed against local refs. No remote
+refresh was performed. Validate this feature by checking that `8e06e55f` is an
+ancestor and reviewing `git log --oneline 8e06e55f..HEAD`. Appendix B was read in
+the primary checkout before tracked edits.
+
+Selected document checks over an exported endpoint snapshot passed 26 cases.
+The direct Rust invocations, rejected empty runs and corrected feature selections
+are retained in the report's evidence. They do not constitute a Cargo or runtime gate.
+Final document checks passed 14 cases on this feature worktree. Their commands and
+limits are recorded in the same verification evidence.
+No push, merge or publication is part of this increment.
+
+The intended next increment is a proposal to reconcile the remaining current-facing
+gate and attribution instructions with the already recorded operator policy. The
+owning line would integrate any repair. The other proposal rulings remain open.
+
+Everything below records the preceding integration-branch handoff. Its statement that
+the delta audit is merely a candidate is superseded by this current block.
+
 The kaizen line's mailbox and its self-contained resume prompt in one file, following the
 per-branch practice of [`PARALLEL_DEVELOPMENT.md`](../PARALLEL_DEVELOPMENT.md) as the proof
 line extended it to a top-level line. Read it with

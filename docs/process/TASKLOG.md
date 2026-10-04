@@ -6,6 +6,17 @@ Current sprint source of truth.
 
 ---
 
+## Kaizen delta review on docs/kaizen-delta-20260928
+
+2026-10-04. Completed the [process delta review](./kaizen/2026-10-04-process-delta-audit.md)
+from the original 2026-09-08 baseline to trunk commit `89fc6aac` on 2026-09-28.
+Five proposals have partial implementations. Full adoption of any proposal remains
+unestablished. The endpoint's selected document checks passed 26 cases through direct
+Rust test compilation. Two initial empty feature-gated runs were rejected and corrected.
+Final worktree document checks passed 14 cases. No runtime gate or remote workflow
+was run. The kaizen mailbox carries the handoff.
+The primary checkout and peer process state were left unchanged.
+
 ## Current Phase
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
