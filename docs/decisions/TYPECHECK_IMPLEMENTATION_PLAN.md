@@ -14,8 +14,16 @@ retain element type and length. Expression kind 16 derives literal-array tags in
 Function headers retain parameter positions across unrecorded tuple types. Direct struct-returning
 calls and literals now arm field access, and whole composite fields retain their representation.
 Scalar-array signatures preserve the outer shape. The sixteen-source audit and fourteen valid
-controls pass. Complete tuple/nested-array facts, enum constructor payload facts, array let
+controls pass. Complete tuple/nested-array facts, composite payload details, array let
 annotations and nominal struct signatures remain open. Full Order 1 is not complete.
+
+**Enum construction facts, 2026-10-04.** Parser metadata now preserves declaration-order
+variant identity. Scalar, named and scalar-array payload requirements reach the independent
+type stage. A nineteen-source comparison agrees with the reference, including fourteen
+shipping rejections that must precede reference checking. Tuple payloads retain their field
+position but remain unknown. Eleven artifact and execution controls cover payload access and
+enum-to-Word casts. The cast controls exposed missing variant dispatch and enum alias facts,
+both now repaired. This does not establish complete composite typing or full syntax admission.
 
 **Currency, 2026-10-04.** The active completion effort is tracked in
 [ORDER1_COMPLETION_PLAN.md](./ORDER1_COMPLETION_PLAN.md). Parser records now retain explicit

@@ -141,6 +141,8 @@ pub struct ParsedFn {
     struct_counts: Vec<(i64, i64)>,
     // Constructor identities in postorder, with their guard/body range.
     struct_types: Vec<(bool, i64)>,
+    // Declaration-order variant identities, in postorder and separated by source range.
+    enum_variants: Vec<(bool, i64)>,
 }
 
 impl ParsedFn {
@@ -1808,6 +1810,13 @@ fn try_parse_functions_impl(
         budget,
         |code, val| {
             on_record(code, val, cursor_at.get());
+            if (in_body || in_guard) && code == crate::selfhost_host::PARSE_ENUM_VARIANT_TAG {
+                assert!(val >= 0, "negative source enum variant index");
+                open_decl(&mut cur, code, val)
+                    .enum_variants
+                    .push((in_guard, val));
+                return ControlFlow::Continue(());
+            }
             if (in_body || in_guard) && code == crate::selfhost_host::PARSE_LET_TYPE_TAG {
                 let f = open_decl(&mut cur, code, val);
                 assert!(val >= 0, "negative source annotation name id");
@@ -1925,6 +1934,7 @@ fn try_parse_functions_impl(
                             let_annotations: Vec::new(),
                             struct_counts: Vec::new(),
                             struct_types: Vec::new(),
+                            enum_variants: Vec::new(),
                         })
                     }
                     4 => {
@@ -2374,6 +2384,35 @@ pub fn try_call_type_inputs_from_pipeline(
             scalar_tag_of_type_name(names.get(id as usize).map(String::as_str))
         }
     };
+    // Variant order is supplied by parser declarations and constructor metadata.
+    // Scalar/named payloads emit PTYPE, arrays add ASIZE, and tuples reserve
+    // an unknown field. No layout size is treated as a nominal type identity.
+    let mut enum_variants: Vec<(i64, Vec<i64>)> = Vec::new();
+    let mut current_enum = None;
+    for &(kind, value) in &enum_records {
+        match kind {
+            12 => current_enum = Some(value),
+            13 => enum_variants.push((
+                current_enum.expect("variant without enum declaration"),
+                Vec::new(),
+            )),
+            4 | 6 => enum_variants
+                .last_mut()
+                .expect("payload without variant")
+                .1
+                .push(if kind == 6 { tag_of(value) } else { 0 }),
+            8 => {
+                let field = enum_variants
+                    .last_mut()
+                    .expect("array payload without variant")
+                    .1
+                    .last_mut()
+                    .expect("array length without element type");
+                *field = scalar_array_tag(*field, value);
+            }
+            _ => {}
+        }
+    }
     let mut field_types: alloc::collections::BTreeMap<i64, Vec<i64>> =
         alloc::collections::BTreeMap::new();
     let mut current_struct = None;
@@ -2542,8 +2581,38 @@ pub fn try_call_type_inputs_from_pipeline(
                     .count(),
                 "constructor identity count"
             );
+            let enum_nodes: alloc::collections::BTreeMap<_, _> = body
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, node)| node.kind == 18)
+                .zip(
+                    f.enum_variants
+                        .iter()
+                        .filter(|(guard, _)| *guard == (range == 0)),
+                )
+                .map(|((index, _), (_, variant))| {
+                    let variant = usize::try_from(*variant).expect("negative enum variant");
+                    (index as i64, &enum_variants[variant])
+                })
+                .collect();
+            assert_eq!(
+                enum_nodes.len(),
+                body.nodes.iter().filter(|node| node.kind == 18).count(),
+                "enum node without constructor metadata"
+            );
+            assert_eq!(
+                enum_nodes.len(),
+                f.enum_variants
+                    .iter()
+                    .filter(|(guard, _)| *guard == (range == 0))
+                    .count(),
+                "enum metadata without constructor node"
+            );
             let operand = |index| {
                 if let Some(name) = struct_nodes.get(&index) {
+                    (tag_of(*name), 0, String::new())
+                } else if let Some((name, _)) = enum_nodes.get(&index) {
                     (tag_of(*name), 0, String::new())
                 } else if let Some(identity) = computed_names.get(&index) {
                     (0, 1, identity.clone())
@@ -2610,6 +2679,22 @@ pub fn try_call_type_inputs_from_pipeline(
                     {
                         expressions.push((8, operand(child), (declared, 0, String::new())));
                     }
+                }
+            }
+            for (&index, (_, tags)) in &enum_nodes {
+                let node = &body.nodes[index as usize];
+                let first = usize::try_from(node.lhs).expect("negative enum child offset");
+                let count = usize::try_from(node.rhs).expect("negative enum child count");
+                assert!(count > 0, "enum constructor without discriminant");
+                expressions.push((
+                    7,
+                    (tags.len() as i64, 0, String::new()),
+                    (node.rhs - 1, 0, String::new()),
+                ));
+                for (&declared, &child) in
+                    tags.iter().zip(&body.call_args[first + 1..first + count])
+                {
+                    expressions.push((8, operand(child), (declared, 0, String::new())));
                 }
             }
             for node in &body.nodes {

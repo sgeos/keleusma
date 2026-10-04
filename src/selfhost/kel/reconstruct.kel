@@ -335,7 +335,7 @@ fn is_unary(k: Word) -> Word {
 // lay out the match_parts enum entry as [temp][ename][per arm: vname, disc, result]; build the
 // EnumMatch node (kind 39): arg the entry start, lhs the scrutinee, rhs the arm count. Held out of
 // `step` so that function's node forest stays within the codegen work buffers.
-fn build_enum_match(a: Word) -> Word {
+fn build_enum_match(a: Word, is_cast: Word) -> Word {
     let temp = a % 1024;
     let total = (a / 1024) % 1024;
     let haswc = if total > 0 andalso rs.epending[rs.epcount - 1] < 0 { 1 } else { 0 };
@@ -393,7 +393,8 @@ fn build_enum_match(a: Word) -> Word {
     rs.epcount = ebase;
     rs.bindcount = bbase;
     let scrut = pop();
-    emit(39, base, scrut, count)
+    if is_cast == 1 { emit(26, base + 2, scrut, count) }
+    else { emit(39, base, scrut, count) }
 }
 
 // StructEqBuild assembly: `a` packs `ta + tb*1024 + count*1048576` (the two comparison temps and the
@@ -928,7 +929,7 @@ fn step(k: Word, a: Word) -> Word {
         let scrut = pop();
         emit(22, base, scrut, lit_count)
     } else {
-    if (k >= 40 andalso k <= 63) orelse k == 65 orelse k == 67 orelse k == 68 orelse k == 73 {
+    if (k >= 40 andalso k <= 63) orelse k == 65 orelse k == 67 orelse k == 68 orelse k == 73 orelse k == 74 {
         // The enum-match / struct-eq / bnot assembly records occupy the contiguous kind range 40..63.
         // (The values in that range that are NOT assembly records -- 43/44/45/60 binary or unary, and
         // 54/59/62 which are node-only kinds never yielded as records -- are handled earlier in `step`
@@ -984,9 +985,9 @@ fn step_assembly(k: Word, a: Word) -> Word {
         rs.bindcount = rs.bindcount + 1;
         0
     } else {
-    if k == 41 {
+    if k == 41 orelse k == 74 {
         // EnumMatchBuild: assemble the IsEnum-loop match_parts and build the EnumMatch node.
-        build_enum_match(a)
+        build_enum_match(a, if k == 74 { 1 } else { 0 })
     } else {
     if k == 46 {
         // StructEqField marker: accumulate this field's packed (offset + kind*65536). No node.

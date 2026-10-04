@@ -670,6 +670,7 @@ fn pe_value_call() -> Word { 22 }
 fn pe_match_coverage() -> Word { 23 }
 fn pe_match_variant() -> Word { 24 }
 fn pe_match_depth() -> Word { 25 }
+fn pe_enum_payload() -> Word { 26 }
 // **CODE 12 IS RETIRED AND DELIBERATELY NOT REUSED.** It named the bare `for` form as an
 // unsupported construct -- the only such code among eleven capacity limits -- and existed for
 // exactly as long as the form was unsupported, raised at phase 4 where the lowering now hooks
@@ -1184,6 +1185,14 @@ private data mat {
     enum_phase: Word,
     enum_name: Word,
     enum_disc: Word,
+    enum_row: Word,
+    // Synthetic variant dispatch for a value cast to Word. The operand has already emitted.
+    ec_phase: Word,
+    ec_name: Word,
+    ec_cursor: Word,
+    ec_row: Word,
+    ec_count: Word,
+    ec_temp: Word,
     mpat_phase: Word,
     // Per open match, whether its arms are enum-variant patterns (1) so the build lowers to the
     // IsEnum virtual loop; `match_ename` the matched enum's name intern id (the IsEnum first
@@ -1328,6 +1337,7 @@ private data call {
     // Per open enum construction, the enum's name id, so a `let e = E::A(x)` binding is tagged
     // enum-typed for a following `match e`.
     en_ename: [Word; 8],
+    en_variant: [Word; 8],
     en_sp: Word,
     // A unit enum construction `E::V()` (no `as`) as a VALUE: after the discriminant literal is
     // emitted, `en_unit` arms the finalize that emits the count-1 EnumInit; `en_unit_bs` the enum's
@@ -1335,6 +1345,9 @@ private data call {
     en_unit: Word,
     en_unit_bs: Word,
     en_unit_ename: Word,
+    en_unit_variant: Word,
+    // The constructor record follows its variant metadata without consuming a token.
+    en_record: Word,
     // The tuple-construction context stack, parallel to the array-literal stack: `tp_count` the
     // running element count per open `(...)` tuple, `tp_sp` the nesting depth. A `(` first pushes
     // a `Paren` marker (grouping is indistinguishable until a `,`); the first top-level `,`
@@ -1512,6 +1525,7 @@ fn step_local(v: Word) -> Word {
     ps.last_array_arr = 0;
     // This operand is a whole enum value only if it resolves to an enum-typed parameter (set below).
     ps.last_enum = 0;
+    stmt.pending_cenum = 0;
     for i in 0..stmt.let_count limit 64 {
         if stmt.let_names[i] == v {
             ps.found = stmt.scope_slot[i];
@@ -1530,6 +1544,7 @@ fn step_local(v: Word) -> Word {
                 }
                 if ps.penum[i] > 0 {
                     ps.last_enum = ps.penum[i];
+                    stmt.pending_cenum = ps.penum[i];
                 }
             }
         }
@@ -1621,6 +1636,7 @@ fn resolve_plain_ident(v: Word) -> Word {
             // (`let x = E::A(); x == e`), the let-binding analogue of an enum parameter.
             if stmt.let_enum[ps.let_hit] > 0 {
                 ps.last_enum = stmt.let_enum[ps.let_hit];
+                stmt.pending_cenum = stmt.let_enum[ps.let_hit];
             }
             ln
         } } } } }
@@ -1963,7 +1979,7 @@ fn step_enum_payload(k: Word, v: Word) -> Word {
         if k == Tok::Ident() as Word {
             ps.epf_ekind = scalar_kind_of(v);
             ps.epf_esize = type_byte_size(v);
-            0
+            6 + v * 64
         } else {
         if k == Tok::IntLit() as Word {
             let sz = ps.epf_esize * v;
@@ -1971,7 +1987,7 @@ fn step_enum_payload(k: Word, v: Word) -> Word {
             enums.evfarrkind[fi] = ps.epf_ekind + 1;
             enums.evfcount[vi] = enums.evfcount[vi] + 1;
             enums.epayload[vi] = enums.epayload[vi] + sz;
-            0
+            8 + v * 64
         } else {
         if k == Tok::RBracket() as Word {
             // The array payload field is complete (recorded at the size); close the epf scan.
@@ -1993,7 +2009,8 @@ fn step_enum_payload(k: Word, v: Word) -> Word {
             tupledefs.tup_estart[tupledefs.tup_count] = tupledefs.tup_ecursor;
             tupledefs.tup_ecount[tupledefs.tup_count] = 0;
             tupledefs.tup_count = tupledefs.tup_count + 1;
-            0
+            // Reserve one unknown tuple field, preserving subsequent payload positions.
+            4
         } else {
         if k == Tok::LBracket() as Word {
             // Open an ARRAY payload field: record its offset, enter epf 2 (element type then size).
@@ -2023,7 +2040,7 @@ fn step_enum_payload(k: Word, v: Word) -> Word {
             }
             enums.evfcount[vi] = enums.evfcount[vi] + 1;
             enums.epayload[vi] = enums.epayload[vi] + type_byte_size(v);
-            0
+            6 + v * 64
         } else {
         if k == Tok::RParen() as Word {
             enums.evfcursor = enums.evfstart[enums.enum_count - 1] + enums.evfcount[enums.enum_count - 1];
@@ -2064,11 +2081,16 @@ fn step_enum(k: Word, v: Word) -> Word {
     if mat.enum_phase == 2 {
         if k == Tok::Ident() as Word {
             mat.enum_disc = 0;
+            mat.enum_row = 0;
+            ps.found_flag = 0;
             for i in 0..enums.enum_count limit 256 {
                 if enums.edata[i] == mat.enum_name andalso enums.evar[i] == v {
                     mat.enum_disc = enums.edisc[i];
+                    mat.enum_row = i;
+                    ps.found_flag = 1;
                 }
             }
+            if ps.found_flag == 0 { perr(pe_match_variant(), v); }
             mat.enum_phase = 3;
         }
         0
@@ -2081,6 +2103,9 @@ fn step_enum(k: Word, v: Word) -> Word {
     } else {
     if mat.enum_phase == 4 {
         if k == Tok::RParen() as Word {
+            if enums.evfcount[mat.enum_row] != 0 {
+                perr(pe_enum_payload(), enums.evfcount[mat.enum_row]);
+            }
             mat.enum_phase = 5;
             0
         } else {
@@ -2091,6 +2116,7 @@ fn step_enum(k: Word, v: Word) -> Word {
             call.en_count[call.en_sp] = 1;
             call.en_bytesize[call.en_sp] = enum_bytesize(mat.enum_name);
             call.en_ename[call.en_sp] = mat.enum_name;
+            call.en_variant[call.en_sp] = mat.enum_row;
             call.en_sp = call.en_sp + 1;
             ops.opstack[ops.opsp] = OpCode::EnumMark() as Word;
             ops.opsp = op_push(ops.opsp);
@@ -2110,6 +2136,7 @@ fn step_enum(k: Word, v: Word) -> Word {
             call.en_unit = 1;
             call.en_unit_bs = enum_bytesize(mat.enum_name);
             call.en_unit_ename = mat.enum_name;
+            call.en_unit_variant = mat.enum_row;
             ps.cursor = ps.cursor - 1;
             ops.expect_operand = 0;
             Node::Literal() as Word + mat.enum_disc * 64
@@ -2121,11 +2148,17 @@ fn step_enum(k: Word, v: Word) -> Word {
     } } } } }
 }
 
-// Finalize a unit enum construction `E::V()`: after its discriminant literal, emit the count-1
-// EnumInit (NewComposite(Flat{Enum, count 1, byte_size})) and tag the pending composite type with
-// the enum so a `let e = E::V()` binding is enum-typed for a following `match e`.
+// Metadata outside the node vocabulary. Its payload indexes variants in declaration order.
+fn tag_enum_variant() -> Word { 93 }
+
+// Unit values emit metadata and then EnumInit. Payload constructors reuse phase two to emit
+// their saved EnumInit immediately after the metadata, without consuming another source token.
 fn step_enum_unit_finalize() -> Word {
-    call.en_unit = 0;
+    if call.en_unit == 2 {
+        call.en_unit = 0;
+        call.en_record
+    } else {
+    call.en_unit = 2;
     ops.expect_operand = 0;
     stmt.pending_ctuple = 0;
     stmt.pending_cstruct = 0;
@@ -2139,7 +2172,39 @@ fn step_enum_unit_finalize() -> Word {
     // (`E::V() == e`). A bare `E::V()` value reaches here; `E::V() as Word` folds to a Literal
     // earlier (phase 6) and never does, so a cast result stays scalar.
     ps.last_enum = call.en_unit_ename + 1;
-    Node::EnumInit() as Word + (call.en_unit_bs * 1024 + 1) * 64
+    call.en_record = Node::EnumInit() as Word + (call.en_unit_bs * 1024 + 1) * 64;
+    ps.emit_arg = call.en_unit_variant;
+    tag_enum_variant()
+    }
+}
+
+// Reuse the enum-arm protocol, with a distinct build marker for the cast's trap kind.
+fn step_enum_cast() -> Word {
+    if mat.ec_phase == 2 {
+        mat.ec_phase = 1;
+        Node::Literal() as Word + enums.edisc[mat.ec_row] * 64
+    } else {
+        ps.found_flag = 0;
+        for i in 0..enums.enum_count limit 256 {
+            if i >= mat.ec_cursor andalso enums.edata[i] == mat.ec_name andalso ps.found_flag == 0 {
+                mat.ec_row = i;
+                ps.found_flag = 1;
+            }
+        }
+        if ps.found_flag == 1 {
+            let row = mat.ec_row;
+            mat.ec_cursor = row + 1;
+            mat.ec_count = mat.ec_count + 1;
+            mat.ec_phase = 2;
+            let slot = ps.pcount + stmt.slot_count;
+            stmt.slot_count = stmt.slot_count + 1;
+            Node::EnumArm() as Word + (((enums.evar[row] * 65536 + enums.edisc[row]) * 8) * 1024 + slot) * 64
+        } else {
+            mat.ec_phase = 0;
+            ps.emit_arg = mat.ec_temp + mat.ec_count * 1024 + mat.ec_name * 2097152;
+            74
+        }
+    }
 }
 
 // The `::Variant()` of a unit enum-variant match pattern, folded to the variant's
@@ -4177,6 +4242,7 @@ fn step_closing() -> Word {
             stmt.pending_carray_struct = chunkret.ret_array_struct[call.call_chunk[call.call_sp]];
             stmt.pending_carray_size = chunkret.ret_array_size[call.call_chunk[call.call_sp]];
             stmt.pending_cenum = chunkret.ret_enum[call.call_chunk[call.call_sp]];
+            ps.last_enum = stmt.pending_cenum;
             if stmt.pending_cstruct > 0 {
                 ps.fa_struct = stmt.pending_cstruct - 1;
                 ps.fa_phase = 1;
@@ -4208,7 +4274,10 @@ fn step_closing() -> Word {
             // operand's enum type (`op_lenum`), enabling `E::V(x) == e` with the payload
             // construction on the left.
             ps.last_enum = call.en_ename[call.en_sp] + 1;
-            Node::EnumInit() as Word + (call.en_bytesize[call.en_sp] * 1024 + call.en_count[call.en_sp]) * 64
+            call.en_record = Node::EnumInit() as Word + (call.en_bytesize[call.en_sp] * 1024 + call.en_count[call.en_sp]) * 64;
+            call.en_unit = 2;
+            ps.emit_arg = call.en_variant[call.en_sp];
+            tag_enum_variant()
         } else {
         if top == OpCode::TupleMark() as Word {
             // A `)` closing a tuple construction: pop the mark, count the last element (when a
@@ -4918,6 +4987,8 @@ fn step_normal(k: Word, v: Word) -> Word {
     } else {
     if k == Tok::IntLit() as Word {
         ops.expect_operand = 0;
+        ps.last_enum = 0;
+        stmt.pending_cenum = 0;
         Node::Literal() as Word + v * 64
     } else {
     if k == Tok::Str() as Word {
@@ -5435,9 +5506,21 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         da.as_skip = 0;
         ops.expect_operand = 0;
         if toks.byte_id > 0 andalso v == toks.byte_id {
+            ps.last_enum = 0;
+            stmt.pending_cenum = 0;
             Node::Cast() as Word + 1 * 64
         } else {
-            Node::Cast() as Word
+            if v == toks.word_id andalso ps.last_enum > 0 {
+                mat.ec_phase = 1;
+                mat.ec_name = ps.last_enum - 1;
+                mat.ec_cursor = 0;
+                mat.ec_count = 0;
+                mat.ec_temp = ps.pcount + stmt.slot_count;
+                stmt.slot_count = stmt.slot_count + 1;
+                ps.last_enum = 0;
+                stmt.pending_cenum = 0;
+                0
+            } else { Node::Cast() as Word }
         }
     } else {
     if k == Tok::As() as Word {
@@ -5951,8 +6034,11 @@ fn body_step() -> Word {
     if da.store_emit == 1 {
         step_store_finalize()
     } else {
-    if call.en_unit == 1 {
+    if call.en_unit > 0 {
         step_enum_unit_finalize()
+    } else {
+    if mat.ec_phase > 0 {
+        step_enum_cast()
     } else {
         if ps.cursor >= toks.len {
             ops.draining = 1;
@@ -5985,7 +6071,7 @@ fn body_step() -> Word {
                 step_body_dispatch(k, v)
             } } } } } }
         }
-    } } } } } } } } } } } } } }
+    } } } } } } } } } } } } } } }
 }
 
 // Reset the body-walk state for a fresh function body.
@@ -6024,6 +6110,7 @@ fn arm_body() -> Word {
     mat.match_sp = 0;
     mat.match_build = 0;
     mat.enum_phase = 0;
+    mat.ec_phase = 0;
     mat.mpat_phase = 0;
     da.da_phase = 0;
     da.cda_phase = 0;

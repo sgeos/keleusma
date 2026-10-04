@@ -354,6 +354,12 @@ rejections and one false rejection. Fourteen valid controls and three artifact/e
 cover the extension. Remaining composite facts, complete artifact emission through Keleusma and
 final verification still keep Order 1 open.
 
+Enum constructor identities and scalar, named and scalar-array payload requirements now reach
+production rejection. The nineteen-source comparison closes fourteen missed rejections.
+Eleven artifact and execution controls also close enum-to-Word dispatch and enum alias gaps.
+Tuple payload types remain unknown, with their positions preserved. This progress does not
+complete the composite coverage, wire emission or final gates required by Order 1.
+
 The full completion requirements and current evidence are tracked in
 [ORDER1_COMPLETION_PLAN.md](../decisions/ORDER1_COMPLETION_PLAN.md). Explicit else presence
 now survives parser records and reconstruction, enabling conditional branch-pair extraction.

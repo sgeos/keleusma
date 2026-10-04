@@ -13,6 +13,32 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-04 Enum identity and payload declarations survive lowering
+
+The nominal parameter channel alone could reject a scalar passed to an enum parameter while
+accepting a constructor of a different enum. Both constructor types had become unknown. The
+first nineteen-source comparison found fourteen missed rejections, including wrong payload
+types and arity, unknown variants, constructor returns and alias identity.
+
+Constructor metadata now retains the parser's declaration-order variant index. Enum declaration
+records carry scalar and named payload types and scalar-array lengths. Tuple payloads reserve
+an unknown field, preventing subsequent payload requirements from shifting. The host transports
+these source facts and the stage applies its existing count and agreement rules. Equal byte sizes
+are never used as evidence of nominal identity. The new metadata is consumed before reconstruction.
+
+Positive artifact controls exposed a separate existing enum-to-Word cast error. The parser had
+emitted a plain widening cast and code generation emitted ByteToWord. The reference instead
+evaluates the enum once and emits a variant-dispatch loop. The pipeline now reuses its enum match
+assembly and emission, retaining the cast-specific fallback trap. Internal record 74 builds this
+dispatch into the existing Cast node. The public instruction set is unchanged.
+
+Expanded controls then found missing parser enum facts on aliases. Parameter and local enum
+facts now reach subsequent bindings, and scalar literals and Byte casts clear stale enum facts.
+Eleven complete artifact and runtime comparisons cover these paths and return seven. The first
+diagnostic was sampled in the shadow pilot. Later cast diagnostics remain in engineering logs
+under the first-diagnostic convention. Full composite typing, production wire emission and the
+Order 1 completion gates remain open.
+
 ## 2026-10-04 Composite identity must survive representation lowering
 
 The independent production checker made previously hidden composite gaps observable. The first

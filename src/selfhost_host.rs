@@ -75,7 +75,7 @@ impl ParseRecordError {
     /// retired codes, capacity limits and transport failures never do.
     #[must_use]
     pub fn is_source_rejection(&self) -> bool {
-        matches!(self, Self::Diagnostic { code, .. } if matches!(PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(2 | 13..=17 | 22..=24)))
+        matches!(self, Self::Diagnostic { code, .. } if matches!(PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(2 | 13..=17 | 22..=24 | 26)))
     }
 }
 
@@ -225,6 +225,9 @@ pub const PARSE_STRUCT_FIELDS_TAG: i64 = 91;
 
 /// Source annotation type-name id for the LetIn following this metadata.
 pub const PARSE_LET_TYPE_TAG: i64 = 92;
+
+/// Declaration-order variant index for the EnumInit following this metadata.
+pub const PARSE_ENUM_VARIANT_TAG: i64 = 93;
 
 /// The tag at or below which a word yielded by `reconstruct.kel` is a diagnostic rather
 /// than a node count. Node counts are non-negative, so no legitimate count can collide.
@@ -376,6 +379,7 @@ pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
         23 => format!("non-exhaustive match in parse.kel, missing coverage at {detail}"),
         24 => format!("unknown or mismatched enum variant with name id {detail} in parse.kel"),
         25 => format!("match nesting depth {detail} exceeds the parse.kel limit of 8"),
+        26 => format!("empty enum constructor requires {detail} payload fields in parse.kel"),
         other => format!(
             "parse.kel reported diagnostic code {other} (detail {detail}), which this driver \
              does not know. The stage has grown a cause that `describe_parse_diagnostic` was \

@@ -6,6 +6,23 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Enum constructors, payloads and casts
+
+The nineteen-source enum comparison initially found fourteen invalid programs accepted by the
+independent pipeline. Constructor metadata now retains declaration-order variant identity, and
+enum declarations emit scalar, named and scalar-array payload requirements. All nineteen sources
+agree, including independent shipping rejection for every negative. A tuple payload reserves one
+unknown field, preserving subsequent parameter positions without claiming complete tuple typing.
+
+Eleven artifact and execution controls exposed missing enum-to-Word variant dispatch and parser
+enum facts on aliases. Cast lowering now shares the existing enum dispatch emitter with the
+reference cast's fallback trap. Controls cover parameters, aliases, returned values, payload
+constructors and scalar casts following enum values. Both outputs return seven.
+
+The shadow pilot retains the first diagnostic and bounded completion claims locally. Labels are
+non-independent. Full Order 1 remains active. Verification and remaining gaps are recorded in the
+reverse prompt. Public bytecode version and opcode count remain unchanged.
+
 ## 2026-10-04 Nominal and scalar-array type facts
 
 The production composite audit initially found twelve missed rejections and one false rejection

@@ -278,3 +278,25 @@ PipelineRejected in the shipping entry. Array signatures and whole-field reads h
 artifact-and-execution controls with result seven. This extends the required type coverage without
 closing complete tuple/nested-array facts, enum constructor payloads, array let annotations or
 nominal struct signatures. Production wire emission and the final completion audit remain open.
+
+## Enum constructor and payload facts
+
+The next nineteen-source comparison found fourteen invalid programs accepted by the independent
+pipeline. Constructor metadata now identifies the declared variant, and declaration records
+carry scalar, named and scalar-array payload types. Extraction supplies arity and agreement
+constraints to the existing stage rules. Unknown variants and empty constructors requiring
+payloads have explicit source diagnostics, including the direct cast-folding path.
+
+All nineteen sources now agree, with fourteen independent shipping rejections. A metadata test
+checks adjacency and declaration-order identity across enum declarations. Tuple payloads reserve
+one unknown field so later scalar requirements do not shift. Their full type remains unresolved.
+
+Eleven complete artifact and execution controls return seven through both compilers. These exposed
+an enum value cast being emitted as ByteToWord and a missing parser enum fact on aliases. Casts now
+reuse enum variant dispatch with the EnumVariantUnmapped fallback trap. The existing Cast node
+retains an enum dispatch table, and internal build record 74 distinguishes its assembly. This adds
+no public opcode. Scalar casts after an enum value have a separate control against stale facts.
+
+Complete tuple and nested-array facts, composite projections, array let annotations, occurrence
+coverage and general admission remain open. The all-stage identity and final integration obligations
+above remain authoritative. Production artifact serialization still uses Rust.

@@ -868,7 +868,8 @@ fn push_andor(p: Word) -> Word {
 }
 
 // Cast (kind 26): `<operand> as <target>`. `args` is the target -- 1 for `Byte`,
-// 0 for the widening to `Word` -- and lhs is the operand.
+// 0 for the widening to `Word`, or match_parts base plus two for an enum cast.
+// lhs is the operand. An enum cast's rhs is its variant count.
 //
 // **THIS EMITTED `ByteToWord` UNCONDITIONALLY**, on the stated assumption that the
 // stages only ever cast `Byte as Word`. True of the stage corpus and false of the
@@ -876,12 +877,16 @@ fn push_andor(p: Word) -> Word {
 // than a refusal. The direction was not available here because `parse.kel`
 // discarded the target type name; it now carries it in the payload.
 fn push_cast(p: Word) -> Word {
+    if ast.args[p] >= 2 {
+        push_enum_dispatch(p, ast.args[p] - 2, 4)
+    } else {
     if ast.args[p] == 1 {
         push_emit(wire.wordtobyte);
     } else {
         push_emit(wire.bytetoword);
     }
     push_visit(ast.lhs[p])
+    }
 }
 
 // UnaryNeg (kind 10): emit the operand ops then CheckedNeg and the PopN(2) fixup.
@@ -1348,7 +1353,11 @@ fn push_enum_isenum(ename: Word, vname: Word, disc: Word) -> Word {
 // A negative variant name denotes an ordered wildcard, which allocates no test slot.
 // Each result may be wrapped by a guarded-arm node. A final wildcard uses the trailer.
 fn push_enum_match(p: Word) -> Word {
-    let base = ast.args[p];
+    push_enum_dispatch(p, ast.args[p], wire.nomatch)
+}
+
+// Match and enum-to-Word casts share variant dispatch, with distinct fallback traps.
+fn push_enum_dispatch(p: Word, base: Word, trap_kind: Word) -> Word {
     let temp = ast.match_parts[base];
     let ename = ast.match_parts[base + 1];
     let n = ast.rhs[p];
@@ -1356,7 +1365,7 @@ fn push_enum_match(p: Word) -> Word {
     let haswc = ast.match_parts[base + 2 + n * 20];
     st.let_count = st.let_count + 1;
     push_emit(wire.mendloop);
-    push_emit(wire.trap + wire.nomatch * wire.radix);
+    push_emit(wire.trap + trap_kind * wire.radix);
     // A `_` wildcard's result and Break emit after the variant arms and before the Trap (pushed
     // here so the LIFO walk emits them in that order).
     if haswc == 1 {

@@ -365,7 +365,8 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     // of truth for the number.
                     c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG
                         || c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
-                        || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG => {}
+                        || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
+                        || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG => {}
                     _ => cur
                         .as_mut()
                         .expect("body node before START")
@@ -379,7 +380,8 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     35 => {}                // FieldPos: reorder marker, skipped (see above)
                     c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG
                         || c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
-                        || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG => {}
+                        || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
+                        || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG => {}
                     _ => cur
                         .as_mut()
                         .expect("guard node before START")
