@@ -7,7 +7,8 @@ rests on. The line's mailbox and resume prompt is [`../handoffs/kaizen.md`](../h
 
 | report | state |
 |---|---|
-| [`2026-09-08-process-audit.md`](./2026-09-08-process-audit.md) | the first process audit, sixth draft, publication-reviewed, in the operator's blog format, not published |
+| [`2026-09-08-process-audit.md`](./2026-09-08-process-audit.md) | the first process audit, sixth draft, publication-reviewed, in the operator's blog format, not published, describing the process as of 2026-09-08 |
+| [`2026-10-04-harness-and-mailbox-notes.md`](./2026-10-04-harness-and-mailbox-notes.md) | design notes on a self-handoff harness, a mailbox interface for lines and the operator, and Keleusma's place in both, nothing built, nothing ruled |
 
 The `evidence/` directory holds the ten mining and research reports the audit cites, the
 adversarial review of its first draft with every finding's disposition, the working notes, the
