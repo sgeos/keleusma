@@ -4,6 +4,24 @@
 
 ## Current increment on 2026-10-04
 
+The operator requested the TypeSafe skill as the first step toward Jev integration
+into project workflows. It is installed for Codex at user scope and its installed
+instructions have been read. The [setup record](../TYPESAFE_SKILL.md) contains the
+installation command and observed verification. `CLAUDE.md` now records the
+operator's instruction to use the skill for this project.
+
+The branch is `chore/kaizen-typesafe-skill`, based on `58c786e8`, in the existing
+project-local `.worktrees/kaizen/` checkout. Validate by ancestry and review the
+commits above that parent. Appendix B was read before tracked changes.
+The previous interline implementation remains on `feat/kaizen-interline-protocol`.
+
+On a new machine, reinstall the user-level skill using the tracked setup command.
+Installation is verified. Service authentication and actual Jev workflow execution
+are not verified. No peer message, push or integration merge was performed.
+Continue from the operator's selected workflow increment using the TypeSafe skill.
+
+## Preceding interline portability increment on 2026-10-04
+
 The operator clarified that the protocol document must live in the project and
 that a clone must support continuation without the old `tmp/` or `secret/` trees.
 The kaizen checkout has moved from system temporary storage to `.worktrees/kaizen/`

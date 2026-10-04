@@ -101,6 +101,11 @@ A knowledge graph is maintained in `docs/`. Start at [`docs/README.md`](docs/REA
 
 ## Development Process
 
+Use the `typesafe-ai` skill when working on this project. Read the installed
+skill and its relevant live documentation when applying TypeSafe Jev to project
+workflows. The [TypeSafe skill setup](docs/process/TYPESAFE_SKILL.md) records
+installation, verification and recovery on a new machine.
+
 For communication between development lines, read
 [`docs/process/INTERLINE_PROTOCOL.md`](docs/process/INTERLINE_PROTOCOL.md).
 Address the owning line without assuming its harness. On a fresh clone, the

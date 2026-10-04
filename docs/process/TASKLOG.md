@@ -6,6 +6,15 @@ Current sprint source of truth.
 
 ---
 
+## TypeSafe skill setup on chore/kaizen-typesafe-skill
+
+2026-10-04. Installed the `typesafe-ai` skill for Codex at user scope using the
+operator-provided non-Claude installation method. The installer reports it
+installed for Codex. The [setup record](./TYPESAFE_SKILL.md) preserves the command,
+source, observed file digest and new-machine recovery procedure. Project
+instructions now require using the skill. Jev workflow implementation and service
+authentication are outside this installation increment and remain unverified.
+
 ## Kaizen interline communication on feat/kaizen-interline-protocol
 
 2026-10-04 follow-up. Moved the kaizen checkout into project-local
