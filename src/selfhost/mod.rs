@@ -41,6 +41,12 @@ use crate::{Arena, compiler::compile, lexer::tokenize, parser::parse};
 
 mod wire_auxiliary;
 pub use wire_auxiliary::wire_auxiliary_from_module_via_kel;
+mod wire_signatures;
+pub use wire_signatures::{WireSignatureSections, wire_signature_sections_via_kel};
+mod wire_opcodes;
+pub use wire_opcodes::{
+    WireOpcodeSections, wire_module_artifact_via_kel, wire_opcode_sections_via_kel,
+};
 mod wire_framing;
 pub use wire_framing::{
     wire_artifact_from_sections_via_kel, wire_container_from_regions_via_kel,

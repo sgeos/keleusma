@@ -123,7 +123,8 @@ fn production_compiler_matches_every_complete_stage_artifact() {
         let reference = keleusma::compiler::compile(&ast).expect("reference compile");
         let actual = keleusma::selfhost::self_host_compile_scratch(source);
         let expected_bytes = reference.to_bytes().expect("reference artifact");
-        let actual_bytes = actual.to_bytes().expect("pipeline artifact");
+        let actual_bytes = keleusma::selfhost::wire_module_artifact_via_kel(&actual)
+            .unwrap_or_else(|e| panic!("{name}: pipeline wire emission failed: {e:?}"));
         assert!(!reference.chunks.is_empty(), "{name} has no chunks");
         if actual_bytes != expected_bytes {
             let first = actual_bytes

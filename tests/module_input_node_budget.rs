@@ -129,6 +129,7 @@ fn wire_kel_has_room_under_the_module_input_node_cap() {
     assert!(cap > 0, "the cap parsed as zero, so the reader is broken");
 
     let nodes = blob_node_count(&compile_stage(WIRE_SRC));
+    eprintln!("wire constant nodes {nodes}, capacity {cap}");
 
     assert!(
         nodes > 0,

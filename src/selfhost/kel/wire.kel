@@ -166,6 +166,19 @@ private data framing {
     bad: Word,
 }
 
+// Opcode-stream state. The stage decides whether an instruction consumes a
+// pool entry and advances the ordinal only after a successful write.
+private data opstream {
+    pool: Word,
+    active: Word,
+    shape: Word,
+    operand: Word,
+    p0: Word,
+    p1: Word,
+    p2: Word,
+    bad: Word,
+}
+
 // Scratch for the disagreement scan, which needs an accumulator across loop
 // iterations for the same reason the checksum does.
 private data st {
@@ -673,18 +686,27 @@ fn kind_names() -> Word { 0x0011 }
 fn kind_shapes() -> Word { 0x0015 }
 
 // NameRef: a slice of the string pool. offset u32 @0, length u32 @4.
-fn nameref_stride() -> Word { 8 }
-fn nameref_off_offset() -> Word { 0 }
-fn nameref_off_length() -> Word { 4 }
+// Sharing numeric constants avoids storing the same literal in every schema
+// accessor's per-chunk pool. After opcode integration the old representation
+// left only 21 nodes below the input walk's cap. These calls retain the numeric
+// contract while adding one fixed call level, without enlarging any buffer.
+fn wire_zero() -> Word { 0 }
+fn wire_four() -> Word { 4 }
+fn wire_eight() -> Word { 8 }
+fn wire_sixteen() -> Word { 16 }
+
+fn nameref_stride() -> Word { wire_eight() }
+fn nameref_off_offset() -> Word { wire_zero() }
+fn nameref_off_length() -> Word { wire_four() }
 
 // ShapeRecord: a flat operand shape. tag u16 @0, kind u8 @2, reserved u8 @3,
 // size u32 @4. It fits ONE word, which is why shapes need no side table where
 // struct and enum constants do.
-fn shape_stride() -> Word { 8 }
-fn shape_off_tag() -> Word { 0 }
-fn shape_off_kind() -> Word { 2 }
-fn shape_off_reserved() -> Word { 3 }
-fn shape_off_size() -> Word { 4 }
+fn shape_stride() -> Word { wire_eight() }
+fn shape_off_tag() -> Word { wire_zero() }
+fn shape_off_kind() -> Word { wire_two() }
+fn shape_off_reserved() -> Word { wire_three() }
+fn shape_off_size() -> Word { wire_four() }
 
 // Resolving a region BY KIND rather than by index is what makes this a schema
 // layer. A reader asks for "the names table", not "region 4", so the artifact's
@@ -766,40 +788,40 @@ fn shape_size(i: Word) -> Word {
 // cost 32 bytes for an `Int` that needs 8.
 
 // Constant tags, from `wire_schema::tag`.
-fn tag_unit() -> Word { 1 }
-fn tag_bool() -> Word { 2 }
-fn tag_int() -> Word { 3 }
+fn tag_unit() -> Word { wire_one() }
+fn tag_bool() -> Word { wire_two() }
+fn tag_int() -> Word { wire_three() }
 fn tag_byte() -> Word { 4 }
 fn tag_fixed() -> Word { 5 }
-fn tag_float() -> Word { 6 }
+fn tag_float() -> Word { wire_six() }
 fn tag_static_str() -> Word { 7 }
 fn tag_tuple() -> Word { 8 }
 fn tag_array() -> Word { 9 }
 fn tag_struct() -> Word { 10 }
 fn tag_enum() -> Word { 11 }
-fn tag_none() -> Word { 12 }
+fn tag_none() -> Word { wire_twelve() }
 
 fn kind_consts() -> Word { 0x0012 }
 fn kind_struct_aux() -> Word { 0x0013 }
 fn kind_enum_aux() -> Word { 0x0014 }
 
 // ConstRecord: tag u16 @0, flags u16 @2, aux u32 @4, payload u64 @8.
-fn const_stride() -> Word { 16 }
-fn const_off_tag() -> Word { 0 }
-fn const_off_flags() -> Word { 2 }
-fn const_off_aux() -> Word { 4 }
-fn const_off_payload() -> Word { 8 }
+fn const_stride() -> Word { wire_sixteen() }
+fn const_off_tag() -> Word { wire_zero() }
+fn const_off_flags() -> Word { wire_two() }
+fn const_off_aux() -> Word { wire_four() }
+fn const_off_payload() -> Word { wire_eight() }
 
 // StructAux: type_name u32 @0, field_names_first u32 @4.
-fn structaux_stride() -> Word { 8 }
-fn structaux_off_type_name() -> Word { 0 }
-fn structaux_off_field_names_first() -> Word { 4 }
+fn structaux_stride() -> Word { wire_eight() }
+fn structaux_off_type_name() -> Word { wire_zero() }
+fn structaux_off_field_names_first() -> Word { wire_four() }
 
 // EnumAux: type_name u32 @0, variant u32 @4, discriminant i64 @8.
-fn enumaux_stride() -> Word { 16 }
-fn enumaux_off_type_name() -> Word { 0 }
-fn enumaux_off_variant() -> Word { 4 }
-fn enumaux_off_discriminant() -> Word { 8 }
+fn enumaux_stride() -> Word { wire_sixteen() }
+fn enumaux_off_type_name() -> Word { wire_zero() }
+fn enumaux_off_variant() -> Word { wire_four() }
+fn enumaux_off_discriminant() -> Word { wire_eight() }
 
 // A SIGNED 64-bit read. `get_u32` and friends zero-extend, which is right for
 // every other field, and wrong for a discriminant: they are declared with an
@@ -921,33 +943,33 @@ fn kind_enum_layouts() -> Word { 0x0019 }
 
 // SignatureRecord: params_first u32 @0, params_count u32 @4, ret u32 @8,
 // resume u32 @12.
-fn sig_stride() -> Word { 16 }
-fn sig_off_params_first() -> Word { 0 }
-fn sig_off_params_count() -> Word { 4 }
-fn sig_off_ret() -> Word { 8 }
-fn sig_off_resume() -> Word { 12 }
+fn sig_stride() -> Word { wire_sixteen() }
+fn sig_off_params_first() -> Word { wire_zero() }
+fn sig_off_params_count() -> Word { wire_four() }
+fn sig_off_ret() -> Word { wire_eight() }
+fn sig_off_resume() -> Word { wire_twelve() }
 
 // StructTemplateRecord: type_name u32 @0, field_names_first u32 @4,
 // field_count u32 @8, reserved u32 @12.
-fn tpl_stride() -> Word { 16 }
-fn tpl_off_type_name() -> Word { 0 }
-fn tpl_off_field_names_first() -> Word { 4 }
-fn tpl_off_field_count() -> Word { 8 }
-fn tpl_off_reserved() -> Word { 12 }
+fn tpl_stride() -> Word { wire_sixteen() }
+fn tpl_off_type_name() -> Word { wire_zero() }
+fn tpl_off_field_names_first() -> Word { wire_four() }
+fn tpl_off_field_count() -> Word { wire_eight() }
+fn tpl_off_reserved() -> Word { wire_twelve() }
 
 // EnumVariantRecord: name u32 @0, reserved u32 @4, disc i64 @8.
-fn evar_stride() -> Word { 16 }
-fn evar_off_name() -> Word { 0 }
-fn evar_off_reserved() -> Word { 4 }
-fn evar_off_disc() -> Word { 8 }
+fn evar_stride() -> Word { wire_sixteen() }
+fn evar_off_name() -> Word { wire_zero() }
+fn evar_off_reserved() -> Word { wire_four() }
+fn evar_off_disc() -> Word { wire_eight() }
 
 // EnumLayoutRecord: type_name u32 @0, variants_first u32 @4,
 // variants_count u32 @8, min_payload u32 @12.
-fn elay_stride() -> Word { 16 }
-fn elay_off_type_name() -> Word { 0 }
-fn elay_off_variants_first() -> Word { 4 }
-fn elay_off_variants_count() -> Word { 8 }
-fn elay_off_min_payload() -> Word { 12 }
+fn elay_stride() -> Word { wire_sixteen() }
+fn elay_off_type_name() -> Word { wire_zero() }
+fn elay_off_variants_first() -> Word { wire_four() }
+fn elay_off_variants_count() -> Word { wire_eight() }
+fn elay_off_min_payload() -> Word { wire_twelve() }
 
 fn sig_count() -> Word {
     if dir_find(kind_signatures()) == 0 - 1 { 0 } else {
@@ -1077,14 +1099,14 @@ fn kind_data_init() -> Word { 0x001D }
 
 // DataSlotRecord: name u32 @0, visibility u8 @4, reserved u8 @5. Packed to six
 // bytes, so the stride is the word it rounds up to, not the packed size.
-fn dslot_stride() -> Word { 8 }
-fn dslot_off_name() -> Word { 0 }
-fn dslot_off_visibility() -> Word { 4 }
+fn dslot_stride() -> Word { wire_eight() }
+fn dslot_off_name() -> Word { wire_zero() }
+fn dslot_off_visibility() -> Word { wire_four() }
 // The two reserved fields exist for the EMITTER, not the reader. A reader can
 // ignore them; an emitter that leaves them to a zeroed buffer is the defect
 // slice 4 argued against, and would diverge the moment a window is reused.
 fn dslot_off_reserved() -> Word { 5 }
-fn dslot_off_run() -> Word { 6 }
+fn dslot_off_run() -> Word { wire_six() }
 
 // SharedSlotRecord: offset u32 @0, kind u8 @4, reserved u8 @5, len u16 @6,
 // first_slot u32 @8, run u16 @12, stride u16 @14. TWO words.
@@ -1099,25 +1121,25 @@ fn dslot_off_run() -> Word { 6 }
 // into a scan; deriving `stride` would put a kind-to-size table on this side
 // AND the Rust side, and that particular duplication has already produced
 // three defects in this project.
-fn sslot_stride() -> Word { 16 }
-fn sslot_off_offset() -> Word { 0 }
-fn sslot_off_kind() -> Word { 4 }
-fn sslot_off_len() -> Word { 6 }
+fn sslot_stride() -> Word { wire_sixteen() }
+fn sslot_off_offset() -> Word { wire_zero() }
+fn sslot_off_kind() -> Word { wire_four() }
+fn sslot_off_len() -> Word { wire_six() }
 fn sslot_off_reserved() -> Word { 5 }
-fn sslot_off_first_slot() -> Word { 8 }
-fn sslot_off_run() -> Word { 12 }
+fn sslot_off_first_slot() -> Word { wire_eight() }
+fn sslot_off_run() -> Word { wire_twelve() }
 fn sslot_off_stride() -> Word { 14 }
 
 // PrivateCompositeRecord: slot u16 @0, reserved u16 @2, offset u32 @4.
-fn pcomp_stride() -> Word { 8 }
-fn pcomp_off_slot() -> Word { 0 }
-fn pcomp_off_reserved() -> Word { 2 }
-fn pcomp_off_offset() -> Word { 4 }
+fn pcomp_stride() -> Word { wire_eight() }
+fn pcomp_off_slot() -> Word { wire_zero() }
+fn pcomp_off_reserved() -> Word { wire_two() }
+fn pcomp_off_offset() -> Word { wire_four() }
 
 // DataInitRecord: first u32 @0, count u32 @4. A range into the constant table.
-fn dinit_stride() -> Word { 8 }
-fn dinit_off_first() -> Word { 0 }
-fn dinit_off_count() -> Word { 4 }
+fn dinit_stride() -> Word { wire_eight() }
+fn dinit_off_first() -> Word { wire_zero() }
+fn dinit_off_count() -> Word { wire_four() }
 
 // 1 when the module has a data layout at all. Ask this BEFORE any count below;
 // a zero from `data_slot_count` means "a layout with no slots", not "no layout".
@@ -1222,11 +1244,11 @@ fn absent_index() -> Word { 4294967295 }
 // ChunkRecord, six words. Eleven u32 fields, then local_count u16,
 // param_count u8, block_type u8.
 fn chunk_stride() -> Word { 48 }
-fn chunk_off_name() -> Word { 0 }
-fn chunk_off_consts_first() -> Word { 4 }
-fn chunk_off_consts_count() -> Word { 8 }
-fn chunk_off_templates_first() -> Word { 12 }
-fn chunk_off_templates_count() -> Word { 16 }
+fn chunk_off_name() -> Word { wire_zero() }
+fn chunk_off_consts_first() -> Word { wire_four() }
+fn chunk_off_consts_count() -> Word { wire_eight() }
+fn chunk_off_templates_first() -> Word { wire_twelve() }
+fn chunk_off_templates_count() -> Word { wire_sixteen() }
 fn chunk_off_param_types_first() -> Word { 20 }
 fn chunk_off_param_types_count() -> Word { 24 }
 fn chunk_off_debug_first() -> Word { 28 }
@@ -1238,23 +1260,23 @@ fn chunk_off_param_count() -> Word { 46 }
 fn chunk_off_block_type() -> Word { 47 }
 
 // NativeRecord and NativeReturnRecord: one index plus reserved, one word each.
-fn native_stride() -> Word { 8 }
-fn native_off_name() -> Word { 0 }
-fn native_off_reserved() -> Word { 4 }
-fn natret_stride() -> Word { 8 }
-fn natret_off_shape() -> Word { 0 }
-fn natret_off_reserved() -> Word { 4 }
+fn native_stride() -> Word { wire_eight() }
+fn native_off_name() -> Word { wire_zero() }
+fn native_off_reserved() -> Word { wire_four() }
+fn natret_stride() -> Word { wire_eight() }
+fn natret_off_shape() -> Word { wire_zero() }
+fn natret_off_reserved() -> Word { wire_four() }
 
 // HeaderRecord, four words.
 fn header_stride() -> Word { 32 }
-fn header_off_entry_point() -> Word { 0 }
-fn header_off_word_bits_log2() -> Word { 4 }
+fn header_off_entry_point() -> Word { wire_zero() }
+fn header_off_word_bits_log2() -> Word { wire_four() }
 fn header_off_addr_bits_log2() -> Word { 5 }
-fn header_off_float_bits_log2() -> Word { 6 }
+fn header_off_float_bits_log2() -> Word { wire_six() }
 fn header_off_flags() -> Word { 7 }
-fn header_off_wcet_cycles() -> Word { 8 }
-fn header_off_wcmu_bytes() -> Word { 12 }
-fn header_off_shared_data_bytes() -> Word { 16 }
+fn header_off_wcet_cycles() -> Word { wire_eight() }
+fn header_off_wcmu_bytes() -> Word { wire_twelve() }
+fn header_off_shared_data_bytes() -> Word { wire_sixteen() }
 fn header_off_private_data_bytes() -> Word { 20 }
 fn header_off_schema_hash() -> Word { 24 }
 fn header_off_reserved() -> Word { 28 }
@@ -1486,7 +1508,7 @@ fn emit_pool_bytes(at: Word, n: Word) -> Word {
 // new code at all — slice 4's `emit_pool_bytes` and `emit_pool_pad` already do
 // it — so what is added here is the record side only.
 
-fn nameref_fields() -> Word { 2 }
+fn nameref_fields() -> Word { wire_two() }
 
 // `n` consecutive NameRef records into the window at `at`.
 fn emit_name_records(at: Word, n: Word) -> Word {
@@ -1681,7 +1703,7 @@ fn emit_signature_records(at: Word, n: Word) -> Word {
     }
 }
 
-fn evar_fields() -> Word { 3 }
+fn evar_fields() -> Word { wire_three() }
 
 fn emit_enum_variant_records(at: Word, n: Word) -> Word {
     if (n * evar_fields()) > fin_capacity() { 0 - 207 } else {
@@ -1720,7 +1742,7 @@ fn emit_enum_layout_records(at: Word, n: Word) -> Word {
     }
 }
 
-fn dinit_fields() -> Word { 2 }
+fn dinit_fields() -> Word { wire_two() }
 
 fn emit_data_init_records(at: Word, n: Word) -> Word {
     if (n * dinit_fields()) > fin_capacity() { 0 - 209 } else {
@@ -1772,7 +1794,7 @@ fn emit_const_records(at: Word, n: Word) -> Word {
 // derive's own `write_record` builds the expected bytes, and every field is
 // given a distinct value so a swapped pair cannot hide.
 
-fn saux_fields() -> Word { 2 }
+fn saux_fields() -> Word { wire_two() }
 
 fn emit_struct_aux_records(at: Word, n: Word) -> Word {
     if (n * saux_fields()) > fin_capacity() { 0 - 211 } else {
@@ -1790,7 +1812,7 @@ fn emit_struct_aux_records(at: Word, n: Word) -> Word {
     }
 }
 
-fn eaux_fields() -> Word { 3 }
+fn eaux_fields() -> Word { wire_three() }
 
 fn emit_enum_aux_records(at: Word, n: Word) -> Word {
     if (n * eaux_fields()) > fin_capacity() { 0 - 212 } else {
@@ -1835,7 +1857,7 @@ fn emit_struct_template_records(at: Word, n: Word) -> Word {
     }
 }
 
-fn pcomp_fields() -> Word { 3 }
+fn pcomp_fields() -> Word { wire_three() }
 
 fn emit_private_composite_records(at: Word, n: Word) -> Word {
     if (n * pcomp_fields()) > fin_capacity() { 0 - 214 } else {
@@ -1854,7 +1876,7 @@ fn emit_private_composite_records(at: Word, n: Word) -> Word {
     }
 }
 
-fn native_fields() -> Word { 2 }
+fn native_fields() -> Word { wire_two() }
 
 fn emit_native_records(at: Word, n: Word) -> Word {
     if (n * native_fields()) > fin_capacity() { 0 - 215 } else {
@@ -1869,7 +1891,7 @@ fn emit_native_records(at: Word, n: Word) -> Word {
     }
 }
 
-fn natret_fields() -> Word { 2 }
+fn natret_fields() -> Word { wire_two() }
 
 fn emit_native_return_records(at: Word, n: Word) -> Word {
     if (n * natret_fields()) > fin_capacity() { 0 - 216 } else {
@@ -2061,10 +2083,10 @@ fn oprec_parity_ok(at: Word) -> Word {
 // a bit position as well as detecting it, which is worth more in an
 // eight-byte entry than in a four-byte record.
 
-fn pool_stride() -> Word { 8 }
-fn pool_tag_u16_u16() -> Word { 1 }
-fn pool_tag_u16_u16_u8() -> Word { 2 }
-fn pool_tag_u16_u16_u16() -> Word { 3 }
+fn pool_stride() -> Word { wire_eight() }
+fn pool_tag_u16_u16() -> Word { wire_one() }
+fn pool_tag_u16_u16_u8() -> Word { wire_two() }
+fn pool_tag_u16_u16_u16() -> Word { wire_three() }
 fn pool_tag_u24_u24() -> Word { 4 }
 
 // The parity byte for the entry at `at`: the exclusive-or of byte 0 and bytes
@@ -2183,22 +2205,22 @@ fn pool_u24(at: Word, k: Word) -> Word {
 // bytes, and nothing to get wrong about where the checksummed region ends.
 
 fn header_bytes_len() -> Word { 64 }
-fn bytecode_version() -> Word { 2 }
+fn bytecode_version() -> Word { wire_two() }
 fn crc32_residue() -> Word { 0x2144DF1C }
 
-fn flag_ephemeral() -> Word { 1 }
-fn flag_requires_signature() -> Word { 2 }
+fn flag_ephemeral() -> Word { wire_one() }
+fn flag_requires_signature() -> Word { wire_two() }
 fn flag_encrypted() -> Word { 4 }
 
-fn fh_off_magic() -> Word { 0 }
-fn fh_off_version() -> Word { 4 }
-fn fh_off_header_length() -> Word { 6 }
-fn fh_off_total_length() -> Word { 8 }
-fn fh_off_word_bits_log2() -> Word { 12 }
+fn fh_off_magic() -> Word { wire_zero() }
+fn fh_off_version() -> Word { wire_four() }
+fn fh_off_header_length() -> Word { wire_six() }
+fn fh_off_total_length() -> Word { wire_eight() }
+fn fh_off_word_bits_log2() -> Word { wire_twelve() }
 fn fh_off_addr_bits_log2() -> Word { 13 }
 fn fh_off_float_bits_log2() -> Word { 14 }
 fn fh_off_flags() -> Word { 15 }
-fn fh_off_wcet_cycles() -> Word { 16 }
+fn fh_off_wcet_cycles() -> Word { wire_sixteen() }
 fn fh_off_wcmu_bytes() -> Word { 20 }
 fn fh_off_shared_data_bytes() -> Word { 24 }
 fn fh_off_private_data_bytes() -> Word { 28 }
@@ -2901,7 +2923,7 @@ fn nm_mode_intern() -> Word { 0 }
 // the type name and `names.intern_fresh` per variant, and the difference is the
 // whole content of this section: a producer that wrote dedup mode throughout
 // would agree with the reference on any corpus that never repeats a name.
-fn nm_mode_fresh() -> Word { 1 }
+fn nm_mode_fresh() -> Word { wire_one() }
 
 // Append one pair and mirror it to the output buffer.
 // The producer's output MODES.
@@ -2915,9 +2937,9 @@ fn nm_mode_fresh() -> Word { 1 }
 // state nobody defined.
 fn mi_mode_pairs() -> Word { 0 }
 
-fn mi_mode_nodes() -> Word { 1 }
+fn mi_mode_nodes() -> Word { wire_one() }
 
-fn mi_mode_silent() -> Word { 2 }
+fn mi_mode_silent() -> Word { wire_two() }
 
 fn mi_pair(k: Word, len: Word, mode: Word) -> Word {
     wire.nin[k * 2] = len;
@@ -2969,7 +2991,7 @@ fn mi_offset(k: Word, at: Word) -> Word {
 // place it means anything.
 fn mi_max_nodes() -> Word { 1365 }
 
-fn mi_node_words() -> Word { 6 }
+fn mi_node_words() -> Word { wire_six() }
 
 fn mi_put_node_full(
     i: Word,
@@ -3694,7 +3716,7 @@ private data fl {
 // twice.
 fn fl_max_nodes() -> Word { 170 }
 
-fn fl_fields() -> Word { 6 }
+fn fl_fields() -> Word { wire_six() }
 
 fn fl_tag_of(p: Word) -> Word { wire.fin[p * fl_fields()] }
 fn fl_payload_of(p: Word) -> Word { wire.fin[(p * fl_fields()) + 1] }
@@ -4683,12 +4705,24 @@ fn dispatch_window(cmd: Word) -> Word {
     if cmd == 185 { ev_name_step() } else {
     if cmd == 186 { el_name_begin() } else {
     if cmd == 187 { el_name_step() } else {
+    dispatch_stream(cmd) }}}}}}}}}}}}}}}}}}
+}
+
+fn dispatch_stream(cmd: Word) -> Word {
     if cmd == 188 { frame_begin() } else {
     if cmd == 189 { frame_feed() } else {
     if cmd == 190 { frame_finish() } else {
     if cmd == 191 { frame_read_begin() } else {
     if cmd == 192 { frame_read_finish() } else {
-    0 - 97 }}}}}}}}}}}}}}}}}}}}}}}
+    if cmd == 193 { ow_begin() } else {
+    if cmd == 194 { ow_encode() } else {
+    if cmd == 195 { si_reset() } else {
+    if cmd == 196 { si_begin() } else {
+    if cmd == 197 { si_shape() } else {
+    if cmd == 198 { si_scan() } else {
+    if cmd == 199 { si_accept() } else {
+    if cmd == 200 { si_finish() } else {
+    0 - 97 }}}}}}}}}}}}}
 }
 
 fn dispatch_driver2(cmd: Word) -> Word {
@@ -4962,7 +4996,226 @@ fn frame_read_finish() -> Word {
     } }
 }
 
-fn highest_command() -> Word { 192 }
+// Input is (opcode id, semantic form, a, b, c). Forms are ordinary 0,
+// scalar access 1, boxed access 2, nested access 3, flat construction 4 and
+// boxed construction 5. No endian bytes, sentinels or parity arrive from the host.
+fn ow_class(id: Word) -> Word {
+    if id < 0 orelse id > 69 orelse (id >= 34 andalso id <= 37) { 0 - 1 } else {
+    if id == 5 orelse id == 6 { 5 } else {
+    if id == 43 { 6 } else {
+    if id >= 38 andalso id <= 41 { 7 } else {
+    if id == 69 { 8 } else {
+    if id == 30 orelse id == 67 orelse id == 68 { 4 } else {
+    if id == 3 orelse id == 4 { 3 } else {
+    if (id >= 49 andalso id <= 52) orelse id == 56 orelse id == 58 orelse id == 60 orelse id == 61 { 1 } else {
+    if id <= 2 orelse id == 7 orelse id == 21 orelse id == 22 orelse (id >= 24 andalso id <= 27) orelse id == 44 orelse id == 53 { 2 } else {
+    0 } } } } } } } } }
+}
+
+// A nonzero starting ordinal permits continuation of a transported pool.
+// The production whole-module driver starts at zero. Exact index boundaries
+// can be checked here without allocating a multi-gigabyte test pool.
+fn ow_begin() -> Word {
+    opstream.active = 0;
+    if wire.warg < 0 orelse wire.warg > 0x1000000 { 0 - 270 } else {
+        opstream.pool = wire.warg;
+        opstream.active = 1;
+        0
+    }
+}
+
+fn ow_encode() -> Word {
+    let id = wire.fin[0];
+    let form = wire.fin[1];
+    let a = wire.fin[2];
+    let b = wire.fin[3];
+    let c = wire.fin[4];
+    let cls = ow_class(id);
+    opstream.bad = 0;
+    opstream.shape = 0;
+    opstream.operand = 0;
+    opstream.p0 = a;
+    opstream.p1 = b;
+    opstream.p2 = c;
+    if opstream.active == 0 orelse cls < 0 { opstream.bad = 1; }
+    if a < 0 orelse b < 0 orelse c < 0 orelse a > 0xFFFFFF orelse b > 0xFFFFFF orelse c > 65535 { opstream.bad = 1; }
+    if cls < 7 andalso form != 0 { opstream.bad = 1; }
+    if cls <= 3 {
+        let bound = if cls == 0 { 0 } else { if cls == 1 { 255 } else { if cls == 2 { 65535 } else { 0xFFFFFF } } };
+        if a > bound orelse b != 0 orelse c != 0 { opstream.bad = 1; }
+        opstream.operand = a;
+    }
+    if cls == 4 {
+        if a > 65535 orelse b > 255 orelse c != 0 { opstream.bad = 1; }
+        opstream.operand = a + b * 65536;
+    }
+    if cls == 5 {
+        if c != 0 { opstream.bad = 1; }
+        opstream.shape = 4;
+        opstream.operand = opstream.pool;
+    }
+    if cls == 6 {
+        if a > 65535 orelse b > 65535 { opstream.bad = 1; }
+        opstream.shape = 3;
+        opstream.operand = opstream.pool;
+    }
+    if cls == 7 {
+        if form == 1 {
+            if id == 39 {
+                if a > 7 orelse b != 0 orelse c != 0 { opstream.bad = 1; }
+                opstream.operand = a;
+            } else {
+                if a > 65535 orelse b > 7 orelse c != 0 { opstream.bad = 1; }
+                opstream.operand = a + b * 65536;
+            }
+        } else { if form == 2 {
+            let bound = if id == 38 { 65535 } else { if id == 39 { 0 } else { 255 } };
+            if a > bound orelse b != 0 orelse c != 0 { opstream.bad = 1; }
+            opstream.operand = if id == 39 { 255 } else { a + 255 * 65536 };
+        } else { if form == 3 {
+            if a > 65535 orelse b > 65535 orelse c > 3 orelse (id == 39 andalso b != 0) { opstream.bad = 1; }
+            opstream.shape = 1;
+            opstream.operand = opstream.pool + (240 + c) * 65536;
+        } else { opstream.bad = 1; } } }
+    }
+    if cls == 8 {
+        if (form != 4 andalso form != 5) orelse a > 3 orelse b > 65535 { opstream.bad = 1; }
+        if form == 4 andalso b <= 62 {
+            opstream.operand = c + (a * 64 + b) * 65536;
+        } else {
+            opstream.shape = 2;
+            opstream.p0 = b;
+            opstream.p1 = c;
+            opstream.p2 = form - 4;
+            opstream.operand = opstream.pool + (a * 64 + 63) * 65536;
+        }
+    }
+    if opstream.shape > 0 andalso opstream.pool >= 0x1000000 { opstream.bad = 1; }
+    if (opstream.shape == 1 orelse opstream.shape == 2) andalso opstream.pool > 65535 { opstream.bad = 1; }
+    if opstream.bad != 0 { 0 - 271 } else {
+        oprec_write(0, id, opstream.operand band 255, (opstream.operand lsr 8) band 255, (opstream.operand lsr 16) band 255);
+        if opstream.shape == 0 { 4 } else {
+            if opstream.shape == 1 { pool_write_u16_u16(4, opstream.p0, opstream.p1); }
+            if opstream.shape == 2 { pool_write_u16_u16_u8(4, opstream.p0, opstream.p1, opstream.p2); }
+            if opstream.shape == 3 { pool_write_u16_u16_u16(4, opstream.p0, opstream.p1, opstream.p2); }
+            if opstream.shape == 4 { pool_write_u24_u24(4, opstream.p0, opstream.p1); }
+            opstream.pool = opstream.pool + 1;
+            12
+        }
+    }
+}
+
+// Signature numbering from semantic shapes. Parameters append without sharing.
+// Return and resume shapes search prior emitted records in bounded windows.
+// The host retains those records verbatim and transports them through bin.
+// No table ordinal or candidate record bytes arrive from the reference encoder.
+private data sigstream {
+    count: Word,
+    mode: Word,
+    first: Word,
+    params: Word,
+    position: Word,
+    ret: Word,
+    resume: Word,
+    scanned: Word,
+    found: Word,
+    same: Word,
+    wrote: Word,
+}
+
+fn si_reset() -> Word {
+    sigstream.count = 0;
+    sigstream.mode = 1;
+    0
+}
+
+fn si_begin() -> Word {
+    if sigstream.mode != 1 orelse wire.warg < 0 orelse wire.warg > 0xFFFFFFFF { 0 - 280 } else {
+        sigstream.first = sigstream.count;
+        sigstream.params = wire.warg;
+        sigstream.position = 0;
+        sigstream.mode = 2;
+        0
+    }
+}
+
+fn si_shape() -> Word {
+    let form = wire.fin[0];
+    let kind = wire.fin[1];
+    let size = wire.fin[2];
+    if sigstream.mode != 2 orelse form < 0 orelse form > 2 orelse kind < 0 orelse kind > 255 orelse size < 0 orelse size > 0xFFFFFFFF { 0 - 280 } else {
+    if (form == 0 andalso kind != 0) orelse (form != 2 andalso size != 0) { 0 - 280 } else {
+    if sigstream.position < sigstream.params andalso sigstream.count >= 0xFFFFFFFF { 0 - 280 } else {
+        put_u16(shape_off_tag(), form + 1);
+        put_u8(shape_off_kind(), kind);
+        put_u8(shape_off_reserved(), 0);
+        put_u32(shape_off_size(), size);
+        if sigstream.position < sigstream.params {
+            sigstream.count = sigstream.count + 1;
+            sigstream.position = sigstream.position + 1;
+            shape_stride()
+        } else {
+            sigstream.scanned = 0;
+            sigstream.found = 0 - 1;
+            sigstream.mode = 3;
+            0
+        }
+    }}}
+}
+
+fn si_scan() -> Word {
+    let n = wire.warg;
+    if sigstream.mode != 3 orelse n < 0 orelse n > bin_capacity() orelse n % shape_stride() != 0 { 0 - 280 } else {
+    let rows = n / shape_stride();
+    if rows > sigstream.count - sigstream.scanned { 0 - 280 } else {
+        for i in 0..rows limit 6144 {
+            sigstream.same = 1;
+            for j in 0..8 limit 8 {
+                if wire.bin[(i * shape_stride()) + j] != wire.bytes[j] { sigstream.same = 0; }
+            }
+            if sigstream.same == 1 andalso sigstream.found < 0 { sigstream.found = sigstream.scanned + i; }
+        }
+        sigstream.scanned = sigstream.scanned + rows;
+        0
+    }}
+}
+
+fn si_accept() -> Word {
+    if sigstream.mode != 3 orelse sigstream.scanned != sigstream.count { 0 - 280 } else {
+    if sigstream.found < 0 andalso sigstream.count >= 0xFFFFFFFF { 0 - 280 } else {
+        sigstream.wrote = 0;
+        if sigstream.found < 0 {
+            sigstream.found = sigstream.count;
+            sigstream.count = sigstream.count + 1;
+            sigstream.wrote = shape_stride();
+        }
+        if sigstream.position == sigstream.params { sigstream.ret = sigstream.found; }
+        else { sigstream.resume = sigstream.found; }
+        sigstream.position = sigstream.position + 1;
+        sigstream.mode = 2;
+        if sigstream.position == sigstream.params + 2 { sigstream.mode = 4; }
+        sigstream.wrote
+    }}
+}
+
+fn si_finish() -> Word {
+    if sigstream.mode != 4 { 0 - 280 } else {
+        put_u32(sig_off_params_first(), sigstream.first);
+        put_u32(sig_off_params_count(), sigstream.params);
+        put_u32(sig_off_ret(), sigstream.ret);
+        put_u32(sig_off_resume(), sigstream.resume);
+        sigstream.mode = 1;
+        sig_stride()
+    }
+}
+
+fn wire_one() -> Word { 1 }
+fn wire_two() -> Word { 2 }
+fn wire_three() -> Word { 3 }
+fn wire_six() -> Word { 6 }
+fn wire_twelve() -> Word { 12 }
+
+fn highest_command() -> Word { 200 }
 
 // --- THE ENTRY, AS A COROUTINE ----------------------------------------------
 //
@@ -4984,7 +5237,8 @@ fn highest_command() -> Word { 192 }
 // resume by the Stream parameter-slot update, so a resumed command sees the same
 // number it was entered with.
 fn dispatch(cmd: Word) -> Word {
-    if framing.mode != 0 andalso cmd < 188 { 0 - 260 } else {
+    if sigstream.mode >= 2 andalso (cmd < 195 orelse cmd > 200) { 0 - 280 } else {
+    if framing.mode != 0 andalso (cmd < 188 orelse cmd > 192) { 0 - 260 } else {
     if cmd < 13 { dispatch_container(cmd) } else {
     if cmd < 26 { dispatch_schema(cmd) } else {
     if cmd < 38 { dispatch_consts(cmd) } else {
@@ -4998,6 +5252,7 @@ fn dispatch(cmd: Word) -> Word {
     if cmd < 115 { dispatch_frame(cmd) } else {
     if cmd < 134 { dispatch_emit(cmd) } else {
     if cmd < 152 { dispatch_driver(cmd) } else { dispatch_driver2(cmd) } } } } } } } } } } } } }
+}
 }
 }
 

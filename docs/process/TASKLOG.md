@@ -6,6 +6,53 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Signature numbering and bounded shape interning
+
+The auxiliary producer now derives shape-table numbering and signature ranges in Keleusma.
+Parameters append without sharing. Return and resume shapes reuse the first matching earlier
+record. The host replays emitted records through bounded windows, with no fixed whole-table
+residency cap. Commands 195 through 200 validate protocol order and complete scan coverage.
+All twelve complete pipeline artifacts remain byte-identical to the reference.
+
+The stage now has 516 chunks and uses 48,233 input bytes, leaving 919 below the unchanged cap.
+Sharing another 39 literal accessors through five helpers restores the constant-node reserve to
+74, with 1,291 used. Signature state costs eleven value slots or 352 bytes. Public bytecode
+version remains 2, the instruction count remains 66 and selected type-stage caps remain 640.
+Clearing 42,195 recorded expression types preserves all twelve complete artifacts.
+
+The workspace diagnostic completed with 3,048 passes, one stale documentation-count failure
+and five ignored tests. The count was refreshed without changing the guard. Clippy passes after
+two test-iterator style repairs. The signature and accounting tests pass separately. The reverse
+prompt records final affected verification and the local shadow-pilot outcome.
+Remaining auxiliary forms, semantic decoding, shipping integration, type coverage and final
+integration gates keep Order 1 active. No push, merge or publication occurred.
+
+## 2026-10-04 Semantic opcode streams and complete corpus artifacts
+
+Keleusma now encodes semantic instruction fields into opcode and operand-pool bytes, including
+inline selection, pool ordinals, endian packing, sentinels and parity. All 66 opcode identifiers
+and composite forms have comparison controls. The production pipeline comparison now emits every
+section through Keleusma and matches all twelve complete reference artifacts without borrowed
+section bytes or positions. Shipping still uses Rust serialization. Additional auxiliary forms,
+signature-table numbering, semantic decoding and remaining type coverage keep Order 1 active.
+
+The initial growth left only 21 constant nodes below the cap, failing the 64-node reserve guard.
+Sharing 65 numeric schema constants through four literal functions restores the reserve to 82.
+The stage uses 1,283 of 1,365 constant nodes and 47,687 of 49,152 input bytes. It has 505 chunks
+and highest command 194. No buffer cap, public opcode count or public bytecode version changed.
+
+The current production tree passes 3,044 workspace tests with five ignored. Targeted suites pass
+288 tests with two ignored, integrated comparisons pass fourteen, and six wire protocol tests
+and four inference tests pass. Clearing 41,833 recorded types preserves all twelve artifacts.
+The private-state accounting test was added after the full workspace run and passes separately.
+It corrects the previous handoff's use of target word width for private storage. Framing costs
+128 bytes and opcode state costs 256 bytes because each private value slot costs 32 bytes.
+The runtime allocation calculation was already correct.
+
+The shadow task retains the first capacity diagnostic and three bounded claims locally, with
+non-independent self-labels. External evaluation remains unavailable under the prior automatic
+approval rejection. The reverse prompt records verification commands, logs and remaining work.
+
 ## 2026-10-04 Streaming framing and module-driven auxiliary assembly
 
 Keleusma now derives complete unsigned framing and checksums across 65,536-byte windows.

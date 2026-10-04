@@ -1,5 +1,5 @@
 //! Module-driven auxiliary assembly without reference bytes or region positions.
-//! Signature numbering and scalar metadata remain host supplied. Keleusma owns
+//! Scalar metadata remains host supplied. Keleusma owns signature numbering,
 //! record encoding, name interning and container layout.
 
 use super::wire_framing::{command, read_window, set_word, with_compiled_wire};
@@ -157,8 +157,8 @@ impl Emitter {
 ///
 /// This integrates the existing stage-corpus record paths. Native metadata,
 /// templates, debug pools, composite constants and private composite slots still
-/// require integration. They are refused explicitly. Shape numbering uses the
-/// existing Rust signature-table helper, and parameter tags remain opaque bytes.
+/// require integration. They are refused explicitly. Shape numbering is derived
+/// in Keleusma, and parameter tags remain opaque bytes.
 /// This function is not yet the shipping serializer.
 ///
 /// # Errors
@@ -199,6 +199,7 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
         None
     };
     validate_input(module)?;
+    let signatures = wire_signature_sections_via_kel(&module.signatures)?;
     let (blob, names) = module_input(module);
     if blob.len() > 49152 || names > 1024 {
         return Err(error("module input exceeds the stage capacity"));
@@ -237,10 +238,7 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
     // Declaration order is part of the format. Even empty mandatory tables
     // receive directory entries, while per-chunk tables require a contributor.
     let mut regions = vec![
-        (
-            kind::SIGNATURES,
-            emitter.stream(&signature_fields(module), 4, None, 180, None)?,
-        ),
+        (kind::SIGNATURES, signatures.signatures),
         (
             kind::ENUM_VARIANTS,
             emitter.stream(&enum_variant_fields(module), 3, Some(184), 185, None)?,
@@ -295,10 +293,7 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
         regions.push((kind::STRUCT_TEMPLATES, Vec::new()));
         regions.push((kind::PARAM_TYPES, param_type_bytes(module)));
     }
-    regions.push((
-        kind::SHAPES,
-        emitter.stream(&shape_fields(module), 4, None, 179, None)?,
-    ));
+    regions.push((kind::SHAPES, signatures.shapes));
     if !module.chunks.is_empty() {
         regions.push((
             kind::CHUNKS,

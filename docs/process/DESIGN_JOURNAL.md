@@ -13,6 +13,85 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-04 Signature numbering moves into Keleusma
+
+Encoding shape records was insufficient because the Rust helper still selected their indices.
+The new producer transports semantic variants and fields. Keleusma appends every parameter
+shape, searches earlier emitted records for each return and resume shape, and assigns the
+resulting indices. The two modes cannot be collapsed. Duplicate parameters must remain in a
+contiguous run, while a return must reuse the first identical earlier record.
+
+The host retains stage output and replays it through the existing byte-input window. This keeps
+table growth independent of stage residency. The protocol requires complete scan coverage before
+accepting a single shape and refuses incomplete, excessive or malformed windows. The host remains
+trusted to replay those bytes faithfully. The protocol does not authenticate a hostile host.
+The 6,145-record control crosses the 6,144-record window, returning the last unique parameter
+and resuming with the first repeated one. Separate controls cover empty tables and zero parameters.
+
+The auxiliary path now consumes these tables directly. Complete artifact comparison still passes
+for all twelve pipeline-produced modules, including the wire stage with 516 chunks and 141,436
+artifact bytes. The legacy formatter helpers retain their explicit reference-numbered standing.
+Native return shapes still need integration, and the shipping serializer remains Rust.
+
+The first attempt used local mut syntax that this language does not admit. The parser refused it.
+Private working fields repaired that error. The next capacity check found 1,325 constant nodes,
+leaving only 40 below the unchanged 1,365 cap. Sharing 39 numeric accessors through five literal
+functions removes 34 duplicate nodes and restores the 74-node reserve. One fixed call level is
+added at those accessors. Input grows to 48,233 bytes, leaving 919. No buffer cap was raised.
+The eleven private signature fields occupy 352 bytes, checked from the actual declarations.
+
+The workspace diagnostic passed 3,048 tests and failed only the stale integration inventory in
+CLAUDE.md. The tree has 137 test files against a claim of 126. The inventory now records 1,505
+functions in those files. The first prose repair also changed a phrase consumed by the feature-set
+guard, which was restored without changing the guard. Clippy required fixed-size chunk iteration
+in the new signature test. These repairs affect documentation and tests, not production code.
+
+Local pilot self-review found two completion excerpts insufficient for their full claims. One
+omitted the actual byte-equality assertion and opcode call path. The other omitted the reserve
+threshold and its unchanged status. Source references stay local, so the outbound evidence must
+contain those facts itself. The original baselines remain recorded and labels are non-independent.
+
+The shadow pilot records the first parser diagnostic and bounded evidence claims locally.
+Self-labels remain non-independent and external evaluation remains unavailable. The full Order 1
+scope remains open for auxiliary forms, decoding, shipping integration, type coverage and gates.
+
+## 2026-10-04 Opcode representation decisions move into the stage
+
+Passing prepacked operand bytes to the old record writer would leave representation decisions
+in Rust. The new transport carries typed semantic fields instead. Keleusma classifies the opcode,
+selects inline or pooled representation and advances the pool ordinal only after successful output.
+A refused field or pool index leaves both prior bytes and ordinal unchanged. Both parity schemes
+reuse the existing stage primitives. The host only maps discriminants and transports fields.
+
+The comparison corpus reaches every public opcode identifier and scalar, boxed, nested and
+construction form. It covers field limits, the 62-to-63 construction boundary, sixteen-bit and
+twenty-four-bit pool indices, invalid transport fields and cross-chunk continuation. The integrated
+pipeline comparison now calls the Keleusma artifact helper rather than Module::to_bytes on its
+actual side. All twelve complete artifacts agree. This does not remove host signature numbering
+or implement missing auxiliary forms, semantic decoding or the shipping integration.
+
+The first growth measurement failed the standing reserve guard. The stage used 1,344 constant
+nodes against 1,365, leaving 21 where the guard requires 64. The baseline used 1,282. Sixty-five
+schema offset and stride accessors each stored their own numeric literal. Sharing four literal
+functions removes 61 duplicate nodes and leaves 1,283. The cost is one additional fixed call
+level, with no buffer expansion. The old source-level offset guard now follows exactly one
+literal alias hop. It still compares values with the derive-generated reference offsets.
+
+A later input pin moved from 47,442 to 47,687 bytes. The full input limit remains 49,152.
+Eight new functions, four stream functions and four literal helpers, move all three chunk-count
+pins from 497 to 505. Stage self-compilation and complete artifacts remain byte-identical.
+
+The previous framing handoff incorrectly priced private Word fields at eight bytes. Private
+fields occupy 32-byte Value slots. The framing state is 128 bytes and opcode state is 256 bytes.
+The allocation implementation already used this rule. A new regression compiles the actual
+private declarations and checks header and persistent-capacity accounting. Its first fixture
+was refused because it never mutated the private block. Giving it a real mutation admits the
+fixture and verifies both sizes. This test was added after the green workspace run and checked
+separately. No production code changed after that run.
+
+The workspace passes 3,044 tests with five ignored. The shadow pilot retains the initial reserve
+diagnostic and three bounded claims with non-independent labels. Full Order 1 remains active.
+
 ## 2026-10-04 Actual emitted lengths replace borrowed auxiliary positions
 
 The former windowed driver accepted artifact size and region positions supplied by its caller.

@@ -357,6 +357,11 @@ mod tests {
             assert_eq!(enter_wire(vm, shared, 192)?, -260);
             // The legacy checksum command would replace the live accumulator.
             assert_eq!(enter_wire(vm, shared, 0)?, -260);
+            assert_eq!(enter_wire(vm, shared, 193)?, -260);
+            assert_eq!(enter_wire(vm, shared, 194)?, -260);
+            for cmd in 195..=200 {
+                assert_eq!(enter_wire(vm, shared, cmd)?, -260);
+            }
             assert_eq!(enter_wire(vm, shared, 189)?, 64);
             assert_eq!(enter_wire(vm, shared, 190)?, 4);
             assert_eq!(enter_wire(vm, shared, 190)?, -260);

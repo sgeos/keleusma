@@ -1,11 +1,12 @@
-//! Framing and auxiliary production are compared independently. Reference opcode
-//! and operand sections remain test inputs. Complete serialization is still open.
+//! Module-driven section production is compared with the reference.
+//! Broader auxiliary support, semantic decoding and shipping integration remain open.
 #![cfg(feature = "self-host")]
 
 use keleusma::bytecode::Module;
 use keleusma::selfhost::{
     wire_artifact_from_sections_via_kel, wire_auxiliary_from_module_via_kel,
     wire_container_from_regions_via_kel, wire_framing_is_intact_via_kel,
+    wire_opcode_sections_via_kel,
 };
 
 fn compile(source: &str) -> Module {
@@ -67,10 +68,23 @@ fn framing_matches_every_current_stage_artifact() {
             "auxiliary {}",
             path.display()
         );
+        let instructions = wire_opcode_sections_via_kel(&module).unwrap();
+        assert_eq!(
+            instructions.opcodes,
+            section(&expected, 32),
+            "opcodes {}",
+            path.display()
+        );
+        assert_eq!(
+            instructions.operands,
+            section(&expected, 40),
+            "operands {}",
+            path.display()
+        );
         let actual = wire_artifact_from_sections_via_kel(
             &module,
-            section(&expected, 32),
-            section(&expected, 40),
+            &instructions.opcodes,
+            &instructions.operands,
             &auxiliary,
         )
         .unwrap();

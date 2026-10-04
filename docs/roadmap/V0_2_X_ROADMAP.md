@@ -348,11 +348,12 @@ The gaps to close, from the current subset to the full grammar:
 
 ## Current Order-1 status, 2026-10-04
 
-Module-driven auxiliary containers now match the reference for all twelve stages. Keleusma
-also derives framing offsets, container directories and streaming checksums. The shipping
-serializer remains Rust. Opcode and pool production, remaining auxiliary record forms,
-semantic decoding, type coverage and final integration gates keep Order 1 open.
-The wire stage now has 497 chunks and uses 47,442 of 49,152 input bytes.
+All twelve pipeline-produced stage modules now serialize through Keleusma section emitters
+and match the complete reference artifacts. Opcode and operand-pool encoding covers all 66
+instruction identifiers. The shipping serializer remains Rust. Additional auxiliary forms,
+semantic decoding, type coverage and final integration
+gates keep Order 1 open. Shape interning and signature numbering now also run in Keleusma. The wire stage has 516 chunks and uses 48,233 of 49,152 input bytes.
+Its constant-node table uses 1,291 of 1,365 slots after sharing repeated numeric schema literals.
 
 
 Composite let annotations now preserve named, tuple, array, grouping and unit requirements.
@@ -360,7 +361,7 @@ The twenty-three-source comparison includes fourteen negatives and nine valid co
 seven artifact and execution controls. Parser capacity and unsupported annotation syntax remain
 distinct from source rejection. Remaining input and projection coverage, production wire
 emission and final gates keep Order 1 open. Standing inference-independence evidence now
-covers all twelve stages, clearing 41,227 recorded types without changing complete artifacts.
+covers all twelve stages, clearing 42,195 recorded types without changing complete artifacts.
 The intervention and admission controls also pass.
 
 Struct field and composite array projections now preserve source type identity through calls,

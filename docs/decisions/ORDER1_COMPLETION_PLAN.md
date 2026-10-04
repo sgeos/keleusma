@@ -18,15 +18,15 @@ Full-language support remains Order 6. Existing supported programs must retain t
 
 | Requirement | Evidence required | Current evidence and remaining work |
 |---|---|---|
-| Compile the complete stage corpus | Complete artifact identity against the reference for every current stage source, with a corpus inventory check | All twelve complete serialized artifacts from the production compiler match the reference after the call and alias changes. The new artifact corpus also checks directory inventory. Both sides still use the Rust serializer. |
+| Compile the complete stage corpus | Complete artifact identity against the reference for every current stage source, with a corpus inventory check | All twelve pipeline-produced stage modules now serialize through Keleusma section emitters and match complete reference artifacts. The directory inventory is checked. Shape interning and signature-table numbering now run in Keleusma from semantic fields, using bounded windows over prior emitted records. |
 | Avoid reference scaffold borrowing | Production compilation assembles module fields from pipeline output | `self_host_compile_scratch` provides this path. Preserve it through integration. |
 | Derive type inputs from the self-hosted pipeline | Production rejection receives facts without walking the reference parser's abstract syntax tree or borrowing inferred types | The production input path now derives scoped scalar constraints from Keleusma parser and reconstruction output. Composite facts, complete binder/occurrence coverage and general admission remain incomplete. |
 | Reject ill-typed subset programs | Independent pipeline rejection agrees with the reference on the rejection corpus, valid controls, and the rule-versus-form census | The scoped pipeline harness exercises all twenty rejection cases and seven valid controls without reference-first masking. The separate sixteen-cell rule-versus-form census now runs through that path with eight valid controls. Its required test now passes after preserving match-arm guards. Parser source diagnostics and type-stage verdicts remain distinct from unsupported syntax, capacity and execution failures. The shipping driver now obtains the independent verdict first. Production corpus and census checks assert PipelineRejected so reference rejection cannot mask missing stage coverage. |
 | Preserve the first-pass monomorphization result | Every stage remains unchanged by monomorphization, with a control that does change | The corpus now lists all twelve sources. Identity, changing control and directory inventory tests passed again after the parser and alias changes on 2026-10-04. Repeat if stage sources change. |
-| Preserve independence from inferred expression types | The current stage corpus compiles identically with recorded expression types absent | Four standing tests cover all twelve sources with a directory inventory, a populated-table intervention after recording, a changed-emission control and an admission control. On 2026-10-04, clearing 41,227 recorded types leaves all twelve complete artifacts unchanged. This does not remove reference admission or establish full-language independence. |
-| Emit complete artifacts through Keleusma | Production output uses the Keleusma wire emitter for framing, opcode records, operand pools, auxiliary regions and integrity fields | All twelve module-driven auxiliary containers now match the reference without borrowed region positions or artifact length. Keleusma framing and streaming checksum controls pass. Opcode and pool production, remaining auxiliary forms and semantic decoding are still open. `Module::to_bytes` remains on current artifact paths. Preserve the wire plan's encoder and decoder obligations. |
+| Preserve independence from inferred expression types | The current stage corpus compiles identically with recorded expression types absent | Four standing tests cover all twelve sources with a directory inventory, a populated-table intervention after recording, a changed-emission control and an admission control. On 2026-10-04, clearing 42,195 recorded types leaves all twelve complete artifacts unchanged. This does not remove reference admission or establish full-language independence. |
+| Emit complete artifacts through Keleusma | Production output uses the Keleusma wire emitter for framing, opcode records, operand pools, auxiliary regions and integrity fields | The twelve-stage comparison now supplies no reference section bytes, region positions or artifact lengths. All 66 opcode identifiers have encoding controls. Remaining auxiliary forms, semantic decoding and shipping integration are open. Module::to_bytes remains on the shipping path. |
 | Reach the shipping tool | An end-to-end command emits the independently assembled artifact and reports type rejection through the new path | The command emits the same artifact as the production library, executes a valid result of seven, and independently rejects three invalid sources without emitting files. Serialization still uses Rust, so the complete shipping requirement remains open. |
-| Establish current verification | Relevant differential and failure-path tests, complete workspace checks and applicable integration gates pass on the final tree | The 2026-10-04 release workspace run passes 3,031 tests with five ignored. Clippy, documentation and compile-and-verify no_std checks pass. The separate feature configurations and final integration gates still require verification after the remaining implementation. |
+| Establish current verification | Relevant differential and failure-path tests, complete workspace checks and applicable integration gates pass on the final tree | The workspace diagnostic passed 3,048 tests and failed only a stale documentation count, with five ignored. After its repair and two test-iterator style fixes, all 28 affected tests and documentation guards pass. Clippy and documentation builds pass. The full workspace was not repeated after those documentation and test-only repairs. Separate feature configurations and final integration gates remain required after the remaining implementation. |
 | Participate in the shadow pilot | Diagnostic and completion-claim samples retain baseline judgments, reviewed payloads, outcomes and explicit service status | Capture is installed for this line. Judgments are advisory and do not alter gates. |
 
 ## Work sequence
@@ -456,3 +456,20 @@ pipeline comparison and monomorphization identity controls. Four inference contr
 The next work is complete module-driven opcode and operand-pool production, the remaining
 auxiliary forms and semantic decoding, followed by shipping integration. Existing type coverage
 obligations and final gates remain. The complete Order 1 goal remains active.
+
+## Semantic opcode stream and complete corpus artifacts, 2026-10-04
+
+The host now marshals typed Op fields. Keleusma owns inline-versus-pool selection, ordinal
+assignment, field packing, sentinels and parity. The opcode census covers every current identifier
+and composite form. Boundary controls reject unrepresentable fields and indices before writes.
+The unsigned whole-module helper refuses signing and encryption flags explicitly.
+
+All twelve production pipeline modules now serialize to reference-identical complete artifacts
+through this path. The prior comparison borrowed opcode and operand-pool sections. That borrowing
+is removed. Auxiliary record forms beyond the current helper, signature-table numbering, semantic
+decoding, shipping integration and remaining type coverage are still open.
+
+The stage fits unchanged capacities after sharing 65 repeated numeric schema literals through
+four helpers. It uses 1,283 constant nodes against 1,365 and 47,687 input bytes against 49,152.
+The stage has 505 chunks. Clearing 42,195 inferred expression types preserves all twelve artifacts.
+The full Order 1 goal remains active.

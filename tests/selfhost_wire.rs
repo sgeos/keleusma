@@ -1568,17 +1568,32 @@ const CMD_SHAPE_SIZE: i64 = 25;
 /// Parsing the Keleusma source is deliberate. The alternative is to restate the
 /// number in this file, which would only prove the test agrees with itself.
 fn kel_const(fn_name: &str) -> i64 {
-    let needle = format!("fn {fn_name}() -> Word {{");
-    let at = WIRE_KEL
-        .find(&needle)
-        .unwrap_or_else(|| panic!("wire.kel has no `{fn_name}`"));
-    let rest = &WIRE_KEL[at + needle.len()..];
-    let end = rest.find('}').expect("unterminated body");
-    let body = rest[..end].trim();
-    body.strip_prefix("0x").map_or_else(
-        || body.parse::<i64>().expect("decimal literal"),
-        |hex| i64::from_str_radix(hex, 16).expect("hex literal"),
-    )
+    // Exactly one literal-helper hop is admitted. Cycles and more complex
+    // expressions fail instead of hanging or silently assuming a value.
+    let mut name = fn_name;
+    for _ in 0..2 {
+        let needle = format!("fn {name}() -> Word {{");
+        let at = WIRE_KEL
+            .find(&needle)
+            .unwrap_or_else(|| panic!("wire.kel has no `{name}`"));
+        let rest = &WIRE_KEL[at + needle.len()..];
+        let end = rest.find('}').expect("unterminated body");
+        let body = rest[..end].trim();
+        if let Some(alias) = body.strip_suffix("()") {
+            assert!(
+                alias
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            );
+            name = alias;
+        } else {
+            return body.strip_prefix("0x").map_or_else(
+                || body.parse::<i64>().expect("decimal literal"),
+                |hex| i64::from_str_radix(hex, 16).expect("hex literal"),
+            );
+        }
+    }
+    panic!("{fn_name} exceeds the one-hop literal contract")
 }
 
 #[test]
@@ -12912,9 +12927,9 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     eprintln!("worst names {worst_names}, worst blob {worst_blob}");
     // Measured 2026-10-04. Earlier evidence omitted wire and verify_types.
     // Parse holds the name maximum. Wire holds the byte maximum and leaves
-    // only 1,710 bytes below the input cap. Neither capacity is raised here.
+    // only 919 bytes below the input cap. Neither capacity is raised here.
     assert_eq!(worst_names, 776, "the worst-case name count moved");
-    assert_eq!(worst_blob, 47442, "the worst-case blob size moved");
+    assert_eq!(worst_blob, 48233, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

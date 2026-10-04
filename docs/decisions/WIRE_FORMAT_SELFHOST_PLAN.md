@@ -6,16 +6,69 @@
 
 The driver-capacity test now inventories all twelve stage sources. Earlier versions of that
 test used ten sources and omitted wire and verify_types. The current maxima belong to
-different stages. Parse uses 776 of 1,024 names. Wire uses 47,442 of 49,152 input bytes.
-The remaining wire input margin is 1,710 bytes. No input cap changed. These measurements
+different stages. Parse uses 776 of 1,024 names. Wire uses 48,233 of 49,152 input bytes.
+The remaining wire input margin is 919 bytes. No input cap changed. These measurements
 establish input residency for the corpus, not complete production serialization.
 Both encoding and decoding remain within the original wire-format scope.
+
+## Signature numbering integration, 2026-10-04
+
+Commands 195 through 200 derive shape-table positions and signature parameter ranges from
+semantic shape fields. Parameters append without sharing. Return and resume shapes reuse the
+first identical earlier record. Keleusma performs that search and encodes each record. The host
+retains the emitted bytes and transports them in windows of at most 49,152 bytes. This adds no
+fixed table-residency cap. The host is trusted to replay its own emitted records faithfully.
+The protocol checks window lengths and total coverage, not an independently authenticated history.
+
+The auxiliary artifact path now uses this producer instead of Rust signature_tables. Legacy
+record-formatting comparison helpers still use the reference table and retain their documented
+provenance. Native return shapes are not yet integrated into this interner. The auxiliary helper
+continues to refuse native metadata. Shipping serialization and semantic decoding remain open.
+
+All twelve pipeline artifacts remain byte-identical to the reference. The wire artifact has
+141,436 bytes and 516 chunks. Four focused tests distinguish append from intern behavior, check
+empty and zero-parameter signatures, cross the 6,144-record window boundary and verify that
+invalid fields, incomplete searches and out-of-order commands preserve pending state.
+
+The first code used unsupported local mutation syntax, which the parser refused. After the
+syntax repair, capacity used 1,325 constant nodes and left only 40 free. Sharing 39 numeric
+accessors through five literal functions reduces use to 1,291 and restores 74 free nodes.
+The standing 64-node reserve guard remains unchanged. The eleven new private value slots cost
+352 bytes, checked by the accounting regression. No public opcode, bytecode version or buffer
+cap changes. Inference-independence evidence covers 42,195 expression types across twelve stages.
+The quadratic interning search has not been benchmarked for throughput.
+
+## Opcode and operand-pool integration, 2026-10-04
+
+Commands 193 and 194 start and advance an opcode stream from semantic instruction fields.
+Keleusma selects inline or pooled representation, assigns pool ordinals, writes endian fields
+and sentinels, and computes both parity schemes. The host maps typed opcode discriminants to
+the existing public identifiers and transports fields. It does not call the reference encoder.
+All 66 identifiers and the scalar, boxed, nested and construction forms have differential
+controls, including field widths, pool-index boundaries and cross-chunk ordinal continuity.
+Refused operations preserve output bytes and the pool ordinal. Data operands beyond 24 bits
+are refused instead of truncated. The whole-module helper refuses signing and encryption flags.
+
+The production pipeline comparison now serializes all twelve assembled modules through the new
+Keleusma section emitters. Every complete artifact matches the reference. No reference section
+bytes or region positions are supplied to this path. This closes opcode and pool production for
+the current corpus. Signature numbering was still host-derived at that increment and is closed
+by the newer section above. Remaining auxiliary forms, semantic decoding and shipping integration
+keep the complete serialization obligation open.
+
+The first capacity measurement found 1,344 constant nodes, leaving 21 under the unchanged
+1,365-node cap and failing the standing 64-node reserve guard. Sixty-five numeric offset and
+stride accessors now share four literal functions. This adds one fixed call level and restores
+the reserve to 82 nodes, with 1,283 used at that increment. No buffer cap changed. The stage then
+had 505 chunks and highest command 194. The opcode stream adds eight private value slots, or 256 bytes, not 64.
+A regression test compiles the actual private declarations and checks both header accounting
+and persistent arena capacity. The existing runtime already used the correct 32-byte slot size.
 
 ## Module-driven framing and auxiliary assembly, 2026-10-04
 
 Five new internal commands provide framing begin, feed, finish and the two reader endpoints.
-They add four private words, or 32 bytes at the host word width. The stage now has 497 chunks
-and highest command 192. Public bytecode version remains 2 and the opcode count remains 66.
+They add four private value slots, or 128 bytes. The earlier 32-byte statement incorrectly
+used the target word width. At that increment the stage had 497 chunks and highest command 192. Public bytecode version remains 2 and the opcode count remains 66.
 The dispatch chain and remaining input margin require measurement before further stage growth.
 
 The framing driver obtains offsets and total length from Keleusma, copies opaque sections into
@@ -30,12 +83,12 @@ return their actual lengths, and the stage derives the triplicated directory and
 Header fields include actual flags, resource values and schema hash. Chunk records retain actual
 opcode counts and offsets. Empty mandatory tables retain their directory entries.
 
-This is incomplete production serialization. Rust still supplies signature-table numbering,
-parameter tags, record presence and scalar metadata. Native records, templates, debug pools,
+This is incomplete production serialization. Rust supplies parameter tags, record presence and
+scalar metadata. Signature numbering has since moved into Keleusma, as recorded above. Native records, templates, debug pools,
 composite constants, private composite slots and nonempty non-elided initializer pools remain
 explicitly unsupported by this new helper. The shipping command still uses Module::to_bytes.
-No existing shipping behavior was narrowed. Complete opcode and pool production, remaining
-auxiliary forms, semantic decoding and shipping integration remain required.
+No existing shipping behavior was narrowed. Remaining auxiliary forms, semantic decoding and shipping integration
+remain required. Opcode and pool production is recorded in the newer section above.
 
 Seven integration tests compare all twelve auxiliary containers and framed artifacts, exercise
 multiwindow payloads and directory capacity, preserve nonzero metadata, refuse oversized
