@@ -7,6 +7,7 @@ rests on. The line's mailbox and resume prompt is [`../handoffs/kaizen.md`](../h
 
 | report | state |
 |---|---|
+| [2026-10-04-interline-protocol-receipt.md](./2026-10-04-interline-protocol-receipt.md) | shared local transport and both client configurations installed, live receiver activation unverified |
 | [`2026-10-04-policy-propagation-proposal.md`](./2026-10-04-policy-propagation-proposal.md) | nine-file patch for the V0.2.X owning line, tested on a trunk export, no peer changes applied |
 | [`2026-10-04-process-delta-audit.md`](./2026-10-04-process-delta-audit.md) | delta review through trunk commit `89fc6aac` on 2026-09-28, five proposals partly implemented, no full adoption demonstrated, with measured evidence and verification limits |
 | [`2026-09-08-process-audit.md`](./2026-09-08-process-audit.md) | the first process audit, sixth draft, publication-reviewed, in the operator's blog format, not published, describing the process as of 2026-09-08 |

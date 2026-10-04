@@ -6,6 +6,19 @@ Current sprint source of truth.
 
 ---
 
+## Kaizen interline communication on feat/kaizen-interline-protocol
+
+2026-10-04. Implemented the operator-requested
+[bidirectional interline protocol](./INTERLINE_PROTOCOL.md) for Codex and Claude
+Code. The local SQLite mailbox provides stable identifiers, retry deduplication,
+explicit receipts, validated reply routes and bounded inbox output. Both harness
+reminder configurations are installed for the four development lines and the
+isolated kaizen feature worktree. Tracked peer state is unchanged.
+The [receipt](./kaizen/2026-10-04-interline-protocol-receipt.md) records transport
+and installation checks. Hook trust, session access and actual live receiver
+consumption remain distinct from these checks. The kaizen mailbox carries the
+resume state rather than overwriting the peer-owned root reverse prompt.
+
 ## Kaizen policy propagation on docs/kaizen-policy-propagation
 
 2026-10-04. Prepared the [policy-propagation proposal](./kaizen/2026-10-04-policy-propagation-proposal.md)

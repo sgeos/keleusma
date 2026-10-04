@@ -4,6 +4,33 @@
 
 ## Current increment on 2026-10-04
 
+The operator requested bidirectional Codex and Claude Code communication
+protocols. The [interline protocol](../INTERLINE_PROTOCOL.md) is implemented by
+`scripts/interline.py` and `scripts/install_interline.py`. Its shared local store
+is `secret/interline/` in the primary checkout. Both harness configurations are
+installed for the primary, native, proof and kaizen integration worktrees, plus
+this isolated kaizen feature worktree. No tracked peer files were changed.
+
+The current branch is `feat/kaizen-interline-protocol`, based on `2bc6b352`, in
+`/private/tmp/keleusma-kaizen-delta-20260928`. Validate the parent by ancestry and
+review commits above it. Appendix B was read before tracked edits.
+The [installation receipt](../kaizen/2026-10-04-interline-protocol-receipt.md)
+records verification and its limits.
+
+Codex hook trust remains a user-interface action through `/hooks`. Receivers
+in sibling worktrees need mailbox-directory access through `--add-dir` or their
+normal explicit approval path. Hook configuration alone does not establish
+activation. No live peer consumption or model-to-model handshake is claimed.
+The transport tests use separate command processes with both harness labels.
+There are no fabricated peer receipts and no work messages sent to peer lines.
+
+At the next increment, check the `kaizen` inbox and distinguish transport
+installation from live receiver activation. The prior policy-propagation packet
+remains available at `2bc6b352` and has not been delivered to an owning session.
+No push, integration merge or publication has occurred.
+
+## Preceding policy-propagation increment on 2026-10-04
+
 The [policy-propagation proposal](../kaizen/2026-10-04-policy-propagation-proposal.md)
 contains an exact nine-file patch for the V0.2.X owning line. It reconciles gate
 boundaries, contributor routing and assistant attribution with existing policy.
