@@ -8,6 +8,12 @@ Current sprint source of truth.
 
 ## TypeSafe skill setup on chore/kaizen-typesafe-skill
 
+2026-10-04 availability follow-up. A minimal synthetic request to the documented
+Jev endpoint returned HTTP 403 with `authentication_error` and a missing-key
+message. `TYPESAFE_API_KEY` is absent from the session and fresh login-shell
+environments. The [setup record](./TYPESAFE_SKILL.md) distinguishes the successful
+skill installation from the blocked model call. No credential was changed.
+
 2026-10-04. Installed the `typesafe-ai` skill for Codex at user scope using the
 operator-provided non-Claude installation method. The installer reports it
 installed for Codex. The [setup record](./TYPESAFE_SKILL.md) preserves the command,

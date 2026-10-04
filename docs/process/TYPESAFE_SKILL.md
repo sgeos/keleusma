@@ -44,7 +44,29 @@ An initial offline listing failed because npm could not resolve the installer
 from its offline cache. The subsequent normal listing succeeded. That failure
 did not undo or invalidate the installation.
 
-No TypeSafe application programming interface request was made. Authentication
-and actual Jev workflow execution remain unverified. The project documentation
+No TypeSafe application programming interface request was made during installation.
+The project documentation
 link, citation and claimed-count checks passed fourteen cases. No runtime gate,
 push or integration merge was performed for this setup increment.
+
+## Availability check on 2026-10-04
+
+The operator requested an actual usability check and expected failure.
+`TYPESAFE_API_KEY` was absent from the session environment and a fresh login
+shell. The inspected project locations exposed no candidate environment or
+TypeSafe credential files. This does not establish that no key exists elsewhere.
+
+A minimal request to `https://api.typesafe.ai/v1/systemone` selected `jev-latest`
+with synthetic state about a red apple and one Noul question. No authorization
+header, project content or credential was sent. The service returned HTTP 403
+with the following body.
+
+```json
+{"detail":{"error_type":"authentication_error","message":"Must supply an API key! Check your request and try again."}}
+```
+
+The [reference](https://docs.typesafe.ai/api) documents HTTP 401 for missing or
+invalid keys. The observed status was 403. Both the status and authentication
+message above are from the executed request. Network reachability is established.
+An authenticated Jev evaluation is not established. A valid TypeSafe key must be
+provided through the documented environment before testing authenticated use.
