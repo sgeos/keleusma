@@ -174,6 +174,7 @@ enum Tok {
     // `bnot` (bitwise NOT), a unary prefix operator taking the last free low Tok slot (11, unused in the
     // token vocabulary). It lowers to `a bxor -1`; see `OpCode::Bnot` and `push_bnot`.
     Bnot = 11,
+    When = 64,
 }
 
 // The node-record kinds the body walk yields (a subset of body.kel's `enum Node`).
@@ -366,6 +367,7 @@ enum OpCode {
     // The BinOp retains this tag for type checking; codegen maps it to CmpNe, preserving
     // byte identity with the reference while retaining xor's boolean operand restriction.
     Xor = 33,
+    MatchMark = 34,
 }
 
 // The merged parser state.
@@ -1166,8 +1168,8 @@ private data forst {
 }
 
 // The `match scrut { arms }` context stack: `match_phase` per pending match (1 the
-// scrutinee's `{`, 2 an arm pattern, 3 the `=>`, 4 the arm result), `match_temp` the
-// scrutinee's reserved temp slot, `match_argcount` the literal-arm count, `match_sp` the
+// scrutinee's `{`, 2 an arm pattern, 3 the `when` or `=>`, 4 the result, 5 the guard),
+// `match_temp` the reserved scrutinee slot, `match_argcount` the total arm count, `match_sp` the
 // nesting depth, `match_build` the pending build signal.
 private data mat {
     match_phase: [Word; 8],
@@ -1194,9 +1196,15 @@ private data mat {
     // counter cannot account for a nested match in a prior arm's result (which allocates slots
     // between the arms), so carrying parse's allocation is what makes nested enum matches work.
     mpat_tslot: Word,
-    // Per open enum-value match, whether it has a `_` wildcard arm (1). The wildcard's result is
-    // emitted after the variant arms and before the Trap (a catch-all), with no IsEnum test.
+    // Legacy trailing-wildcard flag. New records carry every arm in source order;
+    // reconstruction recognizes a final wildcard and compacts it into the trailer.
     match_haswc: [Word; 8],
+    match_guarded: [Word; 8],
+    match_let_base: [Word; 8],
+    match_if_base: [Word; 8],
+    match_for_base: [Word; 8],
+    match_struct_base: [Word; 8],
+    match_opbase: [Word; 8],
 }
 
 // The data-field layout table, accumulated by the header as each `data` block is parsed
@@ -2164,16 +2172,15 @@ fn step_mpat(k: Word, v: Word) -> Word {
             }
             0
         } else {
-        if k == Tok::FatArrow() as Word {
+        if k == Tok::FatArrow() as Word orelse k == Tok::When() as Word {
             // THE BARE UNIT-VARIANT PATTERN `E::A => ...`, which the grammar's pattern table
             // documents as the enum unit variant form. Before this, phase 3 waited for `(` and
             // did NOTHING on any other token, so the phase never advanced, tokens kept arriving
             // with no progress, and the parse ran to its step budget without reaching DONE. It
             // did not refuse -- it span.
             //
-            // Only `=>` is handled here. A match-arm pattern must be followed by it, so any
-            // other token at this phase is malformed input, and a narrow branch is easier to
-            // argue correct than a general one.
+            // A bare variant ends at `=>` or begins its guard at `when`. The guard
+            // uses the ordinary expression parser after this pattern record is emitted.
             //
             // The work is the `(` path's slot reservation followed by the `)` path's
             // completion, with ZERO payload binds. The slot reservation is not optional: parse's
@@ -2186,10 +2193,10 @@ fn step_mpat(k: Word, v: Word) -> Word {
             }
             mat.mpat_phase = 0;
             mat.match_argcount[mat.match_sp - 1] = mat.match_argcount[mat.match_sp - 1] + 1;
-            // PHASE 4, NOT 3. The `)` path returns to phase 3, which waits for the `=>`. This
-            // branch has already consumed it, so returning to 3 would swallow the arm result's
-            // first token. `expect_operand` is what phase 3 sets when it sees the arrow.
-            mat.match_phase[mat.match_sp - 1] = 4;
+            // The delimiter has already been consumed. Enter the result or guard
+            // directly rather than waiting for a second delimiter in phase 3.
+            mat.match_phase[mat.match_sp - 1] = if k == Tok::When() as Word { 5 } else { 4 };
+            mat.match_guarded[mat.match_sp - 1] = if k == Tok::When() as Word { 1 } else { 0 };
             ops.expect_operand = 1;
             if mat.match_isenum[mat.match_sp - 1] == 1 {
                 Node::EnumArm() as Word + (((mat.mpat_vname * 65536 + mat.enum_disc) * 8 + mat.mpat_pcount) * 1024 + mat.mpat_tslot) * 64
@@ -2484,6 +2491,7 @@ fn prec_of(op: Word) -> Word {
         OpCode::ArrayMark() => 0,
         OpCode::EnumMark() => 0,
         OpCode::TupleMark() => 0,
+        OpCode::MatchMark() => 0,
         OpCode::Mul() => 12,
         OpCode::Div() => 12,
         OpCode::Mod() => 12,
@@ -4385,6 +4393,14 @@ fn step_op(k: Word) -> Word {
         mat.match_argcount[mat.match_sp] = 0;
         mat.match_isenum[mat.match_sp] = 0;
         mat.match_haswc[mat.match_sp] = 0;
+        mat.match_guarded[mat.match_sp] = 0;
+        mat.match_let_base[mat.match_sp] = stmt.let_count;
+        mat.match_if_base[mat.match_sp] = branch.if_sp;
+        mat.match_for_base[mat.match_sp] = forst.for_sp;
+        mat.match_struct_base[mat.match_sp] = structdefs.sc_sp;
+        mat.match_opbase[mat.match_sp] = ops.opsp;
+        ops.opstack[ops.opsp] = OpCode::MatchMark() as Word;
+        ops.opsp = op_push(ops.opsp);
         mat.match_sp = mat.match_sp + 1;
         ops.expect_operand = 1;
         0
@@ -4522,9 +4538,10 @@ fn is_stmt_start(k: Word) -> Word {
 
 // The `match` structural tokens. Phase 1 awaits the scrutinee's `{` (drain reason 8, which
 // reserves the scrutinee temp slot and moves to the arm patterns); phase 2 reads an arm
-// pattern (an integer literal emitted as a Literal node and counted, a `_` wildcard, or
-// `}` ending the arms); phase 3 awaits `=>`; phase 4 reads the arm result, ended by a
-// match-level `,` (reason 9, next arm) or the closing `}` (reason 10, build).
+// pattern; phase 3 awaits `when` or `=>`. Phase 5 reads a guard until `=>`, drained
+// with reason 14. Phase 4 reads the result until a match-level comma or closing brace,
+// drained with reason 9 or 10. Internal records 71, 72 and 73 carry a guarded result,
+// an integer wildcard and an enum wildcard respectively. These are not bytecode opcodes.
 fn step_match(k: Word, v: Word) -> Word {
     let sp = mat.match_sp - 1;
     let mp = mat.match_phase[sp];
@@ -4541,9 +4558,10 @@ fn step_match(k: Word, v: Word) -> Word {
         } else {
         if k == Tok::Underscore() as Word {
             mat.match_phase[sp] = 3;
-            // A `_` wildcard arm: its result becomes the enum match's catch-all (no IsEnum test).
-            mat.match_haswc[sp] = 1;
-            0
+            // Wildcards remain in source order, including guarded fallthrough arms.
+            mat.match_argcount[sp] = mat.match_argcount[sp] + 1;
+            ps.emit_arg = 0;
+            if mat.match_isenum[sp] == 1 { 73 } else { 72 }
         } else {
         if k == Tok::Ident() as Word {
             // A unit enum-variant pattern `Name::Variant()` folds to the variant's
@@ -4571,9 +4589,20 @@ fn step_match(k: Word, v: Word) -> Word {
         if k == Tok::FatArrow() as Word {
             mat.match_phase[sp] = 4;
             ops.expect_operand = 1;
+        } else {
+            if k == Tok::When() as Word {
+                mat.match_phase[sp] = 5;
+                mat.match_guarded[sp] = 1;
+                ops.expect_operand = 1;
+            } else { perr(pe_pattern_syntax(), toks.at); }
         }
         0
     } else {
+        if mp == 5 {
+            ops.drain_reason = 14;
+            ops.draining = 1;
+            0
+        } else {
         if k == Tok::Comma() as Word {
             ops.drain_reason = 9;
             ops.draining = 1;
@@ -4583,11 +4612,22 @@ fn step_match(k: Word, v: Word) -> Word {
             ops.draining = 1;
             0
         }
-    } } }
+    } } } }
+}
+
+// Close the arm's lexical scope and wrap its guard/result pair when present.
+fn finish_match_arm() -> Word {
+    let sp = mat.match_sp - 1;
+    stmt.let_count = mat.match_let_base[sp];
+    if mat.match_guarded[sp] == 1 {
+        mat.match_guarded[sp] = 0;
+        ps.emit_arg = 0;
+        71
+    } else { 0 }
 }
 
 // Emit the match build record (kind 34): its arg packs the scrutinee temp slot and the
-// literal-arm count as `temp * 1024 + count`. The match is now a completed block-form
+// total arm count as `temp * 1024 + count`. The match is now a completed block-form
 // operand, so blockform marks it and expect_operand clears.
 fn step_match_build() -> Word {
     mat.match_build = 0;
@@ -4595,6 +4635,8 @@ fn step_match_build() -> Word {
     let temp = mat.match_temp[sp];
     let ac = mat.match_argcount[sp];
     mat.match_sp = sp;
+    stmt.let_count = mat.match_let_base[sp];
+    ops.opsp = op_pop(ops.opsp);
     ops.expect_operand = 0;
     stmt.blockform = 1;
     if mat.match_isenum[sp] == 1 {
@@ -5327,6 +5369,31 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
 
 // Dispatch a body token: the else-less `if` synthesis and the block-form-statement commit
 // come first, then the normal phase dispatch.
+// Match structural delimiters cannot consume a nested call, array, tuple or block.
+fn match_boundary(k: Word) -> Word {
+    let sp = mat.match_sp - 1;
+    let mp = mat.match_phase[sp];
+    if mp == 2 orelse mp == 3 { 1 } else {
+        let blocks = branch.if_sp == mat.match_if_base[sp]
+            andalso forst.for_sp == mat.match_for_base[sp]
+            andalso structdefs.sc_sp == mat.match_struct_base[sp]
+            andalso structdefs.sc_phase == 0;
+        let mut_group = mat.match_opbase[sp] + 1;
+        ps.found_flag = 0;
+        for i in mut_group..ops.opsp limit 64 {
+            let op = ops.opstack[i];
+            if op == OpCode::Paren() as Word orelse op == OpCode::CallMark() as Word
+                orelse op == OpCode::ArrayMark() as Word orelse op == OpCode::EnumMark() as Word
+                orelse op == OpCode::TupleMark() as Word orelse op == OpCode::IndexMark() as Word
+                orelse op == OpCode::StructMark() as Word { ps.found_flag = 1; }
+        }
+        if blocks andalso ps.found_flag == 0 andalso (
+            (mp == 1 andalso k == Tok::LBrace() as Word)
+            orelse (mp == 4 andalso (k == Tok::Comma() as Word orelse k == Tok::RBrace() as Word))
+            orelse (mp == 5 andalso k == Tok::FatArrow() as Word)) { 1 } else { 0 }
+    }
+}
+
 fn step_body_dispatch(k: Word, v: Word) -> Word {
     if ps.in_guard == 1 andalso k == Tok::LBrace() as Word andalso da.post_index == 0 andalso da.da_phase == 0 {
         // The body's opening `{` ends the guard expression: drain it (reason 11), then
@@ -5364,8 +5431,7 @@ fn step_body_dispatch(k: Word, v: Word) -> Word {
             // dispatch normally. A pending data-field read (da_phase nonzero) must flush
             // first, so the scrutinee or arm-result DataRead lands before the match drain;
             // step_daindex emits it and pushes the boundary token back for reinterpretation.
-            let mp = mat.match_phase[mat.match_sp - 1];
-            if mp == 2 orelse mp == 3 orelse (mp == 1 andalso k == Tok::LBrace() as Word) orelse (mp == 4 andalso k == Tok::RBrace() as Word) orelse (mp == 4 andalso k == Tok::Comma() as Word) {
+            if match_boundary(k) == 1 {
                 step_match(k, v)
             } else {
                 step_dispatch_normal(k, v)
@@ -5390,7 +5456,8 @@ fn step_draining() -> Word {
     let top = if has_op { ops.opstack[ops.opsp - 1] } else { 0 };
     let marker = top == OpCode::Paren() as Word
         orelse top == OpCode::IndexMark() as Word
-        orelse top == OpCode::CallMark() as Word;
+        orelse top == OpCode::CallMark() as Word
+        orelse top == OpCode::MatchMark() as Word;
     // A YieldMark completes (drains as its YieldExpr) at a statement (reason 0) or the
     // body tail (reason 1), and also at an if-branch fold (reason 3 or 4) when the
     // `yield` was written inside that branch. The latter is true when the YieldMark
@@ -5605,14 +5672,20 @@ fn step_draining() -> Word {
             // An arm result is drained; expect the next arm's pattern.
             mat.match_phase[mat.match_sp - 1] = 2;
             ops.draining = 0;
-            0
+            finish_match_arm()
         } else {
         if ops.drain_reason == 10 {
             // The last arm result is drained; build the match.
             mat.match_build = 1;
             ops.draining = 0;
-            0
+            finish_match_arm()
         } else {
+            if ops.drain_reason == 14 {
+                mat.match_phase[mat.match_sp - 1] = 4;
+                ops.draining = 0;
+                ops.expect_operand = 1;
+                0
+            } else {
             if ops.drain_reason == 12 {
             // **THE BARE FORM'S HIGH BOUND.** Reserve the ONE anonymous slot the bare
             // lowering needs -- the limit -- against the counted form's four, and then do
@@ -5646,7 +5719,7 @@ fn step_draining() -> Word {
             ops.draining = 0;
             Node::Done() as Word
         } } } } } } } } } } } }
-    }
+    } }
 }
 
 // Wrap the block's tail in each statement node, last to first, then do the fold
@@ -6078,8 +6151,8 @@ fn header_use(k: Word, v: Word) -> Word {
 // an explicit `= N` discriminant, the next variant on `,`, or the `}`, 13 the explicit
 // discriminant literal (emit EDISC, dkind 14, and reseed the running discriminant), and 14 the
 // variant's payload type list (each type ident sums into the variant's `epayload`, a `)`
-// returns to mode 12). The payload scan emits no header record; only the internal size table
-// grows, so the declaration record stream is unchanged.
+// returns to mode 12). The END record carries the declared maximum payload byte size
+// for module assembly, using the same size table as construction and field access.
 fn header_enum(k: Word, v: Word) -> Word {
     if ps.mode == 9 {
         if k == 1 {
@@ -6112,7 +6185,8 @@ fn header_enum(k: Word, v: Word) -> Word {
         } else {
         if k == 3 {
             ps.mode = 0;
-            5
+            // END carries the declared maximum payload size for artifact assembly.
+            5 + (enum_bytesize(enums.cur_enum) - 8) * 64
         } else {
             0
         } }
@@ -6132,7 +6206,8 @@ fn header_enum(k: Word, v: Word) -> Word {
         } else {
         if k == 3 {
             ps.mode = 0;
-            5
+            // END carries the declared maximum payload size for artifact assembly.
+            5 + (enum_bytesize(enums.cur_enum) - 8) * 64
         } else {
             0
         } } } }
@@ -6806,10 +6881,8 @@ fn header_sig(k: Word, v: Word) -> Word {
             0
         }
     } else {
-        // Both `->` and `when` are the catch-all Tok 4. The arrow arrives before the
-        // return type (rtype still armed); `when` after it (rtype cleared), so a Tok 4
-        // at depth zero with rtype cleared opens the guard.
-        if k == 4 andalso ps.rtype == 0 andalso ps.pdepth == 0 {
+        // `when` has a distinct token; a return arrow cannot open a guard.
+        if k == Tok::When() as Word andalso ps.rtype == 0 andalso ps.pdepth == 0 {
             arm_guard()
         } else {
             0

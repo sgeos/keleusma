@@ -1269,6 +1269,21 @@ fn push_orelse(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// A guarded arm stores guard/result in node 71. False guards continue at the
+// next arm; the Break belongs inside the guard's If. Items are pushed in reverse.
+fn push_match_result(result: Word) -> Word {
+    if ast.kinds[result] == 71 {
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_visit(ast.rhs[result]);
+        push_emit(wire.mif);
+        push_visit(ast.lhs[result])
+    } else {
+        push_emit(wire.mbreak);
+        push_visit(result)
+    }
+}
+
 // Match (kind 22): `match scrutinee { lit0 => r0, .., _ => rw }` over an integer
 // scrutinee with literal-integer arms and a wildcard default, mirroring the
 // reference lowering. It stashes the scrutinee in a fresh temp local, wraps the
@@ -1281,7 +1296,7 @@ fn push_orelse(p: Word) -> Word {
 // the match_parts entry start, lhs = scrutinee, rhs = arm count. The entry holds
 // the temp slot at [0], the wildcard result node at [1], then arm_count pairs of
 // (literal node, result node) from [2]. Pushed in reverse so the drain emits
-// forward. Literal arms only; a binding or guarded arm is a later increment.
+// forward. Negative pattern indices denote ordered wildcard arms; node 71 wraps a guard.
 fn push_match(p: Word) -> Word {
     let base = ast.args[p];
     let temp = ast.match_parts[base];
@@ -1291,19 +1306,20 @@ fn push_match(p: Word) -> Word {
     st.let_count = st.let_count + 1;
     push_emit(wire.mendloop);
     push_emit(wire.trap + wire.nomatch * wire.radix);
-    push_emit(wire.mbreak);
-    push_visit(wc);
+    if wc >= 0 { push_match_result(wc); }
     // Push the arms in reverse (arm n-1 first) so the LIFO drain emits arm 0 first.
     // The scan bound is the match_parts capacity; the guard selects the live arms.
     for j in 0..n limit 64 {
         let k = n - 1 - j;
-        push_emit(wire.mendif);
-        push_emit(wire.mbreak);
-        push_visit(ast.match_parts[base + 3 + 2 * k]);
-        push_emit(wire.mif);
-        push_emit(wire.cmpeq);
-        push_visit(ast.match_parts[base + 2 + 2 * k]);
-        push_emit(wire.getlocal + temp * wire.radix);
+        let pattern = ast.match_parts[base + 2 + 2 * k];
+        if pattern >= 0 { push_emit(wire.mendif); }
+        push_match_result(ast.match_parts[base + 3 + 2 * k]);
+        if pattern >= 0 {
+            push_emit(wire.mif);
+            push_emit(wire.cmpeq);
+            push_visit(pattern);
+            push_emit(wire.getlocal + temp * wire.radix);
+        }
     }
     push_emit(wire.mloop);
     push_emit(wire.setlocal + temp * wire.radix);
@@ -1328,8 +1344,9 @@ fn push_enum_isenum(ename: Word, vname: Word, disc: Word) -> Word {
 // EnumMatch (kind 39): an enum-value match, the IsEnum virtual loop. Mirrors push_match but the
 // per-arm test is `GetLocal(temp), IsEnum(ename, vname, disc), SetLocal(test), PopN(1),
 // GetLocal(test)` and there is no wildcard (all-variant arms, Trap fallback). match_parts holds
-// [temp][ename][per arm: vname, disc, result]; the test slot for arm k is `temp + 1 + k`, so the
-// frame grows by `1 + n` (temp plus one test per arm).
+// [temp][ename][twenty words per arm], with test and payload slots allocated by parse.
+// A negative variant name denotes an ordered wildcard, which allocates no test slot.
+// Each result may be wrapped by a guarded-arm node. A final wildcard uses the trailer.
 fn push_enum_match(p: Word) -> Word {
     let base = ast.args[p];
     let temp = ast.match_parts[base];
@@ -1343,8 +1360,7 @@ fn push_enum_match(p: Word) -> Word {
     // A `_` wildcard's result and Break emit after the variant arms and before the Trap (pushed
     // here so the LIFO walk emits them in that order).
     if haswc == 1 {
-        push_emit(wire.mbreak);
-        push_visit(ast.match_parts[base + 2 + n * 20 + 1]);
+        push_match_result(ast.match_parts[base + 2 + n * 20 + 1]);
     }
     for j in 0..n limit 64 {
         let k = n - 1 - j;
@@ -1354,10 +1370,11 @@ fn push_enum_match(p: Word) -> Word {
         let result = ast.match_parts[armb + 2];
         let pc = ast.match_parts[armb + 3];
         let testslot = ast.match_parts[armb + 4];
-        st.let_count = st.let_count + 1 + pc;
-        push_emit(wire.mendif);
-        push_emit(wire.mbreak);
-        push_visit(result);
+        if vname >= 0 {
+            st.let_count = st.let_count + 1 + pc;
+            push_emit(wire.mendif);
+        }
+        push_match_result(result);
         // Payload binds emit after the If and before the result: per field, GetLocal(temp),
         // GetEnumField(..), SetLocal(bindslot). Pushed in reverse field order so the LIFO walk emits
         // field 0 first. A SCALAR field (kind 0-7) emits GetEnumField(Flat{offset, kind}); a STRUCT
@@ -1387,12 +1404,14 @@ fn push_enum_match(p: Word) -> Word {
             } } }
             push_emit(wire.getlocal + temp * wire.radix);
         }
-        push_emit(wire.mif);
-        push_emit(wire.getlocal + testslot * wire.radix);
-        push_emit(wire.popn + 1 * wire.radix);
-        push_emit(wire.setlocal + testslot * wire.radix);
-        push_enum_isenum(ename, vname, disc);
-        push_emit(wire.getlocal + temp * wire.radix);
+        if vname >= 0 {
+            push_emit(wire.mif);
+            push_emit(wire.getlocal + testslot * wire.radix);
+            push_emit(wire.popn + 1 * wire.radix);
+            push_emit(wire.setlocal + testslot * wire.radix);
+            push_enum_isenum(ename, vname, disc);
+            push_emit(wire.getlocal + temp * wire.radix);
+        }
     }
     push_emit(wire.mloop);
     push_emit(wire.setlocal + temp * wire.radix);

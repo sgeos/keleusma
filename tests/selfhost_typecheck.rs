@@ -6330,6 +6330,162 @@ fn scoped_pipeline_reaches_the_rule_form_census() {
     );
 }
 
+/// Scalar access facts must reach constraints without typing their composite containers as scalars.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_scalar_access_types_agree_with_reference() {
+    let cases = [
+        (
+            "struct P { x: Word } fn main(p: P) -> Word { p.x + true }",
+            false,
+        ),
+        (
+            "struct P { x: Word } fn main(p: P) -> Word { p.x + 1 }",
+            true,
+        ),
+        (
+            "struct P { c: bool } fn main(p: P) -> Word { p.c + 1 }",
+            false,
+        ),
+        (
+            "struct P { c: bool } fn main(p: P) -> Word { if p.c { 1 } else { 0 } }",
+            true,
+        ),
+        (
+            "struct P { x: Word } fn main(p: P) -> Word { if p.x { 1 } else { 0 } }",
+            false,
+        ),
+        ("struct P { x: Word } fn main(p: P) -> bool { p.x }", false),
+        (
+            "struct P { c: bool } fn take(x: Word) -> Word { x } fn main(p: P) -> Word { take(p.c) }",
+            false,
+        ),
+        (
+            "struct P { x: Word } fn take(x: Word) -> Word { x } fn main(p: P) -> Word { take(p.x) }",
+            true,
+        ),
+        (
+            "struct P { c: bool } fn main(p: P) -> Word { let a = p.c; let b = a; b + 1 }",
+            false,
+        ),
+        (
+            "struct P { c: bool } fn main(p: P) -> bool { let a = p.c; let b = a; b }",
+            true,
+        ),
+        ("struct P { b: Byte } fn main(p: P) -> Word { p.b }", false),
+        (
+            "struct P { b: Byte } fn main(p: P) -> Byte { p.b + 1 }",
+            true,
+        ),
+        ("fn main(t: (Word, bool)) -> Word { t.1 + 1 }", false),
+        (
+            "fn main(t: (Word, bool)) -> Word { if t.1 { t.0 } else { 0 } }",
+            true,
+        ),
+        ("fn main(xs: [Word; 2]) -> Word { xs[0] + true }", false),
+        ("fn main(xs: [Word; 2]) -> Word { xs[0] + 1 }", true),
+        ("fn main(xs: [bool; 2]) -> Word { xs[0] }", false),
+        ("fn main(xs: [bool; 2]) -> bool { xs[0] }", true),
+        ("fn main(xs: [Byte; 2]) -> Byte { xs[0] + 256 }", false),
+        ("fn main(xs: [Byte; 2]) -> Byte { xs[0] + 255 }", true),
+        (
+            "struct P { x: Word } fn main() -> Word { let xs = [P { x: 1 }]; xs[0].x + true }",
+            false,
+        ),
+        (
+            "struct P { x: Word } fn main() -> Word { let xs = [P { x: 1 }]; xs[0].x + 1 }",
+            true,
+        ),
+        (
+            "struct P { xs: [Word; 2] } fn main(p: P) -> Word { p.xs[0] + true }",
+            false,
+        ),
+        (
+            "struct P { xs: [Word; 2] } fn main(p: P) -> Word { p.xs[0] + 1 }",
+            true,
+        ),
+        (
+            "struct P { x: Word } fn take(p: P) -> Word { p.x } fn main(xs: [P; 2]) -> Word { take(xs[0]) }",
+            true,
+        ),
+        (
+            "struct P { xs: [Word; 2] } fn take(xs: [Word; 2]) -> Word { xs[0] } fn main(p: P) -> Word { take(p.xs) }",
+            true,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (source, accepts) in cases {
+        assert_eq!(reference_accepts(source), accepts, "reference {source}");
+        match std::panic::catch_unwind(|| pipeline_call_verdict(source)) {
+            Ok(actual) if actual == accepts => {}
+            other => failures.push((source, accepts, format!("{other:?}"))),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "scalar access disagreements {failures:#?}"
+    );
+}
+
+/// Guard requirements reach literals, computed operands, calls and declared payloads.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_match_guard_types_agree_with_reference() {
+    for (source, accepts) in [
+        (
+            "fn main() -> Word { match 1 { 1 when 1 => 2, _ => 3 } }",
+            false,
+        ),
+        (
+            "fn main(n: Word) -> Word { match n { _ when n + 1 => 2, _ => 3 } }",
+            false,
+        ),
+        (
+            "fn main(c: bool) -> Word { match 1 { 1 when c => 2, _ => 3 } }",
+            true,
+        ),
+        (
+            "fn main(n: Word) -> Word { match n { 1 when n > 0 => 2, _ => 3 } }",
+            true,
+        ),
+        (
+            "fn predicate(n: Word) -> Word { n } fn main() -> Word { match 1 { 1 when predicate(1) => 2, _ => 3 } }",
+            false,
+        ),
+        (
+            "fn predicate(n: Word) -> bool { n > 0 } fn main() -> Word { match 1 { 1 when predicate(1) => 2, _ => 3 } }",
+            true,
+        ),
+        (
+            "enum E { A(Word), B } fn main(e: E) -> Word { match e { E::A(n) when n => 2, _ => 3 } }",
+            false,
+        ),
+        (
+            "enum E { A(bool), B } fn main(e: E) -> Word { match e { E::A(c) when c => 2, _ => 3 } }",
+            true,
+        ),
+        (
+            "enum E { A(bool), B } fn main(e: E) -> Word { match e { E::A(c) when c + 1 => 2, _ => 3 } }",
+            false,
+        ),
+        (
+            "fn main() -> Word { match 1 { _ when true => false, _ => 3 } }",
+            false,
+        ),
+        (
+            "fn main() -> Word { match 1 { 1 when match 2 { 2 => 1, _ => 0 } => 2, _ => 3 } }",
+            false,
+        ),
+        (
+            "enum E { A(Word), B } fn main(e: E) -> Word { match e { E::A(n) when true => n, _ => n } }",
+            false,
+        ),
+    ] {
+        assert_eq!(reference_accepts(source), accepts, "reference {source}");
+        assert_eq!(pipeline_call_verdict(source), accepts, "pipeline {source}");
+    }
+}
+
 /// **MATCH ARMS MUST AGREE, AND THE STAGE HAD NO SUCH RULE UNTIL 2026-09-11.**
 ///
 /// The reference reports "match arms have differing types". The expression walk
@@ -9623,8 +9779,8 @@ fn a_struct_literal_does_not_carry_which_struct_it_constructs() {
 }
 
 /// Pin the expression kinds reached by this corpus. Conditional branch pairs now use the
-/// explicit else marker. Match guards still lack condition extraction, so a kind count is not
-/// evidence that every syntactic form is covered.
+/// explicit else marker. Guarded-arm nodes now provide condition requirements. A kind count
+/// alone still cannot establish that every syntactic form is covered.
 ///
 /// Field and index failures are refused before reconstruction yields a forest. Struct-literal
 /// field counts now have dedicated parser metadata. Their witnesses below remain

@@ -358,7 +358,8 @@ compare them with supplied counts for nested and reordered constructions. This c
 extraction gap without completing the remaining input channels or production integration.
 Integer and enum match-arm comparisons now come from the reconstructed arm tables. Type-input
 extraction also reconstructs each source head separately, preserving individual return checks
-and binding names before dispatch construction. Match guards remain an input gap.
+and binding names before dispatch construction. Match guards now retain their conditions and
+results through type checking and execution.
 
 Call arguments now have a pipeline input channel with identities separated by source head and
 frame slot. Per-range batches fit the selected 640-row limits across all twelve stages. They
@@ -369,9 +370,11 @@ lowering. Composite types and production integration remain incomplete.
 
 The sixteen-cell rule-versus-form census now also runs through scoped pipeline facts with
 eight valid controls. Scalar annotations, data stores and index requirements close three of
-its four initial failures. Match-arm guards remain discarded and keep the required census
-test red. Branch-scope restoration also repairs a valid nested-shadowing program exposed by
-the new checks. Loop and match scopes still need coverage. Order 1 remains open.
+its four initial failures. Match-guard preservation closes the fourth, and the required census
+now passes. Fourteen artifact-and-execution controls cover guard fallthrough and ordering.
+Branch and match-arm scopes restore local names, including payload bindings. Loop scopes,
+composite facts, complete admission coverage and production integration remain open. Order 1
+is not complete.
 
 The type-rejection stage now has capacity for all twelve real stage sources. Six tables use a
 640-row cap, adding 7,168 words or 56 KiB across their parallel arrays. The stage accepts all
@@ -504,3 +507,8 @@ from unsupported syntax and resource failures. Declared scalar projections are r
 reconstruction. The remaining production input, annotation, occurrence and composite coverage
 obligations remain in the [completion plan](../decisions/ORDER1_COMPLETION_PLAN.md).
 This increment does not complete Order 1 or move the shipping driver off reference-first checking.
+
+Scalar struct-field, tuple-field and array-element facts now reach the scoped type stage from
+reconstructed source layouts. Twenty-six programs agree with the reference, closing nine
+missed rejections in that comparison. Composite facts, remaining scope and admission checks,
+production type rejection and complete Keleusma wire emission still precede the Order 1 gate.

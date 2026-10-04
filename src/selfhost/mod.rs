@@ -1100,6 +1100,17 @@ fn scalar_tag_of_type_name(name: Option<&str>) -> i64 {
     }
 }
 
+/// Translate a source layout's scalar kind into the first-pass type vocabulary.
+/// Composite access records must never pass their size or variant here.
+fn scalar_tag_of_layout_kind(kind: i64) -> i64 {
+    match kind {
+        1 => 2, // bool
+        2 => 3, // Byte
+        3 => 1, // Word
+        _ => 0,
+    }
+}
+
 /// Whether a node kind sequences a statement before a CONTINUATION held in `rhs`.
 ///
 /// The list is the stage's own, not a second opinion: `reconstruct.kel` documents `LetIn` 5,
@@ -1870,7 +1881,7 @@ fn try_parse_functions_impl(
                 }
             } else if in_enum {
                 if code == 5 {
-                    enum_records.push((5, 0));
+                    enum_records.push((5, val));
                     in_enum = false;
                 } else if code != 0 {
                     enum_records.push((code, val));
@@ -2354,9 +2365,17 @@ pub fn try_call_type_inputs_from_pipeline(
             let mut sites = Vec::new();
             let mut arguments = Vec::new();
             let mut bindings = Vec::new();
+            let body = reconstruct_via_kel(records, reconstruct_category(f.cat), f.params, &name);
             let slot_names: alloc::collections::BTreeMap<_, _> = source_slots
                 .keys()
-                .map(|&slot| (slot, format!("#local:{head}:{range}:{slot}")))
+                .copied()
+                .chain(
+                    body.nodes
+                        .iter()
+                        .filter(|node| node.kind == 2)
+                        .map(|node| node.arg),
+                )
+                .map(|slot| (slot, format!("#local:{head}:{range}:{slot}")))
                 .collect();
             for (slot, &type_name) in f.param_types.iter().enumerate() {
                 if let Some(identity) = slot_names.get(&(slot as i64)) {
@@ -2366,7 +2385,16 @@ pub fn try_call_type_inputs_from_pipeline(
                     }
                 }
             }
-            let body = reconstruct_via_kel(records, reconstruct_category(f.cat), f.params, &name);
+            // EnumBind records retain source-declared scalar field kinds and frame slots.
+            for &(kind, packed) in records {
+                if kind == 42 {
+                    let slot = packed / 4294967296;
+                    let tag = scalar_tag_of_layout_kind((packed / 65536) % 65536);
+                    if let Some(identity) = slot_names.get(&slot) {
+                        bindings.push((identity.clone(), tag, 0, String::new()));
+                    }
+                }
+            }
             let computed_names: alloc::collections::BTreeMap<_, _> = body
                 .nodes
                 .iter()
@@ -2400,6 +2428,18 @@ pub fn try_call_type_inputs_from_pipeline(
                 {
                     // Preserve literal syntax for the stage's contextual Byte coercion.
                     (node.arg, 3, String::new())
+                } else if let Some(node) = body.nodes.get(index as usize)
+                    && matches!(node.kind, 28 | 31 | 37)
+                {
+                    // Scalar fields pack offset + kind*65536. Scalar array reads
+                    // carry the element kind directly. Nested composite accesses
+                    // have distinct node kinds and remain outside this channel.
+                    let kind = if node.kind == 31 {
+                        node.arg
+                    } else {
+                        node.arg / 65536
+                    };
+                    (scalar_tag_of_layout_kind(kind), 0, String::new())
                 } else if let Some(node) = body.nodes.get(index as usize)
                     && matches!(node.kind, 11 | 13)
                 {
@@ -2820,7 +2860,7 @@ pub type ExprRow = (i64, ExprOperand, ExprOperand);
 /// `an_empty_else_is_distinguished_from_an_implicit_one` pins the parser distinction.
 ///
 /// Field access and index access remain incomplete below. Match-arm pairs use the integer
-/// and enum side tables. Match guard expressions remain unavailable from the parser.
+/// and enum side tables. Guarded-arm nodes preserve their condition and result separately.
 ///
 /// # Composite extraction
 ///
@@ -2965,6 +3005,9 @@ fn expression_rows_from_body<F: Fn(i64) -> ExprOperand>(
             row_of_node.insert(at as i64, rows.len());
             let target = if node.arg == 1 { 3 } else { 1 };
             rows.push((15, operand(node.lhs), (target, 0, String::new())));
+        } else if node.kind == 71 {
+            // Guarded match-arm wrapper. Its result is compared by the parent match.
+            rows.push((3, operand(node.lhs), nothing.clone()));
         } else if node.kind == 4 {
             // The parser marks an absent else, and reconstruction preserves it as a
             // negative condition index. Empty written branches still contribute a pair.
@@ -2992,8 +3035,12 @@ fn expression_rows_from_body<F: Fn(i64) -> ExprOperand>(
             let result_offset = if node.kind == 22 { 3 } else { 4 };
             let first_row = rows.len();
             let mut first: Option<ExprOperand> = None;
+            let arm_result = |index: i64| {
+                let node = &body.nodes[usize::try_from(index).expect("negative arm result")];
+                operand(if node.kind == 71 { node.rhs } else { index })
+            };
             for arm in 0..count {
-                let result = operand(body.match_parts[base + arm * stride + result_offset]);
+                let result = arm_result(body.match_parts[base + arm * stride + result_offset]);
                 if let Some(head) = &first {
                     rows.push((4, head.clone(), result));
                 } else {
@@ -3001,18 +3048,18 @@ fn expression_rows_from_body<F: Fn(i64) -> ExprOperand>(
                 }
             }
             let wildcard = if node.kind == 22 {
-                Some(body.match_parts[base + 1])
+                (body.match_parts[base + 1] >= 0).then_some(body.match_parts[base + 1])
             } else if body.match_parts[base + 2 + count * stride] == 1 {
                 Some(body.match_parts[base + 3 + count * stride])
             } else {
                 None
             };
             if let (Some(head), Some(wildcard)) = (&first, wildcard) {
-                rows.push((4, head.clone(), operand(wildcard)));
+                rows.push((4, head.clone(), arm_result(wildcard)));
             }
             if scalar_results {
                 if rows.len() == first_row
-                    && let Some(single) = first.or_else(|| wildcard.map(&operand))
+                    && let Some(single) = first.or_else(|| wildcard.map(arm_result))
                 {
                     rows.push((4, single.clone(), single));
                 }
@@ -5195,6 +5242,12 @@ fn assemble_enum_layouts(
                 vs.last_mut().unwrap().disc = val;
                 running = val + 1;
             }
+            5 => {
+                layouts
+                    .last_mut()
+                    .expect("enum end without declaration")
+                    .min_payload = u32::try_from(val).expect("invalid enum payload size");
+            }
             _ => {}
         }
     }
@@ -5204,13 +5257,14 @@ fn assemble_enum_layouts(
 }
 
 /// The flat shape of a stage boundary type: `Word` -> Int scalar (tag 3), `Byte` ->
-/// Byte scalar (tag 2), anything else the conservative `Top` the reference records for
+/// Byte scalar (tag 2), bool scalar (tag 1), anything else the conservative `Top` recorded for
 /// an unresolvable type.
 fn wire_shape_of(type_id: i64, names: &[String]) -> crate::bytecode::WireShape {
     use crate::bytecode::WireShape;
     match names.get(type_id as usize).map(String::as_str) {
         Some("Word") => WireShape::Scalar { kind: 3 },
         Some("Byte") => WireShape::Scalar { kind: 2 },
+        Some("bool") => WireShape::Scalar { kind: 1 },
         _ => WireShape::Top,
     }
 }
@@ -5296,6 +5350,7 @@ fn assemble_chunk_metadata(
         match names.get(type_id as usize).map(String::as_str) {
             Some("Word") => TypeTag::Word,
             Some("Byte") => TypeTag::Byte,
+            Some("bool") => TypeTag::Bool,
             _ => TypeTag::Composite,
         }
     };

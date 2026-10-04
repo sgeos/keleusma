@@ -19,15 +19,15 @@ the production input path or the full Order 1 gate.
 Declared struct field counts now travel in parser metadata. The driver pairs each
 count with the following construction record and supplies expression kind 7 to the type stage.
 The equal-size, unequal-field-count witness now distinguishes the cases through metadata.
-Six expression kinds are emitted, with match guards and the field/index rejection paths
-still incomplete. Unary `not` now emits the same boolean-operand requirement as an `if`
+Six expression kinds are emitted by the legacy inventory. The scoped path now also preserves
+match guards and explicit scalar field/index rejection paths. Unary `not` now emits the same boolean-operand requirement as an `if`
 condition, covering another previously omitted syntactic form. The production input path remains open.
 
 Expression extraction reconstructs each source head separately, preserving its parameter names,
 local bindings and return requirement before dispatch construction. Guard subexpressions remain
 in the walk. The Rust reference currently accepts a Word-valued function guard, so no additional
-boolean requirement on that root is introduced here. Match guards have a separate reference
-check but are discarded by the self-hosted parser. These are distinct remaining concerns.
+boolean requirement on that root is introduced here. Match guards have a separate boolean
+requirement and now retain their conditions through the parser and reconstruction.
 
 Call argument extraction now retains scalar literal facts, scoped local identities and referenced
 function return declarations. Independent batches cover each source head's guard and body.
@@ -49,8 +49,8 @@ without reference-first rejection. Parser diagnostics cover unresolved identifie
 struct fields, unsupported function values and calls through values, and declared-scalar
 projections. Unsupported syntax and resource failures remain separate outcomes. General source
 annotation compatibility, unannotated projection facts and production wiring remain incomplete.
-The same rule census now also runs through scoped pipeline inputs. Its required test remains
-red on match-arm guards, which the parser still discards. Scalar let annotation agreement,
+The same rule census now also runs through scoped pipeline inputs. Its required test passes
+after match-arm guards were preserved through compilation and execution. Scalar let annotation agreement,
 scalar data assignment agreement and Word index requirements now reach the stage. Annotated
 binding results use the existing agreement row, and data declarations use bounded slot ranges
 in parser declaration order. The focused corpus includes valid Byte stores and explicit casts
@@ -58,9 +58,17 @@ to distinguish these checks from binary operands' contextual literal conversion.
 
 Branch-local names no longer leak into sibling branches. Frame slots remain monotonic, the
 per-function named-binding cap has a separate total counter and reused name entries have their
-composite metadata cleared. Loop and match scope restoration remain unestablished. The latest
-stage suite has ninety-five passing type tests and the one failing scoped census. Composite
-facts, occurrence coverage and production integration remain required.
+composite metadata cleared. Match-arm scopes now restore their binding names too. Loop scope
+restoration remains unestablished. The latest stage suite has ninety-eight passing type tests,
+including the scoped census and twelve guard-type cases. Scalar enum-payload bindings obtain
+source-declared tags from EnumBind records. Composite facts, complete occurrence coverage,
+match exhaustiveness and production integration remain required.
+
+The scoped operand adapter now also reads scalar struct-field, tuple-field and array-element
+layout kinds. A twenty-six-program comparison agrees with the reference after closing nine
+missed rejections. Word, Byte and bool tags reach existing argument, binding, expression and
+return constraints. Composite access records remain distinct, with valid container-argument
+controls. This extends scalar projection coverage without establishing complete composite facts.
 
 **Currency, 2026-09-29.** The six input channels that previously excluded `parse.kel` and
 `wire.kel` now have 640-row caps. The measured stage-source test fits and checks all twelve real

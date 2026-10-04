@@ -32,7 +32,7 @@
 // Lt 28, Gt 29, LtEq 30, GtEq 31, not 32, band 33, bor 34, bxor 35, andalso 36,
 // orelse 37, let 38, Semicolon 39, Dot 40, LBracket 41, RBracket 42, if 43,
 // else 44, for 45, in 46, DotDot 47, match 48, FatArrow 49, Underscore 50,
-// ColCol 51, as 52, enum 53; the catch-all 4 absorbs the `->` arrow and any
+// ColCol 51, as 52, enum 53, when 64; the catch-all 4 absorbs the `->` arrow and any
 // unrecognized punctuation, which the parser skips.
 //
 // This wire is reached incrementally: increment 2 added maximal munch over the
@@ -214,7 +214,7 @@ fn kw4(start: Word) -> Word {
     if a == 101 andalso b == 110 andalso c == 117 andalso d == 109 { 53 } else {  // enum
     if a == 98 andalso b == 97 andalso c == 110 andalso d == 100 { 33 } else {    // band
     if a == 98 andalso b == 120 andalso c == 111 andalso d == 114 { 35 } else {   // bxor
-    if a == 119 andalso b == 104 andalso c == 101 andalso d == 110 { 4 } else {   // when
+    if a == 119 andalso b == 104 andalso c == 101 andalso d == 110 { 64 } else {  // when
     if a == 105 andalso b == 109 andalso c == 112 andalso d == 108 { 56 } else {  // impl
     if a == 98 andalso b == 110 andalso c == 111 andalso d == 116 { 11 } else {   // bnot
     0 - 1 } } } } } } } } }

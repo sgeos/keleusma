@@ -13,6 +13,64 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-04 Scalar access facts already existed in the layout records
+
+Inspection of code generation established three distinct scalar access record shapes. Struct
+and tuple fields pack a byte offset below the scalar kind. Array-element reads carry the kind
+directly. The scoped type operand adapter previously treated these nodes as unknown even
+though the parser had already derived their layouts from source declarations.
+
+The adapter now translates those layout kinds to Word, Byte and bool type tags. It shares
+the translation with enum payload binding records. Composite field and array accesses use
+different node kinds and remain unknown rather than receiving an element's tag. This preserves
+the distinction between a scalar projection and the complete container passed to a function.
+
+The initial twenty-six-program comparison reported nine invalid programs accepted by the
+pipeline. After the adapter change, all cases agree with the reference. The controls cover
+conditions, return types, call arguments, alias chains, tuple fields and contextual Byte
+arithmetic. Some invalid controls already rejected because another known operand sufficed.
+The nine before-change failures establish that the new facts actually change verdicts.
+
+This does not establish complete composite typing or admission. The broader type adapter,
+loop scopes, match exhaustiveness, production verdict path and wire emission remain open.
+The pilot preserves the first failing comparison and marks its self-review non-independent.
+
+## 2026-10-04 Guards must survive execution
+
+The first runtime comparison confirmed that the parser discarded guards. Merely extracting
+an additional boolean requirement would have made the rejection census pass while continuing
+to execute false arms. An internal guarded-arm node now carries condition and result as separate
+children. Code generation emits the guard after pattern binding and places the arm Break inside
+its If. The type walk checks the condition and compares the actual result across arms.
+
+The old wildcard representation assumed one final wildcard. That cannot express a guarded
+wildcard followed by another arm. Parser records now preserve every wildcard position. The
+reconstructor retains earlier wildcards in the ordered table and compacts a final wildcard into
+the existing trailer. A naive fixed-size entry for every wildcard would have reduced the old
+maximum enum-arm capacity. The compact trailer and twelve-variant control prevent that regression.
+The lexer gives `when` its own token, and match expression boundaries track grouping and nested
+block context. An operator marker separates an enclosing expression from the match's scrutinee,
+guards and results. Match-arm name scopes restore after each arm.
+
+Enum payload guards exposed missing scalar binding facts. Their parser records already carry
+the source-declared scalar kind and allocated slot, so scoped inputs use those facts without
+reference inference. Complete artifacts exposed additional assembly omissions invisible to an
+opcode-only comparison. Enum layout minimum payload had always been zero, and Boolean parameters
+were classified as composite with an unknown verifier shape. The enum declaration END now carries
+the size already computed by the stage. Both Boolean metadata tables now use the declared type.
+
+One proposed valid control had only a guarded Word wildcard. The reference rejects it as
+non-exhaustive. The control was corrected to include an unconditional fallback. That failed probe
+is retained, and match exhaustiveness remains an admission audit item. The new corpus does not
+establish complete syntax coverage or full-language support. Composite facts and loop scope also
+remain incomplete.
+
+The first diagnostic in the shadow pilot is a test authoring error, equality on Chunk without
+PartialEq. A second incorrect test call signature was corrected alongside it. Later runtime and
+artifact discrepancies remain in the engineering logs under the first-diagnostic convention.
+The pilot's completion claims include command, exit and suite identity with non-independent
+self-labels. External evaluation remains pending authorization and has not altered any gate.
+
 ## 2026-10-04 Declaration constraints expose branch scope
 
 Moving the rule-versus-form census onto pipeline inputs exposed four accepted negatives. The

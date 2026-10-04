@@ -318,7 +318,7 @@ fn is_leaf(k: Word) -> Word {
 }
 
 fn is_binary(k: Word) -> Word {
-    if k == 3 orelse k == 5 orelse k == 8 orelse k == 9 orelse k == 12 orelse k == 14 orelse k == 21 orelse k == 31 orelse k == 43 orelse k == 44 orelse k == 45 orelse k == 60 {
+    if k == 3 orelse k == 5 orelse k == 8 orelse k == 9 orelse k == 12 orelse k == 14 orelse k == 21 orelse k == 31 orelse k == 43 orelse k == 44 orelse k == 45 orelse k == 60 orelse k == 71 {
         1
     } else {
         0
@@ -329,15 +329,17 @@ fn is_unary(k: Word) -> Word {
     if k == 6 orelse k == 10 orelse k == 13 orelse k == 24 orelse k == 26 orelse k == 28 orelse k == 29 orelse k == 30 orelse k == 37 { 1 } else { 0 }
 }
 
-// EnumMatchBuild assembly: arg packs `temp + count*1024 + ename*1048576`. Pop `count` arm
-// results, read the `count` EnumArm (vname, disc) pairs from `epending`, pop the scrutinee, and
+// EnumMatchBuild carries the temp, total arm count and enum name. A final wildcard
+// occupies the compact trailer; earlier wildcards keep their source-order arm entries.
+// Pop the results and their EnumArm descriptors, then the scrutinee, and
 // lay out the match_parts enum entry as [temp][ename][per arm: vname, disc, result]; build the
 // EnumMatch node (kind 39): arg the entry start, lhs the scrutinee, rhs the arm count. Held out of
 // `step` so that function's node forest stays within the codegen work buffers.
 fn build_enum_match(a: Word) -> Word {
     let temp = a % 1024;
-    let count = (a / 1024) % 1024;
-    let haswc = (a / 1048576) % 2;
+    let total = (a / 1024) % 1024;
+    let haswc = if total > 0 andalso rs.epending[rs.epcount - 1] < 0 { 1 } else { 0 };
+    let count = total - haswc;
     let ename = a / 2097152;
     let base = rs.mp;
     io.match_parts[base] = temp;
@@ -353,10 +355,12 @@ fn build_enum_match(a: Word) -> Word {
     // The wildcard flag and result sit just past the arm entries; the wildcard result (if any) is
     // on top of the stack, above the variant results, so pop it first, then the variant results in
     // reverse, then the scrutinee.
-    let ebase = rs.epcount - count;
+    let ebase = rs.epcount - total;
     rs.tbind = 0;
     for kb in 0..count limit 64 {
-        rs.tbind = rs.tbind + (rs.epending[ebase + kb] / 1024) % 8;
+        if rs.epending[ebase + kb] >= 0 {
+            rs.tbind = rs.tbind + (rs.epending[ebase + kb] / 1024) % 8;
+        }
     }
     let bbase = rs.bindcount - rs.tbind;
     io.match_parts[base + 2 + count * 20] = haswc;
@@ -372,8 +376,8 @@ fn build_enum_match(a: Word) -> Word {
     for kk in 0..count limit 64 {
         let packed = rs.epending[ebase + kk];
         let rest = packed / 1024;
-        let pc = rest % 8;
-        io.match_parts[base + 2 + kk * 20] = rest / 524288;
+        let pc = if packed < 0 { 0 } else { rest % 8 };
+        io.match_parts[base + 2 + kk * 20] = if packed < 0 { 0 - 1 } else { rest / 524288 };
         io.match_parts[base + 2 + kk * 20 + 1] = (rest / 8) % 65536;
         io.match_parts[base + 2 + kk * 20 + 3] = pc;
         io.match_parts[base + 2 + kk * 20 + 4] = packed % 1024;
@@ -695,11 +699,11 @@ fn build_struct_eq_nested(a: Word) -> Word {
 // stack. An If (4) pops its else, then, and cond children. Its arg is cond for
 // a written else and -(cond + 1) for an omitted else; lhs/rhs hold the branches.
 fn step(k: Word, a: Word) -> Word {
-    if is_leaf(k) == 1 {
+    if is_leaf(k) == 1 orelse k == 72 {
         if k == 2 {
             emit(2, a + rs.remap_base, 0, 0)
         } else {
-            emit(k, a, 0, 0)
+            if k == 72 { push(0 - 1) } else { emit(k, a, 0, 0) }
         }
     } else {
     if is_binary(k) == 1 {
@@ -896,17 +900,23 @@ fn step(k: Word, a: Word) -> Word {
         emit(23, a, 0, cont)
     } else {
     if k == 34 {
-        // MatchBuild: arg packs `temp*1024 + lit_count`. Pop the wildcard result
-        // (top), then a (result, literal) pair per literal arm, then the scrutinee.
-        // Assemble the match_parts entry -- temp, wildcard, then each arm's (literal,
-        // result) in source order -- and build the MatchIn node (kind 22): arg the
-        // entry start, lhs the scrutinee, rhs the literal-arm count.
+        // MatchBuild packs temp*1024 + total arm count. Each ordered arm has a
+        // pattern/result pair; a wildcard pattern is the negative stack sentinel.
+        // A trailing wildcard is compacted into its historical trailer slot.
+        // MatchIn kind 22 retains temp, trailer, then the remaining ordered pairs.
         let temp = a / 1024;
-        let lit_count = a % 1024;
-        let wc = pop();
+        let total = a % 1024;
+        // A final wildcard uses the existing compact trailer. Earlier wildcards
+        // stay in the ordered arm pairs with a negative pattern index.
+        let haswc = if total > 0 andalso rs.stack[rs.sp - 2] < 0 { 1 } else { 0 };
+        let lit_count = total - haswc;
         let base = rs.mp;
         io.match_parts[base] = temp;
-        io.match_parts[base + 1] = wc;
+        io.match_parts[base + 1] = 0 - 1;
+        if haswc == 1 {
+            io.match_parts[base + 1] = pop();
+            pop();
+        }
         for p in 0..lit_count limit 64 {
             let res = pop();
             let lit = pop();
@@ -918,7 +928,7 @@ fn step(k: Word, a: Word) -> Word {
         let scrut = pop();
         emit(22, base, scrut, lit_count)
     } else {
-    if (k >= 40 andalso k <= 63) orelse k == 65 orelse k == 67 orelse k == 68 {
+    if (k >= 40 andalso k <= 63) orelse k == 65 orelse k == 67 orelse k == 68 orelse k == 73 {
         // The enum-match / struct-eq / bnot assembly records occupy the contiguous kind range 40..63.
         // (The values in that range that are NOT assembly records -- 43/44/45/60 binary or unary, and
         // 54/59/62 which are node-only kinds never yielded as records -- are handled earlier in `step`
@@ -962,9 +972,9 @@ fn se_nsub_pop() -> Word {
 // The enum-match and struct-eq assembly records: EnumArm/EnumBind markers accumulate into pending
 // buffers, EnumMatchBuild/StructEqBuild assemble the match_parts loop layout and build the node.
 fn step_assembly(k: Word, a: Word) -> Word {
-    if k == 40 {
-        // EnumArm marker: record this arm's packed (vname, disc, pcount) in source order. No node.
-        rs.epending[rs.epcount] = a;
+    if k == 40 orelse k == 73 {
+        // EnumArm descriptor or wildcard sentinel, in source order. No node.
+        rs.epending[rs.epcount] = if k == 73 { 0 - 1 } else { a };
         rs.epcount = rs.epcount + 1;
         0
     } else {

@@ -104,6 +104,7 @@ fn reference_stream_and_names(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
             TokenKind::DotDot => (47, 0),
             TokenKind::Match => (48, 0),
             TokenKind::FatArrow => (49, 0),
+            TokenKind::When => (64, 0),
             TokenKind::Underscore => (50, 0),
             TokenKind::ColonColon => (51, 0),
             TokenKind::As => (52, 0),

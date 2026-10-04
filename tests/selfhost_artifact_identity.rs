@@ -113,3 +113,126 @@ fn branch_scope_restoration_preserves_complete_artifacts() {
         );
     }
 }
+
+/// Guards execute after pattern binding and before the result, in source arm order.
+#[test]
+fn match_guards_preserve_complete_artifacts_and_execution() {
+    use keleusma::Arena;
+    use keleusma::bytecode::Value;
+    use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
+
+    for (source, expected) in [
+        (
+            "fn main() -> Word { match 1 { 1 when false => 10, 1 when true => 20, _ => 30 } }",
+            20,
+        ),
+        (
+            "fn main() -> Word { match 1 { _ when false => 10, 1 => 20, _ => 30 } }",
+            20,
+        ),
+        (
+            "enum E { A, B } fn main() -> Word { let e = E::A(); match e { E::A when false => 10, E::A when true => 20, _ => 30 } }",
+            20,
+        ),
+        (
+            "enum E { A, B } fn main() -> Word { let e = E::A(); match e { _ when false => 10, E::A() when true => 20, _ => 30 } }",
+            20,
+        ),
+        (
+            "enum E { A(Word), B } fn main() -> Word { let e = E::A(3); match e { E::A(n) when n > 4 => 10, E::A(n) when n == 3 => n + 1, _ => 30 } }",
+            4,
+        ),
+        (
+            "fn main() -> Word { match 1 { 1 when if true { false } else { true } => 10, _ => 20 } }",
+            20,
+        ),
+        (
+            "fn main() -> Word { match 1 { 1 when match 2 { 2 => false, _ => true } => 10, _ => 20 } }",
+            20,
+        ),
+        (
+            "fn add(a: Word, b: Word) -> Word { a + b } fn main() -> Word { match 1 { 1 when true => if false { 10 } else { add(12, 8) }, _ => 30 } }",
+            20,
+        ),
+        (
+            "fn main() -> Word { match 2 { 1 when true => 10, _ when true => 20, _ => 30 } }",
+            20,
+        ),
+        (
+            "enum E { A(Word), B } fn main() -> Word { let n = 5; let e = E::A(3); let r = match e { E::A(n) when false => n, _ => n }; r + n }",
+            10,
+        ),
+        (
+            "fn choose(c: bool) -> Word { match 1 { 1 when c => 10, _ => 20 } } fn main() -> Word { choose(false) }",
+            20,
+        ),
+        (
+            "fn main() -> Word { 2 + match 1 { 1 when true => 18, _ => 30 } }",
+            20,
+        ),
+        (
+            "fn main() -> Word { match 1 { 1 when false => 1 / 0, _ => 20 } }",
+            20,
+        ),
+        (
+            "private data d { n: Word } fn guard() -> bool { d.n = d.n + 1; false } fn main() -> Word { let r = match 1 { 2 when guard() => 10, 1 when guard() => 20, _ => 30 }; r + d.n }",
+            31,
+        ),
+    ] {
+        eprintln!("guard control {source}");
+        let tokens = keleusma::lexer::tokenize(source).expect("reference lex");
+        let ast = keleusma::parser::parse(&tokens).expect("reference parse");
+        let reference = keleusma::compiler::compile(&ast).expect("reference compile");
+        let actual = keleusma::selfhost::self_host_compile_scratch(source);
+        assert_eq!(actual.chunks.len(), reference.chunks.len());
+        for (left, right) in actual.chunks.iter().zip(&reference.chunks) {
+            assert_eq!(left.ops, right.ops, "guard ops {source}");
+        }
+        assert!(
+            actual.to_bytes().expect("pipeline artifact")
+                == reference.to_bytes().expect("reference artifact"),
+            "guard artifact {source}\npipeline {actual:#?}\nreference {reference:#?}"
+        );
+        for module in [reference, actual] {
+            let persistent = required_persistent_capacity_for(&module);
+            let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + persistent);
+            arena
+                .resize_persistent(persistent)
+                .expect("persistent arena");
+            let entry = module
+                .chunks
+                .iter()
+                .position(|c| c.name == "main")
+                .expect("main");
+            let mut vm = Vm::new(module, &arena).expect("verified guard program");
+            assert!(
+                matches!(vm.call_function(entry, &[]).expect("execute guard"), VmState::Finished(Value::Int(n)) if n == expected),
+                "guard value {source}"
+            );
+        }
+    }
+}
+
+/// A final wildcard keeps its compact trailer, preserving the prior twelve-arm capacity.
+#[test]
+fn trailing_wildcard_preserves_enum_match_table_capacity() {
+    let variants = (0..12)
+        .map(|i| format!("V{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let arms = (0..12)
+        .map(|i| format!("E::V{i} => {i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        "enum E {{ {variants} }} fn main() -> Word {{ let e = E::V0(); match e {{ {arms}, _ => 12 }} }}"
+    );
+    let tokens = keleusma::lexer::tokenize(&source).expect("reference lex");
+    let ast = keleusma::parser::parse(&tokens).expect("reference parse");
+    let reference = keleusma::compiler::compile(&ast).expect("reference compile");
+    let actual = keleusma::selfhost::self_host_compile_scratch(&source);
+    assert!(
+        actual.to_bytes().expect("pipeline artifact")
+            == reference.to_bytes().expect("reference artifact")
+    );
+}

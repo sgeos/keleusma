@@ -6,6 +6,45 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Order 1 scalar access facts
+
+The scoped pipeline now carries Word, Byte and bool facts from reconstructed scalar field,
+tuple and array-element reads into its existing constraints. Nested composite accesses remain
+distinct. A twenty-six-program comparison exposed nine missed rejections before the change
+and now agrees with the reference throughout. Valid controls cover container arguments, aliases,
+Byte arithmetic boundaries and fields of array elements.
+
+The first diagnostic was captured in the System 1 shadow pilot. Its self-review is explicitly
+non-independent. External evaluation remains pending the existing approval request. Complete
+Order 1 remains active, including composite input coverage, scope and admission checks,
+production rejection, Keleusma wire emission and final integration gates. The reverse prompt
+records the final verification receipts for this increment and the pending match-guard changes.
+
+## 2026-10-04 Order 1 match guards
+
+Match guards now survive lexing, parsing, reconstruction, type checking and code generation.
+The sixteen-negative, eight-control scoped census passes. Twelve further sources check guards
+on literals, names, computed expressions, calls and scalar enum payloads. Fourteen valid programs
+compare complete artifacts and execute both outputs, covering false fallthrough, payload scope,
+nested expressions, skipped trapping results and guard side effects.
+
+Wildcards remain in source order. Final wildcards use the compact trailer, with a twelve-variant
+capacity control. Match-arm bindings are restored at arm exit. Complete artifact comparison
+found two pre-existing assembly omissions, now corrected. Enum END records retain declared
+maximum payload size, and Boolean parameters retain their chunk and signature metadata.
+No public opcode, bytecode version or selected type-table cap changed.
+
+Final release suites passed 97 type tests, 91 parser tests with two ignored, five artifact tests
+and three monomorphization tests. All twelve complete stage artifacts match the reference.
+Selected compilation tests passed 89. Lexer tests passed twelve and pipeline tests passed nine.
+Default type tests passed thirty. Clippy performed actual crate checking and passed. Documentation
+passed with warnings denied. Exact receipts and remaining verification are in the reverse prompt.
+
+The shadow pilot records the first test compilation error and three bounded completion claims.
+All labels are non-independent. External evaluation remains pending the existing authorization
+question. The guard increment is resolved, while the full Order 1 objective remains active.
+No interline messages were received or sent.
+
 ## 2026-10-04 Order 1 declaration and index constraints
 
 The sixteen-cell rule-versus-form census now runs through scoped pipeline inputs and shares

@@ -21,7 +21,7 @@ Full-language support remains Order 6. Existing supported programs must retain t
 | Compile the complete stage corpus | Complete artifact identity against the reference for every current stage source, with a corpus inventory check | All twelve complete serialized artifacts from the production compiler match the reference after the call and alias changes. The new artifact corpus also checks directory inventory. Both sides still use the Rust serializer. |
 | Avoid reference scaffold borrowing | Production compilation assembles module fields from pipeline output | `self_host_compile_scratch` provides this path. Preserve it through integration. |
 | Derive type inputs from the self-hosted pipeline | Production rejection receives facts without walking the reference parser's abstract syntax tree or borrowing inferred types | Four extraction helpers are partial. Expressions cover only part of the required shapes. Close the residuals and move the production input path. |
-| Reject ill-typed subset programs | Independent pipeline rejection agrees with the reference on the rejection corpus, valid controls, and the rule-versus-form census | The scoped pipeline harness exercises all twenty rejection cases and seven valid controls without reference-first masking. The separate sixteen-cell rule-versus-form census now runs through that path with eight valid controls. Its required test still fails on match-arm guards. Parser source diagnostics and type-stage verdicts remain distinct from unsupported syntax, capacity and execution failures. The shipping driver still calls the reference first. |
+| Reject ill-typed subset programs | Independent pipeline rejection agrees with the reference on the rejection corpus, valid controls, and the rule-versus-form census | The scoped pipeline harness exercises all twenty rejection cases and seven valid controls without reference-first masking. The separate sixteen-cell rule-versus-form census now runs through that path with eight valid controls. Its required test now passes after preserving match-arm guards. Parser source diagnostics and type-stage verdicts remain distinct from unsupported syntax, capacity and execution failures. The shipping driver still calls the reference first. |
 | Preserve the first-pass monomorphization result | Every stage remains unchanged by monomorphization, with a control that does change | The corpus now lists all twelve sources. Identity, changing control and directory inventory tests passed again after the parser and alias changes on 2026-10-04. Repeat if stage sources change. |
 | Preserve independence from inferred expression types | The current stage corpus compiles identically with recorded expression types absent | Refresh the existing inference-independence evidence for all current sources. |
 | Emit complete artifacts through Keleusma | Production output uses the Keleusma wire emitter for framing, opcode records, operand pools, auxiliary regions and integrity fields | Region coverage tests exist, but they do not establish production serialization. `Module::to_bytes` remains on current artifact paths. Preserve the wire plan's encoder and decoder obligations. |
@@ -38,8 +38,8 @@ Full-language support remains Order 6. Existing supported programs must retain t
 2. Close remaining declaration, call argument, occurrence, binding and expression extraction
    gaps. Treat field and index failures during reconstruction as explicit rejection paths.
    Integer and enum match-arm comparisons now have extraction and verdict controls.
-   Source heads now retain separate tail requirements and binding names. Match guards and
-   the remaining input channels still require work.
+   Source heads now retain separate tail requirements and binding names. Match guards now retain their conditions and results through execution.
+   Composite facts and the remaining input channels still require work.
 3. Integrate the rejection stage with the production compiler. Keep the Rust implementation
    as a differential oracle, and prove that its early rejection cannot mask missing stage work.
 4. Complete production artifact emission through the existing Keleusma wire implementation.
@@ -48,13 +48,27 @@ Full-language support remains Order 6. Existing supported programs must retain t
 5. Refresh all-stage identity, monomorphization and inference-independence evidence.
    Exercise the shipping command, run the final gates and audit every row above.
 
+## Scalar access input coverage
+
+The scoped pipeline now reads Word, Byte and bool facts from scalar struct-field,
+tuple-field and array-element records. The layout kinds were already computed by the
+Keleusma parser from source declarations. No reference syntax or inferred type is used.
+Nested composite access records remain distinct and do not acquire their element's scalar tag.
+These operands reach existing call, alias, annotation, expression and return constraints.
+
+A twenty-six-program comparison found nine invalid programs accepted before this change.
+All twenty-six now agree with the reference. Controls include Boolean fields and array
+elements, Byte arithmetic boundaries, tuple offsets, alias chains, array-of-struct reads
+and passing complete composite values. This finite comparison does not establish complete
+composite typing, projection-alias coverage, syntax admission or production rejection.
+
 ## Constraints and open evidence
 
 Bytecode version remains 2. No new bytecode opcode is authorized. The internal parser record
 changes required by this plan do not authorize changing the public artifact format.
 The V0.3.X workstream remains separate. Publication requires in-session confirmation.
 
-The legacy handoff is invalid-and-stale. Its stamp is seventeen commits behind the starting
+The legacy handoff is invalid-and-stale. Its stamp is eighteen commits behind the starting
 tree, its ancestry check passes, and its unchanged-stage-source claim is contradicted by
 `verify_types.kel`. Its full-suite and advisory checks have not been rerun for this increment.
 
@@ -76,8 +90,8 @@ The match comparison corpus includes nested integer and enum dispatch, wildcard-
 explicit enum coverage, later mismatched arms, named operands and an unresolved payload binder.
 The latter remains unknown on both input paths, so comparison agreement does not establish
 payload-type resolution. Bare block expressions in match results are rejected by the reference
-parser. Integer matches without a wildcard fail during reconstruction. Match guards are discarded
-by the self-hosted parser and remain a production input gap.
+parser. The guard increment preserves match conditions through reconstruction and execution. Integer
+match exhaustiveness still needs a separate admission audit before production integration.
 
 Separate reconstruction of each source head recovers its return row and its own binding names.
 Function guard expressions are still traversed. A probe found that the Rust reference accepts
@@ -176,3 +190,29 @@ three monomorphization tests and both inventory and complete-artifact tests for 
 stages. The sole failure was the required scoped census. Later focused tests passed the
 branch-scope artifact controls, disjoint-scope binding cap and expanded declaration controls.
 These results do not establish production type rejection or complete input coverage.
+
+## Match guards and ordered fallthrough
+
+The scoped rule-versus-form census now rejects all sixteen negatives and accepts its eight
+valid controls. A separate twelve-source comparison checks literal, parameter, computed,
+called-function and scalar enum-payload guards. Guarded-arm wrappers retain the condition
+and result separately. The type stage checks the condition as bool and compares the actual
+arm result with other arms. Scalar payload binding facts come from parser EnumBind records.
+General composite payload facts and the legacy occurrence channel remain incomplete.
+
+The lexer now distinguishes `when` from the return arrow. The parser reads guards with its
+ordinary expression machinery and restores match-arm binding scope after each arm. Grouping
+and nested block delimiters cannot prematurely end an arm. Wildcards remain in source order,
+including a guarded wildcard before later arms. A final wildcard keeps the compact trailer,
+and a twelve-variant control preserves the previous enum match table capacity.
+
+Fourteen valid programs compare complete artifacts and execute both compilers' output. They
+cover false-guard fallthrough, repeated patterns, payload bindings, nested match and if guards,
+call arguments, skipped trapping arm results and guard side effects. Complete artifact comparison
+also exposed two assembly omissions. Enum END records now retain declared maximum payload
+size, and Boolean parameters retain their chunk tags and verifier signature shape.
+
+All twelve complete stage artifacts and the monomorphization corpus still agree with the
+reference. The selected type suite now passes ninety-seven tests. This closes the measured
+match-guard gap. It does not establish complete syntax admission or replace the remaining
+production type-input, wire-emission and final-gate requirements.

@@ -131,6 +131,7 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::DotDot => (47, 0),
             TokenKind::Match => (48, 0),
             TokenKind::FatArrow => (49, 0),
+            TokenKind::When => (64, 0),
             TokenKind::Underscore => (50, 0),
             TokenKind::ColonColon => (51, 0),
             TokenKind::As => (52, 0),
@@ -705,9 +706,9 @@ fn flatten(
         Expr::Match {
             scrutinee, arms, ..
         } => {
-            // Postorder: the scrutinee, then per integer-literal arm a Literal node and its
-            // result, then the trailing wildcard's result, then a MatchBuild (kind 34)
-            // packing the scrutinee temp slot and the literal-arm count as
+            // Postorder: scrutinee, then pattern, optional guard and result per arm.
+            // A guard/result pair ends with record 71; wildcard patterns use record 72.
+            // MatchBuild packs the scrutinee temp slot and total arm count as
             // `temp * 1024 + count`. The temp slot is reserved right after the scrutinee.
             flatten(
                 scrutinee,
@@ -721,66 +722,47 @@ fn flatten(
             );
             let temp = *next_slot;
             *next_slot += 1;
-            let mut lit_count = 0i64;
             for arm in arms {
-                assert!(
-                    arm.guard.is_none(),
-                    "increment 5 handles unguarded arms only"
-                );
                 match &arm.pattern {
-                    Pattern::Literal(Literal::Int(v), _) => {
-                        out.push((1, *v));
-                        flatten(
-                            &arm.expr,
-                            scope,
-                            next_slot,
-                            forlim,
-                            data_slots,
-                            chunk_names,
-                            enum_table,
-                            out,
-                        );
-                        lit_count += 1;
-                    }
+                    Pattern::Literal(Literal::Int(v), _) => out.push((1, *v)),
                     Pattern::Enum(enum_name, variant, sub_pats, _) if sub_pats.is_empty() => {
-                        // A unit enum-variant pattern folds to the variant's discriminant
-                        // literal, the same arm an integer literal forms.
                         let disc = enum_table
                             .iter()
                             .find(|(e, v, _)| e == enum_name && v == variant)
-                            .map(|(_, _, d)| *d)
-                            .unwrap_or_else(|| {
-                                panic!("no discriminant for {enum_name}::{variant}")
-                            });
+                            .expect("enum variant")
+                            .2;
                         out.push((1, disc));
-                        flatten(
-                            &arm.expr,
-                            scope,
-                            next_slot,
-                            forlim,
-                            data_slots,
-                            chunk_names,
-                            enum_table,
-                            out,
-                        );
-                        lit_count += 1;
                     }
-                    Pattern::Wildcard(_) => {
-                        flatten(
-                            &arm.expr,
-                            scope,
-                            next_slot,
-                            forlim,
-                            data_slots,
-                            chunk_names,
-                            enum_table,
-                            out,
-                        );
-                    }
-                    other => panic!("increment 5 handles integer and wildcard arms, got {other:?}"),
+                    Pattern::Wildcard(_) => out.push((72, 0)),
+                    other => panic!("unsupported match pattern {other:?}"),
+                }
+                if let Some(guard) = &arm.guard {
+                    flatten(
+                        guard,
+                        scope,
+                        next_slot,
+                        forlim,
+                        data_slots,
+                        chunk_names,
+                        enum_table,
+                        out,
+                    );
+                }
+                flatten(
+                    &arm.expr,
+                    scope,
+                    next_slot,
+                    forlim,
+                    data_slots,
+                    chunk_names,
+                    enum_table,
+                    out,
+                );
+                if arm.guard.is_some() {
+                    out.push((71, 0));
                 }
             }
-            out.push((34, temp * 1024 + lit_count));
+            out.push((34, temp * 1024 + arms.len() as i64));
         }
         Expr::Call { name, args, .. } => {
             // A call flattens its arguments left to right, then a Call (kind 7) packing the
@@ -1437,14 +1419,14 @@ fn the_loop_variable_is_in_scope() {
 }
 
 // A `match` over integer-literal arms with a trailing wildcard is a MatchBuild signal
-// packing the scrutinee temp slot and the literal-arm count.
+// packing the scrutinee temp slot and total arm count.
 #[test]
 fn a_match_expression_parses() {
     let src = "fn f(n: Word) -> Word { match n { 1 => n, 2 => n, _ => n } }";
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
-    // scrut n(0); Lit 1, n(0); Lit 2, n(0); wildcard n(0); MatchBuild(temp 1 * 1024 + 2).
+    // scrut n(0); Lit 1, n(0); Lit 2, n(0); wildcard marker, n(0); MatchBuild(temp 1 * 1024 + 3).
     assert_eq!(
         got.funcs[0].3,
         vec![
@@ -1453,8 +1435,9 @@ fn a_match_expression_parses() {
             (2, 0),
             (1, 2),
             (2, 0),
+            (72, 0),
             (2, 0),
-            (34, 1 * 1024 + 2)
+            (34, 1 * 1024 + 3)
         ]
     );
 }
@@ -1482,8 +1465,9 @@ fn a_block_form_match_statement_is_an_expr_stmt() {
             (2, 0),
             (1, 1),
             (2, 0),
+            (72, 0),
             (2, 0),
-            (34, 1 * 1024 + 1),
+            (34, 1 * 1024 + 2),
             (2, 0),
             (21, 0)
         ]
@@ -1705,7 +1689,7 @@ fn an_enum_match_pattern_folds_to_a_discriminant() {
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
-    // scrut k(0); Tok::Ident disc 0, k(0); Lit 5, k(0); wildcard k(0); MatchBuild(temp*1024+2).
+    // scrut k(0); Tok::Ident disc 0, k(0); Lit 5, k(0); wildcard marker, k(0); MatchBuild(temp*1024+3).
     assert_eq!(
         got.funcs[0].3,
         vec![
@@ -1714,8 +1698,9 @@ fn an_enum_match_pattern_folds_to_a_discriminant() {
             (2, 0),
             (1, 5),
             (2, 0),
+            (72, 0),
             (2, 0),
-            (34, 1024 + 2)
+            (34, 1024 + 3)
         ]
     );
 }
