@@ -10,11 +10,11 @@ instructions have been read. The [setup record](../TYPESAFE_SKILL.md) contains t
 installation command and observed verification. `CLAUDE.md` now records the
 operator's instruction to use the skill for this project.
 
-The subsequent requested usability check failed at authentication. A synthetic
-request to the Jev endpoint returned HTTP 403 and `authentication_error` with a
-missing-key message. `TYPESAFE_API_KEY` was absent from both the session and a
-fresh login shell. The endpoint is reachable but no model evaluation succeeded.
-The setup record contains the exact service response. No credentials were changed.
+The first usability check failed with HTTP 403 and a missing-key message. After
+operator credential provisioning, the requested recheck succeeded through a fresh
+login shell with HTTP 200. It selected `jev-latest`, received `jev-1.13.0` and
+validated a Noul answer of `0.99` for a synthetic red-apple question. The setup
+record preserves both observations. No credential value was recorded.
 
 The branch is `chore/kaizen-typesafe-skill`, based on `58c786e8`, in the existing
 project-local `.worktrees/kaizen/` checkout. Validate by ancestry and review the
@@ -22,8 +22,10 @@ commits above that parent. Appendix B was read before tracked changes.
 The previous interline implementation remains on `feat/kaizen-interline-protocol`.
 
 On a new machine, reinstall the user-level skill using the tracked setup command.
-Installation is verified. Authenticated model use is blocked by the missing key
-in the tested environment. No peer message, push or integration merge was performed.
+Installation, authentication and one minimal model evaluation are verified.
+Provision credentials privately on a new machine and ensure the calling process
+loads them. Broader workflow integration remains unverified. No peer message,
+push or integration merge was performed.
 Continue from the operator's selected workflow increment using the TypeSafe skill.
 
 ## Preceding interline portability increment on 2026-10-04

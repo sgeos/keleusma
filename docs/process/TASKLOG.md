@@ -8,6 +8,12 @@ Current sprint source of truth.
 
 ## TypeSafe skill setup on chore/kaizen-typesafe-skill
 
+2026-10-04 authenticated recheck. After operator credential provisioning, a fresh
+login-shell request succeeded with HTTP 200. The model was `jev-1.13.0` and its
+Noul answer was `0.99` for the synthetic red-apple question. Authentication and
+one minimal evaluation are verified. The [setup record](./TYPESAFE_SKILL.md)
+preserves the result and the limits of that verification without credentials.
+
 2026-10-04 availability follow-up. A minimal synthetic request to the documented
 Jev endpoint returned HTTP 403 with `authentication_error` and a missing-key
 message. `TYPESAFE_API_KEY` is absent from the session and fresh login-shell

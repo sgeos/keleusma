@@ -68,5 +68,21 @@ with the following body.
 The [reference](https://docs.typesafe.ai/api) documents HTTP 401 for missing or
 invalid keys. The observed status was 403. Both the status and authentication
 message above are from the executed request. Network reachability is established.
-An authenticated Jev evaluation is not established. A valid TypeSafe key must be
-provided through the documented environment before testing authenticated use.
+At that point, an authenticated Jev evaluation was not established.
+
+## Successful authenticated recheck on 2026-10-04
+
+After the operator provisioned the key and requested another check, a fresh login
+shell exposed a nonempty `TYPESAFE_API_KEY`. The same synthetic request succeeded
+with HTTP 200. The response identified `jev-1.13.0` and returned a Noul value of
+`0.99` for whether the apple was red. Reported usage was 279 input tokens and
+20 output tokens. The response type and probability range were checked.
+
+The credential was passed to curl through standard input, without placing its
+value in command arguments, tracked files or output. The assistant did not edit
+credential configuration. The login shell uses the existing private profile setup.
+An already-running process need not inherit a later environment change, so this
+result specifically establishes use through a fresh login shell.
+
+Authentication and one minimal Jev evaluation are now verified. Broader project
+workflow integration and task-specific model quality remain unverified.
