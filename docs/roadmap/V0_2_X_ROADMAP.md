@@ -356,6 +356,9 @@ The monomorphization identity corpus now covers all twelve sources and checks it
 Declared struct field counts also now travel in parser metadata, allowing the type stage to
 compare them with supplied counts for nested and reordered constructions. This closes that
 extraction gap without completing the remaining input channels or production integration.
+Integer and enum match-arm comparisons now come from the reconstructed arm tables. Type-input
+extraction also reconstructs each source head separately, preserving individual return checks
+and binding names before dispatch construction. Match guards remain an input gap.
 
 The type-rejection stage now has capacity for all twelve real stage sources. Six tables use a
 640-row cap, adding 7,168 words or 56 KiB across their parallel arrays. The stage accepts all

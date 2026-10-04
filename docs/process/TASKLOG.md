@@ -6,6 +6,31 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Order 1 match comparisons and source heads
+
+Expression extraction now compares integer and enum match arms. Ten source cases produce
+fourteen rows matching reference syntax. Ten verdict witnesses send extracted rows directly
+to the type stage. Source heads are reconstructed separately for expression facts, restoring
+each head's return check and own binding names. Five return-verdict witnesses cover valid and
+invalid heads. Guard subexpressions remain in the walk. Match guards are still discarded by
+the parser, and the reference accepts a Word-valued function guard. Both limits are recorded
+in the completion plan. No stage source or bytecode format changed.
+
+The full self-host type suite passed 80 tests, including production expression extraction over
+all twelve stage sources and checks on derived-row indices. It took 655.31 seconds. After
+adding feature gates to five otherwise-unused test helpers and editing comments, the final
+self-host run passed 79 with only the all-stage extraction test filtered out. The extraction
+implementation and that test were unchanged. The final default-feature suite passed 29 without
+warnings. Default-feature test Clippy and broad-feature Clippy both passed with actual crate
+checking. Full workspace, complete artifact identity and integration gates remain outstanding.
+Documentation guard results are recorded in the reverse prompt.
+
+The shadow pilot captured one diagnostic and three verification claims locally. All labels
+are non-independent self-reviews. The first packet submission had malformed execution metadata
+and was refused before recording. The corrected packet was recorded. No external evaluation
+was retried while the prior authorization question remained pending. The interline inbox was
+empty. This increment advances the complete Order 1 goal, which remains active.
+
 ## 2026-10-04 Order 1 struct field counts and unary not
 
 Parser metadata now supplies each struct literal's declared field count. The driver pairs it

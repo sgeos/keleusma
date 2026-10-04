@@ -13,6 +13,31 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-04 Match comparisons and source-head extraction
+
+The initial differential produced no match comparison where reference syntax produced one.
+The driver now reads result indices from the reconstructed integer and enum match tables,
+compares the first result with every later result, and includes the enum wildcard only when
+its presence flag is set. Nested dispatch, wildcard-only matches, named operands and later
+mismatched arms are covered. An enum payload binder remains unknown on both input paths.
+
+The same review revisited the missing multiheaded return checks. Dispatch construction had
+combined all heads into a synthetic root and remapped their frame slots. The parser still held
+separate body and guard streams. Reconstructing those streams separately for type facts restores
+each source head's return requirement and own parameter and local names. Code generation retains
+its existing dispatch construction. Derived-row indices refer to the accumulated expression rows.
+
+Probes rejected two assumptions. Bare block results in a match are rejected by the reference
+parser. A function guard containing `1` is accepted by the Rust reference compile path, while
+match guards have an explicit boolean requirement. The new extraction keeps function guard
+subexpressions but adds no root requirement. The self-hosted parser discards match guards, and
+integer matches without a wildcard fail during reconstruction. These remain recorded limits.
+
+The shadow pilot recorded the first failed differential before any model judgment. The local
+self-review is explicitly non-independent. External evaluation remains pending the operator's
+answer to the existing destination-and-payload approval question. Later implementation diagnostics
+were not sampled because this increment uses the first-diagnostic convention.
+
 ## 2026-10-04 Struct field counts and unary conditions
 
 The parser already resolves a struct literal to its declaration. It now emits that

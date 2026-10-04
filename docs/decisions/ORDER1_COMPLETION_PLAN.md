@@ -37,7 +37,9 @@ Full-language support remains Order 6. Existing supported programs must retain t
    the construction record and retains nested and reordered literals.
 2. Close remaining declaration, call argument, occurrence, binding and expression extraction
    gaps. Treat field and index failures during reconstruction as explicit rejection paths.
-   Preserve match-arm comparisons and valid controls rather than narrowing the supported set.
+   Integer and enum match-arm comparisons now have extraction and verdict controls.
+   Source heads now retain separate tail requirements and binding names. Match guards and
+   the remaining input channels still require work.
 3. Integrate the rejection stage with the production compiler. Keep the Rust implementation
    as a differential oracle, and prove that its early rejection cannot mask missing stage work.
 4. Complete production artifact emission through the existing Keleusma wire implementation.
@@ -52,7 +54,7 @@ Bytecode version remains 2. No new bytecode opcode is authorized. The internal p
 changes required by this plan do not authorize changing the public artifact format.
 The V0.3.X workstream remains separate. Publication requires in-session confirmation.
 
-The legacy handoff is invalid-and-stale. Its stamp is eleven commits behind the starting
+The legacy handoff is invalid-and-stale. Its stamp is thirteen commits behind the starting
 tree, its ancestry check passes, and its unchanged-stage-source claim is contradicted by
 `verify_types.kel`. Its full-suite and advisory checks have not been rerun for this increment.
 
@@ -67,3 +69,17 @@ Inspection on 2026-10-04 confirmed that `compile_source_with_target` in the comm
 selects `self_hosted_compile`, while the unsigned artifact path still calls `module.to_bytes()`.
 The wire stage already exposes framing and sealing commands through `dispatch_frame`.
 Routing region payloads alone does not close the remaining complete-artifact emission work.
+
+## Expression extraction evidence
+
+The match comparison corpus includes nested integer and enum dispatch, wildcard-only matches,
+explicit enum coverage, later mismatched arms, named operands and an unresolved payload binder.
+The latter remains unknown on both input paths, so comparison agreement does not establish
+payload-type resolution. Bare block expressions in match results are rejected by the reference
+parser. Integer matches without a wildcard fail during reconstruction. Match guards are discarded
+by the self-hosted parser and remain a production input gap.
+
+Separate reconstruction of each source head recovers its return row and its own binding names.
+Function guard expressions are still traversed. A probe found that the Rust reference accepts
+`fn f(x: Word) -> Word when 1 { 1 } fn f(y: Word) -> Word { 2 }`.
+No new root boolean requirement is imposed while that reference behavior remains unresolved.

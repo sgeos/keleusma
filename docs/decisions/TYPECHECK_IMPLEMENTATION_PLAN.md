@@ -12,15 +12,22 @@ Status: **BUILT. Full verdict agreement on the corpus, 2026-08-14.**
 [ORDER1_COMPLETION_PLAN.md](./ORDER1_COMPLETION_PLAN.md). Parser records now retain explicit
 else presence. Reconstruction preserves it and expression extraction emits conditional
 branch pairs only for written else branches. Empty branches contribute unknown tails.
-Match-arm pairs and the composite extraction gaps remain open. This does not complete
+Match-arm pairs now come from the reconstructed integer and enum arm tables. Composite
+extraction gaps remain open. This does not complete
 the production input path or the full Order 1 gate.
 
 Declared struct field counts now travel in parser metadata. The driver pairs each
 count with the following construction record and supplies expression kind 7 to the type stage.
 The equal-size, unequal-field-count witness now distinguishes the cases through metadata.
-Six expression kinds are emitted, with match-arm coverage and the field/index rejection paths
+Six expression kinds are emitted, with match guards and the field/index rejection paths
 still incomplete. Unary `not` now emits the same boolean-operand requirement as an `if`
 condition, covering another previously omitted syntactic form. The production input path remains open.
+
+Expression extraction reconstructs each source head separately, preserving its parameter names,
+local bindings and return requirement before dispatch construction. Guard subexpressions remain
+in the walk. The Rust reference currently accepts a Word-valued function guard, so no additional
+boolean requirement on that root is introduced here. Match guards have a separate reference
+check but are discarded by the self-hosted parser. These are distinct remaining concerns.
 
 **Currency, 2026-09-29.** The six input channels that previously excluded `parse.kel` and
 `wire.kel` now have 640-row caps. The measured stage-source test fits and checks all twelve real

@@ -3189,6 +3189,7 @@ enum Channel {
     Payloads,
 }
 
+#[cfg(feature = "self-host")]
 impl Channel {
     const ALL: &'static [Channel] = &[
         Channel::Pairs,
@@ -3234,6 +3235,7 @@ fn stage_verdict_resolving_eliding(
 /// `withhold` is emptied at the point it is handed over. A driver that also
 /// skipped the walk producing that field would change two things at once, and a
 /// flip could then be attributed to the wrong cause.
+#[cfg(feature = "self-host")]
 fn stage_verdict_withholding(src: &str, withhold: Option<Channel>) -> bool {
     stage_verdict_withholding_eliding(src, withhold, true)
 }
@@ -5006,7 +5008,7 @@ fn a_for_loop_variable_is_not_reported_as_an_unresolved_name() {
 
 /// The twelve self-hosted stage sources, as `(name, source)`.
 ///
-/// **ONE DEFINITION, because two tests read it.** A second copy is a second thing
+/// One definition shared by the extraction and capacity tests. A second copy is a second thing
 /// to forget when a stage is added, and the capacity result and its price would
 /// then describe different corpora.
 #[cfg(feature = "self-host")]
@@ -7872,6 +7874,53 @@ fn branch_pair_rows_follow_explicit_else_presence() {
     assert!(saw_implicit, "an omitted else must contribute no pair");
 }
 
+/// Match comparisons preserve first-arm pairing for integer and enum dispatch.
+#[cfg(feature = "self-host")]
+#[test]
+fn match_arm_rows_agree_with_reference_syntax() {
+    use std::collections::BTreeMap;
+    const SOURCES: &[&str] = &[
+        "fn f(x: Word) -> Word { match x { 1 => 2, _ => 3 } }",
+        "fn f(x: Word) -> Word { match x { 1 => 2, 2 => true, _ => 3 } }",
+        "fn f(x: Word) -> Word { match x { _ => 3 } }",
+        "fn f(x: Word, y: Word, z: Word) -> Word { match x { 1 => x, 2 => y, _ => z } }",
+        "enum E { W(Word), N } fn f(e: E) -> Word { match e { E::W(p) => p, _ => 0 } }",
+        "enum E { A, B } fn f(e: E) -> Word { match e { E::A => match e { E::A => 1, _ => 2 }, E::B => 3 } }",
+        "fn f(x: Word) -> Word { match x { 1 => match x { 2 => 3, _ => 4 }, _ => 5 } }",
+        "enum E { A, B } fn f(e: E) -> Word { match e { E::A => 1, E::B => 2 } }",
+        "enum E { A, B } fn f(e: E) -> Word { match e { E::A => 1, _ => true } }",
+        "enum E { A, B, C } fn f(e: E) -> Word { match e { E::A => 1, E::B => 2, E::C => true } }",
+    ];
+    let mut compared = 0;
+    for src in SOURCES {
+        let ast = parse(&tokenize(src).expect("lex")).expect("parse");
+        let (names, _) = binding_rows(&ast);
+        let (nodes, _) = expression_nodes_and_derived(&ast, &names);
+        let by_id: BTreeMap<i64, String> = names.iter().map(|(k, v)| (*v, k.clone())).collect();
+        let render = |v: i64, f: i64| -> keleusma::selfhost::ExprOperand {
+            if f == 0 {
+                (v, 0, String::new())
+            } else {
+                (0, 1, by_id.get(&v).cloned().unwrap_or_default())
+            }
+        };
+        let mut want: BTreeMap<ExprRowKey, usize> = BTreeMap::new();
+        for (k, a, af, b, bf) in nodes {
+            if k == 4 {
+                *want.entry((k, render(a, af), render(b, bf))).or_insert(0) += 1;
+            }
+        }
+        let (rows, _) = keleusma::selfhost::expression_rows_from_pipeline(src);
+        let mut got: BTreeMap<ExprRowKey, usize> = BTreeMap::new();
+        for row in rows.into_iter().filter(|(k, _, _)| *k == 4) {
+            *got.entry(row).or_insert(0) += 1;
+        }
+        assert_eq!(got, want, "match rows for {src}");
+        compared += want.values().sum::<usize>();
+    }
+    assert_eq!(compared, 14, "retain every match comparison in this corpus");
+}
+
 /// Feed pipeline branch rows to the Keleusma rejection stage. The negative differs only
 /// in the else tail's type, and the empty-else control must remain accepted.
 #[cfg(feature = "self-host")]
@@ -7910,6 +7959,84 @@ fn pipeline_branch_pairs_drive_type_rejection() {
                 ..Default::default()
             }),
             accepts
+        );
+    }
+}
+
+/// Exercise the type stage with match rows independently of the reference input builder.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_match_pairs_drive_type_rejection() {
+    for (src, accepts, count) in [
+        (
+            "fn f(x: Word) -> Word { match x { 1 => 2, _ => 3 } }",
+            true,
+            1,
+        ),
+        (
+            "fn f(x: Word) -> Word { match x { 1 => 2, _ => true } }",
+            false,
+            1,
+        ),
+        (
+            "fn f(x: Word) -> Word { match x { 1 => 2, 2 => true, _ => 3 } }",
+            false,
+            2,
+        ),
+        ("fn f(x: Word) -> Word { match x { _ => 3 } }", true, 0),
+        (
+            "enum E { A, B } fn f(e: E) -> Word { match e { E::A => 1, E::B => 2 } }",
+            true,
+            1,
+        ),
+        (
+            "enum E { A, B } fn f(e: E) -> Word { match e { E::A => 1, E::B => true } }",
+            false,
+            1,
+        ),
+        (
+            "enum E { A, B } fn f(e: E) -> Word { match e { E::A => 1, _ => true } }",
+            false,
+            1,
+        ),
+        (
+            "enum E { A, B, C } fn f(e: E) -> Word { match e { E::A => 1, E::B => 2, E::C => true } }",
+            false,
+            2,
+        ),
+        (
+            "fn f(x: Word) -> Word { match x { 1 => match x { 2 => 3, _ => true }, _ => 5 } }",
+            false,
+            2,
+        ),
+        (
+            "enum E { A, B } fn f(e: E) -> Word { match e { E::A => match e { E::A => 1, _ => true }, E::B => 3 } }",
+            false,
+            2,
+        ),
+    ] {
+        assert_eq!(
+            reference_accepts(src),
+            accepts,
+            "reference witness for {src}"
+        );
+        let (rows, _) = keleusma::selfhost::expression_rows_from_pipeline(src);
+        let pairs: Vec<_> = rows
+            .into_iter()
+            .filter(|(k, ..)| *k == 4)
+            .map(|(k, a, b)| {
+                assert_eq!((a.1, b.1), (0, 0));
+                (k, a.0, b.0)
+            })
+            .collect();
+        assert_eq!(pairs.len(), count, "match pairs for {src}");
+        assert_eq!(
+            stage_verdict(&StageInput {
+                nodes: &pairs,
+                ..Default::default()
+            }),
+            accepts,
+            "type stage for {src}"
         );
     }
 }
@@ -8017,11 +8144,9 @@ fn the_unit_literal_is_refused_by_the_pipeline_and_accepted_by_the_reference() {
 ///
 /// # WHAT THIS CORPUS DELIBERATELY EXCLUDES
 ///
-/// **Every source here is single-headed.** The two sides genuinely disagree for a multiheaded
-/// function — the reference has one tail per head, the pipeline one fused body per group — so
-/// including one would fail rather than inform. The disagreement is recorded separately by
-/// `a_multiheaded_function_contributes_no_tail_row`, in both directions, because a cap that is
-/// not written down reads as coverage.
+/// Every source here is single-headed. Multiheaded functions are covered separately by
+/// `every_function_head_contributes_its_own_tail_row`, including named parameters whose
+/// slots would change during dispatch construction.
 ///
 /// # Compared as a MULTISET, by NAME
 ///
@@ -8277,63 +8402,155 @@ fn the_pipeline_tag_table_omits_float_and_the_reference_does_not() {
     );
 }
 
-/// **A MULTIHEADED FUNCTION CONTRIBUTES NO TAIL-VERSUS-RETURN ROW, AND THAT IS A KNOWN LOSS.**
-///
-/// The reference walks each head as its own function with its own tail expression, so a
-/// three-headed `f` contributes three kind-8 rows. The pipeline reconstructs the entire group
-/// into ONE fused body with a single dispatch root, and can therefore offer at most one.
-///
-/// # Why nothing rather than the group's own row
-///
-/// The fused root is a dispatch structure. On every program measured it types as unknown, which
-/// would accept — but "unknown on the programs I tried" is not the property required. Should any
-/// fused root ever type to a tag, that tag is not one any particular head promises, and kind 8
-/// feeds an EQUALITY predicate: it could **reject a correct program**. Emitting nothing costs a
-/// check; emitting the wrong thing costs a valid program. Same asymmetry that withheld the
-/// branch pair.
-///
-/// # This is recorded rather than left to the agreement test
-///
-/// The agreement corpus is single-headed, so it would be **silent** about this. A cap that is
-/// not written down reads as coverage. The assertion below states the loss in both directions:
-/// the reference really does produce a row per head, and the pipeline really does produce none.
+/// Each head contributes its own tail and declared result, before dispatch lowering.
 #[cfg(feature = "self-host")]
 #[test]
-fn a_multiheaded_function_contributes_no_tail_row() {
-    const SRC: &str = "fn f(0) -> Word { 1 }\n\
-                       fn f(1) -> Word { 2 }\n\
-                       fn f(n: Word) -> Word { n }\n\
-                       fn main() -> Word { f(2) }";
-
+fn every_function_head_contributes_its_own_tail_row() {
+    const SRC: &str = "fn f(0) -> Word { 1 } fn f(1) -> Word { 2 } fn f(n: Word) -> Word { n } fn main() -> Word { f(2) }";
     let ast = parse(&tokenize(SRC).expect("lex")).expect("parse");
-    let heads = ast
-        .functions
-        .iter()
-        .filter(|f| f.name == "f" && f.body.tail_expr.is_some())
-        .count();
-    assert_eq!(
-        heads, 3,
-        "the reference no longer treats each head as its own function, so the loss this test \
-         records may no longer exist"
-    );
-
     let (names, _) = binding_rows(&ast);
     let (nodes, _) = expression_nodes_and_derived(&ast, &names);
-    let reference_rows = nodes.iter().filter(|(k, ..)| *k == 8).count();
-    assert_eq!(
-        reference_rows, 4,
-        "the reference should contribute one tail row per head plus one for `main`"
-    );
-
+    assert_eq!(nodes.iter().filter(|(k, ..)| *k == 8).count(), 4);
     let (rows, _) = keleusma::selfhost::expression_rows_from_pipeline(SRC);
-    let pipeline_rows = rows.iter().filter(|(k, _, _)| *k == 8).count();
+    let tails: Vec<_> = rows.into_iter().filter(|(k, ..)| *k == 8).collect();
+    let word = (1, 0, String::new());
     assert_eq!(
-        pipeline_rows, 1,
-        "the pipeline should contribute a tail row for `main` alone. Emitting one for the \
-         multiheaded group means the fused dispatch root is being typed, which can reject a \
-         correct program; emitting three means per-head tails became reachable and this \
-         recorded loss is stale."
+        tails,
+        vec![
+            (8, word.clone(), word.clone()),
+            (8, word.clone(), word.clone()),
+            (8, (0, 1, "n".into()), word.clone()),
+            (8, (0, 1, "f".into()), word),
+        ]
     );
+}
+
+/// Each head's local names and derived-row indices survive the separate reconstructions.
+#[cfg(feature = "self-host")]
+#[test]
+fn function_heads_keep_their_own_binding_names() {
+    const SRC: &str = "fn f(x: Word) -> Word when x == 0 { let a = x + 1; a } fn f(y: Word) -> Word { let b = y + 2; b }";
+    assert!(reference_accepts(SRC));
+    let (rows, derived) = keleusma::selfhost::expression_rows_from_pipeline(SRC);
+    assert_eq!(derived.len(), 2);
+    assert_eq!(
+        rows.iter().filter(|(k, ..)| *k == 1).count(),
+        3,
+        "one guard and two body binary expressions"
+    );
+    for ((name, at), (binding, parameter)) in derived.iter().zip([("a", "x"), ("b", "y")]) {
+        assert_eq!(name, binding);
+        assert_eq!(
+            rows[*at],
+            (1, (0, 1, parameter.into()), (1, 0, String::new()))
+        );
+    }
+    let tails: Vec<_> = rows
+        .iter()
+        .filter(|(k, ..)| *k == 8)
+        .map(|(_, a, _)| a.2.as_str())
+        .collect();
+    assert_eq!(tails, ["a", "b"]);
+    assert!(
+        rows.iter()
+            .any(|(k, a, b)| *k == 1 && a.2 == "x" && b.0 == 1),
+        "retain guard expression operands"
+    );
+}
+
+/// Head tails are sent to the type stage without reference-derived tags.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_function_head_requirements_drive_type_rejection() {
+    for (src, kind, accepts, count) in [
+        (
+            "fn f(0) -> Word { 1 } fn f(n: Word) -> Word { 2 }",
+            8,
+            true,
+            2,
+        ),
+        (
+            "fn f(0) -> Word { true } fn f(n: Word) -> Word { 2 }",
+            8,
+            false,
+            2,
+        ),
+        (
+            "fn f(0) -> Word { 1 } fn f(n: Word) -> Word { true }",
+            8,
+            false,
+            2,
+        ),
+        (
+            "fn f(x: Word) -> Word when true { 1 } fn f(y: Word) -> Word { 2 }",
+            8,
+            true,
+            2,
+        ),
+        (
+            "fn f(x: Word) -> Word when true { true } fn f(y: Word) -> Word { 2 }",
+            8,
+            false,
+            2,
+        ),
+    ] {
+        assert_eq!(
+            reference_accepts(src),
+            accepts,
+            "reference witness for {src}"
+        );
+        let (rows, _) = keleusma::selfhost::expression_rows_from_pipeline(src);
+        let requirements: Vec<_> = rows
+            .into_iter()
+            .filter(|(k, ..)| *k == kind)
+            .map(|(k, a, b)| {
+                assert_eq!((a.1, b.1), (0, 0));
+                (k, a.0, b.0)
+            })
+            .collect();
+        assert_eq!(requirements.len(), count, "head requirements for {src}");
+        assert_eq!(
+            stage_verdict(&StageInput {
+                nodes: &requirements,
+                ..Default::default()
+            }),
+            accepts,
+            "type stage for {src}"
+        );
+    }
+}
+
+/// Reach every current stage with the production extractor, including codegen's heads.
+/// This checks extraction and tail coverage, not a complete type verdict or artifact identity.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_expression_extraction_reaches_every_stage() {
+    let mut reached = 0;
+    for &(name, src) in REAL_STAGE_SOURCES {
+        let ast = parse(&tokenize(src).expect("lex stage")).expect("parse stage");
+        let expected_tails = ast
+            .functions
+            .iter()
+            .filter(|f| f.body.tail_expr.is_some())
+            .count();
+        let (rows, derived) = keleusma::selfhost::expression_rows_from_pipeline(src);
+        assert!(!rows.is_empty(), "no expression facts from {name}");
+        assert!(expected_tails > 0, "no reference tails in {name}");
+        assert_eq!(
+            rows.iter().filter(|(k, ..)| *k == 8).count(),
+            expected_tails,
+            "tail coverage for {name}"
+        );
+        for (binding, at) in derived {
+            assert_eq!(
+                rows.get(at).map(|r| r.0),
+                Some(1),
+                "derived row for {name} binding {binding}"
+            );
+        }
+        reached += 1;
+    }
+    assert_eq!(reached, 12);
 }
 
 /// **THE ARRAY-ELEMENT ROWS AGREE BETWEEN THE PIPELINE AND THE REFERENCE.**
@@ -8617,7 +8834,7 @@ fn a_struct_literal_does_not_carry_which_struct_it_constructs() {
 }
 
 /// Pin the expression kinds reached by this corpus. Conditional branch pairs now use the
-/// explicit else marker. Kind 4 still lacks match-arm extraction, so a kind count is not
+/// explicit else marker. Match guards still lack condition extraction, so a kind count is not
 /// evidence that every syntactic form is covered.
 ///
 /// Field and index failures are refused before reconstruction yields a forest. Struct-literal
@@ -8929,6 +9146,7 @@ fn a_field_or_index_on_a_scalar_is_refused_before_any_row_could_be_extracted() {
 ///
 /// A wider tagger would map the whole type surface; doing so here would be
 /// sizing a different thing.
+#[cfg(feature = "self-host")]
 fn alloc_prim_name(p: keleusma::ast::PrimType) -> String {
     format!("{p:?}")
 }
@@ -8938,6 +9156,7 @@ fn alloc_prim_name(p: keleusma::ast::PrimType) -> String {
 /// **Only two initialiser forms state it**: a struct literal names its own type,
 /// and a call to a declared function has a declared return type. Anything else
 /// returns `None`, which is the honest answer rather than a guess.
+#[cfg(feature = "self-host")]
 fn let_struct_name(
     e: &keleusma::ast::Expr,
     rets: &std::collections::BTreeMap<String, String>,
@@ -8956,6 +9175,7 @@ fn let_struct_name(
 /// type and the `let` states the base's type; this walks a nested access by
 /// repeating the same two lookups. If either is unavailable the answer is zero,
 /// meaning "cannot type", which is what the stage would do.
+#[cfg(feature = "self-host")]
 fn field_read_tag(
     e: &keleusma::ast::Expr,
     let_types: &std::collections::BTreeMap<String, String>,

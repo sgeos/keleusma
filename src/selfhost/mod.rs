@@ -2484,7 +2484,7 @@ pub type ExprRow = (i64, ExprOperand, ExprOperand);
 /// # Coverage
 ///
 /// Six of the eight kinds are extracted here. They are binary operators, array elements,
-/// conditions, explicit conditional branch pairs, struct field counts, and tail-versus-return claims.
+/// conditions, conditional and match branch pairs, struct field counts, and tail-versus-return claims.
 /// `branch_pair_rows_follow_explicit_else_presence` compares written branch pairs against
 /// reference syntax, including empty, statement-only, nested and sequential branches.
 ///
@@ -2494,8 +2494,8 @@ pub type ExprRow = (i64, ExprOperand, ExprOperand);
 /// follows the presence marker instead of guessing from the synthesized branch's value.
 /// `an_empty_else_is_distinguished_from_an_implicit_one` pins the parser distinction.
 ///
-/// Field access and index access remain incomplete below. Match-arm pairs
-/// are also not extracted here, although the reference includes them in branch-pair kind 4.
+/// Field access and index access remain incomplete below. Match-arm pairs use the integer
+/// and enum side tables. Match guard expressions remain unavailable from the parser.
 ///
 /// # Composite extraction
 ///
@@ -2540,179 +2540,188 @@ pub fn expression_rows_from_pipeline(src: &str) -> (Vec<ExprRow>, Vec<(String, u
 
     let mut rows: Vec<ExprRow> = Vec::new();
     let mut derived: Vec<(String, usize)> = Vec::new();
-    let mut i = 0usize;
-    while i < fns.len() {
-        let Some(group_name) = name_of(fns[i].name) else {
-            i += 1;
+    // Type facts belong to individual source heads. Reconstruct their bodies before
+    // code generation combines them into dispatch, which remaps parameter slots and
+    // replaces the source tails with a synthetic root.
+    for f in &fns {
+        let Some(function_name) = name_of(f.name) else {
             continue;
         };
-        let mut group: Vec<&ParsedFn> = vec![&fns[i]];
-        let mut j = i + 1;
-        while j < fns.len() && name_of(fns[j].name).as_deref() == Some(group_name.as_str()) {
-            group.push(&fns[j]);
-            j += 1;
+        for &(declared, given) in &f.struct_counts {
+            assert!(given >= 0, "unpaired struct field-count metadata");
+            rows.push((7, (declared, 0, String::new()), (given, 0, String::new())));
         }
-        i = j;
-        for f in &group {
-            for &(declared, given) in &f.struct_counts {
-                assert!(given >= 0, "unpaired struct field-count metadata");
-                rows.push((7, (declared, 0, String::new()), (given, 0, String::new())));
-            }
-        }
-        let pc = group[0].params;
-        let body = if is_multihead_group(&group) {
-            reconstruct_via_kel_multihead(&group, pc, &group_name)
-        } else {
-            let category = reconstruct_category(group[0].cat);
-            reconstruct_via_kel(&group[0].body, category, pc, &group_name)
-        };
-
         // Slot to name, the same convention `binding_rows_from_pipeline` uses: parameters take
         // the low slots in order, and `let_names` carries `(slot, name)` looked up BY SLOT.
         let mut slot_name: alloc::collections::BTreeMap<i64, String> =
             alloc::collections::BTreeMap::new();
-        for (slot, &pid) in group[0].param_names.iter().enumerate() {
+        for (slot, &pid) in f.param_names.iter().enumerate() {
             if let Some(n) = name_of(pid) {
                 slot_name.insert(slot as i64, n);
             }
         }
-        for &(slot, nid) in &group[0].let_names {
+        for &(slot, nid) in &f.let_names {
             if let Some(n) = name_of(nid) {
                 slot_name.insert(slot, n);
             }
         }
 
-        // One operand, classified exactly as the reference classifies one: a literal is a TAG, an
-        // identifier or a call is a NAME, anything else is unknown and never rejects.
-        let operand = |idx: i64| -> ExprOperand {
-            match body.nodes.get(idx as usize) {
-                // The forest's literals are always integers -- `codegen.kel` interns every other
-                // scalar elsewhere -- so the tag is the Word tag.
-                Some(n) if n.kind == NODE_LITERAL => (1, 0, String::new()),
-                // Booleans ride the unit kind, whose payload is 0 unit, 1 true, 2 false.
-                Some(n) if n.kind == NODE_UNIT && (n.arg == 1 || n.arg == 2) => {
-                    (2, 0, String::new())
-                }
-                Some(n) if n.kind == NODE_UNIT && n.arg == 0 => (6, 0, String::new()),
-                Some(n) if n.kind == 2 => slot_name
-                    .get(&n.arg)
-                    .map_or((0, 0, String::new()), |s| (0, 1, s.clone())),
-                Some(n) if n.kind == NODE_CALL => chunk_names
-                    .get(n.arg as usize)
-                    .map_or((0, 0, String::new()), |s| (0, 1, s.clone())),
-                _ => (0, 0, String::new()),
+        for (records, is_guard) in [(&f.guard, true), (&f.body, false)] {
+            if is_guard && records.is_empty() {
+                continue;
             }
-        };
+            let category = reconstruct_category(f.cat);
+            let body = reconstruct_via_kel(records, category, f.params, &function_name);
 
-        // The rows, and the LetIn bindings whose initialiser is one of them.
-        let mut row_of_node: alloc::collections::BTreeMap<i64, usize> =
-            alloc::collections::BTreeMap::new();
-        let nothing: ExprOperand = (0, 0, String::new());
-
-        for (at, node) in body.nodes.iter().enumerate() {
-            if is_binary_operator(node.kind) {
-                row_of_node.insert(at as i64, rows.len());
-                rows.push((1, operand(node.lhs), operand(node.rhs)));
-            } else if node.kind == 6 {
-                // Unary not requires a boolean operand, just as a condition does.
-                rows.push((3, operand(node.lhs), nothing.clone()));
-            } else if node.kind == 4 {
-                // The parser marks an absent else, and reconstruction preserves it as a
-                // negative condition index. Empty written branches still contribute a pair.
-                let condition = if node.arg < 0 {
-                    -node.arg - 1
-                } else {
-                    node.arg
-                };
-                rows.push((3, operand(condition), nothing.clone()));
-                if node.arg >= 0 {
-                    let branch_tail = |root| {
-                        block_tail_node(&body, root).map_or_else(|| nothing.clone(), operand)
-                    };
-                    rows.push((4, branch_tail(node.lhs), branch_tail(node.rhs)));
+            // One operand, classified exactly as the reference classifies one: a literal is a TAG, an
+            // identifier or a call is a NAME, anything else is unknown and never rejects.
+            let operand = |idx: i64| -> ExprOperand {
+                match body.nodes.get(idx as usize) {
+                    // The forest's literals are always integers -- `codegen.kel` interns every other
+                    // scalar elsewhere -- so the tag is the Word tag.
+                    Some(n) if n.kind == NODE_LITERAL => (1, 0, String::new()),
+                    // Booleans ride the unit kind, whose payload is 0 unit, 1 true, 2 false.
+                    Some(n) if n.kind == NODE_UNIT && (n.arg == 1 || n.arg == 2) => {
+                        (2, 0, String::new())
+                    }
+                    Some(n) if n.kind == NODE_UNIT && n.arg == 0 => (6, 0, String::new()),
+                    Some(n) if n.kind == 2 => slot_name
+                        .get(&n.arg)
+                        .map_or((0, 0, String::new()), |s| (0, 1, s.clone())),
+                    Some(n) if n.kind == NODE_CALL => chunk_names
+                        .get(n.arg as usize)
+                        .map_or((0, 0, String::new()), |s| (0, 1, s.clone())),
+                    _ => (0, 0, String::new()),
                 }
-            } else if node.kind == NODE_ARRAY_LIT {
-                // --- THE ARRAY-ELEMENT CLAIM, KIND 2 ---------------------------------------
-                //
-                // The reference pairs element ZERO against every LATER element, so a literal of
-                // n elements contributes n-1 rows and one of n <= 1 contributes none. Kind 2 is
-                // an equality kind, so the pairing must match exactly: pairing adjacent elements
-                // instead would accept `[1, true, 2]`, where every adjacent pair disagrees but
-                // the first-versus-rest reading catches it at the first comparison.
-                //
-                // **THE ELEMENTS COME FROM `call_args`, SLICED BY THIS NODE'S OWN `lhs`/`rhs`.**
-                // That channel is shared with `Node::Call`; a scan would read call arguments as
-                // array elements.
-                //
-                // Measured before it was written: on every probe the count of kind-17 nodes
-                // equalled the count of the reference's array-literal expressions, INCLUDING the
-                // nested-index shape that once mis-parsed as a literal. That was the one
-                // direction capable of rejecting a correct program.
-                //
-                // **THE `count >= 2` GUARD IS BELT-AND-BRACES AND MUTATING IT PROVES NOTHING.**
-                // The loop below runs `1..count`, which is already empty at a count of one, so
-                // relaxing the guard to `>= 1` is an EQUIVALENT MUTANT: it changes no output and
-                // its survival is not a gap in the tests. Recorded because a surviving mutant
-                // left unexplained reads as a missing guard, and the next reader would go looking
-                // for one. The guard earns its place by making the intent legible and by keeping
-                // the `call_args` read below off a slice that a zero-count node does not own.
-                let start = node.lhs;
-                let count = node.rhs;
-                if count >= 2
-                    && let Some(&head) = body.call_args.get(usize::try_from(start).unwrap_or(0))
-                {
-                    let first = operand(head);
-                    for k in 1..count {
-                        let Ok(at) = usize::try_from(start + k) else {
-                            continue;
+            };
+
+            // The rows, and the LetIn bindings whose initialiser is one of them.
+            let mut row_of_node: alloc::collections::BTreeMap<i64, usize> =
+                alloc::collections::BTreeMap::new();
+            let nothing: ExprOperand = (0, 0, String::new());
+
+            for (at, node) in body.nodes.iter().enumerate() {
+                if is_binary_operator(node.kind) {
+                    row_of_node.insert(at as i64, rows.len());
+                    rows.push((1, operand(node.lhs), operand(node.rhs)));
+                } else if node.kind == 6 {
+                    // Unary not requires a boolean operand, just as a condition does.
+                    rows.push((3, operand(node.lhs), nothing.clone()));
+                } else if node.kind == 4 {
+                    // The parser marks an absent else, and reconstruction preserves it as a
+                    // negative condition index. Empty written branches still contribute a pair.
+                    let condition = if node.arg < 0 {
+                        -node.arg - 1
+                    } else {
+                        node.arg
+                    };
+                    rows.push((3, operand(condition), nothing.clone()));
+                    if node.arg >= 0 {
+                        let branch_tail = |root| {
+                            block_tail_node(&body, root).map_or_else(|| nothing.clone(), operand)
                         };
-                        if let Some(&elem) = body.call_args.get(at) {
-                            rows.push((2, first.clone(), operand(elem)));
+                        rows.push((4, branch_tail(node.lhs), branch_tail(node.rhs)));
+                    }
+                } else if node.kind == 22 || node.kind == 39 {
+                    // Match arms compare their first result with every subsequent result.
+                    // The integer form always carries its wildcard result; the enum form
+                    // carries an explicit presence flag after its fixed-stride arm entries.
+                    let base = usize::try_from(node.arg).expect("negative match-parts offset");
+                    let count = usize::try_from(node.rhs).expect("negative match arm count");
+                    let stride = if node.kind == 22 { 2 } else { 20 };
+                    let result_offset = if node.kind == 22 { 3 } else { 4 };
+                    let mut first: Option<ExprOperand> = None;
+                    for arm in 0..count {
+                        let result = operand(body.match_parts[base + arm * stride + result_offset]);
+                        if let Some(head) = &first {
+                            rows.push((4, head.clone(), result));
+                        } else {
+                            first = Some(result);
+                        }
+                    }
+                    let wildcard = if node.kind == 22 {
+                        Some(body.match_parts[base + 1])
+                    } else if body.match_parts[base + 2 + count * stride] == 1 {
+                        Some(body.match_parts[base + 3 + count * stride])
+                    } else {
+                        None
+                    };
+                    if let (Some(head), Some(wildcard)) = (first, wildcard) {
+                        rows.push((4, head, operand(wildcard)));
+                    }
+                } else if node.kind == NODE_ARRAY_LIT {
+                    // --- THE ARRAY-ELEMENT CLAIM, KIND 2 ---------------------------------------
+                    //
+                    // The reference pairs element ZERO against every LATER element, so a literal of
+                    // n elements contributes n-1 rows and one of n <= 1 contributes none. Kind 2 is
+                    // an equality kind, so the pairing must match exactly. An unknown first element
+                    // suppresses each first-versus-rest disagreement. Adjacent pairing could still
+                    // compare two later known elements and reject the same input.
+                    //
+                    // **THE ELEMENTS COME FROM `call_args`, SLICED BY THIS NODE'S OWN `lhs`/`rhs`.**
+                    // That channel is shared with `Node::Call`; a scan would read call arguments as
+                    // array elements.
+                    //
+                    // Measured before it was written: on every probe the count of kind-17 nodes
+                    // equalled the count of the reference's array-literal expressions, INCLUDING the
+                    // nested-index shape that once mis-parsed as a literal. That was the one
+                    // direction capable of rejecting a correct program.
+                    //
+                    // **THE `count >= 2` GUARD IS BELT-AND-BRACES AND MUTATING IT PROVES NOTHING.**
+                    // The loop below runs `1..count`, which is already empty at a count of one, so
+                    // relaxing the guard to `>= 1` is an EQUIVALENT MUTANT: it changes no output and
+                    // its survival is not a gap in the tests. Recorded because a surviving mutant
+                    // left unexplained reads as a missing guard, and the next reader would go looking
+                    // for one. The guard earns its place by making the intent legible and by keeping
+                    // the `call_args` read below off a slice that a zero-count node does not own.
+                    let start = node.lhs;
+                    let count = node.rhs;
+                    if count >= 2
+                        && let Some(&head) = body.call_args.get(usize::try_from(start).unwrap_or(0))
+                    {
+                        let first = operand(head);
+                        for k in 1..count {
+                            let Ok(at) = usize::try_from(start + k) else {
+                                continue;
+                            };
+                            if let Some(&elem) = body.call_args.get(at) {
+                                rows.push((2, first.clone(), operand(elem)));
+                            }
                         }
                     }
                 }
             }
-        }
-        for node in &body.nodes {
-            if node.kind == NODE_LET_IN
-                && let Some(&row) = row_of_node.get(&node.lhs)
-                && let Some(name) = slot_name.get(&node.arg)
-            {
-                derived.push((name.clone(), row));
+            for node in &body.nodes {
+                if node.kind == NODE_LET_IN
+                    && let Some(&row) = row_of_node.get(&node.lhs)
+                    && let Some(name) = slot_name.get(&node.arg)
+                {
+                    derived.push((name.clone(), row));
+                }
             }
-        }
 
-        // --- THE TAIL-VERSUS-RETURN CLAIM, KIND 8 -------------------------------------
-        //
-        // One row per function that HAS a tail expression, pairing what the body yields
-        // against what the signature promises. `ty_kind_is_equality` covers kind 8, so this
-        // is the row that refuses `fn f() -> Word { true }`.
-        //
-        // **PUSHED AFTER THE GROUP'S OWN ROWS, and that is not arbitrary.** `row_of_node`
-        // maps a forest node to a position in `rows`, and the derived bindings above read
-        // it; appending here cannot disturb an index already handed out. The reference
-        // appends its tail row at the same point for the same reason.
-        //
-        // The return operand is always form 0 — a tag the signature states outright —
-        // exactly as the reference builds it.
-        // **A MULTIHEADED GROUP EMITS NOTHING, AND THAT IS A DELIBERATE LOSS.** The reference
-        // walks each head as its own function with its own tail, so a three-headed `f`
-        // contributes three rows there; the pipeline reconstructs the whole group into ONE
-        // fused body with a single dispatch root and can offer at most one. Measured: a
-        // two-headed `f` gives the reference three tails against the pipeline's two rows.
-        //
-        // Emitting the group's own row was the obvious alternative and it is refused on the
-        // same ground the branch pair was. The fused root is a DISPATCH structure, and on the
-        // cases measured it types as unknown, which would accept — but "unknown on the two
-        // programs I tried" is not the property needed. If any fused root ever types to a tag,
-        // it is a tag no head necessarily yields, feeding an EQUALITY predicate that can
-        // reject a correct program. **Emitting nothing loses a check; emitting the wrong thing
-        // loses a valid program.** `a_multiheaded_function_contributes_no_tail_row` pins it.
-        if !is_multihead_group(&group)
-            && let Some(tail) = body_tail_node(&body)
-        {
-            let ret = scalar_tag_of_type_name(name_of(group[0].return_type).as_deref());
-            rows.push((8, operand(tail), (ret, 0, String::new())));
+            // --- THE TAIL-VERSUS-RETURN CLAIM, KIND 8 -------------------------------------
+            //
+            // One row per function that HAS a tail expression, pairing what the body yields
+            // against what the signature promises. `ty_kind_is_equality` covers kind 8, so this
+            // is the row that refuses `fn f() -> Word { true }`.
+            //
+            // **PUSHED AFTER THE HEAD'S OWN ROWS, and that is not arbitrary.** `row_of_node`
+            // maps a forest node to a position in `rows`, and the derived bindings above read
+            // it; appending here cannot disturb an index already handed out. The reference
+            // appends its tail row at the same point for the same reason.
+            //
+            // The return operand is always form 0 — a tag the signature states outright —
+            // exactly as the reference builds it.
+            // Each source head has its own body here, so dispatch synthesis cannot
+            // hide a head's tail or substitute another head's slot names.
+            // Guard subexpressions participate in the walk above. Do not invent a
+            // root requirement here: the reference currently accepts a Word-valued
+            // function guard. Match guards have a different reference check.
+            if !is_guard && let Some(tail) = body_tail_node(&body) {
+                let ret = scalar_tag_of_type_name(name_of(f.return_type).as_deref());
+                rows.push((8, operand(tail), (ret, 0, String::new())));
+            }
         }
     }
 
