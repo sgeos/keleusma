@@ -86,3 +86,12 @@ result specifically establishes use through a fresh login shell.
 
 Authentication and one minimal Jev evaluation are now verified. Broader project
 workflow integration and task-specific model quality remain unverified.
+
+## Subsequent workflow research
+
+The [development-flow spike](./kaizen/2026-10-04-jev-development-flow-spike.md)
+records the later 60-case synthetic evaluation, live receipts, offline replay
+and proposed pilot. It establishes narrow observed performance and low service
+cost. Production integration, net subscription savings and end-to-end error
+reduction remain unverified. Use its research runner only for the documented
+experiment, not as a production gate.

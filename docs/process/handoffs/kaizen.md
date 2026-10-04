@@ -4,6 +4,31 @@
 
 ## Current increment on 2026-10-04
 
+The operator requested research into Jev delegation to stretch System 2
+subscription usage and reduce errors. The
+[spike report](../kaizen/2026-10-04-jev-development-flow-spike.md) and its tracked
+experiment are complete. Eighteen live requests over 60 fixed synthetic cases
+verified low service cost and useful narrow judgments. They also exposed a
+missed contradiction and an ambiguous reference label. Jev is not error-free.
+Net subscription savings and end-to-end error reduction remain unmeasured.
+
+Current branch is `research/kaizen-jev-development-flow`, based on `cadcd17c`, in
+the project-local `.worktrees/kaizen/` checkout. Validate this handoff by checking
+that `cadcd17c` is an ancestor and reviewing commits above it. Appendix B was read
+before tracked changes. All evidence needed for offline continuation is tracked.
+Python can reproduce the summary without a credential or the former temporary
+directories. Live repetition needs a privately provisioned credential and an
+explicit new output path. See the report for commands and limitations.
+
+Eight offline runner tests and fourteen document checks passed. The recorded
+summary reproduced byte for byte. No runtime code or production gate changed.
+No peer message, push, merge or publication occurred. The recommended subsequent
+increment is an independently labelled shadow pilot for diagnostic routing and
+claim support, followed by a controlled comparison of completed development
+tasks. Do not describe that proposed work as already authorized or implemented.
+
+## Preceding skill setup and usability increment on 2026-10-04
+
 The operator requested the TypeSafe skill as the first step toward Jev integration
 into project workflows. It is installed for Codex at user scope and its installed
 instructions have been read. The [setup record](../TYPESAFE_SKILL.md) contains the

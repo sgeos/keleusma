@@ -7,6 +7,7 @@ rests on. The line's mailbox and resume prompt is [`../handoffs/kaizen.md`](../h
 
 | report | state |
 |---|---|
+| [2026-10-04-jev-development-flow-spike.md](./2026-10-04-jev-development-flow-spike.md) | bounded Jev experiment with tracked receipts, low service cost verified, subscription savings and overall error reduction unmeasured |
 | [2026-10-04-interline-portability-receipt.md](./2026-10-04-interline-portability-receipt.md) | project-local checkout, tracked queue checkpoint, fresh-clone restoration and harness-independent routes |
 | [2026-10-04-interline-protocol-receipt.md](./2026-10-04-interline-protocol-receipt.md) | shared local transport and both client configurations installed, live receiver activation unverified |
 | [`2026-10-04-policy-propagation-proposal.md`](./2026-10-04-policy-propagation-proposal.md) | nine-file patch for the V0.2.X owning line, tested on a trunk export, no peer changes applied |

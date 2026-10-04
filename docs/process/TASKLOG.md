@@ -6,6 +6,20 @@ Current sprint source of truth.
 
 ---
 
+## Jev development-flow spike on research/kaizen-jev-development-flow
+
+2026-10-04. Completed the [research spike](./kaizen/2026-10-04-jev-development-flow-spike.md)
+using the TypeSafe skill and `jev-1.13.0`. The tracked experiment includes 60
+fixed synthetic cases and 18 live requests. Label agreement was 20 of 20 for
+diagnostic routing, 20 of 20 for excerpt relevance and 18 of 20 for claim support.
+One claim label is ambiguous and one result misses an explicit contradiction.
+Estimated service cost was USD 0.001896426. Neither net System 2 subscription
+savings nor an end-to-end reduction in development errors was measured.
+The report recommends a bounded shadow pilot without changing existing gates.
+Eight offline runner tests and fourteen document checks passed. The summary
+reproduced byte for byte from tracked receipts. No production hook was installed.
+The kaizen handoff records continuation on this branch, based on `cadcd17c`.
+
 ## TypeSafe skill setup on chore/kaizen-typesafe-skill
 
 2026-10-04 authenticated recheck. After operator credential provisioning, a fresh
