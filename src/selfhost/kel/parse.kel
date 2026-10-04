@@ -95,6 +95,9 @@ shared data toks {
     // APPENDED LAST, like `and_id`/`or_id` and `base`/`at` before them.
     true_id: Word,
     false_id: Word,
+    // Whole-source fact from the first lexer pass, including imports after a use site.
+    has_imports: Word,
+    assert_id: Word,
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -416,6 +419,12 @@ private data ps {
     // operand VALUE is Byte-typed (set for a Byte parameter Local, cleared otherwise); the stages
     // carry no Byte value, so this is always 0 there and the Byte lowering never fires for them.
     pbyte: [Word; 33],
+    pscalar: [Word; 33],
+    scalar_postfix: Word,
+    scalar_field_at: Word,
+    unresolved_name: Word,
+    unresolved_pending: Word,
+    has_imports: Word,
     last_byte: Word,
     // Operand-type tracking for `struct == struct` equality (a field-wise comparison loop): the
     // struct declaration index (plus one) of the most recently emitted operand VALUE if it is a
@@ -643,6 +652,18 @@ fn pe_variants() -> Word { 9 }
 // `IndexOutOfBounds(8, 8)`, after `for` nesting and array-literal nesting.
 fn pe_calldepth() -> Word { 10 }
 fn pe_fields() -> Word { 11 }
+// Source errors carry the unresolved name id, not a capacity count.
+fn pe_unknown_name() -> Word { 13 }
+fn pe_unknown_field() -> Word { 14 }
+fn pe_function_value() -> Word { 15 }
+fn pe_scalar_field() -> Word { 16 }
+fn pe_scalar_index() -> Word { 17 }
+// Explicit type application is outside this parser path, not a source type error.
+fn pe_call_syntax() -> Word { 18 }
+fn pe_method_syntax() -> Word { 19 }
+fn pe_pattern_syntax() -> Word { 20 }
+fn pe_unresolved_syntax() -> Word { 21 }
+fn pe_value_call() -> Word { 22 }
 // **CODE 12 IS RETIRED AND DELIBERATELY NOT REUSED.** It named the bare `for` form as an
 // unsupported construct -- the only such code among eleven capacity limits -- and existed for
 // exactly as long as the form was unsupported, raised at phase 4 where the lowering now hooks
@@ -798,6 +819,9 @@ private data stmt {
     // without draining a (non-existent) statement value.
     break_pending: Word,
     pending_let_name: Word,
+    pending_let_scalar: Word,
+    let_annotation_phase: Word,
+    let_scalar: [Word; 65],
     let_names: [Word; 65],
     scope_slot: [Word; 65],
     let_count: Word,
@@ -1062,6 +1086,7 @@ private data stmt {
     // growth of it overflows a 16-deep stack; 32 gives headroom for continued stage work.
     pstmt_kind: [Word; 32],
     pstmt_name: [Word; 32],
+    pstmt_scalar: [Word; 32],
     pstmt_arg: [Word; 32],
     pstmt_sp: Word,
     stmt_base: Word,
@@ -1435,6 +1460,7 @@ private data structdefs {
 fn step_local(v: Word) -> Word {
     ps.found = 0;
     ps.found_flag = 0;
+    ps.scalar_postfix = 0;
     // This operand is Byte-typed only if it resolves to a Byte parameter (set below); default 0.
     // It is a plain scalar/Local, not a whole struct, so clear the struct-operand tracking.
     ps.last_byte = 0;
@@ -1450,6 +1476,7 @@ fn step_local(v: Word) -> Word {
     for i in 0..stmt.let_count limit 64 {
         if stmt.let_names[i] == v {
             ps.found = stmt.scope_slot[i];
+            ps.scalar_postfix = stmt.let_scalar[i];
             ps.found_flag = 1;
         }
     }
@@ -1457,6 +1484,8 @@ fn step_local(v: Word) -> Word {
         for i in 0..ps.pcount limit 32 {
             if ps.pnames[i] == v {
                 ps.found = i;
+                ps.scalar_postfix = ps.pscalar[i];
+                ps.found_flag = 1;
                 if ps.pbyte[i] == 1 {
                     ps.last_byte = 1;
                 }
@@ -1467,7 +1496,13 @@ fn step_local(v: Word) -> Word {
         }
     }
     ops.expect_operand = 0;
-    Node::Local() as Word + ps.found * 64
+    if ps.found_flag == 0 {
+        ps.unresolved_name = v;
+        ps.unresolved_pending = 1;
+        0
+    } else {
+        Node::Local() as Word + ps.found * 64
+    }
 }
 
 // Resolve a local identifier, including one shadowing a global name. If it is a
@@ -2150,6 +2185,7 @@ fn step_mpat(k: Word, v: Word) -> Word {
             stmt.slot_count = stmt.slot_count + 1;
             stmt.let_names[stmt.let_count] = v;
             stmt.scope_slot[stmt.let_count] = slot;
+            stmt.let_scalar[stmt.let_count] = 0;
             // A composite payload binds the bound variable's composite type so `p.field`/`t.N`/`a[j]`
             // resolves: a STRUCT payload sets `let_struct`, a TUPLE `let_tuple` (its layout), an
             // ARRAY `let_array` (its element kind); a scalar payload leaves all 0.
@@ -4498,6 +4534,8 @@ fn step_match(k: Word, v: Word) -> Word {
             if ps.found_flag == 1 {
                 mat.enum_name = v;
                 mat.mpat_phase = 1;
+            } else {
+                perr(pe_pattern_syntax(), v);
             }
             0
         } else {
@@ -4618,6 +4656,7 @@ fn step_forheader(k: Word, v: Word) -> Word {
         if k == Tok::LBrace() as Word {
             stmt.let_names[stmt.let_count] = forst.for_var[fp];
             stmt.scope_slot[stmt.let_count] = forst.for_vslot[fp];
+            stmt.let_scalar[stmt.let_count] = 1;
             stmt.let_count = let_push(stmt.let_count);
             forst.for_phase[fp] = 7;
             forst.for_stmt_start[fp] = stmt.stmt_count;
@@ -4791,6 +4830,7 @@ fn step_normal(k: Word, v: Word) -> Word {
         } } } }
     } else {
     if k == Tok::LParen() as Word {
+        if ops.expect_operand == 0 { perr(pe_value_call(), toks.at); }
         ops.opstack[ops.opsp] = OpCode::Paren() as Word;
         ops.opsp = op_push(ops.opsp);
         ops.expect_operand = 1;
@@ -4829,6 +4869,12 @@ fn step_normal(k: Word, v: Word) -> Word {
 // packing the GetField operand as offset + kind * 65536. Held in its own function so the
 // dispatch chain is not deepened (the parser's own conditional stack is bounded).
 fn step_fieldaccess(k: Word, v: Word) -> Word {
+    if ps.fa_phase == 4 {
+        if k == Tok::LParen() as Word {
+            perr(pe_method_syntax(), toks.at);
+        } else { perr(pe_unknown_field(), ps.unresolved_name); }
+        0
+    } else {
     if ps.fa_phase == 1 {
         if k == Tok::Dot() as Word {
             ps.fa_phase = 2;
@@ -4846,18 +4892,25 @@ fn step_fieldaccess(k: Word, v: Word) -> Word {
         // total byte size, and DEFER emission to phase 3, where the following token decides a
         // scalar read (`p.f`) from an array-element read (`p.xs[i]`).
         if k == Tok::Ident() as Word {
+            ps.found_flag = 0;
             structdefs.sc_fieldpos = structdefs.sd_fstart[ps.fa_struct];
             for i in 0..structdefs.sd_fcount[ps.fa_struct] limit 64 {
                 if structdefs.sd_fname[structdefs.sd_fstart[ps.fa_struct] + i] == v {
                     structdefs.sc_fieldpos = structdefs.sd_fstart[ps.fa_struct] + i;
+                    ps.found_flag = 1;
                 }
             }
+            if ps.found_flag == 0 {
+                ps.unresolved_name = v;
+                ps.fa_phase = 4;
+            } else {
             ps.fa_off = structdefs.sd_foffset[structdefs.sc_fieldpos];
             ps.fa_kind = structdefs.sd_fkind[structdefs.sc_fieldpos];
             ps.fa_size = structdefs.sd_fsize[structdefs.sc_fieldpos];
             ps.fa_fstruct = structdefs.sd_fstruct[structdefs.sc_fieldpos];
             ps.fa_ftuple = structdefs.sd_ftuple[structdefs.sc_fieldpos];
             ps.fa_phase = 3;
+            }
         } else {
             ps.fa_phase = 0;
         }
@@ -4915,7 +4968,7 @@ fn step_fieldaccess(k: Word, v: Word) -> Word {
             Node::FieldAccess() as Word + (ps.fa_off + ps.fa_kind * 65536) * 64
         } }
     } }
-}
+} }
 
 // The tuple-field-access postfix (ps.ta_phase 1/2), after a tuple-typed parameter Local was
 // emitted. Phase 1 awaits an optional `.` (a non-`.` token is pushed back, the parameter was used
@@ -5021,6 +5074,64 @@ fn step_structarrayaccess(k: Word, v: Word) -> Word {
     }
 }
 
+// Preserve only a primitive annotation's outer type. A composite annotation starts
+// with another token and remains unclassified here even if it contains Word or Byte.
+fn scalar_type_name(v: Word) -> Word {
+    if v == toks.word_id orelse v == toks.byte_id orelse v == toks.bool_id { 1 } else { 0 }
+}
+
+fn record_let_annotation(k: Word, v: Word) -> Word {
+    if stmt.let_annotation_phase == 0 andalso k == Tok::Colon() as Word {
+        stmt.let_annotation_phase = 1;
+    } else {
+        if stmt.let_annotation_phase == 1 {
+            stmt.let_annotation_phase = 2;
+            if k == Tok::Ident() as Word { stmt.pending_let_scalar = scalar_type_name(v); }
+        }
+    }
+    0
+}
+
+// A declared scalar cannot have a field or element. Push any ordinary operator
+// back for the existing dispatch. Unknown and composite types never enter this path.
+fn step_scalar_postfix(k: Word) -> Word {
+    if ps.scalar_postfix == 1 {
+        ps.scalar_postfix = 0;
+        if k == Tok::Dot() as Word {
+            ps.scalar_postfix = 2;
+            ps.scalar_field_at = toks.at;
+        } else {
+            if k == Tok::LBracket() as Word {
+                perr(pe_scalar_index(), toks.at);
+            } else { ps.cursor = ps.cursor - 1; }
+        }
+        0
+    } else {
+        if ps.scalar_postfix == 2 andalso k == Tok::Ident() as Word {
+            ps.scalar_postfix = 3;
+            0
+        } else {
+            ps.scalar_postfix = 0;
+            if k == Tok::LParen() as Word {
+                perr(pe_method_syntax(), ps.scalar_field_at)
+            } else {
+                perr(pe_scalar_field(), ps.scalar_field_at)
+            }
+        }
+    }
+}
+
+fn step_unresolved_name(k: Word) -> Word {
+    ps.unresolved_pending = 0;
+    // A qualified name, forward composite/data use, statement keyword or native
+    // import may be valid syntax outside this stage's implemented name resolution.
+    if (toks.assert_id > 0 andalso ps.unresolved_name == toks.assert_id andalso k != Tok::LParen() as Word) orelse ps.has_imports == 1 orelse toks.has_imports == 1 orelse k == Tok::ColCol() as Word orelse k == Tok::Dot() as Word orelse k == Tok::LBrace() as Word orelse k == Tok::Ident() as Word {
+        perr(pe_unresolved_syntax(), ps.unresolved_name)
+    } else {
+        perr(pe_unknown_name(), ps.unresolved_name)
+    }
+}
+
 // The normal parse-phase dispatch: a `let` binding's name or `=`, else an expression
 // token.
 fn step_dispatch_normal(k: Word, v: Word) -> Word {
@@ -5071,10 +5182,12 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         0
     } else {
     if stmt.let_phase == 2 {
+        record_let_annotation(k, v);
         if k == Tok::Eq() as Word {
             stmt.let_phase = 0;
             stmt.pstmt_kind[stmt.pstmt_sp] = 0;
             stmt.pstmt_name[stmt.pstmt_sp] = stmt.pending_let_name;
+            stmt.pstmt_scalar[stmt.pstmt_sp] = stmt.pending_let_scalar;
             stmt.pstmt_sp = stmt.pstmt_sp + 1;
             ops.expect_operand = 1;
             // Begin tracking this `let` value's root composite type fresh.
@@ -5091,6 +5204,8 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
     if stmt.let_phase == 1 {
         if k == Tok::Ident() as Word {
             stmt.pending_let_name = v;
+            stmt.pending_let_scalar = 0;
+            stmt.let_annotation_phase = 0;
             stmt.let_phase = 2;
         }
         0
@@ -5126,6 +5241,12 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
             ops.opsp = op_push(ops.opsp);
             call.call_phase = 0;
             ops.expect_operand = 1;
+        } else {
+            if k == Tok::Lt() as Word orelse k == Tok::ColCol() as Word {
+                perr(pe_call_syntax(), toks.at);
+            } else {
+                perr(pe_function_value(), toks.chunks[call.call_pending]);
+            }
         }
         0
     } else {
@@ -5278,6 +5399,7 @@ fn step_draining() -> Word {
                     stmt.stmt_name[stmt.stmt_count] = stmt.pstmt_name[stmt.pstmt_sp];
                     stmt.let_names[stmt.let_count] = stmt.pstmt_name[stmt.pstmt_sp];
                     stmt.scope_slot[stmt.let_count] = slot;
+                    stmt.let_scalar[stmt.let_count] = stmt.pstmt_scalar[stmt.pstmt_sp];
                     // Record the binding's composite type from its value's root construction, so a
                     // later `x.N`/`x.field` access resolves. A tuple allocates a fresh all-Word
                     // `tupledefs` layout (offset i*8, kind Int); a struct reuses its declaration
@@ -5471,6 +5593,7 @@ fn step_draining() -> Word {
             stmt.slot_count = stmt.slot_count + 1;
             stmt.let_names[stmt.let_count] = forst.for_var[bfp];
             stmt.scope_slot[stmt.let_count] = forst.for_vslot[bfp];
+            stmt.let_scalar[stmt.let_count] = 1;
             stmt.let_count = let_push(stmt.let_count);
             forst.for_phase[bfp] = 7;
             forst.for_stmt_start[bfp] = stmt.stmt_count;
@@ -5633,6 +5756,12 @@ fn body_step() -> Word {
             ps.cursor = ps.cursor + 1;
             // A pending struct-field-access postfix intercepts the next token here, before the
             // normal dispatch, so the deep `step_dispatch_normal` chain is not deepened.
+            if ps.unresolved_pending == 1 {
+                step_unresolved_name(k)
+            } else {
+            if ps.scalar_postfix >= 1 {
+                step_scalar_postfix(k)
+            } else {
             if ps.fa_phase >= 1 {
                 step_fieldaccess(k, v)
             } else {
@@ -5646,7 +5775,7 @@ fn body_step() -> Word {
                 step_arrayaccess(k, v)
             } else {
                 step_body_dispatch(k, v)
-            } } } }
+            } } } } } }
         }
     } } } } } } } } } } } } } }
 }
@@ -5703,6 +5832,8 @@ fn arm_body() -> Word {
     call.call_phase = 0;
     call.cdraining = 0;
     ps.fa_phase = 0;
+    ps.scalar_postfix = 0;
+    ps.unresolved_pending = 0;
     16
 }
 
@@ -5772,6 +5903,7 @@ fn header_step(k: Word, v: Word) -> Word {
         if k == 19 {
             // `use`: a native import declaration. Emit USTART and scan the path.
             ps.mode = 8;
+            ps.has_imports = 1;
             10
         } else {
         if k == 1 andalso v == toks.require_id {
@@ -6329,6 +6461,7 @@ fn header_field(k: Word, v: Word) -> Word {
 // reconstruct cap; parse.kel's own `header_sig` grew past it as the array-type surface expanded.
 fn header_type_ident(v: Word, mode: Word) -> Word {
     if mode == 0 {
+        ps.pscalar[ps.pcount - 1] = scalar_type_name(v);
         // Record a `Byte` scalar parameter so a bitwise op on it lowers promote-operate-truncate.
         if v == toks.byte_id {
             ps.pbyte[ps.pcount - 1] = 1;
@@ -6361,6 +6494,7 @@ fn header_type_ident(v: Word, mode: Word) -> Word {
 
 // Mode 2: the signature scan, ending when the first `{` at depth zero arms the body walk.
 fn header_sig(k: Word, v: Word) -> Word {
+    if k == Tok::Const() as Word { perr(pe_call_syntax(), toks.at); }
     if ps.rtts == 1 {
         // Inside a return-type tuple `-> (T, T, ...)`: count its all-Word elements for the chunk.
         step_ret_tuple_type(k, v)
@@ -6471,6 +6605,7 @@ fn header_sig(k: Word, v: Word) -> Word {
                 ps.parray_arr[ps.pcount] = 0;
                 ps.parray_enum[ps.pcount] = 0;
                 ps.pbyte[ps.pcount] = 0;
+                ps.pscalar[ps.pcount] = 0;
                 ps.pcount = param_push(ps.pcount);
                 4 + v * 64
             } else {

@@ -489,3 +489,12 @@ The V0.2.x line is complete, and V0.3.0 is ready, when:
    primitive-implementation decision resolved and any Keleusma primitives review-gated.
 5. The self-hosted toolchain is driven by the shipping tool, not only by tests, and the Rust
    reference's role is reduced to the differential oracle pending its retirement decision.
+
+## Order 1 rejection-path increment, 2026-10-04
+
+The scoped pipeline harness now reaches the existing twenty rejection cases and seven valid
+controls without reference-first masking. Structured parser errors distinguish source diagnostics
+from unsupported syntax and resource failures. Declared scalar projections are refused before
+reconstruction. The remaining production input, annotation, occurrence and composite coverage
+obligations remain in the [completion plan](../decisions/ORDER1_COMPLETION_PLAN.md).
+This increment does not complete Order 1 or move the shipping driver off reference-first checking.

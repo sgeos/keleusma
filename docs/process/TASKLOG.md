@@ -6,6 +6,31 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-04 Order 1 explicit source rejection
+
+The scoped pipeline now rejects all twenty existing negative corpus cases and accepts all
+seven valid controls without reference-first masking. Six gaps were exposed by the initial
+run. Three were accepted and three failed during reconstruction. Parser diagnostics now
+retain their numeric tags and payloads through a fallible transport and scoped input interface.
+Unknown names and fields no longer substitute valid slots. Bare function values, calls through
+values and declared scalar projections are explicit source failures. Unsupported syntax,
+capacity, protocol and execution failures remain distinct.
+
+Valid controls exposed method syntax after a scalar dot and the host seeding uppercase Bool
+instead of lowercase bool. Method, const parameter, binding-pattern, assertion and imported-name
+cases now have separate unsupported outcomes. Scalar annotations are retained for projection
+checks only. General annotation compatibility and unannotated composite facts remain open.
+
+Final release suites passed 94 type tests, 90 parser tests with two ignored, two complete
+artifact tests covering all twelve stages, and three monomorphization tests. Selected compilation
+tests passed 89. Default type tests passed 30 and host-layout tests passed four. Default and
+broad Clippy performed actual crate checking and passed. The workspace documentation build
+passed with warnings denied. Exact logs and remaining gates are in the reverse prompt.
+
+The shadow pilot retains the initial reconstruction diagnostic and three completion claims.
+Self-reviews are non-independent. External evaluation remains pending the existing authorization
+question. No interline messages were received or sent. Full Order 1 remains active.
+
 ## 2026-10-04 Order 1 computed scalar operands
 
 Scoped batches now connect expression results, call requirements, local bindings and return

@@ -737,6 +737,7 @@ struct FirstPass {
     /// against this to find end of input, so a windowed feed must know it up
     /// front -- which is the one thing a single forward pass cannot supply.
     token_count: usize,
+    has_imports: bool,
 }
 
 /// Stream the lexer once, keeping only what the second pass needs.
@@ -760,9 +761,11 @@ fn first_pass(src: &str) -> FirstPass {
     let mut depth: i64 = 0;
     let mut prev: Option<(i64, i64)> = None;
     let mut token_count = 0usize;
+    let mut has_imports = false;
     while let Some(w) = lex_next(&mut vm, &mut shared) {
         let cur = (w.rem_euclid(256), w.div_euclid(256));
         token_count += 1;
+        has_imports |= cur.0 == 19;
         if let Some((kw, _)) = prev {
             if depth == 0 && (kw == 0 || kw == 5 || kw == 6) && cur.0 == 1 {
                 ids.push(cur.1);
@@ -785,6 +788,7 @@ fn first_pass(src: &str) -> FirstPass {
         names,
         chunks: ids,
         token_count,
+        has_imports,
     }
 }
 
@@ -1270,7 +1274,7 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
         .unwrap();
     vm.set_shared(&mut shared, BR_P_FALSE_ID, Value::Int(id_of("false")))
         .unwrap();
-    vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
+    vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("bool")))
         .unwrap();
     vm.set_shared(
         &mut shared,
@@ -1470,6 +1474,16 @@ fn parse_functions_impl(
     on_function: &mut dyn FnMut(&[String], ParsedFn),
     on_record: &mut dyn FnMut(i64, i64, i64),
 ) -> ParseSideTables {
+    try_parse_functions_impl(src, fused, on_function, on_record)
+        .unwrap_or_else(|error| panic!("{error}"))
+}
+
+fn try_parse_functions_impl(
+    src: &str,
+    fused: bool,
+    on_function: &mut dyn FnMut(&[String], ParsedFn),
+    on_record: &mut dyn FnMut(i64, i64, i64),
+) -> Result<ParseSideTables, crate::selfhost_host::ParseRecordError> {
     // ONE IMPLEMENTATION, TWO FEEDS. The record handling below is long and
     // stateful, and a second copy of it in a fused driver is precisely the drift
     // `selfhost_host` already records paying for once. Only the token FEED
@@ -1535,6 +1549,18 @@ fn parse_functions_impl(
     );
     vm.set_shared(&mut shared, BR_P_LEN, Value::Int(token_count as i64))
         .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_ASSERT_ID,
+        Value::Int(id_of("assert")),
+    )
+    .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_HAS_IMPORTS,
+        Value::Int(i64::from(first.has_imports)),
+    )
+    .unwrap();
     vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_REQUIRE_ID, Value::Int(id_of("require")))
@@ -1565,7 +1591,7 @@ fn parse_functions_impl(
         .unwrap();
     vm.set_shared(&mut shared, BR_P_FALSE_ID, Value::Int(id_of("false")))
         .unwrap();
-    vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
+    vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("bool")))
         .unwrap();
     vm.set_shared(
         &mut shared,
@@ -1753,7 +1779,7 @@ fn parse_functions_impl(
         }
     };
 
-    crate::selfhost_host::drive_parse_records_with(
+    crate::selfhost_host::try_drive_parse_records_with(
         &mut vm,
         &mut shared,
         state,
@@ -1892,8 +1918,8 @@ fn parse_functions_impl(
             ControlFlow::Continue(())
         },
         before_resume,
-    );
-    (names, data_records, enum_records, struct_records)
+    )?;
+    Ok((names, data_records, enum_records, struct_records))
 }
 
 /// Turn `codegen.kel`'s tagged constant pool into the reference compiler's `ConstValue`s.
@@ -2218,7 +2244,18 @@ pub struct CallTypeBatch {
 /// reported by the stage rather than concealed by the positional zip.
 #[must_use]
 pub fn call_type_inputs_from_pipeline(src: &str) -> CallTypeInputs {
-    let (fns, names, ..) = parse_functions_fused(src);
+    try_call_type_inputs_from_pipeline(src).unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// Extract scoped type facts, retaining parser diagnostics as structured errors.
+/// Stage compilation, lexing and reconstruction still use their existing panic paths.
+/// A caller must not classify such a panic as a source rejection.
+pub fn try_call_type_inputs_from_pipeline(
+    src: &str,
+) -> Result<CallTypeInputs, crate::selfhost_host::ParseRecordError> {
+    let mut fns = Vec::new();
+    let (names, ..) =
+        try_parse_functions_impl(src, true, &mut |_, f| fns.push(f), &mut |_, _, _| {})?;
     let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
     let tag_of = |id: i64| scalar_tag_of_type_name(names.get(id as usize).map(String::as_str));
     let mut declarations = Vec::new();
@@ -2368,10 +2405,10 @@ pub fn call_type_inputs_from_pipeline(src: &str) -> CallTypeInputs {
             });
         }
     }
-    CallTypeInputs {
+    Ok(CallTypeInputs {
         declarations,
         batches,
-    }
+    })
 }
 
 /// Declarations and call sites from the same extraction that supplies actual arguments.
@@ -2681,17 +2718,12 @@ pub type ExprRow = (i64, ExprOperand, ExprOperand);
 /// carried over from the occurrences slice. That was a reason to look, not a finding. Both
 /// blockers below were measured, and one of them is not what reading the two sides predicted.
 ///
-/// **KINDS 5 AND 6 — FIELD AND INDEX ON A VALUE — have no forest to extract from.** On every
-/// program these kinds exist to reject, reconstruction refuses outright: the record range does
-/// not reduce to one node. The obstacle is not a missing datum, it is that the input never
-/// becomes a tree. `a_field_or_index_on_a_scalar_is_refused_before_any_row_could_be_extracted`
-/// pins it, together with a control proving the extraction works on a program it does handle.
-///
-/// **THIS FUNCTION THEREFORE PANICS ON THOSE INPUTS**, and that is worth stating plainly next to
-/// the signature rather than leaving to be discovered. It is **not** reachable through the
-/// shipping compiler: `self_hosted_compile` compiles with the reference first and surfaces the
-/// reference's own error, so a program the reference rejects never reaches the pipeline, and it
-/// wraps the pipeline in `catch_unwind` besides. Exposure is to direct callers of this API.
+/// Declared scalar field and index operations are rejected by parser diagnostics before
+/// reconstruction. The scoped fallible input path retains these as source errors, distinct
+/// from parser capacity and unsupported-syntax failures. The legacy interface here still
+/// panics. Unannotated scalar aliases and other composite input paths remain incomplete.
+/// `a_field_or_index_on_a_scalar_is_refused_before_any_row_could_be_extracted` checks the
+/// explicit diagnostics and a valid array control.
 ///
 /// Kind 7 comes from metadata emitted by `parse.kel` after it resolves the literal's struct.
 /// The metadata carries the declared field count. The following construction record carries

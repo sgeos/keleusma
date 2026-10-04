@@ -4274,9 +4274,9 @@ fn every_known_gap_is_refused_by_the_self_hosted_compiler() {
 ///
 /// # The result: the pipeline omits every binder the reference reports
 ///
-/// For a `for` variable, a match-arm payload binding and a const parameter used as
-/// a value, the reference records an occurrence and the pipeline records none.
-/// Only the `for` case was pinned; the other two were not recorded anywhere.
+/// For a `for` variable and a match-arm payload binding, the reference records an
+/// occurrence and the pipeline records none. Const parameter declarations now report
+/// unsupported syntax before extraction, covered separately by the unsupported-syntax controls.
 ///
 /// # THE RISK THIS COMMENT USED TO STATE WAS WRONG, AND READING THE CODE SHOWED IT
 ///
@@ -4323,11 +4323,6 @@ fn the_pipeline_omits_the_binders_the_reference_reports() {
             "match arm payload binding",
             "enum E { W(Word), N }\n\
              fn main(e: E) -> Word { match e { E::W(p) => p + 1, E::N => 0 } }",
-        ),
-        (
-            "const parameter used as a value",
-            "fn plus<const n: Word>() -> Word { n + 10 }\n\
-             fn main() -> Word { plus::<7>() }",
         ),
     ];
 
@@ -4379,11 +4374,7 @@ fn the_pipeline_omits_the_binders_the_reference_reports() {
 
     assert_eq!(
         diverging,
-        vec![
-            "for loop variable",
-            "match arm payload binding",
-            "const parameter used as a value",
-        ],
+        vec!["for loop variable", "match arm payload binding",],
         "the set of binding forms on which the two extractions diverge changed. A \
          form LEAVING it means the pipeline began reporting that binder -- check \
          that it also collects it as a LOCAL, because reporting without collecting \
@@ -6961,6 +6952,177 @@ fn the_declaration_and_call_rows_agree_between_the_pipeline_and_the_reference() 
     );
 }
 
+/// Missing names must report stage source errors, without substituting slot zero.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_name_failures_are_structured_source_rejections() {
+    use keleusma::selfhost::try_call_type_inputs_from_pipeline;
+    use keleusma::selfhost_host::{PARSE_DIAG_TAG_BASE, ParseRecordError};
+    for (source, diagnostic) in [
+        ("fn main() -> Word { nope }", 13),
+        ("fn main() -> Word { nope(1) }", 13),
+        ("fn main(x: Word) -> Word { missing + x }", 13),
+        (
+            "struct P { a: Word } fn main() -> Word { let p = P { a: 1 }; p.b }",
+            14,
+        ),
+        ("struct P { a: Word } fn main(p: P) -> Word { p.b }", 14),
+    ] {
+        assert!(!reference_accepts(source), "negative control {source}");
+        let error = try_call_type_inputs_from_pipeline(source).expect_err(source);
+        assert!(error.is_source_rejection(), "{error}");
+        match error {
+            ParseRecordError::Diagnostic { code, detail } => {
+                assert_eq!(code, PARSE_DIAG_TAG_BASE - diagnostic, "{source}");
+                assert!(detail >= 0, "missing name id for {source}");
+            }
+            other => panic!("expected stage diagnostic, got {other:?}"),
+        }
+    }
+    for source in [
+        "fn main(x: Word) -> Word { x }",
+        "fn main() -> Word { let x = 1; x }",
+        "struct P { a: Word, b: Word } fn main(p: P) -> Word { p.b }",
+        "struct P { a: Word } fn main() -> Word { let p = P { a: 1 }; p.a }",
+        "fn main() -> Word { later(1) } fn later(x: Word) -> Word { x }",
+    ] {
+        assert!(reference_accepts(source), "positive control {source}");
+        assert!(pipeline_call_verdict(source), "false rejection {source}");
+    }
+    for number in [1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 18, 999] {
+        assert!(
+            !ParseRecordError::Diagnostic {
+                code: PARSE_DIAG_TAG_BASE - number,
+                detail: 0,
+            }
+            .is_source_rejection()
+        );
+    }
+    assert!(!ParseRecordError::Budget(1).is_source_rejection());
+    assert!(!ParseRecordError::Protocol("test".into()).is_source_rejection());
+    assert!(
+        !ParseRecordError::Execution(keleusma::vm::VmError::StackUnderflow).is_source_rejection()
+    );
+}
+
+/// Primitive declarations reject projections without classifying composite annotations as scalars.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_declared_scalars_reject_projections() {
+    use keleusma::selfhost::try_call_type_inputs_from_pipeline;
+    use keleusma::selfhost_host::{PARSE_DIAG_TAG_BASE, ParseRecordError};
+    for (source, diagnostic) in [
+        ("fn main() -> Word { let x: Word = 1; x[0] }", 17),
+        ("fn main() -> Word { let x: Word = 1; x.a }", 16),
+        ("fn main(x: Word) -> Word { x[0] }", 17),
+        ("fn main(x: Byte) -> Word { x.a }", 16),
+        ("fn main(x: bool) -> Word { x[0] }", 17),
+        ("fn main() -> Word { let x: bool = true; x.a }", 16),
+        (
+            "fn g() -> Word { 1 } fn main() -> Word { let f = g; f() }",
+            15,
+        ),
+        ("fn g() -> Word { 1 } fn main() -> Word { g }", 15),
+        ("fn main(x: Word) -> Word { x() }", 22),
+        ("fn main() -> Word { let x = 1; x() }", 22),
+    ] {
+        assert!(!reference_accepts(source), "negative control {source}");
+        let error = try_call_type_inputs_from_pipeline(source).expect_err(source);
+        assert!(error.is_source_rejection(), "{error}");
+        assert!(
+            matches!(error, ParseRecordError::Diagnostic { code, .. } if code == PARSE_DIAG_TAG_BASE - diagnostic),
+            "{source}"
+        );
+    }
+    for source in [
+        "fn main() -> Word { let x: Word = if true { let y: Word = 1; y } else { 2 }; x + 1 }",
+        "fn main() -> Word { let x: [Word; 2] = [1, 2]; x[0] }",
+        "fn main() -> Word { let x: (Word, Word) = (1, 2); x.0 }",
+        "fn main(xs: [Word; 2]) -> Word { xs[0] }",
+        "struct P { a: Word } fn main() -> Word { let x: P = P { a: 1 }; x.a }",
+        "fn main(x: Word) -> Word { if true { let x = [1, 2]; x[0] } else { x } }",
+    ] {
+        assert!(reference_accepts(source), "positive control {source}");
+        assert!(pipeline_call_verdict(source), "false rejection {source}");
+    }
+    let capacity = format!(
+        "fn main() -> Word {{ {}1{} }}",
+        "(".repeat(65),
+        ")".repeat(65)
+    );
+    let error = try_call_type_inputs_from_pipeline(&capacity).expect_err("operator capacity");
+    assert!(
+        matches!(error, ParseRecordError::Diagnostic { code, .. } if code == PARSE_DIAG_TAG_BASE - 1)
+    );
+    assert!(!error.is_source_rejection());
+}
+
+/// Valid constructs outside parser coverage must never masquerade as source errors.
+#[cfg(feature = "self-host")]
+#[test]
+fn pipeline_unsupported_syntax_is_not_source_rejection() {
+    use keleusma::selfhost::try_call_type_inputs_from_pipeline;
+    use keleusma::selfhost_host::ParseRecordError;
+    for source in [
+        "fn plus<const n: Word>() -> Word { n + 10 } fn main() -> Word { plus::<7>() }",
+        "fn main(a: Word) -> Word { match a { v => v } }",
+        "struct P { x: Word } fn main(p: P) -> Word { match p { P { x } => x, _ => 0 } }",
+        "fn main(a: Word) -> Word { assert a > 0; a }",
+        "fn main() -> Word { assert not false; 1 }",
+        "fn main() -> Word { assert 1 == 1; 1 }",
+        "use audio::midi_to_freq fn main() -> Float { audio::midi_to_freq(69) }",
+        "trait Doubler { fn double(x: Word) -> Word; } impl Doubler for Word { fn double(x: Word) -> Word { x + x } } fn main() -> Word { let n: Word = 42; n.double() }",
+        "use host::number() -> Word fn main() -> Word { host::number() }",
+    ] {
+        assert!(reference_accepts(source), "positive control {source}");
+        let error = try_call_type_inputs_from_pipeline(source).expect_err(source);
+        assert!(
+            matches!(error, ParseRecordError::Diagnostic { .. }),
+            "{error}"
+        );
+        assert!(
+            !error.is_source_rejection(),
+            "false source rejection {source}: {error}"
+        );
+    }
+}
+
+/// Exercise the existing corpus through pipeline facts without reference-first masking.
+#[cfg(feature = "self-host")]
+#[test]
+fn scoped_pipeline_inputs_reach_the_rejection_corpus() {
+    let mut missed = Vec::new();
+    let mut unavailable = Vec::new();
+    for &(label, source) in ILL_TYPED {
+        assert!(
+            !reference_accepts(source),
+            "invalid negative control {label}"
+        );
+        match std::panic::catch_unwind(|| pipeline_call_verdict(source)) {
+            Ok(false) => eprintln!("{label}: stage rejection"),
+            Ok(true) => {
+                eprintln!("{label}: accepted");
+                missed.push(label);
+            }
+            Err(_) => {
+                eprintln!("{label}: extraction refused before verdict");
+                unavailable.push(label);
+            }
+        }
+    }
+    for &(label, source) in WELL_TYPED {
+        assert!(
+            reference_accepts(source),
+            "invalid positive control {label}"
+        );
+        assert!(pipeline_call_verdict(source), "false rejection {label}");
+    }
+    assert!(
+        missed.is_empty() && unavailable.is_empty(),
+        "accepted negatives {missed:?}; no stage verdict {unavailable:?}"
+    );
+}
+
 /// Positional argument requirements use the declared parameter tag and actual source operand.
 #[cfg(feature = "self-host")]
 #[test]
@@ -7031,7 +7193,11 @@ fn pipeline_call_argument_tags_agree_with_reference_syntax() {
 /// All fact inputs come from the pipeline; the Keleusma stage resolves their names.
 #[cfg(feature = "self-host")]
 fn pipeline_call_verdict(src: &str) -> bool {
-    call_inputs_verdict(&keleusma::selfhost::call_type_inputs_from_pipeline(src))
+    match keleusma::selfhost::try_call_type_inputs_from_pipeline(src) {
+        Ok(inputs) => call_inputs_verdict(&inputs),
+        Err(error) if error.is_source_rejection() => false,
+        Err(error) => panic!("type inputs unavailable: {error}"),
+    }
 }
 
 #[cfg(feature = "self-host")]
@@ -7668,7 +7834,7 @@ fn a_trait_or_impl_declaration_is_not_collected_as_a_struct() {
     const WITH_TRAIT: &str = "struct Pair { lo: Word, hi: Word }\n\
                               trait Doubler {\n    fn double(x: Word) -> Word;\n}\n\
                               impl Doubler for Word {\n    fn double(x: Word) -> Word {\n        x + x\n    }\n}\n\
-                              fn main() -> Word { let n: Word = 42; n.double() }";
+                              fn main() -> Word { 42 }";
 
     let rows = keleusma::selfhost::field_sets_from_pipeline(WITH_TRAIT);
 
@@ -9543,96 +9709,33 @@ fn struct_field_metadata_separates_equal_size_literals() {
     }
 }
 
-/// **KINDS 5 AND 6, FIELD AND INDEX ON A VALUE: WITHHELD, AND FOR A BLUNTER REASON THAN KIND 7.**
-///
-/// These two kinds exist to reject a field access or an index applied to something scalar. The
-/// reference emits the row **only** on programs it already rejects, and hardcodes a known scalar
-/// tag so that `ty_node_bad` refuses: the extractor decides and the stage obeys.
-///
-/// **The pipeline never reaches the point of deciding.** On every program these kinds exist to
-/// catch, reconstruction refuses outright — the record stream does not reduce to one node — so
-/// there is no forest to extract a row from. The obstacle is not a missing field in a record, as
-/// it is for kind 7; it is that the input never becomes a tree.
-///
-/// # Proportionality, stated because a panic in a public function reads worse than it is
-///
-/// `expression_rows_from_pipeline` **panics** on these inputs rather than returning. That is
-/// reachable by a direct caller of the extraction API. It is **not** reachable through the
-/// shipping compiler: `self_hosted_compile` compiles with the reference FIRST and surfaces the
-/// reference's own error when the reference rejects, so none of these programs reaches the
-/// pipeline at all, and it wraps the pipeline in `catch_unwind` besides. Two independent
-/// defences, neither of which this test relies on.
-///
-/// # What this test would catch
-///
-/// If reconstruction later admits these programs, the assertion below fails. That is the signal
-/// to re-read the blocker, because a forest existing is the precondition for kinds 5 and 6 —
-/// though not on its own a licence to emit them, since the row must still be shown incapable of
-/// rejecting a correct program.
+/// Declared-scalar projections now return explicit parser diagnostics before reconstruction.
+/// This replaces the earlier probe that counted any extraction panic as a refusal.
 #[cfg(feature = "self-host")]
 #[test]
 fn a_field_or_index_on_a_scalar_is_refused_before_any_row_could_be_extracted() {
-    // Each is rejected by the reference, and each is the shape of a kind-5 or kind-6 row.
-    const WITNESSES: &[(&str, &str)] = &[
+    use keleusma::selfhost::try_call_type_inputs_from_pipeline;
+    use keleusma::selfhost_host::{PARSE_DIAG_TAG_BASE, ParseRecordError};
+    for (source, diagnostic) in [
         (
-            "field access on a scalar, naming a field that exists on some struct",
-            "struct P { a: Word, b: Word }\nfn f() -> Word { let d: Word = 7; d.a }\n",
+            "struct P { a: Word, b: Word } fn f() -> Word { let d: Word = 7; d.a }",
+            16,
         ),
-        (
-            "field access on a scalar, naming a field no struct declares",
-            "fn f() -> Word { let d: Word = 7; d.q }\n",
-        ),
-        (
-            "index applied to a scalar",
-            "fn f() -> Word { let d: Word = 7; d[0] }\n",
-        ),
-    ];
-
-    // A control, so this test cannot pass by the extraction being broken for everything. The
-    // absence of one is how a guard comes to assert nothing.
-    const CONTROL: &str = "fn f() -> Word { let d = [1, 2, 3]; d[0] }\n";
-    assert!(
-        reference_accepts(CONTROL),
-        "the control stopped compiling, so the extraction check below separates nothing"
-    );
-    let (control_rows, _) = keleusma::selfhost::expression_rows_from_pipeline(CONTROL);
-    assert!(
-        !control_rows.is_empty(),
-        "the extraction returned no rows for a program it handles, so its failing on the \
-         witnesses below says nothing about those witnesses"
-    );
-
-    // Suppress the default panic output for the duration: three deliberate panics would otherwise
-    // print three backtraces into a passing test's log and read as failures.
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let outcomes: Vec<(&str, bool, bool)> = WITNESSES
-        .iter()
-        .map(|(label, src)| {
-            let accepted = reference_accepts(src);
-            let owned = (*src).to_string();
-            let extracted = std::panic::catch_unwind(move || {
-                keleusma::selfhost::expression_rows_from_pipeline(&owned)
-            })
-            .is_ok();
-            (*label, accepted, extracted)
-        })
-        .collect();
-    std::panic::set_hook(previous);
-
-    for (label, accepted, extracted) in outcomes {
+        ("fn f() -> Word { let d: Word = 7; d.q }", 16),
+        ("fn f() -> Word { let d: Word = 7; d[0] }", 17),
+    ] {
+        assert!(!reference_accepts(source));
+        let error = try_call_type_inputs_from_pipeline(source).expect_err(source);
+        assert!(error.is_source_rejection());
         assert!(
-            !accepted,
-            "`{label}` is now accepted by the reference, so it no longer witnesses a kind-5 or \
-             kind-6 rejection"
-        );
-        assert!(
-            !extracted,
-            "`{label}` now reconstructs, so the recorded blocker for kinds 5 and 6 is stale. \
-             Re-read it: a forest existing is the precondition for these kinds, but emitting the \
-             row still requires showing it cannot reject a correct program."
+            matches!(error, ParseRecordError::Diagnostic { code, .. } if code == PARSE_DIAG_TAG_BASE - diagnostic)
         );
     }
+    let control = "fn f() -> Word { let d = [1, 2, 3]; d[0] }";
+    assert!(reference_accepts(control));
+    let inputs = try_call_type_inputs_from_pipeline(control).expect("valid array projection");
+    assert!(!inputs.batches.is_empty());
+    assert!(call_inputs_verdict(&inputs));
 }
 
 // ---------------------------------------------------------------------------
@@ -10055,7 +10158,7 @@ fn every_gap_refusal_names_the_construct() {
              Message was: {text}"
         );
         assert!(
-            text.contains("reconstruct.kel"),
+            text.contains("reconstruct.kel") || text.contains("parse.kel"),
             "{gap}: the refusal no longer carries the stage's own report. The construct name \
              serves the user and the stage detail serves whoever maintains the stage; losing \
              the second half is a regression even though the first half improved. \

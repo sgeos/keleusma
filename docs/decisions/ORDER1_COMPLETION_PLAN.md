@@ -21,7 +21,7 @@ Full-language support remains Order 6. Existing supported programs must retain t
 | Compile the complete stage corpus | Complete artifact identity against the reference for every current stage source, with a corpus inventory check | All twelve complete serialized artifacts from the production compiler match the reference after the call and alias changes. The new artifact corpus also checks directory inventory. Both sides still use the Rust serializer. |
 | Avoid reference scaffold borrowing | Production compilation assembles module fields from pipeline output | `self_host_compile_scratch` provides this path. Preserve it through integration. |
 | Derive type inputs from the self-hosted pipeline | Production rejection receives facts without walking the reference parser's abstract syntax tree or borrowing inferred types | Four extraction helpers are partial. Expressions cover only part of the required shapes. Close the residuals and move the production input path. |
-| Reject ill-typed subset programs | Independent pipeline rejection agrees with the reference on the rejection corpus, valid controls, and the rule-versus-form census | The current test harness feeds reference syntax to `verify_types.kel`. The shipping driver calls the reference first. Neither proves independent production type rejection. |
+| Reject ill-typed subset programs | Independent pipeline rejection agrees with the reference on the rejection corpus, valid controls, and the rule-versus-form census | The scoped pipeline harness now exercises all twenty rejection cases and seven valid controls without reference-first masking. Parser source diagnostics and type-stage verdicts are distinguished from unsupported syntax, capacity and execution failures. The shipping driver still calls the reference first, and the rule-versus-form census is not yet migrated. |
 | Preserve the first-pass monomorphization result | Every stage remains unchanged by monomorphization, with a control that does change | The corpus now lists all twelve sources. Identity, changing control and directory inventory tests passed again after the parser and alias changes on 2026-10-04. Repeat if stage sources change. |
 | Preserve independence from inferred expression types | The current stage corpus compiles identically with recorded expression types absent | Refresh the existing inference-independence evidence for all current sources. |
 | Emit complete artifacts through Keleusma | Production output uses the Keleusma wire emitter for framing, opcode records, operand pools, auxiliary regions and integrity fields | Region coverage tests exist, but they do not establish production serialization. `Module::to_bytes` remains on current artifact paths. Preserve the wire plan's encoder and decoder obligations. |
@@ -127,3 +127,24 @@ Across all twelve stages, the combined expression and argument rows have a measu
 maximum of 299. Bindings have a maximum of 288. The declaration maximum remains 492, and all
 batches pass the stage. These measurements retain the approved 640-row limits. Production
 integration, source annotations, occurrence coverage and composite facts remain incomplete.
+
+## Explicit parser rejection paths
+
+The scoped input path retains parser diagnostic tags and payloads in a structured result.
+Unknown local names and struct fields no longer substitute slot zero or the first field.
+Bare function references and calls through values are explicitly refused. Primitive parameter
+and local annotations support field and index rejection before reconstruction. Composite
+annotations remain distinct from their scalar element names. Annotation compatibility itself
+is still not checked through this channel.
+
+Method syntax, const parameters, unsupported patterns, assertions and unresolved imported
+or qualified names retain separate unsupported diagnostics. The first lexer pass reports
+whether imports occur anywhere in the source. The host now seeds the lowercase `bool` name
+rather than the distinct named type `Bool`. Valid controls distinguish these boundaries from
+source errors. This is not an exhaustive syntax admission proof. General unannotated projection
+facts, occurrence coverage, the rule-versus-form census and production integration remain open.
+
+The fallible interface covers parser record diagnostics and resume failures. Stage compilation,
+lexing, reconstruction and callback failures still have panic paths. None of those panics counts
+as a source rejection. The complete artifact and capacity checks passed again after these parser changes. All twelve
+stage artifacts still match the reference, and their scoped inputs remain within the selected caps.

@@ -51,6 +51,54 @@ pub fn drive_parse_records<F>(
     drive_parse_records_with(vm, shared, state, budget, on_record, |_, _| {});
 }
 
+/// A failure in the parser record transport. A diagnostic retains its numeric stage code.
+/// Capacity, execution and protocol failures are not evidence of a source type error.
+#[derive(Debug)]
+pub enum ParseRecordError {
+    /// The stage reported a diagnostic, with its original tag and payload.
+    Diagnostic {
+        /// Raw negative diagnostic tag.
+        code: i64,
+        /// Stage-defined detail, such as a name identifier or capacity count.
+        detail: i64,
+    },
+    /// The parser virtual machine failed during resume.
+    Execution(crate::vm::VmError),
+    /// The parser did not yield the expected payload word.
+    Protocol(String),
+    /// The parser did not finish within the caller's iteration budget.
+    Budget(usize),
+}
+
+impl ParseRecordError {
+    /// Only explicitly assigned source diagnostics establish rejection. Unknown codes,
+    /// retired codes, capacity limits and transport failures never do.
+    #[must_use]
+    pub fn is_source_rejection(&self) -> bool {
+        matches!(self, Self::Diagnostic { code, .. } if matches!(PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(2 | 13..=17 | 22)))
+    }
+}
+
+impl core::fmt::Display for ParseRecordError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Diagnostic { code, detail } => {
+                f.write_str(&describe_parse_diagnostic(*code, *detail))
+            }
+            Self::Execution(error) => write!(f, "resume parse.kel: {error:?}"),
+            Self::Protocol(message) => f.write_str(message),
+            Self::Budget(budget) => write!(
+                f,
+                "parse.kel ran {budget} steps without reaching DONE. Two causes are on record and \
+                 this guard cannot tell them apart: an unterminated block, string, or bracket, so \
+                 the parser never reaches the end of the declaration; or a construct the stage does \
+                 not handle and spins on rather than refusing. Check the input closes, then check \
+                 whether it uses a construct outside the self-hosted subset."
+            ),
+        }
+    }
+}
+
 /// [`drive_parse_records`] with a hook run before every resume.
 ///
 /// **ONE LOOP, NOT TWO.** A fused driver feeding tokens through a sliding window
@@ -68,9 +116,28 @@ pub fn drive_parse_records_with<F, B>(
     shared: &mut [u8],
     state: VmState,
     budget: usize,
+    on_record: F,
+    before_resume: B,
+) where
+    F: FnMut(i64, i64) -> ControlFlow<()>,
+    B: FnMut(&mut Vm<'_, '_>, &mut [u8]),
+{
+    try_drive_parse_records_with(vm, shared, state, budget, on_record, before_resume)
+        .unwrap_or_else(|error| panic!("{error}"));
+}
+
+/// Fallible record transport used by source-rejection consumers.
+/// Callback panics are not caught. The error distinguishes explicit stage diagnostics
+/// from virtual-machine, protocol and budget failures.
+pub fn try_drive_parse_records_with<F, B>(
+    vm: &mut Vm<'_, '_>,
+    shared: &mut [u8],
+    state: VmState,
+    budget: usize,
     mut on_record: F,
     mut before_resume: B,
-) where
+) -> Result<(), ParseRecordError>
+where
     F: FnMut(i64, i64) -> ControlFlow<()>,
     B: FnMut(&mut Vm<'_, '_>, &mut [u8]),
 {
@@ -83,13 +150,17 @@ pub fn drive_parse_records_with<F, B>(
                 before_resume(vm, shared);
                 state = vm
                     .resume_with_shared(shared, Value::Int(0))
-                    .expect("resume parse.kel");
+                    .map_err(ParseRecordError::Execution)?;
                 match state {
                     VmState::Yielded(Value::Int(a)) => break a,
                     // The productive `loop main` RESETs between its per-iteration yields, so the
                     // payload word is the next Yielded after any intervening RESETs.
                     VmState::Reset => {}
-                    other => panic!("parse.kel: expected a record payload word, got {other:?}"),
+                    other => {
+                        return Err(ParseRecordError::Protocol(format!(
+                            "parse.kel: expected a record payload word, got {other:?}"
+                        )));
+                    }
                 }
             };
             // The -1 sentinel marks an un-migrated (still packed) record: recover the classic
@@ -106,21 +177,17 @@ pub fn drive_parse_records_with<F, B>(
             // naming an array's size, and two unrelated limits (locals and operator nesting,
             // both 64) produced the byte-identical message `IndexOutOfBounds(64, 64)`.
             //
-            // Panics rather than returning an error, matching the existing failure mode of
-            // this driver and of `parse_functions`. Whether these should become a `Result`
-            // is a real question and a separate one; it changes a signature that many tests
-            // and both compile paths depend on.
             if code <= PARSE_DIAG_TAG_BASE {
-                panic!("{}", describe_parse_diagnostic(code, val));
+                return Err(ParseRecordError::Diagnostic { code, detail: val });
             }
             if on_record(code, val).is_break() {
-                return;
+                return Ok(());
             }
         }
         before_resume(vm, shared);
         state = vm
             .resume_with_shared(shared, Value::Int(0))
-            .expect("resume parse.kel");
+            .map_err(ParseRecordError::Execution)?;
     }
     // TWO MEASURED CAUSES, AND THIS MESSAGE USED TO ASSERT ONLY THE FIRST.
     //
@@ -135,13 +202,7 @@ pub fn drive_parse_records_with<F, B>(
     // population nobody measured**, and it would send a reader hunting for an unterminated
     // brace that does not exist. Naming both, and naming neither as usual, costs nothing and
     // stops the message from being confidently wrong.
-    panic!(
-        "parse.kel ran {budget} steps without reaching DONE. Two causes are on record and \
-         this guard cannot tell them apart: an unterminated block, string, or bracket, so \
-         the parser never reaches the end of the declaration; or a construct the stage does \
-         not handle and spins on rather than refusing. Check the input closes, then check \
-         whether it uses a construct outside the self-hosted subset."
-    );
+    Err(ParseRecordError::Budget(budget))
 }
 
 /// The tag `parse.kel` emits a BINDING-NAME record under, restated from
@@ -231,8 +292,7 @@ pub fn describe_reconstruct_diagnostic(code: i64, detail: i64) -> String {
 /// learn it from a program that had already failed.
 pub const PARSE_DIAG_TAG_BASE: i64 = -900;
 
-/// Render a diagnostic record from `parse.kel` as a message that names the cap, the count
-/// that exceeded it, and the construct at fault.
+/// Render a diagnostic record from `parse.kel`, retaining its capacity or source cause.
 ///
 /// The codes are `pe_opstack`/`pe_bracket`/`pe_locals`/`pe_stmts` in the stage. An unknown
 /// code is reported as unknown rather than guessed at: a stage that grew a fifth cause and
@@ -294,6 +354,22 @@ pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
              {PARSE_VARIANTS_CAP}. This is a TOTAL ACROSS THE WHOLE PROGRAM, not one enum: 128 \
              enums of two variants reach it at the same point as one enum of 257."
         ),
+        13 => format!("undefined identifier with name id {detail} in parse.kel"),
+        14 => format!("unknown struct field with name id {detail} in parse.kel"),
+        15 => format!(
+            "first-class function reference with name id {detail} is not supported in parse.kel"
+        ),
+        16 => format!("field access on a declared scalar at token {detail} in parse.kel"),
+        17 => format!("index access on a declared scalar at token {detail} in parse.kel"),
+        18 => format!(
+            "generic signature or call syntax at token {detail} is outside the parse.kel subset"
+        ),
+        19 => format!("method call at token {detail} is outside the parse.kel subset"),
+        20 => format!("binding pattern with name id {detail} is outside the parse.kel subset"),
+        21 => format!(
+            "unresolved qualified, imported or unsupported syntax with name id {detail} in parse.kel"
+        ),
+        22 => format!("call through a value at token {detail} is not supported in parse.kel"),
         other => format!(
             "parse.kel reported diagnostic code {other} (detail {detail}), which this driver \
              does not know. The stage has grown a cause that `describe_parse_diagnostic` was \
@@ -641,7 +717,7 @@ pub const BR_P_WORD_ID: usize = BR_P_REQUIRE_ID + 1;
 /// Slot of `toks.byte_id`, the interned id of the `Byte` type name.
 pub const BR_P_BYTE_ID: usize = BR_P_WORD_ID + 1;
 
-/// Slot of `toks.bool_id`, the interned id of the `Bool` type name.
+/// Slot of `toks.bool_id`, the interned id of the `bool` type name.
 pub const BR_P_BOOL_ID: usize = BR_P_BYTE_ID + 1;
 
 /// The interned id of the eager boolean operator `and`, which is seeded by a
@@ -671,6 +747,12 @@ pub const BR_P_TRUE_ID: usize = BR_P_AT + 1;
 
 /// The interned id of `false`. See [`BR_P_TRUE_ID`].
 pub const BR_P_FALSE_ID: usize = BR_P_TRUE_ID + 1;
+
+/// Whole-source presence of native imports, including forward import declarations.
+pub const BR_P_HAS_IMPORTS: usize = BR_P_FALSE_ID + 1;
+
+/// Contextual assertion keyword, distinct from a user function called `assert`.
+pub const BR_P_ASSERT_ID: usize = BR_P_HAS_IMPORTS + 1;
 
 #[cfg(test)]
 mod shared_layout_tests {
@@ -762,6 +844,10 @@ mod shared_layout_tests {
             ("or_id", "BR_P_OR_ID", BR_P_OR_ID),
             ("base", "BR_P_BASE", BR_P_BASE),
             ("at", "BR_P_AT", BR_P_AT),
+            ("true_id", "BR_P_TRUE_ID", BR_P_TRUE_ID),
+            ("false_id", "BR_P_FALSE_ID", BR_P_FALSE_ID),
+            ("has_imports", "BR_P_HAS_IMPORTS", BR_P_HAS_IMPORTS),
+            ("assert_id", "BR_P_ASSERT_ID", BR_P_ASSERT_ID),
         ];
         for &(field, konst, value) in cases {
             assert_eq!(

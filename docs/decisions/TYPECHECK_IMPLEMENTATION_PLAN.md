@@ -44,6 +44,13 @@ the stage performs bounded Byte coercion for binary operands. All twelve sources
 with maxima of 299 combined expression rows and 288 bindings. These replace the call-only
 measurements above. Source annotations, composite reads and production integration remain open.
 
+The scoped rejection corpus now reaches all twenty negative cases and seven valid controls
+without reference-first rejection. Parser diagnostics cover unresolved identifiers, unknown
+struct fields, unsupported function values and calls through values, and declared-scalar
+projections. Unsupported syntax and resource failures remain separate outcomes. General source
+annotation compatibility, unannotated projection facts and production wiring remain incomplete.
+The older reference-input rule census remains a separate obligation.
+
 **Currency, 2026-09-29.** The six input channels that previously excluded `parse.kel` and
 `wire.kel` now have 640-row caps. The measured stage-source test fits and checks all twelve real
 sources. The selected increase is 7,168 words, or 56 KiB, across the stage's shared and private

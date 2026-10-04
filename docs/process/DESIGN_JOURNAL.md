@@ -13,6 +13,49 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-04 Parser failures as rejection evidence
+
+The full scoped rejection corpus exposed six failures that the earlier scalar witnesses did
+not cover. Unknown identifiers and fields silently selected existing slots. A bare function
+reference left the call parser waiting until a later parenthesis. Scalar projections left
+unfolded operands and failed during reconstruction. Those outcomes cannot be treated as
+interchangeable with a source rejection.
+
+The shared parser transport now has a Result interface preserving diagnostic tags and details.
+Its panicking wrapper remains for existing consumers. The scoped type-input helper propagates
+parser errors. The rejection harness accepts only explicitly classified source diagnostics or
+a false type-stage verdict. It records every unexpected panic as unavailable evidence.
+
+The parser preserves primitive annotations in pending-statement and binding storage for scalar
+projection checks. Composite annotations must be classified by their outer syntax, so an array
+or tuple containing Word is never mistaken for Word. The pending statement stack keeps an outer
+binding's annotation intact while its initializer contains nested bindings. General annotation
+compatibility remains outside this increment.
+
+A dot after a scalar can begin a valid trait method call. The parser therefore waits through
+the following identifier before deciding between a scalar field error and unsupported method
+syntax. Unknown struct fields use the same distinction. Missing names also require care around
+imports, contextual assertions and unsupported patterns. Separate diagnostics preserve those
+boundaries, and the first lexer pass carries import presence to the parser. This remains a
+partial syntax admission analysis, not a claim that every unsupported form has been classified.
+
+The boolean-parameter control exposed a pre-existing uppercase Bool seed. The language primitive
+is lowercase bool. Correcting the seed made the parameter projection check reachable. A legacy
+projection probe also counted any panic as success and temporarily suppressed the process-wide
+panic hook, hiding neighboring test diagnostics. It now checks structured errors directly.
+
+The const-parameter occurrence probe now receives an unsupported diagnostic rather than an
+incomplete occurrence table. The remaining loop and payload binder omissions are still measured.
+Generic identity functions continue reaching the production divergence check. Forward data and
+forward native-import candidates were rejected by the reference and were removed from the valid
+control list. These failed probes remain in the increment logs.
+
+Final verification preserves complete artifact identity for all twelve stages. The type corpus,
+valid controls and stage-capacity checks pass, but production type rejection, general input
+coverage, wire emission and the final integration gates remain open. The shadow pilot captures
+the first diagnostic and completion claims with non-independent self-reviews. External evaluation
+remains pending the existing specific authorization question.
+
 ## 2026-10-04 Scoped scalar expression results
 
 The initial witness passed a comparison result to a Word parameter. Reference compilation
