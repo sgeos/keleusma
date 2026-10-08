@@ -6,10 +6,44 @@
 
 The driver-capacity test now inventories all thirteen stage sources. Earlier versions of that
 test used ten sources and omitted wire and verify_types. The current maxima belong to
-different stages. Parse uses 776 of 1,024 names. Wire uses 23,166 of 49,152 input bytes.
-The remaining wire input margin is 25,986 bytes. No input cap changed. These measurements
+different stages. Parse uses 776 of 1,024 names. Wire uses 23,417 of 49,152 input bytes.
+The remaining wire input margin is 25,735 bytes. No input cap changed. These measurements
 establish input residency for the corpus, not complete production serialization.
 Both encoding and decoding remain within the original wire-format scope.
+
+## Private layout and scalar initializer integration, 2026-10-08
+
+The module-driven helper now emits private composite placements from compiler-owned slot and
+persistent-memory offsets. These are module facts. The existing Keleusma record encoder packs
+them without host wire bytes. Full-width placement fields have comparison controls, and a
+compiled private struct program preserves both complete artifact bytes and execution after decode.
+
+Commands 209 through 212 derive the private initializer record. The stage accumulates each
+chunk's root count, then scans typed initializer tags and payloads in batches of at most 512.
+Only a nonempty sequence of Int(0) is elided. Empty, Unit, None, Bool, Byte, Fixed and Float
+zero values retain their distinct representation. The stage chooses the absent sentinel or the
+stored root index and emits the count. The host follows the returned decision when supplying
+constant values. This path no longer calls the Rust elision predicate or constant-root selector.
+
+The range starts after chunk ROOTS, not after all flattened descendants. Roots occupy the
+constant table's prefix before breadth-first expansion, so the range decision remains valid
+when tree encoding is added. The legacy data_init_fields comparison helper retains its older
+scope and is not used for this production path.
+
+Five integration controls cover explicit scalar initialization, private composite execution,
+zero elision versus typed zeros, batch boundaries, 2,000-value pools, cross-chunk root ranges,
+no-chunk modules and field widths. Protocol controls reject wrong ordering, incomplete streams,
+invalid tags and overflowing ranges. A rejected batch does not partly change the elision result.
+The initializer state occupies seven private Value slots or 224 bytes.
+
+Wire has 551 chunks and highest command 212. It uses 1,301 constant nodes, leaving exactly the
+standing 64-node reserve, and 23,417 input bytes. Further growth must recover node capacity or
+change the representation; the guard remains active. The stage artifact has 152,140 bytes.
+Clearing 44,063 recorded expression types preserves all thirteen complete artifacts. Existing
+buffer caps, public opcode count and bytecode version are unchanged.
+
+Composite and named constant trees remain refused, including such private initializer values.
+Semantic decoding, shipping integration and the remaining type obligations are still required.
 
 ## Debug-pool ordering and encoding, 2026-10-08
 

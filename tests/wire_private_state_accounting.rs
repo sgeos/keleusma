@@ -15,6 +15,7 @@ fn wire_stream_state_is_priced_as_private_value_slots() {
         (wire, "nm", "native_at", 36, 1152),
         (wire, "templates", "count", 7, 224),
         (wire, "ck", "debug", 7, 224),
+        (wire, "initialization", "active", 7, 224),
         (debug, "sort", "mode", 15, 480),
         (debug, "emit", "phase", 9, 288),
     ] {

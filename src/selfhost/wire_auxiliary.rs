@@ -11,6 +11,91 @@ fn error(detail: &str) -> SelfHostError {
     }
 }
 
+struct InitializerPlan {
+    elided: bool,
+    record: Vec<u8>,
+}
+
+// The stage receives chunk root counts and typed scalar initializers. It owns
+// both the constant-table position and the exact all-Int(0) elision decision.
+fn initializer_plan(stage: &Module, module: &Module) -> Result<InitializerPlan, SelfHostError> {
+    let layout = module
+        .data_layout
+        .as_ref()
+        .ok_or_else(|| error("missing data layout"))?;
+    let chunks = u32::try_from(module.chunks.len()).map_err(|_| error("chunk count overflow"))?;
+    let count = u32::try_from(layout.private_init.len())
+        .map_err(|_| error("initializer count overflow"))?;
+    with_compiled_wire(stage.clone(), |vm, shared| {
+        set_word(vm, shared, wire_slots::WARG, i64::from(chunks))?;
+        set_word(vm, shared, wire_slots::WARG + 1, i64::from(count))?;
+        if command(vm, shared, 209)? != 0 {
+            return Err(error("unexpected initializer start"));
+        }
+        for chunk in &module.chunks {
+            let roots = u32::try_from(chunk.constants.len())
+                .map_err(|_| error("constant count overflow"))?;
+            set_word(vm, shared, wire_slots::WARG, i64::from(roots))?;
+            if command(vm, shared, 210)? != 0 {
+                return Err(error("unexpected root-count result"));
+            }
+        }
+        for batch in layout.private_init.chunks(512) {
+            for (i, value) in batch.iter().enumerate() {
+                let (tag, payload) = const_tag_and_name(value);
+                set_word(vm, shared, wire_slots::FIN + i * 2, i64::from(tag))?;
+                set_word(vm, shared, wire_slots::FIN + i * 2 + 1, payload)?;
+            }
+            set_word(vm, shared, wire_slots::WARG, batch.len() as i64)?;
+            if command(vm, shared, 211)? != 0 {
+                return Err(error("unexpected initializer scan"));
+            }
+        }
+        if command(vm, shared, 212)? != 8 {
+            return Err(error("unexpected initializer record length"));
+        }
+        let elided = match vm
+            .get_shared(shared, wire_slots::FIN)
+            .map_err(|_| error("elision response read failed"))?
+        {
+            Value::Int(0) => false,
+            Value::Int(1) => true,
+            _ => return Err(error("invalid elision response")),
+        };
+        let mut record = vec![0; 8];
+        read_window(vm, shared, &mut record)?;
+        Ok(InitializerPlan { elided, record })
+    })
+}
+
+fn scalar_node_fields(
+    module: &Module,
+    include_initializers: bool,
+) -> Result<Vec<i64>, SelfHostError> {
+    let initializers = module.data_layout.iter().flat_map(|d| &d.private_init);
+    let constants = module.chunks.iter().flat_map(|c| &c.constants);
+    let roots =
+        constants.chain(initializers.take(if include_initializers { usize::MAX } else { 0 }));
+    let count = roots.clone().count();
+    if count
+        .checked_mul(16)
+        .is_none_or(|n| u32::try_from(n).is_err())
+    {
+        return Err(error("constant section exceeds u32"));
+    }
+    let words = count
+        .checked_mul(6)
+        .ok_or_else(|| error("constant field count overflow"))?;
+    let mut fields = Vec::new();
+    fields
+        .try_reserve_exact(words)
+        .map_err(|_| error("constant fields allocation failed"))?;
+    for value in roots {
+        push_const_preorder(value, &mut fields);
+    }
+    Ok(fields)
+}
+
 // The historical packer uses infallible u16 conversions. Validate every count
 // and name it will visit before calling it. Constants have already been checked
 // to be scalar, so their root count is also their node count.
@@ -189,7 +274,7 @@ impl Emitter {
 /// Encode the auxiliary container from module facts, with no reference artifact.
 ///
 /// This integrates the stage-corpus records, native metadata and struct templates.
-/// Composite constants and private composite slots still
+/// Composite and named constants still
 /// require integration. They are refused explicitly. Shape numbering is derived
 /// in Keleusma, and parameter tags remain opaque bytes.
 /// This function is not yet the shipping serializer.
@@ -200,28 +285,24 @@ impl Emitter {
 pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
     use crate::wire_schema::kind;
 
-    if module
-        .data_layout
-        .as_ref()
-        .is_some_and(|dl| !dl.private_composite_layout.is_empty())
-    {
-        return Err(error("private composite records are not integrated"));
-    }
-    if !crate::wire_schema::constant_roots_of_module(module)
+    if !module
+        .chunks
         .iter()
+        .flat_map(|c| &c.constants)
+        .chain(module.data_layout.iter().flat_map(|d| &d.private_init))
         .all(constant_is_scalar)
     {
         return Err(error("composite and named constants are not integrated"));
     }
+    validate_input(module)?;
+    let stage = compile_src(&read_stage("kel/wire.kel"));
     let init = if module.data_layout.is_some() {
-        Some(
-            data_init_fields(module)
-                .ok_or_else(|| error("private initializer pool is not integrated"))?,
-        )
+        Some(initializer_plan(&stage, module)?)
     } else {
         None
     };
-    validate_input(module)?;
+    let include_initializers = init.as_ref().is_some_and(|plan| !plan.elided);
+    let constant_fields = scalar_node_fields(module, include_initializers)?;
     let (mut blob, names) = compact_scalar_module_input(module)?;
     let native_at = if module.native_names.is_empty() {
         None
@@ -304,7 +385,7 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
         i64::from(module.schema_hash),
     ]);
     let emitter = Emitter {
-        stage: compile_src(&read_stage("kel/wire.kel")),
+        stage,
         blob,
         header,
         chunks: module.chunks.len(),
@@ -401,24 +482,35 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
                     Some(kind::SHARED_LAYOUT),
                 )?,
             ),
-            (kind::PRIVATE_COMPOSITE, Vec::new()),
-            (
-                kind::DATA_INIT,
-                emitter.stream(&init, 2, None, 164, Some(kind::DATA_INIT))?,
-            ),
+            (kind::PRIVATE_COMPOSITE, {
+                let placements = &module
+                    .data_layout
+                    .as_ref()
+                    .unwrap()
+                    .private_composite_layout;
+                let count = placements
+                    .len()
+                    .checked_mul(3)
+                    .ok_or_else(|| error("placement field count overflow"))?;
+                let mut fields = Vec::new();
+                fields
+                    .try_reserve_exact(count)
+                    .map_err(|_| error("placement allocation failed"))?;
+                for p in placements {
+                    fields.extend_from_slice(&[i64::from(p.slot), 0, i64::from(p.offset)]);
+                }
+                emitter.stream(&fields, 3, None, 164, Some(kind::PRIVATE_COMPOSITE))?
+            }),
+            (kind::DATA_INIT, init.record),
         ]);
     }
     regions.push((kind::HEADER, emitter.single(172)?));
-    let wants_constants = !module.chunks.is_empty()
-        || module
-            .data_layout
-            .as_ref()
-            .is_some_and(|dl| !crate::wire_schema::private_init_is_elided(dl));
+    let wants_constants = !module.chunks.is_empty() || include_initializers;
     if wants_constants {
         regions.extend([
             (
                 kind::CONSTS,
-                window_emit_consts(&emitter.stage, &const_node_fields(module))?,
+                window_emit_consts(&emitter.stage, &constant_fields)?,
             ),
             (kind::STRUCT_AUX, Vec::new()),
             (kind::ENUM_AUX, Vec::new()),
@@ -453,6 +545,77 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initializer_protocol_checks_counts_order_and_atomic_batches() {
+        with_compiled_wire(compile_src(&read_stage("kel/wire.kel")), |vm, shared| {
+            for cmd in 210..=212 {
+                assert!(command(vm, shared, cmd).is_err());
+            }
+            for (chunks, count) in [(-1, 0), (0, -1), (0x1_0000_0000, 0), (0, 0x1_0000_0000)] {
+                set_word(vm, shared, wire_slots::WARG, chunks)?;
+                set_word(vm, shared, wire_slots::WARG + 1, count)?;
+                assert!(command(vm, shared, 209).is_err());
+            }
+            set_word(vm, shared, wire_slots::WARG, 2)?;
+            set_word(vm, shared, wire_slots::WARG + 1, 2)?;
+            command(vm, shared, 209)?;
+            assert!(command(vm, shared, 211).is_err());
+            assert!(command(vm, shared, 212).is_err());
+            set_word(vm, shared, wire_slots::WARG, -1)?;
+            assert!(command(vm, shared, 210).is_err());
+            for count in [3, 4] {
+                set_word(vm, shared, wire_slots::WARG, count)?;
+                command(vm, shared, 210)?;
+            }
+            assert!(command(vm, shared, 210).is_err());
+            for count in [-1, 0, 3, 513] {
+                set_word(vm, shared, wire_slots::WARG, count)?;
+                assert!(command(vm, shared, 211).is_err());
+            }
+            // A valid nonzero value followed by an invalid tag must not partly
+            // change the elision decision or consume any initializer rows.
+            set_word(vm, shared, wire_slots::WARG, 2)?;
+            for (i, value) in [3, 9, 7, 0].into_iter().enumerate() {
+                set_word(vm, shared, wire_slots::FIN + i, value)?;
+            }
+            assert!(command(vm, shared, 211).is_err());
+            assert!(command(vm, shared, 212).is_err());
+            for (i, value) in [3, 0, 3, 0].into_iter().enumerate() {
+                set_word(vm, shared, wire_slots::FIN + i, value)?;
+            }
+            command(vm, shared, 211)?;
+            assert_eq!(command(vm, shared, 212)?, 8);
+            let mut bytes = [0; 8];
+            read_window(vm, shared, &mut bytes)?;
+            assert_eq!(bytes, [255, 255, 255, 255, 2, 0, 0, 0]);
+            assert!(matches!(
+                vm.get_shared(shared, wire_slots::FIN).unwrap(),
+                Value::Int(1)
+            ));
+            assert!(command(vm, shared, 212).is_err());
+            // Exact root-index arithmetic and its immediate overflow neighbor.
+            for first in [0xFFFF_FFFD, 0xFFFF_FFFE] {
+                set_word(vm, shared, wire_slots::WARG, 1)?;
+                set_word(vm, shared, wire_slots::WARG + 1, 2)?;
+                command(vm, shared, 209)?;
+                set_word(vm, shared, wire_slots::WARG, first)?;
+                command(vm, shared, 210)?;
+                set_word(vm, shared, wire_slots::WARG, 2)?;
+                for (i, value) in [3, 1, 3, 0].into_iter().enumerate() {
+                    set_word(vm, shared, wire_slots::FIN + i, value)?;
+                }
+                command(vm, shared, 211)?;
+                if first == 0xFFFF_FFFD {
+                    assert_eq!(command(vm, shared, 212)?, 8);
+                } else {
+                    assert!(command(vm, shared, 212).is_err());
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
 
     #[test]
     fn debug_span_stream_checks_presence_bounds_and_completion() {

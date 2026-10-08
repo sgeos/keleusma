@@ -3,142 +3,129 @@
 ## Current state
 
 Continue the complete Order 1 goal and the System 1 shadow pilot on line v0.2.3.
-The branch is feat/v02-order1-next, starting this increment at 5b81bae4. Preserve unrelated
-untracked .codex and nvim.log. V0.3.X remains separate. No push, merge or publication occurred.
+The branch is feat/v02-order1-next, starting this increment at 075a1cff. Preserve unrelated
+untracked .codex and nvim.log. The concurrent V0.3.X line remains separate. No push, merge or
+publication occurred.
 
-The legacy HANDOFF.md is invalid and stale, measured 32 commits behind the starting head.
-Ancestry passes and its unchanged-stage-source claim fails. Historical full validity and advisory
-checks were not all repeated. Read Appendix B before tracked writes. Public bytecode version
-remains 2, opcode count remains 66 and selected type-stage caps remain 640.
+The legacy HANDOFF.md is invalid and stale, measured 33 commits behind the starting head.
+Ancestry passes and its unchanged-stage-source claim fails. Its historical full verification
+and advisory checks were not all repeated. Read Appendix B before tracked writes. Public bytecode
+version remains 2, opcode count remains 66 and selected type-stage caps remain 640.
 
-## Debug serialization
+## Private data integration
 
-The dedicated wire_debug.kel stage owns stable bottom-up merge sorting and debug output order.
-The host retains two index buffers. The stage supplies read positions, compares semantic record
-headers and operand windows, chooses each copy and determines merge boundaries and generations.
-The host does not sort records or call DebugPool::encode. The sort driver has a checked request
-budget of one plus record count times merge rounds. Equal keys choose the left record.
+The auxiliary helper now emits private composite placements through the existing Keleusma record
+formatter. Slot numbers and persistent-memory offsets remain compiler-owned module facts. The
+host passes those typed fields and the formatter packs their wire representation.
 
-The encoding state machine chooses strings, spans, types and records in format order. It emits
-all count and length prefixes, integer fields and record headers. The host supplies data at
-requested indices and offsets. Raw strings and opaque type blobs use 4,096-byte windows.
-Operand output uses 1,024-word windows and comparisons use 512 pairs. Pools and operand lists
-can cross windows. Operand counts beyond the sixteen-bit wire field are refused. Data sub-pools
-retain their original indices. Debug metadata generation itself is unchanged.
+Commands 209 through 212 derive the private initializer record. The stage receives chunk root
+counts, accumulates the first initializer index, then scans initializer tags and payloads in
+batches of at most 512. Only a nonempty sequence of Int(0) is elided. Empty pools and all other
+scalar zero forms remain distinct. The stage writes either the absent sentinel or the computed
+root index and returns its elision decision. The host follows that result when supplying constant
+values. This production path no longer calls the reference elision predicate or root selector.
 
-Wire commands 207 and 208 derive chunk debug offsets from actual encoded lengths. They receive
-presence and length, not host-computed positions. Absent pools retain the sentinel; present
-empty DebugPool values encode to sixteen bytes. Debug chunks concatenate without padding between
-them. The DEBUG_POOL region occupies its reference position after CHUNKS and before STRING_POOL.
+The initializer range begins after chunk ROOTS. Descendants are emitted later in breadth-first
+order, so their count does not change the root range. The legacy data_init_fields helper retains
+its older comparison-only scope and is not used by the new auxiliary producer.
 
-The host is trusted to replay the requested semantic data and copy index entries faithfully.
-The stage does not authenticate host memory. Per-call loops are bounded; host storage for sort
-indices is linear in record count. No throughput benchmark is claimed.
+Two compiled controls preserve complete artifact bytes, decode and execute with the expected
+results. Further controls cover exact typed-zero behavior, 512-value batch boundaries, 2,000-value
+pools, cross-chunk ranges, no-chunk modules and full-width placement fields. The placement-width
+control compares serialization; its maximal artificial offsets are not an executable layout.
+Protocol controls reject wrong order, invalid counts and tags, incomplete streams and overflowing
+ranges. A refused batch does not partially change the elision result or consume values.
 
-## Inventory and capacity
+Composite and named constant trees remain refused, including such initializer values. The current
+helper still uses the scalar constant-record stream. Do not describe this as general tree encoding.
 
-There are now thirteen embedded stage sources. The complete artifact, monomorphization,
-inference-independence, framing, region and type-input inventories include wire_debug. The
-claimed-count guard derives its final embedding phrase from the actual count rather than
-hardcoding twelve. The debug stage's two validation helpers return bool, widening the previous
-Word-only result surface. Parameters remain Word. The type-surface census checks those exact sets.
+## Capacity
 
-Wire has 545 chunks, highest command 208 and a 149,516-byte artifact. Its input is 23,166 bytes
-of 49,152, with 668 name events. Its 1,300 constant nodes leave 65 below 1,365, retaining the
-64-node reserve. The reset function reuses the existing literal helpers to preserve that margin.
-Parse remains the name maximum at 776. No existing buffer cap increased.
+The wire stage has 551 chunks, command 212 and a 152,140-byte artifact. Its input uses 23,417
+of 49,152 bytes, leaving 25,735. It contributes 681 name events. Parse remains the maximum at
+776. Constant nodes use 1,301 of 1,365, leaving exactly the required 64-node reserve. Further
+stage growth must recover node capacity or change the representation. The guard is unchanged.
 
-The debug stage has 20 chunks, 49 input name events, a 1,380-byte module-input blob and an
-11,236-byte artifact. Its fifteen sort fields occupy 480 private bytes, and its nine encoding
-fields occupy 288. The two new wire chunk fields add 64 bytes, giving that block seven slots
-or 224 bytes. The accounting regression compiles the actual declarations from both stages.
+Six initializer functions account for the six added chunks. Reset literals reuse existing helpers
+to preserve the reserve. The initializer state uses seven private Value slots or 224 bytes.
+No existing buffer cap increased. The thirteen-stage inventory includes wire_debug. Clearing
+44,063 recorded expression types leaves all thirteen artifacts unchanged. No throughput benchmark
+is claimed. The host remains trusted to transport its module facts faithfully.
 
 ## Verification
 
 Runs use an empty RUSTC_WRAPPER and CARGO_HUSKY_DONT_INSTALL_HOOKS set to one. Stage checks use
-KEL_SELFHOST_CACHE zero. No verification subject is edited during a live run.
+KEL_SELFHOST_CACHE zero. Verification subjects remain frozen until their processes are terminal.
 
-- Five debug integration tests pass in tmp/order1-debug-integration2.log. They cover all twelve
-  record kinds, canonical ordering, duplicate keys, merge boundaries, multiwindow data, the
-  operand-count limit, compiled debug artifacts and absent versus empty chunk spans. The same
-  command passes the node-budget and widened type-surface guards. Command cargo test --release
-  --features self-host --test selfhost_wire_debug --test module_input_node_budget --test
-  corpus_type_surface --no-fail-fast -- --nocapture. Session 96806 exited zero.
-- Three debug protocol tests pass in tmp/order1-debug-protocol.log. The direct sort comparison
-  checks stable indices for 1,030 records, including duplicates. Command cargo test --release
-  --features self-host --lib selfhost::wire_debug -- --nocapture. Session 92838 exited zero.
-- Seventeen wire protocol tests pass in tmp/order1-debug-all-protocol.log, including debug-span
-  overflow, sentinel exclusion and stream completion. Command cargo test --release --features
-  self-host --lib selfhost::wire_ -- --nocapture. Session 80327 exited zero.
-- The earlier corpus run passed all thirteen complete pipeline artifacts, all three
-  monomorphization checks and all seven framing tests. It failed only a stale byte-size pin and
-  the embedding phrase hardcoded to twelve. Both guards were corrected before the final run.
-  Log tmp/order1-debug-corpus.log. Session 46049 exited 101.
-- Four inference tests pass in tmp/order1-debug-inference.log. Clearing 43,831 expression types
-  preserves all thirteen artifacts. Command cargo test --release --features self-host --lib
-  compiler::inference_independence -- --nocapture. The command exited zero.
-- Seven focused no-default checks pass in tmp/order1-debug-no-default.log. Command cargo test
-  --release --no-default-features --features self-host --test selfhost_wire_debug --test
-  wire_private_state_accounting --test corpus_type_surface --no-fail-fast. Session 77278 exited zero.
-
-- The release workspace diagnostic completed with 3,073 passes, four failures and five ignored
-  across 168 suites. Command cargo test --release --workspace --no-fail-fast. Log
-  tmp/order1-debug-workspace.log. Session 29502 exited 101. All failures were stale inventories,
-  two expecting twelve stages, one expecting eleven, and one omitting wire_debug.
-- The repaired type, wire and round-trip suites pass 290 tests. Command cargo test --release
-  --workspace --test selfhost_typecheck --test selfhost_wire --test wire_corpus --no-fail-fast.
-  Log tmp/order1-debug-repaired.log. Session 10952 exited zero. The round-trip corpus now also
-  includes wire and verify_types, whose old exclusions incorrectly claimed they were not embedded.
-- Workspace Clippy performed actual Checking and passed after the repairs. Command cargo clippy
-  --workspace --tests -- -D warnings. Log tmp/order1-debug-final-clippy2.log. Session 14293
-  exited zero. The earlier production lint also passed in tmp/order1-debug-final-clippy.log.
-- Documentation passed with RUSTDOCFLAGS set to -D warnings. Command cargo doc --workspace
-  --no-deps. Log tmp/order1-debug-doc.log. Session 16791 exited zero.
-- The no_std self-host check performed actual Checking and passed. Command cargo check
-  --no-default-features --features self-host. Log tmp/order1-debug-nostd.log. Session 97230
+- The first fixture failed compilation because it used the wrong Vm path. Log
+  tmp/order1-private-before.log. Session 88721 exited 101 with zero tests executed.
+- After that fixture repair, both integration cases reached the existing unsupported guards.
+  Log tmp/order1-private-before2.log. Session 82714 exited 101. These establish the original gaps.
+- The first stage implementation referred to misnamed initializer-offset helpers. The corrected
+  implementation passed both execution controls but failed the standing node reserve. Logs
+  tmp/order1-private-first.log and tmp/order1-private-second.log retain those diagnostics.
+- Five private-data integration tests plus capacity and accounting pass in
+  tmp/order1-private-targets.log. Command cargo test --release --features self-host --test
+  selfhost_wire_private --test module_input_node_budget --test wire_private_state_accounting
+  --no-fail-fast -- --nocapture. Session 32258 exited zero.
+- Eighteen wire protocol tests pass in tmp/order1-private-protocol.log. Command cargo test
+  --release --features self-host --lib selfhost::wire_ -- --nocapture. Session 41951 exited zero.
+- The integrated run passed all thirteen complete artifact comparisons and every functional
+  wire check. Its only failure was the old byte-size pin, corrected before final verification.
+  Log tmp/order1-private-integrated.log. Session 21705 exited 101.
+- Four inference tests pass in tmp/order1-private-inference.log. Command cargo test --release
+  --features self-host --lib compiler::inference_independence -- --nocapture. It exited zero.
+- Seven focused no-default checks pass in tmp/order1-private-no-default.log. Command cargo test
+  --release --no-default-features --features self-host --test selfhost_wire_private --test
+  module_input_node_budget --test wire_private_state_accounting --no-fail-fast. Session 69848
   exited zero.
 
-No production code changed after the full workspace run. Only inventory tests and documentation
-were repaired afterward. The full workspace was not repeated after those repairs. The four
-documentation guard suites pass 24 tests in tmp/order1-debug-doc-guards.log. Command cargo test
---release --test documentation_links --test claimed_counts --test comment_citations --test
-push_order_claims. Session 69068 exited zero. Formatting and diff checks pass. The guards are
-repeated after this receipt update. No verification process remains running at final handoff.
+- The final release workspace passes 3,083 tests, zero failures and five ignored across
+  169 reported suites. Command cargo test --release --workspace --no-fail-fast. Log
+  tmp/order1-private-workspace.log. Terminal session 85272 exited zero.
+- Workspace Clippy performed actual Checking and passed. Command cargo clippy --workspace
+  --tests -- -D warnings. Log tmp/order1-private-clippy.log. Session 38835 exited zero.
+- Documentation passed with RUSTDOCFLAGS set to -D warnings. Command cargo doc --workspace
+  --no-deps. Log tmp/order1-private-doc.log. Session 5485 exited zero.
+- The no_std self-host check performed actual Checking and passed. Command cargo check
+  --no-default-features --features self-host. Log tmp/order1-private-nostd.log. Session
+  12367 exited zero.
 
-The first stage parse failed because error() is reserved checked syntax. Renaming that helper
-fixed it. Later diagnostics identified a one-node reserve shortfall, Bool versus bool in the
-census expectation and a tuple-return mismatch in a test fixture. Logs remain under
-tmp/order1-debug-. No standing bound or coverage guard was weakened. Separate feature matrices,
-minimum supported toolchains, Miri, cross-target builds, advisory scanning and final integration
-gates remain required after the remaining implementation.
+No production or test code changed after the full workspace run. The four documentation guard
+suites pass 24 tests in tmp/order1-private-doc-guards.log. Command cargo test --release --test
+documentation_links --test claimed_counts --test comment_citations --test push_order_claims.
+Session 16318 exited zero. Formatting and diff checks pass. The guards are repeated after this
+receipt update. No verification process remains running at final handoff.
+
+Separate feature matrices, minimum supported toolchains, Miri, cross-target builds, advisory
+scanning and final integration gates remain required after the missing implementation.
 
 ## Next work
 
-Complete composite and named constants, private composite slots and nonempty non-elided
-initializer pools. The auxiliary helper still refuses those forms. Constant-name interning
-must preserve breadth-first ordering across all roots, including initializer contributors.
-The older flattener demonstrates the ordering, but its window and provenance limits remain.
+Complete composite and named constant trees, including private initializer trees. Preserve
+breadth-first indexing and name interning across all root contributors. The existing flattener
+has useful ordering controls, but its input-window and provenance constraints still need
+integration. The new initializer-range protocol already accumulates roots rather than descendants.
 
-Complete semantic decoding and connect artifact output to the shipping tool while preserving
-all supported behavior. Shipping unsigned output still calls Module::to_bytes. Legacy
-wire_windowed_via_kel borrows reference positions and can skip unknown regions. Envelope checks
+Complete semantic decoding, then connect artifact output to the shipping tool while preserving
+all supported behavior. Shipping unsigned output still uses Module::to_bytes. Envelope checks
 are not semantic decoding. Retain the completion plan's remaining type obligations, including
 projection identity, nested headers, binders, occurrences, nominal layout, aliases, empty-array
 inference, mixed tuples, casts and enum-dispatch capacity. Full Order 1 remains active.
 
 ## Shadow pilot and mailbox
 
-Task v023-order1-debug retains the first parser diagnostic locally. Later diagnostics belong to
-this same increment. Completion claims, blind labels and export review are recorded below.
-External evaluation remains unavailable under the prior automatic approval rejection for the
-external destination and payload. Do not retry or bypass it. Self-labels are non-independent.
-Usage and elapsed time remain null when unavailable. The pilot implementation line owns its
-tracked checkpoint. Source references stay local, so claim excerpts include decisive assertions.
+Task v023-order1-private retains the first fixture diagnostic. Later failures belong to this
+same increment and remain in the logs. External evaluation remains unavailable under the prior
+automatic approval rejection for the external destination and payload. Do not retry or bypass it.
+Self-labels are non-independent, and unknown usage and elapsed time remain null. The pilot
+implementation line owns its tracked checkpoint. Source references stay local, so excerpts
+must include their decisive assertions.
 
-Four local samples are complete for this increment, the parser diagnostic and three bounded
-claims for stable sorting, chunk spans and window boundaries. Blind exports preceded self-labels.
-The exact request payloads and all four request and source hashes were reviewed in
-tmp/order1-debug-pilot-export.json. The bounded increment outcome is recorded as resolved.
+Four samples are complete, the fixture diagnostic and three bounded claims for decoded
+execution, typed-zero elision and rejected batches. Blind exports preceded self-labels. All four
+request hashes, exact payloads and source hashes were reviewed in
+tmp/order1-private-pilot-export.json. The bounded increment outcome is recorded as resolved.
 Full Order 1 remains active. Missing usage and elapsed time remain null. No independent accuracy
 claim is supported.
 

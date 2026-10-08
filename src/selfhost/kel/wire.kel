@@ -4078,9 +4078,9 @@ fn fl_tag_interns(t: Word) -> Word {
 // wrong, and indistinguishable from a correct record downstream. Refusing is what
 // keeps the gap visible instead of encoding it in the bytes.
 fn fl_stream_begin() -> Word {
-    fl.scur = 0;
-    fl.err = 0;
-    0
+    fl.scur = wire_zero();
+    fl.err = wire_zero();
+    wire_zero()
 }
 
 // Emit the record for the node seeded at `wire.fin[0..6]`, at WINDOW OFFSET ZERO.
@@ -5133,11 +5133,11 @@ fn ow_class(id: Word) -> Word {
 // The production whole-module driver starts at zero. Exact index boundaries
 // can be checked here without allocating a multi-gigabyte test pool.
 fn ow_begin() -> Word {
-    opstream.active = 0;
-    if wire.warg < 0 orelse wire.warg > 0x1000000 { 0 - 270 } else {
+    opstream.active = wire_zero();
+    if wire.warg < wire_zero() orelse wire.warg > 0x1000000 { wire_zero() - 270 } else {
         opstream.pool = wire.warg;
-        opstream.active = 1;
-        0
+        opstream.active = wire_one();
+        wire_zero()
     }
 }
 
@@ -5248,13 +5248,13 @@ fn si_reset() -> Word {
 }
 
 fn si_begin() -> Word {
-    if sigstream.mode != 1 orelse wire.warg < 0 orelse wire.warg > 0xFFFFFFFF { 0 - 280 } else {
-        sigstream.native = 0;
+    if sigstream.mode != wire_one() orelse wire.warg < wire_zero() orelse wire.warg > 0xFFFFFFFF { wire_zero() - 280 } else {
+        sigstream.native = wire_zero();
         sigstream.first = sigstream.count;
         sigstream.params = wire.warg;
-        sigstream.position = 0;
+        sigstream.position = wire_zero();
         sigstream.mode = 2;
-        0
+        wire_zero()
     }
 }
 
@@ -5329,12 +5329,12 @@ fn si_finish() -> Word {
 }
 
 fn si_native_begin() -> Word {
-    if sigstream.mode != 1 { 0 - 280 } else {
-        sigstream.native = 1;
-        sigstream.params = 0;
-        sigstream.position = 0;
+    if sigstream.mode != wire_one() { 0 - 280 } else {
+        sigstream.native = wire_one();
+        sigstream.params = wire_zero();
+        sigstream.position = wire_zero();
         sigstream.mode = 2;
-        0
+        wire_zero()
     }
 }
 
@@ -5352,7 +5352,7 @@ fn si_native_finish() -> Word {
 // the fresh-field run start even when its field count is zero.
 
 
-fn template_error() -> Word { 0 - 283 }
+fn template_error() -> Word { wire_zero() - 283 }
 
 fn template_input() -> Word {
     if wire.warg < 0 orelse wire.warg > bin_capacity() - 2 orelse wire.warg2 < wire.warg + 2 orelse wire.warg2 > bin_capacity() { template_error() } else {
@@ -5424,6 +5424,83 @@ fn template_step() -> Word {
     }
 }
 
+// Private initialization is elided only for a nonempty sequence of Int(0).
+// The first stored root follows the chunk pools, whose counts arrive separately.
+private data initialization {
+    chunks: Word,
+    total: Word,
+    seen: Word,
+    first: Word,
+    elided: Word,
+    active: Word,
+    bad: Word,
+}
+
+fn init_error() -> Word { wire_zero() - 285 }
+
+fn init_begin() -> Word {
+    if wire.warg < wire_zero() orelse wire.warg > absent_index()
+        orelse wire.warg2 < wire_zero() orelse wire.warg2 > absent_index() { init_error() } else {
+        initialization.chunks = wire.warg;
+        initialization.total = wire.warg2;
+        initialization.seen = wire_zero();
+        initialization.first = wire_zero();
+        initialization.elided = if wire.warg2 == wire_zero() { wire_zero() } else { wire_one() };
+        initialization.active = wire_one();
+        wire_zero()
+    }
+}
+
+fn init_chunk() -> Word {
+    if initialization.active != wire_one() orelse initialization.chunks <= wire_zero()
+        orelse wire.warg < wire_zero() orelse wire.warg > absent_index() - initialization.first { init_error() } else {
+        initialization.first = initialization.first + wire.warg;
+        initialization.chunks = initialization.chunks - wire_one();
+        wire_zero()
+    }
+}
+
+fn init_values() -> Word {
+    let n = wire.warg;
+    if initialization.active != wire_one() orelse initialization.chunks != wire_zero()
+        orelse n <= wire_zero() orelse n > 512
+        orelse n > initialization.total - initialization.seen { init_error() } else {
+        initialization.bad = wire_zero();
+        for i in 0..n limit 512 {
+            let tag = wire.fin[i * wire_two()];
+            if tag < tag_unit() orelse (tag > tag_float() andalso tag != tag_none()) { initialization.bad = wire_one(); }
+        }
+        if initialization.bad != wire_zero() { init_error() } else {
+            for i in 0..n limit 512 {
+                if wire.fin[i * wire_two()] != tag_int() orelse wire.fin[i * wire_two() + wire_one()] != wire_zero() {
+                    initialization.elided = wire_zero();
+                }
+            }
+            initialization.seen = initialization.seen + n;
+            wire_zero()
+        }
+    }
+}
+
+fn init_finish() -> Word {
+    if initialization.active != wire_one() orelse initialization.chunks != wire_zero()
+        orelse initialization.seen != initialization.total { init_error() } else {
+    if initialization.elided == wire_zero() andalso initialization.total > absent_index() - initialization.first { init_error() } else {
+        put_u32(dinit_off_first(), if initialization.elided == wire_one() { absent_index() } else { initialization.first });
+        put_u32(dinit_off_count(), initialization.total);
+        wire.fin[wire_zero()] = initialization.elided;
+        initialization.active = wire_zero();
+        dinit_stride()
+    }}
+}
+
+fn dispatch_initialization(cmd: Word) -> Word {
+    if cmd == 209 { init_begin() } else {
+    if cmd == 210 { init_chunk() } else {
+    if cmd == 211 { init_values() } else {
+    if cmd == 212 { init_finish() } else { wire_zero() - 97 }}}}
+}
+
 fn dispatch_native(cmd: Word) -> Word {
     if cmd == 201 { native_input() } else {
     if cmd == 202 { native_name_step() } else {
@@ -5432,7 +5509,7 @@ fn dispatch_native(cmd: Word) -> Word {
     if cmd == 205 { template_input() } else {
     if cmd == 206 { template_step() } else {
     if cmd == 207 { ck_debug_begin() } else {
-    if cmd == 208 { ck_debug_step() } else { 0 - 97 }}}}}}}}
+    if cmd == 208 { ck_debug_step() } else { dispatch_initialization(cmd) }}}}}}}}
 }
 
 fn wire_one() -> Word { 1 }
@@ -5459,7 +5536,7 @@ fn wire_sixty_four() -> Word { 64 }
 fn wire_one_k() -> Word { 1024 }
 fn wire_forty_eight_k() -> Word { 49152 }
 
-fn highest_command() -> Word { 208 }
+fn highest_command() -> Word { 212 }
 
 // --- THE ENTRY, AS A COROUTINE ----------------------------------------------
 //

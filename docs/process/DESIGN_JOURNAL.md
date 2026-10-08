@@ -13,6 +13,33 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-08 Private placements and scalar initializer policy move into the stage
+
+The auxiliary helper now admits private composite placement records and non-default scalar
+initializer pools. Keleusma accumulates chunk root counts and makes the exact nonempty-all-Int(0)
+elision decision. The host follows that result rather than calling the reference predicate or
+constant-root selector. The stored initializer range begins after chunk roots; descendants do
+not precede those roots in the final constant table.
+
+Private composite slot and arena offsets remain compiler-owned facts and are encoded by the
+existing record writer. Two compiled controls match complete artifacts, decode and execute with
+the expected results. Further controls distinguish all scalar zero forms, cross 512-value batch
+boundaries, include 2,000-value pools, handle no chunks and preserve full-width placement fields.
+Protocol checks preserve the elision state on a rejected batch and reject incomplete or overflowing
+ranges. Composite and named initializer trees remain open with the general constant-tree codec.
+
+The first fixture used the wrong Vm path, retained as the pilot's first diagnostic. After that
+repair both requested forms failed on their existing unsupported guards. The first stage build
+also exposed misnamed initializer offset helpers. Correcting those admitted both execution controls.
+The first capacity run left only 59 nodes free. Sharing existing reset literals restores the
+standing 64-node reserve without increasing the cap. Initializer state adds 224 private bytes.
+
+All thirteen complete artifact comparisons and four inference controls pass. Wire has 551 chunks,
+1,301 constant nodes, 23,417 input bytes and a 152,140-byte artifact. Inference independence now
+covers 44,063 recorded expression types. The final workspace passes 3,083 tests with five ignored.
+Workspace Clippy, documentation and the no_std self-host check pass. Receipts and the reviewed
+local shadow-pilot export are in the reverse prompt. Full Order 1 remains active.
+
 ## 2026-10-08 Debug metadata moves into a dedicated Keleusma stage
 
 Debug metadata requires canonical ordering as well as packing. The new stage schedules stable

@@ -151,7 +151,9 @@ mod tests {
             assert!(command(vm, shared, 204).is_err());
             let mut shapes = Vec::new();
             emit_shape(vm, shared, &WireShape::Top, false, &mut shapes)?;
-            for cmd in [196, 197, 198, 199, 200, 201, 202, 203, 205, 206, 207, 208] {
+            for cmd in [
+                196, 197, 198, 199, 200, 201, 202, 203, 205, 206, 207, 208, 209, 210, 211, 212,
+            ] {
                 assert!(command(vm, shared, cmd).is_err(), "command {cmd}");
             }
             assert_eq!(command(vm, shared, 204)?, 8);
