@@ -33,6 +33,10 @@ const CORPUS: &[(&str, &str)] = &[
     // delegates to `first_pass`, which already computed this table, and the
     // exclusion went with the hand-rolled derivation.
     ("wire", include_str!("../src/selfhost/kel/wire.kel")),
+    (
+        "wire_debug",
+        include_str!("../src/selfhost/kel/wire_debug.kel"),
+    ),
 ];
 
 /// **THE DERIVED NUMBERING IS THE COMPILER'S NUMBERING.**
@@ -156,7 +160,8 @@ fn the_self_hosted_compiler_can_now_compile_wire_kel() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
 
     let module = keleusma::selfhost::self_host_compile(WIRE);
-    // 543 after five template functions and ten shared literal helpers.
+    // 545 after two debug-span stream functions.
+    // Previously 543 after five template functions and ten literal helpers.
     // Previously 528 after six native functions and six literal helpers.
     // Previously 516 after six signature-stream functions and five literal helpers.
     // Previously 505 after four opcode-stream functions and four literal helpers.
@@ -173,7 +178,7 @@ fn the_self_hosted_compiler_can_now_compile_wire_kel() {
     // reason, and this is the chunk count.
     assert_eq!(
         module.chunks.len(),
-        543,
+        545,
         "`wire.kel`'s chunk count moved. A function is a chunk, so this figure moves whenever \
          the stage gains or loses one -- update it WITH the cause, as the comment above does"
     );

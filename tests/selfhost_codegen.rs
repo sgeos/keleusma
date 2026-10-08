@@ -9828,3 +9828,11 @@ fn the_boundary_table_counts_match_the_roadmap_and_the_names_match_the_labels() 
         "the roadmap does not state the boundary case total of {total}"
     );
 }
+
+#[test]
+fn self_host_compiles_wire_debug_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_wire_debug_kel_byte_identically",
+        "wire_debug.kel",
+    );
+}

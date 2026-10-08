@@ -4,12 +4,56 @@
 
 ## Current capacity evidence, 2026-10-08
 
-The driver-capacity test now inventories all twelve stage sources. Earlier versions of that
+The driver-capacity test now inventories all thirteen stage sources. Earlier versions of that
 test used ten sources and omitted wire and verify_types. The current maxima belong to
-different stages. Parse uses 776 of 1,024 names. Wire uses 23,080 of 49,152 input bytes.
-The remaining wire input margin is 26,072 bytes. No input cap changed. These measurements
+different stages. Parse uses 776 of 1,024 names. Wire uses 23,166 of 49,152 input bytes.
+The remaining wire input margin is 25,986 bytes. No input cap changed. These measurements
 establish input residency for the corpus, not complete production serialization.
 Both encoding and decoding remain within the original wire-format scope.
+
+## Debug-pool ordering and encoding, 2026-10-08
+
+The new wire_debug stage owns canonical debug ordering and output sequencing. It schedules
+stable bottom-up merge sorting over two host-retained index buffers, requests semantic record
+headers and bounded operand comparisons, and issues each index-copy decision. The host follows
+those requests. It does not sort records or call DebugPool::encode. Sort requests have a checked
+bound of one plus the record count times the number of merge rounds.
+
+A second state machine chooses string, span, type-blob and record output phases, emits all length
+prefixes, and packs integer fields. The host supplies original strings, opaque type bytes, spans
+and records at the requested indices. Transfers use 4,096-byte windows and at most 1,024 operand
+words, or 512 operand pairs for comparisons. A pool need not fit in one window. Operand counts
+above the format's sixteen-bit field are refused rather than truncated. Identical records retain
+stable input order. Data sub-pools retain their existing indices.
+
+Commands 207 and 208 in wire derive each chunk's debug offset from actual encoded lengths.
+Absent pools retain the sentinel and present empty pools retain their sixteen-byte encoding.
+Debug bytes are concatenated without per-chunk padding, matching the reference. The optional
+DEBUG_POOL region retains its reference position in the auxiliary container.
+
+Five integration controls cover all twelve annotation kinds, canonical key and operand ordering,
+empty pools, merge boundaries, multiwindow strings and operands, the operand-count limit,
+compiled debug artifacts and absent versus present-empty chunks. Three private protocol tests
+check stable merge positions and malformed or incomplete requests. A further wire protocol test
+checks debug-span widths, overflow, sentinel exclusion and completion.
+
+The compiler corpus now includes thirteen embedded sources. All thirteen pipeline-produced
+artifacts match complete reference artifacts, and all thirteen remain monomorphization identities.
+The debug stage contributes Boolean function results, widening the corpus's previous Word-only
+return surface. Parameters remain Word. The updated census records the exact new sets.
+Clearing 43,831 expression types preserves all thirteen artifacts.
+
+The wire stage has 545 chunks, command 208, 1,300 constant nodes and a 149,516-byte artifact.
+Its 65-node reserve retains the standing minimum of 64. The new debug stage has 20 chunks,
+49 input name events, a 1,380-byte module-input blob and an 11,236-byte artifact. Its private
+sort and encoding state occupy 480 and 288 bytes respectively. The two added wire fields cost
+64 bytes. Host sort storage is linear in record count. No existing buffer cap, public opcode
+count or bytecode version changed. No throughput benchmark is claimed.
+
+Composite and named constants, private composite slots, nonempty non-elided initializers,
+semantic decoding and shipping integration remain open. Debug metadata generation itself is
+not changed by this encoding work. The host is trusted to replay the requested semantic data
+and copy index-buffer entries faithfully.
 
 ## Struct templates and compact scalar transport, 2026-10-08
 

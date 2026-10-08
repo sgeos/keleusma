@@ -120,6 +120,7 @@ fn the_corpus_covers_every_stage() {
         "verify_types",
         "verify_yield",
         "wire",
+        "wire_debug",
     ];
     let missing: Vec<&str> = stages
         .iter()

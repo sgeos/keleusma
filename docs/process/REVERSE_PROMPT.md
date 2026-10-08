@@ -3,149 +3,145 @@
 ## Current state
 
 Continue the complete Order 1 goal and the System 1 shadow pilot on line v0.2.3.
-The branch is feat/v02-order1-next, starting this increment at b227ce3c. Preserve the unrelated
-untracked .codex directory and nvim.log. The concurrent V0.3.X line remains separate.
+The branch is feat/v02-order1-next, starting this increment at 5b81bae4. Preserve unrelated
+untracked .codex and nvim.log. V0.3.X remains separate. No push, merge or publication occurred.
 
-The legacy HANDOFF.md is invalid and stale, measured 31 commits behind the starting head.
-Ancestry passes and its unchanged-stage-source claim fails. Its historical full verification and
-advisory checks were not all repeated. Read Appendix B before tracked writes. Public bytecode
-version remains 2, opcode count remains 66 and selected type-stage caps remain 640.
+The legacy HANDOFF.md is invalid and stale, measured 32 commits behind the starting head.
+Ancestry passes and its unchanged-stage-source claim fails. Historical full validity and advisory
+checks were not all repeated. Read Appendix B before tracked writes. Public bytecode version
+remains 2, opcode count remains 66 and selected type-stage caps remain 640.
 
-## Implemented work
+## Debug serialization
 
-The auxiliary helper now emits struct templates from semantic type and field names. Commands
-205 and 206 configure the optional input section and emit records. Template type names deduplicate,
-field names append fresh, and a private checkpoint records the next name index after each type
-without emitting a name. This preserves the first-field index for empty runs. Checkpoint behavior
-is enabled only for configured template input. Native and template sections have independent
-input ranges. Chunk template ranges remain derived by the existing stage counters.
+The dedicated wire_debug.kel stage owns stable bottom-up merge sorting and debug output order.
+The host retains two index buffers. The stage supplies read positions, compares semantic record
+headers and operand windows, chooses each copy and determines merge boundaries and generations.
+The host does not sort records or call DebugPool::encode. The sort driver has a checked request
+budget of one plus record count times merge rounds. Equal keys choose the left record.
 
-Five integration controls compare auxiliary and complete artifact bytes. They cover a compiled
-boxed struct whose large field comes from a native, cross-chunk template ranges, repeated names,
-empty and Unicode names, zero-field runs and exact name-event capacity. A template checkpoint
-consumes one input event, so the validator counts it. Invalid sections and calls after completion
-are refused. Seven private template fields cost 224 bytes, verified from the actual declaration.
+The encoding state machine chooses strings, spans, types and records in format order. It emits
+all count and length prefixes, integer fields and record headers. The host supplies data at
+requested indices and offsets. Raw strings and opaque type blobs use 4,096-byte windows.
+Operand output uses 1,024-word windows and comparisons use 512 pairs. Pools and operand lists
+can cross windows. Operand counts beyond the sixteen-bit wire field are refused. Data sub-pools
+retain their original indices. Debug metadata generation itself is unchanged.
 
-The constant-node reader previously returned counts above 1,024 without emitting any records,
-because it reused the name-table clamp. The new regression failed on node zero for 1,025 nodes.
-The repaired loop uses the node table's 1,365 limit. Both legacy and compact transports are checked
-at zero, 1,024, 1,025 and 1,365 nodes, with every emitted field inspected. The next count is refused
-before looping. Compact input also refuses named, composite and unknown tags.
+Wire commands 207 and 208 derive chunk debug offsets from actual encoded lengths. They receive
+presence and length, not host-computed positions. Absent pools retain the sentinel; present
+empty DebugPool values encode to sixteen bytes. Debug chunks concatenate without padding between
+them. The DEBUG_POOL region occupies its reference position after CHUNKS and before STRING_POOL.
 
-Scalar-only module_input now marks bit 15 of the private count and carries a two-byte tag plus
-an eight-byte payload. Four zero fields are reconstructed in Keleusma. Other forests keep the
-legacy grammar. This does not change published artifacts. None and floating-point payloads now
-reach the producer, including signed zero and a NaN payload. The module-input budget test masks
-the flag and checks the compact byte extent against the actual module constant count.
+The host is trusted to replay the requested semantic data and copy index entries faithfully.
+The stage does not authenticate host memory. Per-call loops are bounded; host storage for sort
+indices is linear in record count. No throughput benchmark is claimed.
 
-The first all-stage comparison failed on unresolved name 510, identified by the lexical trace
-as templates. Its private declaration followed a helper using it. The declaration now precedes
-use, restoring parsing and artifact identity. No general forward-data support was added.
-A no-default-features self-host build also found an existing unguarded Float enum variant in
-the host tag decoder. It now uses ScalarKind::from_tag with checked integer conversion. Invalid
-and feature-disabled tags reach the existing bad-tag panic guard. This internal decoder is not
-a new fallible source interface.
+## Inventory and capacity
 
-## Capacity
+There are now thirteen embedded stage sources. The complete artifact, monomorphization,
+inference-independence, framing, region and type-input inventories include wire_debug. The
+claimed-count guard derives its final embedding phrase from the actual count rather than
+hardcoding twelve. The debug stage's two validation helpers return bool, widening the previous
+Word-only result surface. Parameters remain Word. The type-surface census checks those exact sets.
 
-Wire has 543 chunks, highest command 206 and a 148,596-byte artifact. Its compact module input
-uses 23,080 of 49,152 bytes, leaving 26,072. It contributes 664 name events. Parse remains the
-name maximum at 776 of 1,024. Constant nodes use 1,297 of 1,365, leaving 68 and preserving the
-standing 64-node reserve. No buffer cap increased. Further stage growth must still respect the
-node bound even though compact input has recovered substantial byte capacity.
+Wire has 545 chunks, highest command 208 and a 149,516-byte artifact. Its input is 23,166 bytes
+of 49,152, with 668 name events. Its 1,300 constant nodes leave 65 below 1,365, retaining the
+64-node reserve. The reset function reuses the existing literal helpers to preserve that margin.
+Parse remains the name maximum at 776. No existing buffer cap increased.
 
-The first template implementation used 1,315 nodes. Ten additional literal helpers, calls to the
-existing tag constants and a shared template-error helper reduce use to 1,297. Five template
-functions and ten literal helpers account for fifteen added chunks. Literal aliases add fixed
-call levels. The scalar capacity guard now uses the same bounded alias reader as offset checks.
-Throughput has not been benchmarked. The input-event limit remains 1,024, including checkpoints.
+The debug stage has 20 chunks, 49 input name events, a 1,380-byte module-input blob and an
+11,236-byte artifact. Its fifteen sort fields occupy 480 private bytes, and its nine encoding
+fields occupy 288. The two new wire chunk fields add 64 bytes, giving that block seven slots
+or 224 bytes. The accounting regression compiles the actual declarations from both stages.
 
 ## Verification
 
-Cargo uses an empty RUSTC_WRAPPER and CARGO_HUSKY_DONT_INSTALL_HOOKS set to one. Stage runs use
+Runs use an empty RUSTC_WRAPPER and CARGO_HUSKY_DONT_INSTALL_HOOKS set to one. Stage checks use
 KEL_SELFHOST_CACHE zero. No verification subject is edited during a live run.
 
-- The first node-reader regression fails in tmp/order1-templates-node-before.log and passes in
-  tmp/order1-templates-node-after.log. Command cargo test --release --features self-host --lib
-  constant_node_reader_emits_the_tail_above_the_name_capacity -- --nocapture. Sessions 18311 and
-  15693 exited 101 and zero. The later expanded regression covers both formats and the limit.
-- Twelve wire protocol tests pass in tmp/order1-templates-protocol.log. Command cargo test
-  --release --features self-host --lib selfhost::wire_ -- --nocapture. Session 17103 exited zero.
-  This preceded declaration reordering and the later canonical scalar-tag decoder repair.
-- The repaired integrated run passes 202 tests across node budget, artifact identity, wire,
-  native metadata, templates and private accounting. All twelve pipeline artifacts match.
-  Command cargo test --release --features self-host --test selfhost_artifact_identity --test
-  selfhost_wire --test module_input_node_budget --test selfhost_wire_templates --test
-  selfhost_wire_natives --test wire_private_state_accounting --no-fail-fast -- --nocapture.
-  Log tmp/order1-templates-integrated2.log. Session 50157 exited zero.
-- Four inference tests pass in tmp/order1-templates-inference.log. Clearing 42,813 expression
-  types leaves all twelve artifacts unchanged. Command cargo test --release --features self-host
-  --lib compiler::inference_independence -- --nocapture. Session 63556 exited zero.
-- Six integration checks pass without default features in tmp/order1-templates-no-default2.log.
-  Command cargo test --release --no-default-features --features self-host --test
-  selfhost_wire_templates --test module_input_node_budget. Session 48132 exited zero.
-- The no-default tag-decoder test passes in tmp/order1-templates-no-default-tags.log. Command
-  cargo test --release --no-default-features --features self-host --lib
-  scalar_tag_decoding_obeys_feature_gates_without_narrowing_tags. Session 8548 exited zero.
+- Five debug integration tests pass in tmp/order1-debug-integration2.log. They cover all twelve
+  record kinds, canonical ordering, duplicate keys, merge boundaries, multiwindow data, the
+  operand-count limit, compiled debug artifacts and absent versus empty chunk spans. The same
+  command passes the node-budget and widened type-surface guards. Command cargo test --release
+  --features self-host --test selfhost_wire_debug --test module_input_node_budget --test
+  corpus_type_surface --no-fail-fast -- --nocapture. Session 96806 exited zero.
+- Three debug protocol tests pass in tmp/order1-debug-protocol.log. The direct sort comparison
+  checks stable indices for 1,030 records, including duplicates. Command cargo test --release
+  --features self-host --lib selfhost::wire_debug -- --nocapture. Session 92838 exited zero.
+- Seventeen wire protocol tests pass in tmp/order1-debug-all-protocol.log, including debug-span
+  overflow, sentinel exclusion and stream completion. Command cargo test --release --features
+  self-host --lib selfhost::wire_ -- --nocapture. Session 80327 exited zero.
+- The earlier corpus run passed all thirteen complete pipeline artifacts, all three
+  monomorphization checks and all seven framing tests. It failed only a stale byte-size pin and
+  the embedding phrase hardcoded to twelve. Both guards were corrected before the final run.
+  Log tmp/order1-debug-corpus.log. Session 46049 exited 101.
+- Four inference tests pass in tmp/order1-debug-inference.log. Clearing 43,831 expression types
+  preserves all thirteen artifacts. Command cargo test --release --features self-host --lib
+  compiler::inference_independence -- --nocapture. The command exited zero.
+- Seven focused no-default checks pass in tmp/order1-debug-no-default.log. Command cargo test
+  --release --no-default-features --features self-host --test selfhost_wire_debug --test
+  wire_private_state_accounting --test corpus_type_surface --no-fail-fast. Session 77278 exited zero.
 
-The earlier integrated run failed parsing wire and two stale capacity readers. Those diagnostics
-remain in tmp/order1-templates-integrated.log. The lexical probe is in
-tmp/order1-templates-parser-probe.log. Its process handle was unavailable on continuation, so
-no terminal exit status is claimed for that probe. The subsequent parser test passed in
-tmp/order1-templates-parser-after.log. The first no-default compilation failure is retained in
-tmp/order1-templates-no-default.log. These failures were repaired without weakening guards.
-
-- The final release workspace run passes 3,067 tests with zero failures and five ignored across
-  167 reported suites. Command cargo test --release --workspace --no-fail-fast. Log
-  tmp/order1-templates-workspace.log. Terminal session 23291 exited zero. This includes the
-  final canonical tag decoder and all thirteen wire protocol tests.
-- Workspace Clippy performed actual Checking and passed. Command cargo clippy --workspace
-  --tests -- -D warnings. Log tmp/order1-templates-final-clippy.log. Session 64196 exited zero.
+- The release workspace diagnostic completed with 3,073 passes, four failures and five ignored
+  across 168 suites. Command cargo test --release --workspace --no-fail-fast. Log
+  tmp/order1-debug-workspace.log. Session 29502 exited 101. All failures were stale inventories,
+  two expecting twelve stages, one expecting eleven, and one omitting wire_debug.
+- The repaired type, wire and round-trip suites pass 290 tests. Command cargo test --release
+  --workspace --test selfhost_typecheck --test selfhost_wire --test wire_corpus --no-fail-fast.
+  Log tmp/order1-debug-repaired.log. Session 10952 exited zero. The round-trip corpus now also
+  includes wire and verify_types, whose old exclusions incorrectly claimed they were not embedded.
+- Workspace Clippy performed actual Checking and passed after the repairs. Command cargo clippy
+  --workspace --tests -- -D warnings. Log tmp/order1-debug-final-clippy2.log. Session 14293
+  exited zero. The earlier production lint also passed in tmp/order1-debug-final-clippy.log.
 - Documentation passed with RUSTDOCFLAGS set to -D warnings. Command cargo doc --workspace
-  --no-deps. Log tmp/order1-templates-doc.log. Session 84575 exited zero.
+  --no-deps. Log tmp/order1-debug-doc.log. Session 16791 exited zero.
 - The no_std self-host check performed actual Checking and passed. Command cargo check
-  --no-default-features --features self-host. Log tmp/order1-templates-nostd.log. Session
-  94498 exited zero. This includes compile and verify through the self-host feature.
+  --no-default-features --features self-host. Log tmp/order1-debug-nostd.log. Session 97230
+  exited zero.
 
-No production or test code changed after the full workspace run. The four documentation guard
-suites pass 24 tests in tmp/order1-templates-doc-guards.log. Command cargo test --release --test
-documentation_links --test claimed_counts --test comment_citations --test push_order_claims.
-Terminal session 44715 exited zero. Formatting and diff checks pass. The documentation guards
-are repeated after this receipt update. Separate feature matrices,
+No production code changed after the full workspace run. Only inventory tests and documentation
+were repaired afterward. The full workspace was not repeated after those repairs. The four
+documentation guard suites pass 24 tests in tmp/order1-debug-doc-guards.log. Command cargo test
+--release --test documentation_links --test claimed_counts --test comment_citations --test
+push_order_claims. Session 69068 exited zero. Formatting and diff checks pass. The guards are
+repeated after this receipt update. No verification process remains running at final handoff.
+
+The first stage parse failed because error() is reserved checked syntax. Renaming that helper
+fixed it. Later diagnostics identified a one-node reserve shortfall, Bool versus bool in the
+census expectation and a tuple-return mismatch in a test fixture. Logs remain under
+tmp/order1-debug-. No standing bound or coverage guard was weakened. Separate feature matrices,
 minimum supported toolchains, Miri, cross-target builds, advisory scanning and final integration
-gates remain required after the missing implementation. No verification process remains running
-at final handoff.
+gates remain required after the remaining implementation.
 
 ## Next work
 
-Complete debug pools, composite and named constants, private composite slots and nonempty
-non-elided initializer pools. The auxiliary helper still refuses those forms. DebugPool is
-structured input whose Rust encoder sorts records by operation index, kind and operands.
-Passing its encoded bytes through Keleusma would leave serialization in Rust. Constant-name
-interning must preserve the breadth-first ordering already demonstrated by the older flattener.
+Complete composite and named constants, private composite slots and nonempty non-elided
+initializer pools. The auxiliary helper still refuses those forms. Constant-name interning
+must preserve breadth-first ordering across all roots, including initializer contributors.
+The older flattener demonstrates the ordering, but its window and provenance limits remain.
 
-Complete semantic decoding and then connect complete artifact output to the shipping tool.
-Shipping unsigned output still uses Module::to_bytes. Preserve every supported behavior.
-Legacy wire_windowed_via_kel borrows reference positions and can skip unknown regions. Envelope
-integrity alone is not semantic decoding. Retain the full completion plan and its type obligations,
-including projection identity, nested headers, binder and occurrence coverage, nominal layout,
-aliases, empty-array inference, mixed tuple layout, casts and enum-dispatch capacity.
-
-Refresh all-stage identity, monomorphization, inference independence, shipping comparisons and
-final gates after the remaining work. Full Order 1 remains active.
+Complete semantic decoding and connect artifact output to the shipping tool while preserving
+all supported behavior. Shipping unsigned output still calls Module::to_bytes. Legacy
+wire_windowed_via_kel borrows reference positions and can skip unknown regions. Envelope checks
+are not semantic decoding. Retain the completion plan's remaining type obligations, including
+projection identity, nested headers, binders, occurrences, nominal layout, aliases, empty-array
+inference, mixed tuples, casts and enum-dispatch capacity. Full Order 1 remains active.
 
 ## Shadow pilot and mailbox
 
-Task v023-order1-templates contains the first node-reader diagnostic and three bounded claims
-for template ranges, both constant transport forms and the measured input capacity. Blind exports
-preceded non-independent self-labels. All four request hashes, exact payloads and source hashes
-were reviewed in tmp/order1-templates-pilot-export.json. The bounded increment outcome is recorded
-as resolved. Full Order 1 remains active. Later diagnostics belong to this
-same increment and remain in their logs. External evaluation remains unavailable under the prior
-automatic approval rejection for the external destination and payload. Do not retry or bypass
-it. Local self-labels are non-independent. Usage and elapsed time remain null when unavailable.
-Source references stay local, so excerpts must include the decisive assertions themselves.
-The pilot implementation line owns its tracked checkpoint.
+Task v023-order1-debug retains the first parser diagnostic locally. Later diagnostics belong to
+this same increment. Completion claims, blind labels and export review are recorded below.
+External evaluation remains unavailable under the prior automatic approval rejection for the
+external destination and payload. Do not retry or bypass it. Self-labels are non-independent.
+Usage and elapsed time remain null when unavailable. The pilot implementation line owns its
+tracked checkpoint. Source references stay local, so claim excerpts include decisive assertions.
 
-The assigned inbox was empty at startup, on continuation and before handoff. No messages were
-sent or received. The exported mailbox checkpoint was reviewed and has no tracked difference. Publication requires in-session confirmation.
+Four local samples are complete for this increment, the parser diagnostic and three bounded
+claims for stable sorting, chunk spans and window boundaries. Blind exports preceded self-labels.
+The exact request payloads and all four request and source hashes were reviewed in
+tmp/order1-debug-pilot-export.json. The bounded increment outcome is recorded as resolved.
+Full Order 1 remains active. Missing usage and elapsed time remain null. No independent accuracy
+claim is supported.
+
+The assigned inbox was empty at startup and before handoff. No messages were sent or received.
+The mailbox checkpoint was exported, reviewed and has no tracked difference.
+Publication requires explicit in-session confirmation.

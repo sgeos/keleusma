@@ -11838,6 +11838,8 @@ fn the_windowed_path_reaches_every_stage_it_can_walk() {
         "verify_typed",
         "verify_datalayout",
         "wire",
+        "wire_debug",
+        "verify_types",
     ];
 
     let mut full = 0;
@@ -11904,7 +11906,7 @@ fn the_windowed_path_reaches_every_stage_it_can_walk() {
         stages.len(),
         "every stage should emit every region the driver reaches"
     );
-    assert_eq!(stages.len(), 11, "the corpus is eleven stages");
+    assert_eq!(stages.len(), 13, "the corpus includes every current stage");
 }
 
 /// MUST FIRE: the windowed path reaches a stage the absolute-offset path cannot.
@@ -12914,6 +12916,10 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     for (name, src) in CORPUS_STAGES.iter().copied().chain([
         ("wire", include_str!("../src/selfhost/kel/wire.kel")),
         (
+            "wire_debug",
+            include_str!("../src/selfhost/kel/wire_debug.kel"),
+        ),
+        (
             "verify_types",
             include_str!("../src/selfhost/kel/verify_types.kel"),
         ),
@@ -12950,9 +12956,9 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     eprintln!("worst names {worst_names}, worst blob {worst_blob}");
     // Measured 2026-10-04. Earlier evidence omitted wire and verify_types.
     // Parse holds the name maximum. Wire holds the byte maximum and leaves
-    // 26,072 bytes below the input cap. Neither capacity is raised here.
+    // 25,986 bytes below the input cap. Neither capacity is raised here.
     assert_eq!(worst_names, 776, "the worst-case name count moved");
-    assert_eq!(worst_blob, 23080, "the worst-case blob size moved");
+    assert_eq!(worst_blob, 23166, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

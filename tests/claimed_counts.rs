@@ -345,7 +345,12 @@ fn the_stage_source_count_claim_matches_the_directory() {
         disk_names,
         "the driver must embed every stage named by the directory inventory"
     );
-    assert!(INSTRUCTIONS.contains("all twelve embedded in the driver"));
+    let count_word = WORDS
+        .iter()
+        .find(|(_, count)| *count == on_disk)
+        .map(|(word, _)| *word)
+        .expect("extend the stage-count word table");
+    assert!(INSTRUCTIONS.contains(&format!("all {count_word} embedded in the driver")));
 }
 
 /// **EVERY WORKSPACE MEMBER IS NAMED IN THE ORIENTATION DOCUMENT.**

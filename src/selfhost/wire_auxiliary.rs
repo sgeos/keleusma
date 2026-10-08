@@ -189,7 +189,7 @@ impl Emitter {
 /// Encode the auxiliary container from module facts, with no reference artifact.
 ///
 /// This integrates the stage-corpus records, native metadata and struct templates.
-/// Debug pools, composite constants and private composite slots still
+/// Composite constants and private composite slots still
 /// require integration. They are refused explicitly. Shape numbering is derived
 /// in Keleusma, and parameter tags remain opaque bytes.
 /// This function is not yet the shipping serializer.
@@ -200,9 +200,6 @@ impl Emitter {
 pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
     use crate::wire_schema::kind;
 
-    if module.chunks.iter().any(|c| c.debug_pool.is_some()) {
-        return Err(error("debug records are not integrated"));
-    }
     if module
         .data_layout
         .as_ref()
@@ -314,7 +311,39 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
         native_at,
         template_at,
     };
+    let mut debug_bytes = Vec::new();
+    let mut debug_lengths = Vec::new();
+    let mut has_debug = false;
+    for chunk in &module.chunks {
+        if let Some(pool) = &chunk.debug_pool {
+            let bytes = wire_debug_pool_via_kel(pool)?;
+            let length = u32::try_from(bytes.len()).map_err(|_| error("debug pool exceeds u32"))?;
+            let end = debug_bytes
+                .len()
+                .checked_add(bytes.len())
+                .filter(|&n| u32::try_from(n).is_ok())
+                .ok_or_else(|| error("combined debug pool exceeds u32"))?;
+            debug_bytes
+                .try_reserve(bytes.len())
+                .map_err(|_| error("debug allocation failed"))?;
+            debug_bytes.extend_from_slice(&bytes);
+            debug_assert_eq!(debug_bytes.len(), end);
+            debug_lengths.push((1, i64::from(length)));
+            has_debug = true;
+        } else {
+            debug_lengths.push((0, 0));
+        }
+    }
     let mut chunks = chunk_fields_of(module);
+    for (row, &(present, length)) in chunks
+        .as_chunks_mut::<11>()
+        .0
+        .iter_mut()
+        .zip(&debug_lengths)
+    {
+        row[4] = present;
+        row[5] = length;
+    }
     let mut op_offset = 0u32;
     for (row, chunk) in chunks
         .as_chunks_mut::<11>()
@@ -406,8 +435,11 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
     if !module.chunks.is_empty() {
         regions.push((
             kind::CHUNKS,
-            emitter.stream(&chunks, 11, Some(174), 175, None)?,
+            emitter.stream(&chunks, 11, Some(207), 208, None)?,
         ));
+    }
+    if has_debug {
+        regions.push((kind::DEBUG_POOL, debug_bytes));
     }
     regions.push((kind::STRING_POOL, emitter.single(171)?));
     regions.push((kind::NAMES, emitter.single(170)?));
@@ -421,6 +453,45 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debug_span_stream_checks_presence_bounds_and_completion() {
+        let mut input = compile_src("fn main() -> Word { 7 }");
+        input.chunks.push(input.chunks[0].clone());
+        let (blob, _) = module_input(&input);
+        with_compiled_wire(compile_src(&read_stage("kel/wire.kel")), |vm, shared| {
+            for (i, byte) in blob.into_iter().enumerate() {
+                vm.set_shared(shared, wire_slots::BIN + i, Value::Byte(byte))
+                    .unwrap();
+            }
+            assert!(command(vm, shared, 208).is_err());
+            command(vm, shared, 207)?;
+            for (present, size) in [(-1, 0), (2, 0), (0, 1), (1, -1), (1, 0x1_0000_0000)] {
+                set_word(vm, shared, wire_slots::FIN + 4, present)?;
+                set_word(vm, shared, wire_slots::FIN + 5, size)?;
+                assert!(command(vm, shared, 208).is_err());
+            }
+            set_word(vm, shared, wire_slots::FIN + 4, 1)?;
+            set_word(vm, shared, wire_slots::FIN + 5, 0xFFFF_FFFF)?;
+            assert_eq!(command(vm, shared, 208)?, 48);
+            let mut bytes = [0; 48];
+            read_window(vm, shared, &mut bytes)?;
+            assert_eq!(&bytes[28..36], &[0, 0, 0, 0, 255, 255, 255, 255]);
+            set_word(vm, shared, wire_slots::FIN + 4, 1)?;
+            set_word(vm, shared, wire_slots::FIN + 5, 0)?;
+            assert!(
+                command(vm, shared, 208).is_err(),
+                "present span cannot use the absent sentinel"
+            );
+            set_word(vm, shared, wire_slots::FIN + 4, 0)?;
+            assert_eq!(command(vm, shared, 208)?, 48);
+            read_window(vm, shared, &mut bytes)?;
+            assert_eq!(&bytes[28..36], &[255, 255, 255, 255, 0, 0, 0, 0]);
+            assert!(command(vm, shared, 208).is_err());
+            Ok(())
+        })
+        .unwrap();
+    }
 
     #[test]
     fn scalar_tag_decoding_obeys_feature_gates_without_narrowing_tags() {

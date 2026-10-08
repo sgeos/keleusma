@@ -5038,6 +5038,10 @@ const REAL_STAGE_SOURCES: &[(&str, &str)] = &[
         include_str!("../src/selfhost/kel/verify_yield.kel"),
     ),
     ("wire", include_str!("../src/selfhost/kel/wire.kel")),
+    (
+        "wire_debug",
+        include_str!("../src/selfhost/kel/wire_debug.kel"),
+    ),
 ];
 
 /// Every input channel's row count for one program, as `(channel, rows, capacity)`.
@@ -5892,6 +5896,7 @@ fn the_stage_is_measured_against_the_real_stage_sources() {
             "verify_types",
             "verify_yield",
             "wire",
+            "wire_debug",
         ],
         "the set of real stage sources whose tables fit the input channels changed. \
          A stage JOINING it is progress in capacity worth recording; one LEAVING it \
@@ -9598,7 +9603,7 @@ fn pipeline_expression_extraction_reaches_every_stage() {
         }
         reached += 1;
     }
-    assert_eq!(reached, 12);
+    assert_eq!(reached, REAL_STAGE_SOURCES.len());
 }
 
 /// **THE ARRAY-ELEMENT ROWS AGREE BETWEEN THE PIPELINE AND THE REFERENCE.**
@@ -10787,7 +10792,11 @@ fn production_types_reach_corpus_and_rule_form_census() {
 #[test]
 fn production_types_accept_all_stage_inputs() {
     use keleusma::selfhost::{call_type_inputs_from_pipeline, type_check_inputs_via_kel};
-    assert_eq!(REAL_STAGE_SOURCES.len(), 12);
+    assert_eq!(
+        REAL_STAGE_SOURCES.len(),
+        13,
+        "the debug stage joined the complete corpus"
+    );
     for &(name, source) in REAL_STAGE_SOURCES {
         let inputs = call_type_inputs_from_pipeline(source);
         assert!(!inputs.batches.is_empty(), "empty {name}");

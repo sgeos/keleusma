@@ -1,3 +1,6 @@
+<!-- Current corpus update 2026-10-08. Thirteen stage sources now include wire_debug.
+Its two validation helpers return bool, while every stage parameter remains Word.
+Historical twelve-stage measurements below retain their original scope. -->
 # Self-Hosting the Type Checker and the Monomorphizer — Scoping
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
@@ -8,7 +11,7 @@ The standing inference-independence tests in
 [the compiler test module](../../src/compiler/inference_independence.rs) cover all twelve
 current stage sources and check their directory inventory. The intervention clears the
 populated expression-type table after the recording pass and before emission. Clearing
-42,813 entries leaves every complete serialized artifact unchanged. A deliberately changed
+43,831 entries leaves every complete serialized artifact unchanged. A deliberately changed
 array type changes emission, proving that the hook reaches a consulted table. An invalid
 source fails before the hook, preserving admission. The comparisons use complete bytes.
 

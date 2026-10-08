@@ -72,6 +72,10 @@ const STAGES: &[(&str, &str)] = &[
         include_str!("../src/selfhost/kel/verify_types.kel"),
     ),
     ("wire", include_str!("../src/selfhost/kel/wire.kel")),
+    (
+        "wire_debug",
+        include_str!("../src/selfhost/kel/wire_debug.kel"),
+    ),
 ];
 
 fn compile_stage(src: &str) -> Module {

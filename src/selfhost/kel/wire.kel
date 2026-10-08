@@ -4338,6 +4338,8 @@ fn ck_in(j: Word, f: Word) -> Word { wire.fin[(j * ck_fields()) + f] }
 // Running totals, one per range. Three fields rather than one reused, because
 // they advance independently and sharing would couple them silently.
 private data ck {
+    debug: Word,
+    debug_mode: Word,
     consts: Word,
     templates: Word,
     ptypes: Word,
@@ -4452,6 +4454,33 @@ fn ck_stream_begin() -> Word {
 // region depends on and it is why the totals must persist: a step that restarted
 // them would emit a structurally valid region whose every later range points
 // somewhere wrong.
+// Chunk debug positions are derived from emitted pool lengths. Presence is
+// semantic input, so absent and present-empty pools remain distinct.
+fn ck_debug_begin() -> Word {
+    ck.debug = wire_zero();
+    ck.debug_mode = wire_zero();
+    ck.sink = ck_stream_begin();
+    if ck.sink < wire_zero() { ck.sink } else {
+        ck.debug_mode = wire_one();
+        ck.sink
+    }
+}
+
+fn ck_debug_step() -> Word {
+    let present = wire.fin[4];
+    let size = wire.fin[5];
+    if ck.debug_mode != wire_one() orelse ck.j >= mi_count()
+        orelse present < wire_zero() orelse present > wire_one()
+        orelse size < wire_zero() orelse size > absent_index() - ck.debug
+        orelse (present == wire_zero() andalso size != wire_zero())
+        orelse (present == wire_one() andalso ck.debug == absent_index()) { wire_zero() - 284 } else {
+        wire.fin[4] = if present == wire_one() { ck.debug } else { absent_index() };
+        ck.sink = ck_stream_step();
+        if ck.sink >= wire_zero() { ck.debug = ck.debug + size; }
+        ck.sink
+    }
+}
+
 fn ck_stream_step() -> Word {
     if ck.j >= nm_max_names() { 0 - 263 } else {
         ck.sink = put_u32(chunk_off_name(), wire.nmap[ck.j]);
@@ -5213,9 +5242,9 @@ private data sigstream {
 }
 
 fn si_reset() -> Word {
-    sigstream.count = 0;
-    sigstream.mode = 1;
-    0
+    sigstream.count = wire_zero();
+    sigstream.mode = wire_one();
+    wire_zero()
 }
 
 fn si_begin() -> Word {
@@ -5401,7 +5430,9 @@ fn dispatch_native(cmd: Word) -> Word {
     if cmd == 203 { si_native_begin() } else {
     if cmd == 204 { si_native_finish() } else {
     if cmd == 205 { template_input() } else {
-    if cmd == 206 { template_step() } else { 0 - 97 }}}}}}
+    if cmd == 206 { template_step() } else {
+    if cmd == 207 { ck_debug_begin() } else {
+    if cmd == 208 { ck_debug_step() } else { 0 - 97 }}}}}}}}
 }
 
 fn wire_one() -> Word { 1 }
@@ -5428,7 +5459,7 @@ fn wire_sixty_four() -> Word { 64 }
 fn wire_one_k() -> Word { 1024 }
 fn wire_forty_eight_k() -> Word { 49152 }
 
-fn highest_command() -> Word { 206 }
+fn highest_command() -> Word { 208 }
 
 // --- THE ENTRY, AS A COROUTINE ----------------------------------------------
 //

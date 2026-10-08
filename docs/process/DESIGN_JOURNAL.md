@@ -13,6 +13,37 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-08 Debug metadata moves into a dedicated Keleusma stage
+
+Debug metadata requires canonical ordering as well as packing. The new stage schedules stable
+merge sorting, compares semantic keys and operand windows, and directs every index-buffer copy.
+The host retains buffers and transports data. A second stage state machine controls sub-pool
+order, length prefixes and record encoding. It never receives DebugPool::encode output.
+Chunk debug spans are derived by two wire commands from actual emitted lengths.
+
+The separate stage keeps bounded comparison and byte windows without growing the already large
+wire source for sorting logic. The complete corpus is now thirteen embedded sources. Every
+current stage passes complete pipeline artifact identity and monomorphization identity. Two
+Boolean validation results widen the previous Word-only function-result corpus. Parameters
+remain Word. The census now checks that exact distinction.
+
+The first implementation called a helper error, which the language parsed as reserved checked
+syntax. Renaming it resolved the failure. Later checks caught a one-node reserve shortfall, a
+Bool versus bool spelling in the type census, a tuple-return mismatch in a test fixture, a stale
+byte-size pin and a hardcoded twelve in an otherwise derived inventory guard. These were repaired
+without changing the standing reserve or dropping inventory coverage. Reset literals now reuse
+the existing helpers, leaving 65 constant nodes free in wire.
+
+Five integration tests and three debug-stage protocol tests pass. Seventeen wire protocol tests
+pass, including the new span bounds. The no-default configuration passes the focused debug,
+accounting and type-surface checks. Inference independence covers 43,831 expression types across
+thirteen sources. The workspace diagnostic passed 3,073 tests and failed four stale inventory assertions, with
+five ignored. All 290 affected tests pass after the inventory repairs. Workspace Clippy,
+documentation and the no_std self-host check pass. No production code changed after that run.
+The reverse prompt retains receipts and the reviewed local pilot export.
+Full Order 1 remains active for the remaining constant and private-data forms, semantic decoding,
+shipping integration, type coverage and final gates.
+
 ## 2026-10-08 Struct templates and a repaired constant-node reader
 
 Template names now join the shared interner in finalization order. Type names deduplicate and
