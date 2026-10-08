@@ -6,10 +6,53 @@
 
 The driver-capacity test now inventories all thirteen stage sources. Earlier versions of that
 test used ten sources and omitted wire and verify_types. The current maxima belong to
-different stages. Parse uses 776 of 1,024 names. Wire uses 23,417 of 49,152 input bytes.
-The remaining wire input margin is 25,735 bytes. No input cap changed. These measurements
+different stages. Parse uses 776 of 1,024 names. Wire uses 23,578 of 49,152 input bytes.
+The remaining wire input margin is 25,574 bytes. No input cap changed. These measurements
 establish input residency for the corpus, not complete production serialization.
 Both encoding and decoding remain within the original wire-format scope.
+
+## Module constant forests and shared names, 2026-10-08
+
+The module-driven auxiliary path now handles every ConstValue form within its declared input
+bounds, including named and composite initializer trees. The host traverses borrowed values
+iteratively in preorder and supplies tags, payloads, child counts, names and enum metadata.
+Keleusma recovers subtree sizes and root boundaries, assigns breadth-first positions and emits
+CONSTS, STRUCT_AUX and ENUM_AUX. No flattened ranges or auxiliary-table indices come from Rust.
+
+The shared interner processes chunk, enum, native and slot names first. Constant names then
+follow the breadth-first walk, and template names follow all constant names. Struct fields append
+fresh; enum names and strings deduplicate. Empty struct field runs and None versus Some(0) enum
+discriminants retain their distinct metadata. Scalar-only modules retain the existing record
+stream, including large scalar initializer pools beyond the forest residency bound.
+
+Separate arrays hold 1,365 six-word node records, queue positions and subtree sizes. Their
+87,360 shared bytes prevent emitted records from overwriting unread input. They are appended
+after existing shared fields, so old host slot positions remain unchanged. Legacy FIN-based
+calls retain their 170-node input cap. Shared traversal loops now cover 1,365 nodes. The three
+output ranges occupy disjoint portions of the existing 65,536-byte window.
+
+The node and name bounds remain 1,365 and 1,024, with a 256-byte per-name limit, a 16,384-byte
+name pool and a 49,152-byte input window. Those limits still require admission comparison before
+shipping integration. General record-form support does not prove that every previously accepted
+source fits them. Malformed node arities and incomplete subtrees are refused.
+
+Five integration controls compare full artifacts and decoded values, distinguish breadth-first
+from preorder naming, exercise struct and enum side tables and templates, include initializer
+roots and cross the old 170-node bound through the exact 1,365-node limit. Three compiled controls
+also execute after decode. Protocol checks cover malformed arities, incomplete subtrees and
+invalid region selectors. Nineteen wire protocol tests pass. The no-default configuration passes
+forest, private-data and memory-accounting checks.
+
+Wire has 558 chunks, command 213, 1,300 constant nodes and a 156,228-byte artifact. Its 65-node
+reserve retains the standing minimum of 64. Named literal calls in opcode classification recover
+the reserve. Removing literals from loop helpers did not reduce their pools because loop lowering
+still requires those constants, so that experiment was reverted. The private flattener block has
+18 slots or 576 bytes, and the name block has 37 slots or 1,184 bytes. The accounting checks
+compile the actual declarations. Clearing 44,491 expression types preserves all thirteen artifacts.
+
+Semantic decoding, capacity/admission coverage, shipping integration and remaining type obligations
+are still required. No public opcode or bytecode version changed. The host remains trusted to
+transport its own typed module facts faithfully.
 
 ## Private layout and scalar initializer integration, 2026-10-08
 

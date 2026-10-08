@@ -146,6 +146,11 @@ shared data wire {
     // breadth-first walk, in an order that is not the input order, so an
     // arbitrary name's offset has to be recoverable on demand.
     noff: [Word; 1024],
+    // Separate module-forest storage prevents output records overwriting
+    // unread preorder facts. Existing shared-slot positions remain unchanged.
+    forest: [Word; 8190],
+    forest_queue: [Word; 1365],
+    forest_sizes: [Word; 1365],
 }
 
 // The running checksum. It lives in a data block because locals are immutable:
@@ -2674,6 +2679,60 @@ private data templates {
     emitted: Word,
 }
 
+private data fl {
+    module: Word,
+    roots: Word,
+    // Sibling cursor: a preorder index being advanced past whole subtrees.
+    cur: Word,
+    // Subtree-size accumulator.
+    tot: Word,
+    // Queue length, which is ALSO the next breadth-first index to allocate.
+    // The reference carries a separate `next_index`; the two are provably equal
+    // at every step — both start at `nroots` and both grow by the child count —
+    // so keeping one field removes the chance of them disagreeing.
+    qn: Word,
+    // The breadth-first index of the current node's first child.
+    first: Word,
+    // Index actually used after clamping, so a malformed input cannot index out
+    // of range while the error code is being raised.
+    pick: Word,
+    // The clamped QUEUE index, separate from `pick`. One field served both roles
+    // at first and was correct only because each iteration reassigned before
+    // use — the kind of coupling this file keeps apart deliberately, as `st.pad`
+    // records. Found by reading the code back, not by a failing test.
+    qpick: Word,
+    // Sticky rejection code, 0 while the input is well formed.
+    err: Word,
+    // Discards a call whose result is in the fields.
+    sink: Word,
+    // A propagated return code. Separate from `sink`, which discards: reusing
+    // the discard field for a value that is then TESTED is how a guard quietly
+    // stops guarding.
+    rc: Word,
+    // Running `STRUCT_AUX` index, assigned in breadth-first order like every
+    // other index the walk hands out.
+    saux: Word,
+    // Where `STRUCT_AUX` records go. A field rather than a parameter so
+    // `fl_walk` and `fl_put_record` keep the signatures command 141 already
+    // uses; 141 never emits a struct, because its scope predicate rejects the
+    // tag before the walk starts.
+    sauxat: Word,
+    // A struct's interned type-name index, held across the field run.
+    tn: Word,
+    // The name index the field run starts at.
+    ffirst: Word,
+    // Running `ENUM_AUX` index, and where those records go. Same shape as the
+    // struct pair, and separate from it because the two tables are independent.
+    eaux: Word,
+    eauxat: Word,
+    // The STREAMING emit's record cursor. A field of its own rather than a reuse
+    // of `qn`: that one is the breadth-first queue length, and the streaming path
+    // has no queue at all. Sharing them would be correct only for as long as the
+    // two paths never ran against the same block, which is not a property anyone
+    // can check by reading one function.
+    scur: Word,
+}
+
 private data nm {
     // Enum-section counters (slice 14b). Fields rather than locals for the
     // reason `crc.acc` records: this file uses no locals, so a nested walk has
@@ -2721,6 +2780,7 @@ private data nm {
     // stage-computed fields rather than one.
     tcur: Word,
     vfirst: Word,
+    cbase: Word,
     ctag: Word,
     cpay: Word,
     cfirst: Word,
@@ -2966,6 +3026,7 @@ fn nm_mode_fresh() -> Word { wire_one() }
 fn mi_mode_pairs() -> Word { wire_zero() }
 
 fn mi_mode_nodes() -> Word { wire_one() }
+fn mi_mode_forest() -> Word { wire_three() }
 
 fn mi_mode_silent() -> Word { wire_two() }
 
@@ -3030,6 +3091,15 @@ fn mi_put_node_full(
     flags: Word,
     disc: Word,
 ) -> Word {
+    if nm.mode == mi_mode_forest() {
+        wire.forest[i * mi_node_words()] = tag;
+        wire.forest[i * mi_node_words() + wire_one()] = payload;
+        wire.forest[i * mi_node_words() + wire_two()] = kids;
+        wire.forest[i * mi_node_words() + wire_three()] = nfirst;
+        wire.forest[i * mi_node_words() + wire_four()] = flags;
+        wire.forest[i * mi_node_words() + wire_five()] = disc;
+        i + wire_one()
+    } else {
     nm.sink = put_u64(i * (mi_node_words() * 8), tag);
     nm.sink = put_u64((i * (mi_node_words() * 8)) + 8, payload);
     nm.sink = put_u64((i * (mi_node_words() * 8)) + 16, kids);
@@ -3037,6 +3107,7 @@ fn mi_put_node_full(
     nm.sink = put_u64((i * (mi_node_words() * 8)) + 32, flags);
     nm.sink = put_u64((i * (mi_node_words() * 8)) + 40, disc);
     i + 1
+    }
 }
 
 fn mi_put_node(i: Word, tag: Word, payload: Word, nfirst: Word) -> Word {
@@ -3278,6 +3349,7 @@ fn mi_name_mode(tag: Word, i: Word) -> Word {
 fn mi_tag_struct() -> Word { wire_ten() }
 
 fn mi_const_names() -> Word {
+    nm.cbase = nm.cnt;
     nm.ccnt = mi_u16(nm.icur);
     let compact = nm.ccnt >= 32768;
     nm.ccnt = nm.ccnt band 32767;
@@ -3313,6 +3385,21 @@ fn mi_const_names() -> Word {
             nm.cnames = mi_u16(nm.icur);
             nm.icur = nm.icur + 2;
             }
+            // A malformed arity must not let a named node read another node's
+            // name events. This validates semantic shape before interning.
+            if nm.err == wire_zero() {
+            if nm.ctag < tag_unit() orelse nm.ctag > tag_none() { nm.err = wire_zero() - 286; }
+            if nm.ctag == tag_static_str() {
+                if nm.ckids != wire_zero() orelse nm.cnames != wire_one() { nm.err = wire_zero() - 286; }
+            } else { if nm.ctag == tag_struct() {
+                if nm.cnames != nm.ckids + wire_one() { nm.err = wire_zero() - 286; }
+            } else { if nm.ctag == tag_enum() {
+                if nm.cnames != wire_two() { nm.err = wire_zero() - 286; }
+            } else {
+                if nm.cnames != wire_zero() { nm.err = wire_zero() - 286; }
+                if mi_tag_is_composite(nm.ctag) == wire_zero() andalso nm.ckids != wire_zero() { nm.err = wire_zero() - 286; }
+            }}}
+            }
             // `names_first` is the index the node's FIRST name takes, so it is
             // read before any of them advance the counter. A node with no names
             // records zero, matching the reference.
@@ -3332,7 +3419,7 @@ fn mi_const_names() -> Word {
                     0
                 };
             }
-            nm.sink = if nm.mode == mi_mode_nodes() {
+            nm.sink = if nm.mode == mi_mode_nodes() orelse nm.mode == mi_mode_forest() {
                 mi_put_node_full(c, nm.ctag, nm.cpay, nm.ckids, nm.cfirst, nm.cflags, nm.cdisc)
             } else { 0 };
             0
@@ -3531,10 +3618,15 @@ fn mi_join_chunks() -> Word {
 // would be reproducing the stage's output, which is the drift this file has
 // recorded four times.
 fn mi_window_prepare() -> Word {
-    nm.mode = mi_mode_silent();
+    nm.mode = mi_mode_forest();
     nm.total = mi_chunk_names();
     nm.mode = mi_mode_pairs();
-    if nm.total < 0 { nm.total } else { intern_run_preoffset(nm.total) }
+    if nm.total < wire_zero() { nm.total } else {
+        fl.module = wire_one();
+        fl.rc = mf_build();
+        fl.module = wire_zero();
+        if fl.rc < wire_zero() { fl.rc } else { nm.cnt }
+    }
 }
 
 fn mi_window_names() -> Word {
@@ -3737,57 +3829,7 @@ fn intern_emit_pool(n: Word) -> Word {
 // node is enqueued once, so a `for head in 0..nnodes` walks it exactly. A total
 // language forces the bound to be stated and in this case the bound was already
 // known — the restriction cost nothing.
-private data fl {
-    // Sibling cursor: a preorder index being advanced past whole subtrees.
-    cur: Word,
-    // Subtree-size accumulator.
-    tot: Word,
-    // Queue length, which is ALSO the next breadth-first index to allocate.
-    // The reference carries a separate `next_index`; the two are provably equal
-    // at every step — both start at `nroots` and both grow by the child count —
-    // so keeping one field removes the chance of them disagreeing.
-    qn: Word,
-    // The breadth-first index of the current node's first child.
-    first: Word,
-    // Index actually used after clamping, so a malformed input cannot index out
-    // of range while the error code is being raised.
-    pick: Word,
-    // The clamped QUEUE index, separate from `pick`. One field served both roles
-    // at first and was correct only because each iteration reassigned before
-    // use — the kind of coupling this file keeps apart deliberately, as `st.pad`
-    // records. Found by reading the code back, not by a failing test.
-    qpick: Word,
-    // Sticky rejection code, 0 while the input is well formed.
-    err: Word,
-    // Discards a call whose result is in the fields.
-    sink: Word,
-    // A propagated return code. Separate from `sink`, which discards: reusing
-    // the discard field for a value that is then TESTED is how a guard quietly
-    // stops guarding.
-    rc: Word,
-    // Running `STRUCT_AUX` index, assigned in breadth-first order like every
-    // other index the walk hands out.
-    saux: Word,
-    // Where `STRUCT_AUX` records go. A field rather than a parameter so
-    // `fl_walk` and `fl_put_record` keep the signatures command 141 already
-    // uses; 141 never emits a struct, because its scope predicate rejects the
-    // tag before the walk starts.
-    sauxat: Word,
-    // A struct's interned type-name index, held across the field run.
-    tn: Word,
-    // The name index the field run starts at.
-    ffirst: Word,
-    // Running `ENUM_AUX` index, and where those records go. Same shape as the
-    // struct pair, and separate from it because the two tables are independent.
-    eaux: Word,
-    eauxat: Word,
-    // The STREAMING emit's record cursor. A field of its own rather than a reuse
-    // of `qn`: that one is the breadth-first queue length, and the streaming path
-    // has no queue at all. Sharing them would be correct only for as long as the
-    // two paths never ran against the same block, which is not a property anyone
-    // can check by reading one function.
-    scur: Word,
-}
+
 
 // `wire.fin` holds six words per node, so 1024 words is 170 nodes. A STATED cap:
 // an oversized forest is refused with a code, not truncated.
@@ -3802,14 +3844,41 @@ fn fl_max_nodes() -> Word { 170 }
 
 fn fl_fields() -> Word { wire_six() }
 
-fn fl_tag_of(p: Word) -> Word { wire.fin[p * fl_fields()] }
-fn fl_payload_of(p: Word) -> Word { wire.fin[(p * fl_fields()) + 1] }
-fn fl_children_of(p: Word) -> Word { wire.fin[(p * fl_fields()) + 2] }
+fn fl_queue_get(i: Word) -> Word {
+    if fl.module == wire_one() { wire.forest_queue[i] } else { wire.fq[i] }
+}
+fn fl_queue_put(i: Word, value: Word) -> Word {
+    if fl.module == wire_one() { wire.forest_queue[i] = value; } else { wire.fq[i] = value; }
+    value
+}
+fn fl_size_get(i: Word) -> Word {
+    if fl.module == wire_one() { wire.forest_sizes[i] } else { wire.fsz[i] }
+}
+fn fl_size_put(i: Word, value: Word) -> Word {
+    if fl.module == wire_one() { wire.forest_sizes[i] = value; } else { wire.fsz[i] = value; }
+    value
+}
+
+fn fl_tag_of(p: Word) -> Word {
+    if fl.module == wire_one() { wire.forest[p * fl_fields()] } else { wire.fin[p * fl_fields()] }
+}
+fn fl_payload_of(p: Word) -> Word {
+    if fl.module == wire_one() { wire.forest[p * fl_fields() + wire_one()] } else { wire.fin[p * fl_fields() + wire_one()] }
+}
+fn fl_children_of(p: Word) -> Word {
+    if fl.module == wire_one() { wire.forest[p * fl_fields() + wire_two()] } else { wire.fin[p * fl_fields() + wire_two()] }
+}
 // Index into `nin` of this node's first name. Meaningful only for the three
 // interning tags; zero elsewhere.
-fn fl_names_first_of(p: Word) -> Word { wire.fin[(p * fl_fields()) + 3] }
-fn fl_flags_of(p: Word) -> Word { wire.fin[(p * fl_fields()) + 4] }
-fn fl_disc_of(p: Word) -> Word { wire.fin[(p * fl_fields()) + 5] }
+fn fl_names_first_of(p: Word) -> Word {
+    if fl.module == wire_one() { wire.forest[p * fl_fields() + wire_three()] } else { wire.fin[p * fl_fields() + wire_three()] }
+}
+fn fl_flags_of(p: Word) -> Word {
+    if fl.module == wire_one() { wire.forest[p * fl_fields() + wire_four()] } else { wire.fin[p * fl_fields() + wire_four()] }
+}
+fn fl_disc_of(p: Word) -> Word {
+    if fl.module == wire_one() { wire.forest[p * fl_fields() + wire_five()] } else { wire.fin[p * fl_fields() + wire_five()] }
+}
 
 // Only these two carry a range in this slice. Struct and enum also do, and are
 // deliberately absent: admitting them here would emit a record with `aux` 0,
@@ -3887,7 +3956,7 @@ fn fx_enum_aux(p: Word) -> Word {
 fn fx_struct_aux(p: Word) -> Word {
     fl.tn = nm_intern_at(fl_names_first_of(p));
     fl.ffirst = nm.cnt;
-    for k in 0..fl_children_of(p) limit 170 {
+    for k in 0..fl_children_of(p) limit 1365 {
         nm.sink = nm_intern_at(fl_names_first_of(p) + 1 + k);
     }
     put_u32(
@@ -3904,7 +3973,7 @@ fn fx_struct_aux(p: Word) -> Word {
 
 fn fx_validate(nnodes: Word) -> Word {
     fl.err = 0;
-    for p in 0..nnodes limit 170 {
+    for p in 0..nnodes limit 1365 {
         fl.err = if fl_children_of(p) > nnodes { 0 - 241 } else {
                  if fx_tag_in_scope(fl_tag_of(p)) == 0 { 0 - 245 } else { fl.err } };
     }
@@ -3940,15 +4009,15 @@ fn fl_tag_in_scope(t: Word) -> Word {
 fn fl_step(nnodes: Word) -> Word {
     fl.err = if fl.cur >= nnodes { 0 - 242 } else { fl.err };
     fl.pick = if fl.cur < nnodes { fl.cur } else { 0 };
-    fl.cur = fl.cur + wire.fsz[fl.pick];
-    wire.fsz[fl.pick]
+    fl.cur = fl.cur + fl_size_get(fl.pick);
+    fl_size_get(fl.pick)
 }
 
 // The subtree size at preorder index `p`, given every index above `p` is sized.
 fn fl_size_at(p: Word, nnodes: Word) -> Word {
     fl.cur = p + 1;
     fl.tot = 1;
-    for k in 0..fl_children_of(p) limit 170 {
+    for k in 0..fl_children_of(p) limit 1365 {
         fl.tot = fl.tot + fl_step(nnodes);
     }
     fl.tot
@@ -3958,8 +4027,8 @@ fn fl_size_at(p: Word, nnodes: Word) -> Word {
 // makes a single pass sufficient: a node's children all sit above it in
 // preorder, so they are already sized when it is reached.
 fn fl_size_all(nnodes: Word) -> Word {
-    for i in 0..nnodes limit 170 {
-        wire.fsz[nnodes - 1 - i] = fl_size_at(nnodes - 1 - i, nnodes);
+    for i in 0..nnodes limit 1365 {
+        fl.sink = fl_size_put(nnodes - 1 - i, fl_size_at(nnodes - 1 - i, nnodes));
     }
     fl.err
 }
@@ -3970,7 +4039,7 @@ fn fl_size_all(nnodes: Word) -> Word {
 // reported. Validation therefore precedes sizing, not the other way round.
 fn fl_validate(nnodes: Word) -> Word {
     fl.err = 0;
-    for p in 0..nnodes limit 170 {
+    for p in 0..nnodes limit 1365 {
         fl.err = if fl_children_of(p) > nnodes { 0 - 241 } else {
                  if fl_tag_in_scope(fl_tag_of(p)) == 0 { 0 - 245 } else { fl.err } };
     }
@@ -3981,8 +4050,8 @@ fn fl_validate(nnodes: Word) -> Word {
 // one whole subtree past the previous one.
 fn fl_seed_roots(nroots: Word, nnodes: Word) -> Word {
     fl.cur = 0;
-    for r in 0..nroots limit 170 {
-        wire.fq[r] = fl.cur;
+    for r in 0..nroots limit 1365 {
+        fl.sink = fl_queue_put(r, fl.cur);
         fl.sink = fl_step(nnodes);
     }
     nroots
@@ -4003,7 +4072,7 @@ fn fl_seed_roots(nroots: Word, nnodes: Word) -> Word {
 // at all — the guard was unreachable in exactly the case its test exercised.
 fn fl_cover(nroots: Word, nnodes: Word) -> Word {
     fl.cur = 0;
-    for r in 0..nroots limit 170 {
+    for r in 0..nroots limit 1365 {
         fl.sink = fl_step(nnodes);
     }
     if fl.cur != nnodes { 0 - 248 } else { 0 }
@@ -4011,13 +4080,13 @@ fn fl_cover(nroots: Word, nnodes: Word) -> Word {
 
 // Write the record for the node at queue position `head`.
 fn fl_put_record(at: Word, head: Word) -> Word {
-    put_u16(at + (head * const_stride()) + const_off_tag(), fl_tag_of(wire.fq[head]));
+    put_u16(at + (head * const_stride()) + const_off_tag(), fl_tag_of(fl_queue_get(head)));
     // Only an enum sets a flag today, and it comes from the node record rather
     // than being inferred from the discriminant VALUE: `Some(0)` and `None`
     // both present as zero, and only the flag separates them.
     put_u16(
         at + (head * const_stride()) + const_off_flags(),
-        fl_flags_of(wire.fq[head]),
+        fl_flags_of(fl_queue_get(head)),
     );
     // A `STATIC_STR`'s `aux` is its NAME INDEX, and interning it HERE is what
     // couples the two computed values: the walk reaches nodes breadth-first, so
@@ -4025,22 +4094,22 @@ fn fl_put_record(at: Word, head: Word) -> Word {
     // order. Unreachable from command 141, whose validation rejects the tag.
     put_u32(
         at + (head * const_stride()) + const_off_aux(),
-        if fl_tag_of(wire.fq[head]) == tag_static_str() {
-            nm_intern_at(fl_names_first_of(wire.fq[head]))
+        if fl_tag_of(fl_queue_get(head)) == tag_static_str() {
+            nm_intern_at(fl_names_first_of(fl_queue_get(head)))
         } else {
-        if fl_tag_of(wire.fq[head]) == tag_struct() {
-            fx_struct_aux(wire.fq[head])
+        if fl_tag_of(fl_queue_get(head)) == tag_struct() {
+            fx_struct_aux(fl_queue_get(head))
         } else {
-        if fl_tag_of(wire.fq[head]) == tag_enum() {
-            fx_enum_aux(wire.fq[head])
+        if fl_tag_of(fl_queue_get(head)) == tag_enum() {
+            fx_enum_aux(fl_queue_get(head))
         } else { 0 } } },
     );
     put_u64(
         at + (head * const_stride()) + const_off_payload(),
-        if fl_tag_has_range(fl_tag_of(wire.fq[head])) == 1 {
-            fl.first bor (fl_children_of(wire.fq[head]) lsl 32)
+        if fl_tag_has_range(fl_tag_of(fl_queue_get(head))) == 1 {
+            fl.first bor (fl_children_of(fl_queue_get(head)) lsl 32)
         } else {
-            fl_payload_of(wire.fq[head])
+            fl_payload_of(fl_queue_get(head))
         },
     )
 }
@@ -4106,16 +4175,16 @@ fn fl_stream_step() -> Word {
 // its children are appended.
 fn fl_walk(at: Word, nroots: Word, nnodes: Word) -> Word {
     fl.qn = fl_seed_roots(nroots, nnodes);
-    for head in 0..nnodes limit 170 {
+    for head in 0..nnodes limit 1365 {
         fl.first = fl.qn;
-        fl.err = if fl.qn + fl_children_of(wire.fq[head]) > nnodes { 0 - 244 } else { fl.err };
-        fl.cur = wire.fq[head] + 1;
-        for k in 0..fl_children_of(wire.fq[head]) limit 170 {
+        fl.err = if fl.qn + fl_children_of(fl_queue_get(head)) > nnodes { 0 - 244 } else { fl.err };
+        fl.cur = fl_queue_get(head) + 1;
+        for k in 0..fl_children_of(fl_queue_get(head)) limit 1365 {
             fl.qpick = if fl.first + k < nnodes { fl.first + k } else { 0 };
-            wire.fq[fl.qpick] = fl.cur;
+            fl.sink = fl_queue_put(fl.qpick, fl.cur);
             fl.sink = fl_step(nnodes);
         }
-        fl.qn = fl.qn + fl_children_of(wire.fq[head]);
+        fl.qn = fl.qn + fl_children_of(fl_queue_get(head));
         // Written AFTER the children are enqueued, because the record's range
         // needs `fl.first`, which is read before the queue grows.
         fl.sink = fl_put_record(at, head);
@@ -5117,16 +5186,16 @@ fn frame_read_finish() -> Word {
 // scalar access 1, boxed access 2, nested access 3, flat construction 4 and
 // boxed construction 5. No endian bytes, sentinels or parity arrive from the host.
 fn ow_class(id: Word) -> Word {
-    if id < 0 orelse id > 69 orelse (id >= 34 andalso id <= 37) { 0 - 1 } else {
-    if id == 5 orelse id == 6 { 5 } else {
-    if id == 43 { 6 } else {
-    if id >= 38 andalso id <= 41 { 7 } else {
-    if id == 69 { 8 } else {
-    if id == 30 orelse id == 67 orelse id == 68 { 4 } else {
-    if id == 3 orelse id == 4 { 3 } else {
-    if (id >= 49 andalso id <= 52) orelse id == 56 orelse id == 58 orelse id == 60 orelse id == 61 { 1 } else {
-    if id <= 2 orelse id == 7 orelse id == 21 orelse id == 22 orelse (id >= 24 andalso id <= 27) orelse id == 44 orelse id == 53 { 2 } else {
-    0 } } } } } } } } }
+    if id < wire_zero() orelse id > 69 orelse (id >= 34 andalso id <= 37) { wire_zero() - wire_one() } else {
+    if id == wire_five() orelse id == wire_six() { wire_five() } else {
+    if id == 43 { wire_six() } else {
+    if id >= 38 andalso id <= 41 { wire_seven() } else {
+    if id == 69 { wire_eight() } else {
+    if id == 30 orelse id == 67 orelse id == 68 { wire_four() } else {
+    if id == wire_three() orelse id == wire_four() { wire_three() } else {
+    if (id >= 49 andalso id <= 52) orelse id == 56 orelse id == 58 orelse id == 60 orelse id == 61 { wire_one() } else {
+    if id <= wire_two() orelse id == wire_seven() orelse id == 21 orelse id == 22 orelse (id >= 24 andalso id <= 27) orelse id == 44 orelse id == 53 { wire_two() } else {
+    wire_zero() } } } } } } } } }
 }
 
 // A nonzero starting ordinal permits continuation of a transported pool.
@@ -5468,7 +5537,7 @@ fn init_values() -> Word {
         initialization.bad = wire_zero();
         for i in 0..n limit 512 {
             let tag = wire.fin[i * wire_two()];
-            if tag < tag_unit() orelse (tag > tag_float() andalso tag != tag_none()) { initialization.bad = wire_one(); }
+            if tag < tag_unit() orelse tag > tag_none() { initialization.bad = wire_one(); }
         }
         if initialization.bad != wire_zero() { init_error() } else {
             for i in 0..n limit 512 {
@@ -5494,11 +5563,58 @@ fn init_finish() -> Word {
     }}
 }
 
+// The same breadth-first walker serves complete module input. Root boundaries
+// are recovered from subtree sizes, not supplied as wire indices by the host.
+fn mf_build() -> Word {
+    fl.saux = wire_zero();
+    fl.eaux = wire_zero();
+    fl.sauxat = mi_max_nodes() * const_stride();
+    fl.eauxat = fl.sauxat + mi_max_nodes() * structaux_stride();
+    for i in wire_zero()..nm.total limit 1024 {
+        if wire.nin[i * wire_two()] > nm_max_name() { nm.err = wire_zero() - 231; }
+    }
+    if nm.err < wire_zero() { nm.err } else {
+    if fx_validate(nm.ccnt) < wire_zero() { fl.err } else {
+    if fl_size_all(nm.ccnt) < wire_zero() { fl.err } else {
+        fl.cur = wire_zero();
+        fl.roots = wire_zero();
+        for i in wire_zero()..nm.ccnt limit 1365 {
+            if fl.cur < nm.ccnt {
+                fl.sink = fl_step(nm.ccnt);
+                fl.roots = fl.roots + wire_one();
+            }
+        }
+        if fl.cur != nm.ccnt orelse fl.err < wire_zero() { wire_zero() - 248 } else {
+        if intern_run_preoffset(nm.cbase) < wire_zero() { nm.err } else {
+            fl.rc = fl_walk(wire_zero(), fl.roots, nm.ccnt);
+            if fl.rc < wire_zero() { fl.rc } else {
+                for i in templates.cursor..nm.total limit 1024 {
+                    if nm.err == wire_zero() { nm.sink = nm_intern_at(i); }
+                }
+                if nm.err < wire_zero() { nm.err } else { fl.rc }
+            }
+        }}
+    }}}
+}
+
+fn mf_emit(part: Word) -> Word {
+    if part < wire_zero() orelse part > wire_two() { wire_zero() - 286 } else {
+        fl.rc = mi_window_prepare();
+        if fl.rc < wire_zero() { fl.rc } else {
+            let base = if part == wire_zero() { wire_zero() } else { if part == wire_one() { fl.sauxat } else { fl.eauxat } };
+            let size = if part == wire_zero() { nm.ccnt * const_stride() } else { if part == wire_one() { fl.saux * structaux_stride() } else { fl.eaux * enumaux_stride() } };
+            for i in wire_zero()..size limit 21840 { wire.bytes[i] = wire.bytes[base + i]; }
+            size
+        }
+    }
+}
+
 fn dispatch_initialization(cmd: Word) -> Word {
     if cmd == 209 { init_begin() } else {
     if cmd == 210 { init_chunk() } else {
     if cmd == 211 { init_values() } else {
-    if cmd == 212 { init_finish() } else { wire_zero() - 97 }}}}
+    if cmd == 212 { init_finish() } else {
+    if cmd == 213 { mf_emit(wire.warg) } else { wire_zero() - 97 }}}}}
 }
 
 fn dispatch_native(cmd: Word) -> Word {
@@ -5536,7 +5652,7 @@ fn wire_sixty_four() -> Word { 64 }
 fn wire_one_k() -> Word { 1024 }
 fn wire_forty_eight_k() -> Word { 49152 }
 
-fn highest_command() -> Word { 212 }
+fn highest_command() -> Word { 213 }
 
 // --- THE ENTRY, AS A COROUTINE ----------------------------------------------
 //

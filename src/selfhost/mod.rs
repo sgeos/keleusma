@@ -6528,22 +6528,6 @@ fn compact_scalar_module_input(module: &Module) -> Result<(Vec<u8>, usize), Self
 }
 
 fn module_input_encoded(module: &Module, compact: bool) -> (Vec<u8>, usize) {
-    let mut out = Vec::new();
-    let mut names = 0usize;
-    fn push_name(out: &mut Vec<u8>, s: &str, names: &mut usize) {
-        let b = s.as_bytes();
-        let l = u16::try_from(b.len()).expect("name length fits u16");
-        out.extend_from_slice(&l.to_le_bytes());
-        out.extend_from_slice(b);
-        *names += 1;
-    }
-
-    let n = u16::try_from(module.chunks.len()).expect("chunk count fits u16");
-    out.extend_from_slice(&n.to_le_bytes());
-    for c in &module.chunks {
-        push_name(&mut out, &c.name, &mut names);
-    }
-
     // The constant section rides at the END, so the sections the stage reads
     // first are at fixed offsets from the start.
     let consts = const_roots_of(module);
@@ -6562,6 +6546,26 @@ fn module_input_encoded(module: &Module, compact: bool) -> (Vec<u8>, usize) {
     let mut tail = Vec::new();
     tail.extend_from_slice(&(cn | if compact { 0x8000 } else { 0 }).to_le_bytes());
     tail.extend_from_slice(&nodes);
+
+    module_input_with_tail(module, tail, const_names)
+}
+
+fn module_input_with_tail(module: &Module, tail: Vec<u8>, const_names: usize) -> (Vec<u8>, usize) {
+    let mut out = Vec::new();
+    let mut names = 0usize;
+    fn push_name(out: &mut Vec<u8>, s: &str, names: &mut usize) {
+        let b = s.as_bytes();
+        let l = u16::try_from(b.len()).expect("name length fits u16");
+        out.extend_from_slice(&l.to_le_bytes());
+        out.extend_from_slice(b);
+        *names += 1;
+    }
+
+    let n = u16::try_from(module.chunks.len()).expect("chunk count fits u16");
+    out.extend_from_slice(&n.to_le_bytes());
+    for c in &module.chunks {
+        push_name(&mut out, &c.name, &mut names);
+    }
 
     let e = u16::try_from(module.enum_layouts.len()).expect("enum count fits u16");
     out.extend_from_slice(&e.to_le_bytes());

@@ -6,6 +6,37 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-08 Constant forests join the module-driven encoder
+
+The auxiliary producer now supplies bounded semantic preorder input for named and composite
+constant trees, including private initializer roots. Keleusma computes subtree sizes, root
+boundaries, breadth-first child ranges and both auxiliary tables. Name interning now follows
+that traversal between the existing prefix names and template names. The first nested-string
+control distinguishes this order from the original preorder input.
+
+The full-node backing arrays are separate from output. They add 87,360 shared bytes while
+preserving existing host slot positions. Legacy calls still use their 170-row FIN channel.
+The new path reaches the existing 1,365-node bound. Scalar-only pools keep their record stream,
+including large initializer pools. Existing name and input bounds remain explicit and require
+admission comparison before this encoder can replace the shipping path.
+
+The first control reached the old unsupported guard. The implementation then passed that case
+but failed the standing reserve. Replacing literals in loop helpers did not change node count,
+because loop lowering still introduces them. Those substitutions were reverted. Sharing the
+opcode classifier's small literals restored the reserve. A compiled execution fixture also used
+tuple projections that lexed as a decimal literal; parenthesizing the intermediate projection
+made the intended source unambiguous. All original diagnostics remain in the logs.
+
+Five integration controls and nineteen protocol checks pass, including decoded execution,
+private initializer trees, discriminants, empty structs, reused names, malformed arities and the
+node limit. The no-default checks and memory accounting pass. Wire has 558 chunks, 1,300 nodes,
+23,578 input bytes and a 156,228-byte artifact. Inference independence covers 44,491 expression
+types across thirteen stages. Final receipts and the local shadow-pilot review are in the reverse
+prompt. The workspace diagnostic passed 3,089 tests and failed only the old empty-tuple refusal
+expectation, with five ignored. Replacing that expectation with reference-byte equality makes
+all seven framing tests pass. Workspace Clippy, documentation and the no_std self-host check
+pass. No production code changed afterward. Full Order 1 remains active.
+
 ## 2026-10-08 Private placements and scalar initializer policy move into the stage
 
 The auxiliary helper now admits private composite placement records and non-default scalar

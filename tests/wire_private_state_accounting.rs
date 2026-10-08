@@ -12,10 +12,11 @@ fn wire_stream_state_is_priced_as_private_value_slots() {
         (wire, "framing", "mode", 4, 128),
         (wire, "opstream", "pool", 8, 256),
         (wire, "sigstream", "count", 12, 384),
-        (wire, "nm", "native_at", 36, 1152),
+        (wire, "nm", "native_at", 37, 1184),
         (wire, "templates", "count", 7, 224),
         (wire, "ck", "debug", 7, 224),
         (wire, "initialization", "active", 7, 224),
+        (wire, "fl", "module", 18, 576),
         (debug, "sort", "mode", 15, 480),
         (debug, "emit", "phase", 9, 288),
     ] {
@@ -35,4 +36,29 @@ fn wire_stream_state_is_priced_as_private_value_slots() {
             bytes as usize
         );
     }
+}
+
+#[test]
+fn module_forest_scratch_is_priced_at_the_declared_word_width() {
+    let stage = include_str!("../src/selfhost/kel/wire.kel");
+    let declarations: Vec<_> = ["forest:", "forest_queue:", "forest_sizes:"]
+        .into_iter()
+        .map(|name| {
+            stage
+                .lines()
+                .find(|line| line.trim_start().starts_with(name))
+                .unwrap()
+        })
+        .collect();
+    let source = format!(
+        "require word >= 64; shared data scratch {{ {} }} fn main() -> Word {{ scratch.forest[0] = 1; 0 }}",
+        declarations.join("\n")
+    );
+    let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(&source).unwrap()).unwrap();
+    let module = keleusma::compiler::compile(&ast).unwrap();
+    assert_eq!(
+        module.data_layout.as_ref().unwrap().shared_layout.len(),
+        8190 + 1365 * 2
+    );
+    assert_eq!(module.shared_data_bytes, 87_360);
 }

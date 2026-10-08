@@ -108,7 +108,7 @@ fn framing_matches_every_current_stage_artifact() {
 }
 
 #[test]
-fn auxiliary_preserves_metadata_and_refuses_unintegrated_records() {
+fn auxiliary_preserves_metadata_and_empty_composite_constants() {
     let mut module = compile("fn main() -> Word { 7 }");
     module.flags = 1;
     module.wcet_cycles = 123;
@@ -132,7 +132,11 @@ fn auxiliary_preserves_metadata_and_refuses_unintegrated_records() {
     composite.chunks[0]
         .constants
         .push(keleusma::bytecode::ConstValue::Tuple(vec![]));
-    assert!(wire_auxiliary_from_module_via_kel(&composite).is_err());
+    let expected_composite = composite.to_bytes().unwrap();
+    assert_eq!(
+        wire_auxiliary_from_module_via_kel(&composite).unwrap(),
+        section(&expected_composite, 48)
+    );
     module.chunks.clear();
     module.signatures.clear();
     module.entry_point = None;

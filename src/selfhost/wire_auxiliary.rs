@@ -97,27 +97,27 @@ fn scalar_node_fields(
 }
 
 // The historical packer uses infallible u16 conversions. Validate every count
-// and name it will visit before calling it. Constants have already been checked
-// to be scalar, so their root count is also their node count.
-fn validate_input(module: &Module) -> Result<(), SelfHostError> {
-    let fits_name = |name: &str| name.len() <= u16::MAX as usize;
+// and prefix name it will visit before calling it. The bounded forest producer
+// separately counts descendants and constant-name events.
+fn validate_input(module: &Module) -> Result<usize, SelfHostError> {
+    let fits_name = |name: &str| name.len() <= 256;
     let mut events = module
         .chunks
         .len()
         .checked_add(module.native_names.len())
         .ok_or_else(|| error("name count overflow"))?;
     if module.native_names.iter().any(|n| !fits_name(n)) {
-        return Err(error("native name exceeds the input field width"));
+        return Err(error("native name exceeds the stage name capacity"));
     }
     let mut nodes = 0usize;
     for chunk in &module.chunks {
         if !fits_name(&chunk.name) {
-            return Err(error("chunk name exceeds the input field width"));
+            return Err(error("chunk name exceeds the stage name capacity"));
         }
         for template in &chunk.struct_templates {
             if !fits_name(&template.type_name) || template.field_names.iter().any(|n| !fits_name(n))
             {
-                return Err(error("template name exceeds the input field width"));
+                return Err(error("template name exceeds the stage name capacity"));
             }
             events = events
                 .checked_add(2)
@@ -133,7 +133,7 @@ fn validate_input(module: &Module) -> Result<(), SelfHostError> {
     }
     for layout in &module.enum_layouts {
         if !fits_name(&layout.type_name) || layout.variants.iter().any(|v| !fits_name(&v.name)) {
-            return Err(error("enum name exceeds the input field width"));
+            return Err(error("enum name exceeds the stage name capacity"));
         }
         events = events
             .checked_add(layout.variants.len())
@@ -142,7 +142,7 @@ fn validate_input(module: &Module) -> Result<(), SelfHostError> {
     }
     if let Some(layout) = &module.data_layout {
         if layout.slots.iter().any(|s| !fits_name(&s.name)) {
-            return Err(error("slot name exceeds the input field width"));
+            return Err(error("slot name exceeds the stage name capacity"));
         }
         let runs = usize::from(!layout.slots.is_empty())
             + layout
@@ -159,7 +159,96 @@ fn validate_input(module: &Module) -> Result<(), SelfHostError> {
     if events > 1024 {
         return Err(error("name events exceed the stage capacity"));
     }
-    Ok(())
+    Ok(events)
+}
+
+// Bound the semantic preorder iteratively. The stage recovers subtree sizes,
+// root boundaries and breadth-first positions from these facts.
+fn forest_input(
+    module: &Module,
+    include_initializers: bool,
+    prefix_events: usize,
+) -> Result<(Vec<u8>, usize), SelfHostError> {
+    let roots = module.chunks.iter().flat_map(|c| &c.constants).chain(
+        module
+            .data_layout
+            .iter()
+            .flat_map(|d| &d.private_init)
+            .take(if include_initializers { usize::MAX } else { 0 }),
+    );
+    let root_count = roots.clone().count();
+    if root_count > 1365 {
+        return Err(error("constant forest exceeds 1365 nodes"));
+    }
+    let mut stack = Vec::new();
+    stack
+        .try_reserve_exact(1365)
+        .map_err(|_| error("forest traversal allocation failed"))?;
+    stack.extend(roots);
+    stack.reverse();
+    let mut count = 0u16;
+    let mut names = 0usize;
+    let mut nodes = Vec::new();
+    while let Some(value) = stack.pop() {
+        count += 1;
+        let children = match value {
+            ConstValue::Tuple(v) | ConstValue::Array(v) | ConstValue::Enum { fields: v, .. } => {
+                v.len()
+            }
+            ConstValue::Struct { fields, .. } => fields.len(),
+            _ => 0,
+        };
+        if children > 1365 - usize::from(count) - stack.len() {
+            return Err(error("constant forest exceeds 1365 nodes"));
+        }
+        let strings = blob_node_names(value);
+        names = names
+            .checked_add(strings.len())
+            .ok_or_else(|| error("constant name count overflow"))?;
+        if prefix_events.checked_add(names).is_none_or(|n| n > 1024) {
+            return Err(error("constant names exceed the stage capacity"));
+        }
+        let extra = strings
+            .iter()
+            .try_fold(30usize, |n, name| {
+                if name.len() > 256 {
+                    return None;
+                }
+                n.checked_add(2)?.checked_add(name.len())
+            })
+            .filter(|&n| nodes.len().checked_add(n).is_some_and(|end| end <= 49152))
+            .ok_or_else(|| error("constant input or name exceeds the stage capacity"))?;
+        nodes
+            .try_reserve(extra)
+            .map_err(|_| error("constant input allocation failed"))?;
+        let (tag, payload) = const_tag_and_name(value);
+        let (flags, disc) = const_flags_and_discriminant(value);
+        nodes.extend_from_slice(&tag.to_le_bytes());
+        nodes.extend_from_slice(&payload.to_le_bytes());
+        nodes.extend_from_slice(&(children as u16).to_le_bytes());
+        nodes.extend_from_slice(&flags.to_le_bytes());
+        nodes.extend_from_slice(&disc.to_le_bytes());
+        nodes.extend_from_slice(&(strings.len() as u16).to_le_bytes());
+        for name in strings {
+            nodes.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            nodes.extend_from_slice(name.as_bytes());
+        }
+        match value {
+            ConstValue::Tuple(v) | ConstValue::Array(v) | ConstValue::Enum { fields: v, .. } => {
+                stack.extend(v.iter().rev())
+            }
+            ConstValue::Struct { fields, .. } => {
+                stack.extend(fields.iter().rev().map(|(_, value)| value))
+            }
+            _ => {}
+        }
+    }
+    let mut tail = Vec::new();
+    tail.try_reserve_exact(nodes.len() + 2)
+        .map_err(|_| error("constant tail allocation failed"))?;
+    tail.extend_from_slice(&count.to_le_bytes());
+    tail.extend_from_slice(&nodes);
+    Ok(module_input_with_tail(module, tail, names))
 }
 
 struct Emitter {
@@ -224,6 +313,15 @@ impl Emitter {
         read_window(vm, shared, &mut output[at..])
     }
 
+    fn forest_region(&self, part: i64) -> Result<Vec<u8>, SelfHostError> {
+        self.run(|vm, shared| {
+            set_word(vm, shared, wire_slots::WARG, part)?;
+            let mut bytes = Vec::new();
+            Self::append(vm, shared, 213, &mut bytes)?;
+            Ok(bytes)
+        })
+    }
+
     fn single(&self, cmd: i64) -> Result<Vec<u8>, SelfHostError> {
         self.run(|vm, shared| {
             let mut bytes = Vec::new();
@@ -274,8 +372,8 @@ impl Emitter {
 /// Encode the auxiliary container from module facts, with no reference artifact.
 ///
 /// This integrates the stage-corpus records, native metadata and struct templates.
-/// Composite and named constants still
-/// require integration. They are refused explicitly. Shape numbering is derived
+/// Constant forests use a bounded preorder input and Keleusma breadth-first traversal.
+/// Shape numbering is derived
 /// in Keleusma, and parameter tags remain opaque bytes.
 /// This function is not yet the shipping serializer.
 ///
@@ -285,16 +383,7 @@ impl Emitter {
 pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
     use crate::wire_schema::kind;
 
-    if !module
-        .chunks
-        .iter()
-        .flat_map(|c| &c.constants)
-        .chain(module.data_layout.iter().flat_map(|d| &d.private_init))
-        .all(constant_is_scalar)
-    {
-        return Err(error("composite and named constants are not integrated"));
-    }
-    validate_input(module)?;
+    let prefix_events = validate_input(module)?;
     let stage = compile_src(&read_stage("kel/wire.kel"));
     let init = if module.data_layout.is_some() {
         Some(initializer_plan(&stage, module)?)
@@ -302,8 +391,28 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
         None
     };
     let include_initializers = init.as_ref().is_some_and(|plan| !plan.elided);
-    let constant_fields = scalar_node_fields(module, include_initializers)?;
-    let (mut blob, names) = compact_scalar_module_input(module)?;
+    let scalar = module
+        .chunks
+        .iter()
+        .flat_map(|c| &c.constants)
+        .chain(
+            module
+                .data_layout
+                .iter()
+                .flat_map(|d| &d.private_init)
+                .take(if include_initializers { usize::MAX } else { 0 }),
+        )
+        .all(constant_is_scalar);
+    let constant_fields = if scalar {
+        scalar_node_fields(module, include_initializers)?
+    } else {
+        Vec::new()
+    };
+    let (mut blob, names) = if scalar {
+        compact_scalar_module_input(module)?
+    } else {
+        forest_input(module, include_initializers, prefix_events)?
+    };
     let native_at = if module.native_names.is_empty() {
         None
     } else {
@@ -510,10 +619,28 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
         regions.extend([
             (
                 kind::CONSTS,
-                window_emit_consts(&emitter.stage, &constant_fields)?,
+                if scalar {
+                    window_emit_consts(&emitter.stage, &constant_fields)?
+                } else {
+                    emitter.forest_region(0)?
+                },
             ),
-            (kind::STRUCT_AUX, Vec::new()),
-            (kind::ENUM_AUX, Vec::new()),
+            (
+                kind::STRUCT_AUX,
+                if scalar {
+                    Vec::new()
+                } else {
+                    emitter.forest_region(1)?
+                },
+            ),
+            (
+                kind::ENUM_AUX,
+                if scalar {
+                    Vec::new()
+                } else {
+                    emitter.forest_region(2)?
+                },
+            ),
         ]);
     }
     if !module.chunks.is_empty() {
@@ -547,6 +674,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn module_forest_refuses_malformed_arity_and_incomplete_subtrees() {
+        let mut input = compile_src("fn main() -> Word { 7 }");
+        input.chunks[0].constants = vec![ConstValue::Tuple(vec![ConstValue::Int(1)])];
+        let events = validate_input(&input).unwrap();
+        let (valid, _) = forest_input(&input, false, events).unwrap();
+        let tail = valid.len() - 62; // Two legacy thirty-byte node headers.
+        let stage = compile_src(&read_stage("kel/wire.kel"));
+        for (field, value, expected) in [(12, 2u16, -242), (30, 1, -286), (2, 15, -286)] {
+            let mut blob = valid.clone();
+            // Child count, name count and tag, relative to the count prefix.
+            let at = tail + field;
+            blob[at..at + 2].copy_from_slice(&value.to_le_bytes());
+            with_compiled_wire(stage.clone(), |vm, shared| {
+                for (i, byte) in blob.into_iter().enumerate() {
+                    vm.set_shared(shared, wire_slots::BIN + i, Value::Byte(byte))
+                        .unwrap();
+                }
+                set_word(vm, shared, wire_slots::WARG, 0)?;
+                assert_eq!(enter_wire(vm, shared, 213)?, expected);
+                Ok(())
+            })
+            .unwrap();
+        }
+        with_compiled_wire(stage, |vm, shared| {
+            for part in [-1, 3, i64::MAX] {
+                set_word(vm, shared, wire_slots::WARG, part)?;
+                assert_eq!(enter_wire(vm, shared, 213)?, -286);
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
     fn initializer_protocol_checks_counts_order_and_atomic_batches() {
         with_compiled_wire(compile_src(&read_stage("kel/wire.kel")), |vm, shared| {
             for cmd in 210..=212 {
@@ -576,7 +737,7 @@ mod tests {
             // A valid nonzero value followed by an invalid tag must not partly
             // change the elision decision or consume any initializer rows.
             set_word(vm, shared, wire_slots::WARG, 2)?;
-            for (i, value) in [3, 9, 7, 0].into_iter().enumerate() {
+            for (i, value) in [3, 9, 13, 0].into_iter().enumerate() {
                 set_word(vm, shared, wire_slots::FIN + i, value)?;
             }
             assert!(command(vm, shared, 211).is_err());
