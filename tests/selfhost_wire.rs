@@ -12950,9 +12950,9 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     eprintln!("worst names {worst_names}, worst blob {worst_blob}");
     // Measured 2026-10-04. Earlier evidence omitted wire and verify_types.
     // Parse holds the name maximum. Wire holds the byte maximum and leaves
-    // only 660 bytes below the input cap. Neither capacity is raised here.
+    // 26,072 bytes below the input cap. Neither capacity is raised here.
     assert_eq!(worst_names, 776, "the worst-case name count moved");
-    assert_eq!(worst_blob, 48492, "the worst-case blob size moved");
+    assert_eq!(worst_blob, 23080, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
@@ -13084,17 +13084,8 @@ fn the_chunk_region_streams_one_record_per_call_past_the_old_batch_cap() {
 #[cfg(feature = "self-host")]
 #[test]
 fn the_node_bound_and_the_name_bound_are_not_the_same_number() {
-    const SRC: &str = include_str!("../src/selfhost/kel/wire.kel");
-
     let literal = |name: &str| -> usize {
-        let line = SRC
-            .lines()
-            .find(|l| l.trim_start().starts_with(&format!("fn {name}()")))
-            .unwrap_or_else(|| panic!("wire.kel declares {name}"));
-        line.rsplit_once('{')
-            .and_then(|(_, t)| t.split_once('}'))
-            .and_then(|(n, _)| n.trim().parse().ok())
-            .unwrap_or_else(|| panic!("{name} has a literal body"))
+        usize::try_from(kel_const(name)).expect("nonnegative literal capacity")
     };
 
     let nodes = literal("mi_max_nodes");

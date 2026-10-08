@@ -6,10 +6,52 @@
 
 The driver-capacity test now inventories all twelve stage sources. Earlier versions of that
 test used ten sources and omitted wire and verify_types. The current maxima belong to
-different stages. Parse uses 776 of 1,024 names. Wire uses 48,492 of 49,152 input bytes.
-The remaining wire input margin is 660 bytes. No input cap changed. These measurements
+different stages. Parse uses 776 of 1,024 names. Wire uses 23,080 of 49,152 input bytes.
+The remaining wire input margin is 26,072 bytes. No input cap changed. These measurements
 establish input residency for the corpus, not complete production serialization.
 Both encoding and decoding remain within the original wire-format scope.
+
+## Struct templates and compact scalar transport, 2026-10-08
+
+Commands 205 and 206 configure and emit struct templates from their semantic type and field
+names. Type names deduplicate against the shared name table. Every field name appends fresh,
+keeping each run contiguous. A private checkpoint event captures the current name count after
+the type name, including when the field run is empty. It adds no emitted name. Checkpoints are
+active only when template transport is configured. Templates follow constant names in finalization
+order. Chunk template ranges remain stage-derived through the existing running counters.
+
+Five integration controls compare complete artifacts and decoded template ranges. They include
+a real compiled boxed struct, repeated names across native and template tables, empty and Unicode
+names, empty field runs, multiple chunk contributors, exact name-event capacity and scalar bit
+patterns. Protocol controls reject malformed sections, invalid ranges and calls after completion.
+The template state adds seven private Value slots or 224 bytes. No public opcode or version changes.
+
+A new regression found that the legacy constant-node reader returned a count above 1,024 while
+emitting no records. It had reused the name-table clamp. It now reads through the declared
+1,365-node bound. Tests inspect every emitted field at counts zero, 1,024, 1,025 and 1,365, on
+both transport forms, and reject the next count before entering the loop.
+
+Scalar-only module input now sets bit 15 of the private node count and carries ten bytes per
+node, a two-byte tag and an eight-byte payload. Four necessarily zero fields are reconstructed
+by the stage. Named and composite forests retain the legacy grammar. This changes private
+transport only. The published artifact format is unchanged. None and floating-point scalar
+payloads now reach the producer, including signed zero and a NaN payload. The capacity reader
+masks the format bit and checks the compact extent against the actual module constant count.
+
+Initial template growth used 1,315 constant nodes. Further literal sharing and the common
+template-error helper reduce use to 1,297, leaving 68 below 1,365. The 64-node reserve remains.
+Five template functions and ten literal helpers bring the stage to 543 chunks and command 206.
+Its artifact has 148,596 bytes. Clearing 42,813 expression types preserves all twelve artifacts.
+
+The first pipeline comparison could not resolve the template state because its declaration
+followed a helper that referenced it. Moving the declaration before use restored parsing and
+all-stage artifact identity. This does not add general forward-data-declaration support. A build
+without default features also exposed an existing unguarded Float variant in the host scalar-tag
+decoder. It now uses the canonical feature-aware conversion, with checked integer narrowing.
+
+Debug pools, composite and named constants, private composite slots, nonempty non-elided
+initializers, semantic decoding and shipping integration remain open. The current helper still
+refuses those record forms. The host remains responsible for faithful semantic-input transport.
 
 ## Native metadata integration, 2026-10-08
 
@@ -40,8 +82,9 @@ value slots or 128 bytes. Signature state adds one slot and now costs 384 bytes.
 regression also checks the complete name-interner block at 36 slots or 1,152 bytes.
 
 The current wire artifact has 144,396 bytes. Clearing 42,471 recorded expression types preserves
-all twelve artifacts. Templates, debug pools, composite and named constants, private composite
-slots and nonempty non-elided initializer pools remain outside the module-driven helper.
+all twelve artifacts at that increment. Templates are integrated by the newer section above.
+Debug pools, composite and named constants, private composite slots and nonempty non-elided
+initializer pools remain outside the module-driven helper.
 Semantic decoding and shipping integration remain required. No public opcode, bytecode version
 or buffer cap changed. The auxiliary producer still trusts its host to transport module facts
 and previously emitted shape records faithfully.

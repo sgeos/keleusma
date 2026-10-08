@@ -12,6 +12,7 @@ fn wire_stream_state_is_priced_as_private_value_slots() {
         ("opstream", "pool", 8, 256),
         ("sigstream", "count", 12, 384),
         ("nm", "native_at", 36, 1152),
+        ("templates", "count", 7, 224),
     ] {
         let start = stage.find(&format!("private data {name} {{")).unwrap();
         let end = start + stage[start..].find('}').unwrap() + 1;

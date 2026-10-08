@@ -353,17 +353,10 @@ fn br_lex(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
 // The flat-scalar and composite-variant tag decoders, shared by the composite/enum `decode_op` arms.
 // Identical mapping to the differential-oracle decoder in `tests/selfhost_codegen.rs`.
 fn scalar_kind_from_tag(t: i64) -> ScalarKind {
-    match t {
-        0 => ScalarKind::Unit,
-        1 => ScalarKind::Bool,
-        2 => ScalarKind::Byte,
-        3 => ScalarKind::Int,
-        4 => ScalarKind::Fixed,
-        5 => ScalarKind::Float,
-        6 => ScalarKind::Text,
-        7 => ScalarKind::Opaque,
-        other => panic!("bad scalar kind tag {other}"),
-    }
+    u8::try_from(t)
+        .ok()
+        .and_then(ScalarKind::from_tag)
+        .unwrap_or_else(|| panic!("bad scalar kind tag {t}"))
 }
 
 fn composite_kind_from_tag(t: i64) -> CompositeKind {
@@ -6397,13 +6390,14 @@ fn const_tag_and_name(c: &ConstValue) -> (u16, i64) {
         K::Int(v) => (tag::INT, *v),
         K::Byte(v) => (tag::BYTE, i64::from(*v)),
         K::Fixed(v) => (tag::FIXED, *v),
+        #[cfg(feature = "floats")]
+        K::Float(v) => (tag::FLOAT, v.to_bits() as i64),
         K::None => (tag::NONE, 0),
         K::StaticStr(_) => (tag::STATIC_STR, 0),
         K::Tuple(_) => (tag::TUPLE, 0),
         K::Array(_) => (tag::ARRAY, 0),
         K::Struct { .. } => (tag::STRUCT, 0),
         K::Enum { .. } => (tag::ENUM, 0),
-        other => panic!("const_tag_and_name has no tag for {other:?}"),
     }
 }
 
@@ -6509,7 +6503,28 @@ fn push_blob_node(c: &ConstValue, out: &mut Vec<u8>, names: &mut usize) {
 /// have passed here by accident, because `bin` is zero-filled past the blob so a
 /// reader would find a zero count and be right for a reason that is not the
 /// encoding.
+/// Scalar-only forests use a compact tail. Its count has bit 15 set, followed
+/// by ten bytes per scalar, a two-byte tag and an eight-byte payload. Other
+/// forests retain the legacy thirty-byte node header and its name data.
 pub fn module_input(module: &Module) -> (Vec<u8>, usize) {
+    let constants = module.chunks.iter().flat_map(|chunk| &chunk.constants);
+    let compact = constants.clone().all(constant_is_scalar) && constants.count() <= 0x7FFF;
+    module_input_encoded(module, compact)
+}
+
+// Compact scalar facts omit the four fields that are necessarily zero. The
+// private count's high bit distinguishes this from the legacy forest grammar.
+fn compact_scalar_module_input(module: &Module) -> Result<(Vec<u8>, usize), SelfHostError> {
+    let constants = module.chunks.iter().flat_map(|chunk| &chunk.constants);
+    if !constants.clone().all(constant_is_scalar) || constants.count() > 1365 {
+        return Err(SelfHostError::Unsupported {
+            detail: "compact module input requires at most 1365 scalar constants".into(),
+        });
+    }
+    Ok(module_input_encoded(module, true))
+}
+
+fn module_input_encoded(module: &Module, compact: bool) -> (Vec<u8>, usize) {
     let mut out = Vec::new();
     let mut names = 0usize;
     fn push_name(out: &mut Vec<u8>, s: &str, names: &mut usize) {
@@ -6532,11 +6547,17 @@ pub fn module_input(module: &Module) -> (Vec<u8>, usize) {
     let mut nodes = Vec::new();
     let mut const_names = 0usize;
     for c in &consts {
-        push_blob_node(c, &mut nodes, &mut const_names);
+        if compact {
+            let (tag, payload) = const_tag_and_name(c);
+            nodes.extend_from_slice(&tag.to_le_bytes());
+            nodes.extend_from_slice(&payload.to_le_bytes());
+        } else {
+            push_blob_node(c, &mut nodes, &mut const_names);
+        }
     }
     let cn = u16::try_from(count_blob_nodes(&consts)).expect("node count fits u16");
     let mut tail = Vec::new();
-    tail.extend_from_slice(&cn.to_le_bytes());
+    tail.extend_from_slice(&(cn | if compact { 0x8000 } else { 0 }).to_le_bytes());
     tail.extend_from_slice(&nodes);
 
     let e = u16::try_from(module.enum_layouts.len()).expect("enum count fits u16");
@@ -8156,7 +8177,7 @@ fn data_init_fields(module: &Module) -> Option<Vec<i64>> {
 fn constant_is_scalar(c: &crate::bytecode::ConstValue) -> bool {
     use crate::bytecode::ConstValue as C;
     match c {
-        C::Unit | C::Bool(_) | C::Int(_) | C::Byte(_) | C::Fixed(_) => true,
+        C::Unit | C::Bool(_) | C::Int(_) | C::Byte(_) | C::Fixed(_) | C::None => true,
         #[cfg(feature = "floats")]
         C::Float(_) => true,
         _ => false,

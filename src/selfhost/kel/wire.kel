@@ -797,8 +797,8 @@ fn tag_float() -> Word { wire_six() }
 fn tag_static_str() -> Word { wire_seven() }
 fn tag_tuple() -> Word { wire_eight() }
 fn tag_array() -> Word { 9 }
-fn tag_struct() -> Word { 10 }
-fn tag_enum() -> Word { 11 }
+fn tag_struct() -> Word { wire_ten() }
+fn tag_enum() -> Word { wire_eleven() }
 fn tag_none() -> Word { wire_twelve() }
 
 fn kind_consts() -> Word { 0x0012 }
@@ -1128,7 +1128,7 @@ fn sslot_off_len() -> Word { wire_six() }
 fn sslot_off_reserved() -> Word { wire_five() }
 fn sslot_off_first_slot() -> Word { wire_eight() }
 fn sslot_off_run() -> Word { wire_twelve() }
-fn sslot_off_stride() -> Word { 14 }
+fn sslot_off_stride() -> Word { wire_fourteen() }
 
 // PrivateCompositeRecord: slot u16 @0, reserved u16 @2, offset u32 @4.
 fn pcomp_stride() -> Word { wire_eight() }
@@ -1243,7 +1243,7 @@ fn absent_index() -> Word { 4294967295 }
 
 // ChunkRecord, six words. Eleven u32 fields, then local_count u16,
 // param_count u8, block_type u8.
-fn chunk_stride() -> Word { 48 }
+fn chunk_stride() -> Word { wire_forty_eight() }
 fn chunk_off_name() -> Word { wire_zero() }
 fn chunk_off_consts_first() -> Word { wire_four() }
 fn chunk_off_consts_count() -> Word { wire_eight() }
@@ -1253,9 +1253,9 @@ fn chunk_off_param_types_first() -> Word { wire_twenty() }
 fn chunk_off_param_types_count() -> Word { wire_twenty_four() }
 fn chunk_off_debug_first() -> Word { wire_twenty_eight() }
 fn chunk_off_debug_len() -> Word { wire_thirty_two() }
-fn chunk_off_op_byte_offset() -> Word { 36 }
-fn chunk_off_op_record_count() -> Word { 40 }
-fn chunk_off_local_count() -> Word { 44 }
+fn chunk_off_op_byte_offset() -> Word { wire_thirty_six() }
+fn chunk_off_op_record_count() -> Word { wire_forty() }
+fn chunk_off_local_count() -> Word { wire_forty_four() }
 fn chunk_off_param_count() -> Word { 46 }
 fn chunk_off_block_type() -> Word { 47 }
 
@@ -1397,8 +1397,8 @@ fn emit_header_record_at(at: Word) -> Word {
 // against a 65536-byte buffer. The emitter therefore never has to chunk what it
 // writes, only what it is given.
 
-fn chunk_fields() -> Word { 14 }
-fn fin_capacity() -> Word { 1024 }
+fn chunk_fields() -> Word { wire_fourteen() }
+fn fin_capacity() -> Word { wire_one_k() }
 
 // `nout`'s capacity in WORDS, which at two words per name record admits exactly
 // `nm_max_names()` names. Stated as its own function so the emitter reading
@@ -1460,7 +1460,7 @@ fn emit_chunk_records(at: Word, n: Word) -> Word {
 // extreme case of one logical byte in an eight-byte region. Residues 1, 2 and 6
 // do not occur and are covered by a hand-built sweep instead.
 
-fn bin_capacity() -> Word { 49152 }
+fn bin_capacity() -> Word { wire_forty_eight_k() }
 
 // `bout` is the same size as `bin` TODAY, and that is a coincidence rather than
 // a constraint. A guard on the output buffer that names the input one is right
@@ -2204,7 +2204,7 @@ fn pool_u24(at: Word, k: Word) -> Word {
 // polynomial and this convention. One pass, no special-casing of the last four
 // bytes, and nothing to get wrong about where the checksummed region ends.
 
-fn header_bytes_len() -> Word { 64 }
+fn header_bytes_len() -> Word { wire_sixty_four() }
 fn bytecode_version() -> Word { wire_two() }
 fn crc32_residue() -> Word { 0x2144DF1C }
 
@@ -2218,17 +2218,17 @@ fn fh_off_header_length() -> Word { wire_six() }
 fn fh_off_total_length() -> Word { wire_eight() }
 fn fh_off_word_bits_log2() -> Word { wire_twelve() }
 fn fh_off_addr_bits_log2() -> Word { 13 }
-fn fh_off_float_bits_log2() -> Word { 14 }
+fn fh_off_float_bits_log2() -> Word { wire_fourteen() }
 fn fh_off_flags() -> Word { 15 }
 fn fh_off_wcet_cycles() -> Word { wire_sixteen() }
 fn fh_off_wcmu_bytes() -> Word { wire_twenty() }
 fn fh_off_shared_data_bytes() -> Word { wire_twenty_four() }
 fn fh_off_private_data_bytes() -> Word { wire_twenty_eight() }
 fn fh_off_opcode_offset() -> Word { wire_thirty_two() }
-fn fh_off_opcode_length() -> Word { 36 }
-fn fh_off_pool_offset() -> Word { 40 }
-fn fh_off_pool_length() -> Word { 44 }
-fn fh_off_aux_offset() -> Word { 48 }
+fn fh_off_opcode_length() -> Word { wire_thirty_six() }
+fn fh_off_pool_offset() -> Word { wire_forty() }
+fn fh_off_pool_length() -> Word { wire_forty_four() }
+fn fh_off_aux_offset() -> Word { wire_forty_eight() }
 fn fh_off_aux_length() -> Word { 52 }
 fn fh_off_aux_arena_bytes() -> Word { 56 }
 fn fh_off_persistent_composite_bytes() -> Word { 60 }
@@ -2664,6 +2664,16 @@ fn emit_in_window() -> Word {
 // cursor never exceeds the input cursor. Byte ranges therefore never overlap in
 // the wrong direction, and the record pairs coincide only when nothing has been
 // deduped yet, where the input pair is read before the output pair is written.
+private data templates {
+    start: Word,
+    end: Word,
+    count: Word,
+    pos: Word,
+    out: Word,
+    cursor: Word,
+    emitted: Word,
+}
+
 private data nm {
     // Enum-section counters (slice 14b). Fields rather than locals for the
     // reason `crc.acc` records: this file uses no locals, so a nested walk has
@@ -2788,7 +2798,7 @@ fn nm_max_name() -> Word { 256 }
 // input-to-index MAP". That reasoning belonged to a layout where the map shared
 // an array with the record pairs; it does not any more (see `nmap`/`noff`
 // below), so the cap is now bounded by the arrays' own sizes and nothing else.
-fn nm_max_names() -> Word { 1024 }
+fn nm_max_names() -> Word { wire_one_k() }
 
 // Whether two names in `wire.bin` hold the same bytes.
 //
@@ -2872,6 +2882,12 @@ fn nm_offsets(n: Word) -> Word {
 //
 // Returns the `NAMES` index this input resolved to.
 fn nm_intern_at(m: Word) -> Word {
+    // A template checkpoint records the next fresh-name index without adding
+    // a name. This also preserves the field-run start for an empty template.
+    if templates.end > 0 andalso wire.nin[(m * 2) + 1] == 2 {
+        wire.nmap[m] = nm.cnt;
+        nm.cnt
+    } else {
     nm.ioff = wire.noff[m];
     nm.found = if wire.nin[(m * 2) + 1] == 0 {
                    nm_find(nm.ioff, wire.nin[m * 2], nm.cnt)
@@ -2881,6 +2897,7 @@ fn nm_intern_at(m: Word) -> Word {
     wire.nmap[m] = if nm.found < 0 { nm.cnt } else { nm.found };
     nm.cnt = if nm.found < 0 { nm_append(nm.ioff, wire.nin[m * 2]) } else { nm.cnt };
     wire.nmap[m]
+    }
 }
 
 // --- The module-input encoding (slice 14) --------------------------------
@@ -3258,13 +3275,16 @@ fn mi_name_mode(tag: Word, i: Word) -> Word {
     } else { nm_mode_intern() }
 }
 
-fn mi_tag_struct() -> Word { 10 }
+fn mi_tag_struct() -> Word { wire_ten() }
 
 fn mi_const_names() -> Word {
     nm.ccnt = mi_u16(nm.icur);
+    let compact = nm.ccnt >= 32768;
+    nm.ccnt = nm.ccnt band 32767;
     nm.icur = nm.icur + 2;
     nm.err = if nm.ccnt > mi_max_nodes() { 0 - 240 } else { nm.err };
-    for c in 0..mi_bounded(nm.ccnt) limit 1024 {
+    let count = if nm.err < 0 { 0 } else { nm.ccnt };
+    for c in 0..count limit 1365 {
         nm.sink = if nm.err < 0 { 0 } else {
             // ONE LINEAR SCAN, NOT A STACK WALK (slice 14e). The blob carries
             // the forest in PREORDER, and `preorder_13b` pushes a node then
@@ -3277,6 +3297,13 @@ fn mi_const_names() -> Word {
             nm.icur = nm.icur + 2;
             nm.cpay = mi_u64(nm.icur);
             nm.icur = nm.icur + 8;
+            if compact {
+                if nm.ctag < tag_unit() orelse (nm.ctag > tag_float() andalso nm.ctag != tag_none()) { nm.err = 0 - 282; }
+                nm.ckids = 0;
+                nm.cflags = 0;
+                nm.cdisc = 0;
+                nm.cnames = 0;
+            } else {
             nm.ckids = mi_u16(nm.icur);
             nm.icur = nm.icur + 2;
             nm.cflags = mi_u64(nm.icur);
@@ -3285,6 +3312,7 @@ fn mi_const_names() -> Word {
             nm.icur = nm.icur + 8;
             nm.cnames = mi_u16(nm.icur);
             nm.icur = nm.icur + 2;
+            }
             // `names_first` is the index the node's FIRST name takes, so it is
             // read before any of them advance the counter. A node with no names
             // records zero, matching the reference.
@@ -3311,7 +3339,7 @@ fn mi_const_names() -> Word {
         };
     }
     if nm.err < 0 { nm.err } else {
-    if nm.cnt > nm_max_names() { 0 - 239 } else { nm.cnt } }
+    if nm.cnt > nm_max_names() { 0 - 239 } else { mi_template_names() } }
 }
 
 fn intern_run(n: Word) -> Word {
@@ -4151,7 +4179,7 @@ fn fx_scratch() -> Word { 32768 }
 fn fx_scratch_aux() -> Word { 40960 }
 
 // A third scratch window, for `ENUM_AUX` when it is not being emitted.
-fn fx_scratch_eaux() -> Word { 49152 }
+fn fx_scratch_eaux() -> Word { wire_forty_eight_k() }
 
 // Seed the interner with the prefix, leaving it ready for the walk.
 fn fx_seed() -> Word {
@@ -4297,7 +4325,7 @@ fn fx_emit_eaux() -> Word {
 // Eleven input words per chunk rather than fourteen: the three `first` fields
 // are exactly what is no longer passed in.
 
-fn ck_fields() -> Word { 11 }
+fn ck_fields() -> Word { wire_eleven() }
 
 // `wire.fin` is 1024 words, so eleven per chunk is 93. A STATED cap of 90,
 // refused with a code rather than truncated. Real stages have far more chunks
@@ -4581,20 +4609,20 @@ fn ck_carry_ptypes() -> Word {
 // produces a name count the reference does not -- pinned already by the
 // dedup-only and append-only must-fire tests, which this slice reuses.
 
-fn sq_max_layouts() -> Word { 64 }
+fn sq_max_layouts() -> Word { wire_sixty_four() }
 
 fn sq_max_chunks() -> Word { 128 }
 
 // Bounds the INNER loop of the build pass. A count above this would trap on
 // `for v in 0..count limit 64` rather than report, so it is validated in the
 // scan pass before any of it is used as a bound.
-fn sq_max_variants() -> Word { 64 }
+fn sq_max_variants() -> Word { wire_sixty_four() }
 
 // `wire.fin` is 1024 words and a layout record is VARIABLE LENGTH, so the caps
 // above do not bound the input on their own: 64 layouts of 64 variants each
 // would want 4,224 words. The scan pass therefore checks the cursor against this
 // on every step rather than deriving safety from the caps.
-fn sq_fin_capacity() -> Word { 1024 }
+fn sq_fin_capacity() -> Word { wire_one_k() }
 
 private data sq {
     nl: Word,
@@ -5290,11 +5318,90 @@ fn si_native_finish() -> Word {
     }
 }
 
+// Templates follow constant names in the reference's finalization order.
+// Input contains type and field names. The checkpoint between them captures
+// the fresh-field run start even when its field count is zero.
+
+
+fn template_error() -> Word { 0 - 283 }
+
+fn template_input() -> Word {
+    if wire.warg < 0 orelse wire.warg > bin_capacity() - 2 orelse wire.warg2 < wire.warg + 2 orelse wire.warg2 > bin_capacity() { template_error() } else {
+        templates.start = wire.warg;
+        templates.end = wire.warg2;
+        templates.count = 0;
+        0
+    }
+}
+
+fn template_name(mode: Word) -> Word {
+    if templates.pos + 2 > templates.end orelse nm.cnt >= nm_max_names() { nm.err = template_error(); } else {
+        let size = mi_u16(templates.pos);
+        if size > nm_max_name() orelse size > templates.end - templates.pos - 2 { nm.err = template_error(); } else {
+            nm.sink = mi_offset(nm.cnt, templates.pos + 2);
+            nm.cnt = mi_pair(nm.cnt, size, mode);
+            templates.pos = templates.pos + 2 + size;
+        }
+    }
+    nm.err
+}
+
+fn mi_template_names() -> Word {
+    templates.cursor = nm.cnt;
+    templates.emitted = 0;
+    templates.count = 0;
+    templates.out = templates.start + 2;
+    if templates.end > 0 {
+        templates.count = mi_u16(templates.start);
+        templates.pos = templates.out;
+        if templates.count > nm_max_names() { nm.err = template_error(); }
+        for i in 0..mi_bounded(templates.count) limit 1024 {
+            if nm.err == 0 {
+                nm.sink = template_name(nm_mode_intern());
+                if nm.err == 0 {
+                    if templates.pos + 2 > templates.end orelse nm.cnt >= nm_max_names() { nm.err = template_error(); } else {
+                        let fields = mi_u16(templates.pos);
+                        templates.pos = templates.pos + 2;
+                        nm.sink = mi_offset(nm.cnt, 0);
+                        nm.cnt = mi_pair(nm.cnt, 0, 2);
+                        if fields > nm_max_names() - nm.cnt { nm.err = template_error(); }
+                        for f in 0..mi_bounded(fields) limit 1024 {
+                            if nm.err == 0 { nm.sink = template_name(nm_mode_fresh()); }
+                        }
+                    }
+                }
+            }
+        }
+        if templates.pos != templates.end { nm.err = template_error(); }
+    }
+    if nm.err < 0 { nm.err } else { nm.cnt }
+}
+
+fn template_step() -> Word {
+    if nm.err < 0 orelse templates.emitted >= templates.count { template_error() } else {
+        templates.out = templates.out + 2 + mi_u16(templates.out);
+        let fields = mi_u16(templates.out);
+        templates.out = templates.out + 2;
+        put_u32(tpl_off_type_name(), wire.nmap[templates.cursor]);
+        put_u32(tpl_off_field_names_first(), wire.nmap[templates.cursor + 1]);
+        put_u32(tpl_off_field_count(), fields);
+        put_u32(tpl_off_reserved(), 0);
+        for f in 0..fields limit 1024 {
+            templates.out = templates.out + 2 + mi_u16(templates.out);
+        }
+        templates.cursor = templates.cursor + fields + 2;
+        templates.emitted = templates.emitted + 1;
+        tpl_stride()
+    }
+}
+
 fn dispatch_native(cmd: Word) -> Word {
     if cmd == 201 { native_input() } else {
     if cmd == 202 { native_name_step() } else {
     if cmd == 203 { si_native_begin() } else {
-    if cmd == 204 { si_native_finish() } else { 0 - 97 }}}}
+    if cmd == 204 { si_native_finish() } else {
+    if cmd == 205 { template_input() } else {
+    if cmd == 206 { template_step() } else { 0 - 97 }}}}}}
 }
 
 fn wire_one() -> Word { 1 }
@@ -5310,7 +5417,18 @@ fn wire_twenty_four() -> Word { 24 }
 fn wire_twenty_eight() -> Word { 28 }
 fn wire_thirty_two() -> Word { 32 }
 
-fn highest_command() -> Word { 204 }
+fn wire_ten() -> Word { 10 }
+fn wire_eleven() -> Word { 11 }
+fn wire_fourteen() -> Word { 14 }
+fn wire_thirty_six() -> Word { 36 }
+fn wire_forty() -> Word { 40 }
+fn wire_forty_four() -> Word { 44 }
+fn wire_forty_eight() -> Word { 48 }
+fn wire_sixty_four() -> Word { 64 }
+fn wire_one_k() -> Word { 1024 }
+fn wire_forty_eight_k() -> Word { 49152 }
+
+fn highest_command() -> Word { 206 }
 
 // --- THE ENTRY, AS A COROUTINE ----------------------------------------------
 //

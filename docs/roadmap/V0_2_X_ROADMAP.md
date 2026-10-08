@@ -352,8 +352,8 @@ All twelve pipeline-produced stage modules now serialize through Keleusma sectio
 and match the complete reference artifacts. Opcode and operand-pool encoding covers all 66
 instruction identifiers. The shipping serializer remains Rust. Additional auxiliary forms,
 semantic decoding, type coverage and final integration
-gates keep Order 1 open. Shape interning and signature numbering now also run in Keleusma. Native names and return shapes now share the existing name and shape tables without pairing their lengths. The wire stage has 528 chunks and uses 48,492 of 49,152 input bytes.
-Its constant-node table uses 1,291 of 1,365 slots after sharing repeated numeric schema literals.
+gates keep Order 1 open. Shape interning and signature numbering now also run in Keleusma. Native names and return shapes now share the existing name and shape tables without pairing their lengths. Struct-template names and field runs are also stage-derived. Compact scalar transport reduces the wire stage input to 23,080 of 49,152 bytes. The stage has 543 chunks.
+Its constant-node table uses 1,297 of 1,365 slots after sharing repeated numeric schema literals.
 
 
 Composite let annotations now preserve named, tuple, array, grouping and unit requirements.
@@ -361,7 +361,7 @@ The twenty-three-source comparison includes fourteen negatives and nine valid co
 seven artifact and execution controls. Parser capacity and unsupported annotation syntax remain
 distinct from source rejection. Remaining input and projection coverage, production wire
 emission and final gates keep Order 1 open. Standing inference-independence evidence now
-covers all twelve stages, clearing 42,471 recorded types without changing complete artifacts.
+covers all twelve stages, clearing 42,813 recorded types without changing complete artifacts.
 The intervention and admission controls also pass.
 
 Struct field and composite array projections now preserve source type identity through calls,

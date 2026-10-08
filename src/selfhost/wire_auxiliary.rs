@@ -29,6 +29,16 @@ fn validate_input(module: &Module) -> Result<(), SelfHostError> {
         if !fits_name(&chunk.name) {
             return Err(error("chunk name exceeds the input field width"));
         }
+        for template in &chunk.struct_templates {
+            if !fits_name(&template.type_name) || template.field_names.iter().any(|n| !fits_name(n))
+            {
+                return Err(error("template name exceeds the input field width"));
+            }
+            events = events
+                .checked_add(2)
+                .and_then(|n| n.checked_add(template.field_names.len()))
+                .ok_or_else(|| error("name event count overflow"))?;
+        }
         nodes = nodes
             .checked_add(chunk.constants.len())
             .ok_or_else(|| error("node count overflow"))?;
@@ -72,7 +82,8 @@ struct Emitter {
     blob: Vec<u8>,
     header: [i64; 11],
     chunks: usize,
-    native_at: Option<usize>,
+    native_at: Option<(usize, usize)>,
+    template_at: Option<(usize, usize)>,
 }
 
 impl Emitter {
@@ -88,11 +99,18 @@ impl Emitter {
                 vm.set_shared(shared, wire_slots::BIN + i, Value::Byte(byte))
                     .map_err(|_| error("input byte transport failed"))?;
             }
-            if let Some(at) = self.native_at {
+            if let Some((at, end)) = self.native_at {
                 set_word(vm, shared, wire_slots::WARG, at as i64)?;
-                set_word(vm, shared, wire_slots::WARG + 1, self.blob.len() as i64)?;
+                set_word(vm, shared, wire_slots::WARG + 1, end as i64)?;
                 if command(vm, shared, 201)? != 0 {
                     return Err(error("native input setup failed"));
+                }
+            }
+            if let Some((at, end)) = self.template_at {
+                set_word(vm, shared, wire_slots::WARG, at as i64)?;
+                set_word(vm, shared, wire_slots::WARG + 1, end as i64)?;
+                if command(vm, shared, 205)? != 0 {
+                    return Err(error("template input setup failed"));
                 }
             }
             set_word(vm, shared, wire_slots::WARG, self.chunks as i64)?;
@@ -170,8 +188,8 @@ impl Emitter {
 
 /// Encode the auxiliary container from module facts, with no reference artifact.
 ///
-/// This integrates the stage-corpus records and native metadata. Templates,
-/// debug pools, composite constants and private composite slots still
+/// This integrates the stage-corpus records, native metadata and struct templates.
+/// Debug pools, composite constants and private composite slots still
 /// require integration. They are refused explicitly. Shape numbering is derived
 /// in Keleusma, and parameter tags remain opaque bytes.
 /// This function is not yet the shipping serializer.
@@ -182,12 +200,8 @@ impl Emitter {
 pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
     use crate::wire_schema::kind;
 
-    if module
-        .chunks
-        .iter()
-        .any(|c| !c.struct_templates.is_empty() || c.debug_pool.is_some())
-    {
-        return Err(error("template and debug records are not integrated"));
+    if module.chunks.iter().any(|c| c.debug_pool.is_some()) {
+        return Err(error("debug records are not integrated"));
     }
     if module
         .data_layout
@@ -211,7 +225,7 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
         None
     };
     validate_input(module)?;
-    let (mut blob, names) = module_input(module);
+    let (mut blob, names) = compact_scalar_module_input(module)?;
     let native_at = if module.native_names.is_empty() {
         None
     } else {
@@ -235,7 +249,46 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
             blob.extend_from_slice(&len.to_le_bytes());
             blob.extend_from_slice(name.as_bytes());
         }
-        Some(at)
+        Some((at, blob.len()))
+    };
+    let templates: Vec<_> = module
+        .chunks
+        .iter()
+        .flat_map(|chunk| &chunk.struct_templates)
+        .collect();
+    let template_at = if templates.is_empty() {
+        None
+    } else {
+        let at = blob.len();
+        let extra = templates
+            .iter()
+            .try_fold(2usize, |size, template| {
+                let size = size.checked_add(4)?.checked_add(template.type_name.len())?;
+                template.field_names.iter().try_fold(size, |size, name| {
+                    size.checked_add(2)?.checked_add(name.len())
+                })
+            })
+            .filter(|&size| at.checked_add(size).is_some_and(|end| end <= 49152))
+            .ok_or_else(|| error("template input exceeds the stage capacity"))?;
+        blob.try_reserve_exact(extra)
+            .map_err(|_| error("template input allocation failed"))?;
+        let count = u16::try_from(templates.len()).map_err(|_| error("template count overflow"))?;
+        blob.extend_from_slice(&count.to_le_bytes());
+        for template in &templates {
+            let len = u16::try_from(template.type_name.len())
+                .map_err(|_| error("template name overflow"))?;
+            blob.extend_from_slice(&len.to_le_bytes());
+            blob.extend_from_slice(template.type_name.as_bytes());
+            let fields = u16::try_from(template.field_names.len())
+                .map_err(|_| error("template field count overflow"))?;
+            blob.extend_from_slice(&fields.to_le_bytes());
+            for name in &template.field_names {
+                let len = u16::try_from(name.len()).map_err(|_| error("field name overflow"))?;
+                blob.extend_from_slice(&len.to_le_bytes());
+                blob.extend_from_slice(name.as_bytes());
+            }
+        }
+        Some((at, blob.len()))
     };
     if blob.len() > 49152 || names > 1024 {
         return Err(error("module input exceeds the stage capacity"));
@@ -259,6 +312,7 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
         header,
         chunks: module.chunks.len(),
         native_at,
+        template_at,
     };
     let mut chunks = chunk_fields_of(module);
     let mut op_offset = 0u32;
@@ -342,7 +396,10 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
         ]);
     }
     if !module.chunks.is_empty() {
-        regions.push((kind::STRUCT_TEMPLATES, Vec::new()));
+        regions.push((
+            kind::STRUCT_TEMPLATES,
+            emitter.stream(&vec![0; templates.len()], 1, Some(182), 206, None)?,
+        ));
         regions.push((kind::PARAM_TYPES, param_type_bytes(module)));
     }
     regions.push((kind::SHAPES, signatures.shapes));
@@ -364,6 +421,139 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scalar_tag_decoding_obeys_feature_gates_without_narrowing_tags() {
+        for tag in [0, 1, 2, 3, 4, 6, 7] {
+            assert_eq!(
+                Some(scalar_kind_from_tag(tag)),
+                ScalarKind::from_tag(tag as u8)
+            );
+        }
+        #[cfg(feature = "floats")]
+        assert_eq!(scalar_kind_from_tag(5), ScalarKind::Float);
+        #[cfg(not(feature = "floats"))]
+        assert!(std::panic::catch_unwind(|| scalar_kind_from_tag(5)).is_err());
+        for tag in [-1, 8, 256, i64::MAX] {
+            assert!(std::panic::catch_unwind(|| scalar_kind_from_tag(tag)).is_err());
+        }
+    }
+
+    #[test]
+    fn constant_node_reader_emits_the_tail_above_the_name_capacity() {
+        let stage = compile_src(&read_stage("kel/wire.kel"));
+        for count in [0, 1024, 1025, 1365] {
+            let mut input = compile_src("fn main() -> Word { 7 }");
+            input.chunks[0].constants = vec![ConstValue::Int(42); count];
+            let (legacy, names) = module_input_encoded(&input, false);
+            let (compact, compact_names) = compact_scalar_module_input(&input).unwrap();
+            assert_eq!(names, compact_names);
+            assert_eq!(legacy.len() - compact.len(), 20 * count);
+            for blob in [legacy, compact] {
+                with_compiled_wire(stage.clone(), |vm, shared| {
+                    for (i, byte) in blob.into_iter().enumerate() {
+                        vm.set_shared(shared, wire_slots::BIN + i, Value::Byte(byte))
+                            .unwrap();
+                    }
+                    assert_eq!(command(vm, shared, 166)?, count);
+                    let mut nodes = vec![0; count * 48];
+                    read_window(vm, shared, &mut nodes)?;
+                    for node in nodes.as_chunks::<48>().0 {
+                        assert_eq!(&node[..8], &3i64.to_le_bytes());
+                        assert_eq!(&node[8..16], &42i64.to_le_bytes());
+                        assert!(node[16..].iter().all(|&b| b == 0));
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn compact_scalar_reader_rejects_oversized_counts_and_non_scalar_tags() {
+        let stage = compile_src(&read_stage("kel/wire.kel"));
+        for count in [1366u16, 0x8000 | 1366] {
+            with_compiled_wire(stage.clone(), |vm, shared| {
+                for (i, byte) in count.to_le_bytes().into_iter().enumerate() {
+                    vm.set_shared(shared, wire_slots::BIN + 6 + i, Value::Byte(byte))
+                        .unwrap();
+                }
+                assert_eq!(enter_wire(vm, shared, 166)?, -240);
+                Ok(())
+            })
+            .unwrap();
+        }
+        for tag in [0u16, 7, 8, 9, 10, 11, 13, u16::MAX] {
+            with_compiled_wire(stage.clone(), |vm, shared| {
+                for (i, byte) in 0x8001u16.to_le_bytes().into_iter().enumerate() {
+                    vm.set_shared(shared, wire_slots::BIN + 6 + i, Value::Byte(byte))
+                        .unwrap();
+                }
+                for (i, byte) in tag.to_le_bytes().into_iter().enumerate() {
+                    vm.set_shared(shared, wire_slots::BIN + 8 + i, Value::Byte(byte))
+                        .unwrap();
+                }
+                assert_eq!(enter_wire(vm, shared, 166)?, -282);
+                Ok(())
+            })
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn template_transport_checks_setup_extents_and_stream_completion() {
+        with_compiled_wire(compile_src(&read_stage("kel/wire.kel")), |vm, shared| {
+            for (start, end) in [
+                (-1, 2),
+                (i64::MAX, i64::MAX),
+                (8, 9),
+                (49151, 49152),
+                (8, 49153),
+            ] {
+                set_word(vm, shared, wire_slots::WARG, start)?;
+                set_word(vm, shared, wire_slots::WARG + 1, end)?;
+                assert_eq!(enter_wire(vm, shared, 205)?, -283);
+            }
+            // Empty legacy sections occupy the first eight zero bytes.
+            for bytes in [
+                &[1, 0][..],
+                &[1, 0, 4, 0, b'T'],
+                &[1, 0, 0, 0, 255, 255],
+                &[0, 0, 0],
+                &[255, 255],
+            ] {
+                for (i, &byte) in bytes.iter().enumerate() {
+                    vm.set_shared(shared, wire_slots::BIN + 8 + i, Value::Byte(byte))
+                        .unwrap();
+                }
+                set_word(vm, shared, wire_slots::WARG, 8)?;
+                set_word(vm, shared, wire_slots::WARG + 1, (8 + bytes.len()) as i64)?;
+                command(vm, shared, 205)?;
+                assert_eq!(enter_wire(vm, shared, 206)?, -283);
+                assert_eq!(enter_wire(vm, shared, 182)?, -283);
+                assert_eq!(enter_wire(vm, shared, 206)?, -283);
+            }
+            for (i, byte) in [1, 0, 1, 0, b'T', 0, 0].into_iter().enumerate() {
+                vm.set_shared(shared, wire_slots::BIN + 8 + i, Value::Byte(byte))
+                    .unwrap();
+            }
+            set_word(vm, shared, wire_slots::WARG, 8)?;
+            set_word(vm, shared, wire_slots::WARG + 1, 15)?;
+            command(vm, shared, 205)?;
+            assert_eq!(command(vm, shared, 182)?, 1);
+            assert_eq!(command(vm, shared, 206)?, 16);
+            let mut before = [0; 16];
+            read_window(vm, shared, &mut before)?;
+            assert_eq!(before, [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+            assert_eq!(enter_wire(vm, shared, 206)?, -283);
+            let mut after = [0; 16];
+            read_window(vm, shared, &mut after)?;
+            assert_eq!(before, after);
+            Ok(())
+        })
+        .unwrap();
+    }
 
     #[test]
     fn native_transport_rejects_incomplete_names_and_invalid_ranges() {

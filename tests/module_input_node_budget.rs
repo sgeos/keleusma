@@ -115,7 +115,20 @@ fn blob_node_count(module: &Module) -> usize {
         skip_name(&blob, &mut at);
     }
 
-    u16_at(&blob, &mut at)
+    let header = u16_at(&blob, &mut at);
+    let nodes = header & 0x7FFF;
+    if header & 0x8000 != 0 {
+        assert_eq!(blob.len() - at, nodes * 10, "compact scalar record extent");
+        assert_eq!(
+            nodes,
+            module
+                .chunks
+                .iter()
+                .map(|c| c.constants.len())
+                .sum::<usize>()
+        );
+    }
+    nodes
 }
 
 /// **THE BUDGET, RECORDED BEFORE THE STAGE GROWS.**

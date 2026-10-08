@@ -156,7 +156,8 @@ fn the_self_hosted_compiler_can_now_compile_wire_kel() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
 
     let module = keleusma::selfhost::self_host_compile(WIRE);
-    // 528 after six native integration functions and six shared literal helpers.
+    // 543 after five template functions and ten shared literal helpers.
+    // Previously 528 after six native functions and six literal helpers.
     // Previously 516 after six signature-stream functions and five literal helpers.
     // Previously 505 after four opcode-stream functions and four literal helpers.
     // The helpers recover the constant-node reserve without enlarging buffers.
@@ -172,7 +173,7 @@ fn the_self_hosted_compiler_can_now_compile_wire_kel() {
     // reason, and this is the chunk count.
     assert_eq!(
         module.chunks.len(),
-        528,
+        543,
         "`wire.kel`'s chunk count moved. A function is a chunk, so this figure moves whenever \
          the stage gains or loses one -- update it WITH the cause, as the comment above does"
     );

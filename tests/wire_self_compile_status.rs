@@ -1,4 +1,4 @@
-//! **`wire.kel` SELF-COMPILES BYTE-IDENTICALLY.** The largest stage in the corpus, at 528
+//! **`wire.kel` SELF-COMPILES BYTE-IDENTICALLY.** The largest stage in the corpus, at 543
 //! chunks, and the last one that was outside the byte-identity oracle.
 //!
 //! # This file used to say the opposite, and that is the point of keeping it
@@ -120,7 +120,8 @@ fn the_bare_for_counter_is_reset_beside_its_analogue() {
 #[test]
 fn wire_kel_has_the_chunk_count_the_documents_quote() {
     let module = keleusma::selfhost::self_host_compile(WIRE);
-    // 528 after six native integration functions and six shared literal helpers.
+    // 543 after five template functions and ten shared literal helpers.
+    // Previously 528 after six native functions and six literal helpers.
     // Previously 516 after six signature-stream functions and five literal helpers.
     // Previously 505 after four opcode-stream functions and four literal helpers.
     // The helpers recover the constant-node reserve without enlarging buffers.
@@ -137,7 +138,7 @@ fn wire_kel_has_the_chunk_count_the_documents_quote() {
     // `tests/module_input_node_budget.rs` for the other figure `wire.kel`'s growth moves.
     assert_eq!(
         module.chunks.len(),
-        528,
+        543,
         "`wire.kel`'s chunk count moved. THREE tests pin this figure; if only some of them \
          fail, the derivations have parted rather than the stage having changed"
     );

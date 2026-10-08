@@ -13,6 +13,38 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-08 Struct templates and a repaired constant-node reader
+
+Template names now join the shared interner in finalization order. Type names deduplicate and
+field names append fresh. A checkpoint event records the next name index without emitting a
+name, preserving empty field-run positions. Chunk ranges retain the existing stage accumulators.
+Five integration controls cover a compiled boxed struct, repeated and empty names, cross-chunk
+ranges, exact event capacity and scalar payloads. Malformed transport has explicit controls.
+
+The node reader's count was misleading. Above 1,024 nodes it returned the requested count while
+its name-bound clamp skipped the entire constant loop. The regression failed on node zero for a
+1,025-node input. The repaired loop uses its own 1,365-node bound, and tests check every field
+through the exact limit for both input forms. The first diagnostic is retained for the pilot.
+
+Scalar input now omits four necessarily zero fields, using a flagged count and ten-byte records.
+Legacy named and composite inputs remain supported. This is private transport, not a published
+format change. The capacity instrument initially read the flag as part of the count. It now masks
+that flag and verifies the compact extent against the module's actual constant count. The stage
+uses 1,297 nodes with 68 free, and 23,080 input bytes with 26,072 free. Neither cap was raised.
+
+The new template state initially followed a helper that read it. The pipeline parser reported
+unresolved name 510, which the token trace identified as templates. Moving the declaration before
+use repaired the stage source. Forward data declarations remain outside that demonstrated path.
+All twelve complete artifact comparisons pass again. Wire has 543 chunks and a 148,596-byte
+artifact. Clearing 42,813 recorded expression types leaves the twelve artifacts unchanged.
+
+The no-default-features self-host build exposed an existing unguarded Float enum variant in the
+host tag decoder. Canonical feature-aware decoding with checked integer conversion repairs it.
+The targeted no-default run passes six integration checks and one decoder test. The release
+workspace passes 3,067 tests with five ignored. Workspace Clippy, documentation and the no_std
+self-host check pass. The reverse prompt retains command receipts and the reviewed local pilot
+export. External evaluation remains unavailable. Full Order 1 remains open.
+
 ## 2026-10-08 Native metadata preserves shared indices and independent lengths
 
 The auxiliary producer now accepts native names and native return shapes. Keleusma interns names
