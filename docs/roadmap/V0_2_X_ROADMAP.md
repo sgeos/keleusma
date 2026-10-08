@@ -346,13 +346,13 @@ The gaps to close, from the current subset to the full grammar:
 - **Generics and monomorphization.** The full monomorphizer (Workstream A's deferred half):
   generic functions, structs, and enums, const generics, trait bounds, and specialization.
 
-## Current Order-1 status, 2026-10-04
+## Current Order-1 status, 2026-10-08
 
 All twelve pipeline-produced stage modules now serialize through Keleusma section emitters
 and match the complete reference artifacts. Opcode and operand-pool encoding covers all 66
 instruction identifiers. The shipping serializer remains Rust. Additional auxiliary forms,
 semantic decoding, type coverage and final integration
-gates keep Order 1 open. Shape interning and signature numbering now also run in Keleusma. The wire stage has 516 chunks and uses 48,233 of 49,152 input bytes.
+gates keep Order 1 open. Shape interning and signature numbering now also run in Keleusma. Native names and return shapes now share the existing name and shape tables without pairing their lengths. The wire stage has 528 chunks and uses 48,492 of 49,152 input bytes.
 Its constant-node table uses 1,291 of 1,365 slots after sharing repeated numeric schema literals.
 
 
@@ -361,7 +361,7 @@ The twenty-three-source comparison includes fourteen negatives and nine valid co
 seven artifact and execution controls. Parser capacity and unsupported annotation syntax remain
 distinct from source rejection. Remaining input and projection coverage, production wire
 emission and final gates keep Order 1 open. Standing inference-independence evidence now
-covers all twelve stages, clearing 42,195 recorded types without changing complete artifacts.
+covers all twelve stages, clearing 42,471 recorded types without changing complete artifacts.
 The intervention and admission controls also pass.
 
 Struct field and composite array projections now preserve source type identity through calls,

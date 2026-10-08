@@ -16,7 +16,14 @@ fn error(detail: &str) -> SelfHostError {
 // to be scalar, so their root count is also their node count.
 fn validate_input(module: &Module) -> Result<(), SelfHostError> {
     let fits_name = |name: &str| name.len() <= u16::MAX as usize;
-    let mut events = module.chunks.len();
+    let mut events = module
+        .chunks
+        .len()
+        .checked_add(module.native_names.len())
+        .ok_or_else(|| error("name count overflow"))?;
+    if module.native_names.iter().any(|n| !fits_name(n)) {
+        return Err(error("native name exceeds the input field width"));
+    }
     let mut nodes = 0usize;
     for chunk in &module.chunks {
         if !fits_name(&chunk.name) {
@@ -65,6 +72,7 @@ struct Emitter {
     blob: Vec<u8>,
     header: [i64; 11],
     chunks: usize,
+    native_at: Option<usize>,
 }
 
 impl Emitter {
@@ -73,7 +81,6 @@ impl Emitter {
         work: impl FnOnce(&mut Vm<'_, '_>, &mut [u8]) -> Result<T, SelfHostError>,
     ) -> Result<T, SelfHostError> {
         with_compiled_wire(self.stage.clone(), |vm, shared| {
-            set_word(vm, shared, wire_slots::WARG, self.chunks as i64)?;
             for (i, &value) in self.header.iter().enumerate() {
                 set_word(vm, shared, wire_slots::FIN + HEADER_FIELD_BASE + i, value)?;
             }
@@ -81,6 +88,14 @@ impl Emitter {
                 vm.set_shared(shared, wire_slots::BIN + i, Value::Byte(byte))
                     .map_err(|_| error("input byte transport failed"))?;
             }
+            if let Some(at) = self.native_at {
+                set_word(vm, shared, wire_slots::WARG, at as i64)?;
+                set_word(vm, shared, wire_slots::WARG + 1, self.blob.len() as i64)?;
+                if command(vm, shared, 201)? != 0 {
+                    return Err(error("native input setup failed"));
+                }
+            }
+            set_word(vm, shared, wire_slots::WARG, self.chunks as i64)?;
             work(vm, shared)
         })
     }
@@ -155,8 +170,8 @@ impl Emitter {
 
 /// Encode the auxiliary container from module facts, with no reference artifact.
 ///
-/// This integrates the existing stage-corpus record paths. Native metadata,
-/// templates, debug pools, composite constants and private composite slots still
+/// This integrates the stage-corpus records and native metadata. Templates,
+/// debug pools, composite constants and private composite slots still
 /// require integration. They are refused explicitly. Shape numbering is derived
 /// in Keleusma, and parameter tags remain opaque bytes.
 /// This function is not yet the shipping serializer.
@@ -167,9 +182,6 @@ impl Emitter {
 pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, SelfHostError> {
     use crate::wire_schema::kind;
 
-    if !module.native_names.is_empty() || !module.native_return_shapes.is_empty() {
-        return Err(error("native records are not integrated"));
-    }
     if module
         .chunks
         .iter()
@@ -199,11 +211,39 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
         None
     };
     validate_input(module)?;
-    let signatures = wire_signature_sections_via_kel(&module.signatures)?;
-    let (blob, names) = module_input(module);
+    let (mut blob, names) = module_input(module);
+    let native_at = if module.native_names.is_empty() {
+        None
+    } else {
+        let at = blob.len();
+        let extra = module
+            .native_names
+            .iter()
+            .try_fold(2usize, |size, name| {
+                size.checked_add(2)?.checked_add(name.len())
+            })
+            .filter(|&size| at.checked_add(size).is_some_and(|end| end <= 49152))
+            .ok_or_else(|| error("native input exceeds the stage capacity"))?;
+        blob.try_reserve_exact(extra)
+            .map_err(|_| error("native input allocation failed"))?;
+        let count =
+            u16::try_from(module.native_names.len()).map_err(|_| error("native count overflow"))?;
+        blob.extend_from_slice(&count.to_le_bytes());
+        for name in &module.native_names {
+            let len =
+                u16::try_from(name.len()).map_err(|_| error("native name length overflow"))?;
+            blob.extend_from_slice(&len.to_le_bytes());
+            blob.extend_from_slice(name.as_bytes());
+        }
+        Some(at)
+    };
     if blob.len() > 49152 || names > 1024 {
         return Err(error("module input exceeds the stage capacity"));
     }
+    let (signatures, native_returns) = super::wire_signatures::signature_and_native_sections(
+        &module.signatures,
+        &module.native_return_shapes,
+    )?;
     let mut header = header_fields_of(module);
     header[4..10].copy_from_slice(&[
         i64::from(module.flags),
@@ -218,6 +258,7 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
         blob,
         header,
         chunks: module.chunks.len(),
+        native_at,
     };
     let mut chunks = chunk_fields_of(module);
     let mut op_offset = 0u32;
@@ -247,8 +288,19 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
             kind::ENUM_LAYOUTS,
             emitter.stream(&enum_layout_fields(module), 2, Some(186), 187, None)?,
         ),
-        (kind::NATIVES, Vec::new()),
-        (kind::NATIVE_RETURNS, Vec::new()),
+        (
+            kind::NATIVES,
+            emitter.stream(
+                &(0..module.native_names.len())
+                    .map(|i| i as i64)
+                    .collect::<Vec<_>>(),
+                1,
+                Some(182),
+                202,
+                None,
+            )?,
+        ),
+        (kind::NATIVE_RETURNS, native_returns),
     ];
     if let Some(init) = init {
         regions.extend([
@@ -307,4 +359,70 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
         .map(|(kind, bytes)| (*kind, bytes.as_slice()))
         .collect();
     wire_container_from_regions_via_kel(&borrowed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_transport_rejects_incomplete_names_and_invalid_ranges() {
+        with_compiled_wire(compile_src(&read_stage("kel/wire.kel")), |vm, shared| {
+            // Four empty legacy sections followed by the optional native section.
+            for i in 0..8 {
+                vm.set_shared(shared, wire_slots::BIN + i, Value::Byte(0))
+                    .unwrap();
+            }
+            for (start, end) in [
+                (-1, 0),
+                (i64::MAX, i64::MAX),
+                (8, 9),
+                (49151, 49152),
+                (8, 49153),
+            ] {
+                set_word(vm, shared, wire_slots::WARG, start)?;
+                set_word(vm, shared, wire_slots::WARG + 1, end)?;
+                assert!(command(vm, shared, 201).is_err());
+            }
+            for bytes in [
+                &[1, 0][..],
+                &[1, 0, 3, 0, b'a'],
+                &[0, 0, 0],
+                &[255, 255],
+                &[1, 0, 1, 1],
+            ] {
+                for (i, &byte) in bytes.iter().enumerate() {
+                    vm.set_shared(shared, wire_slots::BIN + 8 + i, Value::Byte(byte))
+                        .unwrap();
+                }
+                set_word(vm, shared, wire_slots::WARG, 8)?;
+                set_word(vm, shared, wire_slots::WARG + 1, (8 + bytes.len()) as i64)?;
+                command(vm, shared, 201)?;
+                assert!(command(vm, shared, 202).is_err());
+                assert!(command(vm, shared, 182).is_err());
+                assert!(command(vm, shared, 202).is_err());
+            }
+            for (i, byte) in [1, 0, 1, 0, b'x'].into_iter().enumerate() {
+                vm.set_shared(shared, wire_slots::BIN + 8 + i, Value::Byte(byte))
+                    .unwrap();
+            }
+            set_word(vm, shared, wire_slots::WARG, 8)?;
+            set_word(vm, shared, wire_slots::WARG + 1, 13)?;
+            command(vm, shared, 201)?;
+            assert_eq!(command(vm, shared, 182)?, 1);
+            set_word(vm, shared, wire_slots::FIN, 0)?;
+            assert_eq!(command(vm, shared, 202)?, 8);
+            let mut before = [0; 8];
+            read_window(vm, shared, &mut before)?;
+            for index in [-1, 1, i64::MAX] {
+                set_word(vm, shared, wire_slots::FIN, index)?;
+                assert!(command(vm, shared, 202).is_err());
+                let mut after = [0; 8];
+                read_window(vm, shared, &mut after)?;
+                assert_eq!(before, after);
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
 }

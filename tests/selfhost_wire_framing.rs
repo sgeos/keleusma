@@ -122,7 +122,11 @@ fn auxiliary_preserves_metadata_and_refuses_unintegrated_records() {
     );
     let mut native = module.clone();
     native.native_names.push("native".into());
-    assert!(wire_auxiliary_from_module_via_kel(&native).is_err());
+    let expected_native = native.to_bytes().unwrap();
+    assert_eq!(
+        wire_auxiliary_from_module_via_kel(&native).unwrap(),
+        section(&expected_native, 48)
+    );
     let mut composite = module.clone();
     composite.chunks[0]
         .constants

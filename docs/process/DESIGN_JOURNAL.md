@@ -13,6 +13,39 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-08 Native metadata preserves shared indices and independent lengths
+
+The auxiliary producer now accepts native names and native return shapes. Keleusma interns names
+between enum and data-slot contributions and continues signature-shape interning for native
+returns. The vectors retain independent lengths. Comparison controls cover collisions, empty
+and unequal vectors, repeated shapes, complete compiled native-call artifacts and buffer limits.
+The whole-module helper still refuses the remaining auxiliary forms and is not yet shipping.
+
+Native collisions exposed three input-position bounds using the deduplicated output count.
+The corrected bounds use the original section counts and boundaries. The name interner now
+refuses output-pool overflow before copying. The older constant walker initially swallowed that
+refusal and returned a positive count. A regression failed with 64 instead of minus 255, then
+passed after the wrapper propagated the interner error. Five native integration tests and nine
+wire protocol tests pass. Final workspace receipts are in the reverse prompt.
+
+Stage growth initially left only 48 free constant nodes. Further literal sharing restores 74,
+with 1,291 used. The stage has 528 chunks and uses 48,492 input bytes, leaving 660. Native state
+adds 160 private bytes across the name and signature blocks. No buffer cap changes. Clearing
+42,471 recorded expression types preserves all twelve complete artifacts.
+
+The fresh workspace diagnostic completed with 3,056 passes, one fixture failure and five ignored.
+The command-line bad-input tests shared one temporary directory and could truncate good.kel
+while another case read it. Each test now owns an exclusively created directory, with a process
+identifier and checked sequence number. A deterministic interleaving checks that truncating one
+owner's script and dropping that owner cannot alter the other owner's script. Cleanup is scoped
+to the owned directory. This repair changes test infrastructure only. All 74 command-line tests and workspace Clippy
+pass after the repair. The full workspace was not repeated after the test-only changes.
+
+The shadow task captures the first reserve diagnostic. External evaluation remains unavailable
+under the prior automatic approval rejection. Local review remains non-independent. Order 1
+continues through remaining auxiliary forms, decoding, shipping integration, type coverage and
+final gates. V0.3.X and the untracked .codex directory and nvim.log remain untouched.
+
 ## 2026-10-04 Signature numbering moves into Keleusma
 
 Encoding shape records was insufficient because the Rust helper still selected their indices.

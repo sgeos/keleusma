@@ -2,14 +2,49 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-## Current capacity evidence, 2026-10-04
+## Current capacity evidence, 2026-10-08
 
 The driver-capacity test now inventories all twelve stage sources. Earlier versions of that
 test used ten sources and omitted wire and verify_types. The current maxima belong to
-different stages. Parse uses 776 of 1,024 names. Wire uses 48,233 of 49,152 input bytes.
-The remaining wire input margin is 919 bytes. No input cap changed. These measurements
+different stages. Parse uses 776 of 1,024 names. Wire uses 48,492 of 49,152 input bytes.
+The remaining wire input margin is 660 bytes. No input cap changed. These measurements
 establish input residency for the corpus, not complete production serialization.
 Both encoding and decoding remain within the original wire-format scope.
+
+## Native metadata integration, 2026-10-08
+
+The module-driven auxiliary path now emits native names and native return shapes. Commands 201
+and 202 enable an optional trailing native-name input section and emit native-name records.
+The stage inserts these names after enum names and before data-slot names, derives their indices
+with the existing interner and preserves duplicate, empty and non-ASCII names. Legacy callers
+retain their existing input grammar unless they explicitly enable the extension.
+
+Commands 203 and 204 emit native return records through the same shape interner used for chunk
+signatures. No separate table or host-derived shape index is supplied. Native-name and return-shape
+vectors retain independent lengths, including either empty vector and either longer vector.
+Five integration controls compare auxiliary and complete artifact bytes, including real compiled
+scalar and array-returning native calls. Protocol controls cover incomplete names, oversized
+ranges, invalid indices and unfinished shape searches. Framing excludes all four new commands.
+
+Collision controls exposed bounds that compared input name positions with the deduplicated
+output count. Slot bounds now use their input run count, while enum cursors stop at the native
+section boundary. The 16,384-byte name-pool boundary is checked before copying. A regression
+confirmed that the older constant walker initially hid this refusal and returned 64. It now
+propagates the interner error, and the same regression passes with refusal code minus 255.
+
+The first growth measurement used 1,317 constant nodes. Sharing 32 numeric accessors through
+nine literal helpers, six newly added, removes 26 duplicate nodes and restores use to 1,291.
+The reserve remains 74 against the standing minimum of 64. Six native functions and six literal
+helpers bring the stage to 528 chunks and command 204. The native-name state adds four private
+value slots or 128 bytes. Signature state adds one slot and now costs 384 bytes. The accounting
+regression also checks the complete name-interner block at 36 slots or 1,152 bytes.
+
+The current wire artifact has 144,396 bytes. Clearing 42,471 recorded expression types preserves
+all twelve artifacts. Templates, debug pools, composite and named constants, private composite
+slots and nonempty non-elided initializer pools remain outside the module-driven helper.
+Semantic decoding and shipping integration remain required. No public opcode, bytecode version
+or buffer cap changed. The auxiliary producer still trusts its host to transport module facts
+and previously emitted shape records faithfully.
 
 ## Signature numbering integration, 2026-10-04
 
@@ -22,8 +57,8 @@ The protocol checks window lengths and total coverage, not an independently auth
 
 The auxiliary artifact path now uses this producer instead of Rust signature_tables. Legacy
 record-formatting comparison helpers still use the reference table and retain their documented
-provenance. Native return shapes are not yet integrated into this interner. The auxiliary helper
-continues to refuse native metadata. Shipping serialization and semantic decoding remain open.
+provenance. Native return shapes were not integrated at that increment. The newer native integration
+above closes that refusal using the same interner. Shipping serialization and semantic decoding remain open.
 
 All twelve pipeline artifacts remain byte-identical to the reference. The wire artifact has
 141,436 bytes and 516 chunks. Four focused tests distinguish append from intern behavior, check
@@ -84,7 +119,7 @@ Header fields include actual flags, resource values and schema hash. Chunk recor
 opcode counts and offsets. Empty mandatory tables retain their directory entries.
 
 This is incomplete production serialization. Rust supplies parameter tags, record presence and
-scalar metadata. Signature numbering has since moved into Keleusma, as recorded above. Native records, templates, debug pools,
+scalar metadata. Signature numbering has since moved into Keleusma, as recorded above. Native records are integrated by the newer increment above. Templates, debug pools,
 composite constants, private composite slots and nonempty non-elided initializer pools remain
 explicitly unsupported by this new helper. The shipping command still uses Module::to_bytes.
 No existing shipping behavior was narrowed. Remaining auxiliary forms, semantic decoding and shipping integration

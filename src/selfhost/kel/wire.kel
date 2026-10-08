@@ -791,11 +791,11 @@ fn shape_size(i: Word) -> Word {
 fn tag_unit() -> Word { wire_one() }
 fn tag_bool() -> Word { wire_two() }
 fn tag_int() -> Word { wire_three() }
-fn tag_byte() -> Word { 4 }
-fn tag_fixed() -> Word { 5 }
+fn tag_byte() -> Word { wire_four() }
+fn tag_fixed() -> Word { wire_five() }
 fn tag_float() -> Word { wire_six() }
-fn tag_static_str() -> Word { 7 }
-fn tag_tuple() -> Word { 8 }
+fn tag_static_str() -> Word { wire_seven() }
+fn tag_tuple() -> Word { wire_eight() }
 fn tag_array() -> Word { 9 }
 fn tag_struct() -> Word { 10 }
 fn tag_enum() -> Word { 11 }
@@ -1105,7 +1105,7 @@ fn dslot_off_visibility() -> Word { wire_four() }
 // The two reserved fields exist for the EMITTER, not the reader. A reader can
 // ignore them; an emitter that leaves them to a zeroed buffer is the defect
 // slice 4 argued against, and would diverge the moment a window is reused.
-fn dslot_off_reserved() -> Word { 5 }
+fn dslot_off_reserved() -> Word { wire_five() }
 fn dslot_off_run() -> Word { wire_six() }
 
 // SharedSlotRecord: offset u32 @0, kind u8 @4, reserved u8 @5, len u16 @6,
@@ -1125,7 +1125,7 @@ fn sslot_stride() -> Word { wire_sixteen() }
 fn sslot_off_offset() -> Word { wire_zero() }
 fn sslot_off_kind() -> Word { wire_four() }
 fn sslot_off_len() -> Word { wire_six() }
-fn sslot_off_reserved() -> Word { 5 }
+fn sslot_off_reserved() -> Word { wire_five() }
 fn sslot_off_first_slot() -> Word { wire_eight() }
 fn sslot_off_run() -> Word { wire_twelve() }
 fn sslot_off_stride() -> Word { 14 }
@@ -1249,10 +1249,10 @@ fn chunk_off_consts_first() -> Word { wire_four() }
 fn chunk_off_consts_count() -> Word { wire_eight() }
 fn chunk_off_templates_first() -> Word { wire_twelve() }
 fn chunk_off_templates_count() -> Word { wire_sixteen() }
-fn chunk_off_param_types_first() -> Word { 20 }
-fn chunk_off_param_types_count() -> Word { 24 }
-fn chunk_off_debug_first() -> Word { 28 }
-fn chunk_off_debug_len() -> Word { 32 }
+fn chunk_off_param_types_first() -> Word { wire_twenty() }
+fn chunk_off_param_types_count() -> Word { wire_twenty_four() }
+fn chunk_off_debug_first() -> Word { wire_twenty_eight() }
+fn chunk_off_debug_len() -> Word { wire_thirty_two() }
 fn chunk_off_op_byte_offset() -> Word { 36 }
 fn chunk_off_op_record_count() -> Word { 40 }
 fn chunk_off_local_count() -> Word { 44 }
@@ -1268,18 +1268,18 @@ fn natret_off_shape() -> Word { wire_zero() }
 fn natret_off_reserved() -> Word { wire_four() }
 
 // HeaderRecord, four words.
-fn header_stride() -> Word { 32 }
+fn header_stride() -> Word { wire_thirty_two() }
 fn header_off_entry_point() -> Word { wire_zero() }
 fn header_off_word_bits_log2() -> Word { wire_four() }
-fn header_off_addr_bits_log2() -> Word { 5 }
+fn header_off_addr_bits_log2() -> Word { wire_five() }
 fn header_off_float_bits_log2() -> Word { wire_six() }
-fn header_off_flags() -> Word { 7 }
+fn header_off_flags() -> Word { wire_seven() }
 fn header_off_wcet_cycles() -> Word { wire_eight() }
 fn header_off_wcmu_bytes() -> Word { wire_twelve() }
 fn header_off_shared_data_bytes() -> Word { wire_sixteen() }
-fn header_off_private_data_bytes() -> Word { 20 }
-fn header_off_schema_hash() -> Word { 24 }
-fn header_off_reserved() -> Word { 28 }
+fn header_off_private_data_bytes() -> Word { wire_twenty() }
+fn header_off_schema_hash() -> Word { wire_twenty_four() }
+fn header_off_reserved() -> Word { wire_twenty_eight() }
 
 fn chunk_count() -> Word {
     if dir_find(kind_chunks()) == 0 - 1 { 0 - 1 } else {
@@ -1539,7 +1539,7 @@ fn emit_name_records(at: Word, n: Word) -> Word {
 // established: an emitter that relies on its output starting zeroed breaks the
 // day it writes into a reused window, which is what a staged emitter does.
 
-fn dslot_fields() -> Word { 4 }
+fn dslot_fields() -> Word { wire_four() }
 
 fn emit_data_slot_records(at: Word, n: Word) -> Word {
     if (n * dslot_fields()) > fin_capacity() { 0 - 203 } else {
@@ -1623,7 +1623,7 @@ fn ev_stream_step() -> Word {
 // `run` and `stride` alongside the original four fields. The host supplies all
 // seven; grouping slots into runs is the CALLER's job, exactly as it is for
 // `DATA_SLOTS`.
-fn sslot_fields() -> Word { 7 }
+fn sslot_fields() -> Word { wire_seven() }
 
 fn emit_shared_slot_records(at: Word, n: Word) -> Word {
     if (n * sslot_fields()) > fin_capacity() { 0 - 204 } else {
@@ -1669,7 +1669,7 @@ fn emit_shared_slot_records(at: Word, n: Word) -> Word {
 // `put_u64` writes them as two little-endian limbs. It is correct for a negative
 // discriminant because `lsr` is logical over the whole word.
 
-fn shape_fields() -> Word { 4 }
+fn shape_fields() -> Word { wire_four() }
 
 fn emit_shape_records(at: Word, n: Word) -> Word {
     if (n * shape_fields()) > fin_capacity() { 0 - 205 } else {
@@ -1686,7 +1686,7 @@ fn emit_shape_records(at: Word, n: Word) -> Word {
     }
 }
 
-fn sig_fields() -> Word { 4 }
+fn sig_fields() -> Word { wire_four() }
 
 fn emit_signature_records(at: Word, n: Word) -> Word {
     if (n * sig_fields()) > fin_capacity() { 0 - 206 } else {
@@ -1719,7 +1719,7 @@ fn emit_enum_variant_records(at: Word, n: Word) -> Word {
     }
 }
 
-fn elay_fields() -> Word { 4 }
+fn elay_fields() -> Word { wire_four() }
 
 fn emit_enum_layout_records(at: Word, n: Word) -> Word {
     if (n * elay_fields()) > fin_capacity() { 0 - 208 } else {
@@ -1757,7 +1757,7 @@ fn emit_data_init_records(at: Word, n: Word) -> Word {
     }
 }
 
-fn const_fields() -> Word { 4 }
+fn const_fields() -> Word { wire_four() }
 
 fn emit_const_records(at: Word, n: Word) -> Word {
     if (n * const_fields()) > fin_capacity() { 0 - 210 } else {
@@ -1834,7 +1834,7 @@ fn emit_enum_aux_records(at: Word, n: Word) -> Word {
     }
 }
 
-fn tpl_fields() -> Word { 4 }
+fn tpl_fields() -> Word { wire_four() }
 
 fn emit_struct_template_records(at: Word, n: Word) -> Word {
     if (n * tpl_fields()) > fin_capacity() { 0 - 213 } else {
@@ -2087,7 +2087,7 @@ fn pool_stride() -> Word { wire_eight() }
 fn pool_tag_u16_u16() -> Word { wire_one() }
 fn pool_tag_u16_u16_u8() -> Word { wire_two() }
 fn pool_tag_u16_u16_u16() -> Word { wire_three() }
-fn pool_tag_u24_u24() -> Word { 4 }
+fn pool_tag_u24_u24() -> Word { wire_four() }
 
 // The parity byte for the entry at `at`: the exclusive-or of byte 0 and bytes
 // 2 through 7. Byte 1 is excluded by construction, not by masking.
@@ -2210,7 +2210,7 @@ fn crc32_residue() -> Word { 0x2144DF1C }
 
 fn flag_ephemeral() -> Word { wire_one() }
 fn flag_requires_signature() -> Word { wire_two() }
-fn flag_encrypted() -> Word { 4 }
+fn flag_encrypted() -> Word { wire_four() }
 
 fn fh_off_magic() -> Word { wire_zero() }
 fn fh_off_version() -> Word { wire_four() }
@@ -2221,10 +2221,10 @@ fn fh_off_addr_bits_log2() -> Word { 13 }
 fn fh_off_float_bits_log2() -> Word { 14 }
 fn fh_off_flags() -> Word { 15 }
 fn fh_off_wcet_cycles() -> Word { wire_sixteen() }
-fn fh_off_wcmu_bytes() -> Word { 20 }
-fn fh_off_shared_data_bytes() -> Word { 24 }
-fn fh_off_private_data_bytes() -> Word { 28 }
-fn fh_off_opcode_offset() -> Word { 32 }
+fn fh_off_wcmu_bytes() -> Word { wire_twenty() }
+fn fh_off_shared_data_bytes() -> Word { wire_twenty_four() }
+fn fh_off_private_data_bytes() -> Word { wire_twenty_eight() }
+fn fh_off_opcode_offset() -> Word { wire_thirty_two() }
 fn fh_off_opcode_length() -> Word { 36 }
 fn fh_off_pool_offset() -> Word { 40 }
 fn fh_off_pool_length() -> Word { 44 }
@@ -2685,6 +2685,10 @@ private data nm {
     // itself, so it cannot part from the sequence it indexes.
     ebase: Word,
     sbase: Word,
+    native_at: Word,
+    native_end: Word,
+    nbase: Word,
+    ncount: Word,
     // The enum section's CURSOR, not an offset into it.
     //
     // `mi_enum_names` interleaves a type name with that enum's variants, so a
@@ -2822,6 +2826,12 @@ fn nm_find(coff: Word, clen: Word, upto: Word) -> Word {
 // Append one name to the pool and record its reference. Returns the new count;
 // the caller owns the counter, so the increment is not hidden in here.
 fn nm_append(ioff: Word, ilen: Word) -> Word {
+    // Input residency does not bound the smaller output pool. Refuse before
+    // copying, and leave the sticky error visible to every interner caller.
+    if nm.cnt >= nm_max_names() orelse ilen > bout_capacity() - nm.ocur {
+        nm.err = 0 - 255;
+        nm.cnt
+    } else {
     for b in 0..ilen limit 256 {
         wire.bout[nm.ocur + b] = wire.bin[ioff + b];
     }
@@ -2829,6 +2839,7 @@ fn nm_append(ioff: Word, ilen: Word) -> Word {
     wire.nout[(nm.cnt * 2) + 1] = ilen;
     nm.ocur = nm.ocur + ilen;
     nm.cnt + 1
+    }
 }
 
 // Run the interner over `n` input names.
@@ -2916,7 +2927,7 @@ fn mi_count() -> Word { mi_u16(0) }
 // which a later slice adds. Writing mode 0 for everything here would be right by
 // accident, so the mode is written from `nm_mode_intern()` rather than as a
 // literal zero.
-fn nm_mode_intern() -> Word { 0 }
+fn nm_mode_intern() -> Word { wire_zero() }
 
 // Enum layouts contribute a type name that DEDUPS and variant names that do
 // NOT (slice 14b). `SchemaBuilder::add_enum_layouts` calls `names.intern` for
@@ -2935,7 +2946,7 @@ fn nm_mode_fresh() -> Word { wire_one() }
 // Generalized from a boolean when the join arrived. A third caller wanting
 // neither output is not a third boolean; two booleans would admit a fourth
 // state nobody defined.
-fn mi_mode_pairs() -> Word { 0 }
+fn mi_mode_pairs() -> Word { wire_zero() }
 
 fn mi_mode_nodes() -> Word { wire_one() }
 
@@ -3115,7 +3126,7 @@ fn mi_enum_names() -> Word {
             };
         }
     }
-    if nm.err < 0 { nm.err } else { mi_slot_names() }
+    if nm.err < 0 { nm.err } else { mi_native_names() }
 }
 
 // The DATA-SLOT section (slice 14f).
@@ -3145,6 +3156,52 @@ fn mi_enum_names() -> Word {
 // visibility collapse into one run, and the name is interned ONCE PER RUN. A
 // producer interning per slot would emit one name per array ELEMENT, which is
 // how the pre-run-length-encoding artifact reached tens of thousands.
+// Optional native-name transport is appended to the module blob. It is
+// explicitly enabled, so legacy callers retain the existing blob grammar.
+fn native_input() -> Word {
+    if wire.warg < 0 orelse wire.warg > bin_capacity() - 2 orelse wire.warg2 < wire.warg + 2 orelse wire.warg2 > bin_capacity() { 0 - 281 } else {
+        nm.ncount = 0;
+        nm.native_at = wire.warg;
+        nm.native_end = wire.warg2;
+        0
+    }
+}
+
+fn mi_native_names() -> Word {
+    let after_enums = nm.icur;
+    nm.nbase = nm.cnt;
+    nm.ncount = 0;
+    if nm.native_end > 0 {
+        nm.icur = nm.native_at;
+        nm.ncount = mi_u16(nm.icur);
+        nm.icur = nm.icur + 2;
+        if nm.ncount > nm_max_names() - nm.cnt { nm.err = 0 - 281; }
+        for i in 0..mi_bounded(nm.ncount) limit 1024 {
+            if nm.err == 0 {
+                if nm.icur + 2 > nm.native_end { nm.err = 0 - 281; } else {
+                    let size = mi_u16(nm.icur);
+                    if size > nm_max_name() orelse size > nm.native_end - nm.icur - 2 { nm.err = 0 - 281; } else {
+                        nm.sink = mi_offset(nm.cnt, nm.icur + 2);
+                        nm.cnt = mi_pair(nm.cnt, size, nm_mode_intern());
+                        nm.icur = nm.icur + 2 + size;
+                    }
+                }
+            }
+        }
+        if nm.icur != nm.native_end { nm.err = 0 - 281; }
+    }
+    nm.icur = after_enums;
+    if nm.err < 0 { nm.err } else { mi_slot_names() }
+}
+
+fn native_name_step() -> Word {
+    if nm.err < 0 orelse wire.fin[0] < 0 orelse wire.fin[0] >= nm.ncount { 0 - 281 } else {
+        put_u32(native_off_name(), wire.nmap[nm.nbase + wire.fin[0]]);
+        put_u32(native_off_reserved(), 0);
+        native_stride()
+    }
+}
+
 fn mi_slot_names() -> Word {
     nm.sbase = nm.cnt;
     nm.scnt = mi_u16(nm.icur);
@@ -3174,7 +3231,7 @@ fn mi_slot_names() -> Word {
 // output, so a producer that walked it would be checked by nothing. The tag is
 // still read and still dispatched, so a composite tag arriving here is refused
 // rather than silently treated as a scalar.
-fn mi_tag_static_str() -> Word { 7 }
+fn mi_tag_static_str() -> Word { wire_seven() }
 
 fn mi_tag_is_composite(t: Word) -> Word {
     if t == 8 { 1 } else {
@@ -3600,10 +3657,9 @@ fn emit_pool_bytes_from_bout(at: Word, n: Word) -> Word {
     // the stage is too small, the other says the caller built its input wrongly.
     // The header checks moved to `-229` on the operator's ruling of 2026-08-19.
     //
-    // It still has no negative test, and that is a GAP rather than a justified
-    // omission: reaching it needs a module with more than 16 KB of distinct name
-    // bytes, which the corpus cannot build (the largest is `parse` at 7,680).
-    // **That gap is now honest**, because a test that did reach it could name it.
+// Native metadata now supplies a boundary control with exactly 16 KB of names
+// and one additional name. nm_append refuses the overflow before writing.
+// Constant-walk callers propagate that same refusal through fx_run.
     if n > bout_capacity() { 0 - 255 } else {
         for j in 0..n limit 16384 {
             wire.bytes[at + j] = wire.bout[j];
@@ -4141,7 +4197,11 @@ fn fx_run(at: Word) -> Word {
     // guard that only fired for one of them would leave the other exposed. The
     // first version keyed on `at == fx_scratch()` and did exactly that.
     fl.rc = if wire.len > fx_scratch() { 0 - 252 } else { fx_prep() };
-    if fl.rc < 0 { fl.rc } else { fl_walk(at, wire.warg3, wire.warg4) }
+    if fl.rc < 0 { fl.rc } else {
+        fl.rc = fl_walk(at, wire.warg3, wire.warg4);
+        // A late constant name can overflow after the prefix seeded correctly.
+        if nm.err < 0 { nm.err } else { fl.rc }
+    }
 }
 
 // The three figures the host must relay back before the directory can be laid.
@@ -4722,7 +4782,7 @@ fn dispatch_stream(cmd: Word) -> Word {
     if cmd == 198 { si_scan() } else {
     if cmd == 199 { si_accept() } else {
     if cmd == 200 { si_finish() } else {
-    0 - 97 }}}}}}}}}}}}}
+    dispatch_native(cmd) }}}}}}}}}}}}}
 }
 
 fn dispatch_driver2(cmd: Word) -> Word {
@@ -4815,7 +4875,7 @@ fn ds_name_begin() -> Word {
 // a wrong answer rather than a fault, which is the failure this whole route
 // exists to prevent.
 fn ds_name_step() -> Word {
-    if nm.sbase + wire.fin[0] >= nm.cnt { 0 - 243 } else {
+    if wire.fin[0] >= nm.scnt { 0 - 243 } else {
     if wire.fin[0] < 0 { 0 - 243 } else {
         put_u32(dslot_off_name(), wire.nmap[nm.sbase + wire.fin[0]]);
         put_u8(dslot_off_visibility(), wire.fin[1]);
@@ -4854,7 +4914,7 @@ fn ev_name_begin() -> Word {
 // exactly what this route exists to prevent.
 fn ev_name_step() -> Word {
     nm.vcur = if wire.fin[0] == 0 { nm.vcur } else { nm.vcur + 1 };
-    if nm.vcur >= nm.cnt { 0 - 249 } else {
+    if nm.vcur >= nm.nbase { 0 - 249 } else {
     if nm.vcur < 0 { 0 - 249 } else {
         nm.sink = put_u32(evar_off_name(), wire.nmap[nm.vcur]);
         nm.sink = put_u32(evar_off_reserved(), wire.fin[1]);
@@ -4893,7 +4953,7 @@ fn el_name_begin() -> Word {
 // restarted it would emit a structurally valid region whose every later range
 // points somewhere wrong.
 fn el_name_step() -> Word {
-    if nm.tcur >= nm.cnt { 0 - 257 } else {
+    if nm.tcur >= nm.nbase { 0 - 257 } else {
     if wire.fin[0] < 0 { 0 - 257 } else {
         nm.sink = put_u32(elay_off_type_name(), wire.nmap[nm.tcur]);
         nm.sink = put_u32(elay_off_variants_first(), nm.vfirst);
@@ -5121,6 +5181,7 @@ private data sigstream {
     found: Word,
     same: Word,
     wrote: Word,
+    native: Word,
 }
 
 fn si_reset() -> Word {
@@ -5131,6 +5192,7 @@ fn si_reset() -> Word {
 
 fn si_begin() -> Word {
     if sigstream.mode != 1 orelse wire.warg < 0 orelse wire.warg > 0xFFFFFFFF { 0 - 280 } else {
+        sigstream.native = 0;
         sigstream.first = sigstream.count;
         sigstream.params = wire.warg;
         sigstream.position = 0;
@@ -5192,7 +5254,7 @@ fn si_accept() -> Word {
         if sigstream.position == sigstream.params { sigstream.ret = sigstream.found; }
         else { sigstream.resume = sigstream.found; }
         sigstream.position = sigstream.position + 1;
-        sigstream.mode = 2;
+        sigstream.mode = if sigstream.native == 1 { 5 } else { 2 };
         if sigstream.position == sigstream.params + 2 { sigstream.mode = 4; }
         sigstream.wrote
     }}
@@ -5209,13 +5271,46 @@ fn si_finish() -> Word {
     }
 }
 
+fn si_native_begin() -> Word {
+    if sigstream.mode != 1 { 0 - 280 } else {
+        sigstream.native = 1;
+        sigstream.params = 0;
+        sigstream.position = 0;
+        sigstream.mode = 2;
+        0
+    }
+}
+
+fn si_native_finish() -> Word {
+    if sigstream.mode != 5 { 0 - 280 } else {
+        put_u32(natret_off_shape(), sigstream.ret);
+        put_u32(natret_off_reserved(), 0);
+        sigstream.mode = 1;
+        natret_stride()
+    }
+}
+
+fn dispatch_native(cmd: Word) -> Word {
+    if cmd == 201 { native_input() } else {
+    if cmd == 202 { native_name_step() } else {
+    if cmd == 203 { si_native_begin() } else {
+    if cmd == 204 { si_native_finish() } else { 0 - 97 }}}}
+}
+
 fn wire_one() -> Word { 1 }
 fn wire_two() -> Word { 2 }
 fn wire_three() -> Word { 3 }
 fn wire_six() -> Word { 6 }
 fn wire_twelve() -> Word { 12 }
 
-fn highest_command() -> Word { 200 }
+fn wire_five() -> Word { 5 }
+fn wire_seven() -> Word { 7 }
+fn wire_twenty() -> Word { 20 }
+fn wire_twenty_four() -> Word { 24 }
+fn wire_twenty_eight() -> Word { 28 }
+fn wire_thirty_two() -> Word { 32 }
+
+fn highest_command() -> Word { 204 }
 
 // --- THE ENTRY, AS A COROUTINE ----------------------------------------------
 //
@@ -5237,7 +5332,7 @@ fn highest_command() -> Word { 200 }
 // resume by the Stream parameter-slot update, so a resumed command sees the same
 // number it was entered with.
 fn dispatch(cmd: Word) -> Word {
-    if sigstream.mode >= 2 andalso (cmd < 195 orelse cmd > 200) { 0 - 280 } else {
+    if sigstream.mode >= 2 andalso (cmd < 195 orelse cmd > 204 orelse cmd == 201 orelse cmd == 202) { 0 - 280 } else {
     if framing.mode != 0 andalso (cmd < 188 orelse cmd > 192) { 0 - 260 } else {
     if cmd < 13 { dispatch_container(cmd) } else {
     if cmd < 26 { dispatch_schema(cmd) } else {

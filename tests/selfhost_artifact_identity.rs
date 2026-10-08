@@ -1,6 +1,6 @@
 //! Complete serialized artifacts from the production compiler, across the stage inventory.
-//! This checks scaffold fields as well as chunk bodies. Serialization still uses the Rust
-//! encoder on both sides; production Keleusma wire emission is a separate obligation.
+//! This checks scaffold fields as well as chunk bodies. The all-stage comparison uses
+//! Keleusma serialization for pipeline output and the Rust encoder for its reference.
 #![cfg(all(
     feature = "self-host",
     not(feature = "narrow-word-8"),

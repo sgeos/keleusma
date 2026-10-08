@@ -8357,6 +8357,29 @@ fn run_fx(vm: &mut Vm<'static, 'static>, cmd: i64, i: &FxInput) -> i64 {
     .0
 }
 
+#[test]
+fn constant_walk_propagates_an_interner_pool_refusal() {
+    // The prefix exactly fills the name pool. A constant contributes one more
+    // distinct name, so failure occurs during the walk rather than seeding.
+    let mut input = FxInput {
+        fin: vec![7, 0, 0, 64, 0, 0],
+        nin: Vec::new(),
+        bin: Vec::new(),
+        args: [65, 64, 1, 1, 0],
+    };
+    for i in 0..64 {
+        input.nin.extend_from_slice(&[256, 0]);
+        input
+            .bin
+            .extend_from_slice(format!("{i:04}{}", "a".repeat(252)).as_bytes());
+    }
+    input.nin.extend_from_slice(&[8, 0]);
+    input.bin.extend_from_slice(b"overflow");
+    for cmd in [CMD_FX_NAMES, CMD_FX_POOLLEN] {
+        assert_eq!(run_fx(&mut vm_for(WIRE_KEL), cmd, &input), -255);
+    }
+}
+
 /// Must-fire, about the CORPUS: unless some chunk's range starts somewhere other
 /// than zero, a driver that wrote a constant 0 for every `first` would pass.
 ///
@@ -12927,9 +12950,9 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     eprintln!("worst names {worst_names}, worst blob {worst_blob}");
     // Measured 2026-10-04. Earlier evidence omitted wire and verify_types.
     // Parse holds the name maximum. Wire holds the byte maximum and leaves
-    // only 919 bytes below the input cap. Neither capacity is raised here.
+    // only 660 bytes below the input cap. Neither capacity is raised here.
     assert_eq!(worst_names, 776, "the worst-case name count moved");
-    assert_eq!(worst_blob, 48233, "the worst-case blob size moved");
+    assert_eq!(worst_blob, 48492, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

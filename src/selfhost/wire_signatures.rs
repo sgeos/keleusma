@@ -48,10 +48,62 @@ fn append(
 pub fn wire_signature_sections_via_kel(
     signatures: &[ChunkSignature],
 ) -> Result<WireSignatureSections, SelfHostError> {
+    signature_and_native_sections(signatures, &[]).map(|(sections, _)| sections)
+}
+
+fn emit_shape(
+    vm: &mut Vm<'_, '_>,
+    shared: &mut [u8],
+    shape: &WireShape,
+    parameter: bool,
+    shapes: &mut Vec<u8>,
+) -> Result<(), SelfHostError> {
+    let fields = match shape {
+        WireShape::Top => [0, 0, 0],
+        WireShape::Scalar { kind } => [1, i64::from(*kind), 0],
+        WireShape::Flat { kind, size } => [2, i64::from(*kind), i64::from(*size)],
+    };
+    for (j, value) in fields.into_iter().enumerate() {
+        set_word(vm, shared, wire_slots::FIN + j, value)?;
+    }
+    let mut wrote = command(vm, shared, 197)?;
+    if parameter {
+        if wrote != 8 {
+            return Err(error("parameter was not appended"));
+        }
+    } else {
+        if wrote != 0 {
+            return Err(error("unexpected search start"));
+        }
+        for window in shapes.chunks(49152) {
+            for (j, &byte) in window.iter().enumerate() {
+                vm.set_shared(shared, wire_slots::BIN + j, Value::Byte(byte))
+                    .map_err(|_| error("record transport failed"))?;
+            }
+            set_word(vm, shared, wire_slots::WARG, window.len() as i64)?;
+            if command(vm, shared, 198)? != 0 {
+                return Err(error("unexpected search result"));
+            }
+        }
+        wrote = command(vm, shared, 199)?;
+        if !matches!(wrote, 0 | 8) {
+            return Err(error("unexpected intern result"));
+        }
+    }
+    append(vm, shared, wrote, shapes)
+}
+
+// Native return shapes continue the same interner after all chunk signatures.
+// Their vector length is independent of the native-name vector length.
+pub(super) fn signature_and_native_sections(
+    signatures: &[ChunkSignature],
+    native_returns: &[WireShape],
+) -> Result<(WireSignatureSections, Vec<u8>), SelfHostError> {
     let mut result = WireSignatureSections {
         shapes: Vec::new(),
         signatures: Vec::new(),
     };
+    let mut natives = Vec::new();
     with_compiled_wire(compile_src(&read_stage("kel/wire.kel")), |vm, shared| {
         if command(vm, shared, 195)? != 0 {
             return Err(error("unexpected reset result"));
@@ -64,52 +116,60 @@ pub fn wire_signature_sections_via_kel(
                 return Err(error("unexpected begin result"));
             }
             for (i, shape) in sig.params.iter().chain([&sig.ret, &sig.resume]).enumerate() {
-                let fields = match shape {
-                    WireShape::Top => [0, 0, 0],
-                    WireShape::Scalar { kind } => [1, i64::from(*kind), 0],
-                    WireShape::Flat { kind, size } => [2, i64::from(*kind), i64::from(*size)],
-                };
-                for (j, value) in fields.into_iter().enumerate() {
-                    set_word(vm, shared, wire_slots::FIN + j, value)?;
-                }
-                let mut wrote = command(vm, shared, 197)?;
-                if i < sig.params.len() {
-                    if wrote != 8 {
-                        return Err(error("parameter was not appended"));
-                    }
-                } else {
-                    if wrote != 0 {
-                        return Err(error("unexpected search start"));
-                    }
-                    for window in result.shapes.chunks(49152) {
-                        for (j, &byte) in window.iter().enumerate() {
-                            vm.set_shared(shared, wire_slots::BIN + j, Value::Byte(byte))
-                                .map_err(|_| error("record transport failed"))?;
-                        }
-                        set_word(vm, shared, wire_slots::WARG, window.len() as i64)?;
-                        if command(vm, shared, 198)? != 0 {
-                            return Err(error("unexpected search result"));
-                        }
-                    }
-                    wrote = command(vm, shared, 199)?;
-                    if !matches!(wrote, 0 | 8) {
-                        return Err(error("unexpected intern result"));
-                    }
-                }
-                append(vm, shared, wrote, &mut result.shapes)?;
+                emit_shape(vm, shared, shape, i < sig.params.len(), &mut result.shapes)?;
             }
             if command(vm, shared, 200)? != 16 {
                 return Err(error("unexpected signature result"));
             }
             append(vm, shared, 16, &mut result.signatures)?;
         }
-        Ok(result)
+        for shape in native_returns {
+            if command(vm, shared, 203)? != 0 {
+                return Err(error("unexpected native start"));
+            }
+            emit_shape(vm, shared, shape, false, &mut result.shapes)?;
+            if command(vm, shared, 204)? != 8 {
+                return Err(error("unexpected native record"));
+            }
+            append(vm, shared, 8, &mut natives)?;
+        }
+        Ok((result, natives))
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_return_protocol_requires_completed_interning() {
+        with_compiled_wire(compile_src(&read_stage("kel/wire.kel")), |vm, shared| {
+            assert!(command(vm, shared, 203).is_err());
+            assert!(command(vm, shared, 204).is_err());
+            command(vm, shared, 195)?;
+            command(vm, shared, 203)?;
+            assert!(command(vm, shared, 204).is_err());
+            let mut shapes = Vec::new();
+            emit_shape(vm, shared, &WireShape::Top, false, &mut shapes)?;
+            for cmd in [196, 197, 198, 199, 200, 201, 202, 203] {
+                assert!(command(vm, shared, cmd).is_err(), "command {cmd}");
+            }
+            assert_eq!(command(vm, shared, 204)?, 8);
+            let mut native = [1; 8];
+            read_window(vm, shared, &mut native)?;
+            assert_eq!(native, [0; 8]);
+            assert!(command(vm, shared, 204).is_err());
+            set_word(vm, shared, wire_slots::WARG, 0)?;
+            command(vm, shared, 196)?;
+            emit_shape(vm, shared, &WireShape::Top, false, &mut shapes)?;
+            assert!(command(vm, shared, 204).is_err());
+            emit_shape(vm, shared, &WireShape::Top, false, &mut shapes)?;
+            assert_eq!(command(vm, shared, 200)?, 16);
+            assert_eq!(shapes.len(), 8);
+            Ok(())
+        })
+        .unwrap();
+    }
 
     fn fields(vm: &mut Vm<'_, '_>, shared: &mut [u8], values: [i64; 3]) {
         for (i, value) in values.into_iter().enumerate() {
