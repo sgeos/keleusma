@@ -153,6 +153,7 @@ mod tests {
             emit_shape(vm, shared, &WireShape::Top, false, &mut shapes)?;
             for cmd in [
                 196, 197, 198, 199, 200, 201, 202, 203, 205, 206, 207, 208, 209, 210, 211, 212,
+                213, 214, 215,
             ] {
                 assert!(command(vm, shared, cmd).is_err(), "command {cmd}");
             }

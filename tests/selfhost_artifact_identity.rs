@@ -130,6 +130,20 @@ fn production_compiler_matches_every_complete_stage_artifact() {
         let actual_bytes = keleusma::selfhost::wire_module_artifact_via_kel(&actual)
             .unwrap_or_else(|e| panic!("{name}: pipeline wire emission failed: {e:?}"));
         assert!(!reference.chunks.is_empty(), "{name} has no chunks");
+        let sections = keleusma::selfhost::wire_opcode_sections_via_kel(&actual)
+            .unwrap_or_else(|e| panic!("{name}: opcode emission failed: {e:?}"));
+        let decoded = keleusma::selfhost::wire_decode_opcode_sections_via_kel(
+            &sections.opcodes,
+            &sections.operands,
+        )
+        .unwrap_or_else(|e| panic!("{name}: opcode decoding failed: {e:?}"));
+        let expected_ops: Vec<_> = reference
+            .chunks
+            .iter()
+            .flat_map(|chunk| chunk.ops.iter().cloned())
+            .collect();
+        assert!(!expected_ops.is_empty(), "{name} has no opcodes");
+        assert_eq!(decoded, expected_ops, "{name}: decoded opcode semantics");
         if actual_bytes != expected_bytes {
             let first = actual_bytes
                 .iter()

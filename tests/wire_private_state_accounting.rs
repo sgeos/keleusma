@@ -11,6 +11,7 @@ fn wire_stream_state_is_priced_as_private_value_slots() {
     for (stage, name, field, count, bytes) in [
         (wire, "framing", "mode", 4, 128),
         (wire, "opstream", "pool", 8, 256),
+        (wire, "opread", "pending", 9, 288),
         (wire, "sigstream", "count", 12, 384),
         (wire, "nm", "native_at", 37, 1184),
         (wire, "templates", "count", 7, 224),

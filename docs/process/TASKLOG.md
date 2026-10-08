@@ -6,6 +6,38 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-08 Semantic opcode decoding moves into Keleusma
+
+The new section decoder transports raw opcode and operand-pool bytes to the wire stage.
+Keleusma checks parity, selects inline and pooled forms, validates pool indices and tags,
+and produces semantic fields. Rust constructs typed instructions from those fields without
+reference decoding. All pool entries are checked, including unused records. Commands 214
+and 215 use a bounded request-and-response protocol. Framing and signature transactions
+refuse these commands while their own state is pending.
+
+The decoder preserves reference acceptance of ignored operand bytes and construction flags.
+The raw grid compares 153,600 records in each of two feature configurations. Default features
+accept 69,957 and refuse 83,643. Without default features, 67,317 accept and 86,283 refuse.
+Both agree exactly with the reference. Separate controls cover every canonical identifier,
+composite access and construction forms, single-bit corruption, invalid lengths, unused pool
+corruption, maximum pool-index widths and retry state. This is finite differential evidence.
+
+All thirteen stage artifacts remain byte-identical, and their opcode sections decode to the
+reference instruction sequences. Wire now has 564 chunks, 709 name events, 23,738 input bytes
+and a 159,188-byte artifact. Its constant forest uses 1,299 of 1,365 nodes, retaining 66 free.
+The new private decoder state adds nine value slots or 288 bytes. Sharing existing small
+literal helpers in four loop-free functions restores the node reserve without changing caps.
+Inference independence now covers 44,835 recorded expression types across thirteen stages.
+
+The first integration test imported a crate-private cfg(test) inventory. It was repaired by
+separating the canonical library census from integration enumeration. The first reserve check
+failed before literal sharing. An unqualified test logging macro also failed compilation and
+was corrected. Capacity and chunk pins were refreshed from executed measurements.
+The reverse prompt carries current verification and pilot receipts.
+
+Full semantic auxiliary decoding, admission-preserving capacity coverage, shipping serialization,
+remaining type-input obligations and final integration gates keep Order 1 open.
+
 ## 2026-10-08 Constant forests join the module-driven encoder
 
 The auxiliary producer now supplies bounded semantic preorder input for named and composite

@@ -2063,11 +2063,11 @@ fn oprec_parity_ok(at: Word) -> Word {
     if oprec_stored_parity(at)
         == oprec_parity(
             oprec_id(at),
-            oprec_operand_byte(at, 0),
-            oprec_operand_byte(at, 1),
-            oprec_operand_byte(at, 2),
+            oprec_operand_byte(at, wire_zero()),
+            oprec_operand_byte(at, wire_one()),
+            oprec_operand_byte(at, wire_two()),
         )
-    { 1 } else { 0 }
+    { wire_one() } else { wire_zero() }
 }
 
 // --- SLICE 6b: the operand pool ------------------------------------------
@@ -2112,7 +2112,7 @@ fn pool_stored_parity(at: Word) -> Word {
 }
 
 fn pool_parity_ok(at: Word) -> Word {
-    if pool_stored_parity(at) == pool_parity_of(at) { 1 } else { 0 }
+    if pool_stored_parity(at) == pool_parity_of(at) { wire_one() } else { wire_zero() }
 }
 
 // Stamp the parity byte over an entry whose tag and payload are already
@@ -2250,7 +2250,7 @@ fn fh_u8(off: Word) -> Word { wire.bytes[off] as Word }
 // what makes an older artifact reject cleanly rather than be misread: every
 // field position below is a version-2 fact.
 fn fh_magic_ok() -> Word {
-    if fh_u32(fh_off_magic()) == magic_word() { 1 } else { 0 }
+    if fh_u32(fh_off_magic()) == magic_word() { wire_one() } else { wire_zero() }
 }
 
 fn fh_version_ok() -> Word {
@@ -2311,20 +2311,20 @@ fn artifact_intact(total_len: Word) -> Word {
 // only have to keep the chains short; add a chain rather than lengthening one.
 
 fn dispatch_container(cmd: Word) -> Word {
-    if cmd == 0 { crc_range(0, wire.len) } else {
-    if cmd == 1 { emit_prologue(wire.nregions) } else {
-    if cmd == 2 { parse_prologue() } else {
-    if cmd == 3 { prologue_disagreed() } else {
-    if cmd == 4 { emit_directory(wire.nregions) } else {
-    if cmd == 5 { dir_find(wire.warg) } else {
-    if cmd == 6 { directory_disagreed() } else {
-    if cmd == 7 { dir_u32(wire.warg, 4) } else {
-    if cmd == 8 { dir_u32(wire.warg, 8) } else {
-    if cmd == 9 { dir_u16(wire.warg, 0) } else {
-    if cmd == 10 { emit_header() } else {
-    if cmd == 11 { region_base(wire.warg) } else {
-    if cmd == 12 { region_bytes(wire.warg) } else {
-    0 - 98 }}}}}}}}}}}}}
+    if cmd == wire_zero() { crc_range(wire_zero(), wire.len) } else {
+    if cmd == wire_one() { emit_prologue(wire.nregions) } else {
+    if cmd == wire_two() { parse_prologue() } else {
+    if cmd == wire_three() { prologue_disagreed() } else {
+    if cmd == wire_four() { emit_directory(wire.nregions) } else {
+    if cmd == wire_five() { dir_find(wire.warg) } else {
+    if cmd == wire_six() { directory_disagreed() } else {
+    if cmd == wire_seven() { dir_u32(wire.warg, wire_four()) } else {
+    if cmd == wire_eight() { dir_u32(wire.warg, wire_eight()) } else {
+    if cmd == 9 { dir_u16(wire.warg, wire_zero()) } else {
+    if cmd == wire_ten() { emit_header() } else {
+    if cmd == wire_eleven() { region_base(wire.warg) } else {
+    if cmd == wire_twelve() { region_bytes(wire.warg) } else {
+    wire_zero() - 98 }}}}}}}}}}}}}
 }
 
 fn dispatch_schema(cmd: Word) -> Word {
@@ -5609,12 +5609,137 @@ fn mf_emit(part: Word) -> Word {
     }
 }
 
+// Wire bytes are decoded into the same semantic fields used by the encoder.
+// Pool references are requested only after opcode parity and form validation.
+private data opread {
+    pending: Word,
+    id: Word,
+    form: Word,
+    a: Word,
+    b: Word,
+    c: Word,
+    index: Word,
+    tag: Word,
+    bad: Word,
+}
+
+fn or_error() -> Word { wire_zero() - 287 }
+
+fn or_fields() -> Word {
+    wire.fin[0] = opread.id;
+    wire.fin[1] = opread.form;
+    wire.fin[2] = opread.a;
+    wire.fin[3] = opread.b;
+    wire.fin[4] = opread.c;
+    opread.pending = wire_zero();
+    wire_zero()
+}
+
+fn or_scalar(kind: Word) -> Word {
+    if kind < wire_zero() orelse kind > wire_seven()
+        orelse (kind == wire_five() andalso wire.warg2 == wire_zero()) { or_error() } else { kind }
+}
+
+fn or_access() -> Word {
+    let high = oprec_operand_byte(wire_zero(), wire_two());
+    let low = oprec_operand_byte(wire_zero(), wire_zero());
+    if (opread.id != 39 andalso high == 255)
+        orelse (opread.id == 39 andalso high == wire_zero() andalso low == 255) {
+        opread.form = wire_two();
+        opread.a = if opread.id == 38 { get_u16(wire_one()) } else { if opread.id == 39 { wire_zero() } else { low } };
+    } else { if high >= 240 andalso high <= 243 {
+        opread.form = wire_three();
+        opread.c = high - 240;
+        opread.index = get_u16(wire_one());
+        opread.tag = pool_tag_u16_u16();
+    } else {
+        opread.form = wire_one();
+        if opread.id == 39 { opread.a = or_scalar(low); } else {
+            opread.a = get_u16(wire_one());
+            opread.b = or_scalar(high);
+        }
+        if opread.a < wire_zero() orelse opread.b < wire_zero() { opread.bad = wire_one(); }
+    }}
+    wire_zero()
+}
+
+fn or_begin() -> Word {
+    opread.pending = wire_zero();
+    if wire.warg < wire_zero() orelse wire.warg > absent_index()
+        orelse wire.warg2 < wire_zero() orelse wire.warg2 > wire_one()
+        orelse oprec_parity_ok(wire_zero()) == wire_zero() { or_error() } else {
+        opread.id = oprec_id(wire_zero());
+        let cls = ow_class(opread.id);
+        opread.form = wire_zero();
+        opread.a = wire_zero();
+        opread.b = wire_zero();
+        opread.c = wire_zero();
+        opread.tag = wire_zero();
+        opread.bad = wire_zero();
+        if cls < wire_zero() { opread.bad = wire_one(); }
+        if cls == wire_one() { opread.a = oprec_operand_byte(wire_zero(), wire_zero()); }
+        if cls == wire_two() { opread.a = get_u16(wire_one()); }
+        if cls == wire_three() { opread.a = oprec_operand_u24(wire_zero()); }
+        if cls == wire_four() {
+            opread.a = get_u16(wire_one());
+            opread.b = oprec_operand_byte(wire_zero(), wire_two());
+        }
+        if cls == wire_five() orelse cls == wire_six() {
+            opread.index = oprec_operand_u24(wire_zero());
+            opread.tag = if cls == wire_five() { pool_tag_u24_u24() } else { pool_tag_u16_u16_u16() };
+        }
+        if cls == wire_seven() { or_access(); }
+        if cls == wire_eight() {
+            let high = oprec_operand_byte(wire_zero(), wire_two());
+            opread.form = wire_four();
+            opread.a = high lsr 6;
+            opread.b = high band 63;
+            opread.c = get_u16(wire_one());
+            if opread.b == 63 {
+                opread.index = get_u16(wire_one());
+                opread.tag = pool_tag_u16_u16_u8();
+            }
+        }
+        if opread.bad != wire_zero() { or_error() } else {
+        if opread.tag == wire_zero() { or_fields() } else {
+        if opread.index >= wire.warg { or_error() } else {
+            wire.fin[0] = opread.index;
+            opread.pending = wire_one();
+            wire_one()
+        }}}
+    }
+}
+
+fn or_pool() -> Word {
+    if opread.pending != wire_one() orelse pool_parity_ok(wire_four()) == wire_zero()
+        orelse pool_tag(wire_four()) != opread.tag { or_error() } else {
+        if opread.tag == pool_tag_u24_u24() {
+            opread.a = pool_u24(wire_four(), wire_zero());
+            opread.b = pool_u24(wire_four(), wire_one());
+        } else { if opread.tag == pool_tag_u16_u16_u16() {
+            opread.a = pool_u16(wire_four(), wire_zero());
+            opread.b = pool_u16(wire_four(), wire_one());
+            opread.c = pool_u16(wire_four(), wire_two());
+        } else { if opread.tag == pool_tag_u16_u16() {
+            opread.a = pool_u16(wire_four(), wire_zero());
+            opread.b = if opread.id == 39 { wire_zero() } else { pool_u16(wire_four(), wire_one()) };
+        } else {
+            opread.form = if pool_u8_field(wire_four()) == wire_one() { wire_five() } else { wire_four() };
+            opread.b = pool_u16(wire_four(), wire_zero());
+            opread.c = pool_u16(wire_four(), wire_one());
+        }}}
+        or_fields()
+    }
+}
+
 fn dispatch_initialization(cmd: Word) -> Word {
     if cmd == 209 { init_begin() } else {
     if cmd == 210 { init_chunk() } else {
     if cmd == 211 { init_values() } else {
     if cmd == 212 { init_finish() } else {
-    if cmd == 213 { mf_emit(wire.warg) } else { wire_zero() - 97 }}}}}
+    if cmd == 213 { mf_emit(wire.warg) } else {
+    if cmd == 214 { or_begin() } else {
+    if cmd == 215 { or_pool() } else { wire_zero() - 97 }}}}}}}
 }
 
 fn dispatch_native(cmd: Word) -> Word {
@@ -5652,7 +5777,7 @@ fn wire_sixty_four() -> Word { 64 }
 fn wire_one_k() -> Word { 1024 }
 fn wire_forty_eight_k() -> Word { 49152 }
 
-fn highest_command() -> Word { 213 }
+fn highest_command() -> Word { 215 }
 
 // --- THE ENTRY, AS A COROUTINE ----------------------------------------------
 //

@@ -3,121 +3,123 @@
 ## Current state
 
 Continue the complete Order 1 goal and the System 1 shadow pilot on line v0.2.3.
-The branch is feat/v02-order1-next, starting this increment at f308f972. Preserve unrelated
+The branch is feat/v02-order1-next, starting this increment at 7543abf9. Preserve unrelated
 untracked .codex and nvim.log. V0.3.X remains separate. No push, merge or publication occurred.
 
-The legacy HANDOFF.md is invalid and stale, measured 34 commits behind the starting head.
+The legacy HANDOFF.md is invalid and stale, measured 35 commits behind the starting head.
 Ancestry passes and its unchanged-stage-source claim fails. Historical full validity and advisory
 checks were not all repeated. Read Appendix B before tracked writes. Public bytecode version
 remains 2, opcode count remains 66 and selected type-stage caps remain 640.
 
-## Constant forest integration
+## Semantic opcode decoding
 
-The auxiliary producer now handles every ConstValue form within the declared input bounds.
-The host iteratively traverses borrowed values in preorder and supplies semantic tags, payloads,
-child counts, names and enum metadata. It does not supply flattened child ranges or side-table
-indices. Keleusma computes subtree sizes, recovers roots, walks breadth-first and writes CONSTS,
-STRUCT_AUX and ENUM_AUX. Private initializer roots follow all chunk roots in the same forest.
-The initializer protocol now admits every known constant tag for its exact Int(0) elision decision.
+The public wire_decode_opcode_sections_via_kel helper accepts raw opcode and operand-pool
+sections. The wire stage checks parity and interprets representations, sentinels, tags and pool
+indices. Rust copies bounded byte windows and constructs typed Op values from semantic fields.
+Every pool entry receives a parity check, including unused entries. Malformed lengths, unavailable
+scalar kinds and invalid referenced entries are refused. There is no production reference decoder
+call in this helper. It does not decode complete modules or auxiliary records.
 
-The interner handles prefix names first, constant names during the breadth-first walk and template
-names afterward. Struct field names append fresh, enum names and strings deduplicate, and empty
-struct field runs preserve their position. Enum None and Some(0) discriminants remain distinct.
-Each region's independent run repeats the same deterministic traversal. Scalar-only modules retain
-their existing record stream, including large scalar initializer pools.
+Commands 214 and 215 begin one opcode and finish a requested pool entry. A new begin invalidates
+any previous pending request. A rejected pool response preserves the pending request for retry.
+Framing and signature transactions refuse both commands while their state is pending.
 
-Command 213 selects the three forest output regions. Separate node, queue and size arrays keep
-unread input outside the output window. The shared walkers use those arrays only in module mode,
-then restore their legacy storage mode. Old FIN-based commands retain their 170-node input guard.
-Traversal loops can now cover 1,365 nodes. Malformed arities, incomplete subtrees and invalid region
-selectors are refused. Earlier errors, including compact-input tag refusals, retain their codes.
+Reference acceptance includes noncanonical encodings. Array access ignores unused operand bytes,
+boxed tuple and enum access ignore the middle byte, and pooled construction treats only flag one
+as boxed. The raw differential grid varies high, middle and low bytes independently. It compares
+153,600 records per feature configuration. With default features, 69,957 accept and 83,643 refuse.
+Without default features, 67,317 accept and 86,283 refuse. Both agree with the reference.
+The comparison is finite, not exhaustive. Separate controls cover all 66 canonical identifiers,
+composite forms, single-bit corruption, unused pool corruption and maximum pool-index widths.
 
-## Bounds and memory
+The all-stage artifact comparison now also decodes the Keleusma-produced opcode sections and
+compares instruction sequences with the reference. All thirteen sources remain inventoried.
 
-The module forest has a 1,365-node bound, 1,024 name events, a 256-byte per-name bound, a
-16,384-byte name pool and a 49,152-byte input window. These are real limitations. General
-record-form support does not establish that every previously accepted source fits them. Resolve
-admission/capacity coverage before replacing shipping serialization.
+## Capacity and implementation findings
 
-The new arrays hold 8,190 node-field words and two arrays of 1,365 words, adding 87,360 shared
-bytes at the required 64-bit word width. They are appended after existing shared fields, so old
-host slot positions remain unchanged. The three output regions occupy disjoint ranges in the
-existing 65,536-byte window. The accounting test compiles the actual declarations.
+Wire now has 564 chunks, highest command 215 and a 159,188-byte artifact. Module input occupies
+23,738 bytes and 709 name events. The constant forest uses 1,299 of 1,365 nodes, retaining 66
+free against the standing minimum of 64. Private decoder state adds nine value slots or 288 bytes.
+No cap changed. Existing forest and name bounds still require source-admission coverage before
+shipping integration. The previous forest increment's implementation and receipts remain in the
+design journal and wire plan.
 
-Wire has 558 chunks, command 213 and a 156,228-byte artifact. Its input is 23,578 bytes with
-694 name events. Constant nodes use 1,300 of 1,365, retaining 65 free against the standing minimum
-of 64. The name block has 37 private slots or 1,184 bytes, and the flattener has 18 slots or
-576 bytes. Reusing small opcode-classifier literals restored node headroom. Replacing loop-helper
-literals did not reduce their pools because lowering still introduces them, so that experiment
-was reverted. Existing input bounds were not raised. Throughput is unbenchmarked.
+The initial integration inventory imported a crate-private cfg(test) item. The canonical inventory
+now lives in library tests, while integration enumerates wire identifiers. The first stage growth
+left only 47 nodes free. Existing small literal helpers in four loop-free functions restore the
+reserve. A test-only unqualified logging macro failed compilation and was corrected. The old
+capacity pin then failed at the measured new size and was refreshed along with three chunk pins.
+A final test formatting change names the complete operand in mismatch diagnostics.
 
 ## Verification
 
-Runs use an empty RUSTC_WRAPPER and CARGO_HUSKY_DONT_INSTALL_HOOKS set to one. Stage checks use
-KEL_SELFHOST_CACHE zero. No verification subject is edited during a live run.
+Runs use an empty RUSTC_WRAPPER and CARGO_HUSKY_DONT_INSTALL_HOOKS set to one. Stage runs use
+KEL_SELFHOST_CACHE zero. Verification subjects remain unchanged while their runs are live.
 
-- The initial named-tree control reached the old unsupported guard. Log
-  tmp/order1-forest-before.log. Session 63014 exited 101.
-- Five forest integration controls, node budget and private accounting pass in
-  tmp/order1-forest-targets2.log. Command cargo test --release --features self-host --test
-  selfhost_wire_constants --test module_input_node_budget --test wire_private_state_accounting
-  --no-fail-fast -- --nocapture. Session 83067 exited zero. The forest controls include
-  breadth-first naming, side tables, templates, initializer roots, exact capacity and decoded execution.
-- Nineteen wire protocol tests pass in tmp/order1-forest-protocol.log. Command cargo test
-  --release --features self-host --lib selfhost::wire_ -- --nocapture. Session 4020 exited zero.
-- Both accounting tests pass in tmp/order1-forest-accounting.log, including the new shared-array
-  measurement. Command cargo test --release --features self-host --test
-  wire_private_state_accounting. Session 86989 exited zero.
-- Eleven no-default checks pass in tmp/order1-forest-no-default.log. Command cargo test --release
-  --no-default-features --features self-host --test selfhost_wire_constants --test
-  selfhost_wire_private --test wire_private_state_accounting --no-fail-fast. Session 14441
-  exited zero. The shared-array accounting case was added afterward and checked separately.
-- Four inference tests pass in tmp/order1-forest-inference.log. Clearing 44,491 expression types
-  preserves all thirteen artifacts. Command cargo test --release --features self-host --lib
-  compiler::inference_independence -- --nocapture. The command exited zero.
-- The earlier artifact suite passed all thirteen complete pipeline comparisons in
-  tmp/order1-forest-artifacts.log. Session 47933 exited zero. The later full workspace repeats
-  those comparisons after the semantic arity guard and storage accounting changes.
-
-- The release workspace diagnostic completed with 3,089 passes, one failure and five ignored
-  across 170 suites. Command cargo test --release --workspace --no-fail-fast. Log
-  tmp/order1-forest-workspace.log. Session 78517 exited 101. The sole failure expected an empty
-  tuple constant to remain unsupported. All production and forest controls passed.
-- The stale refusal was replaced by a complete reference-byte comparison. All seven framing
-  tests pass in tmp/order1-forest-framing-repair.log. Command cargo test --release --workspace
-  --test selfhost_wire_framing. Session 14362 exited zero.
-- Workspace Clippy performed actual Checking and passed after the repair. Command cargo clippy
-  --workspace --tests -- -D warnings. Log tmp/order1-forest-clippy2.log. The command exited zero.
-  The earlier production lint also passed in tmp/order1-forest-final-clippy.log.
+- Twenty-two wire unit tests pass in tmp/order1-opdecode-expanded2.log. Command cargo test
+  --release --features self-host --lib selfhost::wire_ -- --nocapture. Session 72130 exited zero.
+- Eleven tests pass in tmp/order1-opdecode-artifacts.log, covering all thirteen complete artifacts
+  and decoded instruction sequences, decoder integration, node reserve and private accounting.
+  Command cargo test --release --features self-host --test selfhost_artifact_identity --test
+  selfhost_wire_decode --test module_input_node_budget --test wire_private_state_accounting
+  --no-fail-fast -- --nocapture. Session 45613 exited zero.
+- Four inference tests pass in tmp/order1-opdecode-inference.log. Clearing 44,835 expression
+  types preserves all thirteen artifacts. Command cargo test --release --features self-host
+  --lib compiler::inference_independence -- --nocapture. Session 75391 exited zero.
+- Three no-default decoder unit tests pass in tmp/order1-opdecode-no-default-unit.log.
+  Session 78012 exited zero. Four integration and accounting tests pass in
+  tmp/order1-opdecode-no-default-integration.log. Session 3338 exited zero. Both use
+  cargo test --release --no-default-features --features self-host with the named targets.
+- The refreshed wire, chunk-name, parser, self-compile and monomorphization suites pass 284 tests,
+  with two ignored. Command cargo test --release --features self-host --test selfhost_wire
+  --test selfhost_chunk_names --test selfhost_parse --test wire_self_compile_status
+  --test selfhost_monomorphize_identity --no-fail-fast. Log tmp/order1-opdecode-wire-gates.log.
+  Session 90360 exited zero.
+- Workspace Clippy performed actual Checking and passed after the final test formatting change.
+  Command cargo clippy --workspace --tests -- -D warnings. Log
+  tmp/order1-opdecode-final-clippy.log. Session 16614 exited zero.
 - Documentation passed with RUSTDOCFLAGS set to -D warnings. Command cargo doc --workspace
-  --no-deps. Log tmp/order1-forest-doc.log. Session 76072 exited zero.
+  --no-deps. Log tmp/order1-opdecode-doc.log. Session 72813 exited zero.
 - The no_std self-host check performed actual Checking and passed. Command cargo check
-  --no-default-features --features self-host. Log tmp/order1-forest-nostd.log. Session 70682
-  exited zero.
+  --no-default-features --features self-host. Log tmp/order1-opdecode-nostd.log.
+  Session 83511 exited zero.
 
-No production code changed after the full workspace run. Only the stale test expectation and
-its name, plus documentation, changed afterward. The whole workspace was not repeated after
-that test-only repair. The four documentation guard suites pass 24 tests in
-tmp/order1-forest-doc-guards.log. Command cargo test --release --test documentation_links --test
-claimed_counts --test comment_citations --test push_order_claims. Session 81878 exited zero.
-Formatting and diff checks pass. Documentation guards are repeated after this receipt update.
-No verification process remains running at final handoff.
+The final no-default library repeat passes all three decoder tests after the test formatting
+change. Log tmp/order1-opdecode-final-no-default.log. Command cargo test --release
+--no-default-features --features self-host --lib selfhost::wire_decode -- --nocapture.
+Session 81120 exited zero.
 
-The first implementation passed the nested-name control but failed the reserve. A compiled
-execution fixture then used tuple projections that lexed as a decimal literal; parenthesizing
-the intermediate projection repaired that fixture. The byte-size pin was refreshed from its
-measurement. Original diagnostics remain under tmp/order1-forest-. Separate feature matrices,
-minimum supported toolchains, Miri, cross-target builds, advisory scanning and final integration
-gates remain required after the missing work.
+The final release workspace passes 3,095 tests with zero failures and five ignored across
+171 suites. Command cargo test --release --workspace --no-fail-fast. Log
+tmp/order1-opdecode-workspace.log. Session 74316 exited zero. No production or test code changed
+after that run. Documentation updates follow it and receive separate documentation guards.
+The four documentation guards pass 24 tests after the handoff and plan updates. Command
+cargo test --release --test documentation_links --test claimed_counts --test comment_citations
+--test push_order_claims. Log tmp/order1-opdecode-doc-guards.log. Session 23446 exited zero.
+Formatting and diff checks pass. The documentation guards are repeated after this receipt update
+in tmp/order1-opdecode-final-doc-guards.log. No verification process remains running at handoff.
+The original diagnostics remain in tmp/order1-opdecode-first.log, -second.log, -expanded.log and
+-capacity.log. The earlier first-stage build check and repairs are recorded in the local logs.
+Separate feature matrices, minimum supported toolchains, Miri, cross-target builds, advisory
+scanning and final integration gates remain required after the missing work.
 
 ## Next work
 
-Finish semantic decoding and establish admission-preserving capacity coverage, then connect the
-Keleusma artifact path to shipping compilation. Shipping unsigned output still calls Module::to_bytes.
-Do not narrow accepted behavior to the current stage corpus or silently fall back to Rust as a
-claim of independent serialization. The current forest/name bounds above need explicit source
-admission checks. Legacy wire_windowed_via_kel still accepts reference positions and may skip
-unknown regions. Envelope integrity alone is not semantic decoding.
+Finish semantic auxiliary decoding and complete module reconstruction. Existing wire commands
+read schema fields, but the legacy windowed host path supplies reference region positions and
+may skip unsupported regions. It is not an independent semantic decoder. The reference
+wire_schema::decode_aux_body documents optional-table behavior that the differential controls
+must distinguish from malformed required tables. Constant reconstruction needs a bounded walk
+that interprets child ranges only for composites and enforces forward child ordering.
+Only two constant nodes remain above the standing reserve, so measure any further stage growth
+before integrating it. Existing schema readers occupy commands 13 through 83 and are candidates
+for reuse, but their resident-buffer assumptions require an audit for large artifacts.
+
+Establish admission-preserving capacity coverage, then connect the Keleusma artifact path to
+shipping compilation. Shipping unsigned output still calls Module::to_bytes. Do not narrow
+accepted behavior to the current stage corpus or silently fall back to Rust as a claim of
+independent serialization. Current forest, name and input bounds need explicit source-admission
+checks. Envelope integrity alone is not semantic decoding.
 
 Retain the completion plan's type obligations, including projection identity, nested headers,
 binders, occurrences, nominal layout, aliases, empty-array inference, mixed tuples, casts and
@@ -126,18 +128,19 @@ full integration evidence after the remaining changes. Full Order 1 remains acti
 
 ## Shadow pilot and mailbox
 
-Task v023-order1-forest retains the first unsupported-tree diagnostic locally. Later failures
-belong to this increment. External evaluation remains unavailable under the prior automatic
-approval rejection for the external destination and payload. Do not retry or bypass it. Self-labels
-are non-independent. Unknown usage and elapsed time remain null. The pilot implementation line
-owns the tracked pilot checkpoint. Claim excerpts must include their decisive assertions.
+Task v023-order1-opdecode retains the first inventory-import diagnostic and three bounded claims
+for raw-record comparisons, all-stage artifact and opcode identity, and node reserve. Blind exports
+preceded non-independent self-labels. Later failures were not separately sampled because they
+belong to this increment. Unknown usage and elapsed time remain null.
 
-Four local samples are complete, the original unsupported-tree diagnostic and three bounded
-claims for nested-name bytes, node capacity and decoded execution. Blind exports preceded
-non-independent self-labels. All four request hashes, exact payloads and source hashes were
-reviewed in tmp/order1-forest-pilot-export.json. The bounded increment outcome is recorded as
-resolved. Full Order 1 remains active. No independent accuracy claim is supported.
+External evaluation remains unavailable under the prior automatic approval rejection for the
+external destination and payload. Do not retry or bypass it. Local capture proceeds. No independent
+accuracy claim is supported. The pilot implementation line owns the tracked pilot checkpoint.
 
-The assigned inbox was empty at startup and before handoff. No messages were sent or received.
-The mailbox checkpoint was exported, reviewed and has no tracked difference.
-Publication requires explicit in-session confirmation.
+The assigned inbox was empty at startup and during work. No messages were sent or received.
+Before handoff the mailbox was checked again and its checkpoint exported and reviewed with no
+tracked difference. Four pilot request hashes, exact payloads and source hashes were reviewed
+in tmp/order1-opdecode-pilot-export.json. The bounded decoder increment outcome is resolved.
+Full Order 1 remains active. Initial export inspection assumed decoded fields and a direct state
+payload. Reading the stored JSON strings and state.input repaired that inspection, and every
+verification assertion then passed. Publication requires explicit in-session confirmation.
