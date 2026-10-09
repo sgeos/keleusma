@@ -129,6 +129,38 @@ fn production_compiler_matches_every_complete_stage_artifact() {
         let expected_bytes = reference.to_bytes().expect("reference artifact");
         let actual_bytes = keleusma::selfhost::wire_module_artifact_via_kel(&actual)
             .unwrap_or_else(|e| panic!("{name}: pipeline wire emission failed: {e:?}"));
+        let raw_auxiliary = keleusma::wire_format::parse_wire_sections(&actual_bytes)
+            .unwrap()
+            .aux_body;
+        let directory = keleusma::selfhost::wire_auxiliary_directory_via_kel(raw_auxiliary)
+            .unwrap_or_else(|e| panic!("{name}: auxiliary directory failed: {e:?}"));
+        let expected_directory = keleusma_wire::WireView::parse(raw_auxiliary).unwrap();
+        assert!(!directory.regions.is_empty(), "{name}: empty directory");
+        assert_eq!(
+            directory.regions.len(),
+            usize::from(expected_directory.region_count())
+        );
+        assert_eq!(directory.needs_scrub, expected_directory.needs_scrub());
+        for (i, region) in directory.regions.iter().enumerate() {
+            let expected = expected_directory.region_at(i as u16).unwrap();
+            assert_eq!(
+                (region.kind, region.flags, region.covers),
+                (expected.kind, expected.flags, expected.covers),
+                "{name}"
+            );
+            assert_eq!(
+                region.byte_offset,
+                expected.byte_offset().unwrap(),
+                "{name}"
+            );
+            let expected_bytes = expected_directory.region_bytes(&expected).unwrap();
+            assert_eq!(region.bytes, expected_bytes, "{name}");
+            assert_eq!(
+                region.bytes.as_ptr(),
+                expected_bytes.as_ptr(),
+                "{name}: payload copied"
+            );
+        }
         assert!(!reference.chunks.is_empty(), "{name} has no chunks");
         let sections = keleusma::selfhost::wire_opcode_sections_via_kel(&actual)
             .unwrap_or_else(|e| panic!("{name}: opcode emission failed: {e:?}"));

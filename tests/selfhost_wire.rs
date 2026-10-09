@@ -1212,7 +1212,11 @@ fn dropping_the_word_rounding_is_reported() {
 
 #[test]
 fn a_wrong_starting_cursor_is_reported() {
-    let mutant = mutate(WIRE_KEL, "    6 * (n + 1)", "    6 * (n + 2)");
+    let mutant = mutate(
+        WIRE_KEL,
+        "    wire_six() * (n + wire_one())",
+        "    wire_six() * (n + wire_two())",
+    );
     let mut vm = vm_for(&mutant);
     let rs: Vec<RegionSpec> = vec![(1, 0, 8, 0), (2, 0, 8, 0)];
     let want = reference_artifact(&rs);
@@ -12956,9 +12960,9 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     eprintln!("worst names {worst_names}, worst blob {worst_blob}");
     // Measured 2026-10-04. Earlier evidence omitted wire and verify_types.
     // Parse holds the name maximum. Wire holds the byte maximum and leaves
-    // 25,414 bytes below the input cap. Neither capacity is raised here.
+    // 25,359 bytes below the input cap. Neither capacity is raised here.
     assert_eq!(worst_names, 776, "the worst-case name count moved");
-    assert_eq!(worst_blob, 23738, "the worst-case blob size moved");
+    assert_eq!(worst_blob, 23793, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

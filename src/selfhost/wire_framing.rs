@@ -48,7 +48,11 @@ pub(super) fn set_word(
         .map_err(|e| error(format!("word transport: {e:?}")))
 }
 
-fn get_word(vm: &Vm<'_, '_>, shared: &[u8], slot: usize) -> Result<usize, SelfHostError> {
+pub(super) fn get_word(
+    vm: &Vm<'_, '_>,
+    shared: &[u8],
+    slot: usize,
+) -> Result<usize, SelfHostError> {
     match vm
         .get_shared(shared, slot)
         .map_err(|e| error(format!("word transport: {e:?}")))?
@@ -359,7 +363,7 @@ mod tests {
             assert_eq!(enter_wire(vm, shared, 0)?, -260);
             assert_eq!(enter_wire(vm, shared, 193)?, -260);
             assert_eq!(enter_wire(vm, shared, 194)?, -260);
-            for cmd in 195..=215 {
+            for cmd in 195..=217 {
                 assert_eq!(enter_wire(vm, shared, cmd)?, -260);
             }
             assert_eq!(enter_wire(vm, shared, 189)?, 64);

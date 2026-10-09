@@ -6,6 +6,49 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-08 Auxiliary directory decoding stops borrowing reference positions
+
+The new wire_auxiliary_directory_via_kel helper supplies raw container headers to Keleusma.
+The stage votes the prologue, validates its checksum and format, derives directory length,
+and emits one decoded region per resume. It checks region bounds and duplicate kinds before
+advancing. Header disagreement remains an explicit repair signal. It is not a payload-integrity
+verdict. Rust retains checked slices into the original artifact and allocates at most 1,024
+region descriptors. Payload bytes are not copied into the stage.
+
+The format ceiling needs 49,200 header bytes, fitting the existing 65,536-byte window. The
+maximum-region control reaches all 1,024 entries. Separate controls retain borrowed payloads
+above 200,000 bytes, unaligned buffers and parity-plane metadata. No payload-size cap was added.
+Reference acceptance of overlapping spans, unknown kinds and flags, and reserved fields is
+preserved. These properties were read from the reference and then compared by execution.
+The mutation corpus accepts 1,182 cases and refuses 181 in agreement with the reference.
+Every single-bit header mutation is outvoted, while invalid voted prologues are refused.
+
+Commands 216 and 217 begin and advance directory decoding. Active decoding excludes other
+commands, a new begin resets the cursor, and a failed begin invalidates the old transaction.
+A rejected entry can be retried without advancing. Framing and signature transactions refuse
+both new commands. Four private state slots add 128 bytes. The existing region-kind array
+holds the already accepted kinds for the bounded duplicate scan.
+
+The initial fixture used a nonexistent builder method. The stage then attempted to assign a
+local binding, which the language refuses. Moving that flag into private state repaired it.
+The first capacity measurement left only 50 nodes free. Literal sharing initially changed a
+loop bound that the verifier requires in canonical form. Those loop functions were restored.
+Five functions without loops now share existing literals, leaving 71 nodes free. An existing
+mutation test needed its anchor changed to the helper-based header calculation. Its detector
+still observes the deliberately wrong starting cursor. A redundant host conversion was also
+removed after Clippy identified it.
+
+Wire has 566 chunks, command 217, 715 name events, 23,793 input bytes and a 160,524-byte artifact.
+Its constant forest uses 1,294 of 1,365 nodes. Inference independence covers 44,978 expression
+types across thirteen stages. Complete artifact comparison now also compares each independently
+decoded directory and checks payload pointer identity. Current receipts are in the reverse prompt.
+
+Schema-record interpretation, constant reconstruction and complete module decoding remain open.
+The new directory removes reference positions from this part of the read path. It does not close
+the complete decoder, source-admission capacity coverage, shipping integration or type obligations.
+Full Order 1 remains active. The local shadow pilot retains the first diagnostic and bounded
+completion claims. External evaluation remains unavailable under the prior approval rejection.
+
 ## 2026-10-08 Semantic opcode decoding moves into Keleusma
 
 The new section decoder transports raw opcode and operand-pool bytes to the wire stage.

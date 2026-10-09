@@ -159,7 +159,7 @@ fn materialize([id, form, a, b, c]: [i64; 5]) -> Result<Op, SelfHostError> {
     })
 }
 
-fn transport(
+pub(super) fn transport(
     vm: &mut Vm<'_, '_>,
     shared: &mut [u8],
     offset: usize,

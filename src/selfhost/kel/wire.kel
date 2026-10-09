@@ -428,12 +428,12 @@ fn prologue_disagreed() -> Word {
 //   -4  bad prologue checksum
 //   -5  region count above the format ceiling of 1024
 fn parse_prologue() -> Word {
-    if voted_u32(0) != 0x4B415558 { 0 - 1 } else {
-    if voted_u16(4) != 0xFEFF { 0 - 2 } else {
-    if voted_u16(6) != 2 { 0 - 3 } else {
-    if crc_voted(12) != voted_u32(12) { 0 - 4 } else {
-    if voted_u16(8) > 1024 { 0 - 5 } else {
-    voted_u16(8) } } } } }
+    if voted_u32(wire_zero()) != 0x4B415558 { wire_zero() - wire_one() } else {
+    if voted_u16(wire_four()) != 0xFEFF { wire_zero() - wire_two() } else {
+    if voted_u16(wire_six()) != wire_two() { wire_zero() - wire_three() } else {
+    if crc_voted(wire_twelve()) != voted_u32(wire_twelve()) { wire_zero() - wire_four() } else {
+    if voted_u16(wire_eight()) > 1024 { wire_zero() - wire_five() } else {
+    voted_u16(wire_eight()) } } } } }
 }
 
 
@@ -456,7 +456,7 @@ fn parse_prologue() -> Word {
 // plus the three 16-byte prologues. `48 + 48n` is always a multiple of 8, so
 // this is exact and needs no rounding, unlike a payload length.
 fn header_words(n: Word) -> Word {
-    6 * (n + 1)
+    wire_six() * (n + wire_one())
 }
 
 // Bytes in one directory copy.
@@ -495,21 +495,21 @@ fn emit_directory(n: Word) -> Word {
 // One voted byte of directory copy-space, at entry `i`, field offset `off`.
 fn dir_voted_byte(i: Word, off: Word) -> Word {
     maj3(
-        wire.bytes[48 + (i lsl 4) + off] as Word,
-        wire.bytes[48 + dir_span() + (i lsl 4) + off] as Word,
-        wire.bytes[48 + (dir_span() lsl 1) + (i lsl 4) + off] as Word,
+        wire.bytes[wire_forty_eight() + (i lsl wire_four()) + off] as Word,
+        wire.bytes[wire_forty_eight() + dir_span() + (i lsl wire_four()) + off] as Word,
+        wire.bytes[wire_forty_eight() + (dir_span() lsl wire_one()) + (i lsl wire_four()) + off] as Word,
     )
 }
 
 fn dir_u16(i: Word, off: Word) -> Word {
-    dir_voted_byte(i, off) + (dir_voted_byte(i, off + 1) lsl 8)
+    dir_voted_byte(i, off) + (dir_voted_byte(i, off + wire_one()) lsl wire_eight())
 }
 
 fn dir_u32(i: Word, off: Word) -> Word {
     dir_voted_byte(i, off)
-        + (dir_voted_byte(i, off + 1) lsl 8)
-        + (dir_voted_byte(i, off + 2) lsl 16)
-        + (dir_voted_byte(i, off + 3) lsl 24)
+        + (dir_voted_byte(i, off + wire_one()) lsl wire_eight())
+        + (dir_voted_byte(i, off + wire_two()) lsl wire_sixteen())
+        + (dir_voted_byte(i, off + wire_three()) lsl 24)
 }
 
 // 1 when any directory copy disagrees with the vote. Same scrub trigger as the
@@ -5732,6 +5732,63 @@ fn or_pool() -> Word {
     }
 }
 
+// The complete directory fits the byte window even at the format ceiling.
+// Payloads remain in host storage and are addressed by the decoded byte spans.
+private data containerread {
+    active: Word,
+    total: Word,
+    at: Word,
+    duplicate: Word,
+}
+
+fn cr_begin() -> Word {
+    containerread.active = wire_zero();
+    if wire.warg < wire_forty_eight() { wire_zero() - 288 } else {
+        let count = parse_prologue();
+        if count < wire_zero() { count } else {
+            let header = header_words(count) lsl 3;
+            if header > wire.warg { wire_zero() - 288 } else {
+                containerread.total = wire.warg;
+                containerread.at = wire_zero();
+                wire.nregions = count;
+                wire.fin[0] = count;
+                containerread.active = wire_one();
+                opread.pending = wire_zero();
+                header
+            }
+        }
+    }
+}
+
+fn cr_step() -> Word {
+    if containerread.active != wire_one() { wire_zero() - 288 } else {
+    if containerread.at == wire.nregions {
+        wire.fin[0] = prologue_disagreed() bor directory_disagreed();
+        containerread.active = wire_zero();
+        wire_zero()
+    } else {
+        let at = containerread.at;
+        let kind = dir_u16(at, wire_zero());
+        let start = region_base(at);
+        let bytes = region_bytes(at);
+        containerread.duplicate = wire_zero();
+        for j in 0..at limit 1024 {
+            if wire.rkind[j] == kind { containerread.duplicate = wire_one(); }
+        }
+        if start > containerread.total orelse bytes > containerread.total - start
+            orelse containerread.duplicate != wire_zero() { wire_zero() - 289 } else {
+            wire.fin[0] = kind;
+            wire.fin[1] = dir_u16(at, wire_two());
+            wire.fin[2] = dir_u16(at, wire_twelve());
+            wire.fin[3] = start;
+            wire.fin[4] = bytes;
+            wire.rkind[at] = kind;
+            containerread.at = at + wire_one();
+            wire_one()
+        }
+    }}
+}
+
 fn dispatch_initialization(cmd: Word) -> Word {
     if cmd == 209 { init_begin() } else {
     if cmd == 210 { init_chunk() } else {
@@ -5739,7 +5796,9 @@ fn dispatch_initialization(cmd: Word) -> Word {
     if cmd == 212 { init_finish() } else {
     if cmd == 213 { mf_emit(wire.warg) } else {
     if cmd == 214 { or_begin() } else {
-    if cmd == 215 { or_pool() } else { wire_zero() - 97 }}}}}}}
+    if cmd == 215 { or_pool() } else {
+    if cmd == 216 { cr_begin() } else {
+    if cmd == 217 { cr_step() } else { wire_zero() - 97 }}}}}}}}}
 }
 
 fn dispatch_native(cmd: Word) -> Word {
@@ -5777,7 +5836,7 @@ fn wire_sixty_four() -> Word { 64 }
 fn wire_one_k() -> Word { 1024 }
 fn wire_forty_eight_k() -> Word { 49152 }
 
-fn highest_command() -> Word { 215 }
+fn highest_command() -> Word { 217 }
 
 // --- THE ENTRY, AS A COROUTINE ----------------------------------------------
 //
@@ -5799,6 +5858,7 @@ fn highest_command() -> Word { 215 }
 // resume by the Stream parameter-slot update, so a resumed command sees the same
 // number it was entered with.
 fn dispatch(cmd: Word) -> Word {
+    if containerread.active == wire_one() andalso (cmd < 216 orelse cmd > 217) { wire_zero() - 288 } else {
     if sigstream.mode >= 2 andalso (cmd < 195 orelse cmd > 204 orelse cmd == 201 orelse cmd == 202) { 0 - 280 } else {
     if framing.mode != 0 andalso (cmd < 188 orelse cmd > 192) { 0 - 260 } else {
     if cmd < 13 { dispatch_container(cmd) } else {
@@ -5816,6 +5876,8 @@ fn dispatch(cmd: Word) -> Word {
     if cmd < 152 { dispatch_driver(cmd) } else { dispatch_driver2(cmd) } } } } } } } } } } } } }
 }
 }
+}
+
 }
 
 loop main(cmd: Word) -> Word {

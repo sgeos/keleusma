@@ -355,8 +355,11 @@ sequences. General constant forests and private initializer trees encode within 
 bounds. Full auxiliary decoding, admission-preserving capacity coverage, remaining type-input
 obligations, shipping serialization and final integration gates keep Order 1 open.
 The shipping serializer remains Rust.
+Auxiliary directory voting, bounds checks and duplicate detection now run in Keleusma, without
+reference region positions or payload copies. Schema-record interpretation and complete module
+reconstruction remain open. The all-stage comparison includes independently decoded directories.
 
-Wire has 564 chunks, 709 name events, 23,738 of 49,152 input bytes and 1,299 of 1,365 constant
+Wire has 566 chunks, 715 name events, 23,793 of 49,152 input bytes and 1,294 of 1,365 constant
 nodes. The separate debug stage has 20 chunks. Public bytecode version, opcode count and the
 approved type-stage caps remain unchanged.
 
@@ -365,7 +368,7 @@ The twenty-three-source comparison includes fourteen negatives and nine valid co
 seven artifact and execution controls. Parser capacity and unsupported annotation syntax remain
 distinct from source rejection. Remaining input and projection coverage, production wire
 emission and final gates keep Order 1 open. Standing inference-independence evidence now
-covers all thirteen stages, clearing 44,835 recorded types without changing complete artifacts.
+covers all thirteen stages, clearing 44,978 recorded types without changing complete artifacts.
 The intervention and admission controls also pass.
 
 Struct field and composite array projections now preserve source type identity through calls,

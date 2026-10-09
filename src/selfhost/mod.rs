@@ -47,6 +47,10 @@ mod wire_signatures;
 pub use wire_signatures::{WireSignatureSections, wire_signature_sections_via_kel};
 mod wire_decode;
 pub use wire_decode::wire_decode_opcode_sections_via_kel;
+mod wire_directory;
+pub use wire_directory::{
+    WireAuxiliaryDirectory, WireAuxiliaryRegion, wire_auxiliary_directory_via_kel,
+};
 mod wire_opcodes;
 pub use wire_opcodes::{
     WireOpcodeSections, wire_module_artifact_via_kel, wire_opcode_sections_via_kel,
