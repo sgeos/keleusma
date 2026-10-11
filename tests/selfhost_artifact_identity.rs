@@ -118,6 +118,34 @@ fn loop_scope_and_match_admission_preserve_artifacts() {
     }
 }
 
+fn reference_record_bytes(record: &keleusma::selfhost::WireSchemaRecord) -> Vec<u8> {
+    use keleusma::selfhost::WireSchemaRecord;
+    fn encode<T: keleusma_wire::WireRecord>(value: &T) -> Vec<u8> {
+        let mut out = vec![0; T::STRIDE];
+        value.write_record(&mut out).unwrap();
+        out
+    }
+    match record {
+        WireSchemaRecord::NameRef(value) => encode(value),
+        WireSchemaRecord::ConstRecord(value) => encode(value),
+        WireSchemaRecord::StructAux(value) => encode(value),
+        WireSchemaRecord::EnumAux(value) => encode(value),
+        WireSchemaRecord::ShapeRecord(value) => encode(value),
+        WireSchemaRecord::SignatureRecord(value) => encode(value),
+        WireSchemaRecord::StructTemplateRecord(value) => encode(value),
+        WireSchemaRecord::EnumVariantRecord(value) => encode(value),
+        WireSchemaRecord::EnumLayoutRecord(value) => encode(value),
+        WireSchemaRecord::DataSlotRecord(value) => encode(value),
+        WireSchemaRecord::SharedSlotRecord(value) => encode(value),
+        WireSchemaRecord::PrivateCompositeRecord(value) => encode(value),
+        WireSchemaRecord::DataInitRecord(value) => encode(value),
+        WireSchemaRecord::ChunkRecord(value) => encode(value),
+        WireSchemaRecord::NativeRecord(value) => encode(value),
+        WireSchemaRecord::HeaderRecord(value) => encode(value),
+        WireSchemaRecord::NativeReturnRecord(value) => encode(value),
+    }
+}
+
 #[test]
 fn production_compiler_matches_every_complete_stage_artifact() {
     let mut differences = Vec::new();
@@ -160,6 +188,33 @@ fn production_compiler_matches_every_complete_stage_artifact() {
                 expected_bytes.as_ptr(),
                 "{name}: payload copied"
             );
+            use keleusma::wire_schema::kind;
+            if !matches!(
+                region.kind,
+                kind::STRING_POOL | kind::PARAM_TYPES | kind::DEBUG_POOL
+            ) {
+                let records =
+                    keleusma::selfhost::wire_schema_records_via_kel(region.kind, region.bytes)
+                        .unwrap_or_else(|e| {
+                            panic!("{name}: record kind {} failed: {e:?}", region.kind)
+                        });
+                assert_eq!(
+                    records.is_empty(),
+                    region.bytes.is_empty(),
+                    "{name}: kind {}",
+                    region.kind
+                );
+                let mut reconstructed = Vec::new();
+                for record in &records {
+                    assert_eq!(record.kind(), region.kind);
+                    reconstructed.extend_from_slice(&reference_record_bytes(record));
+                }
+                assert_eq!(
+                    reconstructed, region.bytes,
+                    "{name}: record kind {}",
+                    region.kind
+                );
+            }
         }
         assert!(!reference.chunks.is_empty(), "{name} has no chunks");
         let sections = keleusma::selfhost::wire_opcode_sections_via_kel(&actual)

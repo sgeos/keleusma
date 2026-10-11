@@ -3052,7 +3052,8 @@ fn wire_kel_parses_correctly_now_that_the_bare_loop_form_is_supported() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
     let parsed = keleusma::selfhost::try_parse_functions(WIRE)
         .expect("wire.kel must parse now that the bare `for` form is lowered");
-    // 566 after the auxiliary-directory begin and step functions.
+    // 561 after nine reader functions and inlining fourteen numeric helpers.
+    // Previously 566 after the auxiliary-directory begin and step functions.
     // Previously 564 after six semantic opcode decoder functions.
     // Previously 558 after a forest-input mode, four storage accessors and two forest handlers.
     // Previously 551 after six initializer protocol functions.
@@ -3070,7 +3071,7 @@ fn wire_kel_parses_correctly_now_that_the_bare_loop_form_is_supported() {
     // both moved together, which is what a figure with two independent derivations should do.
     assert_eq!(
         parsed.functions.len(),
-        566,
+        561,
         "`wire.kel` parsed to {} chunks. The count is pinned because it is the corpus worst \
          case and the thing the chunk cap is sized against: PARSE_CHUNK_CAP is {}, so a \
          stage growing toward it is visible here rather than at the wall.",

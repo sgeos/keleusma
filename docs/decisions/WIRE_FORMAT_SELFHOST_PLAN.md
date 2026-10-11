@@ -2,14 +2,68 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-## Current capacity evidence, 2026-10-08
+## Current capacity evidence, 2026-10-11
 
 The driver-capacity test now inventories all thirteen stage sources. Earlier versions of that
 test used ten sources and omitted wire and verify_types. The current maxima belong to
-different stages. Parse uses 776 of 1,024 names. Wire uses 23,793 of 49,152 input bytes.
-The remaining wire input margin is 25,359 bytes. No input cap changed. These measurements
+different stages. Parse uses 776 of 1,024 names. Wire uses 23,713 of 49,152 input bytes.
+The remaining wire input margin is 25,439 bytes. No input cap changed. These measurements
 establish input residency for the corpus, not complete production serialization.
 Both encoding and decoding remain within the original wire-format scope.
+
+## 2026-10-11 Fixed schema records decode through Keleusma
+
+The new wire_schema_records_via_kel helper decodes all seventeen fixed schema record kinds.
+Keleusma selects the stride, checks table divisibility and reads fields from one transported
+record at a time. Rust constructs a typed WireSchemaRecord variant with checked field narrowing.
+No production reference record reader, byte offset or endian operation appears in that adapter.
+The unsigned 64-bit constant payload preserves every bit of its signed transport word.
+
+Record fields remain distinct from validated schema values. Unknown tags and reserved fields
+are preserved as the reference record codec preserves them. Cross-table references, tag meaning,
+constant child ranges, optional-table policy and complete module reconstruction remain open.
+Byte pools and unknown kinds are refused by this fixed-record interface. The directory reader
+continues to retain borrowed payloads for those pools.
+
+Commands 218 and 219 begin and advance a record stream. The stage owns the record count and
+cursor. Bad record lengths do not advance it, completion clears active state, and a failed new
+begin invalidates the previous stream. Other commands are excluded during an active stream.
+Existing framing, signature and directory transactions refuse the new commands. Five private
+state fields add 160 bytes. No shared array or capacity increased.
+
+The kind control enumerates all 65,536 identifiers against the explicit seventeen-kind contract.
+The field corpus compares 4,386 records with the derived reference reader, including full-width
+signed and unsigned patterns and reserved fields. A separate 9,000-record table crosses the
+byte window, and aligned and unaligned inputs produce identical typed fields. All thirteen
+stage artifacts now also reconstruct every fixed-record region from decoded fields through
+reference writers and compare complete region bytes. Byte pools are explicitly excluded.
+
+The first node-budget assertion found only 54 free nodes. Sharing literals in the existing
+get_u16, get_u32 and get_i64 functions restored 75 free without changing loop bounds or caps.
+The wire stage now has 561 chunks, command 219, 715 name events, 23,713 input bytes and a
+162,836-byte artifact. Its constant forest uses 1,290 of 1,365 nodes. Inference independence
+covers 45,329 recorded expression types across thirteen stages.
+
+A full workspace run then found a second capacity constraint. The legacy type harness needed
+652 occurrence facts and 649 binding facts, exceeding the approved 640-row caps. The production
+scoped path and all-stage artifact comparisons had passed, so those checks did not cover this
+legacy path. Fourteen lightly reused numeric helpers were inlined. Sharing zero and one literals
+in sixteen existing count and presence functions retained the constant-node reserve. Every input
+fact remains checked and no cap changed. Occurrences now use 638 of 640 rows. Future growth must
+be priced against both constraints.
+
+Work began on 2026-10-08 and resumed on 2026-10-11. Several verification handles were no longer
+available after resumption. Their complete logs were retained, and the repaired full workspace run
+passed 3,106 tests with five ignored across 173 suites. Clippy, documentation and no-default
+checks pass. The reverse prompt records terminal receipts and their coverage limits.
+The shadow pilot retains the first node-reserve diagnostic and three bounded claims. The first
+all-stage evidence packet exceeded the text-field limit and was shortened before successful
+capture, retaining the stage inventory, decisive record assertions and executed stage counts.
+External evaluation remains unavailable under the earlier automatic approval rejection.
+
+Full Order 1 remains active. The next work is tag and cross-table validation in Keleusma,
+constant-tree reconstruction and complete module decoding, followed by source-admission capacity
+coverage, shipping integration, remaining type obligations and final integration gates.
 
 ## 2026-10-08 Auxiliary directory decoding stops borrowing reference positions
 

@@ -247,7 +247,7 @@ mod tests {
             set_word(vm, shared, wire_slots::WARG, clean.len() as i64)?;
             assert_eq!(command(vm, shared, 216)?, 144);
             transport(vm, shared, 0, &clean[..144])?;
-            for cmd in [0, 2, 188, 195, 203, 209, 213, 214, 215] {
+            for cmd in [0, 2, 188, 195, 203, 209, 213, 214, 215, 218, 219] {
                 assert!(command(vm, shared, cmd).is_err(), "command {cmd}");
             }
             assert_eq!(command(vm, shared, 217)?, 1);

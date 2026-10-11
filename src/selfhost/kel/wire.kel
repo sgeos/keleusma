@@ -319,14 +319,14 @@ fn put_u32(at: Word, v: Word) -> Word {
 // `Byte as Word` zero-extends, so no masking is needed on the way in either.
 
 fn get_u16(at: Word) -> Word {
-    (wire.bytes[at] as Word) + ((wire.bytes[at + 1] as Word) lsl 8)
+    (wire.bytes[at] as Word) + ((wire.bytes[at + wire_one()] as Word) lsl wire_eight())
 }
 
 fn get_u32(at: Word) -> Word {
     (wire.bytes[at] as Word)
-        + ((wire.bytes[at + 1] as Word) lsl 8)
-        + ((wire.bytes[at + 2] as Word) lsl 16)
-        + ((wire.bytes[at + 3] as Word) lsl 24)
+        + ((wire.bytes[at + wire_one()] as Word) lsl wire_eight())
+        + ((wire.bytes[at + wire_two()] as Word) lsl wire_sixteen())
+        + ((wire.bytes[at + wire_three()] as Word) lsl 24)
 }
 
 // --- Emission ------------------------------------------------------------
@@ -495,9 +495,9 @@ fn emit_directory(n: Word) -> Word {
 // One voted byte of directory copy-space, at entry `i`, field offset `off`.
 fn dir_voted_byte(i: Word, off: Word) -> Word {
     maj3(
-        wire.bytes[wire_forty_eight() + (i lsl wire_four()) + off] as Word,
-        wire.bytes[wire_forty_eight() + dir_span() + (i lsl wire_four()) + off] as Word,
-        wire.bytes[wire_forty_eight() + (dir_span() lsl wire_one()) + (i lsl wire_four()) + off] as Word,
+        wire.bytes[48 + (i lsl wire_four()) + off] as Word,
+        wire.bytes[48 + dir_span() + (i lsl wire_four()) + off] as Word,
+        wire.bytes[48 + (dir_span() lsl wire_one()) + (i lsl wire_four()) + off] as Word,
     )
 }
 
@@ -719,7 +719,7 @@ fn shape_off_size() -> Word { wire_four() }
 // `dir_find`, and the accessors below propagate that rather than reading from a
 // negative base.
 fn name_count() -> Word {
-    if dir_find(kind_names()) == 0 - 1 { 0 } else {
+    if dir_find(kind_names()) == wire_zero() - wire_one() { wire_zero() } else {
         rec_count(dir_find(kind_names()), nameref_stride())
     }
 }
@@ -739,7 +739,7 @@ fn name_byte(i: Word, j: Word) -> Word {
 }
 
 fn shape_count() -> Word {
-    if dir_find(kind_shapes()) == 0 - 1 { 0 } else {
+    if dir_find(kind_shapes()) == wire_zero() - wire_one() { wire_zero() } else {
         rec_count(dir_find(kind_shapes()), shape_stride())
     }
 }
@@ -802,8 +802,8 @@ fn tag_float() -> Word { wire_six() }
 fn tag_static_str() -> Word { wire_seven() }
 fn tag_tuple() -> Word { wire_eight() }
 fn tag_array() -> Word { 9 }
-fn tag_struct() -> Word { wire_ten() }
-fn tag_enum() -> Word { wire_eleven() }
+fn tag_struct() -> Word { 10 }
+fn tag_enum() -> Word { 11 }
 fn tag_none() -> Word { wire_twelve() }
 
 fn kind_consts() -> Word { 0x0012 }
@@ -838,17 +838,17 @@ fn enumaux_off_discriminant() -> Word { wire_eight() }
 // discriminant rather than leaving that to inspection.
 fn get_i64(at: Word) -> Word {
     (wire.bytes[at] as Word)
-        + ((wire.bytes[at + 1] as Word) lsl 8)
-        + ((wire.bytes[at + 2] as Word) lsl 16)
-        + ((wire.bytes[at + 3] as Word) lsl 24)
-        + ((wire.bytes[at + 4] as Word) lsl 32)
-        + ((wire.bytes[at + 5] as Word) lsl 40)
-        + ((wire.bytes[at + 6] as Word) lsl 48)
-        + ((wire.bytes[at + 7] as Word) lsl 56)
+        + ((wire.bytes[at + wire_one()] as Word) lsl wire_eight())
+        + ((wire.bytes[at + wire_two()] as Word) lsl wire_sixteen())
+        + ((wire.bytes[at + wire_three()] as Word) lsl 24)
+        + ((wire.bytes[at + wire_four()] as Word) lsl 32)
+        + ((wire.bytes[at + wire_five()] as Word) lsl 40)
+        + ((wire.bytes[at + wire_six()] as Word) lsl 48)
+        + ((wire.bytes[at + wire_seven()] as Word) lsl 56)
 }
 
 fn const_count() -> Word {
-    if dir_find(kind_consts()) == 0 - 1 { 0 } else {
+    if dir_find(kind_consts()) == wire_zero() - wire_one() { wire_zero() } else {
         rec_count(dir_find(kind_consts()), const_stride())
     }
 }
@@ -977,7 +977,7 @@ fn elay_off_variants_count() -> Word { wire_eight() }
 fn elay_off_min_payload() -> Word { wire_twelve() }
 
 fn sig_count() -> Word {
-    if dir_find(kind_signatures()) == 0 - 1 { 0 } else {
+    if dir_find(kind_signatures()) == wire_zero() - wire_one() { wire_zero() } else {
         rec_count(dir_find(kind_signatures()), sig_stride())
     }
 }
@@ -1006,7 +1006,7 @@ fn sig_param_shape(i: Word, k: Word) -> Word {
 }
 
 fn tpl_count() -> Word {
-    if dir_find(kind_struct_templates()) == 0 - 1 { 0 } else {
+    if dir_find(kind_struct_templates()) == wire_zero() - wire_one() { wire_zero() } else {
         rec_count(dir_find(kind_struct_templates()), tpl_stride())
     }
 }
@@ -1034,7 +1034,7 @@ fn tpl_field_name(i: Word, k: Word) -> Word {
 }
 
 fn elay_count() -> Word {
-    if dir_find(kind_enum_layouts()) == 0 - 1 { 0 } else {
+    if dir_find(kind_enum_layouts()) == wire_zero() - wire_one() { wire_zero() } else {
         rec_count(dir_find(kind_enum_layouts()), elay_stride())
     }
 }
@@ -1133,7 +1133,7 @@ fn sslot_off_len() -> Word { wire_six() }
 fn sslot_off_reserved() -> Word { wire_five() }
 fn sslot_off_first_slot() -> Word { wire_eight() }
 fn sslot_off_run() -> Word { wire_twelve() }
-fn sslot_off_stride() -> Word { wire_fourteen() }
+fn sslot_off_stride() -> Word { 14 }
 
 // PrivateCompositeRecord: slot u16 @0, reserved u16 @2, offset u32 @4.
 fn pcomp_stride() -> Word { wire_eight() }
@@ -1149,32 +1149,32 @@ fn dinit_off_count() -> Word { wire_four() }
 // 1 when the module has a data layout at all. Ask this BEFORE any count below;
 // a zero from `data_slot_count` means "a layout with no slots", not "no layout".
 fn data_layout_present() -> Word {
-    if dir_find(kind_data_slots()) == 0 - 1 { 0 } else { 1 }
+    if dir_find(kind_data_slots()) == wire_zero() - wire_one() { wire_zero() } else { wire_one() }
 }
 
 // The counts. Each returns 0 - 1 when its region is absent rather than 0, so an
 // absent table is never mistaken for an empty one at any level, not just at the
 // top. A caller that wants the lenient reading can compare against 0 - 1 itself.
 fn data_slot_count() -> Word {
-    if dir_find(kind_data_slots()) == 0 - 1 { 0 - 1 } else {
+    if dir_find(kind_data_slots()) == wire_zero() - wire_one() { wire_zero() - wire_one() } else {
         rec_count(dir_find(kind_data_slots()), dslot_stride())
     }
 }
 
 fn shared_slot_count() -> Word {
-    if dir_find(kind_shared_layout()) == 0 - 1 { 0 - 1 } else {
+    if dir_find(kind_shared_layout()) == wire_zero() - wire_one() { wire_zero() - wire_one() } else {
         rec_count(dir_find(kind_shared_layout()), sslot_stride())
     }
 }
 
 fn privcomp_count() -> Word {
-    if dir_find(kind_private_composite()) == 0 - 1 { 0 - 1 } else {
+    if dir_find(kind_private_composite()) == wire_zero() - wire_one() { wire_zero() - wire_one() } else {
         rec_count(dir_find(kind_private_composite()), pcomp_stride())
     }
 }
 
 fn datainit_count() -> Word {
-    if dir_find(kind_data_init()) == 0 - 1 { 0 - 1 } else {
+    if dir_find(kind_data_init()) == wire_zero() - wire_one() { wire_zero() - wire_one() } else {
         rec_count(dir_find(kind_data_init()), dinit_stride())
     }
 }
@@ -1248,19 +1248,19 @@ fn absent_index() -> Word { 4294967295 }
 
 // ChunkRecord, six words. Eleven u32 fields, then local_count u16,
 // param_count u8, block_type u8.
-fn chunk_stride() -> Word { wire_forty_eight() }
+fn chunk_stride() -> Word { 48 }
 fn chunk_off_name() -> Word { wire_zero() }
 fn chunk_off_consts_first() -> Word { wire_four() }
 fn chunk_off_consts_count() -> Word { wire_eight() }
 fn chunk_off_templates_first() -> Word { wire_twelve() }
 fn chunk_off_templates_count() -> Word { wire_sixteen() }
-fn chunk_off_param_types_first() -> Word { wire_twenty() }
-fn chunk_off_param_types_count() -> Word { wire_twenty_four() }
-fn chunk_off_debug_first() -> Word { wire_twenty_eight() }
-fn chunk_off_debug_len() -> Word { wire_thirty_two() }
-fn chunk_off_op_byte_offset() -> Word { wire_thirty_six() }
-fn chunk_off_op_record_count() -> Word { wire_forty() }
-fn chunk_off_local_count() -> Word { wire_forty_four() }
+fn chunk_off_param_types_first() -> Word { 20 }
+fn chunk_off_param_types_count() -> Word { 24 }
+fn chunk_off_debug_first() -> Word { 28 }
+fn chunk_off_debug_len() -> Word { 32 }
+fn chunk_off_op_byte_offset() -> Word { 36 }
+fn chunk_off_op_record_count() -> Word { 40 }
+fn chunk_off_local_count() -> Word { 44 }
 fn chunk_off_param_count() -> Word { 46 }
 fn chunk_off_block_type() -> Word { 47 }
 
@@ -1273,7 +1273,7 @@ fn natret_off_shape() -> Word { wire_zero() }
 fn natret_off_reserved() -> Word { wire_four() }
 
 // HeaderRecord, four words.
-fn header_stride() -> Word { wire_thirty_two() }
+fn header_stride() -> Word { 32 }
 fn header_off_entry_point() -> Word { wire_zero() }
 fn header_off_word_bits_log2() -> Word { wire_four() }
 fn header_off_addr_bits_log2() -> Word { wire_five() }
@@ -1282,12 +1282,12 @@ fn header_off_flags() -> Word { wire_seven() }
 fn header_off_wcet_cycles() -> Word { wire_eight() }
 fn header_off_wcmu_bytes() -> Word { wire_twelve() }
 fn header_off_shared_data_bytes() -> Word { wire_sixteen() }
-fn header_off_private_data_bytes() -> Word { wire_twenty() }
-fn header_off_schema_hash() -> Word { wire_twenty_four() }
-fn header_off_reserved() -> Word { wire_twenty_eight() }
+fn header_off_private_data_bytes() -> Word { 20 }
+fn header_off_schema_hash() -> Word { 24 }
+fn header_off_reserved() -> Word { 28 }
 
 fn chunk_count() -> Word {
-    if dir_find(kind_chunks()) == 0 - 1 { 0 - 1 } else {
+    if dir_find(kind_chunks()) == wire_zero() - wire_one() { wire_zero() - wire_one() } else {
         rec_count(dir_find(kind_chunks()), chunk_stride())
     }
 }
@@ -1320,7 +1320,7 @@ fn chunk_has_debug(i: Word) -> Word {
 }
 
 fn native_count() -> Word {
-    if dir_find(kind_natives()) == 0 - 1 { 0 - 1 } else {
+    if dir_find(kind_natives()) == wire_zero() - wire_one() { wire_zero() - wire_one() } else {
         rec_count(dir_find(kind_natives()), native_stride())
     }
 }
@@ -1331,7 +1331,7 @@ fn native_name(i: Word) -> Word {
 
 // Asked SEPARATELY from `native_count`, and deliberately not derived from it.
 fn native_return_count() -> Word {
-    if dir_find(kind_native_returns()) == 0 - 1 { 0 - 1 } else {
+    if dir_find(kind_native_returns()) == wire_zero() - wire_one() { wire_zero() - wire_one() } else {
         rec_count(dir_find(kind_native_returns()), natret_stride())
     }
 }
@@ -1341,7 +1341,7 @@ fn native_return_shape(i: Word) -> Word {
 }
 
 fn header_present() -> Word {
-    if dir_find(kind_header()) == 0 - 1 { 0 } else { 1 }
+    if dir_find(kind_header()) == wire_zero() - wire_one() { wire_zero() } else { wire_one() }
 }
 
 fn header_u32(off: Word) -> Word {
@@ -1402,8 +1402,8 @@ fn emit_header_record_at(at: Word) -> Word {
 // against a 65536-byte buffer. The emitter therefore never has to chunk what it
 // writes, only what it is given.
 
-fn chunk_fields() -> Word { wire_fourteen() }
-fn fin_capacity() -> Word { wire_one_k() }
+fn chunk_fields() -> Word { 14 }
+fn fin_capacity() -> Word { 1024 }
 
 // `nout`'s capacity in WORDS, which at two words per name record admits exactly
 // `nm_max_names()` names. Stated as its own function so the emitter reading
@@ -1465,7 +1465,7 @@ fn emit_chunk_records(at: Word, n: Word) -> Word {
 // extreme case of one logical byte in an eight-byte region. Residues 1, 2 and 6
 // do not occur and are covered by a hand-built sweep instead.
 
-fn bin_capacity() -> Word { wire_forty_eight_k() }
+fn bin_capacity() -> Word { 49152 }
 
 // `bout` is the same size as `bin` TODAY, and that is a coincidence rather than
 // a constraint. A guard on the output buffer that names the input one is right
@@ -1986,7 +1986,7 @@ fn emit_pool_pad(at: Word, total: Word) -> Word {
 
 // 1 when the module declares no entry point.
 fn entry_point_absent() -> Word {
-    if header_u32(header_off_entry_point()) == absent_index() { 1 } else { 0 }
+    if header_u32(header_off_entry_point()) == absent_index() { wire_one() } else { wire_zero() }
 }
 
 // --- SLICE 6a: the opcode record -----------------------------------------
@@ -2209,7 +2209,7 @@ fn pool_u24(at: Word, k: Word) -> Word {
 // polynomial and this convention. One pass, no special-casing of the last four
 // bytes, and nothing to get wrong about where the checksummed region ends.
 
-fn header_bytes_len() -> Word { wire_sixty_four() }
+fn header_bytes_len() -> Word { 64 }
 fn bytecode_version() -> Word { wire_two() }
 fn crc32_residue() -> Word { 0x2144DF1C }
 
@@ -2223,17 +2223,17 @@ fn fh_off_header_length() -> Word { wire_six() }
 fn fh_off_total_length() -> Word { wire_eight() }
 fn fh_off_word_bits_log2() -> Word { wire_twelve() }
 fn fh_off_addr_bits_log2() -> Word { 13 }
-fn fh_off_float_bits_log2() -> Word { wire_fourteen() }
+fn fh_off_float_bits_log2() -> Word { 14 }
 fn fh_off_flags() -> Word { 15 }
 fn fh_off_wcet_cycles() -> Word { wire_sixteen() }
-fn fh_off_wcmu_bytes() -> Word { wire_twenty() }
-fn fh_off_shared_data_bytes() -> Word { wire_twenty_four() }
-fn fh_off_private_data_bytes() -> Word { wire_twenty_eight() }
-fn fh_off_opcode_offset() -> Word { wire_thirty_two() }
-fn fh_off_opcode_length() -> Word { wire_thirty_six() }
-fn fh_off_pool_offset() -> Word { wire_forty() }
-fn fh_off_pool_length() -> Word { wire_forty_four() }
-fn fh_off_aux_offset() -> Word { wire_forty_eight() }
+fn fh_off_wcmu_bytes() -> Word { 20 }
+fn fh_off_shared_data_bytes() -> Word { 24 }
+fn fh_off_private_data_bytes() -> Word { 28 }
+fn fh_off_opcode_offset() -> Word { 32 }
+fn fh_off_opcode_length() -> Word { 36 }
+fn fh_off_pool_offset() -> Word { 40 }
+fn fh_off_pool_length() -> Word { 44 }
+fn fh_off_aux_offset() -> Word { 48 }
 fn fh_off_aux_length() -> Word { 52 }
 fn fh_off_aux_arena_bytes() -> Word { 56 }
 fn fh_off_persistent_composite_bytes() -> Word { 60 }
@@ -2321,8 +2321,8 @@ fn dispatch_container(cmd: Word) -> Word {
     if cmd == wire_seven() { dir_u32(wire.warg, wire_four()) } else {
     if cmd == wire_eight() { dir_u32(wire.warg, wire_eight()) } else {
     if cmd == 9 { dir_u16(wire.warg, wire_zero()) } else {
-    if cmd == wire_ten() { emit_header() } else {
-    if cmd == wire_eleven() { region_base(wire.warg) } else {
+    if cmd == 10 { emit_header() } else {
+    if cmd == 11 { region_base(wire.warg) } else {
     if cmd == wire_twelve() { region_bytes(wire.warg) } else {
     wire_zero() - 98 }}}}}}}}}}}}}
 }
@@ -2858,7 +2858,7 @@ fn nm_max_name() -> Word { 256 }
 // input-to-index MAP". That reasoning belonged to a layout where the map shared
 // an array with the record pairs; it does not any more (see `nmap`/`noff`
 // below), so the cap is now bounded by the arrays' own sizes and nothing else.
-fn nm_max_names() -> Word { wire_one_k() }
+fn nm_max_names() -> Word { 1024 }
 
 // Whether two names in `wire.bin` hold the same bytes.
 //
@@ -3346,7 +3346,7 @@ fn mi_name_mode(tag: Word, i: Word) -> Word {
     } else { nm_mode_intern() }
 }
 
-fn mi_tag_struct() -> Word { wire_ten() }
+fn mi_tag_struct() -> Word { 10 }
 
 fn mi_const_names() -> Word {
     nm.cbase = nm.cnt;
@@ -4248,7 +4248,7 @@ fn fx_scratch() -> Word { 32768 }
 fn fx_scratch_aux() -> Word { 40960 }
 
 // A third scratch window, for `ENUM_AUX` when it is not being emitted.
-fn fx_scratch_eaux() -> Word { wire_forty_eight_k() }
+fn fx_scratch_eaux() -> Word { 49152 }
 
 // Seed the interner with the prefix, leaving it ready for the walk.
 fn fx_seed() -> Word {
@@ -4394,7 +4394,7 @@ fn fx_emit_eaux() -> Word {
 // Eleven input words per chunk rather than fourteen: the three `first` fields
 // are exactly what is no longer passed in.
 
-fn ck_fields() -> Word { wire_eleven() }
+fn ck_fields() -> Word { 11 }
 
 // `wire.fin` is 1024 words, so eleven per chunk is 93. A STATED cap of 90,
 // refused with a code rather than truncated. Real stages have far more chunks
@@ -4707,20 +4707,20 @@ fn ck_carry_ptypes() -> Word {
 // produces a name count the reference does not -- pinned already by the
 // dedup-only and append-only must-fire tests, which this slice reuses.
 
-fn sq_max_layouts() -> Word { wire_sixty_four() }
+fn sq_max_layouts() -> Word { 64 }
 
 fn sq_max_chunks() -> Word { 128 }
 
 // Bounds the INNER loop of the build pass. A count above this would trap on
 // `for v in 0..count limit 64` rather than report, so it is validated in the
 // scan pass before any of it is used as a bound.
-fn sq_max_variants() -> Word { wire_sixty_four() }
+fn sq_max_variants() -> Word { 64 }
 
 // `wire.fin` is 1024 words and a layout record is VARIABLE LENGTH, so the caps
 // above do not bound the input on their own: 64 layouts of 64 variants each
 // would want 4,224 words. The scan pass therefore checks the cursor against this
 // on every step rather than deriving safety from the caps.
-fn sq_fin_capacity() -> Word { wire_one_k() }
+fn sq_fin_capacity() -> Word { 1024 }
 
 private data sq {
     nl: Word,
@@ -5743,7 +5743,7 @@ private data containerread {
 
 fn cr_begin() -> Word {
     containerread.active = wire_zero();
-    if wire.warg < wire_forty_eight() { wire_zero() - 288 } else {
+    if wire.warg < 48 { wire_zero() - 288 } else {
         let count = parse_prologue();
         if count < wire_zero() { count } else {
             let header = header_words(count) lsl 3;
@@ -5789,6 +5789,136 @@ fn cr_step() -> Word {
     }}
 }
 
+// Fixed-record fields are read from one raw record at byte zero. The host
+// transports records but does not supply field offsets, widths or endianness.
+private data recordread {
+    active: Word,
+    kind: Word,
+    stride: Word,
+    count: Word,
+    at: Word,
+}
+
+fn rr_stride(kind: Word) -> Word {
+    if kind == kind_names() orelse kind == kind_struct_aux()
+        orelse kind == kind_shapes() orelse kind == kind_data_slots()
+        orelse kind == kind_private_composite() orelse kind == kind_data_init()
+        orelse kind == kind_natives() orelse kind == kind_native_returns() { wire_eight() } else {
+    if kind == kind_consts() orelse kind == kind_enum_aux()
+        orelse kind == kind_signatures() orelse kind == kind_struct_templates()
+        orelse kind == kind_enum_variants() orelse kind == kind_enum_layouts()
+        orelse kind == kind_shared_layout() { wire_sixteen() } else {
+    if kind == kind_chunks() { chunk_stride() } else {
+    if kind == kind_header() { header_stride() } else { wire_zero() }}}}
+}
+
+fn rr_u32s(count: Word) -> Word {
+    for i in 0..count limit 14 {
+        wire.fin[i] = get_u32(i * wire_four());
+    }
+    count
+}
+
+fn rr_small() -> Word {
+    if recordread.kind == kind_shapes() {
+        wire.fin[wire_zero()] = get_u16(shape_off_tag());
+        wire.fin[wire_one()] = wire.bytes[shape_off_kind()] as Word;
+        wire.fin[wire_two()] = wire.bytes[shape_off_reserved()] as Word;
+        wire.fin[wire_three()] = get_u32(shape_off_size());
+        shape_fields()
+    } else { if recordread.kind == kind_private_composite() {
+        wire.fin[wire_zero()] = get_u16(pcomp_off_slot());
+        wire.fin[wire_one()] = get_u16(pcomp_off_reserved());
+        wire.fin[wire_two()] = get_u32(pcomp_off_offset());
+        pcomp_fields()
+    } else {
+        wire.fin[wire_zero()] = get_u32(wire_zero());
+        wire.fin[wire_one()] = wire.bytes[wire_four()] as Word;
+        wire.fin[wire_two()] = wire.bytes[wire_five()] as Word;
+        wire.fin[wire_three()] = get_u16(wire_six());
+        if recordread.kind == kind_data_slots() { dslot_fields() } else {
+            wire.fin[wire_four()] = get_u32(sslot_off_first_slot());
+            wire.fin[wire_five()] = get_u16(sslot_off_run());
+            wire.fin[wire_six()] = get_u16(sslot_off_stride());
+            sslot_fields()
+        }
+    }}
+}
+
+fn rr_wide() -> Word {
+    if recordread.kind == kind_consts() {
+        wire.fin[wire_zero()] = get_u16(const_off_tag());
+        wire.fin[wire_one()] = get_u16(const_off_flags());
+        wire.fin[wire_two()] = get_u32(const_off_aux());
+        wire.fin[wire_three()] = get_i64(const_off_payload());
+        const_fields()
+    } else {
+        rr_u32s(wire_two());
+        wire.fin[wire_two()] = get_i64(wire_eight());
+        wire_three()
+    }
+}
+
+fn rr_header() -> Word {
+    wire.fin[wire_zero()] = get_u32(header_off_entry_point());
+    for i in 0..4 {
+        wire.fin[i + wire_one()] = wire.bytes[i + wire_four()] as Word;
+    }
+    for i in 0..6 {
+        wire.fin[i + wire_five()] = get_u32(wire_eight() + i * wire_four());
+    }
+    11
+}
+
+fn rr_chunk() -> Word {
+    rr_u32s(11);
+    wire.fin[11] = get_u16(chunk_off_local_count());
+    wire.fin[wire_twelve()] = wire.bytes[chunk_off_param_count()] as Word;
+    wire.fin[13] = wire.bytes[chunk_off_block_type()] as Word;
+    chunk_fields()
+}
+
+fn rr_fields() -> Word {
+    let kind = recordread.kind;
+    if kind == kind_chunks() { rr_chunk() } else {
+    if kind == kind_header() { rr_header() } else {
+    if kind == kind_consts() orelse kind == kind_enum_aux()
+        orelse kind == kind_enum_variants() { rr_wide() } else {
+    if kind == kind_shapes() orelse kind == kind_data_slots()
+        orelse kind == kind_private_composite() orelse kind == kind_shared_layout() { rr_small() } else {
+        rr_u32s(recordread.stride / wire_four())
+    }}}}
+}
+
+fn rr_begin() -> Word {
+    recordread.active = wire_zero();
+    let stride = rr_stride(wire.warg);
+    if stride == wire_zero() orelse wire.warg2 < wire_zero()
+        orelse wire.warg2 % stride != wire_zero() { wire_zero() - 290 } else {
+        recordread.kind = wire.warg;
+        recordread.stride = stride;
+        recordread.count = wire.warg2 / stride;
+        recordread.at = wire_zero();
+        recordread.active = wire_one();
+        opread.pending = wire_zero();
+        wire.fin[wire_zero()] = recordread.count;
+        stride
+    }
+}
+
+fn rr_read() -> Word {
+    if recordread.active != wire_one() { wire_zero() - 290 } else {
+    if recordread.at == recordread.count {
+        recordread.active = wire_zero();
+        wire_zero()
+    } else {
+    if wire.warg2 != recordread.stride { wire_zero() - 291 } else {
+        let count = rr_fields();
+        recordread.at = recordread.at + wire_one();
+        count
+    }}}
+}
+
 fn dispatch_initialization(cmd: Word) -> Word {
     if cmd == 209 { init_begin() } else {
     if cmd == 210 { init_chunk() } else {
@@ -5798,7 +5928,9 @@ fn dispatch_initialization(cmd: Word) -> Word {
     if cmd == 214 { or_begin() } else {
     if cmd == 215 { or_pool() } else {
     if cmd == 216 { cr_begin() } else {
-    if cmd == 217 { cr_step() } else { wire_zero() - 97 }}}}}}}}}
+    if cmd == 217 { cr_step() } else {
+    if cmd == 218 { rr_begin() } else {
+    if cmd == 219 { rr_read() } else { wire_zero() - 97 }}}}}}}}}}}
 }
 
 fn dispatch_native(cmd: Word) -> Word {
@@ -5820,23 +5952,9 @@ fn wire_twelve() -> Word { 12 }
 
 fn wire_five() -> Word { 5 }
 fn wire_seven() -> Word { 7 }
-fn wire_twenty() -> Word { 20 }
-fn wire_twenty_four() -> Word { 24 }
-fn wire_twenty_eight() -> Word { 28 }
-fn wire_thirty_two() -> Word { 32 }
 
-fn wire_ten() -> Word { 10 }
-fn wire_eleven() -> Word { 11 }
-fn wire_fourteen() -> Word { 14 }
-fn wire_thirty_six() -> Word { 36 }
-fn wire_forty() -> Word { 40 }
-fn wire_forty_four() -> Word { 44 }
-fn wire_forty_eight() -> Word { 48 }
-fn wire_sixty_four() -> Word { 64 }
-fn wire_one_k() -> Word { 1024 }
-fn wire_forty_eight_k() -> Word { 49152 }
 
-fn highest_command() -> Word { 217 }
+fn highest_command() -> Word { 219 }
 
 // --- THE ENTRY, AS A COROUTINE ----------------------------------------------
 //
@@ -5858,6 +5976,7 @@ fn highest_command() -> Word { 217 }
 // resume by the Stream parameter-slot update, so a resumed command sees the same
 // number it was entered with.
 fn dispatch(cmd: Word) -> Word {
+    if recordread.active == wire_one() andalso (cmd < 218 orelse cmd > 219) { wire_zero() - 290 } else {
     if containerread.active == wire_one() andalso (cmd < 216 orelse cmd > 217) { wire_zero() - 288 } else {
     if sigstream.mode >= 2 andalso (cmd < 195 orelse cmd > 204 orelse cmd == 201 orelse cmd == 202) { 0 - 280 } else {
     if framing.mode != 0 andalso (cmd < 188 orelse cmd > 192) { 0 - 260 } else {
@@ -5876,6 +5995,8 @@ fn dispatch(cmd: Word) -> Word {
     if cmd < 152 { dispatch_driver(cmd) } else { dispatch_driver2(cmd) } } } } } } } } } } } } }
 }
 }
+}
+
 }
 
 }

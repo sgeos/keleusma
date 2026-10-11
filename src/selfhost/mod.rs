@@ -51,6 +51,8 @@ mod wire_directory;
 pub use wire_directory::{
     WireAuxiliaryDirectory, WireAuxiliaryRegion, wire_auxiliary_directory_via_kel,
 };
+mod wire_records;
+pub use wire_records::{WireSchemaRecord, wire_schema_records_via_kel};
 mod wire_opcodes;
 pub use wire_opcodes::{
     WireOpcodeSections, wire_module_artifact_via_kel, wire_opcode_sections_via_kel,

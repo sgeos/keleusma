@@ -363,7 +363,7 @@ mod tests {
             assert_eq!(enter_wire(vm, shared, 0)?, -260);
             assert_eq!(enter_wire(vm, shared, 193)?, -260);
             assert_eq!(enter_wire(vm, shared, 194)?, -260);
-            for cmd in 195..=217 {
+            for cmd in 195..=219 {
                 assert_eq!(enter_wire(vm, shared, cmd)?, -260);
             }
             assert_eq!(enter_wire(vm, shared, 189)?, 64);

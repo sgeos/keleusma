@@ -346,7 +346,7 @@ The gaps to close, from the current subset to the full grammar:
 - **Generics and monomorphization.** The full monomorphizer (Workstream A's deferred half):
   generic functions, structs, and enums, const generics, trait bounds, and specialization.
 
-## Current Order-1 status, 2026-10-08
+## Current Order-1 status, 2026-10-11
 
 All thirteen pipeline-produced stage modules serialize through Keleusma section emitters and
 match complete reference artifacts. Opcode and operand-pool encoding and semantic decoding
@@ -358,8 +358,12 @@ The shipping serializer remains Rust.
 Auxiliary directory voting, bounds checks and duplicate detection now run in Keleusma, without
 reference region positions or payload copies. Schema-record interpretation and complete module
 reconstruction remain open. The all-stage comparison includes independently decoded directories.
+All seventeen fixed-record kinds now decode through Keleusma, and every fixed-record stage
+region reconstructs byte-identically from those decoded fields. Semantic tags, cross-table
+references and constant-tree reconstruction still require integration. The legacy type-input
+path uses 638 of the approved 640 occurrence rows after inlining fourteen numeric helpers.
 
-Wire has 566 chunks, 715 name events, 23,793 of 49,152 input bytes and 1,294 of 1,365 constant
+Wire has 561 chunks, 715 name events, 23,713 of 49,152 input bytes and 1,290 of 1,365 constant
 nodes. The separate debug stage has 20 chunks. Public bytecode version, opcode count and the
 approved type-stage caps remain unchanged.
 
@@ -368,7 +372,7 @@ The twenty-three-source comparison includes fourteen negatives and nine valid co
 seven artifact and execution controls. Parser capacity and unsupported annotation syntax remain
 distinct from source rejection. Remaining input and projection coverage, production wire
 emission and final gates keep Order 1 open. Standing inference-independence evidence now
-covers all thirteen stages, clearing 44,978 recorded types without changing complete artifacts.
+covers all thirteen stages, clearing 45,329 recorded types without changing complete artifacts.
 The intervention and admission controls also pass.
 
 Struct field and composite array projections now preserve source type identity through calls,
