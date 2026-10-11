@@ -9124,7 +9124,7 @@ fn the_fused_compile_holds_one_group_not_the_program() {
         (
             "analyze",
             include_str!("../src/selfhost/kel/analyze.kel"),
-            1538,
+            1877,
             324,
         ),
         (

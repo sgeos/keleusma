@@ -82,6 +82,11 @@ shared data wa {
     out_heap: Word,
     out_reject: Word,
     out_valid: Word,
+    // Streaming text-boundary analysis. The host stores the abstract stack and locals.
+    tf_command: Word, tf_kind: Word, tf_required: Word, tf_delta: Word,
+    tf_top: Word, tf_second: Word, tf_local: Word, tf_const: Word,
+    tf_callee: Word, tf_callee_known: Word, tf_index: Word, tf_locals: Word,
+    tf_pops: Word, tf_pushes: Word, tf_value: Word, tf_write: Word, tf_write_value: Word,
 }
 
 // The region-frame work stack. Each frame is one invocation of the reference's recursion
@@ -693,7 +698,60 @@ fn run() -> Word {
     }
 }
 
-// Compute the chunk's bounds in one call and yield the WCET.
+private data tf { returned: Word, yielded: Word, }
+fn text_flow_bit(value: Word) -> Word {
+    if value == 0 orelse value == 1 { 1 } else { 0 }
+}
+// Commands 1 reset, 2 consume one opcode, 3 finish a chunk, 4 derive ephemerality.
+// Op kinds 1 Const, 2 GetLocal, 3 SetLocal, 4 Dup, 5 Add, 6 Call,
+// 7 native call, 8 Return, 9 Yield, and 0 other. Stack effects are syntax facts.
+fn text_flow_step() -> Word {
+    if wa.tf_command == 1 {
+        tf.returned = 0; tf.yielded = 0; 0
+    } else {
+    if wa.tf_command == 3 {
+        if text_flow_bit(wa.tf_top) == 0 { 0 - 1 } else {
+            if wa.tf_top == 1 { tf.returned = 1; }
+            tf.returned + tf.yielded * 2
+        }
+    } else {
+    if wa.tf_command == 4 {
+        if text_flow_bit(wa.tf_top) == 0 orelse text_flow_bit(wa.tf_second) == 0 orelse text_flow_bit(wa.tf_local) == 0 orelse text_flow_bit(wa.tf_callee_known) == 0 orelse wa.tf_index < 0 { 0 - 1 } else {
+            let boundary = if wa.tf_callee_known == 1 { wa.tf_top } else { 1 };
+            if wa.tf_index == 0 andalso wa.tf_second == 0 andalso (wa.tf_local == 0 orelse boundary == 0) { 1 } else { 0 }
+        }
+    } else {
+    if wa.tf_command != 2 orelse wa.tf_kind < 0 orelse wa.tf_kind > 9 orelse wa.tf_required < 0 orelse wa.tf_required > 65535 orelse wa.tf_delta < 0 - 65535 orelse wa.tf_delta > 3 orelse wa.tf_locals < 0 orelse wa.tf_locals > 65535 orelse wa.tf_index < 0 { 0 - 1 } else {
+    if text_flow_bit(wa.tf_top) == 0 orelse text_flow_bit(wa.tf_second) == 0 orelse text_flow_bit(wa.tf_local) == 0 orelse text_flow_bit(wa.tf_const) == 0 orelse text_flow_bit(wa.tf_callee) == 0 orelse text_flow_bit(wa.tf_callee_known) == 0 { 0 - 1 } else {
+        wa.tf_pops = if wa.tf_required > 0 { wa.tf_required } else { 0 };
+        let pushed = wa.tf_required + wa.tf_delta;
+        wa.tf_pushes = if pushed > 0 { pushed } else { 0 };
+        wa.tf_value = 0; wa.tf_write = 0; wa.tf_write_value = 0;
+        if wa.tf_kind == 1 { wa.tf_value = wa.tf_const; }
+        if wa.tf_kind == 2 { wa.tf_value = wa.tf_local; }
+        if wa.tf_kind == 3 andalso wa.tf_index >= 0 andalso wa.tf_index < wa.tf_locals {
+            wa.tf_write = 1; wa.tf_write_value = wa.tf_top;
+        }
+        if wa.tf_kind == 4 { wa.tf_pops = 0; wa.tf_pushes = 1; wa.tf_value = wa.tf_top; }
+        if wa.tf_kind == 5 { wa.tf_value = wa.tf_top * wa.tf_second; }
+        if wa.tf_kind == 6 { wa.tf_value = if wa.tf_callee_known == 1 { wa.tf_callee } else { 1 }; }
+        if wa.tf_kind == 7 {
+            // Match the reference text analysis's raw native operand convention.
+            wa.tf_pops = wa.tf_index; wa.tf_pushes = 1; wa.tf_value = 1;
+        }
+        if wa.tf_kind == 8 {
+            if wa.tf_top == 1 { tf.returned = 1; }
+            wa.tf_pops = 1; wa.tf_pushes = 0;
+        }
+        if wa.tf_kind == 9 {
+            if wa.tf_top == 1 { tf.yielded = 1; }
+            wa.tf_pops = 1; wa.tf_pushes = 0;
+        }
+        0
+    } } } } }
+}
+
 loop main(resume: Word) -> Word {
-    yield run()
+    let result = if wa.tf_command == 0 { run() } else { text_flow_step() };
+    yield result
 }

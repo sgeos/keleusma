@@ -39,6 +39,8 @@ use crate::value_layout::{CompositeKind, ScalarKind};
 use crate::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 use crate::{Arena, compiler::compile, lexer::tokenize, parser::parse};
 
+mod artifact_compare;
+mod text_flow;
 mod wire_debug_decode;
 pub use wire_debug_decode::{wire_decode_debug_pool_via_kel, wire_decode_parameter_tags_via_kel};
 mod wire_debug;
@@ -202,6 +204,7 @@ pub struct ParsedFn {
     tuple_projections: Vec<(bool, i64)>,
     param_layouts: Vec<Option<crate::bytecode::WireShape>>,
     return_layout: Option<crate::bytecode::WireShape>,
+    text_boundary: i64,
 }
 
 impl ParsedFn {
@@ -1345,6 +1348,25 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
         .unwrap();
     vm.set_shared(
         &mut shared,
+        crate::selfhost_host::BR_P_FLOAT_ID,
+        Value::Int(id_of("Float") + 1),
+    )
+    .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_FIXED_ID,
+        Value::Int(id_of("Fixed") + 1),
+    )
+    .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_TEXT_ID,
+        Value::Int(id_of("Text") + 1),
+    )
+    .unwrap();
+
+    vm.set_shared(
+        &mut shared,
         BR_P_CHUNK_COUNT,
         Value::Int(chunks.len() as i64),
     )
@@ -1669,6 +1691,25 @@ fn try_parse_functions_impl(
         .unwrap();
     vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("bool")))
         .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_FLOAT_ID,
+        Value::Int(id_of("Float") + 1),
+    )
+    .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_FIXED_ID,
+        Value::Int(id_of("Fixed") + 1),
+    )
+    .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_TEXT_ID,
+        Value::Int(id_of("Text") + 1),
+    )
+    .unwrap();
+
     vm.set_shared(
         &mut shared,
         BR_P_CHUNK_COUNT,
@@ -2096,6 +2137,7 @@ fn try_parse_functions_impl(
                             tuple_projections: Vec::new(),
                             param_layouts: Vec::new(),
                             return_layout: None,
+                            text_boundary: 0,
                         })
                     }
                     4 => {
@@ -2126,6 +2168,10 @@ fn try_parse_functions_impl(
                         } else {
                             f.param_type_records.last_mut().unwrap().push((8, val));
                         }
+                    }
+                    crate::selfhost_host::PARSE_TEXT_BOUNDARY_TAG => {
+                        assert!((0..=3).contains(&val), "invalid text-boundary facts");
+                        open_decl(&mut cur, code, val).text_boundary = val;
                     }
                     crate::selfhost_host::PARSE_HEADER_LAYOUT_TAG => {
                         use crate::bytecode::WireShape;
@@ -6079,6 +6125,9 @@ fn assemble_chunk_metadata(
                         crate::bytecode::WireShape::Scalar { kind: 1 } => TypeTag::Bool,
                         crate::bytecode::WireShape::Scalar { kind: 2 } => TypeTag::Byte,
                         crate::bytecode::WireShape::Scalar { kind: 3 } => TypeTag::Word,
+                        crate::bytecode::WireShape::Scalar { kind: 4 } => TypeTag::Fixed,
+                        crate::bytecode::WireShape::Scalar { kind: 5 } => TypeTag::Float,
+                        crate::bytecode::WireShape::Scalar { kind: 6 } => TypeTag::Text,
                         _ => TypeTag::Composite,
                     };
                 }
@@ -6131,7 +6180,7 @@ pub fn self_host_compile_full(src: &str) -> Module {
         }
     }
     assemble_resource_bounds(&mut module);
-    self_host_module_bookkeeping(&mut module);
+    self_host_module_bookkeeping(&mut module, &fns, &names);
     module
 }
 
@@ -6139,27 +6188,12 @@ pub fn self_host_compile_full(src: &str) -> Module {
 /// `aux_arena_bytes`, `persistent_composite_bytes`, and `flags` -- from the pipeline output,
 /// rather than inheriting them from the reference base.
 ///
-/// For the self-hosting subset (scalar `Word`/`Byte` data, no `Text`, no opaque types, no
-/// `signed` entry) these reduce to closed forms:
-///
-/// - **`aux_arena_bytes` is 0.** The field reserves an opaque-registry arena slice sized by
-///   `may_intern_opaque`, which is true only when the program constructs a flat composite able
-///   to hold a host opaque. A scalar-only program never does, so the field is provably 0. The
-///   general opaque-reachability analysis is a future extension gated on opaque-type support.
-/// - **`persistent_composite_bytes` is 0.** The field is the summed flat-body size of private
-///   data slots that hold a composite; the subset's private data is scalar or array-of-scalar,
-///   so the assembled private-composite layout is empty. The general body-size accounting is a
-///   future extension gated on composite-in-`data` support (a `debug_assert` guards the
-///   assumption).
-/// - **`FLAG_EPHEMERAL` iff `private_data_bytes == 0`.** The reference sets it when the module
-///   has no private data and no arena-resident (`Text`) value crosses the host boundary; the
-///   subset has no `Text`, so the text condition is vacuously satisfied and the flag reduces to
-///   the private-data test. `FLAG_REQUIRES_SIGNATURE` is never set (the subset has no `signed`
-///   entry).
-///
-/// The byte-identity oracle (`tests/scaffold.rs`) confirms these match the reference for the
-/// five stages (all zero) and a private-data-free program (which sets `FLAG_EPHEMERAL`).
-fn self_host_module_bookkeeping(module: &mut Module) {
+/// Scalar private storage gives the existing zero auxiliary and composite-pool totals.
+/// The parser supplies entry-parameter text usage and structural return-type facts.
+/// When those facts require a text boundary check, analyze.kel computes abstract stack,
+/// local and callee text flow. The host stores values and schedules callees before callers.
+/// Opaque allocation, private composites and signed entries remain outside this assembly path.
+fn self_host_module_bookkeeping(module: &mut Module, fns: &[ParsedFn], names: &[String]) {
     module.aux_arena_bytes = 0;
     debug_assert!(
         module
@@ -6169,10 +6203,16 @@ fn self_host_module_bookkeeping(module: &mut Module) {
         "self-hosted persistent_composite_bytes = 0 assumes no private composite data (subset)"
     );
     module.persistent_composite_bytes = 0;
-    module.flags = if module.private_data_bytes == 0 {
+    let text_flags = fns
+        .iter()
+        .find(|f| names[f.name as usize] == "main")
+        .map_or(0, |f| f.text_boundary);
+    module.flags = if module.private_data_bytes != 0 {
+        0
+    } else if text_flags == 0 {
         crate::bytecode::FLAG_EPHEMERAL
     } else {
-        0
+        text_flow::ephemeral_flag(module, text_flags).expect("Keleusma text-boundary analysis")
     };
 }
 
@@ -6315,7 +6355,7 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
         native_return_shapes,
     };
     assemble_resource_bounds(&mut module);
-    self_host_module_bookkeeping(&mut module);
+    self_host_module_bookkeeping(&mut module, &fns, &names);
     module
 }
 
@@ -8880,9 +8920,8 @@ pub fn self_hosted_compile(
         };
         SelfHostError::Unsupported { detail }
     })?;
-    // Correctness cross-check: the self-hosted compiled code (each chunk's ops, constant
-    // pool, and local count) must match the reference. Reject a divergence rather than emit
-    // a module neither side vouches for.
+    // Compare chunk bodies and every assembled metadata field, including signatures,
+    // data layouts and resource bounds. The reference supplies no field to the result.
     //
     // **A DIVERGENCE DOES NOT SAY WHICH SIDE IS WRONG**, and this comment used to claim it
     // meant the program was outside the self-hosted subset. That is the usual cause and is
@@ -8897,21 +8936,8 @@ pub fn self_hosted_compile(
     // the far more mature implementation and will be the right side in almost every case.
     // What changed is the claim, because "the cause is already known" is what stops someone
     // investigating the case where it is not.
-    let diverges = module.chunks.len() != reference.chunks.len()
-        || module
-            .chunks
-            .iter()
-            .zip(reference.chunks.iter())
-            .any(|(m, r)| {
-                m.name != r.name
-                    || m.ops != r.ops
-                    || m.constants != r.constants
-                    || m.local_count != r.local_count
-            });
-    if diverges {
-        return Err(SelfHostError::Unsupported {
-            detail: describe_divergence(&module, &reference),
-        });
+    if let Some(detail) = artifact_compare::difference(&module, &reference) {
+        return Err(SelfHostError::Unsupported { detail });
     }
     Ok(module)
 }

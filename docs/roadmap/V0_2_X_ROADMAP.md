@@ -348,17 +348,17 @@ The gaps to close, from the current subset to the full grammar:
 
 ## Current Order-1 status, 2026-10-11
 
-The latest tuple increment closes the three measured projection disagreements. Fourteen verdict
-cases now agree with the reference, with independent shipping rejection for invalid cases.
-Nested headers retain source identity and computed layouts. Nested tuple equality and struct
-members at several tuple depths preserve artifacts. All fourteen stages also pass the shipping
-entry and complete artifact comparisons. Inference independence now covers 55,276 recorded types.
-The full workspace reports two guard failures among 3,184 executed tests. Both guards were repaired
-and their 189-test targeted rerun passes. The full workspace has not been rerun after those test-only
-changes. Remaining nominal signatures, tuple literal layouts, general header paths, empty-array
-argument rejection and final integration gates keep Order 1 open. The current
+The latest increment resolves nominal signature layouts, including forward declarations, and
+retains empty-array shape and length for independent rejection. The shipping comparison now checks
+all assembled metadata, with mutation controls, and the permanent fourteen-stage artifact test
+uses that shipping entry. Text and Fixed admission are preserved through Keleusma layout and
+text-boundary decisions. Inference independence covers 56,408 recorded types.
+The final workspace reports 3,197 passes, one stale residency pin and five ignored tests. After
+correcting the pin, all 152 code-generation tests pass. The workspace was not rerun after that
+test-only change. Private source initializers, mixed tuple construction, general nested headers,
+binder and occurrence coverage, and final integration gates keep Order 1 open. The
 [completion plan](../decisions/ORDER1_COMPLETION_PLAN.md) and
-[reverse prompt](../process/REVERSE_PROMPT.md) distinguish these gaps from completed work.
+[reverse prompt](../process/REVERSE_PROMPT.md) carry current evidence and witnesses.
 
 All fourteen pipeline-produced stage modules serialize through Keleusma section emitters and
 match complete reference artifacts. Opcode and operand-pool encoding and semantic decoding

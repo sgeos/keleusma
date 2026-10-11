@@ -98,6 +98,10 @@ shared data toks {
     // Whole-source fact from the first lexer pass, including imports after a use site.
     has_imports: Word,
     assert_id: Word,
+    // Float type-name id plus one. Zero means absent or an older feeder.
+    float_id: Word,
+    fixed_id: Word,
+    text_id: Word,
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -421,6 +425,8 @@ private data ps {
     pcount: Word,
     pnames: [Word; 33],
     pdescriptor: [Word; 33],
+    ptext: [Word; 33],
+    text_params: Word, text_used: Word, text_return: Word,
     // Per value-parameter: 1 if the parameter's type is `Byte`, else 0, so a bitwise op on two Byte
     // operands lowers promote-operate-truncate. `last_byte` tracks whether the most recently emitted
     // operand VALUE is Byte-typed (set for a Byte parameter Local, cleared otherwise); the stages
@@ -1546,6 +1552,15 @@ fn clear_let_shape(at: Word) -> Word {
     0
 }
 
+private data nl {
+    ftype: [Word; 512], ttype: [Word; 256],
+    known: [Word; 64], tknown: [Word; 32], tdecl: [Word; 32],
+    dirty: Word, changed: Word,
+    kind: Word, size: Word, sid: Word, eid: Word, ok: Word,
+    enum_ok: Word, tsize: Word, tok: Word, ssize: Word, sok: Word,
+    asize: Word, aknown: Word,
+}
+
 fn step_local(v: Word) -> Word {
     ps.found = 0;
     ps.found_flag = 0;
@@ -1894,39 +1909,35 @@ fn step_cfield(k: Word, v: Word) -> Word {
 // `field_size_and_kind` without recording a ScalarKind, as an enum payload's per-field kind is
 // unused until payload matching lands.
 fn type_byte_size(v: Word) -> Word {
-    if v == toks.word_id {
-        8
-    } else {
-    if v == toks.byte_id {
-        1
-    } else {
-    if v == toks.bool_id {
-        1
-    } else {
+    let kind = scalar_kind_of(v);
+    if kind == 3 orelse kind == 4 orelse kind == 5 { 8 } else {
+    if kind == 1 orelse kind == 2 { 1 } else {
+    if kind == 6 { 16 } else {
         enums.esz_scratch = 0;
         for i in 0..structdefs.sd_count limit 64 {
-            if structdefs.sd_name[i] == v {
-                enums.esz_scratch = structdefs.sd_bytesize[i];
-            }
+            if structdefs.sd_name[i] == v { enums.esz_scratch = structdefs.sd_bytesize[i]; }
         }
         enums.esz_scratch
     } } }
 }
 
-// The ScalarKind tag of a scalar type name: `Word` Int (3), `Byte` (2), `Bool` (1), else Unit
-// (0). Used to bake a tuple element's GetTupleField kind, mirroring `field_size_and_kind`'s tag.
+// Host-width scalar layouts. Extra primitive ids are offset by one so zero is absent.
 fn scalar_kind_of(v: Word) -> Word {
-    if v == toks.word_id {
-        3
-    } else {
-    if v == toks.byte_id {
-        2
-    } else {
-    if v == toks.bool_id {
-        1
-    } else {
-        0
-    } } }
+    if toks.float_id > 0 andalso v + 1 == toks.float_id { 5 } else {
+    if toks.fixed_id > 0 andalso v + 1 == toks.fixed_id { 4 } else {
+    if toks.text_id > 0 andalso v + 1 == toks.text_id { 6 } else {
+    if v == toks.word_id { 3 } else {
+    if v == toks.byte_id { 2 } else {
+    if v == toks.bool_id { 1 } else { 0 } } } } } }
+}
+
+fn signature_text_name(v: Word, is_return: Word) -> Word {
+    if toks.text_id > 0 andalso v + 1 == toks.text_id {
+        if is_return == 1 { ps.text_return = 1; } else {
+            ps.ptext[ps.pcount - 1] = 1; ps.text_params = 1;
+        }
+    }
+    0
 }
 
 // A token inside a return-type tuple `-> (T, T, ...)` during the signature scan. Counts the
@@ -2009,6 +2020,7 @@ fn step_enum_payload(k: Word, v: Word) -> Word {
             let li = ps.epf_layout - 1;
             let base = tupledefs.tup_estart[li];
             let ei = tupledefs.tup_ecount[li];
+            nl.ttype[base + ei] = v + 1;
             tupledefs.tup_eoffset[base + ei] = ps.epf_off;
             tupledefs.tup_ekind[base + ei] = scalar_kind_of(v);
             tupledefs.tup_ecount[li] = ei + 1;
@@ -2059,6 +2071,7 @@ fn step_enum_payload(k: Word, v: Word) -> Word {
             enums.evfarrkind[fi] = 0;
             ps.epf = 1;
             ps.epf_layout = tupledefs.tup_count + 1;
+            nl.tdecl[tupledefs.tup_count] = 1;
             ps.epf_off = 0;
             tupledefs.tup_estart[tupledefs.tup_count] = tupledefs.tup_ecursor;
             tupledefs.tup_ecount[tupledefs.tup_count] = 0;
@@ -6525,6 +6538,7 @@ fn header_step(k: Word, v: Word) -> Word {
             ps.arr = 0;
             ps.arr_ret = 0;
             ps.pcount = 0;
+            ps.text_params = 0; ps.text_used = 0; ps.text_return = 0;
             // Capture this function's chunk index (its name's position in `toks.chunks`) so its
             // return type is recorded against it.
             ps.cur_chunk = 0;
@@ -6631,6 +6645,7 @@ fn header_use(k: Word, v: Word) -> Word {
 fn header_enum(k: Word, v: Word) -> Word {
     if ps.mode == 9 {
         if k == 1 {
+            nl.dirty = 1;
             enums.cur_enum = v;
             enums.next_disc = 0;
             ps.mode = 10;
@@ -6728,6 +6743,7 @@ fn header_data(k: Word, v: Word) -> Word {
                 // reuse the data-field scan but are not slotted (see commit_field). Record
                 // the name so a body can recognise its `Name { ... }` construction, and open
                 // its flat byte-size accumulator (summed per scalar field below).
+                nl.dirty = 1;
                 structdefs.sd_name[structdefs.sd_count] = v;
                 structdefs.sd_bytesize[structdefs.sd_count] = 0;
                 structdefs.sd_fstart[structdefs.sd_count] = structdefs.sd_fname_ctr;
@@ -6835,6 +6851,11 @@ fn commit_field() -> Word {
 // before use, so final here) with kind 0 and `sd_fstruct` set to the nested struct's index + 1
 // so a nested field access `p.inner.x` can resolve into it.
 fn field_size_and_kind(fidx: Word, v: Word) -> Word {
+    nl.ftype[fidx] = v + 1;
+    if scalar_kind_of(v) >= 4 {
+        structdefs.sd_fkind[fidx] = scalar_kind_of(v);
+        type_byte_size(v)
+    } else {
     if v == toks.word_id {
         structdefs.sd_fkind[fidx] = 3;
         8
@@ -6868,7 +6889,7 @@ fn field_size_and_kind(fidx: Word, v: Word) -> Word {
             }
         }
         structdefs.sd_matchsz
-    } } }
+    } } } }
 }
 
 // A token inside a struct field's tuple type `(T, T, ...)`. A type ident sums its size into the
@@ -6885,6 +6906,7 @@ fn step_struct_tuple_field(k: Word, v: Word) -> Word {
             let li = structdefs.sd_ftuple[fidx] - 1;
             let base = tupledefs.tup_estart[li];
             let ei = tupledefs.tup_ecount[li];
+            nl.ttype[base + ei] = v + 1;
             tupledefs.tup_eoffset[base + ei] = ps.tf_size;
             tupledefs.tup_ekind[base + ei] = scalar_kind_of(v);
             // A struct-typed element records its declaration index + 1, mirroring `step_tuple_type`
@@ -7002,6 +7024,7 @@ fn header_field(k: Word, v: Word) -> Word {
                 tupledefs.tup_ecount[li] = 0;
                 tupledefs.tup_count = li + 1;
                 structdefs.sd_ftuple[fidx] = li + 1;
+                nl.tdecl[li] = 1;
             }
             if ps.dvis == 3 { type_tuple_record(94, 0) } else { 0 }
         } else { 0 }
@@ -7053,6 +7076,8 @@ fn header_field(k: Word, v: Word) -> Word {
 // reconstructed node count (its four struct/enum scan loops inlined) stays under the per-function
 // reconstruct cap; parse.kel's own `header_sig` grew past it as the array-type surface expanded.
 fn header_type_ident(v: Word, mode: Word) -> Word {
+    signature_text_name(v, mode);
+    if scalar_kind_of(v) >= 4 { queue_named_layout(v, mode); }
     if mode == 0 {
         ps.pscalar[ps.pcount - 1] = scalar_type_name(v);
         // Record a `Byte` scalar parameter so a bitwise op on it lowers promote-operate-truncate.
@@ -7101,18 +7126,117 @@ fn header_node(form: Word, bytes: Word) -> Word {
         at
     }
 }
+// Layout dependencies are resolved monotonically. Unknown names and cycles stay unknown.
+fn nominal_enum_known(name: Word) -> Word {
+    nl.enum_ok = 1;
+    for vi in 0..enums.enum_count limit 256 {
+        if enums.edata[vi] == name {
+            for i in 0..enums.evfcount[vi] limit 32 {
+                let fi = enums.evfstart[vi] + i;
+                if enums.evfstruct[fi] > 0 {
+                    if nl.known[enums.evfstruct[fi] - 1] == 0 { nl.enum_ok = 0; }
+                } else { if enums.evftuple[fi] > 0 {
+                    if nl.tknown[enums.evftuple[fi] - 1] == 0 { nl.enum_ok = 0; }
+                } else { if enums.evfarrkind[fi] > 0 {
+                    if enums.evfarrkind[fi] == 1 { nl.enum_ok = 0; }
+                } else { if enums.evfkind[fi] == 0 { nl.enum_ok = 0; } } } }
+            }
+        }
+    }
+    nl.enum_ok
+}
+fn nominal_name(name: Word) -> Word {
+    nl.kind = scalar_kind_of(name); nl.size = type_byte_size(name);
+    nl.ok = if nl.kind > 0 { 1 } else { 0 }; nl.sid = 0; nl.eid = 0;
+    for i in 0..structdefs.sd_count limit 64 {
+        if structdefs.sd_name[i] == name {
+            nl.sid = i + 1; nl.ok = nl.known[i]; nl.size = structdefs.sd_bytesize[i];
+        }
+    }
+    for i in 0..enums.enum_count limit 256 {
+        if enums.edata[i] == name {
+            nl.eid = name + 1; nl.ok = nominal_enum_known(name); nl.size = enum_bytesize(name);
+        }
+    }
+    0
+}
+fn nominal_tuple(t: Word) -> Word {
+    nl.tsize = 0; nl.tok = 1;
+    for i in 0..tupledefs.tup_ecount[t] limit 256 {
+        let at = tupledefs.tup_estart[t] + i;
+        if nl.ttype[at] > 0 {
+            nominal_name(nl.ttype[at] - 1);
+        } else {
+            nl.kind = tupledefs.tup_ekind[at]; nl.sid = tupledefs.tup_estruct[at];
+            nl.ok = if nl.kind > 0 andalso nl.kind < 7 { 1 } else { 0 };
+            nl.size = if nl.kind == 6 { 16 } else { if nl.kind >= 3 { 8 } else { 1 } };
+        }
+        if nl.ok == 0 { nl.tok = 0; }
+        tupledefs.tup_eoffset[at] = nl.tsize;
+        tupledefs.tup_ekind[at] = nl.kind;
+        tupledefs.tup_estruct[at] = nl.sid;
+        nl.tsize = nl.tsize + nl.size;
+        if nl.tsize > 0xFFFFFFFF { nl.tok = 0; }
+    }
+    if nl.tok == 1 {
+        nl.tknown[t] = 1; tupledefs.tup_bytes[t] = nl.tsize; nl.changed = 1;
+    }
+    0
+}
+fn nominal_struct(s: Word) -> Word {
+    nl.ssize = 0; nl.sok = 1;
+    for i in 0..structdefs.sd_fcount[s] limit 512 {
+        let fi = structdefs.sd_fstart[s] + i;
+        if structdefs.sd_ftuple[fi] > 0 {
+            let t = structdefs.sd_ftuple[fi] - 1;
+            nl.ok = nl.tknown[t]; nl.size = tupledefs.tup_bytes[t];
+        } else {
+            if nl.ftype[fi] > 0 { nominal_name(nl.ftype[fi] - 1); } else {
+                nl.ok = 0; nl.size = 0; nl.kind = 0; nl.sid = 0; nl.eid = 0;
+            }
+            structdefs.sd_fkind[fi] = nl.kind;
+            structdefs.sd_fstruct[fi] = nl.sid;
+            structdefs.sd_fenum[fi] = nl.eid;
+        }
+        let count = if structdefs.sd_farraylen[fi] > 0 { structdefs.sd_farraylen[fi] } else { 1 };
+        if nl.ok == 0 orelse (nl.size > 0 andalso count > 0xFFFFFFFF / nl.size) { nl.sok = 0; } else {
+            structdefs.sd_foffset[fi] = nl.ssize;
+            structdefs.sd_fsize[fi] = nl.size * count;
+            nl.ssize = nl.ssize + structdefs.sd_fsize[fi];
+            if nl.ssize > 0xFFFFFFFF { nl.sok = 0; }
+        }
+    }
+    if nl.sok == 1 {
+        nl.known[s] = 1; structdefs.sd_bytesize[s] = nl.ssize; nl.changed = 1;
+    }
+    0
+}
+fn nominal_refresh() -> Word {
+    if nl.dirty == 1 {
+        nl.changed = 1;
+        for pass in 0..(structdefs.sd_count + tupledefs.tup_count + 1) limit 97 {
+            if nl.changed == 1 {
+                nl.changed = 0;
+                for t in 0..tupledefs.tup_count limit 32 {
+                    if nl.tdecl[t] == 1 andalso nl.tknown[t] == 0 { nominal_tuple(t); }
+                }
+                for s in 0..structdefs.sd_count limit 64 {
+                    if nl.known[s] == 0 { nominal_struct(s); }
+                }
+            }
+        }
+        nl.dirty = 0;
+    }
+    0
+}
+
 fn header_named(v: Word) -> Word {
     let at = header_node(0, type_byte_size(v));
     ht.scalar[at] = scalar_kind_of(v);
-    ht.nknown[at] = if scalar_type_name(v) == 1 { 1 } else { 0 };
+    ht.nknown[at] = if ht.scalar[at] > 0 { 1 } else { 0 };
     for i in 0..structdefs.sd_count limit 64 {
         if structdefs.sd_name[i] == v {
-            ht.nform[at] = 3; ht.decl[at] = i + 1; ht.nknown[at] = 1;
-            for j in 0..structdefs.sd_fcount[i] limit 512 {
-                // A primitive-field struct has a fully determined flat layout.
-                // Unresolved transitive layouts retain Top until their own metadata is available.
-                if structdefs.sd_fkind[structdefs.sd_fstart[i] + j] == 0 { ht.nknown[at] = 0; }
-            }
+            ht.nform[at] = 3; ht.decl[at] = i + 1; ht.nknown[at] = nl.known[i];
         }
     }
     for i in 0..enums.enum_count limit 256 {
@@ -7124,7 +7248,7 @@ fn header_named(v: Word) -> Word {
     at
 }
 fn header_layout_word(at: Word, is_return: Word) -> Word {
-    if ht.nknown[at] == 0 orelse ht.nsize[at] > 65535 { is_return } else {
+    if ht.nknown[at] == 0 orelse ht.nsize[at] > 0xFFFFFFFF { is_return } else {
         let kind = if ht.nform[at] == 0 { ht.scalar[at] } else { ht.nform[at] - 1 };
         let form = if ht.nform[at] == 0 { 1 } else { 2 };
         is_return + form * 2 + kind * 8 + ht.nsize[at] * 256
@@ -7294,6 +7418,7 @@ fn header_member(k: Word, v: Word) -> Word {
     let frame = ht.depth - 1;
     if ht.phase[frame] == 0 {
         if k == Tok::Ident() as Word {
+            signature_text_name(v, if ht.mode == 2 { 1 } else { 0 });
             header_add(header_named(v)); type_tuple_record(95, v)
         } else {
         if k == Tok::LParen() as Word { header_open(1) } else {
@@ -7350,6 +7475,11 @@ fn header_arm(at: Word) -> Word {
     0
 }
 fn resolve_plain_ident(v: Word) -> Word {
+    if ps.text_params == 1 andalso ps.in_guard == 0 {
+        for i in 0..ps.pcount limit 32 {
+            if ps.ptext[i] == 1 andalso ps.pnames[i] == v { ps.text_used = 1; }
+        }
+    }
     ps.found_flag = 0;
     for i in 0..stmt.let_count limit 64 { if stmt.let_names[i] == v { ps.found_flag = 1; } }
     if ps.found_flag == 1 { resolve_plain_ident_legacy(v) } else {
@@ -7363,7 +7493,24 @@ fn resolve_plain_ident(v: Word) -> Word {
     }
 }
 
+fn header_array_size(length: Word) -> Word {
+    if nl.asize > 0 andalso length > 0xFFFFFFFF / nl.asize { nl.aknown = 0; } else {
+        nl.asize = nl.asize * length;
+    }
+    0
+}
+fn queue_array_header_layout(length: Word) -> Word {
+    header_array_size(length);
+    ht.pending = 105;
+    let layout = if nl.aknown == 1 { 12 + nl.asize * 256 } else { 0 };
+    ht.pending_arg = ps.arr_ret + layout;
+    0
+}
 fn header_sig(k: Word, v: Word) -> Word {
+    nominal_refresh();
+    if k == Tok::Underscore() as Word andalso ps.pdepth == 1 andalso ps.pname == 1 {
+        perr(pe_pattern_syntax(), toks.at);
+    }
     if k == Tok::Const() as Word { perr(pe_call_syntax(), toks.at); }
     if ps.rtts == 1 {
         header_member(k, v)
@@ -7373,6 +7520,10 @@ fn header_sig(k: Word, v: Word) -> Word {
     } else {
     if k == 1 {
         if ps.arr == 3 {
+            signature_text_name(v, ps.arr_ret);
+            nominal_name(v);
+            nl.asize = nl.asize + nl.size;
+            if nl.ok == 0 orelse nl.asize > 0xFFFFFFFF { nl.aknown = 0; }
             // A tuple element type inside an array-of-tuple parameter `[(T, T, ...); N]`: append it
             // to the element tuple layout at the running byte offset and emit source metadata.
             // The closing `)` finalizes the element size.
@@ -7396,6 +7547,8 @@ fn header_sig(k: Word, v: Word) -> Word {
             type_tuple_record(95, v)
         } else {
         if ps.arr == 8 {
+            signature_text_name(v, ps.arr_ret);
+            nominal_name(v); nl.asize = nl.size; nl.aknown = nl.ok;
             // The inner element type of an array-of-array parameter `[[T; N]; M]`: record the inner
             // element ScalarKind (plus one) and stash its byte size in `tts_off` to multiply by the
             // inner length at the `; N` (arr 9).
@@ -7405,6 +7558,8 @@ fn header_sig(k: Word, v: Word) -> Word {
             if ps.arr_ret == 0 { 6 + v * 64 } else { 7 + v * 64 }
         } else {
         if ps.arr == 1 {
+            signature_text_name(v, ps.arr_ret);
+            nominal_name(v); nl.asize = nl.size; nl.aknown = nl.ok;
             ps.arr = 2;
             if ps.arr_ret == 0 {
                 // An array PARAMETER `xs: [T; N]`. If the element type names a declared struct,
@@ -7466,6 +7621,7 @@ fn header_sig(k: Word, v: Word) -> Word {
                 // tuple annotation that follows overrides it.
                 ps.pstruct[ps.pcount] = 0;
                 ps.pdescriptor[ps.pcount] = 0;
+                ps.ptext[ps.pcount] = 0;
                 ps.ptuple[ps.pcount] = 0;
                 ps.penum[ps.pcount] = 0;
                 ps.parray[ps.pcount] = 0;
@@ -7508,11 +7664,13 @@ fn header_sig(k: Word, v: Word) -> Word {
             ps.arr = 8;
         } else {
         if ps.ptype == 1 {
+            nl.asize = 0; nl.aknown = 1;
             ps.ptype = 0;
             ps.arr_ret = 0;
             ps.arr = 1;
         } else {
             if ps.rtype == 1 {
+                nl.asize = 0; nl.aknown = 1;
                 ps.rtype = 0;
                 ps.arr_ret = 1;
                 ps.arr = 1;
@@ -7536,11 +7694,13 @@ fn header_sig(k: Word, v: Word) -> Word {
             // size is element_size (stashed in `tts_off`) * N; await the inner `]` (arr 10).
             if v <= 0 { perr(pe_array_length(), v); }
             if ps.arr_ret == 0 { ps.parray_size[ps.pcount - 1] = ps.tts_off * v; }
+            header_array_size(v);
             ps.arr = 10;
             8 + v * 64
         } else {
         if ps.arr == 2 {
             if v <= 0 { perr(pe_array_length(), v); }
+            queue_array_header_layout(v);
             ps.arr = 0;
             // A scalar-array PARAMETER's length `; N`: record it (a return-type array is not a param
             // and is not recorded). `v` is N.
@@ -7652,10 +7812,12 @@ fn step_body() -> Word {
         mat.pending_bind = 0;
         record
     } else {
-    if ps.pend_end == 1 {
-        ps.pend_end = 0;
-        ps.mode = 0;
-        5
+    if ps.pend_end > 0 {
+        if ps.pend_end == 1 andalso (ps.text_used > 0 orelse ps.text_return > 0) {
+            ps.pend_end = 2; ps.emit_arg = ps.text_used + ps.text_return * 2; 106
+        } else {
+            ps.pend_end = 0; ps.mode = 0; 5
+        }
     } else {
     if ps.arm_pending == 1 {
         // The guard just closed; arm the real body (emit BSTART) before its tokens.

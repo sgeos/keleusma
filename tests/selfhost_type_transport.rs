@@ -314,3 +314,20 @@ fn array_projection_resolves_exact_element_types() {
         );
     }
 }
+
+#[test]
+fn empty_array_element_can_remain_unknown_in_zero_length_constraints() {
+    for required in [17, 18, 19, 33, 1] {
+        let mut batch = empty_batch();
+        batch
+            .expressions
+            .push((16, (0, 0, String::new()), (0, 0, String::new())));
+        batch.bindings.push(("empty".into(), 0, 2, String::new()));
+        batch.arguments.push((required, (0, 1, "empty".into())));
+        assert_eq!(
+            type_check_inputs_via_kel(&input(batch)).unwrap(),
+            (17..20).contains(&required),
+            "requirement {required}"
+        );
+    }
+}

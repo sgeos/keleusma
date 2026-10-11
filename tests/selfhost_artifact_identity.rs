@@ -157,7 +157,9 @@ fn production_compiler_matches_every_complete_stage_artifact() {
         let tokens = keleusma::lexer::tokenize(source).expect("reference lex");
         let ast = keleusma::parser::parse(&tokens).expect("reference parse");
         let reference = keleusma::compiler::compile(&ast).expect("reference compile");
-        let actual = keleusma::selfhost::self_host_compile_scratch(source);
+        let actual =
+            keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host())
+                .unwrap_or_else(|error| panic!("{name}: shipping compilation failed: {error:?}"));
         let expected_bytes = reference.to_bytes().expect("reference artifact");
         let actual_bytes = keleusma::selfhost::wire_module_artifact_via_kel(&actual)
             .unwrap_or_else(|e| panic!("{name}: pipeline wire emission failed: {e:?}"));

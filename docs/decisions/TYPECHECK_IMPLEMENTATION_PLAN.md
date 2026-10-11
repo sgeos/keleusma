@@ -348,3 +348,23 @@ The full code-generation test run also exposed a stale Rust test reconstruction 
 stale inventory assertions. The mirror now handles ordered wildcard patterns and guarded match
 results. All 78 current code-generation functions are required to compile identically. The
 construct-support count guard reads the current roadmap instead of the historical handoff.
+
+
+## Empty-array constraints and nominal layouts, 2026-10-11
+
+An empty literal now produces private tag 7. Its array shape and zero length are known, while
+its element remains unknown. The tag consumes no structural-pool cell. Compatible zero-length
+constraints can retain unknown element identity. Array projection checks distinguish an unknown
+element from a known non-array receiver. Ten source verdicts agree with the reference, including
+six previously missed rejections through calls, returns, aliases, annotations, comparisons and
+branches. Invalid cases require independent PipelineRejected at the shipping entry. Unused empty
+arrays and aliases still execute correctly. Empty-array equality retains the reference's runtime
+fault, and direct literal indexing remains unavailable during reconstruction.
+
+Nominal layouts now resolve from retained declaration names in Keleusma, including forward
+references. Sixteen signature controls preserve full artifacts. The shipping comparison checks
+all module metadata, and the fourteen-stage artifact test now exercises that entry. Keleusma
+also records Text boundary facts and computes the text-flow flag needed to preserve established
+Text admission. Physical Float and Fixed layouts do not establish full arithmetic type support.
+The selected capacities remain 640. The complete Order 1 objective still requires the remaining
+input obligations and final integration audit described in ORDER1_COMPLETION_PLAN.md.

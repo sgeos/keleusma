@@ -2161,7 +2161,7 @@ pub fn module_chunk_text_analyses(
 }
 
 /// Topological order of the call graph. Leaves come first, roots last.
-fn topological_call_order(module: &Module) -> Result<Vec<usize>, VerifyError> {
+pub(crate) fn topological_call_order(module: &Module) -> Result<Vec<usize>, VerifyError> {
     let n = module.chunks.len();
     let mut visited = alloc::vec![false; n];
     let mut on_stack = alloc::vec![false; n];

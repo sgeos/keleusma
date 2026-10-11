@@ -6,6 +6,52 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-11 Nominal layouts and complete metadata comparison
+
+Keleusma now retains nominal member names and resolves forward layout dependencies with a bounded
+monotone pass. Sixteen signature fixtures match complete reference artifacts. A reversed chain of
+64 structs resolves, and corrected forward-field offsets execute against host values as twelve.
+Float, Fixed and Text physical scalar layouts are retained, together with nominal arrays and
+large structural signatures. The source type checker retains its documented arithmetic boundary.
+
+The shipping comparison now checks every module, chunk and data-layout field. Exhaustive field
+patterns require future metadata additions to make an explicit comparison decision. Thirty-one
+independent mutation controls detect changes. The permanent fourteen-stage artifact test now uses
+the shipping entry before Keleusma serialization and decoding.
+
+An empty literal retains its array shape and zero length through private type tag 7, with an
+unknown element and no structural-pool allocation. Ten verdict cases agree with the reference.
+Six invalid cases require independent shipping rejection. Unused empty literals and aliases still
+execute as seven. Empty-array equality preserves the reference artifact and its runtime type fault.
+
+The broader comparison exposed Text and Fixed admission regressions. Metadata 106 now carries
+Keleusma-derived text usage and return facts. A streaming mode in analyze.kel computes textness of
+stack and local values, propagates callee summaries and derives the ephemerality flag. Rust stores
+abstract values and provides dependency scheduling and opcode facts. The existing Text and Fixed
+boundaries, large text serialization and command-line admission pass again. Wildcard function
+parameters remain unsupported and now receive an explicit parser diagnostic.
+
+The parser has 206 chunks and a 174,436-byte artifact. Its 336,016 shared bytes and 1,073,472 private
+bytes include this increment's 24 shared bytes and 30,272 private bytes. Analyze has 19 chunks,
+a 17,964-byte artifact and 64 additional private bytes. The type stage has 44 chunks and a
+23,404-byte artifact without added shared or private storage. Selected type capacities stay at 640.
+Public bytecode version stays 2 and opcode count stays 66. The bounded wire-input maxima are
+873 names and 24,662 bytes, within the unchanged limits.
+
+The final workspace records 3,197 passes, one stale measurement-pin failure and five ignored tests
+across 187 suites. Analyze now has 1,877 total parser records while its peak group remains 324.
+After the test-only pin correction, all 152 code-generation tests pass. The workspace was not
+rerun afterward. Twenty-seven selected no-default tests, fresh Clippy, documentation and the
+build without the standard library pass. Inference independence covers 56,408 recorded types.
+All fourteen stages pass the permanent shipping artifact check. The reverse prompt carries receipts.
+
+The shadow pilot retains the first diagnostic and three completion excerpts with non-independent
+labels and reviewed source hashes. External evaluation remains unavailable. Order 1 remains active.
+The new comparison catches a private initializer lost by source assembly, with pipeline execution
+one against reference six. Shipping now refuses that mismatch. Private initializers, mixed tuple
+construction, general nested headers, binder and occurrence coverage, and final integration gates
+remain work to complete.
+
 ## 2026-10-11 Tuple projections retain source identity
 
 Tuple headers now preserve nested tuples, arrays with literal dimensions, grouping and unit.

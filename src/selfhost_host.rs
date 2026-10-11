@@ -249,6 +249,8 @@ pub const PARSE_ANNOTATION_GROUP_TAG: i64 = 103;
 pub const PARSE_TUPLE_PROJECTION_TAG: i64 = 104;
 /// Source header layout, with return bit, shape form, kind and byte size.
 pub const PARSE_HEADER_LAYOUT_TAG: i64 = 105;
+/// Entry-boundary facts. Bit zero is a used text parameter, bit one a text return type.
+pub const PARSE_TEXT_BOUNDARY_TAG: i64 = 106;
 
 /// The tag at or below which a word yielded by `reconstruct.kel` is a diagnostic rather
 /// than a node count. Node counts are non-negative, so no legitimate count can collide.
@@ -796,6 +798,13 @@ pub const BR_P_HAS_IMPORTS: usize = BR_P_FALSE_ID + 1;
 /// Contextual assertion keyword, distinct from a user function called `assert`.
 pub const BR_P_ASSERT_ID: usize = BR_P_HAS_IMPORTS + 1;
 
+/// Float type-name id plus one. Zero means no Float type name was supplied.
+pub const BR_P_FLOAT_ID: usize = BR_P_ASSERT_ID + 1;
+/// Fixed type-name id plus one.
+pub const BR_P_FIXED_ID: usize = BR_P_FLOAT_ID + 1;
+/// Text type-name id plus one.
+pub const BR_P_TEXT_ID: usize = BR_P_FIXED_ID + 1;
+
 #[cfg(test)]
 mod shared_layout_tests {
     use super::*;
@@ -890,6 +899,9 @@ mod shared_layout_tests {
             ("false_id", "BR_P_FALSE_ID", BR_P_FALSE_ID),
             ("has_imports", "BR_P_HAS_IMPORTS", BR_P_HAS_IMPORTS),
             ("assert_id", "BR_P_ASSERT_ID", BR_P_ASSERT_ID),
+            ("float_id", "BR_P_FLOAT_ID", BR_P_FLOAT_ID),
+            ("fixed_id", "BR_P_FIXED_ID", BR_P_FIXED_ID),
+            ("text_id", "BR_P_TEXT_ID", BR_P_TEXT_ID),
         ];
         for &(field, konst, value) in cases {
             assert_eq!(
