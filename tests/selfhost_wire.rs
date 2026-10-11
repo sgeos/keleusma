@@ -12443,7 +12443,9 @@ fn the_join_holds_on_the_largest_real_stage() {
     // The control's premise, asserted rather than assumed: this module must
     // exceed the OLD ceilings, or it verifies nothing that a smaller case did
     // not already verify.
-    let blob = module_input_blob(&module);
+    // The established compact scalar tail preserves every value and name while
+    // omitting the zero-only legacy node fields. The full legacy blob now exceeds bin.
+    let (blob, _) = keleusma::selfhost::module_input(&module);
     // The count comes from the REFERENCE's own `NAMES` region, not from
     // `interner_input`. That model predates the data-slot contributor and
     // reports 252 for `parse` where the reference emits 627; using it here would
@@ -12654,7 +12656,9 @@ fn the_join_holds_across_every_stage() {
             compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
         let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
         let reference = keleusma_wire::WireView::parse(&want).expect("reference parses");
-        let blob = module_input_blob(&module);
+        // The established compact scalar tail preserves every value and name while
+        // omitting the zero-only legacy node fields. The full legacy blob now exceeds bin.
+        let (blob, _) = keleusma::selfhost::module_input(&module);
 
         let specs: Vec<RegionSpec> = region_counts_for(&want)
             .into_iter()
@@ -12963,10 +12967,10 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     );
     eprintln!("worst names {worst_names}, worst blob {worst_blob}");
     // Measured 2026-10-11. Earlier evidence omitted wire and verify_types.
-    // Parse holds both maxima and leaves 24,490 bytes below the input cap.
+    // Parse holds both maxima and leaves 23,660 bytes below the input cap.
     // Neither capacity is raised here.
-    assert_eq!(worst_names, 873, "the worst-case name count moved");
-    assert_eq!(worst_blob, 24662, "the worst-case blob size moved");
+    assert_eq!(worst_names, 901, "the worst-case name count moved");
+    assert_eq!(worst_blob, 25492, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

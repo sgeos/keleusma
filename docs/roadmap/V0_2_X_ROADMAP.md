@@ -348,15 +348,16 @@ The gaps to close, from the current subset to the full grammar:
 
 ## Current Order-1 status, 2026-10-11
 
-The latest increment resolves nominal signature layouts, including forward declarations, and
-retains empty-array shape and length for independent rejection. The shipping comparison now checks
-all assembled metadata, with mutation controls, and the permanent fourteen-stage artifact test
-uses that shipping entry. Text and Fixed admission are preserved through Keleusma layout and
-text-boundary decisions. Inference independence covers 56,408 recorded types.
-The final workspace reports 3,197 passes, one stale residency pin and five ignored tests. After
-correcting the pin, all 152 code-generation tests pass. The workspace was not rerun after that
-test-only change. Private source initializers, mixed tuple construction, general nested headers,
-binder and occurrence coverage, and final integration gates keep Order 1 open. The
+The latest increment preserves source private initializers and computes shared/private slot order
+in Keleusma. Fifteen valid sources preserve complete artifacts, eight execute after serialization
+and decoding, and eleven invalid initializers reject independently. Immutable function address
+snapshots prevent later declarations from changing earlier type facts. The parser declaration
+capacity is 640, with matching scans and boundary controls. Selected type-stage capacities remain 640.
+All fourteen stage artifacts pass the shipping check. Inference independence covers 56,921 types.
+The workspace reports 3,202 passes, three legacy adapter failures and five ignored tests. Test-only
+repairs subsequently pass 193 targeted checks. The workspace was not rerun afterward.
+Declaration-order relocation, mixed tuple construction, general nested headers, binder and
+occurrence coverage, and final integration gates keep Order 1 open. The
 [completion plan](../decisions/ORDER1_COMPLETION_PLAN.md) and
 [reverse prompt](../process/REVERSE_PROMPT.md) carry current evidence and witnesses.
 

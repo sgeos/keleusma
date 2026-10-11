@@ -6,6 +6,45 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-11 Private source initializers reach persistent state
+
+Keleusma now emits a private initializer kind and value for each field. Metadata 107 names the
+kind, 108 carries a nonnegative value and 109 carries the complement of a negative value. This
+preserves negative one despite the legacy record sentinel. The Rust host validates the descriptors
+and constructs constant values without choosing type-based defaults or borrowing reference values.
+
+Fifteen valid sources preserve complete artifacts. Word and Byte integer literals, Bool literals,
+a leading minus, grouped scalar initializers and grouped scalar types retain their values.
+Scalar-array defaults repeat the emitted zero. Fixed and Float default zeros are represented.
+The floating-point literal boundary remains separate. Eight cases execute after Keleusma
+serialization and decoding, including the original counter returning six. Eleven invalid initializers
+require independent PipelineRejected. One-element arrays remain distinct from scalars.
+
+Keleusma assigns shared slots before private slots. Metadata 110 preserves field ordinals and bases.
+Function type extraction shares immutable address snapshots through copy-on-write Arc vectors.
+Later declarations cannot change the meaning of an earlier address during type checking. Relocation
+of an already emitted body after a later shared declaration remains open, with a standing valid-source
+control that distinguishes unsupported assembly from false type rejection.
+
+The parser's own source now declares 525 fields. Its declaration table and four scans were widened
+from 512 to 640, with boundary and scan-inventory controls. The existing 24-bit data-address limit is
+checked before expansion. The parser has 216 chunks, a 179,828-byte artifact and 1,110,912 private
+bytes, an increase of 37,440 bytes. Shared storage remains 336,016 bytes. The selected type-stage
+caps remain 640. Public bytecode version stays 2 and opcode count stays 66.
+
+All fourteen stage artifacts, monomorphization controls and inference checks pass. Inference
+independence covers 56,921 recorded types. The full workspace records 3,202 passes, three legacy
+adapter failures and five ignored tests across 188 suites. Repairs add metadata 110 to the pipeline
+adapter and use the existing compact scalar encoding in two resident join controls. The joins still
+compare full name and pool payloads. Their 193-test rerun passes. The workspace was not rerun after
+those test-only changes. Twenty-one no-default tests, fresh Clippy, documentation and the build
+without the standard library pass. Exact receipts are in the reverse prompt.
+
+The shadow pilot retains the first diagnostic and three completion excerpts, with immutable source
+snapshots, non-independent labels and a reviewed export. External evaluation remains unavailable.
+Order 1 remains active. Declaration-order relocation, mixed tuple construction, general nested
+headers, binder and occurrence coverage, and final integration gates still require work.
+
 ## 2026-10-11 Nominal layouts and complete metadata comparison
 
 Keleusma now retains nominal member names and resolves forward layout dependencies with a bounded

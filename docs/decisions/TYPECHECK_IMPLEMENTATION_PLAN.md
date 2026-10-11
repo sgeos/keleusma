@@ -368,3 +368,19 @@ also records Text boundary facts and computes the text-flow flag needed to prese
 Text admission. Physical Float and Fixed layouts do not establish full arithmetic type support.
 The selected capacities remain 640. The complete Order 1 objective still requires the remaining
 input obligations and final integration audit described in ORDER1_COMPLETION_PLAN.md.
+
+
+## Private initializers and data-address snapshots, 2026-10-11
+
+Private initializer kinds, defaults, signed integer values and Bool values now come from Keleusma
+parser records. Initializer presence on shared or composite private fields, incompatible literal
+kinds, Byte range violations and malformed scalar syntax are rejected independently. Eleven negative
+controls require PipelineRejected, with fifteen valid artifact controls. The minus-one payload uses
+a complement record, preserving the existing transport sentinel.
+
+Data address assignments now come from Keleusma after visibility partitioning. Function inputs retain
+immutable snapshots so later declarations cannot change earlier type facts. A valid early-private,
+late-shared witness remains unsupported at assembly because its earlier body needs relocation, while
+its independent type verdict stays true. The declaration table and all four scans now admit 640
+fields. The selected type-stage capacities remain unchanged at 640. The complete Order 1 audit
+remains governed by ORDER1_COMPLETION_PLAN.md.

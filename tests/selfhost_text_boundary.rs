@@ -61,18 +61,16 @@ fn wildcard_parameters_remain_explicitly_unsupported() {
 }
 
 #[test]
-fn unresolved_private_initializers_cannot_escape_the_shipping_comparison() {
+fn private_initializers_preserve_shipping_metadata() {
     let source = "private data d { n: Word = 5 } fn main() -> Word { d.n = d.n + 1; d.n }";
     let reference = keleusma::selfhost::compile_src(source);
-    let pipeline = keleusma::selfhost::self_host_compile_scratch(source);
-    assert_eq!(pipeline.chunks[0].ops, reference.chunks[0].ops);
-    assert_ne!(
+    let pipeline =
+        keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host()).unwrap();
+    assert_eq!(
         pipeline.data_layout.as_ref().unwrap().private_init,
         reference.data_layout.as_ref().unwrap().private_init
     );
-    assert!(
-        matches!(keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host()), Err(keleusma::selfhost::SelfHostError::Unsupported { detail }) if detail.contains("private initializers"))
-    );
+    assert_eq!(pipeline.to_bytes().unwrap(), reference.to_bytes().unwrap());
     let control = "private data d { n: Word } fn main() -> Word { d.n = d.n + 1; d.n }";
     keleusma::selfhost::self_hosted_compile(control, &keleusma::target::Target::host()).unwrap();
 }

@@ -472,6 +472,7 @@ fn parse_via_lexer(src: &str) -> (usize, usize) {
                     0 => {}
                     1..=3 => open_decl = true,
                     4 | 6 | 7 | 8 => {}
+                    keleusma::selfhost_host::PARSE_DATA_FIELD_BASE_TAG => {}
                     9 => in_data = true,
                     10 => in_use = true,
                     12 => in_enum = true,

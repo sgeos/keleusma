@@ -205,6 +205,7 @@ pub struct ParsedFn {
     param_layouts: Vec<Option<crate::bytecode::WireShape>>,
     return_layout: Option<crate::bytecode::WireShape>,
     text_boundary: i64,
+    data_bases: alloc::sync::Arc<Vec<i64>>,
 }
 
 impl ParsedFn {
@@ -1783,6 +1784,7 @@ fn try_parse_functions_impl(
     // Every data block's header records (DSTART, then PARAM/PTYPE/ASIZE per field, then
     // END), concatenated in declaration order, for the driver's own data-layout assembly.
     let mut data_records: Vec<(i64, i64)> = Vec::new();
+    let mut data_bases = alloc::sync::Arc::new(Vec::new());
     // Every enum's header records (ENUMSTART, then EVARIANT/EDISC per variant, then END),
     // for the driver's own enum-layout assembly.
     let mut enum_records: Vec<(i64, i64)> = Vec::new();
@@ -1903,6 +1905,19 @@ fn try_parse_functions_impl(
         budget,
         |code, val| {
             on_record(code, val, cursor_at.get());
+            if code == crate::selfhost_host::PARSE_DATA_FIELD_BASE_TAG {
+                assert!(val >= 0, "negative data address record");
+                let index = usize::try_from(val / 16777216).expect("data field ordinal");
+                let base = val % 16777216;
+                let values = alloc::sync::Arc::make_mut(&mut data_bases);
+                assert!(index <= values.len(), "data address record leaves a gap");
+                if index == values.len() {
+                    values.push(base);
+                } else {
+                    values[index] = base;
+                }
+                return ControlFlow::Continue(());
+            }
             if (in_body || in_guard) && matches!(code, 94..=96 | 99..=101 | 103) {
                 use crate::selfhost_host::{
                     PARSE_ANNOTATION_ARRAY_TAG, PARSE_ANNOTATION_END_TAG,
@@ -2138,6 +2153,7 @@ fn try_parse_functions_impl(
                             param_layouts: Vec::new(),
                             return_layout: None,
                             text_boundary: 0,
+                            data_bases: alloc::sync::Arc::new(Vec::new()),
                         })
                     }
                     4 => {
@@ -2231,7 +2247,8 @@ fn try_parse_functions_impl(
                     }
                     19..=20 => in_skip_decl = true, // trait/impl declaration
                     5 => {
-                        open_decl(&mut cur, code, val);
+                        open_decl(&mut cur, code, val).data_bases =
+                            alloc::sync::Arc::clone(&data_bases);
                         on_function(&names, cur.take().unwrap())
                     }
                     15 => return ControlFlow::Break(()),
@@ -2632,35 +2649,42 @@ fn declared_type_operand(
 
 /// Source-declared data types keyed by parser slot ranges, in declaration order.
 /// Ranges avoid expanding large arrays just to look up the few fields a body uses.
-fn source_data_type_ranges(records: &[(i64, i64)], names: &[String]) -> Vec<(i64, i64, i64)> {
+fn source_data_type_ranges(
+    records: &[(i64, i64)],
+    names: &[String],
+    bases: &[i64],
+) -> Vec<(i64, i64, i64)> {
     let mut fields = Vec::new();
     let mut visibility = 2;
     for &(kind, value) in records {
         match kind {
             9 => visibility = value % 4,
-            4 => fields.push((visibility, None, 1i64)),
-            6 => fields.last_mut().expect("data type without field").1 = Some(value),
-            8 => fields.last_mut().expect("data length without field").2 = value,
+            4 if visibility < 2 => fields.push((None, 1i64)),
+            6 if visibility < 2 => {
+                fields.last_mut().expect("data type without field").0 = Some(value)
+            }
+            8 if visibility < 2 => fields.last_mut().expect("data length without field").1 = value,
             _ => {}
         }
     }
-    let mut base = 0i64;
-    let mut ranges = Vec::new();
-    for (visibility, type_id, count) in fields {
-        if visibility > 1 {
-            continue;
-        }
-        assert!(count >= 0, "negative data field length");
-        let end = base.checked_add(count).expect("data slot range overflow");
-        let tag = scalar_tag_of_type_name(
-            type_id
-                .and_then(|id| names.get(id as usize))
-                .map(String::as_str),
-        );
-        ranges.push((base, end, tag));
-        base = end;
-    }
-    ranges
+    assert!(
+        bases.len() <= fields.len(),
+        "data address count exceeds declarations"
+    );
+    fields
+        .into_iter()
+        .zip(bases)
+        .map(|((type_id, count), &base)| {
+            assert!(count >= 0 && base >= 0, "negative data field range");
+            let end = base.checked_add(count).expect("data slot range overflow");
+            let tag = scalar_tag_of_type_name(
+                type_id
+                    .and_then(|id| names.get(id as usize))
+                    .map(String::as_str),
+            );
+            (base, end, tag)
+        })
+        .collect()
 }
 
 /// Extract call input facts without reference syntax or inferred expression types.
@@ -2755,7 +2779,6 @@ pub fn try_call_type_inputs_from_pipeline(
             _ => {}
         }
     }
-    let data_types = source_data_type_ranges(&data_records, &names);
     let mut declarations = Vec::new();
     for f in &fns {
         let Some(name) = name_of(f.name) else {
@@ -2799,6 +2822,7 @@ pub fn try_call_type_inputs_from_pipeline(
             continue;
         };
         let source_slots = source_head_slot_names(f, &names);
+        let data_types = source_data_type_ranges(&data_records, &names, &f.data_bases);
         for (range, records) in [&f.guard, &f.body].into_iter().enumerate() {
             if records.is_empty() {
                 continue;
@@ -5823,46 +5847,91 @@ fn assemble_shared_layout(
     layout
 }
 
-/// Assemble the per-private-slot load-time initial values from parse.kel's records:
-/// one entry per private slot (arrays expanded), the type's zero -- `Int(0)` for a
-/// `Word` slot, `Byte(0)` for a `Byte` slot. The stage private fields carry no
-/// `= literal` initializer, so every entry is a zero.
-fn assemble_private_init(
-    data_records: &[(i64, i64)],
-    names: &[String],
-) -> Vec<crate::bytecode::ConstValue> {
-    use crate::bytecode::ConstValue;
-    struct Blk {
-        vis: i64,
-        fields: Vec<(i64, i64)>, // (type name id, element count)
+/// Assemble parser-produced private initializer descriptors in private-slot order.
+/// The parser decides the scalar kind, default, literal value and admission verdict.
+fn assemble_private_init(data_records: &[(i64, i64)], _names: &[String]) -> Vec<ConstValue> {
+    use crate::selfhost_host::{
+        PARSE_PRIVATE_INIT_KIND_TAG, PARSE_PRIVATE_INIT_NEGATIVE_TAG, PARSE_PRIVATE_INIT_VALUE_TAG,
+    };
+    struct Field {
+        count: i64,
+        kind: Option<i64>,
+        value: Option<ConstValue>,
     }
-    let mut blocks: Vec<Blk> = Vec::new();
-    for &(code, val) in data_records {
+    let mut fields: Vec<Field> = Vec::new();
+    let mut visibility = 2;
+    for &(code, value) in data_records {
         match code {
-            9 => blocks.push(Blk {
-                vis: val % 4,
-                fields: Vec::new(),
+            9 => visibility = value % 4,
+            4 if visibility == 1 => fields.push(Field {
+                count: 1,
+                kind: None,
+                value: None,
             }),
-            4 => blocks.last_mut().unwrap().fields.push((0, 1)),
-            6 => blocks.last_mut().unwrap().fields.last_mut().unwrap().0 = val,
-            8 => blocks.last_mut().unwrap().fields.last_mut().unwrap().1 = val,
+            8 if visibility == 1 => fields.last_mut().expect("array without field").count = value,
+            PARSE_PRIVATE_INIT_KIND_TAG if visibility == 1 => {
+                let field = fields.last_mut().expect("initializer kind without field");
+                assert!(
+                    field.kind.replace(value).is_none(),
+                    "duplicate initializer kind"
+                );
+            }
+            PARSE_PRIVATE_INIT_VALUE_TAG | PARSE_PRIVATE_INIT_NEGATIVE_TAG if visibility == 1 => {
+                assert!(
+                    value >= 0,
+                    "initializer transport value must be nonnegative"
+                );
+                let value = if code == PARSE_PRIVATE_INIT_NEGATIVE_TAG {
+                    !value
+                } else {
+                    value
+                };
+                let field = fields.last_mut().expect("initializer without field");
+                let initial = match field.kind.expect("initializer without kind") {
+                    0 => {
+                        assert_eq!(value, 0, "nonzero unit initializer");
+                        ConstValue::Unit
+                    }
+                    1 => {
+                        assert!((0..=1).contains(&value), "invalid Bool initializer");
+                        ConstValue::Bool(value != 0)
+                    }
+                    2 => ConstValue::Byte(u8::try_from(value).expect("invalid Byte initializer")),
+                    3 => ConstValue::Int(value),
+                    4 => ConstValue::Fixed(value),
+                    #[cfg(feature = "floats")]
+                    5 => {
+                        assert_eq!(value, 0, "unsupported Float initializer transport");
+                        ConstValue::Float(0.0)
+                    }
+                    other => panic!("unknown private initializer kind {other}"),
+                };
+                assert!(
+                    field.value.replace(initial).is_none(),
+                    "duplicate initializer value"
+                );
+            }
             _ => {}
         }
     }
-    let mut init = Vec::new();
-    for b in blocks.iter().filter(|b| b.vis == 1) {
-        for &(tid, count) in &b.fields {
-            let zero = match names[tid as usize].as_str() {
-                "Word" => ConstValue::Int(0),
-                "Byte" => ConstValue::Byte(0),
-                other => panic!("unhandled private field type `{other}`"),
-            };
-            for _ in 0..count {
-                init.push(zero.clone());
-            }
+    let mut values = Vec::new();
+    for field in fields {
+        let count = usize::try_from(field.count).expect("negative initializer count");
+        assert!(
+            count <= crate::bytecode::MAX_DATA_ADDR as usize,
+            "initializer count exceeds data addressing"
+        );
+        let value = field
+            .value
+            .expect("private field has no initializer descriptor");
+        values
+            .try_reserve(count)
+            .expect("private initializer allocation");
+        for _ in 0..count {
+            values.push(value.clone());
         }
     }
-    init
+    values
 }
 
 /// Assemble a whole `DataLayout` from parse.kel's data-block records. The stages have

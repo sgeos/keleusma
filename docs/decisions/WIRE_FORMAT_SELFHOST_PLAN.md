@@ -198,9 +198,11 @@ shipping serialization, remaining type obligations and final integration gates s
 
 The driver-capacity test now inventories all fourteen stage sources. Earlier versions of that
 test used ten sources and omitted wire and verify_types. The current maxima belong to
-the parser after the nominal-layout increment. Parse uses 873 of 1,024 names and 24,662 of
-49,152 input bytes, leaving 24,490 bytes. No input cap changed. These measurements cover the
-legacy bounded input path. The shipping emitter uses the separately tested streaming path.
+the parser after the source-initializer increment. Parse uses 901 of 1,024 names and 25,492 of
+49,152 compact input bytes, leaving 23,660 bytes. Its uncompressed scalar-node blob is 50,252
+bytes, so the two stage-scale resident join controls now use the existing compact encoding.
+They still compare complete name and pool payloads against the reference. No wire input cap changed.
+The shipping emitter uses the separately tested streaming path.
 Both encoding and decoding remain within the original wire-format scope.
 
 ## 2026-10-11 Layout families decode through the schema stage

@@ -690,6 +690,10 @@ fn pe_block_syntax() -> Word { 30 }
 fn pe_for_iterable() -> Word { 31 }
 fn pe_array_length() -> Word { 32 }
 fn pe_tuple_index() -> Word { 33 }
+fn pe_init_forbidden() -> Word { 34 }
+fn pe_init_value() -> Word { 35 }
+fn pe_init_syntax() -> Word { 36 }
+fn pe_data_address() -> Word { 37 }
 // **CODE 12 IS RETIRED AND DELIBERATELY NOT REUSED.** It named the bare `for` form as an
 // unsupported construct -- the only such code among eleven capacity limits -- and existed for
 // exactly as long as the form was unsupported, raised at phase 4 where the lowering now hooks
@@ -709,7 +713,7 @@ fn pe_cap_anest() -> Word { 8 }
 // naming an array size could convey that, which is the argument for naming it here.
 fn pe_cap_variant() -> Word { 256 }
 fn pe_cap_calldepth() -> Word { 8 }
-fn pe_cap_field() -> Word { 512 }
+fn pe_cap_field() -> Word { 640 }
 
 // The radix separating a Call record's two packed fields, `chunk + count * RADIX`.
 // NOT a `pe_cap_*` capacity guard, and named apart from that family deliberately: it is a
@@ -1258,11 +1262,13 @@ private data mat {
 private data fields {
     // The accumulated data-field layout table across ALL data blocks (one entry per field), used
     // to resolve a body `block.field` to its slot. Sized 512 (was 256): parse.kel itself now
-    // declares 259 data-block fields, past the old 256, so parse.kel parsing parse.kel overflowed.
-    fdata: [Word; 513],
-    ffield: [Word; 513],
-    fbase: [Word; 513],
-    flen: [Word; 513],
+    // grew beyond 512 fields during initializer support. The usable table is now 640 fields.
+    fdata: [Word; 641],
+    ffield: [Word; 641],
+    fbase: [Word; 641],
+    fvis: [Word; 641],
+    dirty: Word, shared_at: Word, private_at: Word, emit_at: Word,
+    flen: [Word; 641],
     field_count: Word,
     base_ctr: Word,
     cur_block: Word,
@@ -1270,6 +1276,116 @@ private data fields {
     cur_len: Word,
     has_field: Word,
     cur_cval: Word,
+}
+
+// Private scalar initialization is emitted as a kind followed by a full-word value.
+// Negative values use their bitwise complement so payload minus one is never the
+// legacy packed-record sentinel.
+private data di {
+    kind: Word, value: Word, seen: Word, negate: Word, depth: Word,
+    array: Word, sent: Word, pending: Word, ending: Word,
+    type_depth: Word, type_names: Word, type_name: Word, type_composite: Word,
+}
+fn data_group_type(k: Word, v: Word) -> Word {
+    if k == Tok::Ident() as Word {
+        di.type_names = di.type_names + 1; di.type_name = v; 0
+    } else {
+    if k == Tok::LParen() as Word { di.type_depth = di.type_depth + 1; 0 } else {
+    if k == Tok::Comma() as Word orelse k == Tok::LBracket() as Word {
+        di.type_composite = 1; 0
+    } else {
+    if k == Tok::RParen() as Word {
+        di.type_depth = di.type_depth - 1;
+        if di.type_depth == 0 {
+            ps.tf = 0;
+            if di.type_names == 1 andalso di.type_composite == 0 {
+                di.kind = scalar_kind_of(di.type_name);
+                6 + di.type_name * 64
+            } else { di.kind = 0; 0 }
+        } else { 0 }
+    } else { 0 }
+    } } }
+}
+fn data_field_finish(ending: Word) -> Word {
+    if ps.dvis == 1 andalso fields.has_field == 1 andalso di.sent == 0 {
+        di.sent = 1; di.pending = 1; di.ending = ending;
+        ps.emit_arg = if di.kind >= 1 andalso di.kind <= 5 { di.kind } else { 0 };
+        107
+    } else { if ending == 1 { 5 } else { 0 } }
+}
+fn data_init_emit() -> Word {
+    if di.pending == 1 {
+        di.pending = if di.ending == 1 { 2 } else { 0 };
+        if di.value < 0 { ps.emit_arg = bnot di.value; 109 } else {
+            ps.emit_arg = di.value; 108
+        }
+    } else { di.pending = 0; 5 }
+}
+fn data_initializer(k: Word, v: Word) -> Word {
+    if di.seen == 0 {
+        if k == Tok::LParen() as Word andalso di.negate == 0 {
+            di.depth = di.depth + 1; 0
+        } else {
+        if k == Tok::Minus() as Word andalso di.negate == 0 {
+            di.negate = 1; 0
+        } else {
+        if k == Tok::IntLit() as Word {
+            di.value = if di.negate == 0 { v } else {
+                if v == ((0 - 1) lsl 63) { v } else { 0 - v }
+            };
+            di.seen = 1;
+            if di.kind != 3 andalso di.kind != 2 { perr(pe_init_value(), toks.at); }
+            if di.kind == 2 andalso (di.value < 0 orelse di.value > 255) { perr(pe_init_value(), toks.at); }
+            0
+        } else {
+        if k == Tok::Ident() as Word andalso (v == toks.true_id orelse v == toks.false_id) {
+            if di.kind != 1 orelse di.negate != 0 { perr(pe_init_value(), toks.at); }
+            di.value = if v == toks.true_id { 1 } else { 0 }; di.seen = 1; 0
+        } else { perr(pe_init_syntax(), toks.at) }
+        } } }
+    } else {
+        if di.depth > 0 {
+            if k == Tok::RParen() as Word { di.depth = di.depth - 1; 0 } else { perr(pe_init_value(), toks.at) }
+        } else {
+        if k == Tok::Comma() as Word {
+            ps.init = 0; ps.pname = 1; data_field_finish(0)
+        } else {
+        if k == Tok::RBrace() as Word {
+            let record = data_field_finish(1);
+            commit_field(); fields.has_field = 0; ps.init = 0; ps.mode = 0;
+            record
+        } else {
+        if k == Tok::Ident() as Word {
+            ps.init = 0; ps.pname = 1; ps.cursor = ps.cursor - 1;
+            data_field_finish(0)
+        } else { perr(pe_init_syntax(), toks.at) }
+        } } }
+    }
+}
+// Shared slots precede private slots, with declaration order retained within each partition.
+fn data_rebase() -> Word {
+    if fields.dirty == 1 {
+        fields.shared_at = 0; fields.private_at = 0;
+        for i in 0..fields.field_count limit 640 {
+            if fields.fvis[i] == 0 { fields.private_at = fields.private_at + fields.flen[i]; }
+        }
+        for i in 0..fields.field_count limit 640 {
+            if fields.fvis[i] == 0 {
+                fields.fbase[i] = fields.shared_at; fields.shared_at = fields.shared_at + fields.flen[i];
+            } else {
+                fields.fbase[i] = fields.private_at; fields.private_at = fields.private_at + fields.flen[i];
+            }
+        }
+        fields.dirty = 0; fields.emit_at = 1;
+    }
+    0
+}
+fn data_base_emit() -> Word {
+    let at = fields.emit_at - 1;
+    ps.emit_arg = at * 16777216 + fields.fbase[at];
+    fields.emit_at = fields.emit_at + 1;
+    if at + 1 == fields.field_count { fields.emit_at = 0; }
+    110
 }
 
 // The const-data field values. A `const data` block carries no runtime slot; instead each
@@ -1833,7 +1949,7 @@ fn step_global_ident(v: Word) -> Word {
         0
     } else {
     ps.found_flag = 0;
-    for i in 0..fields.field_count limit 512 {
+    for i in 0..fields.field_count limit 640 {
         if fields.fdata[i] == v {
             ps.found_flag = 1;
         }
@@ -2408,7 +2524,7 @@ fn step_dafield(k: Word, v: Word) -> Word {
     if k == 1 {
         da.da_base = 0;
         da.da_len = 1;
-        for i in 0..fields.field_count limit 512 {
+        for i in 0..fields.field_count limit 640 {
             if fields.fdata[i] == da.da_data andalso fields.ffield[i] == v {
                 da.da_base = fields.fbase[i];
                 da.da_len = fields.flen[i];
@@ -6765,7 +6881,7 @@ fn header_data(k: Word, v: Word) -> Word {
         0
     } else {
         if ps.init == 1 {
-            header_field_skip(k, v)
+            if ps.dvis == 1 { data_initializer(k, v) } else { header_field_skip(k, v) }
         } else {
             header_field(k, v)
         }
@@ -6834,12 +6950,16 @@ fn commit_field() -> Word {
             cdata.cval[cdata.ccount] = fields.cur_cval;
             cdata.ccount = cdata.ccount + 1;
         } else {
+            if fields.cur_len > 16777216 - fields.base_ctr { perr(pe_data_address(), fields.cur_len); } else {
+            fields.fvis[fields.field_count] = ps.dvis;
+            fields.dirty = 1;
             fields.fdata[fields.field_count] = fields.cur_block;
             fields.ffield[fields.field_count] = fields.cur_field;
             fields.fbase[fields.field_count] = fields.base_ctr;
             fields.flen[fields.field_count] = fields.cur_len;
             fields.field_count = field_push(fields.field_count);
             fields.base_ctr = fields.base_ctr + fields.cur_len;
+            }
         }
     }
     0
@@ -6949,10 +7069,11 @@ fn step_struct_tuple_field(k: Word, v: Word) -> Word {
 // type routes through `step_struct_tuple_field` to size the tuple field.
 fn header_field(k: Word, v: Word) -> Word {
     if ps.tf == 1 {
-        step_struct_tuple_field(k, v)
+        if ps.dvis == 3 { step_struct_tuple_field(k, v) } else { data_group_type(k, v) }
     } else {
     if k == 1 {
         if ps.arr == 1 {
+            di.kind = scalar_kind_of(v);
             ps.arr = 2;
             // A struct array field's element type: capture the element byte size (and, via the
             // helper, its ScalarKind, unused until array-element access lands) to multiply by
@@ -6969,6 +7090,8 @@ fn header_field(k: Word, v: Word) -> Word {
             fields.cur_field = v;
             fields.cur_len = 1;
             fields.cur_cval = 0;
+            di.kind = 0; di.value = 0; di.seen = 0; di.negate = 0;
+            di.depth = 0; di.array = 0; di.sent = 0;
             fields.has_field = 1;
             // A struct field's name is recorded in declaration order for the construction
             // reorder (see structdefs); data/const fields are not, as they never construct.
@@ -6986,6 +7109,7 @@ fn header_field(k: Word, v: Word) -> Word {
             4 + v * 64
         } else {
         if ps.ptype == 1 {
+            di.kind = scalar_kind_of(v);
             ps.ptype = 0;
             if ps.dvis == 3 {
                 // A scalar field: add its size (the offset was set at the field name), with
@@ -7004,7 +7128,7 @@ fn header_field(k: Word, v: Word) -> Word {
     if k == 41 {
         if ps.ptype == 1 {
             ps.ptype = 0;
-            ps.arr = 1;
+            ps.arr = 1; di.array = 1;
         }
         0
     } else {
@@ -7016,6 +7140,7 @@ fn header_field(k: Word, v: Word) -> Word {
             ps.ptype = 0;
             ps.tf = 1;
             ps.tf_size = 0;
+            di.type_depth = 1; di.type_names = 0; di.type_name = 0; di.type_composite = 0;
             if ps.dvis == 3 {
                 let cur = structdefs.sd_count - 1;
                 let fidx = structdefs.sd_fstart[cur] + structdefs.sd_fcount[cur] - 1;
@@ -7054,18 +7179,22 @@ fn header_field(k: Word, v: Word) -> Word {
     } else {
     if k == 10 {
         ps.pname = 1;
-        0
+        data_field_finish(0)
     } else {
     if k == 17 {
+        if ps.dvis != 2 andalso (ps.dvis != 1 orelse di.array == 1 orelse di.kind < 1 orelse di.kind > 5) {
+            perr(pe_init_forbidden(), toks.at);
+        }
         ps.init = 1;
         ps.idepth = 0;
         0
     } else {
     if k == 3 {
+        let record = data_field_finish(1);
         commit_field();
         fields.has_field = 0;
         ps.mode = 0;
-        5
+        record
     } else {
         0
     } } } } } } } } }
@@ -7508,6 +7637,7 @@ fn queue_array_header_layout(length: Word) -> Word {
 }
 fn header_sig(k: Word, v: Word) -> Word {
     nominal_refresh();
+    data_rebase();
     if k == Tok::Underscore() as Word andalso ps.pdepth == 1 andalso ps.pname == 1 {
         perr(pe_pattern_syntax(), toks.at);
     }
@@ -7799,6 +7929,8 @@ fn header_sig(k: Word, v: Word) -> Word {
 }
 
 fn step_body() -> Word {
+    if di.pending != 0 { data_init_emit() } else {
+    if fields.emit_at > 0 { data_base_emit() } else {
     if ht.pending != 0 {
         let record = ht.pending; ht.pending = 0; ps.emit_arg = ht.pending_arg; record
     } else {
@@ -7834,7 +7966,7 @@ fn step_body() -> Word {
                 ps.mode = 0;
                 5
             } else {
-                15
+                if fields.dirty == 1 { data_rebase(); 0 } else { 15 }
             }
         } else {
             let k = toks.packed[ps.cursor - toks.base] % 256;
@@ -7843,7 +7975,7 @@ fn step_body() -> Word {
             ps.cursor = ps.cursor + 1;
             header_step(k, v)
         }
-    } } } } } }
+    } } } } } } } }
 }
 
 // P11 Option E: the two-phase record emitter. Phase 0 computes the record (via `step_body`)

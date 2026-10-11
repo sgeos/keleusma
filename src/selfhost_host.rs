@@ -75,7 +75,7 @@ impl ParseRecordError {
     /// retired codes, capacity limits and transport failures never do.
     #[must_use]
     pub fn is_source_rejection(&self) -> bool {
-        matches!(self, Self::Diagnostic { code, .. } if matches!(PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(2 | 13..=17 | 22..=24 | 26 | 32 | 33)))
+        matches!(self, Self::Diagnostic { code, .. } if matches!(PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(2 | 13..=17 | 22..=24 | 26 | 32..=36)))
     }
 }
 
@@ -251,6 +251,14 @@ pub const PARSE_TUPLE_PROJECTION_TAG: i64 = 104;
 pub const PARSE_HEADER_LAYOUT_TAG: i64 = 105;
 /// Entry-boundary facts. Bit zero is a used text parameter, bit one a text return type.
 pub const PARSE_TEXT_BOUNDARY_TAG: i64 = 106;
+/// Private initializer scalar kind, chosen by the parser.
+pub const PARSE_PRIVATE_INIT_KIND_TAG: i64 = 107;
+/// Nonnegative private initializer value.
+pub const PARSE_PRIVATE_INIT_VALUE_TAG: i64 = 108;
+/// Bitwise complement of a negative private initializer value.
+pub const PARSE_PRIVATE_INIT_NEGATIVE_TAG: i64 = 109;
+/// Runtime field ordinal times 2^24 plus its assigned slot base.
+pub const PARSE_DATA_FIELD_BASE_TAG: i64 = 110;
 
 /// The tag at or below which a word yielded by `reconstruct.kel` is a diagnostic rather
 /// than a node count. Node counts are non-negative, so no legitimate count can collide.
@@ -412,6 +420,14 @@ pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
         31 => format!("non-range for iterable at token {detail} is outside the parse.kel subset"),
         32 => format!("a fixed-size array must have a positive length, got {detail}, in parse.kel"),
         33 => format!("tuple field index {detail} is out of range in parse.kel"),
+        34 => format!("initializer at token {detail} requires a private scalar field in parse.kel"),
+        35 => format!(
+            "initializer value at token {detail} is incompatible with its private field type in parse.kel"
+        ),
+        36 => format!("invalid private scalar initializer syntax at token {detail} in parse.kel"),
+        37 => format!(
+            "data field length {detail} exceeds the remaining 24-bit slot address space in parse.kel"
+        ),
         other => format!(
             "parse.kel reported diagnostic code {other} (detail {detail}), which this driver \
              does not know. The stage has grown a cause that `describe_parse_diagnostic` was \
@@ -441,7 +457,7 @@ pub const PARSE_VARIANTS_CAP: usize = 256;
 /// Nesting depth of calls. See [`PARSE_OPSTACK_CAP`].
 pub const PARSE_CALL_DEPTH_CAP: usize = 8;
 /// Data-block fields **across the whole program**, not per block. See [`PARSE_OPSTACK_CAP`].
-pub const PARSE_FIELDS_CAP: usize = 512;
+pub const PARSE_FIELDS_CAP: usize = 640;
 /// Let annotation nesting. Pushes are checked before writing the stage arrays.
 pub const PARSE_ANNOTATION_DEPTH_CAP: usize = 32;
 

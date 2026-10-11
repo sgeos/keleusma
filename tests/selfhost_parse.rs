@@ -508,7 +508,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                         assert!(cur.is_none(), "DONE mid-declaration");
                         return std::ops::ControlFlow::Break(());
                     }
-                    103 | 105 | 106 => {} // Source grouping and layout metadata have separate controls.
+                    103 | 105 | 106 | 110 => {} // Source grouping and layout metadata have separate controls.
                     other => panic!("unexpected declaration kind {other}"),
                 }
             }
@@ -2652,7 +2652,7 @@ fn src_parens(n: usize) -> String {
 
 #[cfg(feature = "self-host")]
 fn src_stmts(n: usize) -> String {
-    let mut s = String::from("data d { a: Word = 0 }\nfn f() -> Word {\n");
+    let mut s = String::from("data d { a: Word }\nfn f() -> Word {\n");
     for i in 0..n {
         s.push_str(&format!("    d.a = {i};\n"));
     }
