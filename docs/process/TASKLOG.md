@@ -6,6 +6,45 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-11 Tuple projections retain source identity
+
+Tuple headers now preserve nested tuples, arrays with literal dimensions, grouping and unit.
+The parser emits source ordinals separately from byte offsets, and Keleusma resolves the selected
+structural member type. Fourteen verdict comparisons agree with the reference, including the
+three disagreements from the preceding probe. Invalid cases require independent shipping rejection.
+Six artifact and execution controls return seven. Nested tuple equality executes equal and unequal
+inputs correctly, and four nesting shapes preserve struct-member artifacts. The deepest control
+found and repaired a tuple-frame path that had emitted a struct as a scalar.
+
+Repeated headers reuse layouts. The tests exercise eighty repeated headers and both sides of
+32-frame and 32-distinct-layout limits. Capacity errors remain unavailable evidence. Zero-length
+fixed-array declarations and out-of-range tuple indices are source rejections. Private metadata
+104 and 105 and type expression row 19 preserve identity without changing public bytecode version 2
+or the 66-opcode instruction set. The selected type capacities stay at 640.
+
+The parser has 198 chunks, a 165,924-byte artifact and 1,043,200 private bytes. Its 9,938 added
+value slots cost 318,016 bytes. The header workspace is bounded at 1,024 descriptors, 32 frames,
+32 tuple layouts and 256 members. Parser source length is 356,356 bytes. Code generation has
+79 chunks and a 71,772-byte artifact. The type stage has 43 chunks and a 22,580-byte artifact.
+All fourteen stage artifacts match, monomorphization controls pass, and removing 55,276 recorded
+expression types leaves every artifact unchanged. All fourteen also pass the shipping entry
+with complete artifact identity. The tightest legacy type channel remains 638 of 640 rows.
+
+The full workspace records 3,182 passes, two guard failures and five ignored tests across
+184 suites. Numeric alternatives beside named constants had escaped the declaration parity
+scanner, and the name-count pin still expected 776 instead of the measured 839. Test-only repairs
+pass all 189 checks in the affected targets, including a new guard-extraction control.
+The full workspace was not rerun afterward. Twenty-four selected no-default tests, fresh Clippy,
+documentation and the build without the standard library pass. The reverse prompt carries receipts.
+
+The shadow pilot records the first diagnostic and three completion excerpts with self-review labels.
+One excerpt is insufficient by its own contents despite the underlying artifact test passing.
+External evaluation remains unavailable. The full Order 1 goal remains active. The next probe
+finds nested nominal signatures left at Top, mixed tuple literals with incorrect byte sizes,
+nested literal and array-header reconstruction gaps, and an empty-array argument accepted by the
+independent type stage. An unused empty array remains a valid control. These findings and final
+integration gates prevent a completion claim.
+
 ## 2026-10-11 Keleusma derives logical data-layout runs
 
 The shipping emitter now gives logical slots to Keleusma instead of grouping them in Rust.

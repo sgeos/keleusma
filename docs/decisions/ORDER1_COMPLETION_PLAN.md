@@ -23,10 +23,10 @@ Full-language support remains Order 6. Existing supported programs must retain t
 | Derive type inputs from the self-hosted pipeline | Production rejection receives facts without walking the reference parser's abstract syntax tree or borrowing inferred types | The production input path now derives scoped scalar constraints from Keleusma parser and reconstruction output. Composite facts, complete binder/occurrence coverage and general admission remain incomplete. |
 | Reject ill-typed subset programs | Independent pipeline rejection agrees with the reference on the rejection corpus, valid controls, and the rule-versus-form census | The scoped pipeline harness exercises all twenty rejection cases and seven valid controls without reference-first masking. The separate sixteen-cell rule-versus-form census now runs through that path with eight valid controls. Its required test now passes after preserving match-arm guards. Parser source diagnostics and type-stage verdicts remain distinct from unsupported syntax, capacity and execution failures. The shipping driver now obtains the independent verdict first. Production corpus and census checks assert PipelineRejected so reference rejection cannot mask missing stage coverage. |
 | Preserve the first-pass monomorphization result | Every stage remains unchanged by monomorphization, with a control that does change | The corpus now lists all fourteen sources. Identity, changing control and directory inventory tests passed again after the parser and alias changes on 2026-10-04. Repeat if stage sources change. |
-| Preserve independence from inferred expression types | The current stage corpus compiles identically with recorded expression types absent | Four standing tests cover all fourteen sources with a directory inventory, a populated-table intervention after recording, a changed-emission control and an admission control. On 2026-10-11, clearing 53,213 recorded types leaves all fourteen complete artifacts unchanged. This does not remove reference admission or establish full-language independence. |
+| Preserve independence from inferred expression types | The current stage corpus compiles identically with recorded expression types absent | Four standing tests cover all fourteen sources with a directory inventory, a populated-table intervention after recording, a changed-emission control and an admission control. On 2026-10-11, clearing 55,276 recorded types leaves all fourteen complete artifacts unchanged. This does not remove reference admission or establish full-language independence. |
 | Emit complete artifacts through Keleusma | Production output uses the Keleusma wire emitter for framing, opcode records, operand pools, auxiliary regions and integrity fields | The fourteen-stage comparison now supplies no reference section bytes, region positions or artifact lengths. All 66 opcode identifiers have encoding controls. Native names and return shapes now preserve independent lengths and share the existing name and shape tables. Struct templates now derive type-name indices and contiguous field-name runs in Keleusma, including empty runs. Debug-pool ordering and encoding now run in a dedicated Keleusma stage, and chunk debug offsets are stage-derived. Private composite placements and scalar initializer pools now encode through Keleusma, including stage-derived elision and root ranges. Composite and named constant forests, including initializer trees, now use the Keleusma breadth-first walker within the declared input bounds. Opcode and operand-pool semantic decoding now matches all fourteen stage instruction sequences and a 153,600-record raw corpus in each of two feature configurations. Auxiliary directory voting, bounds and duplicate checks now run in Keleusma, with borrowed payloads and no reference positions. All seventeen fixed-record kinds now decode through Keleusma and reconstruct every fixed-record region in the stage corpus. Signature and native-return range checks and shape-tag interpretation now run in a dedicated Keleusma schema stage. Borrowed name lookup, UTF-8 validation and owned constant reconstruction now run through Keleusma, including ranges, tags, name and child requests and ownership checks. Templates, enum layouts and data-layout semantics now decode through Keleusma, including optional-family policy, run expansion and initializer selection. Parameter tags and debug pools now decode through Keleusma, and the complete auxiliary-body reader composes all semantic families. Complete outer framing and module reconstruction now run through Keleusma readers. Windowed name interning and breadth-first constant scheduling remove the corpus-sized encoder limits. Contributor order, ranges and parameter tags are stage decisions. Unsigned self-hosted command output now uses the Keleusma emitter. Data-slot grouping, record splitting and shared-layout stride/run derivation now run in Keleusma from logical slot facts. |
 | Reach the shipping tool | An end-to-end command emits the independently assembled artifact and reports type rejection through the new path | The command emits the same artifact as the production library, executes a valid result of seven, and independently rejects three invalid sources without emitting files. Unsigned self-hosted output now uses Keleusma serialization. A discriminator checks backend dispatch, and command-line tests cover the formerly rejected large forest and text sources. |
-| Establish current verification | Relevant differential and failure-path tests, complete workspace checks and applicable integration gates pass on the final tree | The run-derivation tree passes 3,175 workspace tests with five ignored across 183 suites. All fourteen complete stage artifacts match. No-default integration/accounting passes seven tests and wire units pass 46. Fresh Clippy, documentation and no_std checks pass. A runtime control crosses the 65,535-slot record boundary. Inference independence covers 53,213 types. A separate eight-case tuple-projection audit still has three disagreements, including valid-source false rejection. Exact receipts are in the reverse prompt. Full Order 1 is not complete. |
+| Establish current verification | Relevant differential and failure-path tests, complete workspace checks and applicable integration gates pass on the final tree | The tuple tree records 3,182 workspace passes, two guard failures and five ignored tests across 184 suites. Test-only guard repairs subsequently pass 189 targeted checks. The full workspace was not rerun afterward. All fourteen complete stage artifacts match, including a separate shipping-entry comparison. Twenty-four selected no-default tests, fresh Clippy, documentation and no_std checks pass. Inference independence covers 55,276 types. Fourteen tuple-projection verdicts agree, closing the earlier three disagreements. Nominal signatures, tuple construction, general header paths, empty-array rejection and final integration gates remain open. Exact receipts are in the reverse prompt. Full Order 1 is not complete. |
 | Participate in the shadow pilot | Diagnostic and completion-claim samples retain baseline judgments, reviewed payloads, outcomes and explicit service status | Capture is installed for this line. Judgments are advisory and do not alter gates. |
 
 ## Current decoder increment
@@ -605,3 +605,49 @@ scratch detail binary. Inspection also finds TupleField node 37 absent from type
 with the operand path using its baked layout kind. step_tupleaccess retains a packed byte offset
 and layout kind but no source element ordinal. These observations guide the next repair and do
 not establish that every cause has been identified.
+
+
+## Tuple header and projection repair, 2026-10-11
+
+This increment supersedes the unresolved status of the eight-case tuple projection audit above.
+All fourteen cases in the expanded test agree with the reference, and invalid cases require
+PipelineRejected from the shipping entry. Metadata 104 supplies source ordinals, metadata 105
+supplies Keleusma-computed header layouts, and type expression 19 projects exact tuple member
+identity. Equal byte widths do not determine nominal identity or array dimensions.
+
+The iterative header scanner handles grouping, unit, nested tuples and literal array dimensions.
+Repeated layouts are interned. Eighty repeated parameter headers and eighty repeated return
+headers retain admission. Tests check both sides of the 32-frame and 32-layout limits directly.
+The reference parser has a lower recursion limit and is not the stage-depth oracle.
+Zero-length fixed-array declarations and out-of-range member indices produce source rejection.
+The descriptor pool holds 1,024 entries and the layout member pool holds 256 entries.
+
+Six complete-artifact controls execute host-supplied values and return seven. Nested tuple
+equality produces true and false for equal and unequal inputs. Four nesting shapes preserve
+struct members, including the third-level case that exposed a missing descent in the frame walker.
+A private tuple extraction marker maps back to the existing public Tuple kind. No opcode or public
+bytecode version changed. The selected type capacities remain 640.
+
+The parser adds 9,938 private value slots at 32 bytes each. Its private footprint grows by
+318,016 bytes to 1,043,200 bytes, while shared storage remains 335,992 bytes. Current parser output
+has 198 chunks and 165,924 bytes. Code generation has 79 chunks and 71,772 bytes. The type stage
+has 43 chunks and 22,580 bytes. Its added private scalar state costs 64 bytes.
+
+The fourteen-stage artifact, monomorphization and inference checks pass on the current production
+sources. A separate directory-inventoried probe sends every stage through self_hosted_compile and
+compares complete artifacts. All fourteen pass. The full workspace's two guard failures were
+repaired without changing production sources, then the affected targets passed 189 checks.
+The reverse prompt states the failed full-run receipt and the subsequent targeted receipts.
+
+The remaining thirteen-source probe confirms that nested nominal signatures can remain Top while
+the reference supplies Flat Struct or Flat Tuple. The shipping chunk-body comparison does not
+check this metadata and accepts both divergent artifacts. Repair layout derivation and strengthen
+that comparison while preserving valid admission. Mixed bool/Word tuple literals still use a
+16-byte body instead of nine bytes. Nested tuple literals and array-of-nested-tuple headers leave
+two reconstructed roots. An empty array argument to a positive-length parameter is independently
+accepted, while an unused empty literal is a valid artifact control. The reverse prompt includes
+sources, commands and logs. Three cast negatives agree in this finite probe. A non-range for-loop
+remains explicitly unsupported and is distinct from these type and artifact failures.
+
+Remaining binder, occurrence, alias, enum-capacity and general type-input obligations, together
+with the final integration gates, keep the complete Order 1 goal active.

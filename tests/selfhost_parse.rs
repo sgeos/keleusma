@@ -369,7 +369,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                         || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
                         || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
                         || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
-                        || matches!(c, 94..=96 | 99..=103) => {}
+                        || matches!(c, 94..=96 | 99..=105) => {}
                     _ => cur
                         .as_mut()
                         .expect("body node before START")
@@ -387,7 +387,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                         || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
                         || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
                         || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
-                        || matches!(c, 94..=96 | 99..=103) => {}
+                        || matches!(c, 94..=96 | 99..=105) => {}
                     _ => cur
                         .as_mut()
                         .expect("guard node before START")
@@ -508,6 +508,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                         assert!(cur.is_none(), "DONE mid-declaration");
                         return std::ops::ControlFlow::Break(());
                     }
+                    103 | 105 => {} // Source grouping and layout metadata have separate controls.
                     other => panic!("unexpected declaration kind {other}"),
                 }
             }

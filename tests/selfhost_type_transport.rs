@@ -86,7 +86,7 @@ fn production_transport_rejects_malformed_facts_as_errors() {
             5 => batch.bindings.push(("b".into(), 0, 2, String::new())),
             6 => batch
                 .expressions
-                .push((19, (0, 0, String::new()), (0, 0, String::new()))),
+                .push((20, (0, 0, String::new()), (0, 0, String::new()))),
             7 => batch.bindings.push(("b".into(), -1, 0, String::new())),
             _ => unreachable!(),
         }

@@ -420,6 +420,7 @@ private data ps {
     pend_end: Word,
     pcount: Word,
     pnames: [Word; 33],
+    pdescriptor: [Word; 33],
     // Per value-parameter: 1 if the parameter's type is `Byte`, else 0, so a bitwise op on two Byte
     // operands lowers promote-operate-truncate. `last_byte` tracks whether the most recently emitted
     // operand VALUE is Byte-typed (set for a Byte parameter Local, cleared otherwise); the stages
@@ -681,6 +682,8 @@ fn pe_cap_annotation() -> Word { 32 }
 fn pe_tuple_layout() -> Word { 29 }
 fn pe_block_syntax() -> Word { 30 }
 fn pe_for_iterable() -> Word { 31 }
+fn pe_array_length() -> Word { 32 }
+fn pe_tuple_index() -> Word { 33 }
 // **CODE 12 IS RETIRED AND DELIBERATELY NOT REUSED.** It named the bare `for` form as an
 // unsupported construct -- the only such code among eleven capacity limits -- and existed for
 // exactly as long as the form was unsupported, raised at phase 4 where the lowering now hooks
@@ -1450,6 +1453,25 @@ private data tupledefs {
     // scalar kind 0 by `scalar_kind_of`, keeping only its size). Nothing reads it until that lowering.
     tup_estruct: [Word; 256],
     tup_ecursor: Word,
+    tup_bytes: [Word; 32],
+    tup_edesc: [Word; 256],
+    tup_desc: [Word; 32],
+}
+
+private data ht {
+    mode: Word, depth: Word, nodes: Word, result: Word,
+    pending: Word, pending_arg: Word,
+    form: [Word; 32], phase: [Word; 32], first: [Word; 32], last: [Word; 32],
+    count: [Word; 32], bytes: [Word; 32], length: [Word; 32], comma: [Word; 32], known: [Word; 32],
+    nform: [Word; 1024], nsize: [Word; 1024], scalar: [Word; 1024], decl: [Word; 1024],
+    layout: [Word; 1024], child: [Word; 1024], arity: [Word; 1024], next: [Word; 1024], nknown: [Word; 1024],
+    eq_sp: Word, eq_ok: Word,
+    eq_layout: [Word; 32], eq_cursor: [Word; 32],
+
+    base_node: Word, base_layout: Word,
+    same_a: Word, same_b: Word, same_ok: Word, same_done: Word,
+    found: Word, equal: Word, offset: Word,
+
 }
 
 // Struct type names, accumulated as each `struct` declaration's STRUCTSTART is emitted, so a
@@ -1580,7 +1602,7 @@ fn step_local(v: Word) -> Word {
 // binding (whose struct type is not tracked) and a non-struct parameter both read as an
 // ordinary Local. Held in its own function so step_ident's five-deep name-lookup chain is not
 // deepened by the two scan loops here (the parser's own conditional stack is bounded).
-fn resolve_plain_ident(v: Word) -> Word {
+fn resolve_plain_ident_legacy(v: Word) -> Word {
     ps.found_flag = 0;
     ps.let_hit = 0;
     for i in 0..stmt.let_count limit 64 {
@@ -2013,6 +2035,7 @@ fn step_enum_payload(k: Word, v: Word) -> Word {
             6 + v * 64
         } else {
         if k == Tok::IntLit() as Word {
+            if v <= 0 { perr(pe_array_length(), v); }
             let sz = ps.epf_esize * v;
             enums.evfkind[fi] = 40000 + sz;
             enums.evfarrkind[fi] = ps.epf_ekind + 1;
@@ -2471,7 +2494,7 @@ fn step_iclosing() -> Word {
             let my_elem = if elem_struct > 0 {
                 structdefs.sd_bytesize[elem_struct - 1]
             } else {
-                if elem_tuple > 0 { elem_tuple * 8 } else {
+                if elem_tuple != 0 { if elem_tuple > 0 { elem_tuple * 8 } else { tupledefs.tup_bytes[0 - elem_tuple - 1] } } else {
                     if elem_array_bytes > 0 { elem_array_bytes } else { 8 }
                 }
             };
@@ -2489,7 +2512,7 @@ fn step_iclosing() -> Word {
                 stmt.pending_carray_struct = elem_struct;
                 stmt.pending_carray_size = my_elem;
             } else {
-            if elem_tuple > 0 {
+            if elem_tuple != 0 {
                 stmt.pending_carray = 0;
                 stmt.pending_carray_tuple = elem_tuple;
                 stmt.pending_carray_size = my_elem;
@@ -2976,6 +2999,12 @@ fn se_frame_subfield_next(top: Word) -> Word {
         se_enum_block_next()
     } else {
     let g = stmt.se_stk_start[top] + stmt.se_stk_cur[top];
+    if stmt.se_stk_istup[top] == 1 andalso header_tuple_child(g) > 0 { header_tuple_nested_field(g) } else {
+    if stmt.se_stk_istup[top] == 1 andalso tupledefs.tup_estruct[g] > 0 {
+        let s = tupledefs.tup_estruct[g] - 1;
+        se_push_frame(s, 0);
+        Node::StructEqNestedField() as Word + (tupledefs.tup_eoffset[g] + (100 + structdefs.sd_bytesize[s]) * 65536) * 64
+    } else {
     if stmt.se_stk_istup[top] == 0 andalso structdefs.sd_fstruct[g] > 0 {
         // A DEEPER struct sub-field: emit the sentinel header (kind 100+bytesize) and PUSH a
         // new frame (r2 then l2, monotonic). This frame's cursor advances only when the
@@ -3015,7 +3044,7 @@ fn se_frame_subfield_next(top: Word) -> Word {
             se_pop_cascade();
         }
         rec
-    } } } } }
+    } } } } } } }
 }
 
 fn se_enum_block_next() -> Word {
@@ -3472,11 +3501,55 @@ fn struct_eq_kind(idx: Word) -> Word {
 // the tuple-container flag). Sets `stmt.sq_found` = 1 for the nested case so the caller routes. A
 // tuple element's struct type rides `tup_estruct[fidx]` (> 0 => struct, its decl index is that - 1);
 // an array or nested-tuple element is flagged by its sentinel kind (`tup_ekind >= 100`).
+fn header_tuple_comparable(layout: Word) -> Word {
+    ht.eq_sp = 1; ht.eq_ok = 1; ht.eq_layout[0] = layout; ht.eq_cursor[0] = 0;
+    for step in 0..2048 limit 2048 {
+        if ht.eq_sp > 0 andalso ht.eq_ok == 1 {
+            let top = ht.eq_sp - 1; let li = ht.eq_layout[top];
+            if ht.eq_cursor[top] == tupledefs.tup_ecount[li] { ht.eq_sp = top; } else {
+                let at = tupledefs.tup_estart[li] + ht.eq_cursor[top];
+                ht.eq_cursor[top] = ht.eq_cursor[top] + 1;
+                let desc = tupledefs.tup_edesc[at];
+                if desc > 0 andalso ht.nform[desc - 1] == 1 {
+                    if ht.eq_sp >= 32 { ht.eq_ok = 0; } else {
+                        ht.eq_layout[ht.eq_sp] = ht.layout[desc - 1]; ht.eq_cursor[ht.eq_sp] = 0; ht.eq_sp = ht.eq_sp + 1;
+                    }
+                } else { if tupledefs.tup_estruct[at] > 0 {
+                    if struct_subtree_pure(tupledefs.tup_estruct[at] - 1) == 0 { ht.eq_ok = 0; }
+                } else { if tupledefs.tup_ekind[at] >= 100 { ht.eq_ok = 0; } }}
+            }
+        }
+    }
+    if ht.eq_sp == 0 { ht.eq_ok } else { 0 }
+}
+fn header_tuple_child(at: Word) -> Word {
+    let desc = tupledefs.tup_edesc[at];
+    if desc > 0 andalso ht.nform[desc - 1] == 1 { desc } else { 0 }
+}
+fn header_tuple_nested_field(at: Word) -> Word {
+    let desc = header_tuple_child(at) - 1;
+    se_push_frame(ht.layout[desc], 1);
+    Node::StructEqNestedField() as Word + (tupledefs.tup_eoffset[at] + (30000 + ht.nsize[desc]) * 65536) * 64
+}
+fn header_tuple_nested_root(at: Word) -> Word {
+    let desc = header_tuple_child(at) - 1;
+    let li = ht.layout[desc];
+    let r2 = ps.pcount + stmt.slot_count; stmt.slot_count = stmt.slot_count + 1;
+    let l2 = ps.pcount + stmt.slot_count; stmt.slot_count = stmt.slot_count + 1;
+    stmt.se_substart = tupledefs.tup_estart[li]; stmt.se_subcount = tupledefs.tup_ecount[li];
+    stmt.se_subcur = 0; stmt.se_subistuple = 1; stmt.se_subisarray = 0; stmt.se_phase = 1;
+    Node::StructEqNested() as Word + (tupledefs.tup_eoffset[at] + ht.nsize[desc] * 65536 + r2 * 17179869184 + l2 * 17592186044416) * 64
+}
+
 fn tuple_eq_kind(idx: Word) -> Word {
     stmt.sq_scan = 1;
     stmt.sq_found = 0;
     for f in 0..tupledefs.tup_ecount[idx] limit 64 {
         let fidx = tupledefs.tup_estart[idx] + f;
+        if header_tuple_child(fidx) > 0 {
+            stmt.sq_found = 1;
+            if header_tuple_comparable(ht.layout[header_tuple_child(fidx) - 1]) == 0 { stmt.sq_scan = 0; }
+        } else {
         if tupledefs.tup_estruct[fidx] > 0 {
             // A struct element: nested-supported when its subtree is pure struct/scalar to ARBITRARY
             // depth (the same frame-stack drain the top-level struct container uses). A tuple, array, or
@@ -3492,6 +3565,7 @@ fn tuple_eq_kind(idx: Word) -> Word {
                 stmt.sq_scan = 0;
             }
         }
+    }
     }
     if stmt.sq_scan == 0 {
         0
@@ -3671,6 +3745,7 @@ fn structeq_nested_next() -> Word {
                 Node::StructEqNestedField() as Word + (stmt.se_arrcount + stmt.se_arrkind * 65536) * 64
             } else {
             if stmt.se_subistuple == 1 {
+                if header_tuple_child(fidx) > 0 { header_tuple_nested_field(fidx) } else {
                 if tupledefs.tup_estruct[fidx] > 0 {
                     // A STRUCT element of a struct field's tuple (`struct S { t: (P, Word) }`): emit
                     // the sentinel header (kind 100+bytesize) and PUSH a frame, exactly as a nested
@@ -3695,7 +3770,7 @@ fn structeq_nested_next() -> Word {
                 stmt.se_subcur = stmt.se_subcur + 1;
                 Node::StructEqNestedField() as Word + (tupledefs.tup_eoffset[fidx] + tupledefs.tup_ekind[fidx] * 65536) * 64
                 }
-            } else {
+            }} else {
             if structdefs.sd_fstruct[fidx] > 0 {
                 // A DEPTH-2 struct sub-field (`struct M { i: I }` inside `struct O { m: M }`): emit the
                 // sentinel header (kind 100+bytesize) and PUSH the first stacked frame (r2 then l2,
@@ -3742,6 +3817,7 @@ fn structeq_nested_next() -> Word {
                 // `tup_ekind`); a struct element (tup_estruct > 0) is a StructEqNested header with
                 // variant Struct (2), then its scalar sub-fields drain via the unchanged `sd_*` path.
                 let tfidx = tupledefs.tup_estart[stmt.sq_struct] + stmt.sq_field;
+                if header_tuple_child(tfidx) > 0 { header_tuple_nested_root(tfidx) } else {
                 if tupledefs.tup_estruct[tfidx] > 0 {
                     let s = tupledefs.tup_estruct[tfidx] - 1;
                     let r2 = ps.pcount + stmt.slot_count;
@@ -3759,7 +3835,7 @@ fn structeq_nested_next() -> Word {
                     stmt.sq_field = stmt.sq_field + 1;
                     Node::StructEqNestedField() as Word + (tupledefs.tup_eoffset[tfidx] + tupledefs.tup_ekind[tfidx] * 65536) * 64
                 }
-            } else {
+            }} else {
             let fidx = structdefs.sd_fstart[stmt.sq_struct] + stmt.sq_field;
             if structdefs.sd_farraylen[fidx] > 0 {
                 let r2 = ps.pcount + stmt.slot_count;
@@ -5297,12 +5373,32 @@ fn step_tupleaccess(k: Word, v: Word) -> Word {
         0
     } else {
         if k == Tok::IntLit() as Word {
-            let base = tupledefs.tup_estart[ps.ta_tuple];
-            ps.fa_off = tupledefs.tup_eoffset[base + v];
-            ps.fa_kind = tupledefs.tup_ekind[base + v];
-            ps.ta_phase = 0;
-            ops.expect_operand = 0;
-            Node::TupleField() as Word + (ps.fa_off + ps.fa_kind * 65536) * 64
+            if v < 0 orelse v >= tupledefs.tup_ecount[ps.ta_tuple] { perr(pe_tuple_index(), v) } else {
+                let at = tupledefs.tup_estart[ps.ta_tuple] + v;
+                let offset = tupledefs.tup_eoffset[at];
+                let desc = tupledefs.tup_edesc[at];
+                ps.ta_phase = 0;
+                ops.expect_operand = 0;
+                let operand = if desc > 0 {
+                    let node = desc - 1;
+                    header_arm(node);
+                    if ht.nform[node] == 0 { offset + ht.scalar[node] * 65536 } else {
+                        if offset > 65535 orelse ht.nsize[node] > 65535 { perr(pe_tuple_layout(), ht.nsize[node]); }
+                        // Internal variant four disambiguates nested Tuple from scalar kinds.
+                        let variant = if ht.nform[node] == 1 { 4 } else { ht.nform[node] - 1 };
+                        offset + ht.nsize[node] * 65536 + variant * 4294967296
+                    }
+                } else {
+                    if tupledefs.tup_estruct[at] > 0 {
+                        let sid = tupledefs.tup_estruct[at] - 1;
+                        ps.fa_struct = sid; ps.fa_phase = 1; stmt.pending_cstruct = sid + 1;
+                        offset + structdefs.sd_bytesize[sid] * 65536 + 2 * 4294967296
+                    } else { offset + tupledefs.tup_ekind[at] * 65536 }
+                };
+                ps.field_record = Node::TupleField() as Word + operand * 64;
+                ps.emit_arg = v;
+                104
+            }
         } else {
             ps.ta_phase = 0;
             0
@@ -5391,9 +5487,11 @@ fn word_tuple_layout(count: Word) -> Word {
         let li = tupledefs.tup_count;
         tupledefs.tup_estart[li] = tupledefs.tup_ecursor;
         tupledefs.tup_ecount[li] = count;
+        tupledefs.tup_bytes[li] = count * 8;
         for e in 0..count limit 32 {
             tupledefs.tup_eoffset[tupledefs.tup_ecursor + e] = e * 8;
             tupledefs.tup_ekind[tupledefs.tup_ecursor + e] = 3;
+            tupledefs.tup_edesc[tupledefs.tup_ecursor + e] = 0;
         }
         tupledefs.tup_ecursor = tupledefs.tup_ecursor + count;
         tupledefs.tup_count = li + 1;
@@ -5464,6 +5562,7 @@ fn annotation_member(k: Word, v: Word) -> Word {
             0
         } else {
         if ann.phase[i] == 2 andalso k == Tok::IntLit() as Word {
+            if v <= 0 { perr(pe_array_length(), v); }
             ann.length[i] = v;
             ann.phase[i] = 3;
             0
@@ -5875,8 +5974,8 @@ fn step_draining() -> Word {
                         stmt.let_array_struct[stmt.let_count] = stmt.pending_carray_struct;
                         stmt.let_array_size[stmt.let_count] = stmt.pending_carray_size;
                     } else {
-                    if stmt.pending_carray_tuple > 0 {
-                        stmt.let_array_tuple[stmt.let_count] = word_tuple_layout(stmt.pending_carray_tuple);
+                    if stmt.pending_carray_tuple != 0 {
+                        stmt.let_array_tuple[stmt.let_count] = if stmt.pending_carray_tuple > 0 { word_tuple_layout(stmt.pending_carray_tuple) } else { 0 - stmt.pending_carray_tuple };
                         stmt.let_array_size[stmt.let_count] = stmt.pending_carray_size;
                     } else {
                     if stmt.pending_carray_arr > 0 {
@@ -5886,8 +5985,8 @@ fn step_draining() -> Word {
                         stmt.let_array_arr[stmt.let_count] = stmt.pending_carray_arr;
                         stmt.let_array_arrbytes[stmt.let_count] = stmt.pending_carray_arrbytes;
                     } else {
-                    if stmt.pending_ctuple > 0 {
-                        stmt.let_tuple[stmt.let_count] = word_tuple_layout(stmt.pending_ctuple);
+                    if stmt.pending_ctuple != 0 {
+                        stmt.let_tuple[stmt.let_count] = if stmt.pending_ctuple > 0 { word_tuple_layout(stmt.pending_ctuple) } else { 0 - stmt.pending_ctuple };
                     } else {
                         if stmt.pending_cstruct > 0 {
                             stmt.let_struct[stmt.let_count] = stmt.pending_cstruct;
@@ -6910,6 +7009,7 @@ fn header_field(k: Word, v: Word) -> Word {
     if k == 12 {
         if ps.arr == 2 {
             ps.arr = 0;
+            if v <= 0 { perr(pe_array_length(), v); }
             fields.cur_len = v;
             // A struct array field's length: the field's flat size is element_size * length,
             // recorded per field for a later FlatNested element access.
@@ -6962,11 +7062,13 @@ fn header_type_ident(v: Word, mode: Word) -> Word {
         for i in 0..structdefs.sd_count limit 64 {
             if structdefs.sd_name[i] == v {
                 ps.pstruct[ps.pcount - 1] = i + 1;
+                queue_named_layout(v, 0);
             }
         }
         for i in 0..enums.enum_count limit 256 {
             if enums.edata[i] == v {
                 ps.penum[ps.pcount - 1] = v + 1;
+                queue_named_layout(v, 0);
             }
         }
         6 + v * 64
@@ -6974,11 +7076,13 @@ fn header_type_ident(v: Word, mode: Word) -> Word {
         for i in 0..structdefs.sd_count limit 64 {
             if structdefs.sd_name[i] == v {
                 chunkret.ret_struct[ps.cur_chunk] = i + 1;
+                queue_named_layout(v, 1);
             }
         }
         for i in 0..enums.enum_count limit 256 {
             if enums.edata[i] == v {
                 chunkret.ret_enum[ps.cur_chunk] = v + 1;
+                queue_named_layout(v, 1);
             }
         }
         7 + v * 64
@@ -6986,15 +7090,286 @@ fn header_type_ident(v: Word, mode: Word) -> Word {
 }
 
 // Mode 2: the signature scan, ending when the first `{` at depth zero arms the body walk.
+// Iterative tuple-header grammar. Layout descriptors and source type records are
+// separate outputs; neither source identity nor member position comes from byte size.
+
+fn header_node(form: Word, bytes: Word) -> Word {
+    if ht.nodes >= 1024 { perr(pe_tuple_layout(), ht.nodes + 1); 0 } else {
+        let at = ht.nodes; ht.nodes = at + 1;
+        ht.nform[at] = form; ht.nsize[at] = bytes; ht.scalar[at] = 0; ht.decl[at] = 0;
+        ht.layout[at] = 0; ht.child[at] = 0 - 1; ht.arity[at] = 0; ht.next[at] = 0 - 1; ht.nknown[at] = 1;
+        at
+    }
+}
+fn header_named(v: Word) -> Word {
+    let at = header_node(0, type_byte_size(v));
+    ht.scalar[at] = scalar_kind_of(v);
+    ht.nknown[at] = if scalar_type_name(v) == 1 { 1 } else { 0 };
+    for i in 0..structdefs.sd_count limit 64 {
+        if structdefs.sd_name[i] == v {
+            ht.nform[at] = 3; ht.decl[at] = i + 1; ht.nknown[at] = 1;
+            for j in 0..structdefs.sd_fcount[i] limit 512 {
+                // A primitive-field struct has a fully determined flat layout.
+                // Unresolved transitive layouts retain Top until their own metadata is available.
+                if structdefs.sd_fkind[structdefs.sd_fstart[i] + j] == 0 { ht.nknown[at] = 0; }
+            }
+        }
+    }
+    for i in 0..enums.enum_count limit 256 {
+        if enums.edata[i] == v {
+            ht.nform[at] = 4; ht.decl[at] = v + 1; ht.nsize[at] = enum_bytesize(v);
+            ht.nknown[at] = 1;
+        }
+    }
+    at
+}
+fn header_layout_word(at: Word, is_return: Word) -> Word {
+    if ht.nknown[at] == 0 orelse ht.nsize[at] > 65535 { is_return } else {
+        let kind = if ht.nform[at] == 0 { ht.scalar[at] } else { ht.nform[at] - 1 };
+        let form = if ht.nform[at] == 0 { 1 } else { 2 };
+        is_return + form * 2 + kind * 8 + ht.nsize[at] * 256
+    }
+}
+fn queue_named_layout(v: Word, is_return: Word) -> Word {
+    let at = header_named(v);
+    ht.pending = 105; ht.pending_arg = header_layout_word(at, is_return);
+    // This descriptor is only a layout reply, not retained by any tuple member.
+    ht.nodes = at;
+    0
+}
+fn header_open(form: Word) -> Word {
+    if ht.depth >= 32 { perr(pe_annotation_depth(), ht.depth + 1) } else {
+        let at = ht.depth;
+        ht.form[at] = form; ht.phase[at] = 0; ht.first[at] = 0 - 1; ht.last[at] = 0 - 1;
+        ht.count[at] = 0; ht.bytes[at] = 0; ht.length[at] = 0; ht.comma[at] = 0; ht.known[at] = 1;
+        ht.depth = at + 1;
+        if form == 1 { type_tuple_record(94, if ht.mode == 2 { 1 } else { 0 }) } else { 0 }
+    }
+}
+fn header_add(at: Word) -> Word {
+    let frame = ht.depth - 1;
+    if ht.count[frame] == 0 { ht.first[frame] = at; } else { ht.next[ht.last[frame]] = at; }
+    ht.last[frame] = at; ht.count[frame] = ht.count[frame] + 1;
+    ht.bytes[frame] = ht.bytes[frame] + ht.nsize[at];
+    if ht.nknown[at] == 0 { ht.known[frame] = 0; }
+    ht.phase[frame] = 1;
+    0
+}
+// Compare layout descriptors without using allocation identity as type identity.
+fn header_same(a: Word, b: Word) -> Word {
+    ht.same_a = a; ht.same_b = b; ht.same_ok = 1; ht.same_done = 0;
+    for step in 0..32 limit 32 {
+        if ht.same_done == 0 {
+            let x = ht.same_a; let y = ht.same_b;
+            if ht.nform[x] != ht.nform[y] orelse ht.nsize[x] != ht.nsize[y] orelse ht.scalar[x] != ht.scalar[y]
+                orelse ht.decl[x] != ht.decl[y] orelse ht.nknown[x] != ht.nknown[y] { ht.same_ok = 0; ht.same_done = 1; } else {
+                if ht.nform[x] == 2 {
+                    if ht.arity[x] != ht.arity[y] { ht.same_ok = 0; ht.same_done = 1; } else {
+                        ht.same_a = ht.child[x]; ht.same_b = ht.child[y];
+                    }
+                } else {
+                    if ht.nform[x] == 1 andalso ht.layout[x] != ht.layout[y] { ht.same_ok = 0; }
+                    ht.same_done = 1;
+                }
+            }
+        }
+    }
+    if ht.same_done == 1 { ht.same_ok } else { 0 }
+}
+fn header_find_tuple(frame: Word) -> Word {
+    ht.found = 0 - 1;
+    for li in 0..tupledefs.tup_count limit 32 {
+        if tupledefs.tup_ecount[li] == ht.count[frame] {
+            ht.equal = 1; ht.result = ht.first[frame]; ht.offset = 0;
+            for i in 0..ht.count[frame] limit 256 {
+                let entry = tupledefs.tup_estart[li] + i;
+                let desc = tupledefs.tup_edesc[entry];
+                if tupledefs.tup_eoffset[entry] != ht.offset { ht.equal = 0; }
+                if desc > 0 {
+                    if header_same(ht.result, desc - 1) == 0 { ht.equal = 0; }
+                } else {
+                    if ht.nform[ht.result] != 0 orelse tupledefs.tup_estruct[entry] != 0
+                        orelse ht.scalar[ht.result] != tupledefs.tup_ekind[entry] { ht.equal = 0; }
+                }
+                ht.offset = ht.offset + ht.nsize[ht.result]; ht.result = ht.next[ht.result];
+            }
+            if ht.equal == 1 { ht.found = li; }
+        }
+    }
+    ht.found
+}
+fn header_all_word(frame: Word) -> Word {
+    ht.equal = 1; ht.result = ht.first[frame];
+    for i in 0..ht.count[frame] limit 1024 {
+        if ht.nform[ht.result] != 0 orelse ht.scalar[ht.result] != 3 { ht.equal = 0; }
+        ht.result = ht.next[ht.result];
+    }
+    ht.equal
+}
+
+fn header_tuple(frame: Word) -> Word {
+    let count = ht.count[frame];
+    let existing = header_find_tuple(frame);
+    if existing >= 0 {
+        let at = header_node(1, ht.bytes[frame]);
+        ht.layout[at] = existing; ht.arity[at] = count; ht.nknown[at] = ht.known[frame];
+        if tupledefs.tup_desc[existing] == 0 { tupledefs.tup_desc[existing] = at + 1; }
+        at
+    } else {
+    if tupledefs.tup_count >= 32 orelse tupledefs.tup_ecursor + count > 256 { perr(pe_tuple_layout(), count); 0 } else {
+        let li = tupledefs.tup_count; let base = tupledefs.tup_ecursor;
+        tupledefs.tup_count = li + 1; tupledefs.tup_estart[li] = base; tupledefs.tup_ecount[li] = count;
+        tupledefs.tup_bytes[li] = ht.bytes[frame];
+        tupledefs.tup_ecursor = base + count;
+        ht.result = ht.first[frame];
+        ht.length[frame] = 0;
+        for i in 0..count limit 256 {
+            let item = ht.result;
+            tupledefs.tup_eoffset[base + i] = ht.length[frame];
+            tupledefs.tup_ekind[base + i] = if ht.nform[item] == 0 { ht.scalar[item] } else { 100 + ht.nsize[item] };
+            tupledefs.tup_estruct[base + i] = if ht.nform[item] == 3 { ht.decl[item] } else { 0 };
+            tupledefs.tup_edesc[base + i] = item + 1;
+            ht.length[frame] = ht.length[frame] + ht.nsize[item];
+            ht.result = ht.next[item];
+        }
+        let at = header_node(1, ht.bytes[frame]);
+        tupledefs.tup_desc[li] = at + 1;
+        ht.layout[at] = li; ht.child[at] = ht.first[frame]; ht.arity[at] = count; ht.nknown[at] = ht.known[frame];
+        at
+    }}
+}
+
+fn header_complete(value: Word) -> Word {
+    let at = if ht.nform[value] == 1 andalso ht.layout[value] >= 0 andalso tupledefs.tup_desc[ht.layout[value]] > 0 {
+        tupledefs.tup_desc[ht.layout[value]] - 1
+    } else { value };
+    if ht.mode == 1 {
+        ps.pdescriptor[ps.pcount - 1] = at + 1;
+        if ht.nform[at] == 1 { ps.ptuple[ps.pcount - 1] = ht.layout[at] + 1; }
+        ps.tts = 0; ps.ptype = 0;
+    } else {
+        if ht.nform[at] == 1 {
+            chunkret.ret_tuple[ps.cur_chunk] = if ht.layout[at] < 0 { ht.arity[at] } else { 0 - ht.layout[at] - 1 };
+        }
+        ps.rtts = 0; ps.rtype = 0;
+    }
+    ht.pending = 105; ht.pending_arg = header_layout_word(at, if ht.mode == 2 { 1 } else { 0 });
+    if tupledefs.tup_count == ht.base_layout andalso (at < ht.base_node orelse (ht.mode == 2 andalso ht.nform[at] == 1 andalso ht.layout[at] < 0)) {
+        ht.nodes = ht.base_node;
+    }
+    ht.mode = 0;
+    0
+}
+
+fn header_close() -> Word {
+    ht.depth = ht.depth - 1;
+    let frame = ht.depth;
+    let form = ht.form[frame];
+    let count = ht.count[frame];
+    let grouped = form == 1 andalso count == 1 andalso ht.comma[frame] == 0;
+    let unit = form == 1 andalso count == 0;
+    let at = if unit { header_node(0, 0) } else {
+        if grouped { ht.first[frame] } else {
+        if form == 1 {
+            if frame == 0 andalso ht.mode == 2 andalso header_all_word(frame) == 1 {
+                let node = header_node(1, ht.bytes[frame]); ht.layout[node] = 0 - 1; ht.arity[node] = count; node
+            } else { header_tuple(frame) }
+        } else {
+            let element = ht.first[frame];
+            let node = header_node(2, ht.nsize[element] * ht.length[frame]);
+            ht.child[node] = element; ht.arity[node] = ht.length[frame]; ht.nknown[node] = ht.nknown[element];
+            node
+        }}
+    };
+    if ht.depth == 0 { header_complete(at); } else { header_add(at); }
+    if form == 2 { type_tuple_record(8, ht.length[frame]) } else {
+        if unit { type_tuple_record(103, 1) } else { if grouped { type_tuple_record(103, 0) } else { type_tuple_record(96, 0) } }
+    }
+}
+fn header_tuple_begin(mode: Word) -> Word {
+    ht.mode = mode; ht.depth = 0; ht.base_node = ht.nodes; ht.base_layout = tupledefs.tup_count;
+    header_open(1)
+}
+fn header_member(k: Word, v: Word) -> Word {
+    let frame = ht.depth - 1;
+    if ht.phase[frame] == 0 {
+        if k == Tok::Ident() as Word {
+            header_add(header_named(v)); type_tuple_record(95, v)
+        } else {
+        if k == Tok::LParen() as Word { header_open(1) } else {
+        if k == Tok::LBracket() as Word { header_open(2) } else {
+        if ht.form[frame] == 1 andalso k == Tok::RParen() as Word { header_close() } else { perr(pe_annotation_syntax(), toks.at) }
+        }}}
+    } else {
+    if ht.form[frame] == 1 {
+        if k == Tok::Comma() as Word { ht.comma[frame] = 1; ht.phase[frame] = 0; 0 } else {
+        if k == Tok::RParen() as Word { header_close() } else { perr(pe_annotation_syntax(), toks.at) }}
+    } else {
+        if ht.phase[frame] == 1 andalso k == Tok::Semi() as Word { ht.phase[frame] = 2; 0 } else {
+        if ht.phase[frame] == 2 andalso k == Tok::IntLit() as Word {
+            let element = ht.first[frame];
+            if v <= 0 { perr(pe_array_length(), v) } else {
+            if ht.nsize[element] > 0 andalso v > 0xFFFFFFFF / ht.nsize[element] { perr(pe_tuple_layout(), v) } else {
+                ht.length[frame] = v; ht.phase[frame] = 3; 0
+            }}
+        } else {
+        if ht.phase[frame] == 3 andalso k == Tok::RBracket() as Word { header_close() } else { perr(pe_annotation_syntax(), toks.at) }
+        }}
+    }}
+}
+// Restore postfix and let-root information from a declared type descriptor.
+fn header_arm(at: Word) -> Word {
+    stmt.pending_ctuple = 0; stmt.pending_cstruct = 0; stmt.pending_carray = 0;
+    stmt.pending_carray_struct = 0; stmt.pending_carray_tuple = 0; stmt.pending_carray_arr = 0; stmt.pending_cenum = 0;
+    if ht.nform[at] == 0 {
+        ps.scalar_postfix = 1; ps.last_byte = if ht.scalar[at] == 2 { 1 } else { 0 };
+    } else { if ht.nform[at] == 1 {
+        ps.ta_tuple = ht.layout[at]; ps.ta_phase = 1; stmt.pending_ctuple = 0 - ht.layout[at] - 1;
+    } else { if ht.nform[at] == 3 {
+        ps.fa_struct = ht.decl[at] - 1; ps.fa_phase = 1; stmt.pending_cstruct = ht.decl[at];
+    } else { if ht.nform[at] == 4 {
+        ps.last_enum = ht.decl[at]; stmt.pending_cenum = ht.decl[at];
+    } else {
+        let element = ht.child[at];
+        if ht.nform[element] == 0 {
+            ps.aa_kind = ht.scalar[element]; ps.aa_len = ht.arity[at]; ps.aa_phase = 1;
+            stmt.pending_carray = ht.scalar[element] + 1;
+        } else {
+            ps.sa_variant = ht.nform[element] - 1; ps.sa_size = ht.nsize[element]; ps.sa_len = ht.arity[at]; ps.sa_phase = 1;
+            ps.sa_tuple = ht.layout[element]; ps.sa_struct = ht.decl[element] - 1; ps.sa_enum = ht.decl[element];
+            if ht.nform[element] == 1 { stmt.pending_carray_tuple = 0 - ht.layout[element] - 1; }
+            if ht.nform[element] == 3 { stmt.pending_carray_struct = ht.decl[element]; }
+            stmt.pending_carray_size = ht.nsize[element];
+            if ht.nform[element] == 2 {
+                let inner = ht.child[element];
+                if ht.nform[inner] != 0 { perr(pe_tuple_layout(), ht.nform[inner]); }
+                ps.sa_arrkind = ht.scalar[inner]; stmt.pending_carray_arr = ht.scalar[inner] + 1; stmt.pending_carray_arrbytes = ht.nsize[element];
+            }
+        }
+    }}}}
+    0
+}
+fn resolve_plain_ident(v: Word) -> Word {
+    ps.found_flag = 0;
+    for i in 0..stmt.let_count limit 64 { if stmt.let_names[i] == v { ps.found_flag = 1; } }
+    if ps.found_flag == 1 { resolve_plain_ident_legacy(v) } else {
+        ps.found = 0 - 1;
+        for i in 0..ps.pcount limit 32 { if ps.pnames[i] == v andalso ps.pdescriptor[i] > 0 { ps.found = i; } }
+        if ps.found < 0 { resolve_plain_ident_legacy(v) } else {
+            header_arm(ps.pdescriptor[ps.found] - 1);
+            ops.expect_operand = 0;
+            Node::Local() as Word + ps.found * 64
+        }
+    }
+}
+
 fn header_sig(k: Word, v: Word) -> Word {
     if k == Tok::Const() as Word { perr(pe_call_syntax(), toks.at); }
     if ps.rtts == 1 {
-        // Inside a return-type tuple `-> (T, T, ...)`: count its all-Word elements for the chunk.
-        step_ret_tuple_type(k, v)
+        header_member(k, v)
     } else {
     if ps.tts == 1 {
-        // Inside a tuple parameter type `(T, T, ...)`: the element types feed the tuple layout.
-        step_tuple_type(k, v)
+        header_member(k, v)
     } else {
     if k == 1 {
         if ps.arr == 3 {
@@ -7090,6 +7465,7 @@ fn header_sig(k: Word, v: Word) -> Word {
                 // Default this parameter to non-struct and non-tuple; the type identifier or `(`
                 // tuple annotation that follows overrides it.
                 ps.pstruct[ps.pcount] = 0;
+                ps.pdescriptor[ps.pcount] = 0;
                 ps.ptuple[ps.pcount] = 0;
                 ps.penum[ps.pcount] = 0;
                 ps.parray[ps.pcount] = 0;
@@ -7158,11 +7534,13 @@ fn header_sig(k: Word, v: Word) -> Word {
         if ps.arr == 9 {
             // The inner length of an array-of-array parameter `[[T; N]; M]`: the inner array byte
             // size is element_size (stashed in `tts_off`) * N; await the inner `]` (arr 10).
+            if v <= 0 { perr(pe_array_length(), v); }
             if ps.arr_ret == 0 { ps.parray_size[ps.pcount - 1] = ps.tts_off * v; }
             ps.arr = 10;
             8 + v * 64
         } else {
         if ps.arr == 2 {
+            if v <= 0 { perr(pe_array_length(), v); }
             ps.arr = 0;
             // A scalar-array PARAMETER's length `; N`: record it (a return-type array is not a param
             // and is not recorded). `v` is N.
@@ -7193,21 +7571,14 @@ fn header_sig(k: Word, v: Word) -> Word {
             // A tuple parameter type `(T, T, ...)`: open a fresh tuple layout entry, bind it to the
             // current parameter, and scan its element types in `step_tuple_type`. The outer `(`
             // stays at pdepth 1; the tuple's own `(`/`)` never touch pdepth.
-            ps.ptuple[ps.pcount - 1] = tupledefs.tup_count + 1;
-            tupledefs.tup_estart[tupledefs.tup_count] = tupledefs.tup_ecursor;
-            tupledefs.tup_ecount[tupledefs.tup_count] = 0;
-            tupledefs.tup_count = tupledefs.tup_count + 1;
             ps.tts = 1;
-            ps.tts_off = 0;
-            type_tuple_record(94, 0)
+            header_tuple_begin(1)
         } else {
         if ps.rtype == 1 andalso ps.pdepth == 0 {
             // A return-type tuple `-> (T, T, ...)`: count its all-Word elements in
             // `step_ret_tuple_type` (no pdepth change; the tuple's `(`/`)` are consumed by rtts).
             ps.rtts = 1;
-            ps.rtts_count = 0;
-            ps.rtts_allword = 1;
-            type_tuple_record(94, 1)
+            header_tuple_begin(2)
         } else {
             ps.pdepth = ps.pdepth + 1;
             if ps.pdepth == 1 {
@@ -7268,6 +7639,9 @@ fn header_sig(k: Word, v: Word) -> Word {
 }
 
 fn step_body() -> Word {
+    if ht.pending != 0 {
+        let record = ht.pending; ht.pending = 0; ps.emit_arg = ht.pending_arg; record
+    } else {
     if ps.field_record != 0 {
         let record = ps.field_record;
         ps.field_record = 0;
@@ -7307,7 +7681,7 @@ fn step_body() -> Word {
             ps.cursor = ps.cursor + 1;
             header_step(k, v)
         }
-    } } } } }
+    } } } } } }
 }
 
 // P11 Option E: the two-phase record emitter. Phase 0 computes the record (via `step_body`)

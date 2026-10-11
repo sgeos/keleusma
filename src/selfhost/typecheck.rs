@@ -233,7 +233,7 @@ fn encode(
     }
     let mut nodes = Vec::new();
     for (kind, a, b) in &batch.expressions {
-        if !(1..=18).contains(kind) {
+        if !(1..=19).contains(kind) {
             return Err(protocol("unsupported expression kind"));
         }
         let (a, af) = operand(a)?;

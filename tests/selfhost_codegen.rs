@@ -956,7 +956,7 @@ fn decode_op(w: i64) -> Op {
             offset: (operand % 65536) as u16,
             size: ((operand / 65536) % 65536) as u16,
             variant: match operand / 4294967296 {
-                0 => CompositeKind::Tuple,
+                0 | 4 => CompositeKind::Tuple,
                 1 => CompositeKind::Array,
                 2 => CompositeKind::Struct,
                 3 => CompositeKind::Enum,
@@ -2028,7 +2028,8 @@ fn self_compile_codegen_atomic_functions() {
     // block (`eq/nested_array_subfield`), factored so the depth-1 array field and the nested array
     // block share one emission form (75 -> 76).
     // Guarded match results and enum cast dispatch added two helpers, both checked above.
-    const EXPECTED_SELF_COMPILE: usize = 78;
+    // Nested tuple extraction adds an internal operand-packing helper.
+    const EXPECTED_SELF_COMPILE: usize = 79;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -2254,7 +2255,7 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
                         || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
                         || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
                         || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
-                        || matches!(c, 94..=96 | 99..=103) => {}
+                        || matches!(c, 94..=96 | 99..=105) => {}
                     _ => records.push((code, val)),
                 }
             } else if in_guard {
@@ -2347,7 +2348,7 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
                 && *k != keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
                 && *k != keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
                 && *k != keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
-                && !matches!(*k, 94..=96 | 99..=103)
+                && !matches!(*k, 94..=96 | 99..=105)
         })
         .collect();
     let records: &[(i64, i64)] = &records;
@@ -4064,79 +4065,8 @@ fn is_multihead_group(group: &[&ParsedFn]) -> bool {
 /// with its guard and body records, plus the interned-name table. Multiheaded functions
 /// appear as several same-named entries in declaration order.
 fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
-    let (tokens, names) = br_lex(src);
-    let id_of = |s: &str| {
-        names
-            .iter()
-            .position(|n| n == s)
-            .map(|i| i as i64)
-            .unwrap_or(-1)
-    };
-    // The chunk table must be in the module's actual chunk order so a resolved call index
-    // matches the assembled module. The Rust compiler orders chunks by name, not by
-    // declaration, so the table (host-supplied resolved-reference data) is taken from the
-    // reference module's chunk order rather than the token scan's declaration order.
-    let reference_chunks = compile_src(src);
-    let chunks: Vec<i64> = reference_chunks
-        .chunks
-        .iter()
-        .map(|c| id_of(&c.name))
-        .collect();
-    let module = std::thread::Builder::new()
-        .stack_size(64 * 1024 * 1024)
-        .spawn(|| {
-            compile_src(
-                &std::fs::read_to_string(common::stage_path("compiler/kel/parse.kel"))
-                    .expect("read"),
-            )
-        })
-        .expect("spawn")
-        .join()
-        .expect("join");
-    let need = required_persistent_capacity_for(&module);
-    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
-    arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(module, &arena).expect("verify parse.kel");
-    let mut shared = vec![0u8; vm.shared_data_bytes()];
-    vm.set_shared(&mut shared, BR_P_LEN, Value::Int(tokens.len() as i64))
-        .unwrap();
-    vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
-        .unwrap();
-    vm.set_shared(&mut shared, BR_P_REQUIRE_ID, Value::Int(id_of("require")))
-        .unwrap();
-    vm.set_shared(&mut shared, BR_P_WORD_ID, Value::Int(id_of("Word")))
-        .unwrap();
-    vm.set_shared(&mut shared, BR_P_BYTE_ID, Value::Int(id_of("Byte")))
-        .unwrap();
-    vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
-        .unwrap();
-    vm.set_shared(&mut shared, BR_P_AND_ID, Value::Int(id_of("and")))
-        .unwrap();
-    // THE BOOLEAN LITERAL IDS. This harness is a COPY of the shipping driver, so
-    // a slot added there is not added here, and the boundary test drives THIS one.
-    // Omitting them makes `true` resolve as a variable reference again — the exact
-    // miscompile the driver-side fix removes.
-    vm.set_shared(&mut shared, BR_P_TRUE_ID, Value::Int(id_of("true")))
-        .unwrap();
-    vm.set_shared(&mut shared, BR_P_FALSE_ID, Value::Int(id_of("false")))
-        .unwrap();
-    vm.set_shared(&mut shared, BR_P_OR_ID, Value::Int(id_of("or")))
-        .unwrap();
-    vm.set_shared(
-        &mut shared,
-        BR_P_CHUNK_COUNT,
-        Value::Int(chunks.len() as i64),
-    )
-    .unwrap();
-    for (i, &c) in chunks.iter().enumerate() {
-        vm.set_shared(&mut shared, BR_P_CHUNKS + i, Value::Int(c))
-            .unwrap();
-    }
-    for (i, &(k, v)) in tokens.iter().enumerate() {
-        vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(k + v * 256))
-            .unwrap();
-    }
-
+    // Keep the independent record collector while using bounded token transport.
+    let (names, traced) = keleusma::selfhost::parse_record_trace_fused(src);
     let mut fns: Vec<ParsedFn> = Vec::new();
     let mut cur: Option<ParsedFn> = None;
     // Every data block's header records (DSTART, then PARAM/PTYPE/ASIZE per field, then
@@ -4150,100 +4080,95 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
     // A struct/trait/impl declaration (STRUCTSTART 18, TRAITSTART 19, IMPLSTART 20) is
     // skipped until its END; it contributes no chunk or scaffold record here.
     let mut in_skip_decl = false;
-    let state = vm
-        .call_with_shared(&mut shared, &[Value::Int(0)])
-        .expect("call");
-    let budget = tokens.len() * 16 + 256;
-    keleusma::selfhost_host::drive_parse_records(
-        &mut vm,
-        &mut shared,
-        state,
-        budget,
-        |code, val| {
-            if in_body {
-                match code {
-                    0 => {}
-                    15 => in_body = false,
-                    c if c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
-                        || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
-                        || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
-                        || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
-                        || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
-                        || matches!(c, 94..=96 | 99..=103) => {}
-                    _ => cur.as_mut().unwrap().body.push((code, val)),
-                }
-            } else if in_guard {
-                match code {
-                    0 => {}
-                    15 => in_guard = false,
-                    c if c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
-                        || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
-                        || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
-                        || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
-                        || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
-                        || matches!(c, 94..=96 | 99..=103) => {}
-                    _ => cur.as_mut().unwrap().guard.push((code, val)),
-                }
-            } else if in_data {
-                if code == 5 {
-                    data_records.push((5, 0));
-                    in_data = false;
-                } else if code != 0 {
-                    data_records.push((code, val));
-                }
-            } else if in_enum {
-                if code == 5 {
-                    enum_records.push((5, 0));
-                    in_enum = false;
-                } else if code != 0 {
-                    enum_records.push((code, val));
-                }
-            } else if in_use {
-                in_use = code != 5;
-            } else if in_skip_decl {
-                in_skip_decl = code != 5;
-            } else {
-                match code {
-                    1..=3 => {
-                        cur = Some(ParsedFn {
-                            cat: code,
-                            name: val,
-                            params: 0,
-                            param_types: Vec::new(),
-                            return_type: 0,
-                            guard: Vec::new(),
-                            body: Vec::new(),
-                        })
-                    }
-                    4 => cur.as_mut().unwrap().params += 1,
-                    6 => cur.as_mut().unwrap().param_types.push(val),
-                    7 => cur.as_mut().unwrap().return_type = val,
-                    // This historical scaffold keeps only scalar signature names.
-                    // Composite signature metadata belongs to the shipping driver.
-                    8 => {}
-                    94 => {}
-                    95 => {}
-                    96 => {}
-                    9 => {
-                        in_data = true;
-                        data_records.push((9, val));
-                    }
-                    10 => in_use = true,
-                    12 => {
-                        in_enum = true;
-                        enum_records.push((12, val));
-                    }
-                    16 => in_body = true,
-                    17 => in_guard = true,
-                    18..=20 => in_skip_decl = true, // struct/trait/impl declaration
-                    5 => fns.push(cur.take().unwrap()),
-                    15 => return std::ops::ControlFlow::Break(()),
-                    _ => {}
-                }
+    let mut consume = |code, val| {
+        if in_body {
+            match code {
+                0 => {}
+                15 => in_body = false,
+                c if c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                    || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
+                    || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
+                    || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
+                    || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
+                    || matches!(c, 94..=96 | 99..=105) => {}
+                _ => cur.as_mut().unwrap().body.push((code, val)),
             }
-            std::ops::ControlFlow::Continue(())
-        },
-    );
+        } else if in_guard {
+            match code {
+                0 => {}
+                15 => in_guard = false,
+                c if c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                    || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
+                    || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
+                    || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
+                    || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
+                    || matches!(c, 94..=96 | 99..=105) => {}
+                _ => cur.as_mut().unwrap().guard.push((code, val)),
+            }
+        } else if in_data {
+            if code == 5 {
+                data_records.push((5, 0));
+                in_data = false;
+            } else if code != 0 {
+                data_records.push((code, val));
+            }
+        } else if in_enum {
+            if code == 5 {
+                enum_records.push((5, 0));
+                in_enum = false;
+            } else if code != 0 {
+                enum_records.push((code, val));
+            }
+        } else if in_use {
+            in_use = code != 5;
+        } else if in_skip_decl {
+            in_skip_decl = code != 5;
+        } else {
+            match code {
+                1..=3 => {
+                    cur = Some(ParsedFn {
+                        cat: code,
+                        name: val,
+                        params: 0,
+                        param_types: Vec::new(),
+                        return_type: 0,
+                        guard: Vec::new(),
+                        body: Vec::new(),
+                    })
+                }
+                4 => cur.as_mut().unwrap().params += 1,
+                6 => cur.as_mut().unwrap().param_types.push(val),
+                7 => cur.as_mut().unwrap().return_type = val,
+                // This historical scaffold keeps only scalar signature names.
+                // Composite signature metadata belongs to the shipping driver.
+                8 => {}
+                94 => {}
+                95 => {}
+                96 => {}
+                9 => {
+                    in_data = true;
+                    data_records.push((9, val));
+                }
+                10 => in_use = true,
+                12 => {
+                    in_enum = true;
+                    enum_records.push((12, val));
+                }
+                16 => in_body = true,
+                17 => in_guard = true,
+                18..=20 => in_skip_decl = true, // struct/trait/impl declaration
+                5 => fns.push(cur.take().unwrap()),
+                15 => return std::ops::ControlFlow::Break(()),
+                _ => {}
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    };
+    for (code, val, _) in traced {
+        if consume(code, val).is_break() {
+            break;
+        }
+    }
     (fns, names, data_records, enum_records)
 }
 
@@ -4463,6 +4388,16 @@ fn the_host_unescape_agrees_with_the_reference_on_every_accepted_escape() {
 fn self_host_compile(src: &str) -> Module {
     let (fns, names, _, _) = parse_functions(src);
     let mut module = compile_src(src);
+    let parsed_names: std::collections::BTreeSet<_> = fns
+        .iter()
+        .map(|f| names[f.name as usize].as_str())
+        .collect();
+    let expected_names: std::collections::BTreeSet<_> =
+        module.chunks.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(
+        parsed_names, expected_names,
+        "parser must reach every source chunk"
+    );
     let mut i = 0;
     while i < fns.len() {
         let name = names[fns[i].name as usize].clone();
@@ -7591,10 +7526,8 @@ fn self_host_compiles_struct_tuple_of_struct_equality() {
 /// element field was emitted as a scalar record and compared with a single `CmpEq` over its whole
 /// flat body — admitted, then SILENTLY MIS-COMPILED.
 ///
-/// Each case below produced a wrong-but-plausible op stream before `elem_all_scalar` was added. The
-/// last one is the most dangerous shape found: it diverged at the SAME op count as the reference
-/// (58 against 58), differing only in content, so nothing but the byte-identical oracle could have
-/// caught it.
+/// These cases retain the explicit unsupported boundary. Boolean scalar array fields have a
+/// separate positive artifact comparison below, since they now compile through this path.
 ///
 /// These are Gaps by design. Full support means giving the flat array family a nested form, or
 /// routing array-of-composite elements through the `StructEqNested` frame machinery — see
@@ -7610,8 +7543,6 @@ fn array_of_composite_element_defers() {
         // Tuples, arrays and plain enums inside are now supported, so this uses an enum with a
         // COMPOSITE payload, which still has no nested form.
         "struct Q { z: Word }\nenum E { A(Q), B }\nstruct P { e: E }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
-        // A struct field array whose element type is not a recognized scalar.
-        "struct S { a: [bool;2], w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
     ] {
         let reference = compile_src(src);
         let module = self_host_compile(src);
@@ -7625,9 +7556,8 @@ fn array_of_composite_element_defers() {
             .iter()
             .find(|c| c.name == "f")
             .expect("ref f");
-        // Assert the SHAPE of a deferral (a short primitive compare), not merely inequality. The
-        // bool case previously diverged at an IDENTICAL op count, so a length-agnostic `!=` check
-        // would have passed while the construct was still being mis-compiled.
+        // Require the short primitive fallback, so a longer but incorrect lowering cannot
+        // satisfy this unsupported-boundary control merely by differing from the reference.
         assert!(
             f.ops.len() < r.ops.len() / 2,
             "expected a short deferral for `{src}`, got {} ops against the reference's {}",
@@ -7635,6 +7565,19 @@ fn array_of_composite_element_defers() {
             r.ops.len()
         );
     }
+}
+
+/// Boolean array fields use scalar element comparisons and preserve the complete artifact.
+#[test]
+fn self_host_compiles_struct_boolean_array_equality() {
+    let source = "struct S { a: [bool;2], w: Word }\nfn f(a: S, b: S) -> bool { a == b }";
+    assert_self_host_byte_identical(source);
+    let actual = keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host())
+        .expect("independent boolean array equality compilation");
+    assert_eq!(
+        keleusma::selfhost::wire_module_artifact_via_kel(&actual).unwrap(),
+        compile_src(source).to_bytes().unwrap()
+    );
 }
 
 /// An ARRAY whose element contains a nested struct self-compiles byte-identically.

@@ -198,9 +198,10 @@ shipping serialization, remaining type obligations and final integration gates s
 
 The driver-capacity test now inventories all fourteen stage sources. Earlier versions of that
 test used ten sources and omitted wire and verify_types. The current maxima belong to
-different stages. Parse uses 776 of 1,024 names. Wire uses 23,713 of 49,152 input bytes.
-The remaining wire input margin is 25,439 bytes. No input cap changed. These measurements
-establish input residency for the corpus, not complete production serialization.
+different stages. After the tuple-header increment, parse uses 839 of 1,024 names. Wire uses
+23,753 of 49,152 input bytes. The remaining wire input margin is 25,399 bytes. No input cap
+changed. These measurements cover the legacy bounded input path. The shipping emitter uses
+the separately tested streaming path.
 Both encoding and decoding remain within the original wire-format scope.
 
 ## 2026-10-11 Layout families decode through the schema stage

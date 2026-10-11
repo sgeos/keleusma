@@ -12965,7 +12965,7 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // Measured 2026-10-11. Earlier evidence omitted wire and verify_types.
     // Parse holds the name maximum. Wire holds the byte maximum and leaves
     // 25,399 bytes below the input cap. Neither capacity is raised here.
-    assert_eq!(worst_names, 776, "the worst-case name count moved");
+    assert_eq!(worst_names, 839, "the worst-case name count moved");
     assert_eq!(worst_blob, 23753, "the worst-case blob size moved");
 }
 

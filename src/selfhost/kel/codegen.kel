@@ -2172,6 +2172,11 @@ fn push_arr_scalar_inner(acount: Word, akind: Word, l2: Word, r2: Word, false_id
     0
 }
 
+// A Tuple parent needs the private marker even when the nested variant is Tuple zero.
+fn nested_access_operand(accessor: Word, operand: Word) -> Word {
+    if accessor == wire.gettuplefield andalso operand < 4294967296 { operand + 4 * 4294967296 } else { operand }
+}
+
 fn push_struct_eq_subfields(sbase: Word, subcount: Word, l2: Word, r2: Word, subacc: Word, false_idx: Word, true_idx: Word, tempbias: Word) -> Word {
     // Frame 0: the given sub-field list, container (l2, r2), accessor `subacc`, no suffix.
     st.es_sbase[0] = sbase;
@@ -2212,9 +2217,9 @@ fn push_struct_eq_subfields(sbase: Word, subcount: Word, l2: Word, r2: Word, sub
                     push_emit(wire.mloop);
                     push_emit(wire.setlocal + st.es_l[top] * wire.radix);
                     push_emit(wire.setlocal + st.es_r[top] * wire.radix);
-                    push_emit(sfxacc + st.es_sfx_extp[top] * wire.radix);
+                    push_emit(sfxacc + nested_access_operand(sfxacc, st.es_sfx_extp[top]) * wire.radix);
                     push_emit(wire.getlocal + st.es_sfx_pr[top] * wire.radix);
-                    push_emit(sfxacc + st.es_sfx_extp[top] * wire.radix);
+                    push_emit(sfxacc + nested_access_operand(sfxacc, st.es_sfx_extp[top]) * wire.radix);
                     push_emit(wire.getlocal + st.es_sfx_pl[top] * wire.radix);
                 }
                 st.es_sp = st.es_sp - 1;
@@ -2619,9 +2624,9 @@ fn push_struct_eq_nested(p: Word) -> Word {
             }
             push_emit(wire.setlocal + l2 * wire.radix);
             push_emit(wire.setlocal + r2 * wire.radix);
-            push_emit(topnestacc + extp * wire.radix);
+            push_emit(topnestacc + nested_access_operand(topnestacc, extp) * wire.radix);
             push_emit(wire.getlocal + tb * wire.radix);
-            push_emit(topnestacc + extp * wire.radix);
+            push_emit(topnestacc + nested_access_operand(topnestacc, extp) * wire.radix);
             push_emit(wire.getlocal + ta * wire.radix);
         }
     }

@@ -348,6 +348,18 @@ The gaps to close, from the current subset to the full grammar:
 
 ## Current Order-1 status, 2026-10-11
 
+The latest tuple increment closes the three measured projection disagreements. Fourteen verdict
+cases now agree with the reference, with independent shipping rejection for invalid cases.
+Nested headers retain source identity and computed layouts. Nested tuple equality and struct
+members at several tuple depths preserve artifacts. All fourteen stages also pass the shipping
+entry and complete artifact comparisons. Inference independence now covers 55,276 recorded types.
+The full workspace reports two guard failures among 3,184 executed tests. Both guards were repaired
+and their 189-test targeted rerun passes. The full workspace has not been rerun after those test-only
+changes. Remaining nominal signatures, tuple literal layouts, general header paths, empty-array
+argument rejection and final integration gates keep Order 1 open. The current
+[completion plan](../decisions/ORDER1_COMPLETION_PLAN.md) and
+[reverse prompt](../process/REVERSE_PROMPT.md) distinguish these gaps from completed work.
+
 All fourteen pipeline-produced stage modules serialize through Keleusma section emitters and
 match complete reference artifacts. Opcode and operand-pool encoding and semantic decoding
 cover all 66 instruction identifiers. The all-stage comparison also checks decoded instruction

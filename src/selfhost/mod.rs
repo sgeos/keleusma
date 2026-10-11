@@ -199,6 +199,9 @@ pub struct ParsedFn {
     // Source range, allocated frame slot, and variant/payload coordinates.
     enum_payload_bindings: Vec<(bool, i64, i64)>,
     field_projections: Vec<(bool, i64)>,
+    tuple_projections: Vec<(bool, i64)>,
+    param_layouts: Vec<Option<crate::bytecode::WireShape>>,
+    return_layout: Option<crate::bytecode::WireShape>,
 }
 
 impl ParsedFn {
@@ -536,7 +539,11 @@ fn decode_op(w: i64) -> Op {
         53 if operand >= 4294967296 => Op::GetTupleField(TupleField::FlatNested {
             offset: (operand % 65536) as u16,
             size: ((operand / 65536) % 65536) as u16,
-            variant: composite_kind_from_tag(operand / 4294967296),
+            variant: composite_kind_from_tag(if operand / 4294967296 == 4 {
+                0
+            } else {
+                operand / 4294967296
+            }),
         }),
         // A flat tuple field read: operand packs offset + kind_tag*65536.
         53 => Op::GetTupleField(TupleField::Flat {
@@ -1519,6 +1526,15 @@ pub fn parse_record_trace(src: &str) -> (Vec<String>, Vec<TracedRecord>) {
     (names, records)
 }
 
+/// Trace parser records using the bounded token feed, including large stage sources.
+pub fn parse_record_trace_fused(src: &str) -> (Vec<String>, Vec<TracedRecord>) {
+    let mut records = Vec::new();
+    let (names, ..) = parse_functions_impl(src, true, &mut |_, _| {}, &mut |code, val, at| {
+        records.push((code, val, at));
+    });
+    (names, records)
+}
+
 /// [`parse_functions_impl`] for the two callers that want the name table in their
 /// callback and no record trace.
 fn parse_functions_impl_named(
@@ -1889,6 +1905,13 @@ fn try_parse_functions_impl(
                 }
                 return ControlFlow::Continue(());
             }
+            if (in_body || in_guard) && code == crate::selfhost_host::PARSE_TUPLE_PROJECTION_TAG {
+                assert!(val >= 0, "negative tuple source position");
+                open_decl(&mut cur, code, val)
+                    .tuple_projections
+                    .push((in_guard, val));
+                return ControlFlow::Continue(());
+            }
             if (in_body || in_guard) && code == crate::selfhost_host::PARSE_STRUCT_PROJECTION_TAG {
                 assert!(val >= 0, "negative source field coordinates");
                 open_decl(&mut cur, code, val)
@@ -2070,6 +2093,9 @@ fn try_parse_functions_impl(
                             enum_variants: Vec::new(),
                             enum_payload_bindings: Vec::new(),
                             field_projections: Vec::new(),
+                            tuple_projections: Vec::new(),
+                            param_layouts: Vec::new(),
+                            return_layout: None,
                         })
                     }
                     4 => {
@@ -2079,6 +2105,7 @@ fn try_parse_functions_impl(
                         // Composite tuple headers may emit no PTYPE. Reserve the slot now.
                         f.param_types.push(-1);
                         f.param_type_records.push(Vec::new());
+                        f.param_layouts.push(None);
                     }
                     6 => {
                         let f = open_decl(&mut cur, code, val);
@@ -2100,7 +2127,29 @@ fn try_parse_functions_impl(
                             f.param_type_records.last_mut().unwrap().push((8, val));
                         }
                     }
-                    94..=96 => {
+                    crate::selfhost_host::PARSE_HEADER_LAYOUT_TAG => {
+                        use crate::bytecode::WireShape;
+                        let f = open_decl(&mut cur, code, val);
+                        assert!(val >= 0, "negative header layout");
+                        let kind = ((val / 8) % 32) as u8;
+                        let shape = match (val / 2) % 4 {
+                            0 => WireShape::Top,
+                            1 => WireShape::Scalar { kind },
+                            2 => WireShape::Flat {
+                                kind,
+                                size: u32::try_from(val / 256).expect("header layout size"),
+                            },
+                            _ => panic!("invalid header shape form"),
+                        };
+                        if val % 2 == 1 {
+                            f.return_layout = Some(shape);
+                        } else {
+                            *f.param_layouts
+                                .last_mut()
+                                .expect("layout without parameter") = Some(shape);
+                        }
+                    }
+                    94..=96 | crate::selfhost_host::PARSE_ANNOTATION_GROUP_TAG => {
                         let f = open_decl(&mut cur, code, val);
                         if code == 94 {
                             f.tuple_header_is_return = val == 1;
@@ -2851,7 +2900,7 @@ pub fn try_call_type_inputs_from_pipeline(
                     // Preserve literal syntax for the stage's contextual Byte coercion.
                     (node.arg, 3, String::new())
                 } else if let Some(node) = body.nodes.get(index as usize)
-                    && matches!(node.kind, 28 | 31 | 37)
+                    && matches!(node.kind, 28 | 31)
                 {
                     // Scalar fields pack offset + kind*65536. Scalar array reads
                     // carry the element kind directly. Nested composite accesses
@@ -2946,6 +2995,32 @@ pub fn try_call_type_inputs_from_pipeline(
                 let (value, form, target) =
                     declared_type_operand(source_type, tag_of, &mut expressions, &mut bindings);
                 bindings.push((computed_names[&(index as i64)].clone(), value, form, target));
+            }
+            let tuple_nodes: Vec<_> = body
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| n.kind == 37)
+                .collect();
+            let tuple_sources: Vec<_> = f
+                .tuple_projections
+                .iter()
+                .filter(|(guard, _)| *guard == (range == 0))
+                .collect();
+            assert_eq!(
+                tuple_nodes.len(),
+                tuple_sources.len(),
+                "tuple projection metadata count"
+            );
+            for ((at, node), &(_, position)) in tuple_nodes.into_iter().zip(tuple_sources) {
+                let row = expressions.len();
+                expressions.push((19, operand(node.lhs), (position, 0, String::new())));
+                bindings.push((
+                    computed_names[&(at as i64)].clone(),
+                    row as i64,
+                    2,
+                    String::new(),
+                ));
             }
             for (index, node) in body.nodes.iter().enumerate() {
                 if node.kind == 19 {
@@ -3659,7 +3734,7 @@ fn typed_result_node(node: &Node) -> bool {
     is_binary_operator(node.kind)
         || matches!(
             node.kind,
-            6 | 8 | 9 | 10 | 17 | 19 | 22 | 26 | 28 | 30 | 39 | 43 | 65 | 66 | 68
+            6 | 8 | 9 | 10 | 17 | 19 | 22 | 26 | 28 | 30 | 37 | 39 | 43 | 65 | 66 | 68
         )
         || (node.kind == 4 && node.arg >= 0)
 }
@@ -5864,6 +5939,15 @@ fn declared_wire_shape(
                     size.map_or(WireShape::Top, |size| WireShape::Flat { kind: 1, size }),
                 ));
             }
+            crate::selfhost_host::PARSE_ANNOTATION_GROUP_TAG => {
+                let inner = if value == 1 {
+                    WireShape::Scalar { kind: 0 }
+                } else {
+                    stack.pop().flatten().expect("empty grouped signature")
+                };
+                assert!(stack.pop().expect("group without open").is_none());
+                stack.push(Some(inner));
+            }
             _ => panic!("unknown signature type record {kind}"),
         }
     }
@@ -5897,9 +5981,14 @@ fn assemble_signatures(
         let params: Vec<WireShape> = first
             .param_type_records
             .iter()
-            .map(|records| declared_wire_shape(records, names, enums))
+            .enumerate()
+            .map(|(i, records)| {
+                first.param_layouts[i].unwrap_or_else(|| declared_wire_shape(records, names, enums))
+            })
             .collect();
-        let ret = declared_wire_shape(&first.return_type_records, names, enums);
+        let ret = first
+            .return_layout
+            .unwrap_or_else(|| declared_wire_shape(&first.return_type_records, names, enums));
         // Only a `loop` (category 3, a Stream chunk) resumes with its first parameter.
         let resume = if first.cat == 3 {
             params.first().copied().unwrap_or(WireShape::Top)
@@ -5984,6 +6073,15 @@ fn assemble_chunk_metadata(
             .iter()
             .enumerate()
             .map(|(i, &t)| {
+                if let Some(shape) = first.param_layouts[i] {
+                    return match shape {
+                        crate::bytecode::WireShape::Scalar { kind: 0 } => TypeTag::Unit,
+                        crate::bytecode::WireShape::Scalar { kind: 1 } => TypeTag::Bool,
+                        crate::bytecode::WireShape::Scalar { kind: 2 } => TypeTag::Byte,
+                        crate::bytecode::WireShape::Scalar { kind: 3 } => TypeTag::Word,
+                        _ => TypeTag::Composite,
+                    };
+                }
                 if first.param_type_records[i]
                     .iter()
                     .any(|(kind, _)| matches!(kind, 8 | 94))

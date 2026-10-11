@@ -75,7 +75,7 @@ impl ParseRecordError {
     /// retired codes, capacity limits and transport failures never do.
     #[must_use]
     pub fn is_source_rejection(&self) -> bool {
-        matches!(self, Self::Diagnostic { code, .. } if matches!(PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(2 | 13..=17 | 22..=24 | 26)))
+        matches!(self, Self::Diagnostic { code, .. } if matches!(PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(2 | 13..=17 | 22..=24 | 26 | 32 | 33)))
     }
 }
 
@@ -245,6 +245,10 @@ pub const PARSE_ANNOTATION_END_TAG: i64 = 101;
 pub const PARSE_ANNOTATION_REF_TAG: i64 = 102;
 /// Close a grouped source type with payload zero, or an empty unit type with payload one.
 pub const PARSE_ANNOTATION_GROUP_TAG: i64 = 103;
+/// Source tuple element ordinal for the following tuple-field read.
+pub const PARSE_TUPLE_PROJECTION_TAG: i64 = 104;
+/// Source header layout, with return bit, shape form, kind and byte size.
+pub const PARSE_HEADER_LAYOUT_TAG: i64 = 105;
 
 /// The tag at or below which a word yielded by `reconstruct.kel` is a diagnostic rather
 /// than a node count. Node counts are non-negative, so no legitimate count can collide.
@@ -397,13 +401,15 @@ pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
         24 => format!("unknown or mismatched enum variant with name id {detail} in parse.kel"),
         25 => format!("match nesting depth {detail} exceeds the parse.kel limit of 8"),
         26 => format!("empty enum constructor requires {detail} payload fields in parse.kel"),
-        27 => format!("unsupported let annotation syntax at token {detail} in parse.kel"),
+        27 => format!("unsupported source type annotation syntax at token {detail} in parse.kel"),
         28 => format!(
-            "let annotation nesting depth {detail} exceeds the parse.kel limit of {PARSE_ANNOTATION_DEPTH_CAP}"
+            "source type annotation nesting depth {detail} exceeds the parse.kel limit of {PARSE_ANNOTATION_DEPTH_CAP}"
         ),
-        29 => format!("literal tuple layout capacity exhausted with {detail} members in parse.kel"),
+        29 => format!("tuple layout capacity exhausted with {detail} members in parse.kel"),
         30 => format!("expression block at token {detail} is outside the parse.kel subset"),
         31 => format!("non-range for iterable at token {detail} is outside the parse.kel subset"),
+        32 => format!("a fixed-size array must have a positive length, got {detail}, in parse.kel"),
+        33 => format!("tuple field index {detail} is out of range in parse.kel"),
         other => format!(
             "parse.kel reported diagnostic code {other} (detail {detail}), which this driver \
              does not know. The stage has grown a cause that `describe_parse_diagnostic` was \

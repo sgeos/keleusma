@@ -623,8 +623,26 @@ fn ty_array_element(tag: Word) -> Word {
     }
 }
 
+private data tp { cursor: Word, hit: Word, }
+fn ty_tuple_element(tag: Word, position: Word) -> Word {
+    tp.cursor = tag; tp.hit = 0;
+    if position >= 0 andalso position < 640 {
+        for i in 0..(position + 1) limit 640 {
+            let at = tp.cursor / 16 - 1;
+            if tp.cursor >= 16 andalso tp.cursor % 16 == 4 andalso at < tys.n {
+                if tys.kind[at] == 1 {
+                    if i == position { tp.hit = tys.a[at]; }
+                    tp.cursor = tys.b[at];
+                } else { tp.cursor = 0; }
+            } else { tp.cursor = 0; }
+        }
+    }
+    tp.hit
+}
+
 fn tyb_node_tag(e: Word) -> Word {
     tyb_pair(e);
+    if ty.ekind[e] == 19 { ty_tuple_element(tyb.la, tyb.lb) } else {
     if ty.ekind[e] == 18 { ty_array_element(tyb.la) } else {
     if ty.ekind[e] == 17 { ty_structural_tag(1, tyb.la, tyb.lb) } else {
     if ty.ekind[e] == 16 { ty_array_tag(tyb.la, tyb.lb) } else {
@@ -634,7 +652,7 @@ fn tyb_node_tag(e: Word) -> Word {
     if ty.ekind[e] == 8 { if tyb.lb != 0 { tyb.lb } else { tyb.la } } else {
     if ty.ekind[e] == 1 orelse ty.ekind[e] == 4 orelse ty.ekind[e] == 14 {
         if tyb.la != 0 andalso tyb.la == tyb.lb { tyb.la } else { ty_unknown() }
-    } else { ty_unknown() } } } } } } } }
+    } else { ty_unknown() } } } } } } } } }
 }
 
 // An unknown operand remains undecided. The scalar subset permits Word or Byte.
@@ -644,6 +662,9 @@ fn ty_scalar_numeric_bad(tag: Word) -> Word {
 
 fn ty_expression_bad(e: Word) -> Word {
     tyb_pair(e);
+    if ty.ekind[e] == 19 {
+        if tyb.la == 0 orelse ty_tuple_element(tyb.la, tyb.lb) != 0 { 0 } else { 1 }
+    } else {
     if ty.ekind[e] == 18 {
         if tyb.la == 0 orelse ty_array_element(tyb.la) != 0 { 0 } else { 1 }
     } else {
@@ -666,7 +687,7 @@ fn ty_expression_bad(e: Word) -> Word {
         if ty_scalar_numeric_bad(tyb.la) == 1 orelse ty_scalar_numeric_bad(tyb.lb) == 1 {
             1
         } else { ty_pair_disagrees(tyb.la, tyb.lb) }
-    } else { ty_node_bad(ty.ekind[e], tyb.la, tyb.lb) } } } } } }
+    } else { ty_node_bad(ty.ekind[e], tyb.la, tyb.lb) } } } } } } }
 }
 
 // The struct type of name `n`, OFFSET BY ONE so that 0 can mean "not stated".
