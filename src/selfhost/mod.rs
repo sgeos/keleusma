@@ -47,6 +47,7 @@ mod wire_aux_decode;
 pub use wire_aux_decode::wire_decode_aux_body_via_kel;
 #[cfg(test)]
 mod wire_auxiliary;
+mod wire_run_encode;
 mod wire_stream_auxiliary;
 pub use wire_stream_auxiliary::wire_auxiliary_from_module_via_kel;
 mod wire_data_decode;

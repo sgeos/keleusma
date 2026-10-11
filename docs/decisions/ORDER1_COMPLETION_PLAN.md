@@ -23,10 +23,10 @@ Full-language support remains Order 6. Existing supported programs must retain t
 | Derive type inputs from the self-hosted pipeline | Production rejection receives facts without walking the reference parser's abstract syntax tree or borrowing inferred types | The production input path now derives scoped scalar constraints from Keleusma parser and reconstruction output. Composite facts, complete binder/occurrence coverage and general admission remain incomplete. |
 | Reject ill-typed subset programs | Independent pipeline rejection agrees with the reference on the rejection corpus, valid controls, and the rule-versus-form census | The scoped pipeline harness exercises all twenty rejection cases and seven valid controls without reference-first masking. The separate sixteen-cell rule-versus-form census now runs through that path with eight valid controls. Its required test now passes after preserving match-arm guards. Parser source diagnostics and type-stage verdicts remain distinct from unsupported syntax, capacity and execution failures. The shipping driver now obtains the independent verdict first. Production corpus and census checks assert PipelineRejected so reference rejection cannot mask missing stage coverage. |
 | Preserve the first-pass monomorphization result | Every stage remains unchanged by monomorphization, with a control that does change | The corpus now lists all fourteen sources. Identity, changing control and directory inventory tests passed again after the parser and alias changes on 2026-10-04. Repeat if stage sources change. |
-| Preserve independence from inferred expression types | The current stage corpus compiles identically with recorded expression types absent | Four standing tests cover all fourteen sources with a directory inventory, a populated-table intervention after recording, a changed-emission control and an admission control. On 2026-10-11, clearing 52,389 recorded types leaves all fourteen complete artifacts unchanged. This does not remove reference admission or establish full-language independence. |
-| Emit complete artifacts through Keleusma | Production output uses the Keleusma wire emitter for framing, opcode records, operand pools, auxiliary regions and integrity fields | The fourteen-stage comparison now supplies no reference section bytes, region positions or artifact lengths. All 66 opcode identifiers have encoding controls. Native names and return shapes now preserve independent lengths and share the existing name and shape tables. Struct templates now derive type-name indices and contiguous field-name runs in Keleusma, including empty runs. Debug-pool ordering and encoding now run in a dedicated Keleusma stage, and chunk debug offsets are stage-derived. Private composite placements and scalar initializer pools now encode through Keleusma, including stage-derived elision and root ranges. Composite and named constant forests, including initializer trees, now use the Keleusma breadth-first walker within the declared input bounds. Opcode and operand-pool semantic decoding now matches all fourteen stage instruction sequences and a 153,600-record raw corpus in each of two feature configurations. Auxiliary directory voting, bounds and duplicate checks now run in Keleusma, with borrowed payloads and no reference positions. All seventeen fixed-record kinds now decode through Keleusma and reconstruct every fixed-record region in the stage corpus. Signature and native-return range checks and shape-tag interpretation now run in a dedicated Keleusma schema stage. Borrowed name lookup, UTF-8 validation and owned constant reconstruction now run through Keleusma, including ranges, tags, name and child requests and ownership checks. Templates, enum layouts and data-layout semantics now decode through Keleusma, including optional-family policy, run expansion and initializer selection. Parameter tags and debug pools now decode through Keleusma, and the complete auxiliary-body reader composes all semantic families. Complete outer framing and module reconstruction now run through Keleusma readers. Windowed name interning and breadth-first constant scheduling remove the corpus-sized encoder limits. Contributor order, ranges and parameter tags are stage decisions. Unsigned self-hosted command output now uses the Keleusma emitter. Host data-slot grouping, splitting and shared-layout run extraction remain to be moved into Keleusma. |
+| Preserve independence from inferred expression types | The current stage corpus compiles identically with recorded expression types absent | Four standing tests cover all fourteen sources with a directory inventory, a populated-table intervention after recording, a changed-emission control and an admission control. On 2026-10-11, clearing 53,213 recorded types leaves all fourteen complete artifacts unchanged. This does not remove reference admission or establish full-language independence. |
+| Emit complete artifacts through Keleusma | Production output uses the Keleusma wire emitter for framing, opcode records, operand pools, auxiliary regions and integrity fields | The fourteen-stage comparison now supplies no reference section bytes, region positions or artifact lengths. All 66 opcode identifiers have encoding controls. Native names and return shapes now preserve independent lengths and share the existing name and shape tables. Struct templates now derive type-name indices and contiguous field-name runs in Keleusma, including empty runs. Debug-pool ordering and encoding now run in a dedicated Keleusma stage, and chunk debug offsets are stage-derived. Private composite placements and scalar initializer pools now encode through Keleusma, including stage-derived elision and root ranges. Composite and named constant forests, including initializer trees, now use the Keleusma breadth-first walker within the declared input bounds. Opcode and operand-pool semantic decoding now matches all fourteen stage instruction sequences and a 153,600-record raw corpus in each of two feature configurations. Auxiliary directory voting, bounds and duplicate checks now run in Keleusma, with borrowed payloads and no reference positions. All seventeen fixed-record kinds now decode through Keleusma and reconstruct every fixed-record region in the stage corpus. Signature and native-return range checks and shape-tag interpretation now run in a dedicated Keleusma schema stage. Borrowed name lookup, UTF-8 validation and owned constant reconstruction now run through Keleusma, including ranges, tags, name and child requests and ownership checks. Templates, enum layouts and data-layout semantics now decode through Keleusma, including optional-family policy, run expansion and initializer selection. Parameter tags and debug pools now decode through Keleusma, and the complete auxiliary-body reader composes all semantic families. Complete outer framing and module reconstruction now run through Keleusma readers. Windowed name interning and breadth-first constant scheduling remove the corpus-sized encoder limits. Contributor order, ranges and parameter tags are stage decisions. Unsigned self-hosted command output now uses the Keleusma emitter. Data-slot grouping, record splitting and shared-layout stride/run derivation now run in Keleusma from logical slot facts. |
 | Reach the shipping tool | An end-to-end command emits the independently assembled artifact and reports type rejection through the new path | The command emits the same artifact as the production library, executes a valid result of seven, and independently rejects three invalid sources without emitting files. Unsigned self-hosted output now uses Keleusma serialization. A discriminator checks backend dispatch, and command-line tests cover the formerly rejected large forest and text sources. |
-| Establish current verification | Relevant differential and failure-path tests, complete workspace checks and applicable integration gates pass on the final tree | The streaming-emitter and shipping tree passes 3,168 workspace tests with five ignored across 182 suites. All fourteen complete stage artifacts match. No-default integration/accounting passes 25 tests and wire units pass 44. Fresh Clippy, documentation and no_std checks pass. The shipping route has a discriminator and command-line large-source controls. Inference independence covers 52,389 types. Exact receipts are in the reverse prompt. Final integration gates remain required after the remaining implementation. |
+| Establish current verification | Relevant differential and failure-path tests, complete workspace checks and applicable integration gates pass on the final tree | The run-derivation tree passes 3,175 workspace tests with five ignored across 183 suites. All fourteen complete stage artifacts match. No-default integration/accounting passes seven tests and wire units pass 46. Fresh Clippy, documentation and no_std checks pass. A runtime control crosses the 65,535-slot record boundary. Inference independence covers 53,213 types. A separate eight-case tuple-projection audit still has three disagreements, including valid-source false rejection. Exact receipts are in the reverse prompt. Full Order 1 is not complete. |
 | Participate in the shadow pilot | Diagnostic and completion-claim samples retain baseline judgments, reviewed payloads, outcomes and explicit service status | Capture is installed for this line. Judgments are advisory and do not alter gates. |
 
 ## Current decoder increment
@@ -38,7 +38,7 @@ stage layout values match the reference, and a decoded layout drives runtime con
 Parameter tags and debug metadata now have Keleusma readers. Complete auxiliary-body assembly
 passes the fourteen-stage comparison and a persistent-execution control. Complete outer framing and module assembly now use the Keleusma readers. Source-admission
 regressions now cross the former encoder limits and unsigned command output uses the Keleusma emitter.
-Host data-slot grouping and shared-run extraction remain serialization work. The reverse prompt carries current receipts and the pilot review.
+Data-slot grouping and shared-run extraction now use stage requests and returned record plans. The reverse prompt carries current receipts and the pilot review.
 
 ## Work sequence
 
@@ -547,3 +547,61 @@ shared_slot_fields still detects constant-stride runs, calculates their starts a
 Move those decisions into Keleusma.
 Do not treat byte identity or shipping dispatch as proof that these decisions have already moved.
 The remaining type-input obligations and final verification rows above also remain active.
+
+## Data-layout run derivation, 2026-10-11
+
+The public emitter no longer uses host name-equality grouping or shared_slot_fields. A stage
+prepass derives groups from logical slot facts, and the name coordinator consumes its verified
+result count. A second stage prepass derives shared runs and split records. Rust stores the plans
+and transports requested fields or bytes. The legacy helpers retain their existing callers outside
+this public emission path. Current receipts are in the reverse prompt.
+
+## Tuple projection audit, 2026-10-11
+
+An isolated probe runs reference compilation and type_check_source_via_kel independently on eight
+sources. Five comparisons agree. Three require work, with the valid-source refusal taking priority.
+
+| Case | Reference | Independent stage |
+|---|---|---|
+| Return bool tuple field as Word | Rejects | Rejects |
+| Return bool tuple field as bool | Accepts | Accepts |
+| Pass projected `(Word, Word)` to `(Word, bool)` | Rejects | Accepts |
+| Pass projected `(Word, Word)` to matching tuple | Accepts | Accepts |
+| Pass projected `[Word; 2]` to `[Word; 3]` | Rejects | Rejects |
+| Pass projected `[Word; 2]` to `[Word; 2]` | Accepts | Rejects |
+| Pass projected P to a same-layout Q | Rejects | Accepts |
+| Pass projected P to P | Accepts | Accepts |
+
+The three unresolved sources follow.
+
+```keleusma
+fn f(xs: [Word; 2]) -> Word { 7 }
+fn main(t: ([Word; 2], Word)) -> Word { f(t.0) }
+```
+
+```keleusma
+fn f(t: (Word, bool)) -> Word { 7 }
+fn main(t: ((Word, Word), Word)) -> Word { f(t.0) }
+```
+
+```keleusma
+struct P { x: Word }
+struct Q { x: Word }
+fn f(q: Q) -> Word { 7 }
+fn main(t: (P, Word)) -> Word { f(t.0) }
+```
+
+The receipt is tmp/order1-runs-type-probe.log. The scratch harness is
+tmp/order1-type-probe/src/main.rs and exits one on comparison disagreement. Promote these
+cases and their valid controls into standing regressions while repairing projection identity.
+The existing composite projection suite covers struct fields and array elements, so its green
+result does not close this tuple-field gap. No type-input implementation changed in this increment.
+
+The tuple-of-array fact dump adds a second localization. The callee requirement is scalar-array
+tag 49, while the projected argument is primitive Word tag 1. The main parameter's structural
+construction rows also encode both tuple members as Word. Repair nested header capture as well
+as projection result identity. The receipt is tmp/order1-runs-type-detail.log, produced by the
+scratch detail binary. Inspection also finds TupleField node 37 absent from typed_result_node,
+with the operand path using its baked layout kind. step_tupleaccess retains a packed byte offset
+and layout kind but no source element ordinal. These observations guide the next repair and do
+not establish that every cause has been identified.

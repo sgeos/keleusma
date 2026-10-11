@@ -10,7 +10,7 @@ fn wire_stream_state_is_priced_as_private_value_slots() {
     let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(schema).unwrap()).unwrap();
     let module = keleusma::compiler::compile(&ast).unwrap();
     assert_eq!(module.shared_data_bytes, 24 * 8 + 1024);
-    assert_eq!(module.private_data_bytes, 5984);
+    assert_eq!(module.private_data_bytes, 6880);
     eprintln!(
         "schema resources: {} chunks, {} artifact bytes, {} shared bytes, {} private bytes",
         module.chunks.len(),
@@ -47,6 +47,8 @@ fn wire_stream_state_is_priced_as_private_value_slots() {
         (schema, "bf", "mode", 16, 512),
         (schema, "ec", "consts", 10, 320),
         (schema, "np", "mode", 17, 544),
+        (schema, "dg", "mode", 14, 448),
+        (schema, "sr", "mode", 14, 448),
     ] {
         let start = stage.find(&format!("private data {name} {{")).unwrap();
         let end = start + stage[start..].find('}').unwrap() + 1;

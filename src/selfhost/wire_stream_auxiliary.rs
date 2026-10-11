@@ -24,7 +24,7 @@ fn append(out: &mut Vec<u8>, values: &[u8]) -> Result<(), SelfHostError> {
     out.extend_from_slice(values);
     Ok(())
 }
-struct Machine<'a, 'm, 'v> {
+pub(super) struct Machine<'a, 'm, 'v> {
     vm: &'a mut Vm<'m, 'v>,
     shared: &'a mut [u8],
     arg: usize,
@@ -33,7 +33,7 @@ struct Machine<'a, 'm, 'v> {
     window: usize,
 }
 impl Machine<'_, '_, '_> {
-    fn args(&mut self, values: &[i64]) -> Result<(), SelfHostError> {
+    pub(super) fn args(&mut self, values: &[i64]) -> Result<(), SelfHostError> {
         if values.len() > 8 {
             return Err(error("argument window exceeded"));
         }
@@ -42,7 +42,7 @@ impl Machine<'_, '_, '_> {
         }
         Ok(())
     }
-    fn fields(&mut self, values: &[i64]) -> Result<(), SelfHostError> {
+    pub(super) fn fields(&mut self, values: &[i64]) -> Result<(), SelfHostError> {
         if values.len() > 16 {
             return Err(error("field window exceeded"));
         }
@@ -51,7 +51,7 @@ impl Machine<'_, '_, '_> {
         }
         Ok(())
     }
-    fn output<const N: usize>(&self) -> Result<[i64; N], SelfHostError> {
+    pub(super) fn output<const N: usize>(&self) -> Result<[i64; N], SelfHostError> {
         if N > 16 {
             return Err(error("field response window exceeded"));
         }
@@ -68,7 +68,7 @@ impl Machine<'_, '_, '_> {
         }
         Ok(result)
     }
-    fn command(&mut self, cmd: i64) -> Result<usize, SelfHostError> {
+    pub(super) fn command(&mut self, cmd: i64) -> Result<usize, SelfHostError> {
         let result = enter_wire(self.vm, self.shared, cmd)?;
         usize::try_from(result).map_err(|_| SelfHostError::Unsupported {
             detail: format!("streaming auxiliary command {cmd} refused with {result}"),
@@ -80,7 +80,7 @@ impl Machine<'_, '_, '_> {
         }
         Ok(())
     }
-    fn write(&mut self, offset: usize, bytes: &[u8]) -> Result<(), SelfHostError> {
+    pub(super) fn write(&mut self, offset: usize, bytes: &[u8]) -> Result<(), SelfHostError> {
         if offset
             .checked_add(bytes.len())
             .is_none_or(|n| n > self.window)
@@ -442,45 +442,14 @@ fn parameter_code(value: crate::bytecode::TypeTag) -> i64 {
     }
 }
 
-struct SlotRun<'a> {
-    name: &'a str,
-    visibility: i64,
-    count: usize,
-}
-fn slot_runs(module: &Module) -> Result<Vec<SlotRun<'_>>, SelfHostError> {
-    let mut runs = Vec::new();
-    if let Some(layout) = &module.data_layout {
-        let mut at = 0;
-        while at < layout.slots.len() {
-            let first = &layout.slots[at];
-            let count = layout.slots[at..]
-                .iter()
-                .take_while(|s| s.name == first.name && s.visibility == first.visibility)
-                .count();
-            let visibility = match first.visibility {
-                crate::bytecode::SlotVisibility::Shared => 1,
-                crate::bytecode::SlotVisibility::Private => 2,
-            };
-            runs.try_reserve(1)
-                .map_err(|_| error("slot run allocation failed"))?;
-            runs.push(SlotRun {
-                name: &first.name,
-                visibility,
-                count,
-            });
-            at += count;
-        }
-    }
-    Ok(runs)
-}
-
 /// Emit the complete auxiliary body without corpus-sized resident name or forest tables.
 ///
 /// Keleusma owns contributor order, hash keys and collision equality, fresh/share decisions, name
 /// offsets and indices, breadth-first node scheduling, child ranges, auxiliary
 /// numbering, template ranges, chunk ranges and parameter-tag encoding. The host
 /// retains typed values and indexed storage and transports bounded windows.
-/// Existing host data-slot grouping and shared-layout run extraction are retained.
+/// Data-slot groups, shared strides and record splitting are stage-derived from
+/// logical slot facts through bounded metadata and byte-comparison batches.
 ///
 /// # Errors
 /// Refuses values outside wire field widths, allocation failures and invalid
@@ -512,7 +481,17 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
                     schema.accept(64)?;
                     let init = initializer(&mut codec, module)?;
                     let include_initializers = init.as_ref().is_some_and(|i| !i.elided);
-                    let runs = slot_runs(module)?;
+                    let (runs, shared_rows) = if let Some(layout) = &module.data_layout {
+                        (
+                            super::wire_run_encode::slot_runs(&mut schema, &layout.slots)?,
+                            super::wire_run_encode::shared_runs(
+                                &mut schema,
+                                &layout.shared_layout,
+                            )?,
+                        )
+                    } else {
+                        (Vec::new(), Vec::new())
+                    };
                     let template_count = module
                         .chunks
                         .iter()
@@ -588,21 +567,27 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
                     if let Some(layout) = &module.data_layout {
                         let mut slots = Vec::new();
                         for (i, run) in runs.iter().enumerate() {
-                            let name =
-                                names.prefix(&mut schema, &mut codec, run.name, (4, i, 0), 0)?;
-                            let mut done = 0;
-                            while done < run.count {
-                                let take = (run.count - done).min(u16::MAX as usize);
+                            let name = names.prefix(
+                                &mut schema,
+                                &mut codec,
+                                &layout
+                                    .slots
+                                    .get(run.first)
+                                    .ok_or_else(|| error("stage selected invalid slot name"))?
+                                    .name,
+                                (4, i, 0),
+                                0,
+                            )?;
+                            for &take in &run.pieces {
                                 codec.record(
                                     kind::DATA_SLOTS,
-                                    &[name.0, run.visibility, 0, size(take)?],
+                                    &[name.0, run.visibility, 0, take],
                                     &mut slots,
                                 )?;
-                                done += take;
                             }
                         }
                         let mut shared = Vec::new();
-                        for row in shared_slot_fields(module).as_chunks::<7>().0 {
+                        for row in &shared_rows {
                             codec.record(kind::SHARED_LAYOUT, row, &mut shared)?;
                         }
                         let mut placements = Vec::new();
@@ -748,6 +733,95 @@ pub fn wire_auxiliary_from_module_via_kel(module: &Module) -> Result<Vec<u8>, Se
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn data_run_protocol_refuses_partial_replies_and_preserves_earliest_boundary() {
+        with_compiled_wire(
+            compile_src(&read_stage("kel/wire_schema.kel")),
+            |vm, shared| {
+                let mut s = Machine {
+                    vm,
+                    shared,
+                    arg: ARG,
+                    fin: FIN,
+                    bytes: BYTES,
+                    window: 1024,
+                };
+                s.args(&[3])?;
+                assert_eq!(s.command(89)?, 1);
+                assert!(s.command(64).is_err());
+                assert!(s.command(94).is_err());
+                s.args(&[1, 0])?;
+                assert_eq!(s.command(90)?, 2);
+                assert_eq!(s.output::<2>()?, [1, 2]);
+                s.fields(&[1, 0, 1, 2])?;
+                s.args(&[2])?;
+                assert!(s.command(91).is_err());
+                s.fields(&[1, 0, 1, 0])?;
+                assert_eq!(s.command(91)?, 3);
+                assert_eq!(s.output::<5>()?, [0, 1, 2, 0, 1]);
+                s.write(0, b"a")?;
+                s.write(64, b"a")?;
+                s.write(128, b"b")?;
+                s.args(&[2])?;
+                assert!(s.command(92).is_err());
+                s.args(&[1])?;
+                assert_eq!(s.command(92)?, 4);
+                assert_eq!(s.output::<4>()?, [0, 2, 1, 0]);
+                assert_eq!(s.command(93)?, 5);
+                assert_eq!(s.output::<1>()?, [2]);
+                assert_eq!(s.command(93)?, 1);
+                assert_eq!(s.output::<1>()?, [2]);
+                s.args(&[1, 0])?;
+                assert_eq!(s.command(90)?, 4);
+                assert_eq!(s.output::<4>()?, [2, 1, 1, 1]);
+                assert_eq!(s.command(93)?, 5);
+                assert_eq!(s.output::<1>()?, [1]);
+                assert_eq!(s.command(93)?, 0);
+                assert_eq!(s.output::<1>()?, [2]);
+                assert!(s.command(93).is_err());
+                Ok(())
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn shared_run_protocol_refuses_bad_batches_without_consuming_rows() {
+        with_compiled_wire(
+            compile_src(&read_stage("kel/wire_schema.kel")),
+            |vm, shared| {
+                let mut s = Machine {
+                    vm,
+                    shared,
+                    arg: ARG,
+                    fin: FIN,
+                    bytes: BYTES,
+                    window: 1024,
+                };
+                s.args(&[3])?;
+                assert_eq!(s.command(94)?, 1);
+                assert!(s.command(89).is_err());
+                s.args(&[0, 3, 0])?;
+                assert_eq!(s.command(95)?, 2);
+                assert_eq!(s.output::<2>()?, [1, 2]);
+                s.fields(&[8, 3, 0, 0x1_0000_0000, 3, 0])?;
+                s.args(&[2])?;
+                assert!(s.command(96).is_err());
+                s.fields(&[8, 3, 0, 16, 3, 0])?;
+                s.args(&[1])?;
+                assert!(s.command(96).is_err());
+                s.args(&[2])?;
+                assert_eq!(s.command(96)?, 3);
+                assert_eq!(s.output::<7>()?, [0, 3, 0, 0, 0, 3, 8]);
+                assert!(s.command(96).is_err());
+                assert_eq!(s.command(97)?, 0);
+                assert!(s.command(97).is_err());
+                Ok(())
+            },
+        )
+        .unwrap();
+    }
+
     #[test]
     fn equal_length_hash_collisions_and_last_fresh_names_remain_distinct() {
         let long = "λ".repeat(40000);

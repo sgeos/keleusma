@@ -6,6 +6,49 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-11 Keleusma derives logical data-layout runs
+
+The shipping emitter now gives logical slots to Keleusma instead of grouping them in Rust.
+The data-slot grouper requests each head, batches up to eight candidate lengths and visibilities,
+and compares candidate name windows of up to 64 bytes. It retains the earliest differing slot
+across windows. Empty names require no byte request. Keleusma returns each group boundary and
+its record sizes, splitting at 65,535. The host stores those results and retrieves the selected
+source name. The name coordinator receives the grouper's checked output count.
+
+Shared-layout grouping receives up to five offset/kind/length triples per reply. Keleusma chooses
+the initial stride using wrapping u32 subtraction, extends only matching runs, and produces each
+record's offset, logical first slot, count and stride. Singletons start with stride zero, while
+a one-slot tail of a split multi-slot run retains that run's stride. Record starts use u32 modular
+arithmetic, matching the release reference encoder's arithmetic. Later verifier constraints remain
+separate from these encoding decisions.
+
+The Rust driver performs bounds checks, storage allocation and transport. It does not compare slot
+names, detect strides or choose record boundaries. The legacy helpers remain for their existing
+bounded test/tooling paths, but the public auxiliary emitter no longer calls them. No new shared
+buffer was added. Commands 89 through 93 group data slots and commands 94 through 97 group shared
+layouts. Two private blocks add 28 value slots, or 896 bytes. The schema stage now has 170 chunks,
+an 85,508-byte artifact, 1,216 shared bytes and 6,880 private bytes. Its legacy occurrence channel
+uses 221 of 640 rows. Inference independence covers 53,213 recorded types across fourteen stages.
+
+Five integration controls cover empty data, long Unicode names, first mismatches across 64-byte
+windows and eight-slot batches, visibility changes, stride boundaries, nonmonotonic offsets,
+wrapped offset differences and 65,535/65,536/131,071-slot boundaries. A runtime control compiles,
+serializes and decodes a 65,536-byte shared array, then accesses both sides of its record boundary.
+Protocol controls refuse malformed batches and foreign commands and check continuation after
+refusal. All fourteen artifacts and the monomorphization controls pass in the targeted run.
+The final workspace passes 3,175 tests with five ignored across 183 suites. No-default checks
+pass seven integration/accounting tests and 46 wire units. Fresh Clippy, documentation and no_std
+checks pass. The local pilot retains three supported, bounded completion claims and the unresolved
+tuple-probe diagnostic with non-independent labels. External evaluation remains unavailable under
+the prior approval rejection. Exact receipts are in the reverse prompt.
+
+A separate tuple-projection probe provides the next type-input work. Among eight comparisons,
+two invalid sources are accepted by the independent stage and one valid source is rejected.
+Nested tuple and nominal identity are lost through tuple field zero. A tuple field containing
+an array is falsely rejected even when its declared dimension matches the callee. Scalar tuple
+projection controls and other valid controls agree with the reference. These type gaps keep the
+full Order 1 goal active, alongside the remaining input obligations and final integration gates.
+
 ## 2026-10-11 Streaming auxiliary emission reaches the shipping command
 
 The public auxiliary emitter now transports bounded windows instead of constructing the old
