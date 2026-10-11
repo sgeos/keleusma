@@ -3,143 +3,173 @@
 ## Current state
 
 Continue the complete Order 1 goal and the System 1 shadow pilot on line v0.2.3.
-This increment started at 8b118bf9 on feat/v02-order1-next. The legacy handoff is
-invalid-and-stale, with its stamp 48 commits behind that starting head. Its ancestry
-check passes, but its unchanged-stage-source claim and twelve-stage count are false.
-Appendix B was read before tracked writes. The V0.3.X worktree and pre-existing
+This increment started at 04c51522 on feat/v02-order1-next. The legacy handoff is
+invalid-and-stale, with its stamp 49 commits behind that starting head. Appendix B
+was read before tracked writes. The concurrent V0.3.X worktree and pre-existing
 .codex/ and nvim.log remain untouched. No push, merge or publication was performed.
 
-## Declaration-order relocation
+## Tuple construction and expression layouts
 
-Codegen now translates scalar and indexed data reads and writes from a function's
-original field bases to the parser's final layout. Metadata 110 supplies the final
-field bases. The host retains and transports those facts. Keleusma chooses the
-translated operand, preserving field-relative offsets and indexed lengths.
-Missing or ambiguous source ranges, invalid widths and addresses outside the
-existing 24-bit space return an unavailable result. The stage has a 640-field map.
+The parser now sizes tuple literals from source-derived expression layouts rather
+than assigning eight bytes to every member. Boolean and Byte members occupy one
+byte, Unit occupies zero, and nested tuple, array, struct and text members retain
+their physical representation. The existing header descriptor and tuple-member
+pools carry these facts. Bindings and aliases retain descriptors for projections.
+Array-of-tuple headers use the nested header parser.
 
-Original immutable address snapshots continue to govern independent type checking.
-Relocation happens before reconstruction and multihead grouping. Collecting, fused,
-full, scratch and shipping compile entries all reach the repaired path. The fused
-entry uses a preliminary parser pass to collect layout facts while discarding
-function records, then compiles one group at a time. It now pays for two parser
-passes. Unchanged snapshots skip relocation. Host layout-record storage still
-retains the address records emitted during parsing.
+The expression observer tracks scalar literals, parameter and binding kinds,
+operators, earlier call declarations, field and array projections, and scalar data
+reads. A data field retains its declared kind, including across an indexed read.
+Array literals now use the known element width. Projection updates replace the
+expression root so a child composite cannot type its scalar parent. Nested field
+tracking preserves a dot already consumed by the field scanner.
 
-Seven source cases preserve complete artifacts, including scalar and indexed
-reads/writes, explicit initializers, multiple private fields, a shared declaration
-at end of file, and heads with different original snapshots. Three programs execute
-after Keleusma serialization and decoding through five entry points, giving fifteen
-runtime comparisons. Four private protocol tests check bounds, malformed maps,
-indexed counts and recovery after refused requests. The former unsupported witness
-in selfhost_source_initializers now requires successful artifact identity.
+Body descriptors and layouts are released at function boundaries while declared
+header layouts remain live. A 400-function tuple corpus checks reuse. The descriptor
+pool remains 1,024 nodes with 32 tuple layouts and 256 members. Eight simultaneously
+open literal tuple contexts are admitted and the ninth is explicitly refused.
+Unknown expression layout has private diagnostic 38, separate from capacity and
+source rejection. A call to a later declaration is still unavailable through this path.
 
-Codegen has 80 chunks, a 73,668-byte artifact, 58,424 shared bytes and 182,560 private
-bytes. Shared storage grows by 15,392 bytes and private storage by 96 bytes. Its source
-is 140,108 bytes. Parser, verify_types and analyze resources are unchanged from the
-previous increment. Parser and selected type-stage capacities remain 640. Public
-bytecode version stays 2 and opcode count stays 66.
+Thirty valid sources preserve an independent true verdict and complete artifact
+identity. Five programs execute to seven after Keleusma serialization and decoding.
+Five invalid tuple programs require PipelineRejected. Six tests in
+tests/selfhost_tuple_construction.rs cover these cases, descriptor reuse and the
+remaining forward-call diagnostic. Public bytecode version stays 2 and opcode count
+stays 66. Parser declaration and selected type-stage capacities stay 640.
+
+The parser has 228 chunks and a 190,492-byte artifact. Its shared storage remains
+336,016 bytes. Private storage is 1,170,848 bytes, an increase of 59,936 bytes. The
+source is 377,878 bytes, within the existing 393,216-byte input capacity. Codegen,
+verify_types and analyze resources remain unchanged from the relocation increment.
 
 ## Verification
 
 Runs use empty RUSTC_WRAPPER, CARGO_HUSKY_DONT_INSTALL_HOOKS set to one and
-KEL_SELFHOST_CACHE zero. Verification subjects were held fixed during live runs.
+KEL_SELFHOST_CACHE zero. Production and test sources remained fixed during live runs.
+The roadmap was updated while a combined invocation was active. Because one codegen
+test embeds that document, the codegen receipt is superseded by a fresh full-target run.
 
-- Four protocol tests pass. Command cargo test --release --features self-host --lib
-  selfhost::data_relocation -- --nocapture. Log tmp/order1-relocation-protocol.log.
-  Session 44452 exits zero.
-- All 152 code-generation tests, two relocation tests and seven initializer tests pass.
-  Command cargo test --release --features self-host --test selfhost_data_relocation
-  --test selfhost_source_initializers --test selfhost_codegen --no-fail-fast.
-  Log tmp/order1-relocation-targeted.log. Session 49521 exits zero.
-- Nine pipeline tests and 184 wire tests pass. Command cargo test --release --features
-  self-host --test selfhost_pipeline --test selfhost_wire --no-fail-fast.
-  Log tmp/order1-relocation-pipeline-wire.log. Session 15831 exits zero.
-- The two relocation and seven initializer tests also pass without default features.
-  Command cargo test --release --no-default-features --features self-host --test
-  selfhost_data_relocation --test selfhost_source_initializers --no-fail-fast.
-  Log tmp/order1-relocation-no-default.log. Session 27198 exits zero.
-- Four inference checks pass, erasing 57,089 recorded types across fourteen stages
-  without changing their complete artifacts. Command cargo test --release --features
-  self-host --lib compiler::inference_independence -- --nocapture.
-  Log tmp/order1-relocation-inference.log. Session 47333 exits zero.
-- Six artifact tests and three monomorphization controls pass in session 87605,
-  which exits zero. All fourteen complete stage artifacts match the reference.
-  Command cargo test --release --features self-host --test selfhost_artifact_identity
-  --test selfhost_monomorphize_identity --no-fail-fast -- --nocapture.
-  Log tmp/order1-relocation-artifacts.log. The artifact suite completes in 510.50 seconds.
+- The corrected focused tuple run passes six tests. Log tmp/order1-tuples-corrected.log.
+  Session 17213 exits zero. Command cargo test --release --features self-host --test
+  selfhost_tuple_construction -- --nocapture. This includes all thirty artifact cases,
+  five executions, five independent negatives, the 400-function corpus and depth controls.
+- All five boundary audits pass. Log tmp/order1-tuples-boundaries-corrected.log.
+  Session 39247 exits zero. Command cargo test --release --features self-host --test
+  selfhost_codegen boundary -- --nocapture.
+- The combined final run is session 83041. Command cargo test --release --features
+  self-host --test selfhost_tuple_construction --test selfhost_parse --test
+  selfhost_codegen --test selfhost_typecheck --no-fail-fast. Log
+  tmp/order1-tuples-verified-broad.log. Session 83041 exits zero with 152 codegen tests,
+  91 parser tests and two ignored, six tuple tests and 103 type-checking tests passing.
+- The fresh codegen run after the roadmap edit is session 80569. Command cargo test
+  --release --features self-host --test selfhost_codegen --no-fail-fast. Log
+  tmp/order1-tuples-codegen-final.log. Session 80569 exits zero with all 152 tests passing.
+- The current all-stage artifact and monomorphization run is session 9401. Command
+  cargo test --release --features self-host --test selfhost_artifact_identity --test
+  selfhost_monomorphize_identity --no-fail-fast -- --nocapture. Log
+  tmp/order1-tuples-verified-artifacts.log. Session 9401 exits zero with six artifact tests
+  and three monomorphization controls passing. Every complete stage artifact passes
+  Keleusma serialization and decoding comparisons. The artifact suite takes 577.18 seconds.
+- Fifteen selected tests pass without default features. Command cargo test --release
+  --no-default-features --features self-host --test selfhost_tuple_construction --test
+  selfhost_data_relocation --test selfhost_source_initializers --no-fail-fast. Log
+  tmp/order1-tuples-verified-no-default.log. Session 35370 exits zero.
+- Four inference tests pass after erasing 58,198 recorded types across fourteen stages,
+  preserving complete artifacts. Command cargo test --release --features self-host
+  --lib compiler::inference_independence -- --nocapture. Log
+  tmp/order1-tuples-verified-inference.log. Session 4431 exits zero.
 - Fresh Clippy passes with actual Checking and warnings denied. Command cargo clippy
-  --workspace --tests -- -D warnings. Log tmp/order1-relocation-clippy.log.
-  Session 12539 exits zero.
-- Documentation passes with actual Documenting and RUSTDOCFLAGS set to -D warnings.
-  Command cargo doc --workspace --no-deps. Log tmp/order1-relocation-doc.log.
-  Session 24717 exits zero.
-- The build without the standard library passes with actual Checking. Command cargo
-  check --no-default-features --features self-host. Log tmp/order1-relocation-nostd.log.
-  Session 93721 exits zero.
-- Resource measurements are in tmp/order1-relocation-resources.log. The resources
-  scratch binary exits zero in session 70697. The source inventory now contains
-  1,617 integration test functions across 161 files. Four private library tests were
-  added. The historical 1,390-test workspace-library run has not been repeated.
+  --workspace --tests -- -D warnings. Log tmp/order1-tuples-verified-clippy.log.
+  Session 46384 exits zero.
+- The current documentation run is session 95052, using cargo doc --workspace --no-deps
+  with RUSTDOCFLAGS set to -D warnings. Log tmp/order1-tuples-verified-doc.log.
+  Session 95052 exits zero with actual Documenting.
+- The current build without the standard library is session 28279, using cargo check
+  --no-default-features --features self-host. Log tmp/order1-tuples-verified-nostd.log.
+  Session 28279 exits zero with actual Checking.
+- Resource measurements are in tmp/order1-tuples-verified-resources.log. The fresh
+  remaining-boundary probe is in tmp/order1-tuples-verified-remaining.log. Their combined
+  scratch command exits zero in session 96482. The source inventory is 1,623 integration
+  test functions across 162 files. No library tests were added in this increment.
 
-The four documentation guard targets pass 24 tests in tmp/order1-relocation-doc-guards.log.
-Session 39108 exits zero. Command cargo test --release --test documentation_links --test
+The four documentation guard targets pass 24 tests in tmp/order1-tuples-doc-guards.log.
+Session 66459 exits zero. Command cargo test --release --test documentation_links --test
 claimed_counts --test comment_citations --test push_order_claims. Formatting and diff checks
-pass. The final documentation-only receipt update is checked again before commit.
+pass. The final receipt update is checked again before commit. All verification handles
+have been collected to terminal results.
 
-The baseline six source mismatches are preserved in tmp/order1-relocation-first.log,
-with the first seven-case repair receipt in tmp/order1-relocation-first-implementation.log.
-The current increment has not rerun the complete workspace or the full integration
-matrix. The previous workspace run had 3,202 passes, three legacy adapter failures
-and five ignored tests. The 193 affected tests pass again in this increment, but this
-is not a replacement for the complete final workspace gate.
+The complete workspace, full feature matrix, minimum supported toolchains, Miri,
+cross-target builds, advisory scan and final integration gates have not been rerun.
+The historical workspace run had 3,202 passes, three legacy adapter failures and five
+ignored tests. Targeted repair receipts do not replace the final complete workspace gate.
+
+## Failed runs and corrections
+
+The original fourteen cases fail in tmp/order1-tuples-first.log, session 12583 exiting
+101. The first implementation fixes thirteen and leaves the nested array header in
+tmp/order1-tuples-implementation.log. The second implementation passes eighteen cases
+in tmp/order1-tuples-second.log. The first broad attempt has two Rust test-assertion
+compilation mistakes in tmp/order1-tuples-broad.log. The corrected broad attempt has
+four codegen failures in tmp/order1-tuples-broad-fixed.log. Those identify struct tuple
+members incorrectly receiving a generic composite sentinel. Restoring their separate
+struct marker preserves the existing equality lowering.
+
+The first extended attempt references the new data block before its declaration,
+which the reference parser refuses. Log tmp/order1-tuples-extended.log. Moving the
+data declaration before its first use repairs it. The next four-test controls pass in
+tmp/order1-tuples-extended-fixed.log, and eleven nested-equality tests pass in
+tmp/order1-tuples-equality-regressions.log.
+
+The subsequent broad attempt passes 150 codegen tests and fails two boundary audits
+in tmp/order1-tuples-final-broad.log. Both identify the same split nested-array indexing
+regression. The source kept the outer array shape after an element read. Replacing
+the root shape after indexing repairs it. The thirty-source corpus now includes the
+witness. The final broad and artifact receipts above supersede these earlier runs.
 
 ## Remaining work
 
-The complete Order 1 goal remains active. A fresh probe in
-tmp/order1-relocation-next-boundaries.log confirms the next tuple witnesses.
+The complete Order 1 goal remains active. The fresh remaining probe confirms two
+next witnesses.
 
 ```keleusma
-fn main() -> Word { let t = (true, 7); t.1 }
-fn pair() -> (bool, Word) { (true, 7) }
-fn nested() -> Word { let t = ((1, 2), 3); t.0 .1 }
-fn from_array(xs: [((Word, Word), Word); 2]) -> Word { xs[0].0 .1 }
+fn main() -> Word { let t = (yes(), 7); t.1 }
+fn yes() -> bool { true }
 ```
 
-Mixed tuple literals still allocate sixteen bytes where the reference uses nine.
-The nested cases leave two reconstruction roots. Preserve the cardinality guard.
-The literal tuple parser currently counts every member as one Word and calls
-word_tuple_layout for its let binding. The tuple header descriptor and postfix paths
-already exist and should be extended without borrowing reference expression types.
+This needs return-layout facts from a later declaration. It receives private diagnostic
+38 and is correctly classified as unavailable. The facts must remain source-owned.
 
-Continue through general nested headers, binder and occurrence coverage, remaining
-alias and cast obligations, enum capacity and final integration gates. Wildcard
-function parameters remain explicitly unsupported. The fresh probe also records
-an invalid tuple for-binder source returning parser diagnostic -931, detail 22.
-This is distinct from a type verdict and still needs coverage analysis.
+```keleusma
+fn make() -> [(bool, Word); 2] { [(true, 7), (false, 8)] }
+fn main() -> Word { let xs = make(); xs[0].1 }
+```
 
-Full feature matrices, minimum supported toolchains, Miri, cross-target builds,
-advisory scanning, shipping-command checks and final integration gates require
-their full completion audit before Order 1 can be marked complete.
+This still leaves three reconstruction roots. The array-of-tuple header now parses
+nested members, but its returned array shape does not reach the call result. Preserve
+the reconstruction cardinality guard. Calls returning nested tuples already pass.
+
+Continue through remaining declaration, binding and occurrence coverage, alias and
+cast obligations, enum capacity and final integration gates. Wildcard function
+parameters remain explicitly unsupported. A finite tuple corpus does not establish
+full source-type or language coverage. Audit every row of ORDER1_COMPLETION_PLAN.md
+before marking the full goal complete.
 
 ## Shadow pilot and interline
 
-The pilot task is v023-order1-data-relocation-8b11. The first diagnostic case
-v023-20261011-relocation-8b11-triage preserves six data-address disagreements and an
-unchanged-address control. Its label is compiler_or_test. Three completion cases
-with the same prefix end in protocol, runtime and inference. Each includes executed
-results and relevant assertion source. Their labels are supports. All labels are
-non-independent self-review and establish no independent accuracy claim.
+The pilot task is v023-order1-tuples-04c5. Case identifiers share the prefix
+v023-20261011-tuples-04c5 and end in triage, corpus, execution and scope. The triage
+label is compiler_or_test. The three completion labels are supports. Evidence
+includes immutable source excerpts and executed results. All labels are
+non-independent self-review, with no independent accuracy claim.
 
-Payload previews were reviewed. External evaluation remains unavailable under the
-previous automatic approval review rejection. No evaluation retry or bypass occurred.
-The three-claim sampling limit is reached. Further completion claims are not sampled.
-The task outcome is resolved for this relocation increment, with unavailable usage and elapsed
-values recorded as null. The reviewed export is tmp/jev-shadow-relocation-8b11-final.json.
-All four current-task request digests and their immutable source hashes match. The export
-contains 166 samples across 42 tasks. No provider judgment or accuracy comparison is claimed.
-All verification handles have been collected to terminal results.
+All four request payloads were reviewed. External evaluation remains unavailable
+under the previous automatic approval review rejection. No evaluation retry or
+bypass occurred. The three-claim sampling limit is reached. The outcome is resolved for this tuple increment, with unavailable usage and elapsed values
+recorded as null. The reviewed export is tmp/jev-shadow-tuples-04c5-final.json. All four
+current-task requests and their immutable source hashes match the reviewed evidence.
+The export contains 170 samples across 43 tasks. No provider judgment is claimed.
 
 The assigned inbox is empty. No peer messages were sent. The tracked interline checkpoint
-was exported and reviewed with no change. The peer-owned tracked shadow-pilot checkpoint
-was not overwritten.
+is exported and reviewed before handoff. The peer-owned tracked shadow-pilot checkpoint
+remains untouched.

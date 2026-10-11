@@ -6,6 +6,49 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-11 Tuple construction preserves member layouts
+
+The parser now retains source-derived expression layouts for tuple construction. Boolean and
+Byte members occupy one byte, Unit occupies zero, and nested tuples, arrays, structs and text
+retain their physical sizes. Tuple literals use the existing descriptor pool and tuple-member
+tables. Their bindings and aliases preserve descriptors for later projections. Array-of-tuple
+headers now use the nested header parser. Scalar data reads retain their declared kind through
+indexed access. This does not borrow reference expression types or add a public opcode.
+
+Temporary body descriptors and layouts are released at function boundaries while declared
+header layouts remain live. A 400-function tuple corpus preserves complete artifact identity.
+Eight simultaneously open tuple contexts are admitted and the ninth produces a parser diagnostic.
+Unknown expression layout has separate private diagnostic 38 and is classified as unavailable.
+A call to a later declaration remains an explicit example of that boundary.
+
+Thirty valid sources preserve independent type acceptance and complete artifact identity.
+Five programs execute to seven after Keleusma serialization and decoding. Five invalid tuple
+programs require independent rejection. The six tests in selfhost_tuple_construction cover these
+controls, descriptor reuse and the remaining forward-call diagnostic. The five standing boundary
+audits pass after repairing the two regressions found during this increment.
+
+The first regression came from marking a struct tuple member as a generic composite sentinel,
+which made the existing array-equality classifier take a scalar fallback. Retaining the separate
+struct marker preserves its existing lowering. The second came from retaining the outer array
+shape after extracting an inner array. Replacing the expression root after indexing preserves
+split indexing through an alias. Nested struct-field tracking preserves an already consumed dot.
+Boolean array literals now use their actual element width.
+
+The parser has 228 chunks, a 190,492-byte artifact, 336,016 shared bytes and 1,170,848 private
+bytes. Private storage grows by 59,936 bytes. Its source is 377,878 bytes. Public bytecode version
+stays 2, opcode count stays 66, and the selected capacities stay 640. The descriptor pool remains
+1,024 nodes with 32 tuple layouts and 256 tuple members. All 152 codegen, 91 parser and 103
+type-checking tests pass, with two parser tests ignored. Fifteen selected no-default tests pass.
+Fresh Clippy, documentation and the build without the standard library pass. Four inference
+checks preserve all fourteen artifacts after erasing 58,198 recorded types. All fourteen complete
+stage artifacts pass Keleusma serialization and decoding comparisons. The six artifact tests
+and three monomorphization controls pass. Exact terminal receipts are in the reverse prompt.
+
+The shadow pilot captured the first fourteen-case failure and three completion claims, with
+reviewed payloads and non-independent self-review labels. External evaluation remains unavailable.
+Forward return layouts, arrays of tuples returned from calls, remaining type-input coverage and
+final integration gates keep the complete Order 1 goal open.
+
 ## 2026-10-11 Earlier data accesses follow final declaration order
 
 The code-generation stage now relocates data operands through parser-produced address maps.

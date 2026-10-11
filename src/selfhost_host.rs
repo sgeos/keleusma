@@ -416,6 +416,7 @@ pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
             "source type annotation nesting depth {detail} exceeds the parse.kel limit of {PARSE_ANNOTATION_DEPTH_CAP}"
         ),
         29 => format!("tuple layout capacity exhausted with {detail} members in parse.kel"),
+        38 => format!("expression layout unavailable near token {detail} in parse.kel"),
         30 => format!("expression block at token {detail} is outside the parse.kel subset"),
         31 => format!("non-range for iterable at token {detail} is outside the parse.kel subset"),
         32 => format!("a fixed-size array must have a positive length, got {detail}, in parse.kel"),
