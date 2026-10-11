@@ -6,6 +6,10 @@ fn wire_stream_state_is_priced_as_private_value_slots() {
     use keleusma::bytecode::{VALUE_SLOT_SIZE_BYTES, Value};
     let wire = include_str!("../src/selfhost/kel/wire.kel");
     let debug = include_str!("../src/selfhost/kel/wire_debug.kel");
+    let schema = include_str!("../src/selfhost/kel/wire_schema.kel");
+    let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(schema).unwrap()).unwrap();
+    let module = keleusma::compiler::compile(&ast).unwrap();
+    assert_eq!(module.shared_data_bytes, 24 * 8);
     assert_eq!(core::mem::size_of::<Value>(), 32);
     assert_eq!(VALUE_SLOT_SIZE_BYTES, 32);
     for (stage, name, field, count, bytes) in [
@@ -22,6 +26,7 @@ fn wire_stream_state_is_priced_as_private_value_slots() {
         (wire, "fl", "module", 18, 576),
         (debug, "sort", "mode", 15, 480),
         (debug, "emit", "phase", 9, 288),
+        (schema, "sg", "mode", 14, 448),
     ] {
         let start = stage.find(&format!("private data {name} {{")).unwrap();
         let end = start + stage[start..].find('}').unwrap() + 1;

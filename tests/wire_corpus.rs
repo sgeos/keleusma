@@ -35,6 +35,10 @@ const CORPUS: &[(&str, &str)] = &[
         include_str!("../src/selfhost/kel/wire_debug.kel"),
     ),
     (
+        "wire_schema",
+        include_str!("../src/selfhost/kel/wire_schema.kel"),
+    ),
+    (
         "verify_types",
         include_str!("../src/selfhost/kel/verify_types.kel"),
     ),

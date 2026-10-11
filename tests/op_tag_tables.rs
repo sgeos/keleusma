@@ -517,6 +517,10 @@ const STAGE_SOURCES: &[(&str, &str)] = &[
         "wire_debug",
         include_str!("../src/selfhost/kel/wire_debug.kel"),
     ),
+    (
+        "wire_schema",
+        include_str!("../src/selfhost/kel/wire_schema.kel"),
+    ),
 ];
 
 /// The stages the byte-identity oracle actually covers, derived from the oracle's own test names.

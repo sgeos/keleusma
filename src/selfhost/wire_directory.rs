@@ -35,7 +35,7 @@ fn error(detail: &str) -> SelfHostError {
     }
 }
 
-fn decode_directory<'a>(
+pub(super) fn decode_directory<'a>(
     vm: &mut Vm<'_, '_>,
     shared: &mut [u8],
     bytes: &'a [u8],

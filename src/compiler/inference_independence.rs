@@ -43,6 +43,10 @@ const STAGES: &[(&str, &str)] = &[
     ),
     ("wire", include_str!("../selfhost/kel/wire.kel")),
     ("wire_debug", include_str!("../selfhost/kel/wire_debug.kel")),
+    (
+        "wire_schema",
+        include_str!("../selfhost/kel/wire_schema.kel"),
+    ),
 ];
 
 #[test]

@@ -15,7 +15,7 @@
 //!
 //! [`crate::selfhost::self_hosted_compile`] is the shipping entry: it host-guards the target and maps any
 //! out-of-subset panic to a clean [`crate::selfhost::SelfHostError`] (the `keleusma-cli` `--compiler
-//! self-hosted` backend). All thirteen stage sources are embedded via `include_str!`
+//! self-hosted` backend). All fourteen stage sources are embedded via `include_str!`
 //! from `src/selfhost/kel/` (this crate is their canonical home; the detached `compiler/`
 //! subproject re-exports this module and its `main.rs`/tests drive it). `prelude.kel` is
 //! not read by the Rust host and stays in `compiler/kel/`.
@@ -43,6 +43,10 @@ mod wire_debug;
 pub use wire_debug::wire_debug_pool_via_kel;
 mod wire_auxiliary;
 pub use wire_auxiliary::wire_auxiliary_from_module_via_kel;
+mod wire_semantics;
+pub use wire_semantics::{
+    WireDecodedSignatures, wire_decode_signature_metadata_via_kel, wire_decode_signatures_via_kel,
+};
 mod wire_signatures;
 pub use wire_signatures::{WireSignatureSections, wire_signature_sections_via_kel};
 mod wire_decode;
@@ -68,7 +72,7 @@ pub use typecheck::{TypeCheckError, type_check_inputs_via_kel, type_check_source
 
 /// Read an embedded stage source by basename without filesystem access.
 fn read_stage(rel: &str) -> String {
-    // All thirteen stage sources are embedded in the crate at `src/selfhost/kel/`
+    // All fourteen stage sources are embedded in the crate at `src/selfhost/kel/`
     // (beside this module) via `include_str!`, so the driver needs no filesystem access
     // and works in an installed binary. `rel` is a `kel/<name>.kel` path; only the
     // basename is significant.
@@ -93,6 +97,7 @@ fn read_stage(rel: &str) -> String {
         // system did not have.
         "wire.kel" => include_str!("kel/wire.kel"),
         "wire_debug.kel" => include_str!("kel/wire_debug.kel"),
+        "wire_schema.kel" => include_str!("kel/wire_schema.kel"),
         other => panic!("unknown embedded stage source `{other}`"),
     };
     s.to_string()

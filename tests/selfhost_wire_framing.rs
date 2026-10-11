@@ -51,7 +51,8 @@ fn framing_matches_every_current_stage_artifact() {
             "verify_types",
             "verify_yield",
             "wire",
-            "wire_debug"
+            "wire_debug",
+            "wire_schema"
         ]
         .into_iter()
         .collect()

@@ -3271,7 +3271,7 @@ pub enum WireShape {
 /// behaviour. Only the signature boundary is described; non-parameter locals
 /// are seeded as `Top` and refined by the pass (a later phase may narrow
 /// them).
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct ChunkSignature {
     /// Flat shape of each parameter, in declaration order.
     pub params: Vec<WireShape>,

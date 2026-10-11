@@ -3,191 +3,166 @@
 ## Current state
 
 Continue the complete Order 1 goal and the System 1 shadow pilot on line v0.2.3.
-The branch is feat/v02-order1-next, starting this increment at c0dd474f. Work began on
-2026-10-08 and resumed on 2026-10-11. Preserve unrelated untracked .codex and nvim.log.
-V0.3.X remains separate. No push, merge or publication occurred.
+The branch is feat/v02-order1-next, starting this increment at b6cfc389. Preserve unrelated
+untracked .codex and nvim.log. V0.3.X remains separate. No push, merge or publication occurred.
 
 Read Appendix B before tracked writes. Public bytecode version remains 2, opcode count remains
-66 and selected type-stage caps remain 640. The legacy HANDOFF.md remains invalid and stale.
-Its ancestry was previously checked and its unchanged-stage-source claim is false. Historical
-full validity and advisory checks were not all repeated. The freshness measurement is 37 commits behind the starting head.
+66 and selected type-stage caps remain 640. The legacy HANDOFF.md remains invalid and stale,
+measured 38 commits behind the starting head. Its ancestry was previously checked and its
+unchanged-stage-source claim is false. Historical full validity and advisory checks were not
+all repeated.
 
-## Fixed schema record decoding
+## Semantic signature and native-return decoding
 
-The new wire_schema_records_via_kel helper takes a region kind and raw table bytes and returns
-WireSchemaRecord variants. Keleusma selects the stride, checks table divisibility and reads every
-field from a bounded record window. Rust constructs the corresponding typed records with checked
-narrowing. It supplies no field offsets or widths and calls no production reference record codec.
-The constant payload preserves all 64 bits of its signed transport word when represented as u64.
+The new wire_schema.kel stage owns signature bounds, shape-tag interpretation, shape request
+ordering and the optional-table decision. wire_decode_signatures_via_kel implements the strict
+standalone signature reader. wire_decode_signature_metadata_via_kel implements the signature
+family's policy inside decode_aux_body, returning signatures, native return shapes and parse_valid.
+It does not validate the other auxiliary families or construct a complete module.
 
-All seventeen fixed-record kinds are handled. Byte pools and unknown kinds receive a named
-refusal. Reserved fields and unknown tags retain reference record-reader behavior. These are raw
-schema records, not validated module values. Tag interpretation, cross-table validation, constant
-child ranges, optional-table policy and complete module reconstruction remain open.
+All signature ranges and return/resume indices are checked before any shape tag is interpreted.
+A bad shared shape/signature view produces empty metadata only when no native return needs it
+and the caller selected optional mode. Referenced invalid shape tags remain errors through an
+otherwise valid view. Unused invalid shapes remain unobserved. Top discards kind and size; Scalar
+discards size. Arbitrary kind bytes are preserved as ShapeRecord::to_shape preserves them.
+The codec boundary is separate from later verification. The standalone helper ignores native
+return tables, matching decode_signatures.
 
-Commands 218 and 219 begin and advance a record stream. The stage owns its count and cursor.
-A bad record length preserves the cursor. Completion clears active state. A failed new begin
-invalidates the previous stream. Active reading excludes other commands. Existing framing,
-signature and directory transactions refuse both new commands. Five private fields add 160 bytes.
-No shared array or cap increased. The typed result vector uses fallible reservation.
+The stage requests each parameter, return and resume shape by index and role. Host code retrieves
+the requested record and constructs the normalized WireShape. Native requests have independent
+counts. Failed shape replies preserve the pending request and do not advance. A failed begin
+invalidates old state. Completion requires exact signature and native counts. Commands 0 through
+7 belong to this new stage, not to wire.kel's command namespace.
 
-The classifier enumerates all 65,536 possible kind identifiers against the explicit seventeen-kind
-contract. It is a current contract test, not an automatically discovered inventory of future schema
-kinds. Field comparisons cover 4,386 records, full-width signed and unsigned patterns, reserved
-fields and malformed table lengths. A 9,000-record table exceeds the byte window. Both aligned
-and unaligned inputs compare all NameRef fields. The initial unaligned control checked only count
-and was strengthened before the final focused run.
+The host reuses one wire machine for directory and record decoding and a separate schema machine
+for semantic work. No production reference signature view or ShapeRecord::to_shape call occurs.
+Transport and allocation errors propagate and are not treated as optional-table absence.
+ChunkSignature now derives PartialEq and Eq, enabling structural comparisons without altering
+its fields or wire representation.
 
-The complete artifact corpus now reconstructs every fixed-record region from Keleusma-decoded
-fields using reference writers and compares every byte. It explicitly excludes STRING_POOL,
-PARAM_TYPES and DEBUG_POOL. Directory metadata, payload pointer identity, opcode semantics and
-complete artifact identity remain checked across all thirteen current stages.
+## Corpus and resources
 
-## Measurements and first diagnostic
+There are now fourteen embedded stage sources. All applicable corpus lists include wire_schema,
+which has its own self-compilation test. The current schema stage has 15 chunks, a 7,052-byte
+artifact, 192 shared bytes and fourteen private value slots occupying 448 bytes. Its largest
+legacy input channel uses 24 of 640 occurrence rows. The wire stage remains at 561 chunks,
+1,290 of 1,365 constant nodes and 638 of 640 occurrence rows. It was not enlarged this increment.
 
-Wire has 561 chunks, highest command 219, 715 name events, 23,713 input bytes and a 162,836-byte
-artifact. Its constant forest uses 1,290 of 1,365 nodes, retaining 75 free against the minimum
-reserve of 64. Input margin is 25,439 bytes. Inference independence covers 45,329 expression types
-across thirteen stages.
-
-The first node-budget test failed with 1,311 nodes and only 54 free. Sharing literals in the
-existing get_u16, get_u32 and get_i64 functions restored the reserve. These functions contain
-no loops. No loop bound was changed and no cap was raised. The later driver-capacity assertion
-measured 23,931 bytes before its old 23,793-byte pin was refreshed. Three chunk pins initially carried
-575 after nine new reader functions. They now carry 561 after the fourteen-helper repair.
+Every current stage matches complete reference artifacts, directory interpretation, fixed-record
+reconstruction, opcode semantics and decoded signature values. The signature comparison now
+requires one decoded signature per compiled chunk. Inference independence covers 45,894 recorded
+expression types across fourteen stages. Parameters remain Word and results remain Word or Bool.
 
 ## Verification receipts
 
 Runs use an empty RUSTC_WRAPPER and CARGO_HUSKY_DONT_INSTALL_HOOKS set to one. Stage runs use
 KEL_SELFHOST_CACHE zero. No verification subject was edited during a live run.
 
-- Three initial record tests evolved from two passing field tests into the final protocol set.
-  Twenty-seven wire unit tests pass in tmp/order1-records-protocol.log. Command cargo test
-  --release --features self-host --lib selfhost::wire_ -- --nocapture. Session 88636 exited zero.
-  The kind test was subsequently renamed to state its explicit seventeen-kind contract.
-- The node budget and private accounting pass three tests in tmp/order1-records-budget-second.log.
-  Command cargo test --release --features self-host --test module_input_node_budget --test
-  wire_private_state_accounting -- --nocapture. Session 48244 exited zero.
-- All thirteen complete artifacts and fixed-record regions pass, with three public reader controls,
-  in tmp/order1-records-artifacts.log. Command cargo test --release --features self-host --test
-  selfhost_wire_records --test selfhost_artifact_identity --no-fail-fast -- --nocapture.
-  Session 56187 exited zero. Nine tests passed. The unaligned assertion was strengthened afterward.
-- Four inference tests pass in tmp/order1-records-inference.log. Command cargo test --release
-  --features self-host --lib compiler::inference_independence -- --nocapture.
-  Session 40533 exited zero. The final stage source is unchanged from that measurement.
-- Three no-default record unit tests pass in tmp/order1-records-no-default-unit.log. Command cargo
-  test --release --no-default-features --features self-host --lib selfhost::wire_records
-  -- --nocapture. Session 77559 exited zero.
-- The focused wire, record, parser, chunk, self-compile and monomorphization log reports 287 passes
-  and two ignored in tmp/order1-records-final-targets.log. Its handle 84895 was unavailable on
-  resumption, so no terminal exit status was recovered. The fresh workspace run supersedes it.
-- A fresh no-default integration repeat passes five tests in
-  tmp/order1-records-resumed-no-default.log. Command cargo test --release --no-default-features
-  --features self-host --test selfhost_wire_records --test wire_private_state_accounting
-  --no-fail-fast. Session 35656 exited zero.
+- The initial check failed on missing imports. Log tmp/order1-semantic-shapes-first.log.
+  Session 78582 exited 101. The next attempt exposed missing equality traits on ChunkSignature.
+  Session 88339 exited 101 in tmp/order1-semantic-shapes-second.log. The fixture was also repaired
+  to obtain auxiliary bytes from Module::to_bytes and parse_wire_sections.
+- The initial semantic and accounting controls pass five tests in
+  tmp/order1-semantic-shapes-targets.log. Session 65795 exited zero. Later controls supersede them.
+- The initial artifact, inventory, monomorphization and public semantic controls pass in
+  tmp/order1-semantic-shapes-artifacts.log. Session 81064 exited zero. All fourteen sources are
+  reached. The schema stage is 15 chunks and 7,052 bytes.
+- Four inference checks pass in tmp/order1-semantic-shapes-inference.log. Command cargo test
+  --release --features self-host --lib compiler::inference_independence -- --nocapture.
+  Session 21438 exited zero. The final production source is unchanged from that measurement.
+- The legacy real-stage type-input measurement accepts all fourteen stages in
+  tmp/order1-semantic-shapes-capacity.log. Command cargo test --release --features self-host
+  --test selfhost_typecheck the_stage_is_measured_against_the_real_stage_sources -- --nocapture.
+  Session 79574 exited zero.
+- Three final no-default schema unit tests pass in
+  tmp/order1-semantic-shapes-final-no-default-unit.log. Command cargo test --release
+  --no-default-features --features self-host --lib selfhost::wire_semantics -- --nocapture.
+  Session 12420 exited zero. The tag census accepts three and refuses 65,533 values. The 2,304
+  kind/size combinations agree with the reference. Retry, completion and native-only state paths
+  are exercised separately.
+- The release workspace completed with 3,113 passes, one failure and five ignored across 174
+  suites. Command cargo test --release --workspace --no-fail-fast. Log
+  tmp/order1-semantic-shapes-workspace.log. Session 48107 exited 101. The sole failure was an
+  old assertion expecting thirteen stages before the production type loop could run.
+- The assertion now compares the actual directory inventory with the named corpus, including
+  duplicate and nonempty checks. The repaired production type check accepts all fourteen sources
+  in tmp/order1-semantic-shapes-type-repair.log. Command cargo test --release --features self-host
+  --test selfhost_typecheck production_types_accept_all_stage_inputs -- --nocapture.
+  Session 52547 exited zero.
+- Four final public semantic tests and two accounting tests pass in
+  tmp/order1-semantic-shapes-final-targets.log. Session 10742 exited zero. Command cargo test
+  --release --features self-host --test selfhost_wire_semantics --test
+  wire_private_state_accounting --no-fail-fast -- --nocapture. Controls include eleven optional
+  parsing cases, eighteen strict boundary cases with five accepts and thirteen refusals,
+  a 3,000-parameter signature, invalid native-only tags, preserved kind bytes and unused bad shapes.
+- The same six integration and accounting tests pass without default features in
+  tmp/order1-semantic-shapes-final-no-default-integration.log. Command cargo test --release
+  --no-default-features --features self-host --test selfhost_wire_semantics --test
+  wire_private_state_accounting --no-fail-fast. Session 43243 exited zero.
+- All six artifact tests pass again after adding the signature-per-chunk count assertion.
+  Command cargo test --release --features self-host --test selfhost_artifact_identity -- --nocapture.
+  Log tmp/order1-semantic-shapes-final-artifacts.log. Session 96443 exited zero.
+- Workspace Clippy performed actual Checking and passed after the test repair and final assertions.
+  Command cargo clippy --workspace --tests -- -D warnings. Log
+  tmp/order1-semantic-shapes-final-lint.log. The command exited zero. The earlier nested-if lint
+  diagnostic remains in tmp/order1-semantic-shapes-clippy.log.
+- Documentation performed actual Documenting and passed with RUSTDOCFLAGS set to -D warnings.
+  Command cargo doc --workspace --no-deps. Log tmp/order1-semantic-shapes-doc.log.
+  Session 31163 exited zero.
+- The no_std check performed actual Checking and passed. Command cargo check --no-default-features
+  --features self-host. Log tmp/order1-semantic-shapes-nostd.log. Session 68905 exited zero.
 
-Handles 84895, 87013, 12274, 49854 and 92905 were missing on 2026-10-11. Their logs were retained.
-Fresh resumption checks for Clippy and documentation returned zero but were cached, so they are
-not counted as fresh analysis. The first fresh workspace result and the subsequent repair receipts follow.
-
-The first resumed workspace completed with 3,104 passes, two failures and five ignored across
-173 suites. Log tmp/order1-records-workspace-final.log. Session 66307 exited 101. Both failures
-were in legacy type-input capacity. Occurrences required 652 rows and bindings 649, above 640.
-The production scoped path and artifact comparisons passed, so they did not cover that harness.
-
-Fourteen lightly reused numeric helper functions were inlined. Sixteen existing count and
-presence functions now share zero and one literals. No type fact was omitted, no cap changed and
-no loop bound changed. The type-capacity price check passes in
-tmp/order1-records-type-capacity-repair.log, session 14129 exited zero. The real-stage corpus
-check accepts all thirteen stages with 638 of 640 occurrence rows in
-tmp/order1-records-type-corpus-repair.log, session 17730 exited zero. The constant-node budget
-still passes at 1,290 nodes in tmp/order1-records-node-capacity-repair.log, session 82568 exited zero.
-Four repaired-stage inference checks pass at 45,329 types in
-tmp/order1-records-inference-repair.log, session 40781 exited zero.
-
-Clippy performed actual Checking and passed in tmp/order1-records-repaired-clippy.log,
-session 46929 exited zero. Command cargo clippy --workspace --tests -- -D warnings.
-Documentation performed actual Documenting and passed in tmp/order1-records-repaired-doc.log,
-session 41387 exited zero. Command cargo doc --workspace --no-deps with RUSTDOCFLAGS set to
--D warnings. The no_std check performed actual Checking and passed in
-tmp/order1-records-repaired-nostd.log, session 4581 exited zero. Command cargo check
---no-default-features --features self-host.
-
-The repaired release workspace passes 3,106 tests with zero failures and five ignored across
-173 suites. Command cargo test --release --workspace --no-fail-fast. Log
-tmp/order1-records-workspace-repaired.log. Session 7525 exited zero. No production or test
-contents changed afterward. Documentation updates follow the run and receive separate guards.
-
-The repaired no-default library tests pass three checks in
-tmp/order1-records-repaired-no-default-unit.log, session 17369 exited zero. Command cargo test
---release --no-default-features --features self-host --lib selfhost::wire_records -- --nocapture.
-Five no-default integration and accounting tests pass in
-tmp/order1-records-repaired-no-default-integration.log, session 57351 exited zero. Command
-cargo test --release --no-default-features --features self-host --test selfhost_wire_records
---test wire_private_state_accounting --no-fail-fast. The four documentation guard suites pass 24 tests after the handoff and plan updates. Command
+No production code changed after the full workspace run. Only the stale inventory assertion,
+stronger test controls and documentation changed afterward. The full workspace was not repeated
+following those test-only changes. Full feature matrices, minimum supported toolchains, Miri,
+cross-target builds, advisory scanning and final integration gates remain required for Order 1.
+The four documentation guards pass 24 tests after the handoff and plan updates. Command
 cargo test --release --test documentation_links --test claimed_counts --test comment_citations
---test push_order_claims. Log tmp/order1-records-doc-guards.log. Session 58673 exited zero.
+--test push_order_claims. Log tmp/order1-semantic-shapes-doc-guards.log. Session 6419 exited zero.
 Formatting and diff checks pass. The guards are repeated after this receipt update in
-tmp/order1-records-final-doc-guards.log. No verification process remains running at handoff.
-
-Original diagnostics remain in tmp/order1-records-budget-first.log and -capacity.log. The first
-pilot diagnostic is the actual reserve failure. The earlier source measurements and stage logs
-are retained under tmp/order1-records-. Full feature matrices, minimum supported toolchains,
-Miri, cross-target builds, advisory scanning and final integration gates remain required before
-completion of Order 1.
+tmp/order1-semantic-shapes-final-doc-guards.log. No process remains running at final handoff.
 
 ## Next work
 
-Implement semantic tag and cross-table checks in Keleusma, then reconstruct constant trees and
-complete modules. Reuse the directory and fixed-record readers. Do not call the reference schema
-decoder behind the new interface, or interpret packed constant ranges in Rust while claiming
-that interpretation is self-hosted. The record interface intentionally preserves unvalidated tags.
+Extend the dedicated schema stage to name and constant semantics, then the remaining auxiliary
+families and complete module reconstruction. The signature component provides the request/reply
+pattern and preserves parse-stage failure separately from semantic lookup failure. Reuse the
+wire directory and record machines; do not move reference semantic decoding into host adapters.
 
-Read findings that should shape the next controls follow. The owned reference constant decoder
-uses a reverse sweep and takes each child from an Option slot. Duplicate child ownership is
-rejected even when all edges point forward. Chunk root ranges are extracted together and reject
-duplicate ownership across those ranges. Private initializers decode through a separate pool
-call. Combining both extraction scopes could reject an artifact that the reference accepts.
-Sources are decode_constant_pools and decode_data_layout in src/wire_schema.rs.
+The reference constant decoder uses a reverse sweep and takes children from Option slots.
+Duplicate child ownership is rejected even when all edges point forward. Chunk root ranges are
+extracted together. Private initializers decode through a separate pool call, so combining those
+ownership scopes can change acceptance. RecordTable::range_is_forward requires first greater
+than the parent index even for an empty range, with end no greater than the table length.
+Do not interpret scalar payloads as child ranges. Float constant admission remains feature-aware.
 
-RecordTable::range_is_forward in keleusma-wire/src/view.rs requires first greater than the parent
-index even for a zero count, and requires the range end no greater than table length. Its empty
-range comment does not override the predicate. SignatureTable::parse checks parameter ranges
-and return/resume indices. ShapeRecord::to_shape interprets the tag but carries kind bytes
-unchanged. Preserve that codec behavior while distinguishing later verifier checks.
-
-The existing schema commands 13 through 83 still assume resident absolute addresses. The new
-record commands read one record at byte zero and therefore avoid that assumption. Decode semantic
-references through stage-produced requests and host transport, with bounded stage work per step.
-The stage has eleven nodes beyond the standing constant-node reserve, but only two occurrence
-rows beyond the current legacy type-input usage. Measure both constraints before further growth.
-A separate reader stage or properly scoped input staging deserves consideration before adding
-many more functions to wire.kel. Do not weaken either capacity guard to make an increment pass.
+Other families remain open, including name lookup, constant side tables and trees, templates,
+enum layouts, data-layout expansion and initializer policy, parameter tags, debug decoding and
+complete module assembly with framing checks. Preserve each family's optional-table behavior.
+The wire stage still has only two occurrence rows free. Add semantic work to the new schema stage
+and measure every current source against both constant-node and type-input limits.
 
 Then establish admission-preserving capacity coverage and connect artifact emission to shipping
-compilation. Shipping unsigned output still calls Module::to_bytes. Existing forest, name and
-input bounds require coverage beyond the current stage corpus. Preserve supported source behavior.
+compilation. Shipping unsigned output still calls Module::to_bytes. Existing encoder forest,
+name and input bounds require coverage beyond the stage corpus. Preserve supported source behavior.
 Retain all type obligations in the completion plan, including projections, nested headers,
 binders, occurrences, nominal layouts, aliases, empty arrays, mixed tuples, casts and enum capacity.
 Refresh all-stage, monomorphization, inference-independence, shipping and final integration evidence
-when those changes land. Full Order 1 remains active.
+as those changes land. Full Order 1 remains active.
 
 ## Shadow pilot and mailbox
 
-Task v023-order1-records retains the first node-reserve diagnostic and three bounded claims for
-field comparisons, the aligned and unaligned long table, and all-stage record reconstruction.
-Blind exports preceded non-independent self-labels. The all-stage excerpt includes the complete
-stage inventory, the decisive reconstruction assertions and executed stage counts. Its first packet
-exceeded the pilot text-field limit and was shortened before successful recording. No fifth sample
-was created. Later capacity-pin diagnostics belong to the same increment and were not sampled again.
+Task v023-order1-shapes retains the first missing-import diagnostic and three bounded claims for
+shape tags and kinds, optional-table outcomes and all-stage signature metadata. Blind exports
+preceded non-independent self-labels. All four request hashes, exact payloads and source hashes
+were reviewed in tmp/order1-semantic-shapes-pilot-export.json. The bounded signature increment
+outcome is resolved. Later diagnostics belonged to the same increment and were not sampled again.
+Usage and elapsed time remain null. No independent accuracy claim is available.
 
 External evaluation remains unavailable under the prior automatic approval rejection for the
-external destination and payload. Do not retry or bypass it. Local capture continues. Usage and
-elapsed time remain null. No independent accuracy claim is available. The pilot implementation
-line owns the tracked pilot checkpoint. The bounded record increment is resolved. All four request hashes, exact payloads and source
-hashes were reviewed in tmp/order1-records-pilot-export.json. The captured claims describe the
-pre-repair snapshot. Final workspace verification repeats their properties after helper inlining.
+external destination and payload. Do not retry or bypass it. Local capture continues. The pilot
+implementation line owns the tracked pilot checkpoint.
 
-The assigned inbox was empty at startup and after resumption. No messages were sent or received.
-The mailbox checkpoint was exported and reviewed with no tracked difference. Publication requires explicit in-session
-confirmation.
+The assigned inbox was empty at startup and before handoff. No messages were sent or received.
+The mailbox checkpoint was exported and reviewed with no tracked difference. Publication requires
+explicit in-session confirmation.

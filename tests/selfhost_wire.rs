@@ -12924,6 +12924,10 @@ fn every_stage_fits_the_driver_caps_with_margin() {
             include_str!("../src/selfhost/kel/wire_debug.kel"),
         ),
         (
+            "wire_schema",
+            include_str!("../src/selfhost/kel/wire_schema.kel"),
+        ),
+        (
             "verify_types",
             include_str!("../src/selfhost/kel/verify_types.kel"),
         ),

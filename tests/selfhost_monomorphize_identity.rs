@@ -55,6 +55,10 @@ const STAGES: &[(&str, &str)] = &[
         "wire_debug",
         include_str!("../src/selfhost/kel/wire_debug.kel"),
     ),
+    (
+        "wire_schema",
+        include_str!("../src/selfhost/kel/wire_schema.kel"),
+    ),
 ];
 
 /// The identity claim must cover every stage, including newly added sources.

@@ -1,0 +1,174 @@
+// Semantic schema validation. Record unpacking remains in the wire stage.
+// Each command handles one record or one shape request, independent of table size.
+require word >= 64;
+
+shared data io {
+    arg: [Word; 8],
+    fin: [Word; 16],
+}
+
+private data sg {
+    mode: Word,
+    shapes: Word,
+    signatures: Word,
+    natives: Word,
+    strict: Word,
+    scanned: Word,
+    bad: Word,
+    decoded: Word,
+    native_at: Word,
+    first: Word,
+    count: Word,
+    ret: Word,
+    resume: Word,
+    cursor: Word,
+}
+
+fn schema_error() -> Word { 0 - 292 }
+fn unsigned32(n: Word) -> bool { n >= 0 andalso n <= 0xFFFFFFFF }
+fn range_ok(first: Word, count: Word, total: Word) -> bool {
+    unsigned32(first) andalso unsigned32(count)
+        andalso first <= total andalso count <= total - first
+}
+fn signature_ok() -> bool {
+    range_ok(io.fin[0], io.fin[1], sg.shapes)
+        andalso unsigned32(io.fin[2]) andalso io.fin[2] < sg.shapes
+        andalso unsigned32(io.fin[3]) andalso io.fin[3] < sg.shapes
+}
+
+// Optional signature parsing may fail without rejecting a module only when no
+// native return shape needs that same parsed view. Execution failures are separate.
+fn tables_absent() -> Word {
+    sg.mode = 0;
+    if sg.strict == 1 orelse sg.natives > 0 { 0 - 293 } else { 0 }
+}
+
+fn tables_begin() -> Word {
+    sg.mode = 0;
+    if io.arg[0] < 0 - 1 orelse io.arg[1] < 0 - 1 orelse io.arg[2] < 0 - 1
+        orelse io.arg[3] < 0 orelse io.arg[3] > 1 { schema_error() } else {
+        sg.strict = io.arg[3];
+        sg.natives = if io.arg[2] < 0 { 0 } else { io.arg[2] / 8 };
+        if io.arg[2] >= 0 andalso io.arg[2] % 8 != 0 { 0 - 294 } else {
+        if io.arg[0] < 0 orelse io.arg[0] % 8 != 0
+            orelse (io.arg[1] >= 0 andalso io.arg[1] % 16 != 0) { tables_absent() } else {
+            sg.shapes = io.arg[0] / 8;
+            sg.signatures = if io.arg[1] < 0 { 0 } else { io.arg[1] / 16 };
+            sg.scanned = 0;
+            sg.bad = 0;
+            sg.decoded = 0;
+            sg.native_at = 0;
+            sg.mode = 1;
+            io.fin[0] = sg.shapes;
+            io.fin[1] = sg.signatures;
+            io.fin[2] = sg.natives;
+            1
+        }}
+    }
+}
+
+// Complete every signature's bounds checks before interpreting any shape tag.
+fn signature_check() -> Word {
+    if sg.mode != 1 orelse sg.scanned >= sg.signatures { schema_error() } else {
+        if not signature_ok() { sg.bad = 1; }
+        sg.scanned = sg.scanned + 1;
+        0
+    }
+}
+
+fn tables_finish() -> Word {
+    if sg.mode != 1 orelse sg.scanned != sg.signatures { schema_error() } else {
+        if sg.bad != 0 { tables_absent() } else { sg.mode = 2; 1 }
+    }
+}
+
+fn signature_begin() -> Word {
+    if sg.mode != 2 orelse sg.decoded >= sg.signatures
+        orelse not signature_ok() { schema_error() } else {
+        sg.first = io.fin[0];
+        sg.count = io.fin[1];
+        sg.ret = io.fin[2];
+        sg.resume = io.fin[3];
+        sg.cursor = 0;
+        sg.mode = 3;
+        0
+    }
+}
+
+// Request roles are parameter, return and resume. The cursor advances only
+// after a valid shape reply, so a refused reply cannot silently skip a field.
+fn shape_next() -> Word {
+    if sg.mode != 3 { schema_error() } else {
+    if sg.cursor == sg.count + 2 {
+        sg.decoded = sg.decoded + 1;
+        sg.mode = 2;
+        0
+    } else {
+        if sg.cursor < sg.count {
+            io.fin[0] = sg.first + sg.cursor;
+            io.fin[1] = 0;
+        } else { if sg.cursor == sg.count {
+            io.fin[0] = sg.ret;
+            io.fin[1] = 1;
+        } else {
+            io.fin[0] = sg.resume;
+            io.fin[1] = 2;
+        }}
+        sg.mode = 4;
+        1
+    }}
+}
+
+// ShapeRecord::to_shape accepts arbitrary kind bytes. The later verifier owns
+// kind validation. Top ignores kind and size; Scalar ignores size.
+fn shape_reply() -> Word {
+    if sg.mode != 4 andalso sg.mode != 5 { schema_error() } else {
+    if io.fin[0] < 1 orelse io.fin[0] > 3 { 0 - 295 } else {
+    if io.fin[1] < 0 orelse io.fin[1] > 255 orelse io.fin[2] < 0
+        orelse io.fin[2] > 255 orelse not unsigned32(io.fin[3]) { schema_error() } else {
+        let form = io.fin[0] - 1;
+        let kind = if form == 0 { 0 } else { io.fin[1] };
+        let size = if form == 2 { io.fin[3] } else { 0 };
+        io.fin[0] = kind;
+        io.fin[1] = size;
+        if sg.mode == 4 {
+            sg.cursor = sg.cursor + 1;
+            sg.mode = 3;
+        } else {
+            sg.native_at = sg.native_at + 1;
+            sg.mode = 2;
+        }
+        form
+    }}}
+}
+
+fn native_begin() -> Word {
+    if sg.mode != 2 orelse sg.decoded != sg.signatures
+        orelse sg.native_at >= sg.natives orelse not unsigned32(io.arg[0])
+        orelse io.arg[0] >= sg.shapes { schema_error() } else {
+        io.fin[0] = io.arg[0];
+        sg.mode = 5;
+        1
+    }
+}
+
+fn schema_finish() -> Word {
+    if sg.mode != 2 orelse sg.decoded != sg.signatures
+        orelse sg.native_at != sg.natives { schema_error() } else {
+        sg.mode = 0;
+        0
+    }
+}
+
+fn dispatch(cmd: Word) -> Word {
+    if cmd == 0 { tables_begin() } else {
+    if cmd == 1 { signature_check() } else {
+    if cmd == 2 { tables_finish() } else {
+    if cmd == 3 { shape_reply() } else {
+    if cmd == 4 { signature_begin() } else {
+    if cmd == 5 { shape_next() } else {
+    if cmd == 6 { native_begin() } else {
+    if cmd == 7 { schema_finish() } else { schema_error() }}}}}}}}
+}
+
+loop main(cmd: Word) -> Word { yield dispatch(cmd) }

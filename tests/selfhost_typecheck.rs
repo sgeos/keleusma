@@ -5042,6 +5042,10 @@ const REAL_STAGE_SOURCES: &[(&str, &str)] = &[
         "wire_debug",
         include_str!("../src/selfhost/kel/wire_debug.kel"),
     ),
+    (
+        "wire_schema",
+        include_str!("../src/selfhost/kel/wire_schema.kel"),
+    ),
 ];
 
 /// Every input channel's row count for one program, as `(channel, rows, capacity)`.
@@ -5897,6 +5901,7 @@ fn the_stage_is_measured_against_the_real_stage_sources() {
             "verify_yield",
             "wire",
             "wire_debug",
+            "wire_schema",
         ],
         "the set of real stage sources whose tables fit the input channels changed. \
          A stage JOINING it is progress in capacity worth recording; one LEAVING it \
@@ -10792,10 +10797,25 @@ fn production_types_reach_corpus_and_rule_form_census() {
 #[test]
 fn production_types_accept_all_stage_inputs() {
     use keleusma::selfhost::{call_type_inputs_from_pipeline, type_check_inputs_via_kel};
+    let actual: std::collections::BTreeSet<_> = std::fs::read_dir("src/selfhost/kel")
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "kel"))
+        .map(|path| path.file_stem().unwrap().to_string_lossy().into_owned())
+        .collect();
+    let listed: std::collections::BTreeSet<_> = REAL_STAGE_SOURCES
+        .iter()
+        .map(|(name, _)| (*name).to_owned())
+        .collect();
+    assert!(!actual.is_empty());
     assert_eq!(
+        listed.len(),
         REAL_STAGE_SOURCES.len(),
-        13,
-        "the debug stage joined the complete corpus"
+        "duplicate stage entries"
+    );
+    assert_eq!(
+        listed, actual,
+        "production types must cover every stage source"
     );
     for &(name, source) in REAL_STAGE_SOURCES {
         let inputs = call_type_inputs_from_pipeline(source);

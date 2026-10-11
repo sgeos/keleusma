@@ -348,7 +348,7 @@ The gaps to close, from the current subset to the full grammar:
 
 ## Current Order-1 status, 2026-10-11
 
-All thirteen pipeline-produced stage modules serialize through Keleusma section emitters and
+All fourteen pipeline-produced stage modules serialize through Keleusma section emitters and
 match complete reference artifacts. Opcode and operand-pool encoding and semantic decoding
 cover all 66 instruction identifiers. The all-stage comparison also checks decoded instruction
 sequences. General constant forests and private initializer trees encode within the declared
@@ -356,12 +356,15 @@ bounds. Full auxiliary decoding, admission-preserving capacity coverage, remaini
 obligations, shipping serialization and final integration gates keep Order 1 open.
 The shipping serializer remains Rust.
 Auxiliary directory voting, bounds checks and duplicate detection now run in Keleusma, without
-reference region positions or payload copies. Schema-record interpretation and complete module
+reference region positions or payload copies. Other schema semantics and complete module
 reconstruction remain open. The all-stage comparison includes independently decoded directories.
+Signature and native-return semantics now decode in a dedicated wire_schema stage, preserving
+the optional-table policy and checking every compiled chunk's signature. The new stage has
+15 chunks and a 7,052-byte artifact. Name and constant semantics and other auxiliary families
+still require implementation before complete module decoding.
 All seventeen fixed-record kinds now decode through Keleusma, and every fixed-record stage
-region reconstructs byte-identically from those decoded fields. Semantic tags, cross-table
-references and constant-tree reconstruction still require integration. The legacy type-input
-path uses 638 of the approved 640 occurrence rows after inlining fourteen numeric helpers.
+region reconstructs byte-identically from those decoded fields. Remaining name and constant
+semantics and cross-table checks still require integration. The legacy type-input path uses 638 of the approved 640 occurrence rows after inlining fourteen numeric helpers.
 
 Wire has 561 chunks, 715 name events, 23,713 of 49,152 input bytes and 1,290 of 1,365 constant
 nodes. The separate debug stage has 20 chunks. Public bytecode version, opcode count and the
@@ -372,7 +375,7 @@ The twenty-three-source comparison includes fourteen negatives and nine valid co
 seven artifact and execution controls. Parser capacity and unsupported annotation syntax remain
 distinct from source rejection. Remaining input and projection coverage, production wire
 emission and final gates keep Order 1 open. Standing inference-independence evidence now
-covers all thirteen stages, clearing 45,329 recorded types without changing complete artifacts.
+covers all fourteen stages, clearing 45,894 recorded types without changing complete artifacts.
 The intervention and admission controls also pass.
 
 Struct field and composite array projections now preserve source type identity through calls,

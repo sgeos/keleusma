@@ -9836,3 +9836,12 @@ fn self_host_compiles_wire_debug_kel_byte_identically() {
         "wire_debug.kel",
     );
 }
+
+#[cfg(feature = "self-host")]
+#[test]
+fn self_host_compiles_wire_schema_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_wire_schema_kel_byte_identically",
+        "wire_schema.kel",
+    );
+}

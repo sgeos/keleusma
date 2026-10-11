@@ -13,6 +13,52 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-11 Signature semantics move into a dedicated schema stage
+
+The new wire_schema.kel stage validates signature ranges and interprets shape tags. It requests
+parameter, return and resume shapes in order, validates native shape references and controls
+completion. The host transports decoded record fields and constructs typed values. Directory
+and fixed-record decoding reuse one wire virtual machine, with a separate schema machine for
+semantic work. No reference signature view or shape conversion is called in production.
+
+The strict signature helper matches the standalone reader. The metadata helper preserves the
+auxiliary decoder's optional-table policy. A malformed shared shape/signature view can produce
+empty metadata only when no native return needs it. An invalid tag reached through a valid view
+remains an error. All signature bounds are checked before any shape tag is interpreted, so a
+later invalid range takes precedence over an earlier invalid shape. The invalid-view flag is
+retained across later valid rows. Unused invalid shapes remain unobserved. Arbitrary kind bytes
+are retained as the reference codec retains them. Top ignores kind and size, and Scalar ignores
+size. Later verification is a separate boundary.
+
+The separate stage avoids increasing wire.kel's nearly full legacy type-input channels. It has
+15 chunks and a 7,052-byte artifact. Its shared window occupies 192 bytes and fourteen private
+value slots occupy 448 bytes. Its largest legacy input channel uses 24 of 640 occurrence rows.
+The complete embedded corpus now has fourteen sources. Every applicable corpus inventory was
+extended, and the new stage has its own byte-identity test. ChunkSignature now derives structural
+equality so complete decoded signature values can be compared directly.
+
+Controls enumerate all 65,536 shape tags and 2,304 kind/size combinations. They cover optional
+parsing failures, referenced and unused invalid tags, empty-range boundaries, native-only errors,
+retry and completion state, and a 3,000-parameter signature. All fourteen stage artifacts compare
+byte-identically, and decoded signature and native-return metadata match the reference. A count
+assertion requires one decoded signature per compiled chunk. Inference independence now covers
+45,894 recorded expression types across fourteen stages.
+
+Initial compilation exposed missing imports and the absence of equality traits on ChunkSignature.
+The test fixture was corrected to obtain auxiliary bytes from a complete reference artifact.
+Clippy identified a nested conditional in the fixture. The full workspace passed 3,113 tests and
+failed one stale assertion expecting thirteen stages, with five ignored across 174 suites. That
+assertion was replaced by a directory-inventory comparison. The repaired production type check
+accepts all fourteen stages. Final semantic, accounting, no-default and complete artifact tests
+pass. No production code changed after the workspace run. The full workspace was not repeated
+after the test-only repair and stronger controls. Receipts are in the reverse prompt.
+
+The local shadow pilot retains the first compiler diagnostic and three bounded claims with
+non-independent review. External evaluation remains unavailable under the earlier approval
+rejection. Full Order 1 remains active. Name and constant semantics, other auxiliary families,
+complete module decoding, admission-preserving capacity coverage, shipping integration and the
+remaining type obligations still require work.
+
 ## 2026-10-11 Fixed schema records decode through Keleusma
 
 The new wire_schema_records_via_kel helper decodes all seventeen fixed schema record kinds.

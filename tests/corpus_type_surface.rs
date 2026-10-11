@@ -1,6 +1,6 @@
 //! What the byte-identity oracle's corpus actually exercises at a function boundary.
 //!
-//! The current thirteen-stage corpus includes Boolean results from wire_debug validation
+//! The current fourteen-stage corpus includes Boolean results from wire_debug and schema validation
 //! helpers. Parameters remain Word. The dated single-type measurement below is historical.
 //!
 //! # The finding this pins
@@ -109,7 +109,7 @@ fn the_corpus_has_word_parameters_and_word_or_bool_results() {
          size; the extraction has broken rather than the corpus having shrunk"
     );
 
-    // wire_debug adds two Boolean validation results to the stage corpus.
+    // Debug and schema validation helpers add Boolean results to the stage corpus.
     let expected_returns: BTreeSet<String> = ["Word".to_string(), "Bool".to_string()]
         .into_iter()
         .collect();

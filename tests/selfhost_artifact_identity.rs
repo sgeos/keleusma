@@ -46,6 +46,10 @@ const STAGES: &[(&str, &str)] = &[
         "wire_debug",
         include_str!("../src/selfhost/kel/wire_debug.kel"),
     ),
+    (
+        "wire_schema",
+        include_str!("../src/selfhost/kel/wire_schema.kel"),
+    ),
 ];
 
 #[test]
@@ -216,6 +220,26 @@ fn production_compiler_matches_every_complete_stage_artifact() {
                 );
             }
         }
+        let decoded_signatures =
+            keleusma::selfhost::wire_decode_signature_metadata_via_kel(raw_auxiliary)
+                .unwrap_or_else(|e| panic!("{name}: signature semantics failed: {e:?}"));
+        assert!(
+            decoded_signatures.parse_valid,
+            "{name}: signature parsing was skipped"
+        );
+        assert_eq!(
+            decoded_signatures.signatures.len(),
+            reference.chunks.len(),
+            "{name}: every compiled chunk must have a decoded signature"
+        );
+        assert_eq!(
+            decoded_signatures.signatures, reference.signatures,
+            "{name}: signatures"
+        );
+        assert_eq!(
+            decoded_signatures.native_return_shapes, reference.native_return_shapes,
+            "{name}: native return shapes"
+        );
         assert!(!reference.chunks.is_empty(), "{name} has no chunks");
         let sections = keleusma::selfhost::wire_opcode_sections_via_kel(&actual)
             .unwrap_or_else(|e| panic!("{name}: opcode emission failed: {e:?}"));
