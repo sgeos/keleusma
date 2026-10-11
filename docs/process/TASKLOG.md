@@ -6,6 +6,48 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-11 Source return-layout queries, feature checkpoint with two failures
+
+The parser performs a source-token census that records each function's return-type range.
+Scalar return kinds are available before declaration order reaches the callee. Composite layouts
+are parsed on demand through the existing Keleusma header grammar and cached for the current
+body generation. The host supplies tokens and retains an eight-token window. Backward seeks
+restart the lexer and forward seeks discard skipped tokens. Private record 111 announces each
+seek. Production drivers opt in through an appended shared command field. Legacy stage feeders
+retain sequential mode. The named fused compiler feed now uses the bounded token path.
+
+Ten valid source cases preserve independent type acceptance and complete artifact identity.
+They include forward scalar, tuple, nested tuple, array and struct returns, arrays of tuples,
+direct indexing of call results and two call results in one tuple. Four decoded programs execute
+to seven and four invalid result uses reject independently. Collecting and bounded feeds produce
+identical traces for the transport control. Distant queries and quoted declarations preserve the
+four lower-level compile paths. The shipping entry is covered by the ten-source corpus.
+
+The feature checkpoint remains red. The cache control exposed a guarded-head local-slot
+mismatch. Its trace has the expected census rewind and two body query round trips, but its
+artifact differs at SetLocal. The cache assertion and artifact assertion are now separate tests,
+and the artifact witness remains failing. A generic-return diagnostic fixture also fails because
+layout resolution now refuses the unknown return type before the reference cross-check. Preserve
+both witnesses while repairing the local-frame mapping and cross-check coverage.
+
+All fourteen stage artifacts and three monomorphization controls pass. The broad run passes
+152 codegen, 91 parser and six existing tuple tests, with two parser tests ignored. The type
+suite passes 102 tests and fails its generic diagnostic fixture. The final return-layout target
+passes six tests and fails the guarded-head artifact witness. Four inference checks preserve
+all fourteen artifacts after erasing 58,671 recorded types. Four shared-layout and capacity
+checks pass, including the six new chunk-indexed query arrays. Fresh Clippy, documentation and
+the build without the standard library pass. Exact commands and failure receipts are in the
+reverse prompt.
+
+The parser has 233 chunks, a 194,916-byte artifact, 336,024 shared bytes and 1,367,904 private
+bytes. The final source is 383,333 bytes and produces 52,294 Keleusma tokens. A formatting-only
+change for the capacity guard preserves the complete parser artifact and token stream. Public
+bytecode version stays 2, opcode count stays 66, and selected capacities stay 640.
+
+The shadow pilot captures the first diagnostic and three bounded claims. Its task outcome is
+unresolved because the checkpoint retains failures. All labels are non-independent self-review.
+External evaluation remains unavailable. The full Order 1 goal remains active.
+
 ## 2026-10-11 Tuple construction preserves member layouts
 
 The parser now retains source-derived expression layouts for tuple construction. Boolean and

@@ -348,17 +348,19 @@ The gaps to close, from the current subset to the full grammar:
 
 ## Current Order-1 status, 2026-10-11
 
-The latest increment preserves mixed and nested tuple construction through source-derived
-member layouts. Thirty valid sources retain independent type acceptance and complete artifacts.
-Five decoded programs execute to seven and five invalid tuple programs reject independently.
-A 400-function corpus checks temporary descriptor reuse. Nested array-of-tuple headers, aliases,
-scalar data members and Boolean array widths are covered. The parser has 228 chunks, a
-190,492-byte artifact, 336,016 shared bytes and 1,170,848 private bytes. Selected capacities
-remain 640. The previous declaration-order relocation remains covered by its standing tests.
-Current verification receipts are in the [reverse prompt](../process/REVERSE_PROMPT.md).
-Forward return layouts, arrays of tuples returned from calls, remaining declaration, binding,
-occurrence, alias, cast and enum obligations, and final integration gates keep Order 1 open.
-The [completion plan](../decisions/ORDER1_COMPLETION_PLAN.md) carries the full requirements.
+The latest feature checkpoint adds source return-layout queries across declaration order.
+Ten valid sources preserve independent type acceptance and complete artifacts. Four decoded
+programs execute to seven and four invalid uses reject independently. Token seeks are explicit,
+and collecting and bounded feeds agree. All fourteen stage artifacts remain identical to the
+reference. Inference independence covers 58,671 recorded types. The parser has 233 chunks,
+a 194,916-byte artifact, 336,024 shared bytes and 1,367,904 private bytes.
+
+The checkpoint is red on a guarded-head local-slot witness and a generic-return diagnostic
+fixture that no longer reaches the reference cross-check. Those repairs precede remaining
+declaration, binding, occurrence, alias, cast and enum obligations and the final integration
+gates. Selected capacities remain 640. Exact receipts are in the
+[reverse prompt](../process/REVERSE_PROMPT.md), and the
+[completion plan](../decisions/ORDER1_COMPLETION_PLAN.md) carries the full requirements.
 
 All fourteen pipeline-produced stage modules serialize through Keleusma section emitters and
 match complete reference artifacts. Opcode and operand-pool encoding and semantic decoding

@@ -259,6 +259,8 @@ pub const PARSE_PRIVATE_INIT_VALUE_TAG: i64 = 108;
 pub const PARSE_PRIVATE_INIT_NEGATIVE_TAG: i64 = 109;
 /// Runtime field ordinal times 2^24 plus its assigned slot base.
 pub const PARSE_DATA_FIELD_BASE_TAG: i64 = 110;
+/// Parser token reposition request, carrying an absolute token index.
+pub const PARSE_TOKEN_SEEK_TAG: i64 = 111;
 
 /// The tag at or below which a word yielded by `reconstruct.kel` is a diagnostic rather
 /// than a node count. Node counts are non-negative, so no legitimate count can collide.
@@ -821,6 +823,8 @@ pub const BR_P_FLOAT_ID: usize = BR_P_ASSERT_ID + 1;
 pub const BR_P_FIXED_ID: usize = BR_P_FLOAT_ID + 1;
 /// Text type-name id plus one.
 pub const BR_P_TEXT_ID: usize = BR_P_FIXED_ID + 1;
+/// Enable source return-range queries and explicit token reposition requests.
+pub const BR_P_RETURN_QUERIES: usize = BR_P_TEXT_ID + 1;
 
 #[cfg(test)]
 mod shared_layout_tests {
@@ -919,6 +923,7 @@ mod shared_layout_tests {
             ("float_id", "BR_P_FLOAT_ID", BR_P_FLOAT_ID),
             ("fixed_id", "BR_P_FIXED_ID", BR_P_FIXED_ID),
             ("text_id", "BR_P_TEXT_ID", BR_P_TEXT_ID),
+            ("return_queries", "BR_P_RETURN_QUERIES", BR_P_RETURN_QUERIES),
         ];
         for &(field, konst, value) in cases {
             assert_eq!(
@@ -996,6 +1001,22 @@ mod shared_layout_tests {
             "only {checked} chunk-indexed arrays were found; the derivation has stopped \
              seeing the family and this check has gone vacuous"
         );
+
+        // Return queries index their arrays with a callee id instead of ps.cur_chunk.
+        let returns = STAGE
+            .split_once("private data rq {")
+            .expect("return-query data block")
+            .1
+            .split('}')
+            .next()
+            .unwrap();
+        for name in ["begin", "end", "known", "scalar", "cache", "epoch"] {
+            assert_eq!(
+                declared_array_len(returns, name),
+                Some(PARSE_CHUNK_CAP),
+                "return-query array {name} must admit every chunk"
+            );
+        }
 
         // Loops bounded by the chunk COUNT. A `limit` below the cap turns an admitted
         // program into `LoopLimitExceeded`, which names neither the chunk table nor the

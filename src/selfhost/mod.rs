@@ -1268,30 +1268,16 @@ fn open_decl(cur: &mut Option<ParsedFn>, code: i64, val: i64) -> &mut ParsedFn {
 
 /// How many tokens the fused feed keeps resident.
 ///
-/// Three would suffice: the parser reads at its cursor and pushes back by at most
-/// one, so `[cursor - 1, cursor + 1]` covers every access, measured by
-/// `the_parser_never_jumps_more_than_one_token`. Eight is used for margin, and the
-/// margin is the point -- a window sized exactly to the measured bound would turn
-/// any future widening of the parser's reach into a silently wrong parse rather
-/// than an obvious one.
+/// Sequential reads keep one token of lookbehind. Return-layout requests can seek
+/// to another source range, which reloads this bounded window through the lexer.
 const FUSED_WINDOW: usize = 8;
 
 /// The token cursor after each resume of `parse.kel`, for measuring how far the
 /// parser actually reaches into its input.
 ///
-/// # Why this exists
-///
-/// `toks.packed` is 40,960 words and the driver seeds the whole token stream into
-/// it. That residency is the LAST one in the pipeline, and it is the driver's
-/// rather than the parser's: every one of `parse.kel`'s cursor moves is plus or
-/// minus one, so it is a one-token lookahead scanner with single-token pushback.
-///
-/// Reading the cursor back is what turns that from a claim about the source into
-/// a measurement. A host feeding a sliding window needs to know the parser cannot
-/// jump; this returns the evidence rather than the assurance.
-///
-/// The stage writes `toks.at` on every token read, and a step consumes at most one
-/// token, so consecutive entries differ by at most one in either direction.
+/// This trace uses the legacy sequential mode, with return queries disabled.
+/// It measures local lookahead and pushback. Production feeds additionally enable
+/// explicit source-range seeks, exercised by the return-layout transport tests.
 #[must_use]
 pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
     let (tokens, names) = br_lex(src);
@@ -1565,7 +1551,7 @@ fn parse_functions_impl_named(
     src: &str,
     on_function: &mut dyn FnMut(&[String], ParsedFn),
 ) -> ParseSideTables {
-    parse_functions_impl(src, false, on_function, &mut |_, _, _| {})
+    parse_functions_impl(src, true, on_function, &mut |_, _, _| {})
 }
 
 fn parse_functions_impl(
@@ -1619,6 +1605,12 @@ fn try_parse_functions_impl(
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(module, &arena).expect("verify parse.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_RETURN_QUERIES,
+        Value::Int(1),
+    )
+    .unwrap();
     // THE TOKEN ARRAY HAS A CAP AND OVERFLOWING IT REPORTS ONE OF TWO WRONG THINGS.
     //
     // `toks.packed` holds `PARSE_TOKEN_CAP` tokens. Measured on a program that is one long
@@ -1859,39 +1851,43 @@ fn try_parse_functions_impl(
             other => panic!("expected Int at BR_P_AT, got {other:?}"),
         };
         cursor_writer.set(at);
-        let Some((lex_vm, lex_shared)) = lex.as_mut() else {
+        if !fused {
             return;
-        };
-        while !eof && (base + win.len() as i64) < at + FUSED_WINDOW as i64 {
+        }
+        // Return-layout queries may seek outside the resident window. Re-lex on
+        // rewind, discarding skipped tokens so residency remains bounded.
+        let keep = at.saturating_sub(1).max(0);
+        if at < base {
+            drop(lex.take());
+            lex = Some(lex_open(&lex_arena, lex_module(), src));
+            win.clear();
+            base = 0;
+            eof = false;
+        }
+        let (lex_vm, lex_shared) = lex.as_mut().expect("fused lexer");
+        while base < keep {
+            if win.pop_front().is_some() {
+                base += 1;
+            } else {
+                match lex_next(lex_vm, lex_shared) {
+                    Some(_) => base += 1,
+                    None => {
+                        eof = true;
+                        break;
+                    }
+                }
+            }
+        }
+        while !eof && win.len() < FUSED_WINDOW {
             match lex_next(lex_vm, lex_shared) {
                 Some(w) => win.push_back(w),
                 None => eof = true,
             }
         }
-        // ONE TOKEN OF LOOKBEHIND, AND IT IS PROVEN RATHER THAN CHOSEN.
-        //
-        // `toks.at` is written BEFORE the cursor advances, so it names the index
-        // just read: after a read at C the cursor is C+1. With k pushbacks the
-        // next read is at C+1-k, so the trace step is 1-k. Every step is within
-        // plus or minus one, asserted over five sources including a whole real
-        // stage by `the_parser_never_jumps_more_than_one_token`, so k is at most
-        // two and the lowest index ever read is `at - 1`.
-        //
-        // AN EARLIER REVISION USED HALF THE WINDOW AND JUSTIFIED IT WITH A CLAIM
-        // THAT IS FALSE -- that the cursor could sit "several tokens" behind `at`.
-        // It cannot. That widening was a misdiagnosis of `IndexOutOfBounds(-1, 64)`,
-        // whose real cause was an unprimed window at the initial call; the
-        // widening did not fix it and was kept anyway.
-        //
-        // The tight bound is also the more diagnostic one. `base` is a true
-        // absolute index, so a read below it lands negative and faults LOUDLY --
-        // slack would only delay the report of an assumption breaking, never
-        // prevent a wrong parse.
-        let lookbehind = 1i64;
-        while base < at - lookbehind && win.len() > 1 {
-            win.pop_front();
-            base += 1;
-        }
+        assert!(
+            win.len() <= FUSED_WINDOW,
+            "parser token window exceeded its bound"
+        );
         vm.set_shared(shared, BR_P_BASE, Value::Int(base)).unwrap();
         for (i, &w) in win.iter().enumerate() {
             vm.set_shared(shared, BR_P_PACKED + i, Value::Int(w))
@@ -1906,6 +1902,13 @@ fn try_parse_functions_impl(
         budget,
         |code, val| {
             on_record(code, val, cursor_at.get());
+            if code == crate::selfhost_host::PARSE_TOKEN_SEEK_TAG {
+                assert!(
+                    val >= 0 && val <= token_count as i64,
+                    "invalid parser token seek"
+                );
+                return ControlFlow::Continue(());
+            }
             if code == crate::selfhost_host::PARSE_DATA_FIELD_BASE_TAG {
                 assert!(val >= 0, "negative data address record");
                 let index = usize::try_from(val / 16777216).expect("data field ordinal");

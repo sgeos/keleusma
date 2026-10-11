@@ -68,10 +68,9 @@ shared data toks {
     // `packed[cursor - base]`. At zero, with the whole stream seeded, this is
     // exactly what it was.
     //
-    // `at` is the cursor written back on every read, so the host can slide the
-    // window without the stage needing a protocol to ask. A step consumes at most
-    // one token, so the cursor advances by at most one per resume and a host
-    // watching `at` can never be surprised by a jump.
+    // `at` identifies each read. Sequential parsing uses one-token lookbehind.
+    // With return queries enabled, record 111 announces a source-range seek and
+    // the host reloads its bounded token window before the next read.
     //
     // APPENDED LAST, like `and_id` and `or_id` before them. The block is addressed
     // by SLOT: inserting in the middle silently shifts every field after the
@@ -102,6 +101,8 @@ shared data toks {
     float_id: Word,
     fixed_id: Word,
     text_id: Word,
+    // Opt in to source return-range queries. Legacy stage feeders may leave this zero.
+    return_queries: Word,
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -110,6 +111,7 @@ enum Tok {
     Ident = 1,
     LBrace = 2,
     RBrace = 3,
+    Arrow = 4,
     Yield = 5,
     Loop = 6,
     LParen = 7,
@@ -1658,6 +1660,21 @@ private data structdefs {
 // Resolve an identifier to its frame slot: the `let` bindings first (most recent wins),
 // then the parameters.
 // A reused lexical-name slot must not retain an earlier binding's composite shape.
+// The census records source ranges only. Layouts are parsed in the caller's scope,
+// where preceding nominal declarations are available. Cached nodes share that scope.
+private data rq {
+    scanned: Word, cursor: Word, depth: Word, phase: Word, parens: Word, chunk: Word,
+    begin: [Word; 1024],
+    end: [Word; 1024],
+    known: [Word; 1024],
+    scalar: [Word; 1024],
+    cache: [Word; 1024],
+    epoch: [Word; 1024],
+    generation: Word,
+    query: Word, callee: Word, saved_cursor: Word, saved_at: Word,
+    pending_call: Word, emit_call: Word, call_desc: Word,
+}
+
 private data vl {
     scalar: Word, form: Word, layout: Word, bytes: Word, decl: Word, child: Word, arity: Word,
     params: [Word; 33], locals: [Word; 65], returns: [Word; 1024], local_desc: [Word; 65],
@@ -2598,7 +2615,7 @@ fn step_iclosing() -> Word {
         if ops.opstack[ops.opsp - 1] == OpCode::ArrayMark() as Word {
             // An array literal `[...]` close: pop the ArrayMark, count the last element (unless
             // the array is empty, when no value was parsed), pop the array context, and emit an
-            // ArrayLit packing the flat byte size (count * word_bytes, eight per Word element)
+            // ArrayLit packing the flat byte size from the current element layout
             // and the count as byte_size * 1024 + count -- the reconstruct/StructInit shape --
             // which codegen lowers to NewComposite(Flat{Array, count, byte_size}).
             ops.opsp = op_pop(ops.opsp);
@@ -2612,8 +2629,8 @@ fn step_iclosing() -> Word {
             // arm `a[i]` access; a later operator/call clears it. If the last element was a struct
             // construction (pending_cstruct set), the array is an array-of-struct: its element size
             // is the struct's byte size (so byte_size = count * element_size, not count * 8) and the
-            // binding records the element struct type. Otherwise the elements are all-Word (element
-            // ScalarKind Int = 3, byte_size = count * 8).
+            // binding records the element struct type. Expression descriptors supply the actual
+            // widths of other known element kinds. The legacy fallback retains its Word default.
             let elem_struct = stmt.pending_cstruct;
             let elem_tuple = stmt.pending_ctuple;
             // **THE ELEMENT SIZE OF A NESTED ARRAY, READ FROM THIS LEVEL'S OWN SLOT.**
@@ -2632,7 +2649,8 @@ fn step_iclosing() -> Word {
     stmt.pending_carray_arrbytes = 0;
             stmt.pending_carray_size = 0;
             stmt.pending_cenum = 0;
-            // This array's own element size: a struct's, an inner array's, or a `Word`'s.
+            // Prefer the source-derived expression layout, retaining the legacy fallback
+            // only when the expression observer has no known scalar layout.
             let my_elem = if vl.form != 0 orelse vl.scalar >= 0 { vl.bytes } else { if elem_struct > 0 {
                 structdefs.sd_bytesize[elem_struct - 1]
             } else {
@@ -4493,6 +4511,98 @@ fn step_resolving() -> Word {
 // Expression layout state is separate from source type identity. Descriptors are
 // allocated only when a tuple captures a member, within the existing header pool.
 
+fn return_range_end(at: Word) -> Word {
+    if rq.chunk >= 0 {
+        if rq.phase == 3 { rq.begin[rq.chunk] = at; rq.scalar[rq.chunk] = 1; }
+        rq.end[rq.chunk] = at; rq.known[rq.chunk] = 1;
+    }
+    rq.phase = 0;
+    0
+}
+fn return_census_step() -> Word {
+    if rq.cursor >= toks.len {
+        rq.scanned = 1; ps.cursor = 0; toks.at = 0; ps.emit_arg = 0; 111
+    } else {
+        let at = rq.cursor; let token = toks.packed[at - toks.base];
+        let k = token % 256; let v = token / 256;
+        toks.at = at; rq.cursor = at + 1;
+        if rq.depth == 0 {
+            if rq.phase == 0 {
+                if k == Tok::Fn() as Word orelse k == Tok::Yield() as Word orelse k == Tok::Loop() as Word { rq.phase = 1; }
+            } else { if rq.phase == 1 {
+                rq.chunk = 0 - 1;
+                if k == Tok::Ident() as Word {
+                    for i in 0..toks.chunk_count limit 1024 {
+                        if toks.chunks[i] == v { rq.chunk = i; }
+                    }
+                    rq.phase = 2; rq.parens = 0;
+                } else { rq.phase = 0; }
+            } else { if rq.phase == 2 {
+                if k == Tok::LParen() as Word { rq.parens = rq.parens + 1; }
+                if k == Tok::RParen() as Word {
+                    rq.parens = rq.parens - 1;
+                    if rq.parens == 0 { rq.phase = 3; }
+                }
+            } else { if rq.phase == 3 {
+                if k == Tok::LBrace() as Word orelse k == Tok::When() as Word { return_range_end(at); } else {
+                    if k != Tok::Arrow() as Word {
+                        if rq.chunk >= 0 {
+                            rq.begin[rq.chunk] = at;
+                            let scalar = if k == Tok::Ident() as Word { scalar_kind_of(v) } else { 0 };
+                            rq.scalar[rq.chunk] = if scalar > 0 { scalar + 1 } else { 0 };
+                        }
+                        rq.phase = 4;
+                    }
+                }
+            } else {
+                if k == Tok::LBrace() as Word orelse k == Tok::When() as Word { return_range_end(at); }
+            }}}}
+        }
+        if k == Tok::LBrace() as Word { rq.depth = rq.depth + 1; }
+        if k == Tok::RBrace() as Word andalso rq.depth > 0 { rq.depth = rq.depth - 1; }
+        0
+    }
+}
+fn return_call(record: Word, callee: Word) -> Word {
+    if toks.return_queries != 1 orelse rq.known[callee] == 0 { record } else {
+    if rq.scalar[callee] > 0 {
+        vl.returns[callee] = rq.scalar[callee]; record
+    } else {
+    if rq.cache[callee] > 0 andalso rq.epoch[callee] == rq.generation {
+        rq.call_desc = rq.cache[callee]; record
+    } else {
+        rq.callee = callee; rq.pending_call = record;
+        rq.saved_cursor = ps.cursor; rq.saved_at = toks.at;
+        ps.cursor = rq.begin[callee]; toks.at = ps.cursor;
+        rq.query = 1; ht.mode = 3; ht.depth = 0;
+        ht.base_node = ht.nodes; ht.base_layout = tupledefs.tup_count;
+        ps.emit_arg = ps.cursor; 111
+    }}}
+}
+fn return_query_finish(at: Word) -> Word {
+    if ht.nknown[at] == 0 { perr(pe_value_layout(), ps.cursor) } else {
+        rq.cache[rq.callee] = at + 1; rq.epoch[rq.callee] = rq.generation;
+        rq.call_desc = at + 1; rq.query = 0; rq.emit_call = 1;
+        ps.cursor = rq.saved_cursor; toks.at = rq.saved_at; ht.mode = 0;
+        0
+    }
+}
+fn return_query_step() -> Word {
+    if ps.cursor >= rq.end[rq.callee] { perr(pe_value_layout(), ps.cursor) } else {
+        let token = toks.packed[ps.cursor - toks.base];
+        let k = token % 256; let v = token / 256;
+        toks.at = ps.cursor; ps.cursor = ps.cursor + 1;
+        if rq.query == 1 {
+            rq.query = 2;
+            if k == Tok::Ident() as Word { return_query_finish(header_named(v)); } else {
+            if k == Tok::LParen() as Word { header_open(1); } else {
+            if k == Tok::LBracket() as Word { header_open(2); } else { perr(pe_value_layout(), toks.at); }
+            }}
+        } else { header_member(k, v); }
+        if rq.emit_call == 1 { ps.emit_arg = ps.cursor; 111 } else { ps.emit_arg = 0 - 1; 0 }
+    }
+}
+
 fn value_scope_end() -> Word {
     if vl.scope_active == 1 {
         for i in 0..vl.base_layouts limit 32 {
@@ -4505,6 +4615,7 @@ fn value_scope_end() -> Word {
 }
 fn value_scope_begin() -> Word {
     value_scope_end();
+    rq.generation = rq.generation + 1;
     vl.base_nodes = ht.nodes; vl.base_layouts = tupledefs.tup_count; vl.base_members = tupledefs.tup_ecursor;
     vl.scope_active = 1;
     0
@@ -4623,6 +4734,9 @@ fn value_record(word: Word) -> Word {
     if kind == 31 { value_scalar(arg); }
     if kind == 37 andalso arg < 4294967296 { value_scalar(arg / 65536); }
     if kind == 7 {
+        if rq.call_desc > 0 {
+            let desc = rq.call_desc - 1; rq.call_desc = 0; header_arm(desc);
+        } else {
         value_scalar(vl.returns[arg % call_chunk_radix()] - 1);
         if stmt.pending_ctuple != 0 {
             vl.form = 1;
@@ -4633,6 +4747,7 @@ fn value_record(word: Word) -> Word {
         } else { if stmt.pending_cenum > 0 {
             vl.form = 4; vl.decl = stmt.pending_cenum; vl.bytes = enum_bytesize(vl.decl - 1);
         }}}
+    }
     }
     if kind == 27 { vl.form = 3; vl.decl = stmt.pending_cstruct; vl.bytes = arg / 1024; }
     if kind == 18 { vl.form = 4; vl.decl = stmt.pending_cenum; vl.bytes = arg / 1024; }
@@ -4695,7 +4810,7 @@ fn step_closing() -> Word {
                 ps.fa_struct = stmt.pending_cstruct - 1;
                 ps.fa_phase = 1;
             }
-            Node::Call() as Word + (call.call_chunk[call.call_sp] + call.call_count[call.call_sp] * call_chunk_radix()) * 64
+            return_call(Node::Call() as Word + (call.call_chunk[call.call_sp] + call.call_count[call.call_sp] * call_chunk_radix()) * 64, call.call_chunk[call.call_sp])
         } else {
         if top == OpCode::EnumMark() as Word {
             // A `)` closing an enum payload construction: pop the mark, count the last payload
@@ -7676,6 +7791,10 @@ fn header_complete(value: Word) -> Word {
     let at = if ht.nform[value] == 1 andalso ht.layout[value] >= 0 andalso tupledefs.tup_desc[ht.layout[value]] > 0 {
         tupledefs.tup_desc[ht.layout[value]] - 1
     } else { value };
+    if ht.mode == 3 {
+        if tupledefs.tup_count == ht.base_layout andalso at < ht.base_node { ht.nodes = ht.base_node; }
+        return_query_finish(at)
+    } else {
     if ps.arr == 3 {
         if ht.nform[at] != 1 { perr(pe_tuple_layout(), ht.nform[at]); } else {
             if ps.arr_ret == 0 {
@@ -7702,6 +7821,7 @@ fn header_complete(value: Word) -> Word {
     }
     ht.mode = 0;
     0
+}
 }
 
 fn header_close() -> Word {
@@ -7737,7 +7857,7 @@ fn header_member(k: Word, v: Word) -> Word {
     let frame = ht.depth - 1;
     if ht.phase[frame] == 0 {
         if k == Tok::Ident() as Word {
-            signature_text_name(v, if ht.mode == 2 { 1 } else { 0 });
+            if ht.mode != 3 { signature_text_name(v, if ht.mode == 2 { 1 } else { 0 }); }
             header_add(header_named(v)); type_tuple_record(95, v)
         } else {
         if k == Tok::LParen() as Word { header_open(1) } else {
@@ -8120,6 +8240,9 @@ fn header_sig(k: Word, v: Word) -> Word {
 }
 
 fn step_body() -> Word {
+    if toks.return_queries == 1 andalso rq.scanned == 0 { return_census_step() } else {
+    if rq.query != 0 { return_query_step() } else {
+    if rq.emit_call == 1 { rq.emit_call = 0; rq.pending_call } else {
     if di.pending != 0 { data_init_emit() } else {
     if fields.emit_at > 0 { data_base_emit() } else {
     if ht.pending != 0 {
@@ -8168,6 +8291,8 @@ fn step_body() -> Word {
         }
     } } } } } } } }
 }
+
+} } }
 
 // P11 Option E: the two-phase record emitter. Phase 0 computes the record (via `step_body`)
 // and returns its tag word, stashing the payload for phase 1; phase 1 returns the payload

@@ -236,18 +236,11 @@ fn temporary_tuple_descriptors_do_not_accumulate_between_functions() {
 }
 
 #[test]
-fn unavailable_forward_return_layout_is_distinct_from_capacity_and_type_rejection() {
-    use keleusma::selfhost_host::{PARSE_DIAG_TAG_BASE, ParseRecordError};
+fn forward_return_layout_is_available_from_its_source_declaration() {
     let source = "fn main() -> Word { let t = (yes(), 7); t.1 } fn yes() -> bool { true }";
-    keleusma::selfhost::compile_src(source);
-    let error = keleusma::selfhost::try_call_type_inputs_from_pipeline(source)
-        .expect_err("forward return layout remains unavailable");
-    assert!(!error.is_source_rejection());
-    assert!(
-        matches!(error, ParseRecordError::Diagnostic { code, .. } if code == PARSE_DIAG_TAG_BASE - 38)
-    );
-    assert!(matches!(
-        keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host()),
-        Err(keleusma::selfhost::SelfHostError::TypeCheckUnavailable { .. })
-    ));
+    let reference = keleusma::selfhost::compile_src(source);
+    assert!(keleusma::selfhost::type_check_source_via_kel(source).unwrap());
+    let actual =
+        keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host()).unwrap();
+    assert_eq!(actual.to_bytes().unwrap(), reference.to_bytes().unwrap());
 }
