@@ -1,4 +1,4 @@
-//! Semantic signature decoding driven by the dedicated schema stage.
+//! Semantic auxiliary decoding driven by the dedicated schema stage.
 
 use super::wire_directory::decode_directory;
 use super::wire_framing::{get_word, set_word, with_compiled_wire};
@@ -7,8 +7,10 @@ use super::*;
 use crate::bytecode::{ChunkSignature, WireShape};
 use crate::wire_schema::{ShapeRecord, SignatureRecord, kind};
 
-const ARG: usize = 0;
-const FIN: usize = 8;
+pub(super) const ARG: usize = 0;
+pub(super) const FIN: usize = 8;
+const BYTES: usize = FIN + 16;
+const NAME_WINDOW: usize = 1024;
 
 /// Signature-family results with the optional-table decision preserved.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,12 +30,20 @@ fn error(detail: impl core::fmt::Display) -> SelfHostError {
     }
 }
 
-fn command(vm: &mut Vm<'_, '_>, shared: &mut [u8], cmd: i64) -> Result<usize, SelfHostError> {
+pub(super) fn command(
+    vm: &mut Vm<'_, '_>,
+    shared: &mut [u8],
+    cmd: i64,
+) -> Result<usize, SelfHostError> {
     let result = enter_wire(vm, shared, cmd)?;
     usize::try_from(result).map_err(|_| error(format!("command {cmd} refused with {result}")))
 }
 
-fn fields(vm: &mut Vm<'_, '_>, shared: &mut [u8], values: &[i64]) -> Result<(), SelfHostError> {
+pub(super) fn fields(
+    vm: &mut Vm<'_, '_>,
+    shared: &mut [u8],
+    values: &[i64],
+) -> Result<(), SelfHostError> {
     if values.len() > 16 {
         return Err(error("field transport exceeds schema window"));
     }
@@ -156,7 +166,7 @@ fn decode_signature(
     })
 }
 
-fn byte_count(bytes: Option<&[u8]>) -> Result<i64, SelfHostError> {
+pub(super) fn byte_count(bytes: Option<&[u8]>) -> Result<i64, SelfHostError> {
     bytes.map_or(Ok(-1), |bytes| {
         i64::try_from(bytes.len()).map_err(|_| error("table exceeds word range"))
     })
@@ -297,6 +307,139 @@ pub fn wire_decode_signature_metadata_via_kel(
     bytes: &[u8],
 ) -> Result<WireDecodedSignatures, SelfHostError> {
     decode_metadata(bytes, false)
+}
+
+// Both returned spans are supplied by the schema stage. The host only checks
+// them against the borrowed buffer before transport or typed construction.
+fn requested_bytes<'a>(
+    vm: &Vm<'_, '_>,
+    shared: &[u8],
+    bytes: &'a [u8],
+) -> Result<&'a [u8], SelfHostError> {
+    let start = get_word(vm, shared, FIN)?;
+    let length = get_word(vm, shared, FIN + 1)?;
+    let end = start
+        .checked_add(length)
+        .ok_or_else(|| error("name span overflow"))?;
+    bytes
+        .get(start..end)
+        .ok_or_else(|| error("name request leaves borrowed region"))
+}
+
+fn validate_name_bytes(
+    vm: &mut Vm<'_, '_>,
+    shared: &mut [u8],
+    bytes: &[u8],
+) -> Result<(), SelfHostError> {
+    for chunk in bytes.chunks(NAME_WINDOW) {
+        for (i, &byte) in chunk.iter().enumerate() {
+            vm.set_shared(shared, BYTES + i, Value::Byte(byte))
+                .map_err(|_| error("name byte transport failed"))?;
+        }
+        set_word(vm, shared, ARG, chunk.len() as i64)?;
+        if command(vm, shared, 10)? != 0 {
+            return Err(error("unexpected name feed response"));
+        }
+    }
+    if command(vm, shared, 11)? != 0 {
+        return Err(error("name validation did not finish"));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct NameTables<'a> {
+    pub(super) names: Option<&'a [u8]>,
+    pub(super) pool: Option<&'a [u8]>,
+}
+
+pub(super) fn name_lookup<'a>(
+    codec: &mut Vm<'_, '_>,
+    codec_shared: &mut [u8],
+    vm: &mut Vm<'_, '_>,
+    shared: &mut [u8],
+    tables: NameTables<'a>,
+    index: u32,
+) -> Result<&'a str, SelfHostError> {
+    for (i, value) in [
+        byte_count(tables.names)?,
+        byte_count(tables.pool)?,
+        i64::from(index),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set_word(vm, shared, ARG + i, value)?;
+    }
+    if command(vm, shared, 8)? != 1 {
+        return Err(error("unexpected name record request"));
+    }
+    let name_bytes = requested_bytes(
+        vm,
+        shared,
+        tables
+            .names
+            .ok_or_else(|| error("name table absent after validation"))?,
+    )?;
+    let mut records = decode_records(codec, codec_shared, kind::NAMES, name_bytes)?;
+    if records.len() != 1 {
+        return Err(error("name request did not select one record"));
+    }
+    let Some(WireSchemaRecord::NameRef(record)) = records.pop() else {
+        return Err(error("unexpected name record"));
+    };
+    fields(
+        vm,
+        shared,
+        &[i64::from(record.offset), i64::from(record.length)],
+    )?;
+    if command(vm, shared, 9)? != 1 {
+        return Err(error("unexpected name pool request"));
+    }
+    let value = requested_bytes(
+        vm,
+        shared,
+        tables
+            .pool
+            .ok_or_else(|| error("string pool absent after validation"))?,
+    )?;
+    validate_name_bytes(vm, shared, value)?;
+    // Checked Rust construction remains a defensive boundary. Acceptance has
+    // already been decided by the stage, which is tested without this check.
+    core::str::from_utf8(value).map_err(|_| error("schema stage returned invalid text"))
+}
+
+/// Resolve and validate one name through Keleusma, retaining the input's storage.
+///
+/// Only the requested name is checked. Unused malformed name records and pool
+/// bytes do not change acceptance. Keleusma validates the name index, pool span
+/// and UTF-8 bytes through bounded windows. Rust returns a borrowed string.
+///
+/// # Errors
+/// Refuses missing regions, invalid indices or spans, malformed UTF-8, and
+/// transport or allocation failures.
+pub fn wire_name_via_kel(bytes: &[u8], index: u32) -> Result<&str, SelfHostError> {
+    with_compiled_wire(
+        compile_src(&read_stage("kel/wire.kel")),
+        |codec, codec_shared| {
+            let directory = decode_directory(codec, codec_shared, bytes)?;
+            let region = |kind| {
+                directory
+                    .regions
+                    .iter()
+                    .find(|r| r.kind == kind)
+                    .map(|r| r.bytes)
+            };
+            let tables = NameTables {
+                names: region(kind::NAMES),
+                pool: region(kind::STRING_POOL),
+            };
+            with_compiled_wire(
+                compile_src(&read_stage("kel/wire_schema.kel")),
+                |vm, shared| name_lookup(codec, codec_shared, vm, shared, tables, index),
+            )
+        },
+    )
 }
 
 #[cfg(test)]
@@ -460,6 +603,111 @@ mod tests {
                 );
                 assert!(command(vm, shared, 6).is_err());
                 assert_eq!(command(vm, shared, 7)?, 0);
+                Ok(())
+            },
+        )
+        .unwrap();
+    }
+    fn utf8_only(
+        vm: &mut Vm<'_, '_>,
+        shared: &mut [u8],
+        bytes: &[u8],
+    ) -> Result<bool, SelfHostError> {
+        for (i, value) in [8, bytes.len() as i64, 0].into_iter().enumerate() {
+            set_word(vm, shared, ARG + i, value)?;
+        }
+        assert_eq!(command(vm, shared, 8)?, 1);
+        fields(vm, shared, &[0, bytes.len() as i64])?;
+        assert_eq!(command(vm, shared, 9)?, 1);
+        match validate_name_bytes(vm, shared, bytes) {
+            Ok(()) => Ok(true),
+            Err(SelfHostError::Unsupported { detail }) if detail.contains("refused with -298") => {
+                Ok(false)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    #[test]
+    fn utf8_stage_verdict_matches_rust_without_host_string_construction() {
+        with_compiled_wire(
+            compile_src(&read_stage("kel/wire_schema.kel")),
+            |vm, shared| {
+                let mut accepted = 0;
+                let mut refused = 0;
+                let mut check = |bytes: &[u8]| -> Result<(), SelfHostError> {
+                    let actual = utf8_only(vm, shared, bytes)?;
+                    assert_eq!(actual, core::str::from_utf8(bytes).is_ok(), "{bytes:?}");
+                    if actual {
+                        accepted += 1;
+                    } else {
+                        refused += 1;
+                    }
+                    Ok(())
+                };
+                check(&[])?;
+                for a in 0..=255u8 {
+                    check(&[a])?;
+                    for b in 0..=255u8 {
+                        check(&[a, b])?;
+                        check(&[a, b, 128])?;
+                        check(&[a, b, 128, 128])?;
+                    }
+                    check(&[225, 128, a])?;
+                    check(&[241, 128, a, 128])?;
+                    check(&[241, 128, 128, a])?;
+                }
+                for sequence in [
+                    &[224, 160, 128][..],
+                    &[237, 159, 191],
+                    &[237, 160, 128],
+                    &[240, 144, 128, 128],
+                    &[244, 143, 191, 191],
+                    &[244, 144, 128, 128],
+                    &[239, 191, 191],
+                    &[226, 130],
+                ] {
+                    for split in 1021..=1025 {
+                        let mut bytes = vec![b'x'; split];
+                        bytes.extend_from_slice(sequence);
+                        check(&bytes)?;
+                    }
+                }
+                assert!(accepted > 1000 && refused > 1000);
+                assert_eq!(accepted + refused, 197673);
+                std::eprintln!("UTF-8 cases accepted {accepted}, refused {refused}");
+                Ok(())
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn name_protocol_refusals_and_other_transactions_preserve_state() {
+        with_compiled_wire(
+            compile_src(&read_stage("kel/wire_schema.kel")),
+            |vm, shared| {
+                assert!(command(vm, shared, 9).is_err());
+                for (i, value) in [8, 4, 0].into_iter().enumerate() {
+                    set_word(vm, shared, ARG + i, value)?;
+                }
+                assert_eq!(command(vm, shared, 8)?, 1);
+                fields(vm, shared, &[3, 2])?;
+                assert!(command(vm, shared, 9).is_err());
+                fields(vm, shared, &[0, 4])?;
+                assert_eq!(command(vm, shared, 9)?, 1);
+                for cmd in [0, 1, 2, 3, 4, 5, 6, 7, 12, 16, 20, 21] {
+                    assert!(command(vm, shared, cmd).is_err());
+                }
+                for len in [-1, 0, 5, 1025] {
+                    set_word(vm, shared, ARG, len)?;
+                    assert!(command(vm, shared, 10).is_err());
+                }
+                assert!(command(vm, shared, 11).is_err());
+                validate_name_bytes(vm, shared, b"name")?;
+                assert!(command(vm, shared, 11).is_err());
+                pending_return(vm, shared)?;
+                assert!(command(vm, shared, 8).is_err());
                 Ok(())
             },
         )

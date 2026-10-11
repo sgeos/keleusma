@@ -43,9 +43,12 @@ mod wire_debug;
 pub use wire_debug::wire_debug_pool_via_kel;
 mod wire_auxiliary;
 pub use wire_auxiliary::wire_auxiliary_from_module_via_kel;
+mod wire_constants_decode;
+pub use wire_constants_decode::wire_decode_constant_pools_via_kel;
 mod wire_semantics;
 pub use wire_semantics::{
     WireDecodedSignatures, wire_decode_signature_metadata_via_kel, wire_decode_signatures_via_kel,
+    wire_name_via_kel,
 };
 mod wire_signatures;
 pub use wire_signatures::{WireSignatureSections, wire_signature_sections_via_kel};

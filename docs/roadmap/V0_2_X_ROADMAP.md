@@ -360,11 +360,13 @@ reference region positions or payload copies. Other schema semantics and complet
 reconstruction remain open. The all-stage comparison includes independently decoded directories.
 Signature and native-return semantics now decode in a dedicated wire_schema stage, preserving
 the optional-table policy and checking every compiled chunk's signature. The new stage has
-15 chunks and a 7,052-byte artifact. Name and constant semantics and other auxiliary families
-still require implementation before complete module decoding.
+38 chunks and a 19,756-byte artifact. Name lookup, UTF-8 validation and owned constant
+reconstruction now run through this stage. Constant pools for every current stage match the
+reference. Other auxiliary families and complete module assembly remain open.
 All seventeen fixed-record kinds now decode through Keleusma, and every fixed-record stage
-region reconstructs byte-identically from those decoded fields. Remaining name and constant
-semantics and cross-table checks still require integration. The legacy type-input path uses 638 of the approved 640 occurrence rows after inlining fourteen numeric helpers.
+region reconstructs byte-identically from those decoded fields. The remaining auxiliary
+families and cross-table checks still require integration. The legacy type-input path uses
+638 of the approved 640 occurrence rows after inlining fourteen numeric helpers.
 
 Wire has 561 chunks, 715 name events, 23,713 of 49,152 input bytes and 1,290 of 1,365 constant
 nodes. The separate debug stage has 20 chunks. Public bytecode version, opcode count and the
@@ -375,7 +377,7 @@ The twenty-three-source comparison includes fourteen negatives and nine valid co
 seven artifact and execution controls. Parser capacity and unsupported annotation syntax remain
 distinct from source rejection. Remaining input and projection coverage, production wire
 emission and final gates keep Order 1 open. Standing inference-independence evidence now
-covers all fourteen stages, clearing 45,894 recorded types without changing complete artifacts.
+covers all fourteen stages, clearing 47,116 recorded types without changing complete artifacts.
 The intervention and admission controls also pass.
 
 Struct field and composite array projections now preserve source type identity through calls,

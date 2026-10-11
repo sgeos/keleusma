@@ -6,6 +6,58 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-11 Names and owned constant forests decode through Keleusma
+
+Name lookup now requests a NameRef and its pool span through the schema stage. The stage checks
+the index and range and validates UTF-8 in 1,024-byte windows. Rust returns a borrowed string,
+with a defensive checked string conversion after the stage verdict. Unused malformed name records
+and pool bytes remain unobserved. The byte window imposes no fixed name-length limit. Independent
+stage-only checks compare 197,673 byte sequences with Rust UTF-8 acceptance, including continuation
+bounds across windows. Borrowed pointer identity, long names, overlong forms, surrogates, invalid
+scalar values and incomplete sequences have direct controls.
+
+The constant decoder reuses directory and record decoding. Keleusma validates all forward ranges
+and requested root ranges, schedules a reverse traversal and selects each construction form.
+Scalar payloads are interpreted by tag, never as child ranges. The stage normalizes Boolean and
+Byte values, gates Float, requests auxiliary records and names, and directs child and root moves.
+The host retains Option slots for typed values and reports whether a requested slot remains
+available. The stage refuses duplicate ownership. No recursive host traversal or reference
+constant decoder is used in production. Each host request loop has a count-derived bound.
+
+Owned decoding builds the complete table even when no roots are requested. Chunk root ranges in
+one call share ownership. Separate calls preserve the reference's distinct initializer ownership
+scope. Empty composite ranges still require a strictly forward first index. An empty struct does
+not validate an unused field-name start. Enum None and Some(0) discriminants remain distinct.
+Unknown flag bits and unused scalar fields retain reference behavior. Comparisons establish
+acceptance and decoded values. Identity of diagnostic variants and failure ordering for
+multiple defects remain unverified.
+
+Name commands 8 through 11 and constant commands 12 through 21 extend wire_schema.kel.
+Active transactions exclude incompatible commands. Constant name requests deliberately allow
+nested name validation. Invalid UTF-8 poisons the name transaction. Refused transport lengths
+and pending-record replies have separate protocol controls. The schema stage now has 38 chunks
+and a 19,756-byte artifact. Its shared window uses 1,216 bytes and its private state uses 1,408
+bytes. The largest legacy schema input channel is 56 of 640 occurrence rows. The wire stage is
+unchanged. All fourteen stages fit the existing caps. Inference independence covers 47,116 types.
+
+Every stage's chunk constant ranges are taken from Keleusma-decoded chunk records. The resulting
+pools match the reference values through canonical re-encoding, including floating-point payload
+bits. Controls cover all constant forms, named trees, duplicate ownership, malformed ranges,
+required tables, feature-disabled floats, 128-level raw trees, 5,000-root pools and long nested
+text. Initial compilation caught a missing function brace and a closure requiring an explicit
+input type. Those diagnostics remain in the local logs. The workspace passed 3,126 tests and
+failed only a stale documentation count, with five ignored.
+The counts were refreshed. Added execution controls clear the original constant pools and restore
+them from the new decoder before executing arrays, nested tuple arrays and a separate private
+initializer. The first private fixture was refused because its data was never mutated. A
+meaningful update repaired that control. All eight constant controls then pass. Current
+verification and pilot receipts are in the reverse prompt.
+
+Full Order 1 remains active. Templates, enum layouts, data-layout expansion and initializer
+elision policy, parameter tags, debug decoding and complete module assembly still require work.
+Source-admission capacity coverage, shipping integration, remaining type obligations and final
+integration gates also remain open.
+
 ## 2026-10-11 Signature semantics move into a dedicated schema stage
 
 The new wire_schema.kel stage validates signature ranges and interprets shape tags. It requests

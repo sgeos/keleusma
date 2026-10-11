@@ -173,6 +173,7 @@ fn production_compiler_matches_every_complete_stage_artifact() {
             usize::from(expected_directory.region_count())
         );
         assert_eq!(directory.needs_scrub, expected_directory.needs_scrub());
+        let mut constant_ranges = Vec::new();
         for (i, region) in directory.regions.iter().enumerate() {
             let expected = expected_directory.region_at(i as u16).unwrap();
             assert_eq!(
@@ -211,6 +212,9 @@ fn production_compiler_matches_every_complete_stage_artifact() {
                 let mut reconstructed = Vec::new();
                 for record in &records {
                     assert_eq!(record.kind(), region.kind);
+                    if let keleusma::selfhost::WireSchemaRecord::ChunkRecord(chunk) = record {
+                        constant_ranges.push((chunk.consts_first, chunk.consts_count));
+                    }
                     reconstructed.extend_from_slice(&reference_record_bytes(record));
                 }
                 assert_eq!(
@@ -219,6 +223,19 @@ fn production_compiler_matches_every_complete_stage_artifact() {
                     region.kind
                 );
             }
+        }
+        assert_eq!(constant_ranges.len(), reference.chunks.len());
+        let decoded_constants =
+            keleusma::selfhost::wire_decode_constant_pools_via_kel(raw_auxiliary, &constant_ranges)
+                .unwrap_or_else(|e| panic!("{name}: constant semantics failed: {e:?}"));
+        assert_eq!(decoded_constants.len(), reference.chunks.len());
+        for (actual_pool, expected_chunk) in decoded_constants.iter().zip(&reference.chunks) {
+            assert_eq!(actual_pool.len(), expected_chunk.constants.len());
+            assert_eq!(
+                keleusma::wire_schema::encode_constants(actual_pool).unwrap(),
+                keleusma::wire_schema::encode_constants(&expected_chunk.constants).unwrap(),
+                "{name}: constant values"
+            );
         }
         let decoded_signatures =
             keleusma::selfhost::wire_decode_signature_metadata_via_kel(raw_auxiliary)
