@@ -161,6 +161,13 @@ fn production_compiler_matches_every_complete_stage_artifact() {
         let expected_bytes = reference.to_bytes().expect("reference artifact");
         let actual_bytes = keleusma::selfhost::wire_module_artifact_via_kel(&actual)
             .unwrap_or_else(|e| panic!("{name}: pipeline wire emission failed: {e:?}"));
+        let decoded_module = keleusma::selfhost::wire_decode_module_via_kel(&actual_bytes)
+            .unwrap_or_else(|e| panic!("{name}: complete module decoding failed: {e:?}"));
+        assert_eq!(
+            decoded_module.to_bytes().unwrap(),
+            expected_bytes,
+            "{name}: complete decoded module"
+        );
         let raw_auxiliary = keleusma::wire_format::parse_wire_sections(&actual_bytes)
             .unwrap()
             .aux_body;

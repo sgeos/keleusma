@@ -1097,6 +1097,193 @@ fn module_dispatch(cmd: Word) -> Word {
     if cmd == 55 { module_name_done() } else {
     if cmd == 56 { module_finish() } else { module_error() }}}}}}}}}
 }
+// Complete frame reader. Section offsets need not be canonical, ordered or
+// aligned. The checksum runs in the wire stage over the selected declared frame.
+private data fr {
+    mode: Word,
+    input: Word,
+    cursor: Word,
+    want: Word,
+    base: Word,
+    total: Word,
+    header: Word,
+    op_at: Word,
+    op_len: Word,
+    pool_at: Word,
+    pool_len: Word,
+    aux_at: Word,
+    aux_len: Word,
+    word: Word,
+    addr: Word,
+    float: Word,
+    flags: Word,
+    wcet: Word,
+    wcmu: Word,
+    shared_bytes: Word,
+    private_bytes: Word,
+    arena: Word,
+    persistent: Word,
+    max_word: Word,
+    max_addr: Word,
+    max_float: Word,
+    chunks: Word,
+    at: Word,
+}
+fn frame_error() -> Word { 0 - 316 }
+fn frame_bad() -> Word { fr.mode = 0; 0 - 317 }
+fn frame_request(at: Word, count: Word, mode: Word) -> Word {
+    if at < 0 orelse at > fr.input orelse count < 0 orelse count > fr.input - at { frame_bad() } else {
+        fr.cursor = at;
+        fr.want = count;
+        fr.mode = mode;
+        io.fin[0] = at;
+        io.fin[1] = count;
+        1
+    }
+}
+fn frame_base() -> Word {
+    if fr.input - fr.base < 68 { frame_bad() } else { frame_request(fr.base, 64, 3) }
+}
+fn frame_begin() -> Word {
+    fr.mode = 0;
+    fr.input = io.arg[0];
+    fr.base = 0;
+    fr.max_word = io.arg[1];
+    fr.max_addr = io.arg[2];
+    fr.max_float = io.arg[3];
+    if fr.input < 2 orelse fr.max_word < 0 orelse fr.max_word > 255
+        orelse fr.max_addr < 0 orelse fr.max_addr > 255
+        orelse fr.max_float < 0 orelse fr.max_float > 255 { frame_bad() } else {
+        frame_request(0, 2, 1)
+    }
+}
+fn frame_line_window() -> Word {
+    let remaining = fr.input - fr.cursor;
+    if remaining == 0 { frame_bad() } else {
+        frame_request(fr.cursor, if remaining < 1024 { remaining } else { 1024 }, 2)
+    }
+}
+fn frame_prefix() -> Word {
+    if io.bytes[0] == 35 as Byte andalso io.bytes[1] == 33 as Byte {
+        fr.cursor = 2;
+        frame_line_window()
+    } else { frame_base() }
+}
+fn frame_line() -> Word {
+    for i in 0..fr.want limit 1024 {
+        if fr.base == 0 andalso io.bytes[i] == 10 as Byte { fr.base = fr.cursor + i + 1; }
+    }
+    if fr.base > 0 {
+        frame_base()
+    } else {
+        fr.cursor = fr.cursor + fr.want;
+        frame_line_window()
+    }
+}
+fn frame_span(at: Word, length: Word) -> bool {
+    at >= fr.header andalso at <= fr.total - 4 andalso length <= fr.total - 4 - at
+}
+fn frame_ready() -> Word {
+    io.fin[0] = fr.base;
+    io.fin[1] = fr.total;
+    io.fin[2] = fr.base + fr.op_at;
+    io.fin[3] = fr.op_len;
+    io.fin[4] = fr.base + fr.pool_at;
+    io.fin[5] = fr.pool_len;
+    io.fin[6] = fr.base + fr.aux_at;
+    io.fin[7] = fr.aux_len;
+    io.fin[8] = fr.arena;
+    io.fin[9] = fr.persistent;
+    fr.mode = 5;
+    2
+}
+fn frame_header() -> Word {
+    if debug32(0) != 0x454C454B orelse debug16(4) != 2 { frame_bad() } else {
+        fr.header = debug16(6);
+        fr.total = debug32(8);
+        fr.word = io.bytes[12] as Word;
+        fr.addr = io.bytes[13] as Word;
+        fr.float = io.bytes[14] as Word;
+        fr.flags = io.bytes[15] as Word;
+        fr.wcet = debug32(16);
+        fr.wcmu = debug32(20);
+        fr.shared_bytes = debug32(24);
+        fr.private_bytes = debug32(28);
+        fr.op_at = debug32(32);
+        fr.op_len = debug32(36);
+        fr.pool_at = debug32(40);
+        fr.pool_len = debug32(44);
+        fr.aux_at = debug32(48);
+        fr.aux_len = debug32(52);
+        fr.arena = debug32(56);
+        fr.persistent = debug32(60);
+        if fr.header < 64 orelse fr.total < fr.header + 4 orelse fr.total > fr.input - fr.base
+            orelse fr.word > fr.max_word orelse fr.addr > fr.max_addr orelse fr.float > fr.max_float { frame_bad() } else {
+        if not frame_span(fr.op_at, fr.op_len) orelse not frame_span(fr.pool_at, fr.pool_len)
+            orelse not frame_span(fr.aux_at, fr.aux_len) orelse fr.op_len % 4 != 0 orelse fr.pool_len % 8 != 0 { frame_bad() } else {
+            if fr.header == 64 {
+                if (fr.flags band 2) != 0 { frame_bad() } else { frame_ready() }
+            } else {
+                if fr.header < 72 orelse (fr.flags band 2) == 0 { frame_bad() } else { frame_request(fr.base + 64, 8, 4) }
+            }
+        }}
+    }
+}
+fn frame_extension() -> Word {
+    let expected = if (fr.flags band 4) != 0 { 224 } else { 136 };
+    if io.bytes[0] != 1 as Byte orelse io.bytes[1] != 0 as Byte
+        orelse debug16(2) != 64 orelse debug32(4) != 0 orelse fr.header != expected { frame_bad() } else { frame_ready() }
+}
+fn frame_reply() -> Word {
+    if io.arg[0] != fr.want { frame_error() } else {
+    if fr.mode == 1 { frame_prefix() } else {
+    if fr.mode == 2 { frame_line() } else {
+    if fr.mode == 3 { frame_header() } else {
+    if fr.mode == 4 { frame_extension() } else { frame_error() }}}}}
+}
+fn frame_checksum() -> Word {
+    if fr.mode != 5 { frame_error() } else {
+        if io.arg[0] != 1 { frame_bad() } else { fr.mode = 6; 0 }
+    }
+}
+fn frame_mirror() -> Word {
+    if fr.mode != 6 orelse io.arg[0] < 0 { frame_error() } else {
+        if io.fin[0] != fr.word orelse io.fin[1] != fr.addr orelse io.fin[2] != fr.float
+            orelse io.fin[3] != fr.flags orelse io.fin[4] != fr.wcet orelse io.fin[5] != fr.wcmu
+            orelse io.fin[6] != fr.shared_bytes orelse io.fin[7] != fr.private_bytes { frame_bad() } else {
+            fr.chunks = io.arg[0];
+            fr.at = 0;
+            fr.mode = 7;
+            0
+        }
+    }
+}
+fn frame_chunk() -> Word {
+    if fr.mode != 7 orelse fr.at >= fr.chunks { frame_error() } else {
+        if not unsigned32(io.arg[0]) orelse not unsigned32(io.arg[1])
+            orelse io.arg[0] > fr.op_len orelse io.arg[1] * 4 > fr.op_len - io.arg[0] { frame_bad() } else {
+            io.fin[0] = io.arg[0];
+            io.fin[1] = io.arg[1] * 4;
+            fr.mode = 8;
+            0
+        }
+    }
+}
+fn frame_chunk_done() -> Word {
+    if fr.mode != 8 { frame_error() } else { fr.at = fr.at + 1; fr.mode = 7; 0 }
+}
+fn frame_finish() -> Word {
+    if fr.mode != 7 orelse fr.at != fr.chunks { frame_error() } else { fr.mode = 0; 0 }
+}
+fn frame_dispatch(cmd: Word) -> Word {
+    if cmd == 57 { frame_begin() } else {
+    if cmd == 58 { frame_reply() } else {
+    if cmd == 59 { frame_checksum() } else {
+    if cmd == 60 { frame_mirror() } else {
+    if cmd == 61 { frame_chunk() } else {
+    if cmd == 62 { frame_chunk_done() } else {
+    if cmd == 63 { frame_finish() } else { frame_error() }}}}}}}
+}
 fn signatures_dispatch(cmd: Word) -> Word {
     if cmd == 0 { tables_begin() } else {
     if cmd == 1 { signature_check() } else {
@@ -1108,15 +1295,17 @@ fn signatures_dispatch(cmd: Word) -> Word {
     if cmd == 7 { schema_finish() } else { schema_error() }}}}}}}}
 }
 fn route(cmd: Word) -> Word {
+    if cmd >= 57 { frame_dispatch(cmd) } else {
     if cmd >= 48 { module_dispatch(cmd) } else {
     if cmd >= 44 { debug_dispatch(cmd) } else {
     if cmd >= 41 { parameters_dispatch(cmd) } else {
     if cmd >= 30 { data_dispatch(cmd) } else {
     if cmd >= 22 { layouts_dispatch(cmd) } else {
     if cmd >= 12 { constants_dispatch(cmd) } else {
-    if cmd >= 8 { names_dispatch(cmd) } else { signatures_dispatch(cmd) }}}}}}}
+    if cmd >= 8 { names_dispatch(cmd) } else { signatures_dispatch(cmd) }}}}}}}}
 }
 fn dispatch(cmd: Word) -> Word {
+    if fr.mode != 0 andalso (cmd < 57 orelse cmd > 63) { frame_error() } else {
     if mo.mode != 0 andalso (cmd < 48 orelse cmd > 56) andalso not (mo.mode == 4 andalso ((cmd >= 8 andalso cmd <= 11) orelse (cmd >= 41 andalso cmd <= 43))) { module_error() } else {
     if pt.mode != 0 andalso (cmd < 41 orelse cmd > 43) { 0 - 310 } else {
     if dr.mode != 0 andalso (cmd < 44 orelse cmd > 47) andalso not (dr.mode == 3 andalso dr.phase == 1 andalso (cmd == 10 orelse cmd == 11)) { debug_error() } else {
@@ -1124,7 +1313,7 @@ fn dispatch(cmd: Word) -> Word {
     if lt.mode != 0 andalso (cmd < 22 orelse cmd > 29) andalso not (cmd >= 8 andalso cmd <= 11 andalso lt.mode == 5) { layout_error() } else {
     if cs.mode != 0 andalso (cmd < 12 orelse cmd > 21) andalso not (cmd >= 8 andalso cmd <= 11 andalso cs.mode == 6) { constant_error() } else {
     if nr.mode != 0 andalso (cmd < 8 orelse cmd > 11) andalso not (cmd == 28 andalso lt.mode == 5 andalso io.arg[0] == 0) { 0 - 296 } else {
-    if sg.mode != 0 andalso cmd >= 8 { schema_error() } else { route(cmd) }}}}}}}}
+    if sg.mode != 0 andalso cmd >= 8 { schema_error() } else { route(cmd) }}}}}}}}}
 }
 
 loop main(cmd: Word) -> Word { yield dispatch(cmd) }

@@ -13,7 +13,11 @@ fn error(detail: &str) -> SelfHostError {
         detail: format!("wire debug decode: {detail}"),
     }
 }
-fn copy_window(vm: &mut Vm<'_, '_>, shared: &mut [u8], bytes: &[u8]) -> Result<(), SelfHostError> {
+pub(super) fn copy_window(
+    vm: &mut Vm<'_, '_>,
+    shared: &mut [u8],
+    bytes: &[u8],
+) -> Result<(), SelfHostError> {
     if bytes.len() > NAME_WINDOW {
         return Err(error("requested field exceeds byte window"));
     }
@@ -116,7 +120,7 @@ pub(super) fn decode_parameters(
     Ok(result)
 }
 
-fn decode_debug(
+pub(super) fn decode_debug(
     vm: &mut Vm<'_, '_>,
     shared: &mut [u8],
     bytes: &[u8],

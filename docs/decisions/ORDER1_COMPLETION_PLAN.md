@@ -23,10 +23,10 @@ Full-language support remains Order 6. Existing supported programs must retain t
 | Derive type inputs from the self-hosted pipeline | Production rejection receives facts without walking the reference parser's abstract syntax tree or borrowing inferred types | The production input path now derives scoped scalar constraints from Keleusma parser and reconstruction output. Composite facts, complete binder/occurrence coverage and general admission remain incomplete. |
 | Reject ill-typed subset programs | Independent pipeline rejection agrees with the reference on the rejection corpus, valid controls, and the rule-versus-form census | The scoped pipeline harness exercises all twenty rejection cases and seven valid controls without reference-first masking. The separate sixteen-cell rule-versus-form census now runs through that path with eight valid controls. Its required test now passes after preserving match-arm guards. Parser source diagnostics and type-stage verdicts remain distinct from unsupported syntax, capacity and execution failures. The shipping driver now obtains the independent verdict first. Production corpus and census checks assert PipelineRejected so reference rejection cannot mask missing stage coverage. |
 | Preserve the first-pass monomorphization result | Every stage remains unchanged by monomorphization, with a control that does change | The corpus now lists all fourteen sources. Identity, changing control and directory inventory tests passed again after the parser and alias changes on 2026-10-04. Repeat if stage sources change. |
-| Preserve independence from inferred expression types | The current stage corpus compiles identically with recorded expression types absent | Four standing tests cover all fourteen sources with a directory inventory, a populated-table intervention after recording, a changed-emission control and an admission control. On 2026-10-11, clearing 49,723 recorded types leaves all fourteen complete artifacts unchanged. This does not remove reference admission or establish full-language independence. |
-| Emit complete artifacts through Keleusma | Production output uses the Keleusma wire emitter for framing, opcode records, operand pools, auxiliary regions and integrity fields | The fourteen-stage comparison now supplies no reference section bytes, region positions or artifact lengths. All 66 opcode identifiers have encoding controls. Native names and return shapes now preserve independent lengths and share the existing name and shape tables. Struct templates now derive type-name indices and contiguous field-name runs in Keleusma, including empty runs. Debug-pool ordering and encoding now run in a dedicated Keleusma stage, and chunk debug offsets are stage-derived. Private composite placements and scalar initializer pools now encode through Keleusma, including stage-derived elision and root ranges. Composite and named constant forests, including initializer trees, now use the Keleusma breadth-first walker within the declared input bounds. Opcode and operand-pool semantic decoding now matches all fourteen stage instruction sequences and a 153,600-record raw corpus in each of two feature configurations. Auxiliary directory voting, bounds and duplicate checks now run in Keleusma, with borrowed payloads and no reference positions. All seventeen fixed-record kinds now decode through Keleusma and reconstruct every fixed-record region in the stage corpus. Signature and native-return range checks and shape-tag interpretation now run in a dedicated Keleusma schema stage. Borrowed name lookup, UTF-8 validation and owned constant reconstruction now run through Keleusma, including ranges, tags, name and child requests and ownership checks. Templates, enum layouts and data-layout semantics now decode through Keleusma, including optional-family policy, run expansion and initializer selection. Parameter tags and debug pools now decode through Keleusma, and the complete auxiliary-body reader composes all semantic families. Outer framing and complete module reconstruction, admission-preserving capacity coverage and shipping integration remain open. Module::to_bytes remains on the shipping path. |
+| Preserve independence from inferred expression types | The current stage corpus compiles identically with recorded expression types absent | Four standing tests cover all fourteen sources with a directory inventory, a populated-table intervention after recording, a changed-emission control and an admission control. On 2026-10-11, clearing 50,483 recorded types leaves all fourteen complete artifacts unchanged. This does not remove reference admission or establish full-language independence. |
+| Emit complete artifacts through Keleusma | Production output uses the Keleusma wire emitter for framing, opcode records, operand pools, auxiliary regions and integrity fields | The fourteen-stage comparison now supplies no reference section bytes, region positions or artifact lengths. All 66 opcode identifiers have encoding controls. Native names and return shapes now preserve independent lengths and share the existing name and shape tables. Struct templates now derive type-name indices and contiguous field-name runs in Keleusma, including empty runs. Debug-pool ordering and encoding now run in a dedicated Keleusma stage, and chunk debug offsets are stage-derived. Private composite placements and scalar initializer pools now encode through Keleusma, including stage-derived elision and root ranges. Composite and named constant forests, including initializer trees, now use the Keleusma breadth-first walker within the declared input bounds. Opcode and operand-pool semantic decoding now matches all fourteen stage instruction sequences and a 153,600-record raw corpus in each of two feature configurations. Auxiliary directory voting, bounds and duplicate checks now run in Keleusma, with borrowed payloads and no reference positions. All seventeen fixed-record kinds now decode through Keleusma and reconstruct every fixed-record region in the stage corpus. Signature and native-return range checks and shape-tag interpretation now run in a dedicated Keleusma schema stage. Borrowed name lookup, UTF-8 validation and owned constant reconstruction now run through Keleusma, including ranges, tags, name and child requests and ownership checks. Templates, enum layouts and data-layout semantics now decode through Keleusma, including optional-family policy, run expansion and initializer selection. Parameter tags and debug pools now decode through Keleusma, and the complete auxiliary-body reader composes all semantic families. Complete outer framing and module reconstruction now run through Keleusma readers. Admission-preserving capacity coverage and shipping integration remain open. Module::to_bytes remains on the shipping path. |
 | Reach the shipping tool | An end-to-end command emits the independently assembled artifact and reports type rejection through the new path | The command emits the same artifact as the production library, executes a valid result of seven, and independently rejects three invalid sources without emitting files. Serialization still uses Rust, so the complete shipping requirement remains open. |
-| Establish current verification | Relevant differential and failure-path tests, complete workspace checks and applicable integration gates pass on the final tree | The debug and auxiliary decoder tree passes 3,150 workspace tests with five ignored across 180 suites. Clippy, documentation, no-default integration and wire unit checks pass. All fourteen stage artifacts and complete auxiliary values match the reference. A runtime control replaces auxiliary fields and exercises shared access and persistent initialization. Inference independence covers 49,723 types. Exact receipts are in the reverse prompt. Final integration gates remain required after the remaining implementation. |
+| Establish current verification | Relevant differential and failure-path tests, complete workspace checks and applicable integration gates pass on the final tree | The complete-module tree ran 3,158 workspace passes, one stale size assertion and five ignored across 181 suites. After correcting the measured blob-size expectation, the entire 184-test wire suite passes. The full workspace was not repeated after that test-only change. Clippy, documentation, no-default integration and wire unit checks pass. All fourteen complete decoded modules match the reference. The runtime control drops the original module before executing decoded instructions. Inference independence covers 50,483 types. Exact receipts are in the reverse prompt. Final integration gates remain required after the remaining implementation. |
 | Participate in the shadow pilot | Diagnostic and completion-claim samples retain baseline judgments, reviewed payloads, outcomes and explicit service status | Capture is installed for this line. Judgments are advisory and do not alter gates. |
 
 ## Current decoder increment
@@ -36,8 +36,8 @@ layouts and data layouts have Keleusma read paths. Optional layout rejection is 
 execution failure. Shared offsets and initializer selection are stage-derived. All fourteen
 stage layout values match the reference, and a decoded layout drives runtime controls.
 Parameter tags and debug metadata now have Keleusma readers. Complete auxiliary-body assembly
-passes the fourteen-stage comparison and a persistent-execution control. Outer framing and complete
-module assembly remain open. Capacity coverage and shipping integration follow. The reverse prompt carries current receipts and the pilot review.
+passes the fourteen-stage comparison and a persistent-execution control. Complete outer framing and module assembly now use the Keleusma readers. Source-admission
+capacity coverage and shipping integration follow. The reverse prompt carries current receipts and the pilot review.
 
 ## Work sequence
 
@@ -483,3 +483,45 @@ The stage fits unchanged capacities after sharing 65 repeated numeric schema lit
 four helpers. It uses 1,283 constant nodes against 1,365 and 47,687 input bytes against 49,152.
 The stage has 505 chunks. Clearing 42,195 inferred expression types preserves all twelve artifacts.
 The full Order 1 goal remains active.
+
+## Accepted-source encoder capacity gaps, 2026-10-11
+
+An isolated probe calls the production self_hosted_compile API with Target::host, then compares
+Module::to_bytes with wire_module_artifact_via_kel. All six generated sources are accepted by the
+production compiler. The probe also decodes every reference artifact through wire_decode_module_via_kel
+and checks complete re-encoding identity. The decoder accepts all six.
+
+| Source construction | Constant roots | Reference artifact bytes | Keleusma encoder |
+|---|---|---|---|
+| 170 arithmetic helpers plus main | 1,361 | 54,772 | Byte-identical |
+| 171 arithmetic helpers plus main | 1,369 | 55,092 | Refuses the 1,365-root cap |
+| 177 arithmetic helpers plus main | 1,417 | 56,996 | Refuses the 1,365-root cap |
+| Text literal of 256 bytes | 1 | 1,244 | Byte-identical |
+| Text literal of 257 bytes | 1 | 1,244 | Refuses the constant name/input capacity |
+| Text literal of 60,000 bytes | 1 | 60,988 | Refuses the constant name/input capacity |
+
+Generate the arithmetic helpers with distinct names f0 through fN-1 and this body.
+
+```keleusma
+fn f0(x: Word) -> Word { x + 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 }
+```
+
+Append this entry function.
+
+```keleusma
+fn main() -> Word { f0(0) }
+```
+
+For the text cases, generate a function returning Text whose body is a quoted ASCII x repeated
+at the stated length. The scratch harness is tmp/order1-admission-probe/src/main.rs. The final
+receipt is tmp/order1-module-admission-decoder.log, from cargo run --offline --release
+--manifest-path tmp/order1-admission-probe/Cargo.toml with the usual wrapper and stage-cache
+settings. This is a production-library probe, not an executed command-line compile invocation.
+The table and construction recipe preserve the evidence needed to reproduce it without scratch files.
+
+The encoder's forest_input rejects constant names above 256 bytes before its aggregate 49,152-byte
+input bound. Its compact input path independently refuses more than 1,365 scalar roots. These
+are observed blockers to switching shipping output while preserving current source admission.
+Promote these cases into standing regressions when removing the encoder limits. Do not narrow the
+compiler's accepted input to make the serializer fit. Other name, forest and input bounds still
+need coverage. Shipping output remains Rust until that integration is ready.

@@ -175,7 +175,7 @@ pub(super) fn transport(
     Ok(())
 }
 
-fn decode_one(
+pub(super) fn decode_one(
     vm: &mut Vm<'_, '_>,
     shared: &mut [u8],
     record: &[u8; 4],

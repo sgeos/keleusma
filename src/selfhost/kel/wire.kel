@@ -5930,7 +5930,17 @@ fn dispatch_initialization(cmd: Word) -> Word {
     if cmd == 216 { cr_begin() } else {
     if cmd == 217 { cr_step() } else {
     if cmd == 218 { rr_begin() } else {
-    if cmd == 219 { rr_read() } else { wire_zero() - 97 }}}}}}}}}}}
+    if cmd == 219 { rr_read() } else {
+    if cmd == 220 {
+        framing.mode = wire_zero();
+        if wire.warg < wire_zero() orelse wire.warg > 0xFFFFFFFF { 0 - 261 } else {
+            framing.expected = wire.warg;
+            framing.seen = wire_zero();
+            crc_begin();
+            framing.mode = wire_two();
+            wire_one()
+        }
+    } else { wire_zero() - 97 }}}}}}}}}}}}
 }
 
 fn dispatch_native(cmd: Word) -> Word {
@@ -5954,7 +5964,7 @@ fn wire_five() -> Word { 5 }
 fn wire_seven() -> Word { 7 }
 
 
-fn highest_command() -> Word { 219 }
+fn highest_command() -> Word { 220 }
 
 // --- THE ENTRY, AS A COROUTINE ----------------------------------------------
 //

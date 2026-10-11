@@ -63,6 +63,8 @@ pub use wire_semantics::{
 };
 mod wire_signatures;
 pub use wire_signatures::{WireSignatureSections, wire_signature_sections_via_kel};
+mod wire_module_decode;
+pub use wire_module_decode::wire_decode_module_via_kel;
 mod wire_decode;
 pub use wire_decode::wire_decode_opcode_sections_via_kel;
 mod wire_directory;

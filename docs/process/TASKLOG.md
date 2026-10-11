@@ -6,6 +6,60 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-11 Complete modules decode through Keleusma
+
+wire_decode_module_via_kel composes Keleusma framing, checksum, auxiliary, opcode and debug readers.
+The schema stage selects an optional shebang prefix and the declared frame, checks header fields,
+section spans, width maxima and signature-extension metadata, compares mirrored auxiliary fields,
+and supplies each chunk's opcode span. Wire command 220 starts an independent checksum transaction
+using the existing incremental checksum implementation. Every operand entry receives a parity
+check, including unused entries. Only selected opcode records are interpreted.
+
+The reader preserves noncanonical section order, unaligned offsets, overlapping sections and
+trailing input. These are reference codec behaviors. It preserves absent versus empty debug spans,
+and applies debug-pool decoding only when constructing complete chunks. Signature authentication,
+decryption and virtual-machine verification remain separate caller responsibilities, matching the
+low-level reference loader. Error variants and precedence for multiple defects are not matched.
+
+Seven integration controls cover prefixes across byte windows, valid noncanonical frames, unused
+invalid opcode records, unused pool corruption, empty chunk tables, extension metadata, header
+bounds and mirrors, debug failures and complete decoded execution. The runtime control discards
+the original module and runs decoded instructions with shared input and persistent state, returning
+12 and then 17. Two protocol controls cover checksum windows and framing transaction completion.
+The all-stage artifact comparison now reconstructs complete modules before re-encoding them.
+
+Initial failures exposed a reserved field name, a mutable local and a stale command ceiling that
+made the newly dispatched checksum operation unreachable. Valid-input controls caught the ceiling
+error. Another control incorrectly expected every changed offset to be invalid. Some changes still
+select valid records or empty sections, so the comparison now retains reference acceptance and
+separately asserts rejection of out-of-bounds spans. These observations did not justify narrowing
+source or artifact admission.
+
+The schema stage has 115 chunks and a 55,492-byte artifact. It uses 1,216 shared bytes and 4,160
+private bytes. Its largest legacy channel uses 147 of 640 occurrence rows. Wire has 561 chunks,
+a 163,044-byte artifact and 1,294 of 1,365 constant nodes, leaving 71 nodes against the required
+minimum reserve of 64. Its largest legacy channel remains 638 of 640 occurrence rows.
+Inference independence covers 50,483 recorded types across fourteen stages. All fourteen complete
+decoded modules match the reference. The workspace ran 3,158 passes and one stale size assertion,
+with five ignored. The measured blob size was corrected from 23,713 to 23,753 bytes, and the full
+184-test wire suite then passed. No production code changed after the workspace run. The whole
+workspace was not repeated after that test-only correction. Other receipts are in the reverse prompt.
+
+The local pilot records one diagnostic and three claims with non-independent review. One runtime
+claim excerpt is unsupported because it omits the helper proving which module is returned. The
+full test source supplies that evidence. External evaluation remains unavailable under the prior
+approval rejection. Exact payloads and source hashes were reviewed in the local export.
+
+A production-library probe found two encoder admission gaps. A 1,369-root program is accepted
+by the compiler but exceeds the encoder's 1,365-root cap. A 257-byte text literal is accepted
+but exceeds the encoder's 256-byte name bound. Nearby smaller controls encode byte-identically.
+The complete decoder also accepts the larger 1,417-root and 60,000-byte text controls. The
+completion plan records exact construction recipes and artifact sizes for the next increment.
+
+Complete module reconstruction closes this decoder integration. Source-admission capacity coverage,
+shipping serialization, remaining type-input obligations and final integration gates remain open.
+The shipping unsigned path still calls Module::to_bytes. Full Order 1 remains active.
+
 ## 2026-10-11 Debug pools and complete auxiliary bodies decode through Keleusma
 
 Parameter tags and debug pools now decode through the schema stage. Parameter ranges preserve

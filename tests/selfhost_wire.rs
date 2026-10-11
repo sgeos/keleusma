@@ -12962,11 +12962,11 @@ fn every_stage_fits_the_driver_caps_with_margin() {
         "capacity evidence must include every current stage"
     );
     eprintln!("worst names {worst_names}, worst blob {worst_blob}");
-    // Measured 2026-10-04. Earlier evidence omitted wire and verify_types.
+    // Measured 2026-10-11. Earlier evidence omitted wire and verify_types.
     // Parse holds the name maximum. Wire holds the byte maximum and leaves
-    // 25,439 bytes below the input cap. Neither capacity is raised here.
+    // 25,399 bytes below the input cap. Neither capacity is raised here.
     assert_eq!(worst_names, 776, "the worst-case name count moved");
-    assert_eq!(worst_blob, 23713, "the worst-case blob size moved");
+    assert_eq!(worst_blob, 23753, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
