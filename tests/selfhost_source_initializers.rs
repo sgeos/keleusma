@@ -183,13 +183,11 @@ fn invalid_initializers_are_rejected_without_reference_masking() {
 #[test]
 fn later_declarations_do_not_retype_earlier_data_accesses() {
     let source = "private data d { n: Word } fn early() -> Word { d.n = 1; d.n } shared data s { n: Byte } fn main() -> Word { early() }";
-    keleusma::selfhost::compile_src(source);
+    let reference = keleusma::selfhost::compile_src(source);
     assert!(keleusma::selfhost::type_check_source_via_kel(source).unwrap());
-    // Relocating an already emitted body remains open. Its address mismatch is not a type error.
-    assert!(matches!(
-        keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host()),
-        Err(keleusma::selfhost::SelfHostError::Unsupported { .. })
-    ));
+    let actual =
+        keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host()).unwrap();
+    assert_eq!(actual.to_bytes().unwrap(), reference.to_bytes().unwrap());
 }
 
 #[test]

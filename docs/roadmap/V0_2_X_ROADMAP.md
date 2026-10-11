@@ -348,18 +348,19 @@ The gaps to close, from the current subset to the full grammar:
 
 ## Current Order-1 status, 2026-10-11
 
-The latest increment preserves source private initializers and computes shared/private slot order
-in Keleusma. Fifteen valid sources preserve complete artifacts, eight execute after serialization
-and decoding, and eleven invalid initializers reject independently. Immutable function address
-snapshots prevent later declarations from changing earlier type facts. The parser declaration
-capacity is 640, with matching scans and boundary controls. Selected type-stage capacities remain 640.
-All fourteen stage artifacts pass the shipping check. Inference independence covers 56,921 types.
-The workspace reports 3,202 passes, three legacy adapter failures and five ignored tests. Test-only
-repairs subsequently pass 193 targeted checks. The workspace was not rerun afterward.
-Declaration-order relocation, mixed tuple construction, general nested headers, binder and
-occurrence coverage, and final integration gates keep Order 1 open. The
-[completion plan](../decisions/ORDER1_COMPLETION_PLAN.md) and
-[reverse prompt](../process/REVERSE_PROMPT.md) carry current evidence and witnesses.
+The latest increment relocates earlier data accesses after later shared declarations.
+Seven source cases preserve complete artifacts. Three programs execute through five compile
+entry points after Keleusma serialization and decoding. Four private protocol tests cover
+address bounds, malformed maps, indexed lengths and request recovery. These source controls
+also pass without default features. Independent type checking keeps original function address
+snapshots. The fused compiler now uses a preliminary layout pass and retains one function group
+during its emission pass. Codegen has 80 chunks, a 73,668-byte artifact, 58,424 shared bytes and
+182,560 private bytes. Parser and selected type-stage capacities remain 640.
+Inference independence covers 57,089 recorded types across fourteen stages. Current verification
+receipts are in the [reverse prompt](../process/REVERSE_PROMPT.md).
+Mixed tuple construction, general nested headers, binder and occurrence coverage, remaining
+alias, cast and enum obligations, and final integration gates keep Order 1 open. The
+[completion plan](../decisions/ORDER1_COMPLETION_PLAN.md) carries the full requirements.
 
 All fourteen pipeline-produced stage modules serialize through Keleusma section emitters and
 match complete reference artifacts. Opcode and operand-pool encoding and semantic decoding

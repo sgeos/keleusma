@@ -277,6 +277,9 @@ shared data ast {
     head_parts: [Word; 256],
     param_count: Word,
     category: Word,
+    // A separate command translates data operands through parser-produced field ranges.
+    relocate_mode: Word, relocate_count: Word, relocate_kind: Word, relocate_arg: Word,
+    relocate_source: [Word; 640], relocate_length: [Word; 640], relocate_target: [Word; 640],
 }
 
 // The work-stack (R3.1), the op buffer the stage backpatches, and the constant
@@ -2898,6 +2901,29 @@ fn emit_next(resume: Word) -> Word {
 // runtime propagates the callee's yield up as the loop's suspension. The yield
 // contract (Word in, Word out) matches, so the yield transparently reaches the
 // host.
+private data relocate { result: Word, hits: Word, bad: Word, }
+fn relocate_data_arg() -> Word {
+    if ast.relocate_count < 0 orelse ast.relocate_count > 640 orelse ast.relocate_kind < 11 orelse ast.relocate_kind > 14 orelse ast.relocate_arg < 0 { 0 - 1 } else {
+        let indexed = ast.relocate_kind >= 13;
+        let base = if indexed { ast.relocate_arg % 16777216 } else { ast.relocate_arg };
+        let width = if indexed { ast.relocate_arg / 16777216 } else { 1 };
+        relocate.result = 0; relocate.hits = 0; relocate.bad = 0;
+        if base >= 16777216 orelse width <= 0 orelse width > 16777216 { relocate.bad = 1; }
+        for i in 0..ast.relocate_count limit 640 {
+            let start = ast.relocate_source[i]; let length = ast.relocate_length[i]; let target = ast.relocate_target[i];
+            if start < 0 orelse start >= 16777216 orelse target < 0 orelse target >= 16777216 orelse length <= 0 orelse length > 16777216 - start orelse length > 16777216 - target { relocate.bad = 1; } else {
+                if base >= start andalso base - start < length {
+                    relocate.hits = relocate.hits + 1;
+                    if width > length - (base - start) { relocate.bad = 1; } else {
+                        let prefix = if indexed { width * 16777216 } else { 0 };
+                        relocate.result = prefix + target + (base - start);
+                    }
+                }
+            }
+        }
+        if relocate.bad == 0 andalso relocate.hits == 1 { relocate.result } else { 0 - 1 }
+    }
+}
 loop main(resume: Word) -> Word {
-    yield emit_next(resume)
+    if ast.relocate_mode == 1 { yield relocate_data_arg() } else { yield emit_next(resume) }
 }

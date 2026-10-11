@@ -40,6 +40,7 @@ use crate::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacit
 use crate::{Arena, compiler::compile, lexer::tokenize, parser::parse};
 
 mod artifact_compare;
+mod data_relocation;
 mod text_flow;
 mod wire_debug_decode;
 pub use wire_debug_decode::{wire_decode_debug_pool_via_kel, wire_decode_parameter_tags_via_kel};
@@ -1909,6 +1910,7 @@ fn try_parse_functions_impl(
                 assert!(val >= 0, "negative data address record");
                 let index = usize::try_from(val / 16777216).expect("data field ordinal");
                 let base = val % 16777216;
+                data_records.push((code, val));
                 let values = alloc::sync::Arc::make_mut(&mut data_bases);
                 assert!(index <= values.len(), "data address record leaves a gap");
                 if index == values.len() {
@@ -2445,7 +2447,13 @@ fn chunk_lookup_failure(src: &str, name: &str) -> ! {
 /// reference's ops. The result is a runnable module whose every source-defined chunk was
 /// emitted by the self-hosted pipeline.
 pub fn self_host_compile(src: &str) -> Module {
-    let (fns, names, _data_records, _enum_records) = parse_functions_fused(src);
+    let (mut fns, names, data_records, _enum_records) = parse_functions_fused(src);
+    let relocation = data_relocation::Plan::from_records(&data_records).expect("data address plan");
+    for function in &mut fns {
+        relocation
+            .relocate(function)
+            .expect("relocate data records");
+    }
     let mut module = compile_src(src);
     let mut i = 0;
     while i < fns.len() {
@@ -4046,7 +4054,12 @@ pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<BindingRow>) {
 ///
 /// The largest stage benefits most, which is the direction that matters.
 ///
-/// # The group is a one-function lookahead, not a whole-input fact
+/// # Final data layout and group lookahead
+///
+/// A preliminary parser pass collects the final data address map and discards function
+/// records as they arrive. This allows later shared declarations to relocate earlier
+/// private-data operands. The second pass reconstructs one group at a time. The extra
+/// pass increases parsing work without retaining the whole program's function records.
 ///
 /// A group ends when the next function's name differs, so a completed function cannot be
 /// compiled until the following header arrives. That is a bounded lookahead of one
@@ -4055,6 +4068,9 @@ pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<BindingRow>) {
 /// at all here -- but that is what the corpus contains, not a bound on what the language
 /// admits, and it must not be offered as one.
 pub fn self_host_compile_fused(src: &str) -> Module {
+    // Collect final layout facts without retaining the function records from this pass.
+    let (_, data_records, ..) = parse_functions_impl_named(src, &mut |_, _| {});
+    let relocation = data_relocation::Plan::from_records(&data_records).expect("data address plan");
     let mut module = compile_src(src);
     // The pending group: consecutive heads sharing a name. Flushed when the name changes
     // and again at end of input, which is the only place the last group can be closed.
@@ -4064,8 +4080,8 @@ pub fn self_host_compile_fused(src: &str) -> Module {
     // **THE NAME TABLE IS A PARAMETER, NOT A RE-DERIVATION.** A `StaticStr` pool entry
     // carries the lexer's intern id, so resolving it needs the table, and this closure runs
     // INSIDE the streaming callback where the table is what the feed has interned so far.
-    // Calling `parse_functions_fused` a second time here to obtain one would discard the
-    // bounded record residency this entry point exists to provide.
+    // Collecting every function through `parse_functions_fused` to obtain the names would
+    // discard the bounded record residency this entry point exists to provide.
     let flush = |group: &mut Vec<ParsedFn>, name: &str, module: &mut Module, names: &[String]| {
         if group.is_empty() {
             return;
@@ -4090,7 +4106,10 @@ pub fn self_host_compile_fused(src: &str) -> Module {
         group.clear();
     };
 
-    let (names, ..) = parse_functions_impl_named(src, &mut |names, f| {
+    let (names, ..) = parse_functions_impl_named(src, &mut |names, mut f| {
+        relocation
+            .relocate(&mut f)
+            .expect("relocate streamed data records");
         let name = names[f.name as usize].clone();
         if !group.is_empty() && name != group_name {
             flush(&mut group, &group_name, &mut module, names);
@@ -6323,7 +6342,13 @@ fn shared_data_bytes_of(shared_layout: &[crate::bytecode::SharedSlotLayout]) -> 
 /// `native_return_shapes` are empty.
 pub fn self_host_compile_scratch(src: &str) -> Module {
     use crate::bytecode::{Chunk, SlotVisibility};
-    let (fns, names, data_records, enum_records) = parse_functions_fused(src);
+    let (mut fns, names, data_records, enum_records) = parse_functions_fused(src);
+    let relocation = data_relocation::Plan::from_records(&data_records).expect("data address plan");
+    for function in &mut fns {
+        relocation
+            .relocate(function)
+            .expect("relocate data records");
+    }
 
     // Build each source chunk from the pipeline output. Group consecutive same-named heads
     // (a multiheaded function is one chunk), mirroring `self_host_compile`, but emit a fresh

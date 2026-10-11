@@ -6,6 +6,43 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-11 Earlier data accesses follow final declaration order
+
+The code-generation stage now relocates data operands through parser-produced address maps.
+Each function retains its original field bases for independent type checking. Compilation maps
+scalar and indexed read/write records to the final layout before reconstruction and grouping.
+The stage preserves offsets within fields and indexed lengths. Missing or ambiguous source ranges,
+invalid lengths and operands outside the existing 24-bit address space are refused.
+
+All five compile entry points use this path. The fused entry first collects final layout facts
+while discarding each function's records, then compiles one group at a time on a second parser
+pass. This preserves group residency at the cost of additional parsing. The host transports
+field maps and operands. Keleusma performs the address translation. Unchanged snapshots skip
+relocation. The former unsupported declaration-order witness now requires artifact identity.
+
+Seven source cases preserve complete artifacts, including an end-of-file shared declaration and
+function heads on opposite sides of a shared declaration. Three programs execute after Keleusma
+serialization and decoding through all five entry points, giving fifteen runtime comparisons.
+These controls and the seven initializer tests also pass without default features. Four private
+protocol tests cover boundaries, malformed maps, indexed counts and recovery after refusal.
+All 152 code-generation tests and 193 pipeline/wire tests pass. Fresh Clippy passes with warnings
+denied. Four inference checks preserve all fourteen artifacts after erasing 57,089 recorded types.
+All fourteen complete stage artifacts pass Keleusma serialization and decoding comparisons.
+The six artifact tests and three monomorphization controls pass. Documentation and the build
+without the standard library pass. The complete workspace and final integration gates remain
+outstanding. The reverse prompt carries exact commands and terminal receipts.
+
+Codegen has 80 chunks and a 73,668-byte artifact. Its shared storage grows from 43,032 to 58,424
+bytes for three 640-entry maps and four command fields. Private storage grows from 182,464 to
+182,560 bytes for three scratch values. Parser and type-stage capacities remain 640. Public
+bytecode version stays 2 and opcode count stays 66.
+
+The System 1 shadow pilot captured the original six artifact mismatches and three completion
+claims. Payloads were reviewed locally, with non-independent self-review labels. External
+assessment remains unavailable under the previously recorded automatic approval rejection.
+Mixed tuple layout, nested tuple reconstruction, remaining type-input coverage and final
+integration gates keep the complete Order 1 goal open.
+
 ## 2026-10-11 Private source initializers reach persistent state
 
 Keleusma now emits a private initializer kind and value for each field. Metadata 107 names the

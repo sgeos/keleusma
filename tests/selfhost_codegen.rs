@@ -2029,7 +2029,8 @@ fn self_compile_codegen_atomic_functions() {
     // block share one emission form (75 -> 76).
     // Guarded match results and enum cast dispatch added two helpers, both checked above.
     // Nested tuple extraction adds an internal operand-packing helper.
-    const EXPECTED_SELF_COMPILE: usize = 79;
+    // Data-address relocation adds one bounded translation helper.
+    const EXPECTED_SELF_COMPILE: usize = 80;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
