@@ -112,16 +112,16 @@ fn initializer_roots_share_the_same_forest_with_chunk_roots() {
 }
 
 #[test]
-fn forest_reaches_the_full_node_capacity_without_the_old_fin_limit() {
+fn forests_cross_former_node_and_name_caps() {
     let mut module = module();
-    for count in [170, 171, 1024, 1365] {
+    for count in [170, 171, 1024, 1365, 1366, 5000] {
         module.chunks[0].constants = vec![ConstValue::Array(vec![ConstValue::Int(7); count - 1])];
         compare(&module);
     }
     module.chunks[0].constants = vec![ConstValue::Array(vec![ConstValue::Int(7); 1365])];
-    assert!(wire_module_artifact_via_kel(&module).is_err());
+    compare(&module);
     module.chunks[0].constants = vec![ConstValue::StaticStr("x".repeat(257))];
-    assert!(wire_module_artifact_via_kel(&module).is_err());
+    compare(&module);
 }
 
 #[test]

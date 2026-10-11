@@ -352,15 +352,15 @@ All fourteen pipeline-produced stage modules serialize through Keleusma section 
 match complete reference artifacts. Opcode and operand-pool encoding and semantic decoding
 cover all 66 instruction identifiers. The all-stage comparison also checks decoded instruction
 sequences. General constant forests and private initializer trees encode within the declared
-bounds. Admission-preserving capacity coverage, remaining type-input
-obligations, shipping serialization and final integration gates keep Order 1 open.
-The shipping serializer remains Rust.
+bounds. Remaining host run processing, type-input obligations and final integration gates keep Order 1
+open. Unsigned self-hosted command output now uses the Keleusma emitter. Its windowed name and
+constant protocols preserve source admission beyond the former resident-buffer caps.
 Auxiliary directory voting, bounds checks and duplicate detection now run in Keleusma, without
 reference region positions or payload copies. Complete outer framing and module
 reconstruction now run through Keleusma readers. The all-stage comparison includes independently decoded directories.
 Signature and native-return semantics now decode in a dedicated wire_schema stage, preserving
 the optional-table policy and checking every compiled chunk's signature. The new stage has
-115 chunks and a 55,492-byte artifact. Name lookup, UTF-8 validation and owned constant
+150 chunks and a 75,876-byte artifact. Name lookup, UTF-8 validation and owned constant
 reconstruction now run through this stage. Constant pools for every current stage match the
 reference. Template, enum-layout and data-layout semantics now also decode through Keleusma,
 including optional-family behavior, run expansion and initializer selection. Parameter tags and debug pools now also decode through Keleusma. The complete auxiliary-body

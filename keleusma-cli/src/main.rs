@@ -700,16 +700,13 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
                 }
             }
         }
-        (None, _) => {
-            // Unsigned, unencrypted (existing default).
-            match module.to_bytes() {
-                Ok(b) => b,
-                Err(e) => {
-                    eprintln!("error: serializing bytecode: {:?}", e);
-                    return ExitCode::FAILURE;
-                }
+        (None, _) => match serialize_unsigned_module(&module, backend) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
             }
-        }
+        },
     };
     if let Err(e) = fs::write(&output_path, &bytes) {
         eprintln!("error: writing {}: {}", output_path, e);
@@ -1594,6 +1591,20 @@ fn strip_subcommand(args: &[String]) -> ExitCode {
 enum Backend {
     Rust,
     SelfHosted,
+}
+
+/// Keep unsigned output on the selected compiler's serialization path.
+fn serialize_unsigned_module(
+    module: &keleusma::bytecode::Module,
+    backend: Backend,
+) -> Result<Vec<u8>, String> {
+    match backend {
+        Backend::Rust => module
+            .to_bytes()
+            .map_err(|e| format!("serializing bytecode: {e:?}")),
+        Backend::SelfHosted => keleusma::selfhost::wire_module_artifact_via_kel(module)
+            .map_err(|e| format!("self-hosted serialization: {e}; retry with --compiler rust")),
+    }
 }
 
 fn compile_source(source: &str) -> Result<keleusma::bytecode::Module, String> {
@@ -2527,6 +2538,30 @@ fn print_value(v: &Value, arena: &Arena) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unsigned_serializer_dispatch_reaches_the_selected_backend() {
+        let mut module = super::compile_source_with_target(
+            "fn main() -> Word { 7 }",
+            None,
+            false,
+            super::Backend::SelfHosted,
+        )
+        .unwrap();
+        assert_eq!(
+            super::serialize_unsigned_module(&module, super::Backend::SelfHosted).unwrap(),
+            super::serialize_unsigned_module(&module, super::Backend::Rust).unwrap(),
+        );
+        // A discriminator makes reference serialization on both branches fail this test.
+        // This is an artificial module, never emitted by the unsigned command path.
+        module.flags |= keleusma::wire_format::FLAG_REQUIRES_SIGNATURE;
+        assert!(super::serialize_unsigned_module(&module, super::Backend::Rust).is_ok());
+        assert!(
+            super::serialize_unsigned_module(&module, super::Backend::SelfHosted)
+                .unwrap_err()
+                .contains("dedicated encoders")
+        );
+    }
+
     use super::*;
 
     #[test]

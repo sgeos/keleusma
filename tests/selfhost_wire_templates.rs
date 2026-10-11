@@ -86,7 +86,7 @@ fn compiled_boxed_struct_reaches_the_template_encoder() {
 }
 
 #[test]
-fn template_event_capacity_includes_empty_run_checkpoints() {
+fn templates_cross_former_event_and_checkpoint_caps() {
     let mut module = compile("fn main() -> Word { 7 }");
     module.chunks[0].struct_templates = vec![StructTemplate {
         type_name: "T".into(),
@@ -96,11 +96,11 @@ fn template_event_capacity_includes_empty_run_checkpoints() {
     module.chunks[0].struct_templates[0]
         .field_names
         .push("f".into());
-    assert!(wire_auxiliary_from_module_via_kel(&module).is_err());
+    compare(&module);
     module.chunks[0].struct_templates = vec![template("T", &[]); 511];
     compare(&module);
     module.chunks[0].struct_templates.push(template("T", &[]));
-    assert!(wire_auxiliary_from_module_via_kel(&module).is_err());
+    compare(&module);
 }
 
 #[test]

@@ -3,156 +3,176 @@
 ## Current state
 
 Continue the complete Order 1 goal and the System 1 shadow pilot on line v0.2.3.
-The branch is feat/v02-order1-next. This increment started at 1925af16. Preserve unrelated
+The branch is feat/v02-order1-next. This increment started at 7b161e05. Preserve unrelated
 untracked .codex and nvim.log. V0.3.X remains separate. No push, merge or publication occurred.
 
 Read Appendix B before tracked writes. Public bytecode version remains 2, opcode count remains
-66 and selected type-stage caps remain 640. The legacy HANDOFF.md remains invalid and stale,
-measured 42 commits behind the starting head. Its previously checked ancestry passes, while its
-unchanged-stage-source claim is false. Historical full validity and advisory checks were not all
-repeated. The current completion plan and latest roadmap section describe the remaining goal.
+66 and selected type-stage caps remain 640. The legacy HANDOFF.md is invalid and stale, measured
+43 commits behind the starting head. Its previously checked ancestry passes and its unchanged-stage
+claim is false. Historical full validity and advisory checks were not all repeated.
 
-## Complete module decoding
+## Streaming auxiliary emission
 
-wire_decode_module_via_kel composes framing, checksum, auxiliary, opcode and debug readers.
-Schema commands 57 through 63 select an optional shebang prefix and the declared frame, check
-headers and section bounds, enforce runtime width maxima, validate extension metadata, compare
-mirrored fields and select each chunk's opcode span. A separate schema instance handles debug
-pools, while the coordinator retains framing state. All module fields are constructed from decoded
-values. Rust transports requested bytes and constructs typed values without the reference loader.
+The public wire_auxiliary_from_module_via_kel export now comes from wire_stream_auxiliary.rs.
+It does not construct the old module-input blob. The previous bounded emitter is compiled only
+for library tests, with a direct comparison control. Other standalone legacy helpers retain
+their documented bounds and are not the shipping serialization path.
 
-Wire command 220 starts the existing incremental checksum state independently of canonical framing.
-Commands 189 and 192 feed and finish that transaction. The old canonical unsigned reader is retained
-for its existing API. The highest-command ceiling is now 220. The public instruction set is unchanged.
+Keleusma owns name hashing, byte equality, last-equal selection, fresh-name policy, pool offsets
+and name indices. Rust retains borrowed strings and BTreeMap buckets keyed only by stage-produced
+hashes. Bucket matches never decide equality. Keleusma compares name windows and chooses the latest
+matching entry, preserving the reference's overwriting behavior after fresh insertions. The host
+appends opaque bytes only on the stage's append decision and checks returned storage coordinates.
 
-Reference behavior preserved by controls includes trailing input, prefixes across transport windows,
-noncanonical and unaligned section offsets, overlapping sections, and unaligned chunk spans.
-Every operand entry receives a parity check, including unused entries. Unknown unused pool tags
-remain unobserved. Only selected opcode records are decoded. Empty chunk tables ignore opcode data.
-Debug payloads become interpreted only at complete module construction, so present empty or malformed
-pools can pass auxiliary decoding and fail here.
+The first streaming draft still scheduled name families in Rust. The audit caught that regression
+in provenance, and a stage coordinator now requests family, parent and child ordinals. The Rust
+transport verifies those requests against its source iteration. Keleusma orders chunk names,
+enum types and fresh variants, natives, data-slot groups, constant names and template names.
+It rejects wrong-family names, premature template processing and incomplete contributor counts.
 
-This API matches the low-level module_from_wire_bytes codec scope. Extension metadata consistency
-is checked, but signature authentication, decryption and virtual-machine verification remain caller
-responsibilities. Error variants and ordering for multiple defects are not matched. It is not wired
-into the shipping runtime load path by this increment.
+Constants use a stage-driven breadth-first queue backed by host references to typed values.
+Keleusma selects every node, child range, auxiliary-table index and required name role. The host
+marshals intrinsic value facts and appends children at the requested queue position. Generation
+checks bind name replies to their pending node. Template field runs and empty checkpoints are
+stage-derived. Header sentinels, parameter tags, chunk ranges, opcode offsets and debug offsets
+also come from stage decisions. The existing wire record emitters encode the resulting fields.
+Struct and enum auxiliary records use their dedicated commands 128 and 129 because command 164
+still refuses those two kinds.
 
-## Resources and evidence
+Schema commands 64 through 77 implement encoder reset, interning and forest traversal. Command 78
+is unused. Commands 79 through 84 handle derived metadata. Commands 85 through 88 coordinate name
+contributors. New private blocks are en, bf, ec and np. All previous reader protocols remain.
 
-The schema stage has 115 chunks and a 55,492-byte artifact. It uses 1,216 shared bytes and 4,160
-private bytes. Its 28 new framing slots account for 896 private bytes. The largest legacy schema
-input channel uses 147 of 640 occurrence rows. Wire has 561 chunks, a 163,044-byte artifact and
-1,294 of 1,365 constant nodes, leaving 71 nodes against the required minimum reserve of 64.
-Its legacy occurrence channel remains 638 of 640. The largest corpus blob is 23,753 bytes, leaving
-25,399 bytes under its 49,152-byte cap. Parse remains the name maximum at 776 of 1,024 events.
+The former fixed root, name-length, name-event, pool and aggregate module-input caps are removed
+from this public path. Wire field widths and storage failures remain explicit limits. Input/output
+windows remain bounded. Tests retain byte comparisons above the former thresholds, including
+65,536 scalar roots, 65,536-byte names, more than 1,024 names/chunks, repeated large names and large
+fresh template runs. Root/source tests cover exact 1,365/1,366 boundaries and 256/257-byte text,
+plus a 60,000-byte text literal. The compiler already accepted these source fixtures.
 
-All fourteen complete decoded modules re-encode byte-identically to reference artifacts.
-Monomorphization controls pass. Inference independence covers 50,483 recorded expression types.
-The runtime test drops the original module and runs decoded instructions, including a function
-call, shared input, debug pools and persistent initialization. Consecutive calls return 12 and 17.
+## Shipping integration
+
+Unsigned command-line compilation now calls serialize_unsigned_module with the selected backend.
+Backend::SelfHosted routes through wire_module_artifact_via_kel. The reference backend retains
+Module::to_bytes. Signing and encryption continue through their dedicated paths.
+
+The dispatch test has an artificial-module discriminator that fails if both branches use the
+reference serializer. Command-line tests compile the large forest and long-text fixtures and
+compare their artifacts against both the Keleusma emitter and reference bytes. Existing command
+controls still execute seven, preserve reproducibility and reject bad types without output files.
+
+## Resources and current evidence
+
+The schema stage has 150 chunks and a 75,876-byte artifact. Shared storage remains 1,216 bytes.
+Private state is 5,984 bytes, adding 57 slots across the four encoder blocks. Its largest legacy
+input channel uses 197 of 640 occurrence rows. Wire remains unchanged at 561 chunks, 1,294 of
+1,365 constant nodes and 638 of 640 occurrence rows. Legacy residency measurements do not describe
+the new streaming emitter's input limits. All fourteen source stages still fit those legacy controls.
+
+All fourteen current stage artifacts compare byte-identically through the final workspace test.
+Inference independence covers 52,389 recorded types. A collision control uses the equal-length
+strings 6a2ef2cd and f41fb47a, both in bucket 0xec8732b2, and checks distinct indices plus latest-fresh
+reuse. A compiled comparison executes seven after serialization and loading, so hash equality alone
+cannot make the two strings equal. Additional protocol controls check input completeness, wrong
+roles, contributor order, constant-before-template sequencing and final completion.
 
 ## Verification receipts
 
 Runs use empty RUSTC_WRAPPER and CARGO_HUSKY_DONT_INSTALL_HOOKS set to one. Stage runs use
 KEL_SELFHOST_CACHE zero. No verification subject was edited while its run remained live.
 
-- The initial capacity run fails because a new field used a reserved identifier. Session 40972
-  exits 101 in tmp/order1-module-first.log. The next run catches a mutable local unsupported by
-  the language. Session 51803 exits 101 in tmp/order1-module-capacity.log. Both were corrected.
-- The first complete-loader controls catch the new checksum command's stale dispatch ceiling.
-  Session 57731 exits 101 in tmp/order1-module-tests.log. The next run catches an incorrect test
-  premise that every repaired offset mutation must be invalid. Session 68831 exits 101 in
-  tmp/order1-module-tests-fixed.log. Both the dispatch and the fixture expectation were corrected.
-- Seven module controls, two accounting checks and one node-budget guard pass in
-  tmp/order1-module-comparison.log. Command cargo test --release --features self-host --test
-  selfhost_wire_module_decode --test wire_private_state_accounting --test module_input_node_budget
-  --no-fail-fast -- --nocapture. Session 26585 exits zero.
-- Two direct protocol checks pass in tmp/order1-module-protocol.log. Command cargo test --release
-  --features self-host --lib selfhost::wire_module_decode -- --nocapture. Session 96425 exits zero.
-- All six artifact checks and three monomorphization checks pass in tmp/order1-module-artifacts.log.
-  Command cargo test --release --features self-host --test selfhost_artifact_identity --test
-  selfhost_monomorphize_identity --no-fail-fast -- --nocapture. Session 77865 exits zero.
-- The final legacy capacity check passes all fourteen sources in tmp/order1-module-final-capacity.log.
-  Command cargo test --release --features self-host --test selfhost_typecheck
-  the_stage_is_measured_against_the_real_stage_sources -- --nocapture. Session 70132 exits zero.
-- Four inference-independence checks pass in tmp/order1-module-inference.log. Command cargo test
-  --release --features self-host --lib compiler::inference_independence -- --nocapture. The command
-  returns exit zero directly without a continuing session.
-- Nine no-default integration and accounting checks pass in tmp/order1-module-no-default.log.
+- The two new admission controls initially fail at the old caps. Session 17418 exits 101 in
+  tmp/order1-encoder-first.log. That diagnostic is the pilot triage case.
+- The first streaming build references the wrong enum-discriminant field. Session 33833 exits 101
+  in tmp/order1-encoder-stream-first.log. After correction, both admission controls pass in
+  tmp/order1-encoder-stream-tests.log, session 4947 exits zero.
+- A rich constant test catches command 164 refusing struct/enum auxiliary records. Session 51049
+  exits 101 in tmp/order1-encoder-families.log, with all other family checks passing. The driver now
+  uses commands 128 and 129. The subsequent constants, framing and admission run passes in
+  tmp/order1-encoder-boundaries.log, session 96796 exits zero.
+- Clippy initially requests as_chunks for a constant-width loop. Session 39730 exits 101 in
+  tmp/order1-encoder-clippy.log. That loop is corrected without changing its grouping algorithm.
+- Nineteen ordered-emitter family, admission and accounting tests pass in
+  tmp/order1-encoder-order-tests.log. Command cargo test --release --features self-host --test
+  selfhost_wire_encoder_capacity --test selfhost_wire_constants --test selfhost_wire_natives
+  --test selfhost_wire_templates --test wire_private_state_accounting --no-fail-fast -- --nocapture.
+  Session 85652 exits zero.
+- The final three admission and collision-execution tests pass in tmp/order1-encoder-final-admission.log.
+  Command cargo test --release --features self-host --test selfhost_wire_encoder_capacity
+  -- --nocapture. Session 36312 exits zero.
+- Forty-four wire unit checks pass in tmp/order1-encoder-final-protocol.log. Command cargo test
+  --release --features self-host --lib selfhost::wire_ -- --nocapture. Session 75278 exits zero.
+- Final legacy capacity and inference-independence checks pass in tmp/order1-encoder-order-capacity.log
+  and tmp/order1-encoder-order-inference.log. Commands cargo test --release --features self-host
+  --test selfhost_typecheck the_stage_is_measured_against_the_real_stage_sources -- --nocapture,
+  and cargo test --release --features self-host --lib compiler::inference_independence -- --nocapture.
+  Sessions 63531 and 37930 exit zero.
+- The command-line route discriminator passes in tmp/order1-encoder-cli-route.log. Command cargo
+  test --release -p keleusma-cli --bin keleusma unsigned_serializer_dispatch_reaches_the_selected_backend
+  -- --nocapture. Session 94387 exits zero.
+- Seven command-line refusal, emission and reproducibility tests pass in tmp/order1-encoder-cli.log.
+  Command cargo test --release -p keleusma-cli --test self_hosted_refusal --test compile_reproducible
+  --no-fail-fast -- --nocapture. Session 94000 exits zero.
+- The full workspace passes 3,168 tests with zero failures and five ignored across 182 suites.
+  Command cargo test --release --workspace --no-fail-fast. Log tmp/order1-encoder-workspace.log.
+  Session 95708 exits zero. This includes the final fourteen-stage comparison and monomorphization
+  controls after the contributor coordinator was added.
+- Twenty-five no-default integration/accounting tests pass in tmp/order1-encoder-final-no-default.log.
   Command cargo test --release --no-default-features --features self-host --test
-  selfhost_wire_module_decode --test wire_private_state_accounting --no-fail-fast.
-  Session 27141 exits zero.
-- Forty no-default wire unit checks pass in tmp/order1-module-no-default-unit.log. Command cargo
-  test --release --no-default-features --features self-host --lib selfhost::wire_ -- --nocapture.
-  Session 81977 exits zero.
-- The full workspace runs 3,158 passes, one failed stale size assertion and five ignored across
-  181 suites. Command cargo test --release --workspace --no-fail-fast. Session 29575 exits 101.
-  Log tmp/order1-module-workspace.log. The sole failure expects the old 23,713-byte blob.
-- The measured expectation and its margin comment are corrected to 23,753 and 25,399. The complete
-  affected wire suite then passes 184 tests. Command cargo test --release --workspace --test
-  selfhost_wire -- --nocapture. Log tmp/order1-module-wire-final.log. Session 16168 exits zero.
-  Expected caught panics from mutation controls appear in this log and are followed by passing tests.
+  selfhost_wire_encoder_capacity --test selfhost_wire_constants --test selfhost_wire_natives --test
+  selfhost_wire_templates --test selfhost_wire_private --test wire_private_state_accounting
+  --no-fail-fast. Session 47900 exits zero.
+- Forty-four no-default wire unit tests pass in tmp/order1-encoder-final-no-default-unit.log.
+  Command cargo test --release --no-default-features --features self-host --lib selfhost::wire_
+  -- --nocapture. Session 92870 exits zero.
 - Fresh final Clippy passes with actual Checking. Command cargo clippy --workspace --tests
-  -- -D warnings. Log tmp/order1-module-final-clippy.log. Session 3977 exits zero.
-- Documentation passes with actual Documenting and RUSTDOCFLAGS set to -D warnings.
-  Command cargo doc --workspace --no-deps. Log tmp/order1-module-doc.log. Session 86185 exits zero.
+  -- -D warnings. Log tmp/order1-encoder-shipping-clippy.log. Session 10611 exits zero.
+- Documentation passes with actual Documenting and RUSTDOCFLAGS set to -D warnings. Command cargo
+  doc --workspace --no-deps. Log tmp/order1-encoder-shipping-doc.log. Session 75229 exits zero.
 - The no_std check passes with actual Checking. Command cargo check --no-default-features
-  --features self-host. Log tmp/order1-module-nostd.log. Session 15707 exits zero.
+  --features self-host. Log tmp/order1-encoder-shipping-nostd.log. Session 57418 exits zero.
 
 The four documentation guards pass 24 tests after the handoff and plan updates. Command cargo
 test --release --test documentation_links --test claimed_counts --test comment_citations
---test push_order_claims. Log tmp/order1-module-doc-guards.log. Session 12966 exits zero.
+--test push_order_claims. Log tmp/order1-encoder-doc-guards.log. Session 38077 exits zero.
 Formatting and diff checks pass. No verification process remains live at handoff.
 
-No production code changed after the workspace run. Only the measured test expectation and
-subsequent documentation changed. The entire workspace was not repeated after that correction.
-Its root library ran 1,380 tests. The source inventory contains 1,581 integration test functions
-across 153 files. Full feature matrices, minimum supported toolchains, Miri, cross-target builds,
-advisory scanning and final integration gates remain required before completing Order 1.
+No production or test content changed after the full workspace run. Documentation updates followed.
+The measured root-library count is 1,384. The integration source inventory is 1,584 test functions
+across 154 files. Full feature matrices, minimum supported toolchains, Miri, cross-target builds,
+advisory scanning and final integration gates remain required for Order 1.
 
 ## Next work
 
-Remove encoder limits that reject sources the production compiler already accepts, then integrate
-Keleusma serialization into shipping output. The unsigned shipping path still uses Module::to_bytes.
-Do not narrow source admission to fit the encoder. The completion plan now records reproducible
-source constructions for two measured blockers.
+Move the remaining host run processing into Keleusma. wire_stream_auxiliary::slot_runs still groups
+logical data slots using name and visibility equality, and its caller splits those groups at
+u16::MAX. shared_slot_fields in selfhost/mod.rs still detects constant-stride runs, calculates
+record starts and splits those runs. These are serialization decisions, and shipping dispatch does
+not establish that they are self-hosted.
 
-- Generate 170, 171 or 177 distinct functions f0 through fN-1, each taking x as Word and returning
-  x + 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8. Append fn main returning f0(0). The production compiler accepts
-  all three. They contain 1,361, 1,369 and 1,417 roots. Only the first fits the encoder's 1,365-root
-  limit. Reference artifact lengths are 54,772, 55,092 and 56,996 bytes.
-- Generate fn main returning Text with a literal of 256, 257 or 60,000 ASCII x bytes. All three
-  are accepted by the production compiler. The first encodes byte-identically. The latter two
-  fail the constant name/input capacity. Reference artifacts are 1,244, 1,244 and 60,988 bytes.
-  forest_input rejects individual constant names above 256 bytes before its aggregate input cap.
-
-Every reference artifact in those six cases decodes and re-encodes byte-identically through the
-new complete decoder. The final scratch receipt is tmp/order1-module-admission-decoder.log,
-session 23381 exited zero. The harness is tmp/order1-admission-probe/src/main.rs, invoked with
-cargo run --offline --release --manifest-path tmp/order1-admission-probe/Cargo.toml and the usual
-wrapper/cache settings. This probes the production library API, not the command-line binary.
-The initial scratch manifest had an incorrect relative dependency path and was corrected before
-these executions. Earlier receipts are tmp/order1-module-admission-probe-fixed.log, session 37157,
-tmp/order1-module-admission-boundaries.log, session 43371, and tmp/order1-module-admission-identity.log,
-session 57301, each exited zero. Promote these cases into standing regression tests while fixing
-the encoder. Other name-event, aggregate-input and forest limits still require coverage.
+Preserve reference details while moving them. Shared grouping compares kind and len, uses wrapping
+u32 offset differences to choose a stride, starts a two-slot run only when that stride fits u16,
+and extends while the same difference persists. Singletons use stride zero. Both tables split at
+65,535 slots. Shared first_slot counts logical slots and each split's offset advances from the
+run's starting offset. Empty tables and runs spanning adjacent source fields need explicit controls.
+Large stages contain hundreds of thousands of logical slots, so use bounded batches and avoid
+re-interning each repeated slot name through a separate sequence of host requests when possible.
+The current name coordinator receives grouped slots as input, so change that interface alongside
+the grouping implementation instead of relabelling the host grouping as a stage decision.
 
 Retain all type obligations in ORDER1_COMPLETION_PLAN.md, including projection identity, nested
 headers, binders, occurrences, nominal layouts, aliases, empty arrays, mixed tuples, casts and
-enum capacity. Refresh stage identity, inference independence, monomorphization, shipping behavior
-and the final integration gates after the remaining changes. Full Order 1 remains active.
+enum capacity. After remaining changes, refresh current-stage identity, inference independence,
+monomorphization, shipping behavior and final gates. Full Order 1 remains active.
 
 ## Shadow pilot and interline
 
-Task v023-order1-module records the first stage parse diagnostic and three bounded completion claims.
-All four labels are non-independent. The stage and selected-span claims are supported. The runtime
-claim excerpt is unsupported because it omits compare, which establishes that the returned module
-is independently decoded. The full test source supplies that provenance. This is a packet evidence
-gap, and the pilot does not change development gates.
+Task v023-order1-encoder records the first admission diagnostic and three bounded claims for
+admission preservation, collision behavior and unsigned shipping dispatch. Baselines precede
+review. All four labels are non-independent. Exact payloads, request hashes and source hashes
+were reviewed in tmp/order1-encoder-pilot-export.json. The bounded increment is resolved.
 
-Exact payloads, request hashes and source hashes were reviewed in tmp/order1-module-pilot-export.json.
-The bounded decoder increment is resolved. External evaluation was not attempted under the prior
-automatic approval rejection of its destination and payload. No accuracy claim is made. Preserve
-peer ownership of the tracked pilot checkpoint. No peer messages were sent.
-
-The v0.2.3 inbox is empty. The interline checkpoint was exported and reviewed with no diff.
+External evaluation was not attempted under the earlier automatic approval rejection of its
+destination and payload. No accuracy claim is made. The peer-owned tracked pilot checkpoint was
+not overwritten. The inbox is empty and no peer messages were sent. The interline checkpoint was
+exported and reviewed with no diff.

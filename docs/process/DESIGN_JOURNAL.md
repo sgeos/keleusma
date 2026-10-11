@@ -13,6 +13,54 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-11 Streaming auxiliary emission reaches the shipping command
+
+The public auxiliary emitter now transports bounded windows instead of constructing the old
+resident module blob. Keleusma hashes names, selects candidate buckets, compares candidate bytes,
+and decides whether to append or reuse the latest equal name. Hashes are an indexing aid, with
+byte comparison deciding equality. The host retains borrowed strings and deterministic bucket
+storage. Fresh names retain contiguous runs and remain available to later shared lookups.
+A protocol control reaches two distinct, equal-length strings with the same hash and proves that
+they remain distinct. A compiled string-comparison program exercises that distinction at runtime.
+
+The schema coordinator owns contributor ordering across chunk names, enum types and fresh variants,
+natives, data-slot groups, constants and templates. It requests source ordinals and rejects names
+from the wrong family or phase. Constants use a stage-driven breadth-first queue. The host stores
+references to typed values, while Keleusma chooses each node, child range, auxiliary index and name
+request. Name and template acknowledgements carry generation checks. Chunk ranges, debug offsets,
+opcode offsets, header sentinels and parameter-tag bytes are also stage decisions.
+
+The former 1,365-node, 256-byte-name, 1,024-event and aggregate module-blob caps no longer apply to
+the public emitter. Fixed transport windows remain. Public wire field widths and fallible storage
+checks bound accepted metadata. The legacy bounded emitter remains available only to library tests
+as a comparison control. Standalone legacy helper APIs retain their documented bounds.
+
+Standing source regressions exercise 1,365 and 1,366 constant roots and text lengths of 256, 257
+and 60,000 bytes. The compiler accepts each source, and the Keleusma output matches the reference.
+Existing family tests now assert successful reference comparisons beyond former name, template,
+node and input caps, including 65,536 scalar roots. They also retain nested forests, enum
+discriminants, initializer ownership, independent native vectors and empty template-run controls.
+
+Unsigned command-line compilation now serializes through the selected backend. The self-hosted
+backend uses wire_module_artifact_via_kel. A discriminator test distinguishes that route from using
+the reference serializer on both branches. Command-line controls emit the large forest and text
+fixtures, preserve reproducibility, execute an ordinary result of seven and retain independent type
+rejection without output files. Signed and encrypted output continue through their dedicated paths.
+
+The schema stage has 150 chunks and a 75,876-byte artifact. Shared storage remains 1,216 bytes.
+Private storage is 5,984 bytes. The largest legacy input channel uses 197 of 640 occurrence rows.
+Wire remains unchanged. Inference independence covers 52,389 recorded expression types.
+The full workspace passes 3,168 tests with five ignored across 182 suites. No-default checks
+pass 25 integration/accounting tests and 44 wire unit tests. Fresh Clippy, documentation and no_std
+checks pass. The local pilot contains the first diagnostic and three bounded completion claims,
+with non-independent labels and a reviewed export. External evaluation remains unavailable under
+the prior approval rejection. The reverse prompt carries exact receipts.
+
+Host data-slot grouping, run splitting and shared-layout run extraction remain nontrivial
+serialization decisions to move into Keleusma. The new driver retains
+these existing algorithms explicitly. Remaining type-input obligations and final integration gates
+also keep Order 1 open. Shipping integration alone does not establish completion of the full goal.
+
 ## 2026-10-11 Complete modules decode through Keleusma
 
 wire_decode_module_via_kel composes Keleusma framing, checksum, auxiliary, opcode and debug readers.

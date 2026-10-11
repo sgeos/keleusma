@@ -98,7 +98,7 @@ fn native_vectors_preserve_independent_empty_and_unequal_lengths() {
 }
 
 #[test]
-fn native_input_and_name_pool_limits_refuse_without_truncation() {
+fn native_names_cross_former_event_input_and_pool_limits() {
     let mut module = compile("fn main() -> Word { 7 }");
     module.chunks.clear();
     module.signatures.clear();
@@ -108,12 +108,11 @@ fn native_input_and_name_pool_limits_refuse_without_truncation() {
         .collect();
     compare(&module); // Exactly 16,384 distinct name bytes.
     module.native_names.push("overflow".into());
-    let error = wire_auxiliary_from_module_via_kel(&module).unwrap_err();
-    assert!(format!("{error:?}").contains("-255"), "{error:?}");
+    compare(&module);
     module.native_names = vec!["a".repeat(257)];
-    assert!(wire_auxiliary_from_module_via_kel(&module).is_err());
+    compare(&module);
     module.native_names = vec!["a".into(); 1025];
-    assert!(wire_auxiliary_from_module_via_kel(&module).is_err());
+    compare(&module);
     module.native_names = vec!["a".repeat(256); 200];
-    assert!(wire_auxiliary_from_module_via_kel(&module).is_err());
+    compare(&module);
 }

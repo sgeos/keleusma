@@ -191,8 +191,8 @@ pub fn wire_opcode_sections_via_kel(module: &Module) -> Result<WireOpcodeSection
 }
 
 /// Assemble an unsigned artifact through Keleusma without reference artifact bytes.
-/// The auxiliary helper's documented record-form limits still apply. This is not
-/// yet the shipping serializer. Auxiliary record-form limits still apply.
+/// Used by unsigned command-line compilation with the self-hosted backend.
+/// Other backends and cryptographic output use their dedicated serializers.
 ///
 /// # Errors
 /// Refuses signing or encryption flags and propagates section production,

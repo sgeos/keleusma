@@ -149,17 +149,29 @@ fn auxiliary_preserves_metadata_and_empty_composite_constants() {
 }
 
 #[test]
-fn auxiliary_refuses_oversized_inputs_without_packer_panics() {
+fn auxiliary_streams_beyond_former_packer_capacities() {
     let module = compile("fn main() -> Word { 7 }");
     let mut long_name = module.clone();
     long_name.chunks[0].name = "a".repeat(65536);
-    assert!(wire_auxiliary_from_module_via_kel(&long_name).is_err());
+    let reference = long_name.to_bytes().unwrap();
+    assert_eq!(
+        wire_auxiliary_from_module_via_kel(&long_name).unwrap(),
+        section(&reference, 48)
+    );
     let mut many_chunks = module.clone();
     many_chunks.chunks = vec![module.chunks[0].clone(); 1025];
-    assert!(wire_auxiliary_from_module_via_kel(&many_chunks).is_err());
+    let reference = many_chunks.to_bytes().unwrap();
+    assert_eq!(
+        wire_auxiliary_from_module_via_kel(&many_chunks).unwrap(),
+        section(&reference, 48)
+    );
     let mut many_nodes = module.clone();
     many_nodes.chunks[0].constants = vec![keleusma::bytecode::ConstValue::Int(0); 65536];
-    assert!(wire_auxiliary_from_module_via_kel(&many_nodes).is_err());
+    let reference = many_nodes.to_bytes().unwrap();
+    assert_eq!(
+        wire_auxiliary_from_module_via_kel(&many_nodes).unwrap(),
+        section(&reference, 48)
+    );
 }
 
 #[test]

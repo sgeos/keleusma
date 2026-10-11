@@ -674,6 +674,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bounded_legacy_encoder_remains_a_comparison_control() {
+        let module = compile_src("fn main() -> Word { 7 }");
+        let expected = wire_auxiliary_from_module_via_kel(&module).unwrap();
+        let actual = super::super::wire_auxiliary_from_module_via_kel(&module).unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn module_forest_refuses_malformed_arity_and_incomplete_subtrees() {
         let mut input = compile_src("fn main() -> Word { 7 }");
         input.chunks[0].constants = vec![ConstValue::Tuple(vec![ConstValue::Int(1)])];

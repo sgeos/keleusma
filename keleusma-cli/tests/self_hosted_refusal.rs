@@ -183,3 +183,32 @@ fn command_emits_the_production_artifact_and_runs_it() {
     assert!(result.status.success(), "{:?}", result);
     assert_eq!(String::from_utf8(result.stdout).unwrap().trim(), "7");
 }
+
+/// Sources already accepted by the compiler must survive serializer window boundaries.
+#[test]
+fn command_serializes_large_forests_and_text_through_keleusma() {
+    let dir = TmpDir::new("serializer_capacity");
+    let mut forest = String::new();
+    for i in 0..171 {
+        forest.push_str(&format!(
+            "fn f{i}(x: Word) -> Word {{ x + 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 }}\n"
+        ));
+    }
+    forest.push_str("fn main() -> Word { f0(0) }");
+    let text = format!("fn main() -> Text {{ \"{}\" }}", "x".repeat(60000));
+    for (tag, source) in [("forest", forest), ("text", text)] {
+        let input = dir.write(&format!("{tag}.kel"), &source);
+        let output = dir.path(&format!("{tag}.kbc"));
+        let (ok, error) = compile_self_hosted(&input, &output);
+        assert!(ok, "{tag}: {error}");
+        let module =
+            keleusma::selfhost::self_hosted_compile(&source, &keleusma::target::Target::host())
+                .unwrap();
+        let actual = std::fs::read(output).unwrap();
+        assert_eq!(
+            actual,
+            keleusma::selfhost::wire_module_artifact_via_kel(&module).unwrap()
+        );
+        assert_eq!(actual, module.to_bytes().unwrap());
+    }
+}

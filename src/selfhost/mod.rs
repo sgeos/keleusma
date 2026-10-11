@@ -45,8 +45,10 @@ mod wire_debug;
 pub use wire_debug::wire_debug_pool_via_kel;
 mod wire_aux_decode;
 pub use wire_aux_decode::wire_decode_aux_body_via_kel;
+#[cfg(test)]
 mod wire_auxiliary;
-pub use wire_auxiliary::wire_auxiliary_from_module_via_kel;
+mod wire_stream_auxiliary;
+pub use wire_stream_auxiliary::wire_auxiliary_from_module_via_kel;
 mod wire_data_decode;
 pub use wire_data_decode::wire_decode_data_layout_via_kel;
 mod wire_layout_decode;
@@ -6546,6 +6548,7 @@ pub fn module_input(module: &Module) -> (Vec<u8>, usize) {
 
 // Compact scalar facts omit the four fields that are necessarily zero. The
 // private count's high bit distinguishes this from the legacy forest grammar.
+#[cfg(test)]
 fn compact_scalar_module_input(module: &Module) -> Result<(Vec<u8>, usize), SelfHostError> {
     let constants = module.chunks.iter().flat_map(|chunk| &chunk.constants);
     if !constants.clone().all(constant_is_scalar) || constants.count() > 1365 {
