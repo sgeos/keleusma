@@ -326,25 +326,63 @@ fn requested_bytes<'a>(
         .ok_or_else(|| error("name request leaves borrowed region"))
 }
 
-fn validate_name_bytes(
+// Data rejection is distinct from stage/transport failure so optional schema
+// families can discard malformed metadata without hiding execution failures.
+#[derive(Debug)]
+pub(super) enum NameReadError {
+    Data(i64),
+    Failure(SelfHostError),
+}
+impl From<SelfHostError> for NameReadError {
+    fn from(error: SelfHostError) -> Self {
+        Self::Failure(error)
+    }
+}
+impl NameReadError {
+    pub(super) fn into_error(self) -> SelfHostError {
+        match self {
+            Self::Data(code) => error(format!("name command refused with {code}")),
+            Self::Failure(error) => error,
+        }
+    }
+}
+fn name_command(vm: &mut Vm<'_, '_>, shared: &mut [u8], cmd: i64) -> Result<usize, NameReadError> {
+    let result = enter_wire(vm, shared, cmd)?;
+    if result == -297 || result == -298 {
+        return Err(NameReadError::Data(result));
+    }
+    usize::try_from(result)
+        .map_err(|_| NameReadError::Failure(error(format!("name protocol refused with {result}"))))
+}
+
+fn validate_name_bytes_decision(
     vm: &mut Vm<'_, '_>,
     shared: &mut [u8],
     bytes: &[u8],
-) -> Result<(), SelfHostError> {
+) -> Result<(), NameReadError> {
     for chunk in bytes.chunks(NAME_WINDOW) {
         for (i, &byte) in chunk.iter().enumerate() {
             vm.set_shared(shared, BYTES + i, Value::Byte(byte))
                 .map_err(|_| error("name byte transport failed"))?;
         }
         set_word(vm, shared, ARG, chunk.len() as i64)?;
-        if command(vm, shared, 10)? != 0 {
-            return Err(error("unexpected name feed response"));
+        if name_command(vm, shared, 10)? != 0 {
+            return Err(error("unexpected name feed response").into());
         }
     }
-    if command(vm, shared, 11)? != 0 {
-        return Err(error("name validation did not finish"));
+    if name_command(vm, shared, 11)? != 0 {
+        return Err(error("name validation did not finish").into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+fn validate_name_bytes(
+    vm: &mut Vm<'_, '_>,
+    shared: &mut [u8],
+    bytes: &[u8],
+) -> Result<(), SelfHostError> {
+    validate_name_bytes_decision(vm, shared, bytes).map_err(NameReadError::into_error)
 }
 
 #[derive(Clone, Copy)]
@@ -353,14 +391,14 @@ pub(super) struct NameTables<'a> {
     pub(super) pool: Option<&'a [u8]>,
 }
 
-pub(super) fn name_lookup<'a>(
+pub(super) fn name_lookup_decision<'a>(
     codec: &mut Vm<'_, '_>,
     codec_shared: &mut [u8],
     vm: &mut Vm<'_, '_>,
     shared: &mut [u8],
     tables: NameTables<'a>,
     index: u32,
-) -> Result<&'a str, SelfHostError> {
+) -> Result<&'a str, NameReadError> {
     for (i, value) in [
         byte_count(tables.names)?,
         byte_count(tables.pool)?,
@@ -371,8 +409,8 @@ pub(super) fn name_lookup<'a>(
     {
         set_word(vm, shared, ARG + i, value)?;
     }
-    if command(vm, shared, 8)? != 1 {
-        return Err(error("unexpected name record request"));
+    if name_command(vm, shared, 8)? != 1 {
+        return Err(error("unexpected name record request").into());
     }
     let name_bytes = requested_bytes(
         vm,
@@ -383,18 +421,18 @@ pub(super) fn name_lookup<'a>(
     )?;
     let mut records = decode_records(codec, codec_shared, kind::NAMES, name_bytes)?;
     if records.len() != 1 {
-        return Err(error("name request did not select one record"));
+        return Err(error("name request did not select one record").into());
     }
     let Some(WireSchemaRecord::NameRef(record)) = records.pop() else {
-        return Err(error("unexpected name record"));
+        return Err(error("unexpected name record").into());
     };
     fields(
         vm,
         shared,
         &[i64::from(record.offset), i64::from(record.length)],
     )?;
-    if command(vm, shared, 9)? != 1 {
-        return Err(error("unexpected name pool request"));
+    if name_command(vm, shared, 9)? != 1 {
+        return Err(error("unexpected name pool request").into());
     }
     let value = requested_bytes(
         vm,
@@ -403,10 +441,23 @@ pub(super) fn name_lookup<'a>(
             .pool
             .ok_or_else(|| error("string pool absent after validation"))?,
     )?;
-    validate_name_bytes(vm, shared, value)?;
+    validate_name_bytes_decision(vm, shared, value)?;
     // Checked Rust construction remains a defensive boundary. Acceptance has
     // already been decided by the stage, which is tested without this check.
-    core::str::from_utf8(value).map_err(|_| error("schema stage returned invalid text"))
+    core::str::from_utf8(value)
+        .map_err(|_| NameReadError::Failure(error("schema stage returned invalid text")))
+}
+
+pub(super) fn name_lookup<'a>(
+    codec: &mut Vm<'_, '_>,
+    codec_shared: &mut [u8],
+    vm: &mut Vm<'_, '_>,
+    shared: &mut [u8],
+    tables: NameTables<'a>,
+    index: u32,
+) -> Result<&'a str, SelfHostError> {
+    name_lookup_decision(codec, codec_shared, vm, shared, tables, index)
+        .map_err(NameReadError::into_error)
 }
 
 /// Resolve and validate one name through Keleusma, retaining the input's storage.

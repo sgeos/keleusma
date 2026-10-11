@@ -360,9 +360,11 @@ reference region positions or payload copies. Other schema semantics and complet
 reconstruction remain open. The all-stage comparison includes independently decoded directories.
 Signature and native-return semantics now decode in a dedicated wire_schema stage, preserving
 the optional-table policy and checking every compiled chunk's signature. The new stage has
-38 chunks and a 19,756-byte artifact. Name lookup, UTF-8 validation and owned constant
+67 chunks and a 32,964-byte artifact. Name lookup, UTF-8 validation and owned constant
 reconstruction now run through this stage. Constant pools for every current stage match the
-reference. Other auxiliary families and complete module assembly remain open.
+reference. Template, enum-layout and data-layout semantics now also decode through Keleusma,
+including optional-family behavior, run expansion and initializer selection. Parameter tags,
+debug metadata and complete module assembly remain open.
 All seventeen fixed-record kinds now decode through Keleusma, and every fixed-record stage
 region reconstructs byte-identically from those decoded fields. The remaining auxiliary
 families and cross-table checks still require integration. The legacy type-input path uses
@@ -377,7 +379,7 @@ The twenty-three-source comparison includes fourteen negatives and nine valid co
 seven artifact and execution controls. Parser capacity and unsupported annotation syntax remain
 distinct from source rejection. Remaining input and projection coverage, production wire
 emission and final gates keep Order 1 open. Standing inference-independence evidence now
-covers all fourteen stages, clearing 47,116 recorded types without changing complete artifacts.
+covers all fourteen stages, clearing 48,424 recorded types without changing complete artifacts.
 The intervention and admission controls also pass.
 
 Struct field and composite array projections now preserve source type identity through calls,

@@ -3191,7 +3191,7 @@ impl Op {
 }
 
 /// Template for struct construction.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct StructTemplate {
     /// Struct type name.
     pub type_name: String,
@@ -3200,7 +3200,7 @@ pub struct StructTemplate {
 }
 
 /// One variant's name and discriminant within an [`EnumLayout`].
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct EnumVariantDisc {
     /// Variant name.
     pub name: String,
@@ -3221,7 +3221,7 @@ pub struct EnumVariantDisc {
 /// a signatured native already does). Only uniformly-flat enums, which the
 /// compiler flattens, need the padding; a non-flat enum stays boxed and is
 /// matched by name.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct EnumLayout {
     /// Enum type name.
     pub type_name: String,
@@ -3293,7 +3293,7 @@ impl Default for ChunkSignature {
 }
 
 /// A named slot in the data segment.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct DataSlot {
     /// Slot name (for host initialization and debugging).
     pub name: String,

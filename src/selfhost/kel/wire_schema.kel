@@ -489,10 +489,324 @@ fn constants_dispatch(cmd: Word) -> Word {
     if cmd == 21 { constants_finish() } else { constant_error() }}}}}}}}}}
 }
 
+private data lt {
+    mode: Word,
+    names: Word,
+    templates: Word,
+    variants: Word,
+    layouts: Word,
+    tscan: Word,
+    escan: Word,
+    form: Word,
+    strict: Word,
+    at: Word,
+    first: Word,
+    count: Word,
+    type_name: Word,
+    payload: Word,
+    pos: Word,
+    variant_name: Word,
+    disc: Word,
+}
+fn layout_error() -> Word { 0 - 304 }
+fn layout_reject() -> Word {
+    lt.mode = 0;
+    nr.mode = 0;
+    if lt.strict == 1 { 0 - 305 } else { 8 }
+}
+fn layout_begin() -> Word {
+    lt.mode = 0;
+    if io.arg[5] < 0 orelse io.arg[5] > 1 orelse io.arg[6] < 0 orelse io.arg[6] > 1 { layout_error() } else {
+        lt.form = io.arg[5];
+        lt.strict = io.arg[6];
+        if io.arg[0] < 0 orelse io.arg[1] < 0 orelse io.arg[0] % 8 != 0
+            orelse io.arg[2] < 0 - 1 orelse io.arg[3] < 0 - 1 orelse io.arg[4] < 0 - 1
+            orelse (io.arg[2] >= 0 andalso io.arg[2] % 16 != 0)
+            orelse (io.arg[3] >= 0 andalso io.arg[3] % 16 != 0)
+            orelse (io.arg[4] >= 0 andalso io.arg[4] % 16 != 0) { layout_reject() } else {
+            lt.names = io.arg[0] / 8;
+            lt.templates = if io.arg[2] < 0 { 0 } else { io.arg[2] / 16 };
+            lt.variants = if io.arg[3] < 0 { 0 } else { io.arg[3] / 16 };
+            lt.layouts = if io.arg[4] < 0 { 0 } else { io.arg[4] / 16 };
+            lt.tscan = 0;
+            lt.escan = 0;
+            lt.at = 0;
+            lt.mode = 1;
+            io.fin[0] = lt.templates;
+            io.fin[1] = lt.layouts;
+            0
+        }
+    }
+}
+fn layout_row_ok(total: Word) -> bool {
+    unsigned32(io.fin[0]) andalso io.fin[0] < lt.names
+        andalso range_ok(io.fin[1], io.fin[2], total)
+}
+fn template_check() -> Word {
+    if lt.mode != 1 orelse lt.tscan >= lt.templates { layout_error() } else {
+        if not layout_row_ok(lt.names) { layout_reject() } else { lt.tscan = lt.tscan + 1; 0 }
+    }
+}
+fn enum_layout_check() -> Word {
+    if lt.mode != 1 orelse lt.tscan != lt.templates orelse lt.escan >= lt.layouts { layout_error() } else {
+        if not layout_row_ok(lt.variants) { layout_reject() } else { lt.escan = lt.escan + 1; 0 }
+    }
+}
+fn layouts_validated() -> Word {
+    if lt.mode != 1 orelse lt.tscan != lt.templates orelse lt.escan != lt.layouts { layout_error() } else { lt.mode = 2; 0 }
+}
+fn layout_record() -> Word {
+    if lt.mode != 3 { layout_error() } else {
+    if not layout_row_ok(if lt.form == 0 { lt.names } else { lt.variants })
+        orelse not unsigned32(io.fin[3]) { layout_reject() } else {
+        lt.type_name = io.fin[0];
+        lt.first = io.fin[1];
+        lt.count = io.fin[2];
+        lt.payload = io.fin[3];
+        lt.pos = 0;
+        lt.mode = 4;
+        io.fin[0] = lt.count;
+        0
+    }}
+}
+fn layout_variant() -> Word {
+    if lt.mode != 6 { layout_error() } else {
+        if not unsigned32(io.fin[0]) orelse io.fin[0] >= lt.names { layout_reject() } else {
+            lt.variant_name = io.fin[0];
+            lt.disc = io.fin[1];
+            lt.mode = 7;
+            0
+        }
+    }
+}
+fn layout_next() -> Word {
+    if lt.mode == 2 {
+        let total = if lt.form == 0 { lt.templates } else { lt.layouts };
+        if lt.at == total { lt.mode = 0; 0 } else { io.fin[0] = lt.at; lt.mode = 3; 1 }
+    } else { if lt.mode == 4 {
+        if lt.pos == 0 {
+            io.fin[0] = lt.type_name;
+            io.fin[1] = 0;
+            lt.mode = 5;
+            2
+        } else { if lt.pos <= lt.count {
+            io.fin[0] = lt.first + lt.pos - 1;
+            if lt.form == 0 { io.fin[1] = 1; lt.mode = 5; 2 } else { lt.mode = 6; 3 }
+        } else { io.fin[0] = lt.payload; lt.mode = 8; 4 }}
+    } else { if lt.mode == 7 {
+        io.fin[0] = lt.variant_name;
+        io.fin[1] = 2;
+        io.fin[2] = lt.disc;
+        lt.mode = 5;
+        2
+    } else { layout_error() }}}
+}
+fn layout_ack() -> Word {
+    if lt.mode == 5 {
+        if io.arg[0] == 0 { layout_reject() } else {
+        if io.arg[0] != 1 { layout_error() } else { lt.pos = lt.pos + 1; lt.mode = 4; 0 }}
+    } else { if lt.mode == 8 { lt.at = lt.at + 1; lt.mode = 2; 0 } else { layout_error() }}
+}
+fn layouts_dispatch(cmd: Word) -> Word {
+    if cmd == 22 { layout_begin() } else {
+    if cmd == 23 { template_check() } else {
+    if cmd == 24 { enum_layout_check() } else {
+    if cmd == 25 { layouts_validated() } else {
+    if cmd == 26 { layout_record() } else {
+    if cmd == 27 { layout_next() } else {
+    if cmd == 28 { layout_ack() } else {
+    if cmd == 29 { layout_variant() } else { layout_error() }}}}}}}}
+}
+
+private data dl {
+    mode: Word,
+    names: Word,
+    slot_rows: Word,
+    shared_rows: Word,
+    placement_rows: Word,
+    scanned: Word,
+    total: Word,
+    slot_at: Word,
+    shared_at: Word,
+    placement_at: Word,
+    name: Word,
+    visibility: Word,
+    run: Word,
+    offset: Word,
+    kind: Word,
+    span: Word,
+    stride: Word,
+    pos: Word,
+    out: Word,
+    init_count: Word,
+}
+fn data_error() -> Word { 0 - 306 }
+fn data_reject() -> Word { dl.mode = 0; 0 - 307 }
+fn short_unsigned(n: Word) -> bool { n >= 0 andalso n <= 65535 }
+fn byte_unsigned(n: Word) -> bool { n >= 0 andalso n <= 255 }
+fn data_begin() -> Word {
+    dl.mode = 0;
+    if io.arg[0] == 0 - 1 { 0 } else {
+    if io.arg[0] < 0 orelse io.arg[1] < 0 orelse io.arg[2] < 0 orelse io.arg[3] < 0
+        orelse io.arg[4] < 0 orelse io.arg[5] < 8 orelse io.arg[0] % 8 != 0
+        orelse io.arg[1] % 8 != 0 orelse io.arg[3] % 16 != 0
+        orelse io.arg[4] % 8 != 0 orelse io.arg[5] % 8 != 0 { data_reject() } else {
+        dl.names = io.arg[1] / 8;
+        dl.slot_rows = io.arg[0] / 8;
+        dl.shared_rows = io.arg[3] / 16;
+        dl.placement_rows = io.arg[4] / 8;
+        dl.scanned = 0;
+        dl.total = 0;
+        dl.slot_at = 0;
+        dl.shared_at = 0;
+        dl.placement_at = 0;
+        dl.mode = 1;
+        io.fin[0] = dl.slot_rows;
+        io.fin[1] = dl.shared_rows;
+        io.fin[2] = dl.placement_rows;
+        1
+    }}
+}
+fn slot_valid() -> bool {
+    unsigned32(io.fin[0]) andalso io.fin[0] < dl.names
+        andalso (io.fin[1] == 1 orelse io.fin[1] == 2)
+        andalso short_unsigned(io.fin[2]) andalso io.fin[2] != 0
+}
+fn slot_check() -> Word {
+    if dl.mode != 1 orelse dl.scanned >= dl.slot_rows { data_error() } else {
+        if not slot_valid() { data_reject() } else {
+            dl.total = dl.total + io.fin[2];
+            dl.scanned = dl.scanned + 1;
+            0
+        }
+    }
+}
+fn slots_validated() -> Word {
+    if dl.mode != 1 orelse dl.scanned != dl.slot_rows { data_error() } else {
+        dl.mode = 2;
+        io.fin[0] = dl.total;
+        0
+    }
+}
+fn slot_begin() -> Word {
+    if dl.mode != 2 orelse dl.slot_at >= dl.slot_rows { data_error() } else {
+        if not slot_valid() { data_reject() } else {
+            dl.name = io.fin[0];
+            dl.visibility = io.fin[1] - 1;
+            dl.run = io.fin[2];
+            io.fin[0] = dl.name;
+            dl.mode = 3;
+            1
+        }
+    }
+}
+fn slot_name_ready() -> Word {
+    if dl.mode != 3 { data_error() } else {
+        io.fin[0] = dl.run;
+        io.fin[1] = dl.visibility;
+        dl.mode = 4;
+        0
+    }
+}
+fn slot_copied() -> Word {
+    if dl.mode != 4 orelse io.arg[0] != dl.run { data_error() } else {
+        dl.slot_at = dl.slot_at + 1;
+        dl.mode = 2;
+        0
+    }
+}
+fn shared_begin() -> Word {
+    if dl.mode != 2 orelse dl.slot_at != dl.slot_rows orelse dl.shared_at >= dl.shared_rows { data_error() } else {
+    if not unsigned32(io.fin[0]) orelse not byte_unsigned(io.fin[1])
+        orelse not short_unsigned(io.fin[2]) orelse not unsigned32(io.fin[3])
+        orelse not short_unsigned(io.fin[4]) orelse io.fin[4] == 0
+        orelse not short_unsigned(io.fin[5]) { data_reject() } else {
+        dl.offset = io.fin[0];
+        dl.kind = io.fin[1];
+        dl.span = io.fin[2];
+        dl.run = io.fin[4];
+        dl.stride = io.fin[5];
+        if not unsigned32(dl.offset + (dl.run - 1) * dl.stride) { data_reject() } else {
+            dl.pos = 0;
+            dl.mode = 5;
+            io.fin[0] = dl.run;
+            0
+        }
+    }}
+}
+// The owned decoder does not use first_slot. The borrowed accessor and later
+// verifier have their own contracts. Offsets are derived here, five per batch.
+fn shared_next() -> Word {
+    if dl.mode != 5 { data_error() } else {
+        if dl.pos == dl.run { dl.shared_at = dl.shared_at + 1; dl.mode = 2; 0 } else {
+            dl.out = 0;
+            for i in 0..5 {
+                if dl.pos < dl.run {
+                    io.fin[i * 3] = dl.offset + dl.pos * dl.stride;
+                    io.fin[i * 3 + 1] = dl.kind;
+                    io.fin[i * 3 + 2] = dl.span;
+                    dl.pos = dl.pos + 1;
+                    dl.out = dl.out + 1;
+                }
+            }
+            dl.out
+        }
+    }
+}
+fn placement_read() -> Word {
+    if dl.mode != 2 orelse dl.slot_at != dl.slot_rows orelse dl.shared_at != dl.shared_rows
+        orelse dl.placement_at >= dl.placement_rows { data_error() } else {
+        if not short_unsigned(io.fin[0]) orelse not unsigned32(io.fin[1]) { data_reject() } else {
+            dl.placement_at = dl.placement_at + 1;
+            0
+        }
+    }
+}
+fn initializer_plan() -> Word {
+    if dl.mode == 2 {
+        if dl.slot_at != dl.slot_rows orelse dl.shared_at != dl.shared_rows
+            orelse dl.placement_at != dl.placement_rows { data_error() } else {
+            io.fin[0] = 0;
+            dl.mode = 7;
+            3
+        }
+    } else { if dl.mode == 7 {
+        if not unsigned32(io.fin[0]) orelse not unsigned32(io.fin[1]) { data_reject() } else {
+            dl.init_count = io.fin[1];
+            dl.mode = 6;
+            if io.fin[0] == 0xFFFFFFFF {
+                io.fin[0] = dl.init_count;
+                io.fin[1] = 0;
+                1
+            } else { 2 }
+        }
+    } else { data_error() }}
+}
+fn initializer_ready() -> Word {
+    if dl.mode != 6 orelse io.arg[0] != dl.init_count { data_error() } else { dl.mode = 0; 0 }
+}
+fn data_dispatch(cmd: Word) -> Word {
+    if cmd == 30 { data_begin() } else {
+    if cmd == 31 { slot_check() } else {
+    if cmd == 32 { slots_validated() } else {
+    if cmd == 33 { slot_begin() } else {
+    if cmd == 34 { slot_name_ready() } else {
+    if cmd == 35 { slot_copied() } else {
+    if cmd == 36 { shared_begin() } else {
+    if cmd == 37 { shared_next() } else {
+    if cmd == 38 { placement_read() } else {
+    if cmd == 39 { initializer_plan() } else {
+    if cmd == 40 { initializer_ready() } else { data_error() }}}}}}}}}}}
+}
+
 fn dispatch(cmd: Word) -> Word {
-    if cs.mode != 0 andalso cmd < 12 andalso not (cmd >= 8 andalso cmd <= 11 andalso cs.mode == 6) { constant_error() } else {
-    if nr.mode != 0 andalso (cmd < 8 orelse cmd > 11) { 0 - 296 } else {
+    if dl.mode != 0 andalso cmd < 30 andalso not (cmd >= 8 andalso cmd <= 11 andalso dl.mode == 3) { data_error() } else {
+    if lt.mode != 0 andalso (cmd < 22 orelse cmd > 29) andalso not (cmd >= 8 andalso cmd <= 11 andalso lt.mode == 5) { layout_error() } else {
+    if cs.mode != 0 andalso (cmd < 12 orelse cmd > 21) andalso not (cmd >= 8 andalso cmd <= 11 andalso cs.mode == 6) { constant_error() } else {
+    if nr.mode != 0 andalso (cmd < 8 orelse cmd > 11) andalso not (cmd == 28 andalso lt.mode == 5 andalso io.arg[0] == 0) { 0 - 296 } else {
     if sg.mode != 0 andalso cmd >= 8 { schema_error() } else {
+    if cmd >= 30 { data_dispatch(cmd) } else {
+    if cmd >= 22 { layouts_dispatch(cmd) } else {
     if cmd >= 12 { constants_dispatch(cmd) } else {
     if cmd >= 8 { names_dispatch(cmd) } else {
     if cmd == 0 { tables_begin() } else {
@@ -506,6 +820,12 @@ fn dispatch(cmd: Word) -> Word {
 }
 
 }
+}
+}
+
+}
+}
+
 }
 }
 

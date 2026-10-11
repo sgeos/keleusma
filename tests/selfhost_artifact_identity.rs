@@ -237,6 +237,43 @@ fn production_compiler_matches_every_complete_stage_artifact() {
                 "{name}: constant values"
             );
         }
+        let decoded_layouts =
+            keleusma::selfhost::wire_decode_layout_metadata_via_kel(raw_auxiliary)
+                .unwrap_or_else(|e| panic!("{name}: layout semantics failed: {e:?}"));
+        let expected_templates: Vec<_> = reference
+            .chunks
+            .iter()
+            .flat_map(|c| c.struct_templates.iter().cloned())
+            .collect();
+        assert_eq!(
+            decoded_layouts.templates.as_ref(),
+            Some(&expected_templates),
+            "{name}: templates"
+        );
+        assert_eq!(
+            decoded_layouts.enum_layouts.as_ref(),
+            Some(&reference.enum_layouts),
+            "{name}: enum layouts"
+        );
+        let decoded_data = keleusma::selfhost::wire_decode_data_layout_via_kel(raw_auxiliary)
+            .unwrap_or_else(|e| panic!("{name}: data layout semantics failed: {e:?}"));
+        match (&decoded_data, &reference.data_layout) {
+            (None, None) => {}
+            (Some(a), Some(b)) => {
+                assert_eq!(a.slots, b.slots, "{name}: data slots");
+                assert_eq!(a.shared_layout, b.shared_layout, "{name}: shared offsets");
+                assert_eq!(
+                    a.private_composite_layout, b.private_composite_layout,
+                    "{name}: private placements"
+                );
+                assert_eq!(
+                    keleusma::wire_schema::encode_constants(&a.private_init).unwrap(),
+                    keleusma::wire_schema::encode_constants(&b.private_init).unwrap(),
+                    "{name}: initializers"
+                );
+            }
+            _ => panic!("{name}: data layout presence disagrees"),
+        }
         let decoded_signatures =
             keleusma::selfhost::wire_decode_signature_metadata_via_kel(raw_auxiliary)
                 .unwrap_or_else(|e| panic!("{name}: signature semantics failed: {e:?}"));

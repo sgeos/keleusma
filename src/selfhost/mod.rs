@@ -43,6 +43,13 @@ mod wire_debug;
 pub use wire_debug::wire_debug_pool_via_kel;
 mod wire_auxiliary;
 pub use wire_auxiliary::wire_auxiliary_from_module_via_kel;
+mod wire_data_decode;
+pub use wire_data_decode::wire_decode_data_layout_via_kel;
+mod wire_layout_decode;
+pub use wire_layout_decode::{
+    WireDecodedLayouts, wire_decode_enum_layouts_via_kel, wire_decode_layout_metadata_via_kel,
+    wire_decode_struct_templates_via_kel,
+};
 mod wire_constants_decode;
 pub use wire_constants_decode::wire_decode_constant_pools_via_kel;
 mod wire_semantics;

@@ -29,6 +29,8 @@ fn wire_stream_state_is_priced_as_private_value_slots() {
         (schema, "sg", "mode", 14, 448),
         (schema, "nr", "mode", 7, 224),
         (schema, "cs", "mode", 23, 736),
+        (schema, "lt", "mode", 17, 544),
+        (schema, "dl", "mode", 20, 640),
     ] {
         let start = stage.find(&format!("private data {name} {{")).unwrap();
         let end = start + stage[start..].find('}').unwrap() + 1;

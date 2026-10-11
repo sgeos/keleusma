@@ -6,6 +6,46 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-11 Layout families decode through the schema stage
+
+Strict template and enum-layout readers now share Keleusma range validation and request-driven
+name reconstruction. The optional metadata helper decodes the two families independently after
+shared parsing checks. A bad name can discard one family without discarding the other. Name data
+rejections now have an internal typed distinction from transport, allocation and protocol failures.
+Only explicit stage-directed data rejection produces an absent optional family. A direct protocol
+control proves that a stage failure is propagated rather than defaulted away.
+
+Data-layout decoding distinguishes absent DATA_SLOTS from a present empty table. Keleusma checks
+required tables, slot names, visibility and nonzero run lengths, then supplies repeat directives
+for named slots. Shared offsets are computed in Keleusma and returned five at a time. The stage
+checks overflow before emitting a shared run, preserves kind and length bytes, and retains the
+owned reference decoder's treatment of unused first_slot and private-placement fields. It requests
+the first initializer record and selects either repeated Int(0) values or a separate constant-pool
+decode operation. Empty stored ranges still require a valid constant table, while elided ranges do
+not. Codec checks remain separate from the later verifier.
+
+Commands 22 through 29 handle templates and enums. Commands 30 through 40 handle data layout.
+Active transactions exclude incompatible commands and permit their own nested name reads.
+The schema stage now has 67 chunks and a 32,964-byte artifact. Shared storage remains 1,216 bytes.
+Private state is 2,592 bytes, adding seventeen layout slots and twenty data slots. Its largest
+legacy input channel uses 87 of 640 occurrence rows. Wire remains unchanged. Inference independence
+covers 48,424 expression types across fourteen sources.
+
+Controls cover signed discriminants, Unicode and malformed names, independent optional failures,
+shared parse failures, absent and empty tables, non-default initializer trees, elision, nonzero
+runs, offset overflow, ignored fields and the 65,535/65,536 logical-slot boundary. A runtime control
+removes the compiled module's original layout, installs the decoded layout and observes shared
+access and persistent initialization across two calls. All fourteen stage artifacts now compare
+template, enum and data-layout values against the reference as well as earlier decoder families.
+The final workspace passes 3,138 tests with five ignored across 178 suites. Clippy, documentation
+and no-default checks pass. Current terminal receipts and coverage limits are in the reverse prompt.
+
+No failed or unexpectedly empty verification run required diagnostic triage before the completion
+samples. The local shadow pilot records three bounded claims with non-independent review. External
+evaluation remains unavailable under the prior approval rejection. Full Order 1 remains active.
+Parameter tags, debug metadata and complete module assembly remain open, followed by source-admission
+capacity coverage, shipping integration, remaining type obligations and final integration gates.
+
 ## 2026-10-11 Names and owned constant forests decode through Keleusma
 
 Name lookup now requests a NameRef and its pool span through the schema stage. The stage checks
