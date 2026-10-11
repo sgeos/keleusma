@@ -352,22 +352,23 @@ All fourteen pipeline-produced stage modules serialize through Keleusma section 
 match complete reference artifacts. Opcode and operand-pool encoding and semantic decoding
 cover all 66 instruction identifiers. The all-stage comparison also checks decoded instruction
 sequences. General constant forests and private initializer trees encode within the declared
-bounds. Full auxiliary decoding, admission-preserving capacity coverage, remaining type-input
+bounds. Complete module decoding, admission-preserving capacity coverage, remaining type-input
 obligations, shipping serialization and final integration gates keep Order 1 open.
 The shipping serializer remains Rust.
 Auxiliary directory voting, bounds checks and duplicate detection now run in Keleusma, without
-reference region positions or payload copies. Other schema semantics and complete module
+reference region positions or payload copies. Complete outer framing and module
 reconstruction remain open. The all-stage comparison includes independently decoded directories.
 Signature and native-return semantics now decode in a dedicated wire_schema stage, preserving
 the optional-table policy and checking every compiled chunk's signature. The new stage has
-67 chunks and a 32,964-byte artifact. Name lookup, UTF-8 validation and owned constant
+96 chunks and a 46,964-byte artifact. Name lookup, UTF-8 validation and owned constant
 reconstruction now run through this stage. Constant pools for every current stage match the
 reference. Template, enum-layout and data-layout semantics now also decode through Keleusma,
-including optional-family behavior, run expansion and initializer selection. Parameter tags,
-debug metadata and complete module assembly remain open.
+including optional-family behavior, run expansion and initializer selection. Parameter tags and debug pools now also decode through Keleusma. The complete auxiliary-body
+reader composes these families and matches every stage. Outer framing and complete module assembly
+remain open.
 All seventeen fixed-record kinds now decode through Keleusma, and every fixed-record stage
-region reconstructs byte-identically from those decoded fields. The remaining auxiliary
-families and cross-table checks still require integration. The legacy type-input path uses
+region reconstructs byte-identically from those decoded fields. Auxiliary families now compose through Keleusma metadata decisions. Outer frame cross-checks
+and opcode-span assembly still require integration. The legacy type-input path uses
 638 of the approved 640 occurrence rows after inlining fourteen numeric helpers.
 
 Wire has 561 chunks, 715 name events, 23,713 of 49,152 input bytes and 1,290 of 1,365 constant

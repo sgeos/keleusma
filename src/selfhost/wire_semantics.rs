@@ -9,8 +9,8 @@ use crate::wire_schema::{ShapeRecord, SignatureRecord, kind};
 
 pub(super) const ARG: usize = 0;
 pub(super) const FIN: usize = 8;
-const BYTES: usize = FIN + 16;
-const NAME_WINDOW: usize = 1024;
+pub(super) const BYTES: usize = FIN + 16;
+pub(super) const NAME_WINDOW: usize = 1024;
 
 /// Signature-family results with the optional-table decision preserved.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -311,7 +311,7 @@ pub fn wire_decode_signature_metadata_via_kel(
 
 // Both returned spans are supplied by the schema stage. The host only checks
 // them against the borrowed buffer before transport or typed construction.
-fn requested_bytes<'a>(
+pub(super) fn requested_bytes<'a>(
     vm: &Vm<'_, '_>,
     shared: &[u8],
     bytes: &'a [u8],
@@ -376,8 +376,7 @@ fn validate_name_bytes_decision(
     Ok(())
 }
 
-#[cfg(test)]
-fn validate_name_bytes(
+pub(super) fn validate_name_bytes(
     vm: &mut Vm<'_, '_>,
     shared: &mut [u8],
     bytes: &[u8],

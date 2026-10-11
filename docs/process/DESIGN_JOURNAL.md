@@ -13,6 +13,53 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-11 Debug pools and complete auxiliary bodies decode through Keleusma
+
+Parameter tags and debug pools now decode through the schema stage. Parameter ranges preserve
+absent-pool behavior and recognize Float independently of execution support. Debug decoding
+preserves record order, opaque type blobs, unresolved indices and trailing bytes. Keleusma
+requests each raw field and payload, validates string encoding through the existing name reader,
+and rejects truncated fields and unknown kinds. Operand lists cross fifteen-value windows.
+Counts are checked against remaining input before host allocations.
+
+The complete auxiliary-body reader composes the directory, record and semantic readers.
+Keleusma checks required table dimensions, chunk and native names and block tags, selects the
+first header, normalizes the entry sentinel and supplies template, parameter and debug ranges.
+Invalid debug spans become absent, matching the reference. Debug bytes remain opaque at this
+layer. Zero-chunk inputs do not decode unused constant tables. Optional layout and signature
+families retain their existing policies. Native names and return descriptors retain independent
+lengths. Rust transports records and constructs owned values from these decisions.
+
+Commands 41 through 47 implement parameter and debug reads. Commands 48 through 56 implement
+module metadata. The dispatcher now separates routing from transaction guards to limit nesting.
+Nested parameter and name reads are permitted only while a chunk is being assembled. Protocol
+controls exercise foreign-command refusal, short transport replies, premature completion and
+successful continuation after refusal. Public bytecode version, opcode count and type caps remain
+unchanged.
+
+The schema stage has 96 chunks and a 46,964-byte artifact. Shared storage remains 1,216 bytes
+and private storage is 3,264 bytes. Its largest legacy channel uses 124 of 640 occurrence rows.
+All fourteen sources fit. Inference independence covers 49,723 recorded expression types.
+All fourteen complete stage artifacts and auxiliary values match the reference. A runtime control
+replaces auxiliary fields and observes shared access plus persistent initialization across calls.
+The workspace passes 3,150 tests with five ignored across 180 suites. No-default checks pass
+eleven integration and accounting tests and thirty-eight wire unit tests. Fresh Clippy,
+documentation and no_std checks pass. Exact receipts and remaining coverage limits are in the
+reverse prompt.
+
+The first compiler failure was a test fixture omitting a named enum field. Subsequent failed
+controls assumed unpadded region lengths and used unsupported literal syntax. The container pads
+regions to eight-byte boundaries, so those expectations were corrected against both decoders.
+The diagnostic and three completion claims are captured and reviewed locally in the shadow
+pilot, with non-independent labels and a reviewed export. External evaluation remains unavailable
+under the prior automatic approval rejection. Pilot judgments do not change development gates.
+
+Complete outer framing and module reconstruction remain open. The current canonical unsigned
+framing reader is narrower than the reference loader. Preserve valid noncanonical section offsets,
+trailing frame bytes, shebang prefixes and signature-metadata consistency. Check every operand-pool
+entry, including unused entries, but decode only opcode spans selected by chunks. Capacity coverage,
+shipping serialization, remaining type obligations and final integration gates still keep Order 1 open.
+
 ## 2026-10-11 Layout families decode through the schema stage
 
 Strict template and enum-layout readers now share Keleusma range validation and request-driven

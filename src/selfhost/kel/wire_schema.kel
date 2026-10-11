@@ -799,16 +799,305 @@ fn data_dispatch(cmd: Word) -> Word {
     if cmd == 40 { initializer_ready() } else { data_error() }}}}}}}}}}}
 }
 
-fn dispatch(cmd: Word) -> Word {
-    if dl.mode != 0 andalso cmd < 30 andalso not (cmd >= 8 andalso cmd <= 11 andalso dl.mode == 3) { data_error() } else {
-    if lt.mode != 0 andalso (cmd < 22 orelse cmd > 29) andalso not (cmd >= 8 andalso cmd <= 11 andalso lt.mode == 5) { layout_error() } else {
-    if cs.mode != 0 andalso (cmd < 12 orelse cmd > 21) andalso not (cmd >= 8 andalso cmd <= 11 andalso cs.mode == 6) { constant_error() } else {
-    if nr.mode != 0 andalso (cmd < 8 orelse cmd > 11) andalso not (cmd == 28 andalso lt.mode == 5 andalso io.arg[0] == 0) { 0 - 296 } else {
-    if sg.mode != 0 andalso cmd >= 8 { schema_error() } else {
-    if cmd >= 30 { data_dispatch(cmd) } else {
-    if cmd >= 22 { layouts_dispatch(cmd) } else {
-    if cmd >= 12 { constants_dispatch(cmd) } else {
-    if cmd >= 8 { names_dispatch(cmd) } else {
+private data pt { mode: Word, remaining: Word, bad: Word, }
+fn parameter_begin() -> Word {
+    pt.mode = 0;
+    if io.arg[0] == 0 - 1 { 0 } else {
+    if io.arg[0] < 0 orelse not range_ok(io.arg[1], io.arg[2], io.arg[0]) { 0 - 308 } else {
+        pt.remaining = io.arg[2];
+        pt.mode = 1;
+        io.fin[0] = io.arg[1];
+        io.fin[1] = io.arg[2];
+        1
+    }}
+}
+fn parameter_feed() -> Word {
+    if pt.mode != 1 orelse io.arg[0] <= 0 orelse io.arg[0] > 16 orelse io.arg[0] > pt.remaining { 0 - 310 } else {
+        pt.bad = 0;
+        for i in 0..io.arg[0] limit 16 {
+            let tag = io.bytes[i] as Word;
+            if tag < 1 orelse tag > 8 { pt.bad = 1; }
+            io.fin[i] = tag - 1;
+        }
+        if pt.bad != 0 { pt.mode = 0; 0 - 309 } else {
+            pt.remaining = pt.remaining - io.arg[0];
+            io.arg[0]
+        }
+    }
+}
+fn parameter_finish() -> Word {
+    if pt.mode != 1 orelse pt.remaining != 0 { 0 - 310 } else { pt.mode = 0; 0 }
+}
+fn parameters_dispatch(cmd: Word) -> Word {
+    if cmd == 41 { parameter_begin() } else {
+    if cmd == 42 { parameter_feed() } else {
+    if cmd == 43 { parameter_finish() } else { 0 - 310 }}}
+}
+
+private data dr {
+    mode: Word,
+    phase: Word,
+    total: Word,
+    cursor: Word,
+    remaining: Word,
+    operands: Word,
+    want: Word,
+    op: Word,
+    kind: Word,
+}
+fn debug_error() -> Word { 0 - 311 }
+fn debug_truncated() -> Word { dr.mode = 0; 0 - 312 }
+fn debug16(at: Word) -> Word {
+    (io.bytes[at] as Word) + ((io.bytes[at + 1] as Word) lsl 8)
+}
+fn debug32(at: Word) -> Word {
+    debug16(at) + (debug16(at + 2) lsl 16)
+}
+fn debug_begin() -> Word {
+    dr.mode = 0;
+    if io.arg[0] < 0 { debug_error() } else {
+        dr.total = io.arg[0];
+        dr.cursor = 0;
+        dr.phase = 0;
+        dr.remaining = 0;
+        dr.operands = 0;
+        dr.mode = 1;
+        0
+    }
+}
+fn debug_next() -> Word {
+    if dr.mode != 1 { debug_error() } else {
+        if dr.phase == 1 andalso dr.remaining == 0 { dr.phase = 2; }
+        if dr.phase == 3 andalso dr.remaining == 0 { dr.phase = 4; }
+        if dr.phase == 5 andalso dr.remaining == 0 { dr.phase = 6; }
+        if dr.phase == 7 andalso dr.remaining == 0 { dr.mode = 0; 0 } else {
+        if dr.phase == 8 andalso dr.operands == 0 { dr.mode = 4; 7 } else {
+            dr.want = if dr.phase == 3 { 10 } else {
+                if dr.phase == 7 { 7 } else {
+                    if dr.phase == 8 { (if dr.operands < 15 { dr.operands } else { 15 }) * 2 } else { 4 }
+                }
+            };
+            if dr.want > dr.total - dr.cursor { debug_truncated() } else {
+                io.fin[0] = dr.cursor;
+                io.fin[1] = dr.want;
+                dr.mode = 2;
+                1
+            }
+        }}
+    }
+}
+fn debug_count() -> Word {
+    let count = debug32(0);
+    let minimum = if dr.phase == 2 { 10 } else { if dr.phase == 6 { 7 } else { 4 } };
+    if count > (dr.total - dr.cursor) / minimum { debug_truncated() } else {
+        io.fin[0] = count;
+        io.fin[1] = dr.phase / 2;
+        dr.remaining = count;
+        dr.phase = dr.phase + 1;
+        dr.mode = 1;
+        2
+    }
+}
+fn debug_blob() -> Word {
+    let length = debug32(0);
+    if length > dr.total - dr.cursor { debug_truncated() } else {
+        io.fin[0] = dr.cursor;
+        io.fin[1] = length;
+        dr.cursor = dr.cursor + length;
+        dr.mode = 3;
+        if dr.phase == 1 {
+            nr.remaining = length;
+            nr.need = 0;
+            nr.low = 128;
+            nr.high = 191;
+            nr.bad = 0;
+            nr.mode = 2;
+            3
+        } else { 5 }
+    }
+}
+fn debug_reply() -> Word {
+    if dr.mode != 2 orelse io.arg[0] != dr.want { debug_error() } else {
+        dr.cursor = dr.cursor + dr.want;
+        if dr.phase == 0 orelse dr.phase == 2 orelse dr.phase == 4 orelse dr.phase == 6 { debug_count() } else {
+        if dr.phase == 1 orelse dr.phase == 5 { debug_blob() } else {
+        if dr.phase == 3 {
+            io.fin[0] = debug16(0);
+            io.fin[1] = debug32(2);
+            io.fin[2] = debug32(6);
+            dr.remaining = dr.remaining - 1;
+            dr.mode = 1;
+            4
+        } else { if dr.phase == 7 {
+            dr.op = debug32(0);
+            dr.kind = io.bytes[4] as Word;
+            dr.operands = debug16(5);
+            if dr.kind > 11 { dr.mode = 0; 0 - 313 } else {
+            if dr.operands * 2 > dr.total - dr.cursor { debug_truncated() } else {
+                io.fin[0] = dr.op;
+                io.fin[1] = dr.kind + 1;
+                io.fin[2] = dr.operands;
+                dr.phase = 8;
+                dr.mode = 1;
+                6
+            }}
+        } else {
+            let count = dr.want / 2;
+            for i in 0..count limit 15 { io.fin[i + 1] = debug16(i * 2); }
+            io.fin[0] = count;
+            dr.operands = dr.operands - count;
+            dr.mode = 1;
+            8
+        }}}}
+    }
+}
+fn debug_ack() -> Word {
+    if dr.mode == 3 {
+        if dr.phase == 1 andalso (nr.mode != 0 orelse nr.need != 0 orelse nr.remaining != 0 orelse nr.bad != 0) { debug_error() } else {
+            dr.remaining = dr.remaining - 1;
+            dr.mode = 1;
+            0
+        }
+    } else { if dr.mode == 4 {
+        dr.remaining = dr.remaining - 1;
+        dr.phase = 7;
+        dr.mode = 1;
+        0
+    } else { debug_error() }}
+}
+fn debug_dispatch(cmd: Word) -> Word {
+    if cmd == 44 { debug_begin() } else {
+    if cmd == 45 { debug_next() } else {
+    if cmd == 46 { debug_reply() } else {
+    if cmd == 47 { debug_ack() } else { debug_error() }}}}
+}
+
+// Module metadata orchestration. Payload readers use separate schema instances,
+// except names, whose nested transaction is permitted while a name is pending.
+private data mo {
+    mode: Word,
+    names: Word,
+    chunks: Word,
+    natives: Word,
+    chunk_at: Word,
+    native_at: Word,
+    params: Word,
+    debug: Word,
+    pending: Word,
+}
+fn module_error() -> Word { 0 - 314 }
+fn module_bad() -> Word { mo.mode = 0; 0 - 315 }
+fn module_begin() -> Word {
+    mo.mode = 0;
+    if io.arg[0] < 0 orelse io.arg[0] % 8 != 0 orelse io.arg[1] < 0
+        orelse io.arg[2] < 0 - 1 orelse (io.arg[2] >= 0 andalso io.arg[2] % 48 != 0)
+        orelse io.arg[3] < 0 - 1 orelse (io.arg[3] >= 0 andalso io.arg[3] % 8 != 0)
+        orelse io.arg[4] < 32 orelse io.arg[4] % 32 != 0
+        orelse io.arg[5] < 0 - 1 orelse io.arg[6] < 0 - 1
+        orelse io.arg[7] < 0 - 1 orelse (io.arg[7] >= 0 andalso io.arg[7] % 8 != 0) { module_bad() } else {
+        mo.names = io.arg[0] / 8;
+        mo.chunks = if io.arg[2] < 0 { 0 } else { io.arg[2] / 48 };
+        mo.natives = if io.arg[3] < 0 { 0 } else { io.arg[3] / 8 };
+        mo.params = io.arg[5];
+        mo.debug = io.arg[6];
+        mo.chunk_at = 0;
+        mo.native_at = 0;
+        mo.mode = 1;
+        io.fin[0] = mo.chunks;
+        io.fin[1] = mo.natives;
+        0
+    }
+}
+fn module_check_chunk() -> Word {
+    if mo.mode != 1 orelse mo.chunk_at >= mo.chunks { module_error() } else {
+        if io.fin[0] < 0 orelse io.fin[0] >= mo.names
+            orelse io.fin[13] < 1 orelse io.fin[13] > 3 { module_bad() } else {
+            io.fin[0] = io.fin[1];
+            io.fin[1] = io.fin[2];
+            mo.chunk_at = mo.chunk_at + 1;
+            0
+        }
+    }
+}
+fn module_check_native() -> Word {
+    if mo.mode != 1 orelse mo.chunk_at != mo.chunks orelse mo.native_at >= mo.natives { module_error() } else {
+        if io.fin[0] < 0 orelse io.fin[0] >= mo.names { module_bad() } else {
+            mo.native_at = mo.native_at + 1;
+            0
+        }
+    }
+}
+fn module_checked() -> Word {
+    if mo.mode != 1 orelse mo.chunk_at != mo.chunks orelse mo.native_at != mo.natives { module_error() } else {
+        mo.mode = 2;
+        io.fin[0] = 0;
+        io.fin[1] = 32;
+        0
+    }
+}
+fn module_header() -> Word {
+    if mo.mode != 2 { module_error() } else {
+        // Shift before replacing the entry sentinel with a presence flag.
+        for i in 0..9 limit 9 { io.fin[10 - i] = io.fin[9 - i]; }
+        let entry = io.fin[0];
+        io.fin[0] = if entry == 0xFFFFFFFF { 0 } else { 1 };
+        io.fin[1] = if entry == 0xFFFFFFFF { 0 } else { entry };
+        mo.chunk_at = 0;
+        mo.native_at = 0;
+        mo.mode = 3;
+        0
+    }
+}
+fn module_chunk() -> Word {
+    if mo.mode != 3 orelse mo.chunk_at >= mo.chunks { module_error() } else {
+        if not range_ok(io.fin[3], io.fin[4], io.arg[0])
+            orelse (mo.params >= 0 andalso not range_ok(io.fin[5], io.fin[6], mo.params)) { module_bad() } else {
+            let debug_present = io.fin[7] != 0xFFFFFFFF andalso mo.debug >= 0 andalso range_ok(io.fin[7], io.fin[8], mo.debug);
+            io.fin[1] = io.fin[13] - 1;
+            io.fin[2] = io.fin[3];
+            io.fin[3] = io.fin[4];
+            io.fin[4] = if mo.params < 0 { 0 } else { io.fin[5] };
+            io.fin[5] = if mo.params < 0 { 0 } else { io.fin[6] };
+            io.fin[6] = if debug_present { 1 } else { 0 };
+            mo.pending = 0;
+            mo.mode = 4;
+            0
+        }
+    }
+}
+fn module_native() -> Word {
+    if mo.mode != 3 orelse mo.chunk_at != mo.chunks orelse mo.native_at >= mo.natives { module_error() } else {
+        mo.pending = 1;
+        mo.mode = 4;
+        0
+    }
+}
+fn module_name_done() -> Word {
+    if mo.mode != 4 orelse nr.mode != 0 { module_error() } else {
+        if mo.pending == 0 { mo.chunk_at = mo.chunk_at + 1; }
+        else { mo.native_at = mo.native_at + 1; }
+        mo.mode = 3;
+        0
+    }
+}
+fn module_finish() -> Word {
+    if mo.mode != 3 orelse mo.chunk_at != mo.chunks orelse mo.native_at != mo.natives { module_error() } else {
+        mo.mode = 0;
+        0
+    }
+}
+fn module_dispatch(cmd: Word) -> Word {
+    if cmd == 48 { module_begin() } else {
+    if cmd == 49 { module_check_chunk() } else {
+    if cmd == 50 { module_check_native() } else {
+    if cmd == 51 { module_checked() } else {
+    if cmd == 52 { module_header() } else {
+    if cmd == 53 { module_chunk() } else {
+    if cmd == 54 { module_native() } else {
+    if cmd == 55 { module_name_done() } else {
+    if cmd == 56 { module_finish() } else { module_error() }}}}}}}}}
+}
+fn signatures_dispatch(cmd: Word) -> Word {
     if cmd == 0 { tables_begin() } else {
     if cmd == 1 { signature_check() } else {
     if cmd == 2 { tables_finish() } else {
@@ -818,18 +1107,24 @@ fn dispatch(cmd: Word) -> Word {
     if cmd == 6 { native_begin() } else {
     if cmd == 7 { schema_finish() } else { schema_error() }}}}}}}}
 }
-
+fn route(cmd: Word) -> Word {
+    if cmd >= 48 { module_dispatch(cmd) } else {
+    if cmd >= 44 { debug_dispatch(cmd) } else {
+    if cmd >= 41 { parameters_dispatch(cmd) } else {
+    if cmd >= 30 { data_dispatch(cmd) } else {
+    if cmd >= 22 { layouts_dispatch(cmd) } else {
+    if cmd >= 12 { constants_dispatch(cmd) } else {
+    if cmd >= 8 { names_dispatch(cmd) } else { signatures_dispatch(cmd) }}}}}}}
 }
-}
-}
-
-}
-}
-
-}
-}
-
-}
+fn dispatch(cmd: Word) -> Word {
+    if mo.mode != 0 andalso (cmd < 48 orelse cmd > 56) andalso not (mo.mode == 4 andalso ((cmd >= 8 andalso cmd <= 11) orelse (cmd >= 41 andalso cmd <= 43))) { module_error() } else {
+    if pt.mode != 0 andalso (cmd < 41 orelse cmd > 43) { 0 - 310 } else {
+    if dr.mode != 0 andalso (cmd < 44 orelse cmd > 47) andalso not (dr.mode == 3 andalso dr.phase == 1 andalso (cmd == 10 orelse cmd == 11)) { debug_error() } else {
+    if dl.mode != 0 andalso (cmd < 30 orelse cmd > 40) andalso not (cmd >= 8 andalso cmd <= 11 andalso dl.mode == 3) { data_error() } else {
+    if lt.mode != 0 andalso (cmd < 22 orelse cmd > 29) andalso not (cmd >= 8 andalso cmd <= 11 andalso lt.mode == 5) { layout_error() } else {
+    if cs.mode != 0 andalso (cmd < 12 orelse cmd > 21) andalso not (cmd >= 8 andalso cmd <= 11 andalso cs.mode == 6) { constant_error() } else {
+    if nr.mode != 0 andalso (cmd < 8 orelse cmd > 11) andalso not (cmd == 28 andalso lt.mode == 5 andalso io.arg[0] == 0) { 0 - 296 } else {
+    if sg.mode != 0 andalso cmd >= 8 { schema_error() } else { route(cmd) }}}}}}}}
 }
 
 loop main(cmd: Word) -> Word { yield dispatch(cmd) }

@@ -39,8 +39,12 @@ use crate::value_layout::{CompositeKind, ScalarKind};
 use crate::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 use crate::{Arena, compiler::compile, lexer::tokenize, parser::parse};
 
+mod wire_debug_decode;
+pub use wire_debug_decode::{wire_decode_debug_pool_via_kel, wire_decode_parameter_tags_via_kel};
 mod wire_debug;
 pub use wire_debug::wire_debug_pool_via_kel;
+mod wire_aux_decode;
+pub use wire_aux_decode::wire_decode_aux_body_via_kel;
 mod wire_auxiliary;
 pub use wire_auxiliary::wire_auxiliary_from_module_via_kel;
 mod wire_data_decode;

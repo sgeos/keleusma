@@ -164,6 +164,14 @@ fn production_compiler_matches_every_complete_stage_artifact() {
         let raw_auxiliary = keleusma::wire_format::parse_wire_sections(&actual_bytes)
             .unwrap()
             .aux_body;
+        let decoded_aux = keleusma::selfhost::wire_decode_aux_body_via_kel(raw_auxiliary)
+            .unwrap_or_else(|e| panic!("{name}: complete auxiliary decoding failed: {e:?}"));
+        let expected_aux = keleusma::wire_schema::decode_aux_body(raw_auxiliary).unwrap();
+        assert_eq!(
+            keleusma::wire_schema::encode_aux_body(&decoded_aux).unwrap(),
+            keleusma::wire_schema::encode_aux_body(&expected_aux).unwrap(),
+            "{name}: complete auxiliary values"
+        );
         let directory = keleusma::selfhost::wire_auxiliary_directory_via_kel(raw_auxiliary)
             .unwrap_or_else(|e| panic!("{name}: auxiliary directory failed: {e:?}"));
         let expected_directory = keleusma_wire::WireView::parse(raw_auxiliary).unwrap();
