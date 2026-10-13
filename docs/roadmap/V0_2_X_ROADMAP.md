@@ -348,19 +348,18 @@ The gaps to close, from the current subset to the full grammar:
 
 ## Current Order-1 status, 2026-10-11
 
-The latest feature checkpoint adds source return-layout queries across declaration order.
-Ten valid sources preserve independent type acceptance and complete artifacts. Four decoded
-programs execute to seven and four invalid uses reject independently. Token seeks are explicit,
-and collecting and bounded feeds agree. All fourteen stage artifacts remain identical to the
-reference. Inference independence covers 58,671 recorded types. The parser has 233 chunks,
-a 194,916-byte artifact, 336,024 shared bytes and 1,367,904 private bytes.
+The 2026-10-13 frame repair closes the guarded-head local-slot mismatch and restores the
+generic reference-cross-check control. Thirteen allocation cases preserve complete artifacts.
+The full workspace passes 3,227 tests and the final standalone self-host run passes 2,970,
+with zero failures in either. All five feature configurations pass. Fourteen actual shipping
+command outputs match the complete reference artifacts. A stage-decision intervention proves
+that derived rejection depends on Keleusma with identical transported inputs.
 
-The checkpoint is red on a guarded-head local-slot witness and a generic-return diagnostic
-fixture that no longer reaches the reference cross-check. Those repairs precede remaining
-declaration, binding, occurrence, alias, cast and enum obligations and the final integration
-gates. Selected capacities remain 640. Exact receipts are in the
-[reverse prompt](../process/REVERSE_PROMPT.md), and the
-[completion plan](../decisions/ORDER1_COMPLETION_PLAN.md) carries the full requirements.
+Order 1 remains open. The [completion audit](../decisions/ORDER1_COMPLETION_AUDIT.md) verified
+the stage-corpus gate and found the listed loop outcome-arm lowering still unavailable.
+Implement `for ... limit ... on { ... }`, including its outcome bindings, before closing the
+first-pass milestone. Full-language support remains Order 6. The
+[reverse prompt](../process/REVERSE_PROMPT.md) records exact receipts and current witnesses.
 
 All fourteen pipeline-produced stage modules serialize through Keleusma section emitters and
 match complete reference artifacts. Opcode and operand-pool encoding and semantic decoding

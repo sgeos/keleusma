@@ -342,3 +342,63 @@ fn run_batch(
     }
     Err(protocol("type stage exhausted its declared step budget"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn verdict(module: &Module, inputs: &CallTypeInputs) -> bool {
+        let layout = Layout::from_module(module).unwrap();
+        let declarations = inputs
+            .declarations
+            .iter()
+            .enumerate()
+            .map(|(index, (name, _, _))| (name.as_str(), word(index).unwrap()))
+            .collect();
+        let arities: Vec<_> = inputs.declarations.iter().map(|(_, n, _)| *n).collect();
+        inputs.batches.iter().all(|batch| {
+            let encoded = encode(batch, &declarations).unwrap();
+            run_batch(module, &layout, &arities, &encoded).unwrap()
+        })
+    }
+
+    /// Identical source facts lose a derived rejection when only the stage's
+    /// expression-type decision is disabled. Direct rejection still works.
+    #[test]
+    fn derived_binding_verdict_depends_on_the_keleusma_decision() {
+        let source = include_str!("kel/verify_types.kel");
+        let begin = source.find("fn tyb_node_tag(e: Word) -> Word {").unwrap();
+        let end = source[begin..].find("\nfn ").unwrap() + begin;
+        let mut disabled = source.to_string();
+        disabled.replace_range(begin..end, "fn tyb_node_tag(e: Word) -> Word { 0 }\n");
+        assert_ne!(disabled, source);
+        let normal = super::super::compile_src(source);
+        let without_derivation = super::super::compile_src(&disabled);
+        for (program, expected, disabled_expected) in [
+            (
+                "fn take(x: bool) -> Word { 7 } fn main() -> Word { let a = 1 + 2; take(a) }",
+                false,
+                true,
+            ),
+            (
+                "fn take(x: bool) -> Word { 7 } fn main() -> Word { let a = 1 == 2; take(a) }",
+                true,
+                true,
+            ),
+            (
+                "fn take(x: bool) -> Word { 7 } fn main() -> Word { take(1) }",
+                false,
+                false,
+            ),
+        ] {
+            let inputs = super::super::call_type_inputs_from_pipeline(program);
+            assert_eq!(type_check_inputs_via_kel(&inputs).unwrap(), expected);
+            assert_eq!(verdict(&normal, &inputs), expected, "{program}");
+            assert_eq!(
+                verdict(&without_derivation, &inputs),
+                disabled_expected,
+                "{program}"
+            );
+        }
+    }
+}

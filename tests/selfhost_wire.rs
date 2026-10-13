@@ -12428,6 +12428,7 @@ fn the_driver_refuses_more_names_than_one_call_can_intern() {
 /// The bytes compared are the region PAYLOADS. Their offsets differ from the
 /// reference's because this directory holds two regions rather than twenty;
 /// the contents must not.
+#[cfg(feature = "self-host")]
 #[test]
 fn the_join_holds_on_the_largest_real_stage() {
     use keleusma::wire_schema::kind;
@@ -12577,6 +12578,7 @@ fn the_join_holds_on_the_largest_real_stage() {
 /// leaves all ten stages byte-identical, because every dedup-mode name in every
 /// stage is distinct. `nm_find` is the quadratic scan whose cost justified the
 /// name cap, and no real input has ever taken its matching branch.
+#[cfg(feature = "self-host")]
 #[test]
 fn the_join_holds_across_every_stage() {
     use keleusma::wire_schema::kind;
@@ -12967,10 +12969,10 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     );
     eprintln!("worst names {worst_names}, worst blob {worst_blob}");
     // Measured 2026-10-11. Earlier evidence omitted wire and verify_types.
-    // Parse holds both maxima and leaves 23,660 bytes below the input cap.
+    // Parse holds both maxima and leaves 21,743 bytes below the input cap.
     // Neither capacity is raised here.
-    assert_eq!(worst_names, 901, "the worst-case name count moved");
-    assert_eq!(worst_blob, 25492, "the worst-case blob size moved");
+    assert_eq!(worst_names, 962, "the worst-case name count moved");
+    assert_eq!(worst_blob, 27409, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
@@ -13139,6 +13141,7 @@ fn the_node_bound_and_the_name_bound_are_not_the_same_number() {
 /// A named type because clippy is right that the bare tuple was doing too much:
 /// three unrelated things held positionally, where swapping the last two still
 /// compiles.
+#[cfg(feature = "self-host")]
 type RegionSubject<'a> = (&'a str, Vec<u8>, Vec<Vec<i64>>);
 
 /// Four record tables stream one record per call, past their input bounds.
@@ -13365,9 +13368,13 @@ fn a_missing_header_region_is_refused_rather_than_written_somewhere_else() {
 // --- THE FOUR RECORD-FORMATTING STREAM COMMANDS, DRIVEN FOR THE FIRST TIME ----
 
 /// `ds_stream_step`, `sh_stream_step`, `sg_stream_step`, `ev_stream_step`.
+#[cfg(feature = "self-host")]
 const CMD_DS_STREAM_STEP: i64 = 178;
+#[cfg(feature = "self-host")]
 const CMD_SH_STREAM_STEP: i64 = 179;
+#[cfg(feature = "self-host")]
 const CMD_SG_STREAM_STEP: i64 = 180;
+#[cfg(feature = "self-host")]
 const CMD_EV_STREAM_STEP: i64 = 181;
 
 /// **COMMANDS 178 TO 181 HAD NEVER EXECUTED, AND THIS IS THE FOURTH TIME.**

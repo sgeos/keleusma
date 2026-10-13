@@ -3,183 +3,168 @@
 ## Current state
 
 Continue the complete Order 1 goal and System 1 shadow pilot on line v0.2.3.
-This increment started at cb033eb9 on feat/v02-order1-next. The legacy handoff is
-invalid-and-stale, with its stamp 50 commits behind that starting head. Appendix B
-was read before tracked writes. The V0.3.X worktree and pre-existing .codex/ and
-nvim.log remain untouched. No push, merge or publication was performed.
+This work started at a7ef30ed on feat/v02-order1-next. Its two red controls are now
+repaired. The legacy handoff remains invalid-and-stale, with its stamp 51 commits
+behind the starting head. Appendix B was read before tracked writes. The V0.3.X
+worktree and pre-existing .codex/ and nvim.log remain untouched. No push, merge or
+publication was performed.
 
-This is a feature checkpoint with two failing tests. The repository permits feature
-branches to commit on red. Keep both assertions and repair their causes or restore
-the intended measurement. Do not merge this checkpoint into a version branch.
-The full Order 1 goal remains active.
+All five feature configurations now have passing full-suite receipts. The final
+standalone self-host refresh includes the new stage-decision intervention. The
+[completion audit](../decisions/ORDER1_COMPLETION_AUDIT.md) records the requirements
+and evidence. It found an explicit Workstream A item still unsupported, loop outcome
+arms. The full Order 1 goal remains active. Do not infer completion from the green
+stage corpus or redefine the milestone to omit that named item.
 
-## Return-layout implementation
+## Implemented frame and admission repairs
 
-The parser now performs a token census that records the return-type range of each
-source function. Scalar return kinds are known before the callee declaration is
-parsed normally. Composite return types are parsed on demand by the existing
-Keleusma header grammar. Cached descriptors are tagged with the current body
-generation so temporary descriptor reuse cannot leave a live cache pointer.
+Reconstruction retains relative slots for each head's guard and body. The first word
+of a head_parts entry is now its parameter count. Keleusma code generation allocates
+parameter-copy windows and schedules guard/body phases in order. Later heads start
+after prior allocations. Let bindings are allocated after their initializers, and each
+logical-right-shift temporary is allocated after its operand. Parser slot identities
+map to physical slots, with a 2,048-entry map matching the bounded emitter. Emitted
+uses establish the frame high-water mark. A separate forest_temps counter computes
+nested equality strides without changing allocation state. Private work tags use
+radix sixteen. No public opcode or artifact version changed.
 
-Private record 111 announces a token seek. The driver restarts the lexer on a
-backward seek and discards tokens on a forward seek, retaining at most eight tokens
-in its window. Rust chooses no return type or layout. The appended shared
-return_queries flag opts production feeds in. Legacy stage feeders and the existing
-sequential cursor instrument leave it zero. The named fused feed now uses the
-bounded token path. Shared-slot and six query-array capacities have explicit guards.
+Thirteen artifact controls and four decoded execution cases pass. They cover multiple
+heads, guard and body temporaries, loops, matches, nested shifts and later bindings.
+The inherited guarded-head witness passes. Unknown generic return layout is deferred
+until needed, restoring the original generic divergence control. A tuple-member use
+still reports unavailable layout. The reference comparison and error distinction stay.
 
-Ten valid source cases retain independent true verdicts and complete artifact
-identity. Forward scalar, tuple, nested tuple, array and struct calls work in these
-controls. Arrays of tuples returned from calls and direct indexing also work.
-Four programs execute to seven after Keleusma serialization and decoding. Four
-invalid uses reject independently. Collecting and bounded traces agree, with every
-large cursor change covered by a seek record. Distant queries and a string containing
-a fake declaration preserve all four lower-level compile entry points. The shipping
-entry is covered by the ten-source corpus.
+The full workspace uncovered three additional issues. Tuple interning invalidated an
+old exhaustion fixture. Its replacement uses distinct shapes to test 32 layouts,
+64 literal members and 256 member entries, plus a repeated-shape reuse control. Whole
+nested nominal arrays pass through without requiring an unused element layout. Legacy
+wire-input maxima are pinned to the measured 962 names and 27,409 bytes, below unchanged
+1,024-name and 49,152-byte caps. Test feature gates now match the production self-host
+API they use. Codegen tests run in the self-host and workspace configurations. Two
+wire controls and their helper declarations are locally gated. Other wire tests still
+run without self-host.
 
-The parser has 233 chunks, a 194,916-byte artifact, 336,024 shared bytes and 1,367,904
-private bytes. Shared storage grows by eight bytes and private storage by 197,056
-bytes. Its final source is 383,333 bytes and produces 52,294 Keleusma tokens. The
-collecting token cap remains 40,960. The source-byte cap remains 393,216. Public
-bytecode version stays 2, opcode count stays 66, and selected type capacities stay 640.
+Current stage resources are in tmp/order1-completion-resources.log.
 
-## First repair priority
+- Parse has 233 chunks, a 195,012-byte artifact, 336,024 shared bytes and 1,367,904 private
+  bytes. Its source is 383,694 bytes, below the 393,216-byte lexer source cap.
+- Codegen has 90 chunks, a 76,700-byte artifact, 58,424 shared bytes and 248,320 private
+  bytes. Its source is 142,127 bytes.
+- Reconstruct has 34 chunks and a 33,068-byte artifact.
+- Public bytecode version stays 2, public opcode count stays 66 and selected type
+  capacities stay 640.
 
-The new cache control exposed a guarded-head local-slot mismatch. The independent
-source verdict is true and the reference compiles the program.
+## Next required work
+
+The roadmap explicitly lists for-limit outcome-arm lowering under Workstream A's
+first-pass tasks. These valid witnesses remain unsupported, measured in
+tmp/order1-outcome-audit.log. Both compile through the reference.
 
 ```keleusma
-fn f(x: Word) -> Word when x == 0 {
-    let a = pair();
-    let b = pair();
-    a.1 + b.1
+fn main(n: Word) -> Word {
+    let i = 7;
+    for i in 0..2 limit 2 {} on { ok => {}, limit => {} }
+    i
 }
-fn f(y: Word) -> Word { let a = pair(); a.1 }
-fn pair() -> (bool, Word) { (true, 7) }
-fn main() -> Word { f(0) }
 ```
-
-The shipping entry refuses chunk f at operation seven, with SetLocal 1 against
-reference SetLocal 2. The standing failing test is
-guarded_head_local_bindings_preserve_artifacts in tests/selfhost_return_layouts.rs.
-It retains the complete artifact requirement. A separate cache test now passes and
-checks exactly five seeks, comprising the census rewind and two body query round trips.
-The scratch receipt tmp/order1-returns-cache-trace.log independently records the same.
-
-Inspect reconstruct.kel step and build_multihead. Local records receive remap_base,
-while the binary path passes a LetIn argument through unchanged. Head bases are
-currently computed as the head ordinal plus one times the parameter count. A general
-repair must also account for local allocations and guard/body temporaries before
-later heads. Do not merely shift the first observed setter. The reconstruction and
-code-generation stage sources were not changed by this return-layout increment.
-
-## Second repair priority
-
-The generic fixture in a_divergence_refusal_localises_and_does_not_assign_fault,
-in tests/selfhost_typecheck.rs, no longer reaches the reference cross-check.
 
 ```keleusma
-fn id<T>(x: T) -> T { x }
-fn main() -> Word { id(1) }
+private data d { hit: Word }
+fn main() -> Word {
+    for i in 0..5 limit 5 { if i == 2 { break; } }
+    on { ok => {}, break(bi) => { d.hit = bi; }, limit => {} }
+    d.hit
+}
 ```
 
-Its message is now type checking unavailable because expression layout is unavailable
-near token 12. The query sees the unknown return name T. Previously this fixture
-reached a chunk-order divergence. Preserve a must-fire cross-check test. Determine
-whether an unknown layout should be deferred until an operation needs it, or whether
-the fixture must change while retaining actual cross-check coverage. Do not weaken
-the assertion to accept any error.
+The current result is Unsupported with parser name ids five and six respectively.
+Use tests/for_limit.rs and the reference compile_loop_outcome_dispatch for semantics.
+OK bindings receive the completed count. BREAK and LIMIT bindings receive the exit
+loop variable. A missing BREAK handler falls through to OK. An absent LIMIT handler,
+or its false guard, traps. Preserve guard, scope and index-binding behavior and the
+conservative verifier. Reuse existing public opcodes.
 
-## Verification
+The parser currently finalizes a loop in step_for_emit before recognizing an outcome
+block. Its forst context is stacked to depth eight. Reconstruct stores twelve fields
+per ForLimit, and codegen emits the bare post-loop reclassification and trap path.
+Extend the stage-owned representation and all affected record consumers together.
+Do not replace source-owned decisions with a Rust AST walk.
 
-Commands use empty RUSTC_WRAPPER, CARGO_HUSKY_DONT_INSTALL_HOOKS set to one and
-KEL_SELFHOST_CACHE zero. Verification subjects remained fixed during each live run.
-Every handle listed below has a terminal result.
+The audit also preserves the original first-pass boundary. Full-language support is
+Order 6. Historical legacy-extractor limitations are not proof that the production
+scoped path has the same limitation. Re-derive each claimed gap and maintain explicit
+boundary tests. Audit the new outcome-arm work before declaring Order 1 complete.
 
-- The original ten-source comparison fails in tmp/order1-returns-first.log. Session
-  88245 exits 101. The first implementation passes the ten sources in
-  tmp/order1-returns-implementation.log, session 17681 exiting zero.
-- The first expanded controls pass four return-layout and six tuple tests in
-  tmp/order1-returns-controls.log, session 87153 exiting zero. Command cargo test
-  --release --features self-host --test selfhost_return_layouts --test
-  selfhost_tuple_construction -- --nocapture.
-- The broad run passes 152 codegen tests, 91 parser tests with two ignored, five
-  return-layout tests, six tuple tests and 102 type-checking tests. It fails the
-  guarded-head artifact control and generic diagnostic fixture. Command cargo test
-  --release --features self-host --test selfhost_return_layouts --test
-  selfhost_tuple_construction --test selfhost_parse --test selfhost_typecheck --test
-  selfhost_codegen --no-fail-fast. Log tmp/order1-returns-broad.log. Session 50770
-  exits 101. At this point the cache and artifact assertions were still one test.
-- The final return-layout target separates those assertions and reports six passes
-  and one failure, guarded_head_local_bindings_preserve_artifacts. Command cargo test
-  --release --features self-host --test selfhost_return_layouts -- --nocapture.
-  Log tmp/order1-returns-final-controls.log. Session 19669 exits 101.
-- The isolated generic diagnostic receipt is tmp/order1-returns-generic-diagnostic.log,
-  exiting 101. The isolated original combined cache/artifact receipt is
-  tmp/order1-returns-cache-diagnostic.log, session 32744 exiting 101.
-- The no-default run passes five return-layout and six tuple tests and fails the
-  combined guarded-head artifact control. Command cargo test --release
-  --no-default-features --features self-host --test selfhost_return_layouts --test
-  selfhost_tuple_construction --no-fail-fast. Log tmp/order1-returns-no-default.log.
-  Session 89286 exits 101. This predates the test split.
-- Six artifact tests and three monomorphization controls pass. Command cargo test
-  --release --features self-host --test selfhost_artifact_identity --test
-  selfhost_monomorphize_identity --no-fail-fast -- --nocapture. Log
-  tmp/order1-returns-artifacts.log. Session 86714 exits zero. All fourteen complete
-  stage artifacts pass Keleusma serialization and decoding comparisons. The artifact
-  suite takes 474.24 seconds.
-- Four inference tests pass after erasing 58,671 recorded expression types across
-  fourteen stages. Command cargo test --release --features self-host --lib
-  compiler::inference_independence -- --nocapture. Log tmp/order1-returns-inference.log.
-  Session 30091 exits zero.
-- Four shared-layout and capacity tests pass. Command cargo test --release --features
-  self-host --lib selfhost_host::shared_layout_tests -- --nocapture. Log
-  tmp/order1-returns-shared-layout-final.log. Session 49221 exits zero. The first run
-  failed because its loop-limit reader requires the opening brace at the line end.
-  Formatting that loop and declaring each query array on its own line repairs the
-  guard and allows explicit checks of all six new arrays.
-- The formatting-only stage change after the all-stage run preserves both the full
-  Keleusma token stream and complete parser artifact. Scratch assertions compare the
-  pre-format snapshot with the current file. Log tmp/order1-returns-format-identity.log.
-  Session 78681 exits zero. No executable stage tokens changed after the all-stage run.
-- Fresh Clippy passes with actual Checking. Command cargo clippy --workspace --tests
-  -- -D warnings. Log tmp/order1-returns-clippy-final.log. Session 93176 exits zero.
-- Documentation passes with actual Documenting and RUSTDOCFLAGS set to -D warnings.
-  Command cargo doc --workspace --no-deps. Log tmp/order1-returns-doc.log.
-  Session 62689 exits zero.
-- The build without the standard library passes with actual Checking. Command cargo
-  check --no-default-features --features self-host. Log tmp/order1-returns-nostd.log.
-  Session 79489 exits zero.
+## Verification receipts
 
-The final test split is checked by another Clippy run with actual Checking in
-tmp/order1-returns-clippy-split.log, which exits zero. The four documentation guard
-targets pass 24 tests in tmp/order1-returns-doc-guards.log, session 89475 exiting zero.
-Command cargo test --release --test documentation_links --test claimed_counts --test
-comment_citations --test push_order_claims. Formatting and diff checks pass.
+Commands use empty RUSTC_WRAPPER, CARGO_HUSKY_DONT_INSTALL_HOOKS set to one, and
+KEL_SELFHOST_CACHE zero for self-host verification. Subjects were held fixed during
+live runs. Every handle below is terminal. The new intervention is test-only.
 
-The complete workspace,
-full feature matrix, minimum supported toolchains, Miri, cross-target builds,
-advisory scanning and final integration gates remain outstanding. The source
-inventory is 1,630 integration test functions across 163 files. No library test
-functions were added. The full Order 1 goal is not complete.
+| Check | Command and receipt |
+|---|---|
+| Workspace | cargo test --release --workspace --no-fail-fast. tmp/order1-frames-workspace-final.log. Session 96468 exits zero. 3,227 pass, zero fail, five ignored across 192 summaries. This precedes the added intervention test. |
+| Final self-host | cargo test --release -p keleusma --features self-host --no-fail-fast. tmp/order1-completion-selfhost.log. Session 54094 exits zero. 2,970 pass, zero fail, five ignored across 166 summaries, including the intervention. |
+| No default | cargo test --release -p keleusma --no-default-features --no-fail-fast. tmp/order1-full-no-default.log. 329 pass, zero fail, two ignored. |
+| Signatures | cargo test --release -p keleusma --features signatures --no-fail-fast. tmp/order1-full-signatures.log. 2,349 pass, zero fail, three ignored. |
+| Signatures and shell | cargo test --release -p keleusma --features signatures,shell --no-fail-fast. tmp/order1-full-broad-features.log. 2,366 pass, zero fail, three ignored. |
+| Detached compiler | cargo test --release --manifest-path compiler/Cargo.toml --no-fail-fast. tmp/order1-detached-compiler-tests.log. 86 pass, zero fail. Its Clippy and formatting checks pass in the companion logs. |
+| Current Clippy | cargo clippy --workspace --all-targets -- -D warnings. tmp/order1-completion-clippy.log. Session 51596 exits zero with actual Checking. |
+| Minimum Rust versions | Rust 1.85.0 arena default and no-default checks pass. Rust 1.88.0 core default, no-default, signatures and test checks pass. Logs tmp/order1-msrv-*.log, ending with core-tests-clean. Toolchains were installed without changing the default. |
+| Embedded target | cargo build -p keleusma --target thumbv7em-none-eabihf. tmp/order1-frames-thumb-build.log exits zero. |
+| Miri | Tree Borrows arena tests have 50 unit, six integration and eight documentation passes, with one ignored. The null-text regression passes. Logs tmp/order1-miri-arena-final.log and tmp/order1-miri-null-text-final.log. |
+| Dependency audit | cargo audit. tmp/order1-dependency-audit-final.log exits zero after refreshing 1,296 advisories and scanning 102 dependencies. |
+| Books | English and Japanese builds pass. The extracted translation template matches. Book examples cover 60 complete programs with 85 assertions and zero failures. Logs tmp/order1-book-*.log. |
+| ShellCheck | shellcheck scripts/*.sh. tmp/order1-shellcheck.log exits zero. |
+| Broad docs | cargo doc -p keleusma --no-deps --features signatures,encryption,shell,self-host with deny-warning RUSTDOCFLAGS. tmp/order1-full-feature-doc.log exits zero. |
+| Wire variants | Both all-features and no-default wire-package tests pass in tmp/order1-wire-all-features.log and tmp/order1-wire-no-default.log. |
+| Actual command corpus | Every one of the fourteen .kel stages compiles through target/release/keleusma compile with --compiler self-hosted. tmp/order1-cli-corpus.log, session 57545 exit zero. Every output matches complete reference bytes in tmp/order1-cli-corpus-identity.log. |
 
-## Shadow pilot and interline
+All fourteen stage artifacts and monomorphization controls pass inside the full suites.
+The current inference intervention erases 58,865 recorded types with complete artifact
+identity. Log tmp/order1-completion-inference.log, four tests passing. The new unit test
+in src/selfhost/typecheck.rs disables only the Keleusma expression-type decision while
+keeping production-derived input unchanged. Derived rejection changes to acceptance,
+while direct rejection remains effective. Its focused receipt is
+tmp/order1-derived-decision-control-final.log and the final full self-host run includes it.
+The initial test mutation removed an adjacent helper and failed to bootstrap. That is
+preserved in tmp/order1-derived-decision-control.log and was repaired before the full run.
 
-Pilot task v023-order1-returns-cb03 contains four cases with prefix
-v023-20261011-returns-cb03 and suffixes triage, corpus, execution and transport.
-The triage label is compiler_or_test and the three bounded claim labels are supports.
-All labels are non-independent self-review. Their claims concern the named passing
-controls and do not claim a green increment. The outcome is unresolved, with missing
-usage and elapsed values recorded as null.
+Earlier failures remain in tmp/order1-frames-first.log, controls.log, edges.log,
+final-broad.log and workspace.log. The first full workspace had 3,224 passes and three
+failures, now repaired and followed by the complete green rerun. Minimum-version test
+compilation first exposed missing feature gates and then unused gated helpers. Both
+are fixed without suppressing warnings. Miri setup and the advisory cache initially
+hit sandbox write restrictions, then completed through approved narrow escalations.
+An initial relative book destination escaped the workspace and was corrected to an
+absolute path under tmp. No source was changed to bypass these environment failures.
 
-Payloads were reviewed. External evaluation remains unavailable under the prior
-automatic approval review rejection. No retry or bypass occurred. The reviewed export
-is tmp/jev-shadow-returns-cb03-final.json, containing 174 samples across 44 tasks.
-All four current-task request digests and their immutable source hashes match.
-The three-claim sampling limit is reached. No provider judgment is claimed.
+The documentation guard targets pass 24 tests in tmp/order1-frame-handoff-guards.log,
+session 69748 exiting zero. Command cargo test --release --test documentation_links
+--test claimed_counts --test comment_citations --test push_order_claims. The final
+receipt update is checked again before commit.
 
-The assigned inbox is empty and no peer messages were sent. The tracked interline
-checkpoint is exported and reviewed before handoff. The peer-owned tracked
-shadow-pilot checkpoint remains untouched. After the two failing controls are repaired, continue the
-remaining declaration, binding, occurrence, alias, cast and enum-capacity obligations
-and perform the complete final audit in ORDER1_COMPLETION_PLAN.md.
+The root workspace library run counted 1,394 tests before the new intervention. The
+final isolated self-host library run counted 1,345 tests. The source inventory contains
+1,633 integration test functions across 164 files. Release-only platform jobs outside
+the affected compiler path and remote continuous integration are not claimed here.
+
+## Pilot and handoff
+
+Task v023-order1-frames-a7ef has four cases with prefix v023-20261011-frames-a7ef and
+suffixes triage, corpus, execution and generic. Triage is labelled compiler_or_test.
+The three bounded claims are labelled supports. All labels are non-independent
+self-review. Their sources and exact request hashes were reviewed. The frame-task
+outcome is resolved, with unavailable usage and elapsed values recorded as null.
+The full Order 1 goal remains active because of the outcome-arm item.
+
+The reviewed export is tmp/jev-shadow-frames-a7ef-final.json, containing 178 samples
+across 45 tasks. All four current-task request digests and immutable source hashes
+match. External evaluation remains unavailable under the previous automatic approval
+review rejection. No retry, provider judgment or independent accuracy claim occurred.
+The three-claim sample limit was reached before the final audit intervention.
+
+The assigned inbox is empty. No peer messages were sent. The tracked interline checkpoint
+is exported and reviewed before handoff. The peer-owned tracked pilot checkpoint
+remains untouched. No unfinished verification process should be resumed from the
+older tmp/order1-verification-resume.json, whose two handles have now exited zero.

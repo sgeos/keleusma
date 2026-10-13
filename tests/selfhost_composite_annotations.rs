@@ -318,18 +318,29 @@ fn composite_annotations_preserve_artifacts_and_execution() {
 fn literal_tuple_layout_exhaustion_is_unavailable() {
     use keleusma::selfhost::try_call_type_inputs_from_pipeline;
     use keleusma::selfhost_host::{PARSE_DIAG_TAG_BASE, ParseRecordError};
-    // Separate layout-count, member-count, and total-field-storage boundaries.
-    for (bindings, members, fits) in [
-        (32, 2, true),
-        (33, 2, false),
-        (1, 32, true),
-        (1, 33, false),
-        (8, 32, true),
-        (9, 32, false),
+    // Distinct shapes consume layout entries. Repeated shapes share their layout.
+    // Keep separate layout-count, literal-member and member-storage boundaries.
+    for (bindings, members, distinct, fits) in [
+        (32, 6, true, true),
+        (33, 6, true, false),
+        (1, 64, false, true),
+        (1, 65, false, false),
+        (8, 32, true, true),
+        (9, 32, true, false),
+        (33, 2, false, true),
     ] {
-        let tuple = format!("({})", vec!["1"; members].join(", "));
         let mut source = "fn main() -> Word { ".to_owned();
         for i in 0..bindings {
+            let values = (0..members)
+                .map(|bit| {
+                    if distinct && bit < 6 && i & (1 << bit) != 0 {
+                        "true"
+                    } else {
+                        "1"
+                    }
+                })
+                .collect::<Vec<_>>();
+            let tuple = format!("({})", values.join(", "));
             source.push_str(&format!("let t{i} = {tuple}; "));
         }
         source.push_str("7 }");

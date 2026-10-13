@@ -172,10 +172,6 @@ private data rs {
     // to place it in declaration order (a construction may write fields out of order).
     fp_stack: [Word; 64],
     fp_sp: Word,
-    // Added to every Local (2) node's slot while reconstructing a multiheaded head,
-    // remapping the head's frame slots into its parameter window `(head+1)*pc`. Zero
-    // for a single-headed function, so the Local slot passes through unchanged.
-    remap_base: Word,
     // The FIRST guard to fire, and the quantity that provoked it. A clamped cursor
     // provokes cascades, so a later guard must not overwrite an earlier one.
     rerr_code: Word,
@@ -701,11 +697,7 @@ fn build_struct_eq_nested(a: Word) -> Word {
 // a written else and -(cond + 1) for an omitted else; lhs/rhs hold the branches.
 fn step(k: Word, a: Word) -> Word {
     if is_leaf(k) == 1 orelse k == 72 {
-        if k == 2 {
-            emit(2, a + rs.remap_base, 0, 0)
-        } else {
-            if k == 72 { push(0 - 1) } else { emit(k, a, 0, 0) }
-        }
+        if k == 72 { push(0 - 1) } else { emit(k, a, 0, 0) }
     } else {
     if is_binary(k) == 1 {
         let r = pop();
@@ -1325,13 +1317,11 @@ fn reconstruct_range(start: Word, len: Word) -> Word {
 }
 
 // Reconstruct a multiheaded function: each head's guard and body reconstruct with the
-// head's frame slots remapped into its parameter window, the four-word head_parts
-// entry (param_start, guarded, guard node, body node) is written, and a MultiHead
+// original relative frame slots. The four-word head_parts entry contains
+// (parameter count, guarded, guard node, body node), and a MultiHead
 // node (kind 25, rhs the head count) is the root.
 fn build_multihead(pc: Word) -> Word {
     for h in 0..io.head_count limit 16 {
-        let base = (h + 1) * pc;
-        rs.remap_base = base;
         let guarded = if io.head_guard_len[h] > 0 { 1 } else { 0 };
         let guard_node = if guarded == 1 {
             reconstruct_range(io.head_guard_start[h], io.head_guard_len[h])
@@ -1339,12 +1329,11 @@ fn build_multihead(pc: Word) -> Word {
             0
         };
         let body_node = reconstruct_range(io.head_body_start[h], io.head_body_len[h]);
-        io.head_parts[h * 4] = base;
+        io.head_parts[h * 4] = pc;
         io.head_parts[h * 4 + 1] = guarded;
         io.head_parts[h * 4 + 2] = guard_node;
         io.head_parts[h * 4 + 3] = body_node;
     }
-    rs.remap_base = 0;
     emit(25, 0, 0, io.head_count)
 }
 
@@ -1360,7 +1349,6 @@ loop main(resume: Word) -> Word {
     rs.mp = 0;
     rs.pcount = 0;
     rs.fp_sp = 0;
-    rs.remap_base = 0;
     rs.rerr_code = 0;
     rs.rerr_detail = 0;
     if io.head_count > 0 {

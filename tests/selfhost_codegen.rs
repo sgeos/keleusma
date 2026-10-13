@@ -1,5 +1,8 @@
 // The self-hosted codegen is a full-width host tool, gated to a 64-bit runtime.
 #![cfg(all(
+    // The record adapter uses the production self-host API. This target runs
+    // in the self-host job and the workspace configuration that enables it.
+    feature = "self-host",
     feature = "compile",
     feature = "verify",
     // The reference tables below name `ScalarKind::Float`, a variant that does not
@@ -743,12 +746,9 @@ fn build_body(
     }
 }
 
-/// Flatten a multiheaded function (its heads share a name), building the MultiHead
-/// dispatch (category 3). Each head copies the parameters into fresh consecutive
-/// locals (mirroring the reference's per-head param binding), then flattens its
-/// optional `when` guard and its `yield`-expression body in the scope of those
-/// copies. The 4-word head_parts entry is (param-copy start slot, guarded flag,
-/// guard node, body node).
+/// Flatten each head with relative parameter slots. Guards and bodies have separate
+/// local namespaces. Code generation allocates their physical windows in order.
+/// The entry is (parameter count, guarded flag, guard node, body node).
 fn build_multihead(
     heads: &[&FunctionDef],
     params: &[Param],
@@ -768,24 +768,24 @@ fn build_multihead(
         const_data,
     };
     let pc = params.len() as i64;
-    // The parameters occupy slots 0..pc; each head's copies and body lets follow.
-    let mut next_slot = pc;
+    // Each guard and body starts from the same relative parameter namespace.
+
     let mut entries: Vec<(i64, i64, i64, i64)> = Vec::new();
     for head in heads {
-        let param_start = next_slot;
-        next_slot += pc;
-        // The parameters resolve to this head's copies for its guard and body.
+        let mut next_slot = pc;
+        // Physical parameter copies are allocated by code generation.
         let mut scope: Vec<(String, i64)> = params
             .iter()
             .enumerate()
-            .map(|(i, p)| (param_name(p).to_string(), param_start + i as i64))
+            .map(|(i, p)| (param_name(p).to_string(), i as i64))
             .collect();
         let (guarded, guard_node) = match &head.guard {
             Some(g) => (1, flatten(g, &mut scope, &mut next_slot, &mut ctx)),
             None => (0, 0),
         };
+        next_slot = pc;
         let body_node = flatten_block(&head.body, &mut scope, &mut next_slot, &mut ctx);
-        entries.push((param_start, guarded, guard_node, body_node));
+        entries.push((pc, guarded, guard_node, body_node));
     }
     for (ps, g, gn, bn) in &entries {
         ctx.head_parts.push(*ps);
@@ -2029,8 +2029,8 @@ fn self_compile_codegen_atomic_functions() {
     // block share one emission form (75 -> 76).
     // Guarded match results and enum cast dispatch added two helpers, both checked above.
     // Nested tuple extraction adds an internal operand-packing helper.
-    // Data-address relocation adds one bounded translation helper.
-    const EXPECTED_SELF_COMPILE: usize = 80;
+    // Data relocation adds one helper. Head phases, local-slot mapping and shift phases add ten.
+    const EXPECTED_SELF_COMPILE: usize = 90;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -4173,14 +4173,9 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
     (fns, names, data_records, enum_records)
 }
 
-/// Combine the heads of a multiheaded function into the codegen Body codegen.kel's
-/// multihead dispatch consumes. Each head's guard and body are reconstructed into one
-/// shared node array, its frame slots remapped by the head's `param_start` -- the heads'
-/// parameter copies occupy `(i+1)*pc .. (i+2)*pc` (this covers heads whose only frame
-/// slots are the parameters; heads with their own lets or loops need the additional
-/// per-head temp offset, a later refinement). Each head contributes a four-word
-/// head_parts entry (param_start, guarded, guard node, body node), and a MultiHead node
-/// (kind 25, rhs = head count) is the root; the category is 3.
+/// Reconstruct each guard and body with relative slots. Code generation allocates
+/// parameter-copy windows and rebases the ranges after earlier heads and guards.
+/// Each head contributes (parameter count, guarded flag, guard node, body node).
 fn build_multihead_bridge(heads: &[&ParsedFn], pc: usize) -> Body {
     let mut nodes: Vec<Node> = Vec::new();
     let mut call_args: Vec<i64> = Vec::new();
@@ -4188,20 +4183,13 @@ fn build_multihead_bridge(heads: &[&ParsedFn], pc: usize) -> Body {
     let mut match_parts: Vec<i64> = Vec::new();
     let mut head_parts: Vec<i64> = Vec::new();
     let mut entries: Vec<(i64, i64, i64, i64)> = Vec::new();
-    for (i, h) in heads.iter().enumerate() {
-        let base = ((i + 1) * pc) as i64;
-        // Remap frame-slot references (Local) into this head's parameter window.
-        let remap = |recs: &[(i64, i64)]| -> Vec<(i64, i64)> {
-            recs.iter()
-                .map(|&(k, a)| if k == 2 { (k, a + base) } else { (k, a) })
-                .collect()
-        };
+    for h in heads {
+        let base = pc as i64;
         let (guarded, guard_node) = if h.guard.is_empty() {
             (0i64, 0i64)
         } else {
-            let g = remap(&h.guard);
             let root = reconstruct_into(
-                &g,
+                &h.guard,
                 &mut nodes,
                 &mut call_args,
                 &mut limit_parts,
@@ -4209,9 +4197,8 @@ fn build_multihead_bridge(heads: &[&ParsedFn], pc: usize) -> Body {
             );
             (1i64, root)
         };
-        let b = remap(&h.body);
         let body_node = reconstruct_into(
-            &b,
+            &h.body,
             &mut nodes,
             &mut call_args,
             &mut limit_parts,
@@ -5493,8 +5480,8 @@ fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize, chunk: &str) ->
 
 // reconstruct.kel increment 4: the multiheaded dispatch. A group of same-named
 // `yield` heads reconstructs to the same forest, head_parts entries, and MultiHead
-// root the Rust `build_multihead_bridge` builds -- each head's frame slots remapped
-// into its parameter window, guards reconstructed when present. With this
+// root the Rust `build_multihead_bridge` builds, retaining relative frame slots
+// and reconstructing guards when present. With this
 // reconstruct.kel covers the whole grammar the bridge does.
 #[test]
 fn reconstruct_kel_matches_rust_for_multihead() {

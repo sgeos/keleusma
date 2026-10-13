@@ -6,6 +6,51 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-13 Frame allocation repaired and full verification refreshed
+
+The two red assertions from a7ef30ed now pass. Reconstruction keeps each guarded head's
+slots relative. Keleusma code generation schedules parameter copies, guard temporaries and
+body locals in forward order, so later heads start after prior allocations. Let bindings are
+allocated after their initializers. Variable logical shifts allocate each temporary after its
+operand. Parser slots map to physical slots, and emitted uses determine the frame high-water
+mark. The nested-equality forest counter is separate from allocation accounting, preserving
+per-element temporary spacing. Private work tags use radix sixteen. No public opcode changed.
+
+Thirteen source cases preserve complete artifacts. Two decoded programs execute to seven for
+both zero and fourteen, covering guarded and trailing heads. Unknown generic return layout is
+deferred until a consumer needs it. The plain generic fixture still exercises a real reference
+divergence, while its tuple-member control reports unavailable layout. No assertion was weakened.
+
+The full workspace run initially found three further issues. Tuple-layout interning made the
+old repeated-shape exhaustion fixture stale. It now uses distinct shapes for layout-count and
+storage boundaries, checks the actual 64-member literal limit and keeps a reuse control.
+Whole nested nominal arrays retain admission when no element layout is needed. Measured legacy
+wire input maxima are 962 names and 27,409 bytes, within unchanged limits of 1,024 and 49,152.
+Test feature gates now match their dependencies. The codegen harness uses the self-host API and
+runs in the workspace and self-host jobs. Two wire controls and their helpers have local gates.
+The remaining wire controls still run without that feature.
+
+Verification now covers all five configurations. Workspace has 3,227 passes and five ignored
+checks. The final standalone self-host run has 2,970 passes and five ignored checks, including a
+new stage-decision intervention. No-default has 329 passes, signatures 2,349 and signatures with
+shell 2,366, all with zero failures. Minimum-version checks, Tree Borrows Miri, the embedded build,
+dependency audit, detached compiler checks, broad-feature documentation, books and ShellCheck
+pass. Fourteen actual command-line stage outputs match complete reference artifacts. The new
+intervention changes only the Keleusma expression-type decision while keeping its input fixed.
+It changes a derived rejection to acceptance while direct rejection remains effective.
+
+Codegen has 90 chunks, a 76,700-byte artifact and 248,320 private bytes. Reconstruct has 34 chunks
+and a 33,068-byte artifact. Parse has 233 chunks, a 195,012-byte artifact and 1,367,904 private
+bytes. Inference independence covers 58,865 recorded types. Bytecode version stays 2, the public
+opcode count stays 66 and selected type-stage capacities stay 640.
+
+The [completion audit](../decisions/ORDER1_COMPLETION_AUDIT.md) found a named Workstream A item
+that is still unavailable. Valid for-limit outcome-arm programs, including a BREAK index binding,
+remain unsupported. The full Order 1 goal therefore remains active. The pilot task records the
+first diagnostic and three supported bounded claims with non-independent labels. External
+assessment remains unavailable under the prior approval rejection. Exact receipts and the next
+witnesses are in the reverse prompt.
+
 ## 2026-10-11 Source return-layout queries, feature checkpoint with two failures
 
 The parser performs a source-token census that records each function's return-type range.

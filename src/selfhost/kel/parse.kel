@@ -4568,7 +4568,7 @@ fn return_call(record: Word, callee: Word) -> Word {
     if rq.scalar[callee] > 0 {
         vl.returns[callee] = rq.scalar[callee]; record
     } else {
-    if rq.cache[callee] > 0 andalso rq.epoch[callee] == rq.generation {
+    if rq.generation > 0 andalso rq.epoch[callee] == rq.generation {
         rq.call_desc = rq.cache[callee]; record
     } else {
         rq.callee = callee; rq.pending_call = record;
@@ -4579,13 +4579,16 @@ fn return_call(record: Word, callee: Word) -> Word {
         ps.emit_arg = ps.cursor; 111
     }}}
 }
+// An unknown return layout does not prevent emitting a plain Call. Consumers that
+// need a physical layout retain their unavailable-layout guard, and the complete
+// reference comparison still rejects unsupported generic transformations.
 fn return_query_finish(at: Word) -> Word {
-    if ht.nknown[at] == 0 { perr(pe_value_layout(), ps.cursor) } else {
-        rq.cache[rq.callee] = at + 1; rq.epoch[rq.callee] = rq.generation;
-        rq.call_desc = at + 1; rq.query = 0; rq.emit_call = 1;
-        ps.cursor = rq.saved_cursor; toks.at = rq.saved_at; ht.mode = 0;
-        0
-    }
+    rq.call_desc = if ht.nknown[at] == 1 { at + 1 } else { 0 };
+    rq.cache[rq.callee] = rq.call_desc; rq.epoch[rq.callee] = rq.generation;
+    if rq.call_desc == 0 { vl.returns[rq.callee] = 0; }
+    rq.query = 0; rq.emit_call = 1;
+    ps.cursor = rq.saved_cursor; toks.at = rq.saved_at; ht.mode = 0;
+    0
 }
 fn return_query_step() -> Word {
     if ps.cursor >= rq.end[rq.callee] { perr(pe_value_layout(), ps.cursor) } else {
@@ -4686,9 +4689,10 @@ fn value_local(slot: Word) -> Word {
         vl.form = ps.sa_variant + 1; vl.bytes = ps.sa_size; vl.layout = ps.sa_tuple; vl.decl = ps.sa_struct + 1;
         if ps.sa_variant == 1 {
             value_scalar(ps.sa_arrkind);
-            if vl.bytes <= 0 { perr(pe_value_layout(), toks.at); } else { value_array(ps.sa_size / vl.bytes); }
+            if vl.bytes <= 0 { value_scalar(0 - 1); } else { value_array(ps.sa_size / vl.bytes); }
         }
-        value_array(ps.sa_len);
+        // Whole values may pass through without requiring a physical element layout.
+        if vl.form != 0 orelse vl.scalar >= 0 { value_array(ps.sa_len); }
     }}}}}
     if slot < ps.pcount andalso ps.pdescriptor[slot] > 0 { value_load(ps.pdescriptor[slot] - 1); }
     for i in 0..stmt.let_count limit 64 {

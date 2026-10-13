@@ -14,22 +14,30 @@ The authoritative scope is the Order 1 row in the
 [wire-format plan](./WIRE_FORMAT_SELFHOST_PLAN.md).
 Full-language support remains Order 6. Existing supported programs must retain their behavior.
 
+## Current audit, 2026-10-13
+
+The [requirement audit](./ORDER1_COMPLETION_AUDIT.md) reconciles current evidence with the
+roadmap and the numbered completion condition. Both inherited red controls are repaired,
+and all five feature configurations pass. The final standalone self-host run includes the
+new stage-decision intervention. The explicitly listed loop outcome-arm lowering remains
+unsupported and is the next required work. The full Order 1 goal remains active.
+
 ## Completion evidence required
 
 | Requirement | Evidence required | Current evidence and remaining work |
 |---|---|---|
 | Compile the complete stage corpus | Complete artifact identity against the reference for every current stage source, with a corpus inventory check | All fourteen pipeline-produced stage modules now serialize through Keleusma section emitters and match complete reference artifacts. The directory inventory is checked. Shape interning and signature-table numbering now run in Keleusma from semantic fields, using bounded windows over prior emitted records. |
 | Avoid reference scaffold borrowing | Production compilation assembles module fields from pipeline output | `self_host_compile_scratch` provides this path. Preserve it through integration. |
-| Derive type inputs from the self-hosted pipeline | Production rejection receives facts without walking the reference parser's abstract syntax tree or borrowing inferred types | The production input path now derives scoped scalar constraints from Keleusma parser and reconstruction output. Composite facts, complete binder/occurrence coverage and general admission remain incomplete. |
+| Derive type inputs from the self-hosted pipeline | Production rejection receives facts without walking the reference parser's abstract syntax tree or borrowing inferred types | The production scoped path uses Keleusma parser records and reconstructed nodes. All fourteen stage inputs, the negative corpus and rule/form census pass. The stage-decision intervention demonstrates dependence on Keleusma with fixed inputs. Legacy extraction APIs retain explicit boundary tests. Outcome-arm bindings remain unavailable. |
 | Reject ill-typed subset programs | Independent pipeline rejection agrees with the reference on the rejection corpus, valid controls, and the rule-versus-form census | The scoped pipeline harness exercises all twenty rejection cases and seven valid controls without reference-first masking. The separate sixteen-cell rule-versus-form census now runs through that path with eight valid controls. Its required test now passes after preserving match-arm guards. Parser source diagnostics and type-stage verdicts remain distinct from unsupported syntax, capacity and execution failures. The shipping driver now obtains the independent verdict first. Production corpus and census checks assert PipelineRejected so reference rejection cannot mask missing stage coverage. |
-| Preserve the first-pass monomorphization result | Every stage remains unchanged by monomorphization, with a control that does change | The corpus now lists all fourteen sources. Identity, changing control and directory inventory tests passed again after the relocation change on 2026-10-11. Repeat if stage sources change. |
-| Preserve independence from inferred expression types | The current stage corpus compiles identically with recorded expression types absent | Four standing tests cover all fourteen sources with a directory inventory, a populated-table intervention after recording, a changed-emission control and an admission control. On 2026-10-11, clearing 58,671 recorded types leaves all fourteen complete artifacts unchanged. This does not remove reference admission or establish full-language independence. |
+| Preserve the first-pass monomorphization result | Every stage remains unchanged by monomorphization, with a control that does change | The corpus now lists all fourteen sources. Identity, changing control and directory inventory tests passed again after the allocation repair on 2026-10-13. Repeat if stage sources change. |
+| Preserve independence from inferred expression types | The current stage corpus compiles identically with recorded expression types absent | Four standing tests cover all fourteen sources with a directory inventory, a populated-table intervention after recording, a changed-emission control and an admission control. On 2026-10-11, clearing 58,865 recorded types leaves all fourteen complete artifacts unchanged. This does not remove reference admission or establish full-language independence. |
 | Emit complete artifacts through Keleusma | Production output uses the Keleusma wire emitter for framing, opcode records, operand pools, auxiliary regions and integrity fields | The fourteen-stage comparison now supplies no reference section bytes, region positions or artifact lengths. All 66 opcode identifiers have encoding controls. Native names and return shapes now preserve independent lengths and share the existing name and shape tables. Struct templates now derive type-name indices and contiguous field-name runs in Keleusma, including empty runs. Debug-pool ordering and encoding now run in a dedicated Keleusma stage, and chunk debug offsets are stage-derived. Private composite placements and scalar initializer pools now encode through Keleusma, including stage-derived elision and root ranges. Composite and named constant forests, including initializer trees, now use the Keleusma breadth-first walker within the declared input bounds. Opcode and operand-pool semantic decoding now matches all fourteen stage instruction sequences and a 153,600-record raw corpus in each of two feature configurations. Auxiliary directory voting, bounds and duplicate checks now run in Keleusma, with borrowed payloads and no reference positions. All seventeen fixed-record kinds now decode through Keleusma and reconstruct every fixed-record region in the stage corpus. Signature and native-return range checks and shape-tag interpretation now run in a dedicated Keleusma schema stage. Borrowed name lookup, UTF-8 validation and owned constant reconstruction now run through Keleusma, including ranges, tags, name and child requests and ownership checks. Templates, enum layouts and data-layout semantics now decode through Keleusma, including optional-family policy, run expansion and initializer selection. Parameter tags and debug pools now decode through Keleusma, and the complete auxiliary-body reader composes all semantic families. Complete outer framing and module reconstruction now run through Keleusma readers. Windowed name interning and breadth-first constant scheduling remove the corpus-sized encoder limits. Contributor order, ranges and parameter tags are stage decisions. Unsigned self-hosted command output now uses the Keleusma emitter. Data-slot grouping, record splitting and shared-layout stride/run derivation now run in Keleusma from logical slot facts. |
 | Reach the shipping tool | An end-to-end command emits the independently assembled artifact and reports type rejection through the new path | The command emits the same artifact as the production library, executes a valid result of seven, and independently rejects three invalid sources without emitting files. Unsigned self-hosted output now uses Keleusma serialization. A discriminator checks backend dispatch, and command-line tests cover the formerly rejected large forest and text sources. |
-| Establish current verification | Relevant differential and failure-path tests, complete workspace checks and applicable integration gates pass on the final tree | The source-initializer tree records 3,202 workspace passes, three legacy adapter failures and five ignored tests across 188 suites. Test-only adapter repairs subsequently pass 193 targeted checks. The workspace was not rerun afterward. All fourteen complete stage artifacts pass the permanent shipping-entry comparison. Twenty-one selected no-default tests, fresh Clippy, documentation and no_std checks pass. Inference independence now covers 58,671 types. Fifteen initializer sources preserve complete artifacts, eight execute through Keleusma serialization/decoding and eleven invalid initializers reject independently. Declaration-order relocation now passes seven artifact controls and fifteen decoded runtime comparisons across five compile paths. Four protocol tests, 152 code-generation tests, 193 pipeline/wire tests and nine selected no-default tests pass. The tuple increment adds thirty artifact cases, five decoded executions, five independent negatives and a 400-function descriptor-reuse control. Return-layout queries now close the named forward-return and returned-array witnesses. Guarded-head local slots and generic cross-check coverage are failing controls. General header paths, binder and occurrence coverage, and final integration gates remain open. Exact receipts are in the reverse prompt. Full Order 1 is not complete. |
+| Establish current verification | Relevant differential and failure-path tests, complete workspace checks and applicable integration gates pass on the final tree | The workspace passes 3,227 tests with five ignored. The final self-host run passes 2,970 with five ignored, including the new stage-decision control. All five feature configurations pass, along with minimum-version checks, Miri, embedded build, dependency audit, detached compiler, documentation and book checks. All fourteen actual command artifacts match the reference. Inference independence covers 58,865 recorded types. The completion audit gives exact receipts. Loop outcome-arm lowering remains a named first-pass item, so full Order 1 is not complete. |
 | Participate in the shadow pilot | Diagnostic and completion-claim samples retain baseline judgments, reviewed payloads, outcomes and explicit service status | Capture is installed for this line. Judgments are advisory and do not alter gates. |
 
-## Current return-layout checkpoint
+## Return-layout checkpoint, 2026-10-11
 
 A Keleusma token census records return-type ranges. The existing header grammar computes
 composite return layouts on demand, including declarations after a caller. Private seek record
@@ -37,12 +45,11 @@ composite return layouts on demand, including declarations after a caller. Priva
 independent rejection controls pass. The former forward-scalar and returned-array-of-tuple
 witnesses now succeed. Cache lifetime and token-feed controls also pass independently.
 
-Two failures remain explicit. Guarded heads with local bindings produce a local-slot mismatch,
-and a generic-return fixture now stops before the reference cross-check it was meant to exercise.
-The feature checkpoint retains both failing assertions. Repair these before continuing the
-remaining input obligations and final gates. This checkpoint does not complete Order 1.
+This checkpoint retained two failing assertions, a guarded-head local-slot mismatch and a
+generic-return fixture that stopped before the reference cross-check. Both are repaired in the
+2026-10-13 allocation increment, with the original assertions retained.
 
-## Current tuple construction increment
+## Tuple construction increment, 2026-10-11
 
 Source-derived expression layouts now size mixed tuple members and preserve nested projections.
 The thirty-source corpus includes scalar parameters and aliases, calls to earlier declarations,
@@ -52,11 +59,11 @@ checks reuse of temporary body descriptors, with header descriptors preserved ac
 Eight open tuple contexts are admitted and the ninth is refused by a parser capacity diagnostic.
 
 Private diagnostic 38 distinguishes unavailable expression layout from source rejection and
-capacity exhaustion. Forward scalar return layouts and arrays of tuples returned from calls
-remain explicit witnesses. General source-type coverage and the complete final verification
-matrix remain outstanding. This increment does not complete Order 1.
+capacity exhaustion. The subsequent return-query increment closes the forward-return and
+returned-array witnesses. Current verification and the remaining outcome-arm item are recorded
+in the audit above.
 
-## Current data relocation increment
+## Data relocation increment, 2026-10-11
 
 The parser's final field-base records now reach compilation alongside immutable per-function
 snapshots. Codegen translates scalar and indexed read/write records before reconstruction.
@@ -66,8 +73,8 @@ one group at a time. Address decisions remain in Keleusma, with a 640-field map 
 24-bit operand bound. Public bytecode version and opcode count remain unchanged.
 
 The subsequent tuple increment closes the mixed-width and nested-header witnesses recorded
-by this relocation increment. Its current evidence and remaining cases are stated above. The full final
-verification matrix remains outstanding. This increment does not complete Order 1.
+by this relocation increment. Current verification evidence and remaining work are in the audit
+above.
 
 ## Current decoder increment
 

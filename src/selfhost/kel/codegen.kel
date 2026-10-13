@@ -220,12 +220,15 @@ const data wire {
     // ~2^48 (GetDataIndexed's two 24-bit fields), so `tag + operand*256` stays ~2^56, well within
     // the i64 word. The host `decode_op` splits with the matching `% 256` / `/ 256`.
     radix: Word = 256,
-    item: Word = 4,
+    item: Word = 16,
     pack: Word = 65536,
     visit: Word = 1,
     emit: Word = 2,
     emitisenum: Word = 3,
     emitbool: Word = 0,
+    headbegin: Word = 4, headbody: Word = 5, headend: Word = 6, rawemit: Word = 7,
+    physicalemit: Word = 8, bindlocal: Word = 9,
+    lsrvalue: Word = 10, lsrcount: Word = 11,
     nomatch: Word = 2,
     looplimit: Word = 7,
     ocok: Word = 1,
@@ -283,8 +286,9 @@ shared data ast {
 }
 
 // The work-stack (R3.1), the op buffer the stage backpatches, and the constant
-// pool. Each stack entry is a work item, `kind + payload*4`: kind 1 VISIT a node
-// (payload is its index), kind 2 EMIT an op (payload is the op wire word). The
+// pool. Each stack entry is a work item, `kind + payload*16`: kind 1 VISIT a node
+// (payload is its index), kind 2 EMIT an op (payload is the op wire word).
+// Additional internal kinds schedule head phases, physical emits and late bindings. The
 // `ops` buffer accumulates the emitted op words so `If`/`Else` targets can be
 // patched in place before the buffer is streamed; `op_count` is its length and
 // `emit_cursor` the streaming cursor. `cf_if`/`cf_else` are a control-flow
@@ -327,6 +331,8 @@ private data st {
     tag_cursor: Word,
     header_done: Word,
     let_count: Word,
+    in_head: Word, head_base: Word, head_bias: Word, head_guard: Word, head_next: Word,
+    local_slots: [Word; 2048], extra_slots: Word, forest_temps: Word,
     dup_idx: Word,
     // Per pending IsEnum emit (work-item kind 3), the enum-name id, variant-name id, and
     // discriminant. Interning happens when the item is PROCESSED during the forward walk (not at
@@ -661,32 +667,7 @@ fn push_binop(p: Word) -> Word {
         // constants (0, 1, 64) are DEFERRED (push_int_const) so they intern in emission order and
         // interleave correctly with any constants the amount operand itself emits (e.g. the `1` of a
         // compound `a lsr (k + 1)` interns before the k==0 test's `0`).
-        let t0 = ast.param_count + st.let_count;
-        let t1 = t0 + 1;
-        st.let_count = st.let_count + 2;
-        push_emit(wire.endif);
-        push_emit(wire.bitand);
-        push_emit(wire.popn + 2 * wire.radix);
-        push_emit(wire.checkedsub);
-        push_int_const(1);
-        push_emit(wire.shl);
-        push_emit(wire.popn + 2 * wire.radix);
-        push_emit(wire.checkedsub);
-        push_emit(wire.getlocal + t1 * wire.radix);
-        push_int_const(64);
-        push_int_const(1);
-        push_emit(wire.shr);
-        push_emit(wire.getlocal + t1 * wire.radix);
-        push_emit(wire.getlocal + t0 * wire.radix);
-        push_emit(wire.els);
-        push_emit(wire.getlocal + t0 * wire.radix);
-        push_emit(wire.iff);
-        push_emit(wire.cmpeq);
-        push_int_const(0);
-        push_emit(wire.getlocal + t1 * wire.radix);
-        push_emit(wire.setlocal + t1 * wire.radix);
-        push_visit(ast.rhs[p]);
-        push_emit(wire.setlocal + t0 * wire.radix);
+        push_work(wire.lsrvalue, p);
         push_visit(ast.lhs[p])
     }
     } else {
@@ -810,12 +791,12 @@ fn push_if(p: Word) -> Word {
 }
 
 // LetIn (kind 5): `let <slot> = <value>; <cont>`. Emit the value ops,
-// SetLocal(slot), then the continuation ops. Count the binding for local_count.
+// SetLocal(slot), then the continuation ops. Allocate the binding after its value
+// so initializer temporaries retain their reference allocation order.
 // Node: args = slot, lhs = value, rhs = continuation.
 fn push_letin(p: Word) -> Word {
-    st.let_count = st.let_count + 1;
     push_visit(ast.rhs[p]);
-    push_emit(wire.setlocal + ast.args[p] * wire.radix);
+    push_work(wire.bindlocal, ast.args[p]);
     push_visit(ast.lhs[p])
 }
 
@@ -845,6 +826,42 @@ fn push_byte_bnot(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// The reference allocates each logical-shift temporary after its operand.
+fn lsr_value(p: Word) -> Word {
+    let t0 = ast.param_count + st.let_count;
+    st.let_count = st.let_count + 1; st.extra_slots = st.extra_slots + 1;
+    emit_physical(wire.setlocal + t0 * wire.radix);
+    push_work(wire.lsrcount, p + t0 * wire.pack);
+    push_visit(ast.rhs[p])
+}
+fn lsr_count(packed: Word) -> Word {
+    let t0 = packed / wire.pack;
+    let t1 = ast.param_count + st.let_count;
+    st.let_count = st.let_count + 1; st.extra_slots = st.extra_slots + 1;
+    emit_physical(wire.setlocal + t1 * wire.radix);
+        push_emit(wire.endif);
+        push_emit(wire.bitand);
+        push_emit(wire.popn + 2 * wire.radix);
+        push_emit(wire.checkedsub);
+        push_int_const(1);
+        push_emit(wire.shl);
+        push_emit(wire.popn + 2 * wire.radix);
+        push_emit(wire.checkedsub);
+        push_work(wire.physicalemit, wire.getlocal + t1 * wire.radix);
+        push_int_const(64);
+        push_int_const(1);
+        push_emit(wire.shr);
+        push_work(wire.physicalemit, wire.getlocal + t1 * wire.radix);
+        push_work(wire.physicalemit, wire.getlocal + t0 * wire.radix);
+        push_emit(wire.els);
+        push_work(wire.physicalemit, wire.getlocal + t0 * wire.radix);
+        push_emit(wire.iff);
+        push_emit(wire.cmpeq);
+        push_int_const(0);
+        push_work(wire.physicalemit, wire.getlocal + t1 * wire.radix);
+    0
+}
+
 // Andor (node kind 68): eager boolean `and`/`or`. `args` = is_or (0 = and, 1 = or). Both spill the
 // left operand to a fresh temp t, evaluate the right (the then-value, left on the stack), then a
 // value-If tests the condition (t for `and`; Not(t) for `or`) with an empty then-branch (the right
@@ -856,6 +873,7 @@ fn push_andor(p: Word) -> Word {
     let is_or = ast.args[p];
     let t = ast.param_count + st.let_count;
     st.let_count = st.let_count + 1;
+    st.extra_slots = st.extra_slots + 1;
     push_emit(wire.endif);
     push_bool(is_or);
     push_emit(wire.popn + 1 * wire.radix);
@@ -864,9 +882,9 @@ fn push_andor(p: Word) -> Word {
     if is_or == 1 {
         push_emit(wire.lnot);
     }
-    push_emit(wire.getlocal + t * wire.radix);
+    push_work(wire.physicalemit, wire.getlocal + t * wire.radix);
     push_visit(ast.rhs[p]);
-    push_emit(wire.setlocal + t * wire.radix);
+    push_work(wire.physicalemit, wire.setlocal + t * wire.radix);
     push_visit(ast.lhs[p])
 }
 
@@ -977,7 +995,6 @@ fn push_forin(p: Word) -> Word {
     let body = ast.for_parts[fp + 5];
     let incr = ast.for_parts[fp + 6];
     let cont = ast.rhs[p];
-    st.let_count = st.let_count + 2;
     push_visit(cont);
     push_emit(wire.endloop);                    // EndLoop
     push_emit(wire.setlocal + i_slot * wire.radix);       // SetLocal(i)  (store the increment)
@@ -1020,7 +1037,6 @@ fn push_forlimit(p: Word) -> Word {
     let one = ast.limit_parts[base + 10];
     let two = ast.limit_parts[base + 11];
     let cont = ast.rhs[p];
-    st.let_count = st.let_count + 5;
     // Pushed in reverse; the drain emits the forward sequence.
     push_visit(cont);
     // LIMIT dispatch: if oc == 0 { Trap }.
@@ -1309,7 +1325,6 @@ fn push_match(p: Word) -> Word {
     let wc = ast.match_parts[base + 1];
     let n = ast.rhs[p];
     let scrut = ast.lhs[p];
-    st.let_count = st.let_count + 1;
     push_emit(wire.mendloop);
     push_emit(wire.trap + wire.nomatch * wire.radix);
     if wc >= 0 { push_match_result(wc); }
@@ -1364,7 +1379,6 @@ fn push_enum_dispatch(p: Word, base: Word, trap_kind: Word) -> Word {
     let n = ast.rhs[p];
     let scrut = ast.lhs[p];
     let haswc = ast.match_parts[base + 2 + n * 20];
-    st.let_count = st.let_count + 1;
     push_emit(wire.mendloop);
     push_emit(wire.trap + trap_kind * wire.radix);
     // A `_` wildcard's result and Break emit after the variant arms and before the Trap (pushed
@@ -1381,7 +1395,6 @@ fn push_enum_dispatch(p: Word, base: Word, trap_kind: Word) -> Word {
         let pc = ast.match_parts[armb + 3];
         let testslot = ast.match_parts[armb + 4];
         if vname >= 0 {
-            st.let_count = st.let_count + 1 + pc;
             push_emit(wire.mendif);
         }
         push_match_result(result);
@@ -1446,7 +1459,6 @@ fn push_struct_eq(p: Word) -> Word {
     } else {
         wire.getfield
     };
-    st.let_count = st.let_count + 2;
     // Pre-intern the results in the reference's pool order (false before true): the reference emits
     // the false (mismatch) Const first, so it takes the lower pool index. `push_emit` runs in reverse
     // (LIFO), so interning here -- not at push time -- keeps the pool order correct.
@@ -1557,7 +1569,6 @@ fn push_enum_eq(p: Word) -> Word {
     let tb = ast.match_parts[base + 1];
     let ename = ast.match_parts[base + 2];
     let vcount = ast.match_parts[base + 3];
-    st.let_count = st.let_count + 2;
     // Forward pre-pass: record each variant's variable-stride offset (for the reverse emission
     // walk) and advance to the `!=` flag. No interning here -- the pool is built at emission time.
     st.eq_cur = base + 4;
@@ -1599,7 +1610,6 @@ fn push_enum_eq(p: Word) -> Word {
             let fkind = ast.match_parts[st.eq_fcur2 + 1];
             st.eq_fcur2 = st.eq_fcur2 + 2;
             if fkind >= 100 {
-                st.let_count = st.let_count + 2;
                 st.eq_fcur2 = st.eq_fcur2 + 3 + ast.match_parts[st.eq_fcur2] * 2;
             }
         }
@@ -1665,7 +1675,6 @@ fn push_array_eq(p: Word) -> Word {
     let count = ast.match_parts[base + 2];
     let kind = ast.match_parts[base + 3];
     let is_ne = ast.match_parts[base + 4];
-    st.let_count = st.let_count + 2;
     for e in 0..count limit 256 {
         st.eq_vidx[e] = intern_int(e);
     }
@@ -1720,10 +1729,8 @@ fn push_array_of_struct_eq(p: Word) -> Word {
     // occupies a 5-word header plus its own sub-forest. Walk it to find where the trailing flags sit,
     // rather than assuming the old fixed `fieldcount * 2`. This walk also counts the per-element
     // nested temp pairs via count_temps=1, which is what the stride below needs.
-    let before_temps = st.let_count;
     let seb_end = struct_forest_end(base + 5, fieldcount, 1);
-    let estride = 2 + st.let_count - before_temps;
-    st.let_count = before_temps;
+    let estride = 2 + st.forest_temps;
     let is_ne = ast.match_parts[seb_end];
     // is_tuple selects the accessor: a tuple element reads fields with GetTupleField and extracts with
     // a FlatNested Tuple (variant 0); a struct element uses GetField and FlatNested Struct (variant 2).
@@ -1741,7 +1748,6 @@ fn push_array_of_struct_eq(p: Word) -> Word {
     // Per-element temp stride: the element pair, plus a pair for every nested block anywhere in the
     // element's subtree (counted by the walk above), because the reference allocates each element's
     // temps interleaved rather than grouping all element pairs first.
-    st.let_count = st.let_count + 2 + estride * arrcount;
     for e in 0..arrcount limit 64 {
         st.eq_vidx[e] = intern_int(e);
     }
@@ -1817,7 +1823,6 @@ fn push_array_of_array_eq(p: Word) -> Word {
     let innercount = ast.match_parts[base + 4];
     let innerkind = ast.match_parts[base + 5];
     let is_ne = ast.match_parts[base + 6];
-    st.let_count = st.let_count + 2 + 2 * m;
     let maxc = if m > innercount {
         m
     } else {
@@ -1906,7 +1911,6 @@ fn push_array_of_enum_eq(p: Word) -> Word {
         st.eq_cur = st.eq_cur + 3 + fcount * 2;
     }
     let is_ne = ast.match_parts[st.eq_cur];
-    st.let_count = st.let_count + 2 + 2 * arrcount;
     for e in 0..arrcount limit 64 {
         st.eq_vidx[e] = intern_int(e);
     }
@@ -2044,10 +2048,11 @@ fn push_nested_enum_loop(ename: Word, vcount: Word, vbase: Word, l2: Word, r2: W
 
 // Walk the sub-field forest of `subcount` fields starting at `start` in match_parts, striding over
 // arbitrarily-nested struct sub-fields ([off, 100+size, subcount, r2, l2, fields...] = 5 + its own
-// forest), and return the end offset. When `count_temps` is 1, add 2 to `let_count` per nested struct
+// forest), and return the end offset. When `count_temps` is 1, count two scratch slots per nested struct in `forest_temps`
 // (its r2/l2 extract temps). The records are laid preorder, so one linear walk with a remaining-fields
 // stack visits the whole forest. Non-recursive (R4); the loop cap bounds the total field count.
 fn struct_forest_end(start: Word, subcount: Word, count_temps: Word) -> Word {
+    st.forest_temps = 0;
     st.cs_cur = start;
     st.cs_rem[0] = subcount;
     st.cs_sp = 1;
@@ -2060,7 +2065,7 @@ fn struct_forest_end(start: Word, subcount: Word, count_temps: Word) -> Word {
                 st.cs_rem[top] = st.cs_rem[top] - 1;
                 if ast.match_parts[st.cs_cur + 1] >= 100 {
                     if count_temps == 1 {
-                        st.let_count = st.let_count + 2;
+                        st.forest_temps = st.forest_temps + 2;
                     }
                     if ast.match_parts[st.cs_cur + 1] >= 50000 {
                         // An ENUM block: [off, 50000+size, vcount, r2, l2, ename, per variant
@@ -2425,7 +2430,6 @@ fn push_struct_eq_nested(p: Word) -> Word {
     let ta = ast.match_parts[base];
     let tb = ast.match_parts[base + 1];
     let topcount = ast.match_parts[base + 2];
-    st.let_count = st.let_count + 2;
     // Forward pass: record each top-level field's offset and count the nested fields' temps. An
     // array field (variant 1) is a fixed 8 slots [1, ext_off, ext_size, 1, r2, l2, count, kind]; a
     // struct/tuple field is 7 + subcount*2; a scalar field is 3.
@@ -2435,14 +2439,12 @@ fn push_struct_eq_nested(p: Word) -> Word {
         if ast.match_parts[st.se_cur] == 0 {
             st.se_cur = st.se_cur + 3;
         } else {
-            st.let_count = st.let_count + 2;
             if ast.match_parts[st.se_cur + 3] == 1 {
                 // Array field. A scalar-element array is a fixed 8 slots [1, off, size, 1, r2, l2,
                 // count, kind]. A struct-element array (`eq/struct_arrayofstruct`, sentinel
                 // `slot+7 >= 100`) is [1, off, size, 1, r2, l2, acount, 100+arrsize, fcount] then
                 // fcount*(off, kind) = 9 + fcount*2, and reserves 2*acount per-element inner temps.
                 if ast.match_parts[st.se_cur + 7] >= 100 {
-                    st.let_count = st.let_count + 2 * ast.match_parts[st.se_cur + 6];
                     st.se_cur = st.se_cur + 9 + ast.match_parts[st.se_cur + 8] * 2;
                 } else {
                     st.se_cur = st.se_cur + 8;
@@ -2647,48 +2649,84 @@ fn push_yield(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
-// MultiHead (kind 25): the dispatch of a multiheaded function, reproducing the
-// reference lowering. Each head first copies the parameters into fresh locals,
-// then a guarded head tests its `when` guard with a bare `If`/`EndIf` and on a
-// match runs its body and returns, while the final unguarded head runs its body
-// and returns directly; an unmatched dispatch falls through to a dead
-// `Trap(NoMatchingHead)`. The body of each head is a `yield` expression. The
-// parameter copies grow local_count by head_count * param_count. args = the
-// head_parts entry start, rhs = head count; each 4-word entry is (param-copy
-// start slot, guarded flag, guard node, body node). Pushed in reverse so the
-// drain emits head 0 first.
+// Parser slots identify bindings and parser-allocated temporaries. Extra temporaries
+// introduced during emission occupy physical slots without consuming parser identities.
+fn reset_local_slots() -> Word {
+    for i in 0..2048 limit 2048 { st.local_slots[i] = 0; }
+    st.extra_slots = 0;
+    0
+}
+// Grow the frame when a parser-owned slot is emitted. Reserving its parent early
+// would place compiler-created operand temporaries after that parent.
+fn mapped_local(slot: Word) -> Word {
+    if slot < ast.param_count { slot } else {
+        if st.local_slots[slot] == 0 { st.local_slots[slot] = slot + st.extra_slots + 1; }
+        let used = st.local_slots[slot] - ast.param_count;
+        if used > st.let_count { st.let_count = used; }
+        st.local_slots[slot] - 1
+    }
+}
+fn emit_physical(word: Word) -> Word {
+    let tag = word % wire.radix;
+    if st.in_head == 1 andalso (tag == wire.getlocal orelse tag == wire.setlocal) {
+        let slot = word / wire.radix;
+        let bias = if slot < ast.param_count { 0 } else { st.head_bias };
+        emit_op(tag + (slot + st.head_base + bias) * wire.radix)
+    } else { emit_op(word) }
+}
+fn bind_local(slot: Word) -> Word {
+    let physical = ast.param_count + st.let_count;
+    st.let_count = st.let_count + 1;
+    st.local_slots[slot] = physical + 1;
+    emit_physical(wire.setlocal + physical * wire.radix)
+}
+
+// Head ranges retain relative slots. Allocate their windows in emission order so
+// guard and body temporaries precede the next head's parameter copies.
+fn push_work(kind: Word, payload: Word) -> Word {
+    st.stack[st.sp] = kind + payload * wire.item;
+    st.sp = st.sp + 1;
+    0
+}
+fn begin_head(hb: Word) -> Word {
+    let pc = ast.head_parts[hb];
+    st.head_base = st.head_next; st.head_bias = 0; st.head_guard = 0;
+    st.in_head = 1; st.let_count = 0; reset_local_slots();
+    push_work(wire.headend, 0);
+    if ast.head_parts[hb + 1] == 1 {
+        push_emit(wire.mendif);
+        push_emit(wire.ret);
+        push_work(wire.headbody, ast.head_parts[hb + 3]);
+        push_emit(wire.mif);
+        push_visit(ast.head_parts[hb + 2]);
+    } else {
+        push_emit(wire.ret);
+        push_work(wire.headbody, ast.head_parts[hb + 3]);
+    }
+    for ij in 0..pc limit 32 {
+        let i = pc - 1 - ij;
+        push_work(wire.rawemit, wire.setlocal + (st.head_base + i) * wire.radix);
+        push_work(wire.rawemit, wire.getlocal + i * wire.radix);
+    }
+    0
+}
+fn begin_head_body(node: Word) -> Word {
+    st.head_guard = st.let_count; st.head_bias = st.head_guard; st.let_count = 0;
+    reset_local_slots();
+    push_visit(node)
+}
+fn end_head() -> Word {
+    st.head_next = st.head_base + ast.param_count + st.head_guard + st.let_count;
+    st.let_count = st.head_next - ast.param_count;
+    st.in_head = 0;
+    0
+}
 fn push_multihead(p: Word) -> Word {
-    let base = ast.args[p];
-    let n = ast.rhs[p];
-    let pc = ast.param_count;
-    st.let_count = st.let_count + n * pc;
-    // The dead NoMatchingHead trap tail (last in the stream, pushed first).
+    let base = ast.args[p]; let n = ast.rhs[p];
+    st.head_next = ast.param_count;
     push_emit(wire.trap + wire.nomatchhead * wire.radix);
     for hj in 0..n limit 64 {
-        let h = n - 1 - hj;
-        let hb = base + h * 4;
-        let param_start = ast.head_parts[hb];
-        let guarded = ast.head_parts[hb + 1];
-        let guard_node = ast.head_parts[hb + 2];
-        let body_node = ast.head_parts[hb + 3];
-        // Guarded: guard; If; body; Return; EndIf. Unguarded: body; Return.
-        if guarded == 1 {
-            push_emit(wire.mendif);
-            push_emit(wire.ret);
-            push_visit(body_node);
-            push_emit(wire.mif);
-            push_visit(guard_node);
-        }
-        if guarded == 0 {
-            push_emit(wire.ret);
-            push_visit(body_node);
-        }
-        // Parameter copies in reverse: forward is GetLocal(i); SetLocal(start+i).
-        for ij in 0..pc limit 8 {
-            let i = pc - 1 - ij;
-            push_emit(wire.setlocal + (param_start + i) * wire.radix);
-            push_emit(wire.getlocal + i * wire.radix);
-        }
+        push_work(wire.headbegin, base + (n - 1 - hj) * 4);
     }
     0
 }
@@ -2716,8 +2754,19 @@ fn walk_step() -> Word {
     let ikind = item % wire.item;
     let payload = item / wire.item;
     if ikind == wire.emit {
-        emit_op(payload);
+        let tag = payload % wire.radix;
+        if tag == wire.getlocal orelse tag == wire.setlocal {
+            emit_physical(tag + mapped_local(payload / wire.radix) * wire.radix);
+        } else { emit_op(payload); }
     }
+    if ikind == wire.physicalemit { emit_physical(payload); }
+    if ikind == wire.bindlocal { bind_local(payload); }
+    if ikind == wire.lsrvalue { lsr_value(payload); }
+    if ikind == wire.lsrcount { lsr_count(payload); }
+    if ikind == wire.rawemit { emit_op(payload); }
+    if ikind == wire.headbegin { begin_head(payload); }
+    if ikind == wire.headbody { begin_head_body(payload); }
+    if ikind == wire.headend { end_head(); }
     if ikind == wire.emitisenum {
         // Intern the enum name, variant name, and discriminant NOW (in the forward walk order),
         // then emit the IsEnum op with the three pool indices packed.
