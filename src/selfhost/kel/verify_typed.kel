@@ -10,9 +10,9 @@
 // non-enum flat `NewComposite` also checks that its packed element sizes sum to the baked body
 // when all are known (`NewCompositeSizeMismatch`). A `Call` additionally checks each popped
 // argument against the callee's parameter shapes (`cp_*`, a packed parameter-shape pool, `CallArgMismatch`), and
-// flat compatibility is exact: same tag AND same size AND same composite `kind`. There are no
-// deferred residuals; within the sound over-approximation the pass reproduces every reference
-// check. An unseeded run (all seeds Top, empty tables) reproduces the isolation `typed_check_chunk`.
+// flat compatibility checks tag, size and composite kind. Control-flow widening and bounded
+// storage remain explicit limits. Whole-verdict agreement remains under the Order 2 audit.
+// An unseeded run uses Top locals and empty module tables for isolation.
 //
 // It reconstructs the flat shape of each operand-stack entry -- the lattice `AbsVal` encoded per
 // entry as `(tag, size, kind)`: 0 Top (unknown, defers every check), 1 Scalar (`size` bytes), 2
@@ -71,6 +71,8 @@ shared data tv {
     // Each call indexes its own declared-shape slice in the existing pool.
     cp_first: [Word; 1536],
     cp_count: [Word; 1536],
+    // 1 operand capacity, 2 frame capacity, 3 unfinished work budget.
+    out_cause: Word,
 }
 
 // The live operand shape stack (`st_tag`/`st_size`, height `dsp`), the local frame
@@ -86,6 +88,7 @@ private data tf {
     st_size: [Word; 256],
     st_kind: [Word; 256],
     dsp: Word,
+    over: Word,
     lc_tag: [Word; 256],
     lc_size: [Word; 256],
     lc_kind: [Word; 256],
@@ -93,6 +96,8 @@ private data tf {
     f_ip: [Word; 64],
     f_end: [Word; 64],
     f_esp: [Word; 64],
+    // Operand entries below the nearest loop entry are preserved by its body.
+    f_floor: [Word; 64],
     f_fell: [Word; 64],
     f_hb: [Word; 64],
     f_bmax: [Word; 64],
@@ -140,7 +145,7 @@ fn st_push(tag: Word, size: Word) -> Word {
         tf.st_size[tf.dsp] = size;
         tf.st_kind[tf.dsp] = 0;
         tf.dsp = tf.dsp + 1;
-    }
+    } else { tf.over = 1; }
     0
 }
 
@@ -152,7 +157,7 @@ fn st_push_k(tag: Word, size: Word, kind: Word) -> Word {
         tf.st_size[tf.dsp] = size;
         tf.st_kind[tf.dsp] = kind;
         tf.dsp = tf.dsp + 1;
-    }
+    } else { tf.over = 1; }
     0
 }
 
@@ -281,7 +286,8 @@ fn eb_check(size: Word) -> Word {
 fn apply_typed(ip: Word) -> Word {
     let k = tv.tk[ip];
     let r = tv.req[ip];
-    if tf.dsp < r {
+    let floor = tf.f_floor[tf.fsp - 1];
+    if tf.dsp < r orelse (floor > 0 andalso tf.dsp < floor + r) {
         tf.bad = 1;
     }
     if k == 0 {
@@ -428,7 +434,7 @@ fn seed_locals() -> Word {
 
 fn push_frame(ip: Word, end: Word, esp: Word) -> Word {
     if tf.fsp > 63 {
-        tf.fsp = tf.fsp;
+        tf.over = 2;
     } else {
         let j = tf.fsp;
         tf.f_ip[j] = ip;
@@ -438,6 +444,7 @@ fn push_frame(ip: Word, end: Word, esp: Word) -> Word {
             tf.f_end[j] = end;
         }
         tf.f_esp[j] = esp;
+        tf.f_floor[j] = if j == 0 { 0 } else { tf.f_floor[j - 1] };
         tf.f_fell[j] = 1;
         tf.f_hb[j] = 0;
         tf.f_bmax[j] = 0;
@@ -524,7 +531,9 @@ fn scan_op(i: Word) -> Word {
         tf.f_esp[i] = tf.dsp;
         tf.f_resume[i] = tv.arg[ip];
         tf.f_pa[i] = 1;
+        let previous_depth = tf.fsp;
         push_frame(ip + 1, tv.arg[ip] - 1, tf.dsp);
+        if tf.fsp > previous_depth { tf.f_floor[tf.fsp - 1] = tf.dsp; }
     } else {
     if tv.class[ip] == 2 orelse tv.class[ip] == 3 orelse tv.class[ip] == 5 {
         // Else/EndIf/EndLoop: structural markers, stepped over.
@@ -609,6 +618,7 @@ fn step() -> Word {
 // whether any flat offset, underflow, or height-balance obligation is violated.
 fn run() -> Word {
     tf.dsp = 0;
+    tf.over = 0;
     tf.fsp = 0;
     tf.bad = 0;
     tf.child_fell = 1;
@@ -622,7 +632,9 @@ fn run() -> Word {
             step();
         }
     }
-    if tf.bad == 1 {
+    if tf.fsp > 0 andalso tf.over == 0 { tf.over = 3; }
+    tv.out_cause = tf.over;
+    if tf.bad == 1 orelse tf.over != 0 {
         tv.out_reject = 1;
     } else {
         tv.out_reject = 0;

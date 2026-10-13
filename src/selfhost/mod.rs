@@ -39,6 +39,8 @@ use crate::value_layout::{CompositeKind, ScalarKind};
 use crate::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 use crate::{Arena, compiler::compile, lexer::tokenize, parser::parse};
 
+mod validation;
+pub use validation::{VerificationError, VerificationVerdict, verify_module_via_kel};
 mod call_graph;
 pub use call_graph::call_order_via_kel;
 mod artifact_compare;
@@ -5051,8 +5053,8 @@ const DV_IS_TERM: usize = 1 + 1536 * 4;
 const DV_OUT_REJECT: usize = 1 + 1536 * 5;
 /// Why `verify_depth.kel` returned the verdict it did.
 ///
-/// 0 means the walk completed, so the verdict is a real analysis result. 1 means
-/// the chunk nests deeper than the stage's declared cap and the verdict is
+/// 0 means the walk completed. 1 means nesting capacity was exceeded and 2 means
+/// the work budget ended before the walk completed. A nonzero cause is
 /// default-deny. **Only the cause distinguishes a proven defect from an
 /// unanalysed program**, and only the cause says whether raising the cap would
 /// change the answer.
@@ -5173,7 +5175,7 @@ pub fn depth_verdict_chunk_via_kel(chunk: &crate::bytecode::Chunk) -> DepthVerdi
     };
     match (reject, cause) {
         (false, _) => DepthVerdict::Accept,
-        (true, 1) => DepthVerdict::OverCap,
+        (true, cause) if cause != 0 => DepthVerdict::OverCap,
         (true, _) => DepthVerdict::Underflow,
     }
 }
@@ -5189,8 +5191,8 @@ pub enum DepthVerdict {
     Accept,
     /// The walk completed and proved an op would underflow the operand stack.
     Underflow,
-    /// The chunk nests deeper than the stage's declared cap, so it was refused
-    /// without being analysed. **Not evidence of a defect.**
+    /// The bounded nesting or work budget was exhausted before analysis completed.
+    /// This is not evidence of a defect in the subject.
     OverCap,
 }
 

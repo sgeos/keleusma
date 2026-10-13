@@ -129,8 +129,10 @@ typed, resource, text-allocation, orchestration and shipping requirements. All f
 current stage modules are accepted by both structural validators, but that positive census
 does not prove complete rejection coverage. New controls found and repaired missed call
 arguments, float-scalar access, enum-table truncation and metadata lost when a caller
-signature was absent. Graph ordering and cycle decisions now run in Keleusma. Resource
-summary ownership, final admission, text heap bounds and shipping integration remain open.
+signature was absent. Graph ordering and cycle decisions now run in Keleusma. A fallible structural/typed
+interface now checks structure first, distinguishes unavailable analysis and enforces
+loop operand floors. Resource summary ownership, final admission, text heap bounds and
+shipping integration remain open.
 The detailed slice notes below retain their earlier findings and completeness claims;
 use the current completion plan for milestone status.
 

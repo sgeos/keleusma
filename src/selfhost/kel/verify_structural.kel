@@ -83,6 +83,8 @@ shared data sv {
     o3: [Word; 1536],
     mark: [Word; 1536],
     out_reject: Word,
+    // Mode 1 checks structure before delegated-yield facts are available.
+    mode: Word,
 }
 
 // The block-nesting scratch. The open blocks form a stack of frames in nesting order: `kind`
@@ -407,6 +409,10 @@ fn run() -> Word {
     sd.bad = 0;
     for ip in 0..1536 limit 1536 {
         if sv.op_count > ip {
+            let c = sv.class[ip];
+            if c == 1 orelse c == 2 orelse c == 4 {
+                if sv.arg[ip] <= ip orelse sv.arg[ip] > sv.op_count { sd.bad = 1; }
+            }
             step(ip);
             check_opbounds(ip);
         }
@@ -414,7 +420,7 @@ fn run() -> Word {
     if sd.depth > 0 {
         sd.bad = 1;
     }
-    check_block_type();
+    if sv.mode == 0 { check_block_type(); }
     if sd.bad == 1 {
         sv.out_reject = 1;
     } else {

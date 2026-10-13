@@ -6,6 +6,27 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-13 Fallible verifier boundary and loop-floor repair
+
+Order 2 remains active. The new verify_module_via_kel API distinguishes completed
+structural/typed verdicts from capacity, unfinished work, execution and protocol errors.
+It checks structure and forward targets before region walks. Depth, yield and typed
+stages expose completion causes; operand overflow no longer silently discards a value.
+The operator's nesting limit remains 32. Data-layout initialization and final count
+reconciliation now execute in Keleusma across resumed batches.
+
+A negative control proved the typed stage accepted a loop which consumed below its
+entry operand floor and later restored the height. The floor now propagates through
+regions and the case is rejected in agreement with the reference. Valid controls cover
+all fourteen stage modules, declared target widths and large layout batches. Failure
+injection proves unfinished or faulty stages cannot supply an acceptance verdict.
+
+Eleven admission tests, seven prior validator tests, six artifact tests, three injected
+failure controls and 63 selected detached validator tests pass. All fourteen artifacts
+remain byte-identical. Clippy and Rust 1.88 checking pass. These targeted results do not
+complete resource admission, text bounds, module orchestration or shipping integration.
+Current receipts and next actions are in REVERSE_PROMPT.md.
+
 ## 2026-10-13 Order 2 audit and initial validator repairs
 
 Order 2 is active on feat/v02-order2-validator, starting from 99b7ab01. The

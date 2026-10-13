@@ -40,6 +40,8 @@ shared data yv {
     cay: [Word; 1536],
     out_fell: Word,
     out_hy: Word,
+    // 1 frame capacity, 2 unfinished work budget.
+    out_cause: Word,
 }
 
 // The region-frame work stack. Each frame is one `analyze_yield_coverage([f_ip, f_end))`: `f_hy`
@@ -51,6 +53,7 @@ shared data yv {
 // frame's result to its parent.
 private data yf {
     sp: Word,
+    over: Word,
     f_ip: [Word; 128],
     f_end: [Word; 128],
     f_hy: [Word; 128],
@@ -77,7 +80,7 @@ private data yf {
 // structural passes regardless.
 fn push_frame(ip: Word, end: Word, hy: Word) -> Word {
     if yf.sp > 127 {
-        yf.sp = yf.sp;
+        yf.over = 1;
     } else {
         let j = yf.sp;
         yf.f_ip[j] = ip;
@@ -273,6 +276,7 @@ fn ayc_step() -> Word {
 // no-op once the stack empties.
 fn run() -> Word {
     yf.sp = 0;
+    yf.over = 0;
     yf.child_fell = 1;
     yf.child_hy = 0;
     yf.child_hb = 0;
@@ -283,6 +287,8 @@ fn run() -> Word {
             ayc_step();
         }
     }
+    if yf.sp > 0 andalso yf.over == 0 { yf.over = 2; }
+    yv.out_cause = yf.over;
     yv.out_fell = yf.child_fell;
     yv.out_hy = yf.child_hy;
     yf.child_fell

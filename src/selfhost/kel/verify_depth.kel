@@ -350,9 +350,10 @@ fn run() -> Word {
     // because it was not analysed, not because a defect was proven; the verdict is
     // the same and the CAUSE is not, and only the cause tells a caller whether
     // raising the cap would change the answer.
-    if df.over == 1 {
+    if df.sp > 0 andalso df.over == 0 { df.over = 2; }
+    if df.over > 0 {
         dv.out_reject = 1;
-        dv.out_cause = 1;
+        dv.out_cause = df.over;
     } else {
         dv.out_cause = 0;
         if df.bad == 1 {

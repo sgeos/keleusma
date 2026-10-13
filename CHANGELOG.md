@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A fallible self-hosted structural and typed verifier API distinguishes completed
+  verdicts from stage capacity, work-budget, execution and protocol failures.
+
 - Keleusma now computes call-graph order and cycle rejection for the self-hosted
   analysis path, with explicit graph capacity errors and staged-decision controls.
 
@@ -544,6 +547,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `BYTECODE_VERSION` change.
 
 ### Fixed
+
+- Self-hosted typed verification now rejects loop bodies that consume operand values
+  below the loop-entry floor, and reports exhausted operand storage explicitly.
 
 - Self-hosted typed validation now checks call arguments beyond position eight,
   retains module metadata when caller signatures are absent, recognizes float
