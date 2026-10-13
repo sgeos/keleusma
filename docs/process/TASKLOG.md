@@ -6,6 +6,34 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-13 Order 2 audit and initial validator repairs
+
+Order 2 is active on feat/v02-order2-validator, starting from 99b7ab01. The
+requirements and remaining work are in docs/decisions/ORDER2_COMPLETION_PLAN.md.
+No scope was removed from the full validator objective.
+
+Call-graph depth-first traversal now runs in analyze.kel. Rust supplies chunk lengths
+and opcode operands. Five controls establish reference order over all fourteen stages,
+cycle behavior, exact capacity boundaries and dependence on the stage-side cycle check.
+The resource driver and text-boundary scheduling use this path. Rust still stores resource
+summaries and combines admission flags. The always-yielding fixpoint orchestration is also
+still in Rust.
+
+The initial negative audit found two false acceptances, an invalid ninth call argument and
+a flat-field access on a float constant. Parameter shapes now use packed slices covering
+repeated calls through arity 255, and float constants carry scalar facts. A valid 65-enum
+program exposed silent layout-table truncation. The table now covers the first-pass
+256-layout bound and reports overflow explicitly. Further controls found that absent
+caller signatures discarded callee and enum metadata. Module context is now independent
+of local signature presence, with an additional native-return control.
+
+Seven new validator tests pass. Five graph controls pass. The three selected detached
+validator suites pass 63 tests. The all-stage artifact and text-boundary regressions,
+Clippy, minimum Rust checking and feature gating are recorded in REVERSE_PROMPT.md.
+These are targeted receipts, not a full Order 2 completion gate. Legacy Boolean entry
+points still expose some capacity failures as panics or default-deny. Full fallible
+admission, text allocation, complete orchestration and shipping integration remain.
+
 ## 2026-10-13 Order 1 completed with loop outcomes
 
 The first-pass compiler milestone is complete on feat/v02-order1-next. The full audit is

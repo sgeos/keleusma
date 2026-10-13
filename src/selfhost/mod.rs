@@ -22,7 +22,7 @@
 //!
 //! `wire.kel` supplies the wire-format emitters. `verify_types.kel` supplies the
 //! independent source-rejection stage used before the reference comparison.
-//! Complete production artifact serialization remains a separate integration step.
+//! Complete production artifacts are emitted through the Keleusma wire stages.
 
 use alloc::boxed::Box;
 use alloc::format;
@@ -39,6 +39,8 @@ use crate::value_layout::{CompositeKind, ScalarKind};
 use crate::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 use crate::{Arena, compiler::compile, lexer::tokenize, parser::parse};
 
+mod call_graph;
+pub use call_graph::call_order_via_kel;
 mod artifact_compare;
 mod data_relocation;
 mod text_flow;
@@ -4985,7 +4987,8 @@ fn run_ayc(
 /// The self-hosted always-yielding chunk set: the monotone fixpoint of verify_yield.kel over
 /// `[0, op_count)` per chunk (a chunk joins the set when every path of it yields, using the set
 /// from prior rounds for the delegated-yield contribution). A drop-in for the reference
-/// `compute_always_yielding`, computed entirely by the self-hosted kernel.
+/// `compute_always_yielding`. The kernel computes each region summary; Rust still
+/// schedules fixpoint rounds and stores the resulting set.
 pub fn self_hosted_always_yielding(module: &Module) -> std::collections::BTreeSet<usize> {
     let mut always: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     loop {
@@ -5191,19 +5194,15 @@ pub enum DepthVerdict {
     OverCap,
 }
 
-/// Run the WHOLE self-hosted verifier over a module -- every check `verify()` performs, all
-/// self-hosted: per chunk, the block-nesting/branch-target/operand-bounds and block-type checks
-/// (verify_structural.kel), the productive-divergence check for Stream chunks (verify_yield.kel),
-/// and the operand-stack depth-balance check (verify_depth.kel); then the module-level A.2.1
-/// typed operand-stack pass (verify_typed.kel, seeded from the signature table) and its
-/// data-layout validation (verify_datalayout.kel, B6/C4). The module is rejected iff any check
-/// rejects, mirroring `verify()`. The always-yielding set is computed by the self-hosted fixpoint.
+/// Run the current Keleusma structural, depth, productivity, typed and data-layout passes.
+/// The always-yielding classification uses the staged region analysis.
 ///
-/// The typed pass reconstructs shapes with the operator's chosen sound over-approximation (operand
-/// shapes reset to Top across control-flow boundaries, so cross-join precision is forgone -- a Top
-/// defers to the retained runtime guard, never a false-reject); within that approximation every
-/// reference check is reproduced exactly, including the Call argument-vs-parameter check and exact
-/// composite-kind compatibility. There are no deferred verifier checks left in the wiring.
+/// The typed pass retains its documented control-flow widening and bounded storage.
+/// Passing the stage corpus does not establish agreement on every malformed module.
+/// The Order 2 completion plan tracks the complete verdict and admission integration.
+///
+/// # Panics
+/// A stage capacity, transport or execution failure can panic in this legacy Boolean API.
 pub fn structural_reject_module_via_kel(module: &Module) -> bool {
     let always = self_hosted_always_yielding(module);
     let per_chunk = module.chunks.iter().any(|chunk| {
@@ -5231,9 +5230,9 @@ pub fn structural_reject_module_via_kel(module: &Module) -> bool {
 // Call/native return shapes, and the enum body sizes; an unseeded run reproduces the isolation
 // `typed_check_chunk`. Every reference check is now reproduced: the non-enum `NewComposite`
 // packed-size check, the Call argument-vs-parameter check (per-callee parameter shapes marshalled
-// as `cp_*`, up to eight), and exact composite-kind compatibility (a `kind` word threaded through
-// every shape). Together with the batched data-layout validation (slice 2c) the typed pass is
-// wired into `structural_reject_module_via_kel`; within the sound over-approximation it is exact.
+// as `cp_*`, packed per call), and exact composite-kind compatibility (a `kind` word threaded through
+// every shape). Together with batched data-layout validation, the typed pass is
+// wired into structural_reject_module_via_kel. Full agreement remains under audit.
 
 const TV_OP_COUNT: usize = 0;
 const TV_RESUME_TAG: usize = 1;
@@ -5256,11 +5255,13 @@ const TV_SEED_TAG: usize = 5 + 1536 * 12;
 const TV_SEED_SIZE: usize = 5 + 1536 * 12 + 256;
 const TV_SEED_KIND: usize = 5 + 1536 * 12 + 512;
 const TV_EB_VALS: usize = 5 + 1536 * 12 + 768;
-const TV_CP_TAG: usize = 5 + 1536 * 12 + 768 + 64;
-const TV_CP_SIZE: usize = 5 + 1536 * 12 + 768 + 64 + 12288;
-const TV_CP_KIND: usize = 5 + 1536 * 12 + 768 + 64 + 12288 * 2;
-const TV_OUT_REJECT: usize = 5 + 1536 * 12 + 768 + 64 + 12288 * 3;
-const TV_CP_STRIDE: usize = 8;
+const TV_CP_TAG: usize = 5 + 1536 * 12 + 768 + 256;
+const TV_CP_SIZE: usize = 5 + 1536 * 12 + 768 + 256 + 12288;
+const TV_CP_KIND: usize = 5 + 1536 * 12 + 768 + 256 + 12288 * 2;
+const TV_OUT_REJECT: usize = 5 + 1536 * 12 + 768 + 256 + 12288 * 3;
+const TV_CP_FIRST: usize = TV_OUT_REJECT + 1;
+const TV_CP_COUNT: usize = TV_CP_FIRST + 1536;
+const TV_CP_CAPACITY: usize = 12288;
 
 /// The compiled `verify_typed.kel` stage module, cached after the first build.
 ///
@@ -5291,9 +5292,8 @@ fn const_scalar_size(
         Some(ConstValue::Byte(_)) => Some(sz(ScalarKind::Byte)),
         Some(ConstValue::Fixed(_)) => Some(sz(ScalarKind::Fixed)),
         Some(ConstValue::StaticStr(_)) => Some(sz(ScalarKind::Text)),
-        // A `Float` constant (present only under the parent crate's `floats` feature, which the
-        // subproject cannot gate on) falls through to `None` -> Top: a sound defer, since a
-        // float const is never a composite operand a flat access would need sized.
+        #[cfg(feature = "floats")]
+        Some(ConstValue::Float(_)) => Some(sz(ScalarKind::Float)),
         _ => None,
     }
 }
@@ -5399,16 +5399,18 @@ fn abs_from_wire(
     }
 }
 
-/// Run verify_typed.kel over one chunk. `sig` seeds the local frame and resume shape (Phase 2b);
-/// `None` is the isolation check (all Top). When `sig` is `Some` the module tables are also used
-/// to seed each `Call`/native return shape and the enum body sizes (B8); the isolation form
-/// leaves them empty, reproducing `typed_check_chunk`. Returns whether the interpreter rejects a
-/// flat offset, an underflow, a height imbalance, a `SetLocal` shape mismatch, or an enum body
-/// size mismatch.
+// Isolation deliberately omits module tables. A missing local signature during
+// module checking still permits callee, native-return and enum-layout evidence.
+#[derive(Clone, Copy)]
+enum TypedSeeding<'a> {
+    Isolated,
+    Module(Option<&'a crate::bytecode::ChunkSignature>),
+}
+
 fn typed_run(
     module: &Module,
     chunk: &crate::bytecode::Chunk,
-    sig: Option<&crate::bytecode::ChunkSignature>,
+    seeding: TypedSeeding<'_>,
     wb: usize,
     fb: usize,
     ab: usize,
@@ -5418,7 +5420,7 @@ fn typed_run(
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(m, &arena).expect("verify verify_typed.kel");
-    let mut shared = seed_verify_typed_shared(&vm, module, chunk, sig, wb, fb, ab);
+    let mut shared = seed_typed_shared(&vm, module, chunk, seeding, wb, fb, ab);
     match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
         .expect("call verify_typed.kel")
@@ -5440,8 +5442,8 @@ fn typed_run(
 /// widths. A chunk driven without its signature is a different, weaker check,
 /// so the argument is required rather than defaulted.
 ///
-/// One encoding, two callers: `typed_run` seeds through this rather than inline,
-/// so an external harness feeds the stage exactly what the driver does.
+/// `None` preserves this helper's isolation contract. Whole-module checking uses
+/// the same encoder with module context even when an individual signature is absent.
 pub fn seed_verify_typed_shared(
     vm: &Vm<'_, '_>,
     module: &Module,
@@ -5451,6 +5453,26 @@ pub fn seed_verify_typed_shared(
     fb: usize,
     ab: usize,
 ) -> Vec<u8> {
+    let seeding = match sig {
+        Some(signature) => TypedSeeding::Module(Some(signature)),
+        None => TypedSeeding::Isolated,
+    };
+    seed_typed_shared(vm, module, chunk, seeding, wb, fb, ab)
+}
+
+fn seed_typed_shared(
+    vm: &Vm<'_, '_>,
+    module: &Module,
+    chunk: &crate::bytecode::Chunk,
+    seeding: TypedSeeding<'_>,
+    wb: usize,
+    fb: usize,
+    ab: usize,
+) -> Vec<u8> {
+    let (sig, module_context) = match seeding {
+        TypedSeeding::Isolated => (None, false),
+        TypedSeeding::Module(signature) => (signature, true),
+    };
     use crate::bytecode::Op;
     assert!(
         chunk.ops.len() <= 1536,
@@ -5473,8 +5495,14 @@ pub fn seed_verify_typed_shared(
         set(vm, &mut shared, TV_RESUME_TAG, rtag);
         set(vm, &mut shared, TV_RESUME_SIZE, rsize);
         set(vm, &mut shared, TV_RESUME_KIND, rkind);
-        // The declared flat enum body sizes (`word_bytes + min_payload`), for the B8 cross-check.
-        for (i, el) in module.enum_layouts.iter().enumerate().take(64) {
+    }
+    if module_context {
+        // Declared enum sizes remain available even if this chunk has no signature.
+        assert!(
+            module.enum_layouts.len() <= 256,
+            "verify_typed.kel enum-table capacity"
+        );
+        for (i, el) in module.enum_layouts.iter().enumerate() {
             set(
                 vm,
                 &mut shared,
@@ -5486,9 +5514,10 @@ pub fn seed_verify_typed_shared(
             vm,
             &mut shared,
             TV_EB_COUNT,
-            module.enum_layouts.len().min(64) as i64,
+            module.enum_layouts.len() as i64,
         );
     }
+    let mut call_shape_cursor = 0usize;
     for (i, op) in chunk.ops.iter().enumerate() {
         let (class, arg, is_term, tk, req, prod, ta, tb, tc) = typed_desc(op, chunk, wb, fb, ab);
         assert!(prod <= 4, "verify_typed.kel push_tops unroll bound");
@@ -5501,24 +5530,33 @@ pub fn seed_verify_typed_shared(
         set(vm, &mut shared, TV_TA + i, ta);
         set(vm, &mut shared, TV_TB + i, tb);
         set(vm, &mut shared, TV_TC + i, tc);
-        // In the seeded form, a Call's return shape and the callee's parameter shapes (for the
-        // argument check), or a native's return shape; isolation leaves them Top, matching
-        // `typed_check_chunk`'s empty tables. An unmarshalled parameter slot (beyond the callee's
-        // count, or for a native) stays Top and defers.
-        if sig.is_some() {
+        // Module tables supply call and native results independently of local seeding.
+        // Isolation leaves these facts unknown, matching typed_check_chunk.
+        if module_context {
             match op {
-                Op::Call(callee, _) => {
+                Op::Call(callee, argc) => {
                     if let Some(cs) = module.signatures.get(*callee as usize) {
                         let (tag, size, kind) = abs_from_wire(&cs.ret, wb, fb, ab);
                         set(vm, &mut shared, TV_RET_TAG + i, tag);
                         set(vm, &mut shared, TV_RET_SIZE + i, size);
                         set(vm, &mut shared, TV_RET_KIND + i, kind);
-                        for (p, param) in cs.params.iter().enumerate().take(TV_CP_STRIDE) {
+                        let count = cs.params.len().min(usize::from(*argc));
+                        let end = call_shape_cursor
+                            .checked_add(count)
+                            .expect("call-shape count overflow");
+                        assert!(
+                            end <= TV_CP_CAPACITY,
+                            "verify_typed.kel call-shape pool capacity"
+                        );
+                        set(vm, &mut shared, TV_CP_FIRST + i, call_shape_cursor as i64);
+                        set(vm, &mut shared, TV_CP_COUNT + i, count as i64);
+                        for (p, param) in cs.params.iter().take(count).enumerate() {
                             let (ptag, psize, pkind) = abs_from_wire(param, wb, fb, ab);
-                            set(vm, &mut shared, TV_CP_TAG + i * TV_CP_STRIDE + p, ptag);
-                            set(vm, &mut shared, TV_CP_SIZE + i * TV_CP_STRIDE + p, psize);
-                            set(vm, &mut shared, TV_CP_KIND + i * TV_CP_STRIDE + p, pkind);
+                            set(vm, &mut shared, TV_CP_TAG + call_shape_cursor + p, ptag);
+                            set(vm, &mut shared, TV_CP_SIZE + call_shape_cursor + p, psize);
+                            set(vm, &mut shared, TV_CP_KIND + call_shape_cursor + p, pkind);
                         }
+                        call_shape_cursor = end;
                     }
                 }
                 Op::CallVerifiedNative(idx, _) | Op::CallExternalNative(idx, _) => {
@@ -5542,21 +5580,26 @@ pub fn typed_reject_chunk_via_kel(module: &Module, chunk: &crate::bytecode::Chun
     let wb = (1usize << module.word_bits_log2) / 8;
     let fb = (1usize << module.float_bits_log2) / 8;
     let ab = (1usize << module.addr_bits_log2) / 8;
-    typed_run(module, chunk, None, wb, fb, ab)
+    typed_run(module, chunk, TypedSeeding::Isolated, wb, fb, ab)
 }
 
 /// Run verify_typed.kel over every chunk of a module, seeding each from the module's per-chunk
-/// signature table (Phase 2b), the drop-in for `typed_check_module`. The module is rejected iff
-/// any chunk is.
+/// signature table. Missing local signatures do not discard module metadata. This helper
+/// checks chunk shapes; structural_reject_module_via_kel also checks data layout.
 pub fn typed_reject_module_via_kel(module: &Module) -> bool {
     let wb = (1usize << module.word_bits_log2) / 8;
     let fb = (1usize << module.float_bits_log2) / 8;
     let ab = (1usize << module.addr_bits_log2) / 8;
-    module
-        .chunks
-        .iter()
-        .enumerate()
-        .any(|(i, chunk)| typed_run(module, chunk, module.signatures.get(i), wb, fb, ab))
+    module.chunks.iter().enumerate().any(|(i, chunk)| {
+        typed_run(
+            module,
+            chunk,
+            TypedSeeding::Module(module.signatures.get(i)),
+            wb,
+            fb,
+            ab,
+        )
+    })
 }
 
 // --- Self-hosted A.2.1 data-layout validation, slice 2c (verify_datalayout.kel) --------------
@@ -5709,42 +5752,21 @@ pub fn dl_reject_module_via_kel(module: &Module) -> bool {
         || (n_shared as i64) != rd(DL_IO_TOTAL)
 }
 
-/// The self-hosted drop-in replacement for `verify_resource_bounds`: analyze.kel decides each
-/// chunk's WCMU transitively (callee bodies folded at every `Op::Call`, resolved in
-/// topological order so callees precede callers), and the module is admitted iff no chunk has
-/// an inextractable bound and every Stream chunk's budget fits `arena_capacity`.
+/// First-pass resource admission using Keleusma graph ordering and per-chunk analysis.
+/// Rust still retains the per-chunk result table and combines admission flags.
+/// Text-allocation bounds remain an Order 2 integration requirement.
+///
+/// # Panics
+/// This legacy Boolean interface panics when a bounded stage cannot process the input.
+/// Graph capacity failures are distinguishable through call_order_via_kel.
 pub fn validate_module_via_kel(module: &Module, arena_capacity: i64) -> bool {
-    use crate::bytecode::{BlockType, Op};
+    use crate::bytecode::BlockType;
     let n = module.chunks.len();
-    // Topological order over the call graph (callees before callers), rejecting recursion --
-    // the same DFS postorder `topological_call_order` computes.
-    let mut visited = vec![0u8; n]; // 0 unseen, 1 on-stack, 2 done
-    let mut order = Vec::new();
-    fn visit(module: &Module, i: usize, visited: &mut [u8], order: &mut Vec<usize>) -> bool {
-        if visited[i] == 1 {
-            return false; // cycle
-        }
-        if visited[i] == 2 {
-            return true;
-        }
-        visited[i] = 1;
-        for op in &module.chunks[i].ops {
-            if let Op::Call(callee, _) = op {
-                let c = *callee as usize;
-                if c < module.chunks.len() && !visit(module, c, visited, order) {
-                    return false;
-                }
-            }
-        }
-        visited[i] = 2;
-        order.push(i);
-        true
-    }
-    for i in 0..n {
-        if visited[i] != 2 && !visit(module, i, &mut visited, &mut order) {
-            return false; // a recursive call graph is inadmissible
-        }
-    }
+    let Some(order) =
+        call_order_via_kel(module).expect("call-graph stage capacity or protocol failure")
+    else {
+        return false;
+    };
     // Resolve each chunk's transitive WCMU in topological order, then admit.
     let shared_layout = module
         .data_layout

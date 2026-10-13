@@ -186,7 +186,7 @@ impl<'a> Machine<'a> {
     }
     fn module(&mut self, module: &Module) -> Result<Option<Vec<(bool, bool)>>, SelfHostError> {
         // Scheduling only. No reference text-flow result is consumed.
-        let Ok(order) = crate::verify::topological_call_order(module) else {
+        let Some(order) = super::call_order_via_kel(module)? else {
             return Ok(None);
         };
         let mut returns = vec![false; module.chunks.len()];

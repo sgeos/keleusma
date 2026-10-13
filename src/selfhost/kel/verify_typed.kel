@@ -9,7 +9,7 @@
 // cross-checks its baked body size against the declared set (`eb_vals`/`eb_count`, audit B8). A
 // non-enum flat `NewComposite` also checks that its packed element sizes sum to the baked body
 // when all are known (`NewCompositeSizeMismatch`). A `Call` additionally checks each popped
-// argument against the callee's parameter shapes (`cp_*`, up to eight, `CallArgMismatch`), and
+// argument against the callee's parameter shapes (`cp_*`, a packed parameter-shape pool, `CallArgMismatch`), and
 // flat compatibility is exact: same tag AND same size AND same composite `kind`. There are no
 // deferred residuals; within the sound over-approximation the pass reproduces every reference
 // check. An unseeded run (all seeds Top, empty tables) reproduces the isolation `typed_check_chunk`.
@@ -63,11 +63,14 @@ shared data tv {
     seed_tag: [Word; 256],
     seed_size: [Word; 256],
     seed_kind: [Word; 256],
-    eb_vals: [Word; 64],
+    eb_vals: [Word; 256],
     cp_tag: [Word; 12288],
     cp_size: [Word; 12288],
     cp_kind: [Word; 12288],
     out_reject: Word,
+    // Each call indexes its own declared-shape slice in the existing pool.
+    cp_first: [Word; 1536],
+    cp_count: [Word; 1536],
 }
 
 // The live operand shape stack (`st_tag`/`st_size`, height `dsp`), the local frame
@@ -261,7 +264,7 @@ fn eb_check(size: Word) -> Word {
         0
     } else {
         tf.flag = 0;
-        for j in 0..64 limit 64 {
+        for j in 0..256 limit 256 {
             if j < tv.eb_count andalso tv.eb_vals[j] == size {
                 tf.flag = 1;
             }
@@ -368,19 +371,19 @@ fn apply_typed(ip: Word) -> Word {
         // Call/native: check each argument against the callee parameter (an unmarshalled
         // parameter -- beyond the callee's count, or a native -- is Top and defers), pop the
         // arguments, push the return shape and any native error flag (as Top). The `kk`-th pop is
-        // parameter `r - 1 - kk`, checked when it is within the marshalled bound of eight.
+        // parameter `r - 1 - kk`, checked against its complete transported slice.
         for kk in 0..256 limit 256 {
             if kk < r {
                 st_pop();
                 let p = r - 1 - kk;
-                if p < 8 {
+                if p < tv.cp_count[ip] {
                     shapes_compat(
                         tf.pop_tag,
                         tf.pop_size,
                         tf.pop_kind,
-                        tv.cp_tag[ip * 8 + p],
-                        tv.cp_size[ip * 8 + p],
-                        tv.cp_kind[ip * 8 + p],
+                        tv.cp_tag[tv.cp_first[ip] + p],
+                        tv.cp_size[tv.cp_first[ip] + p],
+                        tv.cp_kind[tv.cp_first[ip] + p],
                     );
                 }
             }

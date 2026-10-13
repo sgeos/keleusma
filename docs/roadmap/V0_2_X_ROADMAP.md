@@ -123,6 +123,17 @@ the host is glue.
 
 ### B. Validator in Keleusma
 
+**Current audit, 2026-10-13. Order 2 remains open.** The
+[completion plan](../decisions/ORDER2_COMPLETION_PLAN.md) preserves the structural,
+typed, resource, text-allocation, orchestration and shipping requirements. All fourteen
+current stage modules are accepted by both structural validators, but that positive census
+does not prove complete rejection coverage. New controls found and repaired missed call
+arguments, float-scalar access, enum-table truncation and metadata lost when a caller
+signature was absent. Graph ordering and cycle decisions now run in Keleusma. Resource
+summary ownership, final admission, text heap bounds and shipping integration remain open.
+The detailed slice notes below retain their earlier findings and completeness claims;
+use the current completion plan for milestone status.
+
 The full load-time verifier, not only the resource-bound admission that is already
 self-hosted.
 
