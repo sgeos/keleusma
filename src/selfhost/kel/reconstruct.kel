@@ -174,18 +174,20 @@ private data rs {
     fp_sp: Word,
     // The FIRST guard to fire, and the quantity that provoked it. A clamped cursor
     // provokes cascades, so a later guard must not overwrite an earlier one.
+    outcome_base: [Word; 8],
+    outcome_sp: Word,
+    range_lp: Word, range_fop: Word,
+    outcome_map: [Word; 22],
     rerr_code: Word,
     rerr_detail: Word,
 }
 
 // THE NAMED FAILURE MODES OF THIS STAGE.
 //
-// Every array here is one of six sizes, so an unguarded out-of-range index reports
-// `IndexOutOfBounds(i, N)` where `N` identifies a SIZE CLASS rather than an array.
-// Twenty-five of this stage's twenty-six arrays share their message with at least one
-// sibling, which is the same defect `parse.kel` carried until thirteen causes were given
-// their own names. The codes below cover the 1024-wide class; the other five classes are
-// UNGUARDED and recorded as such in `tests/reconstruct_failure_modes.rs`.
+// Array size alone cannot identify a failing index. Codes 1 through 5 name
+// node, work-stack and record-range failures. Code 6 names malformed or exhausted
+// outcome descriptors and contexts. The remaining unguarded side arrays are listed
+// explicitly in tests/reconstruct_failure_modes.rs.
 //
 // A cause is reported by yielding `rc_fail_base() - code` in place of the node count.
 // Node counts are non-negative, so a negative yield cannot be mistaken for one.
@@ -692,10 +694,42 @@ fn build_struct_eq_nested(a: Word) -> Word {
     emit(59, base, lhs, rhs)
 }
 
+// Outcome descriptors use three match_parts entries in canonical dispatch order.
+// Reject exhausted side storage before writing any part of the descriptor.
+fn step_outcome(k: Word, a: Word) -> Word {
+    if k == 112 {
+        if rs.mp + 3 > 256 orelse rs.outcome_sp >= 8 orelse a < 0 orelse a % 12 != 0 orelse a > 244 {
+            rerr(6, rs.mp + 3)
+        } else {
+            let base = rs.mp; rs.mp = base + 3;
+            io.match_parts[base] = 0; io.match_parts[base + 1] = 0; io.match_parts[base + 2] = 0;
+            rs.outcome_map[a / 12] = base + 1;
+            rs.outcome_base[rs.outcome_sp] = base; rs.outcome_sp = rs.outcome_sp + 1; 0
+        }
+    } else { if k == 113 {
+        if rs.outcome_sp == 0 orelse a < 0 orelse a > 2 { rerr(6, a) } else {
+            let arm = pop(); io.match_parts[rs.outcome_base[rs.outcome_sp - 1] + a] = arm + 1; 0
+        }
+    } else { if k == 114 {
+        if rs.outcome_sp == 0 { rerr(6, a) } else { rs.outcome_sp = rs.outcome_sp - 1; 0 }
+    } else { if k == 115 {
+        let body = pop(); let guard = if a / 262144 == 1 { pop() + 1 } else { 0 };
+        emit(75, a % 262144, guard, body)
+    } else { if k == 116 {
+        emit(76, a, 0, 0)
+    } else {
+        let cont = pop();
+        if a < 0 orelse a % 12 != 0 orelse a > 244 { rerr(6, a) } else {
+            if rs.outcome_map[a / 12] == 0 { rerr(6, a) } else { emit(74, a + rs.range_lp, rs.outcome_map[a / 12] - 1, cont) }
+        }
+    } } } } }
+}
+
 // Process one record, folding it into a node and leaving that node's index on the
 // stack. An If (4) pops its else, then, and cond children. Its arg is cond for
 // a written else and -(cond + 1) for an omitted else; lhs/rhs hold the branches.
 fn step(k: Word, a: Word) -> Word {
+    if k >= 112 andalso k <= 117 { step_outcome(k, a) } else {
     if is_leaf(k) == 1 orelse k == 72 {
         if k == 72 { push(0 - 1) } else { emit(k, a, 0, 0) }
     } else {
@@ -884,13 +918,13 @@ fn step(k: Word, a: Word) -> Word {
         // continuation in rhs, lhs unused -- and becomes codegen's kind 16, which
         // `push_forin` lowers.
         let cont = pop();
-        emit(16, a, 0, cont)
+        emit(16, a + rs.range_fop, 0, cont)
     } else {
     if k == 23 {
         // ForLimit statement: arg is the limit_parts entry start. It folds into the
         // block popping only the continuation, held in rhs; lhs is unused.
         let cont = pop();
-        emit(23, a, 0, cont)
+        emit(23, a + rs.range_lp, 0, cont)
     } else {
     if k == 34 {
         // MatchBuild packs temp*1024 + total arm count. Each ordered arm has a
@@ -934,6 +968,7 @@ fn step(k: Word, a: Word) -> Word {
     } else {
         0
     } } } } } } } } } } } } } } } } } }
+}
 }
 
 // Pop the top depth-2+ struct reassembly frame (its sub-fields are fully laid into `seb`) and
@@ -1293,7 +1328,10 @@ fn step_bnot(k: Word, a: Word) -> Word {
 // arrays accumulate across ranges), returning its single remaining node -- the range
 // root. A multihead's per-head guards and bodies each reconstruct as one range.
 fn reconstruct_range(start: Word, len: Word) -> Word {
+    // Parser loop indices restart in each guard/body range; side tables accumulate.
+    rs.range_lp = rs.lp; rs.range_fop = rs.fop;
     rs.sp = 0;
+    for i in 0..22 limit 22 { rs.outcome_map[i] = 0; }
     // Guard the RANGE, not each index. The walk below carries `limit 1024`, so a longer
     // range trapped `LoopLimitExceeded` -- a VM-level message naming no cause at all --
     // one iteration before a per-index check could have fired.
@@ -1348,6 +1386,7 @@ loop main(resume: Word) -> Word {
     rs.fop = 0;
     rs.mp = 0;
     rs.pcount = 0;
+    rs.outcome_sp = 0;
     rs.fp_sp = 0;
     rs.rerr_code = 0;
     rs.rerr_detail = 0;

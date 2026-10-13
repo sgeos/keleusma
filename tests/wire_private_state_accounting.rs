@@ -88,7 +88,7 @@ fn module_forest_scratch_is_priced_at_the_declared_word_width() {
     let module = keleusma::compiler::compile(&ast).unwrap();
     assert_eq!(
         module.data_layout.as_ref().unwrap().shared_layout.len(),
-        8190 + 1365 * 2
+        9216 + 1536 * 2
     );
-    assert_eq!(module.shared_data_bytes, 87_360);
+    assert_eq!(module.shared_data_bytes, 98_304);
 }

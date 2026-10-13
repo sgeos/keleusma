@@ -164,7 +164,8 @@ fn the_self_hosted_compiler_can_now_compile_wire_kel() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
 
     let module = keleusma::selfhost::self_host_compile(WIRE);
-    // 561 after nine reader functions and inlining fourteen numeric helpers.
+    // 562 after separating the module-forest and raw-node capacities.
+    // Previously 561 after nine reader functions and inlining fourteen numeric helpers.
     // Previously 566 after the auxiliary-directory begin and step functions.
     // Previously 564 after six semantic opcode decoder functions.
     // Previously 558 after a forest-input mode, four storage accessors and two forest handlers.
@@ -187,7 +188,7 @@ fn the_self_hosted_compiler_can_now_compile_wire_kel() {
     // reason, and this is the chunk count.
     assert_eq!(
         module.chunks.len(),
-        561,
+        562,
         "`wire.kel`'s chunk count moved. A function is a chunk, so this figure moves whenever \
          the stage gains or loses one -- update it WITH the cause, as the comment above does"
     );

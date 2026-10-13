@@ -7537,6 +7537,7 @@ fn compile_for_limit(
     end: &Expr,
     cap: i64,
 ) -> Result<(), CompileError> {
+    let loop_scope_base = fc.locals.len();
     // i = min (the loop variable).
     compile_expr(fc, start)?;
     let var_slot = fc.declare_local(&for_stmt.var);
@@ -7647,6 +7648,9 @@ fn compile_for_limit(
     fc.patch_jump(outer);
     fc.emit(Op::EndIf);
 
+    // Type checking ends the loop's lexical scope before the outcome arms.
+    // Frame slots remain allocated for dispatch and explicit outcome bindings.
+    fc.locals.truncate(loop_scope_base);
     compile_loop_outcome_dispatch(fc, for_stmt, var_slot, ctr_slot, oc_slot)
 }
 

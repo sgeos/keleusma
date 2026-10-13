@@ -2,6 +2,22 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
+## 2026-10-13 Order 1 completion and legacy forest storage
+
+The [completion audit](./ORDER1_COMPLETION_AUDIT.md) records the final first-pass result.
+The production streaming emitter and all fourteen shipping command artifacts pass complete
+reference comparisons. A larger parser exposed a separate legacy module-forest limit.
+Its 1,399 nodes now fit a 1,536-node forest buffer. Raw six-word node output retains its
+1,365-node limit. Boundary controls cover both buffers, including a nested forest at the
+module limit and refusal one node beyond it. The three module scratch arrays occupy
+98,304 shared bytes, while output regions reserve at most 61,440 bytes in the unchanged
+65,536-byte window. Name and blob limits remain 1,024 and 49,152.
+
+The 92-function code generator exceeds the legacy 90-record batch. Its measured refusal
+is recorded separately from the streaming path, which still accepts every stage. The wire
+stage now has 562 functions. No public opcode or bytecode-version change occurred.
+The earlier dated sections below retain their historical scope and receipts.
+
 ## 2026-10-11 Keleusma derives logical data-layout runs
 
 The shipping emitter now gives logical slots to Keleusma instead of grouping them in Rust.

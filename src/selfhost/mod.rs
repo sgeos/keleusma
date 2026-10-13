@@ -1193,7 +1193,7 @@ fn scalar_tag_of_layout_kind(kind: i64) -> i64 {
 ///
 /// `MatchIn` 22 and `EnumMatch` 39 are deliberately absent: their `rhs` is an ARM COUNT.
 fn is_statement_continuation(kind: i64) -> bool {
-    matches!(kind, 5 | 12 | 14 | 16 | 21 | 23)
+    matches!(kind, 5 | 12 | 14 | 16 | 21 | 23 | 74)
 }
 
 /// The node a function body finally YIELDS, or `None` when it yields nothing.
@@ -1302,6 +1302,18 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     vm.set_shared(&mut shared, BR_P_LEN, Value::Int(tokens.len() as i64))
         .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_ON_ID,
+        Value::Int(id_of("on") + 1),
+    )
+    .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_OK_ID,
+        Value::Int(id_of("ok") + 1),
+    )
+    .unwrap();
     vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_REQUIRE_ID, Value::Int(id_of("require")))
@@ -1651,6 +1663,18 @@ fn try_parse_functions_impl(
         &mut shared,
         crate::selfhost_host::BR_P_HAS_IMPORTS,
         Value::Int(i64::from(first.has_imports)),
+    )
+    .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_ON_ID,
+        Value::Int(id_of("on") + 1),
+    )
+    .unwrap();
+    vm.set_shared(
+        &mut shared,
+        crate::selfhost_host::BR_P_OK_ID,
+        Value::Int(id_of("ok") + 1),
     )
     .unwrap();
     vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
@@ -2888,7 +2912,7 @@ pub fn try_call_type_inputs_from_pipeline(
             for node in &body.nodes {
                 let slot = match node.kind {
                     16 => Some(body.for_parts[node.arg as usize]),
-                    23 => Some(body.limit_parts[node.arg as usize]),
+                    23 | 74 => Some(body.limit_parts[node.arg as usize]),
                     _ => None,
                 };
                 if let Some(identity) = slot.and_then(|slot| slot_names.get(&slot)) {
@@ -3455,7 +3479,7 @@ fn source_operand(
     chunks: &[String],
 ) -> ExprOperand {
     match body.nodes.get(index as usize) {
-        Some(node) if node.kind == NODE_LITERAL => (1, 0, String::new()),
+        Some(node) if matches!(node.kind, NODE_LITERAL | 76) => (1, 0, String::new()),
         Some(node) if node.kind == NODE_UNIT && (node.arg == 1 || node.arg == 2) => {
             (2, 0, String::new())
         }
@@ -3648,7 +3672,7 @@ fn expression_rows_from_body<F: Fn(i64) -> ExprOperand>(
     let nothing: ExprOperand = (0, 0, String::new());
 
     for (at, node) in body.nodes.iter().enumerate() {
-        if scalar_results && matches!(node.kind, 16 | 23) {
+        if scalar_results && matches!(node.kind, 16 | 23 | 74) {
             let base = usize::try_from(node.arg).expect("negative loop-parts offset");
             let bounds = if node.kind == 16 {
                 &body.for_parts[base + 2..base + 4]
@@ -3695,6 +3719,8 @@ fn expression_rows_from_body<F: Fn(i64) -> ExprOperand>(
         } else if scalar_results && node.kind == 43 {
             row_of_node.insert(at as i64, rows.len());
             rows.push((18, operand(node.lhs), nothing.clone()));
+        } else if node.kind == 75 && node.lhs > 0 {
+            rows.push((3, operand(node.lhs - 1), nothing.clone()));
         } else if node.kind == 71 {
             // Guarded match-arm wrapper. Its result is compared by the parent match.
             rows.push((3, operand(node.lhs), nothing.clone()));

@@ -87,7 +87,7 @@ const BINOP: i64 = 3;
 #[test]
 fn every_named_cause_renders_a_distinct_message() {
     let mut seen: Vec<(i64, String)> = Vec::new();
-    for code in 1..=5 {
+    for code in 1..=6 {
         let tag = RECONSTRUCT_DIAG_TAG_BASE - code;
         let msg = describe_reconstruct_diagnostic(tag, 7);
         for (other, prev) in &seen {
@@ -99,7 +99,7 @@ fn every_named_cause_renders_a_distinct_message() {
         }
         seen.push((code, msg));
     }
-    assert_eq!(seen.len(), 5, "the code table lost an entry");
+    assert_eq!(seen.len(), 6, "the code table lost an entry");
 }
 
 /// An underflow and an exhaustion on the SAME array must not read alike.
@@ -179,8 +179,8 @@ fn the_array_family_is_derived_and_non_vacuous() {
         .filter(|(_, s)| arrays.iter().filter(|(_, o)| o == s).count() > 1)
         .count();
     assert!(
-        shared_a_message >= arrays.len() - 1,
-        "at most one array should have a size class to itself; {} of {} do",
+        shared_a_message >= arrays.len() - 2,
+        "at most two arrays should have a size class to themselves; {} of {} do",
         arrays.len() - shared_a_message,
         arrays.len()
     );
@@ -233,7 +233,15 @@ fn the_reconstruct_diagnostic_tag_base_matches() {
 #[test]
 fn the_unguarded_arrays_are_named() {
     let guarded = [
-        "stack", "kinds", "args", "lhs", "rhs", "rec_kind", "rec_arg",
+        "stack",
+        "kinds",
+        "args",
+        "lhs",
+        "rhs",
+        "rec_kind",
+        "rec_arg",
+        "outcome_base",
+        "outcome_map",
     ];
     let arrays = declared_arrays();
     let unguarded: Vec<&str> = arrays
@@ -473,5 +481,33 @@ fn wire_kel_reports_a_named_cause_rather_than_an_array_index() {
              is the regression this file exists to prevent. Got: {msg}"
         );
         panic!("`wire.kel` no longer compiles; it refuses with: {msg}");
+    }
+}
+
+/// Outcome contexts and descriptors reject malformed records before indexing.
+#[test]
+fn outcome_storage_checks_depth_offsets_and_missing_context() {
+    let arrays = declared_arrays();
+    assert!(arrays.contains(&("outcome_base".into(), 8)));
+    assert!(arrays.contains(&("outcome_map".into(), 22)));
+    let mut too_deep = vec![(112, 0); 9];
+    too_deep.push((1, 0));
+    let mut full_descriptors = Vec::new();
+    for _ in 0..86 {
+        full_descriptors.extend([(112, 0), (114, 0)]);
+    }
+    for records in [
+        full_descriptors,
+        too_deep,
+        vec![(112, -12)],
+        vec![(112, 252)],
+        vec![(112, 1)],
+        vec![(113, 0)],
+        vec![(114, 0)],
+        vec![(1, 0), (117, 0)],
+    ] {
+        let (yielded, code, _) = drive(&records);
+        assert_eq!(code, 6, "{records:?}");
+        assert_eq!(yielded, RECONSTRUCT_DIAG_TAG_BASE - 6);
     }
 }

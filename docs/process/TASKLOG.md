@@ -6,6 +6,36 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-13 Order 1 completed with loop outcomes
+
+The first-pass compiler milestone is complete on feat/v02-order1-next. The full audit is
+in docs/decisions/ORDER1_COMPLETION_AUDIT.md. Outcome handlers are stage-owned and preserve
+canonical dispatch, bindings, guards, scope, default traps and nested allocation order.
+The reference compiler's handler scope mismatch is repaired. Eight controls execute to seven
+in both compilers, and the shipping command executes the concrete regression to seven.
+
+The parser's 1,399 constants exposed a legacy forest cap. Separate module storage now admits
+1,536 nodes while raw node output retains 1,365. Boundary and nested-forest tests pass. The
+90-record legacy batch correctly refuses the 92-function code generator, while all stages
+remain required to pass streaming. The wire stage has 562 functions. Selected type caps remain
+640, public bytecode version remains 2 and the public opcode count remains 66.
+
+Final verification has 3,236 workspace passes and 2,978 standalone self-host passes, both
+with zero failures and five ignored tests. No-default has 329 passes, signatures 2,350 and
+signatures with shell 2,367, all green. Detached compiler tests have 86 passes. Root and
+detached Clippy and formatting, Rust 1.88 test checking and the embedded build pass. All
+fourteen actual command artifacts match same-source reference bytes. Inference independence
+covers 59,999 recorded types. Exact commands and receipts are in REVERSE_PROMPT.md.
+
+Pilot task v023-order1-outcomes-b599 retains one diagnostic and three bounded claims.
+All are self-reviewed with independent false. One claim payload is labelled unsupported
+because it omits comparison implementation evidence. The other two claims are supported.
+The reviewed export has 182 samples across 46 tasks. External evaluation remains unavailable.
+No provider accuracy or saved reasoning claim is made. The next milestone is Order 2.
+
+No push, merge or publication occurred. The V0.3.X worktree and pre-existing untracked files
+remain untouched. The earlier gate receipts below remain historical evidence.
+
 ## 2026-10-13 Frame allocation repaired and full verification refreshed
 
 The two red assertions from a7ef30ed now pass. Reconstruction keeps each guarded head's

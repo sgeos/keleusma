@@ -6,8 +6,8 @@
 //! the worst-case iteration count is the cap. An optional `on` block captures the
 //! outcome (`ok`, `break`, `limit`); an unhandled `limit` overrun traps loud as
 //! `LoopLimitExceeded`, the fail-loud default consistent with the other capture
-//! constructs. Overflow capture and `when` guards on outcome arms are not yet
-//! implemented and are rejected explicitly.
+//! constructs. Defensive outcome arms may use `when` guards. Overflow capture
+//! remains inadmissible for these bounded loops and is rejected explicitly.
 
 // Drives the compile front end and constructs a `Vm` (strict verification), so it needs both
 // the `compile` and `verify` features. Gate the whole file so the CI `--no-default-features`
@@ -325,4 +325,21 @@ fn a_break_falls_through_to_ok_when_no_break_arm() {
         fn main(n: Word) -> Word { for i in 0..n limit 9 { if i == 2 { break; } } \
         on { ok => { d.w = 42; }, } d.w }";
     assert_eq!(run(src, 5).unwrap(), 42);
+}
+
+/// Outcome handlers resolve outer names after the induction variable leaves scope.
+#[test]
+fn outcome_handlers_restore_outer_induction_names() {
+    for source in [
+        "private data d { n: Word } fn main(n: Word) -> Word { let __for_end = 7; for i in 0..2 limit 2 {} on { ok => { d.n = __for_end; } } d.n }",
+        "private data d { n: Word } fn main(n: Word) -> Word { let __for_outcome = true; for i in 0..5 limit 2 {} on { ok => {}, limit(si) when __for_outcome => { d.n = 7; } } d.n }",
+        "private data d { n: Word } fn main(n: Word) -> Word { let i = 7; for i in 0..2 limit 2 {} on { ok => { d.n = i; } } d.n }",
+        "private data d { n: Word } fn main(n: Word) -> Word { let i = 7; for i in 0..5 limit 2 {} on { ok => {}, limit(si) when i == 7 => { d.n = i; } } d.n }",
+        "private data d { n: Word } fn main(n: Word) -> Word { let i = 7; for i in 0..5 limit 5 { break; } on { ok => {}, break(si) when i == 7 => { d.n = i; } } d.n }",
+        "private data d { n: Word } fn main(n: Word) -> Word { let i = true; for i in 0..5 limit 2 {} on { ok => {}, limit(si) when i => { d.n = 7; } } d.n }",
+        "private data d { n: Word } fn main(n: Word) -> Word { let i = [7]; for i in 0..2 limit 2 {} on { ok => { d.n = i[0]; } } d.n }",
+        "private data d { n: Word } fn main(n: Word) -> Word { let i = 99; for i in 0..2 limit 2 {} on { ok(i) => { d.n = i + 5; } } d.n }",
+    ] {
+        assert_eq!(run(source, 0).unwrap(), 7, "{source}");
+    }
 }

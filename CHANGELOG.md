@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The self-hosted compiler supports bounded loop outcome handlers with count and index
+  bindings, defensive guards, scoped locals and the existing default trap behavior.
+
 - **Protocol-level tests for the language server, whose wire layer had none.**
   Its existing tests call the analysis, symbol and completion helpers directly.
   Those are pure functions, and a correct analysis says nothing about whether a
@@ -538,6 +541,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `BYTECODE_VERSION` change.
 
 ### Fixed
+
+- Reference compilation now ends loop-local name visibility before outcome handlers.
+  Outer bindings retain their source meaning, including Boolean and array values.
+  Explicit outcome bindings still read the allocated count or exit-index slots.
 
 - **A conflated figure that had been repeated across the roadmap, the handoff and
   the resume channels.** "Self-hosted type rejection is 7 tests against ~15 shapes"

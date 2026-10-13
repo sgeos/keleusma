@@ -2,6 +2,15 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
+## Current first-pass status, 2026-10-13
+
+Order 1 is complete for its defined first-pass corpus. The
+[completion audit](./ORDER1_COMPLETION_AUDIT.md) gives current evidence and boundaries.
+Outcome bindings now carry an intrinsic Word source fact, and outcome guards contribute
+Boolean requirements to the independent stage. Eleven outcome-specific source errors are
+rejected before reference checking. Legacy extraction APIs and full-language coverage retain
+their explicit boundaries. The dated sections below record earlier increments.
+
 The sliced implementation plan the scoping document
 ([`TYPECHECK_SELFHOST_PLAN.md`](./TYPECHECK_SELFHOST_PLAN.md)) deferred until its two spikes had
 run. Both have. Written 2026-08-14.

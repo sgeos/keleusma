@@ -75,7 +75,7 @@ impl ParseRecordError {
     /// retired codes, capacity limits and transport failures never do.
     #[must_use]
     pub fn is_source_rejection(&self) -> bool {
-        matches!(self, Self::Diagnostic { code, .. } if matches!(PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(2 | 13..=17 | 22..=24 | 26 | 32..=36)))
+        matches!(self, Self::Diagnostic { code, .. } if matches!(PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(2 | 13..=17 | 22..=24 | 26 | 32..=36 | 39)))
     }
 }
 
@@ -315,6 +315,9 @@ pub fn describe_reconstruct_diagnostic(code: i64, detail: i64) -> String {
              returned a STALE index for an empty range, or SILENTLY DISCARDED the \
              remainder for an over-full one."
         ),
+        6 => {
+            format!("invalid or exhausted loop outcome storage in reconstruct.kel, detail {detail}")
+        }
         other => format!(
             "reconstruct.kel reported diagnostic code {other} (detail {detail}), which \
              this driver does not know. The stage has grown a cause that \
@@ -418,6 +421,7 @@ pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
             "source type annotation nesting depth {detail} exceeds the parse.kel limit of {PARSE_ANNOTATION_DEPTH_CAP}"
         ),
         29 => format!("tuple layout capacity exhausted with {detail} members in parse.kel"),
+        39 => format!("invalid loop outcome syntax near token {detail} in parse.kel"),
         38 => format!("expression layout unavailable near token {detail} in parse.kel"),
         30 => format!("expression block at token {detail} is outside the parse.kel subset"),
         31 => format!("non-range for iterable at token {detail} is outside the parse.kel subset"),
@@ -825,6 +829,10 @@ pub const BR_P_FIXED_ID: usize = BR_P_FLOAT_ID + 1;
 pub const BR_P_TEXT_ID: usize = BR_P_FIXED_ID + 1;
 /// Enable source return-range queries and explicit token reposition requests.
 pub const BR_P_RETURN_QUERIES: usize = BR_P_TEXT_ID + 1;
+/// Contextual outcome keywords, interned identifier plus one.
+pub const BR_P_ON_ID: usize = BR_P_RETURN_QUERIES + 1;
+/// OK outcome label, interned identifier plus one.
+pub const BR_P_OK_ID: usize = BR_P_ON_ID + 1;
 
 #[cfg(test)]
 mod shared_layout_tests {
@@ -924,6 +932,8 @@ mod shared_layout_tests {
             ("fixed_id", "BR_P_FIXED_ID", BR_P_FIXED_ID),
             ("text_id", "BR_P_TEXT_ID", BR_P_TEXT_ID),
             ("return_queries", "BR_P_RETURN_QUERIES", BR_P_RETURN_QUERIES),
+            ("on_id", "BR_P_ON_ID", BR_P_ON_ID),
+            ("ok_id", "BR_P_OK_ID", BR_P_OK_ID),
         ];
         for &(field, konst, value) in cases {
             assert_eq!(

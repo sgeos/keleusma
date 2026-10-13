@@ -11997,17 +11997,11 @@ fn the_driver_emits_the_chunk_region_on_the_stages_that_fit() {
         ("verify_depth", true),
         ("verify_typed", true),
         ("verify_datalayout", true),
-        // THE EXCLUSION LIST IS DOWN TO THE CHUNK CAP, and that is the whole
-        // effect of the all-default elision on this test. `codegen` and
-        // `verify_structural` were excluded because their artifacts overran the
-        // 65,536-byte buffer at 111,864 and 102,256 bytes; they are now 20,632
-        // and 3,840, and every one of the eleven stages fits a single window.
-        //
-        // What still refuses is the 90-record chunk batch, and only two stages
-        // reach it: `parse` at 94 chunks and `wire` at 475. Measured, not
-        // inferred -- the other nine are between 2 and 76.
+        // The bounded batch has 90 records. The current parser, code generator
+        // and wire stage exceed it. The separate windowed-path test requires
+        // every stage to succeed through streaming, including these three.
         ("parse", false),
-        ("codegen", true),
+        ("codegen", false),
         ("verify_structural", true),
         ("wire", false),
     ];
@@ -12081,12 +12075,9 @@ fn the_driver_emits_the_chunk_region_on_the_stages_that_fit() {
         emitted += 1;
     }
 
-    // NINE OF ELEVEN, up from seven. `codegen` and `verify_structural` joined the
-    // emitting set when the all-default elision took their artifacts under the
-    // window. Pinned as counts rather than derived from the table above, so a
-    // stage silently changing category fails here instead of being absorbed.
-    assert_eq!(emitted, 9, "expected nine stages emitted");
-    assert_eq!(refused, 2, "expected two stages refused");
+    // Measured after outcome dispatch added two code-generator functions.
+    assert_eq!(emitted, 8, "expected eight stages emitted");
+    assert_eq!(refused, 3, "expected three stages refused");
 }
 
 /// MUST FIRE: the chunk record's name index is the STAGE's, not the host's.
@@ -12968,11 +12959,11 @@ fn every_stage_fits_the_driver_caps_with_margin() {
         "capacity evidence must include every current stage"
     );
     eprintln!("worst names {worst_names}, worst blob {worst_blob}");
-    // Measured 2026-10-11. Earlier evidence omitted wire and verify_types.
-    // Parse holds both maxima and leaves 21,743 bytes below the input cap.
+    // Measured 2026-10-13. Earlier evidence omitted wire and verify_types.
+    // Parse holds both maxima and leaves 20,978 bytes below the input cap.
     // Neither capacity is raised here.
-    assert_eq!(worst_names, 962, "the worst-case name count moved");
-    assert_eq!(worst_blob, 27409, "the worst-case blob size moved");
+    assert_eq!(worst_names, 983, "the worst-case name count moved");
+    assert_eq!(worst_blob, 28174, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
@@ -13917,5 +13908,84 @@ fn the_enum_layout_stream_accumulates_its_variant_range() {
              from the declaration, so a difference is in the NAME or the accumulated \
              `variants_first` -- both of which this stage computes"
         );
+    }
+}
+
+/// Raw node records and module forests occupy distinct bounded buffers.
+#[cfg(feature = "self-host")]
+#[test]
+fn module_forest_capacity_is_distinct_from_raw_node_output() {
+    use keleusma::bytecode::ConstValue;
+    use keleusma::wire_schema::kind;
+    assert_eq!(kel_const("mi_max_nodes"), 1365);
+    let forest_cap = usize::try_from(kel_const("mf_max_nodes")).unwrap();
+    assert_eq!(forest_cap, 1536);
+    assert!(forest_cap * (16 + 8 + 16) <= CAPACITY);
+    let mut module =
+        compile(&parse(&tokenize("fn main() -> Word { 7 }").unwrap()).unwrap()).unwrap();
+    let mut vm = vm_for(WIRE_KEL);
+    for (count, nested) in [
+        (1365, false),
+        (1366, false),
+        (1536, false),
+        (1536, true),
+        (1537, false),
+    ] {
+        module.chunks[0].constants = if nested {
+            vec![ConstValue::Array(vec![ConstValue::Int(7); count - 1])]
+        } else {
+            vec![ConstValue::Int(7); count]
+        };
+        let (blob, _) = keleusma::selfhost::module_input(&module);
+        assert!(blob.len() <= BIN_CAPACITY);
+        for command in [CMD_MI_CONST_NODES, 213] {
+            let accepted = count
+                <= if command == CMD_MI_CONST_NODES {
+                    1365
+                } else {
+                    1536
+                };
+            let read_len = if accepted {
+                count
+                    * if command == CMD_MI_CONST_NODES {
+                        48
+                    } else {
+                        16
+                    }
+            } else {
+                0
+            };
+            let (ret, bytes) = run_call(
+                &mut vm,
+                &Call {
+                    cmd: command,
+                    nregions: 0,
+                    seed: &[],
+                    regions: &[],
+                    fields: &[],
+                    names: &[],
+                    pool: &blob,
+                    args: [0, 0, 0, 0, 0],
+                    read_len,
+                },
+            )
+            .unwrap();
+            if !accepted {
+                assert_eq!(ret, -240, "{command}, {count}, {nested}");
+            } else if command == CMD_MI_CONST_NODES {
+                assert_eq!(ret, count as i64);
+            } else {
+                assert_eq!(ret, read_len as i64);
+                let reference =
+                    keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).unwrap();
+                let view = keleusma_wire::WireView::parse(&reference).unwrap();
+                let region = view.find_region(kind::CONSTS).unwrap();
+                assert_eq!(
+                    bytes,
+                    view.region_bytes(&region).unwrap(),
+                    "{count}, {nested}"
+                );
+            }
+        }
     }
 }

@@ -103,6 +103,8 @@ shared data toks {
     text_id: Word,
     // Opt in to source return-range queries. Legacy stage feeders may leave this zero.
     return_queries: Word,
+    on_id: Word,
+    ok_id: Word,
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -1204,6 +1206,14 @@ private data forst {
 // scrutinee's `{`, 2 an arm pattern, 3 the `when` or `=>`, 4 the result, 5 the guard),
 // `match_temp` the reserved scrutinee slot, `match_argcount` the total arm count, `match_sp` the
 // nesting depth, `match_build` the pending build signal.
+// Outcome state shares the bounded loop stack. Labels map to LIMIT, OK, BREAK.
+private data out {
+    base: [Word; 9], kind: [Word; 9], seen: [Word; 9],
+    bind: [Word; 9], name: [Word; 9], slot: [Word; 9],
+    first: [Word; 9], guarded: [Word; 9], letbase: [Word; 9],
+    stmtbase: [Word; 9], seq: [Word; 9], ifbase: [Word; 9],
+    matchbase: [Word; 9], emit: Word, active: Word,
+}
 private data mat {
     // Saved EnumBind emitted immediately after its source payload coordinates.
     pending_bind: Word,
@@ -4703,7 +4713,7 @@ fn value_local(slot: Word) -> Word {
 fn value_record(word: Word) -> Word {
     let kind = if ps.emit_arg == 0 - 1 { word % 64 } else { word };
     let arg = if ps.emit_arg == 0 - 1 { word / 64 } else { ps.emit_arg };
-    if kind == 1 { value_scalar(3); }
+    if kind == 1 orelse kind == 116 { value_scalar(3); }
     if kind == 20 { value_scalar(if arg == 1 orelse arg == 2 { 1 } else { 0 }); }
     if kind == 38 { value_scalar(6); }
     if kind == 11 { value_scalar(da.da_kind); }
@@ -5052,7 +5062,13 @@ fn step_op(k: Word) -> Word {
         // `for .. limit` loop's outcome slot (for_oc), which codegen sets to the user-break
         // outcome code before the Break op. The terminating `;` is consumed as a no-op.
         stmt.stmt_kind[stmt.stmt_count] = Node::Break() as Word;
-        stmt.stmt_arg[stmt.stmt_count] = forst.for_oc[forst.for_sp - 1];
+        out.active = 0 - 1;
+        for i in 0..forst.for_sp limit 8 {
+            if forst.for_phase[i] == 7 { out.active = i; }
+        }
+        if out.active < 0 { perr(39, toks.at); } else {
+            stmt.stmt_arg[stmt.stmt_count] = forst.for_oc[out.active];
+        }
         stmt.stmt_count = stmt_push(stmt.stmt_count);
         stmt.break_pending = 1;
         ops.expect_operand = 1;
@@ -5171,6 +5187,9 @@ fn step_if(k: Word) -> Word {
         let if_seq = if if_open { branch.if_seq[branch.if_sp - 1] } else { 0 };
         let for_seq = if for_open { forst.for_seq[forst.for_sp - 1] } else { 0 };
         let close_for = for_open andalso (not if_open orelse for_seq > if_seq);
+        let outcome_open = forst.for_sp > 0 andalso forst.for_phase[forst.for_sp - 1] == 16;
+        let close_outcome = outcome_open andalso (not if_open orelse out.seq[forst.for_sp - 1] > if_seq);
+        if close_outcome { ops.drain_reason = 16; } else {
         if close_for {
             ops.drain_reason = 7;
         } else {
@@ -5183,6 +5202,7 @@ fn step_if(k: Word) -> Word {
             } else {
                 ops.drain_reason = 1;
             }
+        }
         }
         ops.draining = 1;
         if ops.expect_operand == 1 {
@@ -5387,19 +5407,6 @@ fn step_forheader(k: Word, v: Word) -> Word {
             ops.draining = 1;
             0
         } else {
-        // **THE BARE `for` FORM, REFUSED HERE BECAUSE HERE IS WHERE IT IS KNOWN.** Phase 4
-        // is the high bound and it ends at the contextual `limit`. A `{` instead means the
-        // header has no cap, which is unambiguously `for v in a..b { .. }` -- a form this
-        // stage does not lower.
-        //
-        // Without this, the header never leaves phase 4, the opening brace is attributed to
-        // the enclosing block, and the failure surfaces five layers downstream as a missing
-        // chunk name that names neither the construct nor the file. Seven iterations of
-        // diagnosis were spent on that message once.
-        //
-        // `perr` records the cause and `step` reports it INSTEAD of the next record, so the
-        // host stops at the next record boundary rather than consuming a stream built from
-        // a header that never completed.
         if k == Tok::LBrace() as Word {
             // **THE BARE FORM'S ENTRY.** Phase 4 is the high bound and it ends at the
             // contextual `limit`; a `{` here means the header has no cap, which is
@@ -5490,18 +5497,128 @@ fn step_for_emit() -> Word {
         forst.for_emit_i = 10;
         Node::ForBuild() as Word
     } else {
-        // The loop's parts are emitted; record its ForLimit statement, pop the loop
-        // context, and let the enclosing block fold it in.
-        stmt.stmt_kind[stmt.stmt_count] = Node::ForLimit() as Word;
-        stmt.stmt_arg[stmt.stmt_count] = 12 * forst.forlimit_count;
-        stmt.stmt_count = stmt_push(stmt.stmt_count);
+        out.base[fp] = 12 * forst.forlimit_count;
         forst.forlimit_count = forst.forlimit_count + 1;
         forst.for_emit = 0;
+        forst.for_phase[fp] = 8;
+        // Body locals and the induction variable leave scope before the handlers.
         stmt.let_count = forst.for_let_base[fp];
-        forst.for_sp = forst.for_sp - 1;
         ops.expect_operand = 1;
         0
     } } } } } } } } } } }
+}
+
+// Codes 112 through 117 are private records, never public instructions.
+fn outcome_finish(fp: Word, custom: Word) -> Word {
+    stmt.stmt_kind[stmt.stmt_count] = if custom == 1 { 117 } else { Node::ForLimit() as Word };
+    stmt.stmt_arg[stmt.stmt_count] = out.base[fp];
+    stmt.stmt_count = stmt_push(stmt.stmt_count);
+    stmt.let_count = forst.for_let_base[fp];
+    forst.for_sp = forst.for_sp - 1;
+    ops.expect_operand = 1;
+    if custom == 1 { ps.emit_arg = out.base[fp]; 114 } else { 0 }
+}
+fn outcome_boundary(k: Word) -> Word {
+    if forst.for_sp == 0 { 0 } else {
+        let fp = forst.for_sp - 1;
+        let phase = forst.for_phase[fp];
+        if phase >= 8 andalso phase != 16 andalso phase != 14 { 1 } else {
+            if phase == 14 andalso k == Tok::FatArrow() as Word
+                andalso mat.match_sp == out.matchbase[fp] andalso branch.if_sp == out.ifbase[fp] { 1 } else { 0 }
+        }
+    }
+}
+fn step_outcome(k: Word, v: Word) -> Word {
+    let fp = forst.for_sp - 1;
+    let phase = forst.for_phase[fp];
+    if phase == 8 {
+        if k == Tok::Ident() as Word andalso v + 1 == toks.on_id {
+            forst.for_phase[fp] = 9; out.seen[fp] = 0;
+            0
+        } else { ps.cursor = ps.cursor - 1; outcome_finish(fp, 0) }
+    } else { if phase == 9 {
+        if k == Tok::LBrace() as Word {
+            forst.for_phase[fp] = 10; ps.emit_arg = out.base[fp]; 112
+        } else {
+            // `on` is contextual. Rewind both tokens and refresh the fused window.
+            ps.cursor = ps.cursor - 2; toks.at = ps.cursor; outcome_finish(fp, 0)
+        }
+    } else { if phase == 10 {
+        if k == Tok::RBrace() as Word {
+            if out.seen[fp] != 0 andalso out.seen[fp] band 2 == 0 { perr(39, toks.at); }
+            outcome_finish(fp, 1)
+        } else {
+            let kind = if k == Tok::Break() as Word { 2 } else {
+                if k == Tok::Ident() as Word andalso v == toks.limit_id { 0 } else {
+                    if k == Tok::Ident() as Word andalso v + 1 == toks.ok_id { 1 } else { 3 }
+                }
+            };
+            if kind == 3 { perr(39, toks.at); }
+            let mask = 1 lsl kind;
+            if out.seen[fp] band mask != 0 { perr(39, toks.at); }
+            out.seen[fp] = out.seen[fp] bor mask; out.kind[fp] = kind;
+            out.bind[fp] = 0; out.guarded[fp] = 0;
+            out.letbase[fp] = stmt.let_count;
+            forst.for_phase[fp] = 11; 0
+        }
+    } else { if phase == 11 orelse phase == 18 {
+        if k == Tok::LParen() as Word andalso phase == 11 { forst.for_phase[fp] = 12; } else {
+            out.first[fp] = ps.pcount + stmt.slot_count;
+            out.ifbase[fp] = branch.if_sp; out.matchbase[fp] = mat.match_sp;
+            if k == Tok::When() as Word {
+                if out.kind[fp] == 1 { perr(39, toks.at); }
+                out.guarded[fp] = 1; forst.for_phase[fp] = 14; ops.expect_operand = 1;
+            } else { if k == Tok::FatArrow() as Word { forst.for_phase[fp] = 15; } else { perr(39, toks.at); } }
+        }
+        0
+    } else { if phase == 12 {
+        forst.for_phase[fp] = 13;
+        if k == Tok::Ident() as Word {
+            out.bind[fp] = 1; out.name[fp] = v;
+            let slot = ps.pcount + stmt.slot_count;
+            stmt.slot_count = stmt.slot_count + 1; out.slot[fp] = slot;
+            clear_let_shape(stmt.let_count);
+            stmt.let_names[stmt.let_count] = v; stmt.scope_slot[stmt.let_count] = slot;
+            stmt.let_scalar[stmt.let_count] = 1; vl.locals[stmt.let_count] = 4;
+            stmt.let_count = let_push(stmt.let_count);
+            ps.emit_arg = if out.kind[fp] == 1 { forst.for_ctr[fp] } else { forst.for_vslot[fp] };
+            116
+        } else { if k != Tok::Underscore() as Word { perr(pe_pattern_syntax(), toks.at); } 0 }
+    } else { if phase == 13 {
+        if k != Tok::RParen() as Word { perr(pe_pattern_syntax(), toks.at); }
+        forst.for_phase[fp] = 18; 0
+    } else { if phase == 14 {
+        ops.drain_reason = 15; ops.draining = 1; 0
+    } else { if phase == 15 {
+        if k != Tok::LBrace() as Word { perr(39, toks.at); }
+        forst.for_phase[fp] = 16;
+        out.stmtbase[fp] = stmt.stmt_count; out.seq[fp] = stmt.open_seq;
+        stmt.open_seq = stmt.open_seq + 1;
+        stmt.pbase[stmt.pbase_sp] = stmt.stmt_base; stmt.pbase_sp = stmt.pbase_sp + 1;
+        stmt.stmt_base = stmt.pstmt_sp; ops.expect_operand = 1; 0
+    } else {
+        if k == Tok::Comma() as Word { forst.for_phase[fp] = 10; 0 } else {
+            if k == Tok::RBrace() as Word {
+                if out.seen[fp] != 0 andalso out.seen[fp] band 2 == 0 { perr(39, toks.at); }
+                outcome_finish(fp, 1)
+            } else { perr(39, toks.at); 0 }
+        }
+    } } } } } } } }
+}
+fn outcome_emit() -> Word {
+    let fp = forst.for_sp - 1;
+    if out.emit == 1 {
+        out.emit = if out.bind[fp] == 1 { 2 } else { 4 };
+        ps.emit_arg = out.first[fp] + out.kind[fp] * 65536 + out.guarded[fp] * 262144;
+        115
+    } else { if out.emit == 2 {
+        out.emit = 3; ps.emit_arg = out.name[fp]; tag_let_name()
+    } else { if out.emit == 3 {
+        out.emit = 4; Node::LetIn() as Word + out.slot[fp] * 64
+    } else {
+        out.emit = 0; stmt.let_count = out.letbase[fp];
+        forst.for_phase[fp] = 17; ps.emit_arg = out.kind[fp]; 113
+    } } }
 }
 
 // The BARE form's parts emission, the short analogue of `step_for_emit`. The counted form
@@ -6293,6 +6410,9 @@ fn step_body_dispatch(k: Word, v: Word) -> Word {
                 ops.expect_operand = 1;
             }
         }
+        if outcome_boundary(k) == 1 andalso da.post_index == 0 andalso da.da_phase == 0 andalso mat.enum_phase == 0 {
+            step_outcome(k, v)
+        } else {
         if da.post_index == 1 {
             // The token after a `]` decides read versus indexed assignment.
             step_post_index(k)
@@ -6315,7 +6435,7 @@ fn step_body_dispatch(k: Word, v: Word) -> Word {
             }
         } else {
             step_dispatch_normal(k, v)
-        } } }
+        } } } }
     } }
 }
 
@@ -6562,6 +6682,13 @@ fn step_draining() -> Word {
             ops.draining = 0;
             finish_match_arm()
         } else {
+            if ops.drain_reason == 15 {
+                forst.for_phase[forst.for_sp - 1] = 15; ops.draining = 0; 0
+            } else { if ops.drain_reason == 16 {
+                ops.draining = 0; stmt.folding = 1;
+                stmt.fold_i = stmt.stmt_count; stmt.fold_start = out.stmtbase[forst.for_sp - 1];
+                stmt.fold_cont = 4; 0
+            } else {
             if ops.drain_reason == 14 {
                 mat.match_phase[mat.match_sp - 1] = 4;
                 ops.draining = 0;
@@ -6600,7 +6727,7 @@ fn step_draining() -> Word {
             ps.arm_pending = 1;
             ops.draining = 0;
             Node::Done() as Word
-        } } } } } } } } } } } }
+        } } } } } } } } } } } } } }
     } }
 }
 
@@ -6692,8 +6819,9 @@ fn step_folding() -> Word {
         } else {
             // fold_cont == 3: the `for` body is folded; its value rests on the host stack.
             // Start the ForLimit parts emission.
-            forst.for_emit = 1;
-            forst.for_emit_i = 0;
+            if stmt.fold_cont == 4 { out.emit = 1; } else {
+                forst.for_emit = 1; forst.for_emit_i = 0;
+            }
             0
         } } }
     } }
@@ -6736,8 +6864,8 @@ fn body_step() -> Word {
     if stmt.folding == 1 {
         step_folding()
     } else {
-    if forst.for_emit == 1 {
-        step_for_emit()
+    if forst.for_emit == 1 orelse out.emit > 0 {
+        if out.emit > 0 { outcome_emit() } else { step_for_emit() }
     } else {
     if mat.match_build == 1 {
         step_match_build()
@@ -6809,7 +6937,7 @@ fn arm_body() -> Word {
     stmt.blockform = 0;
     stmt.open_seq = 0;
     branch.if_sp = 0;
-    forst.for_sp = 0;
+    forst.for_sp = 0; out.emit = 0;
     forst.for_emit = 0;
     forst.forlimit_count = 0;
     // A SYMMETRY GAP, closed 2026-08-27. `forin_count` is the bare form's program-order

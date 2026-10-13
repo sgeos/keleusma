@@ -333,6 +333,7 @@ private data st {
     let_count: Word,
     in_head: Word, head_base: Word, head_bias: Word, head_guard: Word, head_next: Word,
     local_slots: [Word; 2048], extra_slots: Word, forest_temps: Word,
+    arm_bias: Word, arm_saved: [Word; 8], arm_depth: Word,
     dup_idx: Word,
     // Per pending IsEnum emit (work-item kind 3), the enum-name id, variant-name id, and
     // discriminant. Interning happens when the item is PROCESSED during the forward walk (not at
@@ -1020,8 +1021,8 @@ fn push_forin(p: Word) -> Word {
 // outcome) grow local_count by five. The counter header is a conditional
 // `mbreakif`, the range exit an unconditional `mbreak`, both patched to the loop
 // exit by `mendloop`; the post-loop tests are bare `mif`/`mendif`. args = the
-// limit_parts entry start; rhs = the continuation. Bare form only (the loops in
-// this file need no outcome block); see src/compiler.rs `compile_for_limit`.
+// limit_parts entry start; rhs = the continuation. Node 74 also carries an outcome
+// descriptor in lhs. See src/compiler.rs `compile_for_limit`.
 fn push_forlimit(p: Word) -> Word {
     let base = ast.args[p];
     let var = ast.limit_parts[base];
@@ -1039,6 +1040,7 @@ fn push_forlimit(p: Word) -> Word {
     let cont = ast.rhs[p];
     // Pushed in reverse; the drain emits the forward sequence.
     push_visit(cont);
+    if ast.kinds[p] == 74 { push_outcome_dispatch(p, oc); } else {
     // LIMIT dispatch: if oc == 0 { Trap }.
     push_emit(wire.mendif);
     push_emit(wire.trap + wire.looplimit * wire.radix);
@@ -1054,6 +1056,7 @@ fn push_forlimit(p: Word) -> Word {
     push_emit(wire.cmpeq);
     push_visit(two);
     push_emit(wire.getlocal + oc * wire.radix);
+    }
     // boundary fixup: if oc == 0 { if var >= end { oc = 1 } }.
     push_emit(wire.mendif);
     push_emit(wire.mendif);
@@ -1108,6 +1111,41 @@ fn push_forlimit(p: Word) -> Word {
     push_visit(end);
     push_emit(wire.setlocal + var * wire.radix);
     push_visit(start)
+}
+
+// Schedule LIMIT, OK, BREAK in reference order, independently of source order.
+fn push_outcome_dispatch(p: Word, oc: Word) -> Word {
+    let base = ast.lhs[p];
+    for j in 0..3 limit 3 {
+        let kind = 2 - j; let arm = ast.match_parts[base + kind];
+        if arm > 0 orelse kind == 0 {
+            push_emit(wire.mendif);
+            if arm > 0 { push_visit(arm - 1); } else { push_emit(wire.trap + wire.looplimit * wire.radix); }
+            push_emit(wire.mif); push_emit(wire.cmpeq);
+            push_int_const(kind); push_emit(wire.getlocal + oc * wire.radix);
+        }
+    }
+    if ast.match_parts[base + 2] == 0 {
+        push_emit(wire.mendif); push_emit(wire.setlocal + oc * wire.radix);
+        push_int_const(1); push_emit(wire.mif); push_emit(wire.cmpeq);
+        push_int_const(2); push_emit(wire.getlocal + oc * wire.radix);
+    }
+    0
+}
+// The optional binding has already allocated its slot. Relocate source-ordered
+// anonymous temporaries until this arm finishes, restoring an enclosing arm's bias.
+fn push_outcome_arm(p: Word) -> Word {
+    st.arm_saved[st.arm_depth] = st.arm_bias; st.arm_depth = st.arm_depth + 1;
+    st.arm_bias = ast.param_count + st.let_count - ast.args[p] % 65536 - st.extra_slots;
+    push_work(12, 0);
+    if ast.lhs[p] > 0 {
+        push_emit(wire.endif);
+        if ast.args[p] / 65536 == 0 { push_emit(wire.trap + wire.looplimit * wire.radix); }
+        push_emit(wire.els);
+    }
+    push_emit(wire.popn + 1 * wire.radix); push_visit(ast.rhs[p]);
+    if ast.lhs[p] > 0 { push_emit(wire.iff); push_visit(ast.lhs[p] - 1); }
+    0
 }
 
 // Call (kind 7): emit the argument ops left to right, then Call(chunk, count),
@@ -2653,14 +2691,14 @@ fn push_yield(p: Word) -> Word {
 // introduced during emission occupy physical slots without consuming parser identities.
 fn reset_local_slots() -> Word {
     for i in 0..2048 limit 2048 { st.local_slots[i] = 0; }
-    st.extra_slots = 0;
+    st.extra_slots = 0; st.arm_bias = 0; st.arm_depth = 0;
     0
 }
 // Grow the frame when a parser-owned slot is emitted. Reserving its parent early
 // would place compiler-created operand temporaries after that parent.
 fn mapped_local(slot: Word) -> Word {
     if slot < ast.param_count { slot } else {
-        if st.local_slots[slot] == 0 { st.local_slots[slot] = slot + st.extra_slots + 1; }
+        if st.local_slots[slot] == 0 { st.local_slots[slot] = slot + st.extra_slots + st.arm_bias + 1; }
         let used = st.local_slots[slot] - ast.param_count;
         if used > st.let_count { st.let_count = used; }
         st.local_slots[slot] - 1
@@ -2759,6 +2797,9 @@ fn walk_step() -> Word {
             emit_physical(tag + mapped_local(payload / wire.radix) * wire.radix);
         } else { emit_op(payload); }
     }
+    if ikind == 12 {
+        st.arm_depth = st.arm_depth - 1; st.arm_bias = st.arm_saved[st.arm_depth];
+    }
     if ikind == wire.physicalemit { emit_physical(payload); }
     if ikind == wire.bindlocal { bind_local(payload); }
     if ikind == wire.lsrvalue { lsr_value(payload); }
@@ -2817,6 +2858,9 @@ fn walk_step() -> Word {
             21 => push_exprstmt(payload),
             22 => push_match(payload),
             23 => push_forlimit(payload),
+            74 => push_forlimit(payload),
+            75 => push_outcome_arm(payload),
+            76 => push_local(payload),
             24 => push_yield(payload),
             25 => push_multihead(payload),
             26 => push_cast(payload),
