@@ -6,6 +6,77 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-13 Order 2 complete for the first-pass validator
+
+The full validator milestone is complete. Structural, typed, text-allocation and
+resource verdicts are integrated through fallible entries and the shipping validate
+command. Keleusma owns graph order, summaries, yield convergence, productivity and
+arena admission. The reference consistency gate and runtime guards remain required
+under the selected typed-widening profile.
+
+Corrected full runs pass 3281 workspace, 329 no-default, 2350 signatures, 2367 broad
+and 3031 isolated self-host tests, with separate doctests. The workspace and self-host
+runs each skip two tests. Wire configurations pass 57 and 20 tests. The detached
+compiler passes 86 tests, including both verifier entries through its structural
+corpus. Formatting, fresh Clippy, documentation, minimum Rust, embedded compilation,
+85 book assertions, debug arithmetic and ShellCheck pass. The local generated-store
+link-check defect is repaired with a new positive and negative command control.
+Final receipts and explicit scope are in docs/decisions/ORDER2_COMPLETION_AUDIT.md.
+
+The source inventory is 1682 integration tests across 169 root files. Public bytecode
+version remains 2, instruction count 66, selected type capacities 640 and depth limit
+32. The pilot has one diagnostic and three claims, with non-independent labels and a
+resolved increment outcome. External evaluation remains unavailable under the previous
+approval rejection. No push, merge, publication or peer message occurred. Order 3,
+trap analysis in the validator, is the next roadmap priority.
+
+## 2026-10-13 Final validator audit repairs the post-loop fallback
+
+The first full workspace run completed 3284 passes with one stale residency-pin
+failure and five ignored tests. No-default passed. The remaining sequence was stopped
+before editing sources. The final admission, resource and command corpora all passed
+on that tree. An additional differential audit exposed an actual typed-stage mismatch
+when a terminated loop body had no break state. The reference checks following
+instructions against its fallback entry state. The stage incorrectly skipped them,
+and the complete admission entry accepted a malformed witness.
+
+The stage now preserves the reference fallback. Eight integrated rejection-family
+controls pass, including that witness and its valid control, all flat projection
+forms, local and resume shapes, array stride, loop height, layout reconciliation and
+the exact 12288-call-shape boundary. The existing detached structural corpus now also
+compares the fallible entry with the legacy entry. Measured residency pins are updated
+to analyzer 3215/367 and typed validator 1438/395, preserving the threefold requirement.
+The focused pin test and fresh workspace Clippy pass. The corrected full gate uses
+nextest's full ci profile plus separate doctests. Order 2 remains active until that
+gate, the requirement audit and the scoped commit are complete.
+
+## 2026-10-13 Complete admission and shipping integration under final audit
+
+Order 2 remains active on feat/v02-order2-validator at a12c45c9 with uncommitted work.
+Keleusma now owns resource summaries, text-allocation transitions, native cost charging,
+final arena admission, the yield fixpoint and productivity verdict. The new fallible
+admission interface combines structural, typed and resource passes. Missing summaries,
+unknown completion codes and unfinished work produce errors. Typed joins, terminated
+branches and break heights have focused repairs. The validate command independently
+runs the Keleusma result and retains a reference consistency gate.
+
+Seventy-eight self-host unit controls, fourteen focused admission tests and twelve
+resource tests pass. Four command tests include fourteen-stage arena boundaries and a
+concrete cross-join disagreement. Six additional typed rejection-family controls and
+an extended 46-test structural corpus pass in an ignored audit package and await
+integration after the running gate. Minimum Rust, embedded build, the debug arithmetic
+boundary, 85 book assertions and ShellCheck pass. Public version and instruction limits
+remain unchanged. The typed widening profile remains explicit.
+
+The complete gate is running under session 25978. It has repeated the fourteen-stage
+artifact comparison successfully and found stale residency pins. Measured analyzer
+residency is total 3215 and peak 367, and typed-validator residency is total 1458 and
+peak 395. Both preserve the existing threefold requirement. Update the pins only after
+the source freeze ends, integrate the additional controls, and finish verification and
+the requirement audit before claiming completion. REVERSE_PROMPT.md carries exact
+logs, handles, pilot state and remaining work. No commit, push, merge or publication
+has occurred for this increment.
+
 ## 2026-10-13 Fallible verifier boundary and loop-floor repair
 
 Order 2 remains active. The new verify_module_via_kel API distinguishes completed

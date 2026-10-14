@@ -6,10 +6,12 @@ use core::fmt;
 const OPS: usize = 1536;
 const LOCALS: usize = 256;
 
-/// A completed proof result. Resource admission is a separate pass.
+/// A completed result for the passes configured by the called entry point.
+/// `verify_module_via_kel` checks structure and types. `admit_module_via_kel`
+/// additionally checks resource admission. Typed control-flow widening applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerificationVerdict {
-    /// Every configured structural and typed pass completed and accepted.
+    /// Every configured pass completed and accepted.
     Accepted,
     /// A stage proved a violation.
     Rejected {
@@ -256,6 +258,7 @@ fn depth_with_stage(chunk: &crate::bytecode::Chunk, stage: Module) -> Result<boo
         },
     )
 }
+#[cfg(test)]
 fn yield_region(
     chunk: &crate::bytecode::Chunk,
     start: usize,
@@ -264,6 +267,7 @@ fn yield_region(
 ) -> Result<(bool, bool)> {
     yield_with_stage(chunk, start, end, always, verify_yield_kel_module())
 }
+#[cfg(test)]
 fn yield_with_stage(
     chunk: &crate::bytecode::Chunk,
     start: usize,
@@ -271,6 +275,24 @@ fn yield_with_stage(
     always: &BTreeSet<usize>,
     stage: Module,
 ) -> Result<(bool, bool)> {
+    yield_using_lookup(chunk, start, end, |i| Ok(always.contains(&i)), stage)
+}
+pub(super) fn yield_using_lookup(
+    chunk: &crate::bytecode::Chunk,
+    start: usize,
+    end: usize,
+    lookup: impl FnMut(usize) -> Result<bool>,
+    stage: Module,
+) -> Result<(bool, bool)> {
+    yield_summary(chunk, start, end, lookup, stage).map(|(fell, yielded, _)| (fell, yielded))
+}
+fn yield_summary(
+    chunk: &crate::bytecode::Chunk,
+    start: usize,
+    end: usize,
+    mut lookup: impl FnMut(usize) -> Result<bool>,
+    stage: Module,
+) -> Result<(bool, bool, bool)> {
     run(
         "productivity",
         stage,
@@ -297,9 +319,10 @@ fn yield_with_stage(
                     (YV_MARK + i, structural_marker(op)),
                     (
                         YV_CAY + i,
-                        i64::from(
-                            matches!(op, Op::Call(c, _) if always.contains(&usize::from(*c))),
-                        ),
+                        i64::from(match op {
+                            Op::Call(c, _) => lookup(usize::from(*c))?,
+                            _ => false,
+                        }),
                     ),
                 ] {
                     set(vm, &mut shared, slot, value, "productivity")?;
@@ -312,6 +335,10 @@ fn yield_with_stage(
             Ok((
                 verdict(vm, shared, YV_OUT_FELL, yielded, "productivity")?,
                 flag(word(vm, shared, YV_OUT_HY, "productivity")?, "productivity")?,
+                flag(
+                    word(vm, shared, YV_OUT_REJECT, "productivity")?,
+                    "productivity",
+                )?,
             ))
         },
     )
@@ -452,7 +479,7 @@ fn layout(module: &Module, widths: (usize, usize, usize)) -> Result<bool> {
 
 /// Run the bounded Keleusma counterpart of `verify`, without executing subject code.
 /// This checks structure, depth, productivity, typed operands and data layout.
-/// Resource admission remains a separate Order 2 requirement. Capacity or incomplete
+/// Resource admission is provided by `admit_module_via_kel`. Capacity or incomplete
 /// analysis returns an error rather than an invalid-module verdict.
 /// Typed control-flow widening remains as documented by the stage.
 pub fn verify_module_via_kel(module: &Module) -> Result<VerificationVerdict> {
@@ -475,22 +502,7 @@ pub fn verify_module_via_kel(module: &Module) -> Result<VerificationVerdict> {
             });
         }
     }
-    let mut always = BTreeSet::new();
-    for _ in 0..=module.chunks.len() {
-        let mut changed = false;
-        for (index, chunk) in module.chunks.iter().enumerate() {
-            if !always.contains(&index) {
-                let (fell, yielded) = yield_region(chunk, 0, chunk.ops.len(), &always)?;
-                if fell && yielded {
-                    always.insert(index);
-                    changed = true;
-                }
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
+    let always = super::yield_fixpoint::always(module)?;
     for (index, chunk) in module.chunks.iter().enumerate() {
         if structure(module, chunk, &always, false)? {
             return Ok(VerificationVerdict::Rejected {
@@ -510,8 +522,14 @@ pub fn verify_module_via_kel(module: &Module) -> Result<VerificationVerdict> {
                 .iter()
                 .position(|op| matches!(op, Op::Reset))
                 .ok_or_else(|| protocol("productivity", "validated stream missing reset"))?;
-            let (fell, yielded) = yield_region(chunk, start, end, &always)?;
-            if fell && !yielded {
+            let (_, _, rejected) = yield_summary(
+                chunk,
+                start,
+                end,
+                |i| Ok(always.contains(&i)),
+                verify_yield_kel_module(),
+            )?;
+            if rejected {
                 return Ok(VerificationVerdict::Rejected {
                     stage: "productivity",
                     chunk: Some(index),
@@ -539,6 +557,50 @@ pub fn verify_module_via_kel(module: &Module) -> Result<VerificationVerdict> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn productivity_verdict_is_decided_by_the_stage() {
+        let module = compile_src("loop main(n: Word) -> Word { yield n }");
+        let chunk = &module.chunks[0];
+        let start = chunk
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::Stream))
+            .unwrap()
+            + 1;
+        let end = chunk
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::Reset))
+            .unwrap();
+        let stage = verify_yield_kel_module();
+        assert!(
+            !yield_summary(chunk, start, end, |_| Ok(false), stage.clone())
+                .unwrap()
+                .2
+        );
+        let mut bad = chunk.clone();
+        for op in &mut bad.ops {
+            if matches!(op, Op::Yield) {
+                *op = Op::PopN(0);
+            }
+        }
+        assert!(
+            yield_summary(&bad, start, end, |_| Ok(false), stage)
+                .unwrap()
+                .2
+        );
+        let source = read_stage("kel/verify_yield.kel");
+        let marker =
+            "yv.out_reject = if yf.child_fell == 1 andalso yf.child_hy == 0 { 1 } else { 0 };";
+        assert_eq!(source.matches(marker).count(), 1);
+        let changed = compile_src(&source.replace(marker, "yv.out_reject = 0;"));
+        assert!(
+            !yield_summary(&bad, start, end, |_| Ok(false), changed)
+                .unwrap()
+                .2
+        );
+    }
 
     #[test]
     fn unfinished_walks_are_errors_for_identical_subjects() {

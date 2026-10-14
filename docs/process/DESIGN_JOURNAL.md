@@ -13,6 +13,43 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-13 Full first-pass validator admission
+
+The resource coordinator now stores chunk summaries and decides final arena admission
+in Keleusma. Text lattice transitions, heap saturation and boundary flags also run in
+Keleusma. Host code transports opcode facts and stores abstract values. Native costs
+use the reference distinction between per-site charging and deduplicated external
+contributions. The analyzer uses a 64-bit Word to represent the unsigned 32-bit heap
+ceiling positively, while subject widths remain independent.
+
+Yield membership, convergence and productivity decisions are stage-owned. Intervention
+controls change each decision with identical subject input. Missing summaries, unfinished
+walks and malformed responses remain analysis errors. The shipping validate command
+computes the Keleusma result before consulting the Rust reference and reports disagreement
+separately from rejection. Runtime guards and the reference gate remain required under
+the selected typed-widening profile.
+
+The rejection audit exposed a subtle post-loop mismatch introduced during the join repair.
+The reference restores an entry state after a terminated body without breaks and checks
+later instructions. Skipping those instructions admitted a malformed scalar projection.
+A complete-admission control first reproduced acceptance and then passed after restoring
+that fallback. This was a verdict-compatibility repair, independent of whether those
+instructions would execute. The eight permanent audit controls also cover projection
+forms, array stride, locals, resume shapes, loop height, layout reconciliation and the
+exact packed-call-shape capacity.
+
+All five feature configurations pass on an unchanged validator tree. The full workspace
+runs 3281 tests and the isolated self-host configuration 3031, plus separate doctests.
+The detached compiler passes 86 tests. Final source residency is analyzer 3215/367 and
+typed validator 1438/395, both retaining the existing threefold fusion requirement.
+The first full run's stale pins were measured and repaired before the corrected run.
+
+The final link gate reached generated local copies under secret and reported their
+relocated relative links. That store is intentionally excluded from version control.
+The checker now prunes it, with a command control proving that public broken links
+still fail and restored links pass. No private contents were copied into the repository.
+The full completion audit records command receipts and the limits of the first-pass claim.
+
 ## 2026-10-11 Keleusma derives logical data-layout runs
 
 The shipping emitter now gives logical slots to Keleusma instead of grouping them in Rust.

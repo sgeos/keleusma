@@ -26,8 +26,7 @@
 // induction or bound local (`advances_induction`, the C7 soundness check). A loop whose
 // bound cannot be extracted sets `out_reject`, mirroring the reference's load-time
 // rejection; the WCET/WCMU guarantee is never weakened by a silent under-count. The one
-// bound pattern not yet handled is the for-in-over-literal-array length (`trace_literal_
-// array_length`); such a loop is rejected rather than mis-bounded.
+// bound also follows literal-array construction and backward local aliases.
 //
 // Every per-op quantity is the authoritative calibrated value the host marshals in:
 // `Op::cost()`, `stack_growth()`/`stack_shrink()`, `heap_alloc()`, and the fine-grained
@@ -45,7 +44,8 @@
 // among them); a text-allocating program would need that pass self-hosted too.
 //
 // The self-hosted compiler is a full-width host tool.
-require word >= 32;
+// Host-side resource arithmetic represents the complete unsigned 32-bit range.
+require word >= 64;
 
 // The one host-facing block (R28 admits a single shared block per program). Per op: `cost`
 // its WCET cycles; `class` its control-flow role (0 plain, 1 If with `arg` the branch
@@ -90,6 +90,13 @@ shared data wa {
     // Call-graph transport. Only counts and opcode operands arrive from the host.
     cg_count: Word, cg_node: Word, cg_index: Word,
     cg_size: Word, cg_callee: Word, cg_output: Word,
+    // Text bounds use tag 0 NotText, 1 Known, 2 Unbounded and two 16-bit limbs.
+    // Entries 0..3 are top, second, local and constant; 4/5 are value/write results.
+    tb_tag: [Word; 6], tb_hi: [Word; 6], tb_lo: [Word; 6],
+    tb_heap_hi: Word, tb_heap_lo: Word,
+    rs_index: Word, rs_kind: Word, rs_text: Word, rs_known: Word,
+    out_cause: Word,
+    native_kind: [Word; 1536], native_heap: [Word; 1536], native_limit: [Word; 1536],
 }
 
 // The region-frame work stack. Each frame is one invocation of the reference's recursion
@@ -104,6 +111,7 @@ shared data wa {
 // `vsets`/`bad` fields are bound-extraction scratch; `reject` latches an inextractable bound.
 private data an {
     sp: Word,
+    over: Word,
     f_ip: [Word; 64],
     f_end: [Word; 64],
     f_cost: [Word; 64],
@@ -142,6 +150,7 @@ private data an {
     trace_ok: Word,
     trace_val: Word,
     trace_done: Word,
+    trace_mode: Word, trace_target: Word,
     bound_val: Word,
     vsets: Word,
     bad: Word,
@@ -152,6 +161,18 @@ private data an {
     lcp: Word,
     lcd: Word,
     lcbp: Word,
+    external_total: Word, external_seen: Word,
+}
+
+// Saturating reference u32 heap arithmetic. Guard products before multiplication.
+fn heap_max() -> Word { 4294967295 }
+fn heap_add(a: Word, b: Word) -> Word {
+    if a >= heap_max() orelse b >= heap_max() orelse b > heap_max() - a { heap_max() } else { a + b }
+}
+fn heap_mul(a: Word, b: Word) -> Word {
+    if a == 0 orelse b == 0 { 0 } else {
+        if a > heap_max() orelse b > heap_max() / a { heap_max() } else { a * b }
+    }
 }
 
 // Clamp a signed depth to a non-negative operand-stack peak.
@@ -161,6 +182,7 @@ fn pos(x: Word) -> Word {
 
 // Push a fresh region frame spanning `[ip, end)` and return its index.
 fn push_frame(ip: Word, end: Word) -> Word {
+    if an.sp >= 64 { an.over = 1; 0 } else {
     let j = an.sp;
     an.f_ip[j] = ip;
     an.f_end[j] = end;
@@ -176,7 +198,7 @@ fn push_frame(ip: Word, end: Word) -> Word {
     an.f_pa[j] = 0;
     an.sp = j + 1;
     j
-}
+} }
 
 // Fold one op's WCET and WCMU effect into frame `i`: cost, during-op operand peak, heap, and
 // net depth change. Does not advance `f_ip`.
@@ -188,7 +210,10 @@ fn account_op(i: Word, ip: Word) -> Word {
     if dp > an.f_peak[i] {
         an.f_peak[i] = dp;
     }
-    an.f_heap[i] = an.f_heap[i] + wa.heap[ip];
+    an.f_heap[i] = heap_add(an.f_heap[i], wa.heap[ip]);
+    if wa.native_kind[ip] > 0 andalso wa.native_limit[ip] == 0 - 1 {
+        an.f_heap[i] = heap_add(an.f_heap[i], wa.native_heap[ip]);
+    }
     an.f_off[i] = an.f_off[i] + g - s;
     0
 }
@@ -209,23 +234,31 @@ fn record_break(i: Word) -> Word {
     0
 }
 
-// Trace the most recent `SetLocal(slot)` before `before_ip` back to a literal integer
-// constant (`Const(int); SetLocal(slot)`). Sets `an.trace_val` and returns 1 on success, 0
-// otherwise (including the not-yet-handled for-in array-length pattern).
+// Trace integer bounds and literal-array lengths through strictly backward aliases.
 fn trace_const(before_ip: Word, target_slot: Word) -> Word {
-    an.trace_ok = 0;
-    an.trace_val = 0;
-    an.trace_done = 0;
-    // Scan backward; the first SetLocal(target_slot) is the most recent. `trace_done` stops
-    // processing at it (an early `break` is avoided to stay in the self-compiling subset).
+    an.trace_ok = 0; an.trace_val = 0; an.trace_done = 0;
+    an.trace_mode = 0; an.trace_target = target_slot;
     for k in 0..before_ip limit 1536 {
         if an.trace_done == 0 {
             let ip = before_ip - 1 - k;
-            if wa.opk[ip] == 2 andalso wa.slot[ip] == target_slot {
+            if wa.opk[ip] == 2 andalso wa.slot[ip] == an.trace_target {
                 an.trace_done = 1;
-                if ip > 0 andalso wa.opk[ip - 1] == 3 andalso wa.cint[ip - 1] == 1 {
-                    an.trace_ok = 1;
-                    an.trace_val = wa.cval[ip - 1];
+                if an.trace_mode == 0 {
+                    if ip > 0 andalso wa.opk[ip - 1] == 3 andalso wa.cint[ip - 1] == 1 {
+                        an.trace_ok = 1; an.trace_val = wa.cval[ip - 1];
+                    } else {
+                        if ip >= 2 andalso wa.opk[ip - 1] == 10 andalso wa.opk[ip - 2] == 1 {
+                            an.trace_mode = 1; an.trace_target = wa.slot[ip - 2]; an.trace_done = 0;
+                        }
+                    }
+                } else {
+                    if ip > 0 andalso wa.opk[ip - 1] == 11 {
+                        an.trace_ok = 1; an.trace_val = wa.cval[ip - 1];
+                    } else {
+                        if ip > 0 andalso wa.opk[ip - 1] == 1 {
+                            an.trace_target = wa.slot[ip - 1]; an.trace_done = 0;
+                        }
+                    }
                 }
             }
         }
@@ -313,7 +346,7 @@ fn extract_bound(loop_ip: Word) -> Word {
                         } else {
                             an.bound_val = 0;
                         }
-                        1
+                        if an.bound_val < 0 orelse an.bound_val > heap_max() { 0 } else { 1 }
                     }
                 }
             }
@@ -345,7 +378,7 @@ fn resolve_bare_if(i: Word) -> Word {
     if an.lcp > an.f_peak[i] {
         an.f_peak[i] = an.lcp;
     }
-    an.f_heap[i] = an.f_heap[i] + an.child_heap;
+    an.f_heap[i] = heap_add(an.f_heap[i], an.child_heap);
     if an.child_broke == 0 {
         if an.lcd > an.f_off[i] {
             an.f_off[i] = an.lcd;
@@ -403,9 +436,9 @@ fn resolve_if_else(i: Word) -> Word {
             an.f_peak[i] = an.lcp;
         }
         if an.f_pth[i] > an.child_heap {
-            an.f_heap[i] = an.f_heap[i] + an.f_pth[i];
+            an.f_heap[i] = heap_add(an.f_heap[i], an.f_pth[i]);
         } else {
-            an.f_heap[i] = an.f_heap[i] + an.child_heap;
+            an.f_heap[i] = heap_add(an.f_heap[i], an.child_heap);
         }
         if tb == 0 andalso cb == 0 {
             if an.f_ptd[i] > an.lcd {
@@ -494,12 +527,12 @@ fn resolve_loop(i: Word) -> Word {
         if break_peak > an.f_peak[i] {
             an.f_peak[i] = break_peak;
         }
-        let body_heap = if cb == 1 { 0 } else { an.child_heap * iter };
+        let body_heap = if cb == 1 { 0 } else { heap_mul(an.child_heap, iter) };
         let break_heap = an.child_bh;
         if body_heap > break_heap {
-            an.f_heap[i] = an.f_heap[i] + body_heap;
+            an.f_heap[i] = heap_add(an.f_heap[i], body_heap);
         } else {
-            an.f_heap[i] = an.f_heap[i] + break_heap;
+            an.f_heap[i] = heap_add(an.f_heap[i], break_heap);
         }
         an.f_ip[i] = an.f_pj[i];
         an.f_pa[i] = 0;
@@ -608,7 +641,7 @@ fn scan_op(i: Word) -> Word {
         if dp > an.f_peak[i] {
             an.f_peak[i] = dp;
         }
-        an.f_heap[i] = an.f_heap[i] + wa.callee_heap[ip];
+        an.f_heap[i] = heap_add(an.f_heap[i], wa.callee_heap[ip]);
         an.f_off[i] = an.f_off[i] + 1 - nn;
         an.f_ip[i] = ip + 1;
         0
@@ -640,6 +673,23 @@ fn analyze_step() -> Word {
     }
 }
 
+// External attestations apply once per unique native in the entire chunk.
+fn external_heap() -> Word {
+    an.external_total = 0;
+    for i in 0..wa.op_count limit 1536 {
+        if wa.native_kind[i] == 2 andalso wa.native_limit[i] >= 0 {
+            an.external_seen = 0;
+            for j in 0..i limit 1536 {
+                if wa.native_kind[j] == 2 andalso wa.slot[j] == wa.slot[i] { an.external_seen = 1; }
+            }
+            if an.external_seen == 0 {
+                an.external_total = heap_add(an.external_total, heap_mul(wa.native_limit[i], wa.native_heap[i]));
+            }
+        }
+    }
+    an.external_total
+}
+
 // Walk the Stream body `[stream_pos + 1, reset_pos)` to a fixed point and publish the three
 // bounds (or set `out_reject` if a loop bound was inextractable). WCET is the Stream and
 // Reset op costs plus the region cost; WCMU stack bytes are `(local_count + region peak) *
@@ -647,6 +697,7 @@ fn analyze_step() -> Word {
 // loop is bounded by a generous static cap and exits the moment the stack empties.
 fn run() -> Word {
     an.sp = 0;
+    an.over = 0;
     an.reject = 0;
     an.child_cost = 0;
     an.child_peak = 0;
@@ -666,7 +717,9 @@ fn run() -> Word {
             analyze_step();
         }
     }
-    if an.reject == 1 {
+    if an.sp > 0 andalso an.over == 0 { an.over = 2; }
+    wa.out_cause = an.over;
+    if an.reject == 1 orelse an.over != 0 {
         // An inextractable bound: the chunk fails validation (no finite bound is provable).
         wa.out_reject = 1;
         wa.out_wcet = 0;
@@ -688,7 +741,7 @@ fn run() -> Word {
         let region_heap = an.child_heap;
         wa.out_wcet = wa.cost[wa.stream_pos] + wa.cost[wa.reset_pos] + region_cost;
         wa.out_stack_bytes = (wa.local_count + region_peak) * wa.value_slot_bytes;
-        wa.out_heap = region_heap;
+        wa.out_heap = heap_add(region_heap, external_heap());
         // Validation verdict: a provable finite bound whose stack-plus-heap budget fits the
         // arena capacity (the per-chunk admission `verify_resource_bounds` enforces, with
         // `Budget::total = bottom + top`). Sound for a chunk without transitive calls.
@@ -820,9 +873,145 @@ fn graph_step() -> Word {
     }
 }
 
+private data tb {
+    returned: Word, yielded: Word, loops: Word, branches: Word,
+    heap_hi: Word, heap_lo: Word, hi: Word, lo: Word, active: Word, early: Word,
+}
+// Saturating u32 addition without requiring a wider Word than the existing stage.
+fn text_bound_add(ah: Word, al: Word, bh: Word, bl: Word) -> Word {
+    let low = al + bl;
+    let high = ah + bh + low / 65536;
+    if high > 65535 { tb.hi = 65535; tb.lo = 65535; } else {
+        tb.hi = high; tb.lo = low % 65536;
+    }
+    0
+}
+fn text_bound_load(i: Word) -> Word {
+    wa.tb_tag[4] = wa.tb_tag[i]; wa.tb_hi[4] = wa.tb_hi[i]; wa.tb_lo[4] = wa.tb_lo[i]; 0
+}
+fn text_bound_opcode() -> Word {
+    let kind = wa.tf_kind;
+    if kind == 10 { tb.branches = tb.branches + 1; }
+    if kind == 12 { tb.loops = tb.loops + 1; }
+    wa.tf_pops = wa.tf_required;
+    let pushes = wa.tf_required + wa.tf_delta;
+    wa.tf_pushes = if pushes > 0 { pushes } else { 0 };
+    wa.tf_write = 0; wa.tb_tag[4] = 0; wa.tb_hi[4] = 0; wa.tb_lo[4] = 0;
+    if kind == 1 { text_bound_load(3); }
+    if kind == 2 { text_bound_load(2); }
+    if kind == 3 { text_bound_load(0); }
+    if kind == 4 { text_bound_load(0); wa.tf_pops = 0; wa.tf_pushes = 1; }
+    if kind == 5 andalso wa.tb_tag[0] > 0 andalso wa.tb_tag[1] > 0 {
+        if wa.tb_tag[0] == 2 orelse wa.tb_tag[1] == 2 {
+            wa.tb_tag[4] = 2; tb.heap_hi = 65535; tb.heap_lo = 65535;
+        } else {
+            text_bound_add(wa.tb_hi[0], wa.tb_lo[0], wa.tb_hi[1], wa.tb_lo[1]);
+            wa.tb_tag[4] = 1; wa.tb_hi[4] = tb.hi; wa.tb_lo[4] = tb.lo;
+            if tb.hi == 65535 andalso tb.lo == 65535 {
+                wa.tb_tag[4] = 2; wa.tb_hi[4] = 0; wa.tb_lo[4] = 0;
+            }
+            text_bound_add(tb.heap_hi, tb.heap_lo, tb.hi, tb.lo);
+            tb.heap_hi = tb.hi; tb.heap_lo = tb.lo;
+        }
+    }
+    if kind == 6 {
+        if wa.tf_callee_known == 0 orelse wa.tf_callee == 1 { wa.tb_tag[4] = 2; }
+    }
+    if kind == 7 { wa.tf_pops = wa.tf_index; wa.tf_pushes = 1; wa.tb_tag[4] = 2; }
+    if kind == 8 {
+        if wa.tb_tag[0] > 0 { tb.returned = 1; }
+        wa.tf_pops = 1; wa.tf_pushes = 0;
+    }
+    if kind == 9 {
+        if wa.tb_tag[0] > 0 { tb.yielded = 1; }
+        wa.tf_pops = 1; wa.tf_pushes = 0;
+    }
+    // Dup preserves its bound even in control flow, as in the reference.
+    if kind != 4 andalso (tb.loops > 0 orelse tb.branches > 0) andalso wa.tb_tag[4] > 0 {
+        wa.tb_tag[4] = 2; wa.tb_hi[4] = 0; wa.tb_lo[4] = 0;
+    }
+    if kind == 3 andalso wa.tf_index < wa.tf_locals {
+        wa.tf_write = 1;
+        wa.tb_tag[5] = wa.tb_tag[4]; wa.tb_hi[5] = wa.tb_hi[4]; wa.tb_lo[5] = wa.tb_lo[4];
+    }
+    if kind == 11 andalso tb.branches > 0 { tb.branches = tb.branches - 1; }
+    if kind == 13 andalso tb.loops > 0 { tb.loops = tb.loops - 1; }
+    if tb.heap_hi == 65535 andalso tb.heap_lo == 65535 { tb.early = 1; }
+    tb.early
+}
+// 20 reset, 21 consume one opcode, 22 finish. A step returns 1 on heap saturation.
+fn text_bound_step() -> Word {
+    if wa.tf_command == 20 {
+        tb.returned = 0; tb.yielded = 0; tb.loops = 0; tb.branches = 0;
+        tb.heap_hi = 0; tb.heap_lo = 0; tb.active = 1; tb.early = 0; 0
+    } else {
+    if tb.active != 1 { 0 - 1 } else {
+    if wa.tf_command == 22 {
+        if tb.early == 0 andalso wa.tb_tag[0] > 0 { tb.returned = 1; }
+        wa.tb_heap_hi = tb.heap_hi; wa.tb_heap_lo = tb.heap_lo;
+        tb.active = 0; tb.returned + tb.yielded * 2
+    } else {
+    if wa.tf_command != 21 orelse tb.early != 0 orelse wa.tf_kind < 0 orelse wa.tf_kind > 13
+        orelse wa.tf_required < 0 orelse wa.tf_required > 65535 orelse wa.tf_delta < 0 - 65535
+        orelse wa.tf_delta > 3 orelse wa.tf_index < 0 orelse wa.tf_locals < 0 orelse wa.tf_locals > 65535
+        orelse text_flow_bit(wa.tf_callee) == 0 orelse text_flow_bit(wa.tf_callee_known) == 0 { 0 - 1 } else {
+        tb.active = 1;
+        for i in 0..4 limit 4 {
+            if wa.tb_tag[i] < 0 orelse wa.tb_tag[i] > 2 orelse wa.tb_hi[i] < 0 orelse wa.tb_hi[i] > 65535
+                orelse wa.tb_lo[i] < 0 orelse wa.tb_lo[i] > 65535 { tb.active = 0; }
+        }
+        if tb.active == 0 { 0 - 1 } else { text_bound_opcode() }
+    } } } }
+}
+
+// Module summaries and admission are retained and combined in Keleusma.
+private data rs {
+    known: [Word; 1024], stacks: [Word; 1024], heaps: [Word; 1024], texts: [Word; 1024],
+    count: Word, stored: Word, valid: Word, active: Word,
+}
+// Commands 30 initialize, 31 store a completed chunk, 32 query a callee, 33 finish.
+fn resource_step() -> Word {
+    if wa.tf_command == 30 {
+        rs.active = 0;
+        if wa.cg_count < 0 orelse wa.cg_count > 1024 orelse wa.arena_capacity < 0 { 0 - 3 } else {
+            rs.count = wa.cg_count; rs.stored = 0; rs.valid = 1;
+            for i in 0..rs.count limit 1024 { rs.known[i] = 0; }
+            rs.active = 1; 0
+        }
+    } else { if rs.active != 1 { 0 - 2 } else {
+    if wa.tf_command == 33 {
+        if rs.valid == 0 { rs.active = 0; 1 } else {
+            if rs.stored != rs.count { 0 - 2 } else { rs.active = 0; 0 }
+        }
+    } else { if wa.tf_command == 32 {
+        wa.rs_known = 0; wa.out_stack_bytes = 0; wa.out_heap = 0; wa.rs_text = 0;
+        if wa.rs_index >= 0 andalso wa.rs_index < rs.count {
+            if rs.known[wa.rs_index] == 1 {
+                wa.rs_known = 1; wa.out_stack_bytes = rs.stacks[wa.rs_index];
+                wa.out_heap = rs.heaps[wa.rs_index]; wa.rs_text = rs.texts[wa.rs_index];
+            }
+        }
+        0
+    } else { if wa.tf_command != 31 orelse wa.rs_index < 0 orelse wa.rs_index >= rs.count { 0 - 2 } else {
+    if rs.known[wa.rs_index] != 0 orelse wa.out_stack_bytes < 0 orelse wa.out_stack_bytes > heap_max()
+        orelse wa.out_heap < 0 orelse wa.rs_kind < 0 orelse wa.rs_kind > 2
+        orelse text_flow_bit(wa.rs_text) == 0 orelse text_flow_bit(wa.out_reject) == 0
+        orelse wa.tb_heap_hi < 0 orelse wa.tb_heap_hi > 65535 orelse wa.tb_heap_lo < 0 orelse wa.tb_heap_lo > 65535 { 0 - 2 } else {
+        let heap = heap_add(wa.out_heap, wa.tb_heap_hi * 65536 + wa.tb_heap_lo);
+        rs.stacks[wa.rs_index] = wa.out_stack_bytes; rs.heaps[wa.rs_index] = heap;
+        rs.texts[wa.rs_index] = wa.rs_text; rs.known[wa.rs_index] = 1; rs.stored = rs.stored + 1;
+        if wa.out_reject == 1 { rs.valid = 0; }
+        if wa.rs_kind == 2 andalso wa.out_stack_bytes + heap > wa.arena_capacity { rs.valid = 0; }
+        1 - rs.valid
+    } } } } } }
+}
+
 loop main(resume: Word) -> Word {
     let result = if wa.tf_command == 0 { run() } else {
-        if wa.tf_command >= 10 { graph_step() } else { text_flow_step() }
+        if wa.tf_command >= 30 { resource_step() } else {
+        if wa.tf_command >= 20 { text_bound_step() } else {
+            if wa.tf_command >= 10 { graph_step() } else { text_flow_step() }
+        } }
     };
     yield result
 }

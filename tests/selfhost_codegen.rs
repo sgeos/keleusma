@@ -9111,16 +9111,18 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             423,
         ),
         (
+            // Order 2 adds text bounds and module resource protocols. Measured
+            // after those sources and the typed loop fallback were finalized.
             "analyze",
             include_str!("../src/selfhost/kel/analyze.kel"),
-            1877,
-            324,
+            3215,
+            367,
         ),
         (
             "verify_typed",
             include_str!("../src/selfhost/kel/verify_typed.kel"),
-            1313,
-            382,
+            1438,
+            395,
         ),
     ];
     for &(name, src, total, peak) in EXPECT {

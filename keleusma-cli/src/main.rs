@@ -23,6 +23,7 @@
 mod duration;
 mod runtasks;
 mod strict_mode;
+mod validate;
 
 use std::env;
 use std::fs;
@@ -58,6 +59,7 @@ fn main() -> ExitCode {
         "run" => run_subcommand(&args[2..]),
         "run-tasks" => run_tasks_subcommand(&args[2..]),
         "compile" => compile_subcommand(&args[2..]),
+        "validate" => validate::run(&args[2..]),
         "strip" => strip_subcommand(&args[2..]),
         "keygen" => keygen_subcommand(&args[2..]),
         "repl" => repl_subcommand(&args[2..]),
@@ -139,6 +141,13 @@ fn print_help() {
     println!("                                    configured interval. --print-memory reports the");
     println!("                                    program's worst-case arena footprint and exits");
     println!("                                    without running, for provisioning a host.");
+    println!("  validate <bytecode> [--validator <rust|self-hosted>]");
+    println!("                      [--arena-capacity <bytes>]");
+    println!("                                    Check structure, types and resource bounds.");
+    println!(
+        "                                    Does not execute code or authenticate signatures."
+    );
+    println!("                                    Uses empty native resource attestations.");
     println!("  compile <file> [-o <output>] [--signing-key <keyfile>]");
     println!("                 [--encryption-key <keyfile>] [--target <name>] [--debug]");
     println!("                 [--compiler <rust|self-hosted>]");

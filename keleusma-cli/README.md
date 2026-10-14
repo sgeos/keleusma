@@ -22,6 +22,30 @@ keleusma --help
 
 ## Usage
 
+### Validate compiled bytecode
+
+```sh
+keleusma validate hello.kel.bin
+keleusma validate hello.kel.bin --validator self-hosted --arena-capacity 65536
+```
+
+The default validator is Rust. The self-hosted selection runs structural, typed
+and resource admission through Keleusma stages, then compares the result with the
+Rust reference. A disagreement cannot produce successful admission. This first-pass
+validator has bounded analysis storage and widens type shapes across control-flow
+joins. A capacity error or disagreement requires investigation or explicit use of
+the Rust validator.
+
+Exit code zero means acceptance, one means rejected or undecodable bytecode, and
+two means unavailable analysis, disagreement, an input/output failure or incorrect
+arguments. The arena capacity is a byte count and defaults to the runtime default.
+Native resource attestations are empty, matching the reference resource admission
+entry point. Hosts that supply native cost bounds should use the library interface.
+
+Validation executes no instructions from the subject module and does not
+authenticate signatures. The command does not replace the runner's signature,
+encryption or deployment policies.
+
 ### Run a script
 
 ```sh

@@ -1,0 +1,144 @@
+//! Validate bytecode through the actual shipping command without executing it.
+use keleusma::bytecode::{Module, Op};
+use std::process::Command;
+fn check(module: &Module, backend: &str, capacity: usize, label: &str) -> std::process::Output {
+    let path = std::env::temp_dir().join(format!(
+        "kel_validate_{}_{}_{}.kbc",
+        std::process::id(),
+        label,
+        backend
+    ));
+    std::fs::write(&path, module.to_bytes().unwrap()).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_keleusma"))
+        .args([
+            "validate",
+            path.to_str().unwrap(),
+            "--validator",
+            backend,
+            "--arena-capacity",
+            &capacity.to_string(),
+        ])
+        .env("KEL_SELFHOST_CACHE", "0")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill().unwrap();
+            let output = child.wait_with_output().unwrap();
+            panic!("validation command exceeded its deadline: {output:?}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let output = child.wait_with_output().unwrap();
+    std::fs::remove_file(path).unwrap();
+    output
+}
+#[test]
+fn command_distinguishes_valid_invalid_and_unavailable() {
+    let module = keleusma::selfhost::compile_src("fn main() -> Word { 7 }");
+    for backend in ["rust", "self-hosted"] {
+        let out = check(&module, backend, 65536, "valid");
+        assert!(out.status.success(), "{:?}", out);
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "validation passed"
+        );
+        let mut bad = module.clone();
+        bad.chunks[0].ops[0] = Op::GetLocal(65535);
+        assert_eq!(
+            check(&bad, backend, 65536, "invalid").status.code(),
+            Some(1)
+        );
+    }
+    let mut large = module.clone();
+    large.chunks[0].local_count = 257;
+    assert!(check(&large, "rust", 65536, "large").status.success());
+    let out = check(&large, "self-hosted", 65536, "large");
+    assert_eq!(out.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("unavailable"));
+}
+#[test]
+fn command_checks_resource_capacity_without_running_the_stream() {
+    let module = keleusma::selfhost::compile_src("loop main(n: Word) -> Word { yield n }");
+    for backend in ["rust", "self-hosted"] {
+        assert_eq!(check(&module, backend, 0, "small").status.code(), Some(1));
+        assert!(check(&module, backend, 65536, "enough").status.success());
+    }
+}
+
+#[test]
+fn reference_disagreement_prevents_successful_admission() {
+    use keleusma::bytecode::StructField;
+    use keleusma::selfhost::{VerificationVerdict, admit_module_via_kel};
+    use keleusma::value_layout::ScalarKind;
+
+    // The selected typed-stage profile widens at a join. The reference retains
+    // this scalar shape, so the shipping consistency gate must catch the gap.
+    let mut module = keleusma::selfhost::compile_src("fn main(n: Word) -> Word { n }");
+    module.chunks[0].ops = vec![
+        Op::GetLocal(0),
+        Op::PushImmediate(1),
+        Op::If(3),
+        Op::EndIf,
+        Op::GetField(StructField::Flat {
+            offset: 0,
+            kind: ScalarKind::Int,
+        }),
+        Op::Return,
+    ];
+    assert!(keleusma::verify::verify(&module).is_err());
+    assert_eq!(
+        admit_module_via_kel(&module, 65536).unwrap(),
+        VerificationVerdict::Accepted
+    );
+    let out = check(&module, "self-hosted", 65536, "disagreement");
+    assert_eq!(out.status.code(), Some(2), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("validator disagreement"));
+    assert_eq!(
+        check(&module, "rust", 65536, "disagreement").status.code(),
+        Some(1)
+    );
+}
+
+#[test]
+fn shipping_validator_reaches_every_current_stage() {
+    use keleusma::bytecode::BlockType;
+    use std::collections::BTreeMap;
+    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/selfhost/kel");
+    let sources: BTreeMap<_, _> = std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "kel"))
+        .map(|path| {
+            let name = path.file_stem().unwrap().to_str().unwrap().to_owned();
+            (name, std::fs::read_to_string(path).unwrap())
+        })
+        .collect();
+    assert_eq!(sources.len(), 14, "review the stage census when it changes");
+    for (name, source) in sources {
+        let module = keleusma::selfhost::compile_src(&source);
+        let bounds = keleusma::verify::module_wcmu(&module, &[]).unwrap();
+        let capacity = module
+            .chunks
+            .iter()
+            .zip(bounds)
+            .filter(|(chunk, _)| chunk.block_type == BlockType::Stream)
+            .map(|(_, (stack, heap))| stack as usize + heap as usize)
+            .max()
+            .expect("stage entry must be a stream");
+        assert!(capacity > 0);
+        for backend in ["rust", "self-hosted"] {
+            let admitted = check(&module, backend, capacity, &name);
+            assert_eq!(admitted.status.code(), Some(0), "{name}: {admitted:?}");
+            let rejected = check(&module, backend, capacity - 1, &name);
+            assert_eq!(rejected.status.code(), Some(1), "{name}: {rejected:?}");
+        }
+        eprintln!("{name}: both shipping validators reached the resource boundary");
+    }
+}

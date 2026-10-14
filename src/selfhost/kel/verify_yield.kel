@@ -19,7 +19,7 @@
 // break-scope, so its child break summaries merge into the parent; a Loop's body is a fresh
 // break-scope, so the body's breaks decide the loop and do not propagate to the parent.
 //
-// Both callers of this kernel live in the host driver: the always-yielding fixpoint runs it over
+// The host services the stage's requests. The always-yielding fixpoint runs the kernel over
 // `[0, op_count)` per chunk (a chunk is always-yielding iff `fell` and `hy`), and the Stream
 // productivity check runs it over `[stream_pos + 1, reset_pos)` (a Stream chunk is unproductive
 // iff `fell` and not `hy`). The delegated-yield input -- whether a Call targets an
@@ -42,6 +42,9 @@ shared data yv {
     out_hy: Word,
     // 1 frame capacity, 2 unfinished work budget.
     out_cause: Word,
+    out_reject: Word,
+    command: Word, module_count: Word, module_node: Word,
+    reply_fell: Word, reply_yielded: Word, query_node: Word,
 }
 
 // The region-frame work stack. Each frame is one `analyze_yield_coverage([f_ip, f_end))`: `f_hy`
@@ -291,10 +294,48 @@ fn run() -> Word {
     yv.out_cause = yf.over;
     yv.out_fell = yf.child_fell;
     yv.out_hy = yf.child_hy;
+    yv.out_reject = if yf.child_fell == 1 andalso yf.child_hy == 0 { 1 } else { 0 };
     yf.child_fell
 }
 
 // Analyse the region in one call and yield the fall-through flag.
+// Monotone module fixpoint. The stage selects unknown chunks and commits membership.
+private data yc {
+    known: [Word; 1024], count: Word, cursor: Word, changed: Word,
+    waiting: Word, active: Word,
+}
+fn module_step() -> Word {
+    if yv.command == 10 {
+        yc.active = 0;
+        yc.count = 0;
+        if yv.module_count < 0 orelse yv.module_count > 1024 { 0 - 3 } else {
+            yc.count = yv.module_count; yc.cursor = 0; yc.changed = 0; yc.waiting = 0;
+            for i in 0..yc.count limit 1024 { yc.known[i] = 0; }
+            yc.active = 1; 3
+        }
+    } else { if yv.command == 13 {
+        if yv.query_node < 0 orelse yv.query_node >= yc.count { 0 } else { yc.known[yv.query_node] }
+    } else { if yc.active != 1 { 0 - 2 } else {
+    if yv.command == 12 {
+        if yc.waiting != 1 orelse yv.reply_fell < 0 orelse yv.reply_fell > 1 orelse yv.reply_yielded < 0 orelse yv.reply_yielded > 1 { 0 - 2 } else {
+            if yv.reply_fell == 1 andalso yv.reply_yielded == 1 {
+                yc.known[yc.cursor] = 1; yc.changed = 1;
+            }
+            yc.cursor = yc.cursor + 1; yc.waiting = 0; 3
+        }
+    } else { if yv.command != 11 orelse yc.waiting != 0 { 0 - 2 } else {
+        if yc.cursor == yc.count {
+            if yc.changed == 0 { yc.active = 0; 0 } else {
+                yc.cursor = 0; yc.changed = 0; 3
+            }
+        } else {
+            if yc.known[yc.cursor] == 1 { yc.cursor = yc.cursor + 1; 3 } else {
+                yv.module_node = yc.cursor; yc.waiting = 1; 1
+            }
+        }
+    } } } } }
+}
+
 loop main(resume: Word) -> Word {
-    yield run()
+    yield if yv.command == 0 { run() } else { module_step() }
 }

@@ -39,7 +39,11 @@ use crate::value_layout::{CompositeKind, ScalarKind};
 use crate::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 use crate::{Arena, compiler::compile, lexer::tokenize, parser::parse};
 
+mod analysis_machine;
+mod resources;
+mod text_bounds;
 mod validation;
+mod yield_fixpoint;
 pub use validation::{VerificationError, VerificationVerdict, verify_module_via_kel};
 mod call_graph;
 pub use call_graph::call_order_via_kel;
@@ -4928,6 +4932,7 @@ const YV_MARK: usize = 3 + 1536 * 2;
 const YV_CAY: usize = 3 + 1536 * 3;
 const YV_OUT_FELL: usize = 3 + 1536 * 4;
 const YV_OUT_HY: usize = 3 + 1536 * 4 + 1;
+const YV_OUT_REJECT: usize = YV_OUT_HY + 2;
 
 fn verify_yield_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -4992,24 +4997,7 @@ fn run_ayc(
 /// `compute_always_yielding`. The kernel computes each region summary; Rust still
 /// schedules fixpoint rounds and stores the resulting set.
 pub fn self_hosted_always_yielding(module: &Module) -> std::collections::BTreeSet<usize> {
-    let mut always: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
-    loop {
-        let mut changed = false;
-        for (i, chunk) in module.chunks.iter().enumerate() {
-            if always.contains(&i) {
-                continue;
-            }
-            let (fell, hy) = run_ayc(chunk, 0, chunk.ops.len(), &always);
-            if fell && hy {
-                always.insert(i);
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    always
+    yield_fixpoint::always(module).expect("yield-fixpoint stage unavailable")
 }
 
 /// Whether `chunk` is an unproductive Stream chunk: some path from its `Stream` to its `Reset`
@@ -5754,41 +5742,89 @@ pub fn dl_reject_module_via_kel(module: &Module) -> bool {
         || (n_shared as i64) != rd(DL_IO_TOTAL)
 }
 
-/// First-pass resource admission using Keleusma graph ordering and per-chunk analysis.
-/// Rust still retains the per-chunk result table and combines admission flags.
-/// Text-allocation bounds remain an Order 2 integration requirement.
+/// Keleusma-computed text-allocation and boundary summary for one chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChunkTextBounds {
+    /// Saturating upper bound on text heap allocation in bytes.
+    pub heap_bytes: u32,
+    /// Whether a return may carry text.
+    pub returns_text: bool,
+    /// Whether a yield may carry text.
+    pub yields_text: bool,
+}
+
+/// Compute the reference text-allocation model through Keleusma transitions.
+/// Callee flags are source-independent summaries; absent entries are conservative.
+pub fn text_bounds_via_kel(
+    chunk: &crate::bytecode::Chunk,
+    callees: &[bool],
+) -> Result<ChunkTextBounds, VerificationError> {
+    let stage = analyze_kel_module();
+    let persistent = required_persistent_capacity_for(&stage);
+    let mut arena = Arena::try_with_capacity(DEFAULT_ARENA_CAPACITY + persistent)
+        .map_err(analysis_machine::error)?;
+    arena
+        .resize_persistent(persistent)
+        .map_err(analysis_machine::error)?;
+    let mut machine = analysis_machine::AnalysisMachine::new(stage, &arena, &text_bounds::FIELDS)?;
+    text_bounds::chunk_bounds(&mut machine, chunk, |i| Ok(callees.get(i).copied()))
+}
+
+/// Verify structure and types, then apply the Keleusma module resource admission.
+/// Invalid programs and unavailable analysis remain distinct. Native resource
+/// attestations are empty, matching verify_resource_bounds. The existing bounded
+/// stage profile and typed control-flow widening apply.
+/// Acceptance describes that profile. Retain reference verification and runtime
+/// guards until independent review establishes that they can be retired.
+pub fn admit_module_via_kel(
+    module: &Module,
+    arena_capacity: usize,
+) -> Result<VerificationVerdict, VerificationError> {
+    match verify_module_via_kel(module)? {
+        VerificationVerdict::Accepted => resources::check(module, arena_capacity),
+        rejected => Ok(rejected),
+    }
+}
+
+/// Resource admission with host-native iteration attestations and the host value-slot width.
+/// Native costs are transported as facts. Keleusma selects per-site versus per-chunk
+/// charging and deduplicates external native contributions.
+/// The bounded typed profile and reference-gate requirement of
+/// [`admit_module_via_kel`] also apply here.
+pub fn admit_module_with_bounds_via_kel(
+    module: &Module,
+    arena_capacity: usize,
+    bounds: &[crate::verify::NativeIterationBound],
+    value_slot_bytes: u32,
+) -> Result<VerificationVerdict, VerificationError> {
+    match verify_module_via_kel(module)? {
+        VerificationVerdict::Accepted => {
+            resources::check_with_bounds(module, arena_capacity, bounds, value_slot_bytes)
+        }
+        rejected => Ok(rejected),
+    }
+}
+
+/// Resource-only compatibility wrapper around the stage-owned admission path.
+/// Text allocation and module summaries are included. The checked admission API
+/// additionally verifies structure and types and reports unavailable analysis.
 ///
 /// # Panics
-/// This legacy Boolean interface panics when a bounded stage cannot process the input.
-/// Graph capacity failures are distinguishable through call_order_via_kel.
+/// This legacy Boolean interface panics on unavailable stage analysis.
 pub fn validate_module_via_kel(module: &Module, arena_capacity: i64) -> bool {
-    use crate::bytecode::BlockType;
-    let n = module.chunks.len();
-    let Some(order) =
-        call_order_via_kel(module).expect("call-graph stage capacity or protocol failure")
-    else {
+    if arena_capacity < 0
+        && module
+            .chunks
+            .iter()
+            .any(|c| c.block_type == crate::bytecode::BlockType::Stream)
+    {
         return false;
-    };
-    // Resolve each chunk's transitive WCMU in topological order, then admit.
-    let shared_layout = module
-        .data_layout
-        .as_ref()
-        .map_or(&[][..], |dl| &dl.shared_layout);
-    let mut chunk_wcmu = vec![(0i64, 0i64); n];
-    let mut valid = true;
-    for &idx in &order {
-        let chunk = &module.chunks[idx];
-        let (_wcet, stack, heap, reject, chunk_valid) =
-            run_analyze_kel(chunk, arena_capacity, &chunk_wcmu, shared_layout);
-        if reject {
-            valid = false; // an inextractable bound anywhere fails module_wcmu
-        }
-        if chunk.block_type == BlockType::Stream && !chunk_valid {
-            valid = false; // a Stream chunk whose transitive budget exceeds the capacity
-        }
-        chunk_wcmu[idx] = (stack, heap);
     }
-    valid
+    matches!(
+        resources::check(module, arena_capacity.max(0) as usize)
+            .expect("resource stage unavailable"),
+        VerificationVerdict::Accepted
+    )
 }
 
 // -- scaffold assembly from parse.kel's records (ported from tests/selfhost_codegen.rs) --

@@ -268,3 +268,78 @@ fn depth_and_productivity_failures_are_completed_rejections() {
         }
     );
 }
+
+#[test]
+fn control_flow_widening_does_not_invent_a_scalar_violation() {
+    use keleusma::bytecode::{NewCompositeOperand, StructField};
+    use keleusma::value_layout::{CompositeKind, ScalarKind};
+    let mut module = base();
+    module.chunks[0].ops = vec![
+        Op::Const(0),
+        Op::PushImmediate(1),
+        Op::If(7),
+        Op::PopN(1),
+        Op::Const(0),
+        Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Struct,
+            count: 1,
+            byte_size: 8,
+        }),
+        Op::Else(8),
+        Op::PopN(0),
+        Op::EndIf,
+        Op::GetField(StructField::Flat {
+            offset: 8,
+            kind: ScalarKind::Int,
+        }),
+        Op::Return,
+    ];
+    accepted(&module);
+}
+
+#[test]
+fn terminated_branches_do_not_make_dead_typed_operations_live() {
+    use keleusma::bytecode::StructField;
+    use keleusma::value_layout::ScalarKind;
+    let mut module = base();
+    module.chunks[0].ops = vec![
+        Op::PushImmediate(1),
+        Op::If(5),
+        Op::Const(0),
+        Op::Return,
+        Op::Else(7),
+        Op::Const(0),
+        Op::Return,
+        Op::EndIf,
+        Op::Const(0),
+        Op::GetField(StructField::Flat {
+            offset: 0,
+            kind: ScalarKind::Int,
+        }),
+        Op::Return,
+    ];
+    accepted(&module);
+}
+
+#[test]
+fn incompatible_break_heights_are_rejected() {
+    let mut module = base();
+    module.chunks[0].ops = vec![
+        Op::Loop(9),
+        Op::PushImmediate(1),
+        Op::If(6),
+        Op::Const(0),
+        Op::Break(9),
+        Op::Else(7),
+        Op::Break(9),
+        Op::EndIf,
+        Op::EndLoop(1),
+        Op::Const(0),
+        Op::Return,
+    ];
+    assert!(keleusma::verify::verify(&module).is_err());
+    assert!(matches!(
+        verify_module_via_kel(&module).unwrap(),
+        VerificationVerdict::Rejected { .. }
+    ));
+}

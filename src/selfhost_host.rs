@@ -573,7 +573,8 @@ pub fn analyze_class(op: &crate::bytecode::Op) -> (i64, i64) {
 
 /// Fine-grained op detail for analyze.kel's loop-bound extraction: `(opk, slot, cval, cint)`.
 /// `opk` tags the opcode (1 GetLocal, 2 SetLocal, 3 Const, 4 CmpGe, 5 BreakIf, 6 CheckedAdd,
-/// 7 PopN, 8 EndLoop, 9 Loop, 0 other); `slot` the GetLocal/SetLocal slot; `cval` the Const
+/// 7 PopN, 8 EndLoop, 9 Loop, 10 Len, 11 array construction, 0 other);
+/// `slot` is the GetLocal/SetLocal slot; `cval` is the array element count or the Const
 /// integer value or PopN count; `cint` 1 if a Const resolves to an integer.
 /// Fine-grained op detail for `analyze.kel`'s loop-bound extraction, as
 /// `(opk, slot, cval, cint)`. Public for the same one-encoding reason as
@@ -596,6 +597,14 @@ pub fn analyze_opk(
         Op::PopN(n) => (7, 0, *n as i64, 0),
         Op::EndLoop(_) => (8, 0, 0, 0),
         Op::Loop(_) => (9, 0, 0, 0),
+        Op::Len => (10, 0, 0, 0),
+        Op::NewComposite(operand) => {
+            if operand.kind() == crate::value_layout::CompositeKind::Array {
+                (11, 0, i64::from(operand.count()), 0)
+            } else {
+                (0, 0, 0, 0)
+            }
+        }
         // EXHAUSTIVE FOR THE SAME REASON AS `analyze_class`, though the failure
         // mode differs and the difference is worth stating.
         //
@@ -637,12 +646,10 @@ pub fn analyze_opk(
         | Op::Return
         | Op::Yield
         | Op::Dup
-        | Op::NewComposite(..)
         | Op::GetField(..)
         | Op::GetIndex(..)
         | Op::GetTupleField(..)
         | Op::GetEnumField(..)
-        | Op::Len
         | Op::IsEnum(..)
         | Op::IsStruct(..)
         | Op::IntToFloat

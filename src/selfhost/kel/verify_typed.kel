@@ -468,9 +468,7 @@ fn record_break(i: Word) -> Word {
         tf.f_hb[i] = 1;
         tf.f_bmax[i] = tf.dsp;
     } else {
-        if tf.dsp > tf.f_bmax[i] {
-            tf.f_bmax[i] = tf.dsp;
-        }
+        ne_bad(tf.dsp, tf.f_bmax[i]);
     }
     0
 }
@@ -546,55 +544,44 @@ fn scan_op(i: Word) -> Word {
     0
 }
 
+// Branches share their parent's break scope; loop bodies have a fresh scope.
+fn merge_breaks(i: Word) -> Word {
+    if tf.child_hb == 1 {
+        if tf.f_hb[i] == 0 { tf.f_hb[i] = 1; tf.f_bmax[i] = tf.child_bmax; }
+        else { ne_bad(tf.f_bmax[i], tf.child_bmax); }
+    }
+    0
+}
 fn resolve_pending(i: Word) -> Word {
     if tf.f_pk[i] == 1 {
-        // Bare if: the then-arm must be height-neutral (join with the fall-through); reset to the
-        // entry height and Top the operand entries above it (the join over-approximation).
-        if tf.child_fell == 1 {
-            ne_bad(tf.dsp, tf.f_esp[i]);
-        }
-        tf.dsp = tf.f_esp[i];
-        tf.f_ip[i] = tf.f_resume[i];
-        tf.f_pa[i] = 0;
-    } else {
-    if tf.f_pk[i] == 2 {
+        merge_breaks(i);
+        if tf.child_fell == 1 { ne_bad(tf.dsp, tf.f_esp[i]); }
+        tf.dsp = tf.f_esp[i]; top_from(0); invalidate_locals();
+        tf.f_ip[i] = tf.f_resume[i]; tf.f_pa[i] = 0;
+    } else { if tf.f_pk[i] == 2 {
+        merge_breaks(i);
         if tf.f_ps[i] == 0 {
-            // Then-branch returned: stash its end height/fell, reset to the entry height, spawn
-            // the else-branch from there.
-            tf.f_tsp[i] = tf.dsp;
-            tf.f_tfell[i] = tf.child_fell;
-            tf.dsp = tf.f_esp[i];
+            tf.f_tsp[i] = tf.dsp; tf.f_tfell[i] = tf.child_fell;
+            tf.dsp = tf.f_esp[i]; top_from(0); invalidate_locals();
             tf.f_ps[i] = 1;
             push_frame(tf.f_elstart[i], tf.f_elend[i], tf.f_esp[i]);
         } else {
-            // Else-branch returned: both arms that fall through must reach the same height
-            // (B3/B4); the joined operand entries above the entry height are Top.
-            if tf.f_tfell[i] == 1 andalso tf.child_fell == 1 {
-                ne_bad(tf.f_tsp[i], tf.dsp);
-            } else {
-                if tf.f_tfell[i] == 1 {
-                    tf.dsp = tf.f_tsp[i];
-                }
-            }
-            top_from(tf.f_esp[i]);
-            tf.f_ip[i] = tf.f_resume[i];
+            if tf.f_tfell[i] == 1 andalso tf.child_fell == 1 { ne_bad(tf.f_tsp[i], tf.dsp); }
+            else { if tf.f_tfell[i] == 1 { tf.dsp = tf.f_tsp[i]; } }
+            top_from(0); invalidate_locals();
+            if tf.f_tfell[i] == 0 andalso tf.child_fell == 0 {
+                tf.f_fell[i] = 0; tf.f_ip[i] = tf.f_end[i];
+            } else { tf.f_ip[i] = tf.f_resume[i]; }
             tf.f_pa[i] = 0;
         }
     } else {
-        // Loop: the body fall-through must restore the entry height (B5 back-edge neutrality).
-        // The height after the loop is the max break height, else the body end, else the entry;
-        // the operand entries above the entry are Top.
-        if tf.child_fell == 1 {
-            ne_bad(tf.dsp, tf.f_esp[i]);
-        }
-        if tf.child_hb == 1 {
-            tf.dsp = tf.child_bmax;
-        } else {
-            if tf.child_fell == 0 {
-                tf.dsp = tf.f_esp[i];
-            }
-        }
-        top_from(tf.f_esp[i]);
+        if tf.child_fell == 1 { ne_bad(tf.dsp, tf.f_esp[i]); }
+        if tf.child_hb == 1 { tf.dsp = tf.child_bmax; }
+        else { if tf.child_fell == 0 { tf.dsp = tf.f_esp[i]; } }
+        top_from(tf.f_esp[i]); invalidate_locals();
+        // The reference restores the neutral body exit or loop-entry state when
+        // there are no break states, even if the body terminated. Keep checking
+        // instructions after the loop against that fallback state.
         tf.f_ip[i] = tf.f_resume[i];
         tf.f_pa[i] = 0;
     } }

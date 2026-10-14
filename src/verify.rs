@@ -719,7 +719,7 @@ fn extract_loop_iteration_bound(chunk: &Chunk, loop_ip: usize) -> Option<u32> {
     }
 
     if end_val >= start_val {
-        let count = (end_val - start_val) as u64;
+        let count = end_val.checked_sub(start_val)? as u64;
         if count > u32::MAX as u64 {
             None
         } else {
