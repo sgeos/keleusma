@@ -694,6 +694,134 @@ fn build_struct_eq_nested(a: Word) -> Word {
     emit(59, base, lhs, rhs)
 }
 
+// Checked arithmetic records use a bounded context stack and match_parts storage.
+// 118 opens after the operand operation, with flag-slot + scalar-kind*65536.
+// 119 wraps a body and optional guard, carrying class + guard*4 + literal0*8 + literal1*16.
+// 120/121 carry literal-pattern values. 123 appends the wrapped arm after its
+// optional LetIn bindings. 124 closes. 125 pushes a typed low/high local read.
+// A header is [packed slots/type, reverse arm list, arm count, covered classes].
+// An arm is [metadata, literal0, literal1, bound result node, previous arm + 1].
+private data checked {
+    depth: Word,
+    ctx_base: [Word; 32],
+    ctx_root: [Word; 32],
+    ctx_meta: [Word; 32],
+    ctx_literal0: [Word; 32],
+    ctx_literal1: [Word; 32],
+    ctx_pending: [Word; 32],
+    ctx_literal_seen: [Word; 32],
+    inspect: Word,
+    binds: Word,
+    valid: Word,
+}
+fn rc_cap_checked() -> Word { 32 }
+
+fn checked_start(a: Word) -> Word {
+    if checked.depth >= rc_cap_checked() orelse rs.mp + 4 > 256 orelse a < 0
+        orelse a % 65536 > 2045 orelse (a / 65536 != 2 andalso a / 65536 != 3) {
+        rerr(6, a)
+    } else {
+        let root = pop();
+        let kind = io.kinds[root]; let op = io.args[root] % 64;
+        let valid = ((kind == 3 orelse kind == 45) andalso op >= 1 andalso op <= 5)
+            orelse (kind == 10 andalso a / 65536 == 3);
+        if not valid { rerr(6, kind) } else {
+            let d = checked.depth; let base = rs.mp; rs.mp = rs.mp + 4;
+            checked.ctx_root[d] = root; checked.ctx_base[d] = base; checked.ctx_pending[d] = 0;
+            io.match_parts[base] = a; io.match_parts[base + 1] = 0;
+            io.match_parts[base + 2] = 0; io.match_parts[base + 3] = 0;
+            checked.depth = d + 1; 0
+        }
+    }
+}
+
+fn checked_allowed(root: Word, scalar: Word) -> Word {
+    let op = io.args[root] % 64;
+    if io.kinds[root] == 10 { 3 } else {
+    if op == 5 { 9 } else { if op == 4 { if scalar == 3 { 11 } else { 9 } } else {
+        if scalar == 3 { 7 } else { if op == 3 { 5 } else { 3 } }
+    } } }
+}
+
+// Only the binding wrappers emitted by this protocol may surround an arm node.
+fn checked_arm_shape(result: Word, base: Word) -> Word {
+    checked.inspect = result; checked.binds = 0; checked.valid = 1;
+    for i in 0..2 limit 2 {
+        if io.kinds[checked.inspect] == 5 {
+            let init = io.lhs[checked.inspect]; let packed = io.match_parts[base];
+            if io.kinds[init] != 80 orelse io.args[init] / 65536 != packed / 65536
+                orelse io.args[init] % 65536 < packed % 65536 + 1
+                orelse io.args[init] % 65536 > packed % 65536 + 2 {
+                checked.valid = 0;
+            }
+            checked.binds = checked.binds + 1;
+            checked.inspect = io.rhs[checked.inspect];
+        }
+    }
+    if io.kinds[checked.inspect] != 78 { checked.valid = 0; }
+    checked.valid
+}
+
+fn checked_arm_finish(d: Word) -> Word {
+    if checked.ctx_pending[d] == 0 orelse rs.mp + 5 > 256 { rerr(6, rs.mp + 5) } else {
+        let result = pop(); let base = checked.ctx_base[d]; let arm = rs.mp;
+        let meta = checked.ctx_meta[d]; let mask = 1 lsl (meta % 4);
+        let allowed = checked_allowed(checked.ctx_root[d], io.match_parts[base] / 65536);
+        if io.match_parts[base + 3] band mask != 0 orelse allowed band mask == 0
+            orelse checked.ctx_literal_seen[d] != meta / 8
+            orelse checked_arm_shape(result, base) == 0 {
+            rerr(6, meta)
+        } else {
+            io.match_parts[arm] = meta;
+            io.match_parts[arm + 1] = checked.ctx_literal0[d];
+            io.match_parts[arm + 2] = checked.ctx_literal1[d];
+            io.match_parts[arm + 3] = result;
+            io.match_parts[arm + 4] = io.match_parts[base + 1];
+            io.match_parts[base + 1] = arm + 1;
+            io.match_parts[base + 2] = io.match_parts[base + 2] + 1;
+            if meta < 4 { io.match_parts[base + 3] = io.match_parts[base + 3] bor mask; }
+            rs.mp = arm + 5; checked.ctx_pending[d] = 0; 0
+        }
+    }
+}
+
+fn step_checked(k: Word, a: Word) -> Word {
+    if k == 118 { checked_start(a) } else {
+    if checked.depth == 0 { rerr(6, k) } else {
+        let d = checked.depth - 1;
+        if k == 125 {
+            if a < 0 orelse a % 65536 > 2047 orelse (a / 65536 != 2 andalso a / 65536 != 3) {
+                rerr(6, a)
+            } else { emit(80, a, 0, 0) }
+        } else { if k == 119 {
+            if checked.ctx_pending[d] != 0 orelse a < 0 orelse a > 31 { rerr(6, a) } else {
+                checked.ctx_meta[d] = a; checked.ctx_literal0[d] = 0; checked.ctx_literal1[d] = 0;
+                checked.ctx_pending[d] = 1; checked.ctx_literal_seen[d] = 0;
+                let body = pop(); let guard = if (a / 4) % 2 == 1 { pop() + 1 } else { 0 };
+                emit(78, a, guard, body)
+            }
+        } else { if k == 120 orelse k == 121 {
+            let mask = if k == 120 { 1 } else { 2 };
+            if checked.ctx_pending[d] == 0 orelse (checked.ctx_meta[d] / 8) band mask == 0
+                orelse checked.ctx_literal_seen[d] band mask != 0 { rerr(6, k) } else {
+                checked.ctx_literal_seen[d] = checked.ctx_literal_seen[d] bor mask;
+                if k == 120 { checked.ctx_literal0[d] = a; } else { checked.ctx_literal1[d] = a; }
+                0
+            }
+        } else { if k == 123 {
+            if a != 0 { rerr(6, a) } else { checked_arm_finish(d) }
+        } else {
+            let base = checked.ctx_base[d];
+            if a != 0 orelse checked.ctx_pending[d] != 0 orelse io.match_parts[base + 3] band 1 == 0 {
+                rerr(6, k)
+            } else {
+                checked.depth = d;
+                emit(77, base, checked.ctx_root[d], io.match_parts[base + 2])
+            }
+        } } } }
+    } }
+}
+
 // Outcome descriptors use three match_parts entries in canonical dispatch order.
 // Reject exhausted side storage before writing any part of the descriptor.
 fn step_outcome(k: Word, a: Word) -> Word {
@@ -729,6 +857,7 @@ fn step_outcome(k: Word, a: Word) -> Word {
 // stack. An If (4) pops its else, then, and cond children. Its arg is cond for
 // a written else and -(cond + 1) for an omitted else; lhs/rhs hold the branches.
 fn step(k: Word, a: Word) -> Word {
+    if k >= 118 andalso k <= 125 { step_checked(k, a) } else {
     if k >= 112 andalso k <= 117 { step_outcome(k, a) } else {
     if is_leaf(k) == 1 orelse k == 72 {
         if k == 72 { push(0 - 1) } else { emit(k, a, 0, 0) }
@@ -969,6 +1098,8 @@ fn step(k: Word, a: Word) -> Word {
         0
     } } } } } } } } } } } } } } } } } }
 }
+}
+
 }
 
 // Pop the top depth-2+ struct reassembly frame (its sub-fields are fully laid into `seb`) and
@@ -1330,7 +1461,7 @@ fn step_bnot(k: Word, a: Word) -> Word {
 fn reconstruct_range(start: Word, len: Word) -> Word {
     // Parser loop indices restart in each guard/body range; side tables accumulate.
     rs.range_lp = rs.lp; rs.range_fop = rs.fop;
-    rs.sp = 0;
+    rs.sp = 0; checked.depth = 0;
     for i in 0..22 limit 22 { rs.outcome_map[i] = 0; }
     // Guard the RANGE, not each index. The walk below carries `limit 1024`, so a longer
     // range trapped `LoopLimitExceeded` -- a VM-level message naming no cause at all --
@@ -1346,6 +1477,7 @@ fn reconstruct_range(start: Word, len: Word) -> Word {
     }
     // EXACTLY one node must remain. Reading `stack[0]` unconditionally returned a stale
     // index for an empty range and silently discarded the remainder for an over-full one.
+    if checked.depth != 0 { rerr(6, checked.depth); }
     if rs.sp != 1 {
         rerr(rc_range_arity(), rs.sp);
         0

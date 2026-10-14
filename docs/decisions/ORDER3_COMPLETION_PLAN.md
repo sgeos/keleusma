@@ -28,7 +28,9 @@ width. It now uses the module-declared width through the shared arithmetic helpe
 The Rust compiler omits the zero-divisor fallback for nondivision arithmetic and
 unguarded variable or wildcard handlers covering that class. Guards and literal
 patterns retain a possible trap. The Keleusma parser still refuses checked arithmetic
-arms, so complete handled-form support in both compilers remains required.
+arms. Reconstruction and code-generation support now exists behind an explicit
+record protocol, with ten record-level controls. Source parsing and its independent
+rejection controls remain required before this is a shipping feature.
 Debugger controls pass for the arithmetic operation and its explicit trap.
 
 A full regression exposed lost Float division/remainder and Fixed remainder
@@ -124,11 +126,53 @@ fn main(op: Word, scalar: Word) -> Word {
     3 + (op + if legacy { scalar * 64 } else { 0 }) * 64
 }
 ```
-The parser emits addition before the conditional, and the shipping type stage
-rejects the resulting facts. Using a local for the conditional result is accepted.
-The parser helper uses that accepted form. The broader direct-right-operand
-conditional case remains unresolved and must be considered when extending checked
-outcome syntax. The diagnostic and whole-source comparison are retained in
+The original parser emitted addition before the conditional, and the shipping type
+stage rejected the resulting facts. The current parser adds an internal IfMark
+boundary and retains enclosing operators until the complete conditional is emitted.
+Artifact and execution controls cover arithmetic, negation, nested conditions, call
+arguments, branch statements, Boolean expressions, side effects and an explicit
+zero-divisor trap. The parser helper retains its local-binding formulation. The diagnostic and whole-source comparison are retained in
 `tmp/order3-minimal-diagnosis.log` and `tmp/order3-parse-diagnosis.log`. The latter's
 unfused parsing attempts exceeded that helper's token cap and are not evidence
 about the shipping fused path. Its type-stage comparisons use the fused path.
+
+## Checked-outcome record protocol
+
+This is implemented in reconstruct.kel and codegen.kel. The source parser does not
+yet emit it. The unit tests in src/selfhost/checked_outcomes_tests.rs inject records
+directly and compare instructions, constants, frame size, complete artifacts and
+execution with reference-compiled checked expressions. They establish the backend
+contract, not source-language admission.
+
+| Record | Meaning |
+|---|---|
+| 118 | Open after the normal operation node. Payload is flag-slot plus scalar-kind times 65536. Scalar kind is 3 for Word or 2 for Byte. Reserve flag, low and high slots in that order. |
+| 125 | Typed low or high local read for a pattern binding. Payload is source-slot plus scalar-kind times 65536. |
+| 119 | Wrap the arm body and optional guard. Payload is class plus guard-present times 4 plus literal-pattern flags times 8 and 16. Class values are 0 ok, 1 overflow, 2 underflow and 3 zero divisor. |
+| 120 and 121 | Supply the first and second literal-pattern values when their flags are set. |
+| 5 | Existing LetIn wrappers bind variable patterns after record 119, in reverse pattern order. Source parsing must also emit binding-name metadata record 90 immediately before each wrapper. |
+| 123 | Finish an arm after its binding wrappers and literal records. Payload is zero. |
+| 124 | Close the checked construct. Payload is zero. An unguarded ok catch-all is mandatory. |
+
+Reconstruction produces checked-expression node 77, arm-result node 78 and typed
+binding-value node 80. Its four-word header carries packed slots/type, the reverse
+arm list, arm count and covered classes. Each five-word arm descriptor carries
+metadata, two literal values, the wrapped result node and the preceding-arm link.
+Guard and literal flags determine coverage inside the stage. The host does not
+supply a trap-free claim. Header and arm storage share the existing 256-word side
+table. An otherwise empty table fits fifty arms and refuses the fifty-first.
+Checked contexts have a guarded depth of 32. Existing unrelated unguarded side
+arrays remain explicitly registered.
+
+Code generation schedules the reverse list onto its work stack to preserve source
+order. Deferred integers share immutable scratch slots so repeated outcome flags
+do not exhaust the 64-entry table. Actual constant-pool interning remains deferred
+until emission. No capacity was raised.
+
+The next implementation is the source parser. It must reserve the three temporaries
+after operands, support scoped Word and Byte pattern bindings, literal and guarded
+arms, enforce outcome admissibility and ok coverage independently, and emit the
+protocol above. Checked expression bodies and guards must retain normal expression
+boundaries. The source type channel recognizes node 80 scalar types, node 78 guards
+and node 77 arm-result joins. Checked shifts and the source parser remain outside
+the current backend evidence. All original Order 3 deliverables remain required.

@@ -456,10 +456,19 @@ fn push_bool(value: Word) -> Word {
 // is processed in the forward walk, so a computed constant (an `lsr` mask) interns AFTER the operand
 // constants emitted before it, matching the reference pool order.
 fn push_int_const(value: Word) -> Word {
-    st.defer_int[st.defer_ctr] = value;
-    st.stack[st.sp] = wire.emitbool + (2 + st.defer_ctr) * wire.item;
+    // Repeated outcome flags and pattern constants share immutable scratch slots.
+    // Pool interning still occurs when the work item executes, in source order.
+    st.dup_idx = st.defer_ctr;
+    for i in 0..st.defer_ctr limit 64 {
+        if st.defer_int[i] == value { st.dup_idx = i; }
+    }
+    let index = st.dup_idx;
+    if index == st.defer_ctr {
+        st.defer_int[index] = value;
+        st.defer_ctr = st.defer_ctr + 1;
+    }
+    st.stack[st.sp] = wire.emitbool + (2 + index) * wire.item;
     st.sp = st.sp + 1;
-    st.defer_ctr = st.defer_ctr + 1;
     0
 }
 
@@ -709,6 +718,69 @@ fn push_binop(p: Word) -> Word {
     push_visit(ast.rhs[p]);
     push_visit(ast.lhs[p])
     }
+}
+
+private data checked_emit { arm: Word }
+
+// Checked node 77 owns three result locals and an ordered outcome dispatch.
+// Every integer constant is deferred so interning follows forward emission order.
+fn push_checked_pattern(value: Word, slot: Word) -> Word {
+    push_emit(wire.mif); push_emit(wire.cmpeq);
+    push_int_const(value); push_emit(wire.getlocal + slot * wire.radix)
+}
+fn push_checked_arm_result(p: Word) -> Word {
+    if ast.kinds[p] == 5 {
+        push_work(13, ast.rhs[p]); push_work(wire.bindlocal, ast.args[p]); push_visit(ast.lhs[p])
+    } else {
+        if ast.lhs[p] > 0 { push_emit(wire.mendif); }
+        push_emit(wire.mbreak); push_visit(ast.rhs[p]);
+        if ast.lhs[p] > 0 { push_emit(wire.mif); push_visit(ast.lhs[p] - 1); }
+        0
+    }
+}
+fn push_checked_arm(arm: Word, flag: Word, scalar: Word) -> Word {
+    let meta = ast.match_parts[arm]; let class = meta % 4;
+    push_emit(wire.mendif);
+    if (meta / 8) % 2 == 1 { push_emit(wire.mendif); }
+    if (meta / 16) % 2 == 1 { push_emit(wire.mendif); }
+    push_work(13, ast.match_parts[arm + 3]);
+    if (meta / 16) % 2 == 1 { push_checked_pattern(ast.match_parts[arm + 2], flag + 1); }
+    if (meta / 8) % 2 == 1 {
+        let slot = if scalar == 3 andalso (class == 1 orelse class == 2) { flag + 2 } else { flag + 1 };
+        push_checked_pattern(ast.match_parts[arm + 1], slot);
+    }
+    push_checked_pattern(class, flag)
+}
+fn push_checked(p: Word) -> Word {
+    let base = ast.args[p]; let packed = ast.match_parts[base];
+    let flag = packed % 65536; let scalar = packed / 65536;
+    let root = ast.lhs[p]; let op = ast.args[root] % 64;
+    let unary = ast.kinds[root] == 10;
+    push_emit(wire.mendloop); push_emit(wire.mbreak);
+    push_emit(wire.getlocal + (flag + 1) * wire.radix);
+    if not unary andalso (op == 4 orelse op == 5) andalso ast.match_parts[base + 3] band 8 == 0 {
+        push_emit(wire.mendif); push_emit(wire.trap + 5 * wire.radix);
+        push_checked_pattern(3, flag);
+    }
+    checked_emit.arm = ast.match_parts[base + 1];
+    for i in 0..ast.rhs[p] limit 50 {
+        let at = checked_emit.arm - 1; push_checked_arm(at, flag, scalar);
+        checked_emit.arm = ast.match_parts[at + 4];
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + (flag + 1) * wire.radix);
+    push_emit(wire.setlocal + (flag + 2) * wire.radix);
+    push_emit(wire.setlocal + flag * wire.radix);
+    let instruction = if unary { wire.checkedneg } else {
+        match op { 1 => wire.checkedadd, 2 => wire.checkedmul, 3 => wire.checkedsub,
+            4 => wire.checkeddiv, _ => wire.checkedmod }
+    };
+    push_emit(instruction);
+    if not unary { push_visit(ast.rhs[root]); }
+    push_visit(ast.lhs[root])
+}
+fn push_checked_binding(p: Word) -> Word {
+    push_emit(wire.getlocal + (ast.args[p] % 65536) * wire.radix)
 }
 
 // ByteBinOp (kind 44): a bitwise op on two Byte operands, promote-operate-truncate. Each operand is
@@ -2816,6 +2888,7 @@ fn walk_step() -> Word {
     }
     if ikind == wire.physicalemit { emit_physical(payload); }
     if ikind == wire.bindlocal { bind_local(payload); }
+    if ikind == 13 { push_checked_arm_result(payload); }
     if ikind == wire.lsrvalue { lsr_value(payload); }
     if ikind == wire.lsrcount { lsr_count(payload); }
     if ikind == wire.rawemit { emit_op(payload); }
@@ -2875,6 +2948,8 @@ fn walk_step() -> Word {
             74 => push_forlimit(payload),
             75 => push_outcome_arm(payload),
             76 => push_local(payload),
+            77 => push_checked(payload),
+            80 => push_checked_binding(payload),
             24 => push_yield(payload),
             25 => push_multihead(payload),
             26 => push_cast(payload),

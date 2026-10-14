@@ -3490,6 +3490,11 @@ fn source_operand(
 ) -> ExprOperand {
     match body.nodes.get(index as usize) {
         Some(node) if matches!(node.kind, NODE_LITERAL | 76) => (1, 0, String::new()),
+        Some(node) if node.kind == 80 => (
+            scalar_tag_of_layout_kind(node.arg / 65536),
+            0,
+            String::new(),
+        ),
         Some(node) if node.kind == NODE_UNIT && (node.arg == 1 || node.arg == 2) => {
             (2, 0, String::new())
         }
@@ -3729,7 +3734,7 @@ fn expression_rows_from_body<F: Fn(i64) -> ExprOperand>(
         } else if scalar_results && node.kind == 43 {
             row_of_node.insert(at as i64, rows.len());
             rows.push((18, operand(node.lhs), nothing.clone()));
-        } else if node.kind == 75 && node.lhs > 0 {
+        } else if matches!(node.kind, 75 | 78) && node.lhs > 0 {
             rows.push((3, operand(node.lhs - 1), nothing.clone()));
         } else if node.kind == 71 {
             // Guarded match-arm wrapper. Its result is compared by the parent match.
@@ -3793,6 +3798,41 @@ fn expression_rows_from_body<F: Fn(i64) -> ExprOperand>(
                     row_of_node.insert(at as i64, first_row);
                 }
             }
+        } else if node.kind == 77 {
+            // Checked arms retain binding wrappers around node 78. Compare their
+            // body results, while each wrapper independently contributes its guard.
+            let base = usize::try_from(node.arg).expect("negative checked header");
+            let count = usize::try_from(node.rhs).expect("negative checked arm count");
+            assert!(
+                (1..=50).contains(&count),
+                "checked arm count outside descriptor capacity"
+            );
+            let mut link = body.match_parts[base + 1];
+            let first_row = rows.len();
+            let mut first: Option<ExprOperand> = None;
+            for _ in 0..count {
+                let arm = usize::try_from(link - 1).expect("missing checked arm");
+                let root = block_tail_node(body, body.match_parts[arm + 3])
+                    .expect("missing checked arm result");
+                let wrapper = &body.nodes[root as usize];
+                assert_eq!(wrapper.kind, 78, "checked arm without result wrapper");
+                let tail = block_tail_node(body, wrapper.rhs).expect("checked body without tail");
+                let result = operand(tail);
+                if let Some(head) = &first {
+                    rows.push((4, head.clone(), result));
+                } else {
+                    first = Some(result);
+                }
+                link = body.match_parts[arm + 4];
+            }
+            assert_eq!(link, 0, "checked arm count does not consume its list");
+            if scalar_results {
+                if rows.len() == first_row {
+                    let single = first.expect("checked expression has an ok arm");
+                    rows.push((4, single.clone(), single));
+                }
+                row_of_node.insert(at as i64, first_row);
+            }
         } else if node.kind == NODE_ARRAY_LIT {
             // --- THE ARRAY-ELEMENT CLAIM, KIND 2 ---------------------------------------
             //
@@ -3851,7 +3891,7 @@ fn typed_result_node(node: &Node) -> bool {
     is_binary_operator(node.kind)
         || matches!(
             node.kind,
-            6 | 8 | 9 | 10 | 17 | 19 | 22 | 26 | 28 | 30 | 37 | 39 | 43 | 65 | 66 | 68
+            6 | 8 | 9 | 10 | 17 | 19 | 22 | 26 | 28 | 30 | 37 | 39 | 43 | 65 | 66 | 68 | 77
         )
         || (node.kind == 4 && node.arg >= 0)
 }
@@ -9691,3 +9731,6 @@ mod construct_naming_guard {
         );
     }
 }
+
+#[cfg(test)]
+mod checked_outcomes_tests;

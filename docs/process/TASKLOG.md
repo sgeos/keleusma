@@ -6,6 +6,29 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-13 Conditional frames and checked-outcome backend
+
+The parser now retains enclosing operators while a conditional operand is parsed.
+Artifact and execution controls cover arithmetic, nested expressions, side-effect
+order and a zero divisor reaching Trap. The earlier inline-conditional defect is
+repaired.
+
+Checked arithmetic now has a bounded reconstruction and code-generation protocol.
+Ten record-level tests compare instructions, constants, frame sizes, complete
+artifacts and execution with the reference, including Word and Byte bindings,
+guards, literal patterns and nested handlers. Source parsing is still pending.
+The existing side table accepts fifty arms and refuses the fifty-first. Reusing
+deferred integer entries repairs scratch exhaustion without increasing capacity.
+Type transport exposes binding types, guard requirements and arm-result joins.
+
+The broad run passed 381 of 382 tests, including every complete stage artifact.
+Its remaining stale function-count assertion was updated to measured 97 and passes
+on rerun. All three conditional-expression tests, fresh Clippy and the detached
+compiler build pass. The final full matrix and release gates have not run.
+REVERSE_PROMPT.md records exact receipts and the still-open source-parser, bounds,
+classification, host-policy and proof-gated execution work. Order 3 remains active.
+Version 2, the fingerprint, public opcode count and selected capacities are unchanged.
+
 ## 2026-10-13 Order 3 arithmetic increment and fixed release identifiers
 
 The operator declined a bytecode-version advance. BYTECODE_VERSION remains 2 and

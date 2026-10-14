@@ -376,6 +376,7 @@ enum OpCode {
     // byte identity with the reference while retaining xor's boolean operand restriction.
     Xor = 33,
     MatchMark = 34,
+    IfMark = 35,
 }
 
 // The merged parser state.
@@ -2814,6 +2815,7 @@ fn prec_of(op: Word) -> Word {
         OpCode::EnumMark() => 0,
         OpCode::TupleMark() => 0,
         OpCode::MatchMark() => 0,
+        OpCode::IfMark() => 0,
         OpCode::Mul() => 12,
         OpCode::Div() => 12,
         OpCode::Mod() => 12,
@@ -5154,6 +5156,10 @@ fn step_op(k: Word) -> Word {
 // operand is still expected has no tail, so its Unit value is emitted for the fold.
 fn step_if(k: Word) -> Word {
     if k == Tok::If() as Word {
+        // Keep enclosing operators below this conditional until its complete
+        // If node is emitted. The condition and both branches drain above it.
+        ops.opstack[ops.opsp] = OpCode::IfMark() as Word;
+        ops.opsp = op_push(ops.opsp);
         branch.if_phase[branch.if_sp] = 1;
         branch.if_let_base[branch.if_sp] = stmt.let_count;
         branch.if_implicit[branch.if_sp] = 0;
@@ -6468,7 +6474,8 @@ fn step_draining() -> Word {
     let marker = top == OpCode::Paren() as Word
         orelse top == OpCode::IndexMark() as Word
         orelse top == OpCode::CallMark() as Word
-        orelse top == OpCode::MatchMark() as Word;
+        orelse top == OpCode::MatchMark() as Word
+        orelse top == OpCode::IfMark() as Word;
     // A YieldMark completes (drains as its YieldExpr) at a statement (reason 0) or the
     // body tail (reason 1), and also at an if-branch fold (reason 3 or 4) when the
     // `yield` was written inside that branch. The latter is true when the YieldMark
@@ -6825,6 +6832,9 @@ fn step_folding() -> Word {
             0
         } else {
         if stmt.fold_cont == 2 {
+            if ops.opsp == 0 orelse ops.opstack[ops.opsp - 1] != OpCode::IfMark() as Word {
+                perr(pe_block_syntax(), toks.at);
+            } else { ops.opsp = op_pop(ops.opsp); }
             stmt.let_count = branch.if_let_base[branch.if_sp - 1];
             branch.if_sp = branch.if_sp - 1;
             ops.expect_operand = 0;

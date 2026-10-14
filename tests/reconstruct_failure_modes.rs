@@ -242,6 +242,13 @@ fn the_unguarded_arrays_are_named() {
         "rec_arg",
         "outcome_base",
         "outcome_map",
+        "ctx_base",
+        "ctx_root",
+        "ctx_meta",
+        "ctx_literal0",
+        "ctx_literal1",
+        "ctx_pending",
+        "ctx_literal_seen",
     ];
     let arrays = declared_arrays();
     let unguarded: Vec<&str> = arrays
@@ -510,4 +517,35 @@ fn outcome_storage_checks_depth_offsets_and_missing_context() {
         assert_eq!(code, 6, "{records:?}");
         assert_eq!(yielded, RECONSTRUCT_DIAG_TAG_BASE - 6);
     }
+}
+
+#[test]
+fn checked_context_arrays_match_the_bounded_entry_guard() {
+    let arrays = declared_arrays();
+    for name in [
+        "ctx_base",
+        "ctx_root",
+        "ctx_meta",
+        "ctx_literal0",
+        "ctx_literal1",
+        "ctx_pending",
+        "ctx_literal_seen",
+    ] {
+        assert_eq!(
+            arrays
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, size)| *size),
+            Some(32)
+        );
+    }
+    assert!(STAGE.contains("fn rc_cap_checked() -> Word { 32 }"));
+    assert!(STAGE.contains("checked.depth >= rc_cap_checked()"));
+    let mut records = Vec::new();
+    for _ in 0..33 {
+        records.extend([(1, 7), (1, 2), (3, 1), (118, 3 * 65536)]);
+    }
+    let (yielded, code, _) = drive(&records);
+    assert_eq!(code, 6);
+    assert_eq!(yielded, RECONSTRUCT_DIAG_TAG_BASE - 6);
 }

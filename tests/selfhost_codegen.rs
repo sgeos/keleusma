@@ -2033,7 +2033,8 @@ fn self_compile_codegen_atomic_functions() {
     // Nested tuple extraction adds an internal operand-packing helper.
     // Data relocation adds one helper. Head phases, local-slot mapping and shift phases add ten.
     // Outcome dispatch and arm scheduling add two helpers.
-    const EXPECTED_SELF_COMPILE: usize = 92;
+    // Checked arithmetic adds five helpers.
+    const EXPECTED_SELF_COMPILE: usize = 97;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
