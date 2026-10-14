@@ -2050,3 +2050,13 @@ Two lower-level items from Part IV of the review:
 - **Public-versus-internal `Value` separation.** Drawn from Rex's own documented debt (`issues/05`). Keeping the host-facing value type distinct from the internal representation before the surface grows avoids a later painful split. Open, medium effort.
 
 The review's bottom line is that the provenance-for-research thesis did not change Rex's trajectory, that Rex leads on editor tooling and onboarding docs and longevity, and that Keleusma leads on its own guarantee model, `no_std` fit, and test and comment density.
+
+
+## B42. First-class ring buffers managed by the compiler
+
+Requested by the operator on 2026-10-14. Keleusma should provide first-class
+ring buffer support managed by the compiler.
+
+Status is requested, pending design and scheduling. Syntax, storage and capacity,
+full and empty behavior, ownership, and verification of resource bounds remain
+open design questions. No implementation or release target is assigned by this note.

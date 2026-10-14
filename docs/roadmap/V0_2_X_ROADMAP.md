@@ -36,6 +36,10 @@ Keleusma rather than a foreign stub. It surfaces concretely at the bare-metal ru
 ([`V0_4_X_ROADMAP.md`](./V0_4_X_ROADMAP.md), Workstream I), but it is a general language
 capability, not a host-migration one-off.
 
+The operator requested first-class ring buffers managed by the compiler on
+2026-10-14. [Backlog B42](../decisions/BACKLOG.md#b42-first-class-ring-buffers-managed-by-the-compiler)
+tracks the request. Design and scheduling remain open.
+
 This re-scopes two earlier framings and both should be aligned to match:
 
 - `compiler/MILESTONES.md` and `V0_3_0_SELF_HOSTING.md` currently state that completing the

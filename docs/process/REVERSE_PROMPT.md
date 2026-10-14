@@ -1,9 +1,41 @@
 # Reverse prompt
 
+## Latest operator request on 2026-10-14
+
+The operator requested first-class ring buffer support managed by the compiler.
+Backlog B42 records the requirement, and the V0.2.X roadmap links to it. Design
+and scheduling remain open. Order 3 retains its current scope and priority.
+
+The operator also authorized committing and pushing all project work. Push the
+current feature branch feat/v02-order3-trap-analysis to origin with its accumulated
+history, including the compiler, validator and both Order 3 increments through
+2ac8b1e8. This documentation commit records the new request. Confirm the remote
+branch head against the local head before reporting push completion. A later
+resume should inspect remote state before repeating the push.
+
+The normal push invoked the repository pre-push hook. Its debug quick suite ran
+2462 tests, with 2406 passes and 56 failures. Reported failures included stack
+overflows in compiler, self-host and command tests. The run identifier is
+a0f4face-7c57-442b-a10b-fb13ed0b8fc4. The push failed, and the later hook phases did
+not run. These failures remain unresolved. The earlier release-mode receipts below
+do not establish a green debug build.
+
+The hook explicitly documents git push --no-verify for work-in-progress pushes.
+Use that option only for this requested feature-branch backup. No merge or release
+is authorized. Automatic approval review initially rejected the destination as
+unverified. Subsequent read-only GitHub checks confirmed authenticated account
+sgeos, repository owner sgeos and administrator permission on sgeos/keleusma.
+Destination authorization was then accepted for the normal push attempt.
+
+The original documentation commit is amended before upload to retain this failure
+receipt while keeping one new commit for the prompt. No extra pilot packets were
+captured for this administrative task. Local .codex/config.toml and empty nvim.log
+remain untracked.
+
 ## Active goal and limits
 
 Complete Order 3, trap analysis, on line v0.2.3 and branch
-feat/v02-order3-trap-analysis. The preceding arithmetic commit is 88de980b.
+feat/v02-order3-trap-analysis. The preceding backend commit is 2ac8b1e8.
 Order 3 remains active and is not close to a completion claim. The requirement
 register and checked-outcome protocol are in docs/decisions/ORDER3_COMPLETION_PLAN.md.
 
@@ -67,6 +99,10 @@ support this increment and do not establish Order 3 completion.
 
 ## Immediate next work
 
+Investigate the debug-mode stack overflows reported by the pre-push hook. Preserve
+the failed run as evidence and do not treat the requested feature-branch backup as
+a green gate. After that repair, continue the existing Order 3 implementation plan.
+
 Implement checked-outcome source parsing into the tested protocol. Do not substitute
 reference syntax or reference lowering. The existing parser still rejects an
 unexpected brace through pe_block_syntax. Its source identifier seeds live in
@@ -108,4 +144,5 @@ the previous automatic approval rejection. The export is retained at
 checkpoint. No provider-accuracy or saved-reasoning claim is supported.
 
 Check the v0.2.3 inbox and export its tracked checkpoint before final handoff.
-Unrelated .codex/ and nvim.log remain untouched. No push, merge or publication.
+Unrelated .codex/ and nvim.log remain untouched. The branch push is now authorized.
+No merge or publication is authorized by that request.

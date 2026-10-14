@@ -6,6 +6,23 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-14 Ring-buffer request and branch push
+
+Recorded the operator's request for first-class ring buffer support managed by
+the compiler as B42 in BACKLOG.md and linked it from the V0.2.X roadmap. Design
+and scheduling remain open. Order 3 continues under its existing requirement register.
+
+The operator requested committing and pushing all project work. The feature branch
+feat/v02-order3-trap-analysis carries the accumulated compiler, validator and trap
+analysis commits. This documentation commit is included in the requested push.
+Local .codex/config.toml and the empty nvim.log are unrelated local files and remain
+untracked. The normal push ran the automatic debug quick suite. It passed 2406 tests
+and failed 56, including stack-overflow aborts. The push failed before upload, and
+later hook checks did not run. REVERSE_PROMPT.md records the run and makes the debug
+failures the next investigation. The requested feature-branch backup uses the hook's
+documented work-in-progress option. This is not a green gate or a merge or release.
+The note commit is amended before upload to include the failed-check receipt.
+
 ## 2026-10-13 Conditional frames and checked-outcome backend
 
 The parser now retains enclosing operators while a conditional operand is parsed.
