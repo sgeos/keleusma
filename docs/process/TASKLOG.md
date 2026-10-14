@@ -6,6 +6,40 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-13 Order 3 arithmetic increment and fixed release identifiers
+
+The operator declined a bytecode-version advance. BYTECODE_VERSION remains 2 and
+FORMAT_FINGERPRINT remains 0x4327_63E1 throughout V0.2.3-WIP. The fingerprint already
+uses a reserved auxiliary-header word and changes only at publication. V0.2.2 remains
+the last published release. The earlier version 3 proposal is withdrawn.
+
+Both compilers now lower bare Word and Byte division and modulo through checked
+operations and an explicit zero-divisor Trap. Rust removes unreachable zero-divisor
+fallbacks when nondivision arithmetic or an unguarded catch-all handler covers the
+case. Guarded and literal patterns retain the fallback. CheckedDiv now wraps at the
+module-declared width on a wider runtime. Debugger locations remain exact.
+
+Regression testing exposed lost Float and Fixed operator acceptance. A scalar-kind
+channel from parser to code generation preserves the existing noninteger paths.
+The parser's inline right-operand conditional ordering defect was also exposed. The
+new helper uses an accepted local-binding formulation, and the broader syntax case
+is recorded in docs/decisions/ORDER3_COMPLETION_PLAN.md as unresolved.
+
+The initial full self-host run passed 3033 tests and failed four, with two skips.
+After repairs, all 384 affected tests and all 329 no-default tests pass. The affected
+set includes all fourteen complete stage artifacts, stage resource admission,
+compiler, wire, arithmetic and instruction-contract controls. Fresh workspace
+Clippy, the detached compiler build and formatting pass. The final full self-host
+suite, three other feature configurations and release gates remain unexecuted.
+
+The expanded seventeen-case census finds only bounds faults without Trap in its
+source corpus. Legacy integer Div and Mod remain partial in hand-built bytecode.
+Order 3 remains active. Checked-outcome syntax in Keleusma, total bounds contracts,
+matching classifications, host policy and proof-gated execution remain required.
+Public instruction count stays 66, selected type capacities 640 and depth limit 32.
+The measured parser wire pool is 985 names and 28367 blob bytes with existing caps.
+No push, merge, publication or peer message occurred.
+
 ## 2026-10-13 Order 2 complete for the first-pass validator
 
 The full validator milestone is complete. Structural, typed, text-allocation and

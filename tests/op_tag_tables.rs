@@ -46,9 +46,9 @@ const DRIVER: &str = include_str!("../src/selfhost/mod.rs");
 const ORACLE: &str = include_str!("selfhost_codegen.rs");
 
 /// The number of op tags the stage assigns. Not a free parameter: the driver's own
-/// `all_wire_op_tags_decode` sweeps `1..=63` and its documentation says to extend the bound when
-/// codegen first assigns a tag at or above 64. A change here must move that sweep too.
-const ASSIGNED_TAGS: i64 = 63;
+/// `all_wire_op_tags_decode` sweeps `1..=65`. Tags 64 and 65 transport existing
+/// CheckedDiv and CheckedMod instructions. A change here must move that sweep too.
+const ASSIGNED_TAGS: i64 = 65;
 
 // ---------------------------------------------------------------------------
 // Extraction. Brace depth throughout; see the module header for why.
@@ -267,6 +267,8 @@ const NAME_CORRESPONDENCE: &[(&str, &str)] = &[
     ("checkedsub", "CheckedSub"),
     ("divop", "Div"),
     ("modop", "Mod"),
+    ("checkeddiv", "CheckedDiv"),
+    ("checkedmod", "CheckedMod"),
     ("cmpeq", "CmpEq"),
     ("cmpne", "CmpNe"),
     ("cmplt", "CmpLt"),
@@ -358,7 +360,7 @@ fn the_stage_tag_table_assigns_each_number_once_and_leaves_no_gap() {
         table.len() as i64,
         ASSIGNED_TAGS,
         "the number of assigned op tags moved. The driver's `all_wire_op_tags_decode` sweeps \
-         1..=63 and its own documentation says to extend that bound when codegen first assigns \
+         1..=65 and its own documentation says to extend that bound when codegen first assigns \
          a tag at or above 64; move both together."
     );
 }
@@ -478,7 +480,7 @@ fn the_name_correspondence_is_total_over_the_stage_table() {
 // set that lacks the feature, which is how four continuous-integration jobs went red last session.
 // ---------------------------------------------------------------------------
 
-/// The twelve stage sources, all covered by the byte-identity corpus.
+/// The fourteen stage sources, all covered by the byte-identity corpus.
 const STAGE_SOURCES: &[(&str, &str)] = &[
     ("analyze", include_str!("../src/selfhost/kel/analyze.kel")),
     ("codegen", include_str!("../src/selfhost/kel/codegen.kel")),
@@ -536,11 +538,11 @@ fn corpus_stages() -> Vec<&'static str> {
         .collect()
 }
 
-/// **THE STAGE CORPUS CANNOT SEE A TRANSPOSITION AMONG FIFTEEN OF THE SIXTY-THREE TAGS.**
+/// **THE STAGE CORPUS CANNOT SEE A TRANSPOSITION AMONG SEVENTEEN OF THE SIXTY-FIVE TAGS.**
 ///
-/// The byte-identity oracle compiles twelve stage sources and compares bytes, so it checks a tag
-/// only if some stage emits it. Fifteen tags decode to operations that appear **nowhere** in any
-/// of the twelve — the entire composite family, the unchecked arithmetic. For
+/// The byte-identity oracle compiles fourteen stage sources and compares bytes, so it checks a tag
+/// only if some stage emits it. Seventeen tags decode to operations that appear **nowhere** in any
+/// of the fourteen — the entire composite family, the unchecked arithmetic. For
 /// those, a transposition in the emitter produces no byte difference to detect, and this is the
 /// project's standing lesson in a new costume: **anything the corpus does not contain is
 /// unverified by construction.**
@@ -549,15 +551,15 @@ fn corpus_stages() -> Vec<&'static str> {
 /// tests in `tests/selfhost_codegen.rs` compile struct constructions, array indexing, enum
 /// payloads and tuple fields through the self-hosted compiler, so the composite family is not
 /// unchecked in general. That is a **different population**, this test does not measure it, and
-/// reading this as "fifteen tags are unchecked" would overstate it.
+/// reading this as "seventeen tags are unchecked" would overstate it.
 ///
 /// The direction of the assertion is the useful one: a tag LEAVING this list means the stage
 /// corpus grew to cover it, which is a gain and should be recorded rather than absorbed silently.
 ///
 /// **A SECOND POPULATION NOW ANSWERS PART OF THAT CAVEAT.**
 /// `the_shipped_examples_narrow_the_unexercised_tags_and_the_residue_is_named` measures the
-/// shipped example corpus and finds it covers TWELVE of these sixteen — the whole composite
-/// family. Four remain unreached by either corpus. The per-construct tests are still a third
+/// shipped example corpus and finds it covers TWELVE of these seventeen — the whole composite
+/// family. Five remain unreached by either corpus. The per-construct tests are still a third
 /// population and still unmeasured, and saying so remains accurate.
 #[test]
 #[cfg(feature = "compile")]
@@ -644,11 +646,15 @@ fn the_stage_corpus_names_every_unexercised_op_tag() {
     );
 }
 
-/// The tags no stage source exercises, measured 2026-10-04 over the twelve-stage corpus.
+/// The tags no stage source exercises, measured 2026-10-13 over the fourteen-stage corpus.
 ///
 /// Not a design choice — a measurement, and the reason it is written out rather than counted is
 /// that the NAMES are the deliverable. They are where a transposition would hide from the oracle.
 const EXPECTED_UNEXERCISED: &[&str] = &[
+    // Bare first-pass division now uses CheckedDiv/CheckedMod. These legacy
+    // polymorphic forms remain valid transport tags but leave the stage corpus.
+    "divop",
+    "modop",
     "addop",
     "getenumfield",
     "getenumfieldnested",
@@ -669,7 +675,7 @@ const EXPECTED_UNEXERCISED: &[&str] = &[
 /// **A SECOND POPULATION, BECAUSE THE FIRST CENSUS NAMED A LIMIT IT DID NOT MEASURE.**
 ///
 /// `the_stage_corpus_names_every_unexercised_op_tag` reports which tags the
-/// twelve-stage byte-identity corpus cannot check, and says in its own words that the
+/// fourteen-stage byte-identity corpus cannot check, and says in its own words that the
 /// per-construct tests are "a different population, this test does not measure it". **That
 /// caveat was honest and it left the interesting question open.**
 ///
@@ -847,13 +853,11 @@ const CENSUS_EXAMPLES: &[&str] = &[
     "15_pixel_blend.kel",
 ];
 
-/// Of the sixteen tags no stage source reaches, the four the shipped examples miss too.
-///
-/// Measured 2026-10-04. The named examples remove twelve of the fifteen
-/// stage-corpus gaps. The combined residue is unchecked Byte arithmetic.
-/// CheckedNeg is now reached by the stage corpus itself. Per-construct tests
-/// provide a third population and are not measured by this constant.
-const SHIPPED_EXAMPLES_ALSO_MISS: &[&str] = &["addop", "mulop", "subop"];
+/// Of the seventeen tags no stage source reaches, five also remain absent
+/// from the named examples. Measured 2026-10-13. These are unchecked Byte
+/// arithmetic and legacy division/modulo. The boundary corpus covers the
+/// Byte arithmetic, and spec_trap_claims executes legacy division directly.
+const SHIPPED_EXAMPLES_ALSO_MISS: &[&str] = &["addop", "divop", "modop", "mulop", "subop"];
 
 /// **`Op::Neg` IS OUTSIDE THE SELF-HOSTED SUBSET, WHICH IS STRONGER THAN BEING UNTAGGED.**
 ///

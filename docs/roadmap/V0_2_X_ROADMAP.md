@@ -200,13 +200,26 @@ that contains a `Trap` opcode, unless the host opts into trap-permitting executi
 proven-trap-free module can additionally run in a no-check mode, because a total opcode needs
 no runtime guard.
 
-**Scope of the change.** This is a `BYTECODE_VERSION`-bumping ISA change touching the
+**Scope of the change.** This is an instruction-set change within V0.2.3-WIP touching the
 instruction set (`bytecode.rs`), the lowering (`compiler.rs` and, in the self-hosted line,
 `codegen.kel`), the VM (`vm.rs`, which becomes simpler because only `Trap` can fault), and
 the validator (`verify.rs` and the self-hosted `analyze.kel`, which gain a trivial scan). It
 supersedes the interval-and-refinement approach that was previously sketched here. It also
 aligns with the flat-machine ISA direction and with the native partial-operation lowering
-planned for V0.4.0 (B35 P8).
+planned for V0.4.0 (B35 P8). The operator reaffirmed on 2026-10-13 that
+`BYTECODE_VERSION` remains 2 and `FORMAT_FINGERPRINT` remains unchanged during
+V0.2.3-WIP. The fingerprint rolls only upon publication of a new version.
+V0.2.2 remains the last published release.
+
+**Arithmetic increment, 2026-10-13.** Bare Word and Byte division and modulo now
+use checked operations followed by an explicit zero-divisor Trap in both compilers.
+The expanded census finds only bounds faults without Trap. Legacy integer Div and
+Mod still fault in hand-built bytecode. Checked-outcome syntax in the Keleusma
+compiler, total bounds contracts, the classification and proof-gated execution remain
+unfinished. The full requirement register is
+[Order 3 completion plan](../decisions/ORDER3_COMPLETION_PLAN.md).
+
+The historical baseline below records the obligation before this increment.
 
 **THE OBLIGATION IS MEASURED, 2026-09-18, and it is smaller than this section's list
 implies.** `tests/runtime_fault_census.rs` executes every partial operation enumerated
@@ -248,8 +261,8 @@ instruction-set specification, since no test could be executed that day.
 carrying the numerator rather than trapping. `TrapKind::ZeroDivisor` exists, and
 `compile_checked` already emits the flag-guarded `Trap` for an outcome class the source
 leaves unhandled — which is precisely the lowering this design describes, already
-implemented, for the arm form. What faults today is the BARE operator, which the
-specification routes to `Op::Div` and `Op::Mod`, and those two rows say plainly that
+implemented, for the arm form. At that baseline the BARE operator faulted, and the
+specification routed it to `Op::Div` and `Op::Mod`, and those two rows say plainly that
 they trap on divide-by-zero. So the work for this family is routing the bare `/` and
 `%` on `Int` through the checked family and the guarded trap, using machinery that
 already exists end to end. **Its size is not claimed here, because it was not

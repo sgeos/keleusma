@@ -7031,32 +7031,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             crate::bytecode::GenericValue::Int(x),
                             crate::bytecode::GenericValue::Int(y),
                         ) => {
-                            // Only `i64::MIN / -1` overflows. The
-                            // true result is `2^63`, which in i128
-                            // is (high=0, low=i64::MIN). All other
-                            // divisions fit in `Word`; the wrapped
-                            // quotient becomes the low slot and the
-                            // high slot is zero.
+                            // Classify at the module's declared width, including
+                            // a narrow module running on a wider host Word.
                             let r = x.widen() / y.widen();
-                            let high = <W as crate::word::Word>::from_wide_wrap(r.high_half());
-                            let low = <W as crate::word::Word>::from_wide_wrap(r);
-                            let flag: i64 = if r >= <W as crate::word::Word>::MIN.widen()
-                                && r <= <W as crate::word::Word>::MAX.widen()
-                            {
-                                0
-                            } else if r > <W as crate::word::Word>::MAX.widen() {
-                                1
-                            } else {
-                                2
-                            };
+                            let (low, high, flag) =
+                                checked_arith_outputs::<W>(r, self.word_bits_log2());
                             sp!(self, crate::bytecode::GenericValue::Int(low));
                             sp!(self, crate::bytecode::GenericValue::Int(high));
-                            sp!(
-                                self,
-                                crate::bytecode::GenericValue::Int(
-                                    <W as crate::word::Word>::from_i64_wrap(flag)
-                                )
-                            );
+                            sp!(self, crate::bytecode::GenericValue::Int(flag));
                         }
                         (
                             crate::bytecode::GenericValue::Byte(x),
@@ -7922,7 +7904,7 @@ mod tests {
     #[test]
     fn fault_location_records_trapping_op_and_maps_to_source() {
         // A division by a runtime zero traps inside a `let` statement;
-        // the VM records the faulting op (the Div), which now carries an
+        // the VM records the faulting Trap, which carries an
         // exact SourceSpan at the operator site (B29 items 2/3), so the
         // fault resolves exactly to the division sub-expression.
         let module = compile_debug("fn main(d: Word) -> Word { let x = 1 / d; x }");
@@ -7939,7 +7921,7 @@ mod tests {
             .expect("the fault maps to the division sub-expression");
         assert!(
             src.exact,
-            "the Div op carries an exact operator-site SourceSpan"
+            "the Trap carries an exact operator-site SourceSpan"
         );
     }
 

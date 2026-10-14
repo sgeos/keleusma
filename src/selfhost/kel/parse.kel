@@ -594,6 +594,7 @@ private data ops {
     // the operator is pushed. `emit_op` reads it (at the popped slot) to detect a Byte-operand
     // bitwise op. A marker slot's entry is unused (markers are never Byte bitwise ops).
     op_lbyte: [Word; 65],
+    op_lscalar: [Word; 65],
     // Parallel to `opstack`: the LEFT operand's struct type (plus one) of each pending operator, so
     // `emit_op(Eq)` can detect a `struct == struct` comparison (both operands whole structs).
     op_lstruct: [Word; 65],
@@ -4362,6 +4363,16 @@ fn andor_record(is_or: Word) -> Word {
     68
 }
 
+// Preserve the existing polymorphic Float division/remainder and Fixed remainder
+// paths. A high scalar-kind lane on the BinOp argument selects them in codegen.
+// Word and Byte retain the untagged checked-operation plus explicit-trap path.
+fn division_record(op: Word) -> Word {
+    let scalar = ops.op_lscalar[ops.opsp];
+    let legacy = scalar == 5 orelse (scalar == 4 andalso op == OpCode::Mod() as Word);
+    let offset = if legacy { scalar * 64 } else { 0 };
+    Node::BinOp() as Word + (op + offset) * 64
+}
+
 fn emit_op(op: Word) -> Word {
     // Any operator applied to a `let` value's operand means the value's root is not a bare
     // composite construction, so clear the pending composite-type tracking (see `stmt`).
@@ -4458,6 +4469,8 @@ fn emit_op(op: Word) -> Word {
             // Preserve xor's operand restriction for type extraction. Code generation maps
             // its operator tag to the same CmpNe instruction as inequality.
             OpCode::Xor() => Node::BinOp() as Word + op * 64,
+            OpCode::Div() => division_record(op),
+            OpCode::Mod() => division_record(op),
             _ => Node::BinOp() as Word + op * 64,
         }
     } } } } } } } } } } } }
@@ -4502,6 +4515,7 @@ fn step_resolving() -> Word {
         // detect a Byte bitwise op or a `struct == struct` when this operator later folds (it reads
         // `op_lbyte`/`op_lstruct` at the popped slot).
         ops.op_lbyte[ops.opsp] = ps.last_byte;
+        ops.op_lscalar[ops.opsp] = if vl.form == 0 { vl.scalar } else { 0 - 1 };
         ops.op_lstruct[ops.opsp] = ps.last_struct;
         ops.op_lenum[ops.opsp] = ps.last_enum;
         ops.op_ltuple[ops.opsp] = ps.last_tuple;
@@ -4738,7 +4752,7 @@ fn value_record(word: Word) -> Word {
         vl.form = 3; vl.decl = ps.fa_fstruct; vl.bytes = (arg / 65536) % 65536;
     }
     if kind == 2 { value_local(arg); }
-    if kind == 3 { value_scalar(if (arg >= 6 andalso arg <= 11) orelse arg == 33 { 1 } else { 3 }); }
+    if kind == 3 { value_scalar(if arg >= 64 { arg / 64 } else { if (arg >= 6 andalso arg <= 11) orelse arg == 33 { 1 } else { 3 } }); }
     if kind == 6 orelse kind == 8 orelse kind == 9 orelse kind == 68 { value_scalar(1); }
     if kind == 47 orelse kind == 50 orelse kind == 53 orelse kind == 58 orelse kind == 61 orelse kind == 63 { value_scalar(1); }
     if kind == 10 orelse kind == 45 orelse kind == 65 { value_scalar(3); }

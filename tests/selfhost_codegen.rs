@@ -872,6 +872,8 @@ fn decode_op(w: i64) -> Op {
         61 => Op::Mul,
         62 => Op::Shl,
         63 => Op::Shr,
+        64 => Op::CheckedDiv(operand as u8),
+        65 => Op::CheckedMod,
         // A flat struct construction: the operand packs count + byte_size*65536.
         46 => Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Struct,
@@ -9538,7 +9540,7 @@ fn the_test_drivers_category_mapping_agrees_with_the_library() {
 /// silently discarding inputs is how a census comes to describe a smaller population than it
 /// names. `RefRejects` cases are expected to refuse and are excluded by their own label.
 #[test]
-fn the_boundary_table_reaches_all_corpus_gaps_and_checked_negation() {
+fn the_boundary_table_reaches_byte_arithmetic_gaps_and_checked_negation() {
     use std::collections::BTreeSet;
 
     // The `Op` variants the three residual stage tags decode to. Named here rather than derived,
@@ -9609,8 +9611,8 @@ fn the_boundary_table_reaches_all_corpus_gaps_and_checked_negation() {
     got.sort_unstable();
     assert_eq!(
         got, want,
-        "the boundary table no longer reaches every operation the other two corpora miss. It \
-         reached all four once `scalar/byte_sub_mul` and `scalar/word_unary_neg` were added; a \
+        "the boundary table no longer reaches the Byte arithmetic operations the other two corpora miss. It \
+         reached the earlier four-operation population once `scalar/byte_sub_mul` and `scalar/word_unary_neg` were added; a \
          NARROWER set means one of those cases has left the table or stopped compiling, and the \
          residue claim in `tests/op_tag_tables.rs` is stale in the unsafe direction."
     );
@@ -9645,7 +9647,7 @@ fn the_boundary_table_reaches_all_corpus_gaps_and_checked_negation() {
     );
 }
 
-/// Keep the three residual tag names aligned with the census source. The
+/// Keep the five residual tag names aligned with the census source. The
 /// boundary corpus independently retains its additional checked-negation witness.
 #[test]
 fn the_residue_named_here_matches_the_census_file() {
@@ -9656,7 +9658,7 @@ fn the_residue_named_here_matches_the_census_file() {
         .find(|l| l.contains("const SHIPPED_EXAMPLES_ALSO_MISS"))
         .expect("the census file declares the residue it measured");
 
-    for tag in ["addop", "subop", "mulop"] {
+    for tag in ["addop", "divop", "modop", "subop", "mulop"] {
         assert!(
             line.contains(tag),
             "the census file no longer lists `{tag}` among the tags the stage and named examples miss: {line}. \
@@ -9665,9 +9667,9 @@ fn the_residue_named_here_matches_the_census_file() {
     }
     assert_eq!(
         line.matches('"').count(),
-        6,
-        "the census residue is no longer exactly three tags: {line}. The test above enumerates \
-         three operations and would be silent about any fourth."
+        10,
+        "the census residue is no longer exactly five tags: {line}. Byte arithmetic is \
+         exercised by the boundary corpus; legacy division has direct instruction fixtures."
     );
 }
 

@@ -490,6 +490,8 @@ fn decode_op(w: i64) -> Op {
         61 => Op::Mul,
         62 => Op::Shl,
         63 => Op::Shr,
+        64 => Op::CheckedDiv(operand as u8),
+        65 => Op::CheckedMod,
         // A flat struct construction: the operand packs count + byte_size*65536.
         46 => Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Struct,
@@ -9194,19 +9196,17 @@ fn describe_divergence(module: &Module, reference: &Module) -> String {
 mod decoder_drift_guard {
     use super::decode_op;
 
-    /// Every op tag the codegen can emit -- currently `1..=63` (the `wire` const
-    /// block in `kel/codegen.kel` assigns ops 1..=63 with no gap) -- must decode without hitting the
+    /// Every op tag the codegen can emit -- currently `1..=65` (the `wire` const
+    /// block in `kel/codegen.kel` assigns ops 1..=65 with no gap) -- must decode without hitting the
     /// `unknown op tag` catch-all. This is the FAST guard against decoder DRIFT: an op added to the
     /// codegen wire set but not to `decode_op` above fails this test in microseconds, rather than only
     /// surfacing in a ~40-second stage self-compile. It is the standing regression for the
     /// `unknown op tag 62` defect, which rode into the `v0.2.3` release line undetected because the
     /// subproject decoder had fallen behind the emitted op set and nothing gated the subproject.
     ///
-    /// Since P11 Option E widened the op-word radix to 8 bits (`tag + operand*256`), a tag >= 64 is now
-    /// REPRESENTABLE, but the codegen still assigns only `1..=63`, so the sweep matches the emitted set;
-    /// extend the upper bound here when codegen first assigns an op tag >= 64. A future GAP in the
-    /// assigned set would make this test slightly over-strict, which fails safe (it prompts a look
-    /// rather than letting an undecoded op ship).
+    /// P11 Option E's eight-bit radix admits the new transport tags 64 and 65
+    /// for existing CheckedDiv and CheckedMod instructions. These are internal
+    /// transport identifiers, not additional public instructions.
     ///
     /// # WHAT THIS TEST DOES NOT CHECK, RAISED BY THE `v0.3.0` LINE
     ///
@@ -9226,7 +9226,7 @@ mod decoder_drift_guard {
     /// defect could hide from the byte-identity oracle.
     #[test]
     fn all_wire_op_tags_decode() {
-        for tag in 1..=63i64 {
+        for tag in 1..=65i64 {
             // operand 0 is the minimal representative word for each tag; decode must not panic.
             let _ = decode_op(tag);
         }

@@ -9227,18 +9227,28 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 BinOp::Div => {
                     if let Some(n) = left_fixed_n {
                         fc.emit(Op::FixedDiv(n));
+                        fc.record_operator_site(span);
+                    } else if left_is_int
+                        || matches!(&operand_ty, Some(TypeExpr::Prim(PrimType::Byte, _)))
+                    {
+                        fc.emit(Op::CheckedDiv(0));
+                        fc.record_operator_site(span);
+                        emit_bare_zero_divisor_guard(fc, span);
                     } else {
                         fc.emit(Op::Div);
+                        fc.record_operator_site(span);
                     }
-                    // Division can trap on a zero divisor; record the
-                    // operator site so the fault resolves exactly here
-                    // (B29 items 2 and 3).
-                    fc.record_operator_site(span);
                 }
                 BinOp::Mod => {
-                    fc.emit(Op::Mod);
-                    // Modulo by zero traps; record the operator site.
-                    fc.record_operator_site(span);
+                    if left_is_int || matches!(&operand_ty, Some(TypeExpr::Prim(PrimType::Byte, _)))
+                    {
+                        fc.emit(Op::CheckedMod);
+                        fc.record_operator_site(span);
+                        emit_bare_zero_divisor_guard(fc, span);
+                    } else {
+                        fc.emit(Op::Mod);
+                        fc.record_operator_site(span);
+                    }
                 }
                 BinOp::Eq | BinOp::NotEq => {
                     // A float-bearing composite must compare field-wise so the
@@ -10134,6 +10144,20 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
     Ok(())
 }
 
+// Checked division leaves low, high and flag. Only a zero divisor traps;
+// overflow continues with the same wrapping low result as the bare operator.
+fn emit_bare_zero_divisor_guard(fc: &mut FuncCompiler, span: &Span) {
+    let zero_flag = fc.add_constant(Value::Int(3));
+    fc.emit(Op::Const(zero_flag));
+    fc.emit(Op::CmpEq);
+    let skip_trap = fc.emit_jump(Op::If(0));
+    fc.emit(Op::Trap(crate::bytecode::TrapKind::ZeroDivisor.code()));
+    fc.record_operator_site(span);
+    fc.patch_jump(skip_trap);
+    fc.emit(Op::EndIf);
+    fc.emit(Op::PopN(1));
+}
+
 /// Compile an overflow-checked construct.
 ///
 /// Surface form: `op_expr { ok(p) => body, overflow(ph, pl) =>
@@ -10143,8 +10167,8 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
 ///
 /// Lowering shape:
 /// 1. Emit the operands and the checked opcode (`CheckedAdd`,
-///    `CheckedSub`, `CheckedMul`, `CheckedNeg`, or `Div`/`Mod`
-///    with stamped overflow contract). The stack carries
+///    `CheckedSub`, `CheckedMul`, `CheckedNeg`, `CheckedDiv`, or
+///    `CheckedMod`). The stack carries
 ///    `[low, high, flag]` after the opcode, bottom to top. Note
 ///    that this is the reverse of the arm binding order: the
 ///    surface form `overflow(h, l)` binds high first.
@@ -10156,9 +10180,8 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
 ///    `underflow`), then literal-pattern equality checks against
 ///    `high_slot` / `low_slot`, then optional guard evaluation,
 ///    then bind variable patterns and compile the body.
-/// 5. After the last arm, emit a `Trap` for the unreachable case
-///    where no catch-all matched (defense-in-depth; the type
-///    checker rejects non-exhaustive constructs).
+/// 5. After the last arm, trap only for an uncovered zero-divisor
+///    outcome. Other unhandled outcomes use the wrapping low result.
 fn compile_checked(
     fc: &mut FuncCompiler,
     op_expr: &Expr,
@@ -10485,14 +10508,34 @@ fn compile_checked(
     // result for `overflow` and `underflow`, so pushing it is the
     // wrapping default for the optional `overflow` and `underflow`
     // classes.
-    fc.emit(Op::GetLocal(flag_slot));
-    let three_idx = fc.add_constant(Value::Int(3));
-    fc.emit(Op::Const(three_idx));
-    fc.emit(Op::CmpEq);
-    let not_zero_divisor = fc.emit_jump(Op::If(0));
-    fc.emit(Op::Trap(crate::bytecode::TrapKind::ZeroDivisor.code()));
-    fc.patch_jump(not_zero_divisor);
-    fc.emit(Op::EndIf);
+    // Only division and modulo can produce flag 3. An unguarded
+    // variable or wildcard covers that class for every numerator.
+    // Guards and literal patterns leave the zero-divisor fallback live.
+    let may_divide_by_zero = matches!(
+        op_expr,
+        Expr::BinOp {
+            op: BinOp::Div | BinOp::Mod,
+            ..
+        }
+    );
+    let zero_divisor_covered = arms.iter().any(|arm| {
+        arm.guard.is_none()
+            && matches!(
+                &arm.kind,
+                CheckedArmKind::ZeroDivisor(Pattern::Variable(..) | Pattern::Wildcard(_))
+            )
+    });
+    if may_divide_by_zero && !zero_divisor_covered {
+        fc.emit(Op::GetLocal(flag_slot));
+        let three_idx = fc.add_constant(Value::Int(3));
+        fc.emit(Op::Const(three_idx));
+        fc.emit(Op::CmpEq);
+        let not_zero_divisor = fc.emit_jump(Op::If(0));
+        fc.emit(Op::Trap(crate::bytecode::TrapKind::ZeroDivisor.code()));
+        fc.record_operator_site(span);
+        fc.patch_jump(not_zero_divisor);
+        fc.emit(Op::EndIf);
+    }
 
     fc.emit(Op::GetLocal(low_slot));
     let default_break = fc.emit(Op::Break(0));
@@ -12381,28 +12424,33 @@ mod tests {
 
     #[test]
     fn debug_emission_records_operator_site_at_division() {
-        // A division emits a SourceSpan and a BreakpointCandidate at the
-        // Div op (B29 items 2/3), so a zero-divisor fault resolves
-        // exactly and a debugger can break before the division.
-        use crate::bytecode::Op;
+        // Preserve a breakpoint before arithmetic and an exact fault span
+        // at the separately emitted zero-divisor Trap.
+        use crate::bytecode::{Op, TrapKind};
         use crate::debug_meta::DebugRecordKind;
-        let module = compile_str_debug("fn main(d: Word) -> Word { let x = 1 / d; x }");
-        let chunk = &module.chunks[0];
-        let div_op = chunk
-            .ops
-            .iter()
-            .position(|op| matches!(op, Op::Div))
-            .expect("a Div op") as u32;
-        let pool = chunk.debug_pool.as_ref().expect("debug pool present");
-        let kinds: alloc::vec::Vec<_> = pool.records_at(div_op).map(|r| r.kind).collect();
-        assert!(
-            kinds.contains(&DebugRecordKind::SourceSpan),
-            "the Div op has an exact SourceSpan, found {kinds:?}"
-        );
-        assert!(
-            kinds.contains(&DebugRecordKind::BreakpointCandidate),
-            "the Div op is an operator-level breakpoint candidate"
-        );
+        for operator in ["/", "%"] {
+            let module = compile_str_debug(&alloc::format!(
+                "fn main(d: Word) -> Word {{ let x = 1 {operator} d; x }}"
+            ));
+            let chunk = &module.chunks[0];
+            let arithmetic = chunk
+                .ops
+                .iter()
+                .position(|op| matches!(op, Op::CheckedDiv(0) | Op::CheckedMod))
+                .expect("checked arithmetic");
+            let trap = chunk
+                .ops
+                .iter()
+                .position(|op| matches!(op, Op::Trap(k) if *k == TrapKind::ZeroDivisor.code()))
+                .expect("explicit zero-divisor trap");
+            let pool = chunk.debug_pool.as_ref().expect("debug pool present");
+            for position in [arithmetic, trap] {
+                let kinds: alloc::vec::Vec<_> =
+                    pool.records_at(position as u32).map(|r| r.kind).collect();
+                assert!(kinds.contains(&DebugRecordKind::SourceSpan));
+                assert!(kinds.contains(&DebugRecordKind::BreakpointCandidate));
+            }
+        }
     }
 
     #[test]

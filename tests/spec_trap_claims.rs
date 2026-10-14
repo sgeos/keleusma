@@ -48,7 +48,7 @@
 extern crate alloc;
 
 use keleusma::Arena;
-use keleusma::bytecode::{Module, Op};
+use keleusma::bytecode::{ConstValue, Module, Op, Value};
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
@@ -85,94 +85,67 @@ fn run(what: &str, m: Module) -> Result<VmState, VmError> {
     vm.call(&[])
 }
 
-/// `Div` and `Mod` trap on a zero divisor, as their rows say.
+/// Build a straight-line opcode fixture independently of surface lowering.
+/// Both division contracts remain executable even though bare source operators
+/// now select the checked family and an explicit Trap.
+fn division_fixture(operation: Op, divisor: i64, discard_outcome: bool) -> Module {
+    let mut module = compiled("fn main() -> Word { 7 }");
+    let chunk = &mut module.chunks[0];
+    chunk.constants = alloc::vec![ConstValue::Int(7), ConstValue::Int(divisor)];
+    chunk.ops = alloc::vec![Op::Const(0), Op::Const(1), operation];
+    if discard_outcome {
+        chunk.ops.push(Op::PopN(2));
+    }
+    chunk.ops.push(Op::Return);
+    module
+}
+
+/// `Div` and `Mod` still trap on zero in hand-built bytecode.
 #[test]
 fn the_plain_divide_and_modulo_trap_on_a_zero_divisor_as_the_spec_says() {
-    for (what, src, wanted) in [
-        ("Div", "fn main() -> Word { let z = 0; 7 / z }", Op::Div),
-        ("Mod", "fn main() -> Word { let z = 0; 7 % z }", Op::Mod),
-    ] {
-        let m = compiled(src);
-        assert!(
-            ops(&m).contains(&wanted),
-            "{what}: the program does not emit {wanted:?}, so this case tests nothing. \
-             The lowering changed and this file's population needs re-deriving."
-        );
-        let r = run(what, m);
-        assert!(
-            matches!(r, Err(VmError::DivisionByZero)),
-            "{what}: the spec row says it traps on divide-by-zero; got {r:?}"
-        );
+    for operation in [Op::Div, Op::Mod] {
+        let module = division_fixture(operation, 0, false);
+        assert!(ops(&module).contains(&operation));
+        assert!(matches!(
+            run("legacy division", module),
+            Err(VmError::DivisionByZero)
+        ));
+        assert!(matches!(
+            run(
+                "valid legacy division",
+                division_fixture(operation, 2, false)
+            ),
+            Ok(VmState::Finished(Value::Int(_)))
+        ));
     }
 }
 
-/// `CheckedDiv` and `CheckedMod` reify a zero divisor rather than trapping.
-///
-/// The surface `/` lowers to `Op::Div`, so a source-level program cannot reach
-/// the checked opcodes without the arm construct. The module is therefore
-/// patched: `Div` is replaced by the two-instruction sequence the
-/// specification itself describes for an uncaptured operation, `CheckedDiv`
-/// followed by `PopN(2)`, which discards the flag and the high half and leaves
-/// the low half. That substitution is stack-neutral, so the surrounding chunk
-/// stays well formed, and the program contains no jump whose target the extra
-/// instruction would move.
-///
-/// If the reified behaviour were a trap, this would fault. It must not.
+/// Discarding an explicit outcome must leave the numerator on zero and the
+/// quotient or remainder otherwise. Verification and execution must succeed.
 #[test]
 fn the_checked_divide_and_modulo_reify_a_zero_divisor_rather_than_trapping() {
-    for (what, src, plain, checked) in [
-        (
-            "CheckedDiv",
-            "fn main() -> Word { let z = 0; 7 / z }",
-            Op::Div,
-            Op::CheckedDiv(0),
-        ),
-        (
-            "CheckedMod",
-            "fn main() -> Word { let z = 0; 7 % z }",
-            Op::Mod,
-            Op::CheckedMod,
-        ),
-    ] {
-        let mut m = compiled(src);
-        let mut patched = false;
-        for chunk in &mut m.chunks {
-            if let Some(i) = chunk.ops.iter().position(|o| *o == plain) {
-                assert!(
-                    !chunk.ops.iter().any(|o| matches!(
-                        o,
-                        Op::If(_)
-                            | Op::Else(_)
-                            | Op::Loop(_)
-                            | Op::EndLoop(_)
-                            | Op::Break(_)
-                            | Op::BreakIf(_)
-                    )),
-                    "{what}: the fixture gained a jump, so splicing an instruction would move a \
-                     target; choose a straight-line fixture instead"
-                );
-                chunk.ops[i] = checked;
-                chunk.ops.insert(i + 1, Op::PopN(2));
-                patched = true;
-                break;
+    for (operation, valid_result) in [(Op::CheckedDiv(0), 3), (Op::CheckedMod, 1)] {
+        for (divisor, expected) in [(0, 7), (2, valid_result)] {
+            let module = division_fixture(operation, divisor, true);
+            assert!(ops(&module).contains(&operation));
+            match run("checked division", module).expect("total arithmetic executes") {
+                VmState::Finished(Value::Int(value)) => assert_eq!(value, expected),
+                other => panic!("unexpected result {other:?}"),
             }
         }
-        assert!(
-            patched,
-            "{what}: no {plain:?} to replace, so this case tests nothing"
-        );
-        assert!(
-            ops(&m).contains(&checked),
-            "{what}: the patch did not take, so this case tests nothing"
-        );
-
-        let r = run(what, m);
-        assert!(
-            !matches!(r, Err(VmError::DivisionByZero)),
-            "{what}: the spec row says a zero divisor reifies as flag 3 rather than trapping, \
-             and the implementation trapped. One of the two is wrong, and the row is the \
-             claim under test."
-        );
+        // Read flag directly. Returning consumes the top slot; leave only
+        // that result on the operand stack through a local.
+        let mut module = division_fixture(operation, 0, false);
+        let chunk = &mut module.chunks[0];
+        chunk.local_count = 1;
+        chunk.ops.pop();
+        chunk
+            .ops
+            .extend([Op::SetLocal(0), Op::PopN(2), Op::GetLocal(0), Op::Return]);
+        assert!(matches!(
+            run("zero-divisor flag", module),
+            Ok(VmState::Finished(Value::Int(3)))
+        ));
     }
 }
 

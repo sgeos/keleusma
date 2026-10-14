@@ -215,6 +215,9 @@ const data wire {
     mulop: Word = 61,
     shl: Word = 62,
     shr: Word = 63,
+    // Internal transport tags for existing public instructions. The ISA stays at 66.
+    checkeddiv: Word = 64,
+    checkedmod: Word = 65,
     // P11 Option E: the op-word radix is 8 bits (256), not 6 (64), so the wire-op TAG space is
     // 1..255 rather than 1..63. Safe as a radix widening (not two-word): the largest operand is
     // ~2^48 (GetDataIndexed's two 24-bit fields), so `tag + operand*256` stays ~2^56, well within
@@ -639,7 +642,8 @@ fn push_local(p: Word) -> Word {
 //   12 band -> BitAnd (24), 13 bor -> BitOr (25), 14 bxor -> BitXor (26), tag opc+12
 // Only the checked arithmetic operators (1, 2, 3) take the PopN.
 fn push_binop(p: Word) -> Word {
-    let opc = ast.args[p];
+    let opc = ast.args[p] % 64;
+    let legacy_division = ast.args[p] >= 64;
     if opc == 29 {
     if ast.kinds[ast.rhs[p]] == 1 {
         // ShrL (logical right shift), CONSTANT amount (the rhs is a Literal): `Shr` is arithmetic
@@ -678,8 +682,8 @@ fn push_binop(p: Word) -> Word {
         1 => wire.checkedadd,
         2 => wire.checkedmul,
         3 => wire.checkedsub,
-        4 => wire.divop,
-        5 => wire.modop,
+        4 => if legacy_division { wire.divop } else { wire.checkeddiv },
+        5 => if legacy_division { wire.modop } else { wire.checkedmod },
         12 => wire.bitand,
         13 => wire.bitor,
         14 => wire.bitxor,
@@ -690,6 +694,16 @@ fn push_binop(p: Word) -> Word {
     };
     if opc < 4 {
         push_emit(wire.popn + 2 * wire.radix);
+    }
+    if (opc == 4 orelse opc == 5) andalso not legacy_division {
+        // Forward order is checked-op, flag==3, If Trap EndIf, PopN(high).
+        // Preserve the wrapping low result for every nonzero-divisor outcome.
+        push_emit(wire.popn + wire.radix);
+        push_emit(wire.mendif);
+        push_emit(wire.trap + 5 * wire.radix);
+        push_emit(wire.mif);
+        push_emit(wire.cmpeq);
+        push_int_const(3);
     }
     push_emit(opw);
     push_visit(ast.rhs[p]);
