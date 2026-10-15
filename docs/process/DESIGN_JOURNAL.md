@@ -13,6 +13,27 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-15 Data-read relocation and verification repair
+
+The private data-read record now carries a fallback kind above two 24-bit lanes.
+Read relocation validates that kind and preserves it. Store records have no such
+lane, so their entire encoded length must be validated rather than masked. The
+old positive width of 16777216 did not fit the public indexed operand. Controls
+now accept 16777215, reject the next width, preserve the last scalar address, and
+exercise reserved kinds and recovery after refusal.
+
+Legacy test adapters omitted the new scalar kind. They now derive it from source
+data declarations. Independent parser expectations and execution controls cover
+Word, Byte and Boolean fields. An initial new private-data fixture was itself
+invalid because the block was never mutated. The corrected shared-data fixture
+supplies its storage explicitly. This failure is retained in the broad receipt.
+
+The broad run passed complete stage artifacts and resource admission, with its
+single remaining failure in that fixture. The final targeted run passed all 114
+cases after fixture repairs and added wire and source-location controls. Production
+code was unchanged between those runs. This evidence supports proceeding to the
+legacy arithmetic contracts, while the full Order 3 verification remains open.
+
 ## 2026-10-15 Indexed data-read work-in-progress backup
 
 GetDataIndexed has no element-kind operand. An explicit Word, Byte or Unit fallback

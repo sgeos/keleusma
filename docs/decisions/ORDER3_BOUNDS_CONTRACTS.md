@@ -7,11 +7,10 @@ BYTECODE_VERSION remains 2 and FORMAT_FINGERPRINT remains 0x4327_63E1. The
 public instruction count remains 66. Development artifacts must be rebuilt after
 contract changes. No publication is authorized.
 
-BoundsCheck, indexed writes and the explicit bounds trap are specified below.
-Flat Word and Byte array reads are also specified below. GetDataIndexed still
-needs its total read contract. Non-first-pass GetIndex forms remain explicit proof
-boundaries. These remaining internal bounds faults are open Order 3 requirements. This
-increment alone cannot establish trap freedom or justify check elision.
+BoundsCheck, indexed writes, scalar array reads, indexed data reads and the explicit
+bounds trap are specified below. Non-first-pass GetIndex forms remain explicit
+proof boundaries. These contracts alone cannot establish trap freedom or justify
+check elision.
 
 ## Portable diagnostic suffix
 
@@ -63,9 +62,9 @@ The successful path discards the four bound limbs and retains the original index
 for stride arithmetic. The branch introduces no anonymous local slots.
 
 The Rust compiler uses this lowering for per-dimension checks. Keleusma verifier
-and resource consumers must agree with the new contract. Indexed write lowering is implemented in both compilers. Indexed read lowering
-remains part of the following increment. Do not infer support
-for source syntax that the first-pass compiler does not yet admit.
+and resource consumers agree with the new contract. Indexed write and scalar read
+lowering are implemented in both compilers. Do not infer support for source syntax
+that the first-pass compiler does not yet admit.
 
 ## SetDataIndexed
 
@@ -124,3 +123,10 @@ The requirement is two and net growth five. Shrink is zero and nominal cost eigh
 The output value remains an unknown shape in the typed verifier, with six Word
 entries following it. No existing shape or host-contract check is removed. The
 opcode and its two u24 wire operands remain unchanged.
+
+The private parser record for a data read packs base and length into two 24-bit
+lanes, followed by fallback kind zero for Unit, two for Byte or three for Word.
+The scalar kind is removed before emitting the public instruction. Data relocation
+preserves it and rejects reserved kinds. Stores have no kind lane and relocation
+checks their entire length before accepting it. Both indexed lengths must be less
+than 16777216. The final scalar address 16777215 remains valid.

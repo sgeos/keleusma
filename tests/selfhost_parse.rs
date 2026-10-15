@@ -35,6 +35,10 @@
     clippy::identity_op
 )]
 
+#[path = "common/data_read_kinds.rs"]
+mod data_read_kinds;
+use data_read_kinds::data_read_kinds;
+
 use keleusma::Arena;
 use keleusma::ast::{
     BinOp, Block, Expr, FunctionCategory, Iterable, Literal, Pattern, PrimType, Stmt, TypeDef,
@@ -1063,6 +1067,7 @@ fn reference(src: &str, names: &[String]) -> Parsed {
     };
     let program = parse(&tokenize(src).expect("lex")).expect("parse");
     let data_slots = data_slot_names(&program);
+    let data_kinds = data_read_kinds(&program);
     let chunk_names: Vec<String> = program.functions.iter().map(|f| f.name.clone()).collect();
     let enum_table = enum_table(&program);
     let mut funcs = Vec::new();
@@ -1118,6 +1123,13 @@ fn reference(src: &str, names: &[String]) -> Parsed {
             &enum_table,
             &mut body,
         );
+        // Add the kind lane from declarations after flattening the legacy address records.
+        for (kind, arg) in body.iter_mut().chain(guard.iter_mut()) {
+            if *kind == 13 {
+                let base = usize::try_from(*arg % 16_777_216).unwrap();
+                *arg += data_kinds[&data_slots[base]] * 281_474_976_710_656;
+            }
+        }
         funcs.push((cat, id(&f.name), params, body, guard));
     }
     // Struct declarations, in source order, each as (name, fields) where a field is
@@ -1570,12 +1582,17 @@ fn shared_and_private_blocks_share_the_slot_space() {
 // An indexed `data.field[i]` read is an IndexRead over the index, arg packing base + len.
 #[test]
 fn an_indexed_data_read_parses() {
-    let src = "shared data d { xs: [Word; 4] } fn f(i: Word) -> Word { d.xs[i] }";
-    let mut names = Vec::new();
-    let got = run_parse(src, &mut names);
-    assert_eq!(got, reference(src, &names));
-    // index i (slot 0), IndexRead(base 0 + len 4 * 2^24).
-    assert_eq!(got.funcs[0].3, vec![(2, 0), (13, 4 * 16_777_216)]);
+    for (ty, scalar) in [("Word", 3), ("Byte", 2), ("bool", 0)] {
+        let src = format!("shared data d {{ xs: [{ty}; 4] }} fn f(i: Word) -> {ty} {{ d.xs[i] }}");
+        let mut names = Vec::new();
+        let got = run_parse(&src, &mut names);
+        assert_eq!(got, reference(&src, &names));
+        // Independent protocol expectation for each fallback kind.
+        assert_eq!(
+            got.funcs[0].3,
+            vec![(2, 0), (13, 4 * 16_777_216 + scalar * 281_474_976_710_656)]
+        );
+    }
 }
 
 // An indexed `data.field[i] = e` assignment: index, value, IndexStore signal, then the

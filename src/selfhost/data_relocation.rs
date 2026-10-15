@@ -235,7 +235,36 @@ mod tests {
         });
         with_machine(&[0], &[SPACE], &[0], |machine| {
             assert_eq!(machine.translate(11, SPACE - 1).unwrap(), SPACE - 1);
-            assert_eq!(machine.translate(13, SPACE * SPACE).unwrap(), SPACE * SPACE);
+            for kind in [13, 14] {
+                assert_eq!(
+                    machine.translate(kind, (SPACE - 1) * SPACE).unwrap(),
+                    (SPACE - 1) * SPACE
+                );
+                assert!(machine.translate(kind, SPACE * SPACE).is_err());
+            }
+        });
+    }
+
+    #[test]
+    fn indexed_read_kinds_survive_relocation_and_reserved_lanes_refuse() {
+        with_machine(&[0], &[4], &[8], |machine| {
+            for scalar in [0, 2, 3] {
+                let arg = scalar * SPACE * SPACE + 2 * SPACE + 1;
+                assert_eq!(machine.translate(13, arg).unwrap(), arg + 8);
+            }
+            for scalar in [1, 4, 255] {
+                let arg = scalar * SPACE * SPACE + 2 * SPACE + 1;
+                assert!(machine.translate(13, arg).is_err());
+                assert_eq!(machine.translate(11, 1).unwrap(), 9);
+            }
+            // Stores have no kind lane. Never mask an oversized length to fit.
+            for scalar in [1, 2, 3] {
+                assert!(
+                    machine
+                        .translate(14, scalar * SPACE * SPACE + 2 * SPACE + 1)
+                        .is_err()
+                );
+            }
         });
     }
 

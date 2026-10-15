@@ -3077,8 +3077,7 @@ impl Op {
 
             Op::SetLocal(_) | Op::SetData(_) => 1,
 
-            // GetDataIndexed pops the index, SetDataIndexed pops the
-            // index then the value, BoundsCheck does not pop.
+            // Bounds operations produce at least as many values as they consume.
             Op::GetDataIndexed(_, _) => 0,
             Op::SetDataIndexed(_, _) => 0,
             Op::BoundsCheck(_) => 0,

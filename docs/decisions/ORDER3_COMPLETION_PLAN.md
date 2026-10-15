@@ -15,8 +15,8 @@ provides evidence sufficient to remove a particular check.
 
 The baseline census passed three tests and found DivisionByZero and
 IndexOutOfBounds without Trap. The expanded census has twenty cases, including
-Word, Byte and indexed shared/private storage. The focused post-change run passes
-and finds only bounds faults without an explicit Trap. This remains a source-family
+Word, Byte and indexed shared/private storage. The post-change data-read run passes
+and finds no source census faults without an explicit Trap. This remains a source-family
 census, not a proof about arbitrary bytecode or host-contract failures.
 
 Both bare Word/Byte division and modulo lowerings now reuse CheckedDiv or CheckedMod
@@ -62,8 +62,12 @@ bindings for Byte arrays, guarded and literal patterns, and no fallback trap und
 complete invalid_index coverage. Other GetIndex forms retain the legacy contract
 and remain outside the first-pass proof.
 
-GetDataIndexed still faults internally on bounds errors. Its total contract and
-both lowerings remain required. No trap-free verdict or no-check mode exists.
+GetDataIndexed now consumes an explicit Word, Byte or Unit fallback after its index
+and returns a value with the portable diagnostic suffix. Both bare lowerings emit
+an explicit bounds trap. Both checked scalar data-read lowerings dispatch the
+outcome directly. The private record carries the fallback kind above its two
+24-bit address lanes. Relocation preserves valid kinds and refuses reserved kinds
+and oversized store lengths. No trap-free verdict or no-check mode exists.
 
 Legacy Div and Mod still fault on integer zero divisors in hand-built bytecode.
 The direct instruction-contract tests retain that negative control. A scan-based
@@ -219,7 +223,7 @@ The expanded parser exceeded the lexer source buffer. Its capacity is now 524288
 bytes, with a driver guard before copying source and aligned detached-harness
 checks. The source-cap boundary has positive and negative controls. The separate
 operator-selected type capacities remain 640. The module-input name cap remains
-1024, with measured parser usage of 1023 names and 30109 blob bytes. Two unused
+1024, with measured parser usage of 1023 names and 30199 blob bytes. Two unused
 private scalar fields were removed before adding the indexed-outcome keyword.
 Only one name remains free.
 
@@ -238,22 +242,26 @@ parser commands accept the maximum integer and reject overflow. Constant-field
 parsing now retains its leading minus sign. Bare Byte shifts after a cast also retain
 the scalar kind. The initial failures and final receipts are in REVERSE_PROMPT.md.
 
-## Bounds contract work next
+## Remaining contracts and analysis
 
-The predicate, indexed-write, flat scalar array-read and diagnostic contracts are
-specified and implemented in [ORDER3_BOUNDS_CONTRACTS.md](ORDER3_BOUNDS_CONTRACTS.md).
-Indexed data-segment reads still need exact stack effects, fallbacks and dispatch.
-GetDataIndexed carries base and length without an element kind. Its invalid-index
-fallback therefore needs an explicit Word or Byte kind rule, including zero length.
-Shared slots have kind metadata, while private slots have initializer metadata.
-An explicit kind operand is a candidate solution, not an implemented decision.
-The portable diagnostic suffix and TrapKind code eight can be reused by the
-remaining operations. No new public opcode or version advance is authorized.
+The predicate, indexed-write, flat scalar array-read, indexed data-read and
+diagnostic contracts are specified and implemented in
+[ORDER3_BOUNDS_CONTRACTS.md](ORDER3_BOUNDS_CONTRACTS.md). Data reads use a stack
+fallback, preserving the public base and length operands. The verifier opcode
+profile is now 2048 because the expanded stage corpus exceeds 1536. Selected type
+capacities remain 640. Selected verification and its limits are recorded in the handoff.
 
-The required work remains total indexed reads, their explicit bounds traps and both
-compiler lowerings, matching classifications, host policy, proved check elision and
-the full completion audit. No trap-free or no-check claim follows from this
-arithmetic frontend increment.
+Legacy Div and Mod contracts are next. Inspect every compiler emission before
+changing them. In particular, compile_multiword_div still uses integer Div as its
+zero-divisor guard, and scalar Fixed remainder still selects Mod. They prevent
+assuming that all remaining legacy emissions are floating point. Preserve those
+source semantics and diagnostics while eliminating hidden first-pass integer
+language faults. Do not infer a whole-language proof from the twenty-case census.
+
+The required work remains these arithmetic contracts, matching classifications,
+host policy, proved check elision and the full completion audit. Non-first-pass
+value forms retain explicit availability boundaries. No new public opcode or
+version advance is authorized.
 
 ## Debug verification recovery
 

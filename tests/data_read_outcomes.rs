@@ -291,3 +291,82 @@ fn a_narrow_runtime_preserves_a_bound_larger_than_its_word() {
         Err(VmError::IndexOutOfBounds(-1, 256))
     ));
 }
+
+#[test]
+fn data_read_trap_preserves_its_source_location() {
+    let source = "shared data d { x: [Word; 2] } fn main() -> Word { d.x[2] }";
+    let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(source).unwrap()).unwrap();
+    let m = keleusma::compiler::compile_with_options(
+        &ast,
+        &keleusma::target::Target::host(),
+        &keleusma::compiler::CompileOptions { emit_debug: true },
+    )
+    .unwrap()
+    .0;
+    let arena = Arena::with_capacity(16384);
+    let mut vm = Vm::new(m, &arena).unwrap();
+    let mut shared = vec![0; vm.shared_data_bytes()];
+    assert!(matches!(
+        vm.call_with_shared(&mut shared, &[]),
+        Err(VmError::IndexOutOfBounds(2, 2))
+    ));
+    let location = vm.fault_source_location().unwrap();
+    assert!(location.exact);
+    assert_eq!(
+        location.byte_offset as usize,
+        source.find("d.x[2]").unwrap()
+    );
+    assert_eq!(location.byte_length, 6);
+}
+
+#[test]
+fn data_read_wire_round_trip_preserves_valid_and_fallback_results() {
+    for byte in [false, true] {
+        for index in [0, 2] {
+            let mut m = compile(if byte {
+                "shared data d { x: [Byte; 2] } fn main() -> Byte { d.x[0] }"
+            } else {
+                "shared data d { x: [Word; 2] } fn main() -> Word { d.x[0] }"
+            });
+            m.chunks[0].constants = vec![
+                ConstValue::Int(index),
+                if byte {
+                    ConstValue::Byte(77)
+                } else {
+                    ConstValue::Int(77)
+                },
+            ];
+            m.chunks[0].ops = vec![
+                Op::Const(0),
+                Op::Const(1),
+                Op::GetDataIndexed(0, 2),
+                Op::PopN(6),
+                Op::Return,
+            ];
+            let bytes = m.to_bytes().unwrap();
+            #[cfg(feature = "self-host")]
+            {
+                assert_eq!(
+                    keleusma::selfhost::wire_module_artifact_via_kel(&m).unwrap(),
+                    bytes
+                );
+                let decoded = keleusma::selfhost::wire_decode_module_via_kel(&bytes).unwrap();
+                assert_eq!(decoded.to_bytes().unwrap(), bytes);
+            }
+            let decoded = Module::from_bytes(&bytes).unwrap();
+            assert_eq!(decoded.chunks[0].ops, m.chunks[0].ops);
+            let arena = Arena::with_capacity(16384);
+            let mut vm = Vm::new(decoded, &arena).unwrap();
+            let mut shared = vec![0; vm.shared_data_bytes()];
+            let number = if index == 0 { 0 } else { 77 };
+            let expected = if byte {
+                Value::Byte(number)
+            } else {
+                Value::Int(i64::from(number))
+            };
+            assert!(
+                matches!(vm.call_with_shared(&mut shared, &[]).unwrap(), VmState::Finished(actual) if actual == expected)
+            );
+        }
+    }
+}

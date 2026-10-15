@@ -1074,8 +1074,8 @@ fn push_data_assign(p: Word) -> Word {
 }
 
 // IndexRead (kind 13): read `d.arr[i]`. Emit the index ops, then GetDataIndexed
-// with the element-0 slot and array length packed as base + len*65536 in args.
-// Node: args = base + len*65536, lhs = index expression.
+// with base and length in 24-bit lanes followed by the scalar fallback kind.
+// Node: args = base + len*2^24 + kind*2^48, lhs = index expression.
 fn push_index_read(p: Word) -> Word {
     let kind = ast.args[p] / 281474976710656;
     push_emit(wire.popn + 5 * wire.radix); push_emit(wire.mendif);
@@ -3152,9 +3152,11 @@ fn relocate_data_arg() -> Word {
     if ast.relocate_count < 0 orelse ast.relocate_count > 640 orelse ast.relocate_kind < 11 orelse ast.relocate_kind > 14 orelse ast.relocate_arg < 0 { 0 - 1 } else {
         let indexed = ast.relocate_kind >= 13;
         let base = if indexed { ast.relocate_arg % 16777216 } else { ast.relocate_arg };
-        let width = if indexed { (ast.relocate_arg / 16777216) % 16777216 } else { 1 };
+        let scalar = if ast.relocate_kind == 13 { ast.relocate_arg / 281474976710656 } else { 0 };
+        let width = if ast.relocate_kind == 13 { (ast.relocate_arg / 16777216) % 16777216 } else { if indexed { ast.relocate_arg / 16777216 } else { 1 } };
         relocate.result = 0; relocate.hits = 0; relocate.bad = 0;
-        if base >= 16777216 orelse width <= 0 orelse width > 16777216 { relocate.bad = 1; }
+        if base >= 16777216 orelse width <= 0 orelse width >= 16777216
+            orelse (scalar != 0 andalso scalar != 2 andalso scalar != 3) { relocate.bad = 1; }
         for i in 0..ast.relocate_count limit 640 {
             let start = ast.relocate_source[i]; let length = ast.relocate_length[i]; let target = ast.relocate_target[i];
             if start < 0 orelse start >= 16777216 orelse target < 0 orelse target >= 16777216 orelse length <= 0 orelse length > 16777216 - start orelse length > 16777216 - target { relocate.bad = 1; } else {

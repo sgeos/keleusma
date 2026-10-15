@@ -7,8 +7,8 @@
 //! `docs/roadmap/V0_2_X_ROADMAP.md` workstream C proposes making trap
 //! reachability decidable: `Trap` becomes the only opcode that traps, every
 //! other opcode is made **total**, and the validator becomes a scan for the
-//! presence of `Trap`. That is a `BYTECODE_VERSION`-bumping instruction-set
-//! change and therefore the operator's call.
+//! presence of `Trap`. The operator authorized contract changes within
+//! V0.2.3-WIP while keeping the bytecode version and fingerprint fixed.
 //!
 //! Two things the proposal rests on were unmeasured: how large "make every
 //! other opcode total" actually is, and whether the scan would be honest
@@ -33,9 +33,9 @@
 //! # Current result
 //!
 //! Bare Word and Byte division and modulo now carry an explicit zero-divisor
-//! Trap. Indexed bounds remain the internal-fault obligation. The original
-//! September census found both families; Order 3's compatible lowering closes
-//! the arithmetic half without changing bytecode version or public opcodes.
+//! Trap. The indexed bounds cases also reach explicit traps. The original
+//! September census found both families faulting internally; the current census
+//! finds no language faults without Trap in its twenty source cases.
 //! This census still does not expose a trap-freedom verdict.
 //!
 //! # What this does NOT establish

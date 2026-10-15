@@ -6,6 +6,32 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-15 Indexed data-read regression repairs
+
+GetDataIndexed now has an explicit scalar fallback, portable diagnostic outcomes,
+bare trap lowering and checked handlers in both compilers. This increment repairs
+the failures recorded in the preceding backup. Relocation retains Word and Byte
+fallback kinds, rejects reserved kinds and refuses oversized store lengths rather
+than masking them. Test adapters derive fallback kinds from source declarations.
+
+Current stage artifacts and complete resource admission pass. The broad run had
+1740 passes and one newly added invalid fixture, subsequently repaired. The final
+selected run passes all 114 executed tests, including the repaired fixture, parser
+records, relocation boundaries, wire round trips and exact fault locations.
+Production code did not change after the broad run. The broad suite was not replayed
+after those test-only repairs. Thirty-two bounds checks without floating-point
+support and 175 no-default library tests pass. Clippy and the detached build pass.
+
+Measured parser input uses 1023 names and 30199 blob bytes under unchanged limits.
+Typed-verifier residency is 1532 records total and 486 peak. The 2048-opcode verifier
+profile admits every current stage. Selected type capacities remain 640.
+
+Order 3 remains active. Legacy Div and Mod contracts are next. Multiword division
+still uses integer Div for a zero-divisor guard, and scalar Fixed remainder uses
+Mod, so their remaining compiler emissions must be audited before changing those
+contracts. Classification, host policy, proved check elision and full final gates
+remain required. No bytecode version or fingerprint change is authorized.
+
 ## 2026-10-15 Work-in-progress backup and ring buffer request
 
 The operator reaffirmed first-class compiler-managed ring buffer support, retained

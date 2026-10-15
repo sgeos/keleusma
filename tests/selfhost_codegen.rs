@@ -51,6 +51,9 @@ use keleusma::value_layout::{CompositeKind, ScalarKind};
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 
 mod common;
+#[path = "common/data_read_kinds.rs"]
+mod data_read_kinds;
+use data_read_kinds::data_read_kinds;
 
 // Complete-key memoization input sets for the whole-stage self-compile tests
 // (process-audit item 3). Each set must be a SUPERSET of the .kel files the test
@@ -170,6 +173,7 @@ struct Ctx {
     head_parts: Vec<i64>,
     chunk_names: Vec<String>,
     data_slots: Vec<String>,
+    data_kinds: std::collections::BTreeMap<String, i64>,
     /// `const data` scalar fields by `name.field` -> value. A read of one of these
     /// inlines to a constant, exactly as the reference compiler does, and never
     /// occupies a runtime data slot.
@@ -423,7 +427,7 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             }
         }
         Expr::ArrayIndex { object, index, .. } => {
-            // A `d.arr[i]` read. IndexRead (kind 13): arg = base + len*2^24,
+            // A `d.arr[i]` read. IndexRead (kind 13) packs base, length and fallback kind,
             // lhs = index. The object is a `d.arr` field access.
             let (data_name, field) = match object.as_ref() {
                 Expr::FieldAccess {
@@ -440,7 +444,9 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             let index_node = flatten(index, scope, next_slot, ctx);
             ctx.nodes.push(Node {
                 kind: 13,
-                arg: base + len * 16_777_216,
+                arg: base
+                    + len * 16_777_216
+                    + ctx.data_kinds[&format!("{data_name}.{field}")] * 281_474_976_710_656,
                 lhs: index_node,
                 rhs: 0,
             });
@@ -714,6 +720,7 @@ fn build_body(
     category: i64,
     chunk_names: Vec<String>,
     data_slots: Vec<String>,
+    data_kinds: std::collections::BTreeMap<String, i64>,
     const_data: Vec<(String, i64)>,
 ) -> Body {
     let mut ctx = Ctx {
@@ -725,6 +732,7 @@ fn build_body(
         head_parts: Vec::new(),
         chunk_names,
         data_slots,
+        data_kinds,
         const_data,
     };
     let mut scope: Vec<(String, i64)> = params
@@ -754,6 +762,7 @@ fn build_multihead(
     params: &[Param],
     chunk_names: Vec<String>,
     data_slots: Vec<String>,
+    data_kinds: std::collections::BTreeMap<String, i64>,
     const_data: Vec<(String, i64)>,
 ) -> Body {
     let mut ctx = Ctx {
@@ -765,6 +774,7 @@ fn build_multihead(
         head_parts: Vec::new(),
         chunk_names,
         data_slots,
+        data_kinds,
         const_data,
     };
     let pc = params.len() as i64;
@@ -1422,6 +1432,7 @@ fn struct_layout_matches_the_reference_baked_layout() {
 #[derive(Clone, Copy, Debug)]
 enum Expect {
     Int(i64),
+    Byte(u8),
     Bool(bool),
 }
 
@@ -1724,6 +1735,16 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             2,
             Int(0),
         ),
+        (
+            "shared data d { xs: [Byte; 2] } fn main(i: Word) -> Byte { d.xs[i] }",
+            1,
+            Expect::Byte(0),
+        ),
+        (
+            "shared data d { xs: [bool; 2] } fn main(i: Word) -> bool { d.xs[i] }",
+            1,
+            Bool(false),
+        ),
     ];
     for &(src, arg, expected) in cases {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
@@ -1763,6 +1784,7 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             0,
             chunk_names,
             data_slots,
+            data_read_kinds(&program),
             const_data,
         );
 
@@ -1792,9 +1814,17 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
         } else {
             vec![Value::Int(arg)]
         };
-        match (expected, vm.call(&call_args).expect("call built")) {
+        let mut shared = vec![0; vm.shared_data_bytes()];
+        match (
+            expected,
+            vm.call_with_shared(&mut shared, &call_args)
+                .expect("call built"),
+        ) {
             (Expect::Int(e), VmState::Finished(Value::Int(n))) => {
                 assert_eq!(n, e, "wrong for `{src}`")
+            }
+            (Expect::Byte(e), VmState::Finished(Value::Byte(b))) => {
+                assert_eq!(b, e, "wrong for `{src}`")
             }
             (Expect::Bool(e), VmState::Finished(Value::Bool(b))) => {
                 assert_eq!(b, e, "wrong for `{src}`")
@@ -1830,6 +1860,7 @@ fn a_synthetic_multiheaded_function_compiles_byte_identically() {
         &heads[0].params,
         chunk_names,
         Vec::new(),
+        data_read_kinds(&program),
         Vec::new(),
     );
     let (emitted, _pool, _lc) = run_codegen(&body, heads[0].params.len());
@@ -1905,6 +1936,7 @@ fn self_compile_codegen_atomic_functions() {
         let first = heads[0];
         let cn = chunk_names.clone();
         let ds = data_slots.clone();
+        let dk = data_read_kinds(&program);
         let cd = const_data.clone();
         let name_c = name.clone();
         let heads_ref = &heads;
@@ -1914,12 +1946,14 @@ fn self_compile_codegen_atomic_functions() {
             // Stream/Reset wrapper (category 2). A lone single-head `yield` is not
             // exercised by codegen.kel and is not yet lowered.
             let body = if heads_ref.len() > 1 {
-                build_multihead(heads_ref, &first.params, cn, ds, cd)
+                build_multihead(heads_ref, &first.params, cn, ds, dk, cd)
             } else {
                 match first.category {
-                    FunctionCategory::Fn => build_body(&first.body, &first.params, 0, cn, ds, cd),
+                    FunctionCategory::Fn => {
+                        build_body(&first.body, &first.params, 0, cn, ds, dk, cd)
+                    }
                     FunctionCategory::Loop if first.guard.is_none() => {
-                        build_body(&first.body, &first.params, 2, cn, ds, cd)
+                        build_body(&first.body, &first.params, 2, cn, ds, dk, cd)
                     }
                     _ => return Err("non-atomic single-head (yield) function".to_string()),
                 }
@@ -9123,8 +9157,8 @@ fn the_fused_compile_holds_one_group_not_the_program() {
         (
             "verify_typed",
             include_str!("../src/selfhost/kel/verify_typed.kel"),
-            1513,
-            467,
+            1532,
+            486,
         ),
     ];
     for &(name, src, total, peak) in EXPECT {

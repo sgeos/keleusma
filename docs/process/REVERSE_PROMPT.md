@@ -1,101 +1,127 @@
 # Reverse prompt
 
-## Work-in-progress backup on 2026-10-15
+## Indexed data-read outcomes and repairs on 2026-10-15
 
-Line v0.2.3, branch feat/v02-order3-trap-analysis. This increment starts from
-1d3429715a0c1ffb49a93a6fcbb9749a8435a2e3. The operator requested recording
-first-class compiler-managed ring buffer support and committing and pushing all
-current work. B42 already records the request and is linked from the V0.2.X
-roadmap. The request was reaffirmed. Design and scheduling remain open.
-
-This is a feature-branch backup of unfinished Order 3 work. It is not ready for
-integration. No merge or publication is authorized by this backup.
-
-## Current implementation
+The active goal remains Complete Order 3, trap analysis. Line v0.2.3 is on branch
+feat/v02-order3-trap-analysis. This repair increment starts from pushed backup
+7a058917bf649a6fc43fa98bdc14428f19333007. The preceding scalar-read commit is
+1d3429715a0c1ffb49a93a6fcbb9749a8435a2e3.
 
 GetDataIndexed consumes [index, fallback] and returns
-[value, index, b0, b1, b2, b3, flag]. Word, Byte and Unit fallbacks are accepted.
-An invalid index returns the fallback without reading data. The complete span is
-validated before access. Empty spans can operate without allocated data storage.
-Both compilers supply typed zero for Word and Byte, and Unit for other bare reads.
-Bare failures reach Trap kind eight. Checked scalar data reads use seven temporary
-slots and omit fallback traps under complete invalid_index coverage.
+[value, index, b0, b1, b2, b3, flag]. Fallback is Word, Byte or Unit. An invalid
+index returns it without reading storage. The full span is checked first. Empty
+spans work without declared storage. Both compiler lowerings supply typed zero
+for Word and Byte and dispatch bare failures through Trap kind eight. Checked
+scalar data reads evaluate the index once, retain seven temporaries and omit
+fallback traps under complete invalid_index coverage. Other bare element kinds
+use Unit. Runtime type, representation and storage guards remain.
 
-Both verifier transfers, stack and cost metadata, instruction documentation and
-stage protocols were updated. The private parser record 13 now carries a scalar
-kind above its two 24-bit address lanes. The verifier opcode capacity increased
-from 1536 to 2048 because measured stage maxima are 1965 parser instructions and
-1568 codegen instructions. This is distinct from selected type capacities of 640.
+The depth effect is two inputs and net growth five. Nominal cost is eight. Both
+verifier transfers produce an unknown value shape followed by six Words. The
+instruction encoding retains base and length as its two 24-bit operands.
 
-## Verification and known failures
+Private parser record 13 carries fallback kind above the address lanes. Relocation
+preserves kinds zero, two and three and rejects reserved values. Store record 14
+has no kind lane and checks its entire length rather than masking it. Indexed
+lengths must be below 16777216, while scalar address 16777215 remains valid.
+Test adapters now derive kinds from source declarations. Independent expectations
+cover Word, Byte and Boolean fields.
 
-The existing release self-host nextest run has terminated with exit status 100.
-It executed 1740 tests with 1729 passes, 11 failures and two skips. Receipt is
- tmp/order3-data-read-acceptance.log. Current-stage production artifact identity
-and complete stage resource admission passed. Nine data-read controls passed.
+The verifier opcode profile is 2048, increased from 1536 in the backup because
+current stage maxima are 1965 parser instructions and 1568 codegen instructions.
+This is distinct from the operator-selected type capacities of 640. All current
+stages fit. Parser input uses 1023 names and 30199 blob bytes, leaving one name
+and 18953 blob bytes. Typed-verifier residency is 1532 total records and 486 peak,
+preserving the threefold reduction criterion.
 
-The failures are as follows.
+## Verification
 
-- The scalar_and_indexed_operands_preserve_offsets_and_counts relocation test
-  accepts an old width of 16777216 that collides with the new high kind lane.
-- codegen_owns_its_constant_pool_and_matches_reference and
-  self_compile_codegen_atomic_functions use a test-only Rust syntax-tree adapter
-  that does not transport the new fallback kind. It produces Unit instead of Word.
-- the_fused_compile_holds_one_group_not_the_program pins 1513 typed-verifier
-  records. The run measured 1532 total and 486 peak.
-- Seven selfhost_parse expectations still use old record 13 payloads. They are
-  a_data_read_may_index_another, a_for_limit_body_with_data_access,
-  a_realistic_stage_like_body_parses, a_stage_scan_loop_function_parses,
-  a_stage_shaped_dispatch_function_parses, a_whole_mini_stage_program_parses and
-  an_indexed_data_read_parses.
+The broad release self-host run completed with 1740 passes, one failure and two
+skips. Its single failure was a newly added private-data test fixture rejected for
+never mutating its data. Complete stage artifact identity and complete resource
+admission passed. The final selected run passes all 114 executed tests, with 1703
+skipped by selection. It includes the corrected shared-data fixture, all earlier
+failed parser and compiler controls, relocation boundaries, eleven data-read
+controls, wire round trips and exact fault source locations.
 
-Earlier Clippy and detached compiler builds passed. Receipts are
- tmp/order3-data-read-clippy.log and tmp/order3-data-read-detached.log.
-Focused and stage-capacity receipts are tmp/order3-data-read-focused.log,
- tmp/order3-data-read-profile.log and tmp/order3-data-read-op-sizes.log.
-No additional tests were run for the backup request. Full feature, shipping,
-compatibility, memory-safety and release verification remain outstanding.
+Production code did not change after the broad run. Only test fixtures, controls
+and documentation changed. The broad run was not replayed after those edits, so
+this is composed verification evidence rather than a claimed full green run.
 
-## Resume work
+Thirty-two bounds controls pass without floating-point support. No-default library
+tests pass 175 cases. Fresh workspace Clippy passes with all targets and self-host.
+The detached compiler build passes. Formatting and diff checks pass.
 
-Repair private relocation first. Indexed lengths must fit the 24-bit public wire
-range. For read record 13, allow high kind only zero, two or three and preserve it.
-For store record 14, reject oversized full lengths rather than masking them into
-valid smaller lengths. Keep the last scalar address valid. Update the old boundary
-control and add malformed high-lane controls when verification is authorized.
+Receipts are tmp/order3-data-read-final2-acceptance.log,
+ tmp/order3-data-read-final-repair.log, tmp/order3-data-read-final3-clippy.log,
+ tmp/order3-data-read-final-detached.log, tmp/order3-data-read-final2-no-floats.log,
+ tmp/order3-data-read-final-no-default.log, tmp/order3-data-read-final-op-sizes.log
+and tmp/order3-data-read-final2-capacity.log.
 
-Derive fallback kinds from source data declarations in the test-only compiler
-adapter. Pass the metadata through build_body and build_multihead. Update parser
-record expectations according to each declared element type. Update residency
-pins only after confirming the current measurements and retained reduction bound.
-Rerun the relevant broad checks on a fixed tree before treating this increment
-as complete. Do not change implementation while its verification is live.
+The original broad failure receipt is tmp/order3-data-read-acceptance.log, with
+1729 passes and eleven failures. The first repair run passed 108 selected tests.
+A subsequent broad attempt failed to compile two new expected-value fixtures.
+Their correction is followed by the broad run described above. The initial
+capacity measurement also failed its old blob-size pin before that pin was updated.
+These failures remain in their local logs and are not treated as passing runs.
 
-The full Order 3 completion plan remains authoritative. Legacy integer Div and Mod
-contracts, matching Rust and Keleusma trap classifications, trap-free host policy,
-resume and replacement preservation, actual proof-gated check elision and final
-audit remain required. Non-first-pass GetIndex forms remain outside the proof.
+The final targeted command is reproducible as follows.
+
+```sh
+CARGO_HUSKY_DONT_INSTALL_HOOKS=true RUSTC_WRAPPER= KEL_SELFHOST_CACHE=0 \
+cargo nextest run --release --features self-host --no-fail-fast -j 4 \
+  --lib --test selfhost_parse --test selfhost_codegen --test data_read_outcomes \
+  --test runtime_fault_census --test selfhost_wire \
+  -E 'test(data_relocation) | test(codegen_owns_its_constant_pool) | test(self_compile_codegen_atomic) | test(the_fused_compile_holds) | binary(selfhost_parse) | binary(data_read_outcomes) | binary(runtime_fault_census) | test(every_stage_fits_the_driver_caps_with_margin)'
+```
+
+The full five-configuration matrix, full workspace and isolated suites, detached
+compiler tests, shipping commands, minimum Rust, cross-target builds, Miri and
+release gates remain outstanding for Order 3 completion.
+
+## Next work
+
+Resolve legacy integer Div and Mod, which still fault in hand-built bytecode.
+Audit every compiler emission first. compile_multiword_div uses integer Div as a
+zero-divisor guard, and scalar Fixed remainder still selects Mod. Remaining legacy
+emissions are therefore not all floating point. Preserve those source behaviors
+and diagnostics while making first-pass arithmetic contracts total. Specify the
+stack contract and update both compilers, runtime, verifiers, costs, wire consumers,
+documentation and direct instruction controls together.
+
+Then implement matching reference and Keleusma trap classifications with analysis
+unavailability distinct from a completed verdict. Add host trap-free policy before
+execution and preserve it across resume and replacement. Implement actual proved
+check elision, retaining checks for unknown shapes and host-contract failures.
+Order 2 Top widening cannot justify arbitrary guard removal. Non-first-pass
+GetIndex forms remain explicit proof boundaries. Complete the full verification
+matrix and requirement-by-requirement audit. ORDER3_COMPLETION_PLAN.md remains
+authoritative. No blacklist-only or no-op substitute completes the objective.
 
 ## Constraints and handoff
 
-BYTECODE_VERSION remains 2. FORMAT_FINGERPRINT remains 0x4327_63E1 during
-V0.2.3-WIP. Public instruction count remains 66. Selected type capacities remain
-640, verifier depth 32 and reference parser depth 24. V0.2.2 remains the last
-published release. Development artifacts require rebuilding after contract changes.
-Appendix B was read before tracked writes.
+BYTECODE_VERSION remains 2 and FORMAT_FINGERPRINT remains 0x4327_63E1 throughout
+V0.2.3-WIP. The public instruction count remains 66. Selected type capacities
+remain 640, verifier depth 32 and reference parser depth 24. V0.2.2 remains the
+last published release. Development artifacts require rebuilding after contract
+changes. No merge or publication occurred. Appendix B was read before writes.
+B42 retains first-class compiler-managed ring buffers pending design and scheduling.
 
-Legacy HANDOFF.md is invalid-and-stale at 66 commits behind the pre-backup head.
-Its ancestry check passes, but all fourteen current stage sources differ from its
-content anchor. Its audit, full workspace, shell and detached RTOS test checks were
-not rerun for this backup. Ancestry does not establish freshness.
+The previous goal turn made progress by committing the unfinished work and its
+failure evidence. This turn repairs that state and adds execution evidence.
+The legacy HANDOFF.md remains invalid-and-stale, measured at 67 commits behind
+this increment's starting head. Its historical audit, workspace and detached RTOS
+checks were not rerun. Ancestry alone is not freshness evidence.
 
-Pilot task v023-data-read-1d34 has an initial diagnostic recorded under
-v023-data-read-triage-1d34. Its development outcome remains unresolved. Completion
-claim sampling was deferred because this is an unfinished backup. External
-evaluation was not retried after the earlier automatic approval rejection.
+Pilot task v023-data-read-1d34 records its first diagnostic and three completion
+claims. Labels are non-independent self-reviews. The task outcome resolves only
+this increment. External evaluation was not retried after the earlier automatic
+approval rejection. The reviewed local export is
+ tmp/order3-data-read-pilot-checkpoint.json. This branch does not own the shared
+tracked pilot checkpoint.
 
-The v0.2.3 inbox is empty. Its checkpoint is exported and reviewed before the commit.
-All known verification processes have terminated. Local .codex/ settings and the
-empty nvim.log remain unrelated and untracked. No peer message was sent. The
-concurrent V0.3.X worktree was not modified. The documented work-in-progress
-pre-push hook bypass applies to this feature-branch backup.
+The v0.2.3 inbox is empty. The tracked interline checkpoint is exported and reviewed
+before commit. All verification processes are terminal. Local .codex/ settings and
+nvim.log remain unrelated and untracked. No peer messages were sent and the
+concurrent V0.3.X worktree was not modified. Feature-branch push authorization
+persists, using the hook's documented work-in-progress bypass where appropriate.

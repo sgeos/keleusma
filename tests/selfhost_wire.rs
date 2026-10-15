@@ -12960,10 +12960,10 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     );
     eprintln!("worst names {worst_names}, worst blob {worst_blob}");
     // Measured 2026-10-15 after checked-outcome source parsing.
-    // Parse holds both maxima, leaving one name and 19,043 blob bytes.
+    // Parse holds both maxima, leaving one name and 18,953 blob bytes.
     // Neither capacity is raised here.
     assert_eq!(worst_names, 1023, "the worst-case name count moved");
-    assert_eq!(worst_blob, 30109, "the worst-case blob size moved");
+    assert_eq!(worst_blob, 30199, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
