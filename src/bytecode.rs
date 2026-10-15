@@ -2165,6 +2165,18 @@ pub enum ArrayElem {
     Boxed,
 }
 
+impl ArrayElem {
+    /// Whether this operand uses the total first-pass scalar read contract.
+    pub const fn has_bounds_outcome(self) -> bool {
+        matches!(
+            self,
+            Self::Flat {
+                kind: crate::value_layout::ScalarKind::Int | crate::value_layout::ScalarKind::Byte
+            }
+        )
+    }
+}
+
 /// Baked operand of [`Op::NewComposite`] (B28 P4).
 ///
 /// One operand for all four composite kinds. The `Flat` form carries the
@@ -2397,6 +2409,9 @@ pub enum Op {
     /// Pop index (Int), pop array, push element. The baked
     /// [`ArrayElem`] operand selects a flat read at `index * size` or a
     /// positional index into the boxed body (B28 P2).
+    /// Flat Word and Byte forms push the value followed by the six-Word
+    /// bounds outcome suffix. Invalid indices yield zero of the same kind.
+    /// Other operand forms retain the single-result contract.
     GetIndex(ArrayElem),
     /// Pop tuple, push element. The baked [`TupleField`] operand
     /// selects a flat read at an offset or a positional index into the
@@ -2819,6 +2834,7 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         Op::Trap(kind) if *kind == TrapKind::IndexOutOfBounds.code() => 6,
         Op::BoundsCheck(_) => 7,
         Op::SetDataIndexed(_, _) => 8,
+        Op::GetIndex(elem) if elem.has_bounds_outcome() => 8,
         Op::Const(_)
         | Op::GetLocal(_)
         | Op::SetLocal(_)
@@ -2934,6 +2950,7 @@ impl Op {
     /// instruction.
     pub fn stack_growth(&self) -> u32 {
         match self {
+            Op::GetIndex(elem) if elem.has_bounds_outcome() => 5,
             Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::Dup => 1,
 
             Op::Not | Op::Neg => 0,
@@ -3033,6 +3050,7 @@ impl Op {
     /// For true pop counts use [`crate::verify::op_depth_effect`].
     pub fn stack_shrink(&self) -> u32 {
         match self {
+            Op::GetIndex(elem) if elem.has_bounds_outcome() => 0,
             Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::Dup => 0,
 
             Op::Not | Op::Neg => 0,

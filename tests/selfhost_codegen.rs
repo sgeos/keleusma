@@ -2034,7 +2034,7 @@ fn self_compile_codegen_atomic_functions() {
     // Data relocation adds one helper. Head phases, local-slot mapping and shift phases add ten.
     // Outcome dispatch and arm scheduling add two helpers.
     // Checked arithmetic adds five helpers.
-    const EXPECTED_SELF_COMPILE: usize = 97;
+    const EXPECTED_SELF_COMPILE: usize = 100;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -9123,8 +9123,8 @@ fn the_fused_compile_holds_one_group_not_the_program() {
         (
             "verify_typed",
             include_str!("../src/selfhost/kel/verify_typed.kel"),
-            1485,
-            439,
+            1513,
+            467,
         ),
     ];
     for &(name, src, total, peak) in EXPECT {

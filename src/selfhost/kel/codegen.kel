@@ -476,6 +476,17 @@ fn push_int_const(value: Word) -> Word {
 // an `If` records its slot; an `Else` sets the matching `If`'s target to the op
 // after this `Else`; an `EndIf` sets the matching `Else`'s target to itself.
 fn emit_op(word: Word) -> Word {
+    emit_raw(word);
+    let tag = word % wire.radix; let kind = word / wire.radix;
+    if tag == wire.getindex andalso (kind == 2 orelse kind == 3) {
+        emit_raw(wire.konst + intern_int(1) * wire.radix);
+        emit_raw(wire.cmpeq); emit_raw(wire.mif);
+        emit_raw(wire.trap + 8 * wire.radix); emit_raw(wire.mendif);
+        emit_raw(wire.popn + 5 * wire.radix);
+    }
+    0
+}
+fn emit_raw(word: Word) -> Word {
     let pos = st.op_count;
     st.ops[pos] = word;
     st.op_count = pos + 1;
@@ -748,12 +759,16 @@ fn push_checked_arm(arm: Word, flag: Word, scalar: Word) -> Word {
     push_work(13, ast.match_parts[arm + 3]);
     if (meta / 16) % 2 == 1 { push_checked_pattern(ast.match_parts[arm + 2], flag + 1); }
     if (meta / 8) % 2 == 1 {
-        let slot = if scalar == 3 andalso (class == 1 orelse class == 2) { flag + 2 } else { flag + 1 };
+        let slot = if (scalar == 3 andalso (class == 1 orelse class == 2))
+            orelse (scalar >= 8 andalso class == 1) { flag + 2 } else { flag + 1 };
         push_checked_pattern(ast.match_parts[arm + 1], slot);
     }
     push_checked_pattern(class, flag)
 }
 fn push_checked(p: Word) -> Word {
+    if ast.kinds[ast.lhs[p]] == 31 { push_checked_index(p) } else { push_checked_arithmetic(p) }
+}
+fn push_checked_arithmetic(p: Word) -> Word {
     let base = ast.args[p]; let packed = ast.match_parts[base];
     let flag = packed % 65536; let scalar = packed / 65536;
     let root = ast.lhs[p]; let op = ast.args[root] % 64;
@@ -784,6 +799,30 @@ fn push_checked(p: Word) -> Word {
         if shift { push_emit(wire.konst + constant * wire.radix); } else { push_visit(ast.rhs[root]); }
     }
     push_visit(ast.lhs[root])
+}
+fn push_checked_index(p: Word) -> Word {
+    let base = ast.args[p]; let packed = ast.match_parts[base];
+    let flag = packed % 65536; let scalar = packed / 65536;
+    let root = ast.lhs[p];
+    push_emit(wire.mendloop); push_emit(wire.mbreak);
+    push_emit(wire.getlocal + (flag + 1) * wire.radix);
+    if ast.match_parts[base + 3] band 2 == 0 {
+        push_emit(wire.trap + 8 * wire.radix);
+        for i in 0..4 limit 4 { push_emit(wire.getlocal + (flag + 6 - i) * wire.radix); }
+        push_emit(wire.getlocal + (flag + 2) * wire.radix);
+    }
+    checked_emit.arm = ast.match_parts[base + 1];
+    for i in 0..ast.rhs[p] limit 50 {
+        let at = checked_emit.arm - 1; push_checked_arm(at, flag, scalar + 8);
+        checked_emit.arm = ast.match_parts[at + 4];
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + (flag + 1) * wire.radix);
+    push_emit(wire.setlocal + (flag + 2) * wire.radix);
+    for i in 0..4 limit 4 { push_emit(wire.setlocal + (flag + 3 + i) * wire.radix); }
+    push_emit(wire.setlocal + flag * wire.radix);
+    push_work(wire.rawemit, wire.getindex + scalar * wire.radix);
+    push_visit(ast.rhs[root]); push_visit(ast.lhs[root])
 }
 fn push_checked_binding(p: Word) -> Word {
     push_emit(wire.getlocal + (ast.args[p] % 65536) * wire.radix)
@@ -2903,7 +2942,7 @@ fn walk_step() -> Word {
     if ikind == 13 { push_checked_arm_result(payload); }
     if ikind == wire.lsrvalue { lsr_value(payload); }
     if ikind == wire.lsrcount { lsr_count(payload); }
-    if ikind == wire.rawemit { emit_op(payload); }
+    if ikind == wire.rawemit { emit_raw(payload); }
     if ikind == wire.headbegin { begin_head(payload); }
     if ikind == wire.headbody { begin_head_body(payload); }
     if ikind == wire.headend { end_head(); }

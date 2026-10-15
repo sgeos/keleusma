@@ -8,8 +8,9 @@ public instruction count remains 66. Development artifacts must be rebuilt after
 contract changes. No publication is authorized.
 
 BoundsCheck, indexed writes and the explicit bounds trap are specified below.
-GetIndex and GetDataIndexed still need their total read contracts.
-Their existing internal bounds faults remain an open Order 3 requirement. This
+Flat Word and Byte array reads are also specified below. GetDataIndexed still
+needs its total read contract. Non-first-pass GetIndex forms remain explicit proof
+boundaries. These remaining internal bounds faults are open Order 3 requirements. This
 increment alone cannot establish trap freedom or justify check elision.
 
 ## Portable diagnostic suffix
@@ -84,3 +85,23 @@ Both bare compiler lowerings compare the flag with Word one and emit the explici
 bounds trap on failure. The success path discards the remaining five diagnostic
 Words. Operand evaluation order and source fault locations remain observable.
 Direct bytecode can inspect the flag and handle failure without emitting a Trap.
+
+## GetIndex for Word and Byte
+
+Flat Word and Byte operands consume [array, index] and return
+[value, index, b0, b1, b2, b3, flag]. An invalid index returns zero of the specified
+element kind and flag one without reading an element. A valid index returns the
+element and flag zero. The diagnostic bound is the actual element count. Empty
+arrays are valid and always yield an invalid-index outcome. Type, representation,
+stride and arena-lifetime failures remain contract errors.
+
+The requirement is two and net effect plus five. Growth is five, shrink zero and
+nominal cost eight. Other GetIndex operand forms retain their previous single-result
+contract and remain outside the first-pass trap-free proof. They must be reported as
+unsupported by that proof, never silently treated as total.
+
+Bare lowering compares flag with one, traps on invalid, and discards the five
+remaining diagnostic Words on success. Handled Word and Byte reads store the result,
+index, limbs and flag in seven temporaries after evaluating the operands. Fully
+covered invalid_index outcomes omit the fallback trap. A deterministic unreachable
+value-and-break trailer keeps the virtual dispatch loop structurally bounded.

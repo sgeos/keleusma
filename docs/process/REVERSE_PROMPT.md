@@ -1,113 +1,110 @@
 # Reverse prompt
 
-## Total indexed writes on 2026-10-15
+## Total scalar array reads on 2026-10-15
 
-The active goal remains Complete Order 3, trap analysis. This increment starts from
-19840d57 on line v0.2.3 and branch feat/v02-order3-trap-analysis. That preceding
-bounds-predicate increment was pushed and verified against the remote head.
+The active goal remains Complete Order 3, trap analysis. Work is on line v0.2.3
+and branch feat/v02-order3-trap-analysis. This increment starts from pushed commit
+28a280db, which made indexed writes total.
 
-SetDataIndexed now consumes [value, index] and returns
-[index, b0, b1, b2, b3, flag]. The portable byte limbs and flag follow
- docs/decisions/ORDER3_BOUNDS_CONTRACTS.md. A valid index writes one slot and returns
-flag zero. A negative index, upper bound or empty span writes nothing and returns
-flag one. The complete span is checked before access. Operand type checks and
-existing storage checks remain. The depth effect is requirement two and net plus
-four. Stack growth is four, shrink zero and nominal cost eight.
+GetIndex with a flat Word or Byte operand now consumes array and index and returns
+[value, index, b0, b1, b2, b3, flag]. Invalid indices yield typed zero and flag one
+without reading an element. Valid indices yield the element and flag zero. Empty
+flat arrays are supported by the primitive. Representation, stride, type and arena
+lifetime checks remain. The full signed index is compared with the checked bound
+before conversion to an address, avoiding narrow-host truncation. The requirement is two and net growth five, with no net
+shrink and nominal cost eight. Other operand forms retain their single-result
+contract and remain outside the first-pass trap-free proof.
 
-Both Rust and Keleusma bare lowerings compare flag with one and emit Trap kind eight
-for failure. Successful writes discard the five remaining diagnostic Words. No
-anonymous locals are introduced. The reference preserves exact source records for
-the store and trap. Direct bytecode can handle a failed outcome and continue.
-No new source-level handled-write syntax is claimed by this increment.
+Both bare lowerings dispatch failure through Trap kind eight and discard successful
+diagnostics. Rust routes all generated reads through emit_index_read. Keleusma wraps
+scalar reads in emit_op, with emit_raw reserved for already-handled outcomes. The
+reference debug recorder attaches exact source spans to the read and its trap.
 
-Both typed verifiers consume two operands and produce six Word-shaped entries.
-Keleusma uses transfer kind sixteen. The text-flow and text-bound protocols also
-needed new effect limits. Their former maximum delta of three and output count of
-four refused the new operations. They now admit delta five and six outputs, covering
-both BoundsCheck and SetDataIndexed. Dedicated controls retain text below diagnostic
-outputs and check module flags for text returned after a store.
+Both compilers now lower checked reads of stack-resident scalar arrays from the
+total outcome.
+Operands are evaluated once before seven temporaries are reserved in the order
+flag, value, index and four bound limbs. The value binds the element type, while
+invalid_index always binds Word, including for Byte arrays. Reconstruction validates
+those different binder kinds and the single-pattern arity. Full unguarded invalid
+coverage removes the fallback trap. Guarded and literal patterns retain it. A
+value-and-break trailer keeps the virtual loop structurally bounded without a trap.
 
-## Capacity repair
-
-The new bare dispatch expanded reconstruction's step_assembly to 1706 opcodes,
-exceeding the unchanged verifier limit of 1536. Its record-55 nested-field branch
-is now a focused nested_eq_field helper, preserving statement order and state.
-The largest reconstruction chunk is now step_record at 1412 opcodes. The stage has
-43 functions. No buffer or verifier capacity was raised. The current-source probe
-receipts are tmp/order3-store-op-sizes.log and tmp/order3-store-op-sizes-after.log.
+The parser uses its existing checked protocol, adds invalid_index recognition and
+retains the indexed family in the context form's high lane. Header record 118 still
+carries the element scalar kind. Two private scalars with no references, stmt.se_r2
+and stmt.se_l2, were removed to make room under the name cap. Direct Word and Byte
+array literals now arm the existing indexing postfix path. They previously parsed
+as two array literals in a source such as [7][2].
 
 ## Verification
 
-The final release self-host run passed all 1636 selected tests with zero skips.
-It includes the root library tests, store and bounds controls, verifier admission,
-the complete fourteen-stage artifact comparison, resource boundaries for every
-stage, code-generation regressions and narrow runtime controls. The implementation
-was held fixed during this run.
+The final release self-host run passed all 1758 executed tests, with two existing
+parser instrumentation tests skipped. It includes all current stage artifacts,
+resource-admission boundaries, compiler and parser regressions, malformed input
+controls and narrow runtime checks. The implementation was fixed during the run.
 
-Eight indexed-store controls cover shared and private Word and Byte storage,
-no mutation on failure, exact bounds, empty spans within declared storage,
-continuation after a handled failure, malformed spans and operand counts, runtime
-index-type guards, an i8 Word runtime, reference artifact equality, operand effects
-and text-return flags. The two compiler paths agree on the source controls.
+All ten indexed-read controls pass. The floating-point-disabled set passes twenty-five
+bounds and indexed-access controls. No-default library tests pass 175 cases. Fresh
+workspace Clippy with all targets and self-host passes, and the detached compiler
+builds. Formatting and diff checks pass. The first broad run had 1754 passes and two
+stale measurement assertions, both corrected before the final run. Typed-verifier
+residency is now 1513 total records and 467 peak, preserving the threefold criterion.
 
-Fresh workspace Clippy with all targets and self-host passes. No-default library
-tests pass 175 cases. Eighteen bounds and store controls also pass with floating
-point disabled and compile and verify enabled. The detached compiler builds. Formatting and diff checks pass.
-The first broad run had 1632 passes and two failures. One was the stale typed-stage
-record count, now measured at 1485 total and 439 peak while preserving the threefold
-fusion condition. The other exposed the text-analysis protocol refusal. Both were
-repaired before the final broad run. All verification processes are terminal.
+Final receipts are tmp/order3-read-final-acceptance.log,
+ tmp/order3-read-capacity-final.log, tmp/order3-read-clippy-final.log,
+ tmp/order3-read-detached-final.log, tmp/order3-read-no-floats-final.log and
+ tmp/order3-read-no-default.log. The first broad run is
+ tmp/order3-read-acceptance.log.
 
-Receipts are tmp/order3-store-final-acceptance.log,
- tmp/order3-store-focused-final.log, tmp/order3-store-resources-after.log,
- tmp/order3-store-clippy-final.log, tmp/order3-store-no-default.log and
- tmp/order3-store-detached-final.log and tmp/order3-store-no-floats.log. The original primitive failure is in
- tmp/order3-store-before.log, and the first broad run is
- tmp/order3-store-acceptance.log.
+Fifteen backend controls pass, including index binder kinds, seven temporaries,
+malformed descriptors and slot limits. The parser-name measurement is 1023 names
+and 30109 blob bytes under unchanged caps, leaving one name free. Current-source
+stage sizing keeps every stage chunk below the existing 1536-opcode verifier limit.
+Codegen now has 100 functions. The parser and other fixed capacities were not raised.
 
-The full five-configuration matrix, complete workspace and isolated suites,
-detached compiler tests, shipping commands, documentation tests, minimum Rust,
-cross-target builds, Miri and release gates were not rerun. These receipts support
-this increment and do not establish completion of Order 3.
+Receipts include tmp/order3-read-focused.log, tmp/order3-read-backend.log,
+ tmp/order3-read-op-sizes.log, tmp/order3-read-capacity.log,
+ tmp/order3-read-source-second.log and tmp/order3-read-no-floats.log.
+The initial contract failure is tmp/order3-read-before.log. The direct-literal
+parsing defect is recorded in tmp/order3-read-source-trace.log.
+
+The full five-configuration matrix, full isolated/workspace suites, detached
+compiler tests, shipping commands, minimum Rust, cross-target builds, Miri and
+release gates were not rerun. No Order 3 completion claim follows from this work.
 
 ## Next work
 
-Implement total indexed reads under docs/decisions/ORDER3_COMPLETION_PLAN.md.
-GetIndex and GetDataIndexed still raise internal bounds faults. GetIndex already
-carries its element descriptor. GetDataIndexed carries only base and length, so
-its deterministic Word or Byte fallback needs a kind rule, including zero length.
-An explicit kind operand remains a candidate, not an implemented decision.
-Specify the exact output stack before changing each contract, and update both
-compilers, both verifiers, text and resource consumers, wire paths and documentation.
-Reuse the portable diagnostic suffix rather than hidden last-failure state.
+GetDataIndexed still raises an internal bounds fault and needs a total Word/Byte
+contract. It currently carries base and length without an element kind. Its typed
+fallback, especially for zero-length spans, needs an explicit kind rule before
+implementation. An explicit kind operand remains a candidate. Keep the portable
+diagnostic suffix and update both compilers, verifiers, resource/text consumers,
+wire paths and documentation together.
 
-Handled index outcomes must omit unreachable fallback traps. Legacy integer Div
-and Mod still fault in hand-built bytecode. Matching classifications, host loading
-policy, resume and replacement preservation, actual proof-gated check elision and
-the final audit remain required. No trap-free or no-check mode exists yet.
+Legacy integer Div and Mod still fault in hand-built bytecode. Their contract
+resolution, matching Rust and Keleusma classifications, trap-free host policy,
+resume and replacement preservation, actual proof-gated check elision and final
+verification remain required. Non-first-pass GetIndex forms must be classified as
+unsupported, never admitted as trap-free from a zero-Trap scan.
 
-## Compatibility and handoff
+## Constraints and handoff
 
-Rebuild development artifacts because the indexed-store stack contract changed.
-BYTECODE_VERSION remains 2 and FORMAT_FINGERPRINT remains 0x4327_63E1 during
-V0.2.3-WIP. Publication is the fingerprint change boundary. V0.2.2 remains the last
-published release. Public instruction count stays 66, selected type capacities 640
-and verifier depth 32. The reference parser depth stays 24. The parser's 1024-name
-input pool remains full and unchanged. Appendix B was read before tracked writes.
-The legacy HANDOFF.md remains invalid-and-stale. Backlog B42 retains the requested
-first-class compiler-managed ring buffer support.
+Rebuild development artifacts after these stack-contract changes. BYTECODE_VERSION
+stays 2, FORMAT_FINGERPRINT stays 0x4327_63E1 during V0.2.3-WIP, public instruction
+count stays 66, selected type capacities stay 640 and verifier depth stays 32.
+Reference parser depth stays 24. V0.2.2 remains the last published release. No
+publication is authorized. Appendix B was read before writes. The legacy HANDOFF.md
+is invalid-and-stale. Backlog B42 retains compiler-managed ring buffer support.
 
-Pilot task v023-store-1984 records one diagnostic and three completion claims.
-Labels are non-independent self-review. The store-test claim was labelled
-unsupported because its excerpt omitted the binary identity, which is present in
-the full log. The reviewed export is tmp/order3-store-pilot-checkpoint.json.
-External evaluation was not retried after the earlier automatic approval rejection.
-This branch does not own the shared tracked pilot checkpoint. The task outcome
-resolves this increment only, not Order 3.
+Pilot task v023-read-28a2 records the first failed control and three completion
+claims. All labels are non-independent self-review. The reviewed export is
+ tmp/order3-read-pilot-checkpoint.json. The task outcome resolves this increment
+only. External evaluation was not retried after the earlier automatic approval
+rejection. This branch does not own the shared tracked pilot checkpoint.
 
 The v0.2.3 inbox is empty. Its tracked checkpoint was exported and reviewed without
 a diff. All verification processes are terminal.
 
 Local .codex/ settings and nvim.log remain unrelated and untracked. No peer message,
 merge or publication occurred. The concurrent V0.3.X worktree was not modified.
-Feature-branch backup remains authorized by the operator's earlier request.
+The operator's earlier feature-branch backup authorization remains in force.

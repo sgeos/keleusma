@@ -855,6 +855,8 @@ pub const BR_P_UNDERFLOW_ID: usize = BR_P_OVERFLOW_ID + 1;
 pub const BR_P_ZERO_DIVISOR_ID: usize = BR_P_UNDERFLOW_ID + 1;
 /// Full-width literal values transported from the lexer without host parsing.
 pub const BR_P_VALUES: usize = BR_P_ZERO_DIVISOR_ID + 1;
+/// Contextual indexed-read outcome label, interned identifier plus one.
+pub const BR_P_INVALID_INDEX_ID: usize = BR_P_VALUES + LEX_INTERN_CAP;
 
 #[cfg(test)]
 mod shared_layout_tests {
@@ -958,6 +960,11 @@ mod shared_layout_tests {
             ("on_id", "BR_P_ON_ID", BR_P_ON_ID),
             ("ok_id", "BR_P_OK_ID", BR_P_OK_ID),
             ("values", "BR_P_VALUES", BR_P_VALUES),
+            (
+                "invalid_index_id",
+                "BR_P_INVALID_INDEX_ID",
+                BR_P_INVALID_INDEX_ID,
+            ),
             ("overflow_id", "BR_P_OVERFLOW_ID", BR_P_OVERFLOW_ID),
             ("underflow_id", "BR_P_UNDERFLOW_ID", BR_P_UNDERFLOW_ID),
             (

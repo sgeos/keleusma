@@ -567,7 +567,24 @@ impl FuncCompiler {
         if !self.emit_debug {
             return;
         }
-        if let Some(idx) = self.chunk.ops.len().checked_sub(1) {
+        if let Some(last) = self.chunk.ops.len().checked_sub(1) {
+            let read = last.checked_sub(6).filter(|&at| {
+                matches!(self.chunk.ops[at], Op::GetIndex(elem) if elem.has_bounds_outcome())
+                    && self.chunk.ops[last] == Op::PopN(5)
+                    && self.chunk.ops[last - 2]
+                        == Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code())
+            });
+            if let Some(at) = read {
+                self.pending_debug.push(PendingDebug::SourceSpan {
+                    op_index: at,
+                    span: *span,
+                });
+                self.pending_debug.push(PendingDebug::BreakpointCandidate {
+                    op_index: at,
+                    span: *span,
+                });
+            }
+            let idx = if read.is_some() { last - 2 } else { last };
             self.pending_debug.push(PendingDebug::SourceSpan {
                 op_index: idx,
                 span: *span,
@@ -779,6 +796,21 @@ impl FuncCompiler {
         let idx = self.chunk.ops.len();
         self.chunk.ops.push(op);
         idx
+    }
+
+    fn emit_index_read(&mut self, elem: ArrayElem) -> usize {
+        let start = self.emit(Op::GetIndex(elem));
+        if elem.has_bounds_outcome() {
+            let one = self.add_constant(Value::Int(1));
+            self.emit(Op::Const(one));
+            self.emit(Op::CmpEq);
+            let valid = self.emit_jump(Op::If(0));
+            self.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
+            self.patch_jump(valid);
+            self.emit(Op::EndIf);
+            self.emit(Op::PopN(5));
+        }
+        start
     }
 
     fn emit_jump(&mut self, placeholder: Op) -> usize {
@@ -1326,7 +1358,7 @@ fn compile_multiword_shift(
         let wi = fc.declare_local("__mw_w");
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(wi));
         wv.push(wi);
     }
@@ -1480,7 +1512,7 @@ fn emit_mw_guarded(
     // (a[safe_idx] band in_mask) bor (fill band bnot(in_mask)).
     fc.emit(Op::GetLocal(av));
     fc.emit(Op::GetLocal(siv));
-    fc.emit(Op::GetIndex(elem_op));
+    fc.emit_index_read(elem_op);
     fc.emit(Op::GetLocal(imv));
     fc.emit(Op::BitAnd);
     fc.emit(Op::GetLocal(fillv));
@@ -1581,7 +1613,7 @@ fn compile_multiword_variable_shift(
         let top_c = fc.add_constant(Value::Int((nn - 1) as i64));
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(top_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::Const(wbm1_c));
         fc.emit(Op::Shr);
         fc.emit(Op::SetLocal(fillv));
@@ -1712,10 +1744,10 @@ fn compile_multiword_bitwise(
         let rk = fc.declare_local("__mw_r");
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(bit_op);
         fc.emit(Op::SetLocal(rk));
         rwords.push(rk);
@@ -1758,7 +1790,7 @@ fn compile_multiword_bnot(
         let rk = fc.declare_local("__mw_r");
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::Const(neg1));
         fc.emit(Op::BitXor);
         fc.emit(Op::SetLocal(rk));
@@ -1911,12 +1943,12 @@ fn compile_multiword_add_sub(
         // x = a[i]
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(xi));
         // y = b[i]
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(yi));
         // s1 = x (op) y, wrapping; discard the high word and flag.
         fc.emit(Op::GetLocal(xi));
@@ -2025,7 +2057,7 @@ fn compile_multiword_compare(
         // x = a[i], sign-flipped for the signed top limb.
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         if is_top {
             fc.emit(Op::Const(sign));
             fc.emit(Op::BitXor);
@@ -2034,7 +2066,7 @@ fn compile_multiword_compare(
         // y = b[i], sign-flipped for the signed top limb.
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         if is_top {
             fc.emit(Op::Const(sign));
             fc.emit(Op::BitXor);
@@ -2198,13 +2230,13 @@ fn compile_multiword_mul(
         let ai = fc.declare_local("__mw_ai");
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(ai));
         adig.push(ai);
         let bj = fc.declare_local("__mw_bj");
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(bj));
         bdig.push(bj);
     }
@@ -2453,13 +2485,13 @@ fn compile_multiword_fixed_mul(
         let ai = fc.declare_local("__mw_ai");
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(ai));
         adig.push(ai);
         let bj = fc.declare_local("__mw_bj");
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(bj));
         bdig.push(bj);
     }
@@ -2751,13 +2783,13 @@ fn compile_multiword_div(
         let ai = fc.declare_local("__mw_ai");
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(ai));
         adig.push(ai);
         let bj = fc.declare_local("__mw_bj");
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(bj));
         bdig.push(bj);
     }
@@ -5204,10 +5236,7 @@ fn emit_data_indexed_read(
         for index_expr in chain.indices {
             compile_expr(fc, index_expr)?;
             let elem_ty = cur_ty.as_ref().and_then(element_type_of);
-            fc.emit(Op::GetIndex(array_elem_operand(
-                elem_ty.as_ref(),
-                &fc.type_info,
-            )));
+            fc.emit_index_read(array_elem_operand(elem_ty.as_ref(), &fc.type_info));
             cur_ty = elem_ty;
             // Each level's index can trap out-of-bounds; record the
             // operator site so the fault resolves exactly (B29 item 2).
@@ -6825,7 +6854,7 @@ fn emit_field_extract(fc: &mut FuncCompiler, slot: u16, access: &FieldAccessOp) 
             // `GetIndex` pops the index then the container, so push the
             // container (via `GetLocal` above) then the index constant.
             fc.emit(Op::Const(*index_const));
-            fc.emit(Op::GetIndex(*elem));
+            fc.emit_index_read(*elem);
         }
     }
 }
@@ -7956,10 +7985,7 @@ fn compile_for_scoped(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), C
             // Extract element at current index.
             fc.emit(Op::GetLocal(arr_slot));
             fc.emit(Op::GetLocal(idx_slot));
-            fc.emit(Op::GetIndex(array_elem_operand(
-                element_ty.as_ref(),
-                &fc.type_info,
-            )));
+            fc.emit_index_read(array_elem_operand(element_ty.as_ref(), &fc.type_info));
             let var_slot = fc.declare_local_typed(&for_stmt.var, element_ty);
             fc.emit(Op::SetLocal(var_slot));
 
@@ -9746,10 +9772,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             let elem_ty = infer_expr_type(fc, object).and_then(|t| element_type_of(&t));
             compile_expr(fc, object)?;
             compile_expr(fc, index)?;
-            fc.emit(Op::GetIndex(array_elem_operand(
-                elem_ty.as_ref(),
-                &fc.type_info,
-            )));
+            fc.emit_index_read(array_elem_operand(elem_ty.as_ref(), &fc.type_info));
             // Indexing can trap on an out-of-bounds index; record the
             // operator site so the fault resolves exactly (B29 item 2).
             fc.record_operator_site(span);
@@ -10575,17 +10598,9 @@ fn compile_checked(
     Ok(())
 }
 
-/// Compile the indexing construct `array[index] { ok(v) => ...,
-/// invalid_index(i) => ... }` (B35 P4). The lowering needs no new
-/// opcode: it synthesizes the bounds check from the folded array length,
-/// integer comparisons, and `Op::If`, computing an outcome flag (`0` ok, `1`
-/// invalid index) and stashing the element (in-bounds) or leaving the
-/// index for the `invalid_index` binding. **The length is a folded constant
-/// and never `Op::Len`**, which a flat array body cannot answer; this comment
-/// named that opcode until the fall-back beneath it was removed. The arm dispatch mirrors
-/// `compile_checked`. An unhandled out-of-bounds index re-issues the
-/// plain `Op::GetIndex`, which traps with the precise
-/// `VmError::IndexOutOfBounds(index, len)`.
+/// Compile indexed outcome handlers. First-pass Word and Byte reads consume
+/// the total opcode result and retain its diagnostic payload. Other element
+/// forms keep the legacy guarded-read lowering and remain outside that proof.
 fn compile_checked_index(
     fc: &mut FuncCompiler,
     op_expr: &Expr,
@@ -10603,74 +10618,97 @@ fn compile_checked_index(
     let word_ty = TypeExpr::Prim(PrimType::Word, *span);
 
     let suffix = span.start;
-    let arr_slot = fc.declare_local(&alloc::format!("__idx_arr_{}", suffix));
-    let idx_slot = fc.declare_local(&alloc::format!("__idx_i_{}", suffix));
-    let len_slot = fc.declare_local(&alloc::format!("__idx_len_{}", suffix));
-    let flag_slot = fc.declare_local(&alloc::format!("__idx_flag_{}", suffix));
-    let elem_slot = fc.declare_local(&alloc::format!("__idx_elem_{}", suffix));
-
-    // arr_slot = object; idx_slot = index.
-    compile_expr(fc, object)?;
-    fc.emit(Op::SetLocal(arr_slot));
-    compile_expr(fc, index)?;
-    fc.emit(Op::SetLocal(idx_slot));
-    // len_slot = the array length. Array length is a fixed-size,
-    // compile-time constant, so fold it to a literal rather than emit
-    // `Op::Len`, which a flat array body cannot answer (B28 P2).
-    //
-    // **The `Op::Len` fall-back that used to sit here is gone**, for the
-    // reason given at the for-in emission site: the opcode is refused on a
-    // flat body, so emitting it yields a module that passes `verify()` and
-    // traps at run time. The comment it carried described the fall-back as
-    // serving "a boxed array whose length the compiler could not recover
-    // statically", and no such case was found -- the indexed operand's type
-    // is what decides the fold, and a boxed array's type is an array like any
-    // other.
-    let arr_len = infer_expr_type(fc, object)
-        .as_ref()
-        .and_then(indexable_length_of_type);
-    let Some(n) = arr_len else {
-        return Err(CompileError {
-            message: String::from(
-                "the length of this indexed value could not be folded to a constant, \
-                 so its bounds check cannot be built. A fixed-size array's length is \
-                 statically known, so this is a limitation of the compiler rather than \
-                 of the program; please report it.",
-            ),
-            span: *span,
+    let element = array_elem_operand(Some(&elem_ty), &fc.type_info);
+    let total = element.has_bounds_outcome();
+    let (idx_slot, flag_slot, elem_slot, arr_slot, limbs) = if total {
+        // Evaluate once before reserving the seven diagnostic/result temporaries.
+        compile_expr(fc, object)?;
+        compile_expr(fc, index)?;
+        let flag = fc.declare_local(&alloc::format!("__idx_flag_{}", suffix));
+        let value = fc.declare_local(&alloc::format!("__idx_elem_{}", suffix));
+        let index = fc.declare_local(&alloc::format!("__idx_i_{}", suffix));
+        let limbs = core::array::from_fn::<_, 4, _>(|i| {
+            fc.declare_local(&alloc::format!("__idx_bound_{}_{}", suffix, i))
         });
+        // Deliberately bypass the bare-read wrapper so handlers own the outcome.
+        fc.emit(Op::GetIndex(element));
+        fc.record_operator_site(span);
+        fc.emit(Op::SetLocal(flag));
+        for &slot in limbs.iter().rev() {
+            fc.emit(Op::SetLocal(slot));
+        }
+        fc.emit(Op::SetLocal(index));
+        fc.emit(Op::SetLocal(value));
+        (index, flag, value, None, limbs)
+    } else {
+        let arr_slot = fc.declare_local(&alloc::format!("__idx_arr_{}", suffix));
+        let idx_slot = fc.declare_local(&alloc::format!("__idx_i_{}", suffix));
+        let len_slot = fc.declare_local(&alloc::format!("__idx_len_{}", suffix));
+        let flag_slot = fc.declare_local(&alloc::format!("__idx_flag_{}", suffix));
+        let elem_slot = fc.declare_local(&alloc::format!("__idx_elem_{}", suffix));
+
+        // arr_slot = object; idx_slot = index.
+        compile_expr(fc, object)?;
+        fc.emit(Op::SetLocal(arr_slot));
+        compile_expr(fc, index)?;
+        fc.emit(Op::SetLocal(idx_slot));
+        // len_slot = the array length. Array length is a fixed-size,
+        // compile-time constant, so fold it to a literal rather than emit
+        // `Op::Len`, which a flat array body cannot answer (B28 P2).
+        //
+        // **The `Op::Len` fall-back that used to sit here is gone**, for the
+        // reason given at the for-in emission site: the opcode is refused on a
+        // flat body, so emitting it yields a module that passes `verify()` and
+        // traps at run time. The comment it carried described the fall-back as
+        // serving "a boxed array whose length the compiler could not recover
+        // statically", and no such case was found -- the indexed operand's type
+        // is what decides the fold, and a boxed array's type is an array like any
+        // other.
+        let arr_len = infer_expr_type(fc, object)
+            .as_ref()
+            .and_then(indexable_length_of_type);
+        let Some(n) = arr_len else {
+            return Err(CompileError {
+                message: String::from(
+                    "the length of this indexed value could not be folded to a constant, \
+                     so its bounds check cannot be built. A fixed-size array's length is \
+                     statically known, so this is a limitation of the compiler rather than \
+                     of the program; please report it.",
+                ),
+                span: *span,
+            });
+        };
+        let n_const = fc.add_constant(Value::Int(n));
+        fc.emit(Op::Const(n_const));
+        fc.emit(Op::SetLocal(len_slot));
+        // flag defaults to 1 (invalid_index); flipped to 0 when in range.
+        let one_idx = fc.add_constant(Value::Int(1));
+        fc.emit(Op::Const(one_idx));
+        fc.emit(Op::SetLocal(flag_slot));
+        // if idx >= 0 { if idx < len { elem = arr[idx]; flag = 0 } }
+        fc.emit(Op::GetLocal(idx_slot));
+        let zero_idx = fc.add_constant(Value::Int(0));
+        fc.emit(Op::Const(zero_idx));
+        fc.emit(Op::CmpGe);
+        let ge_skip = fc.emit_jump(Op::If(0));
+        fc.emit(Op::GetLocal(idx_slot));
+        fc.emit(Op::GetLocal(len_slot));
+        fc.emit(Op::CmpLt);
+        let lt_skip = fc.emit_jump(Op::If(0));
+        fc.emit(Op::GetLocal(arr_slot));
+        fc.emit(Op::GetLocal(idx_slot));
+        fc.emit_index_read(array_elem_operand(Some(&elem_ty), &fc.type_info));
+        fc.emit(Op::SetLocal(elem_slot));
+        let zero_flag_idx = fc.add_constant(Value::Int(0));
+        fc.emit(Op::Const(zero_flag_idx));
+        fc.emit(Op::SetLocal(flag_slot));
+        fc.patch_jump(lt_skip);
+        fc.emit(Op::EndIf);
+        fc.patch_jump(ge_skip);
+        fc.emit(Op::EndIf);
+
+        (idx_slot, flag_slot, elem_slot, Some(arr_slot), [0; 4])
     };
-    let n_const = fc.add_constant(Value::Int(n));
-    fc.emit(Op::Const(n_const));
-    fc.emit(Op::SetLocal(len_slot));
-    // flag defaults to 1 (invalid_index); flipped to 0 when in range.
-    let one_idx = fc.add_constant(Value::Int(1));
-    fc.emit(Op::Const(one_idx));
-    fc.emit(Op::SetLocal(flag_slot));
-    // if idx >= 0 { if idx < len { elem = arr[idx]; flag = 0 } }
-    fc.emit(Op::GetLocal(idx_slot));
-    let zero_idx = fc.add_constant(Value::Int(0));
-    fc.emit(Op::Const(zero_idx));
-    fc.emit(Op::CmpGe);
-    let ge_skip = fc.emit_jump(Op::If(0));
-    fc.emit(Op::GetLocal(idx_slot));
-    fc.emit(Op::GetLocal(len_slot));
-    fc.emit(Op::CmpLt);
-    let lt_skip = fc.emit_jump(Op::If(0));
-    fc.emit(Op::GetLocal(arr_slot));
-    fc.emit(Op::GetLocal(idx_slot));
-    fc.emit(Op::GetIndex(array_elem_operand(
-        Some(&elem_ty),
-        &fc.type_info,
-    )));
-    fc.emit(Op::SetLocal(elem_slot));
-    let zero_flag_idx = fc.add_constant(Value::Int(0));
-    fc.emit(Op::Const(zero_flag_idx));
-    fc.emit(Op::SetLocal(flag_slot));
-    fc.patch_jump(lt_skip);
-    fc.emit(Op::EndIf);
-    fc.patch_jump(ge_skip);
-    fc.emit(Op::EndIf);
 
     // Dispatch arms in a virtual loop, mirroring compile_checked.
     let loop_addr = fc.emit(Op::Loop(0));
@@ -10732,16 +10770,30 @@ fn compile_checked_index(
         }
     }
 
-    // No arm matched. Reaching here implies the index was out of
-    // bounds (flag 1) and no `invalid_index` arm covered it, since the
-    // `ok` class is a mandatory catch-all. Re-issue the plain index so
-    // the runtime traps with the precise `IndexOutOfBounds(index, len)`.
-    fc.emit(Op::GetLocal(arr_slot));
-    fc.emit(Op::GetLocal(idx_slot));
-    fc.emit(Op::GetIndex(array_elem_operand(
-        Some(&elem_ty),
-        &fc.type_info,
-    )));
+    if total {
+        let covered = arms.iter().any(|arm| {
+            arm.guard.is_none()
+                && matches!(
+                    &arm.kind,
+                    CheckedArmKind::InvalidIndex(Pattern::Variable(_, _) | Pattern::Wildcard(_))
+                )
+        });
+        if !covered {
+            fc.emit(Op::GetLocal(idx_slot));
+            for slot in limbs {
+                fc.emit(Op::GetLocal(slot));
+            }
+            fc.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
+            fc.record_operator_site(span);
+        }
+        // Structurally bounded, deterministic trailer. Complete coverage makes
+        // it unreachable, while partial coverage terminates at the explicit trap.
+        fc.emit(Op::GetLocal(elem_slot));
+    } else {
+        fc.emit(Op::GetLocal(arr_slot.expect("legacy array slot")));
+        fc.emit(Op::GetLocal(idx_slot));
+        fc.emit_index_read(element);
+    }
     let default_break = fc.emit(Op::Break(0));
     if let Some(breaks) = fc.loop_breaks.last_mut() {
         breaks.push(default_break);

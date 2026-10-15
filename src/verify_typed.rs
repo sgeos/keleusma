@@ -1071,7 +1071,7 @@ fn apply_op(
 
         // Flat array element access pops the index and the array. The element
         // offset is `index * element_size` computed at run time, so the index
-        // bound stays a runtime trap; the static check validates that the
+        // bound is handled at runtime; the static check validates that the
         // baked element stride evenly divides the array body (A.2.1 Phase 3),
         // then pushes the element shape.
         Op::GetIndex(ArrayElem::Flat { kind }) => {
@@ -1080,6 +1080,9 @@ fn apply_op(
             let elem = kind.size_in_bytes(ctx.wb, ctx.fb, ctx.ab) as u32;
             check_flat_array_stride(&arr, elem, ip)?;
             stack.push(AbsVal::Scalar(*kind));
+            if (ArrayElem::Flat { kind: *kind }).has_bounds_outcome() {
+                stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 6));
+            }
         }
         Op::GetIndex(ArrayElem::FlatNested { size, variant }) => {
             let _index = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;

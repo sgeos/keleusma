@@ -55,10 +55,15 @@ failures through an explicit bounds Trap and discard successful diagnostics.
 Shared and private Word and Byte controls cover failure, success and continued
 execution after a handled outcome.
 
-GetIndex and GetDataIndexed still fault internally on bounds errors.
-Their total contracts and both compiler lowerings remain required. The checked-index
-fallback still reissues a trapping GetIndex. No trap-free verdict or no-check mode
-is implemented.
+GetIndex now returns a typed scalar value and the diagnostic suffix for flat Word
+and Byte reads. Both bare lowerings use explicit traps. Both compilers also support
+checked reads of stack-resident scalar arrays, with seven temporaries, Word index
+bindings for Byte arrays, guarded and literal patterns, and no fallback trap under
+complete invalid_index coverage. Other GetIndex forms retain the legacy contract
+and remain outside the first-pass proof.
+
+GetDataIndexed still faults internally on bounds errors. Its total contract and
+both lowerings remain required. No trap-free verdict or no-check mode exists.
 
 Legacy Div and Mod still fault on integer zero divisors in hand-built bytecode.
 The direct instruction-contract tests retain that negative control. A scan-based
@@ -182,6 +187,13 @@ table. An otherwise empty table fits fifty arms and refuses the fifty-first.
 Checked contexts have a guarded depth of 32. Existing unrelated unguarded side
 arrays remain explicitly registered.
 
+For checked Word and Byte array reads, record 118 also accepts a scalar-index root
+node 31. Seven temporaries follow the operands in flag, value, index and bound-limb
+order. Class zero is ok and class one is invalid_index. Only one pattern is allowed.
+The ok binding uses the element kind, while invalid_index always binds Word.
+Reconstruction checks those kinds and source slots independently. The parser retains
+this family in its context form and uses the same guard and coverage protocol.
+
 Code generation schedules the reverse list onto its work stack to preserve source
 order. Deferred integers share immutable scratch slots so repeated outcome flags
 do not exhaust the 64-entry table. Actual constant-pool interning remains deferred
@@ -207,8 +219,9 @@ The expanded parser exceeded the lexer source buffer. Its capacity is now 524288
 bytes, with a driver guard before copying source and aligned detached-harness
 checks. The source-cap boundary has positive and negative controls. The separate
 operator-selected type capacities remain 640. The module-input name cap remains
-1024, with measured parser usage of exactly 1024 names and 30050 blob bytes.
-The name pool has no remaining headroom.
+1024, with measured parser usage of 1023 names and 30109 blob bytes. Two unused
+private scalar fields were removed before adding the indexed-outcome keyword.
+Only one name remains free.
 
 The observed packed-token defect is repaired. Large integer values use lexer token
 65 and a shared value table keyed by the interned spelling. The parser receives the
@@ -227,9 +240,9 @@ the scalar kind. The initial failures and final receipts are in REVERSE_PROMPT.m
 
 ## Bounds contract work next
 
-The predicate, indexed-write and diagnostic contracts are specified and implemented
-in [ORDER3_BOUNDS_CONTRACTS.md](ORDER3_BOUNDS_CONTRACTS.md). The remaining read
-operations still need exact stack effects, fallbacks and compiler dispatch.
+The predicate, indexed-write, flat scalar array-read and diagnostic contracts are
+specified and implemented in [ORDER3_BOUNDS_CONTRACTS.md](ORDER3_BOUNDS_CONTRACTS.md).
+Indexed data-segment reads still need exact stack effects, fallbacks and dispatch.
 GetDataIndexed carries base and length without an element kind. Its invalid-index
 fallback therefore needs an explicit Word or Byte kind rule, including zero length.
 Shared slots have kind metadata, while private slots have initializer metadata.

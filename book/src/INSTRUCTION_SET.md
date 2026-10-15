@@ -176,7 +176,7 @@ The `Option::None` sentinel and `Option::Some` wrap are handled through `PushImm
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
 | GetField | `StructField` (flat/nested/boxed) | 3 | Pop struct, push field value. The baked `StructField` operand selects a flat read at a byte offset, a nested-composite extraction, or a boxed positional/named lookup. |
-| GetIndex | `ArrayElem` (flat/nested/boxed) | 2 | Pop index and array, push element. The baked `ArrayElem` operand selects a flat read at `index * element_size`, a nested-composite extraction, or a boxed index. |
+| GetIndex | `ArrayElem` (flat/nested/boxed) | 2 or 8 | Flat Word and Byte forms pop array and index and push the value, index, four Word byte limbs of the bound, and an outcome flag. Invalid indices yield typed zero and flag one without reading an element. Valid indices yield the element and flag zero. These forms cost eight. Other forms retain a single result and cost two, and remain outside the first-pass trap-free proof. |
 | GetTupleField | `TupleField` (flat/nested/boxed) | 2 | Pop tuple, push element. The baked `TupleField` operand selects a flat read at a byte offset, a nested-composite extraction, or a boxed positional index. |
 | GetEnumField | `EnumField` (flat/nested/boxed) | 2 | Pop enum variant, push payload field. The baked `EnumField` operand selects a flat read past the discriminant word, a nested-composite extraction, or a boxed positional index. |
 | Len | none | 2 | Pop composite value (Array, Text, Tuple), push length as Int. |
@@ -234,12 +234,12 @@ The cost groupings reproduce `bytecode::nominal_op_cycles`. Hosts that need wall
 | Cost | Instructions |
 |------|-------------|
 | 1 | Const, PushImmediate, GetLocal, SetLocal, GetData, SetData, Dup, Not, If, Else, EndIf, Loop, EndLoop, Break, BreakIf, Stream, Reset, Yield, Trap except kind 8, PopN |
-| 2 | Add, Sub, Mul, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Return, GetDataIndexed, BitAnd, BitOr, BitXor, Shl, Shr |
+| 2 | Add, Sub, Mul, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex other forms, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Return, GetDataIndexed, BitAnd, BitOr, BitXor, Shl, Shr |
 | 3 | Div, Mod, GetField, IsEnum, IsStruct |
 | 5 | NewComposite |
 | 6 | Trap kind 8 |
 | 7 | BoundsCheck |
-| 8 | SetDataIndexed |
+| 8 | SetDataIndexed, GetIndex flat Word or Byte |
 | 10 | Call, CallVerifiedNative, CallExternalNative |
 
 ## WCMU contributions
@@ -252,11 +252,11 @@ The values reproduce `Op::stack_growth` in `src/bytecode.rs`. For multi-output o
 
 | Growth | Instructions |
 |--------|--------------|
-| 0 | Not, Neg, Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Yield, Return, GetField, GetIndex, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap, PopN, BitAnd, BitOr, BitXor, Shl, Shr |
+| 0 | Not, Neg, Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Yield, Return, GetField, GetIndex other forms, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap, PopN, BitAnd, BitOr, BitXor, Shl, Shr |
 | 1 | Const, PushImmediate, GetLocal, GetData, Dup, GetDataIndexed, CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, CallVerifiedNative, CallExternalNative, NewComposite, IsEnum, IsStruct |
 | 2 | CheckedNeg |
 | 4 | SetDataIndexed |
-| 5 | BoundsCheck |
+| 5 | BoundsCheck, GetIndex flat Word or Byte |
 
 ### Stack shrink (slots popped during execution)
 
@@ -264,8 +264,8 @@ The values reproduce `Op::stack_shrink`. For opcodes whose net delta is non-nega
 
 | Shrink | Instructions |
 |--------|--------------|
-| 0 | Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, SetDataIndexed, BoundsCheck, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap except kind 8 |
-| 1 | Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, GetDataIndexed, If, BreakIf, Yield, GetField, GetIndex, GetTupleField, GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr |
+| 0 | Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, SetDataIndexed, BoundsCheck, GetIndex flat Word or Byte, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap except kind 8 |
+| 1 | Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, GetDataIndexed, If, BreakIf, Yield, GetField, GetIndex other forms, GetTupleField, GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr |
 | 5 | Trap kind 8 |
 | n | PopN(n), Call(_, n), CallVerifiedNative(_, n), CallExternalNative(_, n), NewComposite(count) |
 

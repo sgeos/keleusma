@@ -358,11 +358,12 @@ fn apply_typed(ip: Word) -> Word {
         check_flat_extent(tf.pop_tag, tf.pop_size, tv.ta[ip] + tv.tb[ip]);
         st_push_k(2, tv.tb[ip], tv.tc[ip]);
     } else {
-    if k == 9 {
+    if k == 9 orelse k == 17 {
         st_pop();
         st_pop();
         check_stride(tf.pop_tag, tf.pop_size, tv.ta[ip]);
         st_push(1, tv.ta[ip]);
+        if k == 17 { for j in 0..6 limit 6 { st_push(1, tv.tb[ip]); } }
     } else {
     if k == 10 {
         st_pop();

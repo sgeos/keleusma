@@ -6,6 +6,31 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-15 Total scalar array reads and checked handlers
+
+Flat Word and Byte GetIndex operands now return typed values and portable bounds
+outcomes. Invalid indices yield typed zero. Both bare compiler lowerings use an
+explicit trap, and both checked lowerings retain seven temporaries and omit the
+fallback trap under full invalid_index coverage. Byte-array invalid_index bindings
+remain Word. Direct scalar-array literal indexing and malformed descriptor controls
+are included. Other GetIndex operand forms retain their explicit proof boundary.
+
+The parser name cap remains unchanged. Removing two unused private scalar fields
+made room for the contextual keyword, leaving measured usage of 1023 names and
+30109 blob bytes. Codegen has 100 functions. Typed-verifier residency is measured
+at 1513 total records and 467 peak, retaining the threefold reduction requirement.
+
+All 1758 executed checks pass in the final selected run, with two instrumentation
+tests skipped. Every current stage artifact and resource-admission boundary passes.
+Clippy, the detached build, 175 no-default library tests and twenty-five controls
+without floating-point support pass. Full feature and release gates remain.
+
+Order 3 remains active. Indexed data-segment reads, legacy partial arithmetic
+contracts, classifications, host policy, proof-gated check elision and the full
+audit remain required. Development artifacts must be rebuilt. The operator's
+version, fingerprint, public instruction-count and selected-capacity constraints
+remain unchanged.
+
 ## 2026-10-15 Total indexed writes
 
 SetDataIndexed now returns a portable diagnostic suffix and an outcome flag.

@@ -1349,6 +1349,7 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
     )
     .unwrap();
     for (slot, name) in [
+        (crate::selfhost_host::BR_P_INVALID_INDEX_ID, "invalid_index"),
         (crate::selfhost_host::BR_P_OVERFLOW_ID, "overflow"),
         (crate::selfhost_host::BR_P_UNDERFLOW_ID, "underflow"),
         (crate::selfhost_host::BR_P_ZERO_DIVISOR_ID, "zero_divisor"),
@@ -1747,6 +1748,7 @@ fn try_parse_functions_impl(
     )
     .unwrap();
     for (slot, name) in [
+        (crate::selfhost_host::BR_P_INVALID_INDEX_ID, "invalid_index"),
         (crate::selfhost_host::BR_P_OVERFLOW_ID, "overflow"),
         (crate::selfhost_host::BR_P_UNDERFLOW_ID, "underflow"),
         (crate::selfhost_host::BR_P_ZERO_DIVISOR_ID, "zero_divisor"),
@@ -5469,6 +5471,9 @@ fn typed_desc(
             size,
             variant,
         }) => (8, *offset as i64, *size as i64, i64::from(variant.to_tag())),
+        Op::GetIndex(elem @ ArrayElem::Flat { kind }) if elem.has_bounds_outcome() => {
+            (17, kind.size_in_bytes(wb, fb, ab) as i64, wb as i64, 0)
+        }
         Op::GetIndex(ArrayElem::Flat { kind }) => (9, kind.size_in_bytes(wb, fb, ab) as i64, 0, 0),
         Op::GetIndex(ArrayElem::FlatNested { size, variant }) => {
             (10, *size as i64, 0, i64::from(variant.to_tag()))
@@ -5626,7 +5631,7 @@ fn seed_typed_shared(
         // BoundsCheck preserves its input and uses the dedicated five-Word
         // transfer. It never enters the generic push_tops unroll.
         assert!(
-            prod <= 4 || ((tk == 15 || tk == 16) && prod == 6),
+            prod <= 4 || ((tk == 15 || tk == 16) && prod == 6) || (tk == 17 && prod == 7),
             "verify_typed.kel push_tops unroll bound"
         );
         set(vm, &mut shared, TV_CLASS + i, class);

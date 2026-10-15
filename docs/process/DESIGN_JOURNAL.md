@@ -13,6 +13,26 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-15 Scalar array-read outcomes
+
+Word and Byte array operands have a known zero value, so their invalid-index result
+can retain its kind without allocation. The result precedes the portable diagnostic
+suffix. The full signed index is compared against the checked bound before address
+conversion, avoiding truncation on a narrow host. Representation, stride and lifetime
+checks remain separate contract guards.
+
+The checked lowering stores the outcome directly and evaluates each operand once.
+Seven temporaries preserve the result and diagnostic state across nested handlers.
+The same arm protocol supports Word invalid_index bindings for Byte arrays. Complete
+coverage removes the fallback trap while a deterministic value-and-break trailer
+keeps the dispatch loop structurally bounded. No hidden failure cache is used.
+
+The parser had treated direct literal indexing as a second array literal. Completed
+scalar literals now arm the existing postfix path. Two unused private fields were
+removed before adding the keyword, keeping the name cap intact. The final selected
+run passes every stage artifact and resource boundary. Indexed data-segment reads
+still require a kind rule and total contract.
+
 ## 2026-10-15 Indexed-write outcomes
 
 Indexed writes need no fallback element value. They consume the value and index,

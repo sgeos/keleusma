@@ -6031,6 +6031,53 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                                 self.read_flat_scalar(bytes, 0, kind, wb, fb, ep)?;
                                             sp!(self, val);
                                         }
+                                        Some(len) if elem.has_bounds_outcome() => {
+                                            if bytes.len() % esize != 0 {
+                                                return Err(VmError::InvalidBytecode(
+                                                    String::from(
+                                                        "array body is not a multiple of its element stride",
+                                                    ),
+                                                ));
+                                            }
+                                            let bound = u32::try_from(len).map_err(|_| VmError::InvalidBytecode(String::from("array length exceeds the diagnostic representation")))?;
+                                            // Compare before converting to usize so a wide Word cannot
+                                            // wrap into a valid address on a narrower host.
+                                            let invalid = idx < 0 || idx >= i64::from(bound);
+                                            let val = if invalid {
+                                                if kind == crate::value_layout::ScalarKind::Byte {
+                                                    crate::bytecode::GenericValue::Byte(0)
+                                                } else {
+                                                    crate::bytecode::GenericValue::Int(
+                                                        W::from_i64_wrap(0),
+                                                    )
+                                                }
+                                            } else {
+                                                self.read_flat_scalar(
+                                                    bytes,
+                                                    idx as usize * esize,
+                                                    kind,
+                                                    wb,
+                                                    fb,
+                                                    ep,
+                                                )?
+                                            };
+                                            sp!(self, val);
+                                            sp!(self, crate::bytecode::GenericValue::Int(i));
+                                            for byte in bound.to_le_bytes() {
+                                                sp!(
+                                                    self,
+                                                    crate::bytecode::GenericValue::Int(
+                                                        W::from_i64_wrap(i64::from(byte as i8))
+                                                    )
+                                                );
+                                            }
+                                            sp!(
+                                                self,
+                                                crate::bytecode::GenericValue::Int(
+                                                    W::from_i64_wrap(i64::from(invalid))
+                                                )
+                                            );
+                                        }
                                         Some(len) => {
                                             if idx < 0 || idx as usize >= len {
                                                 return Err(VmError::IndexOutOfBounds(idx, len));

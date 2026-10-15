@@ -728,7 +728,8 @@ fn checked_start(a: Word) -> Word {
         // a positive power of two, so literal amounts are restricted to 0..62.
         let shift = kind == 3 andalso io.args[root] == 37 andalso a / 65536 == 3;
         let amount = io.rhs[root];
-        let valid = ((kind == 3 orelse kind == 45) andalso op >= 1 andalso op <= 5 andalso io.args[root] == op)
+        let valid = (kind == 31 andalso io.args[root] == a / 65536 andalso a % 65536 <= 2041)
+            orelse ((kind == 3 orelse kind == 45) andalso op >= 1 andalso op <= 5 andalso io.args[root] == op)
             orelse (kind == 10 andalso a / 65536 == 3)
             orelse (shift andalso io.kinds[amount] == 1 andalso io.args[amount] >= 0 andalso io.args[amount] < 63);
         if not valid { rerr(6, kind) } else {
@@ -743,7 +744,7 @@ fn checked_start(a: Word) -> Word {
 
 fn checked_allowed(root: Word, scalar: Word) -> Word {
     let op = io.args[root] % 64;
-    if io.kinds[root] == 10 { 3 } else {
+    if io.kinds[root] == 10 orelse io.kinds[root] == 31 { 3 } else {
     if op == 5 { 9 } else { if op == 4 { if scalar == 3 { 11 } else { 9 } } else {
         if scalar == 3 { 7 } else { if op == 3 { 5 } else { 3 } }
     } } }
@@ -755,7 +756,12 @@ fn checked_arm_shape(result: Word, base: Word) -> Word {
     for i in 0..2 limit 2 {
         if io.kinds[checked.inspect] == 5 {
             let init = io.lhs[checked.inspect]; let packed = io.match_parts[base];
-            if io.kinds[init] != 80 orelse io.args[init] / 65536 != packed / 65536
+            let source = io.args[init] % 65536;
+            let indexed = io.kinds[checked.ctx_root[checked.depth - 1]] == 31;
+            let scalar = if indexed andalso source == packed % 65536 + 2 { 3 } else { packed / 65536 };
+            if indexed andalso (source != packed % 65536 + 1 + checked.ctx_meta[checked.depth - 1] % 4
+                orelse checked.binds > 0) { checked.valid = 0; }
+            if io.kinds[init] != 80 orelse io.args[init] / 65536 != scalar
                 orelse io.args[init] % 65536 < packed % 65536 + 1
                 orelse io.args[init] % 65536 > packed % 65536 + 2 {
                 checked.valid = 0;
@@ -773,7 +779,8 @@ fn checked_arm_finish(d: Word) -> Word {
         let result = pop(); let base = checked.ctx_base[d]; let arm = rs.mp;
         let meta = checked.ctx_meta[d]; let mask = 1 lsl (meta % 4);
         let allowed = checked_allowed(checked.ctx_root[d], io.match_parts[base] / 65536);
-        if io.match_parts[base + 3] band mask != 0 orelse allowed band mask == 0
+        if (io.kinds[checked.ctx_root[d]] == 31 andalso meta >= 16)
+            orelse io.match_parts[base + 3] band mask != 0 orelse allowed band mask == 0
             orelse checked.ctx_literal_seen[d] != meta / 8
             orelse checked_arm_shape(result, base) == 0 {
             rerr(6, meta)

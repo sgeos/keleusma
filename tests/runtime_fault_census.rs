@@ -131,13 +131,13 @@ const CASES: &[Case] = &[
     Case {
         name: "array index out of bounds, runtime index",
         src: "fn main() -> Word { let xs = [1, 2]; let i = 5; xs[i] }",
-        traps_expected: false,
+        traps_expected: true,
         outcome: Outcome::Faulted("IndexOutOfBounds"),
     },
     Case {
         name: "array index out of bounds, constant index",
         src: "fn main() -> Word { let xs = [1, 2]; xs[5] }",
-        traps_expected: false,
+        traps_expected: true,
         outcome: Outcome::Faulted("IndexOutOfBounds"),
     },
     Case {

@@ -401,3 +401,95 @@ fn signed_literal_records_preserve_full_words_and_reject_negative_complements() 
     }
     assert_eq!(reconstruct_code(&[(128, -1)]), 7);
 }
+
+#[test]
+fn checked_array_records_preserve_index_bindings_and_seven_temporaries() {
+    assert_lowering(
+        "fn main() -> Word { [7][2] { ok(v) => v, invalid_index(i) => i } }",
+        &[
+            (1, 7),
+            (17, 8193),
+            (1, 2),
+            (31, 3),
+            (118, 3 * 65536),
+            (125, 3 * 65536 + 1),
+            (2, 7),
+            (119, 0),
+            (5, 7),
+            (123, 0),
+            (125, 3 * 65536 + 2),
+            (2, 8),
+            (119, 1),
+            (5, 8),
+            (123, 0),
+            (124, 0),
+        ],
+    );
+    assert_lowering(
+        "fn main() -> Byte { [7 as Byte][2] { ok(v) => v, invalid_index(i) => 3 as Byte } }",
+        &[
+            (1, 7),
+            (26, 1),
+            (17, 1025),
+            (1, 2),
+            (31, 2),
+            (118, 2 * 65536),
+            (125, 2 * 65536 + 1),
+            (2, 7),
+            (119, 0),
+            (5, 7),
+            (123, 0),
+            (125, 3 * 65536 + 2),
+            (1, 3),
+            (26, 1),
+            (119, 1),
+            (5, 8),
+            (123, 0),
+            (124, 0),
+        ],
+    );
+}
+
+#[test]
+fn malformed_index_outcome_records_fail_closed() {
+    let prefix = [
+        (1, 7),
+        (26, 1),
+        (17, 1025),
+        (1, 2),
+        (31, 2),
+        (118, 2 * 65536),
+        (1, 0),
+        (26, 1),
+        (119, 0),
+        (123, 0),
+    ];
+    for suffix in [
+        vec![
+            (125, 2 * 65536 + 2),
+            (1, 0),
+            (26, 1),
+            (119, 1),
+            (5, 7),
+            (123, 0),
+            (124, 0),
+        ],
+        vec![
+            (125, 3 * 65536 + 1),
+            (1, 0),
+            (26, 1),
+            (119, 1),
+            (5, 7),
+            (123, 0),
+            (124, 0),
+        ],
+        vec![(1, 0), (26, 1), (119, 17), (121, 0), (123, 0), (124, 0)],
+    ] {
+        let records: Vec<_> = prefix.into_iter().chain(suffix).collect();
+        assert_eq!(reconstruct_code(&records), 6, "{records:?}");
+    }
+    assert_eq!(
+        reconstruct_code(&[(1, 7), (17, 8193), (1, 2), (31, 3), (118, 3 * 65536 + 2042)]),
+        6
+    );
+}
