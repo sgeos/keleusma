@@ -164,6 +164,24 @@ const CASES: &[Case] = &[
         traps_expected: false,
         outcome: Outcome::Faulted("IndexOutOfBounds"),
     },
+    Case {
+        name: "multidimensional shared read rejects a negative outer index",
+        src: "shared data d { xs: [[Word; 2]; 2] } fn main() -> Word { d.xs[-1][0] }",
+        traps_expected: true,
+        outcome: Outcome::Faulted("IndexOutOfBounds"),
+    },
+    Case {
+        name: "multidimensional Byte write rejects the inner upper bound",
+        src: "private data d { xs: [[Byte; 2]; 2] } fn main() -> Word { d.xs[0][2] = 7 as Byte; 0 }",
+        traps_expected: true,
+        outcome: Outcome::Faulted("IndexOutOfBounds"),
+    },
+    Case {
+        name: "control: multidimensional read and write remain valid",
+        src: "private data d { xs: [[Word; 2]; 2] } fn main() -> Word { d.xs[1][1] = 7; d.xs[1][1] }",
+        traps_expected: true,
+        outcome: Outcome::Completed,
+    },
     // --- Already carries a trap. ---
     Case {
         name: "bare for-limit exceeded",
@@ -311,6 +329,8 @@ fn the_census_covers_the_specified_partial_operations() {
         "Byte modulo by zero",
         "shared indexed read out of bounds",
         "private indexed write out of bounds",
+        "multidimensional shared read rejects a negative outer index",
+        "multidimensional Byte write rejects the inner upper bound",
         "array index out of bounds, runtime index",
         "bare for-limit exceeded",
         "addition overflow wraps, as specified",

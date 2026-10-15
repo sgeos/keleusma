@@ -6,6 +6,29 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-15 Total bounds predicate and explicit diagnostic trap
+
+BoundsCheck now returns a portable diagnostic suffix and an outcome flag while
+preserving the index. Trap kind eight consumes the index and four byte limbs,
+preserving the full bound even on an i8 Word runtime. Rust per-dimension lowering
+emits the explicit trap with exact index source spans. Both verifier implementations
+check terminal operands and loop-frame ownership. Stack and nominal cost models,
+the instruction specification and generated book chapter are updated.
+
+All 1473 selected release self-host tests pass with no skips, including all fourteen
+stage artifacts and resource admission for every stage. Twelve new controls cover
+the predicate, trap, narrow runtime, malformed payloads, wire paths and source
+locations. No-default library tests pass 175 cases. Clippy and the detached build
+pass. The separately measured typed-verifier residency is 1466 total and 420 peak
+records. Its updated pin passes while retaining the threefold reduction criterion.
+Full feature, release and memory-safety gates remain outstanding.
+
+Indexed reads and writes still have implicit bounds faults. Their total contracts,
+both compiler lowerings, legacy integer division contracts, classifications, host
+policy and proof-gated check elision remain required. Order 3 stays active.
+Development artifacts need rebuilding, while the operator's version, fingerprint,
+instruction-count and selected-capacity constraints remain unchanged.
+
 ## 2026-10-15 Checked shifts and wide integer transport
 
 Checked arithmetic left shifts now lower through CheckedMul with a bounded positive

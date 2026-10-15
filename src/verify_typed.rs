@@ -643,7 +643,12 @@ fn interp_region(
     while ip < end {
         let op = &ops[ip];
         match op {
-            Op::Trap(_) | Op::Return => return Ok(None),
+            Op::Trap(_) => {
+                check_floor(ctx, op, state.stack.len(), floor, ip)?;
+                apply_op(ctx, op, &mut state.stack, &mut state.locals, ip)?;
+                return Ok(None);
+            }
+            Op::Return => return Ok(None),
             Op::Break(_) => {
                 breaks.push(state);
                 return Ok(None);
@@ -917,6 +922,9 @@ fn apply_op(
             stack.push(top);
         }
         Op::IsEnum(_, _, _) | Op::IsStruct(_) => stack.push(AbsVal::Scalar(ScalarKind::Bool)),
+        Op::BoundsCheck(_) => {
+            stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 5));
+        }
 
         // Read a local's tracked shape. A slot beyond the frame is `Top`.
         Op::GetLocal(i) => {

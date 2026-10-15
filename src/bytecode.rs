@@ -1974,6 +1974,9 @@ pub enum TrapKind {
     /// handled the overrun. Fail-loud by default, consistent with the
     /// other capture constructs whose unhandled defensive outcome traps.
     LoopLimitExceeded,
+    /// Explicit indexed-bounds failure. Pops the index and four Word byte limbs
+    /// encoding an unsigned 32-bit exclusive bound, lowest limb first on stack.
+    IndexOutOfBounds,
 }
 
 impl TrapKind {
@@ -1988,6 +1991,7 @@ impl TrapKind {
             TrapKind::ZeroDivisor => 5,
             TrapKind::AssertionFailed => 6,
             TrapKind::LoopLimitExceeded => 7,
+            TrapKind::IndexOutOfBounds => 8,
         }
     }
 
@@ -2004,6 +2008,7 @@ impl TrapKind {
             5 => Some(TrapKind::ZeroDivisor),
             6 => Some(TrapKind::AssertionFailed),
             7 => Some(TrapKind::LoopLimitExceeded),
+            8 => Some(TrapKind::IndexOutOfBounds),
             _ => None,
         }
     }
@@ -2273,14 +2278,12 @@ pub enum Op {
     /// twenty-four-bit wire operands (`u32` in memory), as for
     /// [`Op::GetDataIndexed`].
     SetDataIndexed(u32, u32),
-    /// Bounds check against the value on top of the operand stack
-    /// without modifying the stack. The immediate is the exclusive
-    /// upper bound. Traps when the top is not a `Value::Int`, when
-    /// the value is negative, or when the value is greater than or
-    /// equal to the bound. Used by the compiler to validate each
-    /// level of a multi-dimensional `state.field[i][j]...` access
-    /// before the per-level stride arithmetic computes the flat
-    /// offset.
+    /// Total bounds predicate. Preserve the Word index and append four Word
+    /// byte limbs of the unsigned bound, then flag zero for in-range or one
+    /// for out-of-range. The limbs are little-endian and sign-extended from
+    /// eight bits, preserving diagnostics on every supported Word width.
+    /// Empty stacks and non-Word indices remain contract failures. Bare
+    /// source lowering dispatches an invalid outcome to an explicit Trap.
     BoundsCheck(u16),
 
     /// Binary addition on `Byte`, `Fixed`, and `Float` operands.
@@ -2815,6 +2818,8 @@ pub const NOMINAL_COST_MODEL: CostModel = CostModel {
 /// pipelined cycles during deployment validation.
 pub fn nominal_op_cycles(op: &Op) -> u32 {
     match op {
+        Op::Trap(kind) if *kind == TrapKind::IndexOutOfBounds.code() => 6,
+        Op::BoundsCheck(_) => 7,
         Op::Const(_)
         | Op::GetLocal(_)
         | Op::SetLocal(_)
@@ -2865,8 +2870,7 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         | Op::FixedDiv(_)
         | Op::Return
         | Op::GetDataIndexed(_, _)
-        | Op::SetDataIndexed(_, _)
-        | Op::BoundsCheck(_) => 2,
+        | Op::SetDataIndexed(_, _) => 2,
 
         Op::Div | Op::Mod | Op::GetField(_) | Op::IsEnum(_, _, _) | Op::IsStruct(_) => 3,
 
@@ -2967,8 +2971,8 @@ impl Op {
             Op::GetDataIndexed(_, _) => 1,
             // SetDataIndexed pops index and value.
             Op::SetDataIndexed(_, _) => 0,
-            // BoundsCheck does not change the stack.
-            Op::BoundsCheck(_) => 0,
+            // Preserve the index and append four diagnostic limbs and a flag.
+            Op::BoundsCheck(_) => 5,
 
             Op::If(_) | Op::BreakIf(_) => 0,
             Op::Else(_) | Op::EndIf | Op::Loop(_) | Op::EndLoop(_) | Op::Break(_) => 0,
@@ -3145,6 +3149,7 @@ impl Op {
             // before stops verifying.
             Op::FixedMul(_) | Op::FixedDiv(_) => 1,
 
+            Op::Trap(kind) if *kind == TrapKind::IndexOutOfBounds.code() => 5,
             Op::Trap(_) => 0,
 
             // V0.2.0 ISA additions.

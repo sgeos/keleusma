@@ -5423,6 +5423,7 @@ fn typed_desc(
     // (the reference's `CompositeKind::to_tag`); everything not listed is generic (tk 0).
     let (tk, ta, tb, tc): (i64, i64, i64, i64) = match op {
         Op::Dup => (1, 0, 0, 0),
+        Op::BoundsCheck(_) => (15, wb as i64, 0, 0),
         Op::IsEnum(_, _, _) | Op::IsStruct(_) => (2, 1, 0, 0),
         Op::GetLocal(i) => (3, *i as i64, 0, 0),
         Op::SetLocal(i) => (4, *i as i64, 0, 0),
@@ -5621,7 +5622,12 @@ fn seed_typed_shared(
     let mut call_shape_cursor = 0usize;
     for (i, op) in chunk.ops.iter().enumerate() {
         let (class, arg, is_term, tk, req, prod, ta, tb, tc) = typed_desc(op, chunk, wb, fb, ab);
-        assert!(prod <= 4, "verify_typed.kel push_tops unroll bound");
+        // BoundsCheck preserves its input and uses the dedicated five-Word
+        // transfer. It never enters the generic push_tops unroll.
+        assert!(
+            prod <= 4 || (tk == 15 && prod == 6),
+            "verify_typed.kel push_tops unroll bound"
+        );
         set(vm, &mut shared, TV_CLASS + i, class);
         set(vm, &mut shared, TV_ARG + i, arg);
         set(vm, &mut shared, TV_IS_TERM + i, is_term);

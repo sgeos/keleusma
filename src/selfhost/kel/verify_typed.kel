@@ -302,8 +302,9 @@ fn apply_typed(ip: Word) -> Word {
             st_push_k(dt, ds, dk);
         }
     } else {
-    if k == 2 {
-        st_push(1, tv.ta[ip]);
+    if k == 2 orelse k == 15 {
+        let count = if k == 15 { 5 } else { 1 };
+        for j in 0..count limit 5 { st_push(1, tv.ta[ip]); }
     } else {
     if k == 3 {
         st_push_k(tf.lc_tag[tv.ta[ip]], tf.lc_size[tv.ta[ip]], tf.lc_kind[tv.ta[ip]]);
@@ -484,7 +485,8 @@ fn ne_bad(x: Word, y: Word) -> Word {
 fn scan_op(i: Word) -> Word {
     let ip = tf.f_ip[i];
     if tv.is_term[ip] == 1 {
-        // Trap/Return: no fall-through.
+        // Check terminal payloads and their loop-frame floor before exiting.
+        apply_typed(ip);
         tf.f_fell[i] = 0;
         tf.f_ip[i] = tf.f_end[i];
     } else {

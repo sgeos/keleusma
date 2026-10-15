@@ -5231,9 +5231,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     self.write_data_slot(slot, val)?;
                 }
                 Op::BoundsCheck(bound) => {
-                    // Peek the top of the stack; trap if it is not a
-                    // non-negative `Int` strictly less than `bound`.
-                    // The stack is not modified.
                     let top = self.stack.last().ok_or(VmError::StackUnderflow)?;
                     let value = match top {
                         crate::bytecode::GenericValue::Int(n) => *n,
@@ -5244,9 +5241,19 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             )));
                         }
                     };
-                    if value.to_i64() < 0 || value.to_i64() >= bound as i64 {
-                        return Err(VmError::IndexOutOfBounds(value.to_i64(), bound as usize));
+                    let invalid = value.to_i64() < 0 || value.to_i64() >= i64::from(bound);
+                    for byte in u32::from(bound).to_le_bytes() {
+                        sp!(
+                            self,
+                            crate::bytecode::GenericValue::Int(W::from_i64_wrap(i64::from(
+                                byte as i8
+                            )))
+                        );
                     }
+                    sp!(
+                        self,
+                        crate::bytecode::GenericValue::Int(W::from_i64_wrap(i64::from(invalid)))
+                    );
                 }
 
                 Op::Add => {
@@ -6684,6 +6691,34 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         Some(TrapKind::ZeroDivisor) => VmError::DivisionByZero,
                         Some(TrapKind::AssertionFailed) => VmError::AssertionFailed,
                         Some(TrapKind::LoopLimitExceeded) => VmError::LoopLimitExceeded,
+                        Some(TrapKind::IndexOutOfBounds) => {
+                            let mut bound = 0_u32;
+                            for byte in (0..4).rev() {
+                                let limb = match self.pop()? {
+                                    crate::bytecode::GenericValue::Int(n) => n.to_i64() as u8,
+                                    _ => {
+                                        return Err(VmError::TypeError(String::from(
+                                            "bounds trap expects Word limbs",
+                                        )));
+                                    }
+                                };
+                                bound |= u32::from(limb) << (byte * 8);
+                            }
+                            let index = match self.pop()? {
+                                crate::bytecode::GenericValue::Int(n) => n.to_i64(),
+                                _ => {
+                                    return Err(VmError::TypeError(String::from(
+                                        "bounds trap expects a Word index",
+                                    )));
+                                }
+                            };
+                            let bound = usize::try_from(bound).map_err(|_| {
+                                VmError::InvalidBytecode(String::from(
+                                    "bounds trap length exceeds the host representation",
+                                ))
+                            })?;
+                            VmError::IndexOutOfBounds(index, bound)
+                        }
                         None => VmError::InvalidBytecode(alloc::format!(
                             "Op::Trap carried an unknown trap-kind code {}",
                             kind_code

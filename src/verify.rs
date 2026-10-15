@@ -2572,7 +2572,7 @@ pub fn op_depth_effect(op: &Op, _chunk: &Chunk) -> (i32, i32) {
         Op::SetLocal(_) | Op::SetData(_) => (1, -1),
         Op::GetDataIndexed(_, _) => (1, 0),
         Op::SetDataIndexed(_, _) => (2, -2),
-        Op::BoundsCheck(_) => (1, 0),
+        Op::BoundsCheck(_) => (1, 5),
         Op::Add
         | Op::Sub
         | Op::Mul
@@ -2628,6 +2628,7 @@ pub fn op_depth_effect(op: &Op, _chunk: &Chunk) -> (i32, i32) {
         | Op::CheckedDiv(_) => (2, 1),
         Op::CheckedNeg => (1, 2),
         Op::PopN(n) => (*n as i32, -(*n as i32)),
+        Op::Trap(kind) if *kind == crate::bytecode::TrapKind::IndexOutOfBounds.code() => (5, -5),
         Op::If(_) | Op::BreakIf(_) => (1, -1),
         Op::Else(_)
         | Op::EndIf
@@ -2781,7 +2782,13 @@ fn verify_depth_region_at(
             // to the following instruction. A `loop` chunk therefore ends in
             // `Reset` rather than `Return`, which is correct and is why "the
             // reference compiler always emits a trailing Return" is false.
-            Op::Trap(_) | Op::Return | Op::Reset => return Ok(None),
+            Op::Trap(_) | Op::Return | Op::Reset => {
+                let (req, _) = op_depth_effect(op, chunk);
+                if depth < req {
+                    return Err(depth_underflow(chunk, ip, op, req, depth));
+                }
+                return Ok(None);
+            }
             Op::Break(_) => {
                 // Unconditional exit to after the enclosing loop, carrying
                 // the current operand depth.

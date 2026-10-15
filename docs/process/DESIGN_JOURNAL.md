@@ -13,6 +13,25 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-15 Portable bounds outcomes
+
+The bounds diagnostic is carried explicitly on the operand stack. A hidden last
+failure cache could be overwritten by a nested handler and was therefore avoided.
+Four byte limbs preserve the unsigned bound on every supported Word width. The
+initial two-limb proposal would have lost information on i8 and was replaced before
+implementation. The predicate preserves the index and produces the payload and flag.
+The bare failure branch consumes the payload through the existing Trap opcode.
+
+A terminal instruction can now consume operands. Both depth walks previously ended
+at every Trap without checking its requirement. Both typed walks also need the
+payload and loop-frame checks before termination. The existing widening profile
+still cannot prove exact operand kinds, so runtime type guards remain mandatory.
+
+The new predicate is total over Word indices, including negative indices and a zero
+bound. Indexed reads and writes retain their separate contract obligations. The
+new contract document fixes this increment's stack, cost, diagnostic and compatibility
+rules without claiming trap freedom or a no-check execution mode.
+
 ## 2026-10-15 Shift ordering and full-word literal transport
 
 A checked arithmetic shift is a checked multiply by a positive power of two.

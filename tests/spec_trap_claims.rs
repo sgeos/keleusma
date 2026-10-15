@@ -30,7 +30,7 @@
 //! | `Mod` | traps on divide-by-zero |
 //! | `CheckedDiv` | a zero divisor reifies as flag `3`, rather than trapping |
 //! | `CheckedMod` | the same, mirroring `CheckedDiv` |
-//! | `BoundsCheck` | traps if the index is outside `[0, bound)` |
+//! | `BoundsCheck` | reifies an invalid index as flag `1` |
 //!
 //! `CheckedNeg` names an overflow case but makes no trap-or-reify claim, and
 //! `Trap` is the trap itself. Neither is in this class.
@@ -149,33 +149,27 @@ fn the_checked_divide_and_modulo_reify_a_zero_divisor_rather_than_trapping() {
     }
 }
 
-/// `BoundsCheck` traps when the index is outside its bound.
-///
-/// The row records that the compiler emits it between levels of a
-/// multi-dimensional indexed access, so the fixture is two-dimensional. If a
-/// lowering change stops emitting it here the assertion below fails rather
-/// than the case quietly passing on a program that never contained the
-/// opcode.
+/// The predicate returns a flag; source lowering owns the explicit failure.
 #[test]
-fn the_bounds_check_traps_outside_its_bound_as_the_spec_says() {
-    let src = "fn main() -> Word {\n\
-               \x20 let g = [[1, 2], [3, 4]];\n\
-               \x20 let i = 5;\n\
-               \x20 g[i][0]\n\
-               }";
-    let m = compiled(src);
-    assert!(
-        ops(&m)
-            .iter()
-            .any(|o| matches!(o, Op::BoundsCheck(_)) || matches!(o, Op::GetIndex(_))),
-        "the two-dimensional index emits neither BoundsCheck nor GetIndex, so this case \
-         tests nothing and the population needs re-deriving"
+fn the_bounds_check_reifies_failure_and_source_lowering_traps() {
+    let mut module = compiled("fn main() -> Word { 0 }");
+    module.chunks[0].constants = alloc::vec![ConstValue::Int(-1)];
+    module.chunks[0].ops = alloc::vec![Op::Const(0), Op::BoundsCheck(2), Op::Return];
+    assert!(matches!(
+        run("BoundsCheck outcome", module),
+        Ok(VmState::Finished(Value::Int(1)))
+    ));
+    let module = compiled(
+        "private data d { xs: [[Word; 2]; 2] } fn main() -> Word { d.xs[0][0] = 1; d.xs[5][0] }",
     );
-    let r = run("BoundsCheck", m);
-    assert!(
-        matches!(r, Err(VmError::IndexOutOfBounds(_, _))),
-        "an out-of-range index must fault, as the BoundsCheck row says; got {r:?}"
-    );
+    assert!(ops(&module).contains(&Op::BoundsCheck(2)));
+    assert!(ops(&module).contains(&Op::Trap(
+        keleusma::bytecode::TrapKind::IndexOutOfBounds.code()
+    )));
+    assert!(matches!(
+        run("explicit bounds failure", module),
+        Err(VmError::IndexOutOfBounds(5, 2))
+    ));
 }
 
 /// The population this file covers is the one the specification states.

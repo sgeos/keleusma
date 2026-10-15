@@ -14,7 +14,7 @@ provides evidence sufficient to remove a particular check.
 ## Current evidence
 
 The baseline census passed three tests and found DivisionByZero and
-IndexOutOfBounds without Trap. The expanded census has seventeen cases, including
+IndexOutOfBounds without Trap. The expanded census has twenty cases, including
 Word, Byte and indexed shared/private storage. The focused post-change run passes
 and finds only bounds faults without an explicit Trap. This remains a source-family
 census, not a proof about arbitrary bytecode or host-contract failures.
@@ -41,11 +41,18 @@ binary-node argument. Code generation preserves those legacy paths. Word and Byt
 use the new explicit-trap lowering. Nested noninteger expressions, locals and calls
 have artifact controls. Public opcode identifiers remain unchanged.
 
-BoundsCheck currently leaves the stack unchanged and faults on an invalid index.
-GetIndex, GetDataIndexed and SetDataIndexed also fault internally on bounds errors.
-Total bounds outcomes therefore require an instruction-contract change. The current
-TrapKind table has no indexed-bounds trap kind. The checked-index fallback still
-reissues a trapping GetIndex. No trap-free verdict or no-check mode is implemented.
+BoundsCheck now preserves the index and appends four diagnostic byte limbs and an
+outcome flag. It performs no indexed data access and returns an invalid-index outcome
+instead of a language bounds fault. TrapKind code eight consumes the index and four
+limbs, preserving the unsigned 32 bit bound even on an 8 bit Word runtime. Rust
+per-dimension lowering emits that explicit trap and retains an exact index source
+span. Both verifier implementations check terminal payload availability and loop
+frame floors. The [bounds contract](ORDER3_BOUNDS_CONTRACTS.md) records exact effects.
+
+GetIndex, GetDataIndexed and SetDataIndexed still fault internally on bounds errors.
+Their total contracts and both compiler lowerings remain required. The checked-index
+fallback still reissues a trapping GetIndex. No trap-free verdict or no-check mode
+is implemented.
 
 Legacy Div and Mod still fault on integer zero divisors in hand-built bytecode.
 The direct instruction-contract tests retain that negative control. A scan-based
@@ -214,13 +221,15 @@ the scalar kind. The initial failures and final receipts are in REVERSE_PROMPT.m
 
 ## Bounds contract work next
 
-Define the exact stack effects and diagnostic payload before changing the four
-bounds operations. Current GetDataIndexed operands carry base and length, without
-an element kind. Its invalid-index fallback therefore needs an explicit rule for
-recovering Word or Byte kind, including the zero-length case. Current TrapKind codes
-zero through seven are occupied. Numeric index and length diagnostics must account
-for narrow runtime words, alongside preserved source fault locations. These are
-implementation constraints found by source inspection, not completed contracts.
+The first predicate and diagnostic contracts are specified and implemented in
+[ORDER3_BOUNDS_CONTRACTS.md](ORDER3_BOUNDS_CONTRACTS.md). The remaining read and write
+operations still need exact stack effects, fallbacks and compiler dispatch.
+GetDataIndexed carries base and length without an element kind. Its invalid-index
+fallback therefore needs an explicit Word or Byte kind rule, including zero length.
+Shared slots have kind metadata, while private slots have initializer metadata.
+An explicit kind operand is a candidate solution, not an implemented decision.
+The portable diagnostic suffix and TrapKind code eight can be reused by the
+remaining operations. No new public opcode or version advance is authorized.
 
 The required work remains total bounds operations, explicit bounds traps, both
 compiler lowerings, matching classifications, host policy, proved check elision and

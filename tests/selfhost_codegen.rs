@@ -9123,8 +9123,8 @@ fn the_fused_compile_holds_one_group_not_the_program() {
         (
             "verify_typed",
             include_str!("../src/selfhost/kel/verify_typed.kel"),
-            1438,
-            395,
+            1466,
+            420,
         ),
     ];
     for &(name, src, total, peak) in EXPECT {

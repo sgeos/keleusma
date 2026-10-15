@@ -194,7 +194,8 @@ fn check_underflow(i: Word, ip: Word) -> Word {
 fn scan_op(i: Word) -> Word {
     let ip = df.f_ip[i];
     if dv.is_term[ip] == 1 {
-        // Trap/Return: end this path, no fall-through.
+        // Terminal instructions can consume diagnostic payloads.
+        check_underflow(i, ip);
         df.f_fell[i] = 0;
         df.f_ip[i] = df.f_end[i];
     } else {

@@ -44,11 +44,11 @@ The unified slot index space partitions into shared slots `[0, shared_count)` an
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
-| GetData | u16 slot | 1 | Push data segment slot value onto stack. |
-| SetData | u16 slot | 1 | Pop value and store into a data segment slot. A scalar stores inline; a flat composite copies its body into the persistent composite pool at the offset the module's private-composite layout table records for the slot (no dedicated composite-write opcode). |
-| GetDataIndexed | u16 base, u16 len | 2 | Pop array index, bounds-check against `len`, push the value at `base + index`. |
-| SetDataIndexed | u16 base, u16 len | 2 | Pop array index then pop value, bounds-check against `len`, store into the slot at `base + index`. |
-| BoundsCheck | u16 bound | 2 | Peek the top of the stack as an `Int`, trap if outside `[0, bound)`. Emitted by the compiler between levels of a multi-dimensional indexed access. |
+| GetData | u24 slot | 1 | Push data segment slot value onto stack. |
+| SetData | u24 slot | 1 | Pop value and store into a data segment slot. A scalar stores inline; a flat composite copies its body into the persistent composite pool at the offset the module's private-composite layout table records for the slot (no dedicated composite-write opcode). |
+| GetDataIndexed | u24 base, u24 len | 2 | Pop array index, bounds-check against `len`, push the value at `base + index`. |
+| SetDataIndexed | u24 base, u24 len | 2 | Pop array index then pop value, bounds-check against `len`, store into the slot at `base + index`. |
+| BoundsCheck | u16 bound | 7 | Preserve the Word index and append four Word byte limbs of the unsigned bound, little-endian, then a flag. An invalid index reifies as flag `1`, while an index in `[0, bound)` yields flag `0`. The limbs are sign-extended from eight bits. No indexed data access or language bounds fault occurs. |
 
 ## Arithmetic
 
@@ -204,7 +204,7 @@ The `Option::None` sentinel and `Option::Some` wrap are handled through `PushImm
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
-| Trap | u16 message index | 1 | Halt execution with an error message from the constant pool. |
+| Trap | u16 kind code | 1 or 6 | Halt with the error selected by TrapKind. Code `8` consumes five Words, the index followed by four little-endian byte limbs of an unsigned 32 bit bound, and returns IndexOutOfBounds. The runtime uses the low eight bits of each limb. Its nominal cost is `6`. Other trap kinds cost `1`. Unknown kind codes and malformed payloads are contract errors. |
 
 ## Opcode count and operand-shape inventory
 
@@ -216,9 +216,10 @@ The shapes below are the `Op`-variant operand types as defined in `src/bytecode.
 |-------|---------|
 | None (zero-operand) | 33 opcodes (arithmetic, comparison, bit ops, type coercions, stack manipulation, streaming, coroutine, etc.) |
 | `u8` | 8 opcodes (`PushImmediate`, `PopN`, `WordToFixed`, `FixedToWord`, `FixedMul`, `FixedDiv`, `CheckedMul`, `CheckedDiv`) |
-| `u16` | 14 opcodes (`Const`, `GetLocal`, `SetLocal`, `GetData`, `SetData`, `IsStruct`, `If`, `Else`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `BoundsCheck`, `Trap`) |
+| `u16` | 12 opcodes (`Const`, `GetLocal`, `SetLocal`, `IsStruct`, `If`, `Else`, `Loop`, `EndLoop`, `Break`, `BreakIf`, `BoundsCheck`, `Trap`) |
 | `(u16, u8)` | 3 opcodes (`Call`, `CallVerifiedNative`, `CallExternalNative`) |
-| `(u16, u16)` | 2 opcodes (`GetDataIndexed`, `SetDataIndexed`) |
+| `u32` | 2 opcodes (`GetData`, `SetData`), encoded as u24 on the wire |
+| `(u32, u32)` | 2 opcodes (`GetDataIndexed`, `SetDataIndexed`), encoded as two u24 values on the wire |
 | `(u16, u16, u16)` | 1 opcode (`IsEnum`, carrying the enum-name, variant-name, and discriminant-value constant indices) |
 | Baked access operand (bespoke) | 4 opcodes (`GetField(StructField)`, `GetIndex(ArrayElem)`, `GetTupleField(TupleField)`, `GetEnumField(EnumField)`). Each carries a bespoke B28 operand struct with a compiler-selected `Flat`, `FlatNested`, or `Boxed` form. The flat forms bake a byte offset and a scalar `kind` (or a nested composite `size` and `variant`); the boxed forms carry a positional index or a field-name constant index for the pre-B28 `Vec` body. See the `StructField`, `ArrayElem`, `TupleField`, and `EnumField` enums in `src/bytecode.rs`. |
 | NewComposite (bespoke) | 1 opcode (`NewComposite`). The flat form packs the composite kind, the operand-stack pop count (0 through 62), and the exact flat byte size into the three operand bytes of the record. The boxed form, or a flat field count above 62, spills a 24-bit operand-pool index to a `(u16, u16, u8)` entry carrying `(count, byte_size-or-meta, boxed_flag)`. |
@@ -231,10 +232,12 @@ The cost groupings reproduce `bytecode::nominal_op_cycles`. Hosts that need wall
 
 | Cost | Instructions |
 |------|-------------|
-| 1 | Const, PushImmediate, GetLocal, SetLocal, GetData, SetData, Dup, Not, If, Else, EndIf, Loop, EndLoop, Break, BreakIf, Stream, Reset, Yield, Trap, PopN |
-| 2 | Add, Sub, Mul, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Return, GetDataIndexed, SetDataIndexed, BoundsCheck, BitAnd, BitOr, BitXor, Shl, Shr |
+| 1 | Const, PushImmediate, GetLocal, SetLocal, GetData, SetData, Dup, Not, If, Else, EndIf, Loop, EndLoop, Break, BreakIf, Stream, Reset, Yield, Trap except kind 8, PopN |
+| 2 | Add, Sub, Mul, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Return, GetDataIndexed, SetDataIndexed, BitAnd, BitOr, BitXor, Shl, Shr |
 | 3 | Div, Mod, GetField, IsEnum, IsStruct |
 | 5 | NewComposite |
+| 6 | Trap kind 8 |
+| 7 | BoundsCheck |
 | 10 | Call, CallVerifiedNative, CallExternalNative |
 
 ## WCMU contributions
@@ -247,9 +250,10 @@ The values reproduce `Op::stack_growth` in `src/bytecode.rs`. For multi-output o
 
 | Growth | Instructions |
 |--------|--------------|
-| 0 | Not, Neg, Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, SetDataIndexed, BoundsCheck, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Yield, Return, GetField, GetIndex, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap, PopN, BitAnd, BitOr, BitXor, Shl, Shr |
+| 0 | Not, Neg, Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, SetDataIndexed, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Yield, Return, GetField, GetIndex, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap, PopN, BitAnd, BitOr, BitXor, Shl, Shr |
 | 1 | Const, PushImmediate, GetLocal, GetData, Dup, GetDataIndexed, CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, CallVerifiedNative, CallExternalNative, NewComposite, IsEnum, IsStruct |
 | 2 | CheckedNeg |
+| 5 | BoundsCheck |
 
 ### Stack shrink (slots popped during execution)
 
@@ -257,9 +261,10 @@ The values reproduce `Op::stack_shrink`. For opcodes whose net delta is non-nega
 
 | Shrink | Instructions |
 |--------|--------------|
-| 0 | Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, BoundsCheck, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap |
+| 0 | Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, BoundsCheck, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap except kind 8 |
 | 1 | Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, GetDataIndexed, If, BreakIf, Yield, GetField, GetIndex, GetTupleField, GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr |
 | 2 | SetDataIndexed |
+| 5 | Trap kind 8 |
 | n | PopN(n), Call(_, n), CallVerifiedNative(_, n), CallExternalNative(_, n), NewComposite(count) |
 
 ### Heap allocation (bytes)

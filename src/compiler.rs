@@ -5102,6 +5102,17 @@ fn emit_indexed_offset(
                 span,
             })?;
             fc.emit(Op::BoundsCheck(len_u16));
+            fc.record_operator_site(&idx_expr.span());
+            let invalid = fc.add_constant(Value::Int(1));
+            fc.emit(Op::Const(invalid));
+            fc.emit(Op::CmpEq);
+            let valid = fc.emit_jump(Op::If(0));
+            fc.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
+            fc.record_operator_site(&idx_expr.span());
+            fc.patch_jump(valid);
+            fc.emit(Op::EndIf);
+            // Retain the original index for the following stride arithmetic.
+            fc.emit(Op::PopN(4));
         }
         if stride != 1 {
             let stride_const = fc.add_constant(Value::Int(stride as i64));
