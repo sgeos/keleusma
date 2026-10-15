@@ -1,5 +1,23 @@
 # Reverse prompt
 
+## Requested branch backup on 2026-10-15
+
+The first-class compiler-managed ring buffer request is already recorded as
+Backlog B42 and linked from the V0.2.X roadmap in 9b176725. The operator's request
+to commit and push all project work also covers the committed parser recovery
+at fc3718c2. This documentation update accompanies its feature-branch push.
+Use the hook's documented work-in-progress option. The complete verification gate
+has not passed and this backup does not establish Order 3 completion.
+
+No implementation or tests changed in this backup increment. No tests were rerun.
+The inbox is empty and the exported interline checkpoint is unchanged. The legacy
+handoff is invalid-and-stale at a measured distance of 60 commits from e84d7cfa to
+fc3718c2. Its ancestry anchor passes, but its twelve-stage inventory and unchanged
+stage-source assertions fail against fourteen modified stages. Its other content
+checks were not rerun. The current work state and remaining work follow below.
+No eligible development-pilot samples were collected for this administrative
+increment. Local .codex/ settings and nvim.log remain untracked.
+
 ## Completed parser recovery on 2026-10-15
 
 The preceding backup push completed at 9b176725 on

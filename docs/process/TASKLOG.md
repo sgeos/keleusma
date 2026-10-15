@@ -6,6 +6,17 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-15 Requested feature-branch backup
+
+Confirmed that B42 records first-class ring buffers managed by the compiler and
+that the V0.2.X roadmap links the request. Design and scheduling remain open.
+The authorized backup includes the parser recovery committed at fc3718c2 and
+this handoff update. It uses the documented work-in-progress push option, with
+the prior verification limits retained. No implementation or tests changed and
+no tests were rerun. The interline inbox is empty and its exported checkpoint is
+unchanged. Local .codex/ settings and nvim.log remain untracked. Order 3 remains
+active with checked-outcome source parsing next.
+
 ## 2026-10-15 Debug parser stack recovery
 
 The pre-push abort was reproduced during parsing on a two-mebibyte worker. Nine
