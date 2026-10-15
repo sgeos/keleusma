@@ -30,7 +30,9 @@ unguarded variable or wildcard handlers covering that class. Guards and literal
 patterns retain a possible trap. Keleusma source parsing now emits the explicit
 checked-outcome protocol for Word and Byte arithmetic, including Word negation.
 Source controls cover bindings, guards, literal patterns, nested expressions and
-independent source rejection. Checked arithmetic shifts remain unsupported.
+independent source rejection. Checked arithmetic left shifts now retain their
+source distinction from logical shifts and lower through CheckedMul with a proved
+positive constant multiplier on the supported 64 bit host path.
 Debugger controls pass for the arithmetic operation and its explicit trap.
 
 A full regression exposed lost Float division/remainder and Fixed remainder
@@ -152,6 +154,7 @@ source controls in tests/selfhost_checked_outcomes.rs and
 | 119 | Wrap the arm body and optional guard. Payload is class plus guard-present times 4 plus literal-pattern flags times 8 and 16. Class values are 0 ok, 1 overflow, 2 underflow and 3 zero divisor. |
 | 120 and 121 | Supply the first and second literal-pattern values when their flags are set. |
 | 126 and 127 | Supply the nonnegative bitwise complement of a negative first or second literal. This avoids the legacy transport sentinel at negative one. |
+| 128 | Supply the nonnegative complement of a signed ordinary literal, reconstructed as a literal node. Negative complements are malformed. |
 | 5 | Existing LetIn wrappers bind variable patterns after record 119, in reverse pattern order. Source parsing must also emit binding-name metadata record 90 immediately before each wrapper. |
 | 123 | Finish an arm after its binding wrappers and literal records. Payload is zero. |
 | 124 | Close the checked construct. Payload is zero. An unguarded ok catch-all is mandatory. |
@@ -177,8 +180,10 @@ A checked marker protects enclosing expression operators, and a bounded context
 stack accepts 32 and refuses 33 before writing. Guards, binding scope and nested
 expression boundaries have source controls. The source type channel recognizes
 node 80 scalar types, node 78 guards and node 77 arm-result joins. Checked shifts
-remain outside the current backend evidence. All original Order 3 deliverables
-remain required.
+have source and record-level controls. Reconstruction independently requires Word
+operands and a literal amount from zero through 62 on the supported 64 bit host
+path. The multiplier is interned before the left operand, preserving the reference
+constant-pool order. All original Order 3 deliverables remain required.
 
 Two source controls exposed defects subsequently repaired. Negative one collided
 with the parser transport sentinel, so records 126 and 127 now carry complements.
@@ -189,13 +194,38 @@ The expanded parser exceeded the lexer source buffer. Its capacity is now 524288
 bytes, with a driver guard before copying source and aligned detached-harness
 checks. The source-cap boundary has positive and negative controls. The separate
 operator-selected type capacities remain 640. The module-input name cap remains
-1024, with measured parser usage of 1022 names and 29892 blob bytes.
+1024, with measured parser usage of exactly 1024 names and 30050 blob bytes.
+The name pool has no remaining headroom.
 
-A separate packed-token defect remains open. A recorded parser trace omits the
-large decimal literal in fn main() -> Word { 9223372036854775807 + 1 }.
-The receipt is tmp/order3-checked-source-diagnostic2.log. Current overflow controls
-construct Word boundary values through shifts. The literal-transport defect needs
-an explicit disposition before the final arithmetic coverage audit.
+The observed packed-token defect is repaired. Large integer values use lexer token
+65 and a shared value table keyed by the interned spelling. The parser receives the
+stage-computed values through a matching table. Both tables retain the existing
+1280-entry interner bound. The host transports values without parsing their source
+text. Integer accumulation checks its range before multiplication, and token 66
+reports overflow or a radix prefix without digits. Ordinary literals use full-word
+records, with record 128 avoiding the negative-one transport sentinel.
+
+Source controls exercise decimal, hexadecimal and binary limits, end of input,
+positive and negative checked patterns, constant fields, a string spelling collision,
+collected and fused feeds, and the shared interner capacity. The detached lexer and
+parser commands accept the maximum integer and reject overflow. Constant-field
+parsing now retains its leading minus sign. Bare Byte shifts after a cast also retain
+the scalar kind. The initial failures and final receipts are in REVERSE_PROMPT.md.
+
+## Bounds contract work next
+
+Define the exact stack effects and diagnostic payload before changing the four
+bounds operations. Current GetDataIndexed operands carry base and length, without
+an element kind. Its invalid-index fallback therefore needs an explicit rule for
+recovering Word or Byte kind, including the zero-length case. Current TrapKind codes
+zero through seven are occupied. Numeric index and length diagnostics must account
+for narrow runtime words, alongside preserved source fault locations. These are
+implementation constraints found by source inspection, not completed contracts.
+
+The required work remains total bounds operations, explicit bounds traps, both
+compiler lowerings, matching classifications, host policy, proved check elision and
+the full completion audit. No trap-free or no-check claim follows from this
+arithmetic frontend increment.
 
 ## Debug verification recovery
 

@@ -359,46 +359,30 @@ fn next_word(vm: &mut Vm<'_, '_>, shared: &mut [u8]) -> i64 {
     }
 }
 
-/// Tokenize `src` with lexer.kel; return its `(tok, payload)` stream (no EOF) and
-/// the id-to-spelling table recovered from the exposed intern table.
-fn br_lex(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
-    let bytes = src.as_bytes();
-    let m = compile_src(&read_stage("kel/lexer.kel"));
+/// Stage-owned token words, spellings and full-width integer payloads.
+struct LexedSource {
+    tokens: Vec<(i64, i64)>,
+    names: Vec<String>,
+    values: Vec<i64>,
+}
+
+fn br_lex(src: &str) -> LexedSource {
+    let m = lex_module();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify lexer.kel");
-    let mut shared = vec![0u8; vm.shared_data_bytes()];
-    vm.set_shared(&mut shared, 0, Value::Int(bytes.len() as i64))
-        .unwrap();
-    for (i, &b) in bytes.iter().enumerate() {
-        vm.set_shared(&mut shared, 1 + i, Value::Byte(b)).unwrap();
+    let (mut vm, mut shared) = lex_open(&arena, m, src);
+    let mut tokens = Vec::new();
+    while let Some(t) = lex_next(&mut vm, &mut shared) {
+        tokens.push((t.rem_euclid(256), t.div_euclid(256)));
     }
-    let mut toks = Vec::new();
-    let mut st = vm
-        .call_with_shared(&mut shared, &[Value::Int(0)])
-        .expect("call");
-    for _ in 0..(bytes.len() * 4 + 16) {
-        if let VmState::Yielded(Value::Int(t)) = st {
-            if t == 63 {
-            } else if t == 62 {
-                break;
-            } else {
-                toks.push((t.rem_euclid(256), t.div_euclid(256)));
-            }
-        }
-        st = vm
-            .resume_with_shared(&mut shared, Value::Int(0))
-            .expect("resume");
+    let names = lex_names(&vm, &shared, src);
+    let values = lex_values(&vm, &shared, names.len());
+    LexedSource {
+        tokens,
+        names,
+        values,
     }
-    let icount = br_shared_word(&vm, &shared, BR_LEX_ICOUNT) as usize;
-    let mut names = Vec::with_capacity(icount);
-    for id in 0..icount {
-        let start = br_shared_word(&vm, &shared, BR_LEX_ISTART + id) as usize;
-        let len = br_shared_word(&vm, &shared, BR_LEX_ILEN + id) as usize;
-        names.push(String::from_utf8(bytes[start..start + len].to_vec()).unwrap());
-    }
-    (toks, names)
 }
 
 // The flat-scalar and composite-variant tag decoders, shared by the composite/enum `decode_op` arms.
@@ -753,7 +737,15 @@ fn lex_next(vm: &mut Vm<'_, '_>, shared: &mut [u8]) -> Option<i64> {
         match st {
             VmState::Yielded(Value::Int(62)) => return None,
             VmState::Yielded(Value::Int(63)) | VmState::Reset => {}
-            VmState::Yielded(Value::Int(t)) => return Some(t),
+            VmState::Yielded(Value::Int(t)) => {
+                assert_ne!(
+                    t.rem_euclid(256),
+                    66,
+                    "invalid integer literal in lexer.kel near byte {}",
+                    t.div_euclid(256)
+                );
+                return Some(t);
+            }
             other => panic!("lexer.kel yielded {other:?}"),
         }
     }
@@ -805,6 +797,17 @@ fn lex_names(vm: &Vm<'_, '_>, shared: &[u8], src: &str) -> Vec<String> {
         .collect()
 }
 
+/// Transport values already computed by the lexer stage. No source parsing occurs here.
+fn lex_values(vm: &Vm<'_, '_>, shared: &[u8], count: usize) -> Vec<i64> {
+    assert!(
+        count <= crate::selfhost_host::LEX_INTERN_CAP,
+        "lexer intern capacity exceeded"
+    );
+    (0..count)
+        .map(|id| br_shared_word(vm, shared, crate::selfhost_host::BR_LEX_VALUES + id))
+        .collect()
+}
+
 /// What the first pass over the source establishes, all of it bounded.
 struct FirstPass {
     /// The intern table. Complete only at end of input, which is why it is a
@@ -817,6 +820,7 @@ struct FirstPass {
     /// front -- which is the one thing a single forward pass cannot supply.
     token_count: usize,
     has_imports: bool,
+    values: Vec<i64>,
 }
 
 /// Stream the lexer once, keeping only what the second pass needs.
@@ -858,12 +862,14 @@ fn first_pass(src: &str) -> FirstPass {
         prev = Some(cur);
     }
     let names = lex_names(&vm, &shared, src);
+    let values = lex_values(&vm, &shared, names.len());
     // Ordering needs the names, which exist only now. A multiheaded function is
     // one chunk, and the reference keys its chunk map by name, so the table is the
     // deduplicated lexicographically sorted set.
     ids.sort_by(|&a, &b| names[a as usize].cmp(&names[b as usize]));
     ids.dedup_by(|&mut a, &mut b| names[a as usize] == names[b as usize]);
     FirstPass {
+        values,
         names,
         chunks: ids,
         token_count,
@@ -1296,7 +1302,11 @@ const FUSED_WINDOW: usize = 8;
 /// explicit source-range seeks, exercised by the return-layout transport tests.
 #[must_use]
 pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
-    let (tokens, names) = br_lex(src);
+    let LexedSource {
+        tokens,
+        names,
+        values,
+    } = br_lex(src);
     let id_of = |s: &str| {
         names
             .iter()
@@ -1316,6 +1326,14 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(module, &arena).expect("verify parse.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
+    for (id, &value) in values.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            crate::selfhost_host::BR_P_VALUES + id,
+            Value::Int(value),
+        )
+        .unwrap();
+    }
     vm.set_shared(&mut shared, BR_P_LEN, Value::Int(tokens.len() as i64))
         .unwrap();
     vm.set_shared(
@@ -1485,7 +1503,8 @@ type ParseSideTables = (
 );
 
 /// Every `(kind, value)` token `lexer.kel` produces for `src`, beside the interned
-/// name table.
+/// name table. Wide integer indices are resolved from the stage-owned value table
+/// and reported as integer tokens. No source text is parsed by this transport.
 ///
 /// # The third instrument, and why the set was incomplete
 ///
@@ -1512,7 +1531,21 @@ type ParseSideTables = (
 /// hidden instrument is one the next person does not know exists.
 #[must_use]
 pub fn lex_token_trace(src: &str) -> (Vec<String>, Vec<(i64, i64)>) {
-    let (tokens, names) = br_lex(src);
+    let LexedSource {
+        tokens,
+        names,
+        values,
+    } = br_lex(src);
+    let tokens = tokens
+        .into_iter()
+        .map(|(kind, value)| {
+            if kind == 65 {
+                (12, values[value as usize])
+            } else {
+                (kind, value)
+            }
+        })
+        .collect();
     (names, tokens)
 }
 
@@ -1614,7 +1647,11 @@ fn try_parse_functions_impl(
     let names = first.names.clone();
     let token_count = first.token_count;
     // The collecting feed still needs the tokens themselves.
-    let tokens: Vec<(i64, i64)> = if fused { Vec::new() } else { br_lex(src).0 };
+    let tokens: Vec<(i64, i64)> = if fused {
+        Vec::new()
+    } else {
+        br_lex(src).tokens
+    };
     let id_of = |s: &str| {
         names
             .iter()
@@ -1641,6 +1678,14 @@ fn try_parse_functions_impl(
     arena.resize_persistent(need).expect("resize");
     let mut vm = Vm::new(module, &arena).expect("verify parse.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
+    for (id, &value) in first.values.iter().enumerate() {
+        vm.set_shared(
+            &mut shared,
+            crate::selfhost_host::BR_P_VALUES + id,
+            Value::Int(value),
+        )
+        .unwrap();
+    }
     vm.set_shared(
         &mut shared,
         crate::selfhost_host::BR_P_RETURN_QUERIES,
@@ -3924,7 +3969,9 @@ fn binary_fact_kind(node: &Node) -> i64 {
         13
     } else if node.kind == 3 && (6..=11).contains(&node.arg) {
         9
-    } else if node.kind == 60 || (node.kind == 3 && (27..=29).contains(&node.arg)) {
+    } else if node.kind == 60
+        || (node.kind == 3 && ((27..=29).contains(&node.arg) || node.arg == 37))
+    {
         10
     } else {
         14

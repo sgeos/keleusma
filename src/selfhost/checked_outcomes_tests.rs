@@ -352,3 +352,52 @@ fn checked_records_expose_guard_and_result_type_constraints() {
         );
     }
 }
+
+#[test]
+fn checked_shift_records_intern_the_multiplier_before_the_operand() {
+    for amount in [0, 1, 62] {
+        let records = [
+            (1, 3),
+            (1, amount),
+            (3, 37),
+            (118, 3 * 65536),
+            (125, 3 * 65536 + 1),
+            (2, 3),
+            (119, 0),
+            (5, 3),
+            (123, 0),
+            (124, 0),
+        ];
+        assert_lowering(
+            &format!("fn main() -> Word {{ 3 asl {amount} {{ ok(v) => v }} }}"),
+            &records,
+        );
+    }
+}
+
+#[test]
+fn checked_shift_records_refuse_unproved_multipliers() {
+    for (kind, amount, scalar, op) in [
+        (1, -1, 3, 37),
+        (1, 63, 3, 37),
+        (1, 64, 3, 37),
+        (2, 0, 3, 37),
+        (1, 2, 2, 37),
+        (1, 2, 3, 27),
+        (1, 2, 3, 37 + 64),
+    ] {
+        let records = [(1, 3), (kind, amount), (3, op), (118, scalar * 65536)];
+        assert_eq!(reconstruct_code(&records), 6, "{records:?}");
+    }
+}
+
+#[test]
+fn signed_literal_records_preserve_full_words_and_reject_negative_complements() {
+    for value in [-1_i64, -i64::MAX] {
+        assert_lowering(
+            &format!("const data d {{ n: Word = {value} }} fn main() -> Word {{ d.n }}"),
+            &[(128, !value)],
+        );
+    }
+    assert_eq!(reconstruct_code(&[(128, -1)]), 7);
+}

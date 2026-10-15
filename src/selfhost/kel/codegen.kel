@@ -697,6 +697,7 @@ fn push_binop(p: Word) -> Word {
         13 => wire.bitor,
         14 => wire.bitxor,
         27 => wire.shl,
+        37 => wire.shl,
         28 => wire.shr,
         33 => wire.cmpne,
         _ => opc + 5,
@@ -723,7 +724,8 @@ fn push_binop(p: Word) -> Word {
 private data checked_emit { arm: Word }
 
 // Checked node 77 owns three result locals and an ordered outcome dispatch.
-// Every integer constant is deferred so interning follows forward emission order.
+// Pattern constants are deferred. A checked shift multiplier is interned before
+// its left operand, matching the reference compiler's explicit pool order.
 fn push_checked_pattern(value: Word, slot: Word) -> Word {
     push_emit(wire.mif); push_emit(wire.cmpeq);
     push_int_const(value); push_emit(wire.getlocal + slot * wire.radix)
@@ -756,6 +758,8 @@ fn push_checked(p: Word) -> Word {
     let flag = packed % 65536; let scalar = packed / 65536;
     let root = ast.lhs[p]; let op = ast.args[root] % 64;
     let unary = ast.kinds[root] == 10;
+    let shift = not unary andalso op == 37;
+    let constant = if shift { intern_int(1 lsl ast.args[ast.rhs[root]]) } else { 0 };
     push_emit(wire.mendloop); push_emit(wire.mbreak);
     push_emit(wire.getlocal + (flag + 1) * wire.radix);
     if not unary andalso (op == 4 orelse op == 5) andalso ast.match_parts[base + 3] band 8 == 0 {
@@ -773,10 +777,12 @@ fn push_checked(p: Word) -> Word {
     push_emit(wire.setlocal + flag * wire.radix);
     let instruction = if unary { wire.checkedneg } else {
         match op { 1 => wire.checkedadd, 2 => wire.checkedmul, 3 => wire.checkedsub,
-            4 => wire.checkeddiv, _ => wire.checkedmod }
+            4 => wire.checkeddiv, 37 => wire.checkedmul, _ => wire.checkedmod }
     };
     push_emit(instruction);
-    if not unary { push_visit(ast.rhs[root]); }
+    if not unary {
+        if shift { push_emit(wire.konst + constant * wire.radix); } else { push_visit(ast.rhs[root]); }
+    }
     push_visit(ast.lhs[root])
 }
 fn push_checked_binding(p: Word) -> Word {

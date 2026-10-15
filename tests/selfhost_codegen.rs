@@ -9104,14 +9104,13 @@ fn the_fused_compile_holds_one_group_not_the_program() {
     // (stage, total records, largest group). Pinned; a stage that grows moves these.
     const EXPECT: &[(&str, &str, usize, usize)] = &[
         (
-            // MOVED 2026-08-26 when the lexer gained radix-prefixed literals: total
-            // 1415 -> 1598, peak 276 -> 423. The peak rose by more than half because the
-            // two new accumulation states join the tokenizer's largest dispatch group,
-            // which is the group this figure measures. The fusion ratio is still 3.78.
+            // Measured 2026-10-15 after bounded full-width integer transport.
+            // Total records grew from 1598 to 1650, while extracting integer
+            // helpers reduced peak residency from 423 to 403. The ratio exceeds four.
             "lexer",
             include_str!("../src/selfhost/kel/lexer.kel"),
-            1598,
-            423,
+            1650,
+            403,
         ),
         (
             // Order 2 adds text bounds and module resource protocols. Measured
@@ -9130,6 +9129,7 @@ fn the_fused_compile_holds_one_group_not_the_program() {
     ];
     for &(name, src, total, peak) in EXPECT {
         let (got_peak, got_total) = keleusma::selfhost::fused_compile_residency(src);
+        eprintln!("{name}: total {got_total}, peak {got_peak}");
         assert_eq!(got_total, total, "{name}: total record count moved");
         assert_eq!(got_peak, peak, "{name}: peak group residency moved");
         assert!(

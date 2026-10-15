@@ -108,6 +108,8 @@ shared data toks {
     overflow_id: Word,
     underflow_id: Word,
     zero_divisor_id: Word,
+    // Full-width literal values, indexed by lexer token 65.
+    values: [Word; 1280],
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -357,8 +359,8 @@ enum OpCode {
     ArrayMark = 24,
     EnumMark = 25,
     TupleMark = 26,
-    // Word shift operators: `lsl`/`asl` both lower to Shl (a bare arithmetic left shift wraps like a
-    // logical one); `asr` lowers to Shr (arithmetic, sign-preserving), ordinary single-op binops.
+    // Word shift operators retain asl separately for checked-outcome admission.
+    // Bare lsl and asl both lower to Shl; `asr` lowers to Shr (arithmetic, sign-preserving), ordinary single-op binops.
     // `lsr` (logical right) lowers to Shr plus a mask (`ShrL`, a multi-op binop in codegen).
     Shl = 27,
     Shr = 28,
@@ -381,6 +383,7 @@ enum OpCode {
     MatchMark = 34,
     IfMark = 35,
     CheckedMark = 36,
+    Asl = 37,
 }
 
 // The merged parser state.
@@ -2070,7 +2073,7 @@ fn step_cfield(k: Word, v: Word) -> Word {
             }
         }
         ops.expect_operand = 0;
-        Node::Literal() as Word + cdata.cfound * 64
+        type_tuple_record(1, cdata.cfound)
     } else {
         0
     }
@@ -2119,8 +2122,10 @@ fn signature_text_name(v: Word, is_return: Word) -> Word {
 // Tuple type metadata is outside the node vocabulary. Open carries the return flag,
 // element carries a source name id, and close terminates the declared tuple.
 fn type_tuple_record(kind: Word, value: Word) -> Word {
-    ps.emit_arg = value;
-    kind
+    if kind == 1 andalso value < 0 {
+        // Signed literals use a complement to avoid the -1 transport sentinel.
+        ps.emit_arg = bnot value; 128
+    } else { ps.emit_arg = value; kind }
 }
 
 fn step_ret_tuple_type(k: Word, v: Word) -> Word {
@@ -2361,7 +2366,7 @@ fn step_enum(k: Word, v: Word) -> Word {
             ops.opsp = op_push(ops.opsp);
             ops.expect_operand = 1;
             ps.cursor = ps.cursor - 1;
-            Node::Literal() as Word + mat.enum_disc * 64
+            type_tuple_record(1, mat.enum_disc)
         }
     } else {
     if mat.enum_phase == 5 {
@@ -2378,12 +2383,12 @@ fn step_enum(k: Word, v: Word) -> Word {
             call.en_unit_variant = mat.enum_row;
             ps.cursor = ps.cursor - 1;
             ops.expect_operand = 0;
-            Node::Literal() as Word + mat.enum_disc * 64
+            type_tuple_record(1, mat.enum_disc)
         }
     } else {
         mat.enum_phase = 0;
         ops.expect_operand = 0;
-        Node::Literal() as Word + mat.enum_disc * 64
+        type_tuple_record(1, mat.enum_disc)
     } } } } }
 }
 
@@ -2423,7 +2428,7 @@ fn step_enum_unit_finalize() -> Word {
 fn step_enum_cast() -> Word {
     if mat.ec_phase == 2 {
         mat.ec_phase = 1;
-        Node::Literal() as Word + enums.edisc[mat.ec_row] * 64
+        type_tuple_record(1, enums.edisc[mat.ec_row])
     } else {
         ps.found_flag = 0;
         for i in 0..enums.enum_count limit 256 {
@@ -2524,7 +2529,7 @@ fn step_mpat(k: Word, v: Word) -> Word {
             if mat.match_isenum[mat.match_sp - 1] == 1 {
                 Node::EnumArm() as Word + (((mat.mpat_vname * 65536 + mat.enum_disc) * 8 + mat.mpat_pcount) * 1024 + mat.mpat_tslot) * 64
             } else {
-                Node::Literal() as Word + mat.enum_disc * 64
+                type_tuple_record(1, mat.enum_disc)
             }
         } else { 0 } }
     } else {
@@ -2568,7 +2573,7 @@ fn step_mpat(k: Word, v: Word) -> Word {
                 // match in a prior arm's result cannot desynchronize the arm test slots.
                 Node::EnumArm() as Word + (((mat.mpat_vname * 65536 + mat.enum_disc) * 8 + mat.mpat_pcount) * 1024 + mat.mpat_tslot) * 64
             } else {
-                Node::Literal() as Word + mat.enum_disc * 64
+                type_tuple_record(1, mat.enum_disc)
             }
         } }
     } } }
@@ -2842,6 +2847,7 @@ fn prec_of(op: Word) -> Word {
         // (the C/Java convention, matching the reference `parse_shift_expr` between comparison and
         // additive). Left-associative like the other binary operators.
         OpCode::Shl() => 10,
+        OpCode::Asl() => 10,
         OpCode::Shr() => 10,
         OpCode::ShrL() => 10,
         OpCode::Band() => 9,
@@ -4446,7 +4452,7 @@ fn emit_op(op: Word) -> Word {
             struct_eq_start(op)
         }
     } else {
-    if ops.op_lbyte[ops.opsp] == 1 andalso (op == OpCode::Shl() as Word orelse op == OpCode::Shr() as Word orelse op == OpCode::ShrL() as Word) {
+    if (ops.op_lbyte[ops.opsp] == 1 orelse ops.op_lscalar[ops.opsp] == 2) andalso (op == OpCode::Shl() as Word orelse op == OpCode::Asl() as Word orelse op == OpCode::Shr() as Word orelse op == OpCode::ShrL() as Word) {
         // A shift on a BYTE left operand: promote-operate-truncate (a Byte result). The shift amount
         // (the right operand) is not a Byte, so `byte_op_kind` (which needs BOTH operands Byte) does
         // not catch it; the left-operand Byte flag alone selects the byte-shift lowering.
@@ -4514,7 +4520,7 @@ fn opcode_of(k: Word) -> Word {
         Tok::Bor() => OpCode::Bor() as Word,
         Tok::Bxor() => OpCode::Bxor() as Word,
         Tok::Lsl() => OpCode::Shl() as Word,
-        Tok::Asl() => OpCode::Shl() as Word,
+        Tok::Asl() => OpCode::Asl() as Word,
         Tok::Asr() => OpCode::Shr() as Word,
         Tok::Lsr() => OpCode::ShrL() as Word,
         Tok::Andalso() => OpCode::Andalso() as Word,
@@ -4567,7 +4573,9 @@ fn return_census_step() -> Word {
         rq.scanned = 1; ps.cursor = 0; toks.at = 0; ps.emit_arg = 0; 111
     } else {
         let at = rq.cursor; let token = toks.packed[at - toks.base];
-        let k = token % 256; let v = token / 256;
+        let kind = token % 256;
+        let k = if kind == 65 { 12 } else { kind };
+        let v = if kind == 65 { toks.values[token / 256] } else { token / 256 };
         toks.at = at; rq.cursor = at + 1;
         if rq.depth == 0 {
             if rq.phase == 0 {
@@ -4636,7 +4644,9 @@ fn return_query_finish(at: Word) -> Word {
 fn return_query_step() -> Word {
     if ps.cursor >= rq.end[rq.callee] { perr(pe_value_layout(), ps.cursor) } else {
         let token = toks.packed[ps.cursor - toks.base];
-        let k = token % 256; let v = token / 256;
+        let kind = token % 256;
+        let k = if kind == 65 { 12 } else { kind };
+        let v = if kind == 65 { toks.values[token / 256] } else { token / 256 };
         toks.at = ps.cursor; ps.cursor = ps.cursor + 1;
         if rq.query == 1 {
             rq.query = 2;
@@ -4748,7 +4758,7 @@ fn value_record(word: Word) -> Word {
     let arg = if ps.emit_arg == 0 - 1 { word / 64 } else { ps.emit_arg };
     if kind != 0 {
         checked.root = 0;
-        if (kind == 3 orelse kind == 45) andalso arg >= 1 andalso arg <= 5 {
+        if (kind == 3 orelse kind == 45) andalso ((arg >= 1 andalso arg <= 5) orelse arg == OpCode::Asl() as Word) {
             checked.root = arg;
             checked.scalar = if kind == 45 { 2 } else { ops.op_lscalar[ops.opsp] };
         }
@@ -4758,7 +4768,7 @@ fn value_record(word: Word) -> Word {
         }
     }
     if kind == 125 { value_scalar(arg / 65536); }
-    if kind == 1 orelse kind == 116 { value_scalar(3); }
+    if kind == 1 orelse kind == 116 orelse kind == 128 { value_scalar(3); }
     if kind == 20 { value_scalar(if arg == 1 orelse arg == 2 { 1 } else { 0 }); }
     if kind == 38 { value_scalar(6); }
     if kind == 11 { value_scalar(da.da_kind); }
@@ -5313,7 +5323,7 @@ fn step_match(k: Word, v: Word) -> Word {
             mat.match_argcount[sp] = mat.match_argcount[sp] + 1;
             mat.match_variant[sp] = 0 - 2;
             mat.match_phase[sp] = 3;
-            Node::Literal() as Word + v * 64
+            type_tuple_record(1, v)
         } else {
         if k == Tok::Underscore() as Word {
             mat.match_phase[sp] = 3;
@@ -5509,7 +5519,7 @@ fn step_for_emit() -> Word {
     } else {
     if forst.for_emit_i == 0 {
         forst.for_emit_i = 1;
-        Node::Literal() as Word + forst.for_cap[fp] * 64
+        type_tuple_record(1, forst.for_cap[fp])
     } else {
     if forst.for_emit_i == 1 {
         forst.for_emit_i = 2;
@@ -5517,11 +5527,11 @@ fn step_for_emit() -> Word {
     } else {
     if forst.for_emit_i == 2 {
         forst.for_emit_i = 3;
-        Node::Literal() as Word + 1 * 64
+        type_tuple_record(1, 1)
     } else {
     if forst.for_emit_i == 3 {
         forst.for_emit_i = 4;
-        Node::Literal() as Word + 2 * 64
+        type_tuple_record(1, 2)
     } else {
     if forst.for_emit_i == 4 {
         forst.for_emit_i = 5;
@@ -5684,7 +5694,7 @@ fn outcome_emit() -> Word {
 fn step_forin_emit(fp: Word) -> Word {
     if forst.for_emit_i == 0 {
         forst.for_emit_i = 1;
-        Node::Literal() as Word + 1 * 64
+        type_tuple_record(1, 1)
     } else {
     if forst.for_emit_i == 1 {
         forst.for_emit_i = 2;
@@ -5722,7 +5732,7 @@ fn step_normal(k: Word, v: Word) -> Word {
         ops.expect_operand = 0;
         ps.last_enum = 0;
         stmt.pending_cenum = 0;
-        Node::Literal() as Word + v * 64
+        type_tuple_record(1, v)
     } else {
     if k == Tok::Str() as Word {
         // A string literal: emit a StrLit carrying the intern id (v), which codegen interns as a
@@ -6451,7 +6461,6 @@ fn checked_open() -> Word {
     ops.draining = 0;
     if checked.depth >= 32 { perr(41, checked.depth + 1) } else {
     if (checked.scalar != 2 andalso checked.scalar != 3) orelse checked.root == 0 {
-        // Unknown roots include checked shifts, which need their own lowering.
         // An unavailable family must not be reported as a source type error.
         perr(42, toks.at)
     } else {
@@ -7155,8 +7164,10 @@ fn body_next() -> Word {
                 ops.draining = 1; 0
             }
         } else {
-            let k = toks.packed[ps.cursor - toks.base] % 256;
-            let v = toks.packed[ps.cursor - toks.base] / 256;
+            let token = toks.packed[ps.cursor - toks.base];
+            let kind = token % 256;
+            let k = if kind == 65 { 12 } else { kind };
+            let v = if kind == 65 { toks.values[token / 256] } else { token / 256 };
             toks.at = ps.cursor;
             ps.cursor = ps.cursor + 1;
             // A pending struct-field-access postfix intercepts the next token here, before the
@@ -7589,10 +7600,14 @@ fn header_data(k: Word, v: Word) -> Word {
 // array, or struct initializer is consumed whole; a top-level `,` ends the field and a
 // top-level `}` ends the block.
 fn header_field_skip(k: Word, v: Word) -> Word {
+    if k == Tok::Minus() as Word andalso ps.idepth == 0 andalso di.seen == 0 {
+        di.negate = 1; 0
+    } else {
     if k == 12 andalso ps.idepth == 0 {
         // A top-level integer literal is the const field's value; capture it for the
         // const-field table. A non-literal or nested initializer leaves cur_cval at 0.
-        fields.cur_cval = v;
+        fields.cur_cval = if di.negate == 1 { 0 - v } else { v };
+        di.seen = 1;
         0
     } else {
     if k == 2 orelse k == 7 orelse k == 41 {
@@ -7628,6 +7643,7 @@ fn header_field_skip(k: Word, v: Word) -> Word {
     } else {
         0
     } } } } }
+}
 }
 
 // Record the pending field's layout in the accumulated table, unless there is no pending
@@ -8688,8 +8704,10 @@ fn step_body() -> Word {
                 if fields.dirty == 1 { data_rebase(); 0 } else { 15 }
             }
         } else {
-            let k = toks.packed[ps.cursor - toks.base] % 256;
-            let v = toks.packed[ps.cursor - toks.base] / 256;
+            let token = toks.packed[ps.cursor - toks.base];
+            let kind = token % 256;
+            let k = if kind == 65 { 12 } else { kind };
+            let v = if kind == 65 { toks.values[token / 256] } else { token / 256 };
             toks.at = ps.cursor;
             ps.cursor = ps.cursor + 1;
             header_step(k, v)

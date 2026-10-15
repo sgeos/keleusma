@@ -318,6 +318,7 @@ pub fn describe_reconstruct_diagnostic(code: i64, detail: i64) -> String {
         6 => {
             format!("invalid or exhausted outcome storage in reconstruct.kel, detail {detail}")
         }
+        7 => format!("invalid signed literal complement in reconstruct.kel, detail {detail}"),
         other => format!(
             "reconstruct.kel reported diagnostic code {other} (detail {detail}), which \
              this driver does not know. The stage has grown a cause that \
@@ -769,6 +770,8 @@ pub const BR_LEX_ILEN: usize = BR_LEX_ISTART + LEX_INTERN_CAP;
 
 /// Slot of `src.icount`, how many identifiers the lexer interned.
 pub const BR_LEX_ICOUNT: usize = BR_LEX_ILEN + LEX_INTERN_CAP;
+/// Full-width integer values indexed by the lexer's interned source spelling.
+pub const BR_LEX_VALUES: usize = BR_LEX_ICOUNT + 1;
 
 /// Slot of `toks.len`, the token count `parse.kel` compares its cursor against to
 /// find end of input.
@@ -850,6 +853,8 @@ pub const BR_P_OVERFLOW_ID: usize = BR_P_OK_ID + 1;
 pub const BR_P_UNDERFLOW_ID: usize = BR_P_OVERFLOW_ID + 1;
 /// Zero-divisor outcome keyword, interned identifier plus one.
 pub const BR_P_ZERO_DIVISOR_ID: usize = BR_P_UNDERFLOW_ID + 1;
+/// Full-width literal values transported from the lexer without host parsing.
+pub const BR_P_VALUES: usize = BR_P_ZERO_DIVISOR_ID + 1;
 
 #[cfg(test)]
 mod shared_layout_tests {
@@ -927,6 +932,7 @@ mod shared_layout_tests {
     #[test]
     fn the_driver_shared_slots_match_the_stage() {
         let layout = stage_layout();
+        assert_eq!(len_of(&layout, "values"), LEX_INTERN_CAP);
         let cases: &[(&str, &str, usize)] = &[
             ("len", "BR_P_LEN", BR_P_LEN),
             ("packed", "BR_P_PACKED", BR_P_PACKED),
@@ -951,6 +957,7 @@ mod shared_layout_tests {
             ("return_queries", "BR_P_RETURN_QUERIES", BR_P_RETURN_QUERIES),
             ("on_id", "BR_P_ON_ID", BR_P_ON_ID),
             ("ok_id", "BR_P_OK_ID", BR_P_OK_ID),
+            ("values", "BR_P_VALUES", BR_P_VALUES),
             ("overflow_id", "BR_P_OVERFLOW_ID", BR_P_OVERFLOW_ID),
             ("underflow_id", "BR_P_UNDERFLOW_ID", BR_P_UNDERFLOW_ID),
             (
@@ -1140,6 +1147,7 @@ mod shared_layout_tests {
             LEX_INTERN_CAP,
             "`src.istart` and LEX_INTERN_CAP differ"
         );
+        assert_eq!(len("values"), LEX_INTERN_CAP);
         assert_eq!(
             len("ilen"),
             LEX_INTERN_CAP,
@@ -1151,6 +1159,7 @@ mod shared_layout_tests {
             ("istart", "BR_LEX_ISTART", BR_LEX_ISTART),
             ("ilen", "BR_LEX_ILEN", BR_LEX_ILEN),
             ("icount", "BR_LEX_ICOUNT", BR_LEX_ICOUNT),
+            ("values", "BR_LEX_VALUES", BR_LEX_VALUES),
         ] {
             assert_eq!(
                 slot(field),

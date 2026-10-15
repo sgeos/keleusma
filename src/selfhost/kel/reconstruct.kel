@@ -724,8 +724,13 @@ fn checked_start(a: Word) -> Word {
     } else {
         let root = pop();
         let kind = io.kinds[root]; let op = io.args[root] % 64;
-        let valid = ((kind == 3 orelse kind == 45) andalso op >= 1 andalso op <= 5)
-            orelse (kind == 10 andalso a / 65536 == 3);
+        // The host compiler uses 64-bit Words. A checked shift multiplies by
+        // a positive power of two, so literal amounts are restricted to 0..62.
+        let shift = kind == 3 andalso io.args[root] == 37 andalso a / 65536 == 3;
+        let amount = io.rhs[root];
+        let valid = ((kind == 3 orelse kind == 45) andalso op >= 1 andalso op <= 5 andalso io.args[root] == op)
+            orelse (kind == 10 andalso a / 65536 == 3)
+            orelse (shift andalso io.kinds[amount] == 1 andalso io.args[amount] >= 0 andalso io.args[amount] < 63);
         if not valid { rerr(6, kind) } else {
             let d = checked.depth; let base = rs.mp; rs.mp = rs.mp + 4;
             checked.ctx_root[d] = root; checked.ctx_base[d] = base; checked.ctx_pending[d] = 0;
@@ -860,6 +865,11 @@ fn step_outcome(k: Word, a: Word) -> Word {
 // stack. An If (4) pops its else, then, and cond children. Its arg is cond for
 // a written else and -(cond + 1) for an omitted else; lhs/rhs hold the branches.
 fn step(k: Word, a: Word) -> Word {
+    if k == 128 {
+        if a < 0 { rerr(7, a) } else { emit(1, bnot a, 0, 0) }
+    } else { step_record(k, a) }
+}
+fn step_record(k: Word, a: Word) -> Word {
     if k >= 118 andalso k <= 127 {
         if k == 122 { rerr(6, k) } else { step_checked(k, a) }
     } else {

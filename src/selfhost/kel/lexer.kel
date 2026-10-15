@@ -69,6 +69,8 @@ shared data src {
     istart: [Word; 1280],
     ilen: [Word; 1280],
     icount: Word,
+    // Token 65 indexes a full-width integer under its interned source spelling.
+    values: [Word; 1280],
 }
 
 // The scanner's cross-iteration state. `kind` is the token being built: 0 none,
@@ -367,7 +369,28 @@ fn ident_token(start: Word, len: Word) -> Word {
     }
 }
 
+// Validate before multiplying so malformed literals never wrap into valid values.
+fn integer_digit(digit: Word, radix: Word) -> Word {
+    let maximum = bnot 0 lsr 1;
+    if st.val > (maximum - digit) / radix { st.kind = 8; } else {
+        st.val = st.val * radix + digit;
+    }
+    0
+}
+fn integer_token() -> Word {
+    let valid = st.kind == 3 orelse st.ndig > 0;
+    st.kind = 0;
+    if not valid { 66 + st.cursor * 256 } else {
+        if st.val <= (bnot 0 lsr 1) / 256 { 12 + st.val * 256 } else {
+            let id = intern_id(st.start, st.cursor - st.start);
+            src.values[id] = st.val;
+            65 + id * 256
+        }
+    }
+}
+
 loop main(resume: Word) -> Word {
+    if st.kind == 8 { yield 66 + st.cursor * 256 } else {
     if st.cursor >= src.len {
         // End of source: flush a token still being built, then report EOF (62).
         if st.kind == 0 {
@@ -378,11 +401,8 @@ loop main(resume: Word) -> Word {
             st.kind = 0;
             yield ident_token(st.start, st.val)
         } else {
-        if st.kind == 3 {
-            // An integer ending at end of input: IntLit (Tok 12), value the payload.
-            let v = st.val;
-            st.kind = 0;
-            yield 12 + v * 256
+        if st.kind == 3 orelse st.kind == 6 orelse st.kind == 7 {
+            yield integer_token()
         } else {
             // A `//` comment ran to end of source with no trailing newline: no token.
             yield 62
@@ -406,13 +426,11 @@ loop main(resume: Word) -> Word {
             // Extending an integer, or ending it at a non-digit byte.
             if is_digit(b) == 1 {
                 st.cursor = st.cursor + 1;
-                st.val = st.val * 10 + (b - 48);
+                integer_digit(b - 48, 10);
                 yield 63
             } else {
                 // IntLit (Tok 12), the parsed value as the payload.
-                let v = st.val;
-                st.kind = 0;
-                yield 12 + v * 256
+                yield integer_token()
             }
         } else {
         if st.kind == 6 {
@@ -420,29 +438,23 @@ loop main(resume: Word) -> Word {
             let d = hex_val(b);
             if d >= 0 {
                 st.cursor = st.cursor + 1;
-                st.val = st.val * 16 + d;
+                integer_digit(d, 16);
                 st.ndig = st.ndig + 1;
                 yield 63
             } else {
-                // `0x` with no digit after it. The reference rejects this outright; the
-                // stage has no diagnostic channel, so it yields the literal zero and the
-                // reference cross-check refuses the program. Recorded rather than hidden.
-                let v = st.val;
-                st.kind = 0;
-                yield 12 + v * 256
+                // The token helper refuses a prefix without digits.
+                yield integer_token()
             }
         } else {
         if st.kind == 7 {
             // Extending a binary integer, or ending it at a non-binary-digit byte.
             if b == 48 orelse b == 49 {
                 st.cursor = st.cursor + 1;
-                st.val = st.val * 2 + (b - 48);
+                integer_digit(b - 48, 2);
                 st.ndig = st.ndig + 1;
                 yield 63
             } else {
-                let v = st.val;
-                st.kind = 0;
-                yield 12 + v * 256
+                yield integer_token()
             }
         } else {
         if st.kind == 5 {
@@ -547,4 +559,5 @@ loop main(resume: Word) -> Word {
             } } } } }
         } } } } } }
     }
+}
 }

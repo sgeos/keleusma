@@ -6,6 +6,33 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-15 Checked shifts and wide integer transport
+
+Checked arithmetic left shifts now lower through CheckedMul with a bounded positive
+constant multiplier and reference constant-pool order. Source and record controls
+cover valid boundaries, rejected amounts and types, nested handlers and side effects.
+Bare Byte shifts after casts retain their scalar kind.
+
+Wide integer values now travel through stage-owned tables under token 65. The host
+moves values without parsing source text. Accumulation rejects overflow before it
+wraps, and token 66 reports invalid integers. Decimal, hexadecimal and binary limits,
+end of input, both parser feeds, constant fields, signed patterns and interner
+capacity have controls. Ordinary signed literal record 128 avoids the negative-one
+sentinel. Constant fields retain a leading minus sign.
+
+The broad run passed 306 of 308 tests, including all fourteen complete stage artifacts.
+Its two stale assertions were corrected against measured diagnostic and lexer record
+counts. Seven targeted follow-up controls pass. Thirteen backend controls, four
+layout controls, the capacity measurement, fresh Clippy, the detached build, four
+actual detached commands and both debug parser-stack tests pass. The full broad set
+was not rerun after the test-only corrections. Full feature and release gates remain.
+
+Parser module input now exactly fills the unchanged 1024-name pool and uses 30050
+blob bytes. Lexer residency measures 1650 total and 403 peak records. Public version,
+fingerprint, instruction count and selected type capacities remain unchanged.
+Order 3 remains active. Total bounds contracts and the remaining classifier, host
+policy, check-elision and final-audit requirements are next.
+
 ## 2026-10-15 Checked arithmetic source parsing
 
 The Keleusma parser now emits checked Word and Byte arithmetic outcomes with scoped

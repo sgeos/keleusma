@@ -87,7 +87,7 @@ const BINOP: i64 = 3;
 #[test]
 fn every_named_cause_renders_a_distinct_message() {
     let mut seen: Vec<(i64, String)> = Vec::new();
-    for code in 1..=6 {
+    for code in 1..=7 {
         let tag = RECONSTRUCT_DIAG_TAG_BASE - code;
         let msg = describe_reconstruct_diagnostic(tag, 7);
         for (other, prev) in &seen {
@@ -99,7 +99,7 @@ fn every_named_cause_renders_a_distinct_message() {
         }
         seen.push((code, msg));
     }
-    assert_eq!(seen.len(), 6, "the code table lost an entry");
+    assert_eq!(seen.len(), 7, "the code table lost an entry");
 }
 
 /// An underflow and an exhaustion on the SAME array must not read alike.

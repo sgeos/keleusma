@@ -13,6 +13,27 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-15 Shift ordering and full-word literal transport
+
+A checked arithmetic shift is a checked multiply by a positive power of two.
+The reference interns that multiplier before compiling the left operand. Deferring
+all constants would preserve execution order but change the artifact, so this one
+constant is interned when scheduling the checked construct. The parser retains
+asl separately from lsl to keep the checked-family admission rule explicit.
+
+The literal failure occurred before reconstruction. Multiplying a full Word by the
+token radix discarded its upper bits. A bounded stage-owned table now separates
+the value from its token index. The driver copies the computed values and does not
+reparse numeric source. A second transport boundary needed full-word records and a
+negative complement encoding because minus one is the legacy record sentinel.
+Range checks precede numeric accumulation, and every radix flushes at end of input.
+
+These changes preserve all fourteen complete stage artifacts against the reference.
+They consume the last entries of the existing compiler name pool, which now holds
+1024 names. Further parser work must account for that bound. The next implementation
+requires exact bounds-operation contracts and proof obligations, not another source
+syntax change. The completion plan and reverse prompt retain the full goal scope.
+
 ## 2026-10-15 Checked-outcome source integration
 
 Checked arms attach after a complete expression. A one-token brace probe and a
