@@ -1,36 +1,45 @@
 # Reverse prompt
 
-## Latest operator request on 2026-10-14
+## Completed parser recovery on 2026-10-15
 
-The operator requested first-class ring buffer support managed by the compiler.
-Backlog B42 records the requirement, and the V0.2.X roadmap links to it. Design
-and scheduling remain open. Order 3 retains its current scope and priority.
+The preceding backup push completed at 9b176725 on
+origin/feat/v02-order3-trap-analysis. The ring-buffer request remains Backlog B42.
+This recovery increment is separate from that completed push.
 
-The operator also authorized committing and pushing all project work. Push the
-current feature branch feat/v02-order3-trap-analysis to origin with its accumulated
-history, including the compiler, validator and both Order 3 increments through
-2ac8b1e8. This documentation commit records the new request. Confirm the remote
-branch head against the local head before reporting push completion. A later
-resume should inspect remote state before repeating the push.
+A two-mebibyte worker reproduced the debug failure during Rust parsing, before
+compilation or verification. Splitting nine primary-expression branches into
+focused helpers reduced the measured common debug frame from about 40 KB to
+6.7 KB on this build. MAX_PARSE_DEPTH remains 24. The separate verifier depth
+limit remains 32. No additional worker stack or relaxed parser limit was used.
 
-The normal push invoked the repository pre-push hook. Its debug quick suite ran
-2462 tests, with 2406 passes and 56 failures. Reported failures included stack
-overflows in compiler, self-host and command tests. The run identifier is
-a0f4face-7c57-442b-a10b-fb13ed0b8fc4. The push failed, and the later hook phases did
-not run. These failures remain unresolved. The earlier release-mode receipts below
-do not establish a green debug build.
+Both tests in tests/parser_stack_bounds.rs pass. They compile all fourteen current
+stages on an explicit two-mebibyte stack and check nine expression shapes at
+accepted depth 23 and rejected depth 24. The debug quick suite ran 2464 tests,
+with 2463 passes and one validator-command timeout. No stack-overflow abort
+remained. A direct command retry completed successfully in about 125 seconds,
+exceeding the former 120-second deadline. The test now allows 600 seconds in debug
+and retains 120 seconds in release. All verdict and boundary assertions remain.
+All four validator command tests then passed, including both validators at the
+arena boundary and one byte below it for all fourteen stages. Runtime was 1258
+seconds for that test binary. All verification processes are terminal.
 
-The hook explicitly documents git push --no-verify for work-in-progress pushes.
-Use that option only for this requested feature-branch backup. No merge or release
-is authorized. Automatic approval review initially rejected the destination as
-unverified. Subsequent read-only GitHub checks confirmed authenticated account
-sgeos, repository owner sgeos and administrator permission on sgeos/keleusma.
-Destination authorization was then accepted for the normal push attempt.
+Receipts are tmp/order3-debug-stack-before.log,
+ tmp/order3-debug-stack-phase.log, tmp/order3-debug-stack-phase-after.log,
+ tmp/order3-debug-parser-bounds.log, tmp/order3-debug-quick-after.log and
+ tmp/order3-debug-validator-after.log. Fresh workspace Clippy passed before the
+test deadline edit, and the changed command-test target passed fresh Clippy after
+it, in tmp/order3-debug-parser-clippy.log and
+ tmp/order3-debug-parser-clippy-final.log. The complete quick suite was not rerun
+after that test-only change. Other feature configurations, release gates and Miri
+were not rerun for this recovery increment. This is scoped regression evidence,
+not a general proof of parser stack usage or resolution of every H2 concern.
 
-The original documentation commit is amended before upload to retain this failure
-receipt while keeping one new commit for the prompt. No extra pilot packets were
-captured for this administrative task. Local .codex/config.toml and empty nvim.log
-remain untracked.
+Pilot task v023-order3-stack-9b17 records one diagnostic and three claims, with
+non-independent self-review labels and a resolved increment outcome. The validator
+claim was labelled unsupported because its excerpt omitted the build profile,
+although the full log establishes debug execution. The export is
+ tmp/order3-stack-pilot-checkpoint.json. External evaluation remains unavailable
+under the previous approval rejection. This increment does not complete Order 3.
 
 ## Active goal and limits
 
@@ -49,7 +58,7 @@ The legacy HANDOFF.md remains invalid-and-stale. Its previously reported distanc
 of 56 commits was measured at 1cfb6dd9, not the current head. Use this bounded
 handoff and the current completion plan for work state.
 
-## Implemented this increment
+## Previous backend increment at 2ac8b1e8
 
 The parser now uses an internal IfMark to keep enclosing operators pending until
 a conditional operand is complete. Three tests cover artifact equality, execution,
@@ -69,9 +78,10 @@ holds fifty arms when otherwise empty. The fifty-first is refused. Deferred inte
 scratch entries are now deduplicated so the valid fifty-arm case also lowers and
 executes. Pool interning remains in emission order. No capacity was increased.
 
-## Verification receipts
+## Backend increment verification
 
-All processes are terminal. The implementation was held fixed during each run.
+These earlier runs are terminal. Current live verification is listed above.
+Their implementation was held fixed during each run.
 
 - Ten backend unit tests pass in tmp/order3-outcomes-backend-final.log.
 - The broad final set passed 381 of 382 tests in tmp/order3-outcomes-acceptance.log.
@@ -99,9 +109,8 @@ support this increment and do not establish Order 3 completion.
 
 ## Immediate next work
 
-Investigate the debug-mode stack overflows reported by the pre-push hook. Preserve
-the failed run as evidence and do not treat the requested feature-branch backup as
-a green gate. After that repair, continue the existing Order 3 implementation plan.
+Continue the existing Order 3 implementation plan with checked-outcome source
+parsing. The debug recovery is verified within the scope recorded above.
 
 Implement checked-outcome source parsing into the tested protocol. Do not substitute
 reference syntax or reference lowering. The existing parser still rejects an
@@ -134,7 +143,7 @@ was integrated through pull request 482. Both full native gate receipts pass at
 tracked inputs changed. No remote activity was queried and no peer message sent.
 The V0.3.X worktree was not modified. Other native workstreams remain separately scoped.
 
-## Pilot and handoff
+## Previous pilot and handoff
 
 Pilot task v023-order3-outcomes-88de records one diagnostic and three completion
 claims, all with non-independent self-review labels. Its completed outcome describes

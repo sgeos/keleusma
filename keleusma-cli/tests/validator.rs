@@ -23,7 +23,11 @@ fn check(module: &Module, backend: &str, capacity: usize, label: &str) -> std::p
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    // Debug execution of the large parser artifact measured about 125 seconds
+    // after stack repair, exceeding the former shared 120-second deadline.
+    // This bounds a test process, not the subject program's execution time.
+    let timeout_seconds = if cfg!(debug_assertions) { 600 } else { 120 };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_seconds);
     loop {
         if child.try_wait().unwrap().is_some() {
             break;
@@ -31,7 +35,9 @@ fn check(module: &Module, backend: &str, capacity: usize, label: &str) -> std::p
         if std::time::Instant::now() >= deadline {
             child.kill().unwrap();
             let output = child.wait_with_output().unwrap();
-            panic!("validation command exceeded its deadline: {output:?}");
+            panic!(
+                "{label} with {backend} at capacity {capacity} exceeded {timeout_seconds} seconds: {output:?}"
+            );
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }

@@ -6,6 +6,29 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-15 Debug parser stack recovery
+
+The pre-push abort was reproduced during parsing on a two-mebibyte worker. Nine
+primary-expression branches now use focused helpers, preserving their logic and
+the parser depth limit of 24. The common debug frame measured about 40 KB before
+and 6.7 KB after the extraction on this build. All fourteen stage sources now parse
+and compile on a fixed two-mebibyte stack. Nine expression shapes accept depth 23
+and report the existing error at depth 24.
+
+The debug quick suite completed 2464 tests with 2463 passes and one command timeout,
+with no remaining stack-overflow abort. A direct validator invocation succeeded in
+about 125 seconds. The command test therefore now uses a finite 600-second debug
+deadline while retaining 120 seconds in release and all semantic assertions. All
+four validator command tests then pass, covering both validators on every stage at
+and below its resource boundary. Fresh Clippy passes. The full quick suite was not
+rerun after the test-only timeout change. Other configurations and release gates
+remain unexecuted for this increment.
+
+This repairs the observed debug paths without increasing host thread stacks or
+narrowing the accepted language. It does not establish a universal stack bound.
+Order 3 remains active, and checked-outcome source parsing is next. Version,
+fingerprint and public instruction count remain unchanged.
+
 ## 2026-10-14 Ring-buffer request and branch push
 
 Recorded the operator's request for first-class ring buffer support managed by

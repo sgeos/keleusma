@@ -176,3 +176,15 @@ protocol above. Checked expression bodies and guards must retain normal expressi
 boundaries. The source type channel recognizes node 80 scalar types, node 78 guards
 and node 77 arm-result joins. Checked shifts and the source parser remain outside
 the current backend evidence. All original Order 3 deliverables remain required.
+
+## Debug verification recovery
+
+The pre-push debug suite exposed stack overflow in the reference parser used to
+bootstrap stages. Primary-expression helper extraction repairs the observed paths
+while preserving the depth limit. Fixed two-mebibyte tests cover every stage and
+nine nesting shapes at both sides of the existing boundary. The debug quick suite
+reported no remaining stack aborts. Its single command-timeout failure was followed
+by a successful measured invocation and a finite debug-only deadline adjustment.
+All four command tests then passed. The full quick suite was not rerun after that
+test-only adjustment. This recovery enables further verification and does not
+complete any of the outstanding trap-analysis deliverables.
