@@ -699,6 +699,7 @@ fn build_struct_eq_nested(a: Word) -> Word {
 // 119 wraps a body and optional guard, carrying class + guard*4 + literal0*8 + literal1*16.
 // 120/121 carry literal-pattern values. 123 appends the wrapped arm after its
 // optional LetIn bindings. 124 closes. 125 pushes a typed low/high local read.
+// 126 and 127 carry nonnegative complements of negative pattern literals.
 // A header is [packed slots/type, reverse arm list, arm count, covered classes].
 // An arm is [metadata, literal0, literal1, bound result node, previous arm + 1].
 private data checked {
@@ -800,12 +801,14 @@ fn step_checked(k: Word, a: Word) -> Word {
                 let body = pop(); let guard = if (a / 4) % 2 == 1 { pop() + 1 } else { 0 };
                 emit(78, a, guard, body)
             }
-        } else { if k == 120 orelse k == 121 {
-            let mask = if k == 120 { 1 } else { 2 };
+        } else { if k == 120 orelse k == 121 orelse k == 126 orelse k == 127 {
+            let mask = if k % 2 == 0 { 1 } else { 2 };
             if checked.ctx_pending[d] == 0 orelse (checked.ctx_meta[d] / 8) band mask == 0
-                orelse checked.ctx_literal_seen[d] band mask != 0 { rerr(6, k) } else {
+                orelse checked.ctx_literal_seen[d] band mask != 0
+                orelse (k >= 126 andalso a < 0) { rerr(6, k) } else {
                 checked.ctx_literal_seen[d] = checked.ctx_literal_seen[d] bor mask;
-                if k == 120 { checked.ctx_literal0[d] = a; } else { checked.ctx_literal1[d] = a; }
+                let value = if k >= 126 { bnot a } else { a };
+                if mask == 1 { checked.ctx_literal0[d] = value; } else { checked.ctx_literal1[d] = value; }
                 0
             }
         } else { if k == 123 {
@@ -857,7 +860,9 @@ fn step_outcome(k: Word, a: Word) -> Word {
 // stack. An If (4) pops its else, then, and cond children. Its arg is cond for
 // a written else and -(cond + 1) for an omitted else; lhs/rhs hold the branches.
 fn step(k: Word, a: Word) -> Word {
-    if k >= 118 andalso k <= 125 { step_checked(k, a) } else {
+    if k >= 118 andalso k <= 127 {
+        if k == 122 { rerr(6, k) } else { step_checked(k, a) }
+    } else {
     if k >= 112 andalso k <= 117 { step_outcome(k, a) } else {
     if is_leaf(k) == 1 orelse k == 72 {
         if k == 72 { push(0 - 1) } else { emit(k, a, 0, 0) }

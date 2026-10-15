@@ -186,11 +186,12 @@ fn run_lexer(path: &str) {
     let mut vm = Vm::new(module, &arena).expect("verify lexer.kel");
 
     let cap = vm.shared_data_bytes();
-    // The increment-1 lexer holds up to 65536 source bytes in its shared array.
-    if input.len() > 393216 {
+    // Use the same source bound as the shipping lexer driver.
+    if input.len() > keleusma::selfhost_host::LEX_SOURCE_CAP {
         eprintln!(
-            "input is {} bytes; the increment-1 lexer caps source at 65536",
-            input.len()
+            "input is {} bytes; the lexer source capacity is {}",
+            input.len(),
+            keleusma::selfhost_host::LEX_SOURCE_CAP
         );
         std::process::exit(1);
     }
@@ -358,10 +359,11 @@ fn run_parse_pipeline(path: &str) {
         eprintln!("cannot read {path}: {e}");
         std::process::exit(1);
     });
-    if input.len() > 393216 {
+    if input.len() > keleusma::selfhost_host::LEX_SOURCE_CAP {
         eprintln!(
-            "input is {} bytes; the increment-1 lexer caps source at 65536",
-            input.len()
+            "input is {} bytes; the lexer source capacity is {}",
+            input.len(),
+            keleusma::selfhost_host::LEX_SOURCE_CAP
         );
         std::process::exit(1);
     }

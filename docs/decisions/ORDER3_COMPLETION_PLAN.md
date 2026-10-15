@@ -27,10 +27,10 @@ width. It now uses the module-declared width through the shared arithmetic helpe
 
 The Rust compiler omits the zero-divisor fallback for nondivision arithmetic and
 unguarded variable or wildcard handlers covering that class. Guards and literal
-patterns retain a possible trap. The Keleusma parser still refuses checked arithmetic
-arms. Reconstruction and code-generation support now exists behind an explicit
-record protocol, with ten record-level controls. Source parsing and its independent
-rejection controls remain required before this is a shipping feature.
+patterns retain a possible trap. Keleusma source parsing now emits the explicit
+checked-outcome protocol for Word and Byte arithmetic, including Word negation.
+Source controls cover bindings, guards, literal patterns, nested expressions and
+independent source rejection. Checked arithmetic shifts remain unsupported.
 Debugger controls pass for the arithmetic operation and its explicit trap.
 
 A full regression exposed lost Float division/remainder and Fixed remainder
@@ -138,11 +138,12 @@ about the shipping fused path. Its type-stage comparisons use the fused path.
 
 ## Checked-outcome record protocol
 
-This is implemented in reconstruct.kel and codegen.kel. The source parser does not
-yet emit it. The unit tests in src/selfhost/checked_outcomes_tests.rs inject records
-directly and compare instructions, constants, frame size, complete artifacts and
-execution with reference-compiled checked expressions. They establish the backend
-contract, not source-language admission.
+This is implemented in parse.kel, reconstruct.kel and codegen.kel for the arithmetic
+families described above. The unit tests in src/selfhost/checked_outcomes_tests.rs
+inject records directly and compare instructions, constants, frame size, complete
+artifacts and execution with reference-compiled checked expressions. Separate
+source controls in tests/selfhost_checked_outcomes.rs and
+ tests/selfhost_checked_patterns.rs establish source admission and rejection.
 
 | Record | Meaning |
 |---|---|
@@ -150,6 +151,7 @@ contract, not source-language admission.
 | 125 | Typed low or high local read for a pattern binding. Payload is source-slot plus scalar-kind times 65536. |
 | 119 | Wrap the arm body and optional guard. Payload is class plus guard-present times 4 plus literal-pattern flags times 8 and 16. Class values are 0 ok, 1 overflow, 2 underflow and 3 zero divisor. |
 | 120 and 121 | Supply the first and second literal-pattern values when their flags are set. |
+| 126 and 127 | Supply the nonnegative bitwise complement of a negative first or second literal. This avoids the legacy transport sentinel at negative one. |
 | 5 | Existing LetIn wrappers bind variable patterns after record 119, in reverse pattern order. Source parsing must also emit binding-name metadata record 90 immediately before each wrapper. |
 | 123 | Finish an arm after its binding wrappers and literal records. Payload is zero. |
 | 124 | Close the checked construct. Payload is zero. An unguarded ok catch-all is mandatory. |
@@ -169,13 +171,31 @@ order. Deferred integers share immutable scratch slots so repeated outcome flags
 do not exhaust the 64-entry table. Actual constant-pool interning remains deferred
 until emission. No capacity was raised.
 
-The next implementation is the source parser. It must reserve the three temporaries
-after operands, support scoped Word and Byte pattern bindings, literal and guarded
-arms, enforce outcome admissibility and ok coverage independently, and emit the
-protocol above. Checked expression bodies and guards must retain normal expression
-boundaries. The source type channel recognizes node 80 scalar types, node 78 guards
-and node 77 arm-result joins. Checked shifts and the source parser remain outside
-the current backend evidence. All original Order 3 deliverables remain required.
+The source parser reserves three temporaries after operands and independently
+checks class admissibility, arity, unreachable arms and unguarded ok coverage.
+A checked marker protects enclosing expression operators, and a bounded context
+stack accepts 32 and refuses 33 before writing. Guards, binding scope and nested
+expression boundaries have source controls. The source type channel recognizes
+node 80 scalar types, node 78 guards and node 77 arm-result joins. Checked shifts
+remain outside the current backend evidence. All original Order 3 deliverables
+remain required.
+
+Two source controls exposed defects subsequently repaired. Negative one collided
+with the parser transport sentinel, so records 126 and 127 now carry complements.
+Byte bindings lost their scalar classification during local lookup, so lookup now
+uses the recorded scalar kind. Reconstruction also rejects reserved record 122.
+
+The expanded parser exceeded the lexer source buffer. Its capacity is now 524288
+bytes, with a driver guard before copying source and aligned detached-harness
+checks. The source-cap boundary has positive and negative controls. The separate
+operator-selected type capacities remain 640. The module-input name cap remains
+1024, with measured parser usage of 1022 names and 29892 blob bytes.
+
+A separate packed-token defect remains open. A recorded parser trace omits the
+large decimal literal in fn main() -> Word { 9223372036854775807 + 1 }.
+The receipt is tmp/order3-checked-source-diagnostic2.log. Current overflow controls
+construct Word boundary values through shifts. The literal-transport defect needs
+an explicit disposition before the final arithmetic coverage audit.
 
 ## Debug verification recovery
 

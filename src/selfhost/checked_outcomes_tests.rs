@@ -225,6 +225,9 @@ fn reconstruct_code(records: &[(i64, i64)]) -> i64 {
 fn malformed_checked_records_fail_through_the_stage_diagnostic() {
     let prefix = [(1, 7), (1, 0), (3, 4), (118, 3 * 65536)];
     for suffix in [
+        vec![(1, 9), (119, 0), (123, 0), (122, 0)], // Reserved tag cannot close.
+        vec![(1, 9), (119, 8), (126, -1)],          // Negative complement is malformed.
+        vec![(1, 9), (119, 16), (127, -1)],
         vec![],                                     // Unclosed context.
         vec![(124, 0)],                             // No exhaustive ok arm.
         vec![(123, 0)],                             // No arm wrapper.

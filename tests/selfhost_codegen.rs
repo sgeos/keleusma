@@ -2062,7 +2062,7 @@ fn self_compile_codegen_atomic_functions() {
 // reconstruction to the control-flow, data-access, call, and yield kinds.
 // ---------------------------------------------------------------------------
 
-// Lexer `src` block slots: len(1) + bytes(393216) then the intern table.
+// Lexer `src` block slots: len(1) + bytes(LEX_SOURCE_CAP) then the intern table.
 const BR_LEX_ISTART: usize = keleusma::selfhost_host::BR_LEX_ISTART;
 const BR_LEX_ILEN: usize = keleusma::selfhost_host::BR_LEX_ILEN;
 const BR_LEX_ICOUNT: usize = keleusma::selfhost_host::BR_LEX_ICOUNT;
@@ -5693,7 +5693,7 @@ fn assemble_shared_layout(
 
 // The per-shared-slot byte layout the driver assembles from parse.kel's records equals
 // the reference compiler's, offset/kind/len for every element slot, for all four stage
-// sources (including lexer.kel's 393216-byte buffer whose later fields sit past 64 KB).
+// sources (including lexer.kel's source buffer whose later fields sit past 64 KB).
 #[test]
 fn assembled_shared_layout_matches_the_reference() {
     if common::selfhost_cache::hit(

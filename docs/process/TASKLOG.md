@@ -6,6 +6,34 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-15 Checked arithmetic source parsing
+
+The Keleusma parser now emits checked Word and Byte arithmetic outcomes with scoped
+bindings, signed literal patterns, guards and independently enforced coverage.
+Nested conditionals, matches, calls and function guards have source controls.
+The context stack accepts 32 and refuses 33 before writing. Checked arithmetic
+shifts remain unsupported and are the next family to implement.
+
+Failing controls exposed and repaired a negative-one transport collision, Byte
+binding arithmetic losing its scalar kind, and conditional statement state leaking
+across arm boundaries. Negative literals now travel under private records 126 and
+127 as nonnegative complements. Reconstruction rejects malformed complements and
+reserved record 122. No public instruction or version identifier changed.
+
+The larger parser exceeded the lexer source buffer. The buffer is now bounded at
+524288 bytes with a driver length check and aligned detached-harness checks. Exact
+capacity and capacity plus one have controls. Type capacities remain 640. Measured
+parser module input uses 1022 names and 29892 blob bytes under unchanged caps.
+Only two names remain available. A separate wide-decimal-literal transport defect
+is recorded as unresolved in the Order 3 completion plan.
+
+The final selected release run passes 148 tests, including all fourteen complete
+stage artifacts, with two instrumentation tests skipped. Ten backend controls,
+four shared-layout controls, capacity measurement, fresh workspace Clippy, the
+detached compiler build and both debug parser-stack tests pass. Full feature and
+release gates remain outstanding. The reverse prompt records exact receipts,
+remaining requirements and the shadow-pilot outcome. Order 3 remains active.
+
 ## 2026-10-15 Requested feature-branch backup
 
 Confirmed that B42 records first-class ring buffers managed by the compiler and

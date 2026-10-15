@@ -1,175 +1,112 @@
 # Reverse prompt
 
-## Requested branch backup on 2026-10-15
+## Checked arithmetic source parsing on 2026-10-15
 
-The first-class compiler-managed ring buffer request is already recorded as
-Backlog B42 and linked from the V0.2.X roadmap in 9b176725. The operator's request
-to commit and push all project work also covers the committed parser recovery
-at fc3718c2. This documentation update accompanies its feature-branch push.
-Use the hook's documented work-in-progress option. The complete verification gate
-has not passed and this backup does not establish Order 3 completion.
+The active goal remains Complete Order 3, trap analysis. Work is on line v0.2.3,
+branch feat/v02-order3-trap-analysis, starting this increment from f26c381c.
+The preceding backup push reached f26c381c. Backlog B42 records the operator's
+first-class compiler-managed ring buffer request, pending design and scheduling.
 
-No implementation or tests changed in this backup increment. No tests were rerun.
-The inbox is empty and the exported interline checkpoint is unchanged. The legacy
-handoff is invalid-and-stale at a measured distance of 60 commits from e84d7cfa to
-fc3718c2. Its ancestry anchor passes, but its twelve-stage inventory and unchanged
-stage-source assertions fail against fourteen modified stages. Its other content
-checks were not rerun. The current work state and remaining work follow below.
-No eligible development-pilot samples were collected for this administrative
-increment. Local .codex/ settings and nvim.log remain untracked.
+The parser now emits the checked-outcome backend protocol for Word and Byte
+addition, subtraction, multiplication, division and modulo, plus Word negation.
+It handles scoped bindings, both Word result positions, Byte result kinds,
+wildcards, signed literal patterns, guards, nesting, conditional and match bodies,
+calls and function-head guards. It independently rejects inadmissible classes,
+wrong arity, unreachable arms and missing unguarded ok coverage. A checked marker
+protects enclosing expression operators. Brace lookahead uses the existing token
+cursor and refill protocol. Context depth accepts 32 and refuses 33 before writing.
+Malformed checked source at end of input now reports a source diagnostic.
 
-## Completed parser recovery on 2026-10-15
+Three appended shared keyword identifiers are seeded in both production feeders.
+Diagnostic 40 is a checked-source rejection. Codes 41 and 42 remain unavailable
+analysis for capacity exhaustion and unsupported operation families. Checked
+arithmetic shifts still need backend and source support. Do not treat the current
+source increment as completion of every checked arithmetic family or of Order 3.
 
-The preceding backup push completed at 9b176725 on
-origin/feat/v02-order3-trap-analysis. The ring-buffer request remains Backlog B42.
-This recovery increment is separate from that completed push.
+Negative patterns use records 126 and 127 carrying a nonnegative bitwise complement.
+This prevents -1 from colliding with the legacy transport sentinel. Reconstruction
+decodes those records, rejects negative complement payloads and refuses reserved
+record 122. Existing 120 and 121 record semantics remain supported. Local reads now
+recover Byte classification from their recorded scalar kind. Failing controls for
+both the -1 transport collision and Byte arm arithmetic preceded these repairs.
 
-A two-mebibyte worker reproduced the debug failure during Rust parsing, before
-compilation or verification. Splitting nine primary-expression branches into
-focused helpers reduced the measured common debug frame from about 40 KB to
-6.7 KB on this build. MAX_PARSE_DEPTH remains 24. The separate verifier depth
-limit remains 32. No additional worker stack or relaxed parser limit was used.
+The parser source grew beyond the lexer source buffer. The first artifact run
+failed before reaching parser self-compilation, while copying source bytes into
+lexer shared slots. The source cap is now 524288 bytes, with an explicit driver
+length guard and aligned detached-harness checks. The exact boundary accepts and
+the next byte refuses. This changes lexer residency by 131072 bytes. It does not
+change the operator-selected type capacities of 640. Current parse source measures
+402004 bytes. The module-input measurement is 1022 names and 29892 blob bytes,
+leaving only two names under the unchanged 1024-name cap. Avoid adding names without
+measuring the complete stage corpus.
 
-Both tests in tests/parser_stack_bounds.rs pass. They compile all fourteen current
-stages on an explicit two-mebibyte stack and check nine expression shapes at
-accepted depth 23 and rejected depth 24. The debug quick suite ran 2464 tests,
-with 2463 passes and one validator-command timeout. No stack-overflow abort
-remained. A direct command retry completed successfully in about 125 seconds,
-exceeding the former 120-second deadline. The test now allows 600 seconds in debug
-and retains 120 seconds in release. All verdict and boundary assertions remain.
-All four validator command tests then passed, including both validators at the
-arena boundary and one byte below it for all fourteen stages. Runtime was 1258
-seconds for that test binary. All verification processes are terminal.
+## Verification
 
-Receipts are tmp/order3-debug-stack-before.log,
- tmp/order3-debug-stack-phase.log, tmp/order3-debug-stack-phase-after.log,
- tmp/order3-debug-parser-bounds.log, tmp/order3-debug-quick-after.log and
- tmp/order3-debug-validator-after.log. Fresh workspace Clippy passed before the
-test deadline edit, and the changed command-test target passed fresh Clippy after
-it, in tmp/order3-debug-parser-clippy.log and
- tmp/order3-debug-parser-clippy-final.log. The complete quick suite was not rerun
-after that test-only change. Other feature configurations, release gates and Miri
-were not rerun for this recovery increment. This is scoped regression evidence,
-not a general proof of parser stack usage or resolution of every H2 concern.
+The final release self-host regression run passed all 148 tests, including complete
+byte-identical artifacts for all fourteen current stages. Two pre-existing parser
+instrumentation tests were skipped. The run completed in about 380 seconds.
 
-Pilot task v023-order3-stack-9b17 records one diagnostic and three claims, with
-non-independent self-review labels and a resolved increment outcome. The validator
-claim was labelled unsupported because its excerpt omitted the build profile,
-although the full log establishes debug execution. The export is
- tmp/order3-stack-pilot-checkpoint.json. External evaluation remains unavailable
-under the previous approval rejection. This increment does not complete Order 3.
+Ten checked-backend unit controls pass, including malformed protocol and side-table
+boundaries. Four shared-layout controls and the complete-stage capacity measurement
+pass. Fresh workspace Clippy with all targets and the self-host feature passes.
+The detached compiler builds. Both parser-stack controls pass in debug, including
+all fourteen stage sources on an explicit two-mebibyte stack. Formatting and diff
+checks pass. All processes listed here are terminal before commit.
 
-## Active goal and limits
+Receipts are tmp/order3-checked-source-final-acceptance.log,
+ tmp/order3-checked-backend-final.log, tmp/order3-checked-layout-final.log,
+ tmp/order3-checked-capacity-final2.log, tmp/order3-checked-source-clippy-final.log,
+ tmp/order3-checked-detached-final.log and tmp/order3-checked-parser-stack-final.log.
+The initial capacity failure is in tmp/order3-checked-source-acceptance.log.
+The pre-repair failures are tmp/order3-checked-negative-before.log and
+ tmp/order3-checked-byte-before.log. A preceding tree passed all 130 selected tests
+in tmp/order3-checked-source-acceptance2.log. That is separate from the final run.
 
-Complete Order 3, trap analysis, on line v0.2.3 and branch
-feat/v02-order3-trap-analysis. The preceding backend commit is 2ac8b1e8.
-Order 3 remains active and is not close to a completion claim. The requirement
-register and checked-outcome protocol are in docs/decisions/ORDER3_COMPLETION_PLAN.md.
+The full five-configuration matrix, isolated full suite, detached compiler tests,
+shipping command tests, documentation tests, Miri and release gates were not rerun
+for this increment. These receipts support the described implementation increment.
+They do not establish Order 3 completion or permission to merge or publish.
 
-The operator declined a bytecode-version advance. BYTECODE_VERSION stays 2 and
-FORMAT_FINGERPRINT stays 0x4327_63E1 throughout V0.2.3-WIP. The fingerprint changes
-only at publication. V0.2.2 remains the last published release. Instruction count
-stays 66, selected type capacities 640 and the depth limit 32. No publication is
-authorized. Appendix B was read before tracked writes.
+## Remaining work
 
-The legacy HANDOFF.md remains invalid-and-stale. Its previously reported distance
-of 56 commits was measured at 1cfb6dd9, not the current head. Use this bounded
-handoff and the current completion plan for work state.
+Continue docs/decisions/ORDER3_COMPLETION_PLAN.md. Checked arithmetic left shift
+requires a constant bounded amount and matching constant-pool order in both
+compilers. The parser currently loses the distinction between bare asl and lsl
+when selecting its ordinary shift node. Preserve that distinction for checked
+admission. The reference implementation is compile_checked in src/compiler.rs.
 
-## Previous backend increment at 2ac8b1e8
+A separate literal-transport defect was observed. The trace for
+fn main() -> Word { 9223372036854775807 + 1 }
+omits the large literal on the packed-token path. The trace is recorded in
+ tmp/order3-checked-source-diagnostic2.log. Overflow execution controls construct
+Word boundary values through shifts instead. The large-literal defect is unresolved
+and needs an explicit disposition before the final arithmetic coverage audit.
 
-The parser now uses an internal IfMark to keep enclosing operators pending until
-a conditional operand is complete. Three tests cover artifact equality, execution,
-evaluation order and a zero divisor reaching an explicit Trap. The previously
-recorded inline-conditional ordering defect is repaired.
+Total bounds contracts remain required for BoundsCheck, GetIndex, GetDataIndexed
+and SetDataIndexed. Legacy integer Div and Mod remain partial in hand-built
+bytecode. No trap-free classifier, host trap-free policy or proven no-check mode
+exists. Order 2 typed widening does not justify removing runtime guards. Complete
+all required implementation, full verification and the requirement-by-requirement
+audit before marking the goal complete.
 
-Reconstruction and code generation implement checked arithmetic behind records
-118 through 125. Forest nodes 77, 78 and 80 represent the checked expression, arm
-result and typed binding read. The source parser DOES NOT emit these records yet.
-Ten unit controls inject records directly. They cover Word operations, Byte
-bindings, guards, literal patterns, nesting, type constraints, malformed records
-and side-table boundaries. These are backend tests, not source admission evidence.
+## Governing state and handoff
 
-The reconstruction stage derives coverage from guards and patterns, requires an
-ok catch-all, and guards its context stack at 32. Its existing 256-word side table
-holds fifty arms when otherwise empty. The fifty-first is refused. Deferred integer
-scratch entries are now deduplicated so the valid fifty-arm case also lowers and
-executes. Pool interning remains in emission order. No capacity was increased.
+BYTECODE_VERSION stays 2, FORMAT_FINGERPRINT stays 0x4327_63E1 throughout V0.2.3-WIP,
+public instruction count stays 66, selected type capacities stay 640 and verifier
+depth stays 32. The separate reference parser depth stays 24. V0.2.2 is the last
+published release. No publication is authorized. Appendix B was read before writes.
+The legacy HANDOFF.md is invalid-and-stale. Its last measured distance was 60 commits
+from e84d7cfa to fc3718c2. Its old content checks do not describe this worktree.
 
-## Backend increment verification
+Pilot task v023-checked-source-f26c records the first compiler diagnostic and three
+completion claims. Each has a non-independent self-review label. Its outcome is
+resolved for this source-parser increment only. External evaluation was not retried
+after the previous automatic approval rejection. The reviewed export is
+ tmp/order3-checked-pilot-checkpoint.json. This branch does not own the shared tracked
+pilot checkpoint. No independent accuracy or saved-reasoning claim is supported.
 
-These earlier runs are terminal. Current live verification is listed above.
-Their implementation was held fixed during each run.
+The v0.2.3 inbox is empty. Its tracked checkpoint was exported and reviewed without
+a diff. No message was sent.
 
-- Ten backend unit tests pass in tmp/order3-outcomes-backend-final.log.
-- The broad final set passed 381 of 382 tests in tmp/order3-outcomes-acceptance.log.
-  The only failure was a stale self-compilation count of 92. All 97 actual codegen
-  functions compiled byte-identically. The constant was corrected and the test
-  rerun successfully in tmp/order3-outcomes-atomic-final.log.
-- Three expression tests pass after removing a redundant cast in
-  tmp/order3-outcomes-frames-final.log.
-- The broad set includes the complete fourteen-stage artifact comparison, which
-  passed on the current implementation. It also covers wire handling, loop outcomes,
-  reconstruction failure modes, opcode tags and the previous arithmetic increment.
-- Fresh workspace Clippy passes in tmp/order3-outcomes-clippy-final.log.
-- The detached compiler build passes in tmp/order3-outcomes-detached.log.
-
-An earlier boundary test found deferred scratch exhaustion. Deduplication repaired
-it without increasing the 64-entry array. Earlier broad failures named the new
-context arrays and moved measurements. Arrays now have unique names and explicit
-coverage registration. Parse measures 986 names and 28415 blob bytes. Atomic codegen
-self-compilation measures 97 functions. These were measured before updating pins.
-
-The complete final broad set was not rerun after the two test-only corrections.
-The full feature matrix, full isolated suite, detached compiler tests, doctests,
-Miri and release gates remain unexecuted for this increment. The current receipts
-support this increment and do not establish Order 3 completion.
-
-## Immediate next work
-
-Continue the existing Order 3 implementation plan with checked-outcome source
-parsing. The debug recovery is verified within the scope recorded above.
-
-Implement checked-outcome source parsing into the tested protocol. Do not substitute
-reference syntax or reference lowering. The existing parser still rejects an
-unexpected brace through pe_block_syntax. Its source identifier seeds live in
-selfhost_host.rs and two production feeders in selfhost/mod.rs. Contextual ok is
-already seeded. Overflow, underflow and zero_divisor will need recognition.
-
-Reserve flag, low and high temporaries after the operand expressions. Emit typed
-binding reads before guard/body records, then arm wrappers and binding-name/LetIn
-records in reverse pattern order. Preserve source scope, literals, guards and arm
-order. Enforce admissible classes, pattern arity, unreachable arms and mandatory
-ok coverage independently. The new expression marker supplies the conditional
-boundary needed inside guards and bodies. Checked shifts are not yet covered by
-the backend. The completion plan records the exact protocol and forest layout.
-
-After source parsing, total bounds contracts remain required for BoundsCheck,
-GetIndex, GetDataIndexed and SetDataIndexed. Legacy integer Div and Mod also remain
-partial in hand-built bytecode. No trap-free classifier, host trap-free load policy
-or proof-gated no-check mode exists. Order 2 typed widening does not justify removing
-runtime guards. Every eliminated check needs an explicit proof and negative controls.
-Finish the full requirement audit and prescribed verification before completion.
-
-## Status question and concurrent line
-
-The operator asked whether Order 3 is clearly close. The answer given was no,
-because core implementation remains. A read-only inspection of the canonical
-V0.3.X worktree found clean trunk 7d141fcc dated 2026-10-01. Workstream B completion
-was integrated through pull request 482. Both full native gate receipts pass at
-5695ab1f on 2026-09-30, but tools/gate-status.sh currently reports UNVERIFIED because
-tracked inputs changed. No remote activity was queried and no peer message sent.
-The V0.3.X worktree was not modified. Other native workstreams remain separately scoped.
-
-## Previous pilot and handoff
-
-Pilot task v023-order3-outcomes-88de records one diagnostic and three completion
-claims, all with non-independent self-review labels. Its completed outcome describes
-this increment, not the entire goal. External evaluation remains unavailable under
-the previous automatic approval rejection. The export is retained at
- tmp/order3-outcomes-pilot-checkpoint.json. This branch does not own the shared pilot
-checkpoint. No provider-accuracy or saved-reasoning claim is supported.
-
-Check the v0.2.3 inbox and export its tracked checkpoint before final handoff.
-Unrelated .codex/ and nvim.log remain untouched. The branch push is now authorized.
-No merge or publication is authorized by that request.
+Local .codex/ settings and nvim.log remain unrelated and untracked. No peer message,
+merge or publication occurred. The concurrent V0.3.X worktree was not modified.

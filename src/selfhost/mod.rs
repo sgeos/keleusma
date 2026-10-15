@@ -739,7 +739,7 @@ fn lex_next(vm: &mut Vm<'_, '_>, shared: &mut [u8]) -> Option<i64> {
     // Bounded rather than `loop`: a lexer that only ever reported PENDING would
     // otherwise hang the driver, and a total language should not need a host that
     // can. Four bytes of pending per token is far past any real run.
-    for _ in 0..(4 * 393_216) {
+    for _ in 0..(4 * crate::selfhost_host::LEX_SOURCE_CAP) {
         // A coroutine must be RESUMED, not re-called -- but the FIRST entry has to
         // be a call, and the machine exposes no predicate for which it wants.
         // `NotSuspended` is that predicate, and taking it here keeps the caller
@@ -778,6 +778,12 @@ fn lex_open<'a>(arena: &'a Arena, m: Module, src: &str) -> (Vm<'a, 'a>, Vec<u8>)
     let vm = Vm::new(m, arena).expect("verify lexer.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     let bytes = src.as_bytes();
+    assert!(
+        bytes.len() <= crate::selfhost_host::LEX_SOURCE_CAP,
+        "source has {} bytes, exceeding lexer source capacity {}",
+        bytes.len(),
+        crate::selfhost_host::LEX_SOURCE_CAP,
+    );
     vm.set_shared(&mut shared, 0, Value::Int(bytes.len() as i64))
         .unwrap();
     for (i, &b) in bytes.iter().enumerate() {
@@ -1324,6 +1330,14 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
         Value::Int(id_of("ok") + 1),
     )
     .unwrap();
+    for (slot, name) in [
+        (crate::selfhost_host::BR_P_OVERFLOW_ID, "overflow"),
+        (crate::selfhost_host::BR_P_UNDERFLOW_ID, "underflow"),
+        (crate::selfhost_host::BR_P_ZERO_DIVISOR_ID, "zero_divisor"),
+    ] {
+        vm.set_shared(&mut shared, slot, Value::Int(id_of(name) + 1))
+            .unwrap();
+    }
     vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_REQUIRE_ID, Value::Int(id_of("require")))
@@ -1687,6 +1701,14 @@ fn try_parse_functions_impl(
         Value::Int(id_of("ok") + 1),
     )
     .unwrap();
+    for (slot, name) in [
+        (crate::selfhost_host::BR_P_OVERFLOW_ID, "overflow"),
+        (crate::selfhost_host::BR_P_UNDERFLOW_ID, "underflow"),
+        (crate::selfhost_host::BR_P_ZERO_DIVISOR_ID, "zero_divisor"),
+    ] {
+        vm.set_shared(&mut shared, slot, Value::Int(id_of(name) + 1))
+            .unwrap();
+    }
     vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
         .unwrap();
     vm.set_shared(&mut shared, BR_P_REQUIRE_ID, Value::Int(id_of("require")))

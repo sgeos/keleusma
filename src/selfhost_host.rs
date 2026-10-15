@@ -75,7 +75,7 @@ impl ParseRecordError {
     /// retired codes, capacity limits and transport failures never do.
     #[must_use]
     pub fn is_source_rejection(&self) -> bool {
-        matches!(self, Self::Diagnostic { code, .. } if matches!(PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(2 | 13..=17 | 22..=24 | 26 | 32..=36 | 39)))
+        matches!(self, Self::Diagnostic { code, .. } if matches!(PARSE_DIAG_TAG_BASE.checked_sub(*code), Some(2 | 13..=17 | 22..=24 | 26 | 32..=36 | 39 | 40)))
     }
 }
 
@@ -316,7 +316,7 @@ pub fn describe_reconstruct_diagnostic(code: i64, detail: i64) -> String {
              remainder for an over-full one."
         ),
         6 => {
-            format!("invalid or exhausted loop outcome storage in reconstruct.kel, detail {detail}")
+            format!("invalid or exhausted outcome storage in reconstruct.kel, detail {detail}")
         }
         other => format!(
             "reconstruct.kel reported diagnostic code {other} (detail {detail}), which \
@@ -422,6 +422,11 @@ pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
         ),
         29 => format!("tuple layout capacity exhausted with {detail} members in parse.kel"),
         39 => format!("invalid loop outcome syntax near token {detail} in parse.kel"),
+        40 => format!("invalid checked arithmetic outcome near token {detail} in parse.kel"),
+        41 => format!("checked arithmetic nesting {detail} exceeds 32 contexts in parse.kel"),
+        42 => format!(
+            "checked operation near token {detail} is outside the implemented arithmetic families in parse.kel"
+        ),
         38 => format!("expression layout unavailable near token {detail} in parse.kel"),
         30 => format!("expression block at token {detail} is outside the parse.kel subset"),
         31 => format!("non-range for iterable at token {detail} is outside the parse.kel subset"),
@@ -743,10 +748,9 @@ pub const CALL_CHUNK_RADIX: usize = PARSE_CHUNK_CAP;
 
 /// How many source bytes `src.bytes` in `lexer.kel` holds.
 ///
-/// Sized to hold the largest stage source. `parse.kel` is the largest at roughly
-/// 100 KB; the wire-format v2 twenty-four-bit data operands raised the shared-segment
+/// Sized to hold the largest stage source. `parse.kel` exceeds 400 KB; the wire-format v2 twenty-four-bit data operands raised the shared-segment
 /// ceiling from 64 KB to 16 MB, so this may exceed 64 KB.
-pub const LEX_SOURCE_CAP: usize = 393216;
+pub const LEX_SOURCE_CAP: usize = 524288;
 
 /// How many distinct identifiers `src.istart`/`src.ilen` in `lexer.kel` hold.
 pub const LEX_INTERN_CAP: usize = 1280;
@@ -840,6 +844,12 @@ pub const BR_P_RETURN_QUERIES: usize = BR_P_TEXT_ID + 1;
 pub const BR_P_ON_ID: usize = BR_P_RETURN_QUERIES + 1;
 /// OK outcome label, interned identifier plus one.
 pub const BR_P_OK_ID: usize = BR_P_ON_ID + 1;
+/// Overflow outcome keyword, interned identifier plus one.
+pub const BR_P_OVERFLOW_ID: usize = BR_P_OK_ID + 1;
+/// Underflow outcome keyword, interned identifier plus one.
+pub const BR_P_UNDERFLOW_ID: usize = BR_P_OVERFLOW_ID + 1;
+/// Zero-divisor outcome keyword, interned identifier plus one.
+pub const BR_P_ZERO_DIVISOR_ID: usize = BR_P_UNDERFLOW_ID + 1;
 
 #[cfg(test)]
 mod shared_layout_tests {
@@ -941,6 +951,13 @@ mod shared_layout_tests {
             ("return_queries", "BR_P_RETURN_QUERIES", BR_P_RETURN_QUERIES),
             ("on_id", "BR_P_ON_ID", BR_P_ON_ID),
             ("ok_id", "BR_P_OK_ID", BR_P_OK_ID),
+            ("overflow_id", "BR_P_OVERFLOW_ID", BR_P_OVERFLOW_ID),
+            ("underflow_id", "BR_P_UNDERFLOW_ID", BR_P_UNDERFLOW_ID),
+            (
+                "zero_divisor_id",
+                "BR_P_ZERO_DIVISOR_ID",
+                BR_P_ZERO_DIVISOR_ID,
+            ),
         ];
         for &(field, konst, value) in cases {
             assert_eq!(

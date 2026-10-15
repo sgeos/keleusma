@@ -13,6 +13,28 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-15 Checked-outcome source integration
+
+Checked arms attach after a complete expression. A one-token brace probe and a
+checked-expression operator marker preserve that boundary in the streaming parser.
+Per-context class masks and pattern facts enforce coverage without a host verdict.
+Three result temporaries are allocated after operand expressions. Scoped binding
+initializers precede guards and bodies, while reverse binding wrappers follow the
+arm-result record, matching the reference frame allocation and evaluation order.
+
+Negative one is a legacy transport sentinel. A direct signed pattern payload
+therefore selected the wrong record decoder. Records 126 and 127 carry nonnegative
+complements instead, with reconstruction validating their sign and expected pattern
+position. A separate failing control showed Byte bindings losing their kind during
+local lookup. Restoring that classification preserves Byte arithmetic in arm bodies.
+
+Adding parser state also crossed the lexer's complete-source capacity. A named
+length guard now precedes copying, and the bounded source buffer grows to 512 KiB.
+The compiler input name pool remains unchanged and has only two entries free.
+The final 148-test selected run includes all fourteen complete artifact comparisons.
+Checked shifts, wide-literal transport and the remaining Order 3 requirements stay
+open. The completion plan and reverse prompt record those limits and receipts.
+
 ## 2026-10-13 Full first-pass validator admission
 
 The resource coordinator now stores chunk summaries and decides final arena admission

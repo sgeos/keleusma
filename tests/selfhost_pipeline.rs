@@ -118,7 +118,7 @@ fn reference_stream_and_names(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
 }
 
 // Flat shared-data slot indices of the lexer's intern table, in the `src` block's
-// declaration order: len (1 slot) then bytes (393216) precede it.
+// declaration order: len (1 slot) then the source byte buffer precede it.
 const LEX_ISTART: usize = keleusma::selfhost_host::BR_LEX_ISTART;
 const LEX_ILEN: usize = keleusma::selfhost_host::BR_LEX_ILEN;
 const LEX_ICOUNT: usize = keleusma::selfhost_host::BR_LEX_ICOUNT;
@@ -145,8 +145,8 @@ fn lex_full(src: &str) -> (Vec<(i64, i64)>, Vec<String>) {
     let mut vm = Vm::new(m, &arena).expect("verify");
 
     assert!(
-        bytes.len() <= 393216,
-        "source exceeds the lexer's 393216-byte cap"
+        bytes.len() <= keleusma::selfhost_host::LEX_SOURCE_CAP,
+        "source exceeds the lexer source capacity"
     );
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     vm.set_shared(&mut shared, 0, Value::Int(bytes.len() as i64))

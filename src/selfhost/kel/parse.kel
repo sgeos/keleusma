@@ -105,6 +105,9 @@ shared data toks {
     return_queries: Word,
     on_id: Word,
     ok_id: Word,
+    overflow_id: Word,
+    underflow_id: Word,
+    zero_divisor_id: Word,
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -377,6 +380,7 @@ enum OpCode {
     Xor = 33,
     MatchMark = 34,
     IfMark = 35,
+    CheckedMark = 36,
 }
 
 // The merged parser state.
@@ -1208,6 +1212,17 @@ private data forst {
 // scrutinee's `{`, 2 an arm pattern, 3 the `when` or `=>`, 4 the result, 5 the guard),
 // `match_temp` the reserved scrutinee slot, `match_argcount` the total arm count, `match_sp` the
 // nesting depth, `match_build` the pending build signal.
+// Checked arithmetic contexts. The two pattern positions use adjacent slots.
+// The depth guard runs before any write. No host supplied coverage is accepted.
+private data checked {
+    depth: Word, probe: Word, emit: Word, root: Word, scalar: Word,
+    phase: [Word; 32], base: [Word; 32], kind: [Word; 32],
+    seen: [Word; 32], allowed: [Word; 32], form: [Word; 32],
+    count: [Word; 32], guarded: [Word; 32], literal: [Word; 32],
+    letbase: [Word; 32], opbase: [Word; 32], ifbase: [Word; 32],
+    matchbase: [Word; 32], forbase: [Word; 32], closing: [Word; 32],
+    names: [Word; 64], slots: [Word; 64], values: [Word; 64],
+}
 // Outcome state shares the bounded loop stack. Labels map to LIMIT, OK, BREAK.
 private data out {
     base: [Word; 9], kind: [Word; 9], seen: [Word; 9],
@@ -1738,6 +1753,7 @@ fn step_local(v: Word) -> Word {
         if stmt.let_names[i] == v {
             ps.found = stmt.scope_slot[i];
             ps.scalar_postfix = stmt.let_scalar[i];
+            ps.last_byte = if vl.locals[i] == 3 { 1 } else { 0 };
             ps.found_flag = 1;
         }
     }
@@ -2816,6 +2832,7 @@ fn prec_of(op: Word) -> Word {
         OpCode::TupleMark() => 0,
         OpCode::MatchMark() => 0,
         OpCode::IfMark() => 0,
+        OpCode::CheckedMark() => 0,
         OpCode::Mul() => 12,
         OpCode::Div() => 12,
         OpCode::Mod() => 12,
@@ -4729,6 +4746,18 @@ fn value_local(slot: Word) -> Word {
 fn value_record(word: Word) -> Word {
     let kind = if ps.emit_arg == 0 - 1 { word % 64 } else { word };
     let arg = if ps.emit_arg == 0 - 1 { word / 64 } else { ps.emit_arg };
+    if kind != 0 {
+        checked.root = 0;
+        if (kind == 3 orelse kind == 45) andalso arg >= 1 andalso arg <= 5 {
+            checked.root = arg;
+            checked.scalar = if kind == 45 { 2 } else { ops.op_lscalar[ops.opsp] };
+        }
+        if kind == 10 {
+            checked.scalar = vl.scalar;
+            if vl.scalar == 3 { checked.root = 10; }
+        }
+    }
+    if kind == 125 { value_scalar(arg / 65536); }
     if kind == 1 orelse kind == 116 { value_scalar(3); }
     if kind == 20 { value_scalar(if arg == 1 orelse arg == 2 { 1 } else { 0 }); }
     if kind == 38 { value_scalar(6); }
@@ -4757,7 +4786,8 @@ fn value_record(word: Word) -> Word {
     if kind == 3 { value_scalar(if arg >= 64 { arg / 64 } else { if (arg >= 6 andalso arg <= 11) orelse arg == 33 { 1 } else { 3 } }); }
     if kind == 6 orelse kind == 8 orelse kind == 9 orelse kind == 68 { value_scalar(1); }
     if kind == 47 orelse kind == 50 orelse kind == 53 orelse kind == 58 orelse kind == 61 orelse kind == 63 { value_scalar(1); }
-    if kind == 10 orelse kind == 45 orelse kind == 65 { value_scalar(3); }
+    if kind == 10 orelse kind == 65 { value_scalar(3); }
+    if kind == 45 { value_scalar(2); }
     if kind == 44 orelse kind == 51 orelse kind == 60 { value_scalar(2); }
     if kind == 26 { value_scalar(if arg == 1 { 2 } else { 3 }); }
     if kind == 28 { value_scalar(arg / 65536); }
@@ -6407,7 +6437,213 @@ fn match_boundary(k: Word) -> Word {
     }
 }
 
+// A one-token brace probe distinguishes checked arms from an if or match body.
+// It uses the normal cursor so the fused feeder can refill its token window.
+fn checked_label(k: Word, v: Word) -> Word {
+    if k != Tok::Ident() as Word { 4 } else {
+        if toks.ok_id > 0 andalso v + 1 == toks.ok_id { 0 } else {
+        if toks.overflow_id > 0 andalso v + 1 == toks.overflow_id { 1 } else {
+        if toks.underflow_id > 0 andalso v + 1 == toks.underflow_id { 2 } else {
+        if toks.zero_divisor_id > 0 andalso v + 1 == toks.zero_divisor_id { 3 } else { 4 }
+    } } } }
+}
+fn checked_open() -> Word {
+    ops.draining = 0;
+    if checked.depth >= 32 { perr(41, checked.depth + 1) } else {
+    if (checked.scalar != 2 andalso checked.scalar != 3) orelse checked.root == 0 {
+        // Unknown roots include checked shifts, which need their own lowering.
+        // An unavailable family must not be reported as a source type error.
+        perr(42, toks.at)
+    } else {
+        let fp = checked.depth;
+        checked.depth = fp + 1;
+        checked.phase[fp] = 0; checked.seen[fp] = 0;
+        checked.form[fp] = checked.scalar;
+        checked.allowed[fp] = if checked.root == 10 { 3 } else {
+            if checked.root == 5 { 9 } else { if checked.root == 4 {
+                if checked.scalar == 3 { 11 } else { 9 }
+            } else { if checked.scalar == 3 { 7 } else {
+                if checked.root == 3 { 5 } else { 3 }
+            } } }
+        };
+        checked.base[fp] = ps.pcount + stmt.slot_count;
+        stmt.slot_count = stmt.slot_count + 3;
+        checked.letbase[fp] = stmt.let_count;
+        checked.ifbase[fp] = branch.if_sp;
+        checked.matchbase[fp] = mat.match_sp;
+        checked.forbase[fp] = forst.for_sp;
+        ops.opstack[ops.opsp] = OpCode::CheckedMark() as Word;
+        ops.opsp = op_push(ops.opsp);
+        checked.opbase[fp] = ops.opsp;
+        ops.expect_operand = 1;
+        type_tuple_record(118, checked.base[fp] + checked.form[fp] * 65536)
+    } }
+}
+fn checked_close(fp: Word) -> Word {
+    if checked.seen[fp] band 1 == 0 { perr(40, toks.at); }
+    if ops.opsp != checked.opbase[fp] orelse ops.opsp == 0 {
+        perr(40, toks.at);
+    } else { ops.opsp = op_pop(ops.opsp); }
+    stmt.let_count = checked.letbase[fp];
+    checked.depth = fp; ops.expect_operand = 0; stmt.blockform = 0;
+    type_tuple_record(124, 0)
+}
+fn checked_pattern(k: Word, v: Word, fp: Word) -> Word {
+    let n = checked.count[fp];
+    let at = fp * 2 + n;
+    let negative = checked.phase[fp] == 9;
+    if k == Tok::Minus() as Word andalso not negative {
+        checked.phase[fp] = 9; 0
+    } else {
+        checked.phase[fp] = 3; checked.count[fp] = n + 1;
+        if k == Tok::IntLit() as Word {
+            checked.literal[fp] = checked.literal[fp] bor (1 lsl n);
+            checked.values[at] = if negative { 0 - v } else { v };
+            0
+        } else { if negative { perr(40, toks.at) } else {
+        if k == Tok::Underscore() as Word { 0 } else {
+        if k != Tok::Ident() as Word { perr(40, toks.at) } else {
+            // Word wide results bind high then low. All other patterns bind low.
+            let wide = checked.form[fp] == 3 andalso (checked.kind[fp] == 1 orelse checked.kind[fp] == 2);
+            let source = checked.base[fp] + if wide andalso n == 0 { 2 } else { 1 };
+            let slot = ps.pcount + stmt.slot_count;
+            stmt.slot_count = stmt.slot_count + 1;
+            checked.names[at] = v + 1; checked.slots[at] = slot;
+            clear_let_shape(stmt.let_count);
+            stmt.let_names[stmt.let_count] = v; stmt.scope_slot[stmt.let_count] = slot;
+            stmt.let_scalar[stmt.let_count] = 1;
+            vl.locals[stmt.let_count] = checked.form[fp] + 1;
+            stmt.let_count = let_push(stmt.let_count);
+            type_tuple_record(125, source + checked.form[fp] * 65536)
+        } } } }
+    }
+}
+fn checked_boundary(k: Word) -> Word {
+    if checked.depth == 0 { 0 } else {
+        let fp = checked.depth - 1; let phase = checked.phase[fp];
+        if phase < 6 orelse phase == 9 { 1 } else {
+            let same = branch.if_sp == checked.ifbase[fp]
+                andalso mat.match_sp == checked.matchbase[fp]
+                andalso forst.for_sp == checked.forbase[fp];
+            // Any bracket above the checked marker belongs to a nested expression.
+            ps.found_flag = 0;
+            for i in checked.opbase[fp]..ops.opsp limit 64 {
+                if prec_of(ops.opstack[i]) == 0 { ps.found_flag = 1; }
+            }
+            if same andalso ps.found_flag == 0 andalso (
+                (phase == 6 andalso k == Tok::FatArrow() as Word)
+                orelse (phase == 7 andalso (k == Tok::Comma() as Word orelse k == Tok::RBrace() as Word))) { 1 } else { 0 }
+        }
+    }
+}
+fn step_checked(k: Word, v: Word) -> Word {
+    let fp = checked.depth - 1; let phase = checked.phase[fp];
+    if phase == 0 {
+        if k == Tok::RBrace() as Word { checked_close(fp) } else {
+            let kind = checked_label(k, v);
+            if kind == 4 { perr(40, toks.at) } else {
+                let mask = 1 lsl kind;
+                if checked.allowed[fp] band mask == 0 orelse checked.seen[fp] band mask != 0 { perr(40, toks.at); }
+                checked.kind[fp] = kind; checked.guarded[fp] = 0;
+                checked.literal[fp] = 0; checked.count[fp] = 0;
+                checked.names[fp * 2] = 0; checked.names[fp * 2 + 1] = 0;
+                checked.phase[fp] = 1; 0
+            }
+        }
+    } else { if phase == 1 {
+        if k != Tok::LParen() as Word { perr(40, toks.at); }
+        checked.phase[fp] = 2; 0
+    } else { if phase == 2 orelse phase == 9 { checked_pattern(k, v, fp) } else {
+    if phase == 3 {
+        let wide = checked.form[fp] == 3 andalso (checked.kind[fp] == 1 orelse checked.kind[fp] == 2);
+        let count = if wide { 2 } else { 1 };
+        if checked.count[fp] < count {
+            if k != Tok::Comma() as Word { perr(40, toks.at); }
+            checked.phase[fp] = 2;
+        } else {
+            if k != Tok::RParen() as Word { perr(40, toks.at); }
+            checked.phase[fp] = 5;
+        }
+        0
+    } else { if phase == 5 {
+        ops.expect_operand = 1;
+        if k == Tok::When() as Word {
+            checked.guarded[fp] = 1; checked.phase[fp] = 6;
+        } else {
+            if k != Tok::FatArrow() as Word { perr(40, toks.at); }
+            checked.phase[fp] = 7;
+        }
+        0
+    } else {
+        if ops.expect_operand != 0 { perr(40, toks.at); }
+        stmt.blockform = 0;
+        ops.draining = 1;
+        if phase == 6 { ops.drain_reason = 18; } else {
+            ops.drain_reason = 19;
+            checked.closing[fp] = if k == Tok::RBrace() as Word { 1 } else { 0 };
+        }
+        0
+    } } } } }
+}
+fn checked_emit() -> Word {
+    let fp = checked.depth - 1; let phase = checked.emit;
+    checked.emit = phase + 1;
+    if phase == 1 {
+        if checked.guarded[fp] == 0 andalso checked.literal[fp] == 0 {
+            checked.seen[fp] = checked.seen[fp] bor (1 lsl checked.kind[fp]);
+        }
+        type_tuple_record(119, checked.kind[fp] + checked.guarded[fp] * 4 + checked.literal[fp] * 8)
+    } else { if phase >= 2 andalso phase <= 5 {
+        let at = fp * 2 + if phase <= 3 { 1 } else { 0 };
+        if checked.names[at] == 0 { 0 } else {
+            if phase % 2 == 0 { type_tuple_record(90, checked.names[at] - 1) } else {
+                type_tuple_record(5, checked.slots[at])
+            }
+        }
+    } else { if phase == 6 orelse phase == 7 {
+        let n = phase - 6;
+        if checked.literal[fp] band (1 lsl n) == 0 { 0 } else {
+            let value = checked.values[fp * 2 + n];
+            // -1 is the transport's legacy marker. Negative payloads travel
+            // as their nonnegative complement under separate internal tags.
+            if value < 0 { type_tuple_record(126 + n, bnot value) } else {
+                type_tuple_record(120 + n, value)
+            }
+        }
+    } else { if phase == 8 {
+        stmt.let_count = checked.letbase[fp];
+        type_tuple_record(123, 0)
+    } else {
+        checked.emit = 0; checked.phase[fp] = 0;
+        if checked.closing[fp] == 1 { checked_close(fp) } else { 0 }
+    } } } }
+}
+
 fn step_body_dispatch(k: Word, v: Word) -> Word {
+    if checked.probe == 1 {
+        checked.probe = 0;
+        // Match the reference recognizer. zero_divisor cannot be the first arm.
+        let kind = checked_label(k, v);
+        if kind < 3 {
+            ps.cursor = ps.cursor - 1;
+            ops.draining = 1; ops.drain_reason = 17; 0
+        } else {
+            ps.cursor = ps.cursor - 2; toks.at = ps.cursor; checked.probe = 2; 0
+        }
+    } else {
+        let replay = checked.probe == 2;
+        checked.probe = 0;
+        if not replay andalso k == Tok::LBrace() as Word andalso ops.expect_operand == 0
+            andalso da.post_index == 0 andalso da.da_phase == 0 andalso mat.enum_phase == 0 {
+            checked.probe = 1; 0
+        } else {
+            if checked_boundary(k) == 1 andalso da.post_index == 0 andalso da.da_phase == 0 andalso mat.enum_phase == 0 {
+                step_checked(k, v)
+            } else { step_body_normal(k, v) }
+        }
+    }
+}
+fn step_body_normal(k: Word, v: Word) -> Word {
     if ps.in_guard == 1 andalso k == Tok::LBrace() as Word andalso da.post_index == 0 andalso da.da_phase == 0 {
         // The body's opening `{` ends the guard expression: drain it (reason 11), then
         // step_draining emits the guard's Done and arms the real body. A pending
@@ -6475,7 +6711,8 @@ fn step_draining() -> Word {
         orelse top == OpCode::IndexMark() as Word
         orelse top == OpCode::CallMark() as Word
         orelse top == OpCode::MatchMark() as Word
-        orelse top == OpCode::IfMark() as Word;
+        orelse top == OpCode::IfMark() as Word
+        orelse top == OpCode::CheckedMark() as Word;
     // A YieldMark completes (drains as its YieldExpr) at a statement (reason 0) or the
     // body tail (reason 1), and also at an if-branch fold (reason 3 or 4) when the
     // `yield` was written inside that branch. The latter is true when the YieldMark
@@ -6499,6 +6736,13 @@ fn step_draining() -> Word {
         let op = ops.opstack[ops.opsp];
         emit_op(op)
     } else {
+        if ops.drain_reason == 17 { checked_open() } else {
+        if ops.drain_reason == 18 {
+            ops.draining = 0; ops.expect_operand = 1;
+            checked.phase[checked.depth - 1] = 7; 0
+        } else { if ops.drain_reason == 19 {
+            ops.draining = 0; checked.emit = 1; 0
+        } else {
         if ops.drain_reason == 0 {
             if stmt.pstmt_sp > stmt.stmt_base {
                 stmt.pstmt_sp = stmt.pstmt_sp - 1;
@@ -6749,7 +6993,7 @@ fn step_draining() -> Word {
             ops.draining = 0;
             Node::Done() as Word
         } } } } } } } } } } } } } }
-    } }
+    } } } } }
 }
 
 // Wrap the block's tail in each statement node, last to first, then do the fold
@@ -6853,6 +7097,9 @@ fn step_folding() -> Word {
 
 // One step of the body walk: the active sub-state, or the next body token.
 fn body_step() -> Word {
+    if checked.emit > 0 { checked_emit() } else { body_next() }
+}
+fn body_next() -> Word {
     if stmt.structeq_nested == 1 {
         // A nested `struct == struct` fold armed the nested drain.
         structeq_nested_next()
@@ -6904,8 +7151,9 @@ fn body_step() -> Word {
         step_enum_cast()
     } else {
         if ps.cursor >= toks.len {
-            ops.draining = 1;
-            0
+            if checked.depth > 0 orelse checked.probe == 1 { perr(40, ps.cursor) } else {
+                ops.draining = 1; 0
+            }
         } else {
             let k = toks.packed[ps.cursor - toks.base] % 256;
             let v = toks.packed[ps.cursor - toks.base] / 256;
@@ -6939,6 +7187,7 @@ fn body_step() -> Word {
 
 // Reset the body-walk state for a fresh function body.
 fn arm_body() -> Word {
+    checked.depth = 0; checked.probe = 0; checked.emit = 0; checked.root = 0;
     value_scope_begin();
     value_scalar(0 - 1);
     ps.in_body = 1;
