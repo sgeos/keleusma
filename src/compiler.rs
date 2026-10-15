@@ -569,7 +569,8 @@ impl FuncCompiler {
         }
         if let Some(last) = self.chunk.ops.len().checked_sub(1) {
             let read = last.checked_sub(6).filter(|&at| {
-                matches!(self.chunk.ops[at], Op::GetIndex(elem) if elem.has_bounds_outcome())
+                (matches!(self.chunk.ops[at], Op::GetIndex(elem) if elem.has_bounds_outcome())
+                    || matches!(self.chunk.ops[at], Op::GetDataIndexed(_, _)))
                     && self.chunk.ops[last] == Op::PopN(5)
                     && self.chunk.ops[last - 2]
                         == Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code())
@@ -810,6 +811,35 @@ impl FuncCompiler {
             self.emit(Op::EndIf);
             self.emit(Op::PopN(5));
         }
+        start
+    }
+
+    fn emit_data_fallback(&mut self, ty: &TypeExpr) {
+        match ty {
+            TypeExpr::Prim(PrimType::Word, _) => {
+                self.emit(Op::PushImmediate(4));
+            }
+            TypeExpr::Prim(PrimType::Byte, _) => {
+                self.emit(Op::PushImmediate(4));
+                self.emit(Op::WordToByte);
+            }
+            _ => {
+                self.emit(Op::PushImmediate(0));
+            }
+        }
+    }
+
+    fn emit_data_read(&mut self, base: u32, len: u32, ty: &TypeExpr) -> usize {
+        self.emit_data_fallback(ty);
+        let start = self.emit(Op::GetDataIndexed(base, len));
+        let one = self.add_constant(Value::Int(1));
+        self.emit(Op::Const(one));
+        self.emit(Op::CmpEq);
+        let valid = self.emit_jump(Op::If(0));
+        self.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
+        self.patch_jump(valid);
+        self.emit(Op::EndIf);
+        self.emit(Op::PopN(5));
         start
     }
 
@@ -5264,7 +5294,13 @@ fn emit_data_indexed_read(
             span,
         })?;
     let total = emit_indexed_offset(fc, &field_type, &chain.indices, span)?;
-    fc.emit(Op::GetDataIndexed(base, total));
+    let mut element = &field_type;
+    for _ in &chain.indices {
+        if let TypeExpr::Array(inner, _, _) = element {
+            element = inner;
+        }
+    }
+    fc.emit_data_read(base, total, element);
     // A dynamic data-array index can trap out-of-bounds; record the
     // operator site so the fault resolves exactly (B29 item 2).
     fc.record_operator_site(&span);
@@ -7472,7 +7508,7 @@ fn compile_for_in_data_array(
 
     // Bind the iteration variable to the indexed element.
     fc.emit(Op::GetLocal(idx_slot));
-    fc.emit(Op::GetDataIndexed(base, total_slots));
+    fc.emit_data_read(base, total_slots, elem_type);
     let var_slot = fc.declare_local_typed(&for_stmt.var, Some(elem_type.clone()));
     fc.emit(Op::SetLocal(var_slot));
 
@@ -10621,9 +10657,36 @@ fn compile_checked_index(
     let element = array_elem_operand(Some(&elem_ty), &fc.type_info);
     let total = element.has_bounds_outcome();
     let (idx_slot, flag_slot, elem_slot, arr_slot, limbs) = if total {
-        // Evaluate once before reserving the seven diagnostic/result temporaries.
-        compile_expr(fc, object)?;
-        compile_expr(fc, index)?;
+        // A single data dimension already has a total primitive and does not
+        // need materializing as an array value merely to dispatch its outcome.
+        let data_range = if let Some(chain) = data_indexed_chain(object, index)
+            && chain.indices.len() == 1
+            && fc.is_data_block(chain.data_name)
+            && !fc.is_const_data_block(chain.data_name)
+        {
+            let field_type = fc
+                .type_info
+                .data_field_types
+                .get(chain.data_name)
+                .and_then(|fields| fields.get(chain.field))
+                .cloned()
+                .ok_or_else(|| CompileError {
+                    message: String::from("checked data field has no type descriptor"),
+                    span: *span,
+                })?;
+            let base = fc
+                .resolve_data_field(chain.data_name, chain.field)
+                .ok_or_else(|| CompileError {
+                    message: String::from("checked data field has no storage range"),
+                    span: *span,
+                })?;
+            let count = emit_indexed_offset(fc, &field_type, &chain.indices, *span)?;
+            Some((base, count))
+        } else {
+            compile_expr(fc, object)?;
+            compile_expr(fc, index)?;
+            None
+        };
         let flag = fc.declare_local(&alloc::format!("__idx_flag_{}", suffix));
         let value = fc.declare_local(&alloc::format!("__idx_elem_{}", suffix));
         let index = fc.declare_local(&alloc::format!("__idx_i_{}", suffix));
@@ -10631,7 +10694,12 @@ fn compile_checked_index(
             fc.declare_local(&alloc::format!("__idx_bound_{}_{}", suffix, i))
         });
         // Deliberately bypass the bare-read wrapper so handlers own the outcome.
-        fc.emit(Op::GetIndex(element));
+        if let Some((base, count)) = data_range {
+            fc.emit_data_fallback(&elem_ty);
+            fc.emit(Op::GetDataIndexed(base, count));
+        } else {
+            fc.emit(Op::GetIndex(element));
+        }
         fc.record_operator_site(span);
         fc.emit(Op::SetLocal(flag));
         for &slot in limbs.iter().rev() {

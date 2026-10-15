@@ -2797,7 +2797,7 @@ fn step_post_index(k: Word) -> Word {
     } else {
         ps.cursor = ps.cursor - 1;
         ops.expect_operand = 0;
-        Node::IndexRead() as Word + (da.pidx_base + da.pidx_len * 16777216) * 64
+        Node::IndexRead() as Word + (da.pidx_base + da.pidx_len * 16777216 + (if da.pidx_kind == 2 orelse da.pidx_kind == 3 { da.pidx_kind } else { 0 }) * 281474976710656) * 64
     }
 }
 
@@ -4767,6 +4767,9 @@ fn value_record(word: Word) -> Word {
         }
     }
     if kind == 31 andalso (arg == 2 orelse arg == 3) { checked.root = 31; checked.scalar = arg; }
+    if kind == 13 andalso (arg / 281474976710656 == 2 orelse arg / 281474976710656 == 3) {
+        checked.root = 13; checked.scalar = arg / 281474976710656;
+    }
     if kind == 125 { value_scalar(arg / 65536); }
     if kind == 1 orelse kind == 116 orelse kind == 128 { value_scalar(3); }
     if kind == 20 { value_scalar(if arg == 1 orelse arg == 2 { 1 } else { 0 }); }
@@ -6472,8 +6475,8 @@ fn checked_open() -> Word {
         let fp = checked.depth;
         checked.depth = fp + 1;
         checked.phase[fp] = 0; checked.seen[fp] = 0;
-        checked.form[fp] = checked.scalar + if checked.root == 31 { 8 } else { 0 };
-        checked.allowed[fp] = if checked.root == 31 { 3 } else { if checked.root == 10 { 3 } else {
+        checked.form[fp] = checked.scalar + if checked.root == 31 orelse checked.root == 13 { 8 } else { 0 };
+        checked.allowed[fp] = if checked.root == 31 orelse checked.root == 13 { 3 } else { if checked.root == 10 { 3 } else {
             if checked.root == 5 { 9 } else { if checked.root == 4 {
                 if checked.scalar == 3 { 11 } else { 9 }
             } else { if checked.scalar == 3 { 7 } else {
@@ -6481,7 +6484,7 @@ fn checked_open() -> Word {
             } } }
         } };
         checked.base[fp] = ps.pcount + stmt.slot_count;
-        stmt.slot_count = stmt.slot_count + if checked.root == 31 { 7 } else { 3 };
+        stmt.slot_count = stmt.slot_count + if checked.root == 31 orelse checked.root == 13 { 7 } else { 3 };
         checked.letbase[fp] = stmt.let_count;
         checked.ifbase[fp] = branch.if_sp;
         checked.matchbase[fp] = mat.match_sp;

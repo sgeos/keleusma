@@ -24,11 +24,11 @@ fn always_with_stage(module: &Module, stage: Module) -> Result<BTreeSet<usize>, 
         });
     }
     for chunk in &module.chunks {
-        if chunk.ops.len() > 1536 {
+        if chunk.ops.len() > crate::selfhost_host::VERIFY_OP_CAP {
             return Err(VerificationError::Capacity {
                 stage: "yield fixpoint",
                 resource: "opcodes",
-                limit: 1536,
+                limit: crate::selfhost_host::VERIFY_OP_CAP,
                 actual: chunk.ops.len(),
             });
         }

@@ -2570,7 +2570,7 @@ pub fn op_depth_effect(op: &Op, _chunk: &Chunk) -> (i32, i32) {
         Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::PushImmediate(_) => (0, 1),
         Op::Dup => (1, 1),
         Op::SetLocal(_) | Op::SetData(_) => (1, -1),
-        Op::GetDataIndexed(_, _) => (1, 0),
+        Op::GetDataIndexed(_, _) => (2, 5),
         Op::SetDataIndexed(_, _) => (2, 4),
         Op::BoundsCheck(_) => (1, 5),
         Op::GetIndex(elem) if elem.has_bounds_outcome() => (2, 5),
@@ -3294,16 +3294,7 @@ fn verify_chunk(
                     } else {
                         "SetDataIndexed"
                     };
-                    if data_len == 0 {
-                        return Err(VerifyError {
-                            chunk_name: name.clone(),
-                            message: alloc::format!(
-                                "{} at {} but module has no data layout declared",
-                                op_name,
-                                ip
-                            ),
-                        });
-                    }
+                    // Empty spans need no storage and still have total outcomes.
                     record(ip, P1, "data-range-layout-declared");
                     let base_usize = *base as usize;
                     let len_usize = *len as usize;

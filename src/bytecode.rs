@@ -2273,14 +2273,11 @@ pub enum Op {
     /// twenty-four-bit wire operand (`u32` in memory), as for [`Op::GetData`].
     SetData(u32),
 
-    /// Indexed read from a data-segment array. The first immediate is
-    /// the array's base slot, the second is the array's total slot
-    /// count. The opcode pops a `Value::Int` index from the operand
-    /// stack, checks `0 <= index < total`, traps if the index is out
-    /// of range, and pushes `data[base + index]`. Used by the compiler
-    /// for `state.field[i]` reads when `state.field` is an array-typed
-    /// data field. Both immediates are twenty-four-bit wire operands (`u32` in
-    /// memory), so an array's base slot and length may each exceed 64 K.
+    /// Total indexed read. Pop a Word/Byte/Unit fallback and then a Word
+    /// index. Read the selected slot only in range, otherwise use fallback.
+    /// Push value, index, four Word bound limbs, and flag zero for a read or
+    /// one for fallback. Invalid spans and type/storage contract failures
+    /// remain errors. Base and length retain their u24 wire encoding.
     GetDataIndexed(u32, u32),
     /// Total indexed write. Pop value and Word index, write only when the
     /// index is in range, then push index, four Word byte limbs of the bound,
@@ -2833,7 +2830,7 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
     match op {
         Op::Trap(kind) if *kind == TrapKind::IndexOutOfBounds.code() => 6,
         Op::BoundsCheck(_) => 7,
-        Op::SetDataIndexed(_, _) => 8,
+        Op::SetDataIndexed(_, _) | Op::GetDataIndexed(_, _) => 8,
         Op::GetIndex(elem) if elem.has_bounds_outcome() => 8,
         Op::Const(_)
         | Op::GetLocal(_)
@@ -2883,8 +2880,7 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         | Op::FixedToWord(_)
         | Op::FixedMul(_)
         | Op::FixedDiv(_)
-        | Op::Return
-        | Op::GetDataIndexed(_, _) => 2,
+        | Op::Return => 2,
 
         Op::Div | Op::Mod | Op::GetField(_) | Op::IsEnum(_, _, _) | Op::IsStruct(_) => 3,
 
@@ -2982,8 +2978,8 @@ impl Op {
 
             Op::SetLocal(_) | Op::SetData(_) => 0,
 
-            // GetDataIndexed pops one index, pushes one value.
-            Op::GetDataIndexed(_, _) => 1,
+            // Indexed reads consume two values and produce seven.
+            Op::GetDataIndexed(_, _) => 5,
             // Indexed writes consume two operands and return six diagnostic Words.
             Op::SetDataIndexed(_, _) => 4,
             // Preserve the index and append four diagnostic limbs and a flag.
@@ -3083,7 +3079,7 @@ impl Op {
 
             // GetDataIndexed pops the index, SetDataIndexed pops the
             // index then the value, BoundsCheck does not pop.
-            Op::GetDataIndexed(_, _) => 1,
+            Op::GetDataIndexed(_, _) => 0,
             Op::SetDataIndexed(_, _) => 0,
             Op::BoundsCheck(_) => 0,
 

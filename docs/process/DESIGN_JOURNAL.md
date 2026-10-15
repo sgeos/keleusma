@@ -13,6 +13,24 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-15 Indexed data-read work-in-progress backup
+
+GetDataIndexed has no element-kind operand. An explicit Word, Byte or Unit fallback
+on the stack supplies a deterministic invalid-index result without changing the
+public instruction encoding. Both compiler paths supply the fallback and dispatch
+unhandled outcomes through the existing bounds trap. The private parser record
+uses a high scalar-kind lane that must survive data relocation.
+
+The expanded stage corpus exceeds the previous 1536-opcode verifier profile.
+Measured maxima are 1965 for the parser and 1568 for code generation. The shared
+opcode profile is now 2048. Selected type capacities remain 640.
+
+The broad run completed with eleven failures. The new high lane exposes unfinished
+relocation boundary handling and old test adapters without kind information.
+Parser record expectations and the verifier residency pin also need updates.
+The operator requested a backup commit and push before those repairs. This entry
+records an unfinished increment and does not establish Order 3 completion.
+
 ## 2026-10-15 Scalar array-read outcomes
 
 Word and Byte array operands have a known zero value, so their invalid-index result

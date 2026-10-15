@@ -89,11 +89,11 @@ fn chunk_bounds(
     value_slot_bytes: u32,
 ) -> Result<(i64, i64, bool), VerificationError> {
     let chunk = &module.chunks[index];
-    if chunk.ops.len() > 1536 {
+    if chunk.ops.len() > crate::selfhost_host::VERIFY_OP_CAP {
         return Err(VerificationError::Capacity {
             stage: "resources",
             resource: "opcodes",
-            limit: 1536,
+            limit: crate::selfhost_host::VERIFY_OP_CAP,
             actual: chunk.ops.len(),
         });
     }

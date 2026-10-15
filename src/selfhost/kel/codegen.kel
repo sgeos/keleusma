@@ -766,7 +766,7 @@ fn push_checked_arm(arm: Word, flag: Word, scalar: Word) -> Word {
     push_checked_pattern(class, flag)
 }
 fn push_checked(p: Word) -> Word {
-    if ast.kinds[ast.lhs[p]] == 31 { push_checked_index(p) } else { push_checked_arithmetic(p) }
+    if ast.kinds[ast.lhs[p]] == 31 orelse ast.kinds[ast.lhs[p]] == 13 { push_checked_index(p) } else { push_checked_arithmetic(p) }
 }
 fn push_checked_arithmetic(p: Word) -> Word {
     let base = ast.args[p]; let packed = ast.match_parts[base];
@@ -821,8 +821,15 @@ fn push_checked_index(p: Word) -> Word {
     push_emit(wire.setlocal + (flag + 2) * wire.radix);
     for i in 0..4 limit 4 { push_emit(wire.setlocal + (flag + 3 + i) * wire.radix); }
     push_emit(wire.setlocal + flag * wire.radix);
-    push_work(wire.rawemit, wire.getindex + scalar * wire.radix);
-    push_visit(ast.rhs[root]); push_visit(ast.lhs[root])
+    if ast.kinds[root] == 13 {
+        push_work(wire.rawemit, wire.getdataix + (ast.args[root] % 281474976710656) * wire.radix);
+        if scalar == 2 { push_emit(wire.wordtobyte); }
+        push_emit(wire.pushimm + 4 * wire.radix);
+    } else {
+        push_work(wire.rawemit, wire.getindex + scalar * wire.radix);
+        push_visit(ast.rhs[root]);
+    }
+    push_visit(ast.lhs[root])
 }
 fn push_checked_binding(p: Word) -> Word {
     push_emit(wire.getlocal + (ast.args[p] % 65536) * wire.radix)
@@ -1070,7 +1077,13 @@ fn push_data_assign(p: Word) -> Word {
 // with the element-0 slot and array length packed as base + len*65536 in args.
 // Node: args = base + len*65536, lhs = index expression.
 fn push_index_read(p: Word) -> Word {
-    push_emit(wire.getdataix + ast.args[p] * wire.radix);
+    let kind = ast.args[p] / 281474976710656;
+    push_emit(wire.popn + 5 * wire.radix); push_emit(wire.mendif);
+    push_emit(wire.trap + 8 * wire.radix); push_emit(wire.mif);
+    push_emit(wire.cmpeq); push_int_const(1);
+    push_emit(wire.getdataix + (ast.args[p] % 281474976710656) * wire.radix);
+    if kind == 2 { push_emit(wire.wordtobyte); }
+    push_emit(wire.pushimm + (if kind == 2 orelse kind == 3 { 4 } else { 0 }) * wire.radix);
     push_visit(ast.lhs[p])
 }
 
@@ -3139,7 +3152,7 @@ fn relocate_data_arg() -> Word {
     if ast.relocate_count < 0 orelse ast.relocate_count > 640 orelse ast.relocate_kind < 11 orelse ast.relocate_kind > 14 orelse ast.relocate_arg < 0 { 0 - 1 } else {
         let indexed = ast.relocate_kind >= 13;
         let base = if indexed { ast.relocate_arg % 16777216 } else { ast.relocate_arg };
-        let width = if indexed { ast.relocate_arg / 16777216 } else { 1 };
+        let width = if indexed { (ast.relocate_arg / 16777216) % 16777216 } else { 1 };
         relocate.result = 0; relocate.hits = 0; relocate.bad = 0;
         if base >= 16777216 orelse width <= 0 orelse width > 16777216 { relocate.bad = 1; }
         for i in 0..ast.relocate_count limit 640 {
@@ -3148,7 +3161,7 @@ fn relocate_data_arg() -> Word {
                 if base >= start andalso base - start < length {
                     relocate.hits = relocate.hits + 1;
                     if width > length - (base - start) { relocate.bad = 1; } else {
-                        let prefix = if indexed { width * 16777216 } else { 0 };
+                        let prefix = if indexed { (ast.relocate_arg / 16777216) * 16777216 } else { 0 };
                         relocate.result = prefix + target + (base - start);
                     }
                 }

@@ -4625,22 +4625,22 @@ const WA_ARENA_CAPACITY: usize = 5;
 const WA_REGION_START: usize = 6;
 const WA_REGION_END: usize = 7;
 const WA_COST: usize = 8;
-const WA_CLASS: usize = 8 + 1536;
-const WA_ARG: usize = 8 + 1536 * 2;
-const WA_GROWTH: usize = 8 + 1536 * 3;
-const WA_SHRINK: usize = 8 + 1536 * 4;
-const WA_HEAP: usize = 8 + 1536 * 5;
-const WA_OPK: usize = 8 + 1536 * 6;
-const WA_SLOT: usize = 8 + 1536 * 7;
-const WA_CVAL: usize = 8 + 1536 * 8;
-const WA_CINT: usize = 8 + 1536 * 9;
-const WA_CALLEE_SLOTS: usize = 8 + 1536 * 10;
-const WA_CALLEE_HEAP: usize = 8 + 1536 * 11;
-const WA_OUT_WCET: usize = 8 + 1536 * 12;
-const WA_OUT_STACK: usize = 8 + 1536 * 12 + 1;
-const WA_OUT_HEAP: usize = 8 + 1536 * 12 + 2;
-const WA_OUT_REJECT: usize = 8 + 1536 * 12 + 3;
-const WA_OUT_VALID: usize = 8 + 1536 * 12 + 4;
+const WA_CLASS: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP;
+const WA_ARG: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 2;
+const WA_GROWTH: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 3;
+const WA_SHRINK: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 4;
+const WA_HEAP: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 5;
+const WA_OPK: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 6;
+const WA_SLOT: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+const WA_CVAL: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 8;
+const WA_CINT: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 9;
+const WA_CALLEE_SLOTS: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 10;
+const WA_CALLEE_HEAP: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 11;
+const WA_OUT_WCET: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 12;
+const WA_OUT_STACK: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 1;
+const WA_OUT_HEAP: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 2;
+const WA_OUT_REJECT: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 3;
+const WA_OUT_VALID: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 4;
 
 fn analyze_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -4742,7 +4742,10 @@ fn run_analyze_kel(
         }
         BlockType::Func | BlockType::Reentrant => (0, chunk.ops.len(), 0, 0),
     };
-    assert!(chunk.ops.len() <= 1536, "analyze.kel op-table capacity");
+    assert!(
+        chunk.ops.len() <= crate::selfhost_host::VERIFY_OP_CAP,
+        "analyze.kel op-table capacity"
+    );
     let m = analyze_kel_module();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -4830,7 +4833,7 @@ pub fn analyze_stream_chunk(chunk: &crate::bytecode::Chunk) -> (i64, i64, i64, b
 // (marshalled per chunk), pending that fixpoint's own self-hosting alongside the third pass. The
 // shared block `sv` lays out the scalars `op_count` (0), `local_count` (1), `const_count` (2),
 // `template_count` (3), `data_len` (4), `nchunks` (5), `word_bits` (6), `block_type` (7),
-// `calls_ay` (8); the arrays `class` (9..), `arg`, `opb`, `o1`, `o2`, `o3`, `mark` (each 1536
+// `calls_ay` (8); the arrays `class` (9..), `arg`, `opb`, `o1`, `o2`, `o3`, `mark` (each crate::selfhost_host::VERIFY_OP_CAP
 // wide); and the verdict `out_reject`.
 
 const SV_OP_COUNT: usize = 0;
@@ -4843,13 +4846,13 @@ const SV_WORD_BITS: usize = 6;
 const SV_BLOCK_TYPE: usize = 7;
 const SV_CALLS_AY: usize = 8;
 const SV_CLASS: usize = 9;
-const SV_ARG: usize = 9 + 1536;
-const SV_OPB: usize = 9 + 1536 * 2;
-const SV_O1: usize = 9 + 1536 * 3;
-const SV_O2: usize = 9 + 1536 * 4;
-const SV_O3: usize = 9 + 1536 * 5;
-const SV_MARK: usize = 9 + 1536 * 6;
-const SV_OUT_REJECT: usize = 9 + 1536 * 7;
+const SV_ARG: usize = 9 + crate::selfhost_host::VERIFY_OP_CAP;
+const SV_OPB: usize = 9 + crate::selfhost_host::VERIFY_OP_CAP * 2;
+const SV_O1: usize = 9 + crate::selfhost_host::VERIFY_OP_CAP * 3;
+const SV_O2: usize = 9 + crate::selfhost_host::VERIFY_OP_CAP * 4;
+const SV_O3: usize = 9 + crate::selfhost_host::VERIFY_OP_CAP * 5;
+const SV_MARK: usize = 9 + crate::selfhost_host::VERIFY_OP_CAP * 6;
+const SV_OUT_REJECT: usize = 9 + crate::selfhost_host::VERIFY_OP_CAP * 7;
 
 /// The compiled `verify_structural.kel` stage module, cached after the first
 /// build.
@@ -4979,7 +4982,7 @@ pub fn seed_verify_structural_shared(
     always: &std::collections::BTreeSet<usize>,
 ) -> Vec<u8> {
     assert!(
-        chunk.ops.len() <= 1536,
+        chunk.ops.len() <= crate::selfhost_host::VERIFY_OP_CAP,
         "verify_structural.kel op-table capacity"
     );
     let mut shared = vec![0u8; vm.shared_data_bytes()];
@@ -5030,7 +5033,7 @@ pub fn seed_verify_structural_shared(
 // verify_yield.kel decides whether every fall-through path of a chunk region passes through a
 // Yield (or a Call delegating to an always-yielding chunk), reproducing the reference
 // `analyze_yield_coverage`. Its shared block `yv` lays out `op_count` (0), `region_start` (1),
-// `region_end` (2); the arrays `class` (3..), `arg`, `mark`, `cay` (each 1536 wide, where `cay`
+// `region_end` (2); the arrays `class` (3..), `arg`, `mark`, `cay` (each crate::selfhost_host::VERIFY_OP_CAP wide, where `cay`
 // flags a Call to an always-yielding chunk); and the results `out_fell`, `out_hy`. The driver
 // runs it in two orchestrations, both self-hosting what was the reference borrow: the
 // always-yielding monotone fixpoint (over `[0, op_count)` per chunk) and the Stream productivity
@@ -5040,11 +5043,11 @@ const YV_OP_COUNT: usize = 0;
 const YV_REGION_START: usize = 1;
 const YV_REGION_END: usize = 2;
 const YV_CLASS: usize = 3;
-const YV_ARG: usize = 3 + 1536;
-const YV_MARK: usize = 3 + 1536 * 2;
-const YV_CAY: usize = 3 + 1536 * 3;
-const YV_OUT_FELL: usize = 3 + 1536 * 4;
-const YV_OUT_HY: usize = 3 + 1536 * 4 + 1;
+const YV_ARG: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP;
+const YV_MARK: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP * 2;
+const YV_CAY: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP * 3;
+const YV_OUT_FELL: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP * 4;
+const YV_OUT_HY: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP * 4 + 1;
 const YV_OUT_REJECT: usize = YV_OUT_HY + 2;
 
 fn verify_yield_kel_module() -> Module {
@@ -5065,7 +5068,7 @@ fn run_ayc(
 ) -> (bool, bool) {
     use crate::bytecode::Op;
     assert!(
-        chunk.ops.len() <= 1536,
+        chunk.ops.len() <= crate::selfhost_host::VERIFY_OP_CAP,
         "verify_yield.kel op-table capacity"
     );
     let m = verify_yield_kel_module();
@@ -5141,17 +5144,17 @@ fn productivity_reject_via_kel(
 // a chunk tracking the absolute operand-stack depth through the structured control flow and
 // rejects any op that would underflow the operand stack (audit finding 3). Height-only (no
 // shapes), it is the frame-stack twin of verify_yield.kel. Its shared block `dv` lays out
-// `op_count` (0); the arrays `class` (1..), `arg`, `dreq`, `dnet`, `is_term` (each 1536 wide);
+// `op_count` (0); the arrays `class` (1..), `arg`, `dreq`, `dnet`, `is_term` (each crate::selfhost_host::VERIFY_OP_CAP wide);
 // and the verdict `out_reject`. `dreq`/`dnet` are the reference `op_depth_effect` (the actual
 // operand consumption, NOT the WCMU stack effect); `is_term` flags Trap/Return.
 
 const DV_OP_COUNT: usize = 0;
 const DV_CLASS: usize = 1;
-const DV_ARG: usize = 1 + 1536;
-const DV_DREQ: usize = 1 + 1536 * 2;
-const DV_DNET: usize = 1 + 1536 * 3;
-const DV_IS_TERM: usize = 1 + 1536 * 4;
-const DV_OUT_REJECT: usize = 1 + 1536 * 5;
+const DV_ARG: usize = 1 + crate::selfhost_host::VERIFY_OP_CAP;
+const DV_DREQ: usize = 1 + crate::selfhost_host::VERIFY_OP_CAP * 2;
+const DV_DNET: usize = 1 + crate::selfhost_host::VERIFY_OP_CAP * 3;
+const DV_IS_TERM: usize = 1 + crate::selfhost_host::VERIFY_OP_CAP * 4;
+const DV_OUT_REJECT: usize = 1 + crate::selfhost_host::VERIFY_OP_CAP * 5;
 /// Why `verify_depth.kel` returned the verdict it did.
 ///
 /// 0 means the walk completed. 1 means nesting capacity was exceeded and 2 means
@@ -5159,7 +5162,7 @@ const DV_OUT_REJECT: usize = 1 + 1536 * 5;
 /// default-deny. **Only the cause distinguishes a proven defect from an
 /// unanalysed program**, and only the cause says whether raising the cap would
 /// change the answer.
-const DV_OUT_CAUSE: usize = 2 + 1536 * 5;
+const DV_OUT_CAUSE: usize = 2 + crate::selfhost_host::VERIFY_OP_CAP * 5;
 
 /// The compiled `verify_depth.kel` stage module, cached after the first build.
 ///
@@ -5186,7 +5189,7 @@ pub fn verify_depth_kel_module() -> Module {
 pub fn seed_verify_depth_shared(vm: &Vm<'_, '_>, chunk: &crate::bytecode::Chunk) -> Vec<u8> {
     use crate::bytecode::Op;
     assert!(
-        chunk.ops.len() <= 1536,
+        chunk.ops.len() <= crate::selfhost_host::VERIFY_OP_CAP,
         "verify_depth.kel op-table capacity"
     );
     let mut shared = vec![0u8; vm.shared_data_bytes()];
@@ -5343,27 +5346,27 @@ const TV_RESUME_SIZE: usize = 2;
 const TV_RESUME_KIND: usize = 3;
 const TV_EB_COUNT: usize = 4;
 const TV_CLASS: usize = 5;
-const TV_ARG: usize = 5 + 1536;
-const TV_IS_TERM: usize = 5 + 1536 * 2;
-const TV_TK: usize = 5 + 1536 * 3;
-const TV_REQ: usize = 5 + 1536 * 4;
-const TV_PROD: usize = 5 + 1536 * 5;
-const TV_TA: usize = 5 + 1536 * 6;
-const TV_TB: usize = 5 + 1536 * 7;
-const TV_TC: usize = 5 + 1536 * 8;
-const TV_RET_TAG: usize = 5 + 1536 * 9;
-const TV_RET_SIZE: usize = 5 + 1536 * 10;
-const TV_RET_KIND: usize = 5 + 1536 * 11;
-const TV_SEED_TAG: usize = 5 + 1536 * 12;
-const TV_SEED_SIZE: usize = 5 + 1536 * 12 + 256;
-const TV_SEED_KIND: usize = 5 + 1536 * 12 + 512;
-const TV_EB_VALS: usize = 5 + 1536 * 12 + 768;
-const TV_CP_TAG: usize = 5 + 1536 * 12 + 768 + 256;
-const TV_CP_SIZE: usize = 5 + 1536 * 12 + 768 + 256 + 12288;
-const TV_CP_KIND: usize = 5 + 1536 * 12 + 768 + 256 + 12288 * 2;
-const TV_OUT_REJECT: usize = 5 + 1536 * 12 + 768 + 256 + 12288 * 3;
+const TV_ARG: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP;
+const TV_IS_TERM: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 2;
+const TV_TK: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 3;
+const TV_REQ: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 4;
+const TV_PROD: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 5;
+const TV_TA: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 6;
+const TV_TB: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+const TV_TC: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 8;
+const TV_RET_TAG: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 9;
+const TV_RET_SIZE: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 10;
+const TV_RET_KIND: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 11;
+const TV_SEED_TAG: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 12;
+const TV_SEED_SIZE: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 256;
+const TV_SEED_KIND: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 512;
+const TV_EB_VALS: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 768;
+const TV_CP_TAG: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 768 + 256;
+const TV_CP_SIZE: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 768 + 256 + 12288;
+const TV_CP_KIND: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 768 + 256 + 12288 * 2;
+const TV_OUT_REJECT: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 12 + 768 + 256 + 12288 * 3;
 const TV_CP_FIRST: usize = TV_OUT_REJECT + 1;
-const TV_CP_COUNT: usize = TV_CP_FIRST + 1536;
+const TV_CP_COUNT: usize = TV_CP_FIRST + crate::selfhost_host::VERIFY_OP_CAP;
 const TV_CP_CAPACITY: usize = 12288;
 
 /// The compiled `verify_typed.kel` stage module, cached after the first build.
@@ -5427,6 +5430,7 @@ fn typed_desc(
         Op::Dup => (1, 0, 0, 0),
         Op::BoundsCheck(_) => (15, wb as i64, 0, 0),
         Op::SetDataIndexed(_, _) => (16, wb as i64, 0, 0),
+        Op::GetDataIndexed(_, _) => (18, 0, wb as i64, 0),
         Op::IsEnum(_, _, _) | Op::IsStruct(_) => (2, 1, 0, 0),
         Op::GetLocal(i) => (3, *i as i64, 0, 0),
         Op::SetLocal(i) => (4, *i as i64, 0, 0),
@@ -5583,7 +5587,7 @@ fn seed_typed_shared(
     };
     use crate::bytecode::Op;
     assert!(
-        chunk.ops.len() <= 1536,
+        chunk.ops.len() <= crate::selfhost_host::VERIFY_OP_CAP,
         "verify_typed.kel op-table capacity"
     );
     let mut shared = vec![0u8; vm.shared_data_bytes()];
@@ -5631,7 +5635,9 @@ fn seed_typed_shared(
         // BoundsCheck preserves its input and uses the dedicated five-Word
         // transfer. It never enters the generic push_tops unroll.
         assert!(
-            prod <= 4 || ((tk == 15 || tk == 16) && prod == 6) || (tk == 17 && prod == 7),
+            prod <= 4
+                || ((tk == 15 || tk == 16) && prod == 6)
+                || ((tk == 17 || tk == 18) && prod == 7),
             "verify_typed.kel push_tops unroll bound"
         );
         set(vm, &mut shared, TV_CLASS + i, class);

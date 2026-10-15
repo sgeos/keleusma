@@ -3,7 +3,7 @@ use super::*;
 use alloc::collections::BTreeSet;
 use core::fmt;
 
-const OPS: usize = 1536;
+const OPS: usize = crate::selfhost_host::VERIFY_OP_CAP;
 const LOCALS: usize = 256;
 
 /// A completed result for the passes configured by the called entry point.

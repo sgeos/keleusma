@@ -48,18 +48,18 @@ shared data tv {
     resume_size: Word,
     resume_kind: Word,
     eb_count: Word,
-    class: [Word; 1536],
-    arg: [Word; 1536],
-    is_term: [Word; 1536],
-    tk: [Word; 1536],
-    req: [Word; 1536],
-    prod: [Word; 1536],
-    ta: [Word; 1536],
-    tb: [Word; 1536],
-    tc: [Word; 1536],
-    ret_tag: [Word; 1536],
-    ret_size: [Word; 1536],
-    ret_kind: [Word; 1536],
+    class: [Word; 2048],
+    arg: [Word; 2048],
+    is_term: [Word; 2048],
+    tk: [Word; 2048],
+    req: [Word; 2048],
+    prod: [Word; 2048],
+    ta: [Word; 2048],
+    tb: [Word; 2048],
+    tc: [Word; 2048],
+    ret_tag: [Word; 2048],
+    ret_size: [Word; 2048],
+    ret_kind: [Word; 2048],
     seed_tag: [Word; 256],
     seed_size: [Word; 256],
     seed_kind: [Word; 256],
@@ -69,8 +69,8 @@ shared data tv {
     cp_kind: [Word; 12288],
     out_reject: Word,
     // Each call indexes its own declared-shape slice in the existing pool.
-    cp_first: [Word; 1536],
-    cp_count: [Word; 1536],
+    cp_first: [Word; 2048],
+    cp_count: [Word; 2048],
     // 1 operand capacity, 2 frame capacity, 3 unfinished work budget.
     out_cause: Word,
 }
@@ -358,12 +358,14 @@ fn apply_typed(ip: Word) -> Word {
         check_flat_extent(tf.pop_tag, tf.pop_size, tv.ta[ip] + tv.tb[ip]);
         st_push_k(2, tv.tb[ip], tv.tc[ip]);
     } else {
-    if k == 9 orelse k == 17 {
+    if k == 9 orelse k == 17 orelse k == 18 {
         st_pop();
         st_pop();
-        check_stride(tf.pop_tag, tf.pop_size, tv.ta[ip]);
-        st_push(1, tv.ta[ip]);
-        if k == 17 { for j in 0..6 limit 6 { st_push(1, tv.tb[ip]); } }
+        if k == 18 { st_push(0, 0); } else {
+            check_stride(tf.pop_tag, tf.pop_size, tv.ta[ip]);
+            st_push(1, tv.ta[ip]);
+        }
+        if k == 17 orelse k == 18 { for j in 0..6 limit 6 { st_push(1, tv.tb[ip]); } }
     } else {
     if k == 10 {
         st_pop();

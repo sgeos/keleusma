@@ -54,7 +54,7 @@ fn malformed_targets_are_rejected_before_region_walks() {
 #[test]
 fn table_capacity_and_bad_operands_are_distinct() {
     let mut module = base();
-    module.chunks[0].ops = vec![Op::Return; 1537];
+    module.chunks[0].ops = vec![Op::Return; keleusma::selfhost_host::VERIFY_OP_CAP + 1];
     assert!(matches!(
         verify_module_via_kel(&module),
         Err(VerificationError::Capacity {

@@ -6243,22 +6243,22 @@ const WA_ARENA_CAPACITY: usize = 5;
 const WA_REGION_START: usize = 6;
 const WA_REGION_END: usize = 7;
 const WA_COST: usize = 8;
-const WA_CLASS: usize = 8 + 1536;
-const WA_ARG: usize = 8 + 1536 * 2;
-const WA_GROWTH: usize = 8 + 1536 * 3;
-const WA_SHRINK: usize = 8 + 1536 * 4;
-const WA_HEAP: usize = 8 + 1536 * 5;
-const WA_OPK: usize = 8 + 1536 * 6;
-const WA_SLOT: usize = 8 + 1536 * 7;
-const WA_CVAL: usize = 8 + 1536 * 8;
-const WA_CINT: usize = 8 + 1536 * 9;
-const WA_CALLEE_SLOTS: usize = 8 + 1536 * 10;
-const WA_CALLEE_HEAP: usize = 8 + 1536 * 11;
-const WA_OUT_WCET: usize = 8 + 1536 * 12;
-const WA_OUT_STACK: usize = 8 + 1536 * 12 + 1;
-const WA_OUT_HEAP: usize = 8 + 1536 * 12 + 2;
-const WA_OUT_REJECT: usize = 8 + 1536 * 12 + 3;
-const WA_OUT_VALID: usize = 8 + 1536 * 12 + 4;
+const WA_CLASS: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP;
+const WA_ARG: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 2;
+const WA_GROWTH: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 3;
+const WA_SHRINK: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 4;
+const WA_HEAP: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 5;
+const WA_OPK: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 6;
+const WA_SLOT: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 7;
+const WA_CVAL: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 8;
+const WA_CINT: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 9;
+const WA_CALLEE_SLOTS: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 10;
+const WA_CALLEE_HEAP: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 11;
+const WA_OUT_WCET: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 12;
+const WA_OUT_STACK: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 12 + 1;
+const WA_OUT_HEAP: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 12 + 2;
+const WA_OUT_REJECT: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 12 + 3;
+const WA_OUT_VALID: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 12 + 4;
 
 fn analyze_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -6352,7 +6352,7 @@ fn run_analyze_kel(
         BlockType::Func | BlockType::Reentrant => (0, chunk.ops.len(), 0, 0),
     };
     assert!(
-        chunk.ops.len() <= 1536,
+        chunk.ops.len() <= keleusma::selfhost_host::VERIFY_OP_CAP,
         "analyze.kel op-table capacity: chunk `{}` has {} ops",
         chunk.name,
         chunk.ops.len()

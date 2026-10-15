@@ -747,6 +747,10 @@ pub const CALL_CHUNK_RADIX: usize = PARSE_CHUNK_CAP;
 // Fixing the instance leaves the class. Both layouts are published and chained here,
 // and `no_other_file_restates_the_shared_layout` looks for restatements of either.
 
+/// Maximum subject instructions per chunk in the first-pass verifier profile.
+/// Sized from the current stage corpus after explicit bounds dispatch expansion.
+pub const VERIFY_OP_CAP: usize = 2048;
+
 /// How many source bytes `src.bytes` in `lexer.kel` holds.
 ///
 /// Sized to hold the largest stage source. `parse.kel` exceeds 400 KB; the wire-format v2 twenty-four-bit data operands raised the shared-segment

@@ -5177,28 +5177,64 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     self.write_data_slot(idx, val)?;
                 }
                 Op::GetDataIndexed(base, len) => {
+                    let fallback = self.pop()?;
+                    if !matches!(
+                        fallback,
+                        crate::bytecode::GenericValue::Int(_)
+                            | crate::bytecode::GenericValue::Byte(_)
+                            | crate::bytecode::GenericValue::Unit
+                    ) {
+                        return Err(VmError::TypeError(String::from(
+                            "indexed read fallback must be Word, Byte or Unit",
+                        )));
+                    }
                     let index = match self.pop()? {
                         crate::bytecode::GenericValue::Int(n) => n,
-                        other => {
-                            return Err(VmError::TypeError(format!(
-                                "GetDataIndexed expected Int index, got {}",
-                                other.type_name()
+                        _ => {
+                            return Err(VmError::TypeError(String::from(
+                                "indexed read expects a Word index",
                             )));
                         }
                     };
-                    if index.to_i64() < 0 || index.to_i64() >= len as i64 {
-                        return Err(VmError::IndexOutOfBounds(index.to_i64(), len as usize));
-                    }
-                    let slot = base as usize + index.to_i64() as usize;
-                    let total = self.data_len();
-                    if slot >= total {
-                        return Err(VmError::InvalidBytecode(format!(
-                            "GetDataIndexed slot {} out of bounds",
-                            slot
+                    let first = usize::try_from(base).map_err(|_| {
+                        VmError::InvalidBytecode(String::from(
+                            "indexed read base exceeds the host representation",
+                        ))
+                    })?;
+                    let count = usize::try_from(len).map_err(|_| {
+                        VmError::InvalidBytecode(String::from(
+                            "indexed read length exceeds the host representation",
+                        ))
+                    })?;
+                    if first
+                        .checked_add(count)
+                        .is_none_or(|end| end > self.data_len())
+                    {
+                        return Err(VmError::InvalidBytecode(String::from(
+                            "indexed read span exceeds the data segment",
                         )));
                     }
-                    let val = self.read_data_slot(slot)?;
-                    sp!(self, val);
+                    let offset = index.to_i64();
+                    let invalid = offset < 0 || offset >= i64::from(len);
+                    let value = if invalid {
+                        fallback
+                    } else {
+                        self.read_data_slot(first + offset as usize)?
+                    };
+                    sp!(self, value);
+                    sp!(self, crate::bytecode::GenericValue::Int(index));
+                    for byte in len.to_le_bytes() {
+                        sp!(
+                            self,
+                            crate::bytecode::GenericValue::Int(W::from_i64_wrap(i64::from(
+                                byte as i8
+                            )))
+                        );
+                    }
+                    sp!(
+                        self,
+                        crate::bytecode::GenericValue::Int(W::from_i64_wrap(i64::from(invalid)))
+                    );
                 }
                 Op::SetDataIndexed(base, len) => {
                     let index = match self.pop()? {

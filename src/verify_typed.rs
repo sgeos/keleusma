@@ -925,6 +925,11 @@ fn apply_op(
         Op::BoundsCheck(_) => {
             stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 5));
         }
+        Op::GetDataIndexed(_, _) => {
+            stack.truncate(stack.len() - 2);
+            stack.push(AbsVal::Top);
+            stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 6));
+        }
         Op::SetDataIndexed(_, _) => {
             stack.truncate(stack.len() - 2);
             stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 6));

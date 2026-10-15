@@ -46,7 +46,7 @@ The unified slot index space partitions into shared slots `[0, shared_count)` an
 |-------------|----------|------|-------------|
 | GetData | u24 slot | 1 | Push data segment slot value onto stack. |
 | SetData | u24 slot | 1 | Pop value and store into a data segment slot. A scalar stores inline; a flat composite copies its body into the persistent composite pool at the offset the module's private-composite layout table records for the slot (no dedicated composite-write opcode). |
-| GetDataIndexed | u24 base, u24 len | 2 | Pop array index, bounds-check against `len`, push the value at `base + index`. |
+| GetDataIndexed | u24 base, u24 len | 8 | Pop a Word, Byte or Unit fallback and then a Word index. Read in range, otherwise use the supplied fallback. Push value, index, four Word byte limbs of the bound and an outcome flag. Invalid spans and operand types remain contract errors. |
 | SetDataIndexed | u24 base, u24 len | 8 | Pop value and Word index. A valid index writes one slot. An invalid index performs no write. Push the index, four Word byte limbs of the bound and flag zero for success or one for invalid. Invalid spans and storage-contract violations remain errors. |
 | BoundsCheck | u16 bound | 7 | Preserve the Word index and append four Word byte limbs of the unsigned bound, little-endian, then a flag. An invalid index reifies as flag `1`, while an index in `[0, bound)` yields flag `0`. The limbs are sign-extended from eight bits. No indexed data access or language bounds fault occurs. |
 
@@ -233,12 +233,12 @@ The cost groupings reproduce `bytecode::nominal_op_cycles`. Hosts that need wall
 | Cost | Instructions |
 |------|-------------|
 | 1 | Const, PushImmediate, GetLocal, SetLocal, GetData, SetData, Dup, Not, If, Else, EndIf, Loop, EndLoop, Break, BreakIf, Stream, Reset, Yield, Trap except kind 8, PopN |
-| 2 | Add, Sub, Mul, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex other forms, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Return, GetDataIndexed, BitAnd, BitOr, BitXor, Shl, Shr |
+| 2 | Add, Sub, Mul, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex other forms, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Return, BitAnd, BitOr, BitXor, Shl, Shr |
 | 3 | Div, Mod, GetField, IsEnum, IsStruct |
 | 5 | NewComposite |
 | 6 | Trap kind 8 |
 | 7 | BoundsCheck |
-| 8 | SetDataIndexed, GetIndex flat Word or Byte |
+| 8 | GetDataIndexed, SetDataIndexed, GetIndex flat Word or Byte |
 | 10 | Call, CallVerifiedNative, CallExternalNative |
 
 ## WCMU contributions
@@ -252,10 +252,10 @@ The values reproduce `Op::stack_growth` in `src/bytecode.rs`. For multi-output o
 | Growth | Instructions |
 |--------|--------------|
 | 0 | Not, Neg, Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Yield, Return, GetField, GetIndex other forms, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap, PopN, BitAnd, BitOr, BitXor, Shl, Shr |
-| 1 | Const, PushImmediate, GetLocal, GetData, Dup, GetDataIndexed, CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, CallVerifiedNative, CallExternalNative, NewComposite, IsEnum, IsStruct |
+| 1 | Const, PushImmediate, GetLocal, GetData, Dup, CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, CallVerifiedNative, CallExternalNative, NewComposite, IsEnum, IsStruct |
 | 2 | CheckedNeg |
 | 4 | SetDataIndexed |
-| 5 | BoundsCheck, GetIndex flat Word or Byte |
+| 5 | GetDataIndexed, BoundsCheck, GetIndex flat Word or Byte |
 
 ### Stack shrink (slots popped during execution)
 
@@ -263,8 +263,8 @@ The values reproduce `Op::stack_shrink`. For opcodes whose net delta is non-nega
 
 | Shrink | Instructions |
 |--------|--------------|
-| 0 | Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, SetDataIndexed, BoundsCheck, GetIndex flat Word or Byte, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap except kind 8 |
-| 1 | Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, GetDataIndexed, If, BreakIf, Yield, GetField, GetIndex other forms, GetTupleField, GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr |
+| 0 | Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, GetDataIndexed, SetDataIndexed, BoundsCheck, GetIndex flat Word or Byte, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap except kind 8 |
+| 1 | Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, If, BreakIf, Yield, GetField, GetIndex other forms, GetTupleField, GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr |
 | 5 | Trap kind 8 |
 | n | PopN(n), Call(_, n), CallVerifiedNative(_, n), CallExternalNative(_, n), NewComposite(count) |
 

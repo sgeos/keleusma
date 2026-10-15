@@ -155,7 +155,7 @@ const CASES: &[Case] = &[
     Case {
         name: "shared indexed read out of bounds",
         src: "shared data d { xs: [Word; 2] } fn main() -> Word { d.xs[5] }",
-        traps_expected: false,
+        traps_expected: true,
         outcome: Outcome::Faulted("IndexOutOfBounds"),
     },
     Case {
@@ -291,7 +291,7 @@ fn every_census_row_behaves_as_recorded() {
 /// faulting without a `Trap` present, or one of these two stops, the set moves
 /// and this fails — rather than the roadmap's sizing quietly going stale.
 #[test]
-fn only_bounds_fault_without_a_trap_opcode() {
+fn source_census_faults_all_have_explicit_traps() {
     let mut without_trap: alloc::vec::Vec<&'static str> = CASES
         .iter()
         .filter_map(|c| {
@@ -307,7 +307,7 @@ fn only_bounds_fault_without_a_trap_opcode() {
 
     assert_eq!(
         without_trap,
-        alloc::vec!["IndexOutOfBounds"],
+        alloc::vec::Vec::<&str>::new(),
         "the set of faults reachable from compiler output with NO trap opcode \
          has changed. That set is the measured size of workstream C's \
          'make every other opcode total' obligation, so a change here resizes \

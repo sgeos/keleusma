@@ -143,7 +143,7 @@ fn genuine_source_error_is_pipeline_rejected() {
 ///    compares two callers of ONE encoding, so a defect in that encoding is
 ///    invisible here by construction; the byte-identity differential covers that.
 /// 2. That the `verify_depth` verdict slot index below is right. It is written
-///    as `1 + 1536 * 5`, duplicating a constant private to `selfhost`, and every
+///    as `1 + keleusma::selfhost_host::VERIFY_OP_CAP * 5`, duplicating a constant private to `selfhost`, and every
 ///    chunk in this source is ACCEPTED — so a wrong index reading zero would
 ///    agree with the driver vacuously. The non-zero-buffer assertion guards the
 ///    seeding, not the read.
@@ -187,7 +187,10 @@ fn the_seed_accessors_reach_the_same_verdict_as_the_driver() {
             VmState::Yielded(_) => {}
             other => panic!("unexpected state {other:?}"),
         }
-        let via_accessor = match vm.get_shared(&shared, 1 + 1536 * 5).unwrap() {
+        let via_accessor = match vm
+            .get_shared(&shared, 1 + keleusma::selfhost_host::VERIFY_OP_CAP * 5)
+            .unwrap()
+        {
             keleusma::bytecode::Value::Int(n) => n != 0,
             o => panic!("expected Int, got {o:?}"),
         };

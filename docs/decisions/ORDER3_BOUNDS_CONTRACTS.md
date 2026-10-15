@@ -105,3 +105,22 @@ remaining diagnostic Words on success. Handled Word and Byte reads store the res
 index, limbs and flag in seven temporaries after evaluating the operands. Fully
 covered invalid_index outcomes omit the fallback trap. A deterministic unreachable
 value-and-break trailer keeps the virtual dispatch loop structurally bounded.
+
+## GetDataIndexed
+
+The input stack ends with [index, fallback]. The index is Word and fallback is
+Word, Byte or Unit. The instruction consumes both. A valid index reads the selected
+slot and an invalid index uses the supplied fallback without accessing storage.
+It returns [value, index, b0, b1, b2, b3, flag]. Flag zero means a read occurred and
+flag one means fallback. The complete span must fit the declared segment. The empty
+span at base zero is valid even when the module has no data slots.
+
+First-pass compilers supply Word zero or Byte zero for their corresponding element
+kind. Other source kinds use Unit, and bare failure still reaches an explicit trap.
+Fallback operands cannot carry text or composites. Their type is checked at runtime.
+This keeps the new outcome compatible with the existing text analysis boundary.
+
+The requirement is two and net growth five. Shrink is zero and nominal cost eight.
+The output value remains an unknown shape in the typed verifier, with six Word
+entries following it. No existing shape or host-contract check is removed. The
+opcode and its two u24 wire operands remain unchanged.

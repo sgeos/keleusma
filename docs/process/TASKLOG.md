@@ -6,6 +6,24 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-15 Work-in-progress backup and ring buffer request
+
+The operator reaffirmed first-class compiler-managed ring buffer support, retained
+as B42 and linked from the V0.2.X roadmap. Design and scheduling remain open.
+The operator requested a commit and push of all current work.
+
+The current GetDataIndexed increment supplies an explicit stack fallback, portable
+bounds outcomes and both compiler lowerings. Verifier opcode capacity is now 2048,
+separate from the unchanged selected type capacities of 640. This increment is
+unfinished and is being backed up on feat/v02-order3-trap-analysis.
+
+The existing release self-host run finished with 1729 passes, 11 failures and two
+skips. Current-stage artifact identity and resource admission pass. Failures cover
+private relocation boundaries, legacy compiler and parser fixtures, and a moved
+residency measurement. Clippy and the detached compiler build passed earlier.
+No additional tests were run for this backup request. REVERSE_PROMPT.md records
+the concrete repair work and verification limits. Order 3 remains incomplete.
+
 ## 2026-10-15 Total scalar array reads and checked handlers
 
 Flat Word and Byte GetIndex operands now return typed values and portable bounds

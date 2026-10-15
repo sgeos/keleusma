@@ -2055,7 +2055,8 @@ The review's bottom line is that the provenance-for-research thesis did not chan
 ## B42. First-class ring buffers managed by the compiler
 
 Requested by the operator on 2026-10-14. Keleusma should provide first-class
-ring buffer support managed by the compiler.
+ring buffer support managed by the compiler. The operator reaffirmed this request
+on 2026-10-15 and requested a commit and push of the current work.
 
 Status is requested, pending design and scheduling. Syntax, storage and capacity,
 full and empty behavior, ownership, and verification of resource bounds remain
