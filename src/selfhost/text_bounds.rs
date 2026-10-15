@@ -130,7 +130,7 @@ pub(super) fn chunk_bounds(
         }
         let pops = usize::try_from(machine.get(8)?).map_err(error)?;
         let pushes = usize::try_from(machine.get(9)?).map_err(error)?;
-        if pops > 65535 || pushes > 4 {
+        if pops > 65535 || pushes > 6 {
             return Err(error("invalid stack transition"));
         }
         let value = Bound::read(machine, 4)?;

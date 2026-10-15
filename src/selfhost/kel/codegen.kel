@@ -1049,6 +1049,12 @@ fn push_index_store(p: Word) -> Word {
 // continuation.
 fn push_index_assign(p: Word) -> Word {
     push_visit(ast.rhs[p]);
+    push_emit(wire.popn + 5 * wire.radix);
+    push_emit(wire.mendif);
+    push_emit(wire.trap + 8 * wire.radix);
+    push_emit(wire.mif);
+    push_emit(wire.cmpeq);
+    push_int_const(1);
     push_emit(wire.setdataix + ast.args[p] * wire.radix);
     push_visit(ast.lhs[p])
 }

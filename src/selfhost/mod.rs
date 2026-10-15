@@ -5424,6 +5424,7 @@ fn typed_desc(
     let (tk, ta, tb, tc): (i64, i64, i64, i64) = match op {
         Op::Dup => (1, 0, 0, 0),
         Op::BoundsCheck(_) => (15, wb as i64, 0, 0),
+        Op::SetDataIndexed(_, _) => (16, wb as i64, 0, 0),
         Op::IsEnum(_, _, _) | Op::IsStruct(_) => (2, 1, 0, 0),
         Op::GetLocal(i) => (3, *i as i64, 0, 0),
         Op::SetLocal(i) => (4, *i as i64, 0, 0),
@@ -5625,7 +5626,7 @@ fn seed_typed_shared(
         // BoundsCheck preserves its input and uses the dedicated five-Word
         // transfer. It never enters the generic push_tops unroll.
         assert!(
-            prod <= 4 || (tk == 15 && prod == 6),
+            prod <= 4 || ((tk == 15 || tk == 16) && prod == 6),
             "verify_typed.kel push_tops unroll bound"
         );
         set(vm, &mut shared, TV_CLASS + i, class);

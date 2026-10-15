@@ -6,6 +6,29 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-15 Total indexed writes
+
+SetDataIndexed now returns a portable diagnostic suffix and an outcome flag.
+Invalid indices perform no write, and both compilers emit an explicit bounds Trap
+for bare failures. Both typed verifiers and the text and resource analyses account
+for the six outgoing Words. Shared and private Word and Byte tests cover success,
+failure, empty spans, handled continuation, operand effects and an i8 runtime.
+
+The expanded reconstruction function exceeded the existing 1536-opcode verifier
+limit. Extracting its nested-field branch reduced the largest chunk to 1412
+opcodes. No capacity was raised. The text analysis protocol also required updated
+stack-effect bounds. Tests expose both regressions and pass after their repairs.
+
+All 1636 selected release tests pass with no skips, including every stage artifact
+and resource-admission boundary. Clippy, the detached build, 175 no-default library
+tests and eighteen floating-point-disabled controls pass. Typed-verifier residency
+is measured at 1485 total records and 439 peak, with the threefold requirement kept.
+
+Order 3 remains active. Indexed reads, legacy partial arithmetic contracts,
+classification, host policy, proof-gated check elision and the full audit remain.
+Development artifacts require rebuilding. Version, fingerprint, instruction count
+and operator-selected capacities remain unchanged.
+
 ## 2026-10-15 Total bounds predicate and explicit diagnostic trap
 
 BoundsCheck now returns a portable diagnostic suffix and an outcome flag while

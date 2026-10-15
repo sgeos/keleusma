@@ -925,6 +925,10 @@ fn apply_op(
         Op::BoundsCheck(_) => {
             stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 5));
         }
+        Op::SetDataIndexed(_, _) => {
+            stack.truncate(stack.len() - 2);
+            stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 6));
+        }
 
         // Read a local's tracked shape. A slot beyond the frame is `Top`.
         Op::GetLocal(i) => {

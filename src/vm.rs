@@ -5210,26 +5210,44 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             )));
                         }
                     };
-                    if index.to_i64() < 0 || index.to_i64() >= len as i64 {
-                        return Err(VmError::IndexOutOfBounds(index.to_i64(), len as usize));
-                    }
-                    // `write_data_slot` persists a flat composite element into
-                    // the persistent composite pool at the element slot's
-                    // compiler-baked offset (B28 item 2 step 6A); an
-                    // array-of-composite element therefore survives RESET in
-                    // place with no global-heap owned body. A scalar element is
-                    // stored directly.
                     let val = self.pop()?;
-                    let slot = base as usize + index.to_i64() as usize;
+                    let first = usize::try_from(base).map_err(|_| {
+                        VmError::InvalidBytecode(String::from(
+                            "indexed store base exceeds the host representation",
+                        ))
+                    })?;
+                    let count = usize::try_from(len).map_err(|_| {
+                        VmError::InvalidBytecode(String::from(
+                            "indexed store length exceeds the host representation",
+                        ))
+                    })?;
                     let total = self.data_len();
-                    if slot >= total {
-                        return Err(VmError::InvalidBytecode(format!(
-                            "SetDataIndexed slot {} out of bounds",
-                            slot
+                    if first.checked_add(count).is_none_or(|end| end > total) {
+                        return Err(VmError::InvalidBytecode(String::from(
+                            "indexed store span exceeds the data segment",
                         )));
                     }
-                    self.write_data_slot(slot, val)?;
+                    let invalid = index.to_i64() < 0 || index.to_i64() >= i64::from(len);
+                    if !invalid {
+                        // The checked span and index make this addition in range.
+                        // Existing scalar and composite storage checks remain in force.
+                        self.write_data_slot(first + index.to_i64() as usize, val)?;
+                    }
+                    sp!(self, crate::bytecode::GenericValue::Int(index));
+                    for byte in len.to_le_bytes() {
+                        sp!(
+                            self,
+                            crate::bytecode::GenericValue::Int(W::from_i64_wrap(i64::from(
+                                byte as i8
+                            )))
+                        );
+                    }
+                    sp!(
+                        self,
+                        crate::bytecode::GenericValue::Int(W::from_i64_wrap(i64::from(invalid)))
+                    );
                 }
+
                 Op::BoundsCheck(bound) => {
                     let top = self.stack.last().ok_or(VmError::StackUnderflow)?;
                     let value = match top {

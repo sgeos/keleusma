@@ -13,6 +13,24 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-15 Indexed-write outcomes
+
+Indexed writes need no fallback element value. They consume the value and index,
+perform the write only in range, and return the diagnostic suffix and flag. Both
+compiler paths retain operand order and dispatch unhandled failures to Trap kind
+eight. The success path removes the suffix. This preserves source behavior while
+allowing bytecode to handle a failed write without stopping execution.
+
+The extra dispatch instructions made one reconstruction chunk too large for the
+existing verifier profile. Extracting its nested-field branch preserved the
+capacity and state transitions. A broad resource run then exposed text analysis's
+old effect limits. The text protocols now accept the new predicate and store
+outputs, with controls for text retained below those outputs.
+
+The final selected run passes all 1636 cases, including every stage artifact and
+resource boundary. Indexed reads still need their own total contracts. The bounds
+contract and completion plan retain that requirement and the full Order 3 scope.
+
 ## 2026-10-15 Portable bounds outcomes
 
 The bounds diagnostic is carried explicitly on the operand stack. A hidden last

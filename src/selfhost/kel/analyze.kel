@@ -777,7 +777,7 @@ fn text_flow_step() -> Word {
             if wa.tf_index == 0 andalso wa.tf_second == 0 andalso (wa.tf_local == 0 orelse boundary == 0) { 1 } else { 0 }
         }
     } else {
-    if wa.tf_command != 2 orelse wa.tf_kind < 0 orelse wa.tf_kind > 9 orelse wa.tf_required < 0 orelse wa.tf_required > 65535 orelse wa.tf_delta < 0 - 65535 orelse wa.tf_delta > 3 orelse wa.tf_locals < 0 orelse wa.tf_locals > 65535 orelse wa.tf_index < 0 { 0 - 1 } else {
+    if wa.tf_command != 2 orelse wa.tf_kind < 0 orelse wa.tf_kind > 9 orelse wa.tf_required < 0 orelse wa.tf_required > 65535 orelse wa.tf_delta < 0 - 65535 orelse wa.tf_delta > 5 orelse wa.tf_locals < 0 orelse wa.tf_locals > 65535 orelse wa.tf_index < 0 { 0 - 1 } else {
     if text_flow_bit(wa.tf_top) == 0 orelse text_flow_bit(wa.tf_second) == 0 orelse text_flow_bit(wa.tf_local) == 0 orelse text_flow_bit(wa.tf_const) == 0 orelse text_flow_bit(wa.tf_callee) == 0 orelse text_flow_bit(wa.tf_callee_known) == 0 { 0 - 1 } else {
         wa.tf_pops = if wa.tf_required > 0 { wa.tf_required } else { 0 };
         let pushed = wa.tf_required + wa.tf_delta;
@@ -953,7 +953,7 @@ fn text_bound_step() -> Word {
     } else {
     if wa.tf_command != 21 orelse tb.early != 0 orelse wa.tf_kind < 0 orelse wa.tf_kind > 13
         orelse wa.tf_required < 0 orelse wa.tf_required > 65535 orelse wa.tf_delta < 0 - 65535
-        orelse wa.tf_delta > 3 orelse wa.tf_index < 0 orelse wa.tf_locals < 0 orelse wa.tf_locals > 65535
+        orelse wa.tf_delta > 5 orelse wa.tf_index < 0 orelse wa.tf_locals < 0 orelse wa.tf_locals > 65535
         orelse text_flow_bit(wa.tf_callee) == 0 orelse text_flow_bit(wa.tf_callee_known) == 0 { 0 - 1 } else {
         tb.active = 1;
         for i in 0..4 limit 4 {

@@ -49,7 +49,13 @@ per-dimension lowering emits that explicit trap and retains an exact index sourc
 span. Both verifier implementations check terminal payload availability and loop
 frame floors. The [bounds contract](ORDER3_BOUNDS_CONTRACTS.md) records exact effects.
 
-GetIndex, GetDataIndexed and SetDataIndexed still fault internally on bounds errors.
+SetDataIndexed now consumes the value and index and returns the portable diagnostic
+suffix and flag. Invalid indices perform no write. Both compilers dispatch bare
+failures through an explicit bounds Trap and discard successful diagnostics.
+Shared and private Word and Byte controls cover failure, success and continued
+execution after a handled outcome.
+
+GetIndex and GetDataIndexed still fault internally on bounds errors.
 Their total contracts and both compiler lowerings remain required. The checked-index
 fallback still reissues a trapping GetIndex. No trap-free verdict or no-check mode
 is implemented.
@@ -221,8 +227,8 @@ the scalar kind. The initial failures and final receipts are in REVERSE_PROMPT.m
 
 ## Bounds contract work next
 
-The first predicate and diagnostic contracts are specified and implemented in
-[ORDER3_BOUNDS_CONTRACTS.md](ORDER3_BOUNDS_CONTRACTS.md). The remaining read and write
+The predicate, indexed-write and diagnostic contracts are specified and implemented
+in [ORDER3_BOUNDS_CONTRACTS.md](ORDER3_BOUNDS_CONTRACTS.md). The remaining read
 operations still need exact stack effects, fallbacks and compiler dispatch.
 GetDataIndexed carries base and length without an element kind. Its invalid-index
 fallback therefore needs an explicit Word or Byte kind rule, including zero length.
@@ -231,7 +237,7 @@ An explicit kind operand is a candidate solution, not an implemented decision.
 The portable diagnostic suffix and TrapKind code eight can be reused by the
 remaining operations. No new public opcode or version advance is authorized.
 
-The required work remains total bounds operations, explicit bounds traps, both
+The required work remains total indexed reads, their explicit bounds traps and both
 compiler lowerings, matching classifications, host policy, proved check elision and
 the full completion audit. No trap-free or no-check claim follows from this
 arithmetic frontend increment.

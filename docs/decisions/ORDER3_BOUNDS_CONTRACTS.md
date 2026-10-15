@@ -7,8 +7,8 @@ BYTECODE_VERSION remains 2 and FORMAT_FINGERPRINT remains 0x4327_63E1. The
 public instruction count remains 66. Development artifacts must be rebuilt after
 contract changes. No publication is authorized.
 
-BoundsCheck and the explicit bounds trap are specified below. GetIndex,
-GetDataIndexed and SetDataIndexed still need their total read and write contracts.
+BoundsCheck, indexed writes and the explicit bounds trap are specified below.
+GetIndex and GetDataIndexed still need their total read contracts.
 Their existing internal bounds faults remain an open Order 3 requirement. This
 increment alone cannot establish trap freedom or justify check elision.
 
@@ -62,6 +62,25 @@ The successful path discards the four bound limbs and retains the original index
 for stride arithmetic. The branch introduces no anonymous local slots.
 
 The Rust compiler uses this lowering for per-dimension checks. Keleusma verifier
-and resource consumers must agree with the new contract. Indexed read and write
-lowering in Keleusma remains part of the following increment. Do not infer support
+and resource consumers must agree with the new contract. Indexed write lowering is implemented in both compilers. Indexed read lowering
+remains part of the following increment. Do not infer support
 for source syntax that the first-pass compiler does not yet admit.
+
+## SetDataIndexed
+
+The input stack ends with [value, index]. The instruction consumes both and returns
+[index, b0, b1, b2, b3, flag], using the portable suffix above. A valid index writes
+exactly one slot and returns flag zero. A negative index, exact upper bound or empty
+span performs no write and returns flag one. The value is consumed on either outcome.
+The span must fit the declared data segment before any access occurs. Invalid spans,
+and wrong index types remain errors. Valid accesses retain the existing storage
+contract checks.
+
+Stack growth is four and shrink is zero, matching two inputs and six outputs. The
+depth requirement is two and net effect plus four. All outgoing entries are Words.
+The nominal cost estimate is eight units. No new opcode or operand encoding is used.
+
+Both bare compiler lowerings compare the flag with Word one and emit the explicit
+bounds trap on failure. The success path discards the remaining five diagnostic
+Words. Operand evaluation order and source fault locations remain observable.
+Direct bytecode can inspect the flag and handle failure without emitting a Trap.

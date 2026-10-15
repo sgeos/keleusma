@@ -2270,13 +2270,11 @@ pub enum Op {
     /// data field. Both immediates are twenty-four-bit wire operands (`u32` in
     /// memory), so an array's base slot and length may each exceed 64 K.
     GetDataIndexed(u32, u32),
-    /// Indexed write to a data-segment array. The first immediate is
-    /// the array's base slot, the second is the array's total slot
-    /// count. The opcode pops the `Value::Int` index, then pops the
-    /// new value, checks `0 <= index < total`, traps if out of range,
-    /// and stores `data[base + index] = value`. Both immediates are
-    /// twenty-four-bit wire operands (`u32` in memory), as for
-    /// [`Op::GetDataIndexed`].
+    /// Total indexed write. Pop value and Word index, write only when the
+    /// index is in range, then push index, four Word byte limbs of the bound,
+    /// and flag zero for success or one for an invalid index. Invalid indices
+    /// and empty spans perform no write. Invalid data spans and storage/type
+    /// contract failures remain errors. Both operands use u24 wire encoding.
     SetDataIndexed(u32, u32),
     /// Total bounds predicate. Preserve the Word index and append four Word
     /// byte limbs of the unsigned bound, then flag zero for in-range or one
@@ -2820,6 +2818,7 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
     match op {
         Op::Trap(kind) if *kind == TrapKind::IndexOutOfBounds.code() => 6,
         Op::BoundsCheck(_) => 7,
+        Op::SetDataIndexed(_, _) => 8,
         Op::Const(_)
         | Op::GetLocal(_)
         | Op::SetLocal(_)
@@ -2869,8 +2868,7 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         | Op::FixedMul(_)
         | Op::FixedDiv(_)
         | Op::Return
-        | Op::GetDataIndexed(_, _)
-        | Op::SetDataIndexed(_, _) => 2,
+        | Op::GetDataIndexed(_, _) => 2,
 
         Op::Div | Op::Mod | Op::GetField(_) | Op::IsEnum(_, _, _) | Op::IsStruct(_) => 3,
 
@@ -2969,8 +2967,8 @@ impl Op {
 
             // GetDataIndexed pops one index, pushes one value.
             Op::GetDataIndexed(_, _) => 1,
-            // SetDataIndexed pops index and value.
-            Op::SetDataIndexed(_, _) => 0,
+            // Indexed writes consume two operands and return six diagnostic Words.
+            Op::SetDataIndexed(_, _) => 4,
             // Preserve the index and append four diagnostic limbs and a flag.
             Op::BoundsCheck(_) => 5,
 
@@ -3068,7 +3066,7 @@ impl Op {
             // GetDataIndexed pops the index, SetDataIndexed pops the
             // index then the value, BoundsCheck does not pop.
             Op::GetDataIndexed(_, _) => 1,
-            Op::SetDataIndexed(_, _) => 2,
+            Op::SetDataIndexed(_, _) => 0,
             Op::BoundsCheck(_) => 0,
 
             Op::If(_) | Op::BreakIf(_) => 1,

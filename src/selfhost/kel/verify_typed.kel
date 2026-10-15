@@ -302,9 +302,10 @@ fn apply_typed(ip: Word) -> Word {
             st_push_k(dt, ds, dk);
         }
     } else {
-    if k == 2 orelse k == 15 {
-        let count = if k == 15 { 5 } else { 1 };
-        for j in 0..count limit 5 { st_push(1, tv.ta[ip]); }
+    if k == 2 orelse k == 15 orelse k == 16 {
+        if k == 16 { st_pop_n(2); }
+        let count = if k == 16 { 6 } else { if k == 15 { 5 } else { 1 } };
+        for j in 0..count limit 6 { st_push(1, tv.ta[ip]); }
     } else {
     if k == 3 {
         st_push_k(tf.lc_tag[tv.ta[ip]], tf.lc_size[tv.ta[ip]], tf.lc_kind[tv.ta[ip]]);

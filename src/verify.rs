@@ -2571,7 +2571,7 @@ pub fn op_depth_effect(op: &Op, _chunk: &Chunk) -> (i32, i32) {
         Op::Dup => (1, 1),
         Op::SetLocal(_) | Op::SetData(_) => (1, -1),
         Op::GetDataIndexed(_, _) => (1, 0),
-        Op::SetDataIndexed(_, _) => (2, -2),
+        Op::SetDataIndexed(_, _) => (2, 4),
         Op::BoundsCheck(_) => (1, 5),
         Op::Add
         | Op::Sub

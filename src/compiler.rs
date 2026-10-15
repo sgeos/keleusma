@@ -5286,9 +5286,16 @@ fn emit_data_indexed_write(
         })?;
     let total = emit_indexed_offset(fc, &field_type, &chain.indices, span)?;
     fc.emit(Op::SetDataIndexed(base, total));
-    // A dynamic data-array index can trap out-of-bounds; record the
-    // operator site so the fault resolves exactly (B29 item 2).
     fc.record_operator_site(&span);
+    let invalid = fc.add_constant(Value::Int(1));
+    fc.emit(Op::Const(invalid));
+    fc.emit(Op::CmpEq);
+    let valid = fc.emit_jump(Op::If(0));
+    fc.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
+    fc.record_operator_site(&span);
+    fc.patch_jump(valid);
+    fc.emit(Op::EndIf);
+    fc.emit(Op::PopN(5));
     Ok(())
 }
 

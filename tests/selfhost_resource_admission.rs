@@ -401,3 +401,32 @@ fn raw_array_length_pattern_requires_a_literal_origin() {
         }
     ));
 }
+
+#[test]
+fn diagnostic_outputs_preserve_text_below_their_operands() {
+    for (prefix, operation) in [
+        (vec![Op::Const(1)], Op::BoundsCheck(2)),
+        (vec![Op::Const(1), Op::Const(1)], Op::SetDataIndexed(0, 1)),
+    ] {
+        let mut module = compile_src("fn main() -> Word { 0 }");
+        let chunk = &mut module.chunks[0];
+        chunk.constants = vec![
+            keleusma::bytecode::ConstValue::StaticStr("retained".into()),
+            keleusma::bytecode::ConstValue::Int(0),
+        ];
+        chunk.ops = vec![Op::Const(0)];
+        chunk.ops.extend(prefix);
+        chunk.ops.extend([operation, Op::PopN(6), Op::Return]);
+        let expected = keleusma::text_size::analyze_chunk_text(chunk, &[]);
+        assert!(expected.returns_text);
+        let actual = text_bounds_via_kel(chunk, &[]).unwrap();
+        assert_eq!(
+            (actual.heap_bytes, actual.returns_text, actual.yields_text),
+            (
+                expected.heap_alloc,
+                expected.returns_text,
+                expected.yields_text
+            )
+        );
+    }
+}

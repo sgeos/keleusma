@@ -161,7 +161,7 @@ const CASES: &[Case] = &[
     Case {
         name: "private indexed write out of bounds",
         src: "private data d { xs: [Word; 2] } fn main() -> Word { d.xs[5] = 7; 0 }",
-        traps_expected: false,
+        traps_expected: true,
         outcome: Outcome::Faulted("IndexOutOfBounds"),
     },
     Case {
