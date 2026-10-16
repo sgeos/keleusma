@@ -343,3 +343,25 @@ The convention is `.kel` for source files and `.kel.bin` for compiled bytecode. 
 ## License
 
 0BSD. Same as Keleusma.
+
+
+## Trap policy and proven execution
+
+`keleusma run file.kel --require-trap-free` requires a completed first-pass
+trap-free classification before execution. Trapping programs and unsupported
+analysis are refused. The same option applies to serialized bytecode.
+
+`keleusma run file.kbc --proven-execution` also proves operand availability and
+removes the corresponding runtime stack checks. It implies strict trap policy.
+Type, lifetime, storage and allocation guards remain active. This option cannot
+be combined with `--print-memory`.
+
+`keleusma validate file.kbc --require-trap-free --validator self-hosted` performs
+the Keleusma classification with the reference consistency check. Use `rust` for
+the reference backend. Exit status one reports a rejected or possibly-trapping
+subject. Exit status two reports unavailable analysis or a backend disagreement.
+A trap-free verdict is distinct from the stronger execution certificate.
+
+The [execution contract](../docs/decisions/ORDER3_PROVEN_EXECUTION.md) records the
+proof, removed checks and lifecycle requirements. Native-call and other unsupported
+first-pass contracts remain unavailable to strict admission.

@@ -382,6 +382,14 @@ fn unavailable_verification_cannot_be_replaced_by_a_host_attestation() {
     );
     assert_eq!(vm.trap_policy(), TrapPolicy::Allow);
     vm.set_trap_policy(TrapPolicy::Allow).unwrap();
+    assert!(
+        vm.set_execution_checks(keleusma::vm::ExecutionChecks::Proven)
+            .is_err()
+    );
+    assert_eq!(
+        vm.execution_checks(),
+        keleusma::vm::ExecutionChecks::Checked
+    );
     #[cfg(feature = "signatures")]
     {
         let signer = ed25519_dalek::SigningKey::from_bytes(&[81; 32]);

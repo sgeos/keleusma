@@ -38,7 +38,7 @@ use keleusma::compiler::{CompileOptions, compile_with_options};
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
 use keleusma::stddsl;
-use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState};
+use keleusma::vm::{DEFAULT_ARENA_CAPACITY, ExecutionChecks, TrapPolicy, Vm, VmOptions, VmState};
 use keleusma::{Arena, Value};
 
 use strict_mode::{PolicyContext, X25519_PRIVATE_KEY_LEN, build_policy_context};
@@ -128,6 +128,14 @@ fn print_help() {
     println!("  run <file> [--verifying-key <keyfile> ...]");
     println!("             [--decryption-key <keyfile> ...]");
     println!("             [--tick-interval <duration>] [--quiet] [--print-memory]");
+    println!("             [--require-trap-free] [--proven-execution]");
+    println!(
+        "                                    --require-trap-free refuses trapping or unproved input."
+    );
+    println!(
+        "                                    --proven-execution also removes proved operand-stack"
+    );
+    println!("                                    checks and implies --require-trap-free.");
     println!("                                    Compile and execute a script.");
     println!("                                    Pass --verifying-key (repeatable) to verify");
     println!("                                    signed compiled bytecode against the");
@@ -142,7 +150,7 @@ fn print_help() {
     println!("                                    program's worst-case arena footprint and exits");
     println!("                                    without running, for provisioning a host.");
     println!("  validate <bytecode> [--validator <rust|self-hosted>]");
-    println!("                      [--arena-capacity <bytes>]");
+    println!("                      [--arena-capacity <bytes>] [--require-trap-free]");
     println!("                                    Check structure, types and resource bounds.");
     println!(
         "                                    Does not execute code or authenticate signatures."
@@ -335,6 +343,15 @@ fn run_subcommand(args: &[String]) -> ExitCode {
             }
             "--quiet" => {
                 loop_config.quiet = true;
+                i += 1;
+            }
+            "--require-trap-free" => {
+                loop_config.vm_options.trap_policy = TrapPolicy::RequireTrapFree;
+                i += 1;
+            }
+            "--proven-execution" => {
+                loop_config.vm_options.trap_policy = TrapPolicy::RequireTrapFree;
+                loop_config.vm_options.execution_checks = ExecutionChecks::Proven;
                 i += 1;
             }
             "--print-memory" => {
@@ -1808,6 +1825,24 @@ fn print_module_memory(module: &keleusma::bytecode::Module) -> Result<(), String
     Ok(())
 }
 
+fn print_module_memory_with_options(
+    module: &keleusma::bytecode::Module,
+    options: VmOptions,
+) -> Result<(), String> {
+    if options.execution_checks == ExecutionChecks::Proven {
+        return Err(String::from(
+            "--proven-execution cannot be combined with --print-memory",
+        ));
+    }
+    if options.trap_policy == TrapPolicy::RequireTrapFree {
+        match keleusma::trap_analysis::classify_traps(module) {
+            Ok(keleusma::trap_analysis::TrapVerdict::TrapFree) => {}
+            result => return Err(format!("trap policy requires TrapFree: {result:?}")),
+        }
+    }
+    print_module_memory(module)
+}
+
 /// Run a source program through compile and execute. The runner
 /// pre-registers utility and math natives so scripts can use
 /// `to_string`, `length`, `concat`, `slice`, `println`, and the
@@ -1819,11 +1854,12 @@ fn execute_source(
 ) -> Result<(), String> {
     let module = compile_source(source)?;
     if print_memory {
-        return print_module_memory(&module);
+        return print_module_memory_with_options(&module, loop_config.vm_options);
     }
     let entry_kind = detect_entry_kind(&module)?;
     let arena = allocate_module_arena(&module)?;
-    let mut vm = Vm::new(module, &arena).map_err(|e| format!("verify: {:?}", e))?;
+    let (mut vm, _) = Vm::new_with_options(module, &arena, loop_config.vm_options)
+        .map_err(|e| format!("verify: {:?}", e))?;
     drive_to_completion(&mut vm, &arena, entry_kind, loop_config)
 }
 
@@ -1956,7 +1992,7 @@ fn execute_bytecode(
     let module = load_module(bytes, verifying_keys, decryption_keys, policy)?;
 
     if print_memory {
-        return print_module_memory(&module);
+        return print_module_memory_with_options(&module, loop_config.vm_options);
     }
 
     // Auto-size the arena from the module's declared bounds and allocate it
@@ -1974,7 +2010,8 @@ fn execute_bytecode(
     // happened during load_module. The flag is cleared in
     // load_module so Vm::new accepts the module without further
     // checks.
-    let mut vm = Vm::new(module, &arena).map_err(|e| format!("verify: {:?}", e))?;
+    let (mut vm, _) = Vm::new_with_options(module, &arena, loop_config.vm_options)
+        .map_err(|e| format!("verify: {:?}", e))?;
     for key in verifying_keys {
         vm.register_verifying_key(*key);
     }
@@ -1998,6 +2035,8 @@ struct LoopRunnerConfig {
     /// exceeds the configured interval. Default false (warnings
     /// emitted).
     quiet: bool,
+    /// Host-selected trap policy and execution proofs, applied before running.
+    vm_options: VmOptions,
 }
 
 /// Outcome of inspecting the loaded module's entry chunk. Drives

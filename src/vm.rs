@@ -331,6 +331,31 @@ pub enum TrapPolicy {
     RequireTrapFree,
 }
 
+/// Runtime operand-stack checking mode. Other contract guards remain active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExecutionChecks {
+    /// Retain ordinary operand-pop underflow checks.
+    #[default]
+    Checked,
+    /// Remove operand-stack underflow checks only after structural, depth, resource and
+    /// trap-free proofs. Requires `TrapPolicy::RequireTrapFree`.
+    Proven,
+}
+
+// Not constructible by callers. It belongs to the VM's immutable current image.
+struct PopElisionProof;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecutionProofState {
+    Inactive,
+    Ready,
+    Prepared,
+    Yielded,
+    Reset,
+    Breakpoint,
+    Finished,
+    Poisoned,
+}
+
 /// Construction-time options for [`Vm::new_with_options`].
 ///
 /// The default options apply the strict overflow policy
@@ -343,6 +368,8 @@ pub struct VmOptions {
     pub overflow_policy: OverflowPolicy,
     /// Language-trap admission policy. This does not enable unchecked execution.
     pub trap_policy: TrapPolicy,
+    /// Select actual proof-gated operand-pop check removal.
+    pub execution_checks: ExecutionChecks,
 }
 
 /// Non-fatal finding produced by [`Vm::new_with_options`] when an
@@ -1072,6 +1099,14 @@ pub struct GenericVm<
 > {
     bytecode: BytecodeStore<'a>,
     trap_policy: TrapPolicy,
+    execution_checks: ExecutionChecks,
+    pop_proof: Option<PopElisionProof>,
+    proof_state: ExecutionProofState,
+    elide_pops: bool,
+    #[cfg(test)]
+    pop_counts: (usize, usize),
+    #[cfg(test)]
+    panic_after_pop: bool,
     /// Region offsets into the auxiliary body, plus the module-level scalars the
     /// interpreter reads on its hot path, all resolved once when the image is
     /// installed. See [`AuxResolved`].
@@ -1911,6 +1946,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         }
         let mut vm = Self::construct(module, arena)?;
         vm.trap_policy = options.trap_policy;
+        if options.execution_checks == ExecutionChecks::Proven {
+            vm.set_execution_checks(ExecutionChecks::Proven)?;
+        }
         Ok((vm, warnings))
     }
 
@@ -1951,6 +1989,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// RequireTrapFree cannot be enabled without the verification feature, even
     /// on a VM created through an unsafe trust-skip route.
     pub fn set_trap_policy(&mut self, policy: TrapPolicy) -> Result<(), VmError> {
+        if policy == TrapPolicy::Allow && self.execution_checks == ExecutionChecks::Proven {
+            return Err(VmError::VerifyError(String::from(
+                "disable proven execution before allowing traps",
+            )));
+        }
         match policy {
             TrapPolicy::Allow => {}
             TrapPolicy::RequireTrapFree => {
@@ -1967,6 +2010,142 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     pub fn with_trap_policy(mut self, policy: TrapPolicy) -> Result<Self, VmError> {
         self.set_trap_policy(policy)?;
         Ok(self)
+    }
+
+    fn prove_pop_elision(
+        module: &Module,
+        arena: &keleusma_arena::Arena,
+        policy: TrapPolicy,
+        checks: ExecutionChecks,
+    ) -> Result<Option<PopElisionProof>, VmError> {
+        if checks == ExecutionChecks::Checked {
+            return Ok(None);
+        }
+        if policy != TrapPolicy::RequireTrapFree {
+            return Err(VmError::VerifyError(String::from(
+                "proven execution requires RequireTrapFree policy",
+            )));
+        }
+        Self::enforce_trap_policy(module, policy)?;
+        #[cfg(feature = "verify")]
+        {
+            crate::verify_execution::verify_pop_elision(module)
+                .map_err(|e| VmError::VerifyError(format!("operand-pop proof: {e:?}")))?;
+            verify::verify_resource_bounds_with_natives_and_value_slot_bytes(
+                module,
+                arena.capacity(),
+                &[],
+                core::mem::size_of::<crate::bytecode::GenericValue<W, F>>() as u32,
+            )
+            .map_err(|e| VmError::VerifyError(format!("operand-pop resources: {e:?}")))?;
+            Ok(Some(PopElisionProof))
+        }
+        #[cfg(not(feature = "verify"))]
+        {
+            let _ = arena;
+            Err(VmError::VerifyError(String::from(
+                "proven execution requires verification support",
+            )))
+        }
+    }
+
+    fn prove_image(
+        bytes: &[u8],
+        decoded: &[Vec<Op>],
+        arena: &keleusma_arena::Arena,
+        policy: TrapPolicy,
+        checks: ExecutionChecks,
+    ) -> Result<Option<PopElisionProof>, VmError> {
+        if checks == ExecutionChecks::Checked {
+            return Ok(None);
+        }
+        let module = Module::from_bytes(bytes)?;
+        if module.chunks.len() != decoded.len()
+            || module
+                .chunks
+                .iter()
+                .zip(decoded)
+                .any(|(chunk, ops)| chunk.ops != *ops)
+        {
+            return Err(VmError::VerifyError(String::from(
+                "instruction cache differs from the proof image",
+            )));
+        }
+        Self::prove_pop_elision(&module, arena, policy, checks)
+    }
+
+    /// Configured operand-pop checking mode. Proven mode still retains type,
+    /// lifetime, allocation and host-contract guards.
+    pub fn execution_checks(&self) -> ExecutionChecks {
+        self.execution_checks
+    }
+
+    /// Enable proof-gated pops on a fresh or explicitly reset instance.
+    /// All required proofs run even for a trust-skip or borrowed instance.
+    /// An error or panic poisons proven reentry until `reset_after_error`.
+    pub fn set_execution_checks(&mut self, checks: ExecutionChecks) -> Result<(), VmError> {
+        // No public configuration call owns a live shared-buffer borrow.
+        self.shared_buf.clear();
+        match checks {
+            ExecutionChecks::Checked => {
+                self.elide_pops = false;
+                self.pop_proof = None;
+                self.execution_checks = checks;
+                if self.proof_state == ExecutionProofState::Poisoned {
+                    self.shared_buf.clear();
+                }
+                self.proof_state = ExecutionProofState::Inactive;
+            }
+            ExecutionChecks::Proven => {
+                if self.started || !self.frames.is_empty() || !self.stack.is_empty() {
+                    return Err(VmError::VerifyError(String::from(
+                        "enable proven execution before calling or after reset_after_error",
+                    )));
+                }
+                let proof = Self::prove_image(
+                    self.bytecode.as_slice(),
+                    &self.decoded_ops,
+                    self.arena,
+                    self.trap_policy,
+                    checks,
+                )?;
+                self.pop_proof = proof;
+                self.execution_checks = checks;
+                self.proof_state = ExecutionProofState::Ready;
+                self.elide_pops = false;
+            }
+        }
+        Ok(())
+    }
+
+    /// Configure proof-gated execution before the first call.
+    pub fn with_execution_checks(mut self, checks: ExecutionChecks) -> Result<Self, VmError> {
+        self.set_execution_checks(checks)?;
+        Ok(self)
+    }
+
+    fn begin_proven_entry(&mut self, allowed: &[ExecutionProofState]) -> Result<(), VmError> {
+        self.elide_pops = false;
+        if self.execution_checks == ExecutionChecks::Proven {
+            if self.proof_state == ExecutionProofState::Poisoned {
+                self.shared_buf.clear();
+            }
+            if self.pop_proof.is_none() || !allowed.contains(&self.proof_state) {
+                return Err(VmError::VerifyError(String::from(
+                    "proven execution cannot enter from this state; use the matching resume method or reset_after_error",
+                )));
+            }
+            // Poison before any argument preparation, allocation or user-value drop.
+            // Unwinding therefore cannot leave a resumable execution-state proof.
+            self.proof_state = ExecutionProofState::Poisoned;
+        }
+        Ok(())
+    }
+
+    fn prepare_proven_run(&mut self) {
+        if self.execution_checks == ExecutionChecks::Proven {
+            self.proof_state = ExecutionProofState::Prepared;
+        }
     }
 
     /// Create a VM that runs structural verification but skips WCET and
@@ -2523,6 +2702,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let mut vm = Self {
             bytecode: BytecodeStore::Borrowed(bytes),
             trap_policy: TrapPolicy::Allow,
+            execution_checks: ExecutionChecks::Checked,
+            pop_proof: None,
+            proof_state: ExecutionProofState::Inactive,
+            elide_pops: false,
+            #[cfg(test)]
+            pop_counts: (0, 0),
+            #[cfg(test)]
+            panic_after_pop: false,
             aux_resolved,
             _phantom_a: core::marker::PhantomData,
             decoded_ops,
@@ -2750,6 +2937,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let mut vm = Self {
             bytecode: BytecodeStore::Owned(aligned),
             trap_policy: TrapPolicy::Allow,
+            execution_checks: ExecutionChecks::Checked,
+            pop_proof: None,
+            proof_state: ExecutionProofState::Inactive,
+            elide_pops: false,
+            #[cfg(test)]
+            pop_counts: (0, 0),
+            #[cfg(test)]
+            panic_after_pop: false,
             aux_resolved,
             _phantom_a: core::marker::PhantomData,
             decoded_ops,
@@ -3859,8 +4054,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // `full_reset_arena_internal` drops and recreates the
         // arena-backed stacks and clears both arena ends. The volatile
         // state is cleared as a side effect.
-        let _ = self.full_reset_arena_internal();
+        self.elide_pops = false;
+        if self.execution_checks == ExecutionChecks::Proven {
+            self.proof_state = ExecutionProofState::Poisoned;
+        }
+        self.shared_buf.clear();
+        let reset = self.full_reset_arena_internal();
         self.started = false;
+        if reset.is_ok() && self.pop_proof.is_some() {
+            self.proof_state = ExecutionProofState::Ready;
+        }
     }
 
     /// Replace the current module with a new one as a hot code update.
@@ -4124,8 +4327,25 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
         aligned.extend_from_slice(&bytes);
         let decoded_ops = decode_all_ops(aligned.as_slice())?;
+        let new_proof = Self::prove_image(
+            &aligned,
+            &decoded_ops,
+            self.arena,
+            self.trap_policy,
+            self.execution_checks,
+        )?;
+        let new_aux = AuxResolved::resolve(Self::aux_body_slice(&aligned))
+            .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
+        self.shared_buf.clear();
+        self.elide_pops = false;
+        self.pop_proof = None;
+        if self.execution_checks == ExecutionChecks::Proven {
+            self.proof_state = ExecutionProofState::Poisoned;
+        }
 
-        // Commit point: every step below is infallible.
+        // Commit point. Returned validation errors have already been handled.
+        // Host-owned values can still unwind from Drop, so the proof is revoked
+        // and each old slot remains initialized before invoking its destructor.
         // Drop the old private slots. Each was initialised at
         // construction or at a prior hot swap and may hold owned
         // resources whose destructor must run.
@@ -4134,14 +4354,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             let base =
                 self.arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
             for i in 0..old_private_count {
-                // SAFETY: every old private slot held a valid
-                // `Value` initialised through `write_data_slot`
-                // or `Vm::construct`. `drop_in_place` runs the
-                // destructor in place; the bytes are then
-                // uninitialised and ready for `ptr::write`.
-                unsafe {
-                    core::ptr::drop_in_place(base.add(i));
-                }
+                // SAFETY: this slot contains an initialized value. Replace it
+                // with Unit before dropping the old owner so unwinding cannot
+                // leave a dangling value for the VM destructor to drop again.
+                let old =
+                    unsafe { core::ptr::replace(base.add(i), crate::bytecode::GenericValue::Unit) };
+                drop(old);
             }
         }
         // The host-supplied initial values are exactly the new module's
@@ -4161,8 +4379,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // the drop), so the swap is transactional.
         // Re-resolve against the new image: the offsets and the bytes must stay
         // together, and a hot swap replaces the bytes.
-        self.aux_resolved = AuxResolved::resolve(Self::aux_body_slice(&aligned))
-            .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
+        self.aux_resolved = new_aux;
         self.bytecode = BytecodeStore::Owned(aligned);
         self.decoded_ops = decoded_ops;
         self.shared_slot_count = new_shared;
@@ -4212,7 +4429,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // `full_reset_arena_internal` drops and recreates the
         // arena-backed stacks before clearing both ends. The
         // persistent region is preserved through the reset.
-        let _ = self.full_reset_arena_internal();
+        let reset = self.full_reset_arena_internal();
+        if self.execution_checks == ExecutionChecks::Proven && reset.is_err() {
+            return Err(VmError::VerifyError(String::from(
+                "arena reset could not establish execution-state proof",
+            )));
+        }
         // Rebuild the const pool for the swapped-in module (B28 P3 item 2,
         // Increment 2). The old templates referenced the retired image's
         // constants and the old pool boxes; rebuilding reassigns both fields,
@@ -4222,6 +4444,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // `Flat(Arena)` handle reads no bytes in any case).
         self.build_const_pool();
         self.started = false;
+        self.pop_proof = new_proof;
+        if self.pop_proof.is_some() {
+            self.proof_state = ExecutionProofState::Ready;
+        }
 
         Ok(())
     }
@@ -4719,7 +4945,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             .module()
             .entry_point()
             .ok_or_else(|| VmError::InvalidBytecode(String::from("no entry point")))?;
-        self.call_function(entry, args)
+        self.call_function_after_enter(entry, args)
     }
 
     /// Capture the host shared-data buffer for the current call (B28 item 2).
@@ -4755,6 +4981,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         chunk_idx: usize,
         args: &[crate::bytecode::GenericValue<W, F>],
     ) -> Result<GenericVmState<W, F>, VmError> {
+        // This entry has no buffer argument. Internal calls with an active
+        // borrow use call_function_after_enter instead. Clear even after unwind.
+        self.shared_buf.clear();
+        self.call_function_after_enter(chunk_idx, args)
+    }
+
+    fn call_function_after_enter(
+        &mut self,
+        chunk_idx: usize,
+        args: &[crate::bytecode::GenericValue<W, F>],
+    ) -> Result<GenericVmState<W, F>, VmError> {
+        self.begin_proven_entry(&[ExecutionProofState::Ready, ExecutionProofState::Finished])?;
         // Native-classification check runs lazily before any
         // execution. The first call after natives are registered
         // (or after a hot swap) walks every native-call site and
@@ -4849,7 +5087,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             }
         );
         self.started = true;
-
+        self.prepare_proven_run();
         self.run()
     }
 
@@ -4926,6 +5164,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         &mut self,
         input: crate::bytecode::GenericValue<W, F>,
     ) -> Result<GenericVmState<W, F>, VmError> {
+        self.begin_proven_entry(&[ExecutionProofState::Yielded, ExecutionProofState::Reset])?;
         if !self.started || self.frames.is_empty() {
             return Err(VmError::NotSuspended);
         }
@@ -4990,6 +5229,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         }
         // Push the input value onto the stack (it becomes the yield expression result).
         sp!(self, input);
+        self.prepare_proven_run();
         self.run()
     }
 
@@ -5090,6 +5330,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// buffer-binding decision lives at the boundary and the resume logic
     /// exists once. Mirrors the `call_after_enter`/`resume_after_enter` shape.
     fn resume_from_breakpoint_after_enter(&mut self) -> Result<GenericVmState<W, F>, VmError> {
+        self.begin_proven_entry(&[ExecutionProofState::Breakpoint])?;
         if !self.started || self.frames.is_empty() {
             return Err(VmError::NotSuspended);
         }
@@ -5097,6 +5338,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // suppress it once so the op executes rather than re-triggering.
         let frame = *self.frames.last().ok_or(VmError::NotSuspended)?;
         self.skip_breakpoint_at = Some((frame.chunk_idx, frame.ip));
+        self.prepare_proven_run();
         self.run()
     }
 
@@ -5192,9 +5434,27 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// On a successful outcome the field is cleared, so it is `Some`
     /// only after a fault.
     fn run(&mut self) -> Result<GenericVmState<W, F>, VmError> {
+        if self.execution_checks == ExecutionChecks::Proven {
+            if self.pop_proof.is_none() || self.proof_state != ExecutionProofState::Prepared {
+                return Err(VmError::VerifyError(String::from(
+                    "missing execution-state proof",
+                )));
+            }
+            self.proof_state = ExecutionProofState::Poisoned;
+            self.elide_pops = true;
+        }
         let result = self.run_inner();
-        if result.is_ok() {
+        self.elide_pops = false;
+        if let Ok(state) = &result {
             self.fault_location = None;
+            if self.execution_checks == ExecutionChecks::Proven {
+                self.proof_state = match state {
+                    GenericVmState::Yielded(_) => ExecutionProofState::Yielded,
+                    GenericVmState::Reset => ExecutionProofState::Reset,
+                    GenericVmState::BreakpointHit { .. } => ExecutionProofState::Breakpoint,
+                    GenericVmState::Finished(_) => ExecutionProofState::Finished,
+                };
+            }
         }
         result
     }
@@ -5415,7 +5675,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
 
                 Op::BoundsCheck(bound) => {
-                    let top = self.stack.last().ok_or(VmError::StackUnderflow)?;
+                    let top = self.peek_operand()?;
                     let value = match top {
                         crate::bytecode::GenericValue::Int(n) => *n,
                         other => {
@@ -5695,11 +5955,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // callee's local-slot count (an arity mismatch). Both
                     // return a clean error instead of panicking or wrapping
                     // to a wild frame base.
-                    let new_base = self
-                        .stack
-                        .len()
-                        .checked_sub(arg_count as usize)
-                        .ok_or(VmError::StackUnderflow)?;
+                    let new_base = self.operand_start(arg_count as usize)?;
                     let extra = called_local_count
                         .checked_sub(arg_count as usize)
                         .ok_or_else(|| {
@@ -5765,7 +6021,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
 
                 Op::Dup => {
-                    let val = self.stack.last().ok_or(VmError::StackUnderflow)?.clone();
+                    let val = self.peek_operand()?.clone();
                     sp!(self, val);
                 }
 
@@ -5779,9 +6035,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     use crate::bytecode::NewCompositeOperand as NCO;
                     use crate::value_layout::CompositeKind as CK;
                     let count = operand.count() as usize;
-                    if self.stack.len() < count {
-                        return Err(VmError::StackUnderflow);
-                    }
+                    let start = self.operand_start(count)?;
                     let arena = self.arena;
                     // Drain the operands without materialising them to owned
                     // `Inline` bodies. The flat path packs them directly into
@@ -5791,7 +6045,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     // which stores the operands as separate values, materialises
                     // them (B28 P3 item 5 C-residual 3b).
                     let mut values: Vec<crate::bytecode::GenericValue<W, F>> =
-                        self.stack.drain(self.stack.len() - count..).collect();
+                        self.stack.drain(start..).collect();
                     let wb = self.module_word_bytes();
                     let ab = self.module_addr_bytes();
                     let fb = self.module_float_bytes();
@@ -6497,7 +6751,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             )));
                         }
                     };
-                    let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
+                    let val = self.peek_operand()?;
                     let matches = match val {
                         // Boxed: compare the type and variant names.
                         crate::bytecode::GenericValue::Enum(crate::bytecode::EnumBody::Boxed(
@@ -6559,7 +6813,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         .ok_or_else(|| {
                             VmError::InvalidBytecode(String::from("type const not string"))
                         })?;
-                    let val = self.stack.last().ok_or(VmError::StackUnderflow)?;
+                    let val = self.peek_operand()?;
                     let matches = match val {
                         crate::bytecode::GenericValue::Struct(
                             crate::bytecode::StructBody::Boxed(b),
@@ -7492,10 +7746,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
                 Op::PopN(n) => {
                     let count = n as usize;
-                    if self.stack.len() < count {
-                        return Err(VmError::StackUnderflow);
-                    }
-                    let new_len = self.stack.len() - count;
+                    let new_len = self.operand_start(count)?;
                     self.stack.truncate(new_len);
                 }
                 Op::BitAnd => {
@@ -7731,8 +7982,59 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         }
     }
 
+    fn operand_start(&self, count: usize) -> Result<usize, VmError> {
+        if self.elide_pops {
+            // The lower-bound proof covers the complete immediate operand count.
+            Ok(self.stack.len().wrapping_sub(count))
+        } else {
+            self.stack
+                .len()
+                .checked_sub(count)
+                .ok_or(VmError::StackUnderflow)
+        }
+    }
+
+    fn peek_operand(&self) -> Result<&crate::bytecode::GenericValue<W, F>, VmError> {
+        if self.elide_pops {
+            // SAFETY: Same execution-state and lower-bound proof as `pop`.
+            // Peek opcodes require one initialized operand and preserve it.
+            let index = self.stack.len().wrapping_sub(1);
+            Ok(unsafe { &*self.stack.as_ptr().add(index) })
+        } else {
+            self.stack.last().ok_or(VmError::StackUnderflow)
+        }
+    }
+
     fn pop(&mut self) -> Result<crate::bytecode::GenericValue<W, F>, VmError> {
-        self.stack.pop().ok_or(VmError::StackUnderflow)
+        let result = if self.elide_pops {
+            #[cfg(test)]
+            {
+                self.pop_counts.1 = self.pop_counts.1.wrapping_add(1);
+            }
+            let index = self.stack.len().wrapping_sub(1);
+            // SAFETY: PopElisionProof validates a lower bound for every reachable
+            // operand consumption, including Return and loop back edges. Only a
+            // prepared entry can enable this path. Errors and unwinding poison
+            // reentry before any mutation, and replacement installs a new proof.
+            // Thus len is nonzero and index names an initialized element. Moving
+            // it and shortening the vector leaves no duplicate owner to drop.
+            unsafe {
+                self.stack.set_len(index);
+                Ok(self.stack.as_ptr().add(index).read())
+            }
+        } else {
+            #[cfg(test)]
+            {
+                self.pop_counts.0 = self.pop_counts.0.wrapping_add(1);
+            }
+            self.stack.pop().ok_or(VmError::StackUnderflow)
+        };
+        #[cfg(test)]
+        if self.panic_after_pop && result.is_ok() {
+            self.panic_after_pop = false;
+            panic!("injected panic after operand consumption");
+        }
+        result
     }
 
     fn binary_arith<IntOp, FloatOp>(
@@ -15236,6 +15538,166 @@ mod tests {
             ),
             Err(other) => panic!("expected LoadError, got: {:?}", other),
             Ok(_) => panic!("expected error, got Ok(_)"),
+        }
+    }
+}
+
+#[cfg(all(test, feature = "compile", feature = "verify"))]
+mod proof_elision_tests {
+    extern crate std;
+    use super::*;
+    fn module() -> Module {
+        let ast = crate::parser::parse(
+            &crate::lexer::tokenize("fn main(x: Word) -> Word { x + 7 }").unwrap(),
+        )
+        .unwrap();
+        crate::compiler::compile(&ast).unwrap()
+    }
+    fn options(checks: ExecutionChecks) -> VmOptions {
+        VmOptions {
+            trap_policy: TrapPolicy::RequireTrapFree,
+            execution_checks: checks,
+            ..VmOptions::default()
+        }
+    }
+    #[test]
+    fn proof_elision_executes_unchecked_pops_and_preserves_results() {
+        for checks in [ExecutionChecks::Checked, ExecutionChecks::Proven] {
+            let arena = crate::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+            let (mut vm, _) = Vm::new_with_options(module(), &arena, options(checks)).unwrap();
+            assert!(matches!(
+                vm.call(&[Value::Int(3)]).unwrap(),
+                VmState::Finished(Value::Int(10))
+            ));
+            match checks {
+                ExecutionChecks::Checked => {
+                    assert!(vm.pop_counts.0 > 0);
+                    assert_eq!(vm.pop_counts.1, 0);
+                }
+                ExecutionChecks::Proven => {
+                    assert_eq!(vm.pop_counts.0, 0);
+                    assert!(vm.pop_counts.1 > 0);
+                }
+            }
+        }
+    }
+    #[test]
+    fn proof_elision_unwinding_poison_prevents_partial_frame_reentry() {
+        let arena = crate::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let (mut vm, _) =
+            Vm::new_with_options(module(), &arena, options(ExecutionChecks::Proven)).unwrap();
+        vm.panic_after_pop = true;
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| vm.call(&[Value::Int(3)])));
+        assert!(outcome.is_err());
+        assert_eq!(vm.proof_state, ExecutionProofState::Poisoned);
+        assert!(vm.resume(Value::Int(0)).is_err());
+        assert!(vm.resume_from_breakpoint().is_err());
+        assert!(vm.call(&[Value::Int(3)]).is_err());
+        vm.reset_after_error();
+        assert!(matches!(
+            vm.call(&[Value::Int(3)]).unwrap(),
+            VmState::Finished(Value::Int(10))
+        ));
+    }
+    #[test]
+    fn proof_elision_rejects_an_instruction_cache_that_differs_from_its_image() {
+        let arena = crate::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+        let mut vm = Vm::new(module(), &arena)
+            .unwrap()
+            .with_trap_policy(TrapPolicy::RequireTrapFree)
+            .unwrap();
+        vm.decoded_ops[0][0] = Op::PopN(255);
+        assert!(vm.set_execution_checks(ExecutionChecks::Proven).is_err());
+        assert_eq!(vm.execution_checks(), ExecutionChecks::Checked);
+    }
+    #[test]
+    fn proof_elision_replacement_drop_unwind_leaves_initialized_slots() {
+        use alloc::sync::Arc;
+        use core::sync::atomic::{AtomicUsize, Ordering};
+        struct PanickingDrop(Arc<AtomicUsize>);
+        impl crate::opaque::HostOpaque for PanickingDrop {
+            fn type_name(&self) -> &'static str {
+                "PanickingDrop"
+            }
+        }
+        impl Drop for PanickingDrop {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                panic!("host Drop panic");
+            }
+        }
+        let ast = crate::parser::parse(
+            &crate::lexer::tokenize(
+                "private data d { n: Word } fn main(x: Word) -> Word { d.n = x; d.n }",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let module = crate::compiler::compile(&ast).unwrap();
+        for checks in [ExecutionChecks::Checked, ExecutionChecks::Proven] {
+            let need = required_persistent_capacity_for(&module);
+            let mut arena = crate::Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+            arena.resize_persistent(need).unwrap();
+            let (mut vm, _) =
+                Vm::new_with_options(module.clone(), &arena, options(checks)).unwrap();
+            let count = Arc::new(AtomicUsize::new(0));
+            vm.replace_module(
+                module.clone(),
+                vec![Value::Opaque(Arc::new(PanickingDrop(count.clone())))],
+            )
+            .unwrap();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                vm.replace_module(module.clone(), vec![Value::Int(0)])
+            }));
+            assert!(result.is_err());
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+            if checks == ExecutionChecks::Proven {
+                assert!(vm.pop_proof.is_none());
+                assert_eq!(vm.proof_state, ExecutionProofState::Poisoned);
+                assert!(vm.call(&[Value::Int(1)]).is_err());
+            }
+            drop(vm);
+            assert_eq!(count.load(Ordering::SeqCst), 1);
+        }
+    }
+    #[test]
+    fn proof_elision_unwind_cannot_reuse_a_borrowed_shared_buffer() {
+        let ast = crate::parser::parse(
+            &crate::lexer::tokenize(
+                "shared data d { n: Word } fn main(x: Word) -> Word { d.n + x }",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let module = crate::compiler::compile(&ast).unwrap();
+        for route in 0..3 {
+            let arena = crate::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+            let (mut vm, _) =
+                Vm::new_with_options(module.clone(), &arena, options(ExecutionChecks::Proven))
+                    .unwrap();
+            let mut shared = vec![0; vm.shared_data_bytes()];
+            vm.panic_after_pop = true;
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                    || vm.call_with_shared(&mut shared, &[Value::Int(3)])
+                ))
+                .is_err()
+            );
+            drop(shared);
+            if route == 2 {
+                vm.replace_module(module.clone(), vec![]).unwrap();
+            }
+            if route > 0 {
+                vm.set_execution_checks(ExecutionChecks::Checked).unwrap();
+            }
+            assert!(vm.call_function(0, &[Value::Int(3)]).is_err());
+            vm.reset_after_error();
+            let mut fresh = vec![0; vm.shared_data_bytes()];
+            assert!(matches!(
+                vm.call_with_shared(&mut fresh, &[Value::Int(3)]).unwrap(),
+                VmState::Finished(Value::Int(3))
+            ));
         }
     }
 }

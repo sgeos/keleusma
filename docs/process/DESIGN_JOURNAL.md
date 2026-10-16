@@ -13,6 +13,32 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-15 Operand certificates and execution state
+
+The ordinary depth model is insufficient for unsafe pop access. Return has a
+terminal requirement of zero there, while execution consumes a value. Upper-bound
+joins also cannot establish availability. A separate bounded control-flow worklist
+now propagates minimum operand depths and includes reset reentry. This catches
+programs that seed operands before Stream only on their initial iteration.
+
+The physical invariant relates the current frame base, local prefix and proved
+operand lower bound. Typed pointer reads and proved count subtraction remove the
+corresponding runtime underflow checks. Instrumentation proves that the unchecked
+pop path executes, and comparison controls preserve results. The certificate is
+computed from the installed image and checked against its instruction cache.
+
+Valid suspension kinds require different entry protocols. Yield and reset resumes
+supply an operand, while breakpoint resume does not. A state machine distinguishes
+them and poisons state before argument preparation and execution. It restores a
+valid suspension only after success. Errors and caught panics cannot reuse partial
+frames. Mode changes cannot silently weaken the strict trap premise.
+
+Unwind review also found recovery hazards outside ordinary dispatch. Manually
+managed private slots must remain initialized before host destructors run during
+replacement. Borrowed shared-buffer bindings must be cleared before direct entry,
+configuration and replacement can follow a panic. Both repairs have Tree Borrows
+controls, including opt-out after replacement. The final audit remains open.
+
 ## 2026-10-15 Persistent host trap policy
 
 Policy belongs to the host instance rather than the artifact. Constructors with

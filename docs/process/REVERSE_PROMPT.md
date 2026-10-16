@@ -1,149 +1,155 @@
 # Reverse prompt
 
-## Host trap policy on 2026-10-15
+## Proven execution on 2026-10-15
 
 The active goal remains Complete Order 3, trap analysis. Work is on line v0.2.3
 and branch feat/v02-order3-trap-analysis. This increment starts from pushed commit
-7316dd95d1834bd6a64a8e04acb43c4451e3a9ba. The previous goal turn made progress
-by implementing matching reference and Keleusma trap classifications.
+765dcbb894b395fd928fd4be2675a3945eeefc43. The previous goal turn made progress
+by enforcing host trap policy and repairing signed replacement.
 
-TrapPolicy is now persistent private state on GenericVm. Allow is the default.
-RequireTrapFree requires a completed reference TrapFree classification before
-execution. MayTrap, unsupported contracts, malformed modules, capacity failures
-and unavailable verification are rejected. The host cannot supply a verdict as
-permission. Runtime contract and resource checks remain active.
+The implementation frontier is now the full completion audit. Do not redesign the
+implemented contracts or substitute a smaller goal. ORDER3_COMPLETION_PLAN.md is
+authoritative, with the execution proof in ORDER3_PROVEN_EXECUTION.md.
 
-VmOptions has a trap_policy field. Existing option literals were updated to retain
-their default permissive policy. new_with_options enforces strict policy before
-construction. New load_bytes_with_options, view_bytes_with_options,
-load_signed_bytes_with_options and load_encrypted_signed_bytes_with_options expose
-the same options. Existing entrypoints delegate with defaults. Signature
-verification and decryption precede policy admission on authenticated routes.
-Existing framing checks still apply before options can act on a decoded module.
+## Implemented execution mode
 
-trap_policy reports the selection. set_trap_policy verifies the current image before
-assigning RequireTrapFree and preserves old policy and state on failure.
-with_trap_policy configures a freshly loaded instance before its first call,
-including borrowed and trust-skip loaders. Strict activation without the verify
-feature is refused, including through authenticated unsafe loaders. Host attestation
-cannot replace this proof. Explicitly selecting Allow remains supported.
+ExecutionChecks::Checked is the default. Proven mode requires RequireTrapFree and
+a private certificate for the actual immutable image and instruction cache.
+It repeats required validation even on borrowed or trust-skip instances. It cannot
+be enabled without verification support or retained while allowing traps.
 
-replace_module_inner enforces the stored policy before mutation. Both ordinary and
-schema-bypassing replacement reach that gate. Policy survives successful replacement,
-rejected replacement, yields, resumes, resets, breakpoints and runtime type errors.
-No execution check is removed by this increment.
+src/verify_execution.rs implements a bounded minimum-depth worklist over actual
+instruction edges. It requires a real Return operand, merges minima, follows loop
+back edges and models Reset reentry after Stream with one resume input. This is
+independent of the ordinary verifier's upper-bound walk, which remains unchanged.
+The queue budget follows from finite nonnegative decreasing depths. Fall-through,
+invalid targets, missing operands and incomplete analysis cannot grant a proof.
 
-## Signed replacement repair
+The VM removes pop and peek emptiness checks and count-underflow checks for PopN,
+NewComposite and internal call arguments. Typed pointer access and proved
+subtraction do actual work in the proven path. All unproved type, representation,
+lifetime, storage, allocation, callee and other contract guards remain active.
+An internal counter control requires unchecked pops and zero checked pops in proven
+mode, with the opposite result in checked mode.
 
-A positive control exposed an existing failure in replace_module_from_bytes.
-After authentication it decoded a signed module, then tried to re-encode the
-signature-required flag without the signature extension. The load failed before a
-valid replacement could succeed. It now clears that internal flag after signature
-verification, matching initial signed loading. The host key matrix stays installed.
-Tests require valid signed replacement to succeed and wrong-key, unsigned and
-trapping replacements to fail under their corresponding host policies. Clearing
-verifying keys does not weaken trap policy.
+A runtime proof state distinguishes ready, prepared, yielded, reset, breakpoint,
+finished and poisoned states. Preparation and dispatch poison state before fallible
+work or user-value destruction. Success restores the exact suspension kind.
+Wrong entry methods are rejected without consuming a valid suspension. Returned
+errors and caught panics cannot resume a partial frame. Explicit reset establishes
+freshness after successful reset. Enabling proven execution requires empty stacks
+and no started frame.
 
-A separate initial fixture failed because its breakpoint remained installed after
-replacement. The test now clears that breakpoint before expecting the opted-out
-division fault. Runtime breakpoint persistence was not changed.
+Replacement validates and certifies its encoded candidate before mutation and
+revokes the old proof at commit. Old private slots become Unit before invoking
+host destructors, preventing a second drop after unwinding. A successful image,
+cache, reset and constant-pool installation precedes assignment of the new proof.
+Direct public function entry, mode configuration and replacement clear borrowed
+shared-buffer bindings. Internal entry with a current buffer uses a private helper.
+These boundaries prevent a pointer retained during unwinding from being reused.
+
+## Shipping interface
+
+The runner accepts --require-trap-free and --proven-execution. The latter also
+selects strict trap policy. Source and serialized artifacts use the options.
+Offline validate accepts --require-trap-free with rust or self-hosted backends,
+including the reference consistency gate. Unavailable analysis remains distinct
+from a completed rejection. A trap verdict alone cannot enable proven execution.
+Proven execution and --print-memory are explicitly incompatible. Strict memory
+reporting checks trap classification before reporting a bound.
+
+Five command-line controls cover source acceptance and refusal, both compiler
+artifacts, both validation backends, unavailable analysis, argument separators,
+memory-reporting behavior and an empty Return that passes trap classification
+but fails the stronger execution proof.
 
 ## Verification
 
-All 1521 selected release tests pass with self-host, signatures and encryption
-features enabled, with zero skips. This includes eleven policy tests, complete
-stage artifact identity, complete resource admission, matching stage classifications,
-hostile module mutation, narrow runtimes and persistent storage. The implementation
-was fixed throughout this run. No production or test edits followed it.
+All 1541 selected release tests pass with self-host, signatures and encryption,
+with zero skips. This includes the new proof and policy cases, current stage
+artifacts and resource admission, hostile modules, narrow runtimes and persistent
+storage. The runtime implementation was fixed during this run. The eight-bit
+integration control was added afterwards and passes separately.
 
-Nine policy tests pass without floating-point support. The verification-disabled
-control passes both without cryptography and with signed and encrypted loaders
-enabled. These controls prove that strict policy does not accept a host attestation
-when the classifier is unavailable. Clippy passes for the workspace and all targets
-with self-host, signatures and encryption. The detached compiler builds. Formatting
-and diff checks pass.
+The focused proof/policy suite passes 31 tests. The final proven-execution
+integration binary passes twelve tests with signatures and encryption. The shipping
+command-line binary passes five controls. Verification-disabled builds refuse
+proven execution. Workspace all-target Clippy and the detached compiler build pass.
+Formatting and diff checks pass.
 
-Receipts are tmp/order3-policy-acceptance.log,
- tmp/order3-policy-final-focused.log, tmp/order3-policy-final-clippy.log,
- tmp/order3-policy-detached.log, tmp/order3-policy-no-floats.log,
- tmp/order3-policy-final-no-verify.log and tmp/order3-policy-no-verify-crypto.log.
-The initial test compilation error is tmp/order3-policy-focused.log. The signed
-replacement and retained-breakpoint failures are in tmp/order3-policy-focused2.log.
-The ten-case repaired run is tmp/order3-policy-focused3.log, followed by the final
-eleven-case policy coverage in the broad run.
+Tree Borrows evidence is explicit and has three scopes.
 
-The broad command is reproducible as follows.
+- Ten integration tests passed in tmp/order3-elision-miri-integration2.log. This
+  run preceded the final borrowed-buffer cleanup changes. It took about 33 minutes
+  because the tests also compile their source fixtures under Miri.
+- Nine library controls passed on the final runtime in
+  tmp/order3-elision-miri-library.log. These include actual unchecked pops,
+  cache/image mismatch, lower-depth counterexamples, dispatch unwinding,
+  private-value destructor unwinding and borrowed-buffer recovery routes.
+- The final eight-bit runtime control passed in tmp/order3-elision-miri-narrow.log.
+
+The initial sandboxed Miri attempt could not create its local compiler sysroot.
+The authorized elevated invocation built the cache and executed the tests.
+Nightly, Miri and rust-src are installed. No memory-check process remains live.
+
+Other receipts are tmp/order3-elision-acceptance.log,
+ tmp/order3-elision-final-focused.log, tmp/order3-elision-final-integration.log,
+ tmp/order3-elision-cli-final.log, tmp/order3-elision-no-verify.log,
+ tmp/order3-elision-last-clippy.log and tmp/order3-elision-detached.log.
+Initial compile failures are retained in first-check, focused and focused2 logs.
+They concerned an integer-width comparison and test-only imports/construction.
+The recursive proof prototype was replaced by the bounded graph proof before the
+successful focused3 run. src/verify.rs was restored to its prior implementation.
+
+Reproduction commands for the principal memory controls follow.
 
 ```sh
-CARGO_HUSKY_DONT_INSTALL_HOOKS=true RUSTC_WRAPPER= KEL_SELFHOST_CACHE=0 \
-cargo nextest run --release --features self-host,signatures,encryption \
-  --no-fail-fast -j 4 --lib --test trap_policy --test trap_analysis \
-  --test selfhost_admission --test selfhost_resource_admission \
-  --test selfhost_artifact_identity --test hostile_module_mutation \
-  --test narrow_vm --test persistent_data --test flat_text_persistent
+CARGO_HUSKY_DONT_INSTALL_HOOKS=true RUSTC_WRAPPER= MIRIFLAGS=-Zmiri-tree-borrows \
+cargo +nightly miri test --no-default-features --features compile,verify \
+  --lib proof_elision
+CARGO_HUSKY_DONT_INSTALL_HOOKS=true RUSTC_WRAPPER= MIRIFLAGS=-Zmiri-tree-borrows \
+cargo +nightly miri test --no-default-features --features compile,verify \
+  --test proven_execution
 ```
 
-The full five-configuration matrix, full workspace and isolated suites, detached
-compiler tests, shipping commands, minimum Rust, cross-target builds, Miri and
-release gates remain outstanding for Order 3 completion. This selected combination
-is not a substitute for all five feature configurations.
+## Next work and completion audit
 
-## Next work
+Run the full five feature configurations and the full workspace and isolated
+suites. Include the detached compiler's relevant tests, actual shipping commands,
+compatibility checks, minimum Rust and cross-target checks required by the project's
+gates. Complete final memory-safety evidence on the final implementation, including
+rerunning the integration memory suite if claiming all memory evidence is from the
+same final tree. The earlier ten-case receipt must not be silently relabelled.
 
-Implement actual proof-gated check elision. Host trap policy and classification are
-now implemented, but neither creates an execution certificate. Specify the exact
-checks to remove and the proof for each. Static operand-stack depth is a candidate
-for removing redundant pop-underflow checks. Validated dispatch bounds are another
-candidate. Retain unknown type, shape, lifetime, storage, host-result and allocation
-guards. Order 2 Top widening cannot justify removing them.
+Create the explicit requirement-by-requirement completion audit required by
+ORDER3_COMPLETION_PLAN.md. Inspect actual code, artifacts and terminal results for
+each row. Source assertions, selected counts and successful partial gates cannot
+stand in for the full audit. Fix regressions found by broader coverage while
+preserving the original total-operation, classification, policy and real-elision
+requirements. Do not mark the goal complete until every required item is proved.
 
-Audit the actual instruction stack effects and every state transition before using
-unchecked memory access. Bind any certificate to the immutable loaded image and
-re-establish it on successful replacement. Enabling the mode on a trust-skip or
-borrowed instance must still obtain the required proofs. Disabling verification
-cannot become an alternate proof source. A later policy change to Allow must not
-leave unchecked execution relying on a discarded trap-free premise.
-
-The execution-state obligation is critical. A returned error or caught panic may
-leave an instruction with only part of its operands consumed. Invalidate the live
-proof before error or unwind reentry. Audit argument preparation in call and resume,
-not just the run wrapper, and the replacement commit boundary. Distinguish a fresh
-call or reset from resuming a partial frame. Exercise yields, normal returns,
-breakpoints, resets, failed and successful replacement and host-contract errors.
-A mode that removes no checks or merely trusts an unsafe host promise does not
-satisfy the goal.
-
-The new policy test strict_policy_retains_runtime_contract_guards_and_survives_error_reset
-is a useful boundary control. A hand-built Bool-plus-Word operation passes the
-current generic numeric transfer and trap profile, then reaches a retained TypeError.
-A trap-free language verdict does not establish concrete operand kinds. Any future
-check elision must preserve this refusal and safe error handling.
-
-Then run the complete feature, shipping, compatibility and relevant memory-safety
-verification and perform the explicit requirement-by-requirement completion audit.
-ORDER3_COMPLETION_PLAN.md remains authoritative. The policy contract is in
-ORDER3_HOST_POLICY.md and the classifier contract is in ORDER3_TRAP_CLASSIFICATION.md,
-both under docs/decisions. Order 3 remains active.
+No full five-configuration matrix, complete release gate, complete detached tests
+or final completion audit has run for the assembled Order 3 changes. That is now
+the outstanding work, rather than another design increment.
 
 ## Constraints and handoff
 
 BYTECODE_VERSION remains 2 and FORMAT_FINGERPRINT remains 0x4327_63E1 during
 V0.2.3-WIP. Public instruction count remains 66. Selected type capacities remain
-640, verifier and trap opcode capacities 2048, verifier depth 32 and reference parser
-depth 24. V0.2.2 remains the last published release. Development artifacts require
-rebuilding after the preceding stack-contract changes. No merge or publication
-occurred. Appendix B was read before tracked writes. B42 retains first-class
-compiler-managed ring buffers pending design and scheduling.
+640, verifier and trap opcode capacities 2048, verifier depth 32 and reference
+parser depth 24. V0.2.2 remains the last published release. Development artifacts
+require rebuilding after the earlier stack-contract changes. No merge or
+publication occurred. Appendix B was read before tracked writes. B42 retains
+first-class compiler-managed ring buffers pending design and scheduling.
 
-Legacy HANDOFF.md remains invalid-and-stale, measured at 70 commits behind this
-increment's starting head. Its historical audit, full workspace and detached RTOS
-checks were not rerun. Ancestry alone is not freshness evidence.
+Legacy HANDOFF.md remains invalid-and-stale, measured at 71 commits behind this
+increment's starting head. Its historical checks were not treated as current.
 
-Pilot task v023-policy-7316 records its first diagnostic and three completion claims.
-All labels are non-independent self-review. The task outcome resolves this policy
-increment only. External evaluation was not retried after the earlier automatic
-approval rejection. The reviewed local export is
- tmp/order3-policy-pilot-checkpoint.json. This branch does not own the shared tracked
+Pilot task v023-elision-765d records the first diagnostic and three completion
+claims. All labels are non-independent self-review. The task outcome resolves this
+implementation increment only. External evaluation was not retried after the earlier
+automatic approval rejection. The reviewed export is
+ tmp/order3-elision-pilot-checkpoint.json. This branch does not own the shared tracked
 pilot checkpoint.
 
 The v0.2.3 inbox is empty. Its tracked checkpoint is exported and reviewed before

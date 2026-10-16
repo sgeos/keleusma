@@ -243,6 +243,8 @@ pub mod text_size;
 /// Structural verifier plus WCET and WCMU resource-bounds pass.
 #[cfg(feature = "verify")]
 pub mod verify;
+#[cfg(feature = "verify")]
+mod verify_execution;
 
 /// First-pass language-trap classification with explicit availability boundaries.
 #[cfg(feature = "verify")]
@@ -282,6 +284,7 @@ pub use opaque::{HostOpaque, host_arc};
 #[cfg(feature = "verify")]
 pub use text_size::{TextSize, op_cost_context};
 pub use vm::{
-    NativeCtx, OverflowPolicy, TrapPolicy, VerifyWarning, VmError, VmOptions, WarningKind,
+    ExecutionChecks, NativeCtx, OverflowPolicy, TrapPolicy, VerifyWarning, VmError, VmOptions,
+    WarningKind,
 };
 pub use word::Word;

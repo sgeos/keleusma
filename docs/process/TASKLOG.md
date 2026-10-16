@@ -6,6 +6,35 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-15 Proof-gated execution and shipping controls
+
+ExecutionChecks::Proven now removes operand-pop, peek and counted-operand underflow
+checks after private certification of the loaded image and instruction cache.
+The certificate requires strict trap policy, structural and resource verification,
+and a bounded minimum-depth control-flow proof. The proof checks Return operands,
+branch and loop edges, and reset-to-stream reentry. Ordinary verification is unchanged.
+
+Runtime protocol states distinguish fresh calls, yields, resets and breakpoints.
+Errors and unwinding poison reentry. Replacement validates its candidate before
+mutation, revokes the old proof at commit and installs a fresh proof after reset.
+Private slots become initialized Unit values before old owners are dropped.
+Configuration, direct function entry and replacement clear stale borrowed-buffer
+bindings. Type, lifetime, allocation and other unproved guards remain active.
+
+The runner exposes --require-trap-free and --proven-execution for source and
+bytecode. Offline validate supports strict trap classification with either backend.
+All 1541 selected regression tests pass. The final twelve integration tests and
+five command-line controls pass. Tree Borrows passed ten initial integration cases,
+nine final library proof and unwind controls, and the final eight-bit runtime case.
+The initial ten-case memory run preceded the last borrowed-buffer cleanup edits.
+Clippy, the detached build and verification-disabled refusal pass.
+
+The implementation frontier is now the full completion audit. All five feature
+configurations, full suites, detached package checks, shipping and compatibility
+coverage, and final memory-safety receipts still need consolidation on the final
+implementation. Order 3 remains active. Version, fingerprint, opcode inventory and
+selected capacities remain unchanged.
+
 ## 2026-10-15 Host trap-policy enforcement
 
 TrapPolicy now provides explicit Allow and RequireTrapFree choices. VmOptions and

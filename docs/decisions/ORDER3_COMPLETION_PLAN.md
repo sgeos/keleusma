@@ -67,8 +67,8 @@ and returns a value with the portable diagnostic suffix. Both bare lowerings emi
 an explicit bounds trap. Both checked scalar data-read lowerings dispatch the
 outcome directly. The private record carries the fallback kind above its two
 24-bit address lanes. Relocation preserves valid kinds and refuses reserved kinds
-and oversized store lengths. The trap classifier and host policy are implemented below. No proof-gated
-check-elision mode exists yet.
+and oversized store lengths. The trap classifier and host policy are implemented below. The proof-gated
+execution mode is implemented below.
 
 Legacy Div and Mod now return low, high and flag outcomes in hand-built bytecode.
 Div shares CheckedDiv with fraction count zero. Mod shares CheckedMod for Word,
@@ -279,9 +279,16 @@ is explicit. Borrowed and trust-skip instances can request policy through a comm
 builder, which requires real verification support. Signed replacement now clears
 its internal signature flag only after authentication while retaining host keys.
 
-Proved check elision and the full completion audit are next. A public verdict is
-not an unchecked-execution certificate. No new public opcode or version advance
-is authorized.
+Proved check elision is implemented in
+[ORDER3_PROVEN_EXECUTION.md](ORDER3_PROVEN_EXECUTION.md). A private image-bound
+certificate adds a bounded lower-depth proof with actual control-flow and reset
+edges. Runtime protocol states preserve its preconditions across entry, suspension,
+errors, unwinding and replacement. Actual pop, peek and counted-operand guards are
+removed only in that mode. The command-line runner and both validator backends
+expose the corresponding policy and proof boundaries.
+
+The full completion audit is next. A public trap verdict alone remains insufficient
+for unchecked execution. No new public opcode or version advance is authorized.
 
 ## Debug verification recovery
 
@@ -309,7 +316,10 @@ reuse a proof from a partially executed frame. Proof invalidation must therefore
 cover unwinding as well as returned errors. Unknown operand kinds must retain
 their runtime guards.
 
-Static depth verification and validated instruction-cache bounds are candidate
-proofs for specific stack and dispatch check removal. They do not justify removing
-shape, lifetime, host-result or storage checks. Actual check elision remains
-unimplemented and requires its own negative controls and memory-safety evidence.
+The implemented operand certificate strengthens the ordinary depth model with
+minimum joins, a real Return requirement and reset reentry edges. It binds to the
+installed image and instruction cache. Runtime state guards invalidate partial
+execution across errors and unwinding. Shape, lifetime, host-result, storage and
+other unproved checks remain. Negative controls and memory evidence are recorded
+in the proven-execution contract and current handoff. The complete final audit
+still remains required.

@@ -220,8 +220,12 @@ operations now return outcomes, and both compilers emit explicit traps for bare
 failures. Rust and Keleusma classifications agree across the current stage corpus
 and distinguish unavailable analysis from completed verdicts. The
 [host policy](../decisions/ORDER3_HOST_POLICY.md) can require TrapFree before
-execution and retains that requirement across resume and replacement. Actual
-proof-gated check removal and the full completion audit remain. Order 3 is active.
+execution and retains that requirement across resume and replacement.
+[Proven execution](../decisions/ORDER3_PROVEN_EXECUTION.md) now removes certified
+operand-stack checks and preserves its execution-state proof across valid entry
+protocols. The runner and offline validator expose the new choices. The full
+feature, shipping, compatibility and memory-safety completion audit remains.
+Order 3 is active.
 
 **Arithmetic increment, 2026-10-13.** Bare Word and Byte division and modulo now
 use checked operations followed by an explicit zero-divisor Trap in both compilers.
