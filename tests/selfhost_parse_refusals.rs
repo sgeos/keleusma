@@ -13,7 +13,7 @@ const REFUSED: &[(&str, i64)] = &[
     ("04_for_in.kel", 31),
     ("07_refinement.kel", 21),
     ("08_method_dispatch.kel", 19),
-    ("09_big_numbers.kel", 30),
+    ("09_big_numbers.kel", 20),
     ("10_multbyte.kel", 20),
     ("11_signed.kel", 21),
 ];
@@ -168,14 +168,6 @@ fn unsupported_syntax_is_not_an_undefined_binding_verdict() {
             "newtype Count = Word; fn main() -> Word { Count(7) as Word }",
             21,
         ),
-        (
-            "fn main() -> Word { 1 + 2 { ok(v) => v, overflow(_, l) => l, underflow(_, l) => l } }",
-            30,
-        ),
-        (
-            "fn main() -> Word { if true { 1 + 2 { ok(v) => v, overflow(_, l) => l, underflow(_, l) => l } } else { 7 } }",
-            30,
-        ),
         ("fn main() -> Word { let (x, y) = (3, 4); x + y }", 20),
     ] {
         assert_unavailable(source, code);
@@ -209,4 +201,25 @@ fn genuinely_undefined_names_still_reject_independently() {
         self_hosted_compile(source, &keleusma::target::Target::host()),
         Err(SelfHostError::PipelineRejected { .. })
     ));
+}
+
+#[test]
+fn checked_arithmetic_refusal_cases_now_compile_and_execute() {
+    for source in [
+        "fn main() -> Word { 1 + 2 { ok(v) => v, overflow(_, l) => l, underflow(_, l) => l } }",
+        "fn main() -> Word { if true { 1 + 2 { ok(v) => v, overflow(_, l) => l, underflow(_, l) => l } } else { 7 } }",
+    ] {
+        let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(source).unwrap()).unwrap();
+        let reference = keleusma::compiler::compile(&ast).unwrap();
+        let actual =
+            keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host())
+                .unwrap();
+        assert_eq!(actual.to_bytes().unwrap(), reference.to_bytes().unwrap());
+        let arena = keleusma::Arena::with_capacity(65536);
+        let mut vm = keleusma::vm::Vm::new(actual, &arena).unwrap();
+        assert!(matches!(
+            vm.call(&[]).unwrap(),
+            keleusma::vm::VmState::Finished(keleusma::bytecode::Value::Int(3))
+        ));
+    }
 }

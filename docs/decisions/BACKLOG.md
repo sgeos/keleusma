@@ -2058,6 +2058,7 @@ Requested by the operator on 2026-10-14. Keleusma should provide first-class
 ring buffer support managed by the compiler. The operator reaffirmed this request
 on 2026-10-15 and requested a commit and push of the current work.
 
+This remains an explicit operator requirement for future language work.
 Status is requested, pending design and scheduling. Syntax, storage and capacity,
 full and empty behavior, ownership, and verification of resource bounds remain
 open design questions. No implementation or release target is assigned by this note.

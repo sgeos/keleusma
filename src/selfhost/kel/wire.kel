@@ -3083,6 +3083,9 @@ fn mi_max_nodes() -> Word { 1365 }
 // 16 + 8 + 16 bytes per node, so 1536 nodes occupy 61440 of the 65536-byte window.
 // Raw six-word node records retain the independent 1365-node output bound.
 fn mf_max_nodes() -> Word { 1536 }
+// Read-only name scans store no nodes. Every node consumes at least ten input
+// bytes, so the existing 49152-byte input window bounds the scan at 4915.
+fn mi_scan_max_nodes() -> Word { 4915 }
 
 fn mi_node_words() -> Word { wire_six() }
 
@@ -3358,10 +3361,10 @@ fn mi_const_names() -> Word {
     let compact = nm.ccnt >= 32768;
     nm.ccnt = nm.ccnt band 32767;
     nm.icur = nm.icur + 2;
-    let cap = if nm.mode == mi_mode_nodes() { mi_max_nodes() } else { mf_max_nodes() };
+    let cap = if nm.mode == mi_mode_nodes() { mi_max_nodes() } else { if nm.mode == mi_mode_forest() { mf_max_nodes() } else { mi_scan_max_nodes() } };
     nm.err = if nm.ccnt > cap { 0 - 240 } else { nm.err };
     let count = if nm.err < 0 { 0 } else { nm.ccnt };
-    for c in 0..count limit 1536 {
+    for c in 0..count limit 4915 {
         nm.sink = if nm.err < 0 { 0 } else {
             // ONE LINEAR SCAN, NOT A STACK WALK (slice 14e). The blob carries
             // the forest in PREORDER, and `preorder_13b` pushes a node then
@@ -3622,6 +3625,14 @@ fn mi_join_chunks() -> Word {
 // rather than a second answer. A host that instead carried indices between calls
 // would be reproducing the stage's output, which is the drift this file has
 // recorded four times.
+// Metadata-only streams need name identities but never consume a constant forest.
+fn mi_names_prepare() -> Word {
+    nm.mode = mi_mode_silent();
+    nm.total = mi_chunk_names();
+    nm.mode = mi_mode_pairs();
+    if nm.total < 0 { nm.total } else { intern_run_preoffset(nm.total) }
+}
+
 fn mi_window_prepare() -> Word {
     nm.mode = mi_mode_forest();
     nm.total = mi_chunk_names();
@@ -3635,12 +3646,12 @@ fn mi_window_prepare() -> Word {
 }
 
 fn mi_window_names() -> Word {
-    nm.jj = mi_window_prepare();
+    nm.jj = mi_names_prepare();
     if nm.jj < 0 { nm.jj } else { emit_name_records_from_nout(0, nm.cnt) }
 }
 
 fn mi_window_pool() -> Word {
-    nm.jj = mi_window_prepare();
+    nm.jj = mi_names_prepare();
     if nm.jj < 0 { nm.jj } else {
         nm.jp = emit_pool_bytes_from_bout(0, nm.ocur);
         nm.jd = emit_pool_pad(nm.ocur, nm.ocur);
@@ -3660,7 +3671,7 @@ fn mi_window_header() -> Word {
 // batch: `ck_max` is 90, so a module with more chunks is refused here and the
 // batching carries remain undriven from a module.
 fn mi_window_chunks() -> Word {
-    nm.jj = mi_window_prepare();
+    nm.jj = mi_names_prepare();
     if nm.jj < 0 { nm.jj } else {
     if wire.warg > ck_max() { 0 - 262 } else {
         for i in 0..wire.warg limit 90 {
@@ -4506,7 +4517,7 @@ fn ck_stream_begin() -> Word {
     // of its input, so re-running it per step would give the same answer at
     // quadratic cost; and `wire.nmap` is shared, so its result survives to every
     // later step for as long as the host keeps handing back the same buffer.
-    nm.jj = mi_window_prepare();
+    nm.jj = mi_names_prepare();
     if nm.jj < 0 { nm.jj } else {
         ck.consts = 0;
         ck.templates = 0;
@@ -4994,7 +5005,7 @@ fn dispatch_driver(cmd: Word) -> Word {
 // neither can be borrowed without a side effect the caller must then undo or
 // discard.
 fn ds_name_begin() -> Word {
-    nm.jj = mi_window_prepare();
+    nm.jj = mi_names_prepare();
     if nm.jj < 0 { nm.jj } else { nm.cnt }
 }
 
@@ -5029,7 +5040,7 @@ fn ds_name_step() -> Word {
 // first. The host never asserts which name a variant carries, which is the
 // property the whole name route exists for.
 fn ev_name_begin() -> Word {
-    nm.jj = mi_window_prepare();
+    nm.jj = mi_names_prepare();
     if nm.jj < 0 { nm.jj } else {
         nm.vcur = nm.ebase;
         nm.cnt
@@ -5067,7 +5078,7 @@ fn ev_name_step() -> Word {
 // must travel to reach the next enum's type name. So the stage needs nothing the
 // record does not already carry.
 fn el_name_begin() -> Word {
-    nm.jj = mi_window_prepare();
+    nm.jj = mi_names_prepare();
     if nm.jj < 0 { nm.jj } else {
         nm.tcur = nm.ebase;
         nm.vfirst = 0;

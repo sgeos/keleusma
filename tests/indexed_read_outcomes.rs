@@ -307,3 +307,32 @@ fn operand_forms_keep_an_explicit_first_pass_boundary() {
         (2, -1)
     );
 }
+
+#[test]
+fn malformed_host_array_stride_keeps_its_runtime_guard_in_both_modes() {
+    use keleusma::vm::{ExecutionChecks, TrapPolicy, VmOptions};
+    let source = "fn main(a: [Word; 1]) -> Word { a[0] { ok(v) => v, invalid_index(_) => 0 } }";
+    for execution_checks in [ExecutionChecks::Checked, ExecutionChecks::Proven] {
+        let arena = Arena::with_capacity(65536);
+        let (mut vm, _) = Vm::new_with_options(
+            compile(source),
+            &arena,
+            VmOptions {
+                trap_policy: TrapPolicy::RequireTrapFree,
+                execution_checks,
+                ..VmOptions::default()
+            },
+        )
+        .unwrap();
+        let body = keleusma::flat_value::FlatComposite::build_in_arena(&arena, 3, |bytes| {
+            bytes.fill(0);
+            Ok(())
+        })
+        .unwrap()
+        .unwrap();
+        let value = Value::Array(keleusma::bytecode::ArrayBody::Flat(body));
+        assert!(
+            matches!(vm.call(&[value]), Err(VmError::InvalidBytecode(message)) if message.contains("multiple of its element stride"))
+        );
+    }
+}

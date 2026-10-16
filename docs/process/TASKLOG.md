@@ -6,6 +6,35 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-15 Audit repairs and requested work-in-progress snapshot
+
+The operator reaffirmed first-class compiler-managed ring buffer support and
+requested committing and pushing all current work. Backlog B42 records the
+requirement. Design and scheduling remain open. The Order 3 goal is paused and
+incomplete.
+
+The five-configuration audit at 09e74c94 completed with failures. Workspace had
+3410 passes and 17 failures, no-default had 328 passes and one failure, signatures
+had 2430 passes and four failures, signatures with shell had 2447 passes and four
+failures, and self-host had 3152 passes and sixteen failures. All five doctest
+runs passed. These results precede the repairs in this increment.
+
+Repairs separate metadata-only wire name scans from forest construction while
+retaining the raw and forest storage bounds. Empty wire regions are skipped only
+after extent validation. Command-sweep faults reset execution before the next
+command. Benchmark Div and Mod patterns discard all three outputs. Parser
+fixtures now execute the supported checked-arithmetic cases. Source inventory
+and the InvalidBytecode census were re-enumerated. Indexed-store controls now
+exercise checked and proven execution, and a malformed host array exercises the
+retained stride guard in both modes.
+
+Existing repair receipts show 54 selected tests passing with 179 skipped,
+186 wire tests passing with zero skipped, six benchmark tests passing, and
+workspace all-target Clippy passing with self-host, signatures and encryption.
+The full feature matrix has not been rerun after these repairs. No new tests were
+run for this administrative snapshot. Source-level indexed-write handlers remain
+an unresolved scope question. The completion audit remains outstanding.
+
 ## 2026-10-15 Proof-gated execution and shipping controls
 
 ExecutionChecks::Proven now removes operand-pop, peek and counted-operand underflow

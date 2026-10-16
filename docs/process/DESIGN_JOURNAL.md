@@ -13,6 +13,21 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-15 Audit repairs preserved before continuation
+
+The broader audit exposed metadata-only wire operations consuming an unnecessary
+constant forest. A names-only preparation path preserves interning while using
+the existing input-window bound. Raw-node and forest capacities remain distinct
+and retain refusal controls. The first repair omitted interning and failed its
+identity controls. Restoring interning produced the passing repair receipts.
+
+The same audit found stale benchmark stack effects, parser refusal expectations
+and source census counts. Their repairs and checked/proven indexed-access controls
+are preserved in this work-in-progress snapshot. Full-matrix success is not yet
+established for the repaired tree. The operator requested the snapshot and
+reaffirmed the ring buffer requirement already tracked by B42. Order 3 remains
+paused and incomplete, including its unresolved source-write-handler scope.
+
 ## 2026-10-15 Operand certificates and execution state
 
 The ordinary depth model is insufficient for unsafe pop access. Return has a

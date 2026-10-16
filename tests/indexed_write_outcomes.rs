@@ -15,54 +15,68 @@ fn compile(source: &str) -> Module {
 #[test]
 fn indexed_store_returns_a_flag_and_never_writes_on_failure() {
     for byte in [false, true] {
-        for (base, len, index) in [
-            (0, 2, -1_i64),
-            (0, 2, 0),
-            (0, 2, 1),
-            (0, 2, 2),
-            (0, 2, i64::MAX),
-            (2, 0, 0),
+        for execution_checks in [
+            keleusma::vm::ExecutionChecks::Checked,
+            keleusma::vm::ExecutionChecks::Proven,
         ] {
-            let mut module = compile(if byte {
-                "shared data d { x: [Byte; 2] } fn main() -> Word { 0 }"
-            } else {
-                "shared data d { x: [Word; 2] } fn main() -> Word { 0 }"
-            });
-            module.chunks[0].constants = vec![
-                if byte {
-                    ConstValue::Byte(7)
+            for (base, len, index) in [
+                (0, 2, -1_i64),
+                (0, 2, 0),
+                (0, 2, 1),
+                (0, 2, 2),
+                (0, 2, i64::MAX),
+                (2, 0, 0),
+            ] {
+                let mut module = compile(if byte {
+                    "shared data d { x: [Byte; 2] } fn main() -> Word { 0 }"
                 } else {
-                    ConstValue::Int(7)
-                },
-                ConstValue::Int(index),
-            ];
-            module.chunks[0].ops = vec![
-                Op::Const(0),
-                Op::Const(1),
-                Op::SetDataIndexed(base, len),
-                Op::Return,
-            ];
-            let arena = Arena::with_capacity(16384);
-            let mut vm = Vm::new(module, &arena).unwrap();
-            let mut shared = vec![0; vm.shared_data_bytes()];
-            let invalid = index < 0 || index >= i64::from(len);
-            assert!(
-                matches!(vm.call_with_shared(&mut shared, &[]).unwrap(), VmState::Finished(Value::Int(flag)) if flag == i64::from(invalid))
-            );
-            for slot in 0..2 {
-                let n = if !invalid && slot == base as usize + index as usize {
-                    7
-                } else {
-                    0
-                };
-                assert_eq!(
-                    vm.get_shared(&shared, slot).unwrap(),
+                    "shared data d { x: [Word; 2] } fn main() -> Word { 0 }"
+                });
+                module.chunks[0].constants = vec![
                     if byte {
-                        Value::Byte(n as u8)
+                        ConstValue::Byte(7)
                     } else {
-                        Value::Int(n)
-                    }
+                        ConstValue::Int(7)
+                    },
+                    ConstValue::Int(index),
+                ];
+                module.chunks[0].ops = vec![
+                    Op::Const(0),
+                    Op::Const(1),
+                    Op::SetDataIndexed(base, len),
+                    Op::Return,
+                ];
+                let arena = Arena::with_capacity(16384);
+                let (mut vm, _) = Vm::new_with_options(
+                    module,
+                    &arena,
+                    keleusma::vm::VmOptions {
+                        trap_policy: keleusma::vm::TrapPolicy::RequireTrapFree,
+                        execution_checks,
+                        ..keleusma::vm::VmOptions::default()
+                    },
+                )
+                .unwrap();
+                let mut shared = vec![0; vm.shared_data_bytes()];
+                let invalid = index < 0 || index >= i64::from(len);
+                assert!(
+                    matches!(vm.call_with_shared(&mut shared, &[]).unwrap(), VmState::Finished(Value::Int(flag)) if flag == i64::from(invalid))
                 );
+                for slot in 0..2 {
+                    let n = if !invalid && slot == base as usize + index as usize {
+                        7
+                    } else {
+                        0
+                    };
+                    assert_eq!(
+                        vm.get_shared(&shared, slot).unwrap(),
+                        if byte {
+                            Value::Byte(n as u8)
+                        } else {
+                            Value::Int(n)
+                        }
+                    );
+                }
             }
         }
     }
@@ -220,22 +234,42 @@ fn valid_store_outcomes_are_accepted_by_both_verifiers() {
 
 #[test]
 fn a_nonword_store_index_remains_a_contract_error() {
-    let mut module = compile("shared data d { x: [Word; 2] } fn main() -> Word { 0 }");
-    module.chunks[0].constants = vec![ConstValue::Int(7), ConstValue::Bool(false)];
-    module.chunks[0].ops = vec![
-        Op::Const(0),
-        Op::Const(1),
-        Op::SetDataIndexed(0, 2),
-        Op::Return,
-    ];
-    let arena = Arena::with_capacity(16384);
-    let mut vm = Vm::new(module, &arena).unwrap();
-    let mut shared = vec![0; vm.shared_data_bytes()];
-    assert!(matches!(
-        vm.call_with_shared(&mut shared, &[]),
-        Err(VmError::TypeError(_))
-    ));
-    assert!(shared.iter().all(|&byte| byte == 0));
+    for execution_checks in [
+        keleusma::vm::ExecutionChecks::Checked,
+        keleusma::vm::ExecutionChecks::Proven,
+    ] {
+        let mut module = compile("shared data d { x: [Word; 2] } fn main() -> Word { 0 }");
+        module.chunks[0].constants = vec![ConstValue::Int(7), ConstValue::Bool(false)];
+        module.chunks[0].ops = vec![
+            Op::Const(0),
+            Op::Const(1),
+            Op::SetDataIndexed(0, 2),
+            Op::Return,
+        ];
+        let arena = Arena::with_capacity(16384);
+        let (mut vm, _) = Vm::new_with_options(
+            module,
+            &arena,
+            keleusma::vm::VmOptions {
+                trap_policy: keleusma::vm::TrapPolicy::RequireTrapFree,
+                execution_checks,
+                ..keleusma::vm::VmOptions::default()
+            },
+        )
+        .unwrap();
+        let mut shared = vec![0; vm.shared_data_bytes()];
+        assert!(matches!(
+            vm.call_with_shared(&mut shared, &[]),
+            Err(VmError::TypeError(_))
+        ));
+        assert!(shared.iter().all(|&byte| byte == 0));
+        if execution_checks == keleusma::vm::ExecutionChecks::Proven {
+            assert!(matches!(
+                vm.resume_with_shared(&mut shared, Value::Int(0)),
+                Err(VmError::VerifyError(_))
+            ));
+        }
+    }
 }
 
 #[test]

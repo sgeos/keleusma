@@ -8823,6 +8823,15 @@ pub fn wire_windowed_via_kel(
     let stage = compile_src(&read_stage("kel/wire.kel"));
     let mut out = vec![0u8; artifact_len];
     for &(kind, base, len) in regions {
+        if base.checked_add(len).is_none_or(|end| end > artifact_len) {
+            return Err(SelfHostError::Unsupported {
+                detail: String::from("windowed region exceeds artifact extent"),
+            });
+        }
+        if len == 0 {
+            continue;
+        }
+
         // CHUNKS TAKES THE STREAMING PATH, so the 90-record batch no longer
         // decides whether a stage is reachable. `parse` (94) and `wire` (475)
         // were the two it excluded and both emit now.

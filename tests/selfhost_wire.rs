@@ -964,8 +964,15 @@ fn no_command_below_the_dispatch_ceiling_falls_through() {
     // refusal is real.
     let highest = kel_const("highest_command");
     for cmd in 0..=highest {
-        let (got, _) =
-            run_cmd_args(&mut vm, cmd, 0, &[], &[], [0, 0, 0, 0, 0], 0).unwrap_or((0, Vec::new()));
+        let got = match run_cmd_args(&mut vm, cmd, 0, &[], &[], [0, 0, 0, 0, 0], 0) {
+            Ok((got, _)) => got,
+            Err(_) => {
+                // A tolerated command fault consumed a partial frame. Reset
+                // before the next command so that it starts from a valid entry.
+                vm.reset_after_error();
+                continue;
+            }
+        };
         if (-99..=-92).contains(&got) {
             fell_through.push(cmd);
         }
@@ -13988,4 +13995,87 @@ fn module_forest_capacity_is_distinct_from_raw_node_output() {
             }
         }
     }
+}
+
+#[cfg(feature = "self-host")]
+#[test]
+fn names_only_commands_do_not_consume_constant_forest_storage() {
+    use keleusma::bytecode::ConstValue;
+    let mut module =
+        compile(&parse(&tokenize("fn main() -> Word { 7 }").unwrap()).unwrap()).unwrap();
+    module.chunks[0].constants.clear();
+    let (empty, _) = keleusma::selfhost::module_input(&module);
+    let fit = (BIN_CAPACITY - empty.len()) / 10;
+    assert_eq!(kel_const("mi_scan_max_nodes") as usize, BIN_CAPACITY / 10);
+    assert!(fit > kel_const("mf_max_nodes") as usize);
+    let mut vm = vm_for(WIRE_KEL);
+    for count in [1537, fit] {
+        module.chunks[0].constants = vec![ConstValue::Int(7); count];
+        let (blob, _) = keleusma::selfhost::module_input(&module);
+        assert!(blob.len() <= BIN_CAPACITY);
+        for command in [CMD_MI_CHUNK_NAMES, 170, 171, 174, 182, 184, 186] {
+            let (ret, _) = run_call(
+                &mut vm,
+                &Call {
+                    cmd: command,
+                    nregions: 0,
+                    seed: &[],
+                    regions: &[],
+                    fields: &[],
+                    names: &[],
+                    pool: &blob,
+                    args: [0; 5],
+                    read_len: 0,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                ret,
+                if command == 170 || command == 171 {
+                    8
+                } else {
+                    1
+                },
+                "command {command}, nodes {count}"
+            );
+        }
+        for command in [CMD_MI_CONST_NODES, 213] {
+            let (ret, _) = run_call(
+                &mut vm,
+                &Call {
+                    cmd: command,
+                    nregions: 0,
+                    seed: &[],
+                    regions: &[],
+                    fields: &[],
+                    names: &[],
+                    pool: &blob,
+                    args: [0; 5],
+                    read_len: 0,
+                },
+            )
+            .unwrap();
+            assert_eq!(ret, -240, "storage command {command} must keep its bound");
+        }
+    }
+    let mut oversized = empty;
+    let at = oversized.len() - 2;
+    let count = u16::try_from(kel_const("mi_scan_max_nodes") + 1).unwrap() | 0x8000;
+    oversized[at..].copy_from_slice(&count.to_le_bytes());
+    let (ret, _) = run_call(
+        &mut vm,
+        &Call {
+            cmd: CMD_MI_CHUNK_NAMES,
+            nregions: 0,
+            seed: &[],
+            regions: &[],
+            fields: &[],
+            names: &[],
+            pool: &oversized,
+            args: [0; 5],
+            read_len: 0,
+        },
+    )
+    .unwrap();
+    assert_eq!(ret, -240, "read-only scan work remains bounded");
 }

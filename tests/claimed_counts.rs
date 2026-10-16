@@ -489,7 +489,7 @@ fn the_invalid_bytecode_census_still_describes_the_tree() {
 
     // The document states the total in words as well as digits; the digits are what is checked.
     let stated = doc
-        .split("**51 matches, of which ")
+        .split(" matches, of which ")
         .nth(1)
         .and_then(|rest| rest.split_whitespace().next())
         .and_then(|n| n.parse::<usize>().ok())
@@ -734,7 +734,7 @@ fn the_census_group_table_adds_up_to_its_stated_totals() {
          checking almost nothing rather than checking the table"
     );
 
-    let stated_sites = 47usize;
+    let stated_sites = 54usize;
     assert_eq!(
         sites, stated_sites,
         "the group rows sum to {sites} sites, not the {stated_sites} the document states. \
@@ -744,13 +744,13 @@ fn the_census_group_table_adds_up_to_its_stated_totals() {
 
     // The prose states the examined total in words and then enumerates it.
     assert!(
-        doc.contains("Thirty-seven of forty-seven sites carry an examined verdict"),
+        doc.contains("Thirty-eight of fifty-four sites carry an examined verdict"),
         "the census no longer states its examined total in the expected form; update this \
          extraction rather than deleting the check"
     );
     assert_eq!(
-        examined, 37,
-        "the group rows sum to {examined} examined sites and the prose says thirty-seven. One of \
+        examined, 38,
+        "the group rows sum to {examined} examined sites and the prose says thirty-eight. One of \
          them moved without the other. The per-group column is the authority."
     );
 }
