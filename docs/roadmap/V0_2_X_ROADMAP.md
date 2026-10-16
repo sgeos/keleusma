@@ -215,6 +215,14 @@ planned for V0.4.0 (B35 P8). The operator reaffirmed on 2026-10-13 that
 V0.2.3-WIP. The fingerprint rolls only upon publication of a new version.
 V0.2.2 remains the last published release.
 
+**Order 3 progress on 2026-10-15.** First-pass arithmetic and scalar bounds
+operations now return outcomes, and both compilers emit explicit traps for bare
+failures. Rust and Keleusma classifications agree across the current stage corpus
+and distinguish unavailable analysis from completed verdicts. The
+[host policy](../decisions/ORDER3_HOST_POLICY.md) can require TrapFree before
+execution and retains that requirement across resume and replacement. Actual
+proof-gated check removal and the full completion audit remain. Order 3 is active.
+
 **Arithmetic increment, 2026-10-13.** Bare Word and Byte division and modulo now
 use checked operations followed by an explicit zero-divisor Trap in both compilers.
 The expanded census finds only bounds faults without Trap. Legacy integer Div and

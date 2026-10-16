@@ -13,6 +13,28 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-15 Persistent host trap policy
+
+Policy belongs to the host instance rather than the artifact. Constructors with
+options establish it before execution, and a common setter proves the current
+image before assigning a stricter policy. Failed policy changes preserve suspended
+state. The replacement gate is in the shared inner path, so schema bypass cannot
+weaken trap admission. Default permissive execution remains available explicitly.
+
+The signed replacement control found that an authenticated module was serialized
+with its signed flag but without the original envelope. Initial signed loading
+already cleared that flag. Replacement now does the same after authentication,
+retaining the host key matrix. Controls require a valid signed swap to succeed and
+wrong-key, unsigned and trapping replacements to fail under the relevant policies.
+An unrelated test expectation also needed to clear its breakpoint explicitly
+before expecting a division fault after opting out of strict trap policy.
+
+A hostile numeric operand fixture demonstrates the intended proof boundary.
+The trap scan completes, while a retained runtime type guard rejects execution.
+Policy persists through that error and reset. No stack or type guard is removed
+by this increment. The next mode must justify each actual check elision and must
+invalidate execution-state proofs across partial failures and unwinding.
+
 ## 2026-10-15 Independent trap-profile scan
 
 The total arithmetic and scalar bounds contracts make a syntactic trap scan

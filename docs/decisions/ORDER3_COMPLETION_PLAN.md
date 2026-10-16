@@ -67,8 +67,8 @@ and returns a value with the portable diagnostic suffix. Both bare lowerings emi
 an explicit bounds trap. Both checked scalar data-read lowerings dispatch the
 outcome directly. The private record carries the fallback kind above its two
 24-bit address lanes. Relocation preserves valid kinds and refuses reserved kinds
-and oversized store lengths. The trap classifier is implemented below. No host
-trap-free policy or no-check execution mode exists yet.
+and oversized store lengths. The trap classifier and host policy are implemented below. No proof-gated
+check-elision mode exists yet.
 
 Legacy Div and Mod now return low, high and flag outcomes in hand-built bytecode.
 Div shares CheckedDiv with fraction count zero. Mod shares CheckedMod for Word,
@@ -78,7 +78,8 @@ remainder zero divisors through an explicit trap. Multiword division and remaind
 now use an explicit zero-divisor test and trap. The
 [arithmetic contract](ORDER3_ARITHMETIC_CONTRACTS.md) records the stack, cost and
 remaining proof boundaries. Direct instruction and source execution controls cover
-these paths. Classification, host policy and proof-gated execution remain required.
+these paths. Classification and host policy are implemented below. Proof-gated
+execution and the full completion audit remain required.
 
 ## Operator decision recorded on 2026-10-13
 
@@ -271,9 +272,16 @@ trap-free and possibly-trapping verdicts. The Keleusma structural stage owns its
 profile and Trap decisions through a separate raw-opcode mode. Verification is
 recorded in the handoff.
 
-Host policy is next, followed by proved check elision and the full completion audit.
-A public verdict is not an unchecked-execution certificate. No new public opcode
-or version advance is authorized.
+Host policy is implemented in [ORDER3_HOST_POLICY.md](ORDER3_HOST_POLICY.md).
+RequireTrapFree rejects possibly-trapping and unavailable analysis before execution
+and persists across resume and all replacement routes. The default Allow behavior
+is explicit. Borrowed and trust-skip instances can request policy through a common
+builder, which requires real verification support. Signed replacement now clears
+its internal signature flag only after authentication while retaining host keys.
+
+Proved check elision and the full completion audit are next. A public verdict is
+not an unchecked-execution certificate. No new public opcode or version advance
+is authorized.
 
 ## Debug verification recovery
 

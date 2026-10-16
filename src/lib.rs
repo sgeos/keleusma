@@ -281,5 +281,7 @@ pub use marshall::{IntoFallibleNativeFn, IntoNativeFn, KeleusmaType, RefContext}
 pub use opaque::{HostOpaque, host_arc};
 #[cfg(feature = "verify")]
 pub use text_size::{TextSize, op_cost_context};
-pub use vm::{NativeCtx, OverflowPolicy, VerifyWarning, VmError, VmOptions, WarningKind};
+pub use vm::{
+    NativeCtx, OverflowPolicy, TrapPolicy, VerifyWarning, VmError, VmOptions, WarningKind,
+};
 pub use word::Word;

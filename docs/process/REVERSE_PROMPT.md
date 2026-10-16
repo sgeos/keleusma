@@ -1,129 +1,149 @@
 # Reverse prompt
 
-## Matching trap classifications on 2026-10-15
+## Host trap policy on 2026-10-15
 
 The active goal remains Complete Order 3, trap analysis. Work is on line v0.2.3
 and branch feat/v02-order3-trap-analysis. This increment starts from pushed commit
-2bdbc08ea913c7905e46fddc36b3c8a9e5aace93. The previous goal turn made progress
-by implementing total legacy arithmetic outcomes and explicit multiword traps.
+7316dd95d1834bd6a64a8e04acb43c4451e3a9ba. The previous goal turn made progress
+by implementing matching reference and Keleusma trap classifications.
 
-The new reference API is trap_analysis::classify_traps. The Keleusma API is
-selfhost::classify_traps_via_kel. Both validate a module before scanning all chunks,
-including unreachable instructions. A completed result is TrapFree or MayTrap
-with the first TrapLocation. Unsupported contracts, invalid modules, per-chunk
-opcode capacity failures and unavailable analysis are distinct errors.
+TrapPolicy is now persistent private state on GenericVm. Allow is the default.
+RequireTrapFree requires a completed reference TrapFree classification before
+execution. MayTrap, unsupported contracts, malformed modules, capacity failures
+and unavailable verification are rejected. The host cannot supply a verdict as
+permission. Runtime contract and resource checks remain active.
 
-The first-pass profile excludes raw FixedDiv, GetIndex outside flat Word and Byte,
-boxed struct, tuple and enum field access, and native calls. Unsupported forms take
-precedence over MayTrap. Known invalid Trap and PushImmediate values cannot become
-completed verdicts. Width and entry metadata are checked before invoking the
-reference verifier on public input. Runtime type, shape, storage, lifetime,
-resource and host-contract guards remain required. This verdict is informational
-and does not create an unchecked-execution certificate.
+VmOptions has a trap_policy field. Existing option literals were updated to retain
+their default permissive policy. new_with_options enforces strict policy before
+construction. New load_bytes_with_options, view_bytes_with_options,
+load_signed_bytes_with_options and load_encrypted_signed_bytes_with_options expose
+the same options. Existing entrypoints delegate with defaults. Signature
+verification and decryption precede policy admission on authenticated routes.
+Existing framing checks still apply before options can act on a decoded module.
 
-Mode two of verify_structural.kel scans raw wire tags and operand forms in existing
-shared arrays. It owns both profile admission and Trap detection. The host supplies
-no safety classification and does not recompute the answer. It validates yielded
-and stored verdict agreement, response sentinels and location bounds. A report of
-an invalid subject without a valid instruction location is unavailable analysis.
-The stage resets its outputs on every request, including after malformed input.
-Modes zero and one retain the structural verifier protocols.
+trap_policy reports the selection. set_trap_policy verifies the current image before
+assigning RequireTrapFree and preserves old policy and state on failure.
+with_trap_policy configures a freshly loaded instance before its first call,
+including borrowed and trust-skip loaders. Strict activation without the verify
+feature is refused, including through authenticated unsafe loaders. Host attestation
+cannot replace this proof. Explicitly selecting Allow remains supported.
 
-Implementation files are src/trap_analysis.rs, src/selfhost/traps.rs and
-src/selfhost/kel/verify_structural.kel. The contract and transport are documented
-in docs/decisions/ORDER3_TRAP_CLASSIFICATION.md. Stage count and the public opcode
-inventory are unchanged. Version and fingerprint remain fixed.
+replace_module_inner enforces the stored policy before mutation. Both ordinary and
+schema-bypassing replacement reach that gate. Policy survives successful replacement,
+rejected replacement, yields, resumes, resets, breakpoints and runtime type errors.
+No execution check is removed by this increment.
+
+## Signed replacement repair
+
+A positive control exposed an existing failure in replace_module_from_bytes.
+After authentication it decoded a signed module, then tried to re-encode the
+signature-required flag without the signature extension. The load failed before a
+valid replacement could succeed. It now clears that internal flag after signature
+verification, matching initial signed loading. The host key matrix stays installed.
+Tests require valid signed replacement to succeed and wrong-key, unsigned and
+trapping replacements to fail under their corresponding host policies. Clearing
+verifying keys does not weaken trap policy.
+
+A separate initial fixture failed because its breakpoint remained installed after
+replacement. The test now clears that breakpoint before expecting the opted-out
+division fault. Runtime breakpoint persistence was not changed.
 
 ## Verification
 
-The broad release self-host run passed all 1606 tests with no skips. This includes
-complete stage artifact identity, resource admission and matching completed trap
-classifications for all fourteen actual stage sources. Two stage interventions
-prove ownership of Trap detection and unsupported-form admission independently.
+All 1521 selected release tests pass with self-host, signatures and encryption
+features enabled, with zero skips. This includes eleven policy tests, complete
+stage artifact identity, complete resource admission, matching stage classifications,
+hostile module mutation, narrow runtimes and persistent storage. The implementation
+was fixed throughout this run. No production or test edits followed it.
 
-After that run, the reference scalar-kind match was rewritten to satisfy Clippy,
-a whole-wire-opcode profile control was added, and invalid-subject response
-locations were hardened. The final focused run passes all twelve tests, including
-both interventions, all fourteen stage classifications, every current opcode,
-malformed response and request recovery, source outcomes, unsupported forms,
-unreachable code, hand-built total arithmetic and exact capacity boundaries.
-The broad run was not replayed after those final changes.
+Nine policy tests pass without floating-point support. The verification-disabled
+control passes both without cryptography and with signed and encrypted loaders
+enabled. These controls prove that strict policy does not accept a host attestation
+when the classifier is unavailable. Clippy passes for the workspace and all targets
+with self-host, signatures and encryption. The detached compiler builds. Formatting
+and diff checks pass.
 
-Clippy passes with workspace, all targets and self-host. The detached compiler
-build passes. Six reference-only classifier tests pass without floating-point
-support. The library builds with verification enabled and compiler and self-hosting
-features disabled. Current stage input maxima remain 1023 names and 30199 blob
-bytes under unchanged caps. Formatting and diff checks pass.
+Receipts are tmp/order3-policy-acceptance.log,
+ tmp/order3-policy-final-focused.log, tmp/order3-policy-final-clippy.log,
+ tmp/order3-policy-detached.log, tmp/order3-policy-no-floats.log,
+ tmp/order3-policy-final-no-verify.log and tmp/order3-policy-no-verify-crypto.log.
+The initial test compilation error is tmp/order3-policy-focused.log. The signed
+replacement and retained-breakpoint failures are in tmp/order3-policy-focused2.log.
+The ten-case repaired run is tmp/order3-policy-focused3.log, followed by the final
+eleven-case policy coverage in the broad run.
 
-Receipts are tmp/order3-traps-acceptance.log,
- tmp/order3-traps-final2-focused.log, tmp/order3-traps-final2-clippy.log,
- tmp/order3-traps-final2-detached.log, tmp/order3-traps-final-no-floats.log,
- tmp/order3-traps-final-verify-only.log and tmp/order3-traps-capacity.log.
-The initial compile errors are retained in tmp/order3-traps-first.log. The first
-Clippy failure is tmp/order3-traps-clippy.log. Earlier focused receipts are retained
-but are superseded by the final2 focused run for the last response guard.
-
-The final focused command is reproducible as follows.
+The broad command is reproducible as follows.
 
 ```sh
 CARGO_HUSKY_DONT_INSTALL_HOOKS=true RUSTC_WRAPPER= KEL_SELFHOST_CACHE=0 \
-cargo nextest run --release --features self-host --no-fail-fast -j 4 \
-  --lib --test trap_analysis \
-  -E 'test(selfhost::traps) | binary(trap_analysis)'
+cargo nextest run --release --features self-host,signatures,encryption \
+  --no-fail-fast -j 4 --lib --test trap_policy --test trap_analysis \
+  --test selfhost_admission --test selfhost_resource_admission \
+  --test selfhost_artifact_identity --test hostile_module_mutation \
+  --test narrow_vm --test persistent_data --test flat_text_persistent
 ```
 
 The full five-configuration matrix, full workspace and isolated suites, detached
 compiler tests, shipping commands, minimum Rust, cross-target builds, Miri and
-release gates remain outstanding for Order 3 completion.
+release gates remain outstanding for Order 3 completion. This selected combination
+is not a substitute for all five feature configurations.
 
 ## Next work
 
-Implement host trap-free policy before subject execution. Default trap-permitting
-behavior must remain an explicit policy. Reject both MayTrap and unavailable proof
-when the host requires TrapFree. A caller-provided public verdict cannot grant an
-execution capability. Inspect every constructor and replacement path, including
-serialized, borrowed, signed, encrypted and trust-skip routes, before wiring policy.
-Preserve policy across normal resume, reset and successful or failed replacement.
-Do not silently fall back to permissive execution when analysis is unavailable.
+Implement actual proof-gated check elision. Host trap policy and classification are
+now implemented, but neither creates an execution certificate. Specify the exact
+checks to remove and the proof for each. Static operand-stack depth is a candidate
+for removing redundant pop-underflow checks. Validated dispatch bounds are another
+candidate. Retain unknown type, shape, lifetime, storage, host-result and allocation
+guards. Order 2 Top widening cannot justify removing them.
 
-Then implement actual proof-gated check elision. Static stack-depth and validated
-instruction-cache bounds are candidate proofs for specific checks. The mode must
-remove actual supported checks, with a proof and negative controls for each.
-Order 2 Top widening does not justify dropping type, shape, lifetime or host-result
-guards. Complete the full feature, shipping, compatibility and memory-safety
-verification and an explicit requirement-by-requirement audit.
-ORDER3_COMPLETION_PLAN.md remains authoritative. No blacklist-only or no-op
-substitute completes the objective.
+Audit the actual instruction stack effects and every state transition before using
+unchecked memory access. Bind any certificate to the immutable loaded image and
+re-establish it on successful replacement. Enabling the mode on a trust-skip or
+borrowed instance must still obtain the required proofs. Disabling verification
+cannot become an alternate proof source. A later policy change to Allow must not
+leave unchecked execution relying on a discarded trap-free premise.
 
-A critical execution-state obligation remains. Vm::run preserves frames and
-operands after an error. An instruction can consume only part of its operands
-before a retained guard fails. A static module-depth proof no longer describes
-that partial frame. Invalidate or re-establish the execution-state proof before
-error reentry. Invalidation must also survive a panic caught by the embedding
-host. Exercise calls, yields, resets, breakpoints, normal returns, returned errors,
-unwinding and replacement separately. No check-elision policy exists yet.
+The execution-state obligation is critical. A returned error or caught panic may
+leave an instruction with only part of its operands consumed. Invalidate the live
+proof before error or unwind reentry. Audit argument preparation in call and resume,
+not just the run wrapper, and the replacement commit boundary. Distinguish a fresh
+call or reset from resuming a partial frame. Exercise yields, normal returns,
+breakpoints, resets, failed and successful replacement and host-contract errors.
+A mode that removes no checks or merely trusts an unsafe host promise does not
+satisfy the goal.
+
+The new policy test strict_policy_retains_runtime_contract_guards_and_survives_error_reset
+is a useful boundary control. A hand-built Bool-plus-Word operation passes the
+current generic numeric transfer and trap profile, then reaches a retained TypeError.
+A trap-free language verdict does not establish concrete operand kinds. Any future
+check elision must preserve this refusal and safe error handling.
+
+Then run the complete feature, shipping, compatibility and relevant memory-safety
+verification and perform the explicit requirement-by-requirement completion audit.
+ORDER3_COMPLETION_PLAN.md remains authoritative. The policy contract is in
+ORDER3_HOST_POLICY.md and the classifier contract is in ORDER3_TRAP_CLASSIFICATION.md,
+both under docs/decisions. Order 3 remains active.
 
 ## Constraints and handoff
 
 BYTECODE_VERSION remains 2 and FORMAT_FINGERPRINT remains 0x4327_63E1 during
-V0.2.3-WIP. The public instruction count remains 66. Selected type capacities
-remain 640, verifier and trap opcode capacities 2048, verifier depth 32 and reference
-parser depth 24. V0.2.2 remains the last published release. Existing development
-artifacts need rebuilding after the preceding stack-contract changes. No merge or
-publication occurred. Appendix B was read before tracked writes. B42 retains
-first-class compiler-managed ring buffers pending design and scheduling.
+V0.2.3-WIP. Public instruction count remains 66. Selected type capacities remain
+640, verifier and trap opcode capacities 2048, verifier depth 32 and reference parser
+depth 24. V0.2.2 remains the last published release. Development artifacts require
+rebuilding after the preceding stack-contract changes. No merge or publication
+occurred. Appendix B was read before tracked writes. B42 retains first-class
+compiler-managed ring buffers pending design and scheduling.
 
-The legacy HANDOFF.md remains invalid-and-stale, measured at 69 commits behind
-this increment's starting head. Its historical audit, full workspace and detached
-RTOS checks were not rerun. Ancestry alone is not freshness evidence.
+Legacy HANDOFF.md remains invalid-and-stale, measured at 70 commits behind this
+increment's starting head. Its historical audit, full workspace and detached RTOS
+checks were not rerun. Ancestry alone is not freshness evidence.
 
-Pilot task v023-traps-2bdb records the first diagnostic and three completion claims.
-Labels are non-independent self-review. One final-run claim is labelled unsupported
-because the bare summary did not establish finality and a later response-hardening
-run superseded it. The current receipt is final2-focused. The task outcome resolves
-only this classifier increment. External evaluation was not retried after the
-earlier automatic approval rejection. The reviewed export is
- tmp/order3-traps-pilot-checkpoint.json. This branch does not own the shared tracked
+Pilot task v023-policy-7316 records its first diagnostic and three completion claims.
+All labels are non-independent self-review. The task outcome resolves this policy
+increment only. External evaluation was not retried after the earlier automatic
+approval rejection. The reviewed local export is
+ tmp/order3-policy-pilot-checkpoint.json. This branch does not own the shared tracked
 pilot checkpoint.
 
 The v0.2.3 inbox is empty. Its tracked checkpoint is exported and reviewed before

@@ -320,6 +320,17 @@ pub enum OverflowPolicy {
     Allow,
 }
 
+/// Host policy for language traps. Resource and host-contract guards remain active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TrapPolicy {
+    /// Preserve ordinary execution, including explicit language traps.
+    #[default]
+    Allow,
+    /// Admit only a completed first-pass TrapFree classification.
+    /// Unsupported or unavailable analysis is rejected before execution.
+    RequireTrapFree,
+}
+
 /// Construction-time options for [`Vm::new_with_options`].
 ///
 /// The default options apply the strict overflow policy
@@ -330,6 +341,8 @@ pub struct VmOptions {
     /// Policy for handling WCET and WCMU bound overflow at the
     /// declared header level. See [`OverflowPolicy`].
     pub overflow_policy: OverflowPolicy,
+    /// Language-trap admission policy. This does not enable unchecked execution.
+    pub trap_policy: TrapPolicy,
 }
 
 /// Non-fatal finding produced by [`Vm::new_with_options`] when an
@@ -1058,6 +1071,7 @@ pub struct GenericVm<
     F: crate::float::Float = f64,
 > {
     bytecode: BytecodeStore<'a>,
+    trap_policy: TrapPolicy,
     /// Region offsets into the auxiliary body, plus the module-level scalars the
     /// interpreter reads on its hot path, all resolved once when the image is
     /// installed. See [`AuxResolved`].
@@ -1866,6 +1880,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
             }
         }
+        Self::enforce_trap_policy(&module, options.trap_policy)?;
         // Structural verification and resource-bound verification.
         // Gated behind the `verify` feature; when the feature is
         // off, `Vm::new_with_options` behaves like
@@ -1894,8 +1909,64 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             )
             .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
         }
-        let vm = Self::construct(module, arena)?;
+        let mut vm = Self::construct(module, arena)?;
+        vm.trap_policy = options.trap_policy;
         Ok((vm, warnings))
+    }
+
+    fn enforce_trap_policy(module: &Module, policy: TrapPolicy) -> Result<(), VmError> {
+        match policy {
+            TrapPolicy::Allow => return Ok(()),
+            TrapPolicy::RequireTrapFree => {}
+        }
+        #[cfg(feature = "verify")]
+        {
+            match crate::trap_analysis::classify_traps(module) {
+                Ok(crate::trap_analysis::TrapVerdict::TrapFree) => Ok(()),
+                Ok(verdict) => Err(VmError::VerifyError(format!(
+                    "trap policy requires TrapFree, got {verdict:?}"
+                ))),
+                Err(error) => Err(VmError::VerifyError(format!(
+                    "trap policy proof unavailable: {error}"
+                ))),
+            }
+        }
+        #[cfg(not(feature = "verify"))]
+        {
+            let _ = module;
+            Err(VmError::VerifyError(String::from(
+                "trap policy requires verification support",
+            )))
+        }
+    }
+
+    /// Current host language-trap policy. It is not a bytecode-supplied claim.
+    pub fn trap_policy(&self) -> TrapPolicy {
+        self.trap_policy
+    }
+
+    /// Change policy only after proving that the current image satisfies it.
+    /// A failure preserves the existing policy and coroutine state. Apply this
+    /// before the first call when loading through a constructor without options.
+    /// RequireTrapFree cannot be enabled without the verification feature, even
+    /// on a VM created through an unsafe trust-skip route.
+    pub fn set_trap_policy(&mut self, policy: TrapPolicy) -> Result<(), VmError> {
+        match policy {
+            TrapPolicy::Allow => {}
+            TrapPolicy::RequireTrapFree => {
+                let module = Module::from_bytes(self.bytecode.as_slice())?;
+                Self::enforce_trap_policy(&module, policy)?;
+            }
+        }
+        self.trap_policy = policy;
+        Ok(())
+    }
+
+    /// Configure a freshly loaded instance before exposing it for execution.
+    /// This also works with borrowed, signed and trust-skip constructors.
+    pub fn with_trap_policy(mut self, policy: TrapPolicy) -> Result<Self, VmError> {
+        self.set_trap_policy(policy)?;
+        Ok(self)
     }
 
     /// Create a VM that runs structural verification but skips WCET and
@@ -1954,6 +2025,16 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// `.rodata`. Runs full verification including resource bounds.
     #[cfg(feature = "verify")]
     pub fn load_bytes(bytes: &[u8], arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
+        Self::load_bytes_with_options(bytes, arena, VmOptions::default()).map(|(vm, _)| vm)
+    }
+
+    /// Load serialized bytes with explicit overflow and language-trap policies.
+    #[cfg(feature = "verify")]
+    pub fn load_bytes_with_options(
+        bytes: &[u8],
+        arena: &'arena keleusma_arena::Arena,
+        options: VmOptions,
+    ) -> Result<(Self, Vec<VerifyWarning>), VmError> {
         // Signed bytecode requires either the `signatures` cargo
         // feature plus a trust matrix (use `Vm::load_signed_bytes`)
         // or a build that explicitly skips verification (use
@@ -1975,7 +2056,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             )));
         }
         let module = Module::from_bytes(bytes)?;
-        Self::new(module, arena)
+        Self::new_with_options(module, arena, options)
     }
 
     /// Load a signed module from serialized bytecode bytes,
@@ -2012,6 +2093,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         arena: &'arena keleusma_arena::Arena,
         verifying_keys: &[ed25519_dalek::VerifyingKey],
     ) -> Result<Self, VmError> {
+        Self::load_signed_bytes_with_options(bytes, arena, verifying_keys, VmOptions::default())
+            .map(|(vm, _)| vm)
+    }
+
+    /// Verify signatures and load with explicit overflow and trap policies.
+    #[cfg(all(feature = "signatures", feature = "verify"))]
+    pub fn load_signed_bytes_with_options(
+        bytes: &[u8],
+        arena: &'arena keleusma_arena::Arena,
+        verifying_keys: &[ed25519_dalek::VerifyingKey],
+        options: VmOptions,
+    ) -> Result<(Self, Vec<VerifyWarning>), VmError> {
         let signed = crate::wire_format::header_requires_signature(bytes);
         if signed {
             crate::wire_format::verify_module_signature(bytes, verifying_keys)
@@ -2034,11 +2127,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         if was_signed {
             module.flags &= !crate::wire_format::FLAG_REQUIRES_SIGNATURE;
         }
-        let mut vm = Self::new(module, arena)?;
+        let (mut vm, warnings) = Self::new_with_options(module, arena, options)?;
         for key in verifying_keys {
             vm.verifying_keys.push(*key);
         }
-        Ok(vm)
+        Ok((vm, warnings))
     }
 
     /// Load a signed module and skip resource-bounds verification.
@@ -2111,6 +2204,25 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         verifying_keys: &[ed25519_dalek::VerifyingKey],
         decryption_key: &[u8; crate::encryption::X25519_PRIVATE_KEY_LEN],
     ) -> Result<Self, VmError> {
+        Self::load_encrypted_signed_bytes_with_options(
+            bytes,
+            arena,
+            verifying_keys,
+            decryption_key,
+            VmOptions::default(),
+        )
+        .map(|(vm, _)| vm)
+    }
+
+    /// Authenticate, decrypt and load with explicit overflow and trap policies.
+    #[cfg(all(feature = "signatures", feature = "encryption", feature = "verify"))]
+    pub fn load_encrypted_signed_bytes_with_options(
+        bytes: &[u8],
+        arena: &'arena keleusma_arena::Arena,
+        verifying_keys: &[ed25519_dalek::VerifyingKey],
+        decryption_key: &[u8; crate::encryption::X25519_PRIVATE_KEY_LEN],
+        options: VmOptions,
+    ) -> Result<(Self, Vec<VerifyWarning>), VmError> {
         let encrypted = crate::wire_format::header_requires_encryption(bytes);
         if !encrypted {
             return Err(VmError::from(crate::bytecode::LoadError::Codec(
@@ -2138,11 +2250,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         if was_signed {
             module.flags &= !crate::wire_format::FLAG_REQUIRES_SIGNATURE;
         }
-        let mut vm = Self::new(module, arena)?;
+        let (mut vm, warnings) = Self::new_with_options(module, arena, options)?;
         for key in verifying_keys {
             vm.verifying_keys.push(*key);
         }
-        Ok(vm)
+        Ok((vm, warnings))
     }
 
     /// Load a signed-and-encrypted module and skip resource-bounds
@@ -2227,8 +2339,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// deserialized owned `Module`.
     #[cfg(feature = "verify")]
     pub fn view_bytes(bytes: &[u8], arena: &'arena keleusma_arena::Arena) -> Result<Self, VmError> {
+        Self::view_bytes_with_options(bytes, arena, VmOptions::default()).map(|(vm, _)| vm)
+    }
+
+    /// View serialized bytes with explicit overflow and language-trap policies.
+    #[cfg(feature = "verify")]
+    pub fn view_bytes_with_options(
+        bytes: &[u8],
+        arena: &'arena keleusma_arena::Arena,
+        options: VmOptions,
+    ) -> Result<(Self, Vec<VerifyWarning>), VmError> {
         let module = Module::view_bytes(bytes)?;
-        Self::new(module, arena)
+        Self::new_with_options(module, arena, options)
     }
 
     /// Load a module from an aligned byte slice and skip resource
@@ -2400,6 +2522,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
         let mut vm = Self {
             bytecode: BytecodeStore::Borrowed(bytes),
+            trap_policy: TrapPolicy::Allow,
             aux_resolved,
             _phantom_a: core::marker::PhantomData,
             decoded_ops,
@@ -2626,6 +2749,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             .map_err(|e| VmError::TypeError(alloc::format!("aux body: {:?}", e)))?;
         let mut vm = Self {
             bytecode: BytecodeStore::Owned(aligned),
+            trap_policy: TrapPolicy::Allow,
             aux_resolved,
             _phantom_a: core::marker::PhantomData,
             decoded_ops,
@@ -3849,7 +3973,12 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             // the self-asserted flag bit.
             return Err(VmError::from(crate::bytecode::LoadError::InvalidSignature));
         }
-        let new_module = Module::from_bytes(bytes).map_err(VmError::from)?;
+        let mut new_module = Module::from_bytes(bytes).map_err(VmError::from)?;
+        // Authentication is complete. The internal image has no signature
+        // extension, while the retained trust matrix governs later byte loads.
+        // This mirrors initial signed construction and avoids serializing a
+        // signature-required flag without its authenticated envelope.
+        new_module.flags &= !crate::wire_format::FLAG_REQUIRES_SIGNATURE;
         self.replace_module(new_module, initial_data)
     }
 
@@ -3895,6 +4024,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         new_module: Module,
         initial_data: Vec<crate::bytecode::GenericValue<W, F>>,
     ) -> Result<(), VmError> {
+        Self::enforce_trap_policy(&new_module, self.trap_policy)?;
         // B16 step 8: the new module's declared widths must match
         // the runtime's W/A/F trait parameters, same as Vm::new.
         // Without this the hot-swap path would re-introduce the
@@ -12893,6 +13023,7 @@ mod tests {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let options = VmOptions {
             overflow_policy: OverflowPolicy::Warn,
+            ..VmOptions::default()
         };
         let warnings = match Vm::new_with_options(module, &arena, options) {
             Ok((_vm, w)) => w,
@@ -12908,6 +13039,7 @@ mod tests {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let options = VmOptions {
             overflow_policy: OverflowPolicy::Warn,
+            ..VmOptions::default()
         };
         let warnings = match Vm::new_with_options(module, &arena, options) {
             Ok((_vm, w)) => w,
@@ -12925,6 +13057,7 @@ mod tests {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let options = VmOptions {
             overflow_policy: OverflowPolicy::Allow,
+            ..VmOptions::default()
         };
         let warnings = match Vm::new_with_options(module, &arena, options) {
             Ok((_vm, w)) => w,
@@ -12939,6 +13072,7 @@ mod tests {
         let arena = keleusma_arena::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
         let options = VmOptions {
             overflow_policy: OverflowPolicy::Warn,
+            ..VmOptions::default()
         };
         let warnings = match Vm::new_with_options(module, &arena, options) {
             Ok((_vm, w)) => w,

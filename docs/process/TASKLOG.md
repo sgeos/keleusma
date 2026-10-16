@@ -6,6 +6,31 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-15 Host trap-policy enforcement
+
+TrapPolicy now provides explicit Allow and RequireTrapFree choices. VmOptions and
+options-bearing byte, view, signed and encrypted loaders enforce strict policy
+before execution. A common builder and setter cover borrowed and trust-skip
+instances. Verification-disabled builds refuse strict activation. Every replacement
+route checks the stored policy before mutation, including schema-bypassing swaps.
+
+Positive signed replacement exposed an existing encoding defect. Authentication
+succeeded, but replacement retained a signed flag without its signature extension.
+The internal image now clears that flag after authentication, matching initial
+signed loading. Host verifying keys and trap policy remain installed.
+
+All 1521 broad tests pass with self-host, signatures and encryption enabled,
+including eleven policy controls, current stage artifacts, resource admission,
+hostile modules, persistent data and narrow runtimes. Nine controls pass without
+floating-point support. The verification-disabled control passes both without
+cryptography and with signed and encrypted loaders enabled. Clippy and the detached
+build pass. Full final feature and release gates remain outstanding.
+
+Policy is not a certificate for unchecked execution. Actual proof-gated check
+elision and its error, panic, resume and replacement invariants are next, followed
+by the full Order 3 completion audit. Version, fingerprint, opcode count and
+selected capacities remain unchanged.
+
 ## 2026-10-15 Matching trap classifications
 
 The reference and Keleusma APIs now classify validated modules as TrapFree or
