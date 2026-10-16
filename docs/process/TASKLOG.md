@@ -6,6 +6,34 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-15 Total legacy division and remainder
+
+Div and Mod now return low, high and flag outcomes. Integer zero divisors return
+the numerator and flag three. Div shares CheckedDiv with fraction count zero.
+Mod shares CheckedMod for Word, Byte and Fixed, and retains Float remainder with
+floating-point classification. Both compiler lowerings discard extra Float outputs
+and dispatch Fixed remainder zero divisors to explicit traps. Multiword division
+and remainder use an explicit test and trap instead of provoking integer Div.
+
+The new execution controls also repair a previously unexecuted Fixed remainder
+path. The compiler emitted Mod, whose runtime previously rejected Fixed operands.
+Direct contracts, narrow widths, serialization, both verifier paths and source
+execution now pass. The nominal legacy opcode cost is five, with stack requirement
+two and net growth one. The specification and generated book are updated.
+
+The broad run passed 1764 tests and failed one older scalar-index stack fixture.
+Complete stage artifact identity and resource admission passed. After correcting
+that fixture and adding the new arithmetic effects, all 141 final focused tests
+pass. Production code was unchanged after the broad run. Clippy, the detached
+build, sixteen floating-point-disabled controls and 175 no-default library tests
+pass. Full Order 3 verification remains outstanding.
+
+Matching reference and Keleusma trap classifications are next. Unsupported forms
+must remain distinct from completed verdicts. Host policy, proof-preserving resume
+and replacement, actual check elision and the final audit remain required. The
+execution proof must account for partially consumed frames after runtime errors.
+Version, fingerprint, opcode count and selected capacities remain unchanged.
+
 ## 2026-10-15 Indexed data-read regression repairs
 
 GetDataIndexed now has an explicit scalar fallback, portable diagnostic outcomes,

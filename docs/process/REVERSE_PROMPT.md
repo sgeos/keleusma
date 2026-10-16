@@ -1,127 +1,132 @@
 # Reverse prompt
 
-## Indexed data-read outcomes and repairs on 2026-10-15
+## Total legacy arithmetic on 2026-10-15
 
-The active goal remains Complete Order 3, trap analysis. Line v0.2.3 is on branch
-feat/v02-order3-trap-analysis. This repair increment starts from pushed backup
-7a058917bf649a6fc43fa98bdc14428f19333007. The preceding scalar-read commit is
-1d3429715a0c1ffb49a93a6fcbb9749a8435a2e3.
+The active goal remains Complete Order 3, trap analysis. Work is on line v0.2.3
+and branch feat/v02-order3-trap-analysis. This increment starts from pushed commit
+fa7a94f94d2dca5a35280903c581dea17ec99bf0. The previous goal turn made progress
+by repairing and verifying the indexed data-read contracts.
 
-GetDataIndexed consumes [index, fallback] and returns
-[value, index, b0, b1, b2, b3, flag]. Fallback is Word, Byte or Unit. An invalid
-index returns it without reading storage. The full span is checked first. Empty
-spans work without declared storage. Both compiler lowerings supply typed zero
-for Word and Byte and dispatch bare failures through Trap kind eight. Checked
-scalar data reads evaluate the index once, retain seven temporaries and omit
-fallback traps under complete invalid_index coverage. Other bare element kinds
-use Unit. Runtime type, representation and storage guards remain.
+Div and Mod now consume two numeric operands and return [low, high, flag]. Div
+shares CheckedDiv with fraction count zero. Mod shares CheckedMod for Word, Byte
+and Fixed and also supports Float remainder with floating-point classification.
+Integer zero divisors return the numerator, typed zero and Word flag three.
+Word overflow classification follows the module width. Wrong operand kinds remain
+contract errors. CheckedMod still rejects Float, preserving its source boundary.
 
-The depth effect is two inputs and net growth five. Nominal cost is eight. Both
-verifier transfers produce an unknown value shape followed by six Words. The
-instruction encoding retains base and length as its two 24-bit operands.
+Both compiler lowerings discard high and flag for bare Float operations. Fixed
+remainder uses a conditional explicit zero-divisor trap. This also repairs an
+existing defect where the compiler emitted Mod for Fixed while the runtime rejected
+Fixed operands. Multiword division and remainder formerly used integer Div only
+to provoke an error on an all-zero divisor. They now test the combined divisor
+limbs and emit Trap kind five explicitly, with a source location on the divisor.
 
-Private parser record 13 carries fallback kind above the address lanes. Relocation
-preserves kinds zero, two and three and rejects reserved values. Store record 14
-has no kind lane and checks its entire length rather than masking it. Indexed
-lengths must be below 16777216, while scalar address 16777215 remains valid.
-Test adapters now derive kinds from source declarations. Independent expectations
-cover Word, Byte and Boolean fields.
-
-The verifier opcode profile is 2048, increased from 1536 in the backup because
-current stage maxima are 1965 parser instructions and 1568 codegen instructions.
-This is distinct from the operator-selected type capacities of 640. All current
-stages fit. Parser input uses 1023 names and 30199 blob bytes, leaving one name
-and 18953 blob bytes. Typed-verifier residency is 1532 total records and 486 peak,
-preserving the threefold reduction criterion.
+The instruction depth requirement is two and net growth one. Shrink is zero and
+nominal cost five, an unmeasured estimate. Both verifier and resource paths consume
+these effects. Instruction encodings and the public opcode inventory are unchanged.
+The specification and generated book are updated. Exact contracts and the remaining
+implicit-fault inventory are in docs/decisions/ORDER3_ARITHMETIC_CONTRACTS.md.
 
 ## Verification
 
-The broad release self-host run completed with 1740 passes, one failure and two
-skips. Its single failure was a newly added private-data test fixture rejected for
-never mutating its data. Complete stage artifact identity and complete resource
-admission passed. The final selected run passes all 114 executed tests, with 1703
-skipped by selection. It includes the corrected shared-data fixture, all earlier
-failed parser and compiler controls, relocation boundaries, eleven data-read
-controls, wire round trips and exact fault source locations.
+The broad release self-host run executed 1765 tests. It passed 1764 and failed one
+older operand-stack fixture that still expected one scalar GetIndex output. The
+implemented bounds contract produces seven. The fixture now records that effect
+and the new Div, Mod, indexed data and predicate effects.
 
-Production code did not change after the broad run. Only test fixtures, controls
-and documentation changed. The broad run was not replayed after those edits, so
-this is composed verification evidence rather than a claimed full green run.
+After that test-only repair, the final focused run passes all 141 tests with no
+skips. Production code did not change after the broad run. Complete current-stage
+artifact identity and resource admission passed in that broad run. Its failure
+remains in the receipt and is not reported as a full green run. The broad suite
+was not replayed after the fixture repair.
 
-Thirty-two bounds controls pass without floating-point support. No-default library
-tests pass 175 cases. Fresh workspace Clippy passes with all targets and self-host.
-The detached compiler build passes. Formatting and diff checks pass.
+Eight new tests cover direct integer, Byte, Fixed and Float outcomes, narrow module
+and runtime widths, malformed operand kinds, Fixed source execution in both
+compilers, wire round trips, verifier admission and explicit multiword traps.
+The multiword controls assert DivisionByZero specifically. The older helper only
+asserted that some error occurred and was insufficient evidence for that claim.
 
-Receipts are tmp/order3-data-read-final2-acceptance.log,
- tmp/order3-data-read-final-repair.log, tmp/order3-data-read-final3-clippy.log,
- tmp/order3-data-read-final-detached.log, tmp/order3-data-read-final2-no-floats.log,
- tmp/order3-data-read-final-no-default.log, tmp/order3-data-read-final-op-sizes.log
-and tmp/order3-data-read-final2-capacity.log.
+Clippy passes with workspace, all targets and self-host. The detached compiler
+build passes. Sixteen focused arithmetic tests pass without floating-point support.
+No-default library tests pass 175 cases. The current-stage input-capacity check
+passes with maxima of 1023 names and 30199 blob bytes. Formatting and diff checks
+pass. The full five-configuration matrix, full workspace and isolated suites,
+detached compiler tests, shipping commands, minimum Rust, cross-target builds,
+Miri and release gates remain outstanding for Order 3 completion.
 
-The original broad failure receipt is tmp/order3-data-read-acceptance.log, with
-1729 passes and eleven failures. The first repair run passed 108 selected tests.
-A subsequent broad attempt failed to compile two new expected-value fixtures.
-Their correction is followed by the broad run described above. The initial
-capacity measurement also failed its old blob-size pin before that pin was updated.
-These failures remain in their local logs and are not treated as passing runs.
+Receipts are tmp/order3-legacy-acceptance.log,
+ tmp/order3-legacy-final-focused.log, tmp/order3-legacy-final-clippy.log,
+ tmp/order3-legacy-detached.log, tmp/order3-legacy-no-floats.log,
+ tmp/order3-legacy-no-default.log and tmp/order3-legacy-capacity.log.
+The initial executed contract failure is tmp/order3-legacy-before.log. The first
+focused build failed on a test-only narrow-runtime state type mismatch, corrected
+before the 134-case focused run in tmp/order3-legacy-focused2.log. The additional
+exact multiword control and stack fixture are included in the final 141 cases.
 
-The final targeted command is reproducible as follows.
+The final focused command is reproducible as follows.
 
 ```sh
 CARGO_HUSKY_DONT_INSTALL_HOOKS=true RUSTC_WRAPPER= KEL_SELFHOST_CACHE=0 \
 cargo nextest run --release --features self-host --no-fail-fast -j 4 \
-  --lib --test selfhost_parse --test selfhost_codegen --test data_read_outcomes \
-  --test runtime_fault_census --test selfhost_wire \
-  -E 'test(data_relocation) | test(codegen_owns_its_constant_pool) | test(self_compile_codegen_atomic) | test(the_fused_compile_holds) | binary(selfhost_parse) | binary(data_read_outcomes) | binary(runtime_fault_census) | test(every_stage_fits_the_driver_caps_with_margin)'
+  --test legacy_division_outcomes --test trap_lowering --test spec_trap_claims \
+  --test float_arith_width --test multiword --test operand_stack_model
 ```
-
-The full five-configuration matrix, full workspace and isolated suites, detached
-compiler tests, shipping commands, minimum Rust, cross-target builds, Miri and
-release gates remain outstanding for Order 3 completion.
 
 ## Next work
 
-Resolve legacy integer Div and Mod, which still fault in hand-built bytecode.
-Audit every compiler emission first. compile_multiword_div uses integer Div as a
-zero-divisor guard, and scalar Fixed remainder still selects Mod. Remaining legacy
-emissions are therefore not all floating point. Preserve those source behaviors
-and diagnostics while making first-pass arithmetic contracts total. Specify the
-stack contract and update both compilers, runtime, verifiers, costs, wire consumers,
-documentation and direct instruction controls together.
+Implement matching reference and Keleusma trap classifications. A completed
+trap-free or possibly-trapping verdict must remain distinct from unsupported or
+incomplete analysis. The first-pass profile must account for raw FixedDiv,
+non-scalar or boxed GetIndex, and boxed GetField, GetTupleField and GetEnumField,
+which still have internal language-fault paths. Do not report them trap-free from
+a zero-Trap scan. The roadmap defers native-error and newtype-refinement widening
+to Workstream F. Native and host-return shape obligations remain explicit.
 
-Then implement matching reference and Keleusma trap classifications with analysis
-unavailability distinct from a completed verdict. Add host trap-free policy before
-execution and preserve it across resume and replacement. Implement actual proved
-check elision, retaining checks for unknown shapes and host-contract failures.
-Order 2 Top widening cannot justify arbitrary guard removal. Non-first-pass
-GetIndex forms remain explicit proof boundaries. Complete the full verification
-matrix and requirement-by-requirement audit. ORDER3_COMPLETION_PLAN.md remains
-authoritative. No blacklist-only or no-op substitute completes the objective.
+Keleusma must determine its verdict from transported instruction information.
+Include the stage-decision intervention control, capacity boundaries, malformed
+inputs and comparison with the reference. Then enforce host trap-free policy
+before subject execution and preserve it across resume and replacement.
+
+Actual proof-gated check elision remains required. Static stack-depth and validated
+instruction-cache bounds are candidate proofs for specific checks. Type, shape,
+lifetime and host-contract checks cannot be removed from Order 2 Top widening.
+The mode must remove actual supported checks and have negative controls for every
+unproved removal. Complete the full verification matrix and explicit audit.
+ORDER3_COMPLETION_PLAN.md remains authoritative. No blacklist-only or no-op
+substitute completes the goal.
+
+A newly recorded safety obligation is essential for unchecked stack execution.
+Vm::run currently preserves frames and operands after an error. An operation may
+have consumed only part of its inputs before a retained type check fails. The
+module-level depth proof does not describe that partial frame. Invalidate or
+re-establish the execution-state proof before error reentry. Exercise initial
+calls, yields, resets, breakpoint suspension, normal returns, runtime faults and
+successful or failed replacement separately. This audit finding is not yet an
+implemented check-elision policy.
 
 ## Constraints and handoff
 
-BYTECODE_VERSION remains 2 and FORMAT_FINGERPRINT remains 0x4327_63E1 throughout
+BYTECODE_VERSION remains 2 and FORMAT_FINGERPRINT remains 0x4327_63E1 during
 V0.2.3-WIP. The public instruction count remains 66. Selected type capacities
-remain 640, verifier depth 32 and reference parser depth 24. V0.2.2 remains the
-last published release. Development artifacts require rebuilding after contract
-changes. No merge or publication occurred. Appendix B was read before writes.
-B42 retains first-class compiler-managed ring buffers pending design and scheduling.
+remain 640, verifier opcode capacity 2048, verifier depth 32 and reference parser
+depth 24. V0.2.2 remains the last published release. Development artifacts need
+rebuilding after these stack-contract changes. No merge or publication occurred.
+Appendix B was read before tracked writes. B42 retains first-class compiler-managed
+ring buffers pending design and scheduling.
 
-The previous goal turn made progress by committing the unfinished work and its
-failure evidence. This turn repairs that state and adds execution evidence.
-The legacy HANDOFF.md remains invalid-and-stale, measured at 67 commits behind
-this increment's starting head. Its historical audit, workspace and detached RTOS
-checks were not rerun. Ancestry alone is not freshness evidence.
+The legacy HANDOFF.md remains invalid-and-stale, measured at 68 commits behind
+this increment's starting head. Its historical audit, full workspace and detached
+RTOS checks were not rerun. Ancestry alone is not freshness evidence.
 
-Pilot task v023-data-read-1d34 records its first diagnostic and three completion
-claims. Labels are non-independent self-reviews. The task outcome resolves only
-this increment. External evaluation was not retried after the earlier automatic
+Pilot task v023-legacy-fa7a records the first diagnostic and three completion
+claims. Labels are non-independent self-review. Its outcome resolves this arithmetic
+increment only. External evaluation was not retried after the earlier automatic
 approval rejection. The reviewed local export is
- tmp/order3-data-read-pilot-checkpoint.json. This branch does not own the shared
+ tmp/order3-legacy-pilot-checkpoint.json. This branch does not own the shared
 tracked pilot checkpoint.
 
-The v0.2.3 inbox is empty. The tracked interline checkpoint is exported and reviewed
-before commit. All verification processes are terminal. Local .codex/ settings and
-nvim.log remain unrelated and untracked. No peer messages were sent and the
-concurrent V0.3.X worktree was not modified. Feature-branch push authorization
-persists, using the hook's documented work-in-progress bypass where appropriate.
+The v0.2.3 inbox is empty. Its tracked checkpoint is exported and reviewed before
+commit. All verification processes are terminal. Local .codex/ settings and nvim.log
+remain unrelated and untracked. No peer messages were sent. The concurrent V0.3.X
+worktree was not modified. Feature-branch push authorization persists, using the
+hook's documented work-in-progress bypass where appropriate.

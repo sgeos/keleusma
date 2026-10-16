@@ -162,12 +162,11 @@ fn both_compilers_preserve_noninteger_division_paths() {
             expected.to_bytes().unwrap(),
             "{source}"
         );
-        assert!(
-            !actual
-                .chunks
-                .iter()
-                .flat_map(|c| &c.ops)
-                .any(|op| matches!(op, Op::Trap(_)))
-        );
+        let has_trap = actual
+            .chunks
+            .iter()
+            .flat_map(|c| &c.ops)
+            .any(|op| matches!(op, Op::Trap(_)));
+        assert_eq!(has_trap, source.contains("Fixed<16>"));
     }
 }

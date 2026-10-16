@@ -2577,8 +2577,6 @@ pub fn op_depth_effect(op: &Op, _chunk: &Chunk) -> (i32, i32) {
         Op::Add
         | Op::Sub
         | Op::Mul
-        | Op::Div
-        | Op::Mod
         | Op::CmpEq
         | Op::CmpNe
         | Op::CmpLt
@@ -2622,7 +2620,9 @@ pub fn op_depth_effect(op: &Op, _chunk: &Chunk) -> (i32, i32) {
             let c = op.count() as i32;
             (c, 1 - c)
         }
-        Op::CheckedAdd
+        Op::Div
+        | Op::Mod
+        | Op::CheckedAdd
         | Op::CheckedSub
         | Op::CheckedMod
         | Op::CheckedMul(_)
@@ -4930,8 +4930,8 @@ mod tests {
         assert_eq!(Op::CmpEq.cost(), 2);
         assert_eq!(Op::Return.cost(), 2);
 
-        assert_eq!(Op::Div.cost(), 3);
-        assert_eq!(Op::Mod.cost(), 3);
+        assert_eq!(Op::Div.cost(), 5);
+        assert_eq!(Op::Mod.cost(), 5);
         assert_eq!(
             Op::GetField(crate::bytecode::StructField::Boxed { name_const: 0 }).cost(),
             3
@@ -4974,12 +4974,12 @@ mod tests {
 
     #[test]
     fn wcet_branching_takes_max() {
-        // Stream -> PushTrue -> If { Add(2) } Else { Div(3) + Mul(2) } ->
+        // Stream -> PushTrue -> If { Add(2) } Else { Div(5) + Mul(2) } ->
         //   Yield -> Pop -> Reset.
-        // Then body [3,4): Add = 2. Else body [5,7): Div(3) + Mul(2) = 5.
-        // Max branch = 5.
-        // Body: PushTrue(1) + If(1) + 5 + Yield(1) + Pop(1) = 9.
-        // Overhead: Stream(1) + Reset(1) = 2. Total = 11.
+        // Then body [3,4): Add = 2. Else body [5,7): Div(5) + Mul(2) = 7.
+        // Max branch = 7.
+        // Body: PushTrue(1) + If(1) + 7 + Yield(1) + Pop(1) = 11.
+        // Overhead: Stream(1) + Reset(1) = 2. Total = 13.
         let chunk = make_chunk(
             "tick",
             vec![
@@ -4998,7 +4998,7 @@ mod tests {
             BlockType::Stream,
         );
         let cost = wcet_stream_iteration(&chunk).unwrap();
-        assert_eq!(cost, 11);
+        assert_eq!(cost, 13);
     }
 
     #[test]

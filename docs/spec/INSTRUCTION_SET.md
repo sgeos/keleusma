@@ -56,12 +56,11 @@ Integer arithmetic uses the checked-arithmetic family. Each `CheckedAdd`, `Check
 
 The wrapping arithmetic opcodes `Add`, `Sub`, `Mul`, and `Neg` remain in the instruction set but no longer accept `Value::Int` operands. Their permitted operand types are `Byte`, `Fixed`, and `Float`. The V0.2.0 Consolidation B pass narrowed these opcodes by routing all `Int` arithmetic through the checked family; the compiler emits `CheckedXxx; PopN(2)` for every `Int` operand position. Operands whose type the compiler cannot statically infer fall through to the `Int` path as well, because `Word` is the default numeric type.
 
-`Op::Div` and `Op::Mod` remain polymorphic over `Int`, `Byte`, and `Float`. Bare `Word` and `Byte` division and modulo now lower to `CheckedDiv(0)` or
+`Op::Div` and `Op::Mod` return low, high and flag outcomes. Div shares `CheckedDiv(0)` semantics. Mod shares `CheckedMod` semantics for Word, Byte and Fixed and also supports Float remainder with floating-point classification. Bare `Word` and `Byte` division and modulo lower to `CheckedDiv(0)` or
 `CheckedMod`, followed by a flag-three conditional `Trap` and removal of the high
 slot. Overflow retains the wrapping low result. A checked construct with an
 unguarded variable or wildcard `zero_divisor` arm omits that fallback trap.
-Guarded and literal-pattern handlers retain it. The legacy `Div` and `Mod`
-instructions still fault on integer zero divisors in hand-built bytecode.
+Guarded and literal-pattern handlers retain it. Legacy instructions also reify integer zero divisors as flag three, including in hand-built bytecode. Bare Float legacy operations discard high and flag. Bare Fixed remainder dispatches flag three through an explicit trap.
 
 `CheckedMul` and `CheckedDiv` carry a `u8` fraction-bit count that selects integer or `Q`-format arithmetic, where `0` is integer and a positive count is `Fixed`. This is the only place the integer and fixed-point datapaths differ, namely a shift by the fraction-bit count around the multiply or divide, so a single parameterized opcode serves both rather than separate opcodes. `CheckedAdd`, `CheckedSub`, `CheckedMod`, and `CheckedNeg` need no such parameter because their `Fixed` forms involve no shift, and they dispatch on the operand type alone.
 
@@ -72,13 +71,13 @@ instructions still fault on integer zero divisors in hand-built bytecode.
 | CheckedMul | u8 frac_bits | 2 | Pop two operands; push `(low, high, flag)`. The fraction-bit count selects the format. With `0` it is integer multiply and the high half is the load-bearing value for big-number multiplication. With a count greater than `0` the operands are `Fixed`, the `i128` product is shifted right by that many bits before the range check, the wrapped result is a single word, and the high slot is unused. So `0` fraction bits is exactly integer multiply. |
 | CheckedNeg | none | 2 | Pop one `Int` operand; push `(low, high, flag)`. The only overflow case under the default 64-bit declared width is `-i64::MIN`. |
 | CheckedDiv | u8 frac_bits | 2 | Pop two operands; push `(low, high, flag)`. The fraction-bit count selects the format. With `0` it is integer divide whose only overflow case at the default 64-bit width is `i64::MIN / -1`. With a count greater than `0` the operands are `Fixed` and the dividend is left-shifted by that many bits in the `i128` domain before dividing. A zero divisor reifies as flag `3` carrying the numerator rather than trapping. Word outcomes use the module-declared width, including when the runtime Word is wider. So `0` fraction bits is exactly integer divide. |
-| CheckedMod | none | 2 | Pop two `Int` operands; push `(low, high, flag)`. A zero divisor reifies as flag `3` carrying the numerator rather than trapping, mirroring `CheckedDiv`; this row said "traps on divide-by-zero" until 2026-09-18, which the implementation has never done. `i64::MIN % -1` yields zero without overflow. |
+| CheckedMod | none | 2 | Pop two Word, Byte or Fixed operands; push `(low, high, flag)`. A zero divisor reifies as flag `3` carrying the numerator rather than trapping, mirroring `CheckedDiv`; this row said "traps on divide-by-zero" until 2026-09-18, which the implementation has never done. `i64::MIN % -1` yields zero without overflow. |
 | Add | none | 2 | Pop two operands of type `Byte`, `Fixed`, or `Float`; push the wrapping or IEEE 754 sum. The `Int` operand position is excluded; the compiler routes `Int + Int` through `CheckedAdd; PopN(2)`. |
 | Sub | none | 2 | Pop two operands of type `Byte`, `Fixed`, or `Float`; push the wrapping or IEEE 754 difference. The `Int` operand position is excluded. |
 | Mul | none | 2 | Pop two operands of type `Byte` or `Float`; push the wrapping or IEEE 754 product. `Fixed` multiplication uses `FixedMul(n)`; the `Int` operand position is excluded. |
 | Neg | none | 2 | Pop one operand of type `Byte`, `Fixed`, or `Float`; push the wrapping or IEEE 754 negation. The `Int` operand position is excluded. |
-| Div | none | 3 | Pop two values; push quotient. Traps on divide-by-zero. No overflow flag. |
-| Mod | none | 3 | Pop two values; push remainder. Traps on divide-by-zero. No overflow flag. |
+| Div | none | 5 | Pop two operands; push `(low, high, flag)` with the same semantics as `CheckedDiv(0)`. A zero integer divisor reifies as flag `3` carrying the numerator. |
+| Mod | none | 5 | Pop two operands; push `(low, high, flag)`. Word, Byte and Fixed use `CheckedMod` semantics. A zero integer divisor reifies as flag `3` carrying the numerator. Float remainder returns a zero high result and flag zero for finite, one for positive infinity, two for negative infinity or four for NaN. |
 
 ## Comparisons
 
@@ -234,8 +233,8 @@ The cost groupings reproduce `bytecode::nominal_op_cycles`. Hosts that need wall
 |------|-------------|
 | 1 | Const, PushImmediate, GetLocal, SetLocal, GetData, SetData, Dup, Not, If, Else, EndIf, Loop, EndLoop, Break, BreakIf, Stream, Reset, Yield, Trap except kind 8, PopN |
 | 2 | Add, Sub, Mul, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex other forms, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Return, BitAnd, BitOr, BitXor, Shl, Shr |
-| 3 | Div, Mod, GetField, IsEnum, IsStruct |
-| 5 | NewComposite |
+| 3 | GetField, IsEnum, IsStruct |
+| 5 | Div, Mod, NewComposite |
 | 6 | Trap kind 8 |
 | 7 | BoundsCheck |
 | 8 | GetDataIndexed, SetDataIndexed, GetIndex flat Word or Byte |
@@ -251,8 +250,8 @@ The values reproduce `Op::stack_growth` in `src/bytecode.rs`. For multi-output o
 
 | Growth | Instructions |
 |--------|--------------|
-| 0 | Not, Neg, Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Yield, Return, GetField, GetIndex other forms, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap, PopN, BitAnd, BitOr, BitXor, Shl, Shr |
-| 1 | Const, PushImmediate, GetLocal, GetData, Dup, CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, CallVerifiedNative, CallExternalNative, NewComposite, IsEnum, IsStruct |
+| 0 | Not, Neg, Add, Sub, Mul, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Yield, Return, GetField, GetIndex other forms, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap, PopN, BitAnd, BitOr, BitXor, Shl, Shr |
+| 1 | Const, PushImmediate, GetLocal, GetData, Dup, Div, Mod, CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, CallVerifiedNative, CallExternalNative, NewComposite, IsEnum, IsStruct |
 | 2 | CheckedNeg |
 | 4 | SetDataIndexed |
 | 5 | GetDataIndexed, BoundsCheck, GetIndex flat Word or Byte |
@@ -263,8 +262,8 @@ The values reproduce `Op::stack_shrink`. For opcodes whose net delta is non-nega
 
 | Shrink | Instructions |
 |--------|--------------|
-| 0 | Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, GetDataIndexed, SetDataIndexed, BoundsCheck, GetIndex flat Word or Byte, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap except kind 8 |
-| 1 | Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, If, BreakIf, Yield, GetField, GetIndex other forms, GetTupleField, GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr |
+| 0 | Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, Div, Mod, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, GetDataIndexed, SetDataIndexed, BoundsCheck, GetIndex flat Word or Byte, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap except kind 8 |
+| 1 | Add, Sub, Mul, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, If, BreakIf, Yield, GetField, GetIndex other forms, GetTupleField, GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr |
 | 5 | Trap kind 8 |
 | n | PopN(n), Call(_, n), CallVerifiedNative(_, n), CallExternalNative(_, n), NewComposite(count) |
 

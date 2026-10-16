@@ -5357,88 +5357,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 }
                 Op::Sub => self.binary_arith(|a: W, b: W| a.wrapping_sub(b), |a: F, b: F| a - b)?,
                 Op::Mul => self.binary_arith(|a: W, b: W| a.wrapping_mul(b), |a: F, b: F| a * b)?,
-                Op::Div => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    match (a, b) {
-                        (
-                            crate::bytecode::GenericValue::Int(_),
-                            crate::bytecode::GenericValue::Int(y),
-                        ) if y == W::default() => {
-                            return Err(VmError::DivisionByZero);
-                        }
-                        (
-                            crate::bytecode::GenericValue::Int(x),
-                            crate::bytecode::GenericValue::Int(y),
-                        ) => sp!(self, crate::bytecode::GenericValue::Int(x.wrapping_div(y))),
-                        (
-                            crate::bytecode::GenericValue::Byte(_),
-                            crate::bytecode::GenericValue::Byte(0),
-                        ) => return Err(VmError::DivisionByZero),
-                        (
-                            crate::bytecode::GenericValue::Byte(x),
-                            crate::bytecode::GenericValue::Byte(y),
-                        ) => {
-                            sp!(self, crate::bytecode::GenericValue::Byte(x.wrapping_div(y)));
-                        }
-                        #[cfg(feature = "floats")]
-                        (
-                            crate::bytecode::GenericValue::Float(x),
-                            crate::bytecode::GenericValue::Float(y),
-                        ) => sp!(
-                            self,
-                            crate::bytecode::GenericValue::Float(self.narrow_float(x / y))
-                        ),
-                        (a, b) => {
-                            return Err(VmError::TypeError(format!(
-                                "cannot divide {} by {}",
-                                a.type_name(),
-                                b.type_name()
-                            )));
-                        }
-                    }
-                }
-                Op::Mod => {
-                    let b = self.pop()?;
-                    let a = self.pop()?;
-                    match (a, b) {
-                        (
-                            crate::bytecode::GenericValue::Int(_),
-                            crate::bytecode::GenericValue::Int(y),
-                        ) if y == W::default() => {
-                            return Err(VmError::DivisionByZero);
-                        }
-                        (
-                            crate::bytecode::GenericValue::Int(x),
-                            crate::bytecode::GenericValue::Int(y),
-                        ) => sp!(self, crate::bytecode::GenericValue::Int(x.wrapping_rem(y))),
-                        (
-                            crate::bytecode::GenericValue::Byte(_),
-                            crate::bytecode::GenericValue::Byte(0),
-                        ) => return Err(VmError::DivisionByZero),
-                        (
-                            crate::bytecode::GenericValue::Byte(x),
-                            crate::bytecode::GenericValue::Byte(y),
-                        ) => {
-                            sp!(self, crate::bytecode::GenericValue::Byte(x.wrapping_rem(y)));
-                        }
-                        #[cfg(feature = "floats")]
-                        (
-                            crate::bytecode::GenericValue::Float(x),
-                            crate::bytecode::GenericValue::Float(y),
-                        ) => sp!(
-                            self,
-                            crate::bytecode::GenericValue::Float(self.narrow_float(x % y))
-                        ),
-                        (a, b) => {
-                            return Err(VmError::TypeError(format!(
-                                "cannot modulo {} by {}",
-                                a.type_name(),
-                                b.type_name()
-                            )));
-                        }
-                    }
-                }
                 Op::Neg => {
                     // Consolidation B narrowed `Op::Neg` away from
                     // `Int` operands. The compiler emits
@@ -7140,7 +7058,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         }
                     }
                 }
-                Op::CheckedDiv(frac_bits) => {
+                Op::Div | Op::CheckedDiv(_) => {
+                    let frac_bits = match op {
+                        Op::CheckedDiv(bits) => bits,
+                        _ => 0,
+                    };
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
@@ -7283,7 +7205,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         }
                     }
                 }
-                Op::CheckedMod => {
+                Op::Mod | Op::CheckedMod => {
                     let b = self.pop()?;
                     let a = self.pop()?;
                     match (a, b) {
@@ -7386,6 +7308,25 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 crate::bytecode::GenericValue::Int(
                                     <W as crate::word::Word>::from_i64_wrap(0)
                                 )
+                            );
+                        }
+                        #[cfg(feature = "floats")]
+                        (
+                            crate::bytecode::GenericValue::Float(x),
+                            crate::bytecode::GenericValue::Float(y),
+                        ) if matches!(op, Op::Mod) => {
+                            let r = self.narrow_float(x % y);
+                            let flag = float_checked_flag(<F as crate::float::Float>::to_f64(r));
+                            sp!(self, crate::bytecode::GenericValue::Float(r));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Float(
+                                    <F as crate::float::Float>::from_f64(0.0)
+                                )
+                            );
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(W::from_i64_wrap(flag))
                             );
                         }
                         (a, b) => {

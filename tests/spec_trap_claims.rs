@@ -26,8 +26,8 @@
 //!
 //! | row | the claim |
 //! |---|---|
-//! | `Div` | traps on divide-by-zero |
-//! | `Mod` | traps on divide-by-zero |
+//! | `Div` | a zero divisor reifies as flag `3` |
+//! | `Mod` | a zero divisor reifies as flag `3` |
 //! | `CheckedDiv` | a zero divisor reifies as flag `3`, rather than trapping |
 //! | `CheckedMod` | the same, mirroring `CheckedDiv` |
 //! | `BoundsCheck` | reifies an invalid index as flag `1` |
@@ -100,23 +100,24 @@ fn division_fixture(operation: Op, divisor: i64, discard_outcome: bool) -> Modul
     module
 }
 
-/// `Div` and `Mod` still trap on zero in hand-built bytecode.
+/// Legacy opcodes expose the same total integer outcome shape.
 #[test]
-fn the_plain_divide_and_modulo_trap_on_a_zero_divisor_as_the_spec_says() {
+fn the_plain_divide_and_modulo_reify_a_zero_divisor_as_the_spec_says() {
     for operation in [Op::Div, Op::Mod] {
-        let module = division_fixture(operation, 0, false);
-        assert!(ops(&module).contains(&operation));
-        assert!(matches!(
-            run("legacy division", module),
-            Err(VmError::DivisionByZero)
-        ));
-        assert!(matches!(
-            run(
-                "valid legacy division",
-                division_fixture(operation, 2, false)
-            ),
-            Ok(VmState::Finished(Value::Int(_)))
-        ));
+        for divisor in [0, 2] {
+            let module = division_fixture(operation, divisor, true);
+            assert!(ops(&module).contains(&operation));
+            let expected = if divisor == 0 {
+                7
+            } else if operation == Op::Div {
+                3
+            } else {
+                1
+            };
+            assert!(
+                matches!(run("total legacy division", module), Ok(VmState::Finished(Value::Int(n))) if n == expected)
+            );
+        }
     }
 }
 

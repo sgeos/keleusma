@@ -13,6 +13,32 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-15 Legacy arithmetic outcomes
+
+Leaving Div and Mod partially defined would invalidate a zero-Trap verdict over
+hand-built bytecode. They now share the existing checked arithmetic implementation
+and return its three outputs. This avoids maintaining a second integer division
+algorithm and preserves module-width overflow classification. Float source
+operations discard the outcomes. Fixed remainder now has both a valid runtime
+operand path and explicit zero-divisor dispatch in both compilers.
+
+The compiler audit found a second use of integer Div as an internal multiword
+zero-divisor guard. Replacing it with a conditional explicit Trap preserves the
+failure after Div becomes total. New controls assert the exact error variant and
+presence of the trap. Existing multiword tests accepted any error, so their green
+result alone would not have established that property.
+
+A broad regression exposed a stale GetIndex stack fixture from the earlier bounds
+work. It now expects seven outputs and also enumerates the new division and data
+operation effects. The final focused suite passes, with full stage artifact and
+resource results retained from the unchanged production implementation.
+
+The upcoming check-elision proof has an additional reentry obligation. A retained
+type guard may fail after an instruction consumes only some operands. The current
+run wrapper leaves that frame in place. Static module depth proofs alone cannot
+justify unchecked execution resumed from that state. The completion plan now
+requires proof invalidation or another justified safe transition after a fault.
+
 ## 2026-10-15 Data-read relocation and verification repair
 
 The private data-read record now carries a fallback kind above two 24-bit lanes.

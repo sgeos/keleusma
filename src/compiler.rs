@@ -2725,7 +2725,7 @@ fn emit_multiword_cond_negate(
 /// exclusive-or and the remainder takes the sign of the dividend. The
 /// operands are reduced to their magnitudes, an unsigned division runs,
 /// and the sign is reapplied. A zero divisor traps as a division by
-/// zero, reusing the scalar `Op::Div` trap.
+/// zero through an explicit conditional `Trap` instruction.
 ///
 /// The fixed-point divide pre-shifts the dividend left by F, because two
 /// same-scale operands a and b represent a/2^F and b/2^F, so the raw
@@ -2823,8 +2823,8 @@ fn compile_multiword_div(
         fc.emit(Op::SetLocal(bj));
         bdig.push(bj);
     }
-    // Divide-by-zero guard: 1 / (OR of divisor words) traps exactly when
-    // the divisor is all zeros, reusing the scalar zero-divisor trap.
+    // Trap explicitly when every divisor limb is zero. The arithmetic
+    // instructions themselves return outcomes rather than raising this fault.
     let b_or = fc.declare_local("__mw_bor");
     fc.emit(Op::GetLocal(bdig[0]));
     for w in bdig.iter().skip(1) {
@@ -2832,10 +2832,15 @@ fn compile_multiword_div(
         fc.emit(Op::BitOr);
     }
     fc.emit(Op::SetLocal(b_or));
-    fc.emit(Op::Const(one));
     fc.emit(Op::GetLocal(b_or));
-    fc.emit(Op::Div);
-    fc.emit(Op::PopN(1));
+    let zero_divisor = fc.add_constant(Value::Int(0));
+    fc.emit(Op::Const(zero_divisor));
+    fc.emit(Op::CmpEq);
+    let nonzero = fc.emit_jump(Op::If(0));
+    fc.emit(Op::Trap(crate::bytecode::TrapKind::ZeroDivisor.code()));
+    fc.record_operator_site(&right.span());
+    fc.patch_jump(nonzero);
+    fc.emit(Op::EndIf);
     // Sign masks (all ones when negative) and magnitudes.
     let sign_a = fc.declare_local("__mw_sga");
     let sign_b = fc.declare_local("__mw_sgb");
@@ -9317,6 +9322,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     } else {
                         fc.emit(Op::Div);
                         fc.record_operator_site(span);
+                        fc.emit(Op::PopN(2));
                     }
                 }
                 BinOp::Mod => {
@@ -9328,6 +9334,11 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     } else {
                         fc.emit(Op::Mod);
                         fc.record_operator_site(span);
+                        if left_fixed_n.is_some() {
+                            emit_bare_zero_divisor_guard(fc, span);
+                        } else {
+                            fc.emit(Op::PopN(2));
+                        }
                     }
                 }
                 BinOp::Eq | BinOp::NotEq => {

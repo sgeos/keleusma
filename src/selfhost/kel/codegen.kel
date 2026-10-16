@@ -657,10 +657,11 @@ fn push_local(p: Word) -> Word {
 // BinOp (kind 3): post-order schedule. The operator code selects the op word and
 // whether the result needs the two-word `PopN(2)` fixup:
 //   1 Add -> CheckedAdd (5) + PopN   2 Mul -> CheckedMul,0 (4) + PopN
-//   3 Sub -> CheckedSub (8) + PopN   4 Div -> Div (9)   5 Mod -> Mod (10)
+//   3 Sub -> CheckedSub (8) + PopN; division and remainder use total outcomes.
 //   6 Eq -> CmpEq (11) .. 11 GtEq -> CmpGe (16), i.e. tag opc+5
 //   12 band -> BitAnd (24), 13 bor -> BitOr (25), 14 bxor -> BitXor (26), tag opc+12
-// Only the checked arithmetic operators (1, 2, 3) take the PopN.
+// Word and Byte division dispatch zero-divisor outcomes. Float discards outcomes;
+// Fixed remainder retains its explicit zero-divisor dispatch.
 fn push_binop(p: Word) -> Word {
     let opc = ast.args[p] % 64;
     let legacy_division = ast.args[p] >= 64;
@@ -716,7 +717,10 @@ fn push_binop(p: Word) -> Word {
     if opc < 4 {
         push_emit(wire.popn + 2 * wire.radix);
     }
-    if (opc == 4 orelse opc == 5) andalso not legacy_division {
+    if (opc == 4 orelse opc == 5) andalso legacy_division andalso ast.args[p] / 64 == 5 {
+        push_emit(wire.popn + 2 * wire.radix);
+    }
+    if (opc == 4 orelse opc == 5) andalso (not legacy_division orelse ast.args[p] / 64 == 4) {
         // Forward order is checked-op, flag==3, If Trap EndIf, PopN(high).
         // Preserve the wrapping low result for every nonzero-divisor outcome.
         push_emit(wire.popn + wire.radix);

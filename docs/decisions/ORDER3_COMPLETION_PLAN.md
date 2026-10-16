@@ -69,10 +69,15 @@ outcome directly. The private record carries the fallback kind above its two
 24-bit address lanes. Relocation preserves valid kinds and refuses reserved kinds
 and oversized store lengths. No trap-free verdict or no-check mode exists.
 
-Legacy Div and Mod still fault on integer zero divisors in hand-built bytecode.
-The direct instruction-contract tests retain that negative control. A scan-based
-verdict must address these contracts as well as compiler output before admitting
-arbitrary verified modules as trap-free.
+Legacy Div and Mod now return low, high and flag outcomes in hand-built bytecode.
+Div shares CheckedDiv with fraction count zero. Mod shares CheckedMod for Word,
+Byte and Fixed and retains Float remainder with a floating-point outcome flag.
+Both compilers discard outcomes for bare Float operations and dispatch bare Fixed
+remainder zero divisors through an explicit trap. Multiword division and remainder
+now use an explicit zero-divisor test and trap. The
+[arithmetic contract](ORDER3_ARITHMETIC_CONTRACTS.md) records the stack, cost and
+remaining proof boundaries. Direct instruction and source execution controls cover
+these paths. Classification, host policy and proof-gated execution remain required.
 
 ## Operator decision recorded on 2026-10-13
 
@@ -251,17 +256,17 @@ fallback, preserving the public base and length operands. The verifier opcode
 profile is now 2048 because the expanded stage corpus exceeds 1536. Selected type
 capacities remain 640. Selected verification and its limits are recorded in the handoff.
 
-Legacy Div and Mod contracts are next. Inspect every compiler emission before
-changing them. In particular, compile_multiword_div still uses integer Div as its
-zero-divisor guard, and scalar Fixed remainder still selects Mod. They prevent
-assuming that all remaining legacy emissions are floating point. Preserve those
-source semantics and diagnostics while eliminating hidden first-pass integer
-language faults. Do not infer a whole-language proof from the twenty-case census.
+The legacy arithmetic contracts are now total for their numeric operands. The
+remaining internal language faults include raw FixedDiv and non-first-pass indexed
+or boxed field forms. Classifications must distinguish these unsupported forms
+from completed trap-free or possibly-trapping verdicts. The roadmap defers native
+error and newtype-refinement widening to Workstream F. Host-contract and unknown
+shape checks remain separate obligations.
 
-The required work remains these arithmetic contracts, matching classifications,
-host policy, proved check elision and the full completion audit. Non-first-pass
-value forms retain explicit availability boundaries. No new public opcode or
-version advance is authorized.
+Matching reference and Keleusma classifications are next, followed by host policy,
+proved check elision and the full completion audit. The classifier must scan the
+validated instruction profile rather than assume that zero Trap is sufficient for
+an unsupported module. No new public opcode or version advance is authorized.
 
 ## Debug verification recovery
 
@@ -274,3 +279,19 @@ by a successful measured invocation and a finite debug-only deadline adjustment.
 All four command tests then passed. The full quick suite was not rerun after that
 test-only adjustment. This recovery enables further verification and does not
 complete any of the outstanding trap-analysis deliverables.
+
+## Execution proof obligations identified during the arithmetic audit
+
+The current run wrapper preserves frames and operands after an error. For example,
+an indexed data read can consume an invalid fallback and return a type error
+before consuming the index. A module-level stack-depth proof does not describe
+that partially executed frame. Any future unchecked pop path must invalidate its
+execution-state proof on error and establish safe reentry behavior before allowing
+resume. A fresh call or replacement needs an explicitly justified proof transition.
+Breakpoint suspension, yields, resets, normal returns and failed replacement also
+need separate controls. Unknown operand kinds must retain their runtime guards.
+
+Static depth verification and validated instruction-cache bounds are candidate
+proofs for specific stack and dispatch check removal. They do not justify removing
+shape, lifetime, host-result or storage checks. Actual check elision remains
+unimplemented and requires its own negative controls and memory-safety evidence.

@@ -2320,9 +2320,12 @@ pub enum Op {
     /// multiplication goes through [`Op::FixedMul`] rather than this opcode,
     /// so this one is narrower still than `Add` and `Sub`.
     Mul,
-    /// Binary division.
+    /// Total division with the same low, high and flag results as CheckedDiv(0).
+    /// A zero integer divisor returns the numerator, typed zero and Word flag 3.
     Div,
-    /// Binary modulo.
+    /// Total remainder with low, high and Word flag results. Integer and Fixed
+    /// operands use CheckedMod outcomes. Float operands retain their remainder
+    /// with a zero high result and floating-point classification flag.
     Mod,
     /// Unary negation on `Byte`, `Fixed`, and `Float` operands.
     ///
@@ -2882,7 +2885,9 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         | Op::FixedDiv(_)
         | Op::Return => 2,
 
-        Op::Div | Op::Mod | Op::GetField(_) | Op::IsEnum(_, _, _) | Op::IsStruct(_) => 3,
+        Op::GetField(_) | Op::IsEnum(_, _, _) | Op::IsStruct(_) => 3,
+
+        Op::Div | Op::Mod => 5,
 
         Op::NewComposite(_) => 5,
 
@@ -2957,7 +2962,9 @@ impl Op {
             // three; net delta +2. The high half is the i128
             // intermediate's high 64 bits, providing the load-
             // bearing value for big-number multiplication.
-            Op::CheckedAdd
+            Op::Div
+            | Op::Mod
+            | Op::CheckedAdd
             | Op::CheckedSub
             | Op::CheckedMul(_)
             | Op::CheckedDiv(_)
@@ -2967,8 +2974,6 @@ impl Op {
             Op::Add
             | Op::Sub
             | Op::Mul
-            | Op::Div
-            | Op::Mod
             | Op::CmpEq
             | Op::CmpNe
             | Op::CmpLt
@@ -3056,7 +3061,9 @@ impl Op {
             // (pop 1, push 3). The growth/shrink split records
             // peak vs. final; shrink is zero because there is no
             // net pop.
-            Op::CheckedAdd
+            Op::Div
+            | Op::Mod
+            | Op::CheckedAdd
             | Op::CheckedSub
             | Op::CheckedMul(_)
             | Op::CheckedNeg
@@ -3066,8 +3073,6 @@ impl Op {
             Op::Add
             | Op::Sub
             | Op::Mul
-            | Op::Div
-            | Op::Mod
             | Op::CmpEq
             | Op::CmpNe
             | Op::CmpLt
