@@ -67,7 +67,8 @@ and returns a value with the portable diagnostic suffix. Both bare lowerings emi
 an explicit bounds trap. Both checked scalar data-read lowerings dispatch the
 outcome directly. The private record carries the fallback kind above its two
 24-bit address lanes. Relocation preserves valid kinds and refuses reserved kinds
-and oversized store lengths. No trap-free verdict or no-check mode exists.
+and oversized store lengths. The trap classifier is implemented below. No host
+trap-free policy or no-check execution mode exists yet.
 
 Legacy Div and Mod now return low, high and flag outcomes in hand-built bytecode.
 Div shares CheckedDiv with fraction count zero. Mod shares CheckedMod for Word,
@@ -263,10 +264,16 @@ from completed trap-free or possibly-trapping verdicts. The roadmap defers nativ
 error and newtype-refinement widening to Workstream F. Host-contract and unknown
 shape checks remain separate obligations.
 
-Matching reference and Keleusma classifications are next, followed by host policy,
-proved check elision and the full completion audit. The classifier must scan the
-validated instruction profile rather than assume that zero Trap is sufficient for
-an unsupported module. No new public opcode or version advance is authorized.
+Matching reference and Keleusma classifications are implemented in
+[ORDER3_TRAP_CLASSIFICATION.md](ORDER3_TRAP_CLASSIFICATION.md). Both validate before
+scanning the complete module and distinguish unsupported analysis from completed
+trap-free and possibly-trapping verdicts. The Keleusma structural stage owns its
+profile and Trap decisions through a separate raw-opcode mode. Verification is
+recorded in the handoff.
+
+Host policy is next, followed by proved check elision and the full completion audit.
+A public verdict is not an unchecked-execution certificate. No new public opcode
+or version advance is authorized.
 
 ## Debug verification recovery
 
@@ -289,7 +296,10 @@ that partially executed frame. Any future unchecked pop path must invalidate its
 execution-state proof on error and establish safe reentry behavior before allowing
 resume. A fresh call or replacement needs an explicitly justified proof transition.
 Breakpoint suspension, yields, resets, normal returns and failed replacement also
-need separate controls. Unknown operand kinds must retain their runtime guards.
+need separate controls. If an embedding host catches a panic, reentry must not
+reuse a proof from a partially executed frame. Proof invalidation must therefore
+cover unwinding as well as returned errors. Unknown operand kinds must retain
+their runtime guards.
 
 Static depth verification and validated instruction-cache bounds are candidate
 proofs for specific stack and dispatch check removal. They do not justify removing

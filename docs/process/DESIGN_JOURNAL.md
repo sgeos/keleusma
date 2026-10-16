@@ -13,6 +13,33 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-15 Independent trap-profile scan
+
+The total arithmetic and scalar bounds contracts make a syntactic trap scan
+meaningful within an explicit instruction profile. The reference uses an exhaustive
+match, so a new instruction requires an admission decision. The Keleusma stage
+receives wire identifiers and operand forms rather than host-computed safety flags.
+Separate predicate interventions demonstrate ownership of both Trap detection and
+unsupported-form admission.
+
+The structural verifier already has suitable bounded arrays. A separate mode
+reuses them without changing its structural protocols or adding a stage file.
+Each request resets verdict and location sentinels. The driver folds per-chunk
+results deterministically and validates stored, yielded and located responses.
+An unsupported instruction prevents a completed verdict even if another instruction
+is an explicit Trap. Invalid instruction metadata likewise cannot become MayTrap.
+
+The first build exposed two Rust type errors, repaired before execution. Clippy
+later requested a direct scalar-kind pattern. Final review also required checking
+the location in an invalid-subject response. An absent location is a broken
+analysis response, not evidence that the subject is invalid. The corresponding
+corruption control and final stage comparisons pass.
+
+These APIs do not grant unchecked execution. Host policy must compute a verdict
+before execution, and any execution certificate must additionally prove each
+removed check and its lifecycle invariants. Error and unwind reentry are explicit
+obligations because an instruction may already have consumed part of its inputs.
+
 ## 2026-10-15 Legacy arithmetic outcomes
 
 Leaving Div and Mod partially defined would invalidate a zero-Trap verdict over

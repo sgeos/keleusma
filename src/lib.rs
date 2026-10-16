@@ -244,6 +244,10 @@ pub mod text_size;
 #[cfg(feature = "verify")]
 pub mod verify;
 
+/// First-pass language-trap classification with explicit availability boundaries.
+#[cfg(feature = "verify")]
+pub mod trap_analysis;
+
 /// Per-site composite confinement: does the region a construction site builds
 /// become unreachable once its enclosing iteration ends? Sound but deliberately
 /// incomplete, with a third verdict distinguishing "no" from "cannot

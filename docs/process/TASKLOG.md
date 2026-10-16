@@ -6,6 +6,35 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-15 Matching trap classifications
+
+The reference and Keleusma APIs now classify validated modules as TrapFree or
+MayTrap with the first explicit trap location. Unsupported operations, invalid
+modules, capacity failures and unavailable analysis remain distinct errors. The
+scan includes unreachable code and every chunk. Runtime shape, lifetime, storage,
+resource and host-contract guards remain required.
+
+Mode two of verify_structural.kel owns both profile admission and Trap detection
+from raw wire tags and operand forms. Two stage interventions change those
+independent decisions. Malformed requests recover on the next valid request.
+Inconsistent responses, including invalid-subject reports without a valid
+instruction location, are unavailable analysis. Every current wire opcode is
+covered by the stage-profile control.
+
+The broad run passed all 1606 tests, including complete stage artifacts and
+resource admission. After a direct-pattern Clippy repair, opcode inventory
+coverage and response-location hardening, all twelve final focused tests pass.
+Both classifiers produce matching completed verdicts for every one of the fourteen
+current stage sources. Clippy, the detached build, six reference-only tests without
+floating-point support, a verification-only build and the capacity check pass.
+The broad suite was not replayed after those final changes.
+
+Host trap-free policy is next. The verdict is informational and is not a certificate
+for unchecked execution. Policy preservation, actual proved check elision and the
+full Order 3 audit remain required. Error and panic reentry must not reuse a proof
+from a partially executed frame. Version, fingerprint and selected capacities
+remain unchanged.
+
 ## 2026-10-15 Total legacy division and remainder
 
 Div and Mod now return low, high and flag outcomes. Integer zero divisors return
