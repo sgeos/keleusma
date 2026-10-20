@@ -286,12 +286,25 @@ Proved check elision is implemented in
 [ORDER3_PROVEN_EXECUTION.md](ORDER3_PROVEN_EXECUTION.md). A private image-bound
 certificate adds a bounded lower-depth proof with actual control-flow and reset
 edges. Runtime protocol states preserve its preconditions across entry, suspension,
-errors, unwinding and replacement. Actual pop, peek and counted-operand guards are
-removed only in that mode. The command-line runner and both validator backends
+errors, unwinding and replacement. Pop, peek and counted-operand guards were
+removed in that mode until 2026-10-20, when the operator ruled that the project
+rejects undefined behaviour and the guards were restored. The proof now
+establishes that they cannot fail. The command-line runner and both validator backends
 expose the corresponding policy and proof boundaries.
 
 The full completion audit is next. A public trap verdict alone remains insufficient
-for unchecked execution. No new public opcode or version advance is authorized.
+for proven execution.
+
+## Scope resolution of 2026-10-20
+
+The open question on source-level indexed-write handlers is resolved. The
+operator placed indexed-write handlers, native-call handlers and handler-required
+composite reads in Order 3 scope, from surface grammar to code generation. The
+rulings, the surface forms and the added acceptance rows are recorded in
+[ORDER3_HANDLER_SURFACE_PLAN.md](ORDER3_HANDLER_SURFACE_PLAN.md). The flags
+register that replaces in-band outcome flags is deferred to V0.2.4. Work needed
+to strengthen the Order 1 and Order 2 completion claims is listed in
+[COMPLETION_CLAIM_STRENGTHENING.md](COMPLETION_CLAIM_STRENGTHENING.md). No new public opcode or version advance is authorized.
 
 ## Debug verification recovery
 

@@ -193,31 +193,6 @@ fn the_stated_figures_say_how_they_were_measured() {
     );
 }
 
-/// **THE STAGE-SOURCE COUNT IN THE ORIENTATION DOCUMENT MATCHES THE DIRECTORY.**
-///
-/// `CLAUDE.md` said **ten** where the tree holds **twelve**, in two separate places, while every
-/// other document — the handoff's "all twelve stages", the `CONSTS` claim, the byte-identity
-/// corpus's "eleven of twelve" — said twelve. A reader calibrated on ten would have believed the
-/// corpus was two stages from complete when it is one.
-///
-/// # BOTH SIDES ARE DERIVED. NEITHER IS PINNED.
-///
-/// The expected count is read out of the prose and the actual out of the directory, so this stays
-/// correct on a branch that adds a stage, provided the document is updated with it. **That shape
-/// is deliberate**: the earlier failure in this family was a test that scanned a directory while
-/// pinning its answer as a constant, which made it wrong on another line's branch — right in the
-/// direction its own message called a coverage gain.
-///
-/// # The claim distinguishes two counts and so does this
-///
-/// Twelve sources exist; **eleven** are embedded in the driver via `include_str!`, and
-/// `verify_types.kel` is embedded by its tests instead. Conflating those is how the original
-/// wording came to be wrong in a way nobody noticed.
-///
-/// **THE EMBEDDED COUNT IS OVER DISTINCT NAMES, NOT OCCURRENCES, AND THE FIRST REVISION GOT THAT
-/// WRONG.** Counting `include_str!` occurrences reports twelve, because at least one stage is
-/// embedded at more than one site. The test failed on that and the instrument was corrected
-/// rather than the expectation — the failure was real evidence about the counter, not the tree.
 #[test]
 fn the_arena_integration_test_claim_matches_the_directory() {
     // The project instructions describe the arena crate's tests as a lib count
@@ -273,6 +248,33 @@ fn the_arena_integration_test_claim_matches_the_directory() {
     }
 }
 
+/// **THE STAGE-SOURCE COUNT IN THE ORIENTATION DOCUMENT MATCHES THE DIRECTORY.**
+///
+/// `CLAUDE.md` said **ten** where the tree holds **twelve**, in two separate places, while every
+/// other document — the handoff's "all twelve stages", the `CONSTS` claim, the byte-identity
+/// corpus's "eleven of twelve" — said twelve. A reader calibrated on ten would have believed the
+/// corpus was two stages from complete when it is one.
+///
+/// # BOTH SIDES ARE DERIVED. NEITHER IS PINNED.
+///
+/// The expected count is read out of the prose and the actual out of the directory, so this stays
+/// correct on a branch that adds a stage, provided the document is updated with it. **That shape
+/// is deliberate**: the earlier failure in this family was a test that scanned a directory while
+/// pinning its answer as a constant, which made it wrong on another line's branch — right in the
+/// direction its own message called a coverage gain.
+///
+/// # The claim distinguishes two counts and so does this
+///
+/// When this was written, twelve sources existed and eleven were embedded in the driver via
+/// `include_str!`, with `verify_types.kel` embedded by its tests instead. Conflating those is how
+/// the original wording came to be wrong in a way nobody noticed. Every stage source is now
+/// embedded, and the test asserts that the embedded set equals the directory inventory. This doc
+/// comment sat above the arena test until 2026-10-20, when it was moved to the test it describes.
+///
+/// **THE EMBEDDED COUNT IS OVER DISTINCT NAMES, NOT OCCURRENCES, AND THE FIRST REVISION GOT THAT
+/// WRONG.** Counting `include_str!` occurrences reports twelve, because at least one stage is
+/// embedded at more than one site. The test failed on that and the instrument was corrected
+/// rather than the expectation — the failure was real evidence about the counter, not the tree.
 #[test]
 fn the_stage_source_count_claim_matches_the_directory() {
     use std::collections::BTreeSet;

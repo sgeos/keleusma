@@ -13,6 +13,33 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-20 Opus 5.5 audit, retained checks and an executed effect table
+
+The audit's central finding about proven execution was not a defect but a
+dependency. The unchecked pop was sound exactly when every entry of
+verify::op_depth_effect matched its opcode's runtime effect, and the only check on
+that table compared it with a second static table. Two tables can agree with each
+other and both be wrong about the machine. The operator ruled that the project
+rejects undefined behaviour while admitting platform-specific behaviour, so the
+checks were restored rather than the proof strengthened. The proof keeps its
+value for timing analysis, since it establishes that the checks cannot fail.
+
+The new test measures the machine rather than a model. A breakpoint on every
+instruction position lets the test read the operand depth before and after each
+executed instruction. Two instrument errors were paid for on the way. Flat
+composite values do not compare equal to themselves under PartialEq, which
+first read as two operands being changed below the consumed window. Comparing
+debug renderings, which include the arena handle, is representation identity
+and resolved it. The second was the reach of the corpus. Eleven opcodes have no
+compiler emission site for source programs, including plain Add, Sub, Div, Mod
+and BoundsCheck, because the compiler now lowers through the checked forms. A
+corpus-only test would have passed while never measuring them, so hand-built
+subjects cover them and an exact coverage assertion keeps that visible.
+
+The method cannot see an understated requirement on an opcode that only peeks,
+because nothing below the declared window changes. With the checks retained,
+such an error now produces StackUnderflow instead of undefined behaviour.
+
 ## 2026-10-20 Audit-oriented handoff
 
 The receiving Opus 5.5 session may primarily audit existing work. The handoff

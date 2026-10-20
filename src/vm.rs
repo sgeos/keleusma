@@ -337,8 +337,11 @@ pub enum ExecutionChecks {
     /// Retain ordinary operand-pop underflow checks.
     #[default]
     Checked,
-    /// Remove operand-stack underflow checks only after structural, depth, resource and
-    /// trap-free proofs. Requires `TrapPolicy::RequireTrapFree`.
+    /// Run only after structural, depth, resource and trap-free proofs, which
+    /// establish that no operand-stack underflow check can fail on the certified
+    /// image. The checks themselves are retained, so a defect in the proof
+    /// surfaces as `VmError::StackUnderflow` rather than undefined behaviour.
+    /// Requires `TrapPolicy::RequireTrapFree`.
     Proven,
 }
 
@@ -7982,53 +7985,35 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         }
     }
 
+    // Proven execution keeps every operand-length check. The proof establishes
+    // that none of these checks can fail on the certified image, which is what
+    // the timing analysis relies on. It does not license unchecked access: an
+    // error in `verify::op_depth_effect` would turn a defined `StackUnderflow`
+    // into undefined behaviour, and the project admits platform-specific
+    // behaviour but never undefined behaviour (operator ruling, 2026-10-20).
+    // Agreement between that table and the runtime is pinned per opcode by
+    // `vm::operand_effect_agreement_tests` in `src/vm_operand_effect_tests.rs`.
     fn operand_start(&self, count: usize) -> Result<usize, VmError> {
-        if self.elide_pops {
-            // The lower-bound proof covers the complete immediate operand count.
-            Ok(self.stack.len().wrapping_sub(count))
-        } else {
-            self.stack
-                .len()
-                .checked_sub(count)
-                .ok_or(VmError::StackUnderflow)
-        }
+        self.stack
+            .len()
+            .checked_sub(count)
+            .ok_or(VmError::StackUnderflow)
     }
 
     fn peek_operand(&self) -> Result<&crate::bytecode::GenericValue<W, F>, VmError> {
-        if self.elide_pops {
-            // SAFETY: Same execution-state and lower-bound proof as `pop`.
-            // Peek opcodes require one initialized operand and preserve it.
-            let index = self.stack.len().wrapping_sub(1);
-            Ok(unsafe { &*self.stack.as_ptr().add(index) })
-        } else {
-            self.stack.last().ok_or(VmError::StackUnderflow)
-        }
+        self.stack.last().ok_or(VmError::StackUnderflow)
     }
 
     fn pop(&mut self) -> Result<crate::bytecode::GenericValue<W, F>, VmError> {
-        let result = if self.elide_pops {
-            #[cfg(test)]
-            {
+        #[cfg(test)]
+        {
+            if self.elide_pops {
                 self.pop_counts.1 = self.pop_counts.1.wrapping_add(1);
-            }
-            let index = self.stack.len().wrapping_sub(1);
-            // SAFETY: PopElisionProof validates a lower bound for every reachable
-            // operand consumption, including Return and loop back edges. Only a
-            // prepared entry can enable this path. Errors and unwinding poison
-            // reentry before any mutation, and replacement installs a new proof.
-            // Thus len is nonzero and index names an initialized element. Moving
-            // it and shortening the vector leaves no duplicate owner to drop.
-            unsafe {
-                self.stack.set_len(index);
-                Ok(self.stack.as_ptr().add(index).read())
-            }
-        } else {
-            #[cfg(test)]
-            {
+            } else {
                 self.pop_counts.0 = self.pop_counts.0.wrapping_add(1);
             }
-            self.stack.pop().ok_or(VmError::StackUnderflow)
-        };
+        }
+        let result = self.stack.pop().ok_or(VmError::StackUnderflow);
         #[cfg(test)]
         if self.panic_after_pop && result.is_ok() {
             self.panic_after_pop = false;
@@ -15542,6 +15527,10 @@ mod tests {
     }
 }
 
+#[cfg(all(test, feature = "compile", feature = "verify", feature = "floats"))]
+#[path = "vm_operand_effect_tests.rs"]
+mod operand_effect_agreement_tests;
+
 #[cfg(all(test, feature = "compile", feature = "verify"))]
 mod proof_elision_tests {
     extern crate std;
@@ -15561,7 +15550,7 @@ mod proof_elision_tests {
         }
     }
     #[test]
-    fn proof_elision_executes_unchecked_pops_and_preserves_results() {
+    fn proof_elision_executes_proven_pops_and_preserves_results() {
         for checks in [ExecutionChecks::Checked, ExecutionChecks::Proven] {
             let arena = crate::Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
             let (mut vm, _) = Vm::new_with_options(module(), &arena, options(checks)).unwrap();

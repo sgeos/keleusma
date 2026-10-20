@@ -6,6 +6,36 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-20 Opus 5.5 audit of the Codex V0.2.X work
+
+Branch feat/v02-order3-audit-followup, cut from feat/v02-order3-trap-analysis at
+36ebe64d. The audit covered the 65 commits from 89fc6aac. Three read-only
+reviews examined proven execution, opcode semantics and the completion claims.
+Findings and operator rulings are recorded in the reverse prompt and in
+docs/decisions/ORDER3_HANDLER_SURFACE_PLAN.md.
+
+Done in this increment, per operator direction.
+
+- Proven execution keeps every operand-length check. The unchecked pop, peek
+  and counted-operand paths are removed. The proof still establishes that the
+  checks cannot fail.
+- A unit test module, src/vm_operand_effect_tests.rs, steps every executed
+  instruction of 37 source programs and 13 hand-built subjects and compares
+  each observed stack change with verify::op_depth_effect. Every canonical
+  opcode is checked or excluded with a reason. Corrupting one net entry and
+  one pop requirement each made it fail.
+- STANDARD.md and STRUCTURAL_ISA.md no longer describe faults the runtime no
+  longer raises.
+- Scope of Order 3 resolved. Indexed-write handlers, native-call handlers and
+  handler-required composite reads are in scope. The flags register is V0.2.4.
+- docs/decisions/COMPLETION_CLAIM_STRENGTHENING.md lists the work needed to
+  strengthen the Order 1 and Order 2 claims.
+
+Open. A CI-shaped debug matrix on the unmodified 36ebe64d tree was still
+running at commit time. Implementation of the handler surface has not started.
+Source Fixed division still raises DivisionByZero without a Trap. The trap
+analysis reports it as unsupported, so no unsound verdict results.
+
 ## 2026-10-20 Handoff to Opus 5.5
 
 The operator requested a handoff and noted that Opus may do little more than audit

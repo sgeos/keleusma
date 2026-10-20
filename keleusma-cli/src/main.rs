@@ -133,9 +133,9 @@ fn print_help() {
         "                                    --require-trap-free refuses trapping or unproved input."
     );
     println!(
-        "                                    --proven-execution also removes proved operand-stack"
+        "                                    --proven-execution also proves operand-stack checks"
     );
-    println!("                                    checks and implies --require-trap-free.");
+    println!("                                    cannot fail and implies --require-trap-free.");
     println!("                                    Compile and execute a script.");
     println!("                                    Pass --verifying-key (repeatable) to verify");
     println!("                                    signed compiled bytecode against the");

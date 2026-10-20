@@ -2,9 +2,10 @@
 
 ## Implemented mode
 
-ExecutionChecks::Checked is the default. ExecutionChecks::Proven removes selected
-operand-stack underflow checks after obtaining a private certificate for the loaded
-image. It requires TrapPolicy::RequireTrapFree. The host must disable proven
+ExecutionChecks::Checked is the default. ExecutionChecks::Proven runs only after
+obtaining a private certificate for the loaded image, which proves that no
+operand-stack underflow check can fail. The checks themselves are retained. See
+the operator ruling below. It requires TrapPolicy::RequireTrapFree. The host must disable proven
 execution before relaxing trap policy. Runtime type, representation, lifetime,
 allocation, storage and other unproved checks remain active.
 
@@ -65,7 +66,7 @@ base, its runtime local count and the proved operand lower bound. Frame creation
 initializes its locals before dispatch. Successful instructions preserve the
 modeled effects. Internal calls establish a new local prefix and restore one
 result on return. Allocation and contract failures leave the dispatch loop and
-invalidate execution-state proof before another unchecked operation can run.
+invalidate execution-state proof before another proven operation can run.
 
 A completed Return requires an operand above the local prefix and truncates to
 the frame base. A Reset truncates to locals and requires exactly one resume input.
@@ -73,21 +74,39 @@ A Yield requires exactly one reply before continuation. A breakpoint requires no
 reply because it suspends before executing its instruction. The runtime entry
 protocol enforces those distinctions.
 
-## Removed checks and retained preconditions
+## Proved checks, all retained
 
-| Execution site | Removed check | Proof and remaining guards |
+| Execution site | Check proved unable to fail | Proof and remaining guards |
 |---|---|---|
-| pop helper | Per-pop empty-stack test | The instruction requires the consumed operand count. The unchecked path shortens the vector and moves the initialized last element through its typed pointer. |
-| peek helper | Empty-stack test for BoundsCheck, Dup, IsEnum and IsStruct | Each requires one operand and preserves it. The pointer borrow ends before a later stack mutation. |
+| pop helper | Per-pop empty-stack test | The instruction requires the consumed operand count. |
+| peek helper | Empty-stack test for BoundsCheck, Dup, IsEnum and IsStruct | Each requires one operand and preserves it. |
 | PopN | Underflow test before truncation | The complete immediate count is admitted by the lower-bound proof. Normal value destruction remains. |
 | NewComposite | Operand-count test before draining | The baked count is part of the validated instruction effect. Standard container, allocation, representation and layout checks remain. |
 | Call argument extraction | Underflow test for the argument prefix | The call's argument count is part of the instruction effect. Callee-index and local-storage checks remain. |
 
-This is actual check removal. The single-value and peek paths use typed pointer
-access without an emptiness branch. The counted paths use the proved subtraction.
-Internal instrumentation exercises unchecked pops and requires zero checked pops
-on the proven control, with the opposite result in checked mode. No hardware
-speedup claim is made from that control.
+### Operator ruling, 2026-10-20
+
+The first implementation removed these checks. The single-value and peek paths
+used raw pointer access without an emptiness branch and the counted paths used a
+wrapping subtraction. Soundness then rested entirely on every entry of
+verify::op_depth_effect matching the runtime effect of its opcode, and no test
+compared the two. A single wrong entry would have produced undefined behaviour
+where the checked path produces StackUnderflow.
+
+The operator ruled that the project rejects undefined behaviour while admitting
+platform-specific behaviour, and directed that a real length check be kept on the
+fast path and that the agreement be tested. The checks are therefore retained in
+both modes. The proof still establishes that they cannot fail, which is the
+property the timing analysis depends on. The unit test module in
+src/vm_operand_effect_tests.rs steps every executed instruction of a source
+corpus and of hand-built subjects for the opcodes no compiler emits. It
+compares each observed stack change with the table, and requires every opcode
+to be checked or explicitly excluded with a reason. An understated requirement
+on a peek-only opcode remains invisible to that method, as its header records.
+
+Internal instrumentation still distinguishes the proven control from the checked
+control by counting which mode performed each pop. No hardware speedup claim is
+made from that control.
 
 ## Execution-state protocol
 
@@ -121,7 +140,8 @@ consuming back edges, reset reentry, wrong resume methods, runtime type failures
 cache/image disagreement, failed and successful replacement, authenticated and
 borrowed loading, explicit mode changes and verification-disabled refusal.
 
-Memory controls exercise actual unchecked pops, error recovery, caught dispatch
+Memory controls, recorded before the 2026-10-20 ruling, exercised the then
+unchecked pops, error recovery, caught dispatch
 panics, private-value destructor panics and borrowed-buffer cleanup under Tree
 Borrows. Command-line controls exercise source execution, both compiler artifacts,
 both validator backends, strict rejection, unavailable analysis and the distinction

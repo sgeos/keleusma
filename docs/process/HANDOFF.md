@@ -1,3 +1,29 @@
+# V0.2.X after the Opus 5.5 audit
+
+Written 2026-10-20. This is the current startup block. It supersedes the Codex
+block below, which remains accurate for its own anchor and is retained as the
+audit's starting point.
+
+The audit of the 65 Codex commits is complete. Its findings, the operator rulings
+given during it, the work done and the verification receipts are in
+REVERSE_PROMPT.md. The work is on feat/v02-order3-audit-followup, cut from
+feat/v02-order3-trap-analysis at 36ebe64d and intended to merge back into it.
+
+Validity. Confirm that 36ebe64d is an ancestor of HEAD and that HEAD is on the
+follow-up branch or a successor. Inspect `git log 36ebe64d..HEAD`. Confirm that
+src/vm.rs contains no unsafe block in its pop, peek_operand or operand_start
+helpers, that src/vm_operand_effect_tests.rs exists, and that
+docs/decisions/ORDER3_HANDLER_SURFACE_PLAN.md records the 2026-10-20 rulings.
+BYTECODE_VERSION is 2 and the opcode count is 66. Ancestry alone cannot detect
+staleness, so report unperformed checks explicitly.
+
+Next work. Open a pull request so the branch reaches remote continuous
+integration for the first time, and measure whether its debug test job fits the
+runner limit. Then implement the handler surface plan. The Order 1 and Order 2
+strengthening list is in docs/decisions/COMPLETION_CLAIM_STRENGTHENING.md.
+
+---
+
 # V0.2.X handoff to Opus 5.5
 
 Refreshed on 2026-10-20 against implementation commit
@@ -983,7 +1009,7 @@ the test rather than grepping for the classification**, which is how a wrong fig
 earlier in this line's history.
 
 **That figure is stated here twice ON PURPOSE, and a test requires it.**
-`the_boundary_table_counts_match_the_handoff_and_the_names_match_the_labels` derives the triple by
+`the_boundary_table_counts_match_the_roadmap_and_the_names_match_the_labels` [historical name the\_boundary\_table\_counts\_match\_the\_handoff\_and\_the\_names\_match\_the\_labels, renamed or replaced in ace23d6c] derives the triple by
 calling `boundary_cases` and then demands at least two occurrences of it in this file, so a branch
 adding a case silently turns the document red instead of leaving it quietly wrong. **The refresh of
 2026-09-03 deleted one of the two and broke that test**, which the pre-push hook cannot see, because
@@ -1168,7 +1194,7 @@ emits none can REJECT A CORRECT PROGRAM. A body with no tail expression reconstr
 **synthesised payload-0 unit**, the same shape as the synthesised else arm. What separates them is
 that the only source expression that would also land there is a written `()`, and the pipeline
 refuses it -- pinned in the FAILING direction by
-`a_written_unit_expression_is_refused_by_the_pipeline`, so admitting `()` later breaks the test
+`a_written_unit_expression_remains_a_real_tail` [historical name a\_written\_unit\_expression\_is\_refused\_by\_the\_pipeline, renamed or replaced in ace23d6c], so admitting `()` later breaks the test
 rather than quietly making the descent unsound.
 
 **TWO LOSSES ARE PINNED RATHER THAN PAPERED OVER.** A multiheaded group emits NO tail row at all,
@@ -1216,8 +1242,8 @@ stage reject a correct program, and a DROPPED row makes it miss a disagreement i
 stronger than the earlier wording that it could not be shown safe. A written `else { }` and an
 implicit arm produce the SAME parse record stream, while the reference separates them by
 `else_block.is_some()`, so the distinguishing information never reaches this side.
-`a_one_armed_conditional_is_why_the_branch_pair_does_not_move` pins the witness, and
-`an_empty_else_is_indistinguishable_from_an_implicit_one` establishes the impossibility.
+`branch_pair_rows_follow_explicit_else_presence` [historical name a\_one\_armed\_conditional\_is\_why\_the\_branch\_pair\_does\_not\_move, renamed or replaced in 778bfb35] pins the witness, and
+`an_empty_else_is_distinguished_from_an_implicit_one` [historical name an\_empty\_else\_is\_indistinguishable\_from\_an\_implicit\_one, renamed or replaced in 778bfb35] establishes the impossibility.
 
 **THE THREE COMPOSITE KINDS ARE THE REMAINING RISK, WITH EVIDENCE RATHER THAN A HUNCH.** The
 occurrences slice established that the two sides **disagree about what a node IS** for a composite:
