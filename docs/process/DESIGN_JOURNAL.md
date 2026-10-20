@@ -13,6 +13,16 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-20 Audit-oriented handoff
+
+The receiving Opus 5.5 session may primarily audit existing work. The handoff
+therefore identifies the implementation anchor, separates baseline failures from
+post-repair receipts, and gives reproducible commands without claiming new runs.
+The unresolved source-write-handler scope remains explicit. The old startup block
+was seventy-three commits behind the current implementation, so a new leading
+block supplies current validity checks while preserving historical material.
+No completion, merge or publication claim is made.
+
 ## 2026-10-15 Audit repairs preserved before continuation
 
 The broader audit exposed metadata-only wire operations consuming an unnecessary

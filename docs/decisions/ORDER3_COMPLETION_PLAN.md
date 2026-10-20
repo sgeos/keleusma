@@ -5,7 +5,10 @@
 Complete the V0.2.X roadmap's first-pass trap analysis, including total partial
 operations, both compiler lowerings, reference and Keleusma verdicts, and a host
 no-check mode gated on valid proof. The first pass covers the Word and Byte
-arithmetic and bounds classes used by the toolchain. The goal remains active.
+arithmetic and bounds classes used by the toolchain. As of the 2026-10-20 handoff
+to Opus 5.5, the goal is paused and incomplete. The receiving session should begin
+with the audit recorded in docs/process/REVERSE_PROMPT.md. The expectation of
+primarily audit work does not waive any acceptance requirement below.
 
 The starting commit is 1cfb6dd9 on feat/v02-order3-trap-analysis. Order 2 is complete.
 Its selected typed widening and retained runtime guards remain binding until Order 3
