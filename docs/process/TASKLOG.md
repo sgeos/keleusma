@@ -6,6 +6,22 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-20 Wire stage restored to the type stage's name channel
+
+The CI-shaped debug matrix on the unmodified 36ebe64d tree failed five
+workspace tests, each on all three attempts. The cause is 53b88f52, which added
+mi_scan_max_nodes and mi_names_prepare to wire.kel. The chunk count moved from
+562 to 564, so three pins failed. The distinct name-occurrence rows reached 642
+against the type stage's 640-row channel, so wire.kel left the set of stage
+sources whose tables fit. That is a capacity regression, not only a stale pin.
+
+No capacity was raised. A private copy of the struct tag was replaced by
+tag_struct, an uncalled copy of the static-string tag was removed, and the
+one-call mi_pairs wrapper was inlined at its dispatch arm. The stage has 561
+chunks. Two distinct called names were removed, so the channel is inferred to
+hold exactly 640 rows. The passing capacity test confirms only that it holds
+at most 640. The three pins record the cause.
+
 ## 2026-10-20 Opus 5.5 audit of the Codex V0.2.X work
 
 Branch feat/v02-order3-audit-followup, cut from feat/v02-order3-trap-analysis at

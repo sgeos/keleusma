@@ -3141,14 +3141,6 @@ fn mi_bounded(v: Word) -> Word {
 // and the constant nodes written instead. ONE WALK rather than two, because a
 // second walk would compute `names_first` from a counter with its own history
 // and the two could drift without any test noticing.
-// The pair entry point. Sets `quiet` explicitly rather than trusting it: private
-// data PERSISTS across calls in the arena, unlike shared data which is re-seeded,
-// so a flag left set by a previous call would silently suppress this one`s output.
-fn mi_pairs() -> Word {
-    nm.mode = mi_mode_pairs();
-    mi_chunk_names()
-}
-
 fn mi_const_nodes() -> Word {
     nm.mode = mi_mode_nodes();
     nm.sink = mi_chunk_names();
@@ -3326,8 +3318,11 @@ fn mi_slot_names() -> Word {
 // output, so a producer that walked it would be checked by nothing. The tag is
 // still read and still dispatched, so a composite tag arriving here is refused
 // rather than silently treated as a scalar.
-fn mi_tag_static_str() -> Word { wire_seven() }
-
+//
+// The node tags are the constant-forest tags declared with `tag_unit` above.
+// A private copy of the struct tag and an uncalled copy of the static-string
+// tag were removed on 2026-10-20. Each distinct called name costs one row of
+// the type stage's 640-row name channel, and this stage sits at that cap.
 fn mi_tag_is_composite(t: Word) -> Word {
     if t == 8 { 1 } else {
     if t == 9 { 1 } else {
@@ -3348,12 +3343,10 @@ fn mi_tag_is_composite(t: Word) -> Word {
 // A single "a composite interns its names" rule would be wrong for one of the
 // two, and only where a name repeats.
 fn mi_name_mode(tag: Word, i: Word) -> Word {
-    if tag == mi_tag_struct() {
+    if tag == tag_struct() {
         if i == 0 { nm_mode_intern() } else { nm_mode_fresh() }
     } else { nm_mode_intern() }
 }
-
-fn mi_tag_struct() -> Word { 10 }
 
 fn mi_const_names() -> Word {
     nm.cbase = nm.cnt;
@@ -4944,7 +4937,12 @@ fn dispatch_driver2(cmd: Word) -> Word {
     // Slice 14: the module-input producer. Fourteen arms in this chain, which is
     // four clear of `emit_at`'s eighteen, so there is room here that there is not
     // there.
-    if cmd == 165 { mi_pairs() } else {
+    // The pair entry point, inlined because a one-call wrapper spends a row of
+    // the type stage's name channel. It sets the mode explicitly rather than
+    // trusting it: private data PERSISTS across calls in the arena, unlike
+    // shared data which is re-seeded, so a mode left set by a previous call
+    // would silently suppress this one's output.
+    if cmd == 165 { nm.mode = mi_mode_pairs(); mi_chunk_names() } else {
     if cmd == 166 { mi_const_nodes() } else {
     if cmd == 167 { mi_join() } else {
     if cmd == 168 { mi_join_header() } else {

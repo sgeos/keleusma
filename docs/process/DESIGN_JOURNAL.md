@@ -13,6 +13,23 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-20 A repair that passed its targeted runs and left the corpus
+
+53b88f52 was confirmed only by targeted runs, and its wire.kel change cost
+two rows of the type stage's name-occurrence channel. The channel counts
+distinct (name, local, call) facts, so every newly called function name costs
+one row regardless of how often it is called. The corpus measurement that
+catches this lives in tests/selfhost_typecheck.rs, which the targeted runs did
+not include.
+
+The repair removes names rather than raising the cap, because capacity raises
+in this line have lacked recorded sign-off and the operator has not asked for
+one. Inlining mi_scan_max_nodes was tried first and abandoned, because
+tests/selfhost_wire.rs reads that constant from the source by name. The three
+helpers removed instead had no reader outside the stage. The stage is inferred
+to sit exactly at 640, so the next new called name in wire.kel would fail the
+same test. That is the intended signal, not a margin.
+
 ## 2026-10-20 Opus 5.5 audit, retained checks and an executed effect table
 
 The audit's central finding about proven execution was not a defect but a

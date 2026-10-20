@@ -84,9 +84,17 @@ ignored tmp/opus-audit-20261020 directory of the primary checkout.
 | `cargo fmt --check` | passed |
 
 The full five-configuration matrix was NOT run on this branch. A CI-shaped debug
-matrix on the unmodified 36ebe64d tree was in flight at commit time. After about
-two hours its workspace run had passed 2241 of 3430 tests with no failure.
-Several self-host tests had each run for over an hour in debug mode.
+matrix ran on the unmodified 36ebe64d tree. Its workspace run took 14,901
+seconds and passed 3425 of 3430 tests. The other five failed on all three
+attempts. No-default-features, signatures and signatures,shell passed, with
+their documentation tests.
+
+The five failures came from 53b88f52. It added two functions to wire.kel, so
+three chunk-count pins moved, and it pushed wire.kel two rows past the type
+stage's 640-row name-occurrence channel. The second effect is a capacity
+regression. A follow-up commit removes three redundant helpers rather than
+raising any capacity. See the TASKLOG entry. The two capacity tests pass after
+it, and the binaries that read wire.kel were rerun in debug.
 
 ## Concerns
 
@@ -101,7 +109,10 @@ Several self-host tests had each run for over an hour in debug mode.
 
 ## Intended next step
 
-Report the debug matrix result when it completes. Then open a pull request so
-the branch reaches remote continuous integration for the first time. The
+A pull request into v0.2.3 was opened at the operator's request, so the
+branch reaches remote continuous integration for the first time. Its result,
+and whether the debug test job fits GitHub's six-hour default, decide the
+merge. The self-host set of the local matrix was still running when the pull
+request was opened. The
 handler surface implementation follows the plan document. Its acceptance rows
 are listed there. Codex or Claude may take it.

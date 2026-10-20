@@ -164,7 +164,10 @@ fn the_self_hosted_compiler_can_now_compile_wire_kel() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
 
     let module = keleusma::selfhost::self_host_compile(WIRE);
-    // 562 after separating the module-forest and raw-node capacities.
+    // 561 after a metadata-only name preparation function and scan bound (+2),
+    // less a duplicate struct tag, an uncalled tag and a one-call wrapper (-3),
+    // removed to keep the stage inside the type stage's 640-row name channel.
+    // Previously 562 after separating the module-forest and raw-node capacities.
     // Previously 561 after nine reader functions and inlining fourteen numeric helpers.
     // Previously 566 after the auxiliary-directory begin and step functions.
     // Previously 564 after six semantic opcode decoder functions.
@@ -188,7 +191,7 @@ fn the_self_hosted_compiler_can_now_compile_wire_kel() {
     // reason, and this is the chunk count.
     assert_eq!(
         module.chunks.len(),
-        562,
+        561,
         "`wire.kel`'s chunk count moved. A function is a chunk, so this figure moves whenever \
          the stage gains or loses one -- update it WITH the cause, as the comment above does"
     );

@@ -15,7 +15,9 @@ module limit and refusal one node beyond it. The three module scratch arrays occ
 
 The 92-function code generator exceeds the legacy 90-record batch. Its measured refusal
 is recorded separately from the streaming path, which still accepts every stage. The wire
-stage now has 562 functions. No public opcode or bytecode-version change occurred.
+stage had 562 functions at this point and has 561 since 2026-10-20, when three
+redundant helpers were removed to keep it inside the type stage's 640-row name channel.
+No public opcode or bytecode-version change occurred.
 The earlier dated sections below retain their historical scope and receipts.
 
 ## 2026-10-11 Keleusma derives logical data-layout runs

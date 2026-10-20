@@ -3070,7 +3070,10 @@ fn wire_kel_parses_correctly_now_that_the_bare_loop_form_is_supported() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
     let parsed = keleusma::selfhost::try_parse_functions(WIRE)
         .expect("wire.kel must parse now that the bare `for` form is lowered");
-    // 562 after separating the module-forest and raw-node capacities.
+    // 561 after a metadata-only name preparation function and scan bound (+2),
+    // less a duplicate struct tag, an uncalled tag and a one-call wrapper (-3),
+    // removed to keep the stage inside the type stage's 640-row name channel.
+    // Previously 562 after separating the module-forest and raw-node capacities.
     // Previously 561 after nine reader functions and inlining fourteen numeric helpers.
     // Previously 566 after the auxiliary-directory begin and step functions.
     // Previously 564 after six semantic opcode decoder functions.
@@ -3090,7 +3093,7 @@ fn wire_kel_parses_correctly_now_that_the_bare_loop_form_is_supported() {
     // both moved together, which is what a figure with two independent derivations should do.
     assert_eq!(
         parsed.functions.len(),
-        562,
+        561,
         "`wire.kel` parsed to {} chunks. The count is pinned because it is the corpus worst \
          case and the thing the chunk cap is sized against: PARSE_CHUNK_CAP is {}, so a \
          stage growing toward it is visible here rather than at the wall.",
