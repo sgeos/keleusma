@@ -4658,6 +4658,19 @@ fn param_name_is_used(body: &Block, name: &str) -> bool {
             Expr::Checked { op_expr, arms, .. } => {
                 expr_uses(op_expr, name) || arms.iter().any(|arm| expr_uses(&arm.body, name))
             }
+            Expr::DataIndexStore {
+                indices,
+                value,
+                arms,
+                ..
+            } => {
+                indices.iter().any(|e| expr_uses(e, name))
+                    || expr_uses(value, name)
+                    || arms.iter().any(|arm| {
+                        arm.guard.as_ref().is_some_and(|g| expr_uses(g, name))
+                            || expr_uses(&arm.body, name)
+                    })
+            }
             Expr::SaturateMax { .. } | Expr::SaturateMin { .. } => false,
             Expr::Classify { value, .. } | Expr::Declassify { value, .. } => expr_uses(value, name),
         }
@@ -5312,14 +5325,33 @@ fn emit_data_indexed_read(
     Ok(())
 }
 
-/// Emit a `state.field[i][j]... = value` write. The value is
-/// already on the stack from the caller; the helper appends the
-/// offset arithmetic and `Op::SetDataIndexed`.
-fn emit_data_indexed_write(
+/// The data range and element of an indexed write, after its probe.
+struct DataWriteProbe {
+    base: u32,
+    total: u32,
+    element: TypeExpr,
+    /// The probe was `GetDataIndexed`, so the element's value lies beneath
+    /// the index on the operand stack. Otherwise it was `BoundsCheck`.
+    read_old: bool,
+}
+
+/// Evaluate the index of a `state.field[i]... = value` write and probe its
+/// bound before the value is evaluated.
+///
+/// The operator ruled on 2026-10-21 that the index is evaluated first and
+/// that an invalid index skips the value on bare and handled writes alike.
+/// The probe leaves `[old,] offset, limb0..limb3, flag` on the operand
+/// stack, the same shape `SetDataIndexed` and the handled read produce, so
+/// `Trap(8)` can take its payload directly. The probe is `BoundsCheck`
+/// when the field's slot count fits its sixteen-bit operand. A longer field
+/// has only the twenty-four-bit `GetDataIndexed`, which also reads the
+/// element; that read is the one case in which the old value is loaded
+/// although no handler binds it.
+fn emit_data_write_probe(
     fc: &mut FuncCompiler,
-    chain: DataIndexedChain<'_>,
+    chain: &DataIndexedChain<'_>,
     span: Span,
-) -> Result<(), CompileError> {
+) -> Result<DataWriteProbe, CompileError> {
     if !fc.is_data_block(chain.data_name) {
         return Err(CompileError {
             message: format!("unknown data block: {}", chain.data_name),
@@ -5355,8 +5387,46 @@ fn emit_data_indexed_write(
             span,
         })?;
     let total = emit_indexed_offset(fc, &field_type, &chain.indices, span)?;
-    fc.emit(Op::SetDataIndexed(base, total));
+    let mut element = field_type;
+    for _ in &chain.indices {
+        if let TypeExpr::Array(inner, _, _) = element {
+            element = *inner;
+        }
+    }
+    let read_old = match u16::try_from(total) {
+        Ok(bound) => {
+            fc.emit(Op::BoundsCheck(bound));
+            false
+        }
+        Err(_) => {
+            fc.emit_data_fallback(&element);
+            fc.emit(Op::GetDataIndexed(base, total));
+            true
+        }
+    };
     fc.record_operator_site(&span);
+    Ok(DataWriteProbe {
+        base,
+        total,
+        element,
+        read_old,
+    })
+}
+
+/// Emit a bare `state.field[i][j]... = value;` write.
+///
+/// Index, probe, the default `Trap(8)` on an invalid index, the offset held
+/// in a local while the value is evaluated, then `SetDataIndexed`, whose
+/// outcome the probe has already decided, so its six result words are
+/// dropped. `SetDataIndexed` pops the index above the value and no opcode
+/// exchanges two operands, which is why the offset needs the local.
+fn emit_data_indexed_write(
+    fc: &mut FuncCompiler,
+    chain: DataIndexedChain<'_>,
+    value: &Expr,
+    span: Span,
+) -> Result<(), CompileError> {
+    let probe = emit_data_write_probe(fc, &chain, span)?;
     let invalid = fc.add_constant(Value::Int(1));
     fc.emit(Op::Const(invalid));
     fc.emit(Op::CmpEq);
@@ -5365,7 +5435,242 @@ fn emit_data_indexed_write(
     fc.record_operator_site(&span);
     fc.patch_jump(valid);
     fc.emit(Op::EndIf);
-    fc.emit(Op::PopN(5));
+    fc.emit(Op::PopN(4));
+    let offset = fc.declare_local(&alloc::format!("__store_i_{}", span.start));
+    fc.emit(Op::SetLocal(offset));
+    if probe.read_old {
+        fc.emit(Op::PopN(1));
+    }
+    compile_expr(fc, value)?;
+    fc.emit(Op::GetLocal(offset));
+    fc.emit(Op::SetDataIndexed(probe.base, probe.total));
+    fc.emit(Op::PopN(6));
+    Ok(())
+}
+
+/// Emit a handled indexed write, `state.field[i] = value { ok(old, new) =>
+/// ..., invalid_index(j) => ... }`, as an expression of its arms' type.
+///
+/// The probe's outcome is held in locals, the value is evaluated and
+/// written only on success, and the arms then dispatch through the same
+/// virtual loop as the handled read, on flag zero for `ok` and one for
+/// `invalid_index`. The element is read before the write only when some
+/// `ok` arm binds `old`, unless the probe itself had to read it. A write
+/// without an unguarded catch-all `invalid_index` arm ends in the default
+/// `Trap(8)`.
+///
+/// **Slot numbering follows the source, not the emission order.** The
+/// self-hosted parser numbers locals as it streams tokens. It reserves the
+/// offset slot at `=`, after any local the index expression declares, and
+/// it can reserve the outcome block only on reaching the arm block's `{`,
+/// after any local the value declares. Slots here are therefore declared in
+/// that order: the offset after the index, then the value's own locals,
+/// then a block of seven, flag, old, the four bound limbs and new, then the
+/// arm binders. The block is declared after the value is compiled, so the
+/// instructions that address it before that point are emitted with a
+/// placeholder slot and patched. The block always has seven slots, even
+/// when `old` or `new` is unbound, because the parser reserves it before it
+/// has read the arms.
+fn compile_data_index_store(
+    fc: &mut FuncCompiler,
+    data_name: &str,
+    field: &str,
+    indices: &[Expr],
+    value: &Expr,
+    arms: &[crate::ast::CheckedArm],
+    span: Span,
+) -> Result<(), CompileError> {
+    use crate::ast::CheckedArmKind;
+    if indices.len() != 1 {
+        return Err(CompileError {
+            message: String::from("a handled indexed write takes exactly one index"),
+            span,
+        });
+    }
+    let binds_old = arms.iter().any(|arm| {
+        matches!(
+            &arm.kind,
+            CheckedArmKind::StoreOk(Pattern::Variable(_, _), _)
+        )
+    });
+    let binds_new = arms.iter().any(|arm| {
+        matches!(
+            &arm.kind,
+            CheckedArmKind::StoreOk(_, Pattern::Variable(_, _))
+        )
+    });
+    let word_ty = TypeExpr::Prim(PrimType::Word, span);
+    let chain = DataIndexedChain {
+        data_name,
+        field,
+        indices: indices.iter().collect(),
+    };
+    let probe = emit_data_write_probe(fc, &chain, span)?;
+    let suffix = span.start;
+    let offset = fc.declare_local(&alloc::format!("__store_i_{}", suffix));
+
+    // Block-relative positions of the seven-slot outcome block.
+    const FLAG: u16 = 0;
+    const OLD: u16 = 1;
+    const LIMB0: u16 = 2;
+    const NEW: u16 = 6;
+    // (op index, block-relative slot) for every instruction that names a
+    // block slot before the block is declared.
+    let mut pending: Vec<(usize, u16)> = Vec::new();
+    pending.push((fc.emit(Op::SetLocal(0)), FLAG));
+    for i in (0..4).rev() {
+        pending.push((fc.emit(Op::SetLocal(0)), LIMB0 + i));
+    }
+    fc.emit(Op::SetLocal(offset));
+    if probe.read_old {
+        if binds_old {
+            pending.push((fc.emit(Op::SetLocal(0)), OLD));
+        } else {
+            fc.emit(Op::PopN(1));
+        }
+    }
+
+    // Success branch: read the old element when needed, then evaluate and
+    // write the value. The value is never evaluated on an invalid index.
+    pending.push((fc.emit(Op::GetLocal(0)), FLAG));
+    let zero = fc.add_constant(Value::Int(0));
+    fc.emit(Op::Const(zero));
+    fc.emit(Op::CmpEq);
+    let skip = fc.emit_jump(Op::If(0));
+    if binds_old && !probe.read_old {
+        fc.emit(Op::GetLocal(offset));
+        fc.emit_data_fallback(&probe.element);
+        fc.emit(Op::GetDataIndexed(probe.base, probe.total));
+        // Drop the flag, the four limbs and the index, keeping the element.
+        fc.emit(Op::PopN(6));
+        pending.push((fc.emit(Op::SetLocal(0)), OLD));
+    }
+    compile_expr(fc, value)?;
+    if binds_new {
+        fc.emit(Op::Dup);
+        pending.push((fc.emit(Op::SetLocal(0)), NEW));
+    }
+    fc.emit(Op::GetLocal(offset));
+    fc.emit(Op::SetDataIndexed(probe.base, probe.total));
+    fc.emit(Op::PopN(6));
+    fc.patch_jump(skip);
+    fc.emit(Op::EndIf);
+
+    // The value's own locals are now numbered, so the block can be.
+    let block = fc.declare_local(&alloc::format!("__store_flag_{}", suffix));
+    fc.declare_local(&alloc::format!("__store_old_{}", suffix));
+    for i in 0..4 {
+        fc.declare_local(&alloc::format!("__store_bound_{}_{}", suffix, i));
+    }
+    fc.declare_local(&alloc::format!("__store_new_{}", suffix));
+    for (at, rel) in pending {
+        match &mut fc.chunk.ops[at] {
+            Op::SetLocal(slot) | Op::GetLocal(slot) => *slot = block + rel,
+            _ => unreachable!("only local accesses are deferred"),
+        }
+    }
+    let flag = block + FLAG;
+    let limbs: [u16; 4] = core::array::from_fn(|i| block + LIMB0 + i as u16);
+    let old_slot = binds_old.then_some(block + OLD);
+    let new_slot = binds_new.then_some(block + NEW);
+
+    // Dispatch arms in a virtual loop, mirroring the handled read.
+    let loop_addr = fc.emit(Op::Loop(0));
+    fc.enter_loop();
+    for arm in arms {
+        fc.begin_scope();
+        let mut fail_addrs: Vec<usize> = Vec::new();
+        let class_flag: i64 = match &arm.kind {
+            CheckedArmKind::StoreOk(_, _) => 0,
+            CheckedArmKind::InvalidIndex(_) => 1,
+            _ => {
+                return Err(CompileError {
+                    message: String::from(
+                        "internal error: non-write arm in a handled indexed write",
+                    ),
+                    span,
+                });
+            }
+        };
+        fc.emit(Op::GetLocal(flag));
+        let cidx = fc.add_constant(Value::Int(class_flag));
+        fc.emit(Op::Const(cidx));
+        fc.emit(Op::CmpEq);
+        fail_addrs.push(fc.emit_jump(Op::If(0)));
+        match &arm.kind {
+            CheckedArmKind::StoreOk(old, new) => {
+                for (pat, slot) in [(old, old_slot), (new, new_slot)] {
+                    if let (Pattern::Variable(name, _), Some(slot)) = (pat, slot) {
+                        let v_slot = fc.declare_local_typed(name, Some(probe.element.clone()));
+                        fc.emit(Op::GetLocal(slot));
+                        fc.emit(Op::SetLocal(v_slot));
+                    }
+                }
+            }
+            CheckedArmKind::InvalidIndex(pat) => {
+                if let Pattern::Literal(crate::ast::Literal::Int(v), _) = pat {
+                    fc.emit(Op::GetLocal(offset));
+                    let lit = fc.add_constant(Value::Int(*v));
+                    fc.emit(Op::Const(lit));
+                    fc.emit(Op::CmpEq);
+                    fail_addrs.push(fc.emit_jump(Op::If(0)));
+                }
+                if let Pattern::Variable(name, _) = pat {
+                    let v_slot = fc.declare_local_typed(name, Some(word_ty.clone()));
+                    fc.emit(Op::GetLocal(offset));
+                    fc.emit(Op::SetLocal(v_slot));
+                }
+            }
+            _ => {}
+        }
+        if let Some(guard) = arm.guard.as_ref() {
+            compile_expr(fc, guard)?;
+            fail_addrs.push(fc.emit_jump(Op::If(0)));
+        }
+        compile_expr(fc, &arm.body)?;
+        let break_addr = fc.emit(Op::Break(0));
+        if let Some(breaks) = fc.loop_breaks.last_mut() {
+            breaks.push(break_addr);
+        }
+        fc.end_scope();
+        for addr in fail_addrs.into_iter().rev() {
+            fc.patch_jump(addr);
+            fc.emit(Op::EndIf);
+        }
+    }
+    let covered = arms.iter().any(|arm| {
+        arm.guard.is_none()
+            && matches!(
+                &arm.kind,
+                CheckedArmKind::InvalidIndex(Pattern::Variable(_, _) | Pattern::Wildcard(_))
+            )
+    });
+    if !covered {
+        fc.emit(Op::GetLocal(offset));
+        for slot in limbs {
+            fc.emit(Op::GetLocal(slot));
+        }
+        fc.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
+        fc.record_operator_site(&span);
+    }
+    // Structurally bounded, deterministic trailer, as in the handled read.
+    // Complete coverage makes it unreachable, and partial coverage ends at
+    // the explicit trap.
+    fc.emit(Op::GetLocal(flag));
+    let default_break = fc.emit(Op::Break(0));
+    if let Some(breaks) = fc.loop_breaks.last_mut() {
+        breaks.push(default_break);
+    }
+    let endloop_addr = fc.emit(Op::EndLoop(0));
+    let after_loop = (loop_addr + 1) as u16;
+    if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
+        *a = after_loop;
+    }
+    let after_endloop = fc.chunk.ops.len() as u16;
+    if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
+        *a = after_endloop;
+    }
+    fc.exit_loop();
     Ok(())
 }
 
@@ -5952,11 +6257,6 @@ fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> 
             value,
             span,
         } => {
-            // Evaluate the value first so it lands beneath the
-            // computed offset on the operand stack. The trailing
-            // `Op::SetDataIndexed` then pops the offset and pops
-            // the value.
-            compile_expr(fc, value)?;
             let index_refs: Vec<&Expr> = indices.iter().collect();
             emit_data_indexed_write(
                 fc,
@@ -5965,6 +6265,7 @@ fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> 
                     field: field.as_str(),
                     indices: index_refs,
                 },
+                value,
                 *span,
             )?;
         }
@@ -6238,6 +6539,45 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
                 infer_arm_body_type(fc, &first.body, &bound, &operand_ty)
             }
         },
+        // A handled indexed write's type is its arms' common body type,
+        // inferred from the first arm with its binders typed: the element
+        // type for `ok(old, new)` and `Word` for `invalid_index(j)`.
+        Expr::DataIndexStore {
+            data_name,
+            field,
+            arms,
+            span,
+            ..
+        } => {
+            let first = arms.first()?;
+            let mut bound: Vec<String> = Vec::new();
+            let push = |p: &Pattern, out: &mut Vec<String>| {
+                if let Pattern::Variable(name, _) = p {
+                    out.push(name.clone());
+                }
+            };
+            let bind_ty = match &first.kind {
+                crate::ast::CheckedArmKind::StoreOk(old, new) => {
+                    push(old, &mut bound);
+                    push(new, &mut bound);
+                    let field_ty = fc
+                        .type_info
+                        .data_field_types
+                        .get(data_name)
+                        .and_then(|fields| fields.get(field))?;
+                    match field_ty {
+                        TypeExpr::Array(elem, _, _) => (**elem).clone(),
+                        _ => return None,
+                    }
+                }
+                crate::ast::CheckedArmKind::InvalidIndex(p) => {
+                    push(p, &mut bound);
+                    TypeExpr::Prim(PrimType::Word, *span)
+                }
+                _ => return None,
+            };
+            infer_arm_body_type(fc, &first.body, &bound, &bind_ty)
+        }
         _ => None,
     }
 }
@@ -8262,6 +8602,23 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
                     fix_expr(&mut arm.body, frac_bits);
                 }
             }
+            Expr::DataIndexStore {
+                indices,
+                value,
+                arms,
+                ..
+            } => {
+                for idx in indices.iter_mut() {
+                    fix_expr(idx, frac_bits);
+                }
+                fix_expr(value, frac_bits);
+                for arm in arms.iter_mut() {
+                    if let Some(guard) = arm.guard.as_mut() {
+                        fix_expr(guard, frac_bits);
+                    }
+                    fix_expr(&mut arm.body, frac_bits);
+                }
+            }
             Expr::SaturateMax { .. } | Expr::SaturateMin { .. } => {}
             Expr::Classify { value, .. } | Expr::Declassify { value, .. } => {
                 fix_expr(value, frac_bits);
@@ -10203,6 +10560,16 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
         } => {
             compile_checked(fc, op_expr, arms, span)?;
         }
+        Expr::DataIndexStore {
+            data_name,
+            field,
+            indices,
+            value,
+            arms,
+            span,
+        } => {
+            compile_data_index_store(fc, data_name, field, indices, value, arms, *span)?;
+        }
         Expr::SaturateMax { .. } => {
             // Word::MAX. Future iterations refine the value based
             // on the construct's expected type (Byte::MAX,
@@ -10501,7 +10868,8 @@ fn compile_checked(
             | CheckedArmKind::InvalidNewtype(_)
             | CheckedArmKind::PayloadDiscriminant(_)
             | CheckedArmKind::InvalidDiscriminant(_)
-            | CheckedArmKind::Error(_) => {
+            | CheckedArmKind::Error(_)
+            | CheckedArmKind::StoreOk(_, _) => {
                 return Err(CompileError {
                     message: alloc::string::String::from(
                         "internal error: non-arithmetic outcome arm on an arithmetic checked construct",

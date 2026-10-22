@@ -1,5 +1,38 @@
 # Reverse prompt
 
+## Indexed-write handlers, 2026-10-21
+
+Branch feat/v02-indexed-write-handlers, cut from feat/v02-order3-audit-followup
+at 89aaba69. Not pushed to a pull request. Red by design until the self-hosted
+mirror lands.
+
+The Rust reference compiler implements the handled indexed write and the
+index-first order for every indexed write, per the operator rulings recorded in
+docs/decisions/ORDER3_HANDLER_SURFACE_PLAN.md. That file also records the exact
+instruction sequences and the nine-part plan for the self-hosted mirror.
+
+Verification of this increment, in the worktree at
+../keleusma-worktrees/v02-indexed-write-handlers.
+
+| Check | Result |
+|---|---|
+| tests/indexed_write_handlers.rs, nine reference tests | 9 passed after the final edit |
+| Quick tier, workspace, before the slot-order edit | 2577 of 2581 passed |
+| Its four failures | all compare against the self-hosted compiler, which is not yet mirrored |
+
+The quick tier ran before the last edit to the handled lowering, which
+renumbered its locals. That edit touches only the handled form, which no test
+outside tests/indexed_write_handlers.rs uses, and that file was rerun after it.
+The self-host tier was not run, because its failure is known in advance.
+
+Concerns. The stages' own self-compilation changes with the bare reordering,
+because the stages contain many indexed writes. Whether every stage still fits
+its per-chunk instruction and local capacities is unmeasured. The shipping
+`--compiler self-hosted` path fails loudly on any program with an indexed write
+until the mirror lands, which is a regression on this branch only.
+
+Next. The self-hosted mirror, parts one to nine of the plan.
+
 ## Opus 5.5 audit of the Codex V0.2.X work, 2026-10-20
 
 Line v0.2.3. Branch feat/v02-order3-audit-followup, cut from

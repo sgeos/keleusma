@@ -6,6 +6,30 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-21 Indexed-write handlers in the reference compiler
+
+Branch feat/v02-indexed-write-handlers, cut from feat/v02-order3-audit-followup
+at 89aaba69. The operator ruled on 2026-10-21 that an arm block after an
+indexed assignment handles the write, that every indexed write evaluates its
+index first, and that this increment admits one index.
+
+Done in the Rust reference compiler. The parser builds `Expr::DataIndexStore`
+with `ok(old, new)` arms. The type checker admits `ok(old, new)` and
+`invalid_index`, and rejects a single-binder `ok`, a literal or duplicate
+binder, other arm families, a non-exhaustive `ok` and a multi-index target.
+The compiler lowers bare writes index-first with a probe and one offset local,
+and handled writes through the sequence recorded in
+ORDER3_HANDLER_SURFACE_PLAN.md. tests/indexed_write_handlers.rs holds nine
+reference tests, and the order control in tests/indexed_write_outcomes.rs
+moves from 19 to 28. GRAMMAR.md describes the construct, the arm attachment
+and the evaluation order.
+
+Not done. The self-hosted mirror. Until it lands, every self-hosted
+byte-identity test whose source contains an indexed write fails, including the
+stages' self-compilation, and `--compiler self-hosted` fails loudly on such
+programs. The branch is red for that reason and must not merge before the
+mirror. The plan document lists the mirror's nine parts.
+
 ## 2026-10-21 Book catalogue regenerated and long CI test jobs sharded
 
 The first CI run of pull request 484 found two problems. The book workflow's
