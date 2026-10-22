@@ -3648,7 +3648,7 @@ fn verify_chunk(
 }
 
 #[cfg(all(test, feature = "compile"))]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::bytecode::{BlockType, Chunk, ConstValue, Module, Op};
     use alloc::vec;
@@ -5895,8 +5895,9 @@ mod tests {
     /// against `wire_format::opcode_table`, which is the wire format's
     /// application binary interface: a new opcode has to appear there to be
     /// encodable at all, so an opcode added without a representative here is
-    /// reported BY NAME rather than silently skipped.
-    fn representative_ops() -> Vec<Op> {
+    /// reported BY NAME rather than silently skipped. The self-hosted trap
+    /// classifier's per-tag test in `selfhost/traps.rs` reuses it.
+    pub(crate) fn representative_ops() -> Vec<Op> {
         use crate::bytecode::{ArrayElem, EnumField, NewCompositeOperand, StructField, TupleField};
         use crate::value_layout::{CompositeKind, ScalarKind};
         vec![

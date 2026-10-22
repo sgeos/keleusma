@@ -269,8 +269,18 @@ mod tests {
             Err(TrapAnalysisError::Unavailable { .. })
         ));
     }
+    /// Every current opcode, in every operand form the transport
+    /// distinguishes, gets the stage verdict the Rust analysis gives it.
+    ///
+    /// The expectation is derived from `trap_analysis::classify_instruction`,
+    /// the function `classify_traps` itself applies, and the operand forms
+    /// come from this file's `operands`, the transport the classifier uses.
+    /// Until 2026-10-21 both were written into this test as a table of tags,
+    /// so the stage was compared with the table and not with the analysis.
     #[test]
     fn every_current_wire_opcode_has_an_explicit_stage_profile() {
+        use crate::trap_analysis::{InstructionTrapClass, classify_instruction};
+        use crate::value_layout::ScalarKind;
         let stage = verify_structural_kel_module();
         let persistent = required_persistent_capacity_for(&stage);
         let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + persistent);
@@ -291,25 +301,67 @@ mod tests {
             ],
         )
         .unwrap();
-        let inventory = crate::wire_format::opcode_table();
-        assert_eq!(inventory.len(), 66);
+        // One representative per opcode, then the operand forms that change a
+        // verdict: each flat index kind, nested and boxed elements and fields,
+        // and every trap kind.
+        let mut subjects = crate::verify::tests::representative_ops();
+        for kind in [ScalarKind::Byte, ScalarKind::Bool] {
+            subjects.push(Op::GetIndex(ArrayElem::Flat { kind }));
+        }
+        let nested = crate::value_layout::CompositeKind::Struct;
+        subjects.push(Op::GetIndex(ArrayElem::FlatNested {
+            size: 8,
+            variant: nested,
+        }));
+        subjects.push(Op::GetField(StructField::FlatNested {
+            offset: 0,
+            size: 8,
+            variant: nested,
+        }));
+        subjects.push(Op::GetIndex(ArrayElem::Boxed));
+        subjects.push(Op::GetField(StructField::Boxed { name_const: 0 }));
+        subjects.push(Op::GetTupleField(TupleField::Boxed { index: 0 }));
+        subjects.push(Op::GetEnumField(EnumField::Boxed { index: 0 }));
+        for kind in 0..=8 {
+            subjects.push(Op::Trap(kind));
+        }
+        let location = TrapLocation {
+            chunk: 0,
+            instruction: 0,
+        };
+        let mut tags = std::collections::BTreeSet::new();
         machine.set(1, 1).unwrap();
-        for &(name, tag) in inventory {
-            let (form, scalar) = if (38..=41).contains(&tag) {
-                (1, 3)
-            } else {
-                (0, 0)
-            };
+        for op in &subjects {
+            let tag = crate::wire_format::opcode_id_of(op).0;
+            tags.insert(tag);
+            let (form, scalar) = operands(op);
             machine.set_element(2, 0, i64::from(tag)).unwrap();
             machine.set_element(3, 0, form).unwrap();
             machine.set_element(4, 0, scalar).unwrap();
-            let expected = match tag {
-                52 | 67 | 68 => 2,
-                53 => 1,
-                _ => 0,
+            let expected = match classify_instruction(op, location).unwrap() {
+                InstructionTrapClass::Clear => 0,
+                InstructionTrapClass::MayTrap => 1,
+                InstructionTrapClass::Unsupported(_) => 2,
             };
-            assert_eq!(machine.command(2).unwrap(), expected, "{name}/{tag}");
-            assert_eq!(machine.get(5).unwrap(), expected);
+            assert_eq!(machine.command(2).unwrap(), expected, "{op:?}");
+            assert_eq!(machine.get(5).unwrap(), expected, "{op:?}");
         }
+        // Non-vacuity and completeness: every tag of the wire format's opcode
+        // table was reached, and each verdict class occurred.
+        let inventory: std::collections::BTreeSet<u8> = crate::wire_format::opcode_table()
+            .iter()
+            .map(|&(_, tag)| tag)
+            .collect();
+        assert_eq!(inventory.len(), 66);
+        assert_eq!(tags, inventory);
+        let classes: std::collections::BTreeSet<u8> = subjects
+            .iter()
+            .map(|op| match classify_instruction(op, location).unwrap() {
+                InstructionTrapClass::Clear => 0,
+                InstructionTrapClass::MayTrap => 1,
+                InstructionTrapClass::Unsupported(_) => 2,
+            })
+            .collect();
+        assert_eq!(classes.len(), 3);
     }
 }
