@@ -6,8 +6,8 @@
 indexed-write handlers and the index-first order are implemented in the Rust
 reference compiler and mirrored by the self-hosted compiler on 2026-10-21, with
 the self-hosted mirror limited to Word and Byte elements. Handled multi-index
-writes, native-call handlers, handler-required composite reads and FixedDiv
-totalization are not started.
+writes, native-call handlers and handler-required composite reads are not
+started. FixedDiv totalization is implemented on 2026-10-22.
 This document resolves the open question that the 2026-10-20 handoff recorded as
 the first audit priority, which asked whether source-level indexed-write handlers
 belong to Order 3. They do. It extends [the completion plan](./ORDER3_COMPLETION_PLAN.md)
@@ -291,6 +291,19 @@ to a trap when no handler is written. Indexing forms outside the first pass and
 FixedDiv are the known members of this class. The runtime fault census in
 tests/runtime_fault_census.rs should gain a Fixed division row, since its twenty
 source cases did not include one.
+
+**Done 2026-10-22.** FixedDiv now pushes the outcome triple of a Fixed `Mod`.
+The low slot is the saturated quotient, the high slot `Fixed(0)` and the flag
+`0`, saturated or not, because saturation is the defined result and reporting it
+as overflow would send a handler without an overflow arm to the default trap. A
+zero divisor pushes the numerator, `Fixed(0)` and flag `3`. Source Fixed division
+follows FixedDiv with the same default zero-divisor guard as Fixed `%`, and the
+handled form already lowered through `CheckedDiv(n)`. Both trap analyses classify
+FixedDiv as clear, and the census has a twenty-first row, Fixed division by zero,
+which reaches the explicit Trap. The self-hosted compiler lowers Fixed `/` to
+`CheckedDiv(0)`, because its parser does not record the fraction-bit count. That
+divergence predates this change, the entry point refuses it, and
+`the_self_hosted_compiler_refuses_fixed_division` in tests/trap_lowering.rs pins it.
 
 ## Acceptance rows added to the completion plan
 

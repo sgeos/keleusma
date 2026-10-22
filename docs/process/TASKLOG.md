@@ -6,6 +6,27 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-22 FixedDiv reports a zero divisor as an outcome
+
+Branch feat/v02-fixed-div-outcome, cut from v0.2.3 at cc48dc61. Under the
+2026-10-20 ruling that only Trap traps, FixedDiv was one of the two known
+classes of operation that fault inside an opcode. The other, indexing forms
+outside the first pass, remains.
+
+- FixedDiv pushes the outcome triple of a Fixed `Mod`. Saturation reports
+  flag 0. A zero divisor pushes the numerator, `Fixed(0)` and flag 3. Both
+  stack models and the specification follow, and the specification's stale
+  FixedMul shrink entry is corrected.
+- Source Fixed division emits the default zero-divisor guard. The handled form
+  was already lowered through `CheckedDiv(n)` and is unchanged.
+- Both trap analyses classify FixedDiv as clear. The unsupported reason for it is
+  removed from Rust and from verify_structural.kel. Four tests that used FixedDiv
+  as an unsupported subject now use a boxed field access.
+- The census gains its twenty-first row, and spec_trap_claims covers FixedDiv.
+- Residue. The self-hosted compiler lowers Fixed `/` to `CheckedDiv(0)`, a
+  divergence that predates this change. The entry point refuses it, and a test
+  pins the one differing instruction.
+
 ## 2026-10-21 Indexed-write handlers in the self-hosted compiler
 
 Same branch. The self-hosted compiler now mirrors the index-first bare write and

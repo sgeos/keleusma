@@ -9670,6 +9670,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     if let Some(n) = left_fixed_n {
                         fc.emit(Op::FixedDiv(n));
                         fc.record_operator_site(span);
+                        emit_bare_zero_divisor_guard(fc, span);
                     } else if left_is_int
                         || matches!(&operand_ty, Some(TypeExpr::Prim(PrimType::Byte, _)))
                     {

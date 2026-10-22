@@ -34,8 +34,6 @@ pub enum TrapVerdict {
 /// An instruction contract outside the first-pass proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnsupportedTrapOperation {
-    /// Raw saturating Fixed division still faults on zero.
-    FixedDivision,
     /// Only flat Word and Byte indexed values have total first-pass contracts.
     IndexedValue,
     /// Boxed field access can still fault internally.
@@ -141,9 +139,6 @@ pub(crate) fn classify_instruction(
             }
             InstructionTrapClass::Clear
         }
-        Op::FixedDiv(_) => {
-            InstructionTrapClass::Unsupported(UnsupportedTrapOperation::FixedDivision)
-        }
         Op::GetIndex(ArrayElem::Flat {
             kind: crate::value_layout::ScalarKind::Int | crate::value_layout::ScalarKind::Byte,
         }) => InstructionTrapClass::Clear,
@@ -206,6 +201,7 @@ pub(crate) fn classify_instruction(
         | Op::WordToFixed(_)
         | Op::FixedToWord(_)
         | Op::FixedMul(_)
+        | Op::FixedDiv(_)
         | Op::CheckedAdd
         | Op::CheckedSub
         | Op::CheckedMul(_)

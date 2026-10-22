@@ -7051,10 +7051,22 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     let a = self.pop()?;
                     match (a, b) {
                         (
-                            crate::bytecode::GenericValue::Fixed(_),
+                            crate::bytecode::GenericValue::Fixed(x),
                             crate::bytecode::GenericValue::Fixed(y),
                         ) if y == W::default() => {
-                            return Err(VmError::DivisionByZero);
+                            // Zero divisor: reify as flag 3 (zero_divisor)
+                            // rather than faulting, the same outcome as a
+                            // Fixed `Mod`. The numerator goes in the low slot,
+                            // and the compiler's dispatch traps as
+                            // DivisionByZero when no handler is written.
+                            sp!(self, crate::bytecode::GenericValue::Fixed(x));
+                            sp!(self, crate::bytecode::GenericValue::Fixed(W::default()));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(3)
+                                )
+                            );
                         }
                         (
                             crate::bytecode::GenericValue::Fixed(x),
@@ -7063,7 +7075,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             // Q-format divide: extend the dividend to
                             // i128 and left-shift by frac_bits before
                             // dividing, so the result retains the
-                            // Q-format precision.
+                            // Q-format precision. Saturation is the
+                            // defined result and reports flag 0, so a
+                            // handler without an overflow arm still
+                            // receives it through `ok`.
                             let dividend = x.widen() << (frac_bits as u32);
                             let quotient = dividend / y.widen();
                             let bits = if quotient > <W as crate::word::Word>::MAX.widen() {
@@ -7074,6 +7089,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 <W as crate::word::Word>::from_wide_wrap(quotient)
                             };
                             sp!(self, crate::bytecode::GenericValue::Fixed(bits));
+                            sp!(self, crate::bytecode::GenericValue::Fixed(W::default()));
+                            sp!(
+                                self,
+                                crate::bytecode::GenericValue::Int(
+                                    <W as crate::word::Word>::from_i64_wrap(0)
+                                )
+                            );
                         }
                         (a, b) => {
                             return Err(VmError::TypeError(format!(

@@ -35,7 +35,9 @@
 //! Bare Word and Byte division and modulo now carry an explicit zero-divisor
 //! Trap. The indexed bounds cases also reach explicit traps. The original
 //! September census found both families faulting internally; the current census
-//! finds no language faults without Trap in its twenty source cases.
+//! finds no language faults without Trap in its twenty-one source cases. The
+//! twenty-first, Fixed division by zero, was added on 2026-10-22, when that
+//! division stopped faulting inside FixedDiv and began reaching an explicit Trap.
 //! This census still does not expose a trap-freedom verdict.
 //!
 //! # What this does NOT establish
@@ -143,6 +145,12 @@ const CASES: &[Case] = &[
     Case {
         name: "Byte division by zero",
         src: "fn main() -> Byte { (7 as Byte) / (0 as Byte) }",
+        traps_expected: true,
+        outcome: Outcome::Faulted("DivisionByZero"),
+    },
+    Case {
+        name: "Fixed division by a runtime zero",
+        src: "fn main() -> Fixed<16> { let z = 0 as Fixed<16>; let o = 3 as Fixed<16>; o / z }",
         traps_expected: true,
         outcome: Outcome::Faulted("DivisionByZero"),
     },

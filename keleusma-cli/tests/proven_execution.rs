@@ -137,9 +137,11 @@ fn offline_validation_preserves_trap_and_unavailable_distinctions() {
         keleusma::parser::parse(&keleusma::lexer::tokenize("fn main() -> Word { 7 }").unwrap())
             .unwrap();
     let mut module = keleusma::compiler::compile(&ast).unwrap();
-    module.chunks[0]
-        .ops
-        .push(keleusma::bytecode::Op::FixedDiv(0));
+    // A boxed field access is outside the first-pass trap profile. Fixed
+    // division served here until it became total on 2026-10-22.
+    module.chunks[0].ops.push(keleusma::bytecode::Op::GetField(
+        keleusma::bytecode::StructField::Boxed { name_const: 0 },
+    ));
     let path = f.0.join("unsupported.kbc");
     std::fs::write(&path, module.to_bytes().unwrap()).unwrap();
     for backend in ["rust", "self-hosted"] {
