@@ -1974,6 +1974,9 @@ pub enum TrapKind {
     /// handled the overrun. Fail-loud by default, consistent with the
     /// other capture constructs whose unhandled defensive outcome traps.
     LoopLimitExceeded,
+    /// Explicit indexed-bounds failure. Pops the index and four Word byte limbs
+    /// encoding an unsigned 32-bit exclusive bound, lowest limb first on stack.
+    IndexOutOfBounds,
 }
 
 impl TrapKind {
@@ -1988,6 +1991,7 @@ impl TrapKind {
             TrapKind::ZeroDivisor => 5,
             TrapKind::AssertionFailed => 6,
             TrapKind::LoopLimitExceeded => 7,
+            TrapKind::IndexOutOfBounds => 8,
         }
     }
 
@@ -2004,6 +2008,7 @@ impl TrapKind {
             5 => Some(TrapKind::ZeroDivisor),
             6 => Some(TrapKind::AssertionFailed),
             7 => Some(TrapKind::LoopLimitExceeded),
+            8 => Some(TrapKind::IndexOutOfBounds),
             _ => None,
         }
     }
@@ -2160,6 +2165,18 @@ pub enum ArrayElem {
     Boxed,
 }
 
+impl ArrayElem {
+    /// Whether this operand uses the total first-pass scalar read contract.
+    pub const fn has_bounds_outcome(self) -> bool {
+        matches!(
+            self,
+            Self::Flat {
+                kind: crate::value_layout::ScalarKind::Int | crate::value_layout::ScalarKind::Byte
+            }
+        )
+    }
+}
+
 /// Baked operand of [`Op::NewComposite`] (B28 P4).
 ///
 /// One operand for all four composite kinds. The `Flat` form carries the
@@ -2256,31 +2273,24 @@ pub enum Op {
     /// twenty-four-bit wire operand (`u32` in memory), as for [`Op::GetData`].
     SetData(u32),
 
-    /// Indexed read from a data-segment array. The first immediate is
-    /// the array's base slot, the second is the array's total slot
-    /// count. The opcode pops a `Value::Int` index from the operand
-    /// stack, checks `0 <= index < total`, traps if the index is out
-    /// of range, and pushes `data[base + index]`. Used by the compiler
-    /// for `state.field[i]` reads when `state.field` is an array-typed
-    /// data field. Both immediates are twenty-four-bit wire operands (`u32` in
-    /// memory), so an array's base slot and length may each exceed 64 K.
+    /// Total indexed read. Pop a Word/Byte/Unit fallback and then a Word
+    /// index. Read the selected slot only in range, otherwise use fallback.
+    /// Push value, index, four Word bound limbs, and flag zero for a read or
+    /// one for fallback. Invalid spans and type/storage contract failures
+    /// remain errors. Base and length retain their u24 wire encoding.
     GetDataIndexed(u32, u32),
-    /// Indexed write to a data-segment array. The first immediate is
-    /// the array's base slot, the second is the array's total slot
-    /// count. The opcode pops the `Value::Int` index, then pops the
-    /// new value, checks `0 <= index < total`, traps if out of range,
-    /// and stores `data[base + index] = value`. Both immediates are
-    /// twenty-four-bit wire operands (`u32` in memory), as for
-    /// [`Op::GetDataIndexed`].
+    /// Total indexed write. Pop value and Word index, write only when the
+    /// index is in range, then push index, four Word byte limbs of the bound,
+    /// and flag zero for success or one for an invalid index. Invalid indices
+    /// and empty spans perform no write. Invalid data spans and storage/type
+    /// contract failures remain errors. Both operands use u24 wire encoding.
     SetDataIndexed(u32, u32),
-    /// Bounds check against the value on top of the operand stack
-    /// without modifying the stack. The immediate is the exclusive
-    /// upper bound. Traps when the top is not a `Value::Int`, when
-    /// the value is negative, or when the value is greater than or
-    /// equal to the bound. Used by the compiler to validate each
-    /// level of a multi-dimensional `state.field[i][j]...` access
-    /// before the per-level stride arithmetic computes the flat
-    /// offset.
+    /// Total bounds predicate. Preserve the Word index and append four Word
+    /// byte limbs of the unsigned bound, then flag zero for in-range or one
+    /// for out-of-range. The limbs are little-endian and sign-extended from
+    /// eight bits, preserving diagnostics on every supported Word width.
+    /// Empty stacks and non-Word indices remain contract failures. Bare
+    /// source lowering dispatches an invalid outcome to an explicit Trap.
     BoundsCheck(u16),
 
     /// Binary addition on `Byte`, `Fixed`, and `Float` operands.
@@ -2310,9 +2320,12 @@ pub enum Op {
     /// multiplication goes through [`Op::FixedMul`] rather than this opcode,
     /// so this one is narrower still than `Add` and `Sub`.
     Mul,
-    /// Binary division.
+    /// Total division with the same low, high and flag results as CheckedDiv(0).
+    /// A zero integer divisor returns the numerator, typed zero and Word flag 3.
     Div,
-    /// Binary modulo.
+    /// Total remainder with low, high and Word flag results. Integer and Fixed
+    /// operands use CheckedMod outcomes. Float operands retain their remainder
+    /// with a zero high result and floating-point classification flag.
     Mod,
     /// Unary negation on `Byte`, `Fixed`, and `Float` operands.
     ///
@@ -2396,6 +2409,9 @@ pub enum Op {
     /// Pop index (Int), pop array, push element. The baked
     /// [`ArrayElem`] operand selects a flat read at `index * size` or a
     /// positional index into the boxed body (B28 P2).
+    /// Flat Word and Byte forms push the value followed by the six-Word
+    /// bounds outcome suffix. Invalid indices yield zero of the same kind.
+    /// Other operand forms retain the single-result contract.
     GetIndex(ArrayElem),
     /// Pop tuple, push element. The baked [`TupleField`] operand
     /// selects a flat read at an offset or a positional index into the
@@ -2815,6 +2831,10 @@ pub const NOMINAL_COST_MODEL: CostModel = CostModel {
 /// pipelined cycles during deployment validation.
 pub fn nominal_op_cycles(op: &Op) -> u32 {
     match op {
+        Op::Trap(kind) if *kind == TrapKind::IndexOutOfBounds.code() => 6,
+        Op::BoundsCheck(_) => 7,
+        Op::SetDataIndexed(_, _) | Op::GetDataIndexed(_, _) => 8,
+        Op::GetIndex(elem) if elem.has_bounds_outcome() => 8,
         Op::Const(_)
         | Op::GetLocal(_)
         | Op::SetLocal(_)
@@ -2863,12 +2883,11 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         | Op::FixedToWord(_)
         | Op::FixedMul(_)
         | Op::FixedDiv(_)
-        | Op::Return
-        | Op::GetDataIndexed(_, _)
-        | Op::SetDataIndexed(_, _)
-        | Op::BoundsCheck(_) => 2,
+        | Op::Return => 2,
 
-        Op::Div | Op::Mod | Op::GetField(_) | Op::IsEnum(_, _, _) | Op::IsStruct(_) => 3,
+        Op::GetField(_) | Op::IsEnum(_, _, _) | Op::IsStruct(_) => 3,
+
+        Op::Div | Op::Mod => 5,
 
         Op::NewComposite(_) => 5,
 
@@ -2932,6 +2951,7 @@ impl Op {
     /// instruction.
     pub fn stack_growth(&self) -> u32 {
         match self {
+            Op::GetIndex(elem) if elem.has_bounds_outcome() => 5,
             Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::Dup => 1,
 
             Op::Not | Op::Neg => 0,
@@ -2942,7 +2962,9 @@ impl Op {
             // three; net delta +2. The high half is the i128
             // intermediate's high 64 bits, providing the load-
             // bearing value for big-number multiplication.
-            Op::CheckedAdd
+            Op::Div
+            | Op::Mod
+            | Op::CheckedAdd
             | Op::CheckedSub
             | Op::CheckedMul(_)
             | Op::CheckedDiv(_)
@@ -2952,8 +2974,6 @@ impl Op {
             Op::Add
             | Op::Sub
             | Op::Mul
-            | Op::Div
-            | Op::Mod
             | Op::CmpEq
             | Op::CmpNe
             | Op::CmpLt
@@ -2963,12 +2983,12 @@ impl Op {
 
             Op::SetLocal(_) | Op::SetData(_) => 0,
 
-            // GetDataIndexed pops one index, pushes one value.
-            Op::GetDataIndexed(_, _) => 1,
-            // SetDataIndexed pops index and value.
-            Op::SetDataIndexed(_, _) => 0,
-            // BoundsCheck does not change the stack.
-            Op::BoundsCheck(_) => 0,
+            // Indexed reads consume two values and produce seven.
+            Op::GetDataIndexed(_, _) => 5,
+            // Indexed writes consume two operands and return six diagnostic Words.
+            Op::SetDataIndexed(_, _) => 4,
+            // Preserve the index and append four diagnostic limbs and a flag.
+            Op::BoundsCheck(_) => 5,
 
             Op::If(_) | Op::BreakIf(_) => 0,
             Op::Else(_) | Op::EndIf | Op::Loop(_) | Op::EndLoop(_) | Op::Break(_) => 0,
@@ -3031,6 +3051,7 @@ impl Op {
     /// For true pop counts use [`crate::verify::op_depth_effect`].
     pub fn stack_shrink(&self) -> u32 {
         match self {
+            Op::GetIndex(elem) if elem.has_bounds_outcome() => 0,
             Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::Dup => 0,
 
             Op::Not | Op::Neg => 0,
@@ -3040,7 +3061,9 @@ impl Op {
             // (pop 1, push 3). The growth/shrink split records
             // peak vs. final; shrink is zero because there is no
             // net pop.
-            Op::CheckedAdd
+            Op::Div
+            | Op::Mod
+            | Op::CheckedAdd
             | Op::CheckedSub
             | Op::CheckedMul(_)
             | Op::CheckedNeg
@@ -3050,8 +3073,6 @@ impl Op {
             Op::Add
             | Op::Sub
             | Op::Mul
-            | Op::Div
-            | Op::Mod
             | Op::CmpEq
             | Op::CmpNe
             | Op::CmpLt
@@ -3061,10 +3082,9 @@ impl Op {
 
             Op::SetLocal(_) | Op::SetData(_) => 1,
 
-            // GetDataIndexed pops the index, SetDataIndexed pops the
-            // index then the value, BoundsCheck does not pop.
-            Op::GetDataIndexed(_, _) => 1,
-            Op::SetDataIndexed(_, _) => 2,
+            // Bounds operations produce at least as many values as they consume.
+            Op::GetDataIndexed(_, _) => 0,
+            Op::SetDataIndexed(_, _) => 0,
             Op::BoundsCheck(_) => 0,
 
             Op::If(_) | Op::BreakIf(_) => 1,
@@ -3145,6 +3165,7 @@ impl Op {
             // before stops verifying.
             Op::FixedMul(_) | Op::FixedDiv(_) => 1,
 
+            Op::Trap(kind) if *kind == TrapKind::IndexOutOfBounds.code() => 5,
             Op::Trap(_) => 0,
 
             // V0.2.0 ISA additions.
@@ -3191,7 +3212,7 @@ impl Op {
 }
 
 /// Template for struct construction.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct StructTemplate {
     /// Struct type name.
     pub type_name: String,
@@ -3200,7 +3221,7 @@ pub struct StructTemplate {
 }
 
 /// One variant's name and discriminant within an [`EnumLayout`].
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct EnumVariantDisc {
     /// Variant name.
     pub name: String,
@@ -3221,7 +3242,7 @@ pub struct EnumVariantDisc {
 /// a signatured native already does). Only uniformly-flat enums, which the
 /// compiler flattens, need the padding; a non-flat enum stays boxed and is
 /// matched by name.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct EnumLayout {
     /// Enum type name.
     pub type_name: String,
@@ -3271,7 +3292,7 @@ pub enum WireShape {
 /// behaviour. Only the signature boundary is described; non-parameter locals
 /// are seeded as `Top` and refined by the pass (a later phase may narrow
 /// them).
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct ChunkSignature {
     /// Flat shape of each parameter, in declaration order.
     pub params: Vec<WireShape>,
@@ -3293,7 +3314,7 @@ impl Default for ChunkSignature {
 }
 
 /// A named slot in the data segment.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct DataSlot {
     /// Slot name (for host initialization and debugging).
     pub name: String,

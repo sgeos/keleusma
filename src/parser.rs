@@ -90,7 +90,15 @@ struct Parser<'a> {
 /// roughly a dozen stack frames. The bound was reduced from 32 to 24 when the
 /// bitwise operator level was added to the chain.
 ///
-/// # The margin, measured (audit H2)
+/// # Current debug-stack regression coverage
+///
+/// Primary-expression construction is split into focused helpers so recursive
+/// paths do not reserve every unrelated primary arm's temporary storage. The
+/// fixed-stack regression in tests/parser_stack_bounds.rs checks all current
+/// stages and both sides of the existing depth boundary on a two-mebibyte stack.
+/// This is measured coverage for those shapes, not a platform-independent stack bound.
+///
+/// # Historical margin before the helper split (audit H2)
 ///
 /// **This comment previously claimed the limit keeps a maximally-nested
 /// admissible program "well under 2 MiB of stack even in a debug build". That
@@ -124,8 +132,8 @@ struct Parser<'a> {
 /// it raised the corpus maximum to 41 while parenthesis-shaped input began
 /// aborting at counter 27, so the binding shape merely changed.
 ///
-/// The residual is recorded in `docs/decisions/SECURITY_AUDIT_V0_2_1.md` as
-/// H2 rather than papered over. Narrowing the language's accepted nesting to
+/// This historical residual is recorded in `docs/decisions/SECURITY_AUDIT_V0_2_1.md`
+/// as H2. The current tests above cover the repaired paths. Narrowing the language's accepted nesting to
 /// accommodate an artefact of debug frame sizes would cost more than the
 /// defect does.
 const MAX_PARSE_DEPTH: u32 = 24;
@@ -2288,7 +2296,9 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    #[allow(clippy::too_many_lines)]
+    // Keep branch-specific construction temporaries off the common recursive
+    // path. Debug builds otherwise reserve every primary arm's stack storage
+    // even when parsing a simple conditional or grouped operand.
     fn parse_primary_expr(&mut self) -> Result<Expr, ParseError> {
         let tok = self.tokens[self.pos].clone();
 
@@ -2353,46 +2363,7 @@ impl<'a> Parser<'a> {
             // Closure literal: `|args| body` or `|args| -> ret { body }`.
             // Bar (`|`) introduces the parameter list. The body can
             // be a brace block or a single expression.
-            TokenKind::Bar => {
-                self.pos += 1;
-                let mut params: Vec<Param> = Vec::new();
-                if !self.at(&TokenKind::Bar) {
-                    params.push(self.parse_param()?);
-                    while self.eat(&TokenKind::Comma) {
-                        if self.at(&TokenKind::Bar) {
-                            break;
-                        }
-                        params.push(self.parse_param()?);
-                    }
-                }
-                self.expect(&TokenKind::Bar)?;
-                let return_type = if self.eat(&TokenKind::Arrow) {
-                    Some(self.parse_type_expr()?)
-                } else {
-                    None
-                };
-                let body = if self.at(&TokenKind::LBrace) {
-                    self.parse_block()?
-                } else {
-                    // Single-expression body wraps into a block whose
-                    // tail expression is the parsed expression. The
-                    // span is the expression's span.
-                    let e = self.parse_expr()?;
-                    let span = e.span();
-                    Block {
-                        stmts: Vec::new(),
-                        tail_expr: Some(Box::new(e)),
-                        span,
-                    }
-                };
-                let end = body.span;
-                Ok(Expr::Closure {
-                    params,
-                    return_type,
-                    body,
-                    span: merge_spans(tok.span, end),
-                })
-            }
+            TokenKind::Bar => self.parse_closure_primary(tok.span),
             // Literals.
             TokenKind::IntLit(v) => {
                 self.pos += 1;
@@ -2448,301 +2419,28 @@ impl<'a> Parser<'a> {
             }
 
             // Identifier or qualified function call.
-            TokenKind::LowerIdent(_) => {
-                let (name, name_span) = self.expect_lower_ident()?;
-
-                // Check for qualified path.
-                let mut full_name = name;
-                let mut end_span = name_span;
-                while self.at(&TokenKind::ColonColon) {
-                    // Peek ahead to see if next after :: is a lower ident.
-                    if self.pos + 1 < self.tokens.len() {
-                        if let TokenKind::LowerIdent(_) = &self.tokens[self.pos + 1].kind {
-                            self.pos += 1; // consume ::
-                            let (next, next_span) = self.expect_lower_ident()?;
-                            full_name.push_str("::");
-                            full_name.push_str(&next);
-                            end_span = next_span;
-                        } else {
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
-                }
-
-                // Optional const turbofish `::<8, ...>` before the
-                // argument list, e.g. `f::<8>(...)`. Distinguished from a
-                // qualified-path `::` by a `<` following the `::`.
-                let mut const_args: Vec<ConstExpr> = Vec::new();
-                if self.at(&TokenKind::ColonColon) && matches!(self.peek_ahead(1), TokenKind::Lt) {
-                    self.bump(); // consume ::
-                    const_args = self.parse_const_args()?;
-                }
-
-                // Function call?
-                if self.at(&TokenKind::LParen) {
-                    self.pos += 1;
-                    let args = self.parse_arg_list()?;
-                    let end = self.expect(&TokenKind::RParen)?;
-                    let span = merge_spans(name_span, end);
-                    Ok(Expr::Call {
-                        name: full_name,
-                        args,
-                        const_args,
-                        span,
-                    })
-                } else if !const_args.is_empty() {
-                    Err(self.error(
-                        "a const turbofish `::<...>` must be followed by a call argument list",
-                    ))
-                } else {
-                    Ok(Expr::Ident {
-                        name: full_name,
-                        span: merge_spans(name_span, end_span),
-                    })
-                }
-            }
+            TokenKind::LowerIdent(_) => self.parse_named_primary(),
 
             // Upper ident: enum variant or struct init.
-            TokenKind::UpperIdent(_) => {
-                let (name, name_span) = self.expect_upper_ident()?;
-
-                // Multiword::<N>(d0, ..., d_{N-1}) construction. Desugar
-                // to a tuple of the N arguments cast to Multiword<N>,
-                // reusing the tuple-to-Multiword cast (B19).
-                if name == "Multiword"
-                    && self.at(&TokenKind::ColonColon)
-                    && matches!(
-                        self.tokens.get(self.pos + 1).map(|t| &t.kind),
-                        Some(TokenKind::Lt)
-                    )
-                {
-                    self.expect(&TokenKind::ColonColon)?;
-                    self.expect(&TokenKind::Lt)?;
-                    let words = self.parse_const_expr()?;
-                    self.check_multiword_lit_range(&words, true)?;
-                    let frac = if self.eat(&TokenKind::Comma) {
-                        let f = self.parse_const_expr()?;
-                        self.check_multiword_lit_range(&f, false)?;
-                        f
-                    } else {
-                        ConstExpr::Lit(0, name_span)
-                    };
-                    self.expect(&TokenKind::Gt)?;
-                    self.expect(&TokenKind::LParen)?;
-                    let args = self.parse_arg_list()?;
-                    let end = self.expect(&TokenKind::RParen)?;
-                    let span = merge_spans(name_span, end);
-                    let tuple = Expr::TupleLiteral {
-                        elements: args,
-                        span,
-                    };
-                    return Ok(Expr::Cast {
-                        expr: Box::new(tuple),
-                        target: TypeExpr::Multiword(words, frac, span),
-                        span,
-                    });
-                }
-
-                // Optional const turbofish on a construction: the
-                // `Buf::<8> { ... }` struct form or the `Opt::<8>::Some(...)`
-                // enum form. A `::` followed by `<` is the turbofish; a
-                // `::` followed by an upper ident is an enum variant.
-                let mut const_args: Vec<ConstExpr> = Vec::new();
-                if self.at(&TokenKind::ColonColon) && matches!(self.peek_ahead(1), TokenKind::Lt) {
-                    self.bump(); // ::
-                    const_args = self.parse_const_args()?;
-                }
-
-                if self.eat(&TokenKind::ColonColon) {
-                    // Enum variant.
-                    let (variant, _) = self.expect_upper_ident()?;
-                    let args = if self.at(&TokenKind::LParen) {
-                        self.pos += 1;
-                        let a = self.parse_arg_list()?;
-                        self.expect(&TokenKind::RParen)?;
-                        a
-                    } else {
-                        Vec::new()
-                    };
-                    let end = self.prev_span();
-                    Ok(Expr::EnumVariant {
-                        enum_name: name,
-                        variant,
-                        args,
-                        const_args,
-                        span: merge_spans(name_span, end),
-                    })
-                } else if self.at(&TokenKind::LBrace) {
-                    // Struct init.
-                    self.pos += 1;
-                    let mut fields = Vec::new();
-                    while !self.at(&TokenKind::RBrace) {
-                        let (fname, fspan) = self.expect_lower_ident()?;
-                        self.expect(&TokenKind::Colon)?;
-                        let value = self.parse_expr()?;
-                        let end = value.span();
-                        fields.push(FieldInit {
-                            name: fname,
-                            value,
-                            span: merge_spans(fspan, end),
-                        });
-                        if !self.eat(&TokenKind::Comma) {
-                            break;
-                        }
-                    }
-                    let end = self.expect(&TokenKind::RBrace)?;
-                    Ok(Expr::StructInit {
-                        name,
-                        fields,
-                        const_args,
-                        span: merge_spans(name_span, end),
-                    })
-                } else if self.at(&TokenKind::LParen) {
-                    // Newtype construction: `Name(expr)`. The parser
-                    // emits a `Call` expression with the type name as
-                    // the function. The type checker resolves the
-                    // name to a newtype constructor, validates the
-                    // argument against the underlying type, and tags
-                    // the resulting expression with the newtype's
-                    // nominal type. If the name does not resolve to a
-                    // declared newtype, the type checker reports an
-                    // undefined-function error.
-                    self.pos += 1;
-                    let args = self.parse_arg_list()?;
-                    let end = self.expect(&TokenKind::RParen)?;
-                    Ok(Expr::Call {
-                        name,
-                        args,
-                        const_args: Vec::new(),
-                        span: merge_spans(name_span, end),
-                    })
-                } else {
-                    Err(ParseError {
-                        message: String::from(
-                            "expected '::', '{', or '(' after type name in expression",
-                        ),
-                        span: name_span,
-                    })
-                }
-            }
+            TokenKind::UpperIdent(_) => self.parse_constructed_primary(),
 
             // Yield expression.
-            TokenKind::Yield => {
-                self.pos += 1;
-                let value = self.parse_expr()?;
-                let span = merge_spans(tok.span, value.span());
-                Ok(Expr::Yield {
-                    value: Box::new(value),
-                    span,
-                })
-            }
+            TokenKind::Yield => self.parse_yield_primary(tok.span),
 
             // If expression.
-            TokenKind::If => {
-                self.pos += 1;
-                let condition = self.parse_expr()?;
-                let then_block = self.parse_block()?;
-                let else_block = if self.eat(&TokenKind::Else) {
-                    Some(self.parse_block()?)
-                } else {
-                    None
-                };
-                let end = else_block.as_ref().map_or(then_block.span, |b| b.span);
-                Ok(Expr::If {
-                    condition: Box::new(condition),
-                    then_block,
-                    else_block,
-                    span: merge_spans(tok.span, end),
-                })
-            }
+            TokenKind::If => self.parse_if_primary(tok.span),
 
             // Match expression.
-            TokenKind::Match => {
-                self.pos += 1;
-                let scrutinee = self.parse_expr()?;
-                let (arms, end) = self.parse_match_arms()?;
-                Ok(Expr::Match {
-                    scrutinee: Box::new(scrutinee),
-                    arms,
-                    span: merge_spans(tok.span, end),
-                })
-            }
+            TokenKind::Match => self.parse_match_primary(tok.span),
 
             // Loop expression.
-            TokenKind::Loop => {
-                self.pos += 1;
-                let body = self.parse_block()?;
-                let span = merge_spans(tok.span, body.span);
-                Ok(Expr::Loop { body, span })
-            }
+            TokenKind::Loop => self.parse_loop_primary(tok.span),
 
             // Parenthesized expression or tuple literal.
-            TokenKind::LParen => {
-                self.pos += 1;
-                if self.eat(&TokenKind::RParen) {
-                    // Unit literal.
-                    return Ok(Expr::Literal {
-                        value: Literal::Unit,
-                        span: merge_spans(tok.span, self.prev_span()),
-                    });
-                }
-                let first = self.parse_expr()?;
-                if self.eat(&TokenKind::Comma) {
-                    // Tuple literal: (expr, expr, ...) with two or more elements.
-                    // A single element with a trailing comma, `(x,)`, is not a
-                    // one-element tuple; the language admits no one-tuple (a
-                    // one-element tuple is not surface syntax), and `(x)` is a
-                    // grouped expression. Require a second element after the
-                    // first comma.
-                    if self.at(&TokenKind::RParen) {
-                        return Err(ParseError {
-                            message: String::from(
-                                "a one-element tuple `(x,)` is not valid: a tuple has two or more elements, and `(x)` is a grouped expression",
-                            ),
-                            span: tok.span,
-                        });
-                    }
-                    let mut elements = vec![first];
-                    elements.push(self.parse_expr()?);
-                    while self.eat(&TokenKind::Comma) {
-                        if self.at(&TokenKind::RParen) {
-                            break;
-                        }
-                        elements.push(self.parse_expr()?);
-                    }
-                    let end = self.expect(&TokenKind::RParen)?;
-                    Ok(Expr::TupleLiteral {
-                        elements,
-                        span: merge_spans(tok.span, end),
-                    })
-                } else {
-                    // Grouped expression.
-                    self.expect(&TokenKind::RParen)?;
-                    Ok(first)
-                }
-            }
+            TokenKind::LParen => self.parse_group_primary(tok.span),
 
             // Array literal.
-            TokenKind::LBracket => {
-                self.pos += 1;
-                let mut elements = Vec::new();
-                if !self.at(&TokenKind::RBracket) {
-                    elements.push(self.parse_expr()?);
-                    while self.eat(&TokenKind::Comma) {
-                        if self.at(&TokenKind::RBracket) {
-                            break;
-                        }
-                        elements.push(self.parse_expr()?);
-                    }
-                }
-                let end = self.expect(&TokenKind::RBracket)?;
-                Ok(Expr::ArrayLiteral {
-                    elements,
-                    span: merge_spans(tok.span, end),
-                })
-            }
+            TokenKind::LBracket => self.parse_array_primary(tok.span),
 
             // Pipeline placeholder.
             TokenKind::Underscore => {
@@ -2755,6 +2453,332 @@ impl<'a> Parser<'a> {
                 span: tok.span,
             }),
         }
+    }
+
+    fn parse_closure_primary(&mut self, start: Span) -> Result<Expr, ParseError> {
+        self.pos += 1;
+        let mut params: Vec<Param> = Vec::new();
+        if !self.at(&TokenKind::Bar) {
+            params.push(self.parse_param()?);
+            while self.eat(&TokenKind::Comma) {
+                if self.at(&TokenKind::Bar) {
+                    break;
+                }
+                params.push(self.parse_param()?);
+            }
+        }
+        self.expect(&TokenKind::Bar)?;
+        let return_type = if self.eat(&TokenKind::Arrow) {
+            Some(self.parse_type_expr()?)
+        } else {
+            None
+        };
+        let body = if self.at(&TokenKind::LBrace) {
+            self.parse_block()?
+        } else {
+            // Single-expression body wraps into a block whose
+            // tail expression is the parsed expression. The
+            // span is the expression's span.
+            let e = self.parse_expr()?;
+            let span = e.span();
+            Block {
+                stmts: Vec::new(),
+                tail_expr: Some(Box::new(e)),
+                span,
+            }
+        };
+        let end = body.span;
+        Ok(Expr::Closure {
+            params,
+            return_type,
+            body,
+            span: merge_spans(start, end),
+        })
+    }
+
+    fn parse_named_primary(&mut self) -> Result<Expr, ParseError> {
+        let (name, name_span) = self.expect_lower_ident()?;
+
+        // Check for qualified path.
+        let mut full_name = name;
+        let mut end_span = name_span;
+        while self.at(&TokenKind::ColonColon) {
+            // Peek ahead to see if next after :: is a lower ident.
+            if self.pos + 1 < self.tokens.len() {
+                if let TokenKind::LowerIdent(_) = &self.tokens[self.pos + 1].kind {
+                    self.pos += 1; // consume ::
+                    let (next, next_span) = self.expect_lower_ident()?;
+                    full_name.push_str("::");
+                    full_name.push_str(&next);
+                    end_span = next_span;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        // Optional const turbofish `::<8, ...>` before the
+        // argument list, e.g. `f::<8>(...)`. Distinguished from a
+        // qualified-path `::` by a `<` following the `::`.
+        let mut const_args: Vec<ConstExpr> = Vec::new();
+        if self.at(&TokenKind::ColonColon) && matches!(self.peek_ahead(1), TokenKind::Lt) {
+            self.bump(); // consume ::
+            const_args = self.parse_const_args()?;
+        }
+
+        // Function call?
+        if self.at(&TokenKind::LParen) {
+            self.pos += 1;
+            let args = self.parse_arg_list()?;
+            let end = self.expect(&TokenKind::RParen)?;
+            let span = merge_spans(name_span, end);
+            Ok(Expr::Call {
+                name: full_name,
+                args,
+                const_args,
+                span,
+            })
+        } else if !const_args.is_empty() {
+            Err(self.error("a const turbofish `::<...>` must be followed by a call argument list"))
+        } else {
+            Ok(Expr::Ident {
+                name: full_name,
+                span: merge_spans(name_span, end_span),
+            })
+        }
+    }
+
+    fn parse_constructed_primary(&mut self) -> Result<Expr, ParseError> {
+        let (name, name_span) = self.expect_upper_ident()?;
+
+        // Multiword::<N>(d0, ..., d_{N-1}) construction. Desugar
+        // to a tuple of the N arguments cast to Multiword<N>,
+        // reusing the tuple-to-Multiword cast (B19).
+        if name == "Multiword"
+            && self.at(&TokenKind::ColonColon)
+            && matches!(
+                self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                Some(TokenKind::Lt)
+            )
+        {
+            self.expect(&TokenKind::ColonColon)?;
+            self.expect(&TokenKind::Lt)?;
+            let words = self.parse_const_expr()?;
+            self.check_multiword_lit_range(&words, true)?;
+            let frac = if self.eat(&TokenKind::Comma) {
+                let f = self.parse_const_expr()?;
+                self.check_multiword_lit_range(&f, false)?;
+                f
+            } else {
+                ConstExpr::Lit(0, name_span)
+            };
+            self.expect(&TokenKind::Gt)?;
+            self.expect(&TokenKind::LParen)?;
+            let args = self.parse_arg_list()?;
+            let end = self.expect(&TokenKind::RParen)?;
+            let span = merge_spans(name_span, end);
+            let tuple = Expr::TupleLiteral {
+                elements: args,
+                span,
+            };
+            return Ok(Expr::Cast {
+                expr: Box::new(tuple),
+                target: TypeExpr::Multiword(words, frac, span),
+                span,
+            });
+        }
+
+        // Optional const turbofish on a construction: the
+        // `Buf::<8> { ... }` struct form or the `Opt::<8>::Some(...)`
+        // enum form. A `::` followed by `<` is the turbofish; a
+        // `::` followed by an upper ident is an enum variant.
+        let mut const_args: Vec<ConstExpr> = Vec::new();
+        if self.at(&TokenKind::ColonColon) && matches!(self.peek_ahead(1), TokenKind::Lt) {
+            self.bump(); // ::
+            const_args = self.parse_const_args()?;
+        }
+
+        if self.eat(&TokenKind::ColonColon) {
+            // Enum variant.
+            let (variant, _) = self.expect_upper_ident()?;
+            let args = if self.at(&TokenKind::LParen) {
+                self.pos += 1;
+                let a = self.parse_arg_list()?;
+                self.expect(&TokenKind::RParen)?;
+                a
+            } else {
+                Vec::new()
+            };
+            let end = self.prev_span();
+            Ok(Expr::EnumVariant {
+                enum_name: name,
+                variant,
+                args,
+                const_args,
+                span: merge_spans(name_span, end),
+            })
+        } else if self.at(&TokenKind::LBrace) {
+            // Struct init.
+            self.pos += 1;
+            let mut fields = Vec::new();
+            while !self.at(&TokenKind::RBrace) {
+                let (fname, fspan) = self.expect_lower_ident()?;
+                self.expect(&TokenKind::Colon)?;
+                let value = self.parse_expr()?;
+                let end = value.span();
+                fields.push(FieldInit {
+                    name: fname,
+                    value,
+                    span: merge_spans(fspan, end),
+                });
+                if !self.eat(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            let end = self.expect(&TokenKind::RBrace)?;
+            Ok(Expr::StructInit {
+                name,
+                fields,
+                const_args,
+                span: merge_spans(name_span, end),
+            })
+        } else if self.at(&TokenKind::LParen) {
+            // Newtype construction: `Name(expr)`. The parser
+            // emits a `Call` expression with the type name as
+            // the function. The type checker resolves the
+            // name to a newtype constructor, validates the
+            // argument against the underlying type, and tags
+            // the resulting expression with the newtype's
+            // nominal type. If the name does not resolve to a
+            // declared newtype, the type checker reports an
+            // undefined-function error.
+            self.pos += 1;
+            let args = self.parse_arg_list()?;
+            let end = self.expect(&TokenKind::RParen)?;
+            Ok(Expr::Call {
+                name,
+                args,
+                const_args: Vec::new(),
+                span: merge_spans(name_span, end),
+            })
+        } else {
+            Err(ParseError {
+                message: String::from("expected '::', '{', or '(' after type name in expression"),
+                span: name_span,
+            })
+        }
+    }
+
+    fn parse_yield_primary(&mut self, start: Span) -> Result<Expr, ParseError> {
+        self.pos += 1;
+        let value = self.parse_expr()?;
+        let span = merge_spans(start, value.span());
+        Ok(Expr::Yield {
+            value: Box::new(value),
+            span,
+        })
+    }
+
+    fn parse_if_primary(&mut self, start: Span) -> Result<Expr, ParseError> {
+        self.pos += 1;
+        let condition = self.parse_expr()?;
+        let then_block = self.parse_block()?;
+        let else_block = if self.eat(&TokenKind::Else) {
+            Some(self.parse_block()?)
+        } else {
+            None
+        };
+        let end = else_block.as_ref().map_or(then_block.span, |b| b.span);
+        Ok(Expr::If {
+            condition: Box::new(condition),
+            then_block,
+            else_block,
+            span: merge_spans(start, end),
+        })
+    }
+
+    fn parse_match_primary(&mut self, start: Span) -> Result<Expr, ParseError> {
+        self.pos += 1;
+        let scrutinee = self.parse_expr()?;
+        let (arms, end) = self.parse_match_arms()?;
+        Ok(Expr::Match {
+            scrutinee: Box::new(scrutinee),
+            arms,
+            span: merge_spans(start, end),
+        })
+    }
+
+    fn parse_loop_primary(&mut self, start: Span) -> Result<Expr, ParseError> {
+        self.pos += 1;
+        let body = self.parse_block()?;
+        let span = merge_spans(start, body.span);
+        Ok(Expr::Loop { body, span })
+    }
+
+    fn parse_group_primary(&mut self, start: Span) -> Result<Expr, ParseError> {
+        self.pos += 1;
+        if self.eat(&TokenKind::RParen) {
+            // Unit literal.
+            return Ok(Expr::Literal {
+                value: Literal::Unit,
+                span: merge_spans(start, self.prev_span()),
+            });
+        }
+        let first = self.parse_expr()?;
+        if self.eat(&TokenKind::Comma) {
+            // Tuple literal: (expr, expr, ...) with two or more elements.
+            // A single element with a trailing comma, `(x,)`, is not a
+            // one-element tuple; the language admits no one-tuple (a
+            // one-element tuple is not surface syntax), and `(x)` is a
+            // grouped expression. Require a second element after the
+            // first comma.
+            if self.at(&TokenKind::RParen) {
+                return Err(ParseError {
+                    message: String::from(
+                        "a one-element tuple `(x,)` is not valid: a tuple has two or more elements, and `(x)` is a grouped expression",
+                    ),
+                    span: start,
+                });
+            }
+            let mut elements = vec![first];
+            elements.push(self.parse_expr()?);
+            while self.eat(&TokenKind::Comma) {
+                if self.at(&TokenKind::RParen) {
+                    break;
+                }
+                elements.push(self.parse_expr()?);
+            }
+            let end = self.expect(&TokenKind::RParen)?;
+            Ok(Expr::TupleLiteral {
+                elements,
+                span: merge_spans(start, end),
+            })
+        } else {
+            // Grouped expression.
+            self.expect(&TokenKind::RParen)?;
+            Ok(first)
+        }
+    }
+
+    fn parse_array_primary(&mut self, start: Span) -> Result<Expr, ParseError> {
+        self.pos += 1;
+        let mut elements = Vec::new();
+        if !self.at(&TokenKind::RBracket) {
+            elements.push(self.parse_expr()?);
+            while self.eat(&TokenKind::Comma) {
+                if self.at(&TokenKind::RBracket) {
+                    break;
+                }
+                elements.push(self.parse_expr()?);
+            }
+        }
+        let end = self.expect(&TokenKind::RBracket)?;
+        Ok(Expr::ArrayLiteral {
+            elements,
+            span: merge_spans(start, end),
+        })
     }
 
     // --- Helper for function call arguments ---

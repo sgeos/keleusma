@@ -243,6 +243,12 @@ pub mod text_size;
 /// Structural verifier plus WCET and WCMU resource-bounds pass.
 #[cfg(feature = "verify")]
 pub mod verify;
+#[cfg(feature = "verify")]
+mod verify_execution;
+
+/// First-pass language-trap classification with explicit availability boundaries.
+#[cfg(feature = "verify")]
+pub mod trap_analysis;
 
 /// Per-site composite confinement: does the region a construction site builds
 /// become unreachable once its enclosing iteration ends? Sound but deliberately
@@ -277,5 +283,8 @@ pub use marshall::{IntoFallibleNativeFn, IntoNativeFn, KeleusmaType, RefContext}
 pub use opaque::{HostOpaque, host_arc};
 #[cfg(feature = "verify")]
 pub use text_size::{TextSize, op_cost_context};
-pub use vm::{NativeCtx, OverflowPolicy, VerifyWarning, VmError, VmOptions, WarningKind};
+pub use vm::{
+    ExecutionChecks, NativeCtx, OverflowPolicy, TrapPolicy, VerifyWarning, VmError, VmOptions,
+    WarningKind,
+};
 pub use word::Word;

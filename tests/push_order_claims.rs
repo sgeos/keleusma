@@ -55,12 +55,11 @@ fn repo_root() -> PathBuf {
 fn is_skipped_dir(name: &str) -> bool {
     matches!(
         name,
-        ".git" | "target" | "tmp" | "node_modules" | "book_out" | "site"
+        ".git" | ".worktrees" | "secret" | "target" | "tmp" | "node_modules" | "book_out" | "site"
     )
 }
 
-/// Every text file under `root`, depth first. `book/book` is a build output and
-/// is skipped by name along with the other generated directories.
+/// Scan this checkout while excluding private state, peer worktrees and generated output.
 fn walk(root: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(root) else {
         return;
@@ -194,5 +193,38 @@ fn the_authoritative_sites_still_state_the_push_order() {
          order. The Japanese book is built from the translations, so a corrected \
          msgid beside a stale or empty msgstr still fails its reader.\n\
          msgstr was: {msgstr}"
+    );
+}
+
+/// Peer checkouts and private state are outside this repository's public-document scope.
+#[test]
+fn the_walk_excludes_peer_worktrees_and_private_state() {
+    let root =
+        std::env::temp_dir().join(format!("keleusma-push-order-scope-{}", std::process::id()));
+    fs::create_dir(&root).expect("new isolated fixture");
+    for directory in [
+        ".worktrees/peer/docs",
+        "secret/notes",
+        "book/po",
+        "docs/spec",
+    ] {
+        fs::create_dir_all(root.join(directory)).expect("fixture directory");
+        fs::write(root.join(directory).join("probe.txt"), wrong_push_order())
+            .expect("fixture file");
+    }
+    let mut found = Vec::new();
+    walk(&root, &mut found);
+    let mut relative: Vec<_> = found
+        .iter()
+        .map(|path| path.strip_prefix(&root).unwrap().to_owned())
+        .collect();
+    relative.sort();
+    fs::remove_dir_all(&root).expect("remove fixture");
+    assert_eq!(
+        relative,
+        [
+            PathBuf::from("book/po/probe.txt"),
+            PathBuf::from("docs/spec/probe.txt")
+        ]
     );
 }

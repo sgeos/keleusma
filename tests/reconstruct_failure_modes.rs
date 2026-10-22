@@ -87,7 +87,7 @@ const BINOP: i64 = 3;
 #[test]
 fn every_named_cause_renders_a_distinct_message() {
     let mut seen: Vec<(i64, String)> = Vec::new();
-    for code in 1..=5 {
+    for code in 1..=7 {
         let tag = RECONSTRUCT_DIAG_TAG_BASE - code;
         let msg = describe_reconstruct_diagnostic(tag, 7);
         for (other, prev) in &seen {
@@ -99,7 +99,7 @@ fn every_named_cause_renders_a_distinct_message() {
         }
         seen.push((code, msg));
     }
-    assert_eq!(seen.len(), 5, "the code table lost an entry");
+    assert_eq!(seen.len(), 7, "the code table lost an entry");
 }
 
 /// An underflow and an exhaustion on the SAME array must not read alike.
@@ -179,8 +179,8 @@ fn the_array_family_is_derived_and_non_vacuous() {
         .filter(|(_, s)| arrays.iter().filter(|(_, o)| o == s).count() > 1)
         .count();
     assert!(
-        shared_a_message >= arrays.len() - 1,
-        "at most one array should have a size class to itself; {} of {} do",
+        shared_a_message >= arrays.len() - 2,
+        "at most two arrays should have a size class to themselves; {} of {} do",
         arrays.len() - shared_a_message,
         arrays.len()
     );
@@ -233,7 +233,22 @@ fn the_reconstruct_diagnostic_tag_base_matches() {
 #[test]
 fn the_unguarded_arrays_are_named() {
     let guarded = [
-        "stack", "kinds", "args", "lhs", "rhs", "rec_kind", "rec_arg",
+        "stack",
+        "kinds",
+        "args",
+        "lhs",
+        "rhs",
+        "rec_kind",
+        "rec_arg",
+        "outcome_base",
+        "outcome_map",
+        "ctx_base",
+        "ctx_root",
+        "ctx_meta",
+        "ctx_literal0",
+        "ctx_literal1",
+        "ctx_pending",
+        "ctx_literal_seen",
     ];
     let arrays = declared_arrays();
     let unguarded: Vec<&str> = arrays
@@ -410,27 +425,23 @@ fn exhausting_the_node_arrays_names_itself() {
     );
 }
 
-/// Code 2 is UNREACHABLE, and this pins the invariant that makes it so.
-///
-/// `push` has exactly one caller, inside `emit`, and `emit`'s node guard fires first.
-/// Since `sp` never exceeds `node_count`, the work stack cannot fill before the node
-/// arrays do. **A guard that cannot fire is worse than none**, so the honest options were
-/// to delete it or to pin the reason. Pinning is chosen because a second `push` caller
-/// would make the guard live, and this test fails the moment one is added.
+/// Wildcard sentinels push without allocating nodes. Their stack occupancy is
+/// bounded by the record range, independently of the node-allocation bound.
 #[test]
-fn the_work_stack_cannot_overflow_before_the_node_array() {
-    let calls = STAGE
-        .lines()
-        .filter(|l| {
-            let t = l.trim();
-            !t.starts_with("//") && t.contains("push(") && !t.contains("push_fp(")
-        })
-        .count();
+fn wildcard_work_stack_is_bounded_by_the_record_range() {
+    let cap = RECONSTRUCT_NODE_CAP;
+    let (_, code, detail) = drive(&vec![(72, 0); cap]);
     assert_eq!(
-        calls, 2,
-        "`push` no longer has exactly one definition and one call site. If a second caller \
-         was added, the work-stack guard is now reachable and needs a provoking input"
+        code, 5,
+        "a full stack fits and then fails the single-root requirement"
     );
+    assert_eq!(detail, cap as i64);
+    let (_, code, detail) = drive(&vec![(72, 0); cap + 1]);
+    assert_eq!(
+        code, 4,
+        "the range guard refuses before an extra stack push"
+    );
+    assert_eq!(detail, cap as i64 + 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -478,4 +489,63 @@ fn wire_kel_reports_a_named_cause_rather_than_an_array_index() {
         );
         panic!("`wire.kel` no longer compiles; it refuses with: {msg}");
     }
+}
+
+/// Outcome contexts and descriptors reject malformed records before indexing.
+#[test]
+fn outcome_storage_checks_depth_offsets_and_missing_context() {
+    let arrays = declared_arrays();
+    assert!(arrays.contains(&("outcome_base".into(), 8)));
+    assert!(arrays.contains(&("outcome_map".into(), 22)));
+    let mut too_deep = vec![(112, 0); 9];
+    too_deep.push((1, 0));
+    let mut full_descriptors = Vec::new();
+    for _ in 0..86 {
+        full_descriptors.extend([(112, 0), (114, 0)]);
+    }
+    for records in [
+        full_descriptors,
+        too_deep,
+        vec![(112, -12)],
+        vec![(112, 252)],
+        vec![(112, 1)],
+        vec![(113, 0)],
+        vec![(114, 0)],
+        vec![(1, 0), (117, 0)],
+    ] {
+        let (yielded, code, _) = drive(&records);
+        assert_eq!(code, 6, "{records:?}");
+        assert_eq!(yielded, RECONSTRUCT_DIAG_TAG_BASE - 6);
+    }
+}
+
+#[test]
+fn checked_context_arrays_match_the_bounded_entry_guard() {
+    let arrays = declared_arrays();
+    for name in [
+        "ctx_base",
+        "ctx_root",
+        "ctx_meta",
+        "ctx_literal0",
+        "ctx_literal1",
+        "ctx_pending",
+        "ctx_literal_seen",
+    ] {
+        assert_eq!(
+            arrays
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, size)| *size),
+            Some(32)
+        );
+    }
+    assert!(STAGE.contains("fn rc_cap_checked() -> Word { 32 }"));
+    assert!(STAGE.contains("checked.depth >= rc_cap_checked()"));
+    let mut records = Vec::new();
+    for _ in 0..33 {
+        records.extend([(1, 7), (1, 2), (3, 1), (118, 3 * 65536)]);
+    }
+    let (yielded, code, _) = drive(&records);
+    assert_eq!(code, 6);
+    assert_eq!(yielded, RECONSTRUCT_DIAG_TAG_BASE - 6);
 }

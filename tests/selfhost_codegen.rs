@@ -1,5 +1,8 @@
 // The self-hosted codegen is a full-width host tool, gated to a 64-bit runtime.
 #![cfg(all(
+    // The record adapter uses the production self-host API. This target runs
+    // in the self-host job and the workspace configuration that enables it.
+    feature = "self-host",
     feature = "compile",
     feature = "verify",
     // The reference tables below name `ScalarKind::Float`, a variant that does not
@@ -48,6 +51,9 @@ use keleusma::value_layout::{CompositeKind, ScalarKind};
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 
 mod common;
+#[path = "common/data_read_kinds.rs"]
+mod data_read_kinds;
+use data_read_kinds::data_read_kinds;
 
 // Complete-key memoization input sets for the whole-stage self-compile tests
 // (process-audit item 3). Each set must be a SUPERSET of the .kel files the test
@@ -167,6 +173,7 @@ struct Ctx {
     head_parts: Vec<i64>,
     chunk_names: Vec<String>,
     data_slots: Vec<String>,
+    data_kinds: std::collections::BTreeMap<String, i64>,
     /// `const data` scalar fields by `name.field` -> value. A read of one of these
     /// inlines to a constant, exactly as the reference compiler does, and never
     /// occupies a runtime data slot.
@@ -342,7 +349,11 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             };
             ctx.nodes.push(Node {
                 kind: 4,
-                arg: cond,
+                arg: if else_block.is_none() {
+                    -cond - 1
+                } else {
+                    cond
+                },
                 lhs: t,
                 rhs: el,
             });
@@ -416,7 +427,7 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             }
         }
         Expr::ArrayIndex { object, index, .. } => {
-            // A `d.arr[i]` read. IndexRead (kind 13): arg = base + len*2^24,
+            // A `d.arr[i]` read. IndexRead (kind 13) packs base, length and fallback kind,
             // lhs = index. The object is a `d.arr` field access.
             let (data_name, field) = match object.as_ref() {
                 Expr::FieldAccess {
@@ -433,7 +444,9 @@ fn flatten(e: &Expr, scope: &mut Vec<(String, i64)>, next_slot: &mut i64, ctx: &
             let index_node = flatten(index, scope, next_slot, ctx);
             ctx.nodes.push(Node {
                 kind: 13,
-                arg: base + len * 16_777_216,
+                arg: base
+                    + len * 16_777_216
+                    + ctx.data_kinds[&format!("{data_name}.{field}")] * 281_474_976_710_656,
                 lhs: index_node,
                 rhs: 0,
             });
@@ -707,6 +720,7 @@ fn build_body(
     category: i64,
     chunk_names: Vec<String>,
     data_slots: Vec<String>,
+    data_kinds: std::collections::BTreeMap<String, i64>,
     const_data: Vec<(String, i64)>,
 ) -> Body {
     let mut ctx = Ctx {
@@ -718,6 +732,7 @@ fn build_body(
         head_parts: Vec::new(),
         chunk_names,
         data_slots,
+        data_kinds,
         const_data,
     };
     let mut scope: Vec<(String, i64)> = params
@@ -739,17 +754,15 @@ fn build_body(
     }
 }
 
-/// Flatten a multiheaded function (its heads share a name), building the MultiHead
-/// dispatch (category 3). Each head copies the parameters into fresh consecutive
-/// locals (mirroring the reference's per-head param binding), then flattens its
-/// optional `when` guard and its `yield`-expression body in the scope of those
-/// copies. The 4-word head_parts entry is (param-copy start slot, guarded flag,
-/// guard node, body node).
+/// Flatten each head with relative parameter slots. Guards and bodies have separate
+/// local namespaces. Code generation allocates their physical windows in order.
+/// The entry is (parameter count, guarded flag, guard node, body node).
 fn build_multihead(
     heads: &[&FunctionDef],
     params: &[Param],
     chunk_names: Vec<String>,
     data_slots: Vec<String>,
+    data_kinds: std::collections::BTreeMap<String, i64>,
     const_data: Vec<(String, i64)>,
 ) -> Body {
     let mut ctx = Ctx {
@@ -761,27 +774,28 @@ fn build_multihead(
         head_parts: Vec::new(),
         chunk_names,
         data_slots,
+        data_kinds,
         const_data,
     };
     let pc = params.len() as i64;
-    // The parameters occupy slots 0..pc; each head's copies and body lets follow.
-    let mut next_slot = pc;
+    // Each guard and body starts from the same relative parameter namespace.
+
     let mut entries: Vec<(i64, i64, i64, i64)> = Vec::new();
     for head in heads {
-        let param_start = next_slot;
-        next_slot += pc;
-        // The parameters resolve to this head's copies for its guard and body.
+        let mut next_slot = pc;
+        // Physical parameter copies are allocated by code generation.
         let mut scope: Vec<(String, i64)> = params
             .iter()
             .enumerate()
-            .map(|(i, p)| (param_name(p).to_string(), param_start + i as i64))
+            .map(|(i, p)| (param_name(p).to_string(), i as i64))
             .collect();
         let (guarded, guard_node) = match &head.guard {
             Some(g) => (1, flatten(g, &mut scope, &mut next_slot, &mut ctx)),
             None => (0, 0),
         };
+        next_slot = pc;
         let body_node = flatten_block(&head.body, &mut scope, &mut next_slot, &mut ctx);
-        entries.push((param_start, guarded, guard_node, body_node));
+        entries.push((pc, guarded, guard_node, body_node));
     }
     for (ps, g, gn, bn) in &entries {
         ctx.head_parts.push(*ps);
@@ -868,6 +882,8 @@ fn decode_op(w: i64) -> Op {
         61 => Op::Mul,
         62 => Op::Shl,
         63 => Op::Shr,
+        64 => Op::CheckedDiv(operand as u8),
+        65 => Op::CheckedMod,
         // A flat struct construction: the operand packs count + byte_size*65536.
         46 => Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Struct,
@@ -952,7 +968,7 @@ fn decode_op(w: i64) -> Op {
             offset: (operand % 65536) as u16,
             size: ((operand / 65536) % 65536) as u16,
             variant: match operand / 4294967296 {
-                0 => CompositeKind::Tuple,
+                0 | 4 => CompositeKind::Tuple,
                 1 => CompositeKind::Array,
                 2 => CompositeKind::Struct,
                 3 => CompositeKind::Enum,
@@ -1416,6 +1432,7 @@ fn struct_layout_matches_the_reference_baked_layout() {
 #[derive(Clone, Copy, Debug)]
 enum Expect {
     Int(i64),
+    Byte(u8),
     Bool(bool),
 }
 
@@ -1718,6 +1735,16 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             2,
             Int(0),
         ),
+        (
+            "shared data d { xs: [Byte; 2] } fn main(i: Word) -> Byte { d.xs[i] }",
+            1,
+            Expect::Byte(0),
+        ),
+        (
+            "shared data d { xs: [bool; 2] } fn main(i: Word) -> bool { d.xs[i] }",
+            1,
+            Bool(false),
+        ),
     ];
     for &(src, arg, expected) in cases {
         let program = parse(&tokenize(src).expect("lex")).expect("parse");
@@ -1757,6 +1784,7 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
             0,
             chunk_names,
             data_slots,
+            data_read_kinds(&program),
             const_data,
         );
 
@@ -1786,9 +1814,17 @@ fn codegen_owns_its_constant_pool_and_matches_reference() {
         } else {
             vec![Value::Int(arg)]
         };
-        match (expected, vm.call(&call_args).expect("call built")) {
+        let mut shared = vec![0; vm.shared_data_bytes()];
+        match (
+            expected,
+            vm.call_with_shared(&mut shared, &call_args)
+                .expect("call built"),
+        ) {
             (Expect::Int(e), VmState::Finished(Value::Int(n))) => {
                 assert_eq!(n, e, "wrong for `{src}`")
+            }
+            (Expect::Byte(e), VmState::Finished(Value::Byte(b))) => {
+                assert_eq!(b, e, "wrong for `{src}`")
             }
             (Expect::Bool(e), VmState::Finished(Value::Bool(b))) => {
                 assert_eq!(b, e, "wrong for `{src}`")
@@ -1824,6 +1860,7 @@ fn a_synthetic_multiheaded_function_compiles_byte_identically() {
         &heads[0].params,
         chunk_names,
         Vec::new(),
+        data_read_kinds(&program),
         Vec::new(),
     );
     let (emitted, _pool, _lc) = run_codegen(&body, heads[0].params.len());
@@ -1899,6 +1936,7 @@ fn self_compile_codegen_atomic_functions() {
         let first = heads[0];
         let cn = chunk_names.clone();
         let ds = data_slots.clone();
+        let dk = data_read_kinds(&program);
         let cd = const_data.clone();
         let name_c = name.clone();
         let heads_ref = &heads;
@@ -1908,12 +1946,14 @@ fn self_compile_codegen_atomic_functions() {
             // Stream/Reset wrapper (category 2). A lone single-head `yield` is not
             // exercised by codegen.kel and is not yet lowered.
             let body = if heads_ref.len() > 1 {
-                build_multihead(heads_ref, &first.params, cn, ds, cd)
+                build_multihead(heads_ref, &first.params, cn, ds, dk, cd)
             } else {
                 match first.category {
-                    FunctionCategory::Fn => build_body(&first.body, &first.params, 0, cn, ds, cd),
+                    FunctionCategory::Fn => {
+                        build_body(&first.body, &first.params, 0, cn, ds, dk, cd)
+                    }
                     FunctionCategory::Loop if first.guard.is_none() => {
-                        build_body(&first.body, &first.params, 2, cn, ds, cd)
+                        build_body(&first.body, &first.params, 2, cn, ds, dk, cd)
                     }
                     _ => return Err("non-atomic single-head (yield) function".to_string()),
                 }
@@ -2023,7 +2063,12 @@ fn self_compile_codegen_atomic_functions() {
     // 76 with `push_arr_scalar_inner`, the per-element GetIndex compare body of a nested scalar-ARRAY
     // block (`eq/nested_array_subfield`), factored so the depth-1 array field and the nested array
     // block share one emission form (75 -> 76).
-    const EXPECTED_SELF_COMPILE: usize = 76;
+    // Guarded match results and enum cast dispatch added two helpers, both checked above.
+    // Nested tuple extraction adds an internal operand-packing helper.
+    // Data relocation adds one helper. Head phases, local-slot mapping and shift phases add ten.
+    // Outcome dispatch and arm scheduling add two helpers.
+    // Checked arithmetic adds five helpers.
+    const EXPECTED_SELF_COMPILE: usize = 100;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -2051,7 +2096,7 @@ fn self_compile_codegen_atomic_functions() {
 // reconstruction to the control-flow, data-access, call, and yield kinds.
 // ---------------------------------------------------------------------------
 
-// Lexer `src` block slots: len(1) + bytes(393216) then the intern table.
+// Lexer `src` block slots: len(1) + bytes(LEX_SOURCE_CAP) then the intern table.
 const BR_LEX_ISTART: usize = keleusma::selfhost_host::BR_LEX_ISTART;
 const BR_LEX_ILEN: usize = keleusma::selfhost_host::BR_LEX_ILEN;
 const BR_LEX_ICOUNT: usize = keleusma::selfhost_host::BR_LEX_ICOUNT;
@@ -2244,6 +2289,12 @@ fn parse_function_records(src: &str) -> (Vec<(i64, i64)>, usize, i64) {
                 match code {
                     0 => {}
                     15 => in_body = false,
+                    c if c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                        || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
+                        || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
+                        || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
+                        || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
+                        || matches!(c, 94..=96 | 99..=105) => {}
                     _ => records.push((code, val)),
                 }
             } else if in_guard {
@@ -2329,7 +2380,15 @@ fn reconstruct_body(records: &[(i64, i64)], category: i64) -> Body {
     let records: Vec<(i64, i64)> = records
         .iter()
         .copied()
-        .filter(|(k, _)| *k != keleusma::selfhost_host::PARSE_LET_NAME_TAG)
+        .filter(|(k, _)| {
+            *k != keleusma::selfhost_host::PARSE_LET_NAME_TAG
+                && *k != keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                && *k != keleusma::selfhost_host::PARSE_LET_TYPE_TAG
+                && *k != keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
+                && *k != keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
+                && *k != keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
+                && !matches!(*k, 94..=96 | 99..=105)
+        })
         .collect();
     let records: &[(i64, i64)] = &records;
     let mut nodes: Vec<Node> = Vec::new();
@@ -2373,6 +2432,10 @@ fn reconstruct_into(
     // in declaration order (a construction may write fields out of order).
     let mut pending_fp: Vec<i64> = Vec::new();
     for &(kind, arg) in records {
+        if kind == 72 {
+            stack.push(-1); // A wildcard is an ordered pattern sentinel, not a value node.
+            continue;
+        }
         // A SlotRecord (32) carries a frame slot for the pending `for` loop, and a
         // ForBuild (33) assembles the 12-word limit_parts entry from the five
         // collected slots and the seven loop nodes on the stack. Neither is a node.
@@ -2421,7 +2484,7 @@ fn reconstruct_into(
                 });
                 (nodes.len() - 1) as i64
             }
-            3 | 5 | 8 | 9 | 12 | 14 | 21 | 31 => {
+            3 | 5 | 8 | 9 | 12 | 14 | 21 | 31 | 71 => {
                 let r = stack.pop().expect("binary rhs");
                 let l = stack.pop().expect("binary lhs");
                 nodes.push(Node {
@@ -2461,16 +2524,19 @@ fn reconstruct_into(
                 (nodes.len() - 1) as i64
             }
             34 => {
-                // MatchBuild signal: arg packs `temp*1024 + lit_count`. The stack
-                // holds the scrutinee, then a (literal, result) pair per literal arm,
-                // then the wildcard result on top. Assemble the match_parts entry
-                // (temp, wildcard, then the literal/result pairs) and build the
-                // MatchIn node (kind 22): arg = entry start, lhs = scrutinee, rhs =
-                // literal-arm count. Unlike the for loop, the build signal itself
-                // produces the value node.
+                // Each ordered arm has a pattern/result pair. Compact a final
+                // wildcard into the trailer while retaining earlier wildcard positions.
                 let temp = arg.div_euclid(1024);
-                let lit_count = arg.rem_euclid(1024);
-                let wc = stack.pop().expect("match wildcard result");
+                let total = arg.rem_euclid(1024);
+                let has_wildcard = total > 0 && stack[stack.len() - 2] < 0;
+                let lit_count = total - i64::from(has_wildcard);
+                let wc = if has_wildcard {
+                    let result = stack.pop().expect("wildcard result");
+                    assert_eq!(stack.pop(), Some(-1));
+                    result
+                } else {
+                    -1
+                };
                 let mut pairs: Vec<(i64, i64)> = Vec::new();
                 for _ in 0..lit_count {
                     let res = stack.pop().expect("match arm result");
@@ -2510,7 +2576,7 @@ fn reconstruct_into(
                 let cond = stack.pop().expect("if cond");
                 nodes.push(Node {
                     kind: 4,
-                    arg: cond,
+                    arg: if arg == 1 { -cond - 1 } else { cond },
                     lhs: th,
                     rhs: el,
                 });
@@ -4038,79 +4104,8 @@ fn is_multihead_group(group: &[&ParsedFn]) -> bool {
 /// with its guard and body records, plus the interned-name table. Multiheaded functions
 /// appear as several same-named entries in declaration order.
 fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
-    let (tokens, names) = br_lex(src);
-    let id_of = |s: &str| {
-        names
-            .iter()
-            .position(|n| n == s)
-            .map(|i| i as i64)
-            .unwrap_or(-1)
-    };
-    // The chunk table must be in the module's actual chunk order so a resolved call index
-    // matches the assembled module. The Rust compiler orders chunks by name, not by
-    // declaration, so the table (host-supplied resolved-reference data) is taken from the
-    // reference module's chunk order rather than the token scan's declaration order.
-    let reference_chunks = compile_src(src);
-    let chunks: Vec<i64> = reference_chunks
-        .chunks
-        .iter()
-        .map(|c| id_of(&c.name))
-        .collect();
-    let module = std::thread::Builder::new()
-        .stack_size(64 * 1024 * 1024)
-        .spawn(|| {
-            compile_src(
-                &std::fs::read_to_string(common::stage_path("compiler/kel/parse.kel"))
-                    .expect("read"),
-            )
-        })
-        .expect("spawn")
-        .join()
-        .expect("join");
-    let need = required_persistent_capacity_for(&module);
-    let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
-    arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(module, &arena).expect("verify parse.kel");
-    let mut shared = vec![0u8; vm.shared_data_bytes()];
-    vm.set_shared(&mut shared, BR_P_LEN, Value::Int(tokens.len() as i64))
-        .unwrap();
-    vm.set_shared(&mut shared, BR_P_LIMIT_ID, Value::Int(id_of("limit")))
-        .unwrap();
-    vm.set_shared(&mut shared, BR_P_REQUIRE_ID, Value::Int(id_of("require")))
-        .unwrap();
-    vm.set_shared(&mut shared, BR_P_WORD_ID, Value::Int(id_of("Word")))
-        .unwrap();
-    vm.set_shared(&mut shared, BR_P_BYTE_ID, Value::Int(id_of("Byte")))
-        .unwrap();
-    vm.set_shared(&mut shared, BR_P_BOOL_ID, Value::Int(id_of("Bool")))
-        .unwrap();
-    vm.set_shared(&mut shared, BR_P_AND_ID, Value::Int(id_of("and")))
-        .unwrap();
-    // THE BOOLEAN LITERAL IDS. This harness is a COPY of the shipping driver, so
-    // a slot added there is not added here, and the boundary test drives THIS one.
-    // Omitting them makes `true` resolve as a variable reference again — the exact
-    // miscompile the driver-side fix removes.
-    vm.set_shared(&mut shared, BR_P_TRUE_ID, Value::Int(id_of("true")))
-        .unwrap();
-    vm.set_shared(&mut shared, BR_P_FALSE_ID, Value::Int(id_of("false")))
-        .unwrap();
-    vm.set_shared(&mut shared, BR_P_OR_ID, Value::Int(id_of("or")))
-        .unwrap();
-    vm.set_shared(
-        &mut shared,
-        BR_P_CHUNK_COUNT,
-        Value::Int(chunks.len() as i64),
-    )
-    .unwrap();
-    for (i, &c) in chunks.iter().enumerate() {
-        vm.set_shared(&mut shared, BR_P_CHUNKS + i, Value::Int(c))
-            .unwrap();
-    }
-    for (i, &(k, v)) in tokens.iter().enumerate() {
-        vm.set_shared(&mut shared, BR_P_PACKED + i, Value::Int(k + v * 256))
-            .unwrap();
-    }
-
+    // Keep the independent record collector while using bounded token transport.
+    let (names, traced) = keleusma::selfhost::parse_record_trace_fused(src);
     let mut fns: Vec<ParsedFn> = Vec::new();
     let mut cur: Option<ParsedFn> = None;
     // Every data block's header records (DSTART, then PARAM/PTYPE/ASIZE per field, then
@@ -4124,93 +4119,101 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
     // A struct/trait/impl declaration (STRUCTSTART 18, TRAITSTART 19, IMPLSTART 20) is
     // skipped until its END; it contributes no chunk or scaffold record here.
     let mut in_skip_decl = false;
-    let state = vm
-        .call_with_shared(&mut shared, &[Value::Int(0)])
-        .expect("call");
-    let budget = tokens.len() * 16 + 256;
-    keleusma::selfhost_host::drive_parse_records(
-        &mut vm,
-        &mut shared,
-        state,
-        budget,
-        |code, val| {
-            if in_body {
-                match code {
-                    0 => {}
-                    15 => in_body = false,
-                    _ => cur.as_mut().unwrap().body.push((code, val)),
-                }
-            } else if in_guard {
-                match code {
-                    0 => {}
-                    15 => in_guard = false,
-                    _ => cur.as_mut().unwrap().guard.push((code, val)),
-                }
-            } else if in_data {
-                if code == 5 {
-                    data_records.push((5, 0));
-                    in_data = false;
-                } else if code != 0 {
-                    data_records.push((code, val));
-                }
-            } else if in_enum {
-                if code == 5 {
-                    enum_records.push((5, 0));
-                    in_enum = false;
-                } else if code != 0 {
-                    enum_records.push((code, val));
-                }
-            } else if in_use {
-                in_use = code != 5;
-            } else if in_skip_decl {
-                in_skip_decl = code != 5;
-            } else {
-                match code {
-                    1..=3 => {
-                        cur = Some(ParsedFn {
-                            cat: code,
-                            name: val,
-                            params: 0,
-                            param_types: Vec::new(),
-                            return_type: 0,
-                            guard: Vec::new(),
-                            body: Vec::new(),
-                        })
-                    }
-                    4 => cur.as_mut().unwrap().params += 1,
-                    6 => cur.as_mut().unwrap().param_types.push(val),
-                    7 => cur.as_mut().unwrap().return_type = val,
-                    9 => {
-                        in_data = true;
-                        data_records.push((9, val));
-                    }
-                    10 => in_use = true,
-                    12 => {
-                        in_enum = true;
-                        enum_records.push((12, val));
-                    }
-                    16 => in_body = true,
-                    17 => in_guard = true,
-                    18..=20 => in_skip_decl = true, // struct/trait/impl declaration
-                    5 => fns.push(cur.take().unwrap()),
-                    15 => return std::ops::ControlFlow::Break(()),
-                    _ => {}
-                }
+    let mut consume = |code, val| {
+        if in_body {
+            match code {
+                0 => {}
+                15 => in_body = false,
+                c if c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                    || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
+                    || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
+                    || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
+                    || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
+                    || matches!(c, 94..=96 | 99..=105) => {}
+                _ => cur.as_mut().unwrap().body.push((code, val)),
             }
-            std::ops::ControlFlow::Continue(())
-        },
-    );
+        } else if in_guard {
+            match code {
+                0 => {}
+                15 => in_guard = false,
+                c if c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                    || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
+                    || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
+                    || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
+                    || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
+                    || matches!(c, 94..=96 | 99..=105) => {}
+                _ => cur.as_mut().unwrap().guard.push((code, val)),
+            }
+        } else if in_data {
+            if code == 5 {
+                data_records.push((5, 0));
+                in_data = false;
+            } else if code != 0 {
+                data_records.push((code, val));
+            }
+        } else if in_enum {
+            if code == 5 {
+                enum_records.push((5, 0));
+                in_enum = false;
+            } else if code != 0 {
+                enum_records.push((code, val));
+            }
+        } else if in_use {
+            in_use = code != 5;
+        } else if in_skip_decl {
+            in_skip_decl = code != 5;
+        } else {
+            match code {
+                1..=3 => {
+                    cur = Some(ParsedFn {
+                        cat: code,
+                        name: val,
+                        params: 0,
+                        param_types: Vec::new(),
+                        return_type: 0,
+                        guard: Vec::new(),
+                        body: Vec::new(),
+                    })
+                }
+                4 => cur.as_mut().unwrap().params += 1,
+                6 => cur.as_mut().unwrap().param_types.push(val),
+                7 => cur.as_mut().unwrap().return_type = val,
+                // This historical scaffold keeps only scalar signature names.
+                // Composite signature metadata belongs to the shipping driver.
+                8 => {}
+                94 => {}
+                95 => {}
+                96 => {}
+                9 => {
+                    in_data = true;
+                    data_records.push((9, val));
+                }
+                10 => in_use = true,
+                12 => {
+                    in_enum = true;
+                    enum_records.push((12, val));
+                }
+                16 => in_body = true,
+                17 => in_guard = true,
+                18..=20 => in_skip_decl = true, // struct/trait/impl declaration
+                5 => fns.push(cur.take().unwrap()),
+                15 => return std::ops::ControlFlow::Break(()),
+                _ => {}
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    };
+    for (code, val, _) in traced {
+        if consume(code, val).is_break() {
+            break;
+        }
+    }
     (fns, names, data_records, enum_records)
 }
 
-/// Combine the heads of a multiheaded function into the codegen Body codegen.kel's
-/// multihead dispatch consumes. Each head's guard and body are reconstructed into one
-/// shared node array, its frame slots remapped by the head's `param_start` -- the heads'
-/// parameter copies occupy `(i+1)*pc .. (i+2)*pc` (this covers heads whose only frame
-/// slots are the parameters; heads with their own lets or loops need the additional
-/// per-head temp offset, a later refinement). Each head contributes a four-word
-/// head_parts entry (param_start, guarded, guard node, body node), and a MultiHead node
-/// (kind 25, rhs = head count) is the root; the category is 3.
+/// Reconstruct each guard and body with relative slots. Code generation allocates
+/// parameter-copy windows and rebases the ranges after earlier heads and guards.
+/// Each head contributes (parameter count, guarded flag, guard node, body node).
 fn build_multihead_bridge(heads: &[&ParsedFn], pc: usize) -> Body {
     let mut nodes: Vec<Node> = Vec::new();
     let mut call_args: Vec<i64> = Vec::new();
@@ -4218,20 +4221,13 @@ fn build_multihead_bridge(heads: &[&ParsedFn], pc: usize) -> Body {
     let mut match_parts: Vec<i64> = Vec::new();
     let mut head_parts: Vec<i64> = Vec::new();
     let mut entries: Vec<(i64, i64, i64, i64)> = Vec::new();
-    for (i, h) in heads.iter().enumerate() {
-        let base = ((i + 1) * pc) as i64;
-        // Remap frame-slot references (Local) into this head's parameter window.
-        let remap = |recs: &[(i64, i64)]| -> Vec<(i64, i64)> {
-            recs.iter()
-                .map(|&(k, a)| if k == 2 { (k, a + base) } else { (k, a) })
-                .collect()
-        };
+    for h in heads {
+        let base = pc as i64;
         let (guarded, guard_node) = if h.guard.is_empty() {
             (0i64, 0i64)
         } else {
-            let g = remap(&h.guard);
             let root = reconstruct_into(
-                &g,
+                &h.guard,
                 &mut nodes,
                 &mut call_args,
                 &mut limit_parts,
@@ -4239,9 +4235,8 @@ fn build_multihead_bridge(heads: &[&ParsedFn], pc: usize) -> Body {
             );
             (1i64, root)
         };
-        let b = remap(&h.body);
         let body_node = reconstruct_into(
-            &b,
+            &h.body,
             &mut nodes,
             &mut call_args,
             &mut limit_parts,
@@ -4419,6 +4414,16 @@ fn the_host_unescape_agrees_with_the_reference_on_every_accepted_escape() {
 fn self_host_compile(src: &str) -> Module {
     let (fns, names, _, _) = parse_functions(src);
     let mut module = compile_src(src);
+    let parsed_names: std::collections::BTreeSet<_> = fns
+        .iter()
+        .map(|f| names[f.name as usize].as_str())
+        .collect();
+    let expected_names: std::collections::BTreeSet<_> =
+        module.chunks.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(
+        parsed_names, expected_names,
+        "parser must reach every source chunk"
+    );
     let mut i = 0;
     while i < fns.len() {
         let name = names[fns[i].name as usize].clone();
@@ -4809,6 +4814,33 @@ fn self_host_compiles_verify_typed_kel_byte_identically() {
         "self_host_compiles_verify_typed_kel_byte_identically",
         "verify_typed.kel",
     );
+}
+
+/// The type-rejection stage must compile through the pipeline with the same
+/// artifact as the reference. With `self-host`, also check the production driver
+/// that assembles every module field from pipeline output without a reference
+/// scaffold, including the shared and private data layout.
+#[test]
+fn self_host_compiles_verify_types_kel_byte_identically() {
+    let src = include_str!("../src/selfhost/kel/verify_types.kel");
+    let module = assert_self_host_byte_identical(src);
+    let reference = compile_src(src);
+    assert!(
+        module.to_bytes().expect("self-hosted artifact")
+            == reference.to_bytes().expect("reference artifact"),
+        "verify_types.kel artifacts differ beyond the checked chunk bodies"
+    );
+    #[cfg(feature = "self-host")]
+    {
+        let scratch = keleusma::selfhost::self_host_compile_scratch(src);
+        assert!(
+            scratch
+                .to_bytes()
+                .expect("artifact assembled from pipeline output")
+                == reference.to_bytes().expect("reference artifact"),
+            "verify_types.kel artifact assembled without the reference scaffold differs"
+        );
+    }
 }
 
 #[test]
@@ -5348,6 +5380,21 @@ fn reconstruct_kel_matches_rust_for_atomic_and_if_bodies() {
     }
 }
 
+// Else presence must survive reconstruction without changing executable bytecode.
+#[test]
+fn explicit_and_implicit_else_compile_byte_identically() {
+    let cases = [
+        "private data d { q: Word } fn f(c: bool) -> Word { if c { d.q = 1; } d.q }",
+        "private data d { q: Word } fn f(c: bool) -> Word { if c { d.q = 1; } else {} d.q }",
+        "private data d { q: Word } fn f(c: bool) -> Word { if c { if c { d.q = 1; } } else { d.q = 2; } d.q }",
+        "private data d { q: Word } fn f(c: bool) -> Word { if c { d.q = 1; } if c { 2 } else { 3 } }",
+    ];
+    for src in cases {
+        assert_reconstruct_kel_matches(src);
+        assert_self_host_byte_identical(src);
+    }
+}
+
 // reconstruct.kel increment 2: function calls (the call_args side array, argument
 // nodes stored in source order) and indexed data writes (the IndexStore signal
 // folding value and index into a kind-15 node).
@@ -5471,8 +5518,8 @@ fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize, chunk: &str) ->
 
 // reconstruct.kel increment 4: the multiheaded dispatch. A group of same-named
 // `yield` heads reconstructs to the same forest, head_parts entries, and MultiHead
-// root the Rust `build_multihead_bridge` builds -- each head's frame slots remapped
-// into its parameter window, guards reconstructed when present. With this
+// root the Rust `build_multihead_bridge` builds, retaining relative frame slots
+// and reconstructing guards when present. With this
 // reconstruct.kel covers the whole grammar the bridge does.
 #[test]
 fn reconstruct_kel_matches_rust_for_multihead() {
@@ -5680,7 +5727,7 @@ fn assemble_shared_layout(
 
 // The per-shared-slot byte layout the driver assembles from parse.kel's records equals
 // the reference compiler's, offset/kind/len for every element slot, for all four stage
-// sources (including lexer.kel's 393216-byte buffer whose later fields sit past 64 KB).
+// sources (including lexer.kel's source buffer whose later fields sit past 64 KB).
 #[test]
 fn assembled_shared_layout_matches_the_reference() {
     if common::selfhost_cache::hit(
@@ -6230,22 +6277,22 @@ const WA_ARENA_CAPACITY: usize = 5;
 const WA_REGION_START: usize = 6;
 const WA_REGION_END: usize = 7;
 const WA_COST: usize = 8;
-const WA_CLASS: usize = 8 + 1536;
-const WA_ARG: usize = 8 + 1536 * 2;
-const WA_GROWTH: usize = 8 + 1536 * 3;
-const WA_SHRINK: usize = 8 + 1536 * 4;
-const WA_HEAP: usize = 8 + 1536 * 5;
-const WA_OPK: usize = 8 + 1536 * 6;
-const WA_SLOT: usize = 8 + 1536 * 7;
-const WA_CVAL: usize = 8 + 1536 * 8;
-const WA_CINT: usize = 8 + 1536 * 9;
-const WA_CALLEE_SLOTS: usize = 8 + 1536 * 10;
-const WA_CALLEE_HEAP: usize = 8 + 1536 * 11;
-const WA_OUT_WCET: usize = 8 + 1536 * 12;
-const WA_OUT_STACK: usize = 8 + 1536 * 12 + 1;
-const WA_OUT_HEAP: usize = 8 + 1536 * 12 + 2;
-const WA_OUT_REJECT: usize = 8 + 1536 * 12 + 3;
-const WA_OUT_VALID: usize = 8 + 1536 * 12 + 4;
+const WA_CLASS: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP;
+const WA_ARG: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 2;
+const WA_GROWTH: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 3;
+const WA_SHRINK: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 4;
+const WA_HEAP: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 5;
+const WA_OPK: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 6;
+const WA_SLOT: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 7;
+const WA_CVAL: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 8;
+const WA_CINT: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 9;
+const WA_CALLEE_SLOTS: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 10;
+const WA_CALLEE_HEAP: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 11;
+const WA_OUT_WCET: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 12;
+const WA_OUT_STACK: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 12 + 1;
+const WA_OUT_HEAP: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 12 + 2;
+const WA_OUT_REJECT: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 12 + 3;
+const WA_OUT_VALID: usize = 8 + keleusma::selfhost_host::VERIFY_OP_CAP * 12 + 4;
 
 fn analyze_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -6339,7 +6386,7 @@ fn run_analyze_kel(
         BlockType::Func | BlockType::Reentrant => (0, chunk.ops.len(), 0, 0),
     };
     assert!(
-        chunk.ops.len() <= 1536,
+        chunk.ops.len() <= keleusma::selfhost_host::VERIFY_OP_CAP,
         "analyze.kel op-table capacity: chunk `{}` has {} ops",
         chunk.name,
         chunk.ops.len()
@@ -7505,10 +7552,8 @@ fn self_host_compiles_struct_tuple_of_struct_equality() {
 /// element field was emitted as a scalar record and compared with a single `CmpEq` over its whole
 /// flat body — admitted, then SILENTLY MIS-COMPILED.
 ///
-/// Each case below produced a wrong-but-plausible op stream before `elem_all_scalar` was added. The
-/// last one is the most dangerous shape found: it diverged at the SAME op count as the reference
-/// (58 against 58), differing only in content, so nothing but the byte-identical oracle could have
-/// caught it.
+/// These cases retain the explicit unsupported boundary. Boolean scalar array fields have a
+/// separate positive artifact comparison below, since they now compile through this path.
 ///
 /// These are Gaps by design. Full support means giving the flat array family a nested form, or
 /// routing array-of-composite elements through the `StructEqNested` frame machinery — see
@@ -7524,8 +7569,6 @@ fn array_of_composite_element_defers() {
         // Tuples, arrays and plain enums inside are now supported, so this uses an enum with a
         // COMPOSITE payload, which still has no nested form.
         "struct Q { z: Word }\nenum E { A(Q), B }\nstruct P { e: E }\nfn f(a: [(P, Word); 2], b: [(P, Word); 2]) -> bool { a == b }",
-        // A struct field array whose element type is not a recognized scalar.
-        "struct S { a: [bool;2], w: Word }\nfn f(a: S, b: S) -> bool { a == b }",
     ] {
         let reference = compile_src(src);
         let module = self_host_compile(src);
@@ -7539,9 +7582,8 @@ fn array_of_composite_element_defers() {
             .iter()
             .find(|c| c.name == "f")
             .expect("ref f");
-        // Assert the SHAPE of a deferral (a short primitive compare), not merely inequality. The
-        // bool case previously diverged at an IDENTICAL op count, so a length-agnostic `!=` check
-        // would have passed while the construct was still being mis-compiled.
+        // Require the short primitive fallback, so a longer but incorrect lowering cannot
+        // satisfy this unsupported-boundary control merely by differing from the reference.
         assert!(
             f.ops.len() < r.ops.len() / 2,
             "expected a short deferral for `{src}`, got {} ops against the reference's {}",
@@ -7549,6 +7591,19 @@ fn array_of_composite_element_defers() {
             r.ops.len()
         );
     }
+}
+
+/// Boolean array fields use scalar element comparisons and preserve the complete artifact.
+#[test]
+fn self_host_compiles_struct_boolean_array_equality() {
+    let source = "struct S { a: [bool;2], w: Word }\nfn f(a: S, b: S) -> bool { a == b }";
+    assert_self_host_byte_identical(source);
+    let actual = keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host())
+        .expect("independent boolean array equality compilation");
+    assert_eq!(
+        keleusma::selfhost::wire_module_artifact_via_kel(&actual).unwrap(),
+        compile_src(source).to_bytes().unwrap()
+    );
 }
 
 /// An ARRAY whose element contains a nested struct self-compiles byte-identically.
@@ -8306,6 +8361,11 @@ fn the_boundary_tables_thin_families_are_the_ones_on_record() {
 fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
     use Support::{Diverges, Ok as SOk, RefRejects, Refuses};
     &[
+        (
+            "scalar/unit_literal",
+            SOk,
+            "fn f() -> Word { let x = (); 7 }",
+        ),
         // --- scalars -------------------------------------------------------------
         //
         // RADIX-PREFIXED LITERALS. Absent from this table until 2026-08-26, which is why
@@ -9078,30 +9138,32 @@ fn the_fused_compile_holds_one_group_not_the_program() {
     // (stage, total records, largest group). Pinned; a stage that grows moves these.
     const EXPECT: &[(&str, &str, usize, usize)] = &[
         (
-            // MOVED 2026-08-26 when the lexer gained radix-prefixed literals: total
-            // 1415 -> 1598, peak 276 -> 423. The peak rose by more than half because the
-            // two new accumulation states join the tokenizer's largest dispatch group,
-            // which is the group this figure measures. The fusion ratio is still 3.78.
+            // Measured 2026-10-15 after bounded full-width integer transport.
+            // Total records grew from 1598 to 1650, while extracting integer
+            // helpers reduced peak residency from 423 to 403. The ratio exceeds four.
             "lexer",
             include_str!("../src/selfhost/kel/lexer.kel"),
-            1598,
-            423,
+            1650,
+            403,
         ),
         (
+            // Order 2 adds text bounds and module resource protocols. Measured
+            // after those sources and the typed loop fallback were finalized.
             "analyze",
             include_str!("../src/selfhost/kel/analyze.kel"),
-            1538,
-            324,
+            3215,
+            367,
         ),
         (
             "verify_typed",
             include_str!("../src/selfhost/kel/verify_typed.kel"),
-            1313,
-            382,
+            1532,
+            486,
         ),
     ];
     for &(name, src, total, peak) in EXPECT {
         let (got_peak, got_total) = keleusma::selfhost::fused_compile_residency(src);
+        eprintln!("{name}: total {got_total}, peak {got_peak}");
         assert_eq!(got_total, total, "{name}: total record count moved");
         assert_eq!(got_peak, peak, "{name}: peak group residency moved");
         assert!(
@@ -9502,47 +9564,10 @@ fn the_test_drivers_category_mapping_agrees_with_the_library() {
     );
 }
 
-/// **THE THIRD OP-TAG POPULATION, MEASURED. THE RESIDUE WAS FOUR AND IT IS STILL FOUR.**
-///
-/// `tests/op_tag_tables.rs` censused two corpora against the stage's sixty-three op tags. The
-/// twelve stage sources leave sixteen tags unexercised; the fifteen shipped examples cover twelve
-/// of those, leaving `addop`, `subop`, `mulop` and `checkedneg` — byte arithmetic and unary
-/// negation. That file records the **per-construct boundary table as a THIRD population it had
-/// not measured**, and says so rather than rounding the claim up.
-///
-/// This is that measurement. It lives here rather than in the census file because
-/// `boundary_cases` is directly callable here: extracting the sources textually from another
-/// file would mean writing a Rust string-literal scanner, and **this repository has twice had an
-/// audit reach a wrong conclusion because its own extractor was wrong**. No instrument, no
-/// instrument error.
-///
-/// # WHAT IT ESTABLISHED, AND THEN CLOSED
-///
-/// The four residual tags correspond to `Op::Add`, `Op::Sub`, `Op::Mul` and `Op::CheckedNeg` —
-/// the UNCHECKED forms `Byte` operands take through promote-operate-truncate, plus unary
-/// negation.
-///
-/// **Measured, the boundary table already reached `Op::Add`** — through `scalar/byte_arith`
-/// (`a + b` on two `Byte` operands) and `scope/float_arith__GAP` (the same shape on `Float`s). So
-/// the residue across all three populations was THREE, not four. **Rounding the census's claim up
-/// instead of measuring would have been wrong by exactly one tag.**
-///
-/// **And the shape said how to close the rest.** Both witnesses were ADDITION and nothing else,
-/// which is precisely why subtraction and multiplication escaped every oracle while addition did
-/// not. Two cases were added — `scalar/byte_sub_mul` and `scalar/word_unary_neg` — and the
-/// boundary table now reaches all four. **Both compile BYTE-IDENTICALLY, so the coverage is not
-/// bought with a divergence.**
-///
-/// # WHAT THIS DOES NOT SAY
-///
-/// The other two corpora are unchanged and still miss all four; `SHIPPED_EXAMPLES_ALSO_MISS` in
-/// the census file is about the shipped examples and stays at four. **The closed claim is "no
-/// corpus reaches these", not "the shipped examples reach these".** Conflating the populations is
-/// the error this census family exists to avoid.
-///
-/// `scalar/byte_neg` is deliberately absent: byte negation lowers to `Op::Neg`, the stage emits
-/// `checkedneg` for it and diverges, and `Neg` is not one of the sixty-three stage tags at all.
-/// Adding it would buy a divergence for no tag.
+/// The boundary corpus covers the three Byte arithmetic gaps left by the
+/// current stage and named-example corpora. It also retains its checked-negation
+/// witness, even though the stage corpus now covers that operation too.
+/// Byte negation remains distinct because the reference emits Op::Neg for it.
 ///
 /// # A refusal is REPORTED, not skipped
 ///
@@ -9550,12 +9575,12 @@ fn the_test_drivers_category_mapping_agrees_with_the_library() {
 /// silently discarding inputs is how a census comes to describe a smaller population than it
 /// names. `RefRejects` cases are expected to refuse and are excluded by their own label.
 #[test]
-fn the_boundary_table_is_the_third_op_tag_population_and_leaves_the_same_four() {
+fn the_boundary_table_reaches_byte_arithmetic_gaps_and_checked_negation() {
     use std::collections::BTreeSet;
 
-    // The `Op` variants the four residual stage tags decode to. Named here rather than derived,
+    // The `Op` variants the three residual stage tags decode to. Named here rather than derived,
     // and kept honest by `the_residue_named_here_matches_the_census_file` below.
-    const RESIDUE_OPS: &[&str] = &["Add", "Sub", "Mul", "CheckedNeg"];
+    const RESIDUE_OPS: &[&str] = &["Add", "Sub", "Mul"];
 
     let mut present: BTreeSet<String> = BTreeSet::new();
     let mut compiled = 0usize;
@@ -9605,6 +9630,11 @@ fn the_boundary_table_is_the_third_op_tag_population_and_leaves_the_same_four() 
         present.len()
     );
 
+    assert!(
+        present.contains("CheckedNeg"),
+        "retain the boundary corpus negation witness"
+    );
+
     let reached: Vec<&str> = RESIDUE_OPS
         .iter()
         .copied()
@@ -9616,8 +9646,8 @@ fn the_boundary_table_is_the_third_op_tag_population_and_leaves_the_same_four() 
     got.sort_unstable();
     assert_eq!(
         got, want,
-        "the boundary table no longer reaches every operation the other two corpora miss. It \
-         reached all four once `scalar/byte_sub_mul` and `scalar/word_unary_neg` were added; a \
+        "the boundary table no longer reaches the Byte arithmetic operations the other two corpora miss. It \
+         reached the earlier four-operation population once `scalar/byte_sub_mul` and `scalar/word_unary_neg` were added; a \
          NARROWER set means one of those cases has left the table or stopped compiling, and the \
          residue claim in `tests/op_tag_tables.rs` is stale in the unsafe direction."
     );
@@ -9652,14 +9682,8 @@ fn the_boundary_table_is_the_third_op_tag_population_and_leaves_the_same_four() 
     );
 }
 
-/// **THE FOUR RESIDUAL OPERATIONS NAMED IN THE CENSUS ABOVE STILL MATCH THE CENSUS FILE.**
-///
-/// The population census lives in `tests/op_tag_tables.rs` and names its residue by STAGE TAG;
-/// the test above names the same residue by `Op` VARIANT, because that is what a compiled module
-/// carries. Two spellings of one fact drift, so this checks they still agree.
-///
-/// It is a text check on purpose. Deriving the correspondence here would duplicate the mapping
-/// that file already owns, which is the nine-copies defect this tree has paid for once.
+/// Keep the five residual tag names aligned with the census source. The
+/// boundary corpus independently retains its additional checked-negation witness.
 #[test]
 fn the_residue_named_here_matches_the_census_file() {
     const CENSUS: &str = include_str!("op_tag_tables.rs");
@@ -9669,18 +9693,18 @@ fn the_residue_named_here_matches_the_census_file() {
         .find(|l| l.contains("const SHIPPED_EXAMPLES_ALSO_MISS"))
         .expect("the census file declares the residue it measured");
 
-    for tag in ["addop", "subop", "mulop", "checkedneg"] {
+    for tag in ["addop", "divop", "modop", "subop", "mulop"] {
         assert!(
             line.contains(tag),
-            "the census file no longer lists `{tag}` among the tags no corpus reaches: {line}. \
+            "the census file no longer lists `{tag}` among the tags the stage and named examples miss: {line}. \
              The residue has changed, so the operation list in the test above is stale."
         );
     }
     assert_eq!(
         line.matches('"').count(),
-        8,
-        "the census residue is no longer exactly four tags: {line}. The test above enumerates \
-         four operations and would be silent about any fifth."
+        10,
+        "the census residue is no longer exactly five tags: {line}. Byte arithmetic is \
+         exercised by the boundary corpus; legacy division has direct instruction fixtures."
     );
 }
 
@@ -9695,7 +9719,7 @@ fn the_residue_named_here_matches_the_census_file() {
 /// # Both sides derived, neither pinned
 ///
 /// The actual counts come from calling `boundary_cases` — no text extraction, so there is no
-/// parser to be wrong. The expected counts are read out of the handoff. A branch that adds a case
+/// parser to be wrong. The expected counts are read out of the current roadmap. A branch that adds a case
 /// stays green provided the document moves with it, which is the property wanted; a branch that
 /// adds one silently does not.
 ///
@@ -9713,8 +9737,8 @@ fn the_residue_named_here_matches_the_census_file() {
 /// changed without its name changing would be a name that lies**, which this repository has
 /// already had to correct once in a doc comment this session.
 #[test]
-fn the_boundary_table_counts_match_the_handoff_and_the_names_match_the_labels() {
-    const HANDOFF: &str = include_str!("../docs/process/HANDOFF.md");
+fn the_boundary_table_counts_match_the_roadmap_and_the_names_match_the_labels() {
+    const ROADMAP: &str = include_str!("../docs/roadmap/V0_2_X_ROADMAP.md");
 
     let mut ok = 0usize;
     let mut diverges = 0usize;
@@ -9765,14 +9789,30 @@ fn the_boundary_table_counts_match_the_handoff_and_the_names_match_the_labels() 
 
     let stated =
         format!("{ok} SOk / {refuses} Refuses / {diverges} Diverges / {rejects} RefRejects");
-    let occurrences = HANDOFF.matches(stated.as_str()).count();
+    let occurrences = ROADMAP.matches(stated.as_str()).count();
     assert!(
-        occurrences >= 2,
-        "the handoff states the construct-support boundary in two places and neither now reads \
-         `{stated}`; found {occurrences} occurrence(s). The table moved and the document did not."
+        occurrences == 1,
+        "the current roadmap must state `{stated}` once for {total} cases; found {occurrences} occurrences"
     );
     assert!(
-        HANDOFF.contains(&format!("{total} cases")) || HANDOFF.contains(&format!("{total}\n")),
-        "the handoff does not state the boundary case total of {total}"
+        ROADMAP.contains(&format!("{total} cases")),
+        "the roadmap does not state the boundary case total of {total}"
+    );
+}
+
+#[test]
+fn self_host_compiles_wire_debug_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_wire_debug_kel_byte_identically",
+        "wire_debug.kel",
+    );
+}
+
+#[cfg(feature = "self-host")]
+#[test]
+fn self_host_compiles_wire_schema_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_wire_schema_kel_byte_identically",
+        "wire_schema.kel",
     );
 }

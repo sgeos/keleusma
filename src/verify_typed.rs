@@ -643,7 +643,12 @@ fn interp_region(
     while ip < end {
         let op = &ops[ip];
         match op {
-            Op::Trap(_) | Op::Return => return Ok(None),
+            Op::Trap(_) => {
+                check_floor(ctx, op, state.stack.len(), floor, ip)?;
+                apply_op(ctx, op, &mut state.stack, &mut state.locals, ip)?;
+                return Ok(None);
+            }
+            Op::Return => return Ok(None),
             Op::Break(_) => {
                 breaks.push(state);
                 return Ok(None);
@@ -917,6 +922,18 @@ fn apply_op(
             stack.push(top);
         }
         Op::IsEnum(_, _, _) | Op::IsStruct(_) => stack.push(AbsVal::Scalar(ScalarKind::Bool)),
+        Op::BoundsCheck(_) => {
+            stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 5));
+        }
+        Op::GetDataIndexed(_, _) => {
+            stack.truncate(stack.len() - 2);
+            stack.push(AbsVal::Top);
+            stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 6));
+        }
+        Op::SetDataIndexed(_, _) => {
+            stack.truncate(stack.len() - 2);
+            stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 6));
+        }
 
         // Read a local's tracked shape. A slot beyond the frame is `Top`.
         Op::GetLocal(i) => {
@@ -1059,7 +1076,7 @@ fn apply_op(
 
         // Flat array element access pops the index and the array. The element
         // offset is `index * element_size` computed at run time, so the index
-        // bound stays a runtime trap; the static check validates that the
+        // bound is handled at runtime; the static check validates that the
         // baked element stride evenly divides the array body (A.2.1 Phase 3),
         // then pushes the element shape.
         Op::GetIndex(ArrayElem::Flat { kind }) => {
@@ -1068,6 +1085,9 @@ fn apply_op(
             let elem = kind.size_in_bytes(ctx.wb, ctx.fb, ctx.ab) as u32;
             check_flat_array_stride(&arr, elem, ip)?;
             stack.push(AbsVal::Scalar(*kind));
+            if (ArrayElem::Flat { kind: *kind }).has_bounds_outcome() {
+                stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 6));
+            }
         }
         Op::GetIndex(ArrayElem::FlatNested { size, variant }) => {
             let _index = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;

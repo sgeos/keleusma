@@ -197,6 +197,16 @@ until you know. Median 61.
 cannot help. **The only way to shorten CI materially is to split that job**, which is a project-level
 call and is recorded here rather than adopted.
 
+**Superseded on 2026-10-21, when the operator adopted the split.** By then the Order 1 to Order 3
+self-host corpus had grown the two long jobs past GitHub's six-hour hosted-runner limit, and both
+were cancelled at 6h0m on pull request 484. The `Test` and `Test (self-host feature)` jobs now run as
+four hash partitions each, named `Test (shard k/4)` and `Test (self-host feature, shard k/4)`, with
+the documentation tests on shard one. Local debug runs summed 15.1 test-hours for the workspace and
+19.4 for self-host, and the slowest single test took 2.65 hours, which bounds any shard from below.
+The reasoning and the coverage check are recorded on the job in `.github/workflows/ci.yml` and in
+`tests/ci_shard_coverage.rs`. The 61-minute figures above describe the unsplit workflow at a smaller
+corpus and are kept as history.
+
 **The conclusion is unchanged and the correction is small.** Sixty-one minutes against two and a half
 hours is still roughly two and a half times faster, and CI still costs no time on the contended
 machine, so the 2026-08-11 decision stands on the same reasoning with an honest number. Five samples

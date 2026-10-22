@@ -35,6 +35,10 @@
     clippy::identity_op
 )]
 
+#[path = "common/data_read_kinds.rs"]
+mod data_read_kinds;
+use data_read_kinds::data_read_kinds;
+
 use keleusma::Arena;
 use keleusma::ast::{
     BinOp, Block, Expr, FunctionCategory, Iterable, Literal, Pattern, PrimType, Stmt, TypeDef,
@@ -131,6 +135,7 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::DotDot => (47, 0),
             TokenKind::Match => (48, 0),
             TokenKind::FatArrow => (49, 0),
+            TokenKind::When => (64, 0),
             TokenKind::Underscore => (50, 0),
             TokenKind::ColonColon => (51, 0),
             TokenKind::As => (52, 0),
@@ -362,7 +367,13 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     // for it and must not let it into a sequence pinned against the
                     // reference. The tag comes from the driver so there is one source
                     // of truth for the number.
-                    c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG => {}
+                    c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG
+                        || c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                        || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
+                        || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
+                        || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
+                        || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
+                        || matches!(c, 94..=96 | 99..=105) => {}
                     _ => cur
                         .as_mut()
                         .expect("body node before START")
@@ -374,7 +385,13 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     0 => {}                 // PENDING
                     15 => in_guard = false, // the guard's Done ends guard mode
                     35 => {}                // FieldPos: reorder marker, skipped (see above)
-                    c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG => {}
+                    c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG
+                        || c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                        || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
+                        || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
+                        || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
+                        || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
+                        || matches!(c, 94..=96 | 99..=105) => {}
                     _ => cur
                         .as_mut()
                         .expect("guard node before START")
@@ -495,6 +512,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                         assert!(cur.is_none(), "DONE mid-declaration");
                         return std::ops::ControlFlow::Break(());
                     }
+                    103 | 105 | 106 | 110 => {} // Source grouping and layout metadata have separate controls.
                     other => panic!("unexpected declaration kind {other}"),
                 }
             }
@@ -639,7 +657,7 @@ fn flatten(
                 ),
                 None => out.push((20, 0)), // synthesized empty else: a Unit
             }
-            out.push((4, 0));
+            out.push((4, i64::from(else_block.is_none())));
         }
         Expr::Yield { value, .. } => {
             // `yield e` is a unary YieldExpr (kind 24) over its operand.
@@ -701,9 +719,9 @@ fn flatten(
         Expr::Match {
             scrutinee, arms, ..
         } => {
-            // Postorder: the scrutinee, then per integer-literal arm a Literal node and its
-            // result, then the trailing wildcard's result, then a MatchBuild (kind 34)
-            // packing the scrutinee temp slot and the literal-arm count as
+            // Postorder: scrutinee, then pattern, optional guard and result per arm.
+            // A guard/result pair ends with record 71; wildcard patterns use record 72.
+            // MatchBuild packs the scrutinee temp slot and total arm count as
             // `temp * 1024 + count`. The temp slot is reserved right after the scrutinee.
             flatten(
                 scrutinee,
@@ -717,66 +735,47 @@ fn flatten(
             );
             let temp = *next_slot;
             *next_slot += 1;
-            let mut lit_count = 0i64;
             for arm in arms {
-                assert!(
-                    arm.guard.is_none(),
-                    "increment 5 handles unguarded arms only"
-                );
                 match &arm.pattern {
-                    Pattern::Literal(Literal::Int(v), _) => {
-                        out.push((1, *v));
-                        flatten(
-                            &arm.expr,
-                            scope,
-                            next_slot,
-                            forlim,
-                            data_slots,
-                            chunk_names,
-                            enum_table,
-                            out,
-                        );
-                        lit_count += 1;
-                    }
+                    Pattern::Literal(Literal::Int(v), _) => out.push((1, *v)),
                     Pattern::Enum(enum_name, variant, sub_pats, _) if sub_pats.is_empty() => {
-                        // A unit enum-variant pattern folds to the variant's discriminant
-                        // literal, the same arm an integer literal forms.
                         let disc = enum_table
                             .iter()
                             .find(|(e, v, _)| e == enum_name && v == variant)
-                            .map(|(_, _, d)| *d)
-                            .unwrap_or_else(|| {
-                                panic!("no discriminant for {enum_name}::{variant}")
-                            });
+                            .expect("enum variant")
+                            .2;
                         out.push((1, disc));
-                        flatten(
-                            &arm.expr,
-                            scope,
-                            next_slot,
-                            forlim,
-                            data_slots,
-                            chunk_names,
-                            enum_table,
-                            out,
-                        );
-                        lit_count += 1;
                     }
-                    Pattern::Wildcard(_) => {
-                        flatten(
-                            &arm.expr,
-                            scope,
-                            next_slot,
-                            forlim,
-                            data_slots,
-                            chunk_names,
-                            enum_table,
-                            out,
-                        );
-                    }
-                    other => panic!("increment 5 handles integer and wildcard arms, got {other:?}"),
+                    Pattern::Wildcard(_) => out.push((72, 0)),
+                    other => panic!("unsupported match pattern {other:?}"),
+                }
+                if let Some(guard) = &arm.guard {
+                    flatten(
+                        guard,
+                        scope,
+                        next_slot,
+                        forlim,
+                        data_slots,
+                        chunk_names,
+                        enum_table,
+                        out,
+                    );
+                }
+                flatten(
+                    &arm.expr,
+                    scope,
+                    next_slot,
+                    forlim,
+                    data_slots,
+                    chunk_names,
+                    enum_table,
+                    out,
+                );
+                if arm.guard.is_some() {
+                    out.push((71, 0));
                 }
             }
-            out.push((34, temp * 1024 + lit_count));
+            out.push((34, temp * 1024 + arms.len() as i64));
         }
         Expr::Call { name, args, .. } => {
             // A call flattens its arguments left to right, then a Call (kind 7) packing the
@@ -1068,6 +1067,7 @@ fn reference(src: &str, names: &[String]) -> Parsed {
     };
     let program = parse(&tokenize(src).expect("lex")).expect("parse");
     let data_slots = data_slot_names(&program);
+    let data_kinds = data_read_kinds(&program);
     let chunk_names: Vec<String> = program.functions.iter().map(|f| f.name.clone()).collect();
     let enum_table = enum_table(&program);
     let mut funcs = Vec::new();
@@ -1123,6 +1123,13 @@ fn reference(src: &str, names: &[String]) -> Parsed {
             &enum_table,
             &mut body,
         );
+        // Add the kind lane from declarations after flattening the legacy address records.
+        for (kind, arg) in body.iter_mut().chain(guard.iter_mut()) {
+            if *kind == 13 {
+                let base = usize::try_from(*arg % 16_777_216).unwrap();
+                *arg += data_kinds[&data_slots[base]] * 281_474_976_710_656;
+            }
+        }
         funcs.push((cat, id(&f.name), params, body, guard));
     }
     // Struct declarations, in source order, each as (name, fields) where a field is
@@ -1336,7 +1343,7 @@ fn an_if_without_else_synthesizes_a_unit() {
     // cond; a [then]; Unit [synth else]; If.
     assert_eq!(
         got.funcs[0].3,
-        vec![(2, 0), (1, 0), (3, 9), (2, 0), (20, 0), (4, 0)]
+        vec![(2, 0), (1, 0), (3, 9), (2, 0), (20, 0), (4, 1)]
     );
 }
 
@@ -1433,14 +1440,14 @@ fn the_loop_variable_is_in_scope() {
 }
 
 // A `match` over integer-literal arms with a trailing wildcard is a MatchBuild signal
-// packing the scrutinee temp slot and the literal-arm count.
+// packing the scrutinee temp slot and total arm count.
 #[test]
 fn a_match_expression_parses() {
     let src = "fn f(n: Word) -> Word { match n { 1 => n, 2 => n, _ => n } }";
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
-    // scrut n(0); Lit 1, n(0); Lit 2, n(0); wildcard n(0); MatchBuild(temp 1 * 1024 + 2).
+    // scrut n(0); Lit 1, n(0); Lit 2, n(0); wildcard marker, n(0); MatchBuild(temp 1 * 1024 + 3).
     assert_eq!(
         got.funcs[0].3,
         vec![
@@ -1449,8 +1456,9 @@ fn a_match_expression_parses() {
             (2, 0),
             (1, 2),
             (2, 0),
+            (72, 0),
             (2, 0),
-            (34, 1 * 1024 + 2)
+            (34, 1 * 1024 + 3)
         ]
     );
 }
@@ -1478,8 +1486,9 @@ fn a_block_form_match_statement_is_an_expr_stmt() {
             (2, 0),
             (1, 1),
             (2, 0),
+            (72, 0),
             (2, 0),
-            (34, 1 * 1024 + 1),
+            (34, 1 * 1024 + 2),
             (2, 0),
             (21, 0)
         ]
@@ -1573,12 +1582,17 @@ fn shared_and_private_blocks_share_the_slot_space() {
 // An indexed `data.field[i]` read is an IndexRead over the index, arg packing base + len.
 #[test]
 fn an_indexed_data_read_parses() {
-    let src = "shared data d { xs: [Word; 4] } fn f(i: Word) -> Word { d.xs[i] }";
-    let mut names = Vec::new();
-    let got = run_parse(src, &mut names);
-    assert_eq!(got, reference(src, &names));
-    // index i (slot 0), IndexRead(base 0 + len 4 * 2^24).
-    assert_eq!(got.funcs[0].3, vec![(2, 0), (13, 4 * 16_777_216)]);
+    for (ty, scalar) in [("Word", 3), ("Byte", 2), ("bool", 0)] {
+        let src = format!("shared data d {{ xs: [{ty}; 4] }} fn f(i: Word) -> {ty} {{ d.xs[i] }}");
+        let mut names = Vec::new();
+        let got = run_parse(&src, &mut names);
+        assert_eq!(got, reference(&src, &names));
+        // Independent protocol expectation for each fallback kind.
+        assert_eq!(
+            got.funcs[0].3,
+            vec![(2, 0), (13, 4 * 16_777_216 + scalar * 281_474_976_710_656)]
+        );
+    }
 }
 
 // An indexed `data.field[i] = e` assignment: index, value, IndexStore signal, then the
@@ -1701,7 +1715,7 @@ fn an_enum_match_pattern_folds_to_a_discriminant() {
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
-    // scrut k(0); Tok::Ident disc 0, k(0); Lit 5, k(0); wildcard k(0); MatchBuild(temp*1024+2).
+    // scrut k(0); Tok::Ident disc 0, k(0); Lit 5, k(0); wildcard marker, k(0); MatchBuild(temp*1024+3).
     assert_eq!(
         got.funcs[0].3,
         vec![
@@ -1710,8 +1724,9 @@ fn an_enum_match_pattern_folds_to_a_discriminant() {
             (2, 0),
             (1, 5),
             (2, 0),
+            (72, 0),
             (2, 0),
-            (34, 1024 + 2)
+            (34, 1024 + 3)
         ]
     );
 }
@@ -2654,7 +2669,7 @@ fn src_parens(n: usize) -> String {
 
 #[cfg(feature = "self-host")]
 fn src_stmts(n: usize) -> String {
-    let mut s = String::from("data d { a: Word = 0 }\nfn f() -> Word {\n");
+    let mut s = String::from("data d { a: Word }\nfn f() -> Word {\n");
     for i in 0..n {
         s.push_str(&format!("    d.a = {i};\n"));
     }
@@ -2818,6 +2833,31 @@ fn too_many_local_bindings_is_named_and_the_boundary_holds() {
             && msg.contains(&cap.to_string()),
         "the refusal was {msg:?}, which does not name both the count reached and the cap. \
          It used to be `IndexOutOfBounds(64, 64)`."
+    );
+}
+
+/// Releasing lexical names at branch exit must not reset the per-function cap.
+#[cfg(feature = "self-host")]
+#[test]
+fn local_binding_cap_counts_disjoint_branch_scopes() {
+    let source = |count| {
+        let mut text = String::from("fn main() -> Word { ");
+        for i in 0..count {
+            text.push_str(&format!(
+                "if true {{ let x{i}: Word = {i}; x{i} }} else {{ 0 }}; "
+            ));
+        }
+        text.push_str("0 }");
+        text
+    };
+    let cap = keleusma::selfhost_host::PARSE_LOCALS_CAP;
+    assert!(refusal(&source(cap)).is_none(), "exact binding cap");
+    let message = refusal(&source(cap + 1)).expect("total binding cap must still apply");
+    assert!(
+        message.contains("local bindings")
+            && message.contains(&(cap + 1).to_string())
+            && message.contains(&cap.to_string()),
+        "unexpected refusal {message}"
     );
 }
 
@@ -3021,23 +3061,39 @@ fn no_other_file_restates_the_shared_layout() {
 ///
 /// # What still does NOT work, stated so the 486 is not over-read
 ///
-/// `wire.kel` parses; it does not yet self-compile. `self_host_compile` reaches
-/// a capacity limit further down the pipeline. **That is a different failure
-/// from the one this file tracked** — a bound rather than a mis-parse — and it
-/// is the next thing between `wire.kel` and the byte-identity corpus.
+/// The earlier capacity refusal is historical. `wire.kel` now self-compiles
+/// byte-identically in the separate code-generation corpus. This test checks
+/// declaration boundaries and the current chunk count only.
 #[cfg(feature = "self-host")]
 #[test]
 fn wire_kel_parses_correctly_now_that_the_bare_loop_form_is_supported() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
     let parsed = keleusma::selfhost::try_parse_functions(WIRE)
         .expect("wire.kel must parse now that the bare `for` form is lowered");
+    // 561 after a metadata-only name preparation function and scan bound (+2),
+    // less a duplicate struct tag, an uncalled tag and a one-call wrapper (-3),
+    // removed to keep the stage inside the type stage's 640-row name channel.
+    // Previously 562 after separating the module-forest and raw-node capacities.
+    // Previously 561 after nine reader functions and inlining fourteen numeric helpers.
+    // Previously 566 after the auxiliary-directory begin and step functions.
+    // Previously 564 after six semantic opcode decoder functions.
+    // Previously 558 after a forest-input mode, four storage accessors and two forest handlers.
+    // Previously 551 after six initializer protocol functions.
+    // Previously 545 after two debug-span stream functions.
+    // Previously 543 after five template functions and ten literal helpers.
+    // Previously 528 after six native functions and six literal helpers.
+    // Previously 516 after six signature-stream functions and five literal helpers.
+    // Previously 505 after four opcode-stream functions and four literal helpers.
+    // The helpers recover the constant-node reserve without enlarging buffers.
+    // 497 since 2026-10-04. Five framing functions add begin, feed, finish,
+    // read-begin and read-finish to the previous 492 chunks.
     // **492 SINCE 2026-09-11, UP FROM 486.** The name-aware slot, variant and enum-layout streams added six
     // functions to `wire.kel`, and a function is a chunk. The same figure is pinned in
     // `tests/selfhost_chunk_names.rs`, from the COMPILED module rather than the parsed source;
     // both moved together, which is what a figure with two independent derivations should do.
     assert_eq!(
         parsed.functions.len(),
-        492,
+        561,
         "`wire.kel` parsed to {} chunks. The count is pinned because it is the corpus worst \
          case and the thing the chunk cap is sized against: PARSE_CHUNK_CAP is {}, so a \
          stage growing toward it is visible here rather than at the wall.",
@@ -3647,29 +3703,10 @@ fn stage_source_token_counts() {
     }
 }
 
-/// **A WRITTEN EMPTY ELSE AND AN IMPLICIT ONE ARE THE SAME RECORD STREAM.**
-///
-/// `a_one_armed_conditional_is_why_the_branch_pair_does_not_move` in
-/// `tests/selfhost_typecheck.rs` explains that the branch-pair row is withheld because
-/// `push_if` visits an else arm unconditionally, so the pipeline carries one even where
-/// the source wrote none. Its comment used to say a tag-based heuristic "could not be
-/// shown safe". **This test establishes the stronger fact: no heuristic can work,
-/// because the distinguishing information is not in the stream.**
-///
-/// The reference's criterion is `else_block.is_some()`. A written `else { }` satisfies it
-/// and an implicit arm does not, so the reference separates the two shapes. The parse
-/// stage emits the SAME records for both. A heuristic can only read what the stream
-/// carries, so the separation the reference makes is unavailable on this side at any
-/// level of cleverness.
-///
-/// **This is a statement about the records, not about the tag.** The earlier argument
-/// reasoned about whether UNIT and UNKNOWN happen to separate the cases. That question is
-/// moot: the two sources are already identical before any tag is computed.
-///
-/// The empty else is not a contrived shape. It is accepted by the reference compiler, as
-/// the first assertion below establishes rather than assumes.
+/// Parser records retain whether the source supplied an else branch, including an empty one.
+/// The two accepted witnesses differ only in that presence bit.
 #[test]
-fn an_empty_else_is_indistinguishable_from_an_implicit_one() {
+fn an_empty_else_is_distinguished_from_an_implicit_one() {
     use keleusma::ast::{Expr, Stmt};
     use keleusma::visitor::Visitor;
 
@@ -3731,17 +3768,27 @@ fn an_empty_else_is_indistinguishable_from_an_implicit_one() {
          the impossibility claimed here would not follow"
     );
 
-    // THE WITNESS: the pipeline cannot make that separation, because it does not receive it.
     let mut n1 = Vec::new();
     let mut n2 = Vec::new();
     let implicit = run_parse(IMPLICIT, &mut n1);
     let empty = run_parse(EMPTY, &mut n2);
-    assert_eq!(
-        implicit, empty,
-        "the parse stage now distinguishes a written empty else from an implicit arm; if that \
-         is deliberate, the branch-pair row may be implementable after all and the withholding \
-         recorded in tests/selfhost_typecheck.rs should be revisited"
-    );
+    assert_ne!(implicit, empty, "else presence must survive parsing");
+    let implicit_if: Vec<_> = implicit
+        .funcs
+        .iter()
+        .flat_map(|f| &f.3)
+        .filter(|(k, _)| *k == 4)
+        .copied()
+        .collect();
+    let empty_if: Vec<_> = empty
+        .funcs
+        .iter()
+        .flat_map(|f| &f.3)
+        .filter(|(k, _)| *k == 4)
+        .copied()
+        .collect();
+    assert_eq!(implicit_if, vec![(4, 1)]);
+    assert_eq!(empty_if, vec![(4, 0)]);
 
     // NON-VACUITY: the streams must not be empty, or the comparison holds trivially.
     assert!(

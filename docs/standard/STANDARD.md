@@ -744,9 +744,9 @@ emitted or accepted, being the retired separate composite constructors.
 |---|---|---|---|---|
 | 3 | GetData | slot | push 1 | push a data slot, bounds-checked at load |
 | 4 | SetData | slot | pop 1 | store into a data slot, persists across reset; a flat composite value copies its body into the persistent pool at the module table's offset for the slot |
-| 5 | GetDataIndexed | base, len | pop 1 push 1 | pop an index, push `data[base+index]` with a runtime bound |
-| 6 | SetDataIndexed | base, len | pop 2 | pop an index and a value, store with a runtime bound |
-| 7 | BoundsCheck | bound | | peek the top as an integer and fault if negative or at least the bound |
+| 5 | GetDataIndexed | base, len | pop 2 push 7 | pop a Word index and a Word, Byte or Unit fallback, read `data[base+index]` when the index is in range and otherwise use the fallback without accessing storage, then push the value, the index, four byte limbs of the bound and an outcome flag; no language bounds fault |
+| 6 | SetDataIndexed | base, len | pop 2 push 6 | pop a value and a Word index, write one slot when the index is in range and perform no write otherwise, then push the index, four byte limbs of the bound and an outcome flag; no language bounds fault |
+| 7 | BoundsCheck | bound | push 5 | preserve the Word index and push four byte limbs of the bound and an outcome flag, one when the index is negative or at least the bound; no language bounds fault |
 
 **Arithmetic, wrapping and floating.**
 
@@ -755,8 +755,8 @@ emitted or accepted, being the retired separate composite constructors.
 | 8 | Add | | pop 2 push 1 | byte, fixed, or float addition |
 | 9 | Sub | | pop 2 push 1 | byte, fixed, or float subtraction |
 | 10 | Mul | | pop 2 push 1 | byte or float multiplication |
-| 11 | Div | | pop 2 push 1 | division, fault on zero divisor |
-| 12 | Mod | | pop 2 push 1 | remainder, fault on zero divisor |
+| 11 | Div | | pop 2 push 3 | division pushing a low result, a high result and an outcome flag with the semantics of CheckedDiv; a zero integer divisor yields flag three carrying the numerator, not a fault |
+| 12 | Mod | | pop 2 push 3 | remainder pushing a low result, a high result and an outcome flag; a zero integer divisor yields flag three carrying the numerator, not a fault |
 | 13 | Neg | | | negate byte, fixed, or float |
 
 **Arithmetic, checked.** Each checked opcode pops its integer operands and pushes a
@@ -821,7 +821,7 @@ indirect call and no first-class function.
 |---|---|---|---|---|
 | 69 | NewComposite | kind, count, size or meta | pop n push 1 | the single constructor for tuple, array, struct, and enumeration, flat or boxed |
 | 38 | GetField | struct-field operand | pop 1 push 1 | read a struct field, flat by offset or boxed by name |
-| 39 | GetIndex | array-element operand | pop 2 push 1 | read an array element by index |
+| 39 | GetIndex | array-element operand | pop 2 push 1 or 7 | read an array element by index; the flat Word and Byte forms push the value, the index, four byte limbs of the bound and an outcome flag, yielding a typed zero without reading on an invalid index, while other forms push one value and remain outside the first-pass trap-free proof |
 | 40 | GetTupleField | tuple-field operand | pop 1 push 1 | read a tuple element |
 | 41 | GetEnumField | enum-field operand | pop 1 push 1 | read an enumeration payload field past the discriminant word |
 | 42 | Len | | pop 1 push 1 | push a composite length, not emitted for a flat array of constant length |

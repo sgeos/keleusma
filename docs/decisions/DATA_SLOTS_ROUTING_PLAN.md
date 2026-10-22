@@ -8,6 +8,16 @@ DIFFERENT shape. Both kinds are routed byte-identically across the corpus; the s
 Written 2026-09-10 after three increments of reading, one of which over-claimed and one of which is
 corrected below.
 
+## Audit update on 2026-10-15
+
+The routing work below is complete. Its sixty-four-node planning reserve now
+applies to the production forest capacity, while the retained raw-node exporter
+must still fit its separate output storage. The limits remain 1536 forest nodes
+and 1365 raw nodes. Metadata-only commands now use a read-only name scan, bounded
+by the existing 49152-byte input window and the minimum ten-byte node record.
+They no longer allocate an unused forest or reject a module solely because that
+unrelated storage is full. Both storage boundaries retain their refusal controls.
+
 ## What landed on 2026-09-11
 
 Two `nm` fields, `ebase` and `sbase`, captured as each name section begins. Two additive commands:

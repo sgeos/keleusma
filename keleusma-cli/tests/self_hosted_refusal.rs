@@ -135,3 +135,80 @@ fn a_float_typed_signature_without_a_literal_still_compiles() {
          is not evidence that a module was produced"
     );
 }
+
+/// Source rejection must come from the independent pipeline and produce no artifact.
+#[test]
+fn independent_type_rejection_reaches_the_command() {
+    let dir = TmpDir::new("type_rejection");
+    for (index, source) in [
+        "fn main() -> Word { 1 + true }",
+        "fn f(n: Word) -> Word { n } fn main() -> Word { f(true) }",
+        "fn main() -> Word { unknown_name }",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let src = dir.write(&format!("bad{index}.kel"), source);
+        let out = dir.path(&format!("bad{index}.kbc"));
+        let (ok, error) = compile_self_hosted(&src, &out);
+        assert!(!ok, "{source}");
+        assert!(error.contains("pipeline type rejection"), "{error}");
+        assert!(!error.contains("retry with --compiler rust"), "{error}");
+        assert!(!std::path::Path::new(&out).exists());
+    }
+}
+
+/// The command writes the library artifact and executes its independently expected result.
+#[test]
+fn command_emits_the_production_artifact_and_runs_it() {
+    let dir = TmpDir::new("production_artifact");
+    let source = "fn main() -> Word { 1 + 2 * 3 }";
+    let src = dir.write("valid.kel", source);
+    let out = dir.path("valid.kbc");
+    let (ok, error) = compile_self_hosted(&src, &out);
+    assert!(ok, "{error}");
+    let actual = std::fs::read(&out).expect("emitted artifact");
+    let expected =
+        keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host())
+            .expect("production library")
+            .to_bytes()
+            .expect("encode library artifact");
+    assert_eq!(actual, expected);
+    let result = Command::new(env!("CARGO_BIN_EXE_keleusma"))
+        .args(["run", &out])
+        .env_remove("KELEUSMA_REQUIRE_SIGNED")
+        .env_remove("KELEUSMA_REQUIRE_ENCRYPTED")
+        .output()
+        .expect("run artifact");
+    assert!(result.status.success(), "{:?}", result);
+    assert_eq!(String::from_utf8(result.stdout).unwrap().trim(), "7");
+}
+
+/// Sources already accepted by the compiler must survive serializer window boundaries.
+#[test]
+fn command_serializes_large_forests_and_text_through_keleusma() {
+    let dir = TmpDir::new("serializer_capacity");
+    let mut forest = String::new();
+    for i in 0..171 {
+        forest.push_str(&format!(
+            "fn f{i}(x: Word) -> Word {{ x + 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 }}\n"
+        ));
+    }
+    forest.push_str("fn main() -> Word { f0(0) }");
+    let text = format!("fn main() -> Text {{ \"{}\" }}", "x".repeat(60000));
+    for (tag, source) in [("forest", forest), ("text", text)] {
+        let input = dir.write(&format!("{tag}.kel"), &source);
+        let output = dir.path(&format!("{tag}.kbc"));
+        let (ok, error) = compile_self_hosted(&input, &output);
+        assert!(ok, "{tag}: {error}");
+        let module =
+            keleusma::selfhost::self_hosted_compile(&source, &keleusma::target::Target::host())
+                .unwrap();
+        let actual = std::fs::read(output).unwrap();
+        assert_eq!(
+            actual,
+            keleusma::selfhost::wire_module_artifact_via_kel(&module).unwrap()
+        );
+        assert_eq!(actual, module.to_bytes().unwrap());
+    }
+}

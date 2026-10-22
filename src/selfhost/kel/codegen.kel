@@ -215,17 +215,23 @@ const data wire {
     mulop: Word = 61,
     shl: Word = 62,
     shr: Word = 63,
+    // Internal transport tags for existing public instructions. The ISA stays at 66.
+    checkeddiv: Word = 64,
+    checkedmod: Word = 65,
     // P11 Option E: the op-word radix is 8 bits (256), not 6 (64), so the wire-op TAG space is
     // 1..255 rather than 1..63. Safe as a radix widening (not two-word): the largest operand is
     // ~2^48 (GetDataIndexed's two 24-bit fields), so `tag + operand*256` stays ~2^56, well within
     // the i64 word. The host `decode_op` splits with the matching `% 256` / `/ 256`.
     radix: Word = 256,
-    item: Word = 4,
+    item: Word = 16,
     pack: Word = 65536,
     visit: Word = 1,
     emit: Word = 2,
     emitisenum: Word = 3,
     emitbool: Word = 0,
+    headbegin: Word = 4, headbody: Word = 5, headend: Word = 6, rawemit: Word = 7,
+    physicalemit: Word = 8, bindlocal: Word = 9,
+    lsrvalue: Word = 10, lsrcount: Word = 11,
     nomatch: Word = 2,
     looplimit: Word = 7,
     ocok: Word = 1,
@@ -277,11 +283,15 @@ shared data ast {
     head_parts: [Word; 256],
     param_count: Word,
     category: Word,
+    // A separate command translates data operands through parser-produced field ranges.
+    relocate_mode: Word, relocate_count: Word, relocate_kind: Word, relocate_arg: Word,
+    relocate_source: [Word; 640], relocate_length: [Word; 640], relocate_target: [Word; 640],
 }
 
 // The work-stack (R3.1), the op buffer the stage backpatches, and the constant
-// pool. Each stack entry is a work item, `kind + payload*4`: kind 1 VISIT a node
-// (payload is its index), kind 2 EMIT an op (payload is the op wire word). The
+// pool. Each stack entry is a work item, `kind + payload*16`: kind 1 VISIT a node
+// (payload is its index), kind 2 EMIT an op (payload is the op wire word).
+// Additional internal kinds schedule head phases, physical emits and late bindings. The
 // `ops` buffer accumulates the emitted op words so `If`/`Else` targets can be
 // patched in place before the buffer is streamed; `op_count` is its length and
 // `emit_cursor` the streaming cursor. `cf_if`/`cf_else` are a control-flow
@@ -324,6 +334,9 @@ private data st {
     tag_cursor: Word,
     header_done: Word,
     let_count: Word,
+    in_head: Word, head_base: Word, head_bias: Word, head_guard: Word, head_next: Word,
+    local_slots: [Word; 2048], extra_slots: Word, forest_temps: Word,
+    arm_bias: Word, arm_saved: [Word; 8], arm_depth: Word,
     dup_idx: Word,
     // Per pending IsEnum emit (work-item kind 3), the enum-name id, variant-name id, and
     // discriminant. Interning happens when the item is PROCESSED during the forward walk (not at
@@ -443,10 +456,19 @@ fn push_bool(value: Word) -> Word {
 // is processed in the forward walk, so a computed constant (an `lsr` mask) interns AFTER the operand
 // constants emitted before it, matching the reference pool order.
 fn push_int_const(value: Word) -> Word {
-    st.defer_int[st.defer_ctr] = value;
-    st.stack[st.sp] = wire.emitbool + (2 + st.defer_ctr) * wire.item;
+    // Repeated outcome flags and pattern constants share immutable scratch slots.
+    // Pool interning still occurs when the work item executes, in source order.
+    st.dup_idx = st.defer_ctr;
+    for i in 0..st.defer_ctr limit 64 {
+        if st.defer_int[i] == value { st.dup_idx = i; }
+    }
+    let index = st.dup_idx;
+    if index == st.defer_ctr {
+        st.defer_int[index] = value;
+        st.defer_ctr = st.defer_ctr + 1;
+    }
+    st.stack[st.sp] = wire.emitbool + (2 + index) * wire.item;
     st.sp = st.sp + 1;
-    st.defer_ctr = st.defer_ctr + 1;
     0
 }
 
@@ -454,6 +476,17 @@ fn push_int_const(value: Word) -> Word {
 // an `If` records its slot; an `Else` sets the matching `If`'s target to the op
 // after this `Else`; an `EndIf` sets the matching `Else`'s target to itself.
 fn emit_op(word: Word) -> Word {
+    emit_raw(word);
+    let tag = word % wire.radix; let kind = word / wire.radix;
+    if tag == wire.getindex andalso (kind == 2 orelse kind == 3) {
+        emit_raw(wire.konst + intern_int(1) * wire.radix);
+        emit_raw(wire.cmpeq); emit_raw(wire.mif);
+        emit_raw(wire.trap + 8 * wire.radix); emit_raw(wire.mendif);
+        emit_raw(wire.popn + 5 * wire.radix);
+    }
+    0
+}
+fn emit_raw(word: Word) -> Word {
     let pos = st.op_count;
     st.ops[pos] = word;
     st.op_count = pos + 1;
@@ -624,12 +657,14 @@ fn push_local(p: Word) -> Word {
 // BinOp (kind 3): post-order schedule. The operator code selects the op word and
 // whether the result needs the two-word `PopN(2)` fixup:
 //   1 Add -> CheckedAdd (5) + PopN   2 Mul -> CheckedMul,0 (4) + PopN
-//   3 Sub -> CheckedSub (8) + PopN   4 Div -> Div (9)   5 Mod -> Mod (10)
+//   3 Sub -> CheckedSub (8) + PopN; division and remainder use total outcomes.
 //   6 Eq -> CmpEq (11) .. 11 GtEq -> CmpGe (16), i.e. tag opc+5
 //   12 band -> BitAnd (24), 13 bor -> BitOr (25), 14 bxor -> BitXor (26), tag opc+12
-// Only the checked arithmetic operators (1, 2, 3) take the PopN.
+// Word and Byte division dispatch zero-divisor outcomes. Float discards outcomes;
+// Fixed remainder retains its explicit zero-divisor dispatch.
 fn push_binop(p: Word) -> Word {
-    let opc = ast.args[p];
+    let opc = ast.args[p] % 64;
+    let legacy_division = ast.args[p] >= 64;
     if opc == 29 {
     if ast.kinds[ast.rhs[p]] == 1 {
         // ShrL (logical right shift), CONSTANT amount (the rhs is a Literal): `Shr` is arithmetic
@@ -658,32 +693,7 @@ fn push_binop(p: Word) -> Word {
         // constants (0, 1, 64) are DEFERRED (push_int_const) so they intern in emission order and
         // interleave correctly with any constants the amount operand itself emits (e.g. the `1` of a
         // compound `a lsr (k + 1)` interns before the k==0 test's `0`).
-        let t0 = ast.param_count + st.let_count;
-        let t1 = t0 + 1;
-        st.let_count = st.let_count + 2;
-        push_emit(wire.endif);
-        push_emit(wire.bitand);
-        push_emit(wire.popn + 2 * wire.radix);
-        push_emit(wire.checkedsub);
-        push_int_const(1);
-        push_emit(wire.shl);
-        push_emit(wire.popn + 2 * wire.radix);
-        push_emit(wire.checkedsub);
-        push_emit(wire.getlocal + t1 * wire.radix);
-        push_int_const(64);
-        push_int_const(1);
-        push_emit(wire.shr);
-        push_emit(wire.getlocal + t1 * wire.radix);
-        push_emit(wire.getlocal + t0 * wire.radix);
-        push_emit(wire.els);
-        push_emit(wire.getlocal + t0 * wire.radix);
-        push_emit(wire.iff);
-        push_emit(wire.cmpeq);
-        push_int_const(0);
-        push_emit(wire.getlocal + t1 * wire.radix);
-        push_emit(wire.setlocal + t1 * wire.radix);
-        push_visit(ast.rhs[p]);
-        push_emit(wire.setlocal + t0 * wire.radix);
+        push_work(wire.lsrvalue, p);
         push_visit(ast.lhs[p])
     }
     } else {
@@ -693,22 +703,140 @@ fn push_binop(p: Word) -> Word {
         1 => wire.checkedadd,
         2 => wire.checkedmul,
         3 => wire.checkedsub,
-        4 => wire.divop,
-        5 => wire.modop,
+        4 => if legacy_division { wire.divop } else { wire.checkeddiv },
+        5 => if legacy_division { wire.modop } else { wire.checkedmod },
         12 => wire.bitand,
         13 => wire.bitor,
         14 => wire.bitxor,
         27 => wire.shl,
+        37 => wire.shl,
         28 => wire.shr,
+        33 => wire.cmpne,
         _ => opc + 5,
     };
     if opc < 4 {
         push_emit(wire.popn + 2 * wire.radix);
     }
+    if (opc == 4 orelse opc == 5) andalso legacy_division andalso ast.args[p] / 64 == 5 {
+        push_emit(wire.popn + 2 * wire.radix);
+    }
+    if (opc == 4 orelse opc == 5) andalso (not legacy_division orelse ast.args[p] / 64 == 4) {
+        // Forward order is checked-op, flag==3, If Trap EndIf, PopN(high).
+        // Preserve the wrapping low result for every nonzero-divisor outcome.
+        push_emit(wire.popn + wire.radix);
+        push_emit(wire.mendif);
+        push_emit(wire.trap + 5 * wire.radix);
+        push_emit(wire.mif);
+        push_emit(wire.cmpeq);
+        push_int_const(3);
+    }
     push_emit(opw);
     push_visit(ast.rhs[p]);
     push_visit(ast.lhs[p])
     }
+}
+
+private data checked_emit { arm: Word }
+
+// Checked node 77 owns three result locals and an ordered outcome dispatch.
+// Pattern constants are deferred. A checked shift multiplier is interned before
+// its left operand, matching the reference compiler's explicit pool order.
+fn push_checked_pattern(value: Word, slot: Word) -> Word {
+    push_emit(wire.mif); push_emit(wire.cmpeq);
+    push_int_const(value); push_emit(wire.getlocal + slot * wire.radix)
+}
+fn push_checked_arm_result(p: Word) -> Word {
+    if ast.kinds[p] == 5 {
+        push_work(13, ast.rhs[p]); push_work(wire.bindlocal, ast.args[p]); push_visit(ast.lhs[p])
+    } else {
+        if ast.lhs[p] > 0 { push_emit(wire.mendif); }
+        push_emit(wire.mbreak); push_visit(ast.rhs[p]);
+        if ast.lhs[p] > 0 { push_emit(wire.mif); push_visit(ast.lhs[p] - 1); }
+        0
+    }
+}
+fn push_checked_arm(arm: Word, flag: Word, scalar: Word) -> Word {
+    let meta = ast.match_parts[arm]; let class = meta % 4;
+    push_emit(wire.mendif);
+    if (meta / 8) % 2 == 1 { push_emit(wire.mendif); }
+    if (meta / 16) % 2 == 1 { push_emit(wire.mendif); }
+    push_work(13, ast.match_parts[arm + 3]);
+    if (meta / 16) % 2 == 1 { push_checked_pattern(ast.match_parts[arm + 2], flag + 1); }
+    if (meta / 8) % 2 == 1 {
+        let slot = if (scalar == 3 andalso (class == 1 orelse class == 2))
+            orelse (scalar >= 8 andalso class == 1) { flag + 2 } else { flag + 1 };
+        push_checked_pattern(ast.match_parts[arm + 1], slot);
+    }
+    push_checked_pattern(class, flag)
+}
+fn push_checked(p: Word) -> Word {
+    if ast.kinds[ast.lhs[p]] == 31 orelse ast.kinds[ast.lhs[p]] == 13 { push_checked_index(p) } else { push_checked_arithmetic(p) }
+}
+fn push_checked_arithmetic(p: Word) -> Word {
+    let base = ast.args[p]; let packed = ast.match_parts[base];
+    let flag = packed % 65536; let scalar = packed / 65536;
+    let root = ast.lhs[p]; let op = ast.args[root] % 64;
+    let unary = ast.kinds[root] == 10;
+    let shift = not unary andalso op == 37;
+    let constant = if shift { intern_int(1 lsl ast.args[ast.rhs[root]]) } else { 0 };
+    push_emit(wire.mendloop); push_emit(wire.mbreak);
+    push_emit(wire.getlocal + (flag + 1) * wire.radix);
+    if not unary andalso (op == 4 orelse op == 5) andalso ast.match_parts[base + 3] band 8 == 0 {
+        push_emit(wire.mendif); push_emit(wire.trap + 5 * wire.radix);
+        push_checked_pattern(3, flag);
+    }
+    checked_emit.arm = ast.match_parts[base + 1];
+    for i in 0..ast.rhs[p] limit 50 {
+        let at = checked_emit.arm - 1; push_checked_arm(at, flag, scalar);
+        checked_emit.arm = ast.match_parts[at + 4];
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + (flag + 1) * wire.radix);
+    push_emit(wire.setlocal + (flag + 2) * wire.radix);
+    push_emit(wire.setlocal + flag * wire.radix);
+    let instruction = if unary { wire.checkedneg } else {
+        match op { 1 => wire.checkedadd, 2 => wire.checkedmul, 3 => wire.checkedsub,
+            4 => wire.checkeddiv, 37 => wire.checkedmul, _ => wire.checkedmod }
+    };
+    push_emit(instruction);
+    if not unary {
+        if shift { push_emit(wire.konst + constant * wire.radix); } else { push_visit(ast.rhs[root]); }
+    }
+    push_visit(ast.lhs[root])
+}
+fn push_checked_index(p: Word) -> Word {
+    let base = ast.args[p]; let packed = ast.match_parts[base];
+    let flag = packed % 65536; let scalar = packed / 65536;
+    let root = ast.lhs[p];
+    push_emit(wire.mendloop); push_emit(wire.mbreak);
+    push_emit(wire.getlocal + (flag + 1) * wire.radix);
+    if ast.match_parts[base + 3] band 2 == 0 {
+        push_emit(wire.trap + 8 * wire.radix);
+        for i in 0..4 limit 4 { push_emit(wire.getlocal + (flag + 6 - i) * wire.radix); }
+        push_emit(wire.getlocal + (flag + 2) * wire.radix);
+    }
+    checked_emit.arm = ast.match_parts[base + 1];
+    for i in 0..ast.rhs[p] limit 50 {
+        let at = checked_emit.arm - 1; push_checked_arm(at, flag, scalar + 8);
+        checked_emit.arm = ast.match_parts[at + 4];
+    }
+    push_emit(wire.mloop);
+    push_emit(wire.setlocal + (flag + 1) * wire.radix);
+    push_emit(wire.setlocal + (flag + 2) * wire.radix);
+    for i in 0..4 limit 4 { push_emit(wire.setlocal + (flag + 3 + i) * wire.radix); }
+    push_emit(wire.setlocal + flag * wire.radix);
+    if ast.kinds[root] == 13 {
+        push_work(wire.rawemit, wire.getdataix + (ast.args[root] % 281474976710656) * wire.radix);
+        if scalar == 2 { push_emit(wire.wordtobyte); }
+        push_emit(wire.pushimm + 4 * wire.radix);
+    } else {
+        push_work(wire.rawemit, wire.getindex + scalar * wire.radix);
+        push_visit(ast.rhs[root]);
+    }
+    push_visit(ast.lhs[root])
+}
+fn push_checked_binding(p: Word) -> Word {
+    push_emit(wire.getlocal + (ast.args[p] % 65536) * wire.radix)
 }
 
 // ByteBinOp (kind 44): a bitwise op on two Byte operands, promote-operate-truncate. Each operand is
@@ -792,7 +920,7 @@ fn push_byte_shift(p: Word) -> Word {
 
 // If-expression (kind 4): emit the condition ops, an If marker, the then-branch
 // ops, an Else marker, the else-branch ops, then EndIf. The If/Else targets are
-// backpatched in `emit_op`. Node: args = cond, lhs = then, rhs = else. Push in
+// backpatched in `emit_op`. Node args tags cond by else presence, lhs/rhs are branches. Push in
 // reverse so the LIFO drain emits them in order.
 fn push_if(p: Word) -> Word {
     push_emit(wire.endif);
@@ -800,16 +928,18 @@ fn push_if(p: Word) -> Word {
     push_emit(wire.els);
     push_visit(ast.lhs[p]);
     push_emit(wire.iff);
-    push_visit(ast.args[p])
+    // Reconstruct tags an omitted else with -(condition + 1).
+    let cond = if ast.args[p] < 0 { 0 - ast.args[p] - 1 } else { ast.args[p] };
+    push_visit(cond)
 }
 
 // LetIn (kind 5): `let <slot> = <value>; <cont>`. Emit the value ops,
-// SetLocal(slot), then the continuation ops. Count the binding for local_count.
+// SetLocal(slot), then the continuation ops. Allocate the binding after its value
+// so initializer temporaries retain their reference allocation order.
 // Node: args = slot, lhs = value, rhs = continuation.
 fn push_letin(p: Word) -> Word {
-    st.let_count = st.let_count + 1;
     push_visit(ast.rhs[p]);
-    push_emit(wire.setlocal + ast.args[p] * wire.radix);
+    push_work(wire.bindlocal, ast.args[p]);
     push_visit(ast.lhs[p])
 }
 
@@ -839,6 +969,42 @@ fn push_byte_bnot(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// The reference allocates each logical-shift temporary after its operand.
+fn lsr_value(p: Word) -> Word {
+    let t0 = ast.param_count + st.let_count;
+    st.let_count = st.let_count + 1; st.extra_slots = st.extra_slots + 1;
+    emit_physical(wire.setlocal + t0 * wire.radix);
+    push_work(wire.lsrcount, p + t0 * wire.pack);
+    push_visit(ast.rhs[p])
+}
+fn lsr_count(packed: Word) -> Word {
+    let t0 = packed / wire.pack;
+    let t1 = ast.param_count + st.let_count;
+    st.let_count = st.let_count + 1; st.extra_slots = st.extra_slots + 1;
+    emit_physical(wire.setlocal + t1 * wire.radix);
+        push_emit(wire.endif);
+        push_emit(wire.bitand);
+        push_emit(wire.popn + 2 * wire.radix);
+        push_emit(wire.checkedsub);
+        push_int_const(1);
+        push_emit(wire.shl);
+        push_emit(wire.popn + 2 * wire.radix);
+        push_emit(wire.checkedsub);
+        push_work(wire.physicalemit, wire.getlocal + t1 * wire.radix);
+        push_int_const(64);
+        push_int_const(1);
+        push_emit(wire.shr);
+        push_work(wire.physicalemit, wire.getlocal + t1 * wire.radix);
+        push_work(wire.physicalemit, wire.getlocal + t0 * wire.radix);
+        push_emit(wire.els);
+        push_work(wire.physicalemit, wire.getlocal + t0 * wire.radix);
+        push_emit(wire.iff);
+        push_emit(wire.cmpeq);
+        push_int_const(0);
+        push_work(wire.physicalemit, wire.getlocal + t1 * wire.radix);
+    0
+}
+
 // Andor (node kind 68): eager boolean `and`/`or`. `args` = is_or (0 = and, 1 = or). Both spill the
 // left operand to a fresh temp t, evaluate the right (the then-value, left on the stack), then a
 // value-If tests the condition (t for `and`; Not(t) for `or`) with an empty then-branch (the right
@@ -850,6 +1016,7 @@ fn push_andor(p: Word) -> Word {
     let is_or = ast.args[p];
     let t = ast.param_count + st.let_count;
     st.let_count = st.let_count + 1;
+    st.extra_slots = st.extra_slots + 1;
     push_emit(wire.endif);
     push_bool(is_or);
     push_emit(wire.popn + 1 * wire.radix);
@@ -858,14 +1025,15 @@ fn push_andor(p: Word) -> Word {
     if is_or == 1 {
         push_emit(wire.lnot);
     }
-    push_emit(wire.getlocal + t * wire.radix);
+    push_work(wire.physicalemit, wire.getlocal + t * wire.radix);
     push_visit(ast.rhs[p]);
-    push_emit(wire.setlocal + t * wire.radix);
+    push_work(wire.physicalemit, wire.setlocal + t * wire.radix);
     push_visit(ast.lhs[p])
 }
 
 // Cast (kind 26): `<operand> as <target>`. `args` is the target -- 1 for `Byte`,
-// 0 for the widening to `Word` -- and lhs is the operand.
+// 0 for the widening to `Word`, or match_parts base plus two for an enum cast.
+// lhs is the operand. An enum cast's rhs is its variant count.
 //
 // **THIS EMITTED `ByteToWord` UNCONDITIONALLY**, on the stated assumption that the
 // stages only ever cast `Byte as Word`. True of the stage corpus and false of the
@@ -873,12 +1041,16 @@ fn push_andor(p: Word) -> Word {
 // than a refusal. The direction was not available here because `parse.kel`
 // discarded the target type name; it now carries it in the payload.
 fn push_cast(p: Word) -> Word {
+    if ast.args[p] >= 2 {
+        push_enum_dispatch(p, ast.args[p] - 2, 4)
+    } else {
     if ast.args[p] == 1 {
         push_emit(wire.wordtobyte);
     } else {
         push_emit(wire.bytetoword);
     }
     push_visit(ast.lhs[p])
+    }
 }
 
 // UnaryNeg (kind 10): emit the operand ops then CheckedNeg and the PopN(2) fixup.
@@ -906,10 +1078,16 @@ fn push_data_assign(p: Word) -> Word {
 }
 
 // IndexRead (kind 13): read `d.arr[i]`. Emit the index ops, then GetDataIndexed
-// with the element-0 slot and array length packed as base + len*65536 in args.
-// Node: args = base + len*65536, lhs = index expression.
+// with base and length in 24-bit lanes followed by the scalar fallback kind.
+// Node: args = base + len*2^24 + kind*2^48, lhs = index expression.
 fn push_index_read(p: Word) -> Word {
-    push_emit(wire.getdataix + ast.args[p] * wire.radix);
+    let kind = ast.args[p] / 281474976710656;
+    push_emit(wire.popn + 5 * wire.radix); push_emit(wire.mendif);
+    push_emit(wire.trap + 8 * wire.radix); push_emit(wire.mif);
+    push_emit(wire.cmpeq); push_int_const(1);
+    push_emit(wire.getdataix + (ast.args[p] % 281474976710656) * wire.radix);
+    if kind == 2 { push_emit(wire.wordtobyte); }
+    push_emit(wire.pushimm + (if kind == 2 orelse kind == 3 { 4 } else { 0 }) * wire.radix);
     push_visit(ast.lhs[p])
 }
 
@@ -927,18 +1105,22 @@ fn push_index_store(p: Word) -> Word {
 // continuation.
 fn push_index_assign(p: Word) -> Word {
     push_visit(ast.rhs[p]);
+    push_emit(wire.popn + 5 * wire.radix);
+    push_emit(wire.mendif);
+    push_emit(wire.trap + 8 * wire.radix);
+    push_emit(wire.mif);
+    push_emit(wire.cmpeq);
+    push_int_const(1);
     push_emit(wire.setdataix + ast.args[p] * wire.radix);
     push_visit(ast.lhs[p])
 }
 
-// Unit (kind 20): `PushImmediate(args)`. The opcode's own encoding is `0 = Unit`,
-// `1 = true`, `2 = false`, so ONE node kind carries all three and the payload is the
-// operand verbatim.
-//
-// The payload was unused and always zero until boolean literals reached the stage,
-// so every existing program still emits `PushImmediate(0)` and is byte-identical.
+// Unit payload 3 marks a written `()` for type checking. Payload 0 marks a
+// synthesized continuation. Both emit the existing PushImmediate(0); 1 and 2
+// retain the boolean immediate encoding.
 fn push_unit(p: Word) -> Word {
-    push_emit(wire.pushimm + ast.args[p] * wire.radix)
+    let value = if ast.args[p] == 3 { 0 } else { ast.args[p] };
+    push_emit(wire.pushimm + value * wire.radix)
 }
 
 // ExprStmtIn (kind 21): `<expr>; <cont>`. Emit the expression ops, then PopN(1) to
@@ -968,7 +1150,6 @@ fn push_forin(p: Word) -> Word {
     let body = ast.for_parts[fp + 5];
     let incr = ast.for_parts[fp + 6];
     let cont = ast.rhs[p];
-    st.let_count = st.let_count + 2;
     push_visit(cont);
     push_emit(wire.endloop);                    // EndLoop
     push_emit(wire.setlocal + i_slot * wire.radix);       // SetLocal(i)  (store the increment)
@@ -994,8 +1175,8 @@ fn push_forin(p: Word) -> Word {
 // outcome) grow local_count by five. The counter header is a conditional
 // `mbreakif`, the range exit an unconditional `mbreak`, both patched to the loop
 // exit by `mendloop`; the post-loop tests are bare `mif`/`mendif`. args = the
-// limit_parts entry start; rhs = the continuation. Bare form only (the loops in
-// this file need no outcome block); see src/compiler.rs `compile_for_limit`.
+// limit_parts entry start; rhs = the continuation. Node 74 also carries an outcome
+// descriptor in lhs. See src/compiler.rs `compile_for_limit`.
 fn push_forlimit(p: Word) -> Word {
     let base = ast.args[p];
     let var = ast.limit_parts[base];
@@ -1011,9 +1192,9 @@ fn push_forlimit(p: Word) -> Word {
     let one = ast.limit_parts[base + 10];
     let two = ast.limit_parts[base + 11];
     let cont = ast.rhs[p];
-    st.let_count = st.let_count + 5;
     // Pushed in reverse; the drain emits the forward sequence.
     push_visit(cont);
+    if ast.kinds[p] == 74 { push_outcome_dispatch(p, oc); } else {
     // LIMIT dispatch: if oc == 0 { Trap }.
     push_emit(wire.mendif);
     push_emit(wire.trap + wire.looplimit * wire.radix);
@@ -1029,6 +1210,7 @@ fn push_forlimit(p: Word) -> Word {
     push_emit(wire.cmpeq);
     push_visit(two);
     push_emit(wire.getlocal + oc * wire.radix);
+    }
     // boundary fixup: if oc == 0 { if var >= end { oc = 1 } }.
     push_emit(wire.mendif);
     push_emit(wire.mendif);
@@ -1083,6 +1265,41 @@ fn push_forlimit(p: Word) -> Word {
     push_visit(end);
     push_emit(wire.setlocal + var * wire.radix);
     push_visit(start)
+}
+
+// Schedule LIMIT, OK, BREAK in reference order, independently of source order.
+fn push_outcome_dispatch(p: Word, oc: Word) -> Word {
+    let base = ast.lhs[p];
+    for j in 0..3 limit 3 {
+        let kind = 2 - j; let arm = ast.match_parts[base + kind];
+        if arm > 0 orelse kind == 0 {
+            push_emit(wire.mendif);
+            if arm > 0 { push_visit(arm - 1); } else { push_emit(wire.trap + wire.looplimit * wire.radix); }
+            push_emit(wire.mif); push_emit(wire.cmpeq);
+            push_int_const(kind); push_emit(wire.getlocal + oc * wire.radix);
+        }
+    }
+    if ast.match_parts[base + 2] == 0 {
+        push_emit(wire.mendif); push_emit(wire.setlocal + oc * wire.radix);
+        push_int_const(1); push_emit(wire.mif); push_emit(wire.cmpeq);
+        push_int_const(2); push_emit(wire.getlocal + oc * wire.radix);
+    }
+    0
+}
+// The optional binding has already allocated its slot. Relocate source-ordered
+// anonymous temporaries until this arm finishes, restoring an enclosing arm's bias.
+fn push_outcome_arm(p: Word) -> Word {
+    st.arm_saved[st.arm_depth] = st.arm_bias; st.arm_depth = st.arm_depth + 1;
+    st.arm_bias = ast.param_count + st.let_count - ast.args[p] % 65536 - st.extra_slots;
+    push_work(12, 0);
+    if ast.lhs[p] > 0 {
+        push_emit(wire.endif);
+        if ast.args[p] / 65536 == 0 { push_emit(wire.trap + wire.looplimit * wire.radix); }
+        push_emit(wire.els);
+    }
+    push_emit(wire.popn + 1 * wire.radix); push_visit(ast.rhs[p]);
+    if ast.lhs[p] > 0 { push_emit(wire.iff); push_visit(ast.lhs[p] - 1); }
+    0
 }
 
 // Call (kind 7): emit the argument ops left to right, then Call(chunk, count),
@@ -1266,6 +1483,21 @@ fn push_orelse(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
+// A guarded arm stores guard/result in node 71. False guards continue at the
+// next arm; the Break belongs inside the guard's If. Items are pushed in reverse.
+fn push_match_result(result: Word) -> Word {
+    if ast.kinds[result] == 71 {
+        push_emit(wire.mendif);
+        push_emit(wire.mbreak);
+        push_visit(ast.rhs[result]);
+        push_emit(wire.mif);
+        push_visit(ast.lhs[result])
+    } else {
+        push_emit(wire.mbreak);
+        push_visit(result)
+    }
+}
+
 // Match (kind 22): `match scrutinee { lit0 => r0, .., _ => rw }` over an integer
 // scrutinee with literal-integer arms and a wildcard default, mirroring the
 // reference lowering. It stashes the scrutinee in a fresh temp local, wraps the
@@ -1278,29 +1510,29 @@ fn push_orelse(p: Word) -> Word {
 // the match_parts entry start, lhs = scrutinee, rhs = arm count. The entry holds
 // the temp slot at [0], the wildcard result node at [1], then arm_count pairs of
 // (literal node, result node) from [2]. Pushed in reverse so the drain emits
-// forward. Literal arms only; a binding or guarded arm is a later increment.
+// forward. Negative pattern indices denote ordered wildcard arms; node 71 wraps a guard.
 fn push_match(p: Word) -> Word {
     let base = ast.args[p];
     let temp = ast.match_parts[base];
     let wc = ast.match_parts[base + 1];
     let n = ast.rhs[p];
     let scrut = ast.lhs[p];
-    st.let_count = st.let_count + 1;
     push_emit(wire.mendloop);
     push_emit(wire.trap + wire.nomatch * wire.radix);
-    push_emit(wire.mbreak);
-    push_visit(wc);
+    if wc >= 0 { push_match_result(wc); }
     // Push the arms in reverse (arm n-1 first) so the LIFO drain emits arm 0 first.
     // The scan bound is the match_parts capacity; the guard selects the live arms.
     for j in 0..n limit 64 {
         let k = n - 1 - j;
-        push_emit(wire.mendif);
-        push_emit(wire.mbreak);
-        push_visit(ast.match_parts[base + 3 + 2 * k]);
-        push_emit(wire.mif);
-        push_emit(wire.cmpeq);
-        push_visit(ast.match_parts[base + 2 + 2 * k]);
-        push_emit(wire.getlocal + temp * wire.radix);
+        let pattern = ast.match_parts[base + 2 + 2 * k];
+        if pattern >= 0 { push_emit(wire.mendif); }
+        push_match_result(ast.match_parts[base + 3 + 2 * k]);
+        if pattern >= 0 {
+            push_emit(wire.mif);
+            push_emit(wire.cmpeq);
+            push_visit(pattern);
+            push_emit(wire.getlocal + temp * wire.radix);
+        }
     }
     push_emit(wire.mloop);
     push_emit(wire.setlocal + temp * wire.radix);
@@ -1325,23 +1557,26 @@ fn push_enum_isenum(ename: Word, vname: Word, disc: Word) -> Word {
 // EnumMatch (kind 39): an enum-value match, the IsEnum virtual loop. Mirrors push_match but the
 // per-arm test is `GetLocal(temp), IsEnum(ename, vname, disc), SetLocal(test), PopN(1),
 // GetLocal(test)` and there is no wildcard (all-variant arms, Trap fallback). match_parts holds
-// [temp][ename][per arm: vname, disc, result]; the test slot for arm k is `temp + 1 + k`, so the
-// frame grows by `1 + n` (temp plus one test per arm).
+// [temp][ename][twenty words per arm], with test and payload slots allocated by parse.
+// A negative variant name denotes an ordered wildcard, which allocates no test slot.
+// Each result may be wrapped by a guarded-arm node. A final wildcard uses the trailer.
 fn push_enum_match(p: Word) -> Word {
-    let base = ast.args[p];
+    push_enum_dispatch(p, ast.args[p], wire.nomatch)
+}
+
+// Match and enum-to-Word casts share variant dispatch, with distinct fallback traps.
+fn push_enum_dispatch(p: Word, base: Word, trap_kind: Word) -> Word {
     let temp = ast.match_parts[base];
     let ename = ast.match_parts[base + 1];
     let n = ast.rhs[p];
     let scrut = ast.lhs[p];
     let haswc = ast.match_parts[base + 2 + n * 20];
-    st.let_count = st.let_count + 1;
     push_emit(wire.mendloop);
-    push_emit(wire.trap + wire.nomatch * wire.radix);
+    push_emit(wire.trap + trap_kind * wire.radix);
     // A `_` wildcard's result and Break emit after the variant arms and before the Trap (pushed
     // here so the LIFO walk emits them in that order).
     if haswc == 1 {
-        push_emit(wire.mbreak);
-        push_visit(ast.match_parts[base + 2 + n * 20 + 1]);
+        push_match_result(ast.match_parts[base + 2 + n * 20 + 1]);
     }
     for j in 0..n limit 64 {
         let k = n - 1 - j;
@@ -1351,10 +1586,10 @@ fn push_enum_match(p: Word) -> Word {
         let result = ast.match_parts[armb + 2];
         let pc = ast.match_parts[armb + 3];
         let testslot = ast.match_parts[armb + 4];
-        st.let_count = st.let_count + 1 + pc;
-        push_emit(wire.mendif);
-        push_emit(wire.mbreak);
-        push_visit(result);
+        if vname >= 0 {
+            push_emit(wire.mendif);
+        }
+        push_match_result(result);
         // Payload binds emit after the If and before the result: per field, GetLocal(temp),
         // GetEnumField(..), SetLocal(bindslot). Pushed in reverse field order so the LIFO walk emits
         // field 0 first. A SCALAR field (kind 0-7) emits GetEnumField(Flat{offset, kind}); a STRUCT
@@ -1384,12 +1619,14 @@ fn push_enum_match(p: Word) -> Word {
             } } }
             push_emit(wire.getlocal + temp * wire.radix);
         }
-        push_emit(wire.mif);
-        push_emit(wire.getlocal + testslot * wire.radix);
-        push_emit(wire.popn + 1 * wire.radix);
-        push_emit(wire.setlocal + testslot * wire.radix);
-        push_enum_isenum(ename, vname, disc);
-        push_emit(wire.getlocal + temp * wire.radix);
+        if vname >= 0 {
+            push_emit(wire.mif);
+            push_emit(wire.getlocal + testslot * wire.radix);
+            push_emit(wire.popn + 1 * wire.radix);
+            push_emit(wire.setlocal + testslot * wire.radix);
+            push_enum_isenum(ename, vname, disc);
+            push_emit(wire.getlocal + temp * wire.radix);
+        }
     }
     push_emit(wire.mloop);
     push_emit(wire.setlocal + temp * wire.radix);
@@ -1414,7 +1651,6 @@ fn push_struct_eq(p: Word) -> Word {
     } else {
         wire.getfield
     };
-    st.let_count = st.let_count + 2;
     // Pre-intern the results in the reference's pool order (false before true): the reference emits
     // the false (mismatch) Const first, so it takes the lower pool index. `push_emit` runs in reverse
     // (LIFO), so interning here -- not at push time -- keeps the pool order correct.
@@ -1525,7 +1761,6 @@ fn push_enum_eq(p: Word) -> Word {
     let tb = ast.match_parts[base + 1];
     let ename = ast.match_parts[base + 2];
     let vcount = ast.match_parts[base + 3];
-    st.let_count = st.let_count + 2;
     // Forward pre-pass: record each variant's variable-stride offset (for the reverse emission
     // walk) and advance to the `!=` flag. No interning here -- the pool is built at emission time.
     st.eq_cur = base + 4;
@@ -1567,7 +1802,6 @@ fn push_enum_eq(p: Word) -> Word {
             let fkind = ast.match_parts[st.eq_fcur2 + 1];
             st.eq_fcur2 = st.eq_fcur2 + 2;
             if fkind >= 100 {
-                st.let_count = st.let_count + 2;
                 st.eq_fcur2 = st.eq_fcur2 + 3 + ast.match_parts[st.eq_fcur2] * 2;
             }
         }
@@ -1633,7 +1867,6 @@ fn push_array_eq(p: Word) -> Word {
     let count = ast.match_parts[base + 2];
     let kind = ast.match_parts[base + 3];
     let is_ne = ast.match_parts[base + 4];
-    st.let_count = st.let_count + 2;
     for e in 0..count limit 256 {
         st.eq_vidx[e] = intern_int(e);
     }
@@ -1688,10 +1921,8 @@ fn push_array_of_struct_eq(p: Word) -> Word {
     // occupies a 5-word header plus its own sub-forest. Walk it to find where the trailing flags sit,
     // rather than assuming the old fixed `fieldcount * 2`. This walk also counts the per-element
     // nested temp pairs via count_temps=1, which is what the stride below needs.
-    let before_temps = st.let_count;
     let seb_end = struct_forest_end(base + 5, fieldcount, 1);
-    let estride = 2 + st.let_count - before_temps;
-    st.let_count = before_temps;
+    let estride = 2 + st.forest_temps;
     let is_ne = ast.match_parts[seb_end];
     // is_tuple selects the accessor: a tuple element reads fields with GetTupleField and extracts with
     // a FlatNested Tuple (variant 0); a struct element uses GetField and FlatNested Struct (variant 2).
@@ -1709,7 +1940,6 @@ fn push_array_of_struct_eq(p: Word) -> Word {
     // Per-element temp stride: the element pair, plus a pair for every nested block anywhere in the
     // element's subtree (counted by the walk above), because the reference allocates each element's
     // temps interleaved rather than grouping all element pairs first.
-    st.let_count = st.let_count + 2 + estride * arrcount;
     for e in 0..arrcount limit 64 {
         st.eq_vidx[e] = intern_int(e);
     }
@@ -1785,7 +2015,6 @@ fn push_array_of_array_eq(p: Word) -> Word {
     let innercount = ast.match_parts[base + 4];
     let innerkind = ast.match_parts[base + 5];
     let is_ne = ast.match_parts[base + 6];
-    st.let_count = st.let_count + 2 + 2 * m;
     let maxc = if m > innercount {
         m
     } else {
@@ -1874,7 +2103,6 @@ fn push_array_of_enum_eq(p: Word) -> Word {
         st.eq_cur = st.eq_cur + 3 + fcount * 2;
     }
     let is_ne = ast.match_parts[st.eq_cur];
-    st.let_count = st.let_count + 2 + 2 * arrcount;
     for e in 0..arrcount limit 64 {
         st.eq_vidx[e] = intern_int(e);
     }
@@ -2012,10 +2240,11 @@ fn push_nested_enum_loop(ename: Word, vcount: Word, vbase: Word, l2: Word, r2: W
 
 // Walk the sub-field forest of `subcount` fields starting at `start` in match_parts, striding over
 // arbitrarily-nested struct sub-fields ([off, 100+size, subcount, r2, l2, fields...] = 5 + its own
-// forest), and return the end offset. When `count_temps` is 1, add 2 to `let_count` per nested struct
+// forest), and return the end offset. When `count_temps` is 1, count two scratch slots per nested struct in `forest_temps`
 // (its r2/l2 extract temps). The records are laid preorder, so one linear walk with a remaining-fields
 // stack visits the whole forest. Non-recursive (R4); the loop cap bounds the total field count.
 fn struct_forest_end(start: Word, subcount: Word, count_temps: Word) -> Word {
+    st.forest_temps = 0;
     st.cs_cur = start;
     st.cs_rem[0] = subcount;
     st.cs_sp = 1;
@@ -2028,7 +2257,7 @@ fn struct_forest_end(start: Word, subcount: Word, count_temps: Word) -> Word {
                 st.cs_rem[top] = st.cs_rem[top] - 1;
                 if ast.match_parts[st.cs_cur + 1] >= 100 {
                     if count_temps == 1 {
-                        st.let_count = st.let_count + 2;
+                        st.forest_temps = st.forest_temps + 2;
                     }
                     if ast.match_parts[st.cs_cur + 1] >= 50000 {
                         // An ENUM block: [off, 50000+size, vcount, r2, l2, ename, per variant
@@ -2143,6 +2372,11 @@ fn push_arr_scalar_inner(acount: Word, akind: Word, l2: Word, r2: Word, false_id
     0
 }
 
+// A Tuple parent needs the private marker even when the nested variant is Tuple zero.
+fn nested_access_operand(accessor: Word, operand: Word) -> Word {
+    if accessor == wire.gettuplefield andalso operand < 4294967296 { operand + 4 * 4294967296 } else { operand }
+}
+
 fn push_struct_eq_subfields(sbase: Word, subcount: Word, l2: Word, r2: Word, subacc: Word, false_idx: Word, true_idx: Word, tempbias: Word) -> Word {
     // Frame 0: the given sub-field list, container (l2, r2), accessor `subacc`, no suffix.
     st.es_sbase[0] = sbase;
@@ -2183,9 +2417,9 @@ fn push_struct_eq_subfields(sbase: Word, subcount: Word, l2: Word, r2: Word, sub
                     push_emit(wire.mloop);
                     push_emit(wire.setlocal + st.es_l[top] * wire.radix);
                     push_emit(wire.setlocal + st.es_r[top] * wire.radix);
-                    push_emit(sfxacc + st.es_sfx_extp[top] * wire.radix);
+                    push_emit(sfxacc + nested_access_operand(sfxacc, st.es_sfx_extp[top]) * wire.radix);
                     push_emit(wire.getlocal + st.es_sfx_pr[top] * wire.radix);
-                    push_emit(sfxacc + st.es_sfx_extp[top] * wire.radix);
+                    push_emit(sfxacc + nested_access_operand(sfxacc, st.es_sfx_extp[top]) * wire.radix);
                     push_emit(wire.getlocal + st.es_sfx_pl[top] * wire.radix);
                 }
                 st.es_sp = st.es_sp - 1;
@@ -2388,7 +2622,6 @@ fn push_struct_eq_nested(p: Word) -> Word {
     let ta = ast.match_parts[base];
     let tb = ast.match_parts[base + 1];
     let topcount = ast.match_parts[base + 2];
-    st.let_count = st.let_count + 2;
     // Forward pass: record each top-level field's offset and count the nested fields' temps. An
     // array field (variant 1) is a fixed 8 slots [1, ext_off, ext_size, 1, r2, l2, count, kind]; a
     // struct/tuple field is 7 + subcount*2; a scalar field is 3.
@@ -2398,14 +2631,12 @@ fn push_struct_eq_nested(p: Word) -> Word {
         if ast.match_parts[st.se_cur] == 0 {
             st.se_cur = st.se_cur + 3;
         } else {
-            st.let_count = st.let_count + 2;
             if ast.match_parts[st.se_cur + 3] == 1 {
                 // Array field. A scalar-element array is a fixed 8 slots [1, off, size, 1, r2, l2,
                 // count, kind]. A struct-element array (`eq/struct_arrayofstruct`, sentinel
                 // `slot+7 >= 100`) is [1, off, size, 1, r2, l2, acount, 100+arrsize, fcount] then
                 // fcount*(off, kind) = 9 + fcount*2, and reserves 2*acount per-element inner temps.
                 if ast.match_parts[st.se_cur + 7] >= 100 {
-                    st.let_count = st.let_count + 2 * ast.match_parts[st.se_cur + 6];
                     st.se_cur = st.se_cur + 9 + ast.match_parts[st.se_cur + 8] * 2;
                 } else {
                     st.se_cur = st.se_cur + 8;
@@ -2590,9 +2821,9 @@ fn push_struct_eq_nested(p: Word) -> Word {
             }
             push_emit(wire.setlocal + l2 * wire.radix);
             push_emit(wire.setlocal + r2 * wire.radix);
-            push_emit(topnestacc + extp * wire.radix);
+            push_emit(topnestacc + nested_access_operand(topnestacc, extp) * wire.radix);
             push_emit(wire.getlocal + tb * wire.radix);
-            push_emit(topnestacc + extp * wire.radix);
+            push_emit(topnestacc + nested_access_operand(topnestacc, extp) * wire.radix);
             push_emit(wire.getlocal + ta * wire.radix);
         }
     }
@@ -2610,48 +2841,84 @@ fn push_yield(p: Word) -> Word {
     push_visit(ast.lhs[p])
 }
 
-// MultiHead (kind 25): the dispatch of a multiheaded function, reproducing the
-// reference lowering. Each head first copies the parameters into fresh locals,
-// then a guarded head tests its `when` guard with a bare `If`/`EndIf` and on a
-// match runs its body and returns, while the final unguarded head runs its body
-// and returns directly; an unmatched dispatch falls through to a dead
-// `Trap(NoMatchingHead)`. The body of each head is a `yield` expression. The
-// parameter copies grow local_count by head_count * param_count. args = the
-// head_parts entry start, rhs = head count; each 4-word entry is (param-copy
-// start slot, guarded flag, guard node, body node). Pushed in reverse so the
-// drain emits head 0 first.
+// Parser slots identify bindings and parser-allocated temporaries. Extra temporaries
+// introduced during emission occupy physical slots without consuming parser identities.
+fn reset_local_slots() -> Word {
+    for i in 0..2048 limit 2048 { st.local_slots[i] = 0; }
+    st.extra_slots = 0; st.arm_bias = 0; st.arm_depth = 0;
+    0
+}
+// Grow the frame when a parser-owned slot is emitted. Reserving its parent early
+// would place compiler-created operand temporaries after that parent.
+fn mapped_local(slot: Word) -> Word {
+    if slot < ast.param_count { slot } else {
+        if st.local_slots[slot] == 0 { st.local_slots[slot] = slot + st.extra_slots + st.arm_bias + 1; }
+        let used = st.local_slots[slot] - ast.param_count;
+        if used > st.let_count { st.let_count = used; }
+        st.local_slots[slot] - 1
+    }
+}
+fn emit_physical(word: Word) -> Word {
+    let tag = word % wire.radix;
+    if st.in_head == 1 andalso (tag == wire.getlocal orelse tag == wire.setlocal) {
+        let slot = word / wire.radix;
+        let bias = if slot < ast.param_count { 0 } else { st.head_bias };
+        emit_op(tag + (slot + st.head_base + bias) * wire.radix)
+    } else { emit_op(word) }
+}
+fn bind_local(slot: Word) -> Word {
+    let physical = ast.param_count + st.let_count;
+    st.let_count = st.let_count + 1;
+    st.local_slots[slot] = physical + 1;
+    emit_physical(wire.setlocal + physical * wire.radix)
+}
+
+// Head ranges retain relative slots. Allocate their windows in emission order so
+// guard and body temporaries precede the next head's parameter copies.
+fn push_work(kind: Word, payload: Word) -> Word {
+    st.stack[st.sp] = kind + payload * wire.item;
+    st.sp = st.sp + 1;
+    0
+}
+fn begin_head(hb: Word) -> Word {
+    let pc = ast.head_parts[hb];
+    st.head_base = st.head_next; st.head_bias = 0; st.head_guard = 0;
+    st.in_head = 1; st.let_count = 0; reset_local_slots();
+    push_work(wire.headend, 0);
+    if ast.head_parts[hb + 1] == 1 {
+        push_emit(wire.mendif);
+        push_emit(wire.ret);
+        push_work(wire.headbody, ast.head_parts[hb + 3]);
+        push_emit(wire.mif);
+        push_visit(ast.head_parts[hb + 2]);
+    } else {
+        push_emit(wire.ret);
+        push_work(wire.headbody, ast.head_parts[hb + 3]);
+    }
+    for ij in 0..pc limit 32 {
+        let i = pc - 1 - ij;
+        push_work(wire.rawemit, wire.setlocal + (st.head_base + i) * wire.radix);
+        push_work(wire.rawemit, wire.getlocal + i * wire.radix);
+    }
+    0
+}
+fn begin_head_body(node: Word) -> Word {
+    st.head_guard = st.let_count; st.head_bias = st.head_guard; st.let_count = 0;
+    reset_local_slots();
+    push_visit(node)
+}
+fn end_head() -> Word {
+    st.head_next = st.head_base + ast.param_count + st.head_guard + st.let_count;
+    st.let_count = st.head_next - ast.param_count;
+    st.in_head = 0;
+    0
+}
 fn push_multihead(p: Word) -> Word {
-    let base = ast.args[p];
-    let n = ast.rhs[p];
-    let pc = ast.param_count;
-    st.let_count = st.let_count + n * pc;
-    // The dead NoMatchingHead trap tail (last in the stream, pushed first).
+    let base = ast.args[p]; let n = ast.rhs[p];
+    st.head_next = ast.param_count;
     push_emit(wire.trap + wire.nomatchhead * wire.radix);
     for hj in 0..n limit 64 {
-        let h = n - 1 - hj;
-        let hb = base + h * 4;
-        let param_start = ast.head_parts[hb];
-        let guarded = ast.head_parts[hb + 1];
-        let guard_node = ast.head_parts[hb + 2];
-        let body_node = ast.head_parts[hb + 3];
-        // Guarded: guard; If; body; Return; EndIf. Unguarded: body; Return.
-        if guarded == 1 {
-            push_emit(wire.mendif);
-            push_emit(wire.ret);
-            push_visit(body_node);
-            push_emit(wire.mif);
-            push_visit(guard_node);
-        }
-        if guarded == 0 {
-            push_emit(wire.ret);
-            push_visit(body_node);
-        }
-        // Parameter copies in reverse: forward is GetLocal(i); SetLocal(start+i).
-        for ij in 0..pc limit 8 {
-            let i = pc - 1 - ij;
-            push_emit(wire.setlocal + (param_start + i) * wire.radix);
-            push_emit(wire.getlocal + i * wire.radix);
-        }
+        push_work(wire.headbegin, base + (n - 1 - hj) * 4);
     }
     0
 }
@@ -2679,8 +2946,23 @@ fn walk_step() -> Word {
     let ikind = item % wire.item;
     let payload = item / wire.item;
     if ikind == wire.emit {
-        emit_op(payload);
+        let tag = payload % wire.radix;
+        if tag == wire.getlocal orelse tag == wire.setlocal {
+            emit_physical(tag + mapped_local(payload / wire.radix) * wire.radix);
+        } else { emit_op(payload); }
     }
+    if ikind == 12 {
+        st.arm_depth = st.arm_depth - 1; st.arm_bias = st.arm_saved[st.arm_depth];
+    }
+    if ikind == wire.physicalemit { emit_physical(payload); }
+    if ikind == wire.bindlocal { bind_local(payload); }
+    if ikind == 13 { push_checked_arm_result(payload); }
+    if ikind == wire.lsrvalue { lsr_value(payload); }
+    if ikind == wire.lsrcount { lsr_count(payload); }
+    if ikind == wire.rawemit { emit_raw(payload); }
+    if ikind == wire.headbegin { begin_head(payload); }
+    if ikind == wire.headbody { begin_head_body(payload); }
+    if ikind == wire.headend { end_head(); }
     if ikind == wire.emitisenum {
         // Intern the enum name, variant name, and discriminant NOW (in the forward walk order),
         // then emit the IsEnum op with the three pool indices packed.
@@ -2731,6 +3013,11 @@ fn walk_step() -> Word {
             21 => push_exprstmt(payload),
             22 => push_match(payload),
             23 => push_forlimit(payload),
+            74 => push_forlimit(payload),
+            75 => push_outcome_arm(payload),
+            76 => push_local(payload),
+            77 => push_checked(payload),
+            80 => push_checked_binding(payload),
             24 => push_yield(payload),
             25 => push_multihead(payload),
             26 => push_cast(payload),
@@ -2864,6 +3151,31 @@ fn emit_next(resume: Word) -> Word {
 // runtime propagates the callee's yield up as the loop's suspension. The yield
 // contract (Word in, Word out) matches, so the yield transparently reaches the
 // host.
+private data relocate { result: Word, hits: Word, bad: Word, }
+fn relocate_data_arg() -> Word {
+    if ast.relocate_count < 0 orelse ast.relocate_count > 640 orelse ast.relocate_kind < 11 orelse ast.relocate_kind > 14 orelse ast.relocate_arg < 0 { 0 - 1 } else {
+        let indexed = ast.relocate_kind >= 13;
+        let base = if indexed { ast.relocate_arg % 16777216 } else { ast.relocate_arg };
+        let scalar = if ast.relocate_kind == 13 { ast.relocate_arg / 281474976710656 } else { 0 };
+        let width = if ast.relocate_kind == 13 { (ast.relocate_arg / 16777216) % 16777216 } else { if indexed { ast.relocate_arg / 16777216 } else { 1 } };
+        relocate.result = 0; relocate.hits = 0; relocate.bad = 0;
+        if base >= 16777216 orelse width <= 0 orelse width >= 16777216
+            orelse (scalar != 0 andalso scalar != 2 andalso scalar != 3) { relocate.bad = 1; }
+        for i in 0..ast.relocate_count limit 640 {
+            let start = ast.relocate_source[i]; let length = ast.relocate_length[i]; let target = ast.relocate_target[i];
+            if start < 0 orelse start >= 16777216 orelse target < 0 orelse target >= 16777216 orelse length <= 0 orelse length > 16777216 - start orelse length > 16777216 - target { relocate.bad = 1; } else {
+                if base >= start andalso base - start < length {
+                    relocate.hits = relocate.hits + 1;
+                    if width > length - (base - start) { relocate.bad = 1; } else {
+                        let prefix = if indexed { (ast.relocate_arg / 16777216) * 16777216 } else { 0 };
+                        relocate.result = prefix + target + (base - start);
+                    }
+                }
+            }
+        }
+        if relocate.bad == 0 andalso relocate.hits == 1 { relocate.result } else { 0 - 1 }
+    }
+}
 loop main(resume: Word) -> Word {
-    yield emit_next(resume)
+    if ast.relocate_mode == 1 { yield relocate_data_arg() } else { yield emit_next(resume) }
 }

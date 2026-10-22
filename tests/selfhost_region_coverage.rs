@@ -80,6 +80,14 @@ const CORPUS_STAGES: &[(&str, &str)] = &[
         include_str!("../src/selfhost/kel/verify_types.kel"),
     ),
     ("wire", include_str!("../src/selfhost/kel/wire.kel")),
+    (
+        "wire_debug",
+        include_str!("../src/selfhost/kel/wire_debug.kel"),
+    ),
+    (
+        "wire_schema",
+        include_str!("../src/selfhost/kel/wire_schema.kel"),
+    ),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

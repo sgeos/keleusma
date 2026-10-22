@@ -49,20 +49,36 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo check --workspace --all-targets
 
+  # SHARDED BECAUSE ONE RUNNER EXCEEDED GITHUB'S SIX-HOUR LIMIT. On pull request
+  # 484, on 2026-10-21, this job and the self-host job below were cancelled at
+  # 6h0m. The limit applies to every job on a hosted runner and cannot be raised.
+  # Local debug runs summed 15.1 test-hours for the workspace and 19.4 for
+  # self-host, with the slowest single test at 2.65 hours. Hash partitioning into
+  # four shards put each shard's estimate at roughly three hours or less. Hash
+  # assignment depends only on a test's name, so adding a test does not move the
+  # others. Every shard must run. `tests/ci_shard_coverage.rs` checks that the
+  # matrix lists each shard exactly once, because the gate correspondence guard
+  # does not read `--partition` and would pass with a shard missing.
   test:
-    name: Test
+    name: Test (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       # nextest runs the workspace's two dozen test binaries in parallel; the
       # `ci` profile (.config/nextest.toml) retries to absorb the known
-      # temp-file-race flake. Doc-tests run separately (nextest skips them).
+      # temp-file-race flake. Doc-tests run separately (nextest skips them),
+      # once, on the first shard.
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
-      - run: cargo nextest run --profile ci --workspace
-      - run: cargo test --workspace --doc
+      - run: cargo nextest run --profile ci --workspace --partition hash:${{ matrix.shard }}/4
+      - if: matrix.shard == 1
+        run: cargo test --workspace --doc
 
   test-no-default-features:
     name: Test (no default features)
@@ -93,16 +109,22 @@ jobs:
     # self-hosted compile backend. NOT covered by the `selfhost-compiler`
     # job below, which builds the detached `compiler/` subproject — a
     # different thing with a confusingly similar name.
-    name: Test (self-host feature)
+    # Sharded for the reason recorded on the `test` job above.
+    name: Test (self-host feature, shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
-      - run: cargo nextest run --profile ci -p keleusma --features self-host
-      - run: cargo test -p keleusma --features self-host --doc
+      - run: cargo nextest run --profile ci -p keleusma --features self-host --partition hash:${{ matrix.shard }}/4
+      - if: matrix.shard == 1
+        run: cargo test -p keleusma --features self-host --doc
 
   test-wire:
     # `keleusma-wire` in both configurations. The reader is allocation-free
