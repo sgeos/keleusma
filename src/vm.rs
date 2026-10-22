@@ -1367,8 +1367,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             .expect("aux offsets do not match the installed image")
     }
 
-    /// Test-only accessor for the auxiliary-body slice.
-    #[cfg(test)]
+    /// Test-only accessor for the auxiliary-body slice. Gated like the only
+    /// test module that calls it, so a build without those features does not
+    /// carry it as dead code.
+    #[cfg(all(test, feature = "compile", feature = "verify"))]
     pub(crate) fn aux_body_slice_for_test(bytes: &[u8]) -> &[u8] {
         Self::aux_body_slice(bytes)
     }
