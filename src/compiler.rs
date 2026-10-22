@@ -5123,21 +5123,35 @@ fn data_indexed_chain<'a>(object: &'a Expr, last_index: &'a Expr) -> Option<Data
     }
 }
 
-/// Emit per-level bounds checks and stride arithmetic for an
-/// indexed data-segment access, leaving the flat offset on the
-/// operand stack. Returns the total slot count of the field
-/// and an error if the indexing depth does not match the
-/// field's type structure or if the field is not an array.
-fn emit_indexed_offset(
-    fc: &mut FuncCompiler,
+/// One array level of an indexed data-segment access.
+struct IndexLevel {
+    /// The level's length as a `BoundsCheck` operand. `None` for a
+    /// single-level access, whose length the twenty-four-bit indexed
+    /// operand carries instead and which may therefore exceed sixteen bits.
+    bound: Option<u16>,
+    /// Flat slots per element of this level.
+    stride: u32,
+}
+
+/// The validated level structure of an indexed data-segment access.
+struct IndexedShape {
+    levels: Vec<IndexLevel>,
+    /// Total slot count of the field, the indexed opcodes' length operand.
+    total: u32,
+}
+
+/// Validate that `depth` indices descend `field_type` to a scalar and
+/// return each level's bound and stride. Every error an indexed access can
+/// raise from its type is raised here, before any index is compiled.
+fn indexed_shape(
     field_type: &TypeExpr,
-    indices: &[&Expr],
+    depth: usize,
     span: Span,
-) -> Result<u32, CompileError> {
-    let single_level = indices.len() == 1;
+) -> Result<IndexedShape, CompileError> {
+    let single_level = depth == 1;
     let mut current_type = field_type.clone();
-    let mut emitted_first = false;
-    for idx_expr in indices {
+    let mut levels = Vec::with_capacity(depth);
+    for _ in 0..depth {
         let (elem_type, len) = match current_type {
             TypeExpr::Array(elem, len, _) => {
                 let len = len.as_lit().ok_or_else(|| CompileError {
@@ -5162,59 +5176,26 @@ fn emit_indexed_offset(
             });
         }
         let stride = slots_for_data_type(&elem_type);
-
-        compile_expr(fc, idx_expr)?;
-        // Skip the explicit `BoundsCheck` when there is exactly
-        // one index. The trailing `Op::GetDataIndexed` or
-        // `Op::SetDataIndexed` will perform the same check
-        // against the field's total length (a twenty-four-bit
-        // operand), which equals this level's length for a
-        // single-level access. A multi-level access emits a
-        // per-level `BoundsCheck`, whose operand stays sixteen
-        // bits, so a per-level dimension above 64 K is rejected.
-        if !single_level {
-            let len_u16 = u16::try_from(len).map_err(|_| CompileError {
+        // A single-level access needs no explicit `BoundsCheck`.
+        // The trailing `Op::GetDataIndexed` or `Op::SetDataIndexed`
+        // performs the same check against the field's total length
+        // (a twenty-four-bit operand), which equals this level's
+        // length. A multi-level access probes each level with a
+        // `BoundsCheck`, whose operand stays sixteen bits, so a
+        // per-level dimension above 64 K is rejected.
+        let bound = if single_level {
+            None
+        } else {
+            Some(u16::try_from(len).map_err(|_| CompileError {
                 message: format!(
                     "per-level indexed dimension {} exceeds the 16-bit BoundsCheck bound; \
                      only the outermost (single-level) length uses the wider indexed operand",
                     len
                 ),
                 span,
-            })?;
-            fc.emit(Op::BoundsCheck(len_u16));
-            fc.record_operator_site(&idx_expr.span());
-            let invalid = fc.add_constant(Value::Int(1));
-            fc.emit(Op::Const(invalid));
-            fc.emit(Op::CmpEq);
-            let valid = fc.emit_jump(Op::If(0));
-            fc.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
-            fc.record_operator_site(&idx_expr.span());
-            fc.patch_jump(valid);
-            fc.emit(Op::EndIf);
-            // Retain the original index for the following stride arithmetic.
-            fc.emit(Op::PopN(4));
-        }
-        if stride != 1 {
-            let stride_const = fc.add_constant(Value::Int(stride as i64));
-            fc.emit(Op::Const(stride_const));
-            // Index-stride product is `Int * Int`. After
-            // Consolidation B narrowed `Op::Mul` away from
-            // `Int` operands, the compiler synthesizes the
-            // wrapping product via `CheckedMul` followed by
-            // `PopN(2)` so the overflow flag and high half are
-            // discarded. `0` fraction bits selects integer multiply.
-            fc.emit(Op::CheckedMul(0));
-            fc.emit(Op::PopN(2));
-        }
-        if emitted_first {
-            // Flat offset accumulation is `Int + Int`.
-            // Consolidation B routes the wrapping sum through
-            // `CheckedAdd; PopN(2)`.
-            fc.emit(Op::CheckedAdd);
-            fc.emit(Op::PopN(2));
-        } else {
-            emitted_first = true;
-        }
+            })?)
+        };
+        levels.push(IndexLevel { bound, stride });
         current_type = elem_type;
     }
     if matches!(current_type, TypeExpr::Array(_, _, _)) {
@@ -5236,7 +5217,63 @@ fn emit_indexed_offset(
             span,
         });
     }
-    Ok(total)
+    Ok(IndexedShape { levels, total })
+}
+
+/// Push `stride * index` for the index on top of the operand stack.
+fn emit_index_stride(fc: &mut FuncCompiler, stride: u32) {
+    if stride != 1 {
+        let stride_const = fc.add_constant(Value::Int(stride as i64));
+        fc.emit(Op::Const(stride_const));
+        // Index-stride product is `Int * Int`. After
+        // Consolidation B narrowed `Op::Mul` away from
+        // `Int` operands, the compiler synthesizes the
+        // wrapping product via `CheckedMul` followed by
+        // `PopN(2)` so the overflow flag and high half are
+        // discarded. `0` fraction bits selects integer multiply.
+        fc.emit(Op::CheckedMul(0));
+        fc.emit(Op::PopN(2));
+    }
+}
+
+/// Emit per-level bounds checks and stride arithmetic for an
+/// indexed data-segment access, leaving the flat offset on the
+/// operand stack. Returns the total slot count of the field
+/// and an error if the indexing depth does not match the
+/// field's type structure or if the field is not an array.
+fn emit_indexed_offset(
+    fc: &mut FuncCompiler,
+    field_type: &TypeExpr,
+    indices: &[&Expr],
+    span: Span,
+) -> Result<u32, CompileError> {
+    let shape = indexed_shape(field_type, indices.len(), span)?;
+    for (depth, (level, idx_expr)) in shape.levels.iter().zip(indices).enumerate() {
+        compile_expr(fc, idx_expr)?;
+        if let Some(bound) = level.bound {
+            fc.emit(Op::BoundsCheck(bound));
+            fc.record_operator_site(&idx_expr.span());
+            let invalid = fc.add_constant(Value::Int(1));
+            fc.emit(Op::Const(invalid));
+            fc.emit(Op::CmpEq);
+            let valid = fc.emit_jump(Op::If(0));
+            fc.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
+            fc.record_operator_site(&idx_expr.span());
+            fc.patch_jump(valid);
+            fc.emit(Op::EndIf);
+            // Retain the original index for the following stride arithmetic.
+            fc.emit(Op::PopN(4));
+        }
+        emit_index_stride(fc, level.stride);
+        if depth > 0 {
+            // Flat offset accumulation is `Int + Int`.
+            // Consolidation B routes the wrapping sum through
+            // `CheckedAdd; PopN(2)`.
+            fc.emit(Op::CheckedAdd);
+            fc.emit(Op::PopN(2));
+        }
+    }
+    Ok(shape.total)
 }
 
 /// Emit a `state.field[i][j]...` read by computing the flat
@@ -5352,6 +5389,138 @@ fn emit_data_write_probe(
     chain: &DataIndexedChain<'_>,
     span: Span,
 ) -> Result<DataWriteProbe, CompileError> {
+    let (base, field_type) = data_write_target(fc, chain, span)?;
+    let total = emit_indexed_offset(fc, &field_type, &chain.indices, span)?;
+    let mut element = field_type;
+    for _ in &chain.indices {
+        if let TypeExpr::Array(inner, _, _) = element {
+            element = *inner;
+        }
+    }
+    let read_old = match u16::try_from(total) {
+        Ok(bound) => {
+            fc.emit(Op::BoundsCheck(bound));
+            false
+        }
+        Err(_) => {
+            fc.emit_data_fallback(&element);
+            fc.emit(Op::GetDataIndexed(base, total));
+            true
+        }
+    };
+    fc.record_operator_site(&span);
+    Ok(DataWriteProbe {
+        base,
+        total,
+        element,
+        read_old,
+    })
+}
+
+/// Block-relative positions of a handled write's seven-slot outcome block:
+/// the probe's flag, the old element, the four bound limbs, and the new value.
+const STORE_FLAG: u16 = 0;
+const STORE_OLD: u16 = 1;
+const STORE_LIMB0: u16 = 2;
+const STORE_NEW: u16 = 6;
+
+/// Evaluate and probe each index of a handled multi-index write in turn.
+///
+/// The operator ruled on 2026-10-21 that a failure at any level of a handled
+/// write reaches `invalid_index`. Each level is probed against its own
+/// length, because the flat offset alone can lie in range while a level does
+/// not, as `m[0][5]` does in a `[[Word; 3]; 3]`. A failing level stops the
+/// evaluation, so neither the later indices nor the value are evaluated. It
+/// leaves its own index in `offset` and its own bound limbs in the outcome
+/// block, which is the payload the bare form's per-level `Trap(8)` carries,
+/// so `invalid_index(j)` binds the index that failed. On success `offset`
+/// holds the flat offset and the flag is zero.
+///
+/// Every level after the first runs under a guard on the flag. The emitted
+/// control flow is therefore at most two `If` blocks deep whatever the
+/// number of levels, and nothing is left on the operand stack. Every flag,
+/// limb and old-value access names a block slot that is not yet declared and
+/// is recorded in `pending`. The probe never reads the element, because every
+/// level's bound fits the sixteen-bit `BoundsCheck` operand.
+fn emit_data_write_levels(
+    fc: &mut FuncCompiler,
+    chain: &DataIndexedChain<'_>,
+    offset: u16,
+    level_slot: u16,
+    pending: &mut Vec<(usize, u16)>,
+    span: Span,
+) -> Result<DataWriteProbe, CompileError> {
+    let (base, field_type) = data_write_target(fc, chain, span)?;
+    let shape = indexed_shape(&field_type, chain.indices.len(), span)?;
+    let zero = fc.add_constant(Value::Int(0));
+    for (depth, (level, index)) in shape.levels.iter().zip(&chain.indices).enumerate() {
+        let bound = level.bound.ok_or_else(|| CompileError {
+            message: String::from("internal error: a multi-level write level has no bound"),
+            span,
+        })?;
+        let guard = if depth > 0 {
+            pending.push((fc.emit(Op::GetLocal(0)), STORE_FLAG));
+            fc.emit(Op::Const(zero));
+            fc.emit(Op::CmpEq);
+            Some(fc.emit_jump(Op::If(0)))
+        } else {
+            None
+        };
+        compile_expr(fc, index)?;
+        fc.emit(Op::BoundsCheck(bound));
+        fc.record_operator_site(&index.span());
+        pending.push((fc.emit(Op::SetLocal(0)), STORE_FLAG));
+        for i in (0..4).rev() {
+            pending.push((fc.emit(Op::SetLocal(0)), STORE_LIMB0 + i));
+        }
+        fc.emit(Op::SetLocal(level_slot));
+        // In range: accumulate the flat offset. Out of range: the failing
+        // index becomes the payload.
+        pending.push((fc.emit(Op::GetLocal(0)), STORE_FLAG));
+        fc.emit(Op::Const(zero));
+        fc.emit(Op::CmpEq);
+        let in_range = fc.emit_jump(Op::If(0));
+        if depth > 0 {
+            fc.emit(Op::GetLocal(offset));
+        }
+        fc.emit(Op::GetLocal(level_slot));
+        emit_index_stride(fc, level.stride);
+        if depth > 0 {
+            fc.emit(Op::CheckedAdd);
+            fc.emit(Op::PopN(2));
+        }
+        fc.emit(Op::SetLocal(offset));
+        let out_of_range = fc.emit_jump(Op::Else(0));
+        fc.patch_jump(in_range);
+        fc.emit(Op::GetLocal(level_slot));
+        fc.emit(Op::SetLocal(offset));
+        fc.patch_jump(out_of_range);
+        fc.emit(Op::EndIf);
+        if let Some(guard) = guard {
+            fc.patch_jump(guard);
+            fc.emit(Op::EndIf);
+        }
+    }
+    let mut element = field_type;
+    for _ in &chain.indices {
+        if let TypeExpr::Array(inner, _, _) = element {
+            element = *inner;
+        }
+    }
+    Ok(DataWriteProbe {
+        base,
+        total: shape.total,
+        element,
+        read_old: false,
+    })
+}
+
+/// Resolve the base slot and declared type of a writable data field.
+fn data_write_target(
+    fc: &FuncCompiler,
+    chain: &DataIndexedChain<'_>,
+    span: Span,
+) -> Result<(u32, TypeExpr), CompileError> {
     if !fc.is_data_block(chain.data_name) {
         return Err(CompileError {
             message: format!("unknown data block: {}", chain.data_name),
@@ -5386,31 +5555,7 @@ fn emit_data_write_probe(
             ),
             span,
         })?;
-    let total = emit_indexed_offset(fc, &field_type, &chain.indices, span)?;
-    let mut element = field_type;
-    for _ in &chain.indices {
-        if let TypeExpr::Array(inner, _, _) = element {
-            element = *inner;
-        }
-    }
-    let read_old = match u16::try_from(total) {
-        Ok(bound) => {
-            fc.emit(Op::BoundsCheck(bound));
-            false
-        }
-        Err(_) => {
-            fc.emit_data_fallback(&element);
-            fc.emit(Op::GetDataIndexed(base, total));
-            true
-        }
-    };
-    fc.record_operator_site(&span);
-    Ok(DataWriteProbe {
-        base,
-        total,
-        element,
-        read_old,
-    })
+    Ok((base, field_type))
 }
 
 /// Emit a bare `state.field[i][j]... = value;` write.
@@ -5481,12 +5626,6 @@ fn compile_data_index_store(
     span: Span,
 ) -> Result<(), CompileError> {
     use crate::ast::CheckedArmKind;
-    if indices.len() != 1 {
-        return Err(CompileError {
-            message: String::from("a handled indexed write takes exactly one index"),
-            span,
-        });
-    }
     let binds_old = arms.iter().any(|arm| {
         matches!(
             &arm.kind,
@@ -5505,30 +5644,38 @@ fn compile_data_index_store(
         field,
         indices: indices.iter().collect(),
     };
-    let probe = emit_data_write_probe(fc, &chain, span)?;
     let suffix = span.start;
-    let offset = fc.declare_local(&alloc::format!("__store_i_{}", suffix));
-
-    // Block-relative positions of the seven-slot outcome block.
-    const FLAG: u16 = 0;
-    const OLD: u16 = 1;
-    const LIMB0: u16 = 2;
-    const NEW: u16 = 6;
     // (op index, block-relative slot) for every instruction that names a
     // block slot before the block is declared.
     let mut pending: Vec<(usize, u16)> = Vec::new();
-    pending.push((fc.emit(Op::SetLocal(0)), FLAG));
-    for i in (0..4).rev() {
-        pending.push((fc.emit(Op::SetLocal(0)), LIMB0 + i));
-    }
-    fc.emit(Op::SetLocal(offset));
-    if probe.read_old {
-        if binds_old {
-            pending.push((fc.emit(Op::SetLocal(0)), OLD));
-        } else {
-            fc.emit(Op::PopN(1));
+    let (probe, offset) = if indices.len() == 1 {
+        let probe = emit_data_write_probe(fc, &chain, span)?;
+        let offset = fc.declare_local(&alloc::format!("__store_i_{}", suffix));
+        pending.push((fc.emit(Op::SetLocal(0)), STORE_FLAG));
+        for i in (0..4).rev() {
+            pending.push((fc.emit(Op::SetLocal(0)), STORE_LIMB0 + i));
         }
-    }
+        fc.emit(Op::SetLocal(offset));
+        if probe.read_old {
+            if binds_old {
+                pending.push((fc.emit(Op::SetLocal(0)), STORE_OLD));
+            } else {
+                fc.emit(Op::PopN(1));
+            }
+        }
+        (probe, offset)
+    } else {
+        // The self-hosted compiler does not mirror multi-index data access,
+        // so this branch's slot order is not constrained by its parser.
+        let offset = fc.declare_local(&alloc::format!("__store_i_{}", suffix));
+        let level = fc.declare_local(&alloc::format!("__store_level_{}", suffix));
+        let probe = emit_data_write_levels(fc, &chain, offset, level, &mut pending, span)?;
+        (probe, offset)
+    };
+    const FLAG: u16 = STORE_FLAG;
+    const OLD: u16 = STORE_OLD;
+    const LIMB0: u16 = STORE_LIMB0;
+    const NEW: u16 = STORE_NEW;
 
     // Success branch: read the old element when needed, then evaluate and
     // write the value. The value is never evaluated on an invalid index.

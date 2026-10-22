@@ -6,6 +6,33 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-22 Handled multi-index writes in the reference compiler
+
+Branch feat/v02-multi-index-write-handlers, cut from v0.2.3 at cc48dc61 after
+pull requests 485, 486 and 487 merged. The 2026-10-21 ruling deferred this
+increment with the instruction that every level's failure reach
+`invalid_index`.
+
+- The type checker and the compiler admit a handled write with any number of
+  indices. Each level is probed against its own length in source order. The
+  first failing level stops evaluation and binds its own index, which is the
+  payload of the bare form's per-level `Trap(8)`.
+- `indexed_shape` now validates the level structure for every indexed data
+  access before any index is compiled, and `emit_indexed_offset` uses it. Bare
+  reads and writes are meant to emit the same instructions as before. The
+  self-hosted byte-identity corpus checks that for the single-index forms only.
+- The self-hosted compiler refuses the construct, as it refuses every
+  multi-index data access. The boundary table is unchanged.
+- tests/indexed_write_handlers.rs adds seven tests, and tests/trap_analysis.rs
+  an agreement test over three multi-index modules. The former rejection row
+  for a multi-index handled write now pins an index depth that stops at an array.
+- GRAMMAR.md and the plan document's "Multi-index increment" section describe
+  the semantics and the lowering.
+
+Also this session. Pull request 488 merged v0.2.3 and resolved the roadmap
+count to 114 cases, 109 SOk. The affected self-host test binaries passed 450 of
+450 on the merged tree in release.
+
 ## 2026-10-21 Indexed-write handlers in the self-hosted compiler
 
 Same branch. The self-hosted compiler now mirrors the index-first bare write and
