@@ -52,8 +52,10 @@ and rejected by the more precise reference. The shipping command reports this
 as disagreement and cannot report successful admission. Runtime guards remain
 required. Independent review remains a prerequisite for reference retirement.
 
-The bounded profile admits 1024 chunks, 1536 opcodes per chunk, 256 local and
+The bounded profile admitted 1024 chunks, 1536 opcodes per chunk, 256 local and
 operand slots, 256 enum layouts and 12288 transported call shapes per chunk.
+Those are the figures of 2026-10-13. Commit 7a058917 raised the opcode limit per chunk to
+2048 on 2026-10-15, which is the value of `VERIFY_OP_CAP` in src/selfhost_host.rs.
 Exhaustion is unavailable analysis. The existing 32-level depth limit is preserved.
 The call-shape control accepts exactly 12288 entries and reports capacity at 12416.
 Dead calls isolate that transport boundary from stack and opcode capacities.
@@ -124,6 +126,15 @@ executes 1357. These counts describe this increment.
 Memory-interpreter, dependency-advisory and unrelated platform checks were not repeated.
 No unsafe arena code, dependency manifest, lockfile or platform implementation changed.
 Remote continuous integration, merging and publication are not claimed.
+
+### Remote continuous integration, 2026-10-21
+
+The commits from 89fc6aac to 36ebe64d, which carry this audit's evidence, first ran in
+remote continuous integration through pull request 484 into v0.2.3. CI workflow run
+39704059671 passed every job at 89aaba69, which is 36ebe64d plus the audit follow-up
+commits. The pull request merged as 3e4f4984. The run tested the tree after the audit
+follow-ups, not 36ebe64d itself, and the follow-ups changed wire.kel, three chunk-count
+pins, the book catalogue and the CI job layout. See docs/process/TASKLOG.md.
 
 ## Pilot record
 

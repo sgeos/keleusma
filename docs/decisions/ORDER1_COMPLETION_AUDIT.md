@@ -74,7 +74,9 @@ bytes inside the unchanged 65,536-byte window. Tests accept the exact bound, inc
 forest at that bound, and reject the next node. Raw node output still rejects beyond 1,365.
 
 The parser has 585 fields against its 640-field limit and 389,535 source bytes against the
-393,216-byte lexer source limit. The legacy input census measures 983 names and 28,174 bytes
+393,216-byte lexer source limit. These figures are historical and describe 2026-10-13. Commit
+68bc27b1 raised the lexer source limit to 524,288 bytes on 2026-10-15, which is the value of
+`LEX_SOURCE_CAP` in src/selfhost_host.rs. The legacy input census measures 983 names and 28,174 bytes
 against unchanged limits of 1,024 and 49,152. The code generator has 92 functions and the wire
 stage has 562. The old 90-record batch therefore refuses the current code generator, while
 the streaming path remains required to accept every stage. No capacity assertion was removed.
@@ -112,6 +114,15 @@ Memory-interpreter, dependency-advisory, book and unrelated platform checks were
 in this increment. The corresponding earlier receipts remain recorded in TASKLOG.md. No
 unsafe arena code, dependency manifest or lockfile, book source or platform code changed.
 Remote continuous integration, merging and publication are not claimed or authorized here.
+
+### Remote continuous integration, 2026-10-21
+
+The commits from 89fc6aac to 36ebe64d, which carry this audit's evidence, first ran in
+remote continuous integration through pull request 484 into v0.2.3. CI workflow run
+39704059671 passed every job at 89aaba69, which is 36ebe64d plus the audit follow-up
+commits. The pull request merged as 3e4f4984. The run tested the tree after the audit
+follow-ups, not 36ebe64d itself, and the follow-ups changed wire.kel, three chunk-count
+pins, the book catalogue and the CI job layout. See docs/process/TASKLOG.md.
 
 ## Pilot record
 

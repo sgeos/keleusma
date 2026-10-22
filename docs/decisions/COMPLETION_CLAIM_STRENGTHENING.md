@@ -91,6 +91,16 @@ evidence.
     Judge each as a dated ledger entry or a live claim. The present-tense instance
     in tests/claimed_counts.rs was corrected on 2026-10-20.
 
+## Addressed on 2026-10-21
+
+- Item 1. Both audits now record CI workflow run 39704059671, which passed every
+  job at 89aaba69 through pull request 484. That run tested the tree after the
+  audit follow-ups rather than 36ebe64d itself, as each audit says.
+- Item 6. The Order 1 audit marks its lexer limit as historical and names the
+  commit that raised it.
+- Item 10. The Order 2 audit marks its opcode limit as historical and names the
+  commit that raised it.
+
 ## Already addressed on 2026-10-20
 
 The unchecked operand access in proven execution was replaced by retained
