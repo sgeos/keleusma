@@ -3,35 +3,58 @@
 ## Indexed-write handlers, 2026-10-21
 
 Branch feat/v02-indexed-write-handlers, cut from feat/v02-order3-audit-followup
-at 89aaba69. Not pushed to a pull request. Red by design until the self-hosted
-mirror lands.
+at 89aaba69, which merged into v0.2.3 as 3e4f4984 through pull request 484.
 
-The Rust reference compiler implements the handled indexed write and the
-index-first order for every indexed write, per the operator rulings recorded in
-docs/decisions/ORDER3_HANDLER_SURFACE_PLAN.md. That file also records the exact
-instruction sequences and the nine-part plan for the self-hosted mirror.
+Both compilers now implement the index-first bare write and the single-index
+handled write, per the operator rulings recorded in
+docs/decisions/ORDER3_HANDLER_SURFACE_PLAN.md. The self-hosted compiler matches
+the reference byte for byte for Word and Byte elements and refuses other
+element types. The plan document's "Self-hosted mirror" section records the
+mechanism, the capacity measurements and the residue.
 
-Verification of this increment, in the worktree at
-../keleusma-worktrees/v02-indexed-write-handlers.
+Verification. A frozen copy of the tree ran the five feature sets in release.
+The tree then changed only in the roadmap's boundary count and in this file.
 
-| Check | Result |
+| Feature set | Result |
 |---|---|
-| tests/indexed_write_handlers.rs, nine reference tests | 9 passed after the final edit |
-| Quick tier, workspace, before the slot-order edit | 2577 of 2581 passed |
-| Its four failures | all compare against the self-hosted compiler, which is not yet mirrored |
+| `--features self-host` | 3185 of 3186 passed |
+| `--workspace` | 3444 of 3445 passed |
+| `--no-default-features` | 331 of 331 passed |
+| `--features signatures` | 2447 of 2447 passed |
+| `--features signatures,shell` | 2464 of 2464 passed |
 
-The quick tier ran before the last edit to the handled lowering, which
-renumbered its locals. That edit touches only the handled form, which no test
-outside tests/indexed_write_handlers.rs uses, and that file was rerun after it.
-The self-host tier was not run, because its failure is known in advance.
+The one failure in both self-host and workspace was the guard requiring the
+roadmap to state the boundary table's counts. The three new `data/` cases moved
+them to 100 SOk over 105 cases. The roadmap now says so, and the guard was
+rerun and passes. Clippy for the workspace and for self-host printed Checking
+lines and is clean, and fmt is clean. The stages' self-compilation passes in
+release with the index-first writes.
 
-Concerns. The stages' own self-compilation changes with the bare reordering,
-because the stages contain many indexed writes. Whether every stage still fits
-its per-chunk instruction and local capacities is unmeasured. The shipping
-`--compiler self-hosted` path fails loudly on any program with an indexed write
-until the mirror lands, which is a regression on this branch only.
+Also opened this session, on separate branches from v0.2.3.
 
-Next. The self-hosted mirror, parts one to nine of the plan.
+- Pull request 485 cleans the library under no-default-features clippy.
+- Pull request 486 derives the trap classifier's per-tag expectation from the
+  Rust analysis, completion-claim item 13.
+- Branch fix/v02-cast-byte-tracking fixes the cast divergence described in the
+  plan document. Seven boundary cases diverged without it.
+- Commit 7e37e81a on v0.2.3 records the CI receipt in both completion audits.
+
+Concerns.
+
+- Release is not debug. The local matrix ran in release for time. CI runs debug,
+  where overflow checks and debug assertions are active, so the pull request's
+  CI run is the debug evidence.
+- The parse stage holds 1023 of the type stage's 1024 names. Any further parse
+  feature must fold into existing functions, as this one did, or the name
+  channel must be staged.
+- `checked_open` now decides between a handled write and a handled read by the
+  operator depth recorded at `=`. That rule is exercised by the parenthesized
+  read case and the nested-block case. A deeper nesting shape that this does
+  not anticipate would mis-attach the arms, and the cross-check would then
+  refuse the program rather than emit a wrong module.
+
+Next. Handled multi-index writes, then native-call handlers and handler-required
+composite reads, then FixedDiv totalization.
 
 ## Opus 5.5 audit of the Codex V0.2.X work, 2026-10-20
 
