@@ -450,6 +450,15 @@ fn certified_local_widths(chunk: &Chunk) -> BTreeMap<usize, Width> {
                 *slot = None;
             }
         }
+        // **A `Trap` has no successor, so its pops reach no later write.** This
+        // walk is straight-line. Absorption 82 gave `Trap(IndexOutOfBounds)` five
+        // true pops, and charging them to the fallthrough edge attributed every
+        // later `SetLocal` to the wrong producer, which could certify a width the
+        // local never holds. Upstream's own memory walk treats a trap as a path
+        // exit for the same reason.
+        if matches!(op, Op::Trap(_)) {
+            continue;
+        }
         let (required, delta) = keleusma::verify::op_depth_effect(op, chunk);
         for _ in 0..required.max(0) {
             stack.pop();
@@ -1182,20 +1191,82 @@ impl<'ctx> Lower<'ctx> {
         (low, high, flag)
     }
 
-    /// Return a divisor that makes a 64-bit `sdiv`/`srem` defined, given that
-    /// the caller has already excluded a zero divisor.
+    /// Push the four bound limbs and the flag that end every bounds outcome.
     ///
-    /// The only remaining undefined case is `i64::MIN` divided by `-1`, whose
-    /// true quotient is not representable. Substituting `1` for the divisor in
-    /// exactly that case yields the VM's answer for both opcodes without a
-    /// corrective step afterwards; see the call site for why that is exact
-    /// rather than approximate.
-    fn guard_min_div_neg_one(
+    /// Read from `src/vm.rs`: each limb is one little-endian byte of the
+    /// unsigned 32-bit bound, SIGN-extended from eight bits into a Word, and the
+    /// flag is `1` for an out-of-range index, otherwise `0`. The
+    /// `Trap(IndexOutOfBounds)` arm reassembles the bound from these limbs, and
+    /// `PopN` discards them on the in-range path, so this backend reproduces
+    /// them exactly rather than approximately.
+    fn push_bound_outcome(&mut self, bound: IntValue<'ctx>, invalid: IntValue<'ctx>) {
+        let i64t = self.i64t;
+        let i8t = i64t.get_context().i8_type();
+        for limb in 0..4u64 {
+            let shifted = self
+                .b
+                .build_right_shift(bound, i64t.const_int(8 * limb, false), false, "bound_shift")
+                .unwrap();
+            let byte = self
+                .b
+                .build_int_truncate(shifted, i8t, "bound_byte")
+                .unwrap();
+            let word = self.b.build_int_s_extend(byte, i64t, "bound_limb").unwrap();
+            self.push_w(word, Width::Scalar(8));
+        }
+        let flag = self
+            .b
+            .build_int_z_extend(invalid, i64t, "bound_flag")
+            .unwrap();
+        self.push_w(flag, Width::Scalar(8));
+    }
+
+    /// The integer and Byte division triple shared by `CheckedDiv(0)`,
+    /// `CheckedMod` and, since absorption 82, bare `Div` and `Mod`.
+    ///
+    /// The checked forms do NOT fault on a zero divisor. They reify it as flag
+    /// 3 with the numerator in the low slot, so a handled `zero_divisor(n)` arm
+    /// can bind it. Only an UNHANDLED zero divisor traps, and that trap is
+    /// emitted by the compiler as an ordinary `Op::Trap` in the flag dispatch.
+    ///
+    /// **SIXTY-FOUR BITS, NOT 128.** The reference divides in 128 bits, and
+    /// this lowering once did too, which made every Word `/` call the compiler
+    /// runtime's `__divti3` once upstream routed `/` here in absorption 82. Only
+    /// two inputs need the wide domain, and both are fixed points: a zero
+    /// divisor, whose triple is `(numerator, 0, 3)`, and `i64::MIN / -1`, whose
+    /// wide quotient 2^63 gives `(i64::MIN, 0, 1)` and whose remainder gives
+    /// `(0, 0, 0)`. Substituting a divisor of one for both yields `i64::MIN`
+    /// and `0` respectively, which are already those low slots. Every other
+    /// quotient and remainder fits, so the high slot is its sign extension and
+    /// the flag is zero, as the wide classification would compute.
+    ///
+    /// Branch-free, so the per-block operand-depth bookkeeping is untouched.
+    ///
+    /// **A matched Byte pair keeps its width.** The reference returns
+    /// `Byte(x / y)`, `Byte(0)` and a Word flag. Upstream moved Byte `/` and `%`
+    /// onto these opcodes in absorption 82, and labelling the quotient as a
+    /// word would refuse every Byte operation that consumes it. The values
+    /// agree with the integer arm because both operands lie in `0..=255`.
+    fn lower_checked_division(
         &mut self,
-        lhs: IntValue<'ctx>,
-        rhs: IntValue<'ctx>,
-        i64t: IntType<'ctx>,
-    ) -> IntValue<'ctx> {
+        ctx: &'ctx Context,
+        func: FunctionValue<'ctx>,
+        trap_bb: BasicBlock<'ctx>,
+        opts: LowerOptions,
+        divide: bool,
+    ) {
+        let i64t = self.i64t;
+        let byte_operands =
+            self.width_at(0) == Width::Scalar(1) && self.width_at(1) == Width::Scalar(1);
+        let rhs = self.pop();
+        let lhs = self.pop();
+        let select = |b: &Builder<'ctx>, c, yes: IntValue<'ctx>, no: IntValue<'ctx>, name| {
+            b.build_select(c, yes, no, name).unwrap().into_int_value()
+        };
+        let iszero = self
+            .b
+            .build_int_compare(IntPredicate::EQ, rhs, i64t.const_zero(), "divzero")
+            .unwrap();
         let is_min = self
             .b
             .build_int_compare(
@@ -1207,18 +1278,49 @@ impl<'ctx> Lower<'ctx> {
             .unwrap();
         let is_neg1 = self
             .b
-            .build_int_compare(
-                IntPredicate::EQ,
-                rhs,
-                i64t.const_int(-1i64 as u64, true),
-                "isneg1",
-            )
+            .build_int_compare(IntPredicate::EQ, rhs, i64t.const_all_ones(), "isneg1")
             .unwrap();
-        let both = self.b.build_and(is_min, is_neg1, "minneg1").unwrap();
-        self.b
-            .build_select(both, i64t.const_int(1, false), rhs, "safediv")
-            .unwrap()
-            .into_int_value()
+        let wraps = self.b.build_and(is_min, is_neg1, "minneg1").unwrap();
+        let unsafe_divisor = self.b.build_or(iszero, wraps, "unsafediv").unwrap();
+        let divisor = select(
+            &self.b,
+            unsafe_divisor,
+            i64t.const_int(1, false),
+            rhs,
+            "safediv",
+        );
+        let value = if divide {
+            self.b.build_int_signed_div(lhs, divisor, "q64").unwrap()
+        } else {
+            self.b.build_int_signed_rem(lhs, divisor, "r64").unwrap()
+        };
+        let sign = self
+            .b
+            .build_right_shift(value, i64t.const_int(63, false), true, "qsign")
+            .unwrap();
+        let (high, flag) = if divide {
+            (
+                select(&self.b, wraps, i64t.const_zero(), sign, "qhigh"),
+                select(
+                    &self.b,
+                    wraps,
+                    i64t.const_int(1, false),
+                    i64t.const_zero(),
+                    "qflag",
+                ),
+            )
+        } else {
+            (sign, i64t.const_zero())
+        };
+        let low = select(&self.b, iszero, lhs, value, "zdlow");
+        let high = select(&self.b, iszero, i64t.const_zero(), high, "zdhigh");
+        let flag = select(&self.b, iszero, i64t.const_int(3, false), flag, "zdflag");
+        self.push_triple(ctx, func, trap_bb, opts, (low, high, flag));
+        if byte_operands {
+            let top = self.depth;
+            self.widths[top - 3] = Width::Scalar(1);
+            self.widths[top - 2] = Width::Scalar(1);
+        }
     }
 
     /// Apply the overflow policy and push a `(low, high, flag)` triple.
@@ -3472,6 +3574,27 @@ fn guard_array_index<'ctx>(
     elem_bytes: u64,
     op: &str,
 ) -> Result<(), LowerError> {
+    let count = array_element_count(st, i64t, elem_bytes, op)?;
+    let index = st.peek();
+    let cont = ctx.append_basic_block(func, "idxinbounds");
+    let bad =
+        st.b.build_int_compare(IntPredicate::UGE, index, count, "idxoob")
+            .unwrap();
+    st.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
+    st.b.position_at_end(cont);
+    Ok(())
+}
+
+/// The element count of the array operand one beneath the index, as a Word.
+///
+/// Separate from [`guard_array_index`] since absorption 82, when flat Word and
+/// Byte reads became total and stopped trapping on the count they still need.
+fn array_element_count<'ctx>(
+    st: &mut Lower<'ctx>,
+    i64t: inkwell::types::IntType<'ctx>,
+    elem_bytes: u64,
+    op: &str,
+) -> Result<IntValue<'ctx>, LowerError> {
     // Stack shape at an index site is `[.., array, index]`, so the array is one
     // deeper than the top.
     if elem_bytes == 0 {
@@ -3508,14 +3631,7 @@ fn guard_array_index<'ctx>(
             ));
         }
     };
-    let index = st.peek();
-    let cont = ctx.append_basic_block(func, "idxinbounds");
-    let bad =
-        st.b.build_int_compare(IntPredicate::UGE, index, count, "idxoob")
-            .unwrap();
-    st.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
-    st.b.position_at_end(cont);
-    Ok(())
+    Ok(count)
 }
 
 fn lower_chunk_body<'ctx>(
@@ -4828,9 +4944,16 @@ fn lower_chunk_body<'ctx>(
                     st.local_kinds[idx] = k;
                 }
             }
-            Op::PopN(n) => {
-                st.depth -= *n as usize;
-            }
+            // **Recorded, not panicked**, for the reason `stack_underflow`
+            // states. Absorption 82 met this as 114 panics when the upstream
+            // outcome suffixes outgrew the pushes this backend still made.
+            Op::PopN(n) => match st.depth.checked_sub(*n as usize) {
+                Some(depth) => st.depth = depth,
+                None => {
+                    st.stack_underflow = true;
+                    st.depth = 0;
+                }
+            },
             // The integer arithmetic surface. `Op::Add`, `Op::Sub`, `Op::Mul`
             // and `Op::Neg` are NOT part of it: consolidation B narrowed those
             // four away from `Int` operands, so the compiler emits
@@ -4861,10 +4984,8 @@ fn lower_chunk_body<'ctx>(
                 let tags = st.input_tags[base..st.depth].to_vec();
                 let mut values: Vec<_> = (0..count).map(|_| st.pop()).collect();
                 values.reverse();
-                let plain = matches!(
-                    op,
-                    Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Mod | Op::Neg
-                );
+                // `Div` and `Mod` push the checked triple since absorption 82.
+                let plain = matches!(op, Op::Add | Op::Sub | Op::Mul | Op::Neg);
                 if plain {
                     let low = coroutine::arithmetic::plain(
                         &st.b,
@@ -5048,78 +5169,63 @@ fn lower_chunk_body<'ctx>(
                 let wide = st.b.build_int_neg(a, "n128").unwrap();
                 st.push_checked_triple(ctx, func, trap_bb, opts, wide);
             }
-            // The division family. Two undefined behaviours in LLVM have to be
-            // excluded before an `sdiv` or `srem` is emitted at all: a zero
-            // divisor, and `i64::MIN / -1`. The VM treats them DIFFERENTLY from
-            // each other and differently between the checked and unchecked
-            // forms, so each is handled on the VM's terms rather than by one
-            // blanket trap.
+            // **THE BARE DIVISION FAMILY IS TOTAL SINCE ABSORPTION 82.**
             //
-            // | | zero divisor | `i64::MIN` by `-1` |
-            // |---|---|---|
-            // | `Div` | `VmError::DivisionByZero` | `i64::MIN`, no fault |
-            // | `Mod` | `VmError::DivisionByZero` | `0`, no fault |
-            // | `CheckedDiv(0)` | flag `3`, numerator in low | flag `1`, low `i64::MIN` |
-            // | `CheckedMod` | flag `3`, numerator in low | flag `0`, low `0` |
+            // Upstream gave `Op::Div` and `Op::Mod` the checked contract: they
+            // push `low, high, flag` and never fault. Word and Byte source
+            // division now compiles to `CheckedDiv(0)` and `CheckedMod`, so a
+            // float operand is the only shape the compiler emits here, as
+            // `Div; PopN(2)`. Read from `src/vm.rs`:
             //
-            // Read out of `src/vm.rs` and then CONFIRMED BY EXECUTION. The
-            // inventory recorded that `i64::MIN / -1` traps like a zero divisor.
-            // It does not; it wraps.
+            // | operands | low | high | flag |
+            // |---|---|---|---|
+            // | Word or Byte, zero divisor | numerator | zero | `3` |
+            // | Word or Byte, otherwise | as `CheckedDiv(0)` / `CheckedMod` | | |
+            // | Float | `fdiv` / `frem` | `0.0` | `float_checked_flag` |
+            //
+            // The Word and Byte rows share the checked lowering below, so
+            // `i64::MIN / -1` is flag `1` with low `i64::MIN`, exactly as there.
+            //
+            // **A MATCHED FIXED PAIR IS LOWERED SINCE ABSORPTION 82**, which
+            // answered report 4 from the runtime side. The reference's Fixed
+            // arms divide the raw scaled bits with no fraction shift, wrap the
+            // low slot, report flag 1 only for `i64::MIN / -1`, and keep the
+            // high slot ZERO, unlike the integer arm's sign extension. So the
+            // shared lowering runs with the high slot forced to zero. Source
+            // `Fixed / Fixed` compiles to `FixedDiv` and does not arrive here.
+            // A Fixed operand beside any other kind is refused.
+            //
+            // **The float triple does not consult `OverflowPolicy::Trap`.** The
+            // reference never faults here, and infinity and NaN are ordinary
+            // IEEE results that the flag classifies rather than errors.
             Op::Div | Op::Mod => {
-                // **FLOAT DIVISION IS TOTAL, AND SO IS `fdiv` — they match.**
-                //
-                // The reference's `Op::Div` float arm is a bare `x / y` with **no
-                // zero check**: division by zero yields a signed infinity, and
-                // `0.0 / 0.0` yields NaN. That is exactly `fdiv`, so no divisor
-                // substitution and no trap belongs here.
-                //
-                // **A previous increment recorded that float division flows
-                // through `Op::CheckedDiv`'s three-value push, and that was
-                // WRONG for the `/` operator.** The compiler emits plain
-                // `Op::Div`; `CheckedDiv` is a different opcode with a different
-                // convention. Corrected in `FLOAT_DIVISION.md`.
-                //
-                // **`Op::Mod` IS lowered now**, added 2026-08-30 after checking
-                // the reference: its float arm is `x % y`, and Rust's `%` on
-                // `f64` is the TRUNCATED remainder carrying the sign of the
-                // dividend — exactly `frem`. Verified with negative dividends,
-                // where a floor-style remainder would disagree.
-                // **THE REFERENCE TRAPS ON A `Fixed` OPERAND HERE, AND THIS
-                // ARM USED TO RETURN A VALUE.**
-                //
-                // The virtual machine's `Op::Div` and `Op::Mod` arms handle
-                // `Int`/`Int`, `Byte`/`Byte` and `Float`/`Float`. A `Fixed`
-                // operand falls to the catch-all and raises
-                // `TypeError("cannot modulo Fixed by Fixed")`. This backend
-                // lowered an integer remainder and returned `4.0` for
-                // `200.0 % 7.0` -- arithmetically right, and **not what the
-                // reference does**, which is the only contract that matters.
-                //
-                // The surface reaches this for `%` only: `*` and `/` on `Fixed`
-                // compile to `Op::FixedMul`/`Op::FixedDiv`. `Div` is refused
-                // alongside `Mod` because the virtual machine's `Div` arm is
-                // equally Fixed-less, so a module that did reach it would trap
-                // there too.
-                //
-                // **The type checker admits `Fixed % Fixed`**, so this is a
-                // statically-known type error escaping to run time. Reported
-                // upstream; watched by `outstanding_reports.rs`. Refusing here
-                // is right regardless of how that report is ruled, because a
-                // value the reference never produces is worse than a refusal.
-                if st.kind_at(0) == OperandKind::Fixed || st.kind_at(1) == OperandKind::Fixed {
+                let fixed = (st.kind_at(0) == OperandKind::Fixed) as u8
+                    + (st.kind_at(1) == OperandKind::Fixed) as u8;
+                if fixed == 1 {
                     return Err(LowerError::unsupported_op(
                         &op_variant_name(op),
                         format!(
-                            "{} with a Fixed operand: the reference virtual machine has \
-                             no Fixed arm for this opcode and raises a TypeError at run \
-                             time. Refused rather than lowered, because an integer \
-                             remainder on a scaled value is a number the reference never \
-                             produces",
-                            op_variant_name(op)
+                            "{} with one Fixed operand and one {:?}: the reference has \
+                             no arm for a mixed pair",
+                            op_variant_name(op),
+                            if st.kind_at(0) == OperandKind::Fixed {
+                                st.kind_at(1)
+                            } else {
+                                st.kind_at(0)
+                            }
                         ),
                     ));
                 }
-                if st.kind_at(0) == OperandKind::Float || st.kind_at(1) == OperandKind::Float {
+                if fixed == 2 {
+                    st.lower_checked_division(ctx, func, trap_bb, opts, matches!(op, Op::Div));
+                    let top = st.depth;
+                    st.kinds[top - 3] = OperandKind::Fixed;
+                    st.kinds[top - 2] = OperandKind::Fixed;
+                    let zero = i64t.const_zero();
+                    let high = st.slot(top - 2);
+                    st.b.build_store(high, zero).unwrap();
+                } else if st.kind_at(0) == OperandKind::Float || st.kind_at(1) == OperandKind::Float
+                {
                     if !float_width_lowered(float_bytes) {
                         return Err(LowerError::unsupported_float_width(
                             float_bytes,
@@ -5149,63 +5255,17 @@ fn lower_chunk_body<'ctx>(
                     } else {
                         st.b.build_float_rem(l, r, "frem").unwrap()
                     };
+                    let flag = coroutine::arithmetic::float_flag(&st.b, q, i64t);
                     let bits = float_to_bits(&st.b, q, i64t, float_bytes);
                     st.push_k(bits, Width::Scalar(float_bytes), OperandKind::Float);
+                    st.push_k(
+                        i64t.const_zero(),
+                        Width::Scalar(float_bytes),
+                        OperandKind::Float,
+                    );
+                    st.push_w(flag, Width::Scalar(1));
                 } else {
-                    // **THE RESULT WIDTH, READ BEFORE THE POPS DISCARD IT.**
-                    //
-                    // This arm pushed `Width::Unknown` unconditionally until
-                    // 2026-09-17, and for a `Word` division that is right — a word
-                    // carries no packed width. **For a matched `Byte` pair it was
-                    // wrong by omission**: the reference divides two `Byte`s to a
-                    // `Byte`, and dropping that made every operation CONSUMING a
-                    // byte quotient refuse, since the generic arithmetic surface
-                    // admits only a matched pair.
-                    //
-                    // Measured: all nine byte-producing operations lower ALONE;
-                    // only `/` and `%` refused once their result fed another
-                    // operation. `+`, `-`, `*` and the three bitwise operators
-                    // already propagated it. **Found by a generated expression
-                    // tree, on its fourth program** — no single-operator cell
-                    // composes two operations, so no enumerated matrix could see it.
-                    //
-                    // Narrow on purpose: a matched `Byte` pair gains the width, and
-                    // every other combination keeps exactly the `Unknown` it had.
-                    // A `Fixed` operand never reaches here, being refused above.
-                    let kept = preserved_scalar_width(st.width_at(1), st.width_at(0));
-                    let rhs = st.pop();
-                    let lhs = st.pop();
-
-                    // A zero divisor faults. This is the one case in the family that
-                    // reaches the trap block, and it must come first: everything
-                    // after it may assume a non-zero divisor.
-                    let cont = ctx.append_basic_block(func, "nonzerodivisor");
-                    let zero =
-                        st.b.build_int_compare(IntPredicate::EQ, rhs, i64t.const_zero(), "divzero")
-                            .unwrap();
-                    st.b.build_conditional_branch(zero, trap_bb, cont).unwrap();
-                    st.b.position_at_end(cont);
-
-                    // Substituting a divisor of 1 for the `i64::MIN / -1` case is
-                    // not an approximation, it is exact for BOTH opcodes:
-                    // `sdiv(i64::MIN, 1)` is `i64::MIN`, which is the wrapped
-                    // quotient the VM returns, and `srem(i64::MIN, 1)` is `0`, which
-                    // is the remainder it returns. No corrective select is needed
-                    // afterwards, and none is emitted. The substitution is inert for
-                    // every other input because the predicate names exactly one pair.
-                    let safe = st.guard_min_div_neg_one(lhs, rhs, i64t);
-                    let v = match op {
-                        Op::Div => st.b.build_int_signed_div(lhs, safe, "sdiv").unwrap(),
-                        _ => st.b.build_int_signed_rem(lhs, safe, "srem").unwrap(),
-                    };
-                    // The mask is inert for a quotient or remainder of two masked
-                    // bytes, which cannot exceed the dividend. It is applied anyway
-                    // so the byte representation invariant is held by construction
-                    // here as it is everywhere else, rather than by an argument.
-                    match kept {
-                        Some(out) => st.push_w(mask_if_byte(&st.b, i64t, v, out), out),
-                        None => st.push(v),
-                    }
+                    st.lower_checked_division(ctx, func, trap_bb, opts, matches!(op, Op::Div));
                 }
             }
             // The checked forms do NOT fault on a zero divisor. They reify it as
@@ -5220,42 +5280,13 @@ fn lower_chunk_body<'ctx>(
             // a new basic block would have to be reconciled with the per-block
             // operand-stack depth bookkeeping, and selects sidestep that.
             Op::CheckedDiv(0) | Op::CheckedMod => {
-                let rhs = st.pop();
-                let lhs = st.pop();
-
-                let iszero =
-                    st.b.build_int_compare(IntPredicate::EQ, rhs, i64t.const_zero(), "divzero")
-                        .unwrap();
-                let nonzero =
-                    st.b.build_select(iszero, i64t.const_int(1, false), rhs, "nzdiv")
-                        .unwrap()
-                        .into_int_value();
-
-                // In 128 bits `i64::MIN / -1` is 2^63, which is representable,
-                // so unlike the unchecked forms no divisor substitution is
-                // needed for it -- the wide division is simply not undefined.
-                // That is exactly how the VM gets flag 1 with low `i64::MIN`.
-                let a = st.widen(lhs, i128t, "a128");
-                let c = st.widen(nonzero, i128t, "b128");
-                let wide = match op {
-                    Op::CheckedDiv(_) => st.b.build_int_signed_div(a, c, "q128").unwrap(),
-                    _ => st.b.build_int_signed_rem(a, c, "r128").unwrap(),
-                };
-
-                let (low, high, flag) = st.checked_triple(ctx, wide);
-                let low =
-                    st.b.build_select(iszero, lhs, low, "zdlow")
-                        .unwrap()
-                        .into_int_value();
-                let high =
-                    st.b.build_select(iszero, i64t.const_zero(), high, "zdhigh")
-                        .unwrap()
-                        .into_int_value();
-                let flag =
-                    st.b.build_select(iszero, i64t.const_int(3, false), flag, "zdflag")
-                        .unwrap()
-                        .into_int_value();
-                st.push_triple(ctx, func, trap_bb, opts, (low, high, flag));
+                st.lower_checked_division(
+                    ctx,
+                    func,
+                    trap_bb,
+                    opts,
+                    matches!(op, Op::CheckedDiv(_)),
+                );
             }
             // **THE CHECKED FIXED-POINT DIVIDE.** The arm above is the integer
             // one; a NON-ZERO fraction count is the Fixed one, and the count is
@@ -5708,9 +5739,10 @@ fn lower_chunk_body<'ctx>(
                 let c = st.widen(rhs, i128t, "fxd.b");
                 let sh = i128t.const_int(u64::from(*frac_bits), false);
                 let dividend = st.b.build_left_shift(a, sh, "fxd.sh").unwrap();
-                // **NO `guard_min_div_neg_one` HERE, and its absence is
-                // deliberate.** That guard exists for the WRAPPING integer forms,
-                // where `i64::MIN / -1` overflows the result type. Here both
+                // **NO DIVISOR SUBSTITUTION HERE, and its absence is
+                // deliberate.** One existed for the WRAPPING integer forms until
+                // absorption 82 made bare division total, because
+                // `i64::MIN / -1` overflows the result type there. Here both
                 // operands are widened to `i128` first, so the quotient cannot
                 // overflow the wide type, and the clamp below carries the value
                 // back into range. Copying the guard in would be inert at best.
@@ -6659,9 +6691,13 @@ fn lower_chunk_body<'ctx>(
             // negative case in the same instruction. `bound` is a `u16`, so it
             // can never itself be large enough to make that reinterpretation
             // ambiguous.
+            //
+            // **TOTAL SINCE ABSORPTION 82.** The opcode no longer faults. It
+            // keeps the index and appends the bound limbs and a flag, and the
+            // compiler dispatches a set flag to `Trap(IndexOutOfBounds)`, which
+            // is where the fault now happens, natively as in the reference.
             Op::BoundsCheck(bound) => {
                 let v = st.peek();
-                let cont = ctx.append_basic_block(func, "inbounds");
                 let bad =
                     st.b.build_int_compare(
                         IntPredicate::UGE,
@@ -6670,8 +6706,7 @@ fn lower_chunk_body<'ctx>(
                         "oob",
                     )
                     .unwrap();
-                st.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
-                st.b.position_at_end(cont);
+                st.push_bound_outcome(i64t.const_int(u64::from(*bound), false), bad);
             }
             // Data-segment access, shared and private.
             //
@@ -6710,715 +6745,836 @@ fn lower_chunk_body<'ctx>(
                     });
                 }
 
+                // **THE INDEXED FORMS ARE TOTAL SINCE ABSORPTION 82.** A read
+                // pops a fallback above its index and yields the fallback for an
+                // out-of-range index. A write performs no store for one. Both
+                // then push the index, the bound limbs and a flag, and the
+                // compiler dispatches a set flag to `Trap(IndexOutOfBounds)`.
+                //
+                // **The access below always uses an IN-RANGE index.** An
+                // out-of-range one is replaced by element zero for the read,
+                // whose result the select afterwards discards, and the write is
+                // branched around entirely. So no route below can address
+                // outside the declared span, which is what the trap used to
+                // guarantee. A zero-length span has no element zero, so it is
+                // refused. The compiler emits none.
+                //
                 // An indexed access pops its index first, and for a write the
                 // VM pops the index BEFORE the value, so the value is beneath
-                // it on the stack.
-                let index = if indexed { Some(st.pop()) } else { None };
-
-                // ⚠ **A COMPOSITE DATA SLOT IS REFUSED, AND THIS CLOSES A
-                // SILENT MISCOMPILATION RATHER THAN A GAP.**
-                //
-                // Every route below is ONE WORD: a load or a store of `i64`.
-                // For a flat composite the operand is the ADDRESS of a body in
-                // the ephemeral region, so the write stored a pointer where the
-                // runtime copies bytes into the persistent composite pool — and
-                // the read handed back a pointer into a region later iterations
-                // overwrite.
-                //
-                // **It agreed with the runtime by luck wherever it was tested.**
-                // `14_frame_log.kel` reads its slot in the same iteration that
-                // wrote it, and the aliased bytes still hold the right values
-                // there. The shape that separates a copy from an alias --
-                // storing on one loop iteration, then rebuilding the SAME site
-                // twice more, then reading back -- yields `0` on the runtime and
-                // `2` here. See `private_slot_composite.rs`.
-                //
-                // **Two checks, because they see different things.** The
-                // operand's width catches a composite going IN, including
-                // through a shared slot; the module's own
-                // `private_composite_layout` catches a composite coming OUT,
-                // where no operand exists yet to have a width.
-                //
-                // **Refusing, not copying.** The correct lowering copies
-                // `byte_size` bytes to the pool offset the table names, but the
-                // pool's base in this ABI is not pinned against the runtime yet,
-                // and guessing it would put a wrong answer where a refusal
-                // belongs. That is the next increment, not this one.
-                // **THE PERSISTENT COMPOSITE POOL.** A slot the module declares
-                // as a flat composite is a BODY, not a word: the write copies
-                // `size` bytes into the pool and the read hands back the pool
-                // address, so the value survives `Op::Reset` in place exactly as
-                // the runtime's copy does.
-                //
-                // The extent is derived from the module's own table and the
-                // derivation is validated — see `private_composite_extent`.
-                if data
-                    .private_composite_slots
-                    .iter()
-                    .any(|p| u32::from(p.slot) == slot)
-                {
-                    // **INDEXED IS REFUSED, NOT EXTRAPOLATED.** An array of
-                    // composites gives every element slot its own entry, so
-                    // `base + index * size` needs the stride proven uniform
-                    // across the range first. No corpus module declares one, so
-                    // there is no subject to prove it against, and lowering it on
-                    // the strength of the direct case is how a differential
-                    // returns a wrong answer instead of a refusal.
-                    //
-                    // **INDEXED IS NOW LOWERED, with the stride VALIDATED across
-                    // the declared range** rather than extrapolated from the
-                    // direct case. The bound is the instruction's own operand and
-                    // the unsigned check against it was already emitted above, so
-                    // `index` here is in range.
-                    let (pool_off, size) = if indexed {
-                        indexed_composite_extent(&data, slot, bound)?
-                    } else {
-                        private_composite_extent(&data, slot)?
-                    };
-                    let base = private_base.expect("has_data implies the private pointer");
-                    // The element offset: constant for a direct access, and
-                    // `first + index * size` for an indexed one, where `index`
-                    // has already been bounds-checked against the declared count.
-                    let byte_off = match index {
-                        None => i64t.const_int(u64::from(pool_off), false),
-                        Some(ix) => {
-                            st.b.build_int_add(
-                                i64t.const_int(u64::from(pool_off), false),
-                                st.b.build_int_mul(
-                                    ix,
-                                    i64t.const_int(u64::from(size), false),
-                                    "poolstride",
-                                )
-                                .unwrap(),
-                                "pooloff",
-                            )
-                            .unwrap()
-                        }
-                    };
-                    let addr = unsafe {
-                        st.b.build_in_bounds_gep(i8t, base, &[byte_off], "poolptr")
-                            .unwrap()
-                    };
-                    // **THE INITIALISATION WORD FOR THIS SLOT.**
-                    //
-                    // A composite slot's load-time value is `Unit`. A body
-                    // consumer faults on an unwritten slot. The legacy route
-                    // guards eagerly here. Coroutines preserve Unit on reads
-                    // and defer the fault to the consumer. The pool is
-                    // bytes, so zeros are indistinguishable from a written body of
-                    // zeros, and this backend answered `0` where the reference
-                    // faulted — measured on a slot written on one branch and read
-                    // on the other. The flag is a word OUTSIDE the body, because a
-                    // sentinel compared against the body would fault on a
-                    // legitimate body that happened to equal it.
-                    let init_index = data
-                        .private_composite_slots
-                        .iter()
-                        .position(|p| u32::from(p.slot) == slot)
-                        .expect("the slot was just found in this table");
-                    // **THE FLAG MOVES WITH THE ELEMENT.** Each element slot has
-                    // its own pool entry and therefore its own word; using the
-                    // base slot's would let one written element make every
-                    // sibling read as written.
-                    let init_byte = match index {
-                        None => i64t.const_int(
-                            u64::from(data.composite_init_off) + (init_index as u64) * 8,
-                            false,
-                        ),
-                        Some(ix) => {
-                            st.b.build_int_add(
-                                i64t.const_int(
-                                    u64::from(data.composite_init_off) + (init_index as u64) * 8,
-                                    false,
-                                ),
-                                st.b.build_int_mul(ix, i64t.const_int(8, false), "initstride")
-                                    .unwrap(),
-                                "initoff",
-                            )
-                            .unwrap()
-                        }
-                    };
-                    let init_ptr = unsafe {
-                        st.b.build_in_bounds_gep(i8t, base, &[init_byte], "initp")
-                            .unwrap()
-                    };
-                    if is_read && st.runtime_kinds.is_none() {
-                        // **FAULT WHERE THE REFERENCE FAULTS.** One load and one
-                        // compare, both at fixed offsets, so the worst-case cost
-                        // moves by a constant and nothing dynamic is introduced.
-                        let flag =
-                            st.b.build_load(i64t, init_ptr, "initflag")
-                                .unwrap()
-                                .into_int_value();
-                        let cont = ctx.append_basic_block(func, "slotinit");
-                        let bad =
-                            st.b.build_int_compare(
-                                IntPredicate::EQ,
-                                flag,
-                                i64t.const_zero(),
-                                "uninitslot",
-                            )
-                            .unwrap();
-                        st.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
-                        st.b.position_at_end(cont);
-                    }
-                    let scalar_ptr = if st.runtime_kinds.is_some() {
-                        let relative = i64t.const_int(u64::from(slot - data.shared_count), false);
-                        let relative = index.map_or(relative, |ix| {
-                            st.b.build_int_add(relative, ix, "private_value_index")
-                                .unwrap()
-                        });
-                        let offset =
-                            st.b.build_int_mul(
-                                relative,
-                                i64t.const_int(8, false),
-                                "private_value_offset",
-                            )
-                            .unwrap();
-                        Some(unsafe {
-                            st.b.build_in_bounds_gep(i8t, base, &[offset], "private_value_pointer")
-                                .unwrap()
-                        })
-                    } else {
-                        None
-                    };
-                    if is_read {
-                        // The pool address IS the body, so it is pushed as a
-                        // `Body` at the derived size: every downstream field and
-                        // element offset is then bounded by the same figure the
-                        // write was.
-                        let as_int = st.b.build_ptr_to_int(addr, i64t, "poolint").unwrap();
-                        let width = retcon_facts
-                            .map_or(Width::Body(size), |facts| facts[&i].outputs[0].width);
-                        let mut value = as_int;
-                        if let Some(flags) = &st.runtime_kinds {
-                            let metadata =
-                                st.b.build_load(i64t, init_ptr, "private_body_metadata")
-                                    .unwrap()
-                                    .into_int_value();
-                            let tag =
-                                st.b.build_and(
-                                    metadata,
-                                    i64t.const_int(0xffff, false),
-                                    "private_body_kind",
-                                )
-                                .unwrap();
-                            let bytes =
-                                st.b.build_right_shift(
-                                    metadata,
-                                    i64t.const_int(32, false),
-                                    false,
-                                    "private_body_size",
-                                )
-                                .unwrap();
-                            let tag =
-                                st.b.build_select(
-                                    st.b.build_int_compare(
-                                        IntPredicate::EQ,
-                                        tag,
-                                        i64t.const_zero(),
-                                        "private_unwritten",
-                                    )
-                                    .unwrap(),
-                                    i64t.const_int(u64::from(coroutine::types::UNIT), false),
-                                    tag,
-                                    "private_actual_kind",
-                                )
-                                .unwrap()
-                                .into_int_value();
-                            let scalar =
-                                st.b.build_load(i64t, scalar_ptr.unwrap(), "private_scalar_bits")
-                                    .unwrap()
-                                    .into_int_value();
-                            let body =
-                                st.b.build_int_compare(
-                                    IntPredicate::UGE,
-                                    tag,
-                                    i64t.const_int(u64::from(coroutine::types::TUPLE), false),
-                                    "private_is_body",
-                                )
-                                .unwrap();
-                            value =
-                                st.b.build_select(body, as_int, scalar, "private_value")
-                                    .unwrap()
-                                    .into_int_value();
-                            st.b.build_store(flags.slots[st.depth], tag).unwrap();
-                            st.b.build_store(flags.slot_sizes[st.depth], bytes).unwrap();
-                        }
-                        st.push_w(value, width);
-                    } else {
-                        // **The operand's width is cross-checked against the
-                        // derived size.** They come from different places — the
-                        // operand's from the producing op, the size from the
-                        // module's table — so a disagreement means one of them is
-                        // wrong and neither may be used to size a copy.
-                        if st.runtime_kinds.is_some() {
-                            let operand = st.depth - 1;
-                            if st.input_copy_bounds[operand].is_none() {
-                                return Err(LowerError::UnsupportedDataSlot {
-                                    slot,
-                                    why: "private body extent has no producer bound".into(),
-                                });
-                            }
-                            let tag = st.input_tags[operand];
-                            let bytes = st.input_body_sizes[operand];
-                            let bits = st.pop();
-                            coroutine::packing::store_private(
-                                &st.b,
-                                addr,
-                                init_ptr,
-                                scalar_ptr.unwrap(),
-                                coroutine::packing::Operand {
-                                    bits,
-                                    tag,
-                                    body_bytes: bytes,
-                                },
-                                size,
-                                trap_bb,
-                            );
-                            continue;
-                        }
-                        let w = st.width_at(0);
-                        match w {
-                            Width::Body(n) if n == size => {}
-                            Width::Body(n) => {
-                                return Err(LowerError::UnsupportedDataSlot {
-                                    slot,
-                                    why: format!(
-                                        "the operand is a {n}-byte body and the module's pool \
-                                         entry is {size} bytes; the two statements of this \
-                                         slot's size disagree"
-                                    ),
-                                });
-                            }
-                            _ => {
-                                return Err(LowerError::UnsupportedDataSlot {
-                                    slot,
-                                    why: format!(
-                                        "a composite slot needs a body operand of known width to \
-                                         size the copy, and this one is {w:?}"
-                                    ),
-                                });
-                            }
-                        }
-                        let tag = st
-                            .runtime_kinds
-                            .as_ref()
-                            .map_or(i64t.const_int(1, false), |flags| {
-                                flags.load(&st.b, st.depth - 1)
-                            });
-                        let v = st.pop();
-                        let src = st
-                            .b
-                            .build_int_to_ptr(v, ctx.ptr_type(AddressSpace::default()), "poolsrc")
-                            .unwrap();
-                        // Alignment one on both sides: the pool packs bodies
-                        // cumulatively with no padding, so neither end is
-                        // guaranteed anything better, and declaring an alignment
-                        // the pointer lacks is undefined behaviour.
-                        st.b.build_memcpy(addr, 1, src, 1, i64t.const_int(u64::from(size), false))
-                            .map_err(|e| LowerError::UnsupportedDataSlot {
-                                slot,
-                                why: format!(
-                                    "could not copy a {size}-byte body into the pool: {e}"
-                                ),
-                            })?;
-                        // Marked AFTER the copy, so a trap inside it cannot leave
-                        // the slot claiming to hold a body it does not.
-                        st.b.build_store(init_ptr, tag).unwrap();
-                    }
-                    continue;
-                }
-                // **THE SLOTS WITH NO POOL ENTRY**: everything above has
-                // returned or continued, so a body operand reaching here is
-                // headed for a slot the module does not declare as a persistent
-                // composite — a shared slot, or a private one the pool table
-                // does not name. The one-word store would write its ADDRESS, so
-                // it is refused. No corpus module declares a shared composite,
-                // so this arm has no subject and is deliberately not lowered.
-                // **A SLOT WITH A STATED PLACEMENT IS NOT "NOWHERE TO PUT
-                // IT".** The shared layout marks a composite slot and states its
-                // body length, so such a slot is copied below rather than
-                // refused here. The refusal is NARROWED to its actual subject —
-                // a body whose destination outlives the region and has no stated
-                // placement — rather than deleted.
-                let shared_composite = data
-                    .shared_layout
-                    .get(slot as usize)
-                    .is_some_and(|e| e.kind & keleusma::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0);
-                if !is_read && !shared_composite && st.width_at(0).is_body() {
+                // it on the stack. A read's fallback sits above its index.
+                if indexed && bound == 0 {
                     return Err(LowerError::UnsupportedDataSlot {
                         slot,
                         why: String::from(
-                            "the operand is a flat composite body and this slot has no \
-                             persistent pool entry: a one-word store would write the body's \
-                             ADDRESS rather than copy its bytes",
+                            "an indexed access over a zero-length span has no in-range \
+                             element to address; every index takes the fallback",
                         ),
                     });
                 }
-
-                if let Some(ix) = index {
-                    // Bounds check against the declared element count, with one
-                    // unsigned compare covering the negative case, exactly as
-                    // Op::BoundsCheck does.
-                    let cont = ctx.append_basic_block(func, "inbounds_data");
-                    let bad =
-                        st.b.build_int_compare(
-                            IntPredicate::UGE,
-                            ix,
-                            i64t.const_int(u64::from(bound), false),
-                            "dataoob",
+                // **THE FALLBACK'S KIND IS NOT THE VALUE'S KIND, AND THAT IS
+                // CHECKED HERE RATHER THAN ASSUMED.** The value below keeps the
+                // slot's width and kind. The compiler's fallback is Unit for
+                // every element other than Word and Byte, so that label is
+                // right only where a Unit fallback is never observed. The bare
+                // read guarantees it, since the next four instructions send a
+                // set flag to `Trap(IndexOutOfBounds)`. Any other shape with a
+                // Unit fallback is refused, because a consumer of the label
+                // would compute where the reference faults.
+                if indexed
+                    && is_read
+                    && matches!(chunk.ops.get(i.wrapping_sub(1)), Some(Op::PushImmediate(0)))
+                {
+                    let one = |k: &u16| {
+                        matches!(
+                            chunk.constants.get(usize::from(*k)),
+                            Some(ConstValue::Int(1))
                         )
-                        .unwrap();
-                    st.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
-                    st.b.position_at_end(cont);
+                    };
+                    let trap = keleusma::bytecode::TrapKind::IndexOutOfBounds.code();
+                    let guarded = matches!(
+                        chunk.ops.get(i + 1..i + 5),
+                        Some([Op::Const(k), Op::CmpEq, Op::If(_), Op::Trap(t)]) if one(k) && *t == trap
+                    );
+                    if !guarded {
+                        return Err(LowerError::UnsupportedDataSlot {
+                            slot,
+                            why: String::from(
+                                "an indexed read with a Unit fallback that is not followed by \
+                                 the bare bounds trap, so the fallback could reach a consumer \
+                                 that would be handed the slot's kind",
+                            ),
+                        });
+                    }
                 }
-
-                if slot < data.shared_count {
-                    // Shared. An indexed shared access would need the layout
-                    // entries for the whole range proven contiguous, which the
-                    // table does not state, so it is refused rather than
-                    // assumed.
-                    let base = shared_base.expect("has_data implies the shared pointer");
-
-                    // **A SHARED COMPOSITE SLOT: COPY IN, ADDRESS OUT.**
+                let fallback = if indexed && is_read {
+                    Some(st.pop())
+                } else {
+                    None
+                };
+                let raw_index = if indexed { Some(st.pop()) } else { None };
+                let out_of_range = raw_index.map(|ix| {
+                    st.b.build_int_compare(
+                        IntPredicate::UGE,
+                        ix,
+                        i64t.const_int(u64::from(bound), false),
+                        "dataoob",
+                    )
+                    .unwrap()
+                });
+                let index = match (raw_index, out_of_range) {
+                    (Some(ix), Some(bad)) => Some(
+                        st.b.build_select(bad, i64t.const_zero(), ix, "data_index")
+                            .unwrap()
+                            .into_int_value(),
+                    ),
+                    _ => None,
+                };
+                let write_done = match out_of_range {
+                    Some(bad) if !is_read => {
+                        let store = ctx.append_basic_block(func, "data_write");
+                        let done = ctx.append_basic_block(func, "data_write_done");
+                        st.b.build_conditional_branch(bad, done, store).unwrap();
+                        st.b.position_at_end(store);
+                        Some(done)
+                    }
+                    _ => None,
+                };
+                'access: {
+                    // ⚠ **A COMPOSITE DATA SLOT IS REFUSED, AND THIS CLOSES A
+                    // SILENT MISCOMPILATION RATHER THAN A GAP.**
                     //
-                    // `SharedSlotLayout` STATES the body length, so unlike the
-                    // private pool this needs no derived size and no validated
-                    // partition — the length is a field, and recomputing it from
-                    // neighbouring offsets would be a second opinion free to
-                    // drift.
+                    // Every route below is ONE WORD: a load or a store of `i64`.
+                    // For a flat composite the operand is the ADDRESS of a body in
+                    // the ephemeral region, so the write stored a pointer where the
+                    // runtime copies bytes into the persistent composite pool — and
+                    // the read handed back a pointer into a region later iterations
+                    // overwrite.
                     //
-                    // **No initialisation word belongs here.** A private
-                    // composite slot's initial value is `Unit`, which is not a
-                    // body, so reading an unwritten one faults. The shared
-                    // segment has no such state: the host owns the buffer and
-                    // initialises it by contract, and the runtime copies out
-                    // whatever bytes are there and re-wraps them as the declared
-                    // kind. Inventing a fault here would be inventing one the
-                    // reference does not have.
+                    // **It agreed with the runtime by luck wherever it was tested.**
+                    // `14_frame_log.kel` reads its slot in the same iteration that
+                    // wrote it, and the aliased bytes still hold the right values
+                    // there. The shape that separates a copy from an alias --
+                    // storing on one loop iteration, then rebuilding the SAME site
+                    // twice more, then reading back -- yields `0` on the runtime and
+                    // `2` here. See `private_slot_composite.rs`.
                     //
-                    // The address handed back on a read points into the HOST's
-                    // buffer, which outlives the call — which is why it is safe
-                    // where the same move into the ephemeral region would not be.
-                    if let Some(e) = data
-                        .shared_layout
-                        .get(slot as usize)
-                        .filter(|e| e.kind & keleusma::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0)
+                    // **Two checks, because they see different things.** The
+                    // operand's width catches a composite going IN, including
+                    // through a shared slot; the module's own
+                    // `private_composite_layout` catches a composite coming OUT,
+                    // where no operand exists yet to have a width.
+                    //
+                    // **Refusing, not copying.** The correct lowering copies
+                    // `byte_size` bytes to the pool offset the table names, but the
+                    // pool's base in this ABI is not pinned against the runtime yet,
+                    // and guessing it would put a wrong answer where a refusal
+                    // belongs. That is the next increment, not this one.
+                    // **THE PERSISTENT COMPOSITE POOL.** A slot the module declares
+                    // as a flat composite is a BODY, not a word: the write copies
+                    // `size` bytes into the pool and the read hands back the pool
+                    // address, so the value survives `Op::Reset` in place exactly as
+                    // the runtime's copy does.
+                    //
+                    // The extent is derived from the module's own table and the
+                    // derivation is validated — see `private_composite_extent`.
+                    if data
+                        .private_composite_slots
+                        .iter()
+                        .any(|p| u32::from(p.slot) == slot)
                     {
-                        // **INDEXED USES THE SAME RESOLVER THE SCALAR RANGE
-                        // USES**, which proves the whole declared range
-                        // contiguous and uniform before striding — now including
-                        // that every element states the same body length, since a
-                        // matching composite kind is not a matching size.
-                        let (first_off, len) = if indexed {
-                            let (off, stride, _kind) =
-                                resolve_shared_array(&data, slot, bound, float_bytes)?;
-                            (off, stride)
+                        // **INDEXED IS REFUSED, NOT EXTRAPOLATED.** An array of
+                        // composites gives every element slot its own entry, so
+                        // `base + index * size` needs the stride proven uniform
+                        // across the range first. No corpus module declares one, so
+                        // there is no subject to prove it against, and lowering it on
+                        // the strength of the direct case is how a differential
+                        // returns a wrong answer instead of a refusal.
+                        //
+                        // **INDEXED IS NOW LOWERED, with the stride VALIDATED across
+                        // the declared range** rather than extrapolated from the
+                        // direct case. The bound is the instruction's own operand and
+                        // the unsigned check against it was already emitted above, so
+                        // `index` here is in range.
+                        let (pool_off, size) = if indexed {
+                            indexed_composite_extent(&data, slot, bound)?
                         } else {
-                            if e.len == 0 {
-                                return Err(LowerError::UnsupportedDataSlot {
-                                    slot,
-                                    why: String::from(
-                                        "a shared slot marked composite whose stated body length                                          is zero; the layout and the kind disagree",
-                                    ),
-                                });
-                            }
-                            (e.offset, u32::from(e.len))
+                            private_composite_extent(&data, slot)?
                         };
-                        // The index was bounds-checked against the instruction's
-                        // own declared element count before the shared/private
-                        // split, and that remains the guard.
+                        let base = private_base.expect("has_data implies the private pointer");
+                        // The element offset: constant for a direct access, and
+                        // `first + index * size` for an indexed one, where `index`
+                        // has already been bounds-checked against the declared count.
                         let byte_off = match index {
-                            None => i64t.const_int(u64::from(first_off), false),
+                            None => i64t.const_int(u64::from(pool_off), false),
                             Some(ix) => {
                                 st.b.build_int_add(
-                                    i64t.const_int(u64::from(first_off), false),
+                                    i64t.const_int(u64::from(pool_off), false),
                                     st.b.build_int_mul(
                                         ix,
-                                        i64t.const_int(u64::from(len), false),
-                                        "sharedstride",
+                                        i64t.const_int(u64::from(size), false),
+                                        "poolstride",
                                     )
                                     .unwrap(),
-                                    "sharedoff",
+                                    "pooloff",
                                 )
                                 .unwrap()
                             }
                         };
                         let addr = unsafe {
-                            st.b.build_in_bounds_gep(i8t, base, &[byte_off], "sharedbody")
+                            st.b.build_in_bounds_gep(i8t, base, &[byte_off], "poolptr")
                                 .unwrap()
                         };
-                        if is_read {
-                            let as_int =
-                                st.b.build_ptr_to_int(addr, i64t, "sharedbodyint").unwrap();
-                            st.push_w(as_int, Width::Body(len));
+                        // **THE INITIALISATION WORD FOR THIS SLOT.**
+                        //
+                        // A composite slot's load-time value is `Unit`. A body
+                        // consumer faults on an unwritten slot. The legacy route
+                        // guards eagerly here. Coroutines preserve Unit on reads
+                        // and defer the fault to the consumer. The pool is
+                        // bytes, so zeros are indistinguishable from a written body of
+                        // zeros, and this backend answered `0` where the reference
+                        // faulted — measured on a slot written on one branch and read
+                        // on the other. The flag is a word OUTSIDE the body, because a
+                        // sentinel compared against the body would fault on a
+                        // legitimate body that happened to equal it.
+                        let init_index = data
+                            .private_composite_slots
+                            .iter()
+                            .position(|p| u32::from(p.slot) == slot)
+                            .expect("the slot was just found in this table");
+                        // **THE FLAG MOVES WITH THE ELEMENT.** Each element slot has
+                        // its own pool entry and therefore its own word; using the
+                        // base slot's would let one written element make every
+                        // sibling read as written.
+                        let init_byte = match index {
+                            None => i64t.const_int(
+                                u64::from(data.composite_init_off) + (init_index as u64) * 8,
+                                false,
+                            ),
+                            Some(ix) => {
+                                st.b.build_int_add(
+                                    i64t.const_int(
+                                        u64::from(data.composite_init_off)
+                                            + (init_index as u64) * 8,
+                                        false,
+                                    ),
+                                    st.b.build_int_mul(ix, i64t.const_int(8, false), "initstride")
+                                        .unwrap(),
+                                    "initoff",
+                                )
+                                .unwrap()
+                            }
+                        };
+                        let init_ptr = unsafe {
+                            st.b.build_in_bounds_gep(i8t, base, &[init_byte], "initp")
+                                .unwrap()
+                        };
+                        if is_read && st.runtime_kinds.is_none() {
+                            // **FAULT WHERE THE REFERENCE FAULTS.** One load and one
+                            // compare, both at fixed offsets, so the worst-case cost
+                            // moves by a constant and nothing dynamic is introduced.
+                            let flag =
+                                st.b.build_load(i64t, init_ptr, "initflag")
+                                    .unwrap()
+                                    .into_int_value();
+                            let cont = ctx.append_basic_block(func, "slotinit");
+                            let bad =
+                                st.b.build_int_compare(
+                                    IntPredicate::EQ,
+                                    flag,
+                                    i64t.const_zero(),
+                                    "uninitslot",
+                                )
+                                .unwrap();
+                            // An out-of-range index reads no slot in the reference,
+                            // so element zero's flag must not fault on its behalf.
+                            let bad = match out_of_range {
+                                Some(oob) => {
+                                    let in_range = st.b.build_not(oob, "data_in_range").unwrap();
+                                    st.b.build_and(bad, in_range, "uninit_in_range").unwrap()
+                                }
+                                None => bad,
+                            };
+                            st.b.build_conditional_branch(bad, trap_bb, cont).unwrap();
+                            st.b.position_at_end(cont);
+                        }
+                        let scalar_ptr = if st.runtime_kinds.is_some() {
+                            let relative =
+                                i64t.const_int(u64::from(slot - data.shared_count), false);
+                            let relative = index.map_or(relative, |ix| {
+                                st.b.build_int_add(relative, ix, "private_value_index")
+                                    .unwrap()
+                            });
+                            let offset =
+                                st.b.build_int_mul(
+                                    relative,
+                                    i64t.const_int(8, false),
+                                    "private_value_offset",
+                                )
+                                .unwrap();
+                            Some(unsafe {
+                                st.b.build_in_bounds_gep(
+                                    i8t,
+                                    base,
+                                    &[offset],
+                                    "private_value_pointer",
+                                )
+                                .unwrap()
+                            })
                         } else {
-                            // The operand's width is cross-checked against the
-                            // stated length: two independent statements of one
-                            // number, and a disagreement sizes no copy.
+                            None
+                        };
+                        if is_read {
+                            // The pool address IS the body, so it is pushed as a
+                            // `Body` at the derived size: every downstream field and
+                            // element offset is then bounded by the same figure the
+                            // write was.
+                            let as_int = st.b.build_ptr_to_int(addr, i64t, "poolint").unwrap();
+                            let width = retcon_facts
+                                .map_or(Width::Body(size), |facts| facts[&i].outputs[0].width);
+                            let mut value = as_int;
+                            if let Some(flags) = &st.runtime_kinds {
+                                let metadata =
+                                    st.b.build_load(i64t, init_ptr, "private_body_metadata")
+                                        .unwrap()
+                                        .into_int_value();
+                                let tag =
+                                    st.b.build_and(
+                                        metadata,
+                                        i64t.const_int(0xffff, false),
+                                        "private_body_kind",
+                                    )
+                                    .unwrap();
+                                let bytes =
+                                    st.b.build_right_shift(
+                                        metadata,
+                                        i64t.const_int(32, false),
+                                        false,
+                                        "private_body_size",
+                                    )
+                                    .unwrap();
+                                let tag =
+                                    st.b.build_select(
+                                        st.b.build_int_compare(
+                                            IntPredicate::EQ,
+                                            tag,
+                                            i64t.const_zero(),
+                                            "private_unwritten",
+                                        )
+                                        .unwrap(),
+                                        i64t.const_int(u64::from(coroutine::types::UNIT), false),
+                                        tag,
+                                        "private_actual_kind",
+                                    )
+                                    .unwrap()
+                                    .into_int_value();
+                                let scalar = st
+                                    .b
+                                    .build_load(i64t, scalar_ptr.unwrap(), "private_scalar_bits")
+                                    .unwrap()
+                                    .into_int_value();
+                                let body =
+                                    st.b.build_int_compare(
+                                        IntPredicate::UGE,
+                                        tag,
+                                        i64t.const_int(u64::from(coroutine::types::TUPLE), false),
+                                        "private_is_body",
+                                    )
+                                    .unwrap();
+                                value =
+                                    st.b.build_select(body, as_int, scalar, "private_value")
+                                        .unwrap()
+                                        .into_int_value();
+                                st.b.build_store(flags.slots[st.depth], tag).unwrap();
+                                st.b.build_store(flags.slot_sizes[st.depth], bytes).unwrap();
+                            }
+                            st.push_w(value, width);
+                        } else {
+                            // **The operand's width is cross-checked against the
+                            // derived size.** They come from different places — the
+                            // operand's from the producing op, the size from the
+                            // module's table — so a disagreement means one of them is
+                            // wrong and neither may be used to size a copy.
+                            if st.runtime_kinds.is_some() {
+                                let operand = st.depth - 1;
+                                if st.input_copy_bounds[operand].is_none() {
+                                    return Err(LowerError::UnsupportedDataSlot {
+                                        slot,
+                                        why: "private body extent has no producer bound".into(),
+                                    });
+                                }
+                                let tag = st.input_tags[operand];
+                                let bytes = st.input_body_sizes[operand];
+                                let bits = st.pop();
+                                coroutine::packing::store_private(
+                                    &st.b,
+                                    addr,
+                                    init_ptr,
+                                    scalar_ptr.unwrap(),
+                                    coroutine::packing::Operand {
+                                        bits,
+                                        tag,
+                                        body_bytes: bytes,
+                                    },
+                                    size,
+                                    trap_bb,
+                                );
+                                break 'access;
+                            }
                             let w = st.width_at(0);
                             match w {
-                                Width::Body(n) if n == len => {}
-                                other => {
+                                Width::Body(n) if n == size => {}
+                                Width::Body(n) => {
                                     return Err(LowerError::UnsupportedDataSlot {
                                         slot,
                                         why: format!(
-                                            "a shared composite slot of {len} bytes written from                                              an operand of {other:?}"
+                                            "the operand is a {n}-byte body and the module's pool \
+                                         entry is {size} bytes; the two statements of this \
+                                         slot's size disagree"
+                                        ),
+                                    });
+                                }
+                                _ => {
+                                    return Err(LowerError::UnsupportedDataSlot {
+                                        slot,
+                                        why: format!(
+                                            "a composite slot needs a body operand of known width to \
+                                         size the copy, and this one is {w:?}"
                                         ),
                                     });
                                 }
                             }
+                            let tag = st
+                                .runtime_kinds
+                                .as_ref()
+                                .map_or(i64t.const_int(1, false), |flags| {
+                                    flags.load(&st.b, st.depth - 1)
+                                });
                             let v = st.pop();
                             let src =
                                 st.b.build_int_to_ptr(
                                     v,
                                     ctx.ptr_type(AddressSpace::default()),
-                                    "sharedsrc",
+                                    "poolsrc",
                                 )
                                 .unwrap();
+                            // Alignment one on both sides: the pool packs bodies
+                            // cumulatively with no padding, so neither end is
+                            // guaranteed anything better, and declaring an alignment
+                            // the pointer lacks is undefined behaviour.
                             st.b.build_memcpy(
                                 addr,
                                 1,
                                 src,
                                 1,
-                                i64t.const_int(u64::from(len), false),
+                                i64t.const_int(u64::from(size), false),
                             )
                             .map_err(|e| {
                                 LowerError::UnsupportedDataSlot {
                                     slot,
                                     why: format!(
-                                        "could not copy a {len}-byte body into shared: {e}"
+                                        "could not copy a {size}-byte body into the pool: {e}"
                                     ),
                                 }
                             })?;
+                            // Marked AFTER the copy, so a trap inside it cannot leave
+                            // the slot claiming to hold a body it does not.
+                            st.b.build_store(init_ptr, tag).unwrap();
                         }
-                        continue;
+                        break 'access;
                     }
-                    // A direct access resolves one slot; an indexed access
-                    // proves the whole range contiguous and uniform first, then
-                    // computes `first + index * width`.
-                    let (addr, width, kind) = if let Some(ix) = index {
-                        let (first_off, w, k) =
-                            resolve_shared_array(&data, slot, bound, float_bytes)?;
-                        let byte =
-                            st.b.build_int_add(
-                                i64t.const_int(u64::from(first_off), false),
-                                st.b.build_int_mul(
-                                    ix,
-                                    i64t.const_int(u64::from(w), false),
-                                    "sstride",
-                                )
-                                .unwrap(),
-                                "soff",
-                            )
-                            .unwrap();
-                        let a = unsafe {
-                            st.b.build_in_bounds_gep(i8t, base, &[byte], "sdataptr")
-                                .unwrap()
-                        };
-                        // **THREE WIDTHS, NOT TWO.** This mapped anything but
-                        // eight to ONE BYTE, so a four-byte float element loaded
-                        // a single byte of its value once `f32` gave shared
-                        // slots a four-byte width. Caught by the differential
-                        // rather than by review: native returned 11 where the
-                        // reference returned 22.
-                        (
-                            a,
-                            match w {
-                                8 => i64t,
-                                4 => ctx.i32_type(),
-                                _ => i8t,
-                            },
-                            k,
-                        )
-                    } else {
-                        let (byte_off, w, k) =
-                            resolve_shared_scalar(&data, slot, i8t, i64t, float_bytes)?;
-                        let a = unsafe {
-                            st.b.build_in_bounds_gep(
-                                i8t,
-                                base,
-                                &[i64t.const_int(u64::from(byte_off), false)],
-                                "sdataptr",
-                            )
-                            .unwrap()
-                        };
-                        (a, w, k)
-                    };
-                    if is_read {
-                        let raw =
-                            st.b.build_load(width, addr, "sdataload")
-                                .unwrap()
-                                .into_int_value();
-                        let v = if width == i64t {
-                            raw
-                        } else {
-                            st.b.build_int_z_extend(raw, i64t, "sdatazext").unwrap()
-                        };
-                        let v = if kind == SCALAR_BOOL {
-                            let nz =
-                                st.b.build_int_compare(
-                                    IntPredicate::NE,
-                                    v,
-                                    i64t.const_zero(),
-                                    "sboolnz",
-                                )
-                                .unwrap();
-                            st.b.build_int_z_extend(nz, i64t, "sboolz").unwrap()
-                        } else {
-                            v
-                        };
-                        // **THE TAG IS THE WHOLE OF THE FLOAT WORK ON THIS
-                        // PATH.** The eight bytes loaded are already the value:
-                        // the reference stores IEEE-754 little-endian at this
-                        // offset and the operand stack carries a float as its
-                        // bit pattern. Push it untagged and the application
-                        // binary interface is correct while every float
-                        // operation downstream refuses the operand -- the same
-                        // detail a float PARAMETER's local needed.
-                        if retcon_resume_type.is_some() {
-                            let category = match kind {
-                                SCALAR_FLOAT_TAG => OperandKind::Float,
-                                SCALAR_FIXED_TAG => OperandKind::Fixed,
-                                _ => OperandKind::Int,
-                            };
-                            // The shared layout already fixed the scalar load
-                            // width. Carry it into the coroutine yield check.
-                            st.push_k(v, Width::Scalar(width.get_bit_width() / 8), category);
-                        } else if kind == SCALAR_FLOAT_TAG {
-                            st.push_k(v, Width::Scalar(float_bytes), OperandKind::Float);
-                        } else if kind == SCALAR_FIXED_TAG {
-                            // **The same reasoning as the float tag above, for
-                            // the same reason it was missed there once.** The
-                            // width is left `Unknown` deliberately: only the
-                            // KIND is being recovered here, and widening a slot
-                            // read is a separate change with its own
-                            // consequences.
-                            st.push_k(v, Width::Unknown, OperandKind::Fixed);
-                        } else {
-                            st.push(v);
-                        }
-                    } else {
-                        // **THE WRITE SIDE NEEDS NO KIND CHECK, AND THAT IS A
-                        // CONCLUSION RATHER THAN AN OMISSION.** `Op::Call`
-                        // refuses a kind-versus-declaration disagreement because
-                        // the bitcast to the callee's floating-point parameter
-                        // type is a REPRESENTATION change, and the wrong one
-                        // produces a plausible number. Nothing converts here:
-                        // the operand already IS the bit pattern, and the same
-                        // eight bytes are stored whatever the tag says. A guard
-                        // would therefore prevent no wrong byte while REFUSING
-                        // valid programs -- concretely `s.x = h.f` for a private
-                        // float slot `h.f`, whose read is not kind-tracked and so
-                        // arrives tagged `Int` while carrying correct float bits.
-                        // That program lowers, and `shared_data.rs` pins it
-                        // agreeing with the reference byte for byte.
-                        let v = st.pop();
-                        let narrowed = if width == i64t {
-                            v
-                        } else {
-                            st.b.build_int_truncate(v, width, "sdatatrunc").unwrap()
-                        };
-                        st.b.build_store(addr, narrowed).unwrap();
-                    }
-                } else {
-                    // Private. Flat word array indexed from the boundary.
-                    if slot >= data.slot_count {
+                    // **THE SLOTS WITH NO POOL ENTRY**: everything above has
+                    // returned or continued, so a body operand reaching here is
+                    // headed for a slot the module does not declare as a persistent
+                    // composite — a shared slot, or a private one the pool table
+                    // does not name. The one-word store would write its ADDRESS, so
+                    // it is refused. No corpus module declares a shared composite,
+                    // so this arm has no subject and is deliberately not lowered.
+                    // **A SLOT WITH A STATED PLACEMENT IS NOT "NOWHERE TO PUT
+                    // IT".** The shared layout marks a composite slot and states its
+                    // body length, so such a slot is copied below rather than
+                    // refused here. The refusal is NARROWED to its actual subject —
+                    // a body whose destination outlives the region and has no stated
+                    // placement — rather than deleted.
+                    let shared_composite = data.shared_layout.get(slot as usize).is_some_and(|e| {
+                        e.kind & keleusma::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0
+                    });
+                    if !is_read && !shared_composite && st.width_at(0).is_body() {
                         return Err(LowerError::UnsupportedDataSlot {
                             slot,
-                            why: String::from("slot index outside the declared slot table"),
+                            why: String::from(
+                                "the operand is a flat composite body and this slot has no \
+                             persistent pool entry: a one-word store would write the body's \
+                             ADDRESS rather than copy its bytes",
+                            ),
                         });
                     }
-                    let base = private_base.expect("has_data implies the private pointer");
-                    let rel = slot - data.shared_count;
-                    let byte_index =
-                        st.b.build_int_mul(
-                            match index {
+
+                    if slot < data.shared_count {
+                        // Shared. An indexed shared access would need the layout
+                        // entries for the whole range proven contiguous, which the
+                        // table does not state, so it is refused rather than
+                        // assumed.
+                        let base = shared_base.expect("has_data implies the shared pointer");
+
+                        // **A SHARED COMPOSITE SLOT: COPY IN, ADDRESS OUT.**
+                        //
+                        // `SharedSlotLayout` STATES the body length, so unlike the
+                        // private pool this needs no derived size and no validated
+                        // partition — the length is a field, and recomputing it from
+                        // neighbouring offsets would be a second opinion free to
+                        // drift.
+                        //
+                        // **No initialisation word belongs here.** A private
+                        // composite slot's initial value is `Unit`, which is not a
+                        // body, so reading an unwritten one faults. The shared
+                        // segment has no such state: the host owns the buffer and
+                        // initialises it by contract, and the runtime copies out
+                        // whatever bytes are there and re-wraps them as the declared
+                        // kind. Inventing a fault here would be inventing one the
+                        // reference does not have.
+                        //
+                        // The address handed back on a read points into the HOST's
+                        // buffer, which outlives the call — which is why it is safe
+                        // where the same move into the ephemeral region would not be.
+                        if let Some(e) = data.shared_layout.get(slot as usize).filter(|e| {
+                            e.kind & keleusma::bytecode::SHARED_SLOT_COMPOSITE_FLAG != 0
+                        }) {
+                            // **INDEXED USES THE SAME RESOLVER THE SCALAR RANGE
+                            // USES**, which proves the whole declared range
+                            // contiguous and uniform before striding — now including
+                            // that every element states the same body length, since a
+                            // matching composite kind is not a matching size.
+                            let (first_off, len) = if indexed {
+                                let (off, stride, _kind) =
+                                    resolve_shared_array(&data, slot, bound, float_bytes)?;
+                                (off, stride)
+                            } else {
+                                if e.len == 0 {
+                                    return Err(LowerError::UnsupportedDataSlot {
+                                        slot,
+                                        why: String::from(
+                                            "a shared slot marked composite whose stated body length                                          is zero; the layout and the kind disagree",
+                                        ),
+                                    });
+                                }
+                                (e.offset, u32::from(e.len))
+                            };
+                            // The index was bounds-checked against the instruction's
+                            // own declared element count before the shared/private
+                            // split, and that remains the guard.
+                            let byte_off = match index {
+                                None => i64t.const_int(u64::from(first_off), false),
+                                Some(ix) => {
+                                    st.b.build_int_add(
+                                        i64t.const_int(u64::from(first_off), false),
+                                        st.b.build_int_mul(
+                                            ix,
+                                            i64t.const_int(u64::from(len), false),
+                                            "sharedstride",
+                                        )
+                                        .unwrap(),
+                                        "sharedoff",
+                                    )
+                                    .unwrap()
+                                }
+                            };
+                            let addr = unsafe {
+                                st.b.build_in_bounds_gep(i8t, base, &[byte_off], "sharedbody")
+                                    .unwrap()
+                            };
+                            if is_read {
+                                let as_int =
+                                    st.b.build_ptr_to_int(addr, i64t, "sharedbodyint").unwrap();
+                                st.push_w(as_int, Width::Body(len));
+                            } else {
+                                // The operand's width is cross-checked against the
+                                // stated length: two independent statements of one
+                                // number, and a disagreement sizes no copy.
+                                let w = st.width_at(0);
+                                match w {
+                                    Width::Body(n) if n == len => {}
+                                    other => {
+                                        return Err(LowerError::UnsupportedDataSlot {
+                                            slot,
+                                            why: format!(
+                                                "a shared composite slot of {len} bytes written from                                              an operand of {other:?}"
+                                            ),
+                                        });
+                                    }
+                                }
+                                let v = st.pop();
+                                let src =
+                                    st.b.build_int_to_ptr(
+                                        v,
+                                        ctx.ptr_type(AddressSpace::default()),
+                                        "sharedsrc",
+                                    )
+                                    .unwrap();
+                                st.b.build_memcpy(
+                                    addr,
+                                    1,
+                                    src,
+                                    1,
+                                    i64t.const_int(u64::from(len), false),
+                                )
+                                .map_err(|e| {
+                                    LowerError::UnsupportedDataSlot {
+                                        slot,
+                                        why: format!(
+                                            "could not copy a {len}-byte body into shared: {e}"
+                                        ),
+                                    }
+                                })?;
+                            }
+                            break 'access;
+                        }
+                        // A direct access resolves one slot; an indexed access
+                        // proves the whole range contiguous and uniform first, then
+                        // computes `first + index * width`.
+                        let (addr, width, kind) = if let Some(ix) = index {
+                            let (first_off, w, k) =
+                                resolve_shared_array(&data, slot, bound, float_bytes)?;
+                            let byte =
+                                st.b.build_int_add(
+                                    i64t.const_int(u64::from(first_off), false),
+                                    st.b.build_int_mul(
+                                        ix,
+                                        i64t.const_int(u64::from(w), false),
+                                        "sstride",
+                                    )
+                                    .unwrap(),
+                                    "soff",
+                                )
+                                .unwrap();
+                            let a = unsafe {
+                                st.b.build_in_bounds_gep(i8t, base, &[byte], "sdataptr")
+                                    .unwrap()
+                            };
+                            // **THREE WIDTHS, NOT TWO.** This mapped anything but
+                            // eight to ONE BYTE, so a four-byte float element loaded
+                            // a single byte of its value once `f32` gave shared
+                            // slots a four-byte width. Caught by the differential
+                            // rather than by review: native returned 11 where the
+                            // reference returned 22.
+                            (
+                                a,
+                                match w {
+                                    8 => i64t,
+                                    4 => ctx.i32_type(),
+                                    _ => i8t,
+                                },
+                                k,
+                            )
+                        } else {
+                            let (byte_off, w, k) =
+                                resolve_shared_scalar(&data, slot, i8t, i64t, float_bytes)?;
+                            let a = unsafe {
+                                st.b.build_in_bounds_gep(
+                                    i8t,
+                                    base,
+                                    &[i64t.const_int(u64::from(byte_off), false)],
+                                    "sdataptr",
+                                )
+                                .unwrap()
+                            };
+                            (a, w, k)
+                        };
+                        if is_read {
+                            let raw =
+                                st.b.build_load(width, addr, "sdataload")
+                                    .unwrap()
+                                    .into_int_value();
+                            let v = if width == i64t {
+                                raw
+                            } else {
+                                st.b.build_int_z_extend(raw, i64t, "sdatazext").unwrap()
+                            };
+                            let v = if kind == SCALAR_BOOL {
+                                let nz =
+                                    st.b.build_int_compare(
+                                        IntPredicate::NE,
+                                        v,
+                                        i64t.const_zero(),
+                                        "sboolnz",
+                                    )
+                                    .unwrap();
+                                st.b.build_int_z_extend(nz, i64t, "sboolz").unwrap()
+                            } else {
+                                v
+                            };
+                            // **THE TAG IS THE WHOLE OF THE FLOAT WORK ON THIS
+                            // PATH.** The eight bytes loaded are already the value:
+                            // the reference stores IEEE-754 little-endian at this
+                            // offset and the operand stack carries a float as its
+                            // bit pattern. Push it untagged and the application
+                            // binary interface is correct while every float
+                            // operation downstream refuses the operand -- the same
+                            // detail a float PARAMETER's local needed.
+                            if retcon_resume_type.is_some() {
+                                let category = match kind {
+                                    SCALAR_FLOAT_TAG => OperandKind::Float,
+                                    SCALAR_FIXED_TAG => OperandKind::Fixed,
+                                    _ => OperandKind::Int,
+                                };
+                                // The shared layout already fixed the scalar load
+                                // width. Carry it into the coroutine yield check.
+                                st.push_k(v, Width::Scalar(width.get_bit_width() / 8), category);
+                            } else if kind == SCALAR_FLOAT_TAG {
+                                st.push_k(v, Width::Scalar(float_bytes), OperandKind::Float);
+                            } else if kind == SCALAR_FIXED_TAG {
+                                // **The same reasoning as the float tag above, for
+                                // the same reason it was missed there once.** The
+                                // width is left `Unknown` deliberately: only the
+                                // KIND is being recovered here, and widening a slot
+                                // read is a separate change with its own
+                                // consequences.
+                                st.push_k(v, Width::Unknown, OperandKind::Fixed);
+                            } else {
+                                st.push(v);
+                            }
+                        } else {
+                            // **THE WRITE SIDE NEEDS NO KIND CHECK, AND THAT IS A
+                            // CONCLUSION RATHER THAN AN OMISSION.** `Op::Call`
+                            // refuses a kind-versus-declaration disagreement because
+                            // the bitcast to the callee's floating-point parameter
+                            // type is a REPRESENTATION change, and the wrong one
+                            // produces a plausible number. Nothing converts here:
+                            // the operand already IS the bit pattern, and the same
+                            // eight bytes are stored whatever the tag says. A guard
+                            // would therefore prevent no wrong byte while REFUSING
+                            // valid programs -- concretely `s.x = h.f` for a private
+                            // float slot `h.f`, whose read is not kind-tracked and so
+                            // arrives tagged `Int` while carrying correct float bits.
+                            // That program lowers, and `shared_data.rs` pins it
+                            // agreeing with the reference byte for byte.
+                            let v = st.pop();
+                            let narrowed = if width == i64t {
+                                v
+                            } else {
+                                st.b.build_int_truncate(v, width, "sdatatrunc").unwrap()
+                            };
+                            st.b.build_store(addr, narrowed).unwrap();
+                        }
+                    } else {
+                        // Private. Flat word array indexed from the boundary.
+                        if slot >= data.slot_count {
+                            return Err(LowerError::UnsupportedDataSlot {
+                                slot,
+                                why: String::from("slot index outside the declared slot table"),
+                            });
+                        }
+                        let base = private_base.expect("has_data implies the private pointer");
+                        let rel = slot - data.shared_count;
+                        let byte_index =
+                            st.b.build_int_mul(
+                                match index {
+                                    Some(ix) => {
+                                        st.b.build_int_add(
+                                            ix,
+                                            i64t.const_int(u64::from(rel), false),
+                                            "pidx",
+                                        )
+                                        .unwrap()
+                                    }
+                                    None => i64t.const_int(u64::from(rel), false),
+                                },
+                                i64t.const_int(u64::from(PRIVATE_SLOT_BYTES), false),
+                                "pbyte",
+                            )
+                            .unwrap();
+                        let addr = unsafe {
+                            st.b.build_in_bounds_gep(i8t, base, &[byte_index], "pdataptr")
+                                .unwrap()
+                        };
+                        // **Alignment is part of this ABI, not an accident.** A
+                        // slot is a whole word, so the region must be aligned to
+                        // `PRIVATE_SLOT_BYTES` and every access is naturally
+                        // aligned within it. The alignment is set explicitly
+                        // because the default inkwell emits is narrower than the
+                        // access, and a store whose declared alignment exceeds the
+                        // pointer's true alignment is undefined behaviour that
+                        // presents as a bus fault rather than a wrong answer. A
+                        // caller passing a `Vec<u8>` base, whose alignment contract
+                        // is one byte, violates this; the harness allocates a word
+                        // slice for exactly that reason.
+                        let private_kind = if st.runtime_kinds.is_some() {
+                            let relative = match index {
                                 Some(ix) => {
                                     st.b.build_int_add(
                                         ix,
                                         i64t.const_int(u64::from(rel), false),
-                                        "pidx",
+                                        "private_relative_slot",
                                     )
                                     .unwrap()
                                 }
                                 None => i64t.const_int(u64::from(rel), false),
-                            },
-                            i64t.const_int(u64::from(PRIVATE_SLOT_BYTES), false),
-                            "pbyte",
-                        )
-                        .unwrap();
-                    let addr = unsafe {
-                        st.b.build_in_bounds_gep(i8t, base, &[byte_index], "pdataptr")
-                            .unwrap()
-                    };
-                    // **Alignment is part of this ABI, not an accident.** A
-                    // slot is a whole word, so the region must be aligned to
-                    // `PRIVATE_SLOT_BYTES` and every access is naturally
-                    // aligned within it. The alignment is set explicitly
-                    // because the default inkwell emits is narrower than the
-                    // access, and a store whose declared alignment exceeds the
-                    // pointer's true alignment is undefined behaviour that
-                    // presents as a bus fault rather than a wrong answer. A
-                    // caller passing a `Vec<u8>` base, whose alignment contract
-                    // is one byte, violates this; the harness allocates a word
-                    // slice for exactly that reason.
-                    let private_kind = if st.runtime_kinds.is_some() {
-                        let relative = match index {
-                            Some(ix) => {
-                                st.b.build_int_add(
-                                    ix,
-                                    i64t.const_int(u64::from(rel), false),
-                                    "private_relative_slot",
-                                )
-                                .unwrap()
-                            }
-                            None => i64t.const_int(u64::from(rel), false),
-                        };
-                        Some((
-                            coroutine::private::pointer(&st.b, base, &data, relative)?,
-                            relative,
-                        ))
-                    } else {
-                        None
-                    };
-                    if is_read {
-                        let load = st.b.build_load(i64t, addr, "pdataload").unwrap();
-                        load.into_int_value()
-                            .as_instruction()
-                            .expect("a load is an instruction")
-                            .set_alignment(PRIVATE_SLOT_BYTES)
-                            .expect("PRIVATE_SLOT_BYTES is a power of two");
-                        if let Some((pointer, relative)) = private_kind {
-                            let tag =
-                                coroutine::private::load(&st.b, module, pointer, &data, relative);
-                            let flags = st.runtime_kinds.as_ref().unwrap();
-                            st.b.build_store(flags.slots[st.depth], tag).unwrap();
-                            st.b.build_store(flags.slot_sizes[st.depth], i64t.const_zero())
-                                .unwrap();
-                            let output = &retcon_facts.unwrap()[&i].outputs[0];
-                            st.push_k(
-                                load.into_int_value(),
-                                output.width,
-                                coroutine::types::operand_kind(output.tag),
-                            );
+                            };
+                            Some((
+                                coroutine::private::pointer(&st.b, base, &data, relative)?,
+                                relative,
+                            ))
                         } else {
-                            st.push(load.into_int_value());
+                            None
+                        };
+                        if is_read {
+                            let load = st.b.build_load(i64t, addr, "pdataload").unwrap();
+                            load.into_int_value()
+                                .as_instruction()
+                                .expect("a load is an instruction")
+                                .set_alignment(PRIVATE_SLOT_BYTES)
+                                .expect("PRIVATE_SLOT_BYTES is a power of two");
+                            if let Some((pointer, relative)) = private_kind {
+                                let tag = coroutine::private::load(
+                                    &st.b, module, pointer, &data, relative,
+                                );
+                                let flags = st.runtime_kinds.as_ref().unwrap();
+                                st.b.build_store(flags.slots[st.depth], tag).unwrap();
+                                st.b.build_store(flags.slot_sizes[st.depth], i64t.const_zero())
+                                    .unwrap();
+                                let output = &retcon_facts.unwrap()[&i].outputs[0];
+                                st.push_k(
+                                    load.into_int_value(),
+                                    output.width,
+                                    coroutine::types::operand_kind(output.tag),
+                                );
+                            } else {
+                                st.push(load.into_int_value());
+                            }
+                        } else {
+                            if let Some((pointer, _)) = private_kind {
+                                st.b.build_store(pointer, st.input_tags[st.depth - 1])
+                                    .unwrap()
+                                    .set_alignment(1)
+                                    .unwrap();
+                            }
+                            let v = st.pop();
+                            let store = st.b.build_store(addr, v).unwrap();
+                            store
+                                .set_alignment(PRIVATE_SLOT_BYTES)
+                                .expect("PRIVATE_SLOT_BYTES is a power of two");
                         }
-                    } else {
-                        if let Some((pointer, _)) = private_kind {
-                            st.b.build_store(pointer, st.input_tags[st.depth - 1])
-                                .unwrap()
-                                .set_alignment(1)
-                                .unwrap();
-                        }
-                        let v = st.pop();
-                        let store = st.b.build_store(addr, v).unwrap();
-                        store
-                            .set_alignment(PRIVATE_SLOT_BYTES)
-                            .expect("PRIVATE_SLOT_BYTES is a power of two");
                     }
+                }
+                if let Some(done) = write_done {
+                    if st.b.get_insert_block().unwrap().get_terminator().is_none() {
+                        st.b.build_unconditional_branch(done).unwrap();
+                    }
+                    st.b.position_at_end(done);
+                }
+                if let (Some(raw), Some(bad)) = (raw_index, out_of_range) {
+                    // A read's value keeps the slot's width and kind; see the
+                    // upstream premise recorded in `coroutine/types.rs`.
+                    if let Some(fallback) = fallback {
+                        let (w, k) = (st.width_at(0), st.kind_at(0));
+                        let loaded = st.pop();
+                        let value =
+                            st.b.build_select(bad, fallback, loaded, "data_value")
+                                .unwrap()
+                                .into_int_value();
+                        st.push_k(value, w, k);
+                    }
+                    st.push_w(raw, Width::Scalar(8));
+                    st.push_bound_outcome(i64t.const_int(u64::from(bound), false), bad);
                 }
             }
             // Flat composite construction. The body goes at a COMPILE-TIME
@@ -7763,14 +7919,41 @@ fn lower_chunk_body<'ctx>(
                         ));
                     }
                 };
+                // **FLAT WORD AND BYTE READS ARE TOTAL SINCE ABSORPTION 82.**
+                // An out-of-range index yields a zero of the element kind and
+                // the six-Word bounds suffix follows the value. The compiler
+                // dispatches a set flag to `Trap(IndexOutOfBounds)`. The other
+                // flat kinds keep the faulting contract and its guard.
+                //
+                // The load sits behind a branch rather than a clamped index,
+                // because a zero-length array has no element zero to read.
+                //
                 // **GUARD BEFORE POPPING**: the widths are read off the stack
                 // while the operands are still on it.
-                guard_array_index(ctx, func, &mut st, trap_bb, i64t, elem, "GetIndex")?;
+                let total =
+                    keleusma::bytecode::ArrayElem::Flat { kind: *kind }.has_bounds_outcome();
+                let count = if total {
+                    Some(array_element_count(&mut st, i64t, elem, "GetIndex")?)
+                } else {
+                    guard_array_index(ctx, func, &mut st, trap_bb, i64t, elem, "GetIndex")?;
+                    None
+                };
                 // The index is popped BEFORE the array, matching the virtual
                 // machine's order; reversing them reads the array handle as an
                 // index and indexes by a pointer.
                 let index = st.pop();
                 let addr_int = st.pop();
+                let outcome = count.map(|count| {
+                    let bad =
+                        st.b.build_int_compare(IntPredicate::UGE, index, count, "idxoob")
+                            .unwrap();
+                    let before = st.b.get_insert_block().unwrap();
+                    let read = ctx.append_basic_block(func, "index_read");
+                    let done = ctx.append_basic_block(func, "index_done");
+                    st.b.build_conditional_branch(bad, done, read).unwrap();
+                    st.b.position_at_end(read);
+                    (count, bad, before, done)
+                });
                 let base = st
                     .b
                     .build_int_to_ptr(addr_int, ctx.ptr_type(AddressSpace::default()), "cibase")
@@ -7818,11 +8001,26 @@ fn lower_chunk_body<'ctx>(
                     // Zero, not sign: a `Byte` holds `0..=255` in a full slot.
                     (st.b.build_int_z_extend(bv, i64t, "cizext").unwrap(), 1u32)
                 };
+                let v = match outcome {
+                    Some((_, _, before, done)) => {
+                        let read = st.b.get_insert_block().unwrap();
+                        st.b.build_unconditional_branch(done).unwrap();
+                        st.b.position_at_end(done);
+                        let merged = st.b.build_phi(i64t, "index_value").unwrap();
+                        merged.add_incoming(&[(&i64t.const_zero(), before), (&v, read)]);
+                        merged.as_basic_value().into_int_value()
+                    }
+                    None => v,
+                };
                 // **THE TAG, WHICH IS THE HALF THAT KEEPS BEING FORGOTTEN.**
                 // Untagged, the element is packed and read correctly and then
                 // refused by every float operation downstream -- the same miss
                 // the entry ABI and the shared slot each made once.
                 st.push_k(v, Width::Scalar(w), operand_kind_of(*kind));
+                if let Some((count, bad, _, _)) = outcome {
+                    st.push_w(index, Width::Scalar(8));
+                    st.push_bound_outcome(count, bad);
+                }
             }
             // Enum discriminant test. **PEEKS, like `BoundsCheck`**: the virtual
             // machine reads `stack.last()` and leaves the enum in place for the

@@ -1,10 +1,51 @@
-name: Native smoke
+name: Native gate
 
+# The complete native gate runs here in both float configurations, as the
+# operator directed on 2026-10-22. Until then this workflow ran only the
+# default-feature non-corpus subset, and the corpus differential and the
+# narrow-float configuration ran only when someone ran tools/backend-gate.sh.
+#
+# Paths: every input the native suite reads, plus its build inputs. The read set
+# is REACH in native_codegen/tools/gate-status.sh, which reach_census.rs checks
+# against the suite's actual reads, and native_workflow.rs checks that every
+# REACH entry is listed here, so the two cannot drift apart silently.
 on:
   push:
     branches: [main, 'v0.3.0']
+    paths:
+      - 'native_codegen/**'
+      - 'src/**'
+      - 'examples/**'
+      - 'compiler/kel/**'
+      - 'docs/decisions/**'
+      - 'docs/process/REVERSE_PROMPT.md'
+      - 'docs/process/handoffs/v0.3.0.md'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'keleusma-arena/**'
+      - 'keleusma-macros/**'
+      - 'keleusma-wire/**'
+      - 'keleusma-wire-derive/**'
+      - '.github/workflows/native.yml'
   pull_request:
     branches: [main, 'v0.3.0']
+    paths:
+      - 'native_codegen/**'
+      - 'src/**'
+      - 'examples/**'
+      - 'compiler/kel/**'
+      - 'docs/decisions/**'
+      - 'docs/process/REVERSE_PROMPT.md'
+      - 'docs/process/handoffs/v0.3.0.md'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'keleusma-arena/**'
+      - 'keleusma-macros/**'
+      - 'keleusma-wire/**'
+      - 'keleusma-wire-derive/**'
+      - '.github/workflows/native.yml'
 
 permissions:
   contents: read
@@ -15,9 +56,17 @@ concurrency:
 
 jobs:
   native:
-    name: Native default features
+    name: Native gate (${{ matrix.label }})
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: default features
+            flag: ''
+          - label: narrow-float-32
+            flag: '--narrow'
     defaults:
       run:
         working-directory: native_codegen
@@ -25,6 +74,9 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       CARGO_BUILD_JOBS: 2
+      NEXTEST_TEST_THREADS: 2
+      # Tests that need llc and llvm-readobj FAIL rather than skip when absent.
+      KEL_REQUIRE_LLVM_TOOLS: '1'
     steps:
       - uses: actions/checkout@v5
         with:
@@ -46,14 +98,8 @@ jobs:
             22.1.*) ;;
             *) echo 'Expected LLVM 22.1' >&2; exit 1 ;;
           esac
-          # Existing stack-bound tests use this absolute tool path.
-          # Fail on an existing path rather than replace an installation.
-          test ! -e /opt/local/libexec/llvm-22
-          test ! -L /opt/local/libexec/llvm-22
-          sudo mkdir -p /opt/local/libexec
-          sudo ln -s "$native_llvm_prefix" /opt/local/libexec/llvm-22
-          /opt/local/libexec/llvm-22/bin/llc --version
-          /opt/local/libexec/llvm-22/bin/llvm-readobj --version
+          "$native_llvm_prefix/bin/llc" --version
+          "$native_llvm_prefix/bin/llvm-readobj" --version
           cc --version
           {
             echo "LLVM_SYS_221_PREFIX=$native_llvm_prefix"
@@ -61,15 +107,19 @@ jobs:
             echo "RUSTFLAGS=-L native=$(brew --prefix)/lib"
             echo "SDKROOT=$(xcrun --show-sdk-path)"
           } >> "$GITHUB_ENV"
-      - name: Formatting
-        run: cargo fmt --all -- --check
+      - name: Lockfile is current
+        run: cargo metadata --locked --format-version 1 > /dev/null
       - name: Shell analysis
         run: shellcheck tools/*.sh
-      - name: Clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
-      - name: Non-corpus tests
-        run: cargo nextest run --locked --no-fail-fast --test-threads 2 -E 'not binary(corpus_differential)'
-      - name: Optimized non-corpus tests
+      - name: Documentation
         env:
-          KEL_OPTIMIZE: '1'
-        run: cargo nextest run --locked --no-fail-fast --test-threads 2 -E 'not binary(corpus_differential)'
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --no-deps
+      - name: Complete native gate
+        # fmt, clippy, the suite outside the corpus, the corpus differential,
+        # and the suite outside the corpus again under the middle end. The
+        # script exits non-zero on any phase failure.
+        run: tools/backend-gate.sh ${{ matrix.flag }}
+      - name: Gate record written by this run
+        if: always()
+        run: cat GATE_RECORD.md

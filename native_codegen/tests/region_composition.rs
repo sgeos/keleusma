@@ -193,9 +193,11 @@ fn every_streaming_module_reserves_the_same_flat_block() {
 #[test]
 fn the_reservation_share_across_the_corpus_is_pinned() {
     /// Modules with a stream chunk on the entry path.
-    const PINNED_STREAMING: usize = 28;
+    // 28 -> 30 and 25 -> 27 in absorption 82: the added stages `wire_debug.kel`
+    // and `wire_schema.kel` each reserve 98% of a 520-byte figure.
+    const PINNED_STREAMING: usize = 30;
     /// Of those, how many where the reservation is at least half the figure.
-    const PINNED_MAJORITY: usize = 25;
+    const PINNED_MAJORITY: usize = 27;
     /// The lowest share any streaming module shows, as a percentage.
     const PINNED_MIN_SHARE: u32 = 27;
 

@@ -36,7 +36,10 @@
 //! | **a verified module cannot present a depth disagreement** | **HARMLESS IF FALSE — the site no longer relies on it.** |
 //! | **a non-zero fraction count means the operand is `Fixed`** | **refuse — the count is the only static type signal, and a wrong one lowers a Fixed multiply as an integer** |
 //! | float division flows through `Op::Div`, not `CheckedDiv` | already corrected once; the note records the correction rather than the premise |
-//! | **the reference virtual machine has no `Fixed` arm for `Op::Mod`/`Op::Div`** | **refuse — and CHECKED, by `report_four_still_reproduces_on_the_reference`, which drives the reference and asserts it errors** |
+//! | ~~**the reference virtual machine has no `Fixed` arm for `Op::Mod`/`Op::Div`**~~ | **FALSIFIED in absorption 82, exactly as its check was written to detect.** Upstream gave both opcodes a Fixed arm, and the emitter now lowers a matched Fixed pair. `report_four_is_answered_and_the_answer_holds` watches the answer |
+//! | **a float operand is the only shape the compiler emits for bare `Div`/`Mod`** (absorption 82) | **harmless if false** — Word, Byte and Fixed operands each have a lowering compared against the reference, so the note describes the corpus rather than guarding anything |
+//! | **the compiler emits no zero-length indexed span** (absorption 82) | **refuse** — the arm refuses one rather than addressing an element that does not exist |
+//! | **a Unit fallback of an indexed read is never observed** (absorption 82, not phrase-shaped) | **MISLOWER if false, so CHECKED at the site**: a Unit-fallback read lowers only when the bare bounds trap follows it, and is refused otherwise |
 //! | **the reference packs a float field at `float_bytes`** | **refuse — and CHECKED, by `the_documented_composite_sizes_hold_in_this_configuration`. A wrong width here cannot mispack silently: `NewComposite` compares the packed bytes against the byte size the instruction bakes and refuses on a mismatch. Measured the same day — hardcoding the width to 8 yields *"packs 12 bytes but the instruction bakes 8"* under `narrow-float-32`, which is a refusal, not a wrong value** |
 //!
 //! # ⚠ THREE ENTRIES WERE INVISIBLE TO THIS CENSUS UNTIL 2026-09-12
@@ -62,11 +65,10 @@
 //! TypeError at run time."* That is a premise about a file this line does not
 //! own, and the kind most likely to rot.
 //!
-//! **It is checked by execution rather than by reading.**
-//! `report_four_still_reproduces_on_the_reference` builds the program, runs it on
-//! the reference, and asserts the run errors. If upstream gives `Op::Mod` a Fixed
-//! arm, that test fails and says the refusal here is now a coverage loss rather
-//! than a correctness guard.
+//! **It was checked by execution rather than by reading**, and the check
+//! worked: absorption 82 gave `Op::Mod` a Fixed arm, the reproduction failed as
+//! designed, and the refusal became the lowering it now is. The test is
+//! `report_four_is_answered_and_the_answer_holds` since then.
 //!
 //! Note the direction: **a false premise here costs a refusal, not a wrong
 //! value** — the safe side. It is checked anyway, because the premise is also the
@@ -138,7 +140,7 @@ const PREMISE_PHRASES: &[&str] = &[
 /// **Re-derive this rather than trusting it.** It moves with every increment
 /// that adds or removes such a comment, including this file's own prose being
 /// quoted into the emitter.
-const RECORDED_PREMISE_LINES: usize = 35;
+const RECORDED_PREMISE_LINES: usize = 36;
 // 12 -> 29 with the impossibility phrases. The seventeen new lines were read,
 // and they fall in one class: **statements of what the backend DECLINES** —
 // "an unknown width cannot be placed", "`Op::Add` cannot be lowered without

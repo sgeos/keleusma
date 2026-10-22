@@ -38,16 +38,39 @@ use keleusma_native::{LowerOptions, lower_module};
 use std::collections::BTreeMap;
 use std::process::Command;
 
+/// The MacPorts location, consulted only when `KEL_LLVM_BIN` does not name one.
 const LLVM_BIN: &str = "/opt/local/libexec/llvm-22/bin";
 
+/// Resolve an LLVM tool, preferring `KEL_LLVM_BIN` as `spike_native_frame.rs`
+/// does. **Only the fixed path was consulted until 2026-10-22**, so continuous
+/// integration had to symlink its LLVM into `/opt/local` with `sudo` for this
+/// test to measure anything.
 fn tool(name: &str) -> Option<String> {
-    let p = format!("{LLVM_BIN}/{name}");
-    Command::new(&p)
-        .arg("--version")
-        .output()
+    let dirs = std::env::var("KEL_LLVM_BIN")
         .ok()
-        .filter(|o| o.status.success())
-        .map(|_| p)
+        .into_iter()
+        .chain([LLVM_BIN.to_string()]);
+    dirs.map(|dir| format!("{dir}/{name}")).find(|p| {
+        Command::new(p)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    })
+}
+
+/// Skip loudly, or FAIL where the tools are required.
+///
+/// A skip is honest on a machine without LLVM and empty in continuous
+/// integration, which provisions the tools and sets `KEL_REQUIRE_LLVM_TOOLS`.
+/// There a missing tool means this resolution is wrong, which must not read as
+/// a green run that measured nothing.
+fn skip(what: &str) {
+    assert!(
+        std::env::var_os("KEL_REQUIRE_LLVM_TOOLS").is_none(),
+        "KEL_REQUIRE_LLVM_TOOLS is set and llc or llvm-readobj was not found, so {what} \
+         would have been skipped. Check KEL_LLVM_BIN."
+    );
+    eprintln!("\n\x1b[1;33mSKIPPED: {what} NOT verified by this run.\x1b[0m\n");
 }
 
 /// Per-function frame sizes, keyed by symbol, read from the emitted object.
@@ -189,10 +212,7 @@ fn a_native_stack_bound_is_computable_end_to_end() {
                fn mid(x: Word, y: Word) -> Word { leaf(x) - leaf(y) }
                fn main(a: Word, b: Word) -> Word { mid(a, b) + leaf(a) }";
     let Some(sizes) = frame_sizes(src, &dir) else {
-        eprintln!(
-            "\n\x1b[1;33mSKIPPED: llc or llvm-readobj not found, so the native stack bound was \
-             NOT verified by this run.\x1b[0m\n"
-        );
+        skip("llc or llvm-readobj not found, so the native stack bound was");
         return;
     };
     assert!(
@@ -236,9 +256,7 @@ fn a_deeper_call_chain_raises_the_bound() {
                 fn f3(x: Word) -> Word { f2(x) - 7 }
                 fn main(a: Word, b: Word) -> Word { f3(a) + f3(b) }";
     let (Some(sf), Some(sd)) = (frame_sizes(flat, &dir), frame_sizes(deep, &dir)) else {
-        eprintln!(
-            "\n\x1b[1;33mSKIPPED: LLVM tools absent; depth sensitivity NOT verified.\x1b[0m\n"
-        );
+        skip("LLVM tools absent; depth sensitivity was");
         return;
     };
     let mf = compile(&parse(&tokenize(flat).expect("lex")).expect("parse")).expect("compile");

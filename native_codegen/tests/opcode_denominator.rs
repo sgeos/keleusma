@@ -226,7 +226,10 @@ const RECORDED: &[(&str, Class)] = &[
     ("CmpLt", Class::Lowered),
     ("CmpNe", Class::Lowered),
     ("Const", Class::Lowered),
-    ("Div", Class::Lowered),
+    // NotEmitted since absorption 82: upstream compiles Word and Byte `/` and
+    // `%` to the checked forms, and no corpus program divides floats. The arm
+    // exists and is driven by `driven_opcode_witnesses.rs`.
+    ("Div", Class::NotEmitted),
     ("Dup", Class::Lowered),
     ("Else", Class::Lowered),
     ("EndIf", Class::Lowered),
@@ -256,7 +259,10 @@ const RECORDED: &[(&str, Class)] = &[
     ("IsStruct", Class::NotEmitted),
     ("Len", Class::NotEmitted),
     ("Loop", Class::Lowered),
-    ("Mod", Class::Lowered),
+    // NotEmitted since absorption 82: upstream compiles Word and Byte `/` and
+    // `%` to the checked forms, and no corpus program divides floats. The arm
+    // exists and is driven by `driven_opcode_witnesses.rs`.
+    ("Mod", Class::NotEmitted),
     ("Mul", Class::Lowered),
     ("Neg", Class::Lowered),
     // Lowered as an OPCODE. Four of its eight operand variants are never

@@ -519,6 +519,16 @@ fn a_degenerate_stream_visits_its_stream_op_and_never_its_reset() {
 /// `(opcode, disposition, evidence)`.
 const DISPOSITIONS: &[(&str, &str, &str)] = &[
     (
+        "Div",
+        "LOWERED, with no corpus feeder since absorption 82",
+        "upstream made bare division total and moved Word and Byte `/` onto CheckedDiv(0), so only a Float division emits this opcode, and no corpus program divides floats. The arm lowers the checked triple and is driven by driven_opcode_witnesses.rs and by retcon_bytecode.rs, whose bare dispatch covers Word, Byte and Float operands against the reference.",
+    ),
+    (
+        "Mod",
+        "LOWERED, with no corpus feeder since absorption 82",
+        "as Div: Word and Byte `%` compile to CheckedMod, a Float remainder is the only producer, and the corpus has none. Driven by the same two files.",
+    ),
+    (
         "Len",
         "REFUSING IS CORRECT, and lowering it would be a defect",
         "the virtual machine returns InvalidBytecode for Op::Len on a flat body. A          backend that lowered it would compute a length where the reference traps,          manufacturing divergence in the one signal this line treats as its          correctness oracle. That runtime arm is still live and is still pinned, now          through INJECTED bytecode rather than a compiled program: see          len_flat_array_hazard.rs leg 2. WHAT CHANGED ON 2026-09-05 is upstream, not          here -- the reference compiler stopped emitting the opcode from any source,          so the refusal has no feeder. THE REFUSAL IS NOT WITHDRAWN. A module can          still carry the opcode by decode or by hand, and this backend must keep          refusing it. See OP_LEN_PRODUCER_CENSUS.md.",

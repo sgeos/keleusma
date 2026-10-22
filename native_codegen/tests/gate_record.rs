@@ -8,7 +8,8 @@
 //! absorptions), and the shared pre-push hook runs a `--workspace` selector,
 //! which cannot reach a detached package. At that date `tools/backend-gate.sh` was
 //! the only gate covering this code. Since 2026-10-01 a dedicated workflow covers
-//! default-feature non-corpus tests. Complete native gates remain separate.
+//! it, and since 2026-10-22 that workflow runs the complete gate script in both
+//! configurations. Its record stays inside the runner; this file is local provenance.
 //!
 //! That made the line's most-repeated claim -- "green in both float
 //! configurations" -- unverifiable from the tree. `GATE_RECORD.md` makes it a

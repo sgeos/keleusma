@@ -140,7 +140,9 @@ step "Detached compiler/ subproject (fmt, clippy, tests — also the selfhost-co
 # in terms, that the native lowering was not verified by this run.
 KEL_LLVM_PREFIX_DEFAULT=/opt/local/libexec/llvm-22
 if [ -n "${LLVM_SYS_221_PREFIX:-}" ] || [ -d "$KEL_LLVM_PREFIX_DEFAULT" ]; then
-  step "Detached native_codegen/ subproject (fmt, clippy, tests — gated nowhere else)"
+  # Until 2026-10-22 the label claimed this package had no other gate. The native
+  # workflow has covered it on v0.3.0 integrations since 2026-10-01.
+  step "Detached native_codegen/ subproject (fmt, clippy, tests — also the native CI workflow)"
   # `cargo doc` belongs here for the reason the comment above this step
   # gives about the workspace Doc job: this package declares its own
   # `[workspace]` and is absent from the parent's `members`, so

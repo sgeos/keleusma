@@ -150,6 +150,26 @@ fn main() -> Word { f() }
     chunk
         .ops
         .splice(at..at, [Op::GetLocal(slot), Op::Len, Op::PopN(1)]);
+    // **RETARGET, THE THIRD CORRECTION.** Since absorption 82 even `a[0]` emits
+    // the bounds dispatch `If; Trap; EndIf`, so this subject has control flow
+    // after all, and the splice left `If at 12 targets 11`: a branch-target
+    // refusal while the test claimed a runtime one. Every target at or past the
+    // splice moves by the three inserted instructions.
+    for op in chunk.ops.iter_mut() {
+        match op {
+            Op::If(t)
+            | Op::Else(t)
+            | Op::Loop(t)
+            | Op::EndLoop(t)
+            | Op::Break(t)
+            | Op::BreakIf(t)
+                if usize::from(*t) >= at =>
+            {
+                *t += 3
+            }
+            _ => {}
+        }
+    }
     assert!(emits(&m, "Len"), "the injection did not take");
 
     let arena = keleusma_arena::Arena::with_capacity(65536);

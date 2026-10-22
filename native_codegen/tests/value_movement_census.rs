@@ -69,6 +69,7 @@
 //! |---|---|---|
 //! | stable arena-slot header | until release | continuation points into emitted code kept alive by the host; the reply cell carries scalar bits; release stores a null continuation |
 //! | operand slot (`push_w`) | no — dies with the call | nothing needed; an address is the intended content |
+//! | operand slot, Fixed remainder high half (absorption 82) | no — dies with the call | a constant zero overwrites a slot the triple just filled; no address is involved |
 //! | local slot (`SetLocal`, parameters, the resume value) | no — cleared at `Op::Reset` | nothing needed, same reason |
 //! | retcon latest reply | yes, until release | the public lowering admits scalar parameters only; initialised at start and updated on resume |
 //! | retcon delegate context | yes, until release | three pointers refer only to the reply cell or entry locals that LLVM captures in the same frame; helper stores update the same scalar entry parameter and latest reply |
@@ -137,7 +138,8 @@ const MOVE_FORMS: &[&str] = &[
 // 24 -> 27, including the coroutine context and parsed intrinsic helper.
 // 27 -> 30 for the stable continuation, reply, and release stores.
 // 59 -> 63 with selected output size, field store, body copy and padding.
-const RECORDED_MOVE_SITES: usize = 80;
+// 80 -> 81 in absorption 82: the Fixed `Div`/`Mod` arm zeroes the high slot.
+const RECORDED_MOVE_SITES: usize = 81;
 // 18 -> 19 on 2026-09-11, when the shared composite slot landed: one body copy
 // into the host's buffer, at the offset and length the module's shared layout
 // STATES. Unlike the persistent pool, nothing here is derived — so there is no

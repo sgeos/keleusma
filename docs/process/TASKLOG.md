@@ -6108,3 +6108,28 @@ The reviewed interline checkpoint is included. No runtime code changed.
 The archive records verification limits and pilot sampling omissions.
 Verification passed 13 root and 23 native documentation and provenance tests.
 Both commands exited zero. Full native gates were not repeated.
+
+
+## V0.3.X absorption 82, 2026-10-22
+
+Claude Code on `feat/v3-absorption-82`, cut from `v0.3.0` at `13c9ed11` after the
+Codex handoff commit was pushed. Absorption 82 merged 78 upstream commits at
+`bd62e6fd`, through `cc48dc61`. The receipt is in
+`docs/decisions/ABSORPTION_82_BRIEF.md`.
+
+Upstream made division and indexed access total. The native backend now lowers the
+new contracts in both paths, computes checked division in 64 bits, and lowers a
+matched Fixed `Div` or `Mod` now that report 4 is answered. One emitter defect of
+the terminator-walk class was fixed in `certified_local_widths`, with four test
+walks of the same class. The four audit findings of the same day are closed as the
+operator directed. Report 4 is marked answered and report six is re-measured above.
+
+Verification before the gate commit: 777 non-corpus native tests and the corpus
+differential were run on intermediate trees while the repairs proceeded, and the
+root documentation, citation and correspondence guards passed 12 of 12 on the final
+edits. The complete native gates run on the committed tree, and their outcome is
+recorded in the receipt that follows this section, not predicted here.
+
+Open for the operator: whether a hosted run of the complete native gate satisfies
+the full-gate requirement before publication or `main`. Next intended step:
+reconcile the Workstream B acceptance matrix against the absorbed runtime.

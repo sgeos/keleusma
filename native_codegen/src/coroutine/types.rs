@@ -733,7 +733,12 @@ fn analyze(
                     out.copy_from_slice(&[k, k, WORD]);
                 }
                 Op::Add | Op::Sub | Op::Mul | Op::Neg => out[0] = numeric(BYTE | FIXED | FLOAT)?,
-                Op::Div | Op::Mod => out[0] = numeric(WORD | BYTE | FLOAT)?,
+                // Total since absorption 82: low, high and a Word flag, as the
+                // checked family, whose Fixed arm keeps the high slot zero.
+                Op::Div | Op::Mod => {
+                    let k = numeric(WORD | BYTE | FIXED | FLOAT)?;
+                    out.copy_from_slice(&[k, k, WORD]);
+                }
                 Op::CmpEq | Op::CmpNe => {
                     // PartialEq accepts unlike kinds and Unit. It must not
                     // acquire the consuming type guards used by arithmetic.
@@ -804,9 +809,10 @@ fn analyze(
                     require_arg(0, BYTE)?;
                     out[0] = WORD;
                 }
+                // The index survives beneath four bound limbs and a flag.
                 Op::BoundsCheck(_) => {
                     require_arg(0, WORD)?;
-                    out[0] = WORD;
+                    out.fill(WORD);
                 }
                 Op::GetData(i)
                 | Op::SetData(i)
@@ -840,10 +846,32 @@ fn analyze(
                     for s in *i..end {
                         kinds |= slot(m, s, private_kinds);
                     }
-                    if matches!(op, Op::GetDataIndexed(..) | Op::SetDataIndexed(..)) {
-                        require_arg(args.len().checked_sub(1).ok_or_else(fail)?, WORD)?;
+                    // The indexed forms are total since absorption 82. A read
+                    // pops `[index, fallback]` and a write `[value, index]`;
+                    // both push the six-Word suffix after any value.
+                    let index_arg = match op {
+                        Op::GetDataIndexed(..) => Some(0),
+                        Op::SetDataIndexed(..) => Some(1),
+                        _ => None,
+                    };
+                    if let Some(index_arg) = index_arg {
+                        if args.len() != 2 {
+                            return Err(fail());
+                        }
+                        require_arg(index_arg, WORD)?;
                     }
-                    if out.is_empty() {
+                    if let Op::GetDataIndexed(..) = op {
+                        // **The value keeps the SLOT's kind, an upstream premise.**
+                        // An out-of-range read yields the fallback, and the
+                        // compiler's fallback is Unit for every element other
+                        // than Word and Byte. It is observable only on the flag
+                        // one path, which the bare form traps and the handled
+                        // write never enters, so the value seen is the slot's.
+                        require_arg(1, UNIT | BYTE | WORD)?;
+                        out.fill(WORD);
+                        out[0] = kinds;
+                    } else if matches!(op, Op::SetData(..) | Op::SetDataIndexed(..)) {
+                        out.fill(WORD);
                         for slot_index in *i..end {
                             if m.data_layout
                                 .as_ref()
@@ -910,6 +938,8 @@ fn analyze(
                 Op::GetIndex(kind) => {
                     require_arg(0, ARRAY)?;
                     require_arg(1, WORD)?;
+                    // A flat Word or Byte read also pushes the bounds suffix.
+                    out.fill(WORD);
                     out[0] = match kind {
                         keleusma::bytecode::ArrayElem::Flat { kind } => scalar(kind.to_tag()),
                         keleusma::bytecode::ArrayElem::FlatNested { variant, .. } => {

@@ -145,10 +145,24 @@ fn corpus() -> Vec<(std::path::PathBuf, Module)> {
     out
 }
 
+/// Continuous integration provisions the tools and sets `KEL_REQUIRE_LLVM_TOOLS`,
+/// so a skip there would be an empty green rather than an honest one.
+///
+/// A function rather than an inline assertion, so `skippable_tests.rs` still
+/// counts the spike as one that can pass without measuring, which it can
+/// wherever the variable is unset.
+fn refuse_skip_where_required() {
+    assert!(
+        std::env::var_os("KEL_REQUIRE_LLVM_TOOLS").is_none(),
+        "KEL_REQUIRE_LLVM_TOOLS is set and no llc/llvm-readobj was found. Check KEL_LLVM_BIN."
+    );
+}
+
 /// THE DEFERRED MEASUREMENT: the real frame, against the verifier's bound.
 #[test]
 fn spike_report_real_native_frame() {
     let Some(bin) = llvm_bin() else {
+        refuse_skip_where_required();
         println!(
             "\nSKIPPED: no llc/llvm-readobj found. Set KEL_LLVM_BIN to measure.\n\
              This is a reporting spike, not a regression test, so a missing\n\

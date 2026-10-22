@@ -863,86 +863,72 @@ fn byte_conversions_agree_with_the_vm() {
     }
 }
 
-/// Build a module whose entry chunk is `GetLocal(0); BoundsCheck(bound); Return`.
+/// Build a module whose entry chunk is `GetLocal(0); BoundsCheck(bound);
+/// PopN(drop); Return`, so the value returned is the outcome entry `drop`
+/// places below the top: the flag at zero, then the limbs from the most
+/// significant, and the index itself at five.
 ///
-/// `Op::BoundsCheck` is emitted by the reference compiler ONLY for multi-level
-/// data-segment indexing, and the data-segment opcodes are Workstream D and
-/// unsupported here, so no compilable source reaches it. Rewriting real
-/// bytecode is the same technique used for `PushImmediate`'s integer encoding,
-/// and for the same reason: the opcode is part of the instruction set whether or
-/// not today's compiler emits it.
-fn bounds_check_module(bound: u16) -> keleusma::bytecode::Module {
+/// Rewriting real bytecode is the technique used for `PushImmediate`'s integer
+/// encoding, for the same reason: the opcode is part of the instruction set
+/// whatever shape today's compiler emits it in.
+fn bounds_check_module(bound: u16, drop: u8) -> keleusma::bytecode::Module {
     let src = "fn main(a: Word, b: Word) -> Word { a }";
     let mut m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
-    m.chunks[0].ops = vec![Op::GetLocal(0), Op::BoundsCheck(bound), Op::Return];
+    m.chunks[0].ops = vec![Op::GetLocal(0), Op::BoundsCheck(bound)];
+    if drop > 0 {
+        m.chunks[0].ops.push(Op::PopN(drop));
+    }
+    m.chunks[0].ops.push(Op::Return);
     m
 }
 
+/// **`BoundsCheck` IS TOTAL SINCE ABSORPTION 82, and that made the failing case
+/// differential.** It used to fault, leaving native code nothing to compare but
+/// an abort. It now keeps the index and pushes four bound limbs and a flag, and
+/// the compiler dispatches a set flag to `Trap(IndexOutOfBounds)`. So every
+/// entry of the outcome, for in-range and out-of-range indices alike, is a value
+/// both sides return.
+///
+/// **The negative indices are the cases that matter.** The lowering folds both
+/// failure directions into ONE unsigned compare, which is only correct because
+/// a negative `i64` reinterpreted as unsigned is enormous.
 #[test]
-fn an_in_range_bounds_check_passes_the_operand_through_unchanged() {
-    // **`BoundsCheck` PEEKS, it does not pop.** The VM reads `stack.last()` and
-    // leaves the operand for the indexing opcode that follows. A lowering that
-    // consumed it would leave `Return` reading the wrong slot, and the failure
-    // would surface as a wrong VALUE rather than as an obvious stack error.
-    //
-    // That is exactly what this checks: the operand must survive the check and
-    // still be what `Return` yields.
-    for (bound, idx) in [(10u16, 0i64), (10, 9), (1, 0), (65535, 65534)] {
-        let m = bounds_check_module(bound);
-        let native = native_result_of(&m, &[idx, 0]);
-        let vm = vm_result_of(m, &[idx, 0]);
-        assert_eq!(
-            (native, vm),
-            (idx, idx),
-            "an in-range index must pass through unchanged for bound={bound}, idx={idx}"
-        );
+fn every_bounds_check_outcome_entry_agrees_with_the_vm() {
+    let indices = [0i64, 9, 10, 11, -1, i64::MIN, i64::MAX, 65534, 65535];
+    let mut flags_seen = [false; 2];
+    for bound in [1u16, 10, 0x80, 200, 0x1234, 65535] {
+        for idx in indices {
+            for drop in 0..=5u8 {
+                let m = bounds_check_module(bound, drop);
+                let native = native_result_of(&m, &[idx, 0]);
+                let vm = vm_result_of(m, &[idx, 0]);
+                assert_eq!(
+                    native, vm,
+                    "outcome entry {drop} disagrees for bound={bound}, idx={idx}"
+                );
+                if drop == 0 {
+                    flags_seen[vm as usize] = true;
+                }
+                if drop == 5 {
+                    assert_eq!(vm, idx, "the index must survive beneath the outcome");
+                }
+            }
+        }
     }
-}
-
-#[test]
-fn an_out_of_range_bounds_check_faults_in_the_vm_which_is_why_native_traps() {
-    // The differential oracle cannot cover the failing case: the VM raises
-    // `IndexOutOfBounds` and native aborts through `llvm.trap`, so there is no
-    // value to compare. What is checkable is that the VM really does fault,
-    // which is what makes trapping the right lowering rather than a guess.
-    //
-    // **The negative index is the case that matters.** The lowering folds both
-    // failure directions into ONE unsigned compare, which is only correct
-    // because a negative i64 reinterpreted as unsigned is enormous. A signed
-    // compare against the bound would accept every negative index silently.
-    for (bound, idx) in [(10u16, 10i64), (10, 11), (1, 1), (10, -1), (10, i64::MIN)] {
-        let m = bounds_check_module(bound);
-        let cap = auto_arena_capacity_for(&m, &[]).expect("arena capacity");
-        let arena = keleusma_arena::Arena::with_capacity(cap);
-        let mut vm = Vm::new(m, &arena).expect("vm");
-        let err = vm.call(&[Value::Int(idx), Value::Int(0)]).err();
-        assert!(
-            matches!(err, Some(keleusma::vm::VmError::IndexOutOfBounds(_, _))),
-            "the VM must fault for bound={bound}, idx={idx}; got {err:?}"
-        );
-    }
-
-    // MUST-NOT-FIRE CASE: an in-range index must NOT fault, or the assertion
-    // above is satisfied by a check that rejects everything.
-    let m = bounds_check_module(10);
-    let cap = auto_arena_capacity_for(&m, &[]).expect("arena capacity");
-    let arena = keleusma_arena::Arena::with_capacity(cap);
-    let mut vm = Vm::new(m, &arena).expect("vm");
-    assert!(
-        vm.call(&[Value::Int(5), Value::Int(0)]).is_ok(),
-        "an in-range index must not fault"
-    );
+    // MUST-FIRE AND MUST-NOT-FIRE: both flag values occurred, so agreement is
+    // not agreement about a check that always or never fires.
+    assert_eq!(flags_seen, [true, true]);
 }
 
 #[test]
 fn the_bounds_check_guards_with_an_unsigned_compare() {
-    // Structural, because the failing path cannot be executed differentially.
+    // Structural, because a signed compare is what the negative-index cases
+    // above would expose only if the predicate were wrong in exactly that way.
     // The predicate must be UNSIGNED: `icmp uge`. With `sge` every negative
-    // index passes the guard and reaches an out-of-bounds access, and no
-    // in-range differential case would ever notice.
+    // index reports in range.
     let ctx = Context::create();
     let lm = ctx.create_module("kel");
-    let m = bounds_check_module(10);
+    let m = bounds_check_module(10, 0);
     lower_chunk(
         &ctx,
         &lm,
@@ -961,11 +947,6 @@ fn the_bounds_check_guards_with_an_unsigned_compare() {
         guard.contains("icmp uge"),
         "the bounds check must use an UNSIGNED compare so a negative index is \
          caught; a signed compare accepts every negative value. Found: {guard}"
-    );
-    assert!(
-        ir.lines()
-            .any(|l| l.trim_start().starts_with("br i1 ") && l.contains("label %trap")),
-        "the bounds check must branch to the trap block. IR was:\n{ir}"
     );
 }
 
@@ -1422,10 +1403,11 @@ fn division_and_modulo_agree_with_the_vm_including_the_unrepresentable_quotient(
 
 #[test]
 fn a_zero_divisor_faults_in_the_vm_which_is_why_native_traps() {
-    // The premise check for the test below. If the VM ever stopped faulting
-    // here, trapping natively would become a divergence rather than a match, and
-    // the structural assertion would be enforcing the wrong thing while still
-    // passing.
+    // An UNHANDLED zero divisor still faults. Since absorption 82 the opcode
+    // itself reports flag 3 and the fault is the compiler's flag dispatch to
+    // `Trap(ZeroDivisor)`, which native code reaches through the same
+    // bytecode. If the VM ever stopped faulting here, trapping natively would
+    // become a divergence rather than a match.
     for src in [
         "fn main(a: Word, b: Word) -> Word { a / b }",
         "fn main(a: Word, b: Word) -> Word { a % b }",
@@ -1445,64 +1427,80 @@ fn a_zero_divisor_faults_in_the_vm_which_is_why_native_traps() {
     }
 }
 
-/// Does the IR guard the divisor against zero before dividing?
+/// Does the safe divisor's selection exclude a zero divisor?
 ///
-/// Returns whether a conditional branch to the trap block appears BEFORE the
-/// first `sdiv`/`srem` in the text. Textual order is sound here, unlike for the
-/// loop back edge, because both instructions are emitted into the same straight
-/// line by the same opcode arm with no branch between them -- there is no graph
-/// to reconstruct. That is a claim about this lowering, not a general licence.
-fn divisor_is_guarded_before_dividing(ir: &str) -> bool {
-    let lines: Vec<&str> = ir.lines().collect();
-    let div = lines
-        .iter()
-        .position(|l| l.contains(" sdiv i64 ") || l.contains(" srem i64 "));
-    let guard = lines
-        .iter()
-        .position(|l| l.trim_start().starts_with("br i1 ") && l.contains("label %trap"));
-    match (div, guard) {
-        (Some(d), Some(g)) => g < d,
-        _ => false,
-    }
+/// Reads the chain `%safediv = select i1 %c`, `%c = or i1 %a, %b`, and requires
+/// one of `%a` and `%b` to be an equality test against zero.
+fn zero_is_excluded_from_the_divisor(ir: &str) -> bool {
+    let define = |name: &str| {
+        let prefix = format!("%{name} = ");
+        ir.lines()
+            .map(str::trim_start)
+            .find(|l| l.starts_with(&prefix))
+            .map(str::to_string)
+    };
+    let operand = |line: &str, after: &str| {
+        line.split(after)
+            .nth(1)
+            .and_then(|rest| rest.split([',', ' ']).find(|t| t.starts_with('%')))
+            .map(|t| t.trim_start_matches('%').to_string())
+    };
+    let Some(select) = define("safediv") else {
+        return false;
+    };
+    let Some(condition) = operand(&select, "select i1 ") else {
+        return false;
+    };
+    let Some(or) = define(&condition) else {
+        return false;
+    };
+    let Some(rest) = or.split("or i1 ").nth(1) else {
+        return false;
+    };
+    rest.split(',')
+        .map(|t| t.trim().trim_start_matches('%').to_string())
+        .filter_map(|name| define(&name))
+        .any(|l| l.contains("icmp eq i64") && l.trim_end().ends_with(", 0"))
 }
 
 #[test]
-fn the_zero_divisor_guard_precedes_the_division_structurally() {
-    // RUNTIME BEHAVIOUR CANNOT DEMONSTRATE THIS. The differential oracle is
-    // unusable for a zero divisor -- the VM faults and native aborts, so there
-    // is nothing to compare -- and an UNGUARDED `sdiv` by zero is undefined
-    // behaviour, which means it may appear to work. A test that divided by zero
-    // and observed a crash would be testing the platform, not the lowering.
+fn the_zero_divisor_is_excluded_from_the_division_structurally() {
+    // **A ZERO DIVISOR IS DATA SINCE ABSORPTION 82, AND STILL UNDEFINED IN LLVM.**
+    // Word `/` and `%` compile to `CheckedDiv(0)` and `CheckedMod`, which reify
+    // a zero divisor as flag 3, so the lowering no longer branches to the trap
+    // block before dividing. It substitutes a safe divisor instead. An `sdiv`
+    // or `srem` by zero is still undefined behaviour, which may appear to work,
+    // so the exclusion is asserted structurally rather than observed.
     for src in [
         "fn main(a: Word, b: Word) -> Word { a / b }",
         "fn main(a: Word, b: Word) -> Word { a % b }",
     ] {
-        // MUST-FIRE CASE: mutate the IR so the guard branches somewhere other
-        // than the trap block, and require the check to notice. Encoded rather
-        // than run once by hand, because an unencoded control decays.
         let ir = lowered_ir(src);
+
+        // MUST-NOT-FIRE CASE: the real lowering excludes zero.
+        assert!(
+            zero_is_excluded_from_the_divisor(&ir),
+            "the safe divisor must exclude a zero divisor for {src:?}. IR was:\n{ir}"
+        );
+
+        // MUST-FIRE CASE: select on the `i64::MIN / -1` test alone, so zero
+        // reaches the division, and require the check to notice.
         let mutated: Vec<String> = ir
             .lines()
             .map(|l| {
-                if l.trim_start().starts_with("br i1 ") && l.contains("label %trap") {
-                    l.replace("label %trap", "label %nonzerodivisor")
+                if l.trim_start()
+                    .starts_with("%safediv = select i1 %unsafediv")
+                {
+                    l.replace("%unsafediv", "%minneg1")
                 } else {
                     l.to_string()
                 }
             })
             .collect();
         assert!(
-            !divisor_is_guarded_before_dividing(&mutated.join("\n")),
-            "the guard check does not discriminate: it reported a guarded \
-             divisor for IR whose branch does not reach the trap block."
-        );
-
-        // MUST-NOT-FIRE CASE: the real lowering guards, so the check must be
-        // satisfied.
-        assert!(
-            divisor_is_guarded_before_dividing(&ir),
-            "the divisor must be tested against zero and branch to the trap \
-             block BEFORE the division for {src:?}. IR was:\n{ir}"
+            !zero_is_excluded_from_the_divisor(&mutated.join("\n")),
+            "the exclusion check does not discriminate: it accepted a divisor \
+             selected on the overflow test alone."
         );
     }
 }
@@ -2809,8 +2807,9 @@ fn fixed_division_agrees_with_the_vm_including_saturation() {
     //
     // At Q0 the conversion is identity, and `i64::MIN / -1` overflows: the true
     // quotient is 2^63, one past `i64::MAX`. **That is precisely the case the
-    // integer forms handle with `guard_min_div_neg_one` and this lowering does
-    // NOT** -- both operands are widened to `i128` first, so the quotient is
+    // wrapping integer forms once needed a divisor substitution for, which
+    // absorption 82 retired with those forms; this lowering never did** -- both
+    // operands are widened to `i128` first, so the quotient is
     // representable and the clamp carries it back. If that reasoning were wrong,
     // this case is where it breaks.
     let q0 = "fn main(a: Word, b: Word) -> Word { ((a as Fixed<0>) / (b as Fixed<0>)) as Word }";

@@ -4,8 +4,10 @@
 //!
 //! The 999 native call sites in the `piano_roll` family are side effects:
 //! `host::set_waveform`, `host::play`, `host::set_adsr`. Measured, **zero of
-//! them carry a return shape**, and there are 1643 `PopN` against them, so the
-//! results are overwhelmingly discarded. Comparing only a final integer would
+//! them carry a return shape**, and the modules hold 1876 `PopN`, so the
+//! results are overwhelmingly discarded. That count was 1643 until absorption
+//! 82, which put a `PopN` after every bounds outcome, so it no longer counts
+//! discarded call results alone. Comparing only a final integer would
 //! leave the thing these modules exist to do entirely unchecked — a lowering
 //! that dropped every call, or reordered them, or passed arguments backwards,
 //! would return the right number.
@@ -270,7 +272,7 @@ fn a_chained_native_result_feeds_the_next_call() {
 
 #[test]
 fn a_discarded_native_result_still_makes_the_call() {
-    // The corpus shape: 1643 `PopN` against 999 calls. The result is dropped,
+    // The corpus shape: 999 calls whose results are dropped by `PopN`. The result is dropped,
     // so only the log proves the call happened at all.
     assert_agrees(
         "use host::two\nfn main(a: Word, b: Word) -> Word { host::two(a, b); a }",
@@ -533,8 +535,9 @@ fn the_same_composite_is_refused_when_the_native_is_unsignatured() {
 
 /// **THE FIGURES THIS FILE'S HEADER PUBLISHES, GIVEN A PRODUCER.**
 ///
-/// The header states 999 native call sites across the `piano_roll` family, 1643
-/// `PopN`, and zero non-`Top` return shapes. **All three were correct when checked
+/// The header states 999 native call sites across the `piano_roll` family, 1876
+/// `PopN` since absorption 82 (1643 before it), and zero non-`Top` return
+/// shapes. **All three were correct when checked
 /// on 2026-09-24 and pinned by nothing.**
 ///
 /// They are pinned now for a reason this session measured rather than assumed:
@@ -579,7 +582,9 @@ fn the_documented_native_call_figures_are_measured() {
     );
     assert_eq!(
         (piano.len(), calls, popn, shaped),
-        (10, 999, 1643, 0),
+        // `PopN` moved 1643 -> 1876 in absorption 82: the bounds outcome of every
+        // indexed read and write ends in a `PopN`. Modules and calls did not move.
+        (10, 999, 1876, 0),
         "the `piano_roll` native-call figures moved to {} modules, {calls} calls, \
          {popn} PopN, {shaped} shaped returns. This file's header publishes them; \
          update it in the SAME change, or the next reader quotes a figure nothing \

@@ -67,12 +67,15 @@ const TICKS: usize = 4;
 
 /// Corpus modules carrying a `Stream` chunk. **Pinned so growth announces
 /// itself**; `region_composition.rs` pins the same figure independently.
-const PINNED_STREAMING: usize = 28;
+// 28 -> 30 in absorption 82: the added stages `wire_debug.kel` and
+// `wire_schema.kel`.
+const PINNED_STREAMING: usize = 30;
 
 /// How many of those this census can currently drive. **The rest are accounted
 /// for by name and reason**, not dropped: eleven need host natives registered,
 /// three take a **`Composite`** first argument, one the backend refuses to lower.
-const DRIVEN: usize = 13;
+// 13 -> 15 in absorption 82: both added stages drive, and touch zero bytes.
+const DRIVEN: usize = 15;
 /// `14_frame_log.kel` — the first corpus module outside the self-hosted stages
 /// ever measured dynamically. **Report six publishes these two figures.**
 const FRAME_LOG_TOUCHED: usize = 48;

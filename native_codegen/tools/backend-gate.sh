@@ -3,10 +3,10 @@
 #
 # WHY THIS EXISTS
 #
-# `native_codegen` is a detached package. The workspace gate does not build it and
-# dedicated continuous integration now covers default-feature non-corpus tests.
-# This script remains the complete native gate, including corpus and narrow-float
-# coverage. It originally replaced commands retyped from memory, with three facts
+# `native_codegen` is a detached package. The workspace gate does not build it.
+# Since 2026-10-22 the native workflow runs THIS SCRIPT, in both float
+# configurations, so continuous integration and a local run execute the same
+# phases. It originally replaced commands retyped from memory, with three facts
 # living only in a session's scrollback:
 #
 #   1. THE SUITE MUST BE SPLIT. `corpus_differential` alone takes ~390s and the
@@ -65,9 +65,9 @@
 # mandatory before a merge to the release line; this covers the detached backend
 # only, and neither substitutes for the other.
 #
-# **Not the continuous-integration subset.** The operator approved the dedicated
-# default-feature job on 2026-10-01. It does not run this complete gate or write
-# GATE_RECORD.md. Both complete configurations retain their existing gate policy.
+# **Run by continuous integration, but its record is local.** A hosted run writes
+# GATE_RECORD.md inside the runner and prints it; nothing commits it. The committed
+# record still names the last LOCAL run, and `tools/gate-status.sh` reads only that.
 #
 # Usage:  tools/backend-gate.sh [--narrow]      (default: default features)
 set -uo pipefail

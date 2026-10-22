@@ -251,7 +251,11 @@ to debug.
 3. **The write-before-read check is flow-insensitive**: the unconditional shape rejected, the
    conditional one accepted, and the fault arriving at run time. Intended, or should the compiler
    reject the conditional shape too? **Either answer is implementable here; I assumed the first.**
-4. **NEW — the type checker admits `Fixed % Fixed`, and the virtual machine then refuses it at run
+4. **ANSWERED in absorption 82, 2026-10-22, from the runtime side.** Bare `Op::Mod` and `Op::Div`
+   became total with a Fixed arm, so the program below now completes, and no opcode was added. This
+   backend lowers the matched Fixed pair to the same result. The watch is now
+   `report_four_is_answered_and_the_answer_holds`. The original report follows unchanged.
+   **The type checker admits `Fixed % Fixed`, and the virtual machine then refuses it at run
    time.** `fn main(a: Fixed, b: Fixed) -> Fixed { a % b }` compiles, verifies, loads, and traps with
    `TypeError("cannot modulo Fixed by Fixed")`. Your `Op::Mod` arm handles `Int`/`Int`, `Byte`/`Byte`
    and `Float`/`Float`; `Fixed` falls to the catch-all, and `Op::Div`'s arm is equally Fixed-less. The
@@ -260,8 +264,8 @@ to debug.
 
    **I am not asserting which repair is right.** Rejecting `%` on `Fixed` in the type checker, and
    adding a Fixed-aware modulo, are both coherent; the second needs an opcode, which the minimal-ISA
-   constraint disfavours. Watched from both sides by `report_four_still_reproduces_on_the_reference`,
-   so whichever way you rule, this side fails loudly rather than keeping a stale report.
+   constraint disfavours. It was watched from both sides by a reproduction test, so whichever way
+   you ruled, this side would fail loudly rather than keep a stale report, and it did.
 
    **This is how I found it, and it is the part worth your attention.** My differential harness
    *panicked* on any virtual-machine outcome that was not `Finished`, so a trapping cell could not be
@@ -276,8 +280,10 @@ to debug.
    Concretely, `private data d { v: Fixed }` followed by `d.v % d.v` traps on your side and returns a
    number on mine, and **I cannot close it** — I can see the slot is eight bytes and not that it holds
    a scaled value. Every other route by which a `Fixed` value reaches `Op::Mod` is now refused; this
-   one is pinned open by `the_private_slot_route_is_still_open_and_that_is_recorded`, which fails when
-   it closes.
+   one was pinned open by a test that failed when it closed. **Since absorption 82 it no longer
+   diverges**: your side completes it, and the integer remainder mine lowers has the same low bits,
+   so `the_private_slot_route_agrees_without_the_kind` now asserts agreement. The slot's kind is still
+   absent from the module, which is why report 5 stays open.
 
    **I am not asking you to add a field.** If question 4 is settled by rejecting `Fixed % Fixed` in the
    type checker, this route closes with it and nothing else is needed. I am recording that the private
@@ -319,10 +325,12 @@ hosts would consume the figure.
 **The figure.** My backend publishes `host_arena_supplement_bytes`, the arena bytes a host must ADD
 beyond `auto_arena_capacity_for` to run a module natively. Measured two ways:
 
-- **Statically, across the corpus** by native_codegen/tests/region_composition.rs: **28 modules have
+- **Statically, across the corpus** by native_codegen/tests/region_composition.rs: **30 modules have
   a stream chunk on the entry path, and every one reserves the same flat block** of `MAX_STACK * 8` =
-  512 bytes. That reservation is **at least half the published figure for 25 of the 28**, running from
-  27% up to **98% for the twelve self-hosted compiler stages**, which plan almost nothing else. The
+  512 bytes. That reservation is **at least half the published figure for 27 of the 30**, running from
+  27% up to **98% for the self-hosted compiler stages**, which plan almost nothing else. Re-measured in
+  absorption 82: the two added stages `wire_debug.kel` and `wire_schema.kel` are the whole change,
+  each at 98%. Before it the figures were 28 modules and 25 of 28. The
   decomposition is checked against the published total rather than assumed, so the reading of the
   planner is verified.
 - **Dynamically** by native_codegen/tests/arena_high_water.rs and
@@ -330,7 +338,8 @@ beyond `auto_arena_capacity_for` to run a module natively. Measured two ways:
   520-552 byte plans, and **the twelve stages touch ZERO** of 520-600. Instrument reach was proven
   before the numbers were believed — poking one byte into the region moves the measurement.
 - **Dynamically across the CORPUS** by native_codegen/tests/streaming_arena_touch.rs, added
-  2026-09-23: **13 of the 28 streaming modules are driven.** The twelve stages confirm ZERO by a
+  2026-09-23: **15 of the 30 streaming modules are driven** since absorption 82, which added two
+  stages that both drive and touch zero bytes; it was 13 of 28 before. The stages confirm ZERO by a
   second route, and `14_frame_log.kel` is **the first corpus module outside the stages ever measured
   this way — 48 bytes of a 600-byte plan, 8%.** The figure was checked stable across two independent
   runs before being published here.
@@ -338,7 +347,7 @@ beyond `auto_arena_capacity_for` to run a module natively. Measured two ways:
   registered (`host::song_name`, `host::run_player_turn`), three take a **`Composite`** first argument, and
   one my backend refuses to lower — the yield-escape hazard already dispositioned. Reaching them
   needs the stub machinery in my corpus differential, which I declined to extract rather than
-  disturb a tuned instrument. **So read this as 13 of 28, not as the corpus.**
+  disturb a tuned instrument. **So read this as 15 of 30, not as the corpus.**
 
 **Why it may matter to you.** A host sizing an arena from that figure provisions roughly twenty times
 what these streams use, and for the compiler stages provisions a region nothing writes. Whether that
@@ -743,3 +752,28 @@ The reviewed interline checkpoint is included. No runtime code changed.
 The archive records verification limits and pilot sampling omissions.
 Verification passed 13 root and 23 native documentation and provenance tests.
 Both commands exited zero. Full native gates were not repeated.
+
+
+## V0.3.X absorption 82, 2026-10-22
+
+Claude Code on `feat/v3-absorption-82`, cut from `v0.3.0` at `13c9ed11` after the
+Codex handoff commit was pushed. Absorption 82 merged 78 upstream commits at
+`bd62e6fd`, through `cc48dc61`. The receipt is in
+`docs/decisions/ABSORPTION_82_BRIEF.md`.
+
+Upstream made division and indexed access total. The native backend now lowers the
+new contracts in both paths, computes checked division in 64 bits, and lowers a
+matched Fixed `Div` or `Mod` now that report 4 is answered. One emitter defect of
+the terminator-walk class was fixed in `certified_local_widths`, with four test
+walks of the same class. The four audit findings of the same day are closed as the
+operator directed. Report 4 is marked answered and report six is re-measured above.
+
+Verification before the gate commit: 777 non-corpus native tests and the corpus
+differential were run on intermediate trees while the repairs proceeded, and the
+root documentation, citation and correspondence guards passed 12 of 12 on the final
+edits. The complete native gates run on the committed tree, and their outcome is
+recorded in the receipt that follows this section, not predicted here.
+
+Open for the operator: whether a hosted run of the complete native gate satisfies
+the full-gate requirement before publication or `main`. Next intended step:
+reconcile the Workstream B acceptance matrix against the absorbed runtime.

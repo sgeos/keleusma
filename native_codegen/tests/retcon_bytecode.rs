@@ -2564,7 +2564,12 @@ fn bare_numeric_dispatch_preserves_selected_kinds() {
             .unwrap();
         assert!(matches!(chunk.ops[index + 1], Op::PopN(2)));
         chunk.ops[index] = op;
-        chunk.ops.remove(index + 1);
+        // Bare `Div` and `Mod` push the checked triple since absorption 82, so
+        // they keep the `PopN(2)`. The other bare forms push one value.
+        let removed = !matches!(op, Op::Div | Op::Mod);
+        if removed {
+            chunk.ops.remove(index + 1);
+        }
         let mut follows_else = false;
         for instruction in &mut chunk.ops {
             let change = follows_else;
@@ -2576,7 +2581,7 @@ fn bare_numeric_dispatch_preserves_selected_kinds() {
                 | Op::EndLoop(target)
                 | Op::Break(target)
                 | Op::BreakIf(target)
-                    if usize::from(*target) > index + 1 =>
+                    if removed && usize::from(*target) > index + 1 =>
                 {
                     *target -= 1
                 }
@@ -2709,9 +2714,14 @@ fn runtime_checked_arithmetic_rejects_different_selected_kinds() {
 }
 
 #[test]
-fn bare_integer_division_and_remainder_trap_on_zero() {
+fn bare_integer_division_and_remainder_are_total_on_zero() {
+    // **THIS TEST ASSERTED A TRAP UNTIL ABSORPTION 82.** Upstream made bare
+    // `Div` and `Mod` total: a zero integer divisor yields the numerator, a
+    // zero high slot and flag 3, exactly as `CheckedDiv(0)` and `CheckedMod`
+    // do, and the reference no longer raises `DivisionByZero`. The opcode keeps
+    // the `PopN(2)` the checked form carries, so the numerator is the value.
     use keleusma::bytecode::{Op, Value};
-    use keleusma::vm::{Vm, VmState};
+    use keleusma::value_layout::ScalarKind;
     for op in [Op::Div, Op::Mod] {
         let mut program = common::build(
             "yield main(a: Word) -> Word { let x = yield 1; let y = yield 2; x + y }",
@@ -2724,36 +2734,19 @@ fn bare_integer_division_and_remainder_trap_on_zero() {
             .unwrap();
         assert!(matches!(chunk.ops[index + 1], Op::PopN(2)));
         chunk.ops[index] = op;
-        chunk.ops.remove(index + 1);
         assert!(
             !chunk
                 .ops
                 .iter()
                 .any(|op| matches!(op, Op::If(_) | Op::Else(_) | Op::Loop(_)))
         );
-        let arena = keleusma_arena::Arena::with_capacity(65536);
-        let mut vm = Vm::new(program.clone(), &arena).unwrap();
-        assert!(matches!(
-            vm.call(&[Value::Int(5)]).unwrap(),
-            VmState::Yielded(Value::Int(1))
-        ));
-        assert!(matches!(
-            vm.resume(Value::Int(7)).unwrap(),
-            VmState::Yielded(Value::Int(2))
-        ));
-        assert!(matches!(
-            vm.resume(Value::Int(0)),
-            Err(keleusma::vm::VmError::DivisionByZero)
-        ));
-        #[cfg(unix)]
-        require_program_kind_trap(
-            "bare_integer_division_and_remainder_trap_on_zero",
+        checked_dialogue_case(
             &program,
-            None,
-            &[5],
-            &[1, 2],
-            &[7, 0],
-            &format!("bare-zero-{op:?}"),
+            &[
+                (Value::Int(7), ScalarKind::Int, 7),
+                (Value::Int(0), ScalarKind::Int, 0),
+            ],
+            7,
         );
     }
 }

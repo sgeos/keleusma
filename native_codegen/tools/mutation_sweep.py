@@ -340,8 +340,8 @@ MUTATIONS_ROUND3 = {
     # region -- by shifting the resolved offset, which leaves the module
     # lowerable so the mutation stays SEMANTIC rather than aborting lowering.
     "GetData": (
-        "                        let (byte_off, w, k) =\n                            resolve_shared_scalar(&data, slot, i8t, i64t, float_bytes)?;",
-        "                        let (byte_off, w, k) =\n                            resolve_shared_scalar(&data, slot, i8t, i64t, float_bytes)?;\n                        let byte_off = byte_off.wrapping_add(1);",
+        "                            let (byte_off, w, k) =\n                                resolve_shared_scalar(&data, slot, i8t, i64t, float_bytes)?;",
+        "                            let (byte_off, w, k) =\n                                resolve_shared_scalar(&data, slot, i8t, i64t, float_bytes)?;\n                            let byte_off = byte_off.wrapping_add(1);",
     ),
     # **RE-REGISTERED 2026-09-06.** The original anchored on a call to
     # `resolve_shared_scalar` before it gained `float_bytes` and the call site
@@ -350,8 +350,8 @@ MUTATIONS_ROUND3 = {
     # region -- by shifting the resolved offset, which leaves the module
     # lowerable so the mutation stays SEMANTIC rather than aborting lowering.
     "SetData": (
-        "                        let (byte_off, w, k) =\n                            resolve_shared_scalar(&data, slot, i8t, i64t, float_bytes)?;",
-        "                        let (byte_off, w, k) =\n                            resolve_shared_scalar(&data, slot, i8t, i64t, float_bytes)?;\n                        let byte_off = byte_off.wrapping_add(2);",
+        "                            let (byte_off, w, k) =\n                                resolve_shared_scalar(&data, slot, i8t, i64t, float_bytes)?;",
+        "                            let (byte_off, w, k) =\n                                resolve_shared_scalar(&data, slot, i8t, i64t, float_bytes)?;\n                            let byte_off = byte_off.wrapping_add(2);",
     ),
     # **RE-REGISTERED 2026-09-06.** The original anchored on a call to
     # `resolve_shared_array` before it gained `float_bytes` and the call site
@@ -360,8 +360,8 @@ MUTATIONS_ROUND3 = {
     # region -- by shifting the resolved offset, which leaves the module
     # lowerable so the mutation stays SEMANTIC rather than aborting lowering.
     "GetDataIndexed": (
-        "                        let (first_off, w, k) =\n                            resolve_shared_array(&data, slot, bound, float_bytes)?;",
-        "                        let (first_off, w, k) =\n                            resolve_shared_array(&data, slot, bound, float_bytes)?;\n                        let first_off = first_off.wrapping_add(1);",
+        "                            let (first_off, w, k) =\n                                resolve_shared_array(&data, slot, bound, float_bytes)?;",
+        "                            let (first_off, w, k) =\n                                resolve_shared_array(&data, slot, bound, float_bytes)?;\n                            let first_off = first_off.wrapping_add(1);",
     ),
     # **RE-REGISTERED 2026-09-06.** The original anchored on a call to
     # `resolve_shared_array` before it gained `float_bytes` and the call site
@@ -370,8 +370,8 @@ MUTATIONS_ROUND3 = {
     # region -- by shifting the resolved offset, which leaves the module
     # lowerable so the mutation stays SEMANTIC rather than aborting lowering.
     "SetDataIndexed": (
-        "                        let (first_off, w, k) =\n                            resolve_shared_array(&data, slot, bound, float_bytes)?;",
-        "                        let (first_off, w, k) =\n                            resolve_shared_array(&data, slot, bound, float_bytes)?;\n                        let first_off = first_off.wrapping_add(2);",
+        "                            let (first_off, w, k) =\n                                resolve_shared_array(&data, slot, bound, float_bytes)?;",
+        "                            let (first_off, w, k) =\n                                resolve_shared_array(&data, slot, bound, float_bytes)?;\n                            let first_off = first_off.wrapping_add(2);",
     ),
     # --- the division family, guarded so each attributes -------------------
     # **RE-REGISTERED 2026-09-06. THE SHAPE CHANGED, AND THAT IS RECORDED.**
@@ -386,15 +386,22 @@ MUTATIONS_ROUND3 = {
     # **Not chosen because it looked likely to be caught.** It is the minimal
     # unique edit to the arm that still exists, and it is registered before being
     # run, as the pre-registration discipline requires.
+    #
+    # **RE-REGISTERED IN ABSORPTION 82, SAME PROPERTY, NEW ANCHOR.** Upstream made
+    # bare division total and routed Word `/` and `%` through `CheckedDiv(0)` and
+    # `CheckedMod`. All four now share `lower_checked_division`, so the swap moved
+    # there. It therefore also mutates the checked forms, which carry every Word
+    # division in the corpus, and neither had a mutation of its own. The float
+    # arms are the only part unique to the bare opcodes and are not registered.
     "Div": (
-        'Op::Div => st.b.build_int_signed_div(lhs, safe, "sdiv").unwrap(),',
-        'Op::Div => st.b.build_int_signed_rem(lhs, safe, "sdiv").unwrap(),',
+        'self.b.build_int_signed_div(lhs, divisor, "q64").unwrap()',
+        'self.b.build_int_signed_rem(lhs, divisor, "q64").unwrap()',
     ),
-    # Re-registered 2026-09-06 for the same reason as `Div` above, with the same
-    # shape change: `Mod` emits a quotient.
+    # Re-registered in absorption 82 for the same reason as `Div` above:
+    # `Mod` emits a quotient.
     "Mod": (
-        '_ => st.b.build_int_signed_rem(lhs, safe, "srem").unwrap(),',
-        '_ => st.b.build_int_signed_div(lhs, safe, "srem").unwrap(),',
+        'self.b.build_int_signed_rem(lhs, divisor, "r64").unwrap()',
+        'self.b.build_int_signed_div(lhs, divisor, "r64").unwrap()',
     ),
     # --- composites --------------------------------------------------------
     "NewComposite": (

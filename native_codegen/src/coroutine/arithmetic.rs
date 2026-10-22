@@ -5,7 +5,7 @@ use super::types::{BYTE, FIXED, FLOAT, WORD};
 use crate::LowerError;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
-use inkwell::values::IntValue;
+use inkwell::values::{FloatValue, IntValue};
 use inkwell::{FloatPredicate, IntPredicate};
 use keleusma::bytecode::Op;
 
@@ -17,6 +17,16 @@ pub(crate) fn checked<'ctx>(
     op: &Op,
     trap: BasicBlock<'ctx>,
 ) -> Result<(IntValue<'ctx>, IntValue<'ctx>, IntValue<'ctx>), LowerError> {
+    // Bare division and remainder became total in absorption 82. Their integer,
+    // Byte and Fixed arms are the checked forms with no fraction shift. Their
+    // float arms are IEEE `fdiv` and `frem` with the same result classification.
+    let bare_mod = matches!(op, Op::Mod);
+    let normalized = match op {
+        Op::Div => Op::CheckedDiv(0),
+        Op::Mod => Op::CheckedMod,
+        other => *other,
+    };
+    let op = &normalized;
     let i64t = values[0].get_type();
     let ctx = i64t.get_context();
     let i128t = ctx.i128_type();
@@ -144,10 +154,12 @@ pub(crate) fn checked<'ctx>(
         high = select(is_zero, zero, high);
         flag = select(is_zero, i64t.const_int(3, false), flag);
     }
-    if matches!(
-        op,
-        Op::CheckedAdd | Op::CheckedSub | Op::CheckedMul(_) | Op::CheckedDiv(_)
-    ) {
+    if bare_mod
+        || matches!(
+            op,
+            Op::CheckedAdd | Op::CheckedSub | Op::CheckedMul(_) | Op::CheckedDiv(_)
+        )
+    {
         let ft = if float_bytes == 8 {
             ctx.f64_type()
         } else {
@@ -156,41 +168,14 @@ pub(crate) fn checked<'ctx>(
         let x = crate::bits_to_float(b, values[0], ft, float_bytes);
         let y = crate::bits_to_float(b, values[1], ft, float_bytes);
         let result = match op {
+            _ if bare_mod => b.build_float_rem(x, y, "arith_float_rem").unwrap(),
             Op::CheckedAdd => b.build_float_add(x, y, "arith_float_add").unwrap(),
             Op::CheckedSub => b.build_float_sub(x, y, "arith_float_sub").unwrap(),
             Op::CheckedMul(_) => b.build_float_mul(x, y, "arith_float_mul").unwrap(),
             Op::CheckedDiv(_) => b.build_float_div(x, y, "arith_float_div").unwrap(),
             _ => unreachable!(),
         };
-        // VM float_checked_flag classifies the rounded result, not operands.
-        let nan = b
-            .build_float_compare(FloatPredicate::UNO, result, result, "arith_nan")
-            .unwrap();
-        let positive = b
-            .build_float_compare(
-                FloatPredicate::OEQ,
-                result,
-                ft.const_float(f64::INFINITY),
-                "arith_positive_infinity",
-            )
-            .unwrap();
-        let negative = b
-            .build_float_compare(
-                FloatPredicate::OEQ,
-                result,
-                ft.const_float(f64::NEG_INFINITY),
-                "arith_negative_infinity",
-            )
-            .unwrap();
-        let float_flag = select(
-            nan,
-            i64t.const_int(4, false),
-            select(
-                positive,
-                i64t.const_int(1, false),
-                select(negative, i64t.const_int(2, false), zero),
-            ),
-        );
+        let float_flag = float_flag(b, result, i64t);
         let float_bits = crate::float_to_bits(b, result, i64t, float_bytes);
         let is_float = is_kind(FLOAT);
         low = select(is_float, float_bits, low);
@@ -200,8 +185,9 @@ pub(crate) fn checked<'ctx>(
     Ok((low, high, flag))
 }
 
-/// Bare operations wrap. Division faults only for an integer zero divisor.
-/// Float remainder and negation exist only in the bare opcode family.
+/// Bare operations wrap. Division and remainder are no longer bare-valued: they
+/// push the checked triple and are lowered through [`checked`].
+/// Float negation exists only in the bare opcode family.
 pub(crate) fn plain<'ctx>(
     b: &Builder<'ctx>,
     values: &[IntValue<'ctx>],
@@ -214,56 +200,28 @@ pub(crate) fn plain<'ctx>(
         Op::Add => Op::CheckedAdd,
         Op::Sub => Op::CheckedSub,
         Op::Mul => Op::CheckedMul(0),
-        Op::Div => Op::CheckedDiv(0),
-        Op::Mod => Op::CheckedMod,
         Op::Neg => Op::CheckedNeg,
         _ => unreachable!("bare arithmetic opcode"),
     };
     let (low, _, _) = checked(b, values, tags, float_bytes, &checked_op, trap)?;
     let i64t = values[0].get_type();
     let ctx = i64t.get_context();
-    let is_float = b
-        .build_int_compare(
-            IntPredicate::EQ,
-            tags[0],
-            i64t.const_int(u64::from(FLOAT), false),
-            "plain_float",
-        )
-        .unwrap();
-    if matches!(op, Op::Div | Op::Mod) {
-        let nonzero = b
+    if matches!(op, Op::Neg) {
+        let is_float = b
             .build_int_compare(
-                IntPredicate::NE,
-                values[1],
-                i64t.const_zero(),
-                "plain_nonzero",
+                IntPredicate::EQ,
+                tags[0],
+                i64t.const_int(u64::from(FLOAT), false),
+                "plain_float",
             )
             .unwrap();
-        let valid = b
-            .build_or(is_float, nonzero, "plain_divisor_valid")
-            .unwrap();
-        let accepted = ctx.append_basic_block(
-            b.get_insert_block().unwrap().get_parent().unwrap(),
-            "plain_divisor_checked",
-        );
-        // checked() has already replaced a zero integer divisor before LLVM
-        // evaluates it. Float zero division remains IEEE arithmetic.
-        b.build_conditional_branch(valid, accepted, trap).unwrap();
-        b.position_at_end(accepted);
-    }
-    if matches!(op, Op::Mod | Op::Neg) {
         let ft = if float_bytes == 8 {
             ctx.f64_type()
         } else {
             ctx.f32_type()
         };
         let x = crate::bits_to_float(b, values[0], ft, float_bytes);
-        let result = if matches!(op, Op::Neg) {
-            b.build_float_neg(x, "plain_float_neg").unwrap()
-        } else {
-            let y = crate::bits_to_float(b, values[1], ft, float_bytes);
-            b.build_float_rem(x, y, "plain_float_rem").unwrap()
-        };
+        let result = b.build_float_neg(x, "plain_float_neg").unwrap();
         let bits = crate::float_to_bits(b, result, i64t, float_bytes);
         Ok(b.build_select(is_float, bits, low, "plain_value")
             .unwrap()
@@ -271,4 +229,48 @@ pub(crate) fn plain<'ctx>(
     } else {
         Ok(low)
     }
+}
+
+/// The reference's `float_checked_flag`: `4` for NaN, `1` and `2` for positive
+/// and negative infinity, otherwise `0`. It classifies the ROUNDED result, not
+/// the operands, so it is computed at the module's float width.
+pub(crate) fn float_flag<'ctx>(
+    b: &Builder<'ctx>,
+    result: FloatValue<'ctx>,
+    i64t: inkwell::types::IntType<'ctx>,
+) -> IntValue<'ctx> {
+    let ft = result.get_type();
+    let select = |condition, yes: IntValue<'ctx>, no: IntValue<'ctx>| {
+        b.build_select(condition, yes, no, "float_flag_select")
+            .unwrap()
+            .into_int_value()
+    };
+    let nan = b
+        .build_float_compare(FloatPredicate::UNO, result, result, "arith_nan")
+        .unwrap();
+    let positive = b
+        .build_float_compare(
+            FloatPredicate::OEQ,
+            result,
+            ft.const_float(f64::INFINITY),
+            "arith_positive_infinity",
+        )
+        .unwrap();
+    let negative = b
+        .build_float_compare(
+            FloatPredicate::OEQ,
+            result,
+            ft.const_float(f64::NEG_INFINITY),
+            "arith_negative_infinity",
+        )
+        .unwrap();
+    select(
+        nan,
+        i64t.const_int(4, false),
+        select(
+            positive,
+            i64t.const_int(1, false),
+            select(negative, i64t.const_int(2, false), i64t.const_zero()),
+        ),
+    )
 }
