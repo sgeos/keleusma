@@ -478,6 +478,7 @@ fn decode_op(w: i64) -> Op {
         63 => Op::Shr,
         64 => Op::CheckedDiv(operand as u8),
         65 => Op::CheckedMod,
+        66 => Op::BoundsCheck(operand as u16),
         // A flat struct construction: the operand packs count + byte_size*65536.
         46 => Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Struct,
@@ -9343,7 +9344,8 @@ mod decoder_drift_guard {
     /// subproject decoder had fallen behind the emitted op set and nothing gated the subproject.
     ///
     /// P11 Option E's eight-bit radix admits the new transport tags 64 and 65
-    /// for existing CheckedDiv and CheckedMod instructions. These are internal
+    /// for existing CheckedDiv and CheckedMod instructions, and 66 for the
+    /// existing BoundsCheck that probes an indexed write. These are internal
     /// transport identifiers, not additional public instructions.
     ///
     /// # WHAT THIS TEST DOES NOT CHECK, RAISED BY THE `v0.3.0` LINE
@@ -9364,7 +9366,7 @@ mod decoder_drift_guard {
     /// defect could hide from the byte-identity oracle.
     #[test]
     fn all_wire_op_tags_decode() {
-        for tag in 1..=65i64 {
+        for tag in 1..=66i64 {
             // operand 0 is the minimal representative word for each tag; decode must not panic.
             let _ = decode_op(tag);
         }

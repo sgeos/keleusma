@@ -1,5 +1,61 @@
 # Reverse prompt
 
+## Indexed-write handlers, 2026-10-21
+
+Branch feat/v02-indexed-write-handlers, cut from feat/v02-order3-audit-followup
+at 89aaba69, which merged into v0.2.3 as 3e4f4984 through pull request 484.
+
+Both compilers now implement the index-first bare write and the single-index
+handled write, per the operator rulings recorded in
+docs/decisions/ORDER3_HANDLER_SURFACE_PLAN.md. The self-hosted compiler matches
+the reference byte for byte for Word and Byte elements and refuses other
+element types. The plan document's "Self-hosted mirror" section records the
+mechanism, the capacity measurements and the residue.
+
+Verification. A frozen copy of the tree ran the five feature sets in release.
+The tree then changed only in the roadmap's boundary count and in this file.
+
+| Feature set | Result |
+|---|---|
+| `--features self-host` | 3185 of 3186 passed |
+| `--workspace` | 3444 of 3445 passed |
+| `--no-default-features` | 331 of 331 passed |
+| `--features signatures` | 2447 of 2447 passed |
+| `--features signatures,shell` | 2464 of 2464 passed |
+
+The one failure in both self-host and workspace was the guard requiring the
+roadmap to state the boundary table's counts. The three new `data/` cases moved
+them to 100 SOk over 105 cases. The roadmap now says so, and the guard was
+rerun and passes. Clippy for the workspace and for self-host printed Checking
+lines and is clean, and fmt is clean. The stages' self-compilation passes in
+release with the index-first writes.
+
+Also opened this session, on separate branches from v0.2.3.
+
+- Pull request 485 cleans the library under no-default-features clippy.
+- Pull request 486 derives the trap classifier's per-tag expectation from the
+  Rust analysis, completion-claim item 13.
+- Branch fix/v02-cast-byte-tracking fixes the cast divergence described in the
+  plan document. Seven boundary cases diverged without it.
+- Commit 7e37e81a on v0.2.3 records the CI receipt in both completion audits.
+
+Concerns.
+
+- Release is not debug. The local matrix ran in release for time. CI runs debug,
+  where overflow checks and debug assertions are active, so the pull request's
+  CI run is the debug evidence.
+- The parse stage holds 1023 of the type stage's 1024 names. Any further parse
+  feature must fold into existing functions, as this one did, or the name
+  channel must be staged.
+- `checked_open` now decides between a handled write and a handled read by the
+  operator depth recorded at `=`. That rule is exercised by the parenthesized
+  read case and the nested-block case. A deeper nesting shape that this does
+  not anticipate would mis-attach the arms, and the cross-check would then
+  refuse the program rather than emit a wrong module.
+
+Next. Handled multi-index writes, then native-call handlers and handler-required
+composite reads, then FixedDiv totalization.
+
 ## Opus 5.5 audit of the Codex V0.2.X work, 2026-10-20
 
 Line v0.2.3. Branch feat/v02-order3-audit-followup, cut from

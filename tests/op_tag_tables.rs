@@ -46,9 +46,10 @@ const DRIVER: &str = include_str!("../src/selfhost/mod.rs");
 const ORACLE: &str = include_str!("selfhost_codegen.rs");
 
 /// The number of op tags the stage assigns. Not a free parameter: the driver's own
-/// `all_wire_op_tags_decode` sweeps `1..=65`. Tags 64 and 65 transport existing
-/// CheckedDiv and CheckedMod instructions. A change here must move that sweep too.
-const ASSIGNED_TAGS: i64 = 65;
+/// `all_wire_op_tags_decode` sweeps `1..=66`. Tags 64 and 65 transport existing
+/// CheckedDiv and CheckedMod instructions, and 66 the existing BoundsCheck that
+/// probes an indexed write. A change here must move that sweep too.
+const ASSIGNED_TAGS: i64 = 66;
 
 // ---------------------------------------------------------------------------
 // Extraction. Brace depth throughout; see the module header for why.
@@ -269,6 +270,7 @@ const NAME_CORRESPONDENCE: &[(&str, &str)] = &[
     ("modop", "Mod"),
     ("checkeddiv", "CheckedDiv"),
     ("checkedmod", "CheckedMod"),
+    ("boundscheck", "BoundsCheck"),
     ("cmpeq", "CmpEq"),
     ("cmpne", "CmpNe"),
     ("cmplt", "CmpLt"),
@@ -360,7 +362,7 @@ fn the_stage_tag_table_assigns_each_number_once_and_leaves_no_gap() {
         table.len() as i64,
         ASSIGNED_TAGS,
         "the number of assigned op tags moved. The driver's `all_wire_op_tags_decode` sweeps \
-         1..=65 and its own documentation says to extend that bound when codegen first assigns \
+         1..=66 and its own documentation says to extend that bound when codegen first assigns \
          a tag at or above 64; move both together."
     );
 }

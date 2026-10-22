@@ -571,19 +571,29 @@ fn flatten_block(
                     1,
                     "increment handles single-dimension array assignment"
                 );
-                let value_node = flatten(value, scope, next_slot, ctx);
+                // Index first, then the offset slot claimed at `=`, then the value, the
+                // order of the index-first write of 2026-10-21.
                 let index_node = flatten(&indices[0], scope, next_slot, ctx);
-                // IndexStore (kind 15): sequences value then index.
+                let offset_slot = *next_slot;
+                *next_slot += 1;
+                let value_node = flatten(value, scope, next_slot, ctx);
+                // IndexStore (kind 15): arg = the offset slot.
                 ctx.nodes.push(Node {
                     kind: 15,
-                    arg: 0,
+                    arg: offset_slot,
                     lhs: value_node,
                     rhs: index_node,
                 });
                 let store_node = (ctx.nodes.len() - 1) as i64;
                 let (base, len) = array_base_len(ctx, data_name, field);
-                // IndexAssignIn (kind 14): arg = base + len*2^24, value = store node.
-                stmts.push((14, base + len * 16_777_216, store_node));
+                // IndexAssignIn (kind 14): arg = base + len*2^24 + element kind*2^48,
+                // value = store node.
+                stmts.push((
+                    14,
+                    base + len * 16_777_216
+                        + ctx.data_kinds[&format!("{data_name}.{field}")] * 281_474_976_710_656,
+                    store_node,
+                ));
             }
             Stmt::For(fs) if fs.limit.is_some() => {
                 // A `for i in start..end limit CAP { body }` in the bare form.
@@ -884,6 +894,7 @@ fn decode_op(w: i64) -> Op {
         63 => Op::Shr,
         64 => Op::CheckedDiv(operand as u8),
         65 => Op::CheckedMod,
+        66 => Op::BoundsCheck(operand as u16),
         // A flat struct construction: the operand packs count + byte_size*65536.
         46 => Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Struct,
@@ -2068,7 +2079,9 @@ fn self_compile_codegen_atomic_functions() {
     // Data relocation adds one helper. Head phases, local-slot mapping and shift phases add ten.
     // Outcome dispatch and arm scheduling add two helpers.
     // Checked arithmetic adds five helpers.
-    const EXPECTED_SELF_COMPILE: usize = 100;
+    // The index-first and handled indexed writes of 2026-10-21 add `push_write_probe`,
+    // `store_binds` and `push_checked_store` and remove the dead `push_index_store` (100 -> 102).
+    const EXPECTED_SELF_COMPILE: usize = 102;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -2499,12 +2512,13 @@ fn reconstruct_into(
                 // IndexStore signal: fold the value and index already on the stack
                 // into a kind-15 IndexStore node (value in lhs, index in rhs). The
                 // record kind is 36 because 15 collides with the record DONE marker;
-                // the node it produces is a real kind-15.
+                // the node it produces is a real kind-15. Its argument is the offset
+                // slot of a bare write, or a handled write's operand, kind and slot.
                 let value = stack.pop().expect("index-store value");
                 let index = stack.pop().expect("index-store index");
                 nodes.push(Node {
                     kind: 15,
-                    arg: 0,
+                    arg,
                     lhs: value,
                     rhs: index,
                 });
@@ -8687,6 +8701,26 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
             "ctrl/loop_yield",
             SOk,
             "loop main(r: Word) -> Word { yield r }",
+        ),
+        // --- data-segment indexed writes ------------------------------------------
+        //
+        // Index first, then the bound probe, then the value, on bare and handled writes
+        // alike (operator ruling 2026-10-21). Absent from this table before that ruling,
+        // although every stage contains bare writes.
+        (
+            "data/indexed_write_bare",
+            SOk,
+            "private data d { x: [Word; 4] }\nfn f(i: Word) -> Word { d.x[i] = 7; d.x[0] }",
+        ),
+        (
+            "data/indexed_write_handled",
+            SOk,
+            "private data d { x: [Word; 4] }\nfn f(i: Word) -> Word { d.x[i] = 7 { ok(o, n) => o + n, invalid_index(j) => j } }",
+        ),
+        (
+            "data/indexed_write_default_trap",
+            SOk,
+            "private data d { x: [Byte; 4] }\nfn f(i: Word) -> Byte { d.x[i] = 7 as Byte { ok(_, n) => n } }",
         ),
         // --- composites: construction / access -----------------------------------
         (

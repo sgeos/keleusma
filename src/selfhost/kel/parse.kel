@@ -2786,11 +2786,24 @@ fn step_iclosing() -> Word {
 // segment beyond 64 KB, whose element-0 slot or length exceeds 65535, does not spill
 // its base into the length field; the runtime's `GetDataIndexed` operands are the
 // matching twenty-four bits.
+//
+// The `=` also reserves the local that holds the offset while the value is evaluated,
+// since the reference evaluates and checks the index before the value (operator ruling
+// 2026-10-21). The pending argument carries the element kind at 2^48 and that slot at
+// 2^51. The slot leaves on the IndexStore record, so the transported statement argument
+// keeps its old width.
 fn step_post_index(k: Word) -> Word {
     da.post_index = 0;
     if k == Tok::Eq() as Word {
+        let slot = ps.pcount + stmt.slot_count;
+        stmt.slot_count = stmt.slot_count + 1;
         stmt.pstmt_kind[stmt.pstmt_sp] = 2;
-        stmt.pstmt_arg[stmt.pstmt_sp] = da.pidx_base + da.pidx_len * 16777216;
+        stmt.pstmt_arg[stmt.pstmt_sp] = da.pidx_base + da.pidx_len * 16777216
+            + (if da.pidx_kind == 2 orelse da.pidx_kind == 3 { da.pidx_kind } else { 0 }) * 281474976710656
+            + slot * 2251799813685248;
+        // The operator depth at `=`. An arm block reached at this depth follows the whole
+        // right-hand side, so it handles the write rather than a read inside the value.
+        stmt.pstmt_name[stmt.pstmt_sp] = ops.opsp;
         stmt.pstmt_sp = stmt.pstmt_sp + 1;
         ops.expect_operand = 1;
         0
@@ -6465,9 +6478,49 @@ fn checked_label(k: Word, v: Word) -> Word {
         if toks.zero_divisor_id > 0 andalso v + 1 == toks.zero_divisor_id { 3 } else { 4 }
     } } } } }
 }
+// An arm block after the whole right-hand side of an indexed assignment, reached at the
+// operator depth recorded at its `=`, handles the write (operator ruling 2026-10-21).
+// That is tested first, because the value's last record would otherwise be read as the
+// root. The assignment leaves the pending statements and becomes the arm block's
+// expression. Its block of seven, flag, old, the four bound limbs and new, is reserved
+// here, after the value's own locals, as the reference numbers it. The IndexStore record
+// folds the index and value into the root with a full-word payload, the data operand,
+// the element kind at 2^48 and the offset slot plus one at 2^51, which keeps it apart
+// from a bare write's payload, the slot alone. Record 118 follows on the next step,
+// through `da.store_emit` 2. The form code is 16 plus the element kind, and this subset
+// admits Word and Byte elements, as the handled read does. The offset slot is kept in
+// `values[fp * 2 + 1]`, which no write arm uses, since `ok` admits no literal and
+// `invalid_index` has one pattern. Adding names here is avoided deliberately. The parse
+// stage sits at the type stage's name cap.
 fn checked_open() -> Word {
     ops.draining = 0;
     if checked.depth >= 32 { perr(41, checked.depth + 1) } else {
+    if stmt.pstmt_sp > stmt.stmt_base andalso stmt.pstmt_kind[stmt.pstmt_sp - 1] == 2
+        andalso stmt.pstmt_name[stmt.pstmt_sp - 1] == ops.opsp {
+        let arg = stmt.pstmt_arg[stmt.pstmt_sp - 1];
+        let kind = (arg / 281474976710656) % 8;
+        if kind != 2 andalso kind != 3 { perr(42, toks.at) } else {
+            stmt.pstmt_sp = stmt.pstmt_sp - 1;
+            let fp = checked.depth;
+            checked.depth = fp + 1;
+            checked.phase[fp] = 0; checked.seen[fp] = 0;
+            checked.form[fp] = 16 + kind;
+            checked.allowed[fp] = 3;
+            checked.values[fp * 2 + 1] = arg / 2251799813685248;
+            checked.base[fp] = ps.pcount + stmt.slot_count;
+            stmt.slot_count = stmt.slot_count + 7;
+            checked.letbase[fp] = stmt.let_count;
+            checked.ifbase[fp] = branch.if_sp;
+            checked.matchbase[fp] = mat.match_sp;
+            checked.forbase[fp] = forst.for_sp;
+            ops.opstack[ops.opsp] = OpCode::CheckedMark() as Word;
+            ops.opsp = op_push(ops.opsp);
+            checked.opbase[fp] = ops.opsp;
+            ops.expect_operand = 1;
+            da.store_emit = 2;
+            type_tuple_record(Node::IndexStore() as Word, arg + 2251799813685248)
+        }
+    } else {
     if (checked.scalar != 2 andalso checked.scalar != 3) orelse checked.root == 0 {
         // An unavailable family must not be reported as a source type error.
         perr(42, toks.at)
@@ -6494,7 +6547,7 @@ fn checked_open() -> Word {
         checked.opbase[fp] = ops.opsp;
         ops.expect_operand = 1;
         type_tuple_record(118, checked.base[fp] + (checked.form[fp] % 8) * 65536)
-    } }
+    } } }
 }
 fn checked_close(fp: Word) -> Word {
     if checked.seen[fp] band 1 == 0 { perr(40, toks.at); }
@@ -6502,13 +6555,25 @@ fn checked_close(fp: Word) -> Word {
         perr(40, toks.at);
     } else { ops.opsp = op_pop(ops.opsp); }
     stmt.let_count = checked.letbase[fp];
+    // A closed handled write must end the statement or the block. Probe value 3 asks the
+    // next token for that.
+    if checked.form[fp] >= 16 { checked.probe = 3; }
     checked.depth = fp; ops.expect_operand = 0; stmt.blockform = 0;
     type_tuple_record(124, 0)
 }
+// A handled write's `ok(old, new)` binds the element read before the write from f+1 and
+// the written value from f+6, admits no literal and refuses a name bound twice. Its
+// `invalid_index(j)` binds the offset slot. The scalar is the element's for `ok`, since
+// the form code is 16 plus the element kind, and Word for `invalid_index`.
 fn checked_pattern(k: Word, v: Word, fp: Word) -> Word {
     let n = checked.count[fp];
     let at = fp * 2 + n;
     let negative = checked.phase[fp] == 9;
+    let store_ok = checked.form[fp] >= 16 andalso checked.kind[fp] == 0;
+    if store_ok andalso (k == Tok::IntLit() as Word orelse k == Tok::Minus() as Word
+        orelse (n == 1 andalso k == Tok::Ident() as Word andalso checked.names[fp * 2] == v + 1)) {
+        perr(40, toks.at)
+    } else {
     if k == Tok::Minus() as Word andalso not negative {
         checked.phase[fp] = 9; 0
     } else {
@@ -6522,7 +6587,9 @@ fn checked_pattern(k: Word, v: Word, fp: Word) -> Word {
         if k != Tok::Ident() as Word { perr(40, toks.at) } else {
             // Word wide results bind high then low. All other patterns bind low.
             let wide = checked.form[fp] == 3 andalso (checked.kind[fp] == 1 orelse checked.kind[fp] == 2);
-            let source = checked.base[fp] + if (wide andalso n == 0) orelse (checked.form[fp] >= 8 andalso checked.kind[fp] == 1) { 2 } else { 1 };
+            let source = if store_ok { checked.base[fp] + 1 + 5 * n } else { if checked.form[fp] >= 16 { checked.values[fp * 2 + 1] } else {
+                checked.base[fp] + if (wide andalso n == 0) orelse (checked.form[fp] >= 8 andalso checked.kind[fp] == 1) { 2 } else { 1 }
+            } };
             let scalar = if checked.form[fp] >= 8 andalso checked.kind[fp] == 1 { 3 } else { checked.form[fp] % 8 };
             let slot = ps.pcount + stmt.slot_count;
             stmt.slot_count = stmt.slot_count + 1;
@@ -6534,6 +6601,7 @@ fn checked_pattern(k: Word, v: Word, fp: Word) -> Word {
             stmt.let_count = let_push(stmt.let_count);
             type_tuple_record(125, source + scalar * 65536)
         } } } }
+    }
     }
 }
 fn checked_boundary(k: Word) -> Word {
@@ -6577,7 +6645,7 @@ fn step_checked(k: Word, v: Word) -> Word {
     } else { if phase == 2 orelse phase == 9 { checked_pattern(k, v, fp) } else {
     if phase == 3 {
         let wide = checked.form[fp] == 3 andalso (checked.kind[fp] == 1 orelse checked.kind[fp] == 2);
-        let count = if wide { 2 } else { 1 };
+        let count = if wide orelse (checked.form[fp] >= 16 andalso checked.kind[fp] == 0) { 2 } else { 1 };
         if checked.count[fp] < count {
             if k != Tok::Comma() as Word { perr(40, toks.at); }
             checked.phase[fp] = 2;
@@ -6641,6 +6709,10 @@ fn checked_emit() -> Word {
 }
 
 fn step_body_dispatch(k: Word, v: Word) -> Word {
+    if checked.probe == 3 andalso k != Tok::Semi() as Word andalso k != Tok::RBrace() as Word {
+        // The reference accepts a handled write only as a statement or a block's tail.
+        perr(40, toks.at)
+    } else {
     if checked.probe == 1 {
         checked.probe = 0;
         // Match the reference recognizer. zero_divisor cannot be the first arm.
@@ -6662,6 +6734,7 @@ fn step_body_dispatch(k: Word, v: Word) -> Word {
                 step_checked(k, v)
             } else { step_body_normal(k, v) }
         }
+    }
     }
 }
 fn step_body_normal(k: Word, v: Word) -> Word {
@@ -6859,10 +6932,10 @@ fn step_draining() -> Word {
                     // stack (index below, value on top). Emit the IndexStore signal so the
                     // host combines them into a kind-15 node; step_store_finalize then records
                     // the IndexAssignIn statement.
-                    da.store_arg = stmt.pstmt_arg[stmt.pstmt_sp];
+                    da.store_arg = stmt.pstmt_arg[stmt.pstmt_sp] % 2251799813685248;
                     da.store_emit = 1;
                     ops.draining = 0;
-                    Node::IndexStore() as Word
+                    Node::IndexStore() as Word + (stmt.pstmt_arg[stmt.pstmt_sp] / 2251799813685248) * 64
                 } }
             } else {
                 stmt.stmt_kind[stmt.stmt_count] = Node::ExprStmt() as Word;
@@ -7162,8 +7235,11 @@ fn body_next() -> Word {
     if mat.match_build == 1 {
         step_match_build()
     } else {
-    if da.store_emit == 1 {
-        step_store_finalize()
+    if da.store_emit > 0 {
+        if da.store_emit == 1 { step_store_finalize() } else {
+            da.store_emit = 0;
+            type_tuple_record(118, checked.base[checked.depth - 1] + (checked.form[checked.depth - 1] - 16) * 65536)
+        }
     } else {
     if call.en_unit > 0 {
         step_enum_unit_finalize()

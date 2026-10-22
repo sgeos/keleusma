@@ -1506,7 +1506,38 @@ impl<'a> Parser<'a> {
                         if let Some((data_name, field_name, indices, lhs_span)) =
                             data_indexed_lhs(&expr, &self.data_names)
                         {
-                            let value = self.parse_expr()?;
+                            // An arm block after the right-hand side handles the
+                            // WRITE, by the operator ruling of 2026-10-21, so the
+                            // right-hand side is parsed without attaching one. A
+                            // right-hand side needing its own handler is
+                            // parenthesized or bound with `let` first.
+                            let value = self.parse_expr_without_arms()?;
+                            if matches!(self.peek(), TokenKind::LBrace)
+                                && self.peek_ahead_is_checked_arm_keyword()
+                            {
+                                let (arms, arms_end) = self.parse_checked_arm_block()?;
+                                let store = Expr::DataIndexStore {
+                                    data_name,
+                                    field: field_name,
+                                    indices,
+                                    value: Box::new(value),
+                                    arms,
+                                    span: merge_spans(lhs_span, arms_end),
+                                };
+                                // An expression: a statement ending in `;`, or
+                                // the block's tail.
+                                if self.eat(&TokenKind::Semicolon) {
+                                    stmts.push(Stmt::Expr(store));
+                                    continue;
+                                }
+                                if self.at(&TokenKind::RBrace) {
+                                    tail_expr = Some(Box::new(store));
+                                    continue;
+                                }
+                                return Err(
+                                    self.error("expected `;` or `}` after a handled indexed write")
+                                );
+                            }
                             let end = self.expect(&TokenKind::Semicolon)?;
                             stmts.push(Stmt::DataFieldIndexAssign {
                                 data_name,
@@ -1753,8 +1784,32 @@ impl<'a> Parser<'a> {
         ) || matches!(self.peek_ahead(1), TokenKind::LowerIdent(s) if s == "ok" || s == "invalid_index" || s == "invalid_newtype" || s == "payload_discriminant" || s == "invalid_discriminant" || s == "error")
     }
 
+    /// An expression with no outcome-arm block attached at its top level.
+    /// Used for the right-hand side of an indexed data write, whose arm
+    /// block belongs to the write. Arm blocks nested inside parentheses or
+    /// sub-expressions still attach as usual.
+    fn parse_expr_without_arms(&mut self) -> Result<Expr, ParseError> {
+        self.enter_depth()?;
+        let inner = self.parse_pipeline_expr();
+        self.leave_depth();
+        inner
+    }
+
     fn parse_checked_arms_after(&mut self, op_expr: Expr) -> Result<Expr, ParseError> {
         let start_span = op_expr.span();
+        let (arms, end) = self.parse_checked_arm_block()?;
+        Ok(Expr::Checked {
+            op_expr: alloc::boxed::Box::new(op_expr),
+            arms,
+            span: merge_spans(start_span, end),
+        })
+    }
+
+    /// Parse `{ kind [when guard] => body, ... }` and return the arms with the
+    /// span of the closing brace.
+    fn parse_checked_arm_block(
+        &mut self,
+    ) -> Result<(alloc::vec::Vec<crate::ast::CheckedArm>, Span), ParseError> {
         self.expect(&TokenKind::LBrace)?;
         let mut arms: alloc::vec::Vec<crate::ast::CheckedArm> = alloc::vec::Vec::new();
         while !self.at(&TokenKind::RBrace) {
@@ -1779,11 +1834,7 @@ impl<'a> Parser<'a> {
             }
         }
         let end = self.expect(&TokenKind::RBrace)?;
-        Ok(Expr::Checked {
-            op_expr: alloc::boxed::Box::new(op_expr),
-            arms,
-            span: merge_spans(start_span, end),
-        })
+        Ok((arms, end))
     }
 
     /// Parse a single arm pattern position for a checked construct.
@@ -1863,8 +1914,14 @@ impl<'a> Parser<'a> {
                 self.bump();
                 self.expect(&TokenKind::LParen)?;
                 let p = self.parse_checked_arm_pattern()?;
+                // A second pattern is the handled indexed write's `ok(old, new)`.
+                // The type checker admits it only there.
+                let second = self.parse_optional_second_checked_pattern()?;
                 self.expect(&TokenKind::RParen)?;
-                Ok(crate::ast::CheckedArmKind::Ok(p))
+                Ok(match second {
+                    Some(new) => crate::ast::CheckedArmKind::StoreOk(p, new),
+                    None => crate::ast::CheckedArmKind::Ok(p),
+                })
             }
             TokenKind::LowerIdent(name) if name == "zero_divisor" => {
                 self.bump();

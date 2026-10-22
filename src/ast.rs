@@ -947,6 +947,27 @@ pub enum Expr {
         arms: Vec<CheckedArm>,
         span: Span,
     },
+    /// Handled indexed write into a data-segment array field:
+    /// `data_name.field[i] = value { ok(old, new) => .., invalid_index(j) => .. }`.
+    ///
+    /// The index is evaluated first and bounds-checked before the value is
+    /// evaluated, so an invalid index skips the value. The construct is an
+    /// expression whose type is the common type of its arms. The first
+    /// increment admits exactly one index; the type checker rejects more.
+    /// See `docs/decisions/ORDER3_HANDLER_SURFACE_PLAN.md`.
+    DataIndexStore {
+        /// Name of the data block being assigned into.
+        data_name: String,
+        /// Field name being written.
+        field: String,
+        /// Index expressions in source order (outermost first).
+        indices: Vec<Expr>,
+        /// Value written when the index is in range.
+        value: Box<Expr>,
+        /// Arms in declaration order: `StoreOk` and `InvalidIndex`.
+        arms: Vec<CheckedArm>,
+        span: Span,
+    },
     /// `saturate_max` literal. Evaluates to the maximum
     /// representable value of the construct's expected type. The
     /// type checker assigns the context type; the compiler emits
@@ -1069,6 +1090,12 @@ pub enum CheckedArmKind {
     /// (B35 P7). Optional; an unhandled native error propagates the
     /// host failure as it would without the construct.
     Error(Pattern),
+    /// `ok(old, new)`: a handled indexed write succeeded. The first
+    /// pattern matches the element value before the write and the
+    /// second the value written. Each is a binder or `_`. Admissible
+    /// only on a handled indexed write, where the element is read
+    /// only when `old` is bound.
+    StoreOk(Pattern, Pattern),
 }
 
 impl Expr {
@@ -1098,6 +1125,7 @@ impl Expr {
             | Expr::Closure { span, .. }
             | Expr::ClosureRef { span, .. }
             | Expr::Checked { span, .. }
+            | Expr::DataIndexStore { span, .. }
             | Expr::SaturateMax { span }
             | Expr::SaturateMin { span }
             | Expr::Classify { span, .. }

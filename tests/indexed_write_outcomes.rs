@@ -99,8 +99,11 @@ fn both_compilers_preserve_store_artifacts_and_explicit_failures() {
             Err(2_i64),
         ),
         (
+            // 19 until 2026-10-21, when the value was evaluated first. The
+            // operator moved every indexed write to index-first evaluation, so
+            // the trace is 2 then 21, plus the stored 7.
             "private data d { x: [Word; 2], trace: Word } fn idx() -> Word { d.trace = d.trace * 10 + 2; 1 } fn val() -> Word { d.trace = d.trace * 10 + 1; 7 } fn main() -> Word { d.x[idx()] = val(); d.trace + d.x[1] }",
-            Ok(19_i64),
+            Ok(28_i64),
         ),
     ] {
         let reference = compile(source);
