@@ -4541,6 +4541,10 @@ pub(crate) fn const_flat_bytes_owned(
     Some(buf)
 }
 
+// Without `floats` the float width is only threaded through the recursion, because
+// the one arm that reads it is compiled out. The parameter stays so that both
+// configurations share one signature.
+#[cfg_attr(not(feature = "floats"), allow(clippy::only_used_in_recursion))]
 fn const_flat_bytes_owned_into(
     c: &ConstValue,
     word_bytes: usize,
