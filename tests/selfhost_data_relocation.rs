@@ -13,6 +13,10 @@ fn late_shared_declarations_preserve_complete_artifacts() {
             "private data d { xs: [Word; 2] } fn early(i: Word) -> Word { d.xs[i] = 7; d.xs[i] } shared data s { n: Byte } fn main() -> Word { early(1) }",
         ),
         (
+            "handled indexed write",
+            "private data d { xs: [Word; 2] } fn early(i: Word) -> Word { d.xs[i] = 7 { ok(o, n) => o + n, invalid_index(j) => j } } shared data s { n: Byte } fn main() -> Word { early(1) }",
+        ),
+        (
             "initializer",
             "private data d { n: Word = 5 } fn early() -> Word { d.n = d.n + 1; d.n } shared data s { n: Byte } fn main() -> Word { early() }",
         ),
@@ -68,6 +72,12 @@ fn relocated_modules_execute_and_all_compile_paths_agree() {
         ),
         (
             "private data d { xs: [Word; 2] } fn early(i: Word) -> Word { d.xs[i] = 7; d.xs[i] } shared data s { n: Byte } fn main() -> Word { early(1) }",
+            7,
+        ),
+        // A handled write's data operand travels on its root record, not on a
+        // statement record, so it is relocated separately.
+        (
+            "private data d { xs: [Word; 2] } fn early(i: Word) -> Word { d.xs[i] = 7 { ok(o, n) => o + n, invalid_index(j) => j } } shared data s { n: Byte } fn main() -> Word { early(1) }",
             7,
         ),
         (

@@ -500,9 +500,9 @@ execution returning seven. These results do not complete Keleusma wire serializa
 
 ## Current construct-support boundary, 2026-10-21
 
-The executable table in `tests/selfhost_codegen.rs` contains 111 cases with
-106 SOk / 1 Refuses / 3 Diverges / 1 RefRejects. The 2026-10-21 increment added
-the nine cast cases, each byte-identical.
+The executable table in `tests/selfhost_codegen.rs` contains 114 cases with
+109 SOk / 1 Refuses / 3 Diverges / 1 RefRejects. The 2026-10-21 increments added
+the three indexed-write cases and the nine cast cases, each byte-identical.
 SOk denotes byte identity with the reference, Refuses denotes pipeline refusal,
 Diverges denotes different artifacts, and RefRejects denotes reference rejection.
 This measures the enumerated cases, including the newly admitted unit literal.

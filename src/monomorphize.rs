@@ -2200,6 +2200,29 @@ fn subst_in_expr(expr: &Expr, subst: &BTreeMap<String, TypeExpr>) -> Expr {
                 .collect(),
             span: *span,
         },
+        Expr::DataIndexStore {
+            data_name,
+            field,
+            indices,
+            value,
+            arms,
+            span,
+        } => Expr::DataIndexStore {
+            data_name: data_name.clone(),
+            field: field.clone(),
+            indices: indices.iter().map(|e| subst_in_expr(e, subst)).collect(),
+            value: Box::new(subst_in_expr(value, subst)),
+            arms: arms
+                .iter()
+                .map(|arm| crate::ast::CheckedArm {
+                    kind: arm.kind.clone(),
+                    guard: arm.guard.as_ref().map(|g| subst_in_expr(g, subst)),
+                    body: subst_in_expr(&arm.body, subst),
+                    span: arm.span,
+                })
+                .collect(),
+            span: *span,
+        },
         Expr::SaturateMax { span } => Expr::SaturateMax { span: *span },
         Expr::SaturateMin { span } => Expr::SaturateMin { span: *span },
         Expr::Classify {
