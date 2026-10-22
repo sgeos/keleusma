@@ -8573,6 +8573,57 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
             SOk,
             "fn f() -> Word { let b = 7 as Byte; b as Word }",
         ),
+        // A CAST DECIDES WHETHER THE OPERATOR CONSUMING IT IS BYTE ARITHMETIC. Until
+        // 2026-10-21 the cast left the parser's last-operand Byte flag as its operand had set
+        // it, so each of the following diverged: widened Byte operands lowered to the
+        // unchecked Byte operation, and narrowed Word operands to checked Word arithmetic.
+        // Measured before the fix, the first seven of these diverged.
+        (
+            "cast/widened_bytes_add",
+            SOk,
+            "fn f(o: Byte, n: Byte) -> Word { (o as Word) + (n as Word) }",
+        ),
+        (
+            "cast/widened_bytes_mul",
+            SOk,
+            "fn f(o: Byte, n: Byte) -> Word { (o as Word) * (n as Word) }",
+        ),
+        (
+            "cast/widened_bytes_unparenthesized",
+            SOk,
+            "fn f(o: Byte, n: Byte) -> Word { o as Word + n as Word }",
+        ),
+        (
+            "cast/widened_byte_plus_literal",
+            SOk,
+            "fn f(o: Byte) -> Word { (o as Word) + 1 }",
+        ),
+        (
+            "cast/widened_byte_shift",
+            SOk,
+            "fn f(o: Byte) -> Word { (o as Word) lsl 1 }",
+        ),
+        (
+            "cast/narrowed_words_add",
+            SOk,
+            "fn f(a: Word, b: Word) -> Byte { (a as Byte) + (b as Byte) }",
+        ),
+        (
+            "cast/narrowed_words_band",
+            SOk,
+            "fn f(a: Word, b: Word) -> Byte { (a as Byte) band (b as Byte) }",
+        ),
+        // Controls that agreed before the fix and must keep agreeing.
+        (
+            "cast/literal_plus_widened_byte",
+            SOk,
+            "fn f(o: Byte) -> Word { 1 + (o as Word) }",
+        ),
+        (
+            "cast/narrowed_word_shift",
+            SOk,
+            "fn f(a: Word) -> Byte { (a as Byte) lsl 1 }",
+        ),
         // THE LITERALS, WHICH THIS TABLE DID NOT COVER UNTIL 2026-08-20.
         //
         // Every other boolean case here takes a bool PARAMETER. Not one supplied a

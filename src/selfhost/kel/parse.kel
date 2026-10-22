@@ -6407,11 +6407,18 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         // POSITION in the stream is unchanged -- only which token produces it.
         da.as_skip = 0;
         ops.expect_operand = 0;
+        //
+        // The cast also decides whether its result is a Byte for the operator that consumes
+        // it. `ps.last_byte` was left as the operand had set it, so `(o as Word) + (n as Word)`
+        // over two Byte locals lowered to the unchecked Byte `Add` where the reference emits
+        // `CheckedAdd` (found 2026-10-21).
         if toks.byte_id > 0 andalso v == toks.byte_id {
             ps.last_enum = 0;
             stmt.pending_cenum = 0;
+            ps.last_byte = 1;
             Node::Cast() as Word + 1 * 64
         } else {
+            ps.last_byte = 0;
             if v == toks.word_id andalso ps.last_enum > 0 {
                 mat.ec_phase = 1;
                 mat.ec_name = ps.last_enum - 1;
