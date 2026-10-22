@@ -31,6 +31,9 @@ increment, and a table that drifts is worse than no table.
 | [RESOLVED.md](./RESOLVED.md) | Completed decisions with rationale |
 | [PRIORITY.md](./PRIORITY.md) | Blocking decisions awaiting resolution |
 | [BACKLOG.md](./BACKLOG.md) | Deferred decisions for future consideration |
+| [ORDER1_COMPLETION_PLAN.md](./ORDER1_COMPLETION_PLAN.md) | Current first-pass self-hosting requirements, evidence and remaining integration work |
+| [ORDER2_COMPLETION_PLAN.md](./ORDER2_COMPLETION_PLAN.md) | Full first-pass validator requirements and implementation evidence |
+| [ORDER2_COMPLETION_AUDIT.md](./ORDER2_COMPLETION_AUDIT.md) | Validator completion evidence, verification receipts and retained reference boundary |
 | [COMPOSITE_REGION_EVIDENCE.md](./COMPOSITE_REGION_EVIDENCE.md) | What the V0.2.3 runtime establishes for the composite-region-reuse proof, with provenance per claim |
 | [STREAM_SPILL_LAYOUT.md](./STREAM_SPILL_LAYOUT.md) | **Open, framed not taken**: the two remaining resumable-stream refusals are one question — operand entries live in SSA values and do not survive a return — needing a statically sized ephemeral slice; the multi-parameter refusal is separated out, because that shape FAULTS on the reference |
 | [YIELD_OWNERSHIP_MODE.md](./YIELD_OWNERSHIP_MODE.md) | Accepted in principle: `ref`/`out` on a yielding declaration's return signature, choosing machine-owned or host-owned storage for the yielded value (V0.3.0 or later) |

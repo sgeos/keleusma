@@ -816,6 +816,39 @@ let safe = table[i] {
 };
 ````
 
+### Indexed Write Construct
+
+````
+store_construct = data_index_target '=' expr '{' store_arm { ',' store_arm } [ ',' ] '}'
+store_arm      = store_kind [ 'when' expr ] '=>' expr
+store_kind     = 'ok' '(' store_pattern ',' store_pattern ')'
+               | 'invalid_index' '(' arm_pattern ')'
+store_pattern  = '_' | lower_ident
+````
+
+Guards a write into a data-block array field against an out-of-bounds index. The target is a data-block field indexed exactly once, `d.f[i]`. The `ok` arm binds the element's value before the write and the value written, and either may be `_`. The element is read only when some `ok` arm binds the old value. The `invalid_index` arm binds the offending index `Word`, with the patterns and guards of the indexing construct. The `ok` class must end with an unguarded arm, and a literal pattern is inadmissible in either `ok` position. The `invalid_index` class is optional, and an unhandled out-of-bounds index traps as `IndexOutOfBounds`. The construct is an expression whose type is the common type of its arms. It may stand as a statement ending in `;`, whose value is discarded, or as the tail expression of a block. Other expression positions, such as a `let` initializer, and a handled write with more than one index are not yet supported.
+
+**The arm block belongs to the write.** An arm block after the right-hand side of an indexed assignment handles the write, so `d.f[i] = a[j] { ok(v) => v }` is a malformed write handler rather than a handled read of `a[j]`. A right-hand side that needs its own handler is parenthesized, `d.f[i] = (a[j] { ok(v) => v, invalid_index(_) => 0 });`, or bound with `let` first. This meaning took effect on 2026-10-21. The assignment of a whole scalar field, `d.f = e`, cannot fail, and an arm block after its right-hand side still belongs to the right-hand side.
+
+**Evaluation order.** Every indexed write, handled or not, evaluates its index first and checks it against the bound before evaluating the value. An out-of-bounds index therefore never evaluates the value, and a valid write evaluates the index before the value. A program that must evaluate the value regardless binds it with `let` before the write. Before 2026-10-21 a bare write evaluated the value first.
+
+Example:
+
+````
+// Store a sample and return the value it replaced, or the negated index.
+fn store(i: Word, s: Word) -> Word {
+    d.samples[i] = s {
+        ok(old, _) => old,
+        invalid_index(j) => 0 - j,
+    }
+}
+
+// Discard the outcome; an invalid index is ignored rather than trapping.
+d.samples[i] = s { ok(_, _) => (), invalid_index(_) => () };
+````
+
+The self-hosted compiler implements the construct and the index-first order byte for byte, for Word and Byte elements. It refuses a handled write on any other element type, as it refuses the handled read on one, so `--compiler self-hosted` fails loudly on such a program rather than emitting a module. The shapes it is checked against are listed in `tests/indexed_write_handlers.rs`.
+
 ### Newtype Construction Construct
 
 ````

@@ -2,7 +2,8 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: First pass, measured against the tree. Written 2026-09-04.
+**Status**. Current population re-enumerated on 2026-10-15. Historical findings
+retain their original dates. Written 2026-09-04.
 
 ## Why this census exists
 
@@ -16,6 +17,31 @@ was not predicted, not covered by any test, and reachable that day with nothing 
 
 **One hole found by accident implies nothing about how many remain.** The honest response to an
 accidental find in a class nobody has enumerated is to enumerate the class.
+
+## Population update on 2026-10-15
+
+The runtime was re-enumerated against the earlier e84d7cfa snapshot. The two
+indexed-slot error constructions previously counted in group E were replaced by
+whole-span validation. Nine new constructions cover the total indexed outcomes,
+for a net increase of seven. The exact source count is now 52 in vm.rs and two in
+marshall.rs. The direct scalar conversion paths remain six and four respectively.
+
+| New site | Classification and evidence |
+|---|---|
+| Indexed read base conversion | A u32 base fits usize on supported 32-bit and 64-bit hosts. The narrower-host refusal remains a contract guard. No failure execution is claimed. |
+| Indexed read length conversion | Same representation argument as the base conversion. No failure execution is claimed. |
+| Indexed read complete-span check | Malformed spans are rejected by both verifiers in data_read_outcomes. Runtime defense remains before any access. |
+| Indexed store base conversion | A u32 base fits the supported host representation. No narrower-host failure execution is claimed. |
+| Indexed store length conversion | Same representation argument as the base conversion. No failure execution is claimed. |
+| Indexed store complete-span check | Malformed spans are rejected by both verifiers in indexed_write_outcomes. Invalid indices do not perform a write. |
+| Scalar array stride divisibility | A host can supply a malformed flat body despite valid source and module metadata. The runtime guard is exercised in checked and proven modes by indexed_read_outcomes. |
+| Array diagnostic-bound conversion | Ordinary producer construction is bounded by its encoded size. A host-supplied body above the u32 diagnostic range is separately refused. That large allocation boundary was not executed. |
+| Bounds-Trap diagnostic conversion | A reconstructed u32 bound fits supported 32-bit and 64-bit hosts. The narrower-host refusal remains a contract guard and was not executed. |
+
+Group L counts the three executed span/representation controls as probed. The
+six representation-size cases have source reasoning but no corresponding failure
+execution. They remain outside the examined total under this document's convention.
+The old group counts and findings below retain their historical provenance.
 
 ## The question asked at each site
 
@@ -32,9 +58,9 @@ Derived from source, not chosen by hand:
 grep -rn "VmError::InvalidBytecode" src/ --include=*.rs
 ```
 
-**51 matches, of which 47 are construction sites in production code.** The four excluded are named
+**58 matches, of which 54 are construction sites in production code.** The four excluded are named
 rather than silently dropped: one doc comment referring to the variant, one match arm listing it
-among unrecoverable errors, and two inside unit tests. They live in `src/vm.rs` (45) and
+among unrecoverable errors, and two inside unit tests. They live in `src/vm.rs` (52) and
 `src/marshall.rs` (2).
 
 **The figure was 50 and 46 until 2026-09-10.** The opaque-width repair of 2026-09-08 -- part of
@@ -78,15 +104,16 @@ honest; probing every member individually is not a better use of the same effort
 | B | float opcode without the `floats` feature | 2 | **REACHABLE -- see below** |
 | C | `Fixed` fraction bits exceeding the word width | 5 | **defended**, by two checks that compose |
 | D | composite operand form mismatch | 7 | **defended**, by boundary canonicalization |
-| E | structural indices out of range | 9 | **defended at load** (8 of 9 probed) |
+| E | structural indices out of range | 7 | **defended at load** (6 of 7 probed) |
 | F | shared and private data-segment layout | 7 | **host-contract, confirmed** (2 of 7 probed) — but see below |
 | G | arena staleness after reset | 3 | **no witness found**, all three now addressed — see below and the seventh addendum |
 | H | the three "should never have been emitted" | 3 | **closed 2026-09-04** |
 | I | operand-range and constant-kind checks | 6 | **mixed** — see below (5 of 6 probed) |
 | J | unregistered or invalid native index | 3 | **mixed** — the index is admitted at load (1 of 3 probed) |
 | K | the retained runtime bounds guard on a flat opaque field | 1 | **not examined** — added 2026-09-08, see below |
+| L | total indexed-access representation, span and diagnostic checks | 9 | **mixed** (3 of 9 probed), with explicit source-only bounds below |
 
-The group sizes sum to 47, which is the population above; a table whose parts do not add to its
+The group sizes sum to 54, which is the population above; a table whose parts do not add to its
 stated whole has been the tell for a miscount here before.
 
 **Group K is a row rather than a reclassification, deliberately.** The site it holds is a bounds
@@ -121,11 +148,12 @@ written and the row was not updated. The totals were re-derived from the prose a
 **A count in a table and the same count in a sentence are two places to go stale**, and this
 document has now been the tell for its own miscount twice.
 
-**Thirty-seven of forty-seven sites carry an examined verdict**, group by group: A's one, both
-of B, all five of C, all seven of D, eight of E's nine, two of F's seven, all three of G, all three
-of H, five of I's six, and one of J's three.
+**Thirty-eight of fifty-four sites carry an examined verdict**, group by group. These are
+A's one, both of B, all five of C, all seven of D, six of E's seven, two of F's seven,
+all three of G, all three of H, five of I's six, one of J's three and three of L's nine.
 
-**The remaining ten** are one in E, five in F, one in I, two in J, and the one in K.
+**The remaining sixteen** are one in E, five in F, one in I, two in J, one in K and
+six in L. The latter six retain explicit source-only classifications below.
 
 **Group G moved from one of three to all three on 2026-09-10**, when its other two sites were
 probed. See the seventh addendum. By this document's own convention a verdict carrying no probe

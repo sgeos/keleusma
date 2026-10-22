@@ -193,31 +193,6 @@ fn the_stated_figures_say_how_they_were_measured() {
     );
 }
 
-/// **THE STAGE-SOURCE COUNT IN THE ORIENTATION DOCUMENT MATCHES THE DIRECTORY.**
-///
-/// `CLAUDE.md` said **ten** where the tree holds **twelve**, in two separate places, while every
-/// other document — the handoff's "all twelve stages", the `CONSTS` claim, the byte-identity
-/// corpus's "eleven of twelve" — said twelve. A reader calibrated on ten would have believed the
-/// corpus was two stages from complete when it is one.
-///
-/// # BOTH SIDES ARE DERIVED. NEITHER IS PINNED.
-///
-/// The expected count is read out of the prose and the actual out of the directory, so this stays
-/// correct on a branch that adds a stage, provided the document is updated with it. **That shape
-/// is deliberate**: the earlier failure in this family was a test that scanned a directory while
-/// pinning its answer as a constant, which made it wrong on another line's branch — right in the
-/// direction its own message called a coverage gain.
-///
-/// # The claim distinguishes two counts and so does this
-///
-/// Twelve sources exist; **eleven** are embedded in the driver via `include_str!`, and
-/// `verify_types.kel` is embedded by its tests instead. Conflating those is how the original
-/// wording came to be wrong in a way nobody noticed.
-///
-/// **THE EMBEDDED COUNT IS OVER DISTINCT NAMES, NOT OCCURRENCES, AND THE FIRST REVISION GOT THAT
-/// WRONG.** Counting `include_str!` occurrences reports twelve, because at least one stage is
-/// embedded at more than one site. The test failed on that and the instrument was corrected
-/// rather than the expectation — the failure was real evidence about the counter, not the tree.
 #[test]
 fn the_arena_integration_test_claim_matches_the_directory() {
     // The project instructions describe the arena crate's tests as a lib count
@@ -273,6 +248,33 @@ fn the_arena_integration_test_claim_matches_the_directory() {
     }
 }
 
+/// **THE STAGE-SOURCE COUNT IN THE ORIENTATION DOCUMENT MATCHES THE DIRECTORY.**
+///
+/// `CLAUDE.md` said **ten** where the tree holds **twelve**, in two separate places, while every
+/// other document — the handoff's "all twelve stages", the `CONSTS` claim, the byte-identity
+/// corpus's "eleven of twelve" — said twelve. A reader calibrated on ten would have believed the
+/// corpus was two stages from complete when it is one.
+///
+/// # BOTH SIDES ARE DERIVED. NEITHER IS PINNED.
+///
+/// The expected count is read out of the prose and the actual out of the directory, so this stays
+/// correct on a branch that adds a stage, provided the document is updated with it. **That shape
+/// is deliberate**: the earlier failure in this family was a test that scanned a directory while
+/// pinning its answer as a constant, which made it wrong on another line's branch — right in the
+/// direction its own message called a coverage gain.
+///
+/// # The claim distinguishes two counts and so does this
+///
+/// When this was written, twelve sources existed and eleven were embedded in the driver via
+/// `include_str!`, with `verify_types.kel` embedded by its tests instead. Conflating those is how
+/// the original wording came to be wrong in a way nobody noticed. Every stage source is now
+/// embedded, and the test asserts that the embedded set equals the directory inventory. This doc
+/// comment sat above the arena test until 2026-10-20, when it was moved to the test it describes.
+///
+/// **THE EMBEDDED COUNT IS OVER DISTINCT NAMES, NOT OCCURRENCES, AND THE FIRST REVISION GOT THAT
+/// WRONG.** Counting `include_str!` occurrences reports twelve, because at least one stage is
+/// embedded at more than one site. The test failed on that and the instrument was corrected
+/// rather than the expectation — the failure was real evidence about the counter, not the tree.
 #[test]
 fn the_stage_source_count_claim_matches_the_directory() {
     use std::collections::BTreeSet;
@@ -331,16 +333,26 @@ fn the_stage_source_count_claim_matches_the_directory() {
             rest.find(".kel\")").map(|end| &rest[..end])
         })
         .collect();
-    assert!(
-        embedded.len() < on_disk,
-        "the driver embeds all {on_disk} stage sources. The instructions say one is embedded by \
-         its tests instead, so that sentence is stale.",
+    let disk_names: BTreeSet<String> = std::fs::read_dir(dir)
+        .expect("read stage inventory")
+        .map(|entry| entry.expect("read stage entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "kel"))
+        .map(|path| path.file_stem().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        embedded
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>(),
+        disk_names,
+        "the driver must embed every stage named by the directory inventory"
     );
-    assert!(
-        !embedded.contains("verify_types"),
-        "`verify_types.kel` is now embedded in the driver. It is the twelfth stage, the one that \
-         does not self-compile, and the instructions describe it as embedded by its tests."
-    );
+    let count_word = WORDS
+        .iter()
+        .find(|(_, count)| *count == on_disk)
+        .map(|(word, _)| *word)
+        .expect("extend the stage-count word table");
+    assert!(INSTRUCTIONS.contains(&format!("all {count_word} embedded in the driver")));
 }
 
 /// **EVERY WORKSPACE MEMBER IS NAMED IN THE ORIENTATION DOCUMENT.**
@@ -479,7 +491,7 @@ fn the_invalid_bytecode_census_still_describes_the_tree() {
 
     // The document states the total in words as well as digits; the digits are what is checked.
     let stated = doc
-        .split("**51 matches, of which ")
+        .split(" matches, of which ")
         .nth(1)
         .and_then(|rest| rest.split_whitespace().next())
         .and_then(|n| n.parse::<usize>().ok())
@@ -724,7 +736,7 @@ fn the_census_group_table_adds_up_to_its_stated_totals() {
          checking almost nothing rather than checking the table"
     );
 
-    let stated_sites = 47usize;
+    let stated_sites = 54usize;
     assert_eq!(
         sites, stated_sites,
         "the group rows sum to {sites} sites, not the {stated_sites} the document states. \
@@ -734,13 +746,13 @@ fn the_census_group_table_adds_up_to_its_stated_totals() {
 
     // The prose states the examined total in words and then enumerates it.
     assert!(
-        doc.contains("Thirty-seven of forty-seven sites carry an examined verdict"),
+        doc.contains("Thirty-eight of fifty-four sites carry an examined verdict"),
         "the census no longer states its examined total in the expected form; update this \
          extraction rather than deleting the check"
     );
     assert_eq!(
-        examined, 37,
-        "the group rows sum to {examined} examined sites and the prose says thirty-seven. One of \
+        examined, 38,
+        "the group rows sum to {examined} examined sites and the prose says thirty-eight. One of \
          them moved without the other. The per-group column is the authority."
     );
 }

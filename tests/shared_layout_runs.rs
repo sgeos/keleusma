@@ -68,6 +68,14 @@ const STAGES: &[(&str, &str)] = &[
     ),
     // The wire emitter itself, which is the largest artifact this line builds.
     ("wire", include_str!("../src/selfhost/kel/wire.kel")),
+    (
+        "wire_debug",
+        include_str!("../src/selfhost/kel/wire_debug.kel"),
+    ),
+    (
+        "wire_schema",
+        include_str!("../src/selfhost/kel/wire_schema.kel"),
+    ),
 ];
 
 fn compile_stage(src: &str) -> Module {

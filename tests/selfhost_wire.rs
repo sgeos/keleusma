@@ -964,8 +964,15 @@ fn no_command_below_the_dispatch_ceiling_falls_through() {
     // refusal is real.
     let highest = kel_const("highest_command");
     for cmd in 0..=highest {
-        let (got, _) =
-            run_cmd_args(&mut vm, cmd, 0, &[], &[], [0, 0, 0, 0, 0], 0).unwrap_or((0, Vec::new()));
+        let got = match run_cmd_args(&mut vm, cmd, 0, &[], &[], [0, 0, 0, 0, 0], 0) {
+            Ok((got, _)) => got,
+            Err(_) => {
+                // A tolerated command fault consumed a partial frame. Reset
+                // before the next command so that it starts from a valid entry.
+                vm.reset_after_error();
+                continue;
+            }
+        };
         if (-99..=-92).contains(&got) {
             fell_through.push(cmd);
         }
@@ -1212,7 +1219,11 @@ fn dropping_the_word_rounding_is_reported() {
 
 #[test]
 fn a_wrong_starting_cursor_is_reported() {
-    let mutant = mutate(WIRE_KEL, "    6 * (n + 1)", "    6 * (n + 2)");
+    let mutant = mutate(
+        WIRE_KEL,
+        "    wire_six() * (n + wire_one())",
+        "    wire_six() * (n + wire_two())",
+    );
     let mut vm = vm_for(&mutant);
     let rs: Vec<RegionSpec> = vec![(1, 0, 8, 0), (2, 0, 8, 0)];
     let want = reference_artifact(&rs);
@@ -1568,17 +1579,32 @@ const CMD_SHAPE_SIZE: i64 = 25;
 /// Parsing the Keleusma source is deliberate. The alternative is to restate the
 /// number in this file, which would only prove the test agrees with itself.
 fn kel_const(fn_name: &str) -> i64 {
-    let needle = format!("fn {fn_name}() -> Word {{");
-    let at = WIRE_KEL
-        .find(&needle)
-        .unwrap_or_else(|| panic!("wire.kel has no `{fn_name}`"));
-    let rest = &WIRE_KEL[at + needle.len()..];
-    let end = rest.find('}').expect("unterminated body");
-    let body = rest[..end].trim();
-    body.strip_prefix("0x").map_or_else(
-        || body.parse::<i64>().expect("decimal literal"),
-        |hex| i64::from_str_radix(hex, 16).expect("hex literal"),
-    )
+    // Exactly one literal-helper hop is admitted. Cycles and more complex
+    // expressions fail instead of hanging or silently assuming a value.
+    let mut name = fn_name;
+    for _ in 0..2 {
+        let needle = format!("fn {name}() -> Word {{");
+        let at = WIRE_KEL
+            .find(&needle)
+            .unwrap_or_else(|| panic!("wire.kel has no `{name}`"));
+        let rest = &WIRE_KEL[at + needle.len()..];
+        let end = rest.find('}').expect("unterminated body");
+        let body = rest[..end].trim();
+        if let Some(alias) = body.strip_suffix("()") {
+            assert!(
+                alias
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            );
+            name = alias;
+        } else {
+            return body.strip_prefix("0x").map_or_else(
+                || body.parse::<i64>().expect("decimal literal"),
+                |hex| i64::from_str_radix(hex, 16).expect("hex literal"),
+            );
+        }
+    }
+    panic!("{fn_name} exceeds the one-hop literal contract")
 }
 
 #[test]
@@ -8342,6 +8368,29 @@ fn run_fx(vm: &mut Vm<'static, 'static>, cmd: i64, i: &FxInput) -> i64 {
     .0
 }
 
+#[test]
+fn constant_walk_propagates_an_interner_pool_refusal() {
+    // The prefix exactly fills the name pool. A constant contributes one more
+    // distinct name, so failure occurs during the walk rather than seeding.
+    let mut input = FxInput {
+        fin: vec![7, 0, 0, 64, 0, 0],
+        nin: Vec::new(),
+        bin: Vec::new(),
+        args: [65, 64, 1, 1, 0],
+    };
+    for i in 0..64 {
+        input.nin.extend_from_slice(&[256, 0]);
+        input
+            .bin
+            .extend_from_slice(format!("{i:04}{}", "a".repeat(252)).as_bytes());
+    }
+    input.nin.extend_from_slice(&[8, 0]);
+    input.bin.extend_from_slice(b"overflow");
+    for cmd in [CMD_FX_NAMES, CMD_FX_POOLLEN] {
+        assert_eq!(run_fx(&mut vm_for(WIRE_KEL), cmd, &input), -255);
+    }
+}
+
 /// Must-fire, about the CORPUS: unless some chunk's range starts somewhere other
 /// than zero, a driver that wrote a constant 0 for every `first` would pass.
 ///
@@ -11800,6 +11849,8 @@ fn the_windowed_path_reaches_every_stage_it_can_walk() {
         "verify_typed",
         "verify_datalayout",
         "wire",
+        "wire_debug",
+        "verify_types",
     ];
 
     let mut full = 0;
@@ -11866,7 +11917,7 @@ fn the_windowed_path_reaches_every_stage_it_can_walk() {
         stages.len(),
         "every stage should emit every region the driver reaches"
     );
-    assert_eq!(stages.len(), 11, "the corpus is eleven stages");
+    assert_eq!(stages.len(), 13, "the corpus includes every current stage");
 }
 
 /// MUST FIRE: the windowed path reaches a stage the absolute-offset path cannot.
@@ -11953,17 +12004,11 @@ fn the_driver_emits_the_chunk_region_on_the_stages_that_fit() {
         ("verify_depth", true),
         ("verify_typed", true),
         ("verify_datalayout", true),
-        // THE EXCLUSION LIST IS DOWN TO THE CHUNK CAP, and that is the whole
-        // effect of the all-default elision on this test. `codegen` and
-        // `verify_structural` were excluded because their artifacts overran the
-        // 65,536-byte buffer at 111,864 and 102,256 bytes; they are now 20,632
-        // and 3,840, and every one of the eleven stages fits a single window.
-        //
-        // What still refuses is the 90-record chunk batch, and only two stages
-        // reach it: `parse` at 94 chunks and `wire` at 475. Measured, not
-        // inferred -- the other nine are between 2 and 76.
+        // The bounded batch has 90 records. The current parser, code generator
+        // and wire stage exceed it. The separate windowed-path test requires
+        // every stage to succeed through streaming, including these three.
         ("parse", false),
-        ("codegen", true),
+        ("codegen", false),
         ("verify_structural", true),
         ("wire", false),
     ];
@@ -12037,12 +12082,9 @@ fn the_driver_emits_the_chunk_region_on_the_stages_that_fit() {
         emitted += 1;
     }
 
-    // NINE OF ELEVEN, up from seven. `codegen` and `verify_structural` joined the
-    // emitting set when the all-default elision took their artifacts under the
-    // window. Pinned as counts rather than derived from the table above, so a
-    // stage silently changing category fails here instead of being absorbed.
-    assert_eq!(emitted, 9, "expected nine stages emitted");
-    assert_eq!(refused, 2, "expected two stages refused");
+    // Measured after outcome dispatch added two code-generator functions.
+    assert_eq!(emitted, 8, "expected eight stages emitted");
+    assert_eq!(refused, 3, "expected three stages refused");
 }
 
 /// MUST FIRE: the chunk record's name index is the STAGE's, not the host's.
@@ -12384,6 +12426,7 @@ fn the_driver_refuses_more_names_than_one_call_can_intern() {
 /// The bytes compared are the region PAYLOADS. Their offsets differ from the
 /// reference's because this directory holds two regions rather than twenty;
 /// the contents must not.
+#[cfg(feature = "self-host")]
 #[test]
 fn the_join_holds_on_the_largest_real_stage() {
     use keleusma::wire_schema::kind;
@@ -12399,7 +12442,9 @@ fn the_join_holds_on_the_largest_real_stage() {
     // The control's premise, asserted rather than assumed: this module must
     // exceed the OLD ceilings, or it verifies nothing that a smaller case did
     // not already verify.
-    let blob = module_input_blob(&module);
+    // The established compact scalar tail preserves every value and name while
+    // omitting the zero-only legacy node fields. The full legacy blob now exceeds bin.
+    let (blob, _) = keleusma::selfhost::module_input(&module);
     // The count comes from the REFERENCE's own `NAMES` region, not from
     // `interner_input`. That model predates the data-slot contributor and
     // reports 252 for `parse` where the reference emits 627; using it here would
@@ -12531,6 +12576,7 @@ fn the_join_holds_on_the_largest_real_stage() {
 /// leaves all ten stages byte-identical, because every dedup-mode name in every
 /// stage is distinct. `nm_find` is the quadratic scan whose cost justified the
 /// name cap, and no real input has ever taken its matching branch.
+#[cfg(feature = "self-host")]
 #[test]
 fn the_join_holds_across_every_stage() {
     use keleusma::wire_schema::kind;
@@ -12610,7 +12656,9 @@ fn the_join_holds_across_every_stage() {
             compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
         let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).expect("encode");
         let reference = keleusma_wire::WireView::parse(&want).expect("reference parses");
-        let blob = module_input_blob(&module);
+        // The established compact scalar tail preserves every value and name while
+        // omitting the zero-only legacy node fields. The full legacy blob now exceeds bin.
+        let (blob, _) = keleusma::selfhost::module_input(&module);
 
         let specs: Vec<RegionSpec> = region_counts_for(&want)
             .into_iter()
@@ -12861,18 +12909,9 @@ fn the_derived_name_bound_is_exact_on_every_stage_and_sound_elsewhere() {
     );
 }
 
-/// Every stage fits both of the driver's caps, with the margin stated.
-///
-/// **Residency staging is therefore not required for the corpus**, which is the
-/// opposite of what the plan concluded while it sized the problem from 395,804.
-/// That figure was a `CONSTS` region record count. Measured, the worst stage is
-/// `parse` at 628 names against a cap of 1024 and 33,480 blob bytes against
-/// 49,152 — 61% and 68%.
-///
-/// This is an ASSERTION rather than a note because the conclusion is load
-/// bearing: a stage that grows past either bound turns the driver's honest
-/// refusal into a wall, and it should fail here with the number rather than
-/// surface as an `Unsupported` at some later call site.
+/// Inventory every stage against both driver input limits. The worst name and
+/// byte counts belong to different stages. The dated pins require deliberate
+/// review when either bound moves, in addition to the actual capacity checks.
 #[cfg(feature = "self-host")]
 #[test]
 fn every_stage_fits_the_driver_caps_with_margin() {
@@ -12881,7 +12920,23 @@ fn every_stage_fits_the_driver_caps_with_margin() {
 
     let mut worst_names = 0usize;
     let mut worst_blob = 0usize;
-    for (name, src) in CORPUS_STAGES {
+    let mut inventoried = std::collections::BTreeSet::new();
+    for (name, src) in CORPUS_STAGES.iter().copied().chain([
+        ("wire", include_str!("../src/selfhost/kel/wire.kel")),
+        (
+            "wire_debug",
+            include_str!("../src/selfhost/kel/wire_debug.kel"),
+        ),
+        (
+            "wire_schema",
+            include_str!("../src/selfhost/kel/wire_schema.kel"),
+        ),
+        (
+            "verify_types",
+            include_str!("../src/selfhost/kel/verify_types.kel"),
+        ),
+    ]) {
+        assert!(inventoried.insert(name.to_owned()), "duplicate stage");
         let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
         let (blob, names) = keleusma::selfhost::module_input(&m);
         assert!(
@@ -12893,164 +12948,32 @@ fn every_stage_fits_the_driver_caps_with_margin() {
             "{name}: a {}-byte blob exceeds the {BLOB_CAP} cap",
             blob.len()
         );
+        eprintln!("{name}: {names} names, {} blob bytes", blob.len());
         worst_names = worst_names.max(names);
         worst_blob = worst_blob.max(blob.len());
     }
-    // Pinned so a change in the worst case is visible rather than absorbed, and it
-    // has now earned that SEVEN TIMES. `semi_terminates_nothing` for the empty
-    // statement moved it from 627 names and 33,395 bytes to 628 and 33,480; the
-    // `toks.base` and `toks.at` window fields moved it again to 630 and 33,500 —
-    // two data-block field names and their blob records. The capacity diagnostics
-    // moved it to 645 and 34,118: thirteen guard functions and the two `ps.perr_*`
-    // fields, which is the count exactly. **None of the three changes was about
-    // names, and no author would have thought to check.** That is the entire
-    // argument for the pin.
-    //
-    // The fourth was raising the chunk table from 256 to 1024: the NAME count did not
-    // move at all, because widening an array adds no name, but the blob grew 30 bytes
-    // in data-layout records. A change that moves one of these two and not the other is
-    // the normal case, not a surprise.
-    //
-    // The fifth was naming five more capacity diagnostics: 645 -> 660 names (fifteen
-    // guard, cap and code functions) and 34,148 -> 34,785 blob bytes (thirty-one arrays
-    // gaining a spare slot across five families). The sixth named two more, swept rather
-    // than tripped over: 660 -> 666 names and 34,785 -> 35,045 blob bytes.
-    //
-    // The seventh was carrying a `let` binding's NAME id in its own record: 666 ->
-    // 669 names (`stmt_name`, `name_pending`, `tag_let_name`) and 35,045 -> 35,154
-    // blob bytes. **THE FIRST MOVE ANYONE PREDICTED IN ADVANCE**, which is only
-    // possible because the previous six established what moves it -- and six of the
-    // seven were changes whose author was thinking about something else entirely.
-    //
-    // **THE RUNNING COST OF THE DIAGNOSTICS PROGRAMME IS NOW 39 NAMES**, against a
-    // 1,024-name cap, leaving 65% margin at 666. Roughly three names per cause named --
-    // an error code, a capacity, and a guard. That is the unit price of naming a cause
-    // rather than trapping on it, and stating it here is what keeps "just add a named
-    // refusal" from reading as free.
-    //
-    // The margins are 63% and 69% of the caps, so the increment is admissible; the
-    // point of the pin is that a stage growing toward either bound is reported here
-    // with the number rather than surfacing later as an `Unsupported` at some call
-    // site.
-    // The EIGHTH move: recognising the boolean literals `true`/`false`, which the
-    // stage had been resolving as variable references and mis-lowering to
-    // `GetLocal`. 669 -> 671 names, and the two are `true_id` and `false_id`
-    // exactly -- two shared-block fields, no error code and no guard, because this
-    // was a missing feature rather than a named refusal. **The second move predicted
-    // in advance, and the first whose count came out at two rather than the
-    // programme's usual three per cause.**
-    // The NINTH move: sizing a nested array literal's outer composite by its
-    // elements. 671 -> 672 names, and the one name is `al_elem_bytes` exactly --
-    // a per-nesting-level element size, replacing a flat flag that leaked across
-    // siblings. **One name, because a correctly scoped fix needed one field**; the
-    // wrong version needed one too and gave wrong answers, so the count is not a
-    // proxy for correctness.
-    // The TENTH move: chained array indexing, `a[0][1]` and its split form
-    // `let b = a[0]; b[1]`. 672 -> 676 names, and the four are `let_array_arr`,
-    // `let_array_arrbytes`, `pending_carray_arr` and `pending_carray_arrbytes`
-    // exactly -- a binding record for an element that is itself an array, and the
-    // pending pair that carries it from the literal's close to the `let`.
-    //
-    // **THE FIRST MOVE IN TEN WHOSE COUNT MATCHED WHAT ITS AUTHOR PREDICTED BEFORE
-    // MEASURING.** The header above records that six of the first seven moved for a
-    // reason their author was not thinking about; this one was four names expected
-    // and four names observed. That is weak evidence the change did what it claims
-    // and nothing besides -- weak, because a coincidence of counts is not a proof of
-    // scope, but it is the first time the number has agreed rather than surprised.
-    //
-    // No error code and no guard, because this was a missing feature rather than a
-    // named refusal -- the same shape as the eighth move.
-    //
-    // ELEVENTH MOVE: 676 -> 677, one name. `parse.kel` gained `pe_bare_for`, the
-    // diagnostic code for the unsupported bare `for` form -- the first
-    // UNSUPPORTED-CONSTRUCT code among eleven that are all capacity limits.
-    // Predicted one and observed one.
-    //
-    // TWELFTH MOVE: 677 -> 680, three names. The bare `for` form's support added
-    // `for_bare`, `forin_count`, `step_forin_emit`, `fold_record` and a `let`, and
-    // retired the refusal code -- a net of five against an observed three, because
-    // the count is of INTERNED names and several already existed elsewhere in the
-    // stage. **NOT PREDICTED THIS TIME**: the eleventh move's miss established
-    // that the per-name constant applies to name-only changes, and this change is
-    // not one.
-    //
-    // THIRTEENTH MOVE: 680 -> 681, ONE name. Widening the Call record's chunk field added
-    // `call_chunk_radix` to `parse.kel`. `reconstruct.kel` gained `rc_call_chunk_radix` in
-    // the same change and does not appear here, because this figure is the worst case ACROSS
-    // stages and `parse.kel` holds it. **Predicted correctly this time**: one new name in the
-    // worst-case stage, one name of movement.
-    assert_eq!(worst_names, 681, "the worst-case name count moved");
-    // 35,154 -> 35,213 bytes, 59 for the two field names plus the comment-free
-    // identifiers the recognition introduces. Then 35,213 -> 35,233, twenty bytes
-    // for `al_elem_bytes` and the locals the nested-array sizing introduced.
-    // Then 35,233 -> 35,333 for chained array indexing: 100 bytes for four names.
-    //
-    // **THE RESIDUAL IS ACCOUNTED FOR, NOT WAVED AT.** The four identifiers total 72
-    // characters, leaving 28 bytes over four names -- 7 bytes each. The NINTH move is
-    // an independent check on that figure: one name of 13 characters moved the blob by
-    // 20, which is the same 7 bytes of per-name encoding overhead. Two moves, two
-    // different name counts, one constant.
-    //
-    // Stating the arithmetic matters because this pin has moved ten times and a delta
-    // nobody can decompose is indistinguishable from a delta nobody looked at.
-    // ELEVENTH MOVE: 35,333 -> 35,376, forty-three bytes.
-    //
-    // **THE PREDICTION WAS MADE BEFORE MEASURING AND IT WAS WRONG.** Applying the
-    // constant this comment established -- 11 characters plus 7 bytes of per-name
-    // overhead -- gives 35,351. The observed figure is 35,376, twenty-five bytes
-    // over.
-    //
-    // Recorded as a miss rather than re-derived into agreement, because the tenth
-    // move is written up above as the first whose count matched its author's
-    // prediction, and that record is worth nothing if a subsequent miss is quietly
-    // reconciled. The plausible residual is that this change is NOT one name: it
-    // adds a call and a branch to `step_forheader` and a literal to the constant
-    // pool, where the ninth and tenth moves added names alone. **That is a
-    // hypothesis, not a decomposition** -- the 7-byte constant was derived from
-    // name-only changes and this is the first move to test it against something
-    // else. It did not hold, and the constant should be treated as applying to
-    // name-only moves until someone decomposes this one.
-    // TWELFTH MOVE: 35,376 -> 35,698, three hundred and twenty-two bytes for three
-    // names.
-    //
-    // **DELIBERATELY NOT PREDICTED.** The eleventh move's miss established that the
-    // 7-byte per-name constant was derived from name-only changes and does not hold
-    // for a change that also adds calls, branches and literals. This change adds a
-    // phase-machine branch, two emission ladders, a drain reason and a fold helper,
-    // so applying the constant would have been the same error with a bigger number.
-    //
-    // The residual is NOT decomposed. What can be said is the direction and the
-    // reason: 107 bytes per name against the name-only figure of about 18 is
-    // consistent with the bulk being code rather than identifiers, which is what
-    // this change is.
-    // THIRTEENTH MOVE: 35,698 -> 35,716, EIGHTEEN bytes for the single name
-    // `call_chunk_radix` that the Call-field widening added to `parse.kel`.
-    //
-    // **AND THE RECORDED PER-NAME CONSTANT DOES NOT PREDICT IT.** The ninth and tenth moves
-    // both implied about 7 bytes of encoding overhead per name -- one name of 13 characters
-    // moved the blob by 20, and four names totalling 72 characters moved it by 100. That
-    // constant predicts 16 + 7 = 23 here. The observed move is 18, implying 2 bytes.
-    //
-    // **RECORDED AS UNEXPLAINED RATHER THAN RATIONALISED.** Three candidate explanations fit
-    // and none is checked: the overhead may not be constant in name length, the worst-case
-    // stage may have changed identity, or a substring of the new name may already have been
-    // interned. Guessing between them would put a fourth number in this comment with no more
-    // support than the first three had. The pin holds the measurement; the arithmetic behind
-    // it is open.
-    // FOURTEENTH MOVE: 35,716 -> 35,746, THIRTY bytes for the `step_mpat` branch that
-    // admits the bare enum unit-variant pattern `E::A => ...` the grammar documents.
-    //
-    // **PURE CODE, NO NEW NAME**, which is why the per-name arithmetic above has nothing
-    // to say about it: the branch introduces no identifier, so the residual is entirely
-    // the encoded statements. That is consistent with the note above that the bulk is
-    // code rather than identifiers, and it is the first move here with a name count of
-    // zero — so it constrains the per-name constant not at all rather than contradicting
-    // it.
-    //
-    // **THE PIN CAUGHT WHAT LOCAL VERIFICATION DID NOT.** The parse, codegen and
-    // typecheck suites all passed on that change; this file was not run. The increment's
-    // own brief had named "counts pinned elsewhere" as a risk and did not act on it.
-    assert_eq!(worst_blob, 35746, "the worst-case blob size moved");
+    let actual: std::collections::BTreeSet<_> = std::fs::read_dir(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/selfhost/kel"),
+    )
+    .unwrap()
+    .map(|entry| entry.unwrap().path())
+    .filter(|path| path.extension().is_some_and(|ext| ext == "kel"))
+    .map(|path| path.file_stem().unwrap().to_string_lossy().into_owned())
+    .collect();
+    assert!(!actual.is_empty());
+    assert_eq!(
+        inventoried, actual,
+        "capacity evidence must include every current stage"
+    );
+    eprintln!("worst names {worst_names}, worst blob {worst_blob}");
+    // Measured 2026-10-15 after checked-outcome source parsing.
+    // Parse holds both maxima, leaving one name and 18,953 blob bytes.
+    // Remeasured 2026-10-21 after the index-first and handled indexed writes.
+    // Their parsing was folded into existing functions so that the name count
+    // held at 1023. The blob grew by 160 bytes, leaving 18,793. Neither capacity
+    // is raised here.
+    assert_eq!(worst_names, 1023, "the worst-case name count moved");
+    assert_eq!(worst_blob, 30359, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
@@ -13182,17 +13105,8 @@ fn the_chunk_region_streams_one_record_per_call_past_the_old_batch_cap() {
 #[cfg(feature = "self-host")]
 #[test]
 fn the_node_bound_and_the_name_bound_are_not_the_same_number() {
-    const SRC: &str = include_str!("../src/selfhost/kel/wire.kel");
-
     let literal = |name: &str| -> usize {
-        let line = SRC
-            .lines()
-            .find(|l| l.trim_start().starts_with(&format!("fn {name}()")))
-            .unwrap_or_else(|| panic!("wire.kel declares {name}"));
-        line.rsplit_once('{')
-            .and_then(|(_, t)| t.split_once('}'))
-            .and_then(|(n, _)| n.trim().parse().ok())
-            .unwrap_or_else(|| panic!("{name} has a literal body"))
+        usize::try_from(kel_const(name)).expect("nonnegative literal capacity")
     };
 
     let nodes = literal("mi_max_nodes");
@@ -13228,6 +13142,7 @@ fn the_node_bound_and_the_name_bound_are_not_the_same_number() {
 /// A named type because clippy is right that the bare tuple was doing too much:
 /// three unrelated things held positionally, where swapping the last two still
 /// compiles.
+#[cfg(feature = "self-host")]
 type RegionSubject<'a> = (&'a str, Vec<u8>, Vec<Vec<i64>>);
 
 /// Four record tables stream one record per call, past their input bounds.
@@ -13454,9 +13369,13 @@ fn a_missing_header_region_is_refused_rather_than_written_somewhere_else() {
 // --- THE FOUR RECORD-FORMATTING STREAM COMMANDS, DRIVEN FOR THE FIRST TIME ----
 
 /// `ds_stream_step`, `sh_stream_step`, `sg_stream_step`, `ev_stream_step`.
+#[cfg(feature = "self-host")]
 const CMD_DS_STREAM_STEP: i64 = 178;
+#[cfg(feature = "self-host")]
 const CMD_SH_STREAM_STEP: i64 = 179;
+#[cfg(feature = "self-host")]
 const CMD_SG_STREAM_STEP: i64 = 180;
+#[cfg(feature = "self-host")]
 const CMD_EV_STREAM_STEP: i64 = 181;
 
 /// **COMMANDS 178 TO 181 HAD NEVER EXECUTED, AND THIS IS THE FOURTH TIME.**
@@ -14000,4 +13919,166 @@ fn the_enum_layout_stream_accumulates_its_variant_range() {
              `variants_first` -- both of which this stage computes"
         );
     }
+}
+
+/// Raw node records and module forests occupy distinct bounded buffers.
+#[cfg(feature = "self-host")]
+#[test]
+fn module_forest_capacity_is_distinct_from_raw_node_output() {
+    use keleusma::bytecode::ConstValue;
+    use keleusma::wire_schema::kind;
+    assert_eq!(kel_const("mi_max_nodes"), 1365);
+    let forest_cap = usize::try_from(kel_const("mf_max_nodes")).unwrap();
+    assert_eq!(forest_cap, 1536);
+    assert!(forest_cap * (16 + 8 + 16) <= CAPACITY);
+    let mut module =
+        compile(&parse(&tokenize("fn main() -> Word { 7 }").unwrap()).unwrap()).unwrap();
+    let mut vm = vm_for(WIRE_KEL);
+    for (count, nested) in [
+        (1365, false),
+        (1366, false),
+        (1536, false),
+        (1536, true),
+        (1537, false),
+    ] {
+        module.chunks[0].constants = if nested {
+            vec![ConstValue::Array(vec![ConstValue::Int(7); count - 1])]
+        } else {
+            vec![ConstValue::Int(7); count]
+        };
+        let (blob, _) = keleusma::selfhost::module_input(&module);
+        assert!(blob.len() <= BIN_CAPACITY);
+        for command in [CMD_MI_CONST_NODES, 213] {
+            let accepted = count
+                <= if command == CMD_MI_CONST_NODES {
+                    1365
+                } else {
+                    1536
+                };
+            let read_len = if accepted {
+                count
+                    * if command == CMD_MI_CONST_NODES {
+                        48
+                    } else {
+                        16
+                    }
+            } else {
+                0
+            };
+            let (ret, bytes) = run_call(
+                &mut vm,
+                &Call {
+                    cmd: command,
+                    nregions: 0,
+                    seed: &[],
+                    regions: &[],
+                    fields: &[],
+                    names: &[],
+                    pool: &blob,
+                    args: [0, 0, 0, 0, 0],
+                    read_len,
+                },
+            )
+            .unwrap();
+            if !accepted {
+                assert_eq!(ret, -240, "{command}, {count}, {nested}");
+            } else if command == CMD_MI_CONST_NODES {
+                assert_eq!(ret, count as i64);
+            } else {
+                assert_eq!(ret, read_len as i64);
+                let reference =
+                    keleusma::wire_schema::encode_aux_body(&corpus_aux_of(&module)).unwrap();
+                let view = keleusma_wire::WireView::parse(&reference).unwrap();
+                let region = view.find_region(kind::CONSTS).unwrap();
+                assert_eq!(
+                    bytes,
+                    view.region_bytes(&region).unwrap(),
+                    "{count}, {nested}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(feature = "self-host")]
+#[test]
+fn names_only_commands_do_not_consume_constant_forest_storage() {
+    use keleusma::bytecode::ConstValue;
+    let mut module =
+        compile(&parse(&tokenize("fn main() -> Word { 7 }").unwrap()).unwrap()).unwrap();
+    module.chunks[0].constants.clear();
+    let (empty, _) = keleusma::selfhost::module_input(&module);
+    let fit = (BIN_CAPACITY - empty.len()) / 10;
+    assert_eq!(kel_const("mi_scan_max_nodes") as usize, BIN_CAPACITY / 10);
+    assert!(fit > kel_const("mf_max_nodes") as usize);
+    let mut vm = vm_for(WIRE_KEL);
+    for count in [1537, fit] {
+        module.chunks[0].constants = vec![ConstValue::Int(7); count];
+        let (blob, _) = keleusma::selfhost::module_input(&module);
+        assert!(blob.len() <= BIN_CAPACITY);
+        for command in [CMD_MI_CHUNK_NAMES, 170, 171, 174, 182, 184, 186] {
+            let (ret, _) = run_call(
+                &mut vm,
+                &Call {
+                    cmd: command,
+                    nregions: 0,
+                    seed: &[],
+                    regions: &[],
+                    fields: &[],
+                    names: &[],
+                    pool: &blob,
+                    args: [0; 5],
+                    read_len: 0,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                ret,
+                if command == 170 || command == 171 {
+                    8
+                } else {
+                    1
+                },
+                "command {command}, nodes {count}"
+            );
+        }
+        for command in [CMD_MI_CONST_NODES, 213] {
+            let (ret, _) = run_call(
+                &mut vm,
+                &Call {
+                    cmd: command,
+                    nregions: 0,
+                    seed: &[],
+                    regions: &[],
+                    fields: &[],
+                    names: &[],
+                    pool: &blob,
+                    args: [0; 5],
+                    read_len: 0,
+                },
+            )
+            .unwrap();
+            assert_eq!(ret, -240, "storage command {command} must keep its bound");
+        }
+    }
+    let mut oversized = empty;
+    let at = oversized.len() - 2;
+    let count = u16::try_from(kel_const("mi_scan_max_nodes") + 1).unwrap() | 0x8000;
+    oversized[at..].copy_from_slice(&count.to_le_bytes());
+    let (ret, _) = run_call(
+        &mut vm,
+        &Call {
+            cmd: CMD_MI_CHUNK_NAMES,
+            nregions: 0,
+            seed: &[],
+            regions: &[],
+            fields: &[],
+            names: &[],
+            pool: &oversized,
+            args: [0; 5],
+            read_len: 0,
+        },
+    )
+    .unwrap();
+    assert_eq!(ret, -240, "read-only scan work remains bounded");
 }

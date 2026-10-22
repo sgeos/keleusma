@@ -118,7 +118,7 @@ fn prose_naming_the_functions_does_not_enter_the_count() {
 /// Source truncated at the unit-test module, so a construction inside a test
 /// is not counted as a runtime site.
 ///
-/// The census excludes four of its fifty-one raw matches by hand: a doc
+/// The census excludes four of its fifty-eight raw matches by hand: a doc
 /// comment, a match arm listing the variant, and two inside unit tests. This
 /// reproduces that exclusion mechanically -- comments by the strip above, the
 /// match arm by its `(_)` pattern position, and the tests by this cut.
@@ -165,7 +165,7 @@ fn the_census_population_matches_the_source_it_enumerates() {
     let marshall = construction_sites(MARSHALL);
     assert_eq!(
         (vm, marshall),
-        (45, 2),
+        (52, 2),
         "the constructed `InvalidBytecode` sites are now {vm} in src/vm.rs and {marshall} in \
          src/marshall.rs. `docs/decisions/INVALID_BYTECODE_CENSUS.md` enumerates them and states \
          a population; add or remove the row there rather than adjusting this number"

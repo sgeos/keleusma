@@ -26,7 +26,7 @@ Pure, total arithmetic and logic. No partial operations.
 | CONST | Push constant |
 | LOAD | Load from local slot |
 | STORE | Store to local slot |
-| ADD, SUB, MUL, DIV | Arithmetic (DIV is totalized: division by zero yields zero or traps) |
+| ADD, SUB, MUL, DIV | Arithmetic. DIV is total and reports a zero divisor through an outcome flag carrying the numerator. Only an explicit trap halts. |
 | EQ, LT | Comparison |
 | AND, OR, NOT | Logic |
 

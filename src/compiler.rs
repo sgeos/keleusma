@@ -567,7 +567,25 @@ impl FuncCompiler {
         if !self.emit_debug {
             return;
         }
-        if let Some(idx) = self.chunk.ops.len().checked_sub(1) {
+        if let Some(last) = self.chunk.ops.len().checked_sub(1) {
+            let read = last.checked_sub(6).filter(|&at| {
+                (matches!(self.chunk.ops[at], Op::GetIndex(elem) if elem.has_bounds_outcome())
+                    || matches!(self.chunk.ops[at], Op::GetDataIndexed(_, _)))
+                    && self.chunk.ops[last] == Op::PopN(5)
+                    && self.chunk.ops[last - 2]
+                        == Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code())
+            });
+            if let Some(at) = read {
+                self.pending_debug.push(PendingDebug::SourceSpan {
+                    op_index: at,
+                    span: *span,
+                });
+                self.pending_debug.push(PendingDebug::BreakpointCandidate {
+                    op_index: at,
+                    span: *span,
+                });
+            }
+            let idx = if read.is_some() { last - 2 } else { last };
             self.pending_debug.push(PendingDebug::SourceSpan {
                 op_index: idx,
                 span: *span,
@@ -779,6 +797,50 @@ impl FuncCompiler {
         let idx = self.chunk.ops.len();
         self.chunk.ops.push(op);
         idx
+    }
+
+    fn emit_index_read(&mut self, elem: ArrayElem) -> usize {
+        let start = self.emit(Op::GetIndex(elem));
+        if elem.has_bounds_outcome() {
+            let one = self.add_constant(Value::Int(1));
+            self.emit(Op::Const(one));
+            self.emit(Op::CmpEq);
+            let valid = self.emit_jump(Op::If(0));
+            self.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
+            self.patch_jump(valid);
+            self.emit(Op::EndIf);
+            self.emit(Op::PopN(5));
+        }
+        start
+    }
+
+    fn emit_data_fallback(&mut self, ty: &TypeExpr) {
+        match ty {
+            TypeExpr::Prim(PrimType::Word, _) => {
+                self.emit(Op::PushImmediate(4));
+            }
+            TypeExpr::Prim(PrimType::Byte, _) => {
+                self.emit(Op::PushImmediate(4));
+                self.emit(Op::WordToByte);
+            }
+            _ => {
+                self.emit(Op::PushImmediate(0));
+            }
+        }
+    }
+
+    fn emit_data_read(&mut self, base: u32, len: u32, ty: &TypeExpr) -> usize {
+        self.emit_data_fallback(ty);
+        let start = self.emit(Op::GetDataIndexed(base, len));
+        let one = self.add_constant(Value::Int(1));
+        self.emit(Op::Const(one));
+        self.emit(Op::CmpEq);
+        let valid = self.emit_jump(Op::If(0));
+        self.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
+        self.patch_jump(valid);
+        self.emit(Op::EndIf);
+        self.emit(Op::PopN(5));
+        start
     }
 
     fn emit_jump(&mut self, placeholder: Op) -> usize {
@@ -1326,7 +1388,7 @@ fn compile_multiword_shift(
         let wi = fc.declare_local("__mw_w");
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(wi));
         wv.push(wi);
     }
@@ -1480,7 +1542,7 @@ fn emit_mw_guarded(
     // (a[safe_idx] band in_mask) bor (fill band bnot(in_mask)).
     fc.emit(Op::GetLocal(av));
     fc.emit(Op::GetLocal(siv));
-    fc.emit(Op::GetIndex(elem_op));
+    fc.emit_index_read(elem_op);
     fc.emit(Op::GetLocal(imv));
     fc.emit(Op::BitAnd);
     fc.emit(Op::GetLocal(fillv));
@@ -1581,7 +1643,7 @@ fn compile_multiword_variable_shift(
         let top_c = fc.add_constant(Value::Int((nn - 1) as i64));
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(top_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::Const(wbm1_c));
         fc.emit(Op::Shr);
         fc.emit(Op::SetLocal(fillv));
@@ -1712,10 +1774,10 @@ fn compile_multiword_bitwise(
         let rk = fc.declare_local("__mw_r");
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(bit_op);
         fc.emit(Op::SetLocal(rk));
         rwords.push(rk);
@@ -1758,7 +1820,7 @@ fn compile_multiword_bnot(
         let rk = fc.declare_local("__mw_r");
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::Const(neg1));
         fc.emit(Op::BitXor);
         fc.emit(Op::SetLocal(rk));
@@ -1911,12 +1973,12 @@ fn compile_multiword_add_sub(
         // x = a[i]
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(xi));
         // y = b[i]
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(yi));
         // s1 = x (op) y, wrapping; discard the high word and flag.
         fc.emit(Op::GetLocal(xi));
@@ -2025,7 +2087,7 @@ fn compile_multiword_compare(
         // x = a[i], sign-flipped for the signed top limb.
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         if is_top {
             fc.emit(Op::Const(sign));
             fc.emit(Op::BitXor);
@@ -2034,7 +2096,7 @@ fn compile_multiword_compare(
         // y = b[i], sign-flipped for the signed top limb.
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         if is_top {
             fc.emit(Op::Const(sign));
             fc.emit(Op::BitXor);
@@ -2198,13 +2260,13 @@ fn compile_multiword_mul(
         let ai = fc.declare_local("__mw_ai");
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(ai));
         adig.push(ai);
         let bj = fc.declare_local("__mw_bj");
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(bj));
         bdig.push(bj);
     }
@@ -2453,13 +2515,13 @@ fn compile_multiword_fixed_mul(
         let ai = fc.declare_local("__mw_ai");
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(ai));
         adig.push(ai);
         let bj = fc.declare_local("__mw_bj");
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(bj));
         bdig.push(bj);
     }
@@ -2663,7 +2725,7 @@ fn emit_multiword_cond_negate(
 /// exclusive-or and the remainder takes the sign of the dividend. The
 /// operands are reduced to their magnitudes, an unsigned division runs,
 /// and the sign is reapplied. A zero divisor traps as a division by
-/// zero, reusing the scalar `Op::Div` trap.
+/// zero through an explicit conditional `Trap` instruction.
 ///
 /// The fixed-point divide pre-shifts the dividend left by F, because two
 /// same-scale operands a and b represent a/2^F and b/2^F, so the raw
@@ -2751,18 +2813,18 @@ fn compile_multiword_div(
         let ai = fc.declare_local("__mw_ai");
         fc.emit(Op::GetLocal(av));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(ai));
         adig.push(ai);
         let bj = fc.declare_local("__mw_bj");
         fc.emit(Op::GetLocal(bv));
         fc.emit(Op::Const(idx_c));
-        fc.emit(Op::GetIndex(elem_op));
+        fc.emit_index_read(elem_op);
         fc.emit(Op::SetLocal(bj));
         bdig.push(bj);
     }
-    // Divide-by-zero guard: 1 / (OR of divisor words) traps exactly when
-    // the divisor is all zeros, reusing the scalar zero-divisor trap.
+    // Trap explicitly when every divisor limb is zero. The arithmetic
+    // instructions themselves return outcomes rather than raising this fault.
     let b_or = fc.declare_local("__mw_bor");
     fc.emit(Op::GetLocal(bdig[0]));
     for w in bdig.iter().skip(1) {
@@ -2770,10 +2832,15 @@ fn compile_multiword_div(
         fc.emit(Op::BitOr);
     }
     fc.emit(Op::SetLocal(b_or));
-    fc.emit(Op::Const(one));
     fc.emit(Op::GetLocal(b_or));
-    fc.emit(Op::Div);
-    fc.emit(Op::PopN(1));
+    let zero_divisor = fc.add_constant(Value::Int(0));
+    fc.emit(Op::Const(zero_divisor));
+    fc.emit(Op::CmpEq);
+    let nonzero = fc.emit_jump(Op::If(0));
+    fc.emit(Op::Trap(crate::bytecode::TrapKind::ZeroDivisor.code()));
+    fc.record_operator_site(&right.span());
+    fc.patch_jump(nonzero);
+    fc.emit(Op::EndIf);
     // Sign masks (all ones when negative) and magnitudes.
     let sign_a = fc.declare_local("__mw_sga");
     let sign_b = fc.declare_local("__mw_sgb");
@@ -3221,6 +3288,20 @@ pub fn compile_with_options(
     target: &crate::target::Target,
     options: &CompileOptions,
 ) -> Result<(Module, Vec<CompileWarning>), CompileError> {
+    compile_with_recorded_type_hook(program, target, options, |_| {})
+}
+
+// The hook receives only the recorded expression table, after all admission and
+// recording passes. Production entry points preserve it. Tests can remove or alter
+// it here to measure the emitter's structural fallback without bypassing checking.
+type RecordedExpressionTypes = BTreeMap<String, BTreeMap<crate::token::Span, TypeExpr>>;
+
+fn compile_with_recorded_type_hook(
+    program: &Program,
+    target: &crate::target::Target,
+    options: &CompileOptions,
+    before_emission: impl FnOnce(&mut RecordedExpressionTypes),
+) -> Result<(Module, Vec<CompileWarning>), CompileError> {
     let mut warnings: Vec<CompileWarning> = Vec::new();
     target.validate_against_runtime()?;
     // ONE GUARD, RUN ONCE, OVER EVERY DECLARATION POSITION.
@@ -3314,6 +3395,7 @@ pub fn compile_with_options(
     // `Op::CallIndirect`). The type checker rejects
     // `Expr::Closure` before the program reaches this point, so
     // no closure-shaped expressions survive into compilation.
+    before_emission(&mut owned.fn_expr_types);
     let program = &owned;
 
     let mut native_names: Vec<String> = Vec::new();
@@ -4576,6 +4658,19 @@ fn param_name_is_used(body: &Block, name: &str) -> bool {
             Expr::Checked { op_expr, arms, .. } => {
                 expr_uses(op_expr, name) || arms.iter().any(|arm| expr_uses(&arm.body, name))
             }
+            Expr::DataIndexStore {
+                indices,
+                value,
+                arms,
+                ..
+            } => {
+                indices.iter().any(|e| expr_uses(e, name))
+                    || expr_uses(value, name)
+                    || arms.iter().any(|arm| {
+                        arm.guard.as_ref().is_some_and(|g| expr_uses(g, name))
+                            || expr_uses(&arm.body, name)
+                    })
+            }
             Expr::SaturateMax { .. } | Expr::SaturateMin { .. } => false,
             Expr::Classify { value, .. } | Expr::Declassify { value, .. } => expr_uses(value, name),
         }
@@ -5087,6 +5182,17 @@ fn emit_indexed_offset(
                 span,
             })?;
             fc.emit(Op::BoundsCheck(len_u16));
+            fc.record_operator_site(&idx_expr.span());
+            let invalid = fc.add_constant(Value::Int(1));
+            fc.emit(Op::Const(invalid));
+            fc.emit(Op::CmpEq);
+            let valid = fc.emit_jump(Op::If(0));
+            fc.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
+            fc.record_operator_site(&idx_expr.span());
+            fc.patch_jump(valid);
+            fc.emit(Op::EndIf);
+            // Retain the original index for the following stride arithmetic.
+            fc.emit(Op::PopN(4));
         }
         if stride != 1 {
             let stride_const = fc.add_constant(Value::Int(stride as i64));
@@ -5178,10 +5284,7 @@ fn emit_data_indexed_read(
         for index_expr in chain.indices {
             compile_expr(fc, index_expr)?;
             let elem_ty = cur_ty.as_ref().and_then(element_type_of);
-            fc.emit(Op::GetIndex(array_elem_operand(
-                elem_ty.as_ref(),
-                &fc.type_info,
-            )));
+            fc.emit_index_read(array_elem_operand(elem_ty.as_ref(), &fc.type_info));
             cur_ty = elem_ty;
             // Each level's index can trap out-of-bounds; record the
             // operator site so the fault resolves exactly (B29 item 2).
@@ -5209,21 +5312,46 @@ fn emit_data_indexed_read(
             span,
         })?;
     let total = emit_indexed_offset(fc, &field_type, &chain.indices, span)?;
-    fc.emit(Op::GetDataIndexed(base, total));
+    let mut element = &field_type;
+    for _ in &chain.indices {
+        if let TypeExpr::Array(inner, _, _) = element {
+            element = inner;
+        }
+    }
+    fc.emit_data_read(base, total, element);
     // A dynamic data-array index can trap out-of-bounds; record the
     // operator site so the fault resolves exactly (B29 item 2).
     fc.record_operator_site(&span);
     Ok(())
 }
 
-/// Emit a `state.field[i][j]... = value` write. The value is
-/// already on the stack from the caller; the helper appends the
-/// offset arithmetic and `Op::SetDataIndexed`.
-fn emit_data_indexed_write(
+/// The data range and element of an indexed write, after its probe.
+struct DataWriteProbe {
+    base: u32,
+    total: u32,
+    element: TypeExpr,
+    /// The probe was `GetDataIndexed`, so the element's value lies beneath
+    /// the index on the operand stack. Otherwise it was `BoundsCheck`.
+    read_old: bool,
+}
+
+/// Evaluate the index of a `state.field[i]... = value` write and probe its
+/// bound before the value is evaluated.
+///
+/// The operator ruled on 2026-10-21 that the index is evaluated first and
+/// that an invalid index skips the value on bare and handled writes alike.
+/// The probe leaves `[old,] offset, limb0..limb3, flag` on the operand
+/// stack, the same shape `SetDataIndexed` and the handled read produce, so
+/// `Trap(8)` can take its payload directly. The probe is `BoundsCheck`
+/// when the field's slot count fits its sixteen-bit operand. A longer field
+/// has only the twenty-four-bit `GetDataIndexed`, which also reads the
+/// element; that read is the one case in which the old value is loaded
+/// although no handler binds it.
+fn emit_data_write_probe(
     fc: &mut FuncCompiler,
-    chain: DataIndexedChain<'_>,
+    chain: &DataIndexedChain<'_>,
     span: Span,
-) -> Result<(), CompileError> {
+) -> Result<DataWriteProbe, CompileError> {
     if !fc.is_data_block(chain.data_name) {
         return Err(CompileError {
             message: format!("unknown data block: {}", chain.data_name),
@@ -5259,10 +5387,290 @@ fn emit_data_indexed_write(
             span,
         })?;
     let total = emit_indexed_offset(fc, &field_type, &chain.indices, span)?;
-    fc.emit(Op::SetDataIndexed(base, total));
-    // A dynamic data-array index can trap out-of-bounds; record the
-    // operator site so the fault resolves exactly (B29 item 2).
+    let mut element = field_type;
+    for _ in &chain.indices {
+        if let TypeExpr::Array(inner, _, _) = element {
+            element = *inner;
+        }
+    }
+    let read_old = match u16::try_from(total) {
+        Ok(bound) => {
+            fc.emit(Op::BoundsCheck(bound));
+            false
+        }
+        Err(_) => {
+            fc.emit_data_fallback(&element);
+            fc.emit(Op::GetDataIndexed(base, total));
+            true
+        }
+    };
     fc.record_operator_site(&span);
+    Ok(DataWriteProbe {
+        base,
+        total,
+        element,
+        read_old,
+    })
+}
+
+/// Emit a bare `state.field[i][j]... = value;` write.
+///
+/// Index, probe, the default `Trap(8)` on an invalid index, the offset held
+/// in a local while the value is evaluated, then `SetDataIndexed`, whose
+/// outcome the probe has already decided, so its six result words are
+/// dropped. `SetDataIndexed` pops the index above the value and no opcode
+/// exchanges two operands, which is why the offset needs the local.
+fn emit_data_indexed_write(
+    fc: &mut FuncCompiler,
+    chain: DataIndexedChain<'_>,
+    value: &Expr,
+    span: Span,
+) -> Result<(), CompileError> {
+    let probe = emit_data_write_probe(fc, &chain, span)?;
+    let invalid = fc.add_constant(Value::Int(1));
+    fc.emit(Op::Const(invalid));
+    fc.emit(Op::CmpEq);
+    let valid = fc.emit_jump(Op::If(0));
+    fc.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
+    fc.record_operator_site(&span);
+    fc.patch_jump(valid);
+    fc.emit(Op::EndIf);
+    fc.emit(Op::PopN(4));
+    let offset = fc.declare_local(&alloc::format!("__store_i_{}", span.start));
+    fc.emit(Op::SetLocal(offset));
+    if probe.read_old {
+        fc.emit(Op::PopN(1));
+    }
+    compile_expr(fc, value)?;
+    fc.emit(Op::GetLocal(offset));
+    fc.emit(Op::SetDataIndexed(probe.base, probe.total));
+    fc.emit(Op::PopN(6));
+    Ok(())
+}
+
+/// Emit a handled indexed write, `state.field[i] = value { ok(old, new) =>
+/// ..., invalid_index(j) => ... }`, as an expression of its arms' type.
+///
+/// The probe's outcome is held in locals, the value is evaluated and
+/// written only on success, and the arms then dispatch through the same
+/// virtual loop as the handled read, on flag zero for `ok` and one for
+/// `invalid_index`. The element is read before the write only when some
+/// `ok` arm binds `old`, unless the probe itself had to read it. A write
+/// without an unguarded catch-all `invalid_index` arm ends in the default
+/// `Trap(8)`.
+///
+/// **Slot numbering follows the source, not the emission order.** The
+/// self-hosted parser numbers locals as it streams tokens. It reserves the
+/// offset slot at `=`, after any local the index expression declares, and
+/// it can reserve the outcome block only on reaching the arm block's `{`,
+/// after any local the value declares. Slots here are therefore declared in
+/// that order: the offset after the index, then the value's own locals,
+/// then a block of seven, flag, old, the four bound limbs and new, then the
+/// arm binders. The block is declared after the value is compiled, so the
+/// instructions that address it before that point are emitted with a
+/// placeholder slot and patched. The block always has seven slots, even
+/// when `old` or `new` is unbound, because the parser reserves it before it
+/// has read the arms.
+fn compile_data_index_store(
+    fc: &mut FuncCompiler,
+    data_name: &str,
+    field: &str,
+    indices: &[Expr],
+    value: &Expr,
+    arms: &[crate::ast::CheckedArm],
+    span: Span,
+) -> Result<(), CompileError> {
+    use crate::ast::CheckedArmKind;
+    if indices.len() != 1 {
+        return Err(CompileError {
+            message: String::from("a handled indexed write takes exactly one index"),
+            span,
+        });
+    }
+    let binds_old = arms.iter().any(|arm| {
+        matches!(
+            &arm.kind,
+            CheckedArmKind::StoreOk(Pattern::Variable(_, _), _)
+        )
+    });
+    let binds_new = arms.iter().any(|arm| {
+        matches!(
+            &arm.kind,
+            CheckedArmKind::StoreOk(_, Pattern::Variable(_, _))
+        )
+    });
+    let word_ty = TypeExpr::Prim(PrimType::Word, span);
+    let chain = DataIndexedChain {
+        data_name,
+        field,
+        indices: indices.iter().collect(),
+    };
+    let probe = emit_data_write_probe(fc, &chain, span)?;
+    let suffix = span.start;
+    let offset = fc.declare_local(&alloc::format!("__store_i_{}", suffix));
+
+    // Block-relative positions of the seven-slot outcome block.
+    const FLAG: u16 = 0;
+    const OLD: u16 = 1;
+    const LIMB0: u16 = 2;
+    const NEW: u16 = 6;
+    // (op index, block-relative slot) for every instruction that names a
+    // block slot before the block is declared.
+    let mut pending: Vec<(usize, u16)> = Vec::new();
+    pending.push((fc.emit(Op::SetLocal(0)), FLAG));
+    for i in (0..4).rev() {
+        pending.push((fc.emit(Op::SetLocal(0)), LIMB0 + i));
+    }
+    fc.emit(Op::SetLocal(offset));
+    if probe.read_old {
+        if binds_old {
+            pending.push((fc.emit(Op::SetLocal(0)), OLD));
+        } else {
+            fc.emit(Op::PopN(1));
+        }
+    }
+
+    // Success branch: read the old element when needed, then evaluate and
+    // write the value. The value is never evaluated on an invalid index.
+    pending.push((fc.emit(Op::GetLocal(0)), FLAG));
+    let zero = fc.add_constant(Value::Int(0));
+    fc.emit(Op::Const(zero));
+    fc.emit(Op::CmpEq);
+    let skip = fc.emit_jump(Op::If(0));
+    if binds_old && !probe.read_old {
+        fc.emit(Op::GetLocal(offset));
+        fc.emit_data_fallback(&probe.element);
+        fc.emit(Op::GetDataIndexed(probe.base, probe.total));
+        // Drop the flag, the four limbs and the index, keeping the element.
+        fc.emit(Op::PopN(6));
+        pending.push((fc.emit(Op::SetLocal(0)), OLD));
+    }
+    compile_expr(fc, value)?;
+    if binds_new {
+        fc.emit(Op::Dup);
+        pending.push((fc.emit(Op::SetLocal(0)), NEW));
+    }
+    fc.emit(Op::GetLocal(offset));
+    fc.emit(Op::SetDataIndexed(probe.base, probe.total));
+    fc.emit(Op::PopN(6));
+    fc.patch_jump(skip);
+    fc.emit(Op::EndIf);
+
+    // The value's own locals are now numbered, so the block can be.
+    let block = fc.declare_local(&alloc::format!("__store_flag_{}", suffix));
+    fc.declare_local(&alloc::format!("__store_old_{}", suffix));
+    for i in 0..4 {
+        fc.declare_local(&alloc::format!("__store_bound_{}_{}", suffix, i));
+    }
+    fc.declare_local(&alloc::format!("__store_new_{}", suffix));
+    for (at, rel) in pending {
+        match &mut fc.chunk.ops[at] {
+            Op::SetLocal(slot) | Op::GetLocal(slot) => *slot = block + rel,
+            _ => unreachable!("only local accesses are deferred"),
+        }
+    }
+    let flag = block + FLAG;
+    let limbs: [u16; 4] = core::array::from_fn(|i| block + LIMB0 + i as u16);
+    let old_slot = binds_old.then_some(block + OLD);
+    let new_slot = binds_new.then_some(block + NEW);
+
+    // Dispatch arms in a virtual loop, mirroring the handled read.
+    let loop_addr = fc.emit(Op::Loop(0));
+    fc.enter_loop();
+    for arm in arms {
+        fc.begin_scope();
+        let mut fail_addrs: Vec<usize> = Vec::new();
+        let class_flag: i64 = match &arm.kind {
+            CheckedArmKind::StoreOk(_, _) => 0,
+            CheckedArmKind::InvalidIndex(_) => 1,
+            _ => {
+                return Err(CompileError {
+                    message: String::from(
+                        "internal error: non-write arm in a handled indexed write",
+                    ),
+                    span,
+                });
+            }
+        };
+        fc.emit(Op::GetLocal(flag));
+        let cidx = fc.add_constant(Value::Int(class_flag));
+        fc.emit(Op::Const(cidx));
+        fc.emit(Op::CmpEq);
+        fail_addrs.push(fc.emit_jump(Op::If(0)));
+        match &arm.kind {
+            CheckedArmKind::StoreOk(old, new) => {
+                for (pat, slot) in [(old, old_slot), (new, new_slot)] {
+                    if let (Pattern::Variable(name, _), Some(slot)) = (pat, slot) {
+                        let v_slot = fc.declare_local_typed(name, Some(probe.element.clone()));
+                        fc.emit(Op::GetLocal(slot));
+                        fc.emit(Op::SetLocal(v_slot));
+                    }
+                }
+            }
+            CheckedArmKind::InvalidIndex(pat) => {
+                if let Pattern::Literal(crate::ast::Literal::Int(v), _) = pat {
+                    fc.emit(Op::GetLocal(offset));
+                    let lit = fc.add_constant(Value::Int(*v));
+                    fc.emit(Op::Const(lit));
+                    fc.emit(Op::CmpEq);
+                    fail_addrs.push(fc.emit_jump(Op::If(0)));
+                }
+                if let Pattern::Variable(name, _) = pat {
+                    let v_slot = fc.declare_local_typed(name, Some(word_ty.clone()));
+                    fc.emit(Op::GetLocal(offset));
+                    fc.emit(Op::SetLocal(v_slot));
+                }
+            }
+            _ => {}
+        }
+        if let Some(guard) = arm.guard.as_ref() {
+            compile_expr(fc, guard)?;
+            fail_addrs.push(fc.emit_jump(Op::If(0)));
+        }
+        compile_expr(fc, &arm.body)?;
+        let break_addr = fc.emit(Op::Break(0));
+        if let Some(breaks) = fc.loop_breaks.last_mut() {
+            breaks.push(break_addr);
+        }
+        fc.end_scope();
+        for addr in fail_addrs.into_iter().rev() {
+            fc.patch_jump(addr);
+            fc.emit(Op::EndIf);
+        }
+    }
+    let covered = arms.iter().any(|arm| {
+        arm.guard.is_none()
+            && matches!(
+                &arm.kind,
+                CheckedArmKind::InvalidIndex(Pattern::Variable(_, _) | Pattern::Wildcard(_))
+            )
+    });
+    if !covered {
+        fc.emit(Op::GetLocal(offset));
+        for slot in limbs {
+            fc.emit(Op::GetLocal(slot));
+        }
+        fc.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
+        fc.record_operator_site(&span);
+    }
+    // Structurally bounded, deterministic trailer, as in the handled read.
+    // Complete coverage makes it unreachable, and partial coverage ends at
+    // the explicit trap.
+    fc.emit(Op::GetLocal(flag));
+    let default_break = fc.emit(Op::Break(0));
+    if let Some(breaks) = fc.loop_breaks.last_mut() {
+        breaks.push(default_break);
+    }
+    let endloop_addr = fc.emit(Op::EndLoop(0));
+    let after_loop = (loop_addr + 1) as u16;
+    if let Op::EndLoop(a) = &mut fc.chunk.ops[endloop_addr] {
+        *a = after_loop;
+    }
+    let after_endloop = fc.chunk.ops.len() as u16;
+    if let Op::Loop(a) = &mut fc.chunk.ops[loop_addr] {
+        *a = after_endloop;
+    }
+    fc.exit_loop();
     Ok(())
 }
 
@@ -5849,11 +6257,6 @@ fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> 
             value,
             span,
         } => {
-            // Evaluate the value first so it lands beneath the
-            // computed offset on the operand stack. The trailing
-            // `Op::SetDataIndexed` then pops the offset and pops
-            // the value.
-            compile_expr(fc, value)?;
             let index_refs: Vec<&Expr> = indices.iter().collect();
             emit_data_indexed_write(
                 fc,
@@ -5862,6 +6265,7 @@ fn compile_stmt(fc: &mut FuncCompiler, stmt: &Stmt) -> Result<(), CompileError> 
                     field: field.as_str(),
                     indices: index_refs,
                 },
+                value,
                 *span,
             )?;
         }
@@ -6135,6 +6539,45 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
                 infer_arm_body_type(fc, &first.body, &bound, &operand_ty)
             }
         },
+        // A handled indexed write's type is its arms' common body type,
+        // inferred from the first arm with its binders typed: the element
+        // type for `ok(old, new)` and `Word` for `invalid_index(j)`.
+        Expr::DataIndexStore {
+            data_name,
+            field,
+            arms,
+            span,
+            ..
+        } => {
+            let first = arms.first()?;
+            let mut bound: Vec<String> = Vec::new();
+            let push = |p: &Pattern, out: &mut Vec<String>| {
+                if let Pattern::Variable(name, _) = p {
+                    out.push(name.clone());
+                }
+            };
+            let bind_ty = match &first.kind {
+                crate::ast::CheckedArmKind::StoreOk(old, new) => {
+                    push(old, &mut bound);
+                    push(new, &mut bound);
+                    let field_ty = fc
+                        .type_info
+                        .data_field_types
+                        .get(data_name)
+                        .and_then(|fields| fields.get(field))?;
+                    match field_ty {
+                        TypeExpr::Array(elem, _, _) => (**elem).clone(),
+                        _ => return None,
+                    }
+                }
+                crate::ast::CheckedArmKind::InvalidIndex(p) => {
+                    push(p, &mut bound);
+                    TypeExpr::Prim(PrimType::Word, *span)
+                }
+                _ => return None,
+            };
+            infer_arm_body_type(fc, &first.body, &bound, &bind_ty)
+        }
         _ => None,
     }
 }
@@ -6792,7 +7235,7 @@ fn emit_field_extract(fc: &mut FuncCompiler, slot: u16, access: &FieldAccessOp) 
             // `GetIndex` pops the index then the container, so push the
             // container (via `GetLocal` above) then the index constant.
             fc.emit(Op::Const(*index_const));
-            fc.emit(Op::GetIndex(*elem));
+            fc.emit_index_read(*elem);
         }
     }
 }
@@ -7410,7 +7853,7 @@ fn compile_for_in_data_array(
 
     // Bind the iteration variable to the indexed element.
     fc.emit(Op::GetLocal(idx_slot));
-    fc.emit(Op::GetDataIndexed(base, total_slots));
+    fc.emit_data_read(base, total_slots, elem_type);
     let var_slot = fc.declare_local_typed(&for_stmt.var, Some(elem_type.clone()));
     fc.emit(Op::SetLocal(var_slot));
 
@@ -7522,13 +7965,18 @@ fn compile_for_limit(
     end: &Expr,
     cap: i64,
 ) -> Result<(), CompileError> {
+    let loop_scope_base = fc.locals.len();
     // i = min (the loop variable).
     compile_expr(fc, start)?;
     let var_slot = fc.declare_local(&for_stmt.var);
     fc.emit(Op::SetLocal(var_slot));
 
-    // mx = max (the runtime range end).
-    compile_expr(fc, end)?;
+    // Both bounds resolve before the induction variable enters lexical scope.
+    // Reserve its slot in the established order, but hide the name for the end expression.
+    let variable = fc.locals.pop().expect("just declared induction variable");
+    let end_result = compile_expr(fc, end);
+    fc.locals.push(variable);
+    end_result?;
     let end_slot = fc.declare_local("__for_end");
     fc.emit(Op::SetLocal(end_slot));
 
@@ -7628,6 +8076,9 @@ fn compile_for_limit(
     fc.patch_jump(outer);
     fc.emit(Op::EndIf);
 
+    // Type checking ends the loop's lexical scope before the outcome arms.
+    // Frame slots remain allocated for dispatch and explicit outcome bindings.
+    fc.locals.truncate(loop_scope_base);
     compile_loop_outcome_dispatch(fc, for_stmt, var_slot, ctr_slot, oc_slot)
 }
 
@@ -7748,6 +8199,15 @@ fn compile_loop_outcome_dispatch(
 }
 
 fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileError> {
+    // The induction variable and generated temporaries belong to the loop, just
+    // as in type checking. Keep allocated frame slots monotonic across this scope.
+    fc.begin_scope();
+    let result = compile_for_scoped(fc, for_stmt);
+    fc.end_scope();
+    result
+}
+
+fn compile_for_scoped(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileError> {
     if let Some(limit) = &for_stmt.limit {
         let Iterable::Range(start, end) = &for_stmt.iterable else {
             return Err(CompileError {
@@ -7765,7 +8225,10 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             let var_slot = fc.declare_local(&for_stmt.var);
             fc.emit(Op::SetLocal(var_slot));
 
-            compile_expr(fc, end)?;
+            let variable = fc.locals.pop().expect("just declared induction variable");
+            let end_result = compile_expr(fc, end);
+            fc.locals.push(variable);
+            end_result?;
             let end_slot = fc.declare_local("__for_end");
             fc.emit(Op::SetLocal(end_slot));
 
@@ -7903,10 +8366,7 @@ fn compile_for(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), CompileE
             // Extract element at current index.
             fc.emit(Op::GetLocal(arr_slot));
             fc.emit(Op::GetLocal(idx_slot));
-            fc.emit(Op::GetIndex(array_elem_operand(
-                element_ty.as_ref(),
-                &fc.type_info,
-            )));
+            fc.emit_index_read(array_elem_operand(element_ty.as_ref(), &fc.type_info));
             let var_slot = fc.declare_local_typed(&for_stmt.var, element_ty);
             fc.emit(Op::SetLocal(var_slot));
 
@@ -8139,6 +8599,23 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
             Expr::Checked { op_expr, arms, .. } => {
                 fix_expr(op_expr, frac_bits);
                 for arm in arms.iter_mut() {
+                    fix_expr(&mut arm.body, frac_bits);
+                }
+            }
+            Expr::DataIndexStore {
+                indices,
+                value,
+                arms,
+                ..
+            } => {
+                for idx in indices.iter_mut() {
+                    fix_expr(idx, frac_bits);
+                }
+                fix_expr(value, frac_bits);
+                for arm in arms.iter_mut() {
+                    if let Some(guard) = arm.guard.as_mut() {
+                        fix_expr(guard, frac_bits);
+                    }
                     fix_expr(&mut arm.body, frac_bits);
                 }
             }
@@ -9192,18 +9669,34 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 BinOp::Div => {
                     if let Some(n) = left_fixed_n {
                         fc.emit(Op::FixedDiv(n));
+                        fc.record_operator_site(span);
+                    } else if left_is_int
+                        || matches!(&operand_ty, Some(TypeExpr::Prim(PrimType::Byte, _)))
+                    {
+                        fc.emit(Op::CheckedDiv(0));
+                        fc.record_operator_site(span);
+                        emit_bare_zero_divisor_guard(fc, span);
                     } else {
                         fc.emit(Op::Div);
+                        fc.record_operator_site(span);
+                        fc.emit(Op::PopN(2));
                     }
-                    // Division can trap on a zero divisor; record the
-                    // operator site so the fault resolves exactly here
-                    // (B29 items 2 and 3).
-                    fc.record_operator_site(span);
                 }
                 BinOp::Mod => {
-                    fc.emit(Op::Mod);
-                    // Modulo by zero traps; record the operator site.
-                    fc.record_operator_site(span);
+                    if left_is_int || matches!(&operand_ty, Some(TypeExpr::Prim(PrimType::Byte, _)))
+                    {
+                        fc.emit(Op::CheckedMod);
+                        fc.record_operator_site(span);
+                        emit_bare_zero_divisor_guard(fc, span);
+                    } else {
+                        fc.emit(Op::Mod);
+                        fc.record_operator_site(span);
+                        if left_fixed_n.is_some() {
+                            emit_bare_zero_divisor_guard(fc, span);
+                        } else {
+                            fc.emit(Op::PopN(2));
+                        }
+                    }
                 }
                 BinOp::Eq | BinOp::NotEq => {
                     // A float-bearing composite must compare field-wise so the
@@ -9683,10 +10176,7 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             let elem_ty = infer_expr_type(fc, object).and_then(|t| element_type_of(&t));
             compile_expr(fc, object)?;
             compile_expr(fc, index)?;
-            fc.emit(Op::GetIndex(array_elem_operand(
-                elem_ty.as_ref(),
-                &fc.type_info,
-            )));
+            fc.emit_index_read(array_elem_operand(elem_ty.as_ref(), &fc.type_info));
             // Indexing can trap on an out-of-bounds index; record the
             // operator site so the fault resolves exactly (B29 item 2).
             fc.record_operator_site(span);
@@ -10070,6 +10560,16 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
         } => {
             compile_checked(fc, op_expr, arms, span)?;
         }
+        Expr::DataIndexStore {
+            data_name,
+            field,
+            indices,
+            value,
+            arms,
+            span,
+        } => {
+            compile_data_index_store(fc, data_name, field, indices, value, arms, *span)?;
+        }
         Expr::SaturateMax { .. } => {
             // Word::MAX. Future iterations refine the value based
             // on the construct's expected type (Byte::MAX,
@@ -10099,6 +10599,20 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
     Ok(())
 }
 
+// Checked division leaves low, high and flag. Only a zero divisor traps;
+// overflow continues with the same wrapping low result as the bare operator.
+fn emit_bare_zero_divisor_guard(fc: &mut FuncCompiler, span: &Span) {
+    let zero_flag = fc.add_constant(Value::Int(3));
+    fc.emit(Op::Const(zero_flag));
+    fc.emit(Op::CmpEq);
+    let skip_trap = fc.emit_jump(Op::If(0));
+    fc.emit(Op::Trap(crate::bytecode::TrapKind::ZeroDivisor.code()));
+    fc.record_operator_site(span);
+    fc.patch_jump(skip_trap);
+    fc.emit(Op::EndIf);
+    fc.emit(Op::PopN(1));
+}
+
 /// Compile an overflow-checked construct.
 ///
 /// Surface form: `op_expr { ok(p) => body, overflow(ph, pl) =>
@@ -10108,8 +10622,8 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
 ///
 /// Lowering shape:
 /// 1. Emit the operands and the checked opcode (`CheckedAdd`,
-///    `CheckedSub`, `CheckedMul`, `CheckedNeg`, or `Div`/`Mod`
-///    with stamped overflow contract). The stack carries
+///    `CheckedSub`, `CheckedMul`, `CheckedNeg`, `CheckedDiv`, or
+///    `CheckedMod`). The stack carries
 ///    `[low, high, flag]` after the opcode, bottom to top. Note
 ///    that this is the reverse of the arm binding order: the
 ///    surface form `overflow(h, l)` binds high first.
@@ -10121,9 +10635,8 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
 ///    `underflow`), then literal-pattern equality checks against
 ///    `high_slot` / `low_slot`, then optional guard evaluation,
 ///    then bind variable patterns and compile the body.
-/// 5. After the last arm, emit a `Trap` for the unreachable case
-///    where no catch-all matched (defense-in-depth; the type
-///    checker rejects non-exhaustive constructs).
+/// 5. After the last arm, trap only for an uncovered zero-divisor
+///    outcome. Other unhandled outcomes use the wrapping low result.
 fn compile_checked(
     fc: &mut FuncCompiler,
     op_expr: &Expr,
@@ -10355,7 +10868,8 @@ fn compile_checked(
             | CheckedArmKind::InvalidNewtype(_)
             | CheckedArmKind::PayloadDiscriminant(_)
             | CheckedArmKind::InvalidDiscriminant(_)
-            | CheckedArmKind::Error(_) => {
+            | CheckedArmKind::Error(_)
+            | CheckedArmKind::StoreOk(_, _) => {
                 return Err(CompileError {
                     message: alloc::string::String::from(
                         "internal error: non-arithmetic outcome arm on an arithmetic checked construct",
@@ -10450,14 +10964,34 @@ fn compile_checked(
     // result for `overflow` and `underflow`, so pushing it is the
     // wrapping default for the optional `overflow` and `underflow`
     // classes.
-    fc.emit(Op::GetLocal(flag_slot));
-    let three_idx = fc.add_constant(Value::Int(3));
-    fc.emit(Op::Const(three_idx));
-    fc.emit(Op::CmpEq);
-    let not_zero_divisor = fc.emit_jump(Op::If(0));
-    fc.emit(Op::Trap(crate::bytecode::TrapKind::ZeroDivisor.code()));
-    fc.patch_jump(not_zero_divisor);
-    fc.emit(Op::EndIf);
+    // Only division and modulo can produce flag 3. An unguarded
+    // variable or wildcard covers that class for every numerator.
+    // Guards and literal patterns leave the zero-divisor fallback live.
+    let may_divide_by_zero = matches!(
+        op_expr,
+        Expr::BinOp {
+            op: BinOp::Div | BinOp::Mod,
+            ..
+        }
+    );
+    let zero_divisor_covered = arms.iter().any(|arm| {
+        arm.guard.is_none()
+            && matches!(
+                &arm.kind,
+                CheckedArmKind::ZeroDivisor(Pattern::Variable(..) | Pattern::Wildcard(_))
+            )
+    });
+    if may_divide_by_zero && !zero_divisor_covered {
+        fc.emit(Op::GetLocal(flag_slot));
+        let three_idx = fc.add_constant(Value::Int(3));
+        fc.emit(Op::Const(three_idx));
+        fc.emit(Op::CmpEq);
+        let not_zero_divisor = fc.emit_jump(Op::If(0));
+        fc.emit(Op::Trap(crate::bytecode::TrapKind::ZeroDivisor.code()));
+        fc.record_operator_site(span);
+        fc.patch_jump(not_zero_divisor);
+        fc.emit(Op::EndIf);
+    }
 
     fc.emit(Op::GetLocal(low_slot));
     let default_break = fc.emit(Op::Break(0));
@@ -10479,17 +11013,9 @@ fn compile_checked(
     Ok(())
 }
 
-/// Compile the indexing construct `array[index] { ok(v) => ...,
-/// invalid_index(i) => ... }` (B35 P4). The lowering needs no new
-/// opcode: it synthesizes the bounds check from the folded array length,
-/// integer comparisons, and `Op::If`, computing an outcome flag (`0` ok, `1`
-/// invalid index) and stashing the element (in-bounds) or leaving the
-/// index for the `invalid_index` binding. **The length is a folded constant
-/// and never `Op::Len`**, which a flat array body cannot answer; this comment
-/// named that opcode until the fall-back beneath it was removed. The arm dispatch mirrors
-/// `compile_checked`. An unhandled out-of-bounds index re-issues the
-/// plain `Op::GetIndex`, which traps with the precise
-/// `VmError::IndexOutOfBounds(index, len)`.
+/// Compile indexed outcome handlers. First-pass Word and Byte reads consume
+/// the total opcode result and retain its diagnostic payload. Other element
+/// forms keep the legacy guarded-read lowering and remain outside that proof.
 fn compile_checked_index(
     fc: &mut FuncCompiler,
     op_expr: &Expr,
@@ -10507,74 +11033,129 @@ fn compile_checked_index(
     let word_ty = TypeExpr::Prim(PrimType::Word, *span);
 
     let suffix = span.start;
-    let arr_slot = fc.declare_local(&alloc::format!("__idx_arr_{}", suffix));
-    let idx_slot = fc.declare_local(&alloc::format!("__idx_i_{}", suffix));
-    let len_slot = fc.declare_local(&alloc::format!("__idx_len_{}", suffix));
-    let flag_slot = fc.declare_local(&alloc::format!("__idx_flag_{}", suffix));
-    let elem_slot = fc.declare_local(&alloc::format!("__idx_elem_{}", suffix));
-
-    // arr_slot = object; idx_slot = index.
-    compile_expr(fc, object)?;
-    fc.emit(Op::SetLocal(arr_slot));
-    compile_expr(fc, index)?;
-    fc.emit(Op::SetLocal(idx_slot));
-    // len_slot = the array length. Array length is a fixed-size,
-    // compile-time constant, so fold it to a literal rather than emit
-    // `Op::Len`, which a flat array body cannot answer (B28 P2).
-    //
-    // **The `Op::Len` fall-back that used to sit here is gone**, for the
-    // reason given at the for-in emission site: the opcode is refused on a
-    // flat body, so emitting it yields a module that passes `verify()` and
-    // traps at run time. The comment it carried described the fall-back as
-    // serving "a boxed array whose length the compiler could not recover
-    // statically", and no such case was found -- the indexed operand's type
-    // is what decides the fold, and a boxed array's type is an array like any
-    // other.
-    let arr_len = infer_expr_type(fc, object)
-        .as_ref()
-        .and_then(indexable_length_of_type);
-    let Some(n) = arr_len else {
-        return Err(CompileError {
-            message: String::from(
-                "the length of this indexed value could not be folded to a constant, \
-                 so its bounds check cannot be built. A fixed-size array's length is \
-                 statically known, so this is a limitation of the compiler rather than \
-                 of the program; please report it.",
-            ),
-            span: *span,
+    let element = array_elem_operand(Some(&elem_ty), &fc.type_info);
+    let total = element.has_bounds_outcome();
+    let (idx_slot, flag_slot, elem_slot, arr_slot, limbs) = if total {
+        // A single data dimension already has a total primitive and does not
+        // need materializing as an array value merely to dispatch its outcome.
+        let data_range = if let Some(chain) = data_indexed_chain(object, index)
+            && chain.indices.len() == 1
+            && fc.is_data_block(chain.data_name)
+            && !fc.is_const_data_block(chain.data_name)
+        {
+            let field_type = fc
+                .type_info
+                .data_field_types
+                .get(chain.data_name)
+                .and_then(|fields| fields.get(chain.field))
+                .cloned()
+                .ok_or_else(|| CompileError {
+                    message: String::from("checked data field has no type descriptor"),
+                    span: *span,
+                })?;
+            let base = fc
+                .resolve_data_field(chain.data_name, chain.field)
+                .ok_or_else(|| CompileError {
+                    message: String::from("checked data field has no storage range"),
+                    span: *span,
+                })?;
+            let count = emit_indexed_offset(fc, &field_type, &chain.indices, *span)?;
+            Some((base, count))
+        } else {
+            compile_expr(fc, object)?;
+            compile_expr(fc, index)?;
+            None
+        };
+        let flag = fc.declare_local(&alloc::format!("__idx_flag_{}", suffix));
+        let value = fc.declare_local(&alloc::format!("__idx_elem_{}", suffix));
+        let index = fc.declare_local(&alloc::format!("__idx_i_{}", suffix));
+        let limbs = core::array::from_fn::<_, 4, _>(|i| {
+            fc.declare_local(&alloc::format!("__idx_bound_{}_{}", suffix, i))
         });
+        // Deliberately bypass the bare-read wrapper so handlers own the outcome.
+        if let Some((base, count)) = data_range {
+            fc.emit_data_fallback(&elem_ty);
+            fc.emit(Op::GetDataIndexed(base, count));
+        } else {
+            fc.emit(Op::GetIndex(element));
+        }
+        fc.record_operator_site(span);
+        fc.emit(Op::SetLocal(flag));
+        for &slot in limbs.iter().rev() {
+            fc.emit(Op::SetLocal(slot));
+        }
+        fc.emit(Op::SetLocal(index));
+        fc.emit(Op::SetLocal(value));
+        (index, flag, value, None, limbs)
+    } else {
+        let arr_slot = fc.declare_local(&alloc::format!("__idx_arr_{}", suffix));
+        let idx_slot = fc.declare_local(&alloc::format!("__idx_i_{}", suffix));
+        let len_slot = fc.declare_local(&alloc::format!("__idx_len_{}", suffix));
+        let flag_slot = fc.declare_local(&alloc::format!("__idx_flag_{}", suffix));
+        let elem_slot = fc.declare_local(&alloc::format!("__idx_elem_{}", suffix));
+
+        // arr_slot = object; idx_slot = index.
+        compile_expr(fc, object)?;
+        fc.emit(Op::SetLocal(arr_slot));
+        compile_expr(fc, index)?;
+        fc.emit(Op::SetLocal(idx_slot));
+        // len_slot = the array length. Array length is a fixed-size,
+        // compile-time constant, so fold it to a literal rather than emit
+        // `Op::Len`, which a flat array body cannot answer (B28 P2).
+        //
+        // **The `Op::Len` fall-back that used to sit here is gone**, for the
+        // reason given at the for-in emission site: the opcode is refused on a
+        // flat body, so emitting it yields a module that passes `verify()` and
+        // traps at run time. The comment it carried described the fall-back as
+        // serving "a boxed array whose length the compiler could not recover
+        // statically", and no such case was found -- the indexed operand's type
+        // is what decides the fold, and a boxed array's type is an array like any
+        // other.
+        let arr_len = infer_expr_type(fc, object)
+            .as_ref()
+            .and_then(indexable_length_of_type);
+        let Some(n) = arr_len else {
+            return Err(CompileError {
+                message: String::from(
+                    "the length of this indexed value could not be folded to a constant, \
+                     so its bounds check cannot be built. A fixed-size array's length is \
+                     statically known, so this is a limitation of the compiler rather than \
+                     of the program; please report it.",
+                ),
+                span: *span,
+            });
+        };
+        let n_const = fc.add_constant(Value::Int(n));
+        fc.emit(Op::Const(n_const));
+        fc.emit(Op::SetLocal(len_slot));
+        // flag defaults to 1 (invalid_index); flipped to 0 when in range.
+        let one_idx = fc.add_constant(Value::Int(1));
+        fc.emit(Op::Const(one_idx));
+        fc.emit(Op::SetLocal(flag_slot));
+        // if idx >= 0 { if idx < len { elem = arr[idx]; flag = 0 } }
+        fc.emit(Op::GetLocal(idx_slot));
+        let zero_idx = fc.add_constant(Value::Int(0));
+        fc.emit(Op::Const(zero_idx));
+        fc.emit(Op::CmpGe);
+        let ge_skip = fc.emit_jump(Op::If(0));
+        fc.emit(Op::GetLocal(idx_slot));
+        fc.emit(Op::GetLocal(len_slot));
+        fc.emit(Op::CmpLt);
+        let lt_skip = fc.emit_jump(Op::If(0));
+        fc.emit(Op::GetLocal(arr_slot));
+        fc.emit(Op::GetLocal(idx_slot));
+        fc.emit_index_read(array_elem_operand(Some(&elem_ty), &fc.type_info));
+        fc.emit(Op::SetLocal(elem_slot));
+        let zero_flag_idx = fc.add_constant(Value::Int(0));
+        fc.emit(Op::Const(zero_flag_idx));
+        fc.emit(Op::SetLocal(flag_slot));
+        fc.patch_jump(lt_skip);
+        fc.emit(Op::EndIf);
+        fc.patch_jump(ge_skip);
+        fc.emit(Op::EndIf);
+
+        (idx_slot, flag_slot, elem_slot, Some(arr_slot), [0; 4])
     };
-    let n_const = fc.add_constant(Value::Int(n));
-    fc.emit(Op::Const(n_const));
-    fc.emit(Op::SetLocal(len_slot));
-    // flag defaults to 1 (invalid_index); flipped to 0 when in range.
-    let one_idx = fc.add_constant(Value::Int(1));
-    fc.emit(Op::Const(one_idx));
-    fc.emit(Op::SetLocal(flag_slot));
-    // if idx >= 0 { if idx < len { elem = arr[idx]; flag = 0 } }
-    fc.emit(Op::GetLocal(idx_slot));
-    let zero_idx = fc.add_constant(Value::Int(0));
-    fc.emit(Op::Const(zero_idx));
-    fc.emit(Op::CmpGe);
-    let ge_skip = fc.emit_jump(Op::If(0));
-    fc.emit(Op::GetLocal(idx_slot));
-    fc.emit(Op::GetLocal(len_slot));
-    fc.emit(Op::CmpLt);
-    let lt_skip = fc.emit_jump(Op::If(0));
-    fc.emit(Op::GetLocal(arr_slot));
-    fc.emit(Op::GetLocal(idx_slot));
-    fc.emit(Op::GetIndex(array_elem_operand(
-        Some(&elem_ty),
-        &fc.type_info,
-    )));
-    fc.emit(Op::SetLocal(elem_slot));
-    let zero_flag_idx = fc.add_constant(Value::Int(0));
-    fc.emit(Op::Const(zero_flag_idx));
-    fc.emit(Op::SetLocal(flag_slot));
-    fc.patch_jump(lt_skip);
-    fc.emit(Op::EndIf);
-    fc.patch_jump(ge_skip);
-    fc.emit(Op::EndIf);
 
     // Dispatch arms in a virtual loop, mirroring compile_checked.
     let loop_addr = fc.emit(Op::Loop(0));
@@ -10636,16 +11217,30 @@ fn compile_checked_index(
         }
     }
 
-    // No arm matched. Reaching here implies the index was out of
-    // bounds (flag 1) and no `invalid_index` arm covered it, since the
-    // `ok` class is a mandatory catch-all. Re-issue the plain index so
-    // the runtime traps with the precise `IndexOutOfBounds(index, len)`.
-    fc.emit(Op::GetLocal(arr_slot));
-    fc.emit(Op::GetLocal(idx_slot));
-    fc.emit(Op::GetIndex(array_elem_operand(
-        Some(&elem_ty),
-        &fc.type_info,
-    )));
+    if total {
+        let covered = arms.iter().any(|arm| {
+            arm.guard.is_none()
+                && matches!(
+                    &arm.kind,
+                    CheckedArmKind::InvalidIndex(Pattern::Variable(_, _) | Pattern::Wildcard(_))
+                )
+        });
+        if !covered {
+            fc.emit(Op::GetLocal(idx_slot));
+            for slot in limbs {
+                fc.emit(Op::GetLocal(slot));
+            }
+            fc.emit(Op::Trap(crate::bytecode::TrapKind::IndexOutOfBounds.code()));
+            fc.record_operator_site(span);
+        }
+        // Structurally bounded, deterministic trailer. Complete coverage makes
+        // it unreachable, while partial coverage terminates at the explicit trap.
+        fc.emit(Op::GetLocal(elem_slot));
+    } else {
+        fc.emit(Op::GetLocal(arr_slot.expect("legacy array slot")));
+        fc.emit(Op::GetLocal(idx_slot));
+        fc.emit_index_read(element);
+    }
     let default_break = fc.emit(Op::Break(0));
     if let Some(breaks) = fc.loop_breaks.last_mut() {
         breaks.push(default_break);
@@ -11834,6 +12429,9 @@ fn compile_pattern_bind_typed(
     Ok(())
 }
 
+#[cfg(all(test, feature = "verify"))]
+mod inference_independence;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -12343,28 +12941,33 @@ mod tests {
 
     #[test]
     fn debug_emission_records_operator_site_at_division() {
-        // A division emits a SourceSpan and a BreakpointCandidate at the
-        // Div op (B29 items 2/3), so a zero-divisor fault resolves
-        // exactly and a debugger can break before the division.
-        use crate::bytecode::Op;
+        // Preserve a breakpoint before arithmetic and an exact fault span
+        // at the separately emitted zero-divisor Trap.
+        use crate::bytecode::{Op, TrapKind};
         use crate::debug_meta::DebugRecordKind;
-        let module = compile_str_debug("fn main(d: Word) -> Word { let x = 1 / d; x }");
-        let chunk = &module.chunks[0];
-        let div_op = chunk
-            .ops
-            .iter()
-            .position(|op| matches!(op, Op::Div))
-            .expect("a Div op") as u32;
-        let pool = chunk.debug_pool.as_ref().expect("debug pool present");
-        let kinds: alloc::vec::Vec<_> = pool.records_at(div_op).map(|r| r.kind).collect();
-        assert!(
-            kinds.contains(&DebugRecordKind::SourceSpan),
-            "the Div op has an exact SourceSpan, found {kinds:?}"
-        );
-        assert!(
-            kinds.contains(&DebugRecordKind::BreakpointCandidate),
-            "the Div op is an operator-level breakpoint candidate"
-        );
+        for operator in ["/", "%"] {
+            let module = compile_str_debug(&alloc::format!(
+                "fn main(d: Word) -> Word {{ let x = 1 {operator} d; x }}"
+            ));
+            let chunk = &module.chunks[0];
+            let arithmetic = chunk
+                .ops
+                .iter()
+                .position(|op| matches!(op, Op::CheckedDiv(0) | Op::CheckedMod))
+                .expect("checked arithmetic");
+            let trap = chunk
+                .ops
+                .iter()
+                .position(|op| matches!(op, Op::Trap(k) if *k == TrapKind::ZeroDivisor.code()))
+                .expect("explicit zero-divisor trap");
+            let pool = chunk.debug_pool.as_ref().expect("debug pool present");
+            for position in [arithmetic, trap] {
+                let kinds: alloc::vec::Vec<_> =
+                    pool.records_at(position as u32).map(|r| r.kind).collect();
+                assert!(kinds.contains(&DebugRecordKind::SourceSpan));
+                assert!(kinds.contains(&DebugRecordKind::BreakpointCandidate));
+            }
+        }
     }
 
     #[test]

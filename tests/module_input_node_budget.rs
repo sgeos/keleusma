@@ -43,10 +43,10 @@ fn compile_stage(src: &str) -> Module {
 ///
 /// A literal copy would be a second source of truth for a number whose whole
 /// purpose is to bound the first.
-fn declared_node_cap() -> usize {
+fn declared_node_cap(name: &str) -> usize {
     let line = WIRE_SRC
         .lines()
-        .find(|l| l.trim_start().starts_with("fn mi_max_nodes()"))
+        .find(|l| l.trim_start().starts_with(&format!("fn {name}()")))
         .expect("wire.kel declares mi_max_nodes");
     line.rsplit_once('{')
         .and_then(|(_, tail)| tail.split_once('}'))
@@ -115,7 +115,20 @@ fn blob_node_count(module: &Module) -> usize {
         skip_name(&blob, &mut at);
     }
 
-    u16_at(&blob, &mut at)
+    let header = u16_at(&blob, &mut at);
+    let nodes = header & 0x7FFF;
+    if header & 0x8000 != 0 {
+        assert_eq!(blob.len() - at, nodes * 10, "compact scalar record extent");
+        assert_eq!(
+            nodes,
+            module
+                .chunks
+                .iter()
+                .map(|c| c.constants.len())
+                .sum::<usize>()
+        );
+    }
+    nodes
 }
 
 /// **THE BUDGET, RECORDED BEFORE THE STAGE GROWS.**
@@ -125,10 +138,12 @@ fn blob_node_count(module: &Module) -> usize {
 /// slice against this margin needs re-reading.
 #[test]
 fn wire_kel_has_room_under_the_module_input_node_cap() {
-    let cap = declared_node_cap();
+    let raw_cap = declared_node_cap("mi_max_nodes");
+    let cap = declared_node_cap("mf_max_nodes");
     assert!(cap > 0, "the cap parsed as zero, so the reader is broken");
 
     let nodes = blob_node_count(&compile_stage(WIRE_SRC));
+    eprintln!("wire constant nodes {nodes}, capacity {cap}");
 
     assert!(
         nodes > 0,
@@ -146,6 +161,12 @@ fn wire_kel_has_room_under_the_module_input_node_cap() {
     // rather than merely computed. Two new commands are expected to cost far
     // less than this; if the margin has closed to nothing, the slice needs a
     // different shape and this test is where that shows.
+    assert!(
+        nodes <= raw_cap,
+        "the legacy raw-node path must still fit its own storage"
+    );
+    // The routing increment is complete. Reserve future growth against the
+    // production forest capacity, while retaining the separate raw-path fit.
     let margin = cap - nodes;
     assert!(
         margin >= 64,

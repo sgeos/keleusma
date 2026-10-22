@@ -43,10 +43,19 @@ shared data dl {
     a0: [Word; 1024],
     a1: [Word; 1024],
     a2: [Word; 1024],
+    shared_count: Word,
 }
 
 // Process one batch of the current `phase`, updating the running `io_*` state.
 fn run() -> Word {
+    if dl.phase == 0 {
+        dl.io_prefix = 0; dl.io_total = 0; dl.io_still = 1;
+        dl.io_prev_slot = 0; dl.io_prev_off = 0; dl.io_first = 1; dl.io_bad = 0;
+        0
+    } else { if dl.phase == 4 {
+        if dl.io_prefix != dl.io_total orelse dl.shared_count != dl.io_total { dl.io_bad = 1; }
+        dl.io_bad
+    } else {
     if dl.phase == 1 {
         // B6 contiguity/count: count the leading shared prefix and the total shared slots.
         for i in 0..1024 limit 1024 {
@@ -100,6 +109,7 @@ fn run() -> Word {
         }
     } }
     0
+} }
 }
 
 loop main(resume: Word) -> Word {

@@ -608,8 +608,10 @@ pub fn opcode_id_of(op: &Op) -> OpcodeId {
 /// format's application binary interface, so a new opcode must be added here to
 /// be encodable at all, which makes this the authority on what the opcode set
 /// is. A check driven from it reports a newly added opcode by name instead of
-/// silently not covering it.
-#[cfg(test)]
+/// silently not covering it. Gated like the test modules that call it, in
+/// `verify.rs` and `vm_operand_effect_tests.rs`, so a build without those
+/// features does not carry it as dead code.
+#[cfg(all(test, feature = "compile", feature = "verify"))]
 pub(crate) fn opcode_table() -> &'static [(&'static str, u8)] {
     OPCODE_ID_TABLE
 }
