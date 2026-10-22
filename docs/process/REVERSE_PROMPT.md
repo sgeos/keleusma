@@ -777,3 +777,10 @@ recorded in the receipt that follows this section, not predicted here.
 Open for the operator: whether a hosted run of the complete native gate satisfies
 the full-gate requirement before publication or `main`. Next intended step:
 reconcile the Workstream B acceptance matrix against the absorbed runtime.
+
+**Receipt, 2026-10-22.** Both complete native gates passed on clean, frozen `ece800a5`.
+Each configuration ran 777 tests outside the corpus, the 10 corpus differential tests,
+and the 777 again under the middle end, with no failure. Default features finished
+at 20:09 UTC and narrow-float-32 at 20:29 UTC. This receipt commit changes only the
+gate record and these process documents, so `tools/gate-status.sh` reports the later
+tree as `UNVERIFIED` by design, and the records name the tested commit.
