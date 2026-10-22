@@ -4015,3 +4015,19 @@ execution in ordinary and optimized modes. Both local runs passed all 776 select
 with unchanged tracked inputs. Formatting, ShellCheck and all-target Clippy also pass.
 The complete corpus and narrow-float gates remain separate. Consult workflow runs at
 the exact commit being integrated for hosted results.
+
+
+## V0.3.X Claude Code handoff of 2026-10-22
+
+Attributed to Codex on `v0.3.0`, describing `7d141fcc` plus this local, unpushed
+documentation commit. Resume at [the bounded brief](./handoffs/v0.3.0-BRIEF.md)
+in `keleusma-worktrees/arena-composites`. Pull requests 482 and 483 are merged.
+The exact merged head has 28 successful hosted checks and one deployment skip.
+All 150 historical ancestry anchors pass. The old handoff was invalid-and-stale.
+Upstream `cc48dc61` is 78 commits ahead of the absorbed history. Absorb and
+revalidate before further native implementation. Full-gate reach is `UNVERIFIED`
+for both configurations although their records remain PASS at `5695ab1f`.
+The reviewed interline checkpoint is included. No runtime code changed.
+The archive records verification limits and pilot sampling omissions.
+Verification passed 13 root and 23 native documentation and provenance tests.
+Both commands exited zero. Full native gates were not repeated.
