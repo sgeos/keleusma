@@ -1,5 +1,48 @@
 # Reverse prompt
 
+## Handled multi-index writes, 2026-10-22
+
+Branch feat/v02-multi-index-write-handlers, cut from v0.2.3 at cc48dc61.
+Pull requests 485, 486 and 487 merged into v0.2.3 after green CI. Pull request
+488 conflicted with 487 on the roadmap count. v0.2.3 was merged into it with
+the count resolved to 114 cases and 109 SOk, and its CI was rerunning.
+
+The reference compiler admits a handled write with any number of indices, per
+the 2026-10-21 instruction that every level's failure reach `invalid_index`.
+Each level is checked against its own length. The first failing level stops
+evaluation and binds its own index. The self-hosted compiler refuses the
+construct. The plan document's "Multi-index increment" section records the
+semantics and the lowering.
+
+Verification, all in release.
+
+| Check | Result |
+|---|---|
+| `--features self-host`, full | 3194 of 3194 passed |
+| `--workspace`, full | 3453 of 3453 passed |
+| The two edited test files, after the full runs | self-host 26, workspace 26, signatures 22, all passed |
+| The 28 test binaries that read docs, after the doc edits | 504 of 504 passed |
+| Bare indexed programs compiled before and after the refactor | four of four byte-identical |
+| clippy self-host, signatures and shell, with Checking output | clean |
+| fmt | clean |
+
+The full runs began before the trap-analysis test and the documents were
+edited, which is why the two later rows exist. No-default-features and
+signatures,shell were not run in full. The change is confined to compile-gated
+code and to test files gated on compile and verify. CI runs debug and covers
+all five sets.
+
+Concerns.
+
+- The byte-identity check of bare emission is four programs, not a corpus.
+  The single-index forms are additionally covered by the self-hosted
+  byte-identity corpus, and the multi-index forms are not.
+- Per-level bounds are limited to sixteen bits. The limit was already imposed
+  on bare multi-index access and is unchanged.
+
+Next. Native-call `host_error` handlers, handler-required composite reads,
+FixedDiv totalization, then the `let`-initializer position for handled writes.
+
 ## Indexed-write handlers, 2026-10-21
 
 Branch feat/v02-indexed-write-handlers, cut from feat/v02-order3-audit-followup

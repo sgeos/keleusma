@@ -2785,9 +2785,10 @@ fn check_data_index_write(
 /// binds the offending index `Word` exactly as in the handled read. The
 /// `ok` class must end with an unguarded catch-all. `invalid_index` is
 /// optional, and an unhandled invalid index reaches the compiler's default
-/// trap. The construct's type is the common type of its arms. The first
-/// increment admits one index, so a multi-index target is rejected here
-/// and, identically, by the self-hosted compiler.
+/// trap. The construct's type is the common type of its arms. A multi-index
+/// target is admitted, and a failure at any of its levels binds that level's
+/// index in `invalid_index`. The self-hosted compiler refuses it, as it
+/// refuses every multi-index data access.
 fn check_data_index_store(
     ctx: &mut Ctx,
     data_name: &str,
@@ -2798,16 +2799,6 @@ fn check_data_index_store(
     span: Span,
 ) -> Result<Type, TypeError> {
     use crate::ast::CheckedArmKind;
-    if indices.len() != 1 {
-        return Err(TypeError::new(
-            String::from(
-                "a handled indexed write takes exactly one index; handling a multi-index write \
-                 is not yet supported, so bind the value with `let` and write it without a \
-                 handler, or index a one-dimensional field",
-            ),
-            span,
-        ));
-    }
     let elem_ty = check_data_index_write(ctx, data_name, field, indices, value, span)?;
 
     for arm in arms.iter() {

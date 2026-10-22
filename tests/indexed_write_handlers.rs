@@ -243,8 +243,8 @@ fn malformed_handled_writes_are_rejected_with_a_reason() {
             "not admissible for a handled indexed write",
         ),
         (
-            "private data d { m: [[Word; 2]; 2] } fn main() -> Word { d.m[0][1] = 1 { ok(_, n) => n } }",
-            "exactly one index",
+            "private data d { m: [[Word; 2]; 2] } fn main() -> Word { d.m[0] = 1 { ok(_, n) => n } }",
+            "does not descend to a scalar",
         ),
         (
             "private data d { x: [Word; 2] } fn main() -> Word { d.x[0] = 1 { ok(_, n) => n, ok(o, _) => o } }",
@@ -351,7 +351,6 @@ fn the_self_hosted_parser_refuses_every_malformed_handled_write() {
         "private data d { x: [Word; 2] } fn main() -> Word { d.x[0] = 1 { ok(v, v) => v } }",
         "private data d { x: [Word; 2] } fn main() -> Word { d.x[0] = 1 { ok(_, n) when n > 0 => n } }",
         "private data d { x: [Word; 2] } fn main() -> Word { d.x[0] = 1 { ok(_, n) => n, overflow(h, l) => l } }",
-        "private data d { m: [[Word; 2]; 2] } fn main() -> Word { d.m[0][1] = 1 { ok(_, n) => n } }",
         "private data d { x: [Word; 2] } fn main() -> Word { d.x[0] = 1 { ok(_, n) => n, ok(o, _) => o } }",
         "private data d { x: [Word; 2] } fn main() -> Word { d.x[0] = 1 { ok(_, n) => n } + 1 }",
     ] {
@@ -363,5 +362,171 @@ fn the_self_hosted_parser_refuses_every_malformed_handled_write() {
             try_compile(source).is_err(),
             "the reference accepts {source}"
         );
+    }
+}
+
+/// A handled multi-index write is outside the self-hosted subset, which has
+/// no multi-index data access at all. The self-hosted compiler refuses it
+/// rather than emitting a module, while the reference compiles it.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_self_hosted_compiler_refuses_a_handled_multi_index_write() {
+    let source = "private data d { m: [[Word; 2]; 2] } fn main() -> Word { d.m[0][1] = 1 { ok(_, n) => n, invalid_index(j) => j } }";
+    compile(source);
+    assert!(
+        keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host()).is_err()
+    );
+}
+
+const MATRIX: &str = "private data d { m: [[Word; 3]; 2] } ";
+
+fn matrix_source(main: &str) -> String {
+    let mut s = String::from(MATRIX);
+    s.push_str(main);
+    s
+}
+
+/// The sum of every cell weighted by its flat position plus one, so a write
+/// to any other cell than the intended one changes the result.
+const MATRIX_DIGEST: &str =
+    "d.m[0][0] + d.m[0][1] * 2 + d.m[0][2] * 3 + d.m[1][0] * 4 + d.m[1][1] * 5 + d.m[1][2] * 6";
+
+#[test]
+fn a_handled_multi_index_write_writes_the_addressed_cell_and_binds_both_values() {
+    let source = matrix_source(&format!(
+        "fn w() -> Word {{ d.m[1][2] = 7 {{ ok(old, new) => old * 100 + new, invalid_index(j) => 1000 + j }} }} \
+         fn main() -> Word {{ d.m[1][2] = 3; let r = w(); r * 1000 + {MATRIX_DIGEST} }}"
+    ));
+    // `ok` saw old 3 and new 7, and only the cell at flat position six holds 7.
+    assert_eq!(run_word(&source), 307 * 1000 + 42);
+    let source = matrix_source(&format!(
+        "fn main() -> Word {{ d.m[0][1] = 9 {{ ok(_, _) => (), invalid_index(_) => () }}; {MATRIX_DIGEST} }}"
+    ));
+    assert_eq!(run_word(&source), 18);
+}
+
+#[test]
+fn a_failure_at_any_level_binds_that_levels_index_and_writes_nothing() {
+    for (target, bound) in [
+        // The outer level fails.
+        ("d.m[2][0]", 2),
+        // The inner level fails while the flat offset, five, is in range.
+        // Checking only the flat offset would write the cell `m[1][2]`.
+        ("d.m[0][5]", 5),
+        // A negative inner index, whose flat offset would be in range too.
+        ("d.m[1][-1]", -1),
+    ] {
+        let source = matrix_source(&format!(
+            "fn w() -> Word {{ {target} = 7 {{ ok(_, _) => 0 - 1, invalid_index(j) => j }} }} \
+             fn main() -> Word {{ let r = w(); r * 1000 + {MATRIX_DIGEST} }}"
+        ));
+        assert_eq!(run_word(&source), bound * 1000, "{source}");
+    }
+}
+
+#[test]
+fn a_three_level_write_reaches_its_cell_and_reports_its_middle_level() {
+    let cube = "private data d { c: [[[Word; 2]; 2]; 2] } ";
+    let digest = "d.c[1][0][1] * 10 + d.c[0][1][1]";
+    let source = format!(
+        "{cube} fn main() -> Word {{ d.c[1][0][1] = 4 {{ ok(_, n) => n, invalid_index(j) => 100 + j }}; {digest} }}"
+    );
+    assert_eq!(run_word(&source), 40);
+    // The middle level fails. Flat offset 0 * 4 + 2 * 2 + 1 = 5 is in range.
+    let source = format!(
+        "{cube} fn w() -> Word {{ d.c[0][2][1] = 4 {{ ok(_, n) => n, invalid_index(j) => 100 + j }} }} \
+         fn main() -> Word {{ let r = w(); r * 10 + {digest} }}"
+    );
+    assert_eq!(run_word(&source), 1020);
+}
+
+const MATRIX_TRACE: &str = "private data d { m: [[Word; 2]; 2], trace: Word } \
+     fn idx(i: Word) -> Word { d.trace = d.trace * 10 + 2; i } \
+     fn val() -> Word { d.trace = d.trace * 10 + 1; 7 } ";
+
+#[test]
+fn a_failing_level_stops_the_later_indices_and_the_value() {
+    let run_main = |main: &str| {
+        let mut s = String::from(MATRIX_TRACE);
+        s.push_str(main);
+        run_word(&s)
+    };
+    // The outer index fails, so the inner index and the value never run.
+    assert_eq!(
+        run_main(
+            "fn main() -> Word { d.m[idx(5)][idx(0)] = val() { ok(_, n) => n, invalid_index(j) => j * 1000 + d.trace } }"
+        ),
+        5002
+    );
+    // The inner index fails after both indices ran, and the value never runs.
+    assert_eq!(
+        run_main(
+            "fn main() -> Word { d.m[idx(1)][idx(4)] = val() { ok(_, n) => n, invalid_index(j) => j * 1000 + d.trace } }"
+        ),
+        4022
+    );
+    // Both levels in range: the indices, then the value.
+    assert_eq!(
+        run_main(
+            "fn main() -> Word { d.m[idx(1)][idx(0)] = val() { ok(_, n) => n * 1000 + d.trace, invalid_index(j) => j } }"
+        ),
+        7221
+    );
+}
+
+#[test]
+fn an_unhandled_multi_index_failure_traps_with_the_bare_writes_payload() {
+    for (target, expected) in [("d.m[2][0]", (2, 2)), ("d.m[0][5]", (5, 3))] {
+        let handled = matrix_source(&format!(
+            "fn main() -> Word {{ {target} = 7 {{ ok(_, n) => n, invalid_index(0) => 0 }} }}"
+        ));
+        let bare = matrix_source(&format!("fn main() -> Word {{ {target} = 7; 0 }}"));
+        for source in [&handled, &bare] {
+            let module = compile(source);
+            assert!(
+                matches!(classify_traps(&module), Ok(TrapVerdict::MayTrap { .. })),
+                "{source}"
+            );
+            let (result, _, _) = run(module);
+            assert!(
+                matches!(result, Err(VmError::IndexOutOfBounds(i, n)) if (i, n) == expected),
+                "{source}: {result:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_fully_handled_multi_index_write_emits_no_trap_and_classifies_trap_free() {
+    // The seeding write is handled too, because a bare one keeps its trap.
+    let byte_source = "private data d { m: [[Byte; 2]; 2] } fn main() -> Byte { \
+         d.m[1][1] = 7 as Byte { ok(_, _) => (), invalid_index(_) => () }; \
+         d.m[1][1] = 9 as Byte { ok(o, _) => o, invalid_index(_) => 0 as Byte } }";
+    for source in [
+        matrix_source(
+            "fn main() -> Word { d.m[1][3] = 7 { ok(_, n) => n, invalid_index(j) => j } }",
+        ),
+        String::from(byte_source),
+    ] {
+        let module = compile(&source);
+        assert!(
+            !main_ops(&module).iter().any(|op| matches!(op, Op::Trap(_))),
+            "{source}"
+        );
+        assert_eq!(
+            classify_traps(&module),
+            Ok(TrapVerdict::TrapFree),
+            "{source}"
+        );
+        let (result, _, _) = run(module);
+        assert!(
+            matches!(result, Ok(VmState::Finished(_))),
+            "{source}: {result:?}"
+        );
+    }
+    // The old Byte element is read at the flat offset of `m[1][1]`.
+    match run(compile(byte_source)).0 {
+        Ok(VmState::Finished(Value::Byte(7))) => {}
+        other => panic!("{other:?}"),
     }
 }
