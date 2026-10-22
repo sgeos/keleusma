@@ -106,6 +106,122 @@ pub(crate) fn preflight(module: &Module) -> Result<(), TrapAnalysisError> {
     Ok(())
 }
 
+/// The trap class of one instruction, before module-level precedence is applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InstructionTrapClass {
+    /// The instruction neither traps nor is outside the analysed profile.
+    Clear,
+    /// The instruction is a language trap.
+    MayTrap,
+    /// The instruction is outside the analysed profile.
+    Unsupported(UnsupportedTrapOperation),
+}
+
+/// Classify one instruction. `classify_traps` applies this to every
+/// instruction, and the Keleusma classifier's per-tag test derives its
+/// expectation from it, so the two cannot drift through a hand-written table.
+pub(crate) fn classify_instruction(
+    op: &Op,
+    location: TrapLocation,
+) -> Result<InstructionTrapClass, TrapAnalysisError> {
+    Ok(match op {
+        Op::Trap(kind) => {
+            if TrapKind::from_code(*kind).is_none() {
+                return Err(TrapAnalysisError::InvalidModule {
+                    detail: format!("unknown trap kind at {location:?}"),
+                });
+            }
+            InstructionTrapClass::MayTrap
+        }
+        Op::PushImmediate(value) => {
+            if *value > 19 {
+                return Err(TrapAnalysisError::InvalidModule {
+                    detail: format!("reserved immediate at {location:?}"),
+                });
+            }
+            InstructionTrapClass::Clear
+        }
+        Op::FixedDiv(_) => {
+            InstructionTrapClass::Unsupported(UnsupportedTrapOperation::FixedDivision)
+        }
+        Op::GetIndex(ArrayElem::Flat {
+            kind: crate::value_layout::ScalarKind::Int | crate::value_layout::ScalarKind::Byte,
+        }) => InstructionTrapClass::Clear,
+        Op::GetIndex(_) => {
+            InstructionTrapClass::Unsupported(UnsupportedTrapOperation::IndexedValue)
+        }
+        Op::GetField(StructField::Boxed { .. })
+        | Op::GetTupleField(TupleField::Boxed { .. })
+        | Op::GetEnumField(EnumField::Boxed { .. }) => {
+            InstructionTrapClass::Unsupported(UnsupportedTrapOperation::BoxedField)
+        }
+        Op::CallVerifiedNative(..) | Op::CallExternalNative(..) => {
+            InstructionTrapClass::Unsupported(UnsupportedTrapOperation::NativeCall)
+        }
+        // Exhaustive inventory. A new public opcode requires an explicit audit here.
+        Op::Const(_)
+        | Op::GetLocal(_)
+        | Op::SetLocal(_)
+        | Op::GetData(_)
+        | Op::SetData(_)
+        | Op::GetDataIndexed(..)
+        | Op::SetDataIndexed(..)
+        | Op::BoundsCheck(_)
+        | Op::Add
+        | Op::Sub
+        | Op::Mul
+        | Op::Div
+        | Op::Mod
+        | Op::Neg
+        | Op::CmpEq
+        | Op::CmpNe
+        | Op::CmpLt
+        | Op::CmpGt
+        | Op::CmpLe
+        | Op::CmpGe
+        | Op::Not
+        | Op::If(_)
+        | Op::Else(_)
+        | Op::EndIf
+        | Op::Loop(_)
+        | Op::EndLoop(_)
+        | Op::Break(_)
+        | Op::BreakIf(_)
+        | Op::Stream
+        | Op::Reset
+        | Op::Call(..)
+        | Op::Return
+        | Op::Yield
+        | Op::Dup
+        | Op::GetField(_)
+        | Op::GetTupleField(_)
+        | Op::GetEnumField(_)
+        | Op::Len
+        | Op::IsEnum(..)
+        | Op::IsStruct(..)
+        | Op::IntToFloat
+        | Op::FloatToInt
+        | Op::WordToByte
+        | Op::ByteToWord
+        | Op::WordToFixed(_)
+        | Op::FixedToWord(_)
+        | Op::FixedMul(_)
+        | Op::CheckedAdd
+        | Op::CheckedSub
+        | Op::CheckedMul(_)
+        | Op::CheckedNeg
+        | Op::CheckedDiv(_)
+        | Op::CheckedMod
+        | Op::PopN(_)
+        | Op::BitAnd
+        | Op::BitOr
+        | Op::BitXor
+        | Op::Shl
+        | Op::Shr
+        | Op::NewComposite(_) => InstructionTrapClass::Clear,
+    })
+}
+
 /// Classify the entire validated module, including unreachable chunks and instructions.
 /// Unsupported forms take precedence over a possible-trap verdict. This function
 /// neither executes subject code nor creates an unchecked-execution certificate.
@@ -119,105 +235,17 @@ pub fn classify_traps(module: &Module) -> Result<TrapVerdict, TrapAnalysisError>
     for (chunk, body) in module.chunks.iter().enumerate() {
         for (instruction, op) in body.ops.iter().enumerate() {
             let location = TrapLocation { chunk, instruction };
-            let reason = match op {
-                Op::Trap(kind) => {
-                    if TrapKind::from_code(*kind).is_none() {
-                        return Err(TrapAnalysisError::InvalidModule {
-                            detail: format!("unknown trap kind at {location:?}"),
-                        });
-                    }
+            match classify_instruction(op, location)? {
+                InstructionTrapClass::Clear => {}
+                InstructionTrapClass::MayTrap => {
                     first.get_or_insert(location);
-                    None
                 }
-                Op::PushImmediate(value) => {
-                    if *value > 19 {
-                        return Err(TrapAnalysisError::InvalidModule {
-                            detail: format!("reserved immediate at {location:?}"),
-                        });
-                    }
-                    None
+                InstructionTrapClass::Unsupported(operation) => {
+                    unsupported.get_or_insert(TrapAnalysisError::Unsupported {
+                        location,
+                        operation,
+                    });
                 }
-                Op::FixedDiv(_) => Some(UnsupportedTrapOperation::FixedDivision),
-                Op::GetIndex(ArrayElem::Flat {
-                    kind:
-                        crate::value_layout::ScalarKind::Int | crate::value_layout::ScalarKind::Byte,
-                }) => None,
-                Op::GetIndex(_) => Some(UnsupportedTrapOperation::IndexedValue),
-                Op::GetField(StructField::Boxed { .. })
-                | Op::GetTupleField(TupleField::Boxed { .. })
-                | Op::GetEnumField(EnumField::Boxed { .. }) => {
-                    Some(UnsupportedTrapOperation::BoxedField)
-                }
-                Op::CallVerifiedNative(..) | Op::CallExternalNative(..) => {
-                    Some(UnsupportedTrapOperation::NativeCall)
-                }
-                // Exhaustive inventory. A new public opcode requires an explicit audit here.
-                Op::Const(_)
-                | Op::GetLocal(_)
-                | Op::SetLocal(_)
-                | Op::GetData(_)
-                | Op::SetData(_)
-                | Op::GetDataIndexed(..)
-                | Op::SetDataIndexed(..)
-                | Op::BoundsCheck(_)
-                | Op::Add
-                | Op::Sub
-                | Op::Mul
-                | Op::Div
-                | Op::Mod
-                | Op::Neg
-                | Op::CmpEq
-                | Op::CmpNe
-                | Op::CmpLt
-                | Op::CmpGt
-                | Op::CmpLe
-                | Op::CmpGe
-                | Op::Not
-                | Op::If(_)
-                | Op::Else(_)
-                | Op::EndIf
-                | Op::Loop(_)
-                | Op::EndLoop(_)
-                | Op::Break(_)
-                | Op::BreakIf(_)
-                | Op::Stream
-                | Op::Reset
-                | Op::Call(..)
-                | Op::Return
-                | Op::Yield
-                | Op::Dup
-                | Op::GetField(_)
-                | Op::GetTupleField(_)
-                | Op::GetEnumField(_)
-                | Op::Len
-                | Op::IsEnum(..)
-                | Op::IsStruct(..)
-                | Op::IntToFloat
-                | Op::FloatToInt
-                | Op::WordToByte
-                | Op::ByteToWord
-                | Op::WordToFixed(_)
-                | Op::FixedToWord(_)
-                | Op::FixedMul(_)
-                | Op::CheckedAdd
-                | Op::CheckedSub
-                | Op::CheckedMul(_)
-                | Op::CheckedNeg
-                | Op::CheckedDiv(_)
-                | Op::CheckedMod
-                | Op::PopN(_)
-                | Op::BitAnd
-                | Op::BitOr
-                | Op::BitXor
-                | Op::Shl
-                | Op::Shr
-                | Op::NewComposite(_) => None,
-            };
-            if let Some(operation) = reason {
-                unsupported.get_or_insert(TrapAnalysisError::Unsupported {
-                    location,
-                    operation,
-                });
             }
         }
     }

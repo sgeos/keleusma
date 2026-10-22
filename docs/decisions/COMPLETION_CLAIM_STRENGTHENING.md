@@ -100,6 +100,10 @@ evidence.
   commit that raised it.
 - Item 10. The Order 2 audit marks its opcode limit as historical and names the
   commit that raised it.
+- Item 13. The per-tag test in src/selfhost/traps.rs derives its expectation from
+  `trap_analysis::classify_instruction`, which `classify_traps` applies, and sends
+  each subject through the real operand transport. Misclassifying BoundsCheck in
+  the Rust analysis made it fail.
 
 ## Already addressed on 2026-10-20
 
