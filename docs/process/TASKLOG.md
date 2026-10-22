@@ -6,6 +6,23 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-21 Book catalogue regenerated and long CI test jobs sharded
+
+The first CI run of pull request 484 found two problems. The book workflow's
+drift step failed because rows of book/src/INSTRUCTION_SET.md had changed
+without a regenerated catalogue. The template is regenerated, the thirty
+changed messages are translated in ja.po, and BOOK_TRANSLATION_CURRENCY.md
+records the counts.
+
+The Test and Test (self-host feature) jobs were cancelled at GitHub's six-hour
+limit. On operator direction each now runs as four nextest hash partitions,
+with documentation tests on shard one. Partition sums from local debug
+durations estimate each shard at roughly three hours or less. That estimate
+comes from a contended local machine and is unconfirmed on hosted runners.
+tests/ci_shard_coverage.rs checks that each partitioned job lists every shard
+exactly once and keeps its documentation-test step. Removing one shard from
+the matrix made it fail.
+
 ## 2026-10-20 Wire stage restored to the type stage's name channel
 
 The CI-shaped debug matrix on the unmodified 36ebe64d tree failed five

@@ -109,10 +109,11 @@ it, and the binaries that read wire.kel were rerun in debug.
 
 ## Intended next step
 
-A pull request into v0.2.3 was opened at the operator's request, so the
-branch reaches remote continuous integration for the first time. Its result,
-and whether the debug test job fits GitHub's six-hour default, decide the
-merge. The self-host set of the local matrix was still running when the pull
-request was opened. The
+Pull request 484 into v0.2.3 was opened at the operator's request. Its first
+CI run failed the book drift step and timed out both long Test jobs at six
+hours. The catalogue is regenerated, and on operator direction the two long
+jobs now run as four hash partitions each. The next CI run decides whether the
+shards fit. The local self-host matrix later finished with the same five
+failures, which the wire.kel commit fixes. The
 handler surface implementation follows the plan document. Its acceptance rows
 are listed there. Codex or Claude may take it.
