@@ -73,6 +73,9 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 
+# The expansion below is written `${feat[@]+"${feat[@]}"}` because bash 3.2, the
+# macOS system bash a hosted runner reaches through `env bash`, treats an EMPTY
+# array as unbound under `set -u`. Local runs under a newer bash never saw it.
 feat=()
 label="default features"
 if [ "${1:-}" = "--narrow" ]; then
@@ -106,15 +109,15 @@ echo "-- fmt"
 cargo fmt --all -- --check || fail=1
 
 echo "-- clippy"
-cargo clippy --all-targets "${feat[@]}" -- -D warnings || fail=1
+cargo clippy --all-targets ${feat[@]+"${feat[@]}"} -- -D warnings || fail=1
 
 # Split at `corpus_differential`; see note 1 above.
 echo "-- suite, part 1 of 3 (everything but corpus_differential)"
-tools/frozen-run.sh cargo nextest run --no-fail-fast "${feat[@]}" \
+tools/frozen-run.sh cargo nextest run --no-fail-fast ${feat[@]+"${feat[@]}"} \
     -E 'not binary(corpus_differential)' || fail=1
 
 echo "-- suite, part 2 of 3 (corpus_differential)"
-tools/frozen-run.sh cargo nextest run --no-fail-fast "${feat[@]}" \
+tools/frozen-run.sh cargo nextest run --no-fail-fast ${feat[@]+"${feat[@]}"} \
     -E 'binary(corpus_differential)' || fail=1
 
 # 4. THE MIDDLE END, ON THE HALF WHERE IT IS FREE.
@@ -143,7 +146,7 @@ tools/frozen-run.sh cargo nextest run --no-fail-fast "${feat[@]}" \
 #
 # ⚠ The variable is scoped to THIS COMMAND, so no other phase's meaning changes.
 echo "-- suite, part 3 of 3 (everything but corpus_differential, UNDER THE MIDDLE END)"
-KEL_OPTIMIZE=1 tools/frozen-run.sh cargo nextest run --no-fail-fast "${feat[@]}" \
+KEL_OPTIMIZE=1 tools/frozen-run.sh cargo nextest run --no-fail-fast ${feat[@]+"${feat[@]}"} \
     -E 'not binary(corpus_differential)' || fail=1
 
 verdict=$([ $fail -eq 0 ] && echo PASS || echo FAIL)

@@ -141,3 +141,20 @@ fn both_configurations_run_the_complete_gate() {
         "tests needing llc and llvm-readobj could skip in continuous integration"
     );
 }
+
+/// The gate's feature array is EMPTY in the default configuration, and the
+/// hosted runner's `env bash` is the macOS system bash 3.2, which treats an
+/// empty array as unbound under `set -u`. The first hosted run died at Clippy
+/// on exactly that, while every local run under a newer bash had passed.
+#[test]
+fn the_gate_never_expands_its_feature_array_unguarded() {
+    let script = std::fs::read_to_string("tools/backend-gate.sh").expect("the gate");
+    let guarded = script.matches(r#"${feat[@]+"${feat[@]}"}"#).count();
+    // **NON-VACUITY.** Clippy and the three suite runs expand it.
+    assert!(guarded >= 4, "only {guarded} guarded expansions found");
+    let bare = script.matches(r#""${feat[@]}""#).count();
+    assert_eq!(
+        bare, guarded,
+        "an unguarded \"${{feat[@]}}\" fails the default configuration under bash 3.2"
+    );
+}

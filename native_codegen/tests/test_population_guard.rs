@@ -61,7 +61,9 @@
 // 759 -> 760 in absorption 82: `differential.rs` folded two bounds-check tests
 // into one, `differential_coverage.rs` deleted its emptied external-witness test,
 // and `native_workflow.rs` added three.
-const RECORDED_TEST_FUNCTIONS: usize = 760;
+// 760 -> 761: `native_workflow.rs` guards the gate script against bash 3.2,
+// after the first hosted run failed on an empty feature array.
+const RECORDED_TEST_FUNCTIONS: usize = 761;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise
