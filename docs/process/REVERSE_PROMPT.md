@@ -1,5 +1,30 @@
 # Reverse prompt
 
+## Restart readiness, 2026-10-23
+
+The operator asked that the line be ready for a power cycle. Pull requests 485
+to 490 are merged into v0.2.3 at 09b700b5, confirmed against the remote. No
+branch of this line holds unmerged commits. No build, test or continuous
+integration waiter is running. The v02-handlers-snapshot worktree has
+uncommitted edits, and its code files are identical to the merged tip of pull
+request 487, so nothing in it is unique. The primary checkout was moved from the
+merged feat/v02-order3-trap-analysis branch to v0.2.3. HANDOFF.md now opens with
+a block anchored at 09b700b5.
+
+Decisions needed before the next increments.
+
+1. Native-call `host_error` handlers change the stack effect of every native
+   call. The encoding is open. A flag pushed on every call, a flag only on calls
+   with a handler, or deferral to the V0.2.4 flags register.
+2. Handler-required composite reads. The ruling does not yet name the covered
+   read forms or what a handler arm binds.
+3. Handled writes in a `let` initializer. The reference side is mechanical. The
+   self-hosted mirror needs names that the parse stage, at 1023 of 1024, lacks.
+
+Residue carried forward. The self-hosted compiler refuses Fixed `/` and handled
+multi-index writes. Trap-analysis reason code 1 is unused. All local runs this
+session were release builds, and continuous integration supplied the debug runs.
+
 ## FixedDiv totalization, 2026-10-22
 
 Branch feat/v02-fixed-div-outcome, cut from v0.2.3 at cc48dc61, independent of

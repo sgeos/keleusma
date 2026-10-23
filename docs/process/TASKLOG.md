@@ -6,6 +6,12 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-23 Line prepared for a restart
+
+Pull requests 485 to 490 merged into v0.2.3 at 09b700b5. HANDOFF.md gains a
+startup block at that anchor, and REVERSE_PROMPT.md lists the three open
+operator decisions. No work is in flight.
+
 ## 2026-10-22 FixedDiv reports a zero divisor as an outcome
 
 Branch feat/v02-fixed-div-outcome, cut from v0.2.3 at cc48dc61. Under the

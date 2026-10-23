@@ -1,3 +1,27 @@
+# V0.2.X at 09b700b5, ready for a restart
+
+Written 2026-10-23. This is the current startup block. It supersedes the audit
+block below, whose branches have all merged into v0.2.3.
+
+State. The audit follow-up merged as pull request 484. Pull requests 485 to 490
+merged after green continuous integration, the last at 09b700b5. No branch of
+this line holds unmerged work, no gate or continuous integration run is in
+flight, and the interline inbox for v0.2.3 was empty at writing. The primary
+checkout is on v0.2.3. The worktrees for the merged branches under
+../keleusma-worktrees/ hold nothing unmerged and may be removed.
+
+Validity. Confirm that 09b700b5 is an ancestor of HEAD and inspect
+`git log 09b700b5..HEAD`. Confirm that REVERSE_PROMPT.md opens with the
+2026-10-23 restart entry. BYTECODE_VERSION is 2, FORMAT_FINGERPRINT is
+0x4327_63E1 and the opcode count is 66. Ancestry alone cannot detect staleness,
+so report unperformed checks explicitly.
+
+Next work. Three increments wait on operator decisions, listed in
+REVERSE_PROMPT.md. Without them, the remaining items of
+docs/decisions/COMPLETION_CLAIM_STRENGTHENING.md can proceed.
+
+---
+
 # V0.2.X after the Opus 5.5 audit
 
 Written 2026-10-20. This is the current startup block. It supersedes the Codex
