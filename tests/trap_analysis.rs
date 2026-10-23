@@ -131,10 +131,37 @@ fn unreachable_traps_and_chunks_are_scanned() {
     assert!(matches!(agree(&m).unwrap(), TrapVerdict::MayTrap { .. }));
 }
 
+/// Fixed division reports a zero divisor as an outcome since 2026-10-22, so
+/// both analyses treat `FixedDiv` as clear. A bare source division keeps the
+/// compiler's default trap, and a handled one with a catch-all
+/// `zero_divisor` arm has none.
+#[test]
+fn fixed_division_classes_agree() {
+    for (source, trapping) in [
+        (
+            "fn main(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a / b }",
+            true,
+        ),
+        (
+            "fn main(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a / b { ok(v) => v, zero_divisor(n) => n } }",
+            false,
+        ),
+    ] {
+        let module = compile(source);
+        assert_eq!(
+            matches!(agree(&module).unwrap(), TrapVerdict::MayTrap { .. }),
+            trapping,
+            "{source}"
+        );
+    }
+    let mut m = compile("fn main() -> Word { 7 }");
+    m.chunks[0].ops = vec![Op::PushImmediate(4), Op::Return, Op::FixedDiv(0)];
+    assert_eq!(agree(&m).unwrap(), TrapVerdict::TrapFree);
+}
+
 #[test]
 fn unsupported_forms_never_become_trap_free_or_possibly_trapping() {
     let cases = [
-        (Op::FixedDiv(0), UnsupportedTrapOperation::FixedDivision),
         (
             Op::GetIndex(ArrayElem::Boxed),
             UnsupportedTrapOperation::IndexedValue,

@@ -262,8 +262,8 @@ profile is now 2048 because the expanded stage corpus exceeds 1536. Selected typ
 capacities remain 640. Selected verification and its limits are recorded in the handoff.
 
 The legacy arithmetic contracts are now total for their numeric operands. The
-remaining internal language faults include raw FixedDiv and non-first-pass indexed
-or boxed field forms. Classifications must distinguish these unsupported forms
+remaining internal language faults include non-first-pass indexed or boxed field
+forms. Raw FixedDiv was among them until it became total on 2026-10-22. Classifications must distinguish these unsupported forms
 from completed trap-free or possibly-trapping verdicts. The roadmap defers native
 error and newtype-refinement widening to Workstream F. Host-contract and unknown
 shape checks remain separate obligations.

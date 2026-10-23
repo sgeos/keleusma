@@ -841,7 +841,7 @@ indirect call and no first-class function.
 | 47 48 | WordToByte ByteToWord | | truncate and zero-extend |
 | 49 50 | WordToFixed FixedToWord | fraction bits | scale by shifting, saturating and truncating toward negative infinity |
 | 51 | FixedMul | fraction bits | fixed multiplication through a wide intermediate, saturating |
-| 52 | FixedDiv | fraction bits | fixed division through a wide intermediate, saturating, fault on zero divisor |
+| 52 | FixedDiv | fraction bits | fixed division through a wide intermediate, saturating, pushing the outcome triple of a Fixed remainder with flag 3 on a zero divisor |
 
 **Faults.**
 

@@ -29,6 +29,11 @@ mod verified {
             ..VmOptions::default()
         }
     }
+    /// An instruction outside the first-pass trap profile. Fixed division
+    /// served here until it became total on 2026-10-22.
+    fn unsupported_op() -> Op {
+        Op::GetField(keleusma::bytecode::StructField::Boxed { name_const: 0 })
+    }
     fn free() -> Module {
         compile("fn main() -> Word { 7 }")
     }
@@ -50,7 +55,7 @@ mod verified {
             "InvalidModule",
         );
         let mut unknown = free();
-        unknown.chunks[0].ops.push(Op::FixedDiv(0));
+        unknown.chunks[0].ops.push(unsupported_op());
         policy_error(
             Vm::new_with_options(unknown, &arena, strict()),
             "Unsupported",
@@ -183,7 +188,7 @@ mod verified {
                 VmState::Finished(Value::Int(7))
             ));
             let mut unknown = free();
-            unknown.chunks[0].ops.push(Op::FixedDiv(0));
+            unknown.chunks[0].ops.push(unsupported_op());
             policy_error(vm.replace_module_unchecked(unknown, vec![]), "Unsupported");
             assert_eq!(vm.trap_policy(), TrapPolicy::RequireTrapFree);
         }

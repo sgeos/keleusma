@@ -1,5 +1,47 @@
 # Reverse prompt
 
+## FixedDiv totalization, 2026-10-22
+
+Branch feat/v02-fixed-div-outcome, cut from v0.2.3 at cc48dc61, independent of
+pull request 489. Both edit this file, TASKLOG.md and the plan document's status
+lines, so the second to merge needs a conflict resolution. Pull request 489
+merged first, and v0.2.3 was merged into this branch with both entries kept.
+
+FixedDiv now reports a zero divisor as the flag-3 outcome of a Fixed `Mod`, and
+source Fixed division reaches the explicit zero-divisor Trap. See the plan
+document's "Remaining non-trap faults" section.
+
+Verification, all in release.
+
+| Check | Result |
+|---|---|
+| `--no-default-features`, full | 331 of 331 passed |
+| `--features signatures`, full | 2451 of 2451 passed |
+| `--features self-host`, full | 3189 of 3190, the failure fixed below |
+| `--workspace`, full | 3448 of 3449, the same failure |
+| The five edited division and trap test files, after the fix | self-host 34, workspace 34, signatures 30, all passed |
+| keleusma-cli proven_execution | 5 of 5 passed |
+| The 714 tests in binaries that read documents, after the last doc edit | all passed |
+| clippy workspace all targets and no-default lib, with Checking output | clean |
+
+The failure was spec_trap_claims, whose guard requires every specification row
+claiming a trap to have an executed check. The new FixedDiv row now has one.
+The self-host and workspace runs compiled before that fix. signatures,shell was
+not run locally.
+
+Concerns.
+
+- Saturation reports flag 0. Reporting it as overflow would send a handler
+  without an overflow arm to the default trap, so the choice follows the
+  existing defined result. The handled form, which uses `CheckedDiv(n)`, wraps
+  rather than saturates, as it did before.
+- The trap-analysis reason code 1 is now unused and read as unknown. The
+  remaining codes were not renumbered.
+
+Next. Native-call `host_error` handlers need an encoding decision, because they
+change the stack effect of every native call. Handler-required composite reads
+follow.
+
 ## Handled multi-index writes, 2026-10-22
 
 Branch feat/v02-multi-index-write-handlers, cut from v0.2.3 at cc48dc61.
