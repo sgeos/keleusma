@@ -112,3 +112,11 @@ read and `nm` reported it missing. Each sweep now gets a directory unique to the
 that the verification did not resemble the execution. **A green run of one binary, alone, is not
 evidence about that binary in the suite** — and the prediction is what caught it, because a bare
 "2 failed" without a recorded expectation invites the reading that something unrelated broke.
+
+## Addendum, absorption 82, 2026-10-22
+
+**The corpus no longer requires a compiler-runtime symbol.** The sweep emits 70 objects, and its only toolchain symbol is `bzero`, required by `codegen.kel` and `verify_typed.kel`.
+
+The attribution above had already been overtaken before this absorption. `opcode_witness.kel` contains no `Fixed` division, so by the gate commit `5695ab1f` its `__divti3` came from its checked `/` and `%`, which this backend lowered through 128-bit division. Absorption 82 routed every Word `/` and `%` through those checked forms, and the lowering moved to 64 bits. That is exact, because the only two inputs needing the wide domain have known triples, a zero divisor and `i64::MIN / -1`.
+
+**The construct finding stands.** `Fixed` division still scales its numerator past 64 bits and still calls `__divti3`, which `fixed_division_is_the_construct_that_reaches_for_the_compiler_runtime` measures. An embedder whose program divides `Fixed` values needs a compiler runtime. No corpus module that lowers does so. The test that pinned the corpus dependency is now `the_shipped_corpus_needs_no_compiler_runtime_since_absorption_82`.

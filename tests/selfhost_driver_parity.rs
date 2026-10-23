@@ -109,7 +109,8 @@ fn match_body(src: &str, header: &str, must_contain: &str) -> String {
 }
 
 /// Match-arm patterns at the TOP LEVEL of `body`: `<digits> =>`, `<digits> if <guard> =>`,
-/// `a..=b =>`.
+/// `a..=b =>`, including numeric alternatives in `|` patterns. Named constants remain
+/// outside this textual check.
 ///
 /// # Depth matters, and ignoring it produced a false positive on this test's first run
 ///
@@ -144,20 +145,40 @@ fn arm_patterns(body: &str) -> BTreeSet<String> {
             Some(k) => (&pat[..k], true),
             None => (pat, false),
         };
-        let disc = disc.trim();
-        let numericish = disc
-            .chars()
-            .all(|c| c.is_ascii_digit() || c == '.' || c == '=')
-            && disc.chars().any(|c| c.is_ascii_digit());
-        if numericish {
-            out.insert(if guarded {
-                format!("{disc}(guarded)")
-            } else {
-                disc.to_string()
-            });
+        for disc in disc.split('|').map(str::trim) {
+            let numericish = disc
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == '.' || c == '=')
+                && disc.chars().any(|c| c.is_ascii_digit());
+            if numericish {
+                out.insert(if guarded {
+                    format!("{disc}(guarded)")
+                } else {
+                    disc.to_string()
+                });
+            }
         }
     }
     out
+}
+
+#[test]
+fn numeric_alternatives_keep_their_ranges_and_guards() {
+    let body = "{\n94..=96 | crate::metadata::GROUP if ready => {},\n105 => {},\n_ => {},\n}";
+    let actual = covered_codes(&arm_patterns(body));
+    let expected = ["94(guarded)", "95(guarded)", "96(guarded)", "105"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(actual, expected);
+    assert_ne!(
+        actual,
+        covered_codes(&arm_patterns(&body.replace("94..=96 | ", "")))
+    );
+    assert_ne!(
+        actual,
+        covered_codes(&arm_patterns(&body.replace(" if ready", "")))
+    );
 }
 
 /// **THE OP-WORD DECODERS MUST RECOGNISE THE SAME TAGS, WITH THE SAME GUARDS.**

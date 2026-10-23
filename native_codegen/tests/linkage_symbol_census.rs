@@ -341,38 +341,41 @@ fn the_external_symbol_set_is_named_and_partitioned() {
     );
 }
 
-/// **THE FINDING, PINNED SO IT CANNOT QUIETLY STOP BEING TRUE.**
+/// **THE FINDING, RE-DERIVED IN ABSORPTION 82 AFTER IT STOPPED BEING TRUE.**
 ///
-/// `FLOAT_LADDER.md` precondition 3 deferred the linkage question to the arrival
-/// of `f16`, on the reasoning that narrow float operations would be the first
-/// thing to need a compiler runtime. **Measured, that reasoning is wrong on its
-/// facts and not merely on its timing.**
+/// Until then this pinned that a compiler-runtime dependency already existed at
+/// the shipped `f64` rung, as `__divti3`, signed 128-bit division. At the gate
+/// commit the one corpus module requiring it was `opcode_witness.kel`, and that
+/// file contains no `Fixed` division: its checked `/` and `%` went through this
+/// backend's 128-bit checked division. Absorption 82 routed every Word `/` and
+/// `%` through those forms, so the lowering moved to sixty-four bits, which is
+/// exact (see `lower_checked_division`). That removed the corpus dependency.
 ///
-/// A compiler-runtime dependency **already exists at the shipped `f64` rung**.
-/// It is not a floating-point helper, which is why the deferral looked safe: it
-/// is `__divti3`, signed 128-bit integer division, reached through the widened
-/// intermediate that fixed-point division uses to avoid overflow.
+/// **What still holds is the construct, not the corpus.** `Fixed` division
+/// scales its numerator past 64 bits and still calls `__divti3`, as the test
+/// below measures. An embedder whose program divides `Fixed` values needs a
+/// compiler runtime. The shipped corpus no longer contains one that lowers.
 ///
-/// **The consequence for the deployment shape is concrete.** An embedder linking
-/// a Keleusma object today needs a compiler runtime — `compiler-rt` or `libgcc`
-/// — and not merely the natives they registered. On a bare-metal target that
-/// links neither, this is a link failure, and it is present now rather than
-/// arriving with `f16`.
-///
-/// If this test ever fails, the dependency has gone away and the record above is
-/// stale. **Say so and re-derive it**, rather than deleting the test.
+/// If this test fails, a compiler-runtime symbol has returned to the corpus.
+/// **Find the construct before re-pinning**, since the last attribution was
+/// silently replaced by a different cause.
 #[test]
-fn a_compiler_runtime_dependency_already_exists_at_the_shipped_rung() {
+fn the_shipped_corpus_needs_no_compiler_runtime_since_absorption_82() {
     let census = sweep();
     assert!(
-        !census.toolchain.is_empty(),
-        "no toolchain symbol was found across {} objects. If that is now true,          the recorded finding that a compiler runtime is required at the f64          rung has expired and FLOAT_LADDER.md must be re-derived rather than          left standing.",
+        census.objects >= 60,
+        "only {} objects were emitted, so an empty runtime category says little",
         census.objects
     );
+    let runtime: Vec<&String> = census
+        .toolchain
+        .iter()
+        .filter(|s| s.starts_with("__"))
+        .collect();
     assert!(
-        census.toolchain.iter().any(|s| s.starts_with("__")),
-        "the toolchain category holds only C-library symbols {:?}. The recorded          finding is specifically that a COMPILER-RUNTIME symbol is required,          which is the stronger claim, and it no longer holds.",
-        census.toolchain
+        runtime.is_empty(),
+        "the corpus requires compiler-runtime symbols {runtime:?} again. See the \
+         blame printed by `the_external_symbol_set_is_named_and_partitioned`."
     );
 }
 

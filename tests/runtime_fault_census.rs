@@ -7,15 +7,14 @@
 //! `docs/roadmap/V0_2_X_ROADMAP.md` workstream C proposes making trap
 //! reachability decidable: `Trap` becomes the only opcode that traps, every
 //! other opcode is made **total**, and the validator becomes a scan for the
-//! presence of `Trap`. That is a `BYTECODE_VERSION`-bumping instruction-set
-//! change and therefore the operator's call.
+//! presence of `Trap`. The operator authorized contract changes within
+//! V0.2.3-WIP while keeping the bytecode version and fingerprint fixed.
 //!
 //! Two things the proposal rests on were unmeasured: how large "make every
 //! other opcode total" actually is, and whether the scan would be honest
 //! today. Both are measurable now, with no instruction-set change, and that is
-//! what this file does. **It implements no part of workstream C** — in
-//! particular it deliberately does not ship a trap-freedom verdict, because
-//! the census below shows the current instruction set could not support one.
+//! what this file measures. It tracks the Order 3 lowering work, while withholding
+//! a trap-freedom verdict until the instruction contracts support that guarantee.
 //!
 //! # Method
 //!
@@ -31,26 +30,13 @@
 //! bounds, the bare `for .. limit`, cast range, newtype refinement, native
 //! errors) crossed with the fault kinds the runtime defines.
 //!
-//! # The result
+//! # Current result
 //!
-//! **Exactly two operation families fault with no `Trap` opcode anywhere in
-//! the module: division or modulo by zero, and array bounds.** Everything else
-//! either already carries a `Trap`, or does not fault at all.
-//!
-//! That is the measured size of the obligation, for compiler output. It is
-//! smaller than the proposal's list implies, because several entries on that
-//! list are already in the shape it wants:
-//!
-//! - **Arithmetic overflow does not fault.** The instruction-set
-//!   specification states that a surface `a + b` on `Int` operands compiles to
-//!   the checked opcode followed by `PopN(2)`, discarding the outcome flag and
-//!   leaving the WRAPPING result. Wrapping is the specified behaviour of the
-//!   bare operator, and the flag the proposal wants already exists.
-//! - **A cast out of range does not fault either**; it truncates.
-//! - **`assert` is a debug construct** (B29) compiled out entirely in a
-//!   release build, so it raises nothing there.
-//! - **The bare `for .. limit` already lowers to an explicit `Trap`**, as do
-//!   the match and enum-discrimination fallbacks.
+//! Bare Word and Byte division and modulo now carry an explicit zero-divisor
+//! Trap. The indexed bounds cases also reach explicit traps. The original
+//! September census found both families faulting internally; the current census
+//! finds no language faults without Trap in its twenty source cases.
+//! This census still does not expose a trap-freedom verdict.
 //!
 //! # What this does NOT establish
 //!
@@ -123,36 +109,78 @@ fn fault_name(e: &keleusma::vm::VmError) -> &'static str {
 }
 
 const CASES: &[Case] = &[
-    // --- Faults with NO trap opcode. These are the obligation. ---
+    // --- Bare arithmetic now fails through an explicit trap. ---
     Case {
         name: "division by a runtime zero",
         src: "fn main() -> Word { let z = 0; 7 / z }",
-        traps_expected: false,
+        traps_expected: true,
         outcome: Outcome::Faulted("DivisionByZero"),
     },
     Case {
         name: "modulo by a runtime zero",
         src: "fn main() -> Word { let z = 0; 7 % z }",
-        traps_expected: false,
+        traps_expected: true,
         outcome: Outcome::Faulted("DivisionByZero"),
     },
     Case {
         name: "division by a literal zero",
         src: "fn main() -> Word { 7 / 0 }",
-        traps_expected: false,
+        traps_expected: true,
         outcome: Outcome::Faulted("DivisionByZero"),
     },
     Case {
         name: "array index out of bounds, runtime index",
         src: "fn main() -> Word { let xs = [1, 2]; let i = 5; xs[i] }",
-        traps_expected: false,
+        traps_expected: true,
         outcome: Outcome::Faulted("IndexOutOfBounds"),
     },
     Case {
         name: "array index out of bounds, constant index",
         src: "fn main() -> Word { let xs = [1, 2]; xs[5] }",
-        traps_expected: false,
+        traps_expected: true,
         outcome: Outcome::Faulted("IndexOutOfBounds"),
+    },
+    Case {
+        name: "Byte division by zero",
+        src: "fn main() -> Byte { (7 as Byte) / (0 as Byte) }",
+        traps_expected: true,
+        outcome: Outcome::Faulted("DivisionByZero"),
+    },
+    Case {
+        name: "Byte modulo by zero",
+        src: "fn main() -> Byte { (7 as Byte) % (0 as Byte) }",
+        traps_expected: true,
+        outcome: Outcome::Faulted("DivisionByZero"),
+    },
+    Case {
+        name: "shared indexed read out of bounds",
+        src: "shared data d { xs: [Word; 2] } fn main() -> Word { d.xs[5] }",
+        traps_expected: true,
+        outcome: Outcome::Faulted("IndexOutOfBounds"),
+    },
+    Case {
+        name: "private indexed write out of bounds",
+        src: "private data d { xs: [Word; 2] } fn main() -> Word { d.xs[5] = 7; 0 }",
+        traps_expected: true,
+        outcome: Outcome::Faulted("IndexOutOfBounds"),
+    },
+    Case {
+        name: "multidimensional shared read rejects a negative outer index",
+        src: "shared data d { xs: [[Word; 2]; 2] } fn main() -> Word { d.xs[-1][0] }",
+        traps_expected: true,
+        outcome: Outcome::Faulted("IndexOutOfBounds"),
+    },
+    Case {
+        name: "multidimensional Byte write rejects the inner upper bound",
+        src: "private data d { xs: [[Byte; 2]; 2] } fn main() -> Word { d.xs[0][2] = 7 as Byte; 0 }",
+        traps_expected: true,
+        outcome: Outcome::Faulted("IndexOutOfBounds"),
+    },
+    Case {
+        name: "control: multidimensional read and write remain valid",
+        src: "private data d { xs: [[Word; 2]; 2] } fn main() -> Word { d.xs[1][1] = 7; d.xs[1][1] }",
+        traps_expected: true,
+        outcome: Outcome::Completed,
     },
     // --- Already carries a trap. ---
     Case {
@@ -226,7 +254,8 @@ fn run_case(c: &Case) -> (usize, Outcome) {
         .resize_persistent(need)
         .unwrap_or_else(|e| panic!("{}: arena: {e:?}", c.name));
     let mut vm = Vm::new(m, &arena).unwrap_or_else(|e| panic!("{}: verify: {e:?}", c.name));
-    let outcome = match vm.call(&[]) {
+    let mut shared = alloc::vec![0; vm.shared_data_bytes()];
+    let outcome = match vm.call_with_shared(&mut shared, &[]) {
         Ok(VmState::Finished(_)) | Ok(VmState::Reset) => Outcome::Completed,
         Ok(other) => panic!("{}: unexpected state {other:?}", c.name),
         Err(e) => Outcome::Faulted(fault_name(&e)),
@@ -262,7 +291,7 @@ fn every_census_row_behaves_as_recorded() {
 /// faulting without a `Trap` present, or one of these two stops, the set moves
 /// and this fails — rather than the roadmap's sizing quietly going stale.
 #[test]
-fn exactly_two_operation_families_fault_without_a_trap_opcode() {
+fn source_census_faults_all_have_explicit_traps() {
     let mut without_trap: alloc::vec::Vec<&'static str> = CASES
         .iter()
         .filter_map(|c| {
@@ -278,7 +307,7 @@ fn exactly_two_operation_families_fault_without_a_trap_opcode() {
 
     assert_eq!(
         without_trap,
-        alloc::vec!["DivisionByZero", "IndexOutOfBounds"],
+        alloc::vec::Vec::<&str>::new(),
         "the set of faults reachable from compiler output with NO trap opcode \
          has changed. That set is the measured size of workstream C's \
          'make every other opcode total' obligation, so a change here resizes \
@@ -296,6 +325,12 @@ fn the_census_covers_the_specified_partial_operations() {
     for needle in [
         "division by a runtime zero",
         "modulo by a runtime zero",
+        "Byte division by zero",
+        "Byte modulo by zero",
+        "shared indexed read out of bounds",
+        "private indexed write out of bounds",
+        "multidimensional shared read rejects a negative outer index",
+        "multidimensional Byte write rejects the inner upper bound",
         "array index out of bounds, runtime index",
         "bare for-limit exceeded",
         "addition overflow wraps, as specified",

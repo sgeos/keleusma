@@ -2,7 +2,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The Keleusma Guide\n"
-"POT-Creation-Date: 2026-09-27T00:01:00-07:00\n"
+"POT-Creation-Date: 2026-10-21T17:49:18-07:00\n"
 "PO-Revision-Date: \n"
 "Last-Translator: \n"
 "Language-Team: \n"
@@ -351,17 +351,16 @@ msgstr ""
 #: src/introduction.md:32 src/INSTRUCTION_SET.md:16 src/INSTRUCTION_SET.md:17
 #: src/INSTRUCTION_SET.md:39 src/INSTRUCTION_SET.md:40
 #: src/INSTRUCTION_SET.md:48 src/INSTRUCTION_SET.md:49
-#: src/INSTRUCTION_SET.md:94 src/INSTRUCTION_SET.md:114
-#: src/INSTRUCTION_SET.md:115 src/INSTRUCTION_SET.md:116
-#: src/INSTRUCTION_SET.md:117 src/INSTRUCTION_SET.md:118
+#: src/INSTRUCTION_SET.md:98 src/INSTRUCTION_SET.md:118
 #: src/INSTRUCTION_SET.md:119 src/INSTRUCTION_SET.md:120
-#: src/INSTRUCTION_SET.md:148 src/INSTRUCTION_SET.md:149
-#: src/INSTRUCTION_SET.md:150 src/INSTRUCTION_SET.md:156
-#: src/INSTRUCTION_SET.md:157 src/INSTRUCTION_SET.md:203
-#: src/INSTRUCTION_SET.md:230 src/INSTRUCTION_SET.md:247
-#: src/INSTRUCTION_SET.md:257 src/SECURITY_POLICY.md:172
-#: src/SECURITY_POLICY.md:173 src/ROGUE.md:346 src/ROGUE.md:410
-#: src/ROGUE.md:599 src/ROGUE.md:610 src/ROGUE.md:622
+#: src/INSTRUCTION_SET.md:121 src/INSTRUCTION_SET.md:122
+#: src/INSTRUCTION_SET.md:123 src/INSTRUCTION_SET.md:124
+#: src/INSTRUCTION_SET.md:152 src/INSTRUCTION_SET.md:153
+#: src/INSTRUCTION_SET.md:154 src/INSTRUCTION_SET.md:160
+#: src/INSTRUCTION_SET.md:161 src/INSTRUCTION_SET.md:235
+#: src/INSTRUCTION_SET.md:255 src/INSTRUCTION_SET.md:267
+#: src/SECURITY_POLICY.md:172 src/SECURITY_POLICY.md:173 src/ROGUE.md:346
+#: src/ROGUE.md:410 src/ROGUE.md:599 src/ROGUE.md:610 src/ROGUE.md:622
 msgid "1"
 msgstr ""
 
@@ -369,27 +368,25 @@ msgstr ""
 msgid "[What Keleusma Is, and What It Is Not](./01_what_keleusma_is.md)"
 msgstr ""
 
-#: src/introduction.md:33 src/INSTRUCTION_SET.md:50 src/INSTRUCTION_SET.md:51
-#: src/INSTRUCTION_SET.md:52 src/INSTRUCTION_SET.md:66
-#: src/INSTRUCTION_SET.md:67 src/INSTRUCTION_SET.md:68
-#: src/INSTRUCTION_SET.md:69 src/INSTRUCTION_SET.md:70
-#: src/INSTRUCTION_SET.md:71 src/INSTRUCTION_SET.md:72
-#: src/INSTRUCTION_SET.md:73 src/INSTRUCTION_SET.md:74
-#: src/INSTRUCTION_SET.md:75 src/INSTRUCTION_SET.md:83
-#: src/INSTRUCTION_SET.md:84 src/INSTRUCTION_SET.md:85
-#: src/INSTRUCTION_SET.md:86 src/INSTRUCTION_SET.md:87
-#: src/INSTRUCTION_SET.md:88 src/INSTRUCTION_SET.md:102
-#: src/INSTRUCTION_SET.md:103 src/INSTRUCTION_SET.md:104
-#: src/INSTRUCTION_SET.md:105 src/INSTRUCTION_SET.md:106
-#: src/INSTRUCTION_SET.md:140 src/INSTRUCTION_SET.md:174
-#: src/INSTRUCTION_SET.md:175 src/INSTRUCTION_SET.md:176
-#: src/INSTRUCTION_SET.md:177 src/INSTRUCTION_SET.md:190
-#: src/INSTRUCTION_SET.md:191 src/INSTRUCTION_SET.md:192
-#: src/INSTRUCTION_SET.md:193 src/INSTRUCTION_SET.md:194
+#: src/introduction.md:33 src/INSTRUCTION_SET.md:70 src/INSTRUCTION_SET.md:71
+#: src/INSTRUCTION_SET.md:72 src/INSTRUCTION_SET.md:73
+#: src/INSTRUCTION_SET.md:74 src/INSTRUCTION_SET.md:75
+#: src/INSTRUCTION_SET.md:76 src/INSTRUCTION_SET.md:77
+#: src/INSTRUCTION_SET.md:78 src/INSTRUCTION_SET.md:79
+#: src/INSTRUCTION_SET.md:87 src/INSTRUCTION_SET.md:88
+#: src/INSTRUCTION_SET.md:89 src/INSTRUCTION_SET.md:90
+#: src/INSTRUCTION_SET.md:91 src/INSTRUCTION_SET.md:92
+#: src/INSTRUCTION_SET.md:106 src/INSTRUCTION_SET.md:107
+#: src/INSTRUCTION_SET.md:108 src/INSTRUCTION_SET.md:109
+#: src/INSTRUCTION_SET.md:110 src/INSTRUCTION_SET.md:144
+#: src/INSTRUCTION_SET.md:179 src/INSTRUCTION_SET.md:180
+#: src/INSTRUCTION_SET.md:181 src/INSTRUCTION_SET.md:194
 #: src/INSTRUCTION_SET.md:195 src/INSTRUCTION_SET.md:196
-#: src/INSTRUCTION_SET.md:197 src/INSTRUCTION_SET.md:231
-#: src/INSTRUCTION_SET.md:248 src/INSTRUCTION_SET.md:258 src/ROGUE.md:347
-#: src/ROGUE.md:411 src/ROGUE.md:600 src/ROGUE.md:611 src/ROGUE.md:623
+#: src/INSTRUCTION_SET.md:197 src/INSTRUCTION_SET.md:198
+#: src/INSTRUCTION_SET.md:199 src/INSTRUCTION_SET.md:200
+#: src/INSTRUCTION_SET.md:201 src/INSTRUCTION_SET.md:236
+#: src/INSTRUCTION_SET.md:256 src/ROGUE.md:347 src/ROGUE.md:411
+#: src/ROGUE.md:600 src/ROGUE.md:611 src/ROGUE.md:623
 msgid "2"
 msgstr ""
 
@@ -399,9 +396,8 @@ msgid ""
 "Prompt](./02_installing_and_running.md)"
 msgstr ""
 
-#: src/introduction.md:34 src/INSTRUCTION_SET.md:76 src/INSTRUCTION_SET.md:77
-#: src/INSTRUCTION_SET.md:173 src/INSTRUCTION_SET.md:183
-#: src/INSTRUCTION_SET.md:184 src/INSTRUCTION_SET.md:232 src/ROGUE.md:412
+#: src/introduction.md:34 src/INSTRUCTION_SET.md:177 src/INSTRUCTION_SET.md:187
+#: src/INSTRUCTION_SET.md:188 src/INSTRUCTION_SET.md:237 src/ROGUE.md:412
 #: src/ROGUE.md:601 src/ROGUE.md:612
 msgid "3"
 msgstr ""
@@ -410,7 +406,8 @@ msgstr ""
 msgid "[A Complete First Program](./03_first_complete_program.md)"
 msgstr ""
 
-#: src/introduction.md:40 src/ROGUE.md:413 src/ROGUE.md:602 src/ROGUE.md:613
+#: src/introduction.md:40 src/INSTRUCTION_SET.md:257 src/ROGUE.md:413
+#: src/ROGUE.md:602 src/ROGUE.md:613
 msgid "4"
 msgstr ""
 
@@ -418,8 +415,10 @@ msgstr ""
 msgid "[Values and Types](./04_values_and_types.md)"
 msgstr ""
 
-#: src/introduction.md:41 src/INSTRUCTION_SET.md:163 src/INSTRUCTION_SET.md:233
-#: src/ROGUE.md:414 src/ROGUE.md:603 src/ROGUE.md:614
+#: src/introduction.md:41 src/INSTRUCTION_SET.md:80 src/INSTRUCTION_SET.md:81
+#: src/INSTRUCTION_SET.md:167 src/INSTRUCTION_SET.md:238
+#: src/INSTRUCTION_SET.md:258 src/INSTRUCTION_SET.md:268 src/ROGUE.md:414
+#: src/ROGUE.md:603 src/ROGUE.md:614
 msgid "5"
 msgstr ""
 
@@ -427,7 +426,8 @@ msgstr ""
 msgid "[Names and Bindings](./05_names_and_bindings.md)"
 msgstr ""
 
-#: src/introduction.md:42 src/ROGUE.md:415 src/ROGUE.md:615
+#: src/introduction.md:42 src/INSTRUCTION_SET.md:239 src/ROGUE.md:415
+#: src/ROGUE.md:615
 msgid "6"
 msgstr ""
 
@@ -435,7 +435,8 @@ msgstr ""
 msgid "[Functions](./06_functions.md)"
 msgstr ""
 
-#: src/introduction.md:43 src/ROGUE.md:416
+#: src/introduction.md:43 src/INSTRUCTION_SET.md:52 src/INSTRUCTION_SET.md:240
+#: src/ROGUE.md:416
 msgid "7"
 msgstr ""
 
@@ -443,7 +444,8 @@ msgstr ""
 msgid "[Making Decisions](./07_making_decisions.md)"
 msgstr ""
 
-#: src/introduction.md:44 src/ROGUE.md:417
+#: src/introduction.md:44 src/INSTRUCTION_SET.md:50 src/INSTRUCTION_SET.md:51
+#: src/INSTRUCTION_SET.md:241 src/ROGUE.md:417
 msgid "8"
 msgstr ""
 
@@ -459,8 +461,8 @@ msgstr ""
 msgid "[The Pipeline Operator](./09_pipeline.md)"
 msgstr ""
 
-#: src/introduction.md:51 src/INSTRUCTION_SET.md:137 src/INSTRUCTION_SET.md:138
-#: src/INSTRUCTION_SET.md:139 src/INSTRUCTION_SET.md:234 src/ROGUE.md:242
+#: src/introduction.md:51 src/INSTRUCTION_SET.md:141 src/INSTRUCTION_SET.md:142
+#: src/INSTRUCTION_SET.md:143 src/INSTRUCTION_SET.md:242 src/ROGUE.md:242
 #: src/ROGUE.md:419
 msgid "10"
 msgstr ""
@@ -8269,47 +8271,47 @@ msgid "Constants"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:14 src/INSTRUCTION_SET.md:37
-#: src/INSTRUCTION_SET.md:46 src/INSTRUCTION_SET.md:64
-#: src/INSTRUCTION_SET.md:81 src/INSTRUCTION_SET.md:92
-#: src/INSTRUCTION_SET.md:100 src/INSTRUCTION_SET.md:112
-#: src/INSTRUCTION_SET.md:135 src/INSTRUCTION_SET.md:146
-#: src/INSTRUCTION_SET.md:154 src/INSTRUCTION_SET.md:161
-#: src/INSTRUCTION_SET.md:171 src/INSTRUCTION_SET.md:181
-#: src/INSTRUCTION_SET.md:188 src/INSTRUCTION_SET.md:201
+#: src/INSTRUCTION_SET.md:46 src/INSTRUCTION_SET.md:68
+#: src/INSTRUCTION_SET.md:85 src/INSTRUCTION_SET.md:96
+#: src/INSTRUCTION_SET.md:104 src/INSTRUCTION_SET.md:116
+#: src/INSTRUCTION_SET.md:139 src/INSTRUCTION_SET.md:150
+#: src/INSTRUCTION_SET.md:158 src/INSTRUCTION_SET.md:165
+#: src/INSTRUCTION_SET.md:175 src/INSTRUCTION_SET.md:185
+#: src/INSTRUCTION_SET.md:192 src/INSTRUCTION_SET.md:205
 msgid "Instruction"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:14 src/INSTRUCTION_SET.md:37
-#: src/INSTRUCTION_SET.md:46 src/INSTRUCTION_SET.md:64
-#: src/INSTRUCTION_SET.md:81 src/INSTRUCTION_SET.md:92
-#: src/INSTRUCTION_SET.md:100 src/INSTRUCTION_SET.md:112
-#: src/INSTRUCTION_SET.md:135 src/INSTRUCTION_SET.md:146
-#: src/INSTRUCTION_SET.md:154 src/INSTRUCTION_SET.md:161
-#: src/INSTRUCTION_SET.md:171 src/INSTRUCTION_SET.md:181
-#: src/INSTRUCTION_SET.md:188 src/INSTRUCTION_SET.md:201
+#: src/INSTRUCTION_SET.md:46 src/INSTRUCTION_SET.md:68
+#: src/INSTRUCTION_SET.md:85 src/INSTRUCTION_SET.md:96
+#: src/INSTRUCTION_SET.md:104 src/INSTRUCTION_SET.md:116
+#: src/INSTRUCTION_SET.md:139 src/INSTRUCTION_SET.md:150
+#: src/INSTRUCTION_SET.md:158 src/INSTRUCTION_SET.md:165
+#: src/INSTRUCTION_SET.md:175 src/INSTRUCTION_SET.md:185
+#: src/INSTRUCTION_SET.md:192 src/INSTRUCTION_SET.md:205
 msgid "Operands"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:14 src/INSTRUCTION_SET.md:37
-#: src/INSTRUCTION_SET.md:46 src/INSTRUCTION_SET.md:64
-#: src/INSTRUCTION_SET.md:81 src/INSTRUCTION_SET.md:92
-#: src/INSTRUCTION_SET.md:100 src/INSTRUCTION_SET.md:112
-#: src/INSTRUCTION_SET.md:135 src/INSTRUCTION_SET.md:146
-#: src/INSTRUCTION_SET.md:154 src/INSTRUCTION_SET.md:161
-#: src/INSTRUCTION_SET.md:171 src/INSTRUCTION_SET.md:181
-#: src/INSTRUCTION_SET.md:188 src/INSTRUCTION_SET.md:201
-#: src/INSTRUCTION_SET.md:228
+#: src/INSTRUCTION_SET.md:46 src/INSTRUCTION_SET.md:68
+#: src/INSTRUCTION_SET.md:85 src/INSTRUCTION_SET.md:96
+#: src/INSTRUCTION_SET.md:104 src/INSTRUCTION_SET.md:116
+#: src/INSTRUCTION_SET.md:139 src/INSTRUCTION_SET.md:150
+#: src/INSTRUCTION_SET.md:158 src/INSTRUCTION_SET.md:165
+#: src/INSTRUCTION_SET.md:175 src/INSTRUCTION_SET.md:185
+#: src/INSTRUCTION_SET.md:192 src/INSTRUCTION_SET.md:205
+#: src/INSTRUCTION_SET.md:233
 msgid "Cost"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:14 src/INSTRUCTION_SET.md:37
-#: src/INSTRUCTION_SET.md:46 src/INSTRUCTION_SET.md:64
-#: src/INSTRUCTION_SET.md:81 src/INSTRUCTION_SET.md:92
-#: src/INSTRUCTION_SET.md:100 src/INSTRUCTION_SET.md:112
-#: src/INSTRUCTION_SET.md:135 src/INSTRUCTION_SET.md:146
-#: src/INSTRUCTION_SET.md:154 src/INSTRUCTION_SET.md:161
-#: src/INSTRUCTION_SET.md:171 src/INSTRUCTION_SET.md:181
-#: src/INSTRUCTION_SET.md:188 src/INSTRUCTION_SET.md:201
+#: src/INSTRUCTION_SET.md:46 src/INSTRUCTION_SET.md:68
+#: src/INSTRUCTION_SET.md:85 src/INSTRUCTION_SET.md:96
+#: src/INSTRUCTION_SET.md:104 src/INSTRUCTION_SET.md:116
+#: src/INSTRUCTION_SET.md:139 src/INSTRUCTION_SET.md:150
+#: src/INSTRUCTION_SET.md:158 src/INSTRUCTION_SET.md:165
+#: src/INSTRUCTION_SET.md:175 src/INSTRUCTION_SET.md:185
+#: src/INSTRUCTION_SET.md:192 src/INSTRUCTION_SET.md:205
 msgid "Description"
 msgstr ""
 
@@ -8437,7 +8439,6 @@ msgid "GetLocal"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:39 src/INSTRUCTION_SET.md:40
-#: src/INSTRUCTION_SET.md:48 src/INSTRUCTION_SET.md:49
 msgid "u16 slot"
 msgstr ""
 
@@ -8475,6 +8476,10 @@ msgstr ""
 msgid "GetData"
 msgstr ""
 
+#: src/INSTRUCTION_SET.md:48 src/INSTRUCTION_SET.md:49
+msgid "u24 slot"
+msgstr ""
+
 #: src/INSTRUCTION_SET.md:48
 msgid "Push data segment slot value onto stack."
 msgstr ""
@@ -8496,26 +8501,30 @@ msgid "GetDataIndexed"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:50 src/INSTRUCTION_SET.md:51
-msgid "u16 base, u16 len"
+msgid "u24 base, u24 len"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:50
 msgid ""
-"Pop array index, bounds-check against `len`, push the value at `base + "
-"index`."
+"Pop a Word, Byte or Unit fallback and then a Word index. Read in range, "
+"otherwise use the supplied fallback. Push value, index, four Word byte limbs "
+"of the bound and an outcome flag. Invalid spans and operand types remain "
+"contract errors."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:51 src/INSTRUCTION_SET.md:258
+#: src/INSTRUCTION_SET.md:51 src/INSTRUCTION_SET.md:257
 msgid "SetDataIndexed"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:51
 msgid ""
-"Pop array index then pop value, bounds-check against `len`, store into the "
-"slot at `base + index`."
+"Pop value and Word index. A valid index writes one slot. An invalid index "
+"performs no write. Push the index, four Word byte limbs of the bound and "
+"flag zero for success or one for invalid. Invalid spans and storage-contract "
+"violations remain errors."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:52
+#: src/INSTRUCTION_SET.md:52 src/INSTRUCTION_SET.md:240
 msgid "BoundsCheck"
 msgstr ""
 
@@ -8525,8 +8534,10 @@ msgstr ""
 
 #: src/INSTRUCTION_SET.md:52
 msgid ""
-"Peek the top of the stack as an `Int`, trap if outside `[0, bound)`. Emitted "
-"by the compiler between levels of a multi-dimensional indexed access."
+"Preserve the Word index and append four Word byte limbs of the unsigned "
+"bound, little-endian, then a flag. An invalid index reifies as flag `1`, "
+"while an index in `[0, bound)` yields flag `0`. The limbs are sign-extended "
+"from eight bits. No indexed data access or language bounds fault occurs."
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:54
@@ -8561,12 +8572,21 @@ msgstr ""
 
 #: src/INSTRUCTION_SET.md:60
 msgid ""
-"`Op::Div` and `Op::Mod` remain polymorphic over `Int`, `Byte`, and `Float`. "
-"Their checked counterparts `CheckedDiv` and `CheckedMod` expose the corner "
-"cases of signed division."
+"`Op::Div` and `Op::Mod` return low, high and flag outcomes. Div shares "
+"`CheckedDiv(0)` semantics. Mod shares `CheckedMod` semantics for Word, Byte "
+"and Fixed and also supports Float remainder with floating-point "
+"classification. Bare `Word` and `Byte` division and modulo lower to "
+"`CheckedDiv(0)` or `CheckedMod`, followed by a flag-three conditional `Trap` "
+"and removal of the high slot. Overflow retains the wrapping low result. A "
+"checked construct with an unguarded variable or wildcard `zero_divisor` arm "
+"omits that fallback trap. Guarded and literal-pattern handlers retain it. "
+"Legacy instructions also reify integer zero divisors as flag three, "
+"including in hand-built bytecode. Bare Float legacy operations discard high "
+"and flag. Bare Fixed remainder dispatches flag three through an explicit "
+"trap."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:62
+#: src/INSTRUCTION_SET.md:66
 msgid ""
 "`CheckedMul` and `CheckedDiv` carry a `u8` fraction-bit count that selects "
 "integer or `Q`\\-format arithmetic, where `0` is integer and a positive "
@@ -8578,56 +8598,56 @@ msgid ""
 "they dispatch on the operand type alone."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:66
+#: src/INSTRUCTION_SET.md:70
 msgid "CheckedAdd"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:66 src/INSTRUCTION_SET.md:67
-#: src/INSTRUCTION_SET.md:69 src/INSTRUCTION_SET.md:71
-#: src/INSTRUCTION_SET.md:72 src/INSTRUCTION_SET.md:73
-#: src/INSTRUCTION_SET.md:74 src/INSTRUCTION_SET.md:75
+#: src/INSTRUCTION_SET.md:70 src/INSTRUCTION_SET.md:71
+#: src/INSTRUCTION_SET.md:73 src/INSTRUCTION_SET.md:75
 #: src/INSTRUCTION_SET.md:76 src/INSTRUCTION_SET.md:77
-#: src/INSTRUCTION_SET.md:83 src/INSTRUCTION_SET.md:84
-#: src/INSTRUCTION_SET.md:85 src/INSTRUCTION_SET.md:86
+#: src/INSTRUCTION_SET.md:78 src/INSTRUCTION_SET.md:79
+#: src/INSTRUCTION_SET.md:80 src/INSTRUCTION_SET.md:81
 #: src/INSTRUCTION_SET.md:87 src/INSTRUCTION_SET.md:88
-#: src/INSTRUCTION_SET.md:94 src/INSTRUCTION_SET.md:102
-#: src/INSTRUCTION_SET.md:103 src/INSTRUCTION_SET.md:104
-#: src/INSTRUCTION_SET.md:105 src/INSTRUCTION_SET.md:106
-#: src/INSTRUCTION_SET.md:116 src/INSTRUCTION_SET.md:140
-#: src/INSTRUCTION_SET.md:148 src/INSTRUCTION_SET.md:149
-#: src/INSTRUCTION_SET.md:150 src/INSTRUCTION_SET.md:157
-#: src/INSTRUCTION_SET.md:177 src/INSTRUCTION_SET.md:190
-#: src/INSTRUCTION_SET.md:191 src/INSTRUCTION_SET.md:192
-#: src/INSTRUCTION_SET.md:193
+#: src/INSTRUCTION_SET.md:89 src/INSTRUCTION_SET.md:90
+#: src/INSTRUCTION_SET.md:91 src/INSTRUCTION_SET.md:92
+#: src/INSTRUCTION_SET.md:98 src/INSTRUCTION_SET.md:106
+#: src/INSTRUCTION_SET.md:107 src/INSTRUCTION_SET.md:108
+#: src/INSTRUCTION_SET.md:109 src/INSTRUCTION_SET.md:110
+#: src/INSTRUCTION_SET.md:120 src/INSTRUCTION_SET.md:144
+#: src/INSTRUCTION_SET.md:152 src/INSTRUCTION_SET.md:153
+#: src/INSTRUCTION_SET.md:154 src/INSTRUCTION_SET.md:161
+#: src/INSTRUCTION_SET.md:181 src/INSTRUCTION_SET.md:194
+#: src/INSTRUCTION_SET.md:195 src/INSTRUCTION_SET.md:196
+#: src/INSTRUCTION_SET.md:197
 msgid "none"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:66
+#: src/INSTRUCTION_SET.md:70
 msgid ""
 "Pop two `Int` operands; push `(low, high, flag)`. The `flag` and `high` "
 "halves report at the bytecode-declared word width through the shared "
 "`vm::checked_arith_outputs` helper."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:67
+#: src/INSTRUCTION_SET.md:71
 msgid "CheckedSub"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:67
+#: src/INSTRUCTION_SET.md:71
 msgid "Pop two `Int` operands; push `(low, high, flag)`."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:68
+#: src/INSTRUCTION_SET.md:72
 msgid "CheckedMul"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:68 src/INSTRUCTION_SET.md:70
-#: src/INSTRUCTION_SET.md:194 src/INSTRUCTION_SET.md:195
-#: src/INSTRUCTION_SET.md:196 src/INSTRUCTION_SET.md:197
+#: src/INSTRUCTION_SET.md:72 src/INSTRUCTION_SET.md:74
+#: src/INSTRUCTION_SET.md:198 src/INSTRUCTION_SET.md:199
+#: src/INSTRUCTION_SET.md:200 src/INSTRUCTION_SET.md:201
 msgid "u8 frac_bits"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:68
+#: src/INSTRUCTION_SET.md:72
 msgid ""
 "Pop two operands; push `(low, high, flag)`. The fraction-bit count selects "
 "the format. With `0` it is integer multiply and the high half is the "
@@ -8637,226 +8657,233 @@ msgid ""
 "the high slot is unused. So `0` fraction bits is exactly integer multiply."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:69 src/INSTRUCTION_SET.md:248
+#: src/INSTRUCTION_SET.md:73 src/INSTRUCTION_SET.md:256
 msgid "CheckedNeg"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:69
+#: src/INSTRUCTION_SET.md:73
 msgid ""
 "Pop one `Int` operand; push `(low, high, flag)`. The only overflow case "
 "under the default 64-bit declared width is `-i64::MIN`."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:70
+#: src/INSTRUCTION_SET.md:74
 msgid "CheckedDiv"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:70
+#: src/INSTRUCTION_SET.md:74
 msgid ""
 "Pop two operands; push `(low, high, flag)`. The fraction-bit count selects "
 "the format. With `0` it is integer divide whose only overflow case at the "
 "default 64-bit width is `i64::MIN / -1`. With a count greater than `0` the "
 "operands are `Fixed` and the dividend is left-shifted by that many bits in "
 "the `i128` domain before dividing. A zero divisor reifies as flag `3` "
-"carrying the numerator rather than trapping. So `0` fraction bits is exactly "
-"integer divide."
+"carrying the numerator rather than trapping. Word outcomes use the "
+"module-declared width, including when the runtime Word is wider. So `0` "
+"fraction bits is exactly integer divide."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:71
+#: src/INSTRUCTION_SET.md:75
 msgid "CheckedMod"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:71
+#: src/INSTRUCTION_SET.md:75
 msgid ""
-"Pop two `Int` operands; push `(low, high, flag)`. A zero divisor reifies as "
-"flag `3` carrying the numerator rather than trapping, mirroring "
-"`CheckedDiv`; this row said \"traps on divide-by-zero\" until 2026-09-18, "
-"which the implementation has never done. The only overflow case under the "
-"default 64-bit declared width is `i64::MIN % -1`."
+"Pop two Word, Byte or Fixed operands; push `(low, high, flag)`. A zero "
+"divisor reifies as flag `3` carrying the numerator rather than trapping, "
+"mirroring `CheckedDiv`; this row said \"traps on divide-by-zero\" until "
+"2026-09-18, which the implementation has never done. `i64::MIN % -1` yields "
+"zero without overflow."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:72
+#: src/INSTRUCTION_SET.md:76
 msgid "Add"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:72
+#: src/INSTRUCTION_SET.md:76
 msgid ""
 "Pop two operands of type `Byte`, `Fixed`, or `Float`; push the wrapping or "
 "IEEE 754 sum. The `Int` operand position is excluded; the compiler routes "
 "`Int + Int` through `CheckedAdd; PopN(2)`."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:73
+#: src/INSTRUCTION_SET.md:77
 msgid "Sub"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:73
+#: src/INSTRUCTION_SET.md:77
 msgid ""
 "Pop two operands of type `Byte`, `Fixed`, or `Float`; push the wrapping or "
 "IEEE 754 difference. The `Int` operand position is excluded."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:74
+#: src/INSTRUCTION_SET.md:78
 msgid "Mul"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:74
+#: src/INSTRUCTION_SET.md:78
 msgid ""
 "Pop two operands of type `Byte` or `Float`; push the wrapping or IEEE 754 "
 "product. `Fixed` multiplication uses `FixedMul(n)`; the `Int` operand "
 "position is excluded."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:75
+#: src/INSTRUCTION_SET.md:79
 msgid "Neg"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:75
+#: src/INSTRUCTION_SET.md:79
 msgid ""
 "Pop one operand of type `Byte`, `Fixed`, or `Float`; push the wrapping or "
 "IEEE 754 negation. The `Int` operand position is excluded."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:76
+#: src/INSTRUCTION_SET.md:80
 msgid "Div"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:76
-msgid "Pop two values; push quotient. Traps on divide-by-zero. No overflow flag."
+#: src/INSTRUCTION_SET.md:80
+msgid ""
+"Pop two operands; push `(low, high, flag)` with the same semantics as "
+"`CheckedDiv(0)`. A zero integer divisor reifies as flag `3` carrying the "
+"numerator."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:77
+#: src/INSTRUCTION_SET.md:81
 msgid "Mod"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:77
+#: src/INSTRUCTION_SET.md:81
 msgid ""
-"Pop two values; push remainder. Traps on divide-by-zero. No overflow flag."
+"Pop two operands; push `(low, high, flag)`. Word, Byte and Fixed use "
+"`CheckedMod` semantics. A zero integer divisor reifies as flag `3` carrying "
+"the numerator. Float remainder returns a zero high result and flag zero for "
+"finite, one for positive infinity, two for negative infinity or four for NaN."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:79
+#: src/INSTRUCTION_SET.md:83
 msgid "Comparisons"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:83
+#: src/INSTRUCTION_SET.md:87
 msgid "CmpEq"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:83
+#: src/INSTRUCTION_SET.md:87
 msgid "Pop two values, push true if equal."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:84
+#: src/INSTRUCTION_SET.md:88
 msgid "CmpNe"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:84
+#: src/INSTRUCTION_SET.md:88
 msgid "Pop two values, push true if not equal."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:85
+#: src/INSTRUCTION_SET.md:89
 msgid "CmpLt"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:85
+#: src/INSTRUCTION_SET.md:89
 msgid "Pop two values, push true if less than."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:86
+#: src/INSTRUCTION_SET.md:90
 msgid "CmpGt"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:86
+#: src/INSTRUCTION_SET.md:90
 msgid "Pop two values, push true if greater than."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:87
+#: src/INSTRUCTION_SET.md:91
 msgid "CmpLe"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:87
+#: src/INSTRUCTION_SET.md:91
 msgid "Pop two values, push true if less than or equal."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:88
+#: src/INSTRUCTION_SET.md:92
 msgid "CmpGe"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:88
+#: src/INSTRUCTION_SET.md:92
 msgid "Pop two values, push true if greater than or equal."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:90
+#: src/INSTRUCTION_SET.md:94
 msgid "Logic"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:94
+#: src/INSTRUCTION_SET.md:98
 msgid "Not"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:94
+#: src/INSTRUCTION_SET.md:98
 msgid "Pop boolean, push logical negation."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:96
+#: src/INSTRUCTION_SET.md:100
 msgid ""
 "Short-circuit AND and OR are encoded as `If`\\-branching at the bytecode "
 "level; there are no `LogicalAnd` or `LogicalOr` opcodes."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:98
+#: src/INSTRUCTION_SET.md:102
 msgid "Bitwise"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:102
+#: src/INSTRUCTION_SET.md:106
 msgid "BitAnd"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:102
+#: src/INSTRUCTION_SET.md:106
 msgid "Pop two `Int` operands, push bitwise AND."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:103
+#: src/INSTRUCTION_SET.md:107
 msgid "BitOr"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:103
+#: src/INSTRUCTION_SET.md:107
 msgid "Pop two `Int` operands, push bitwise OR."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:104
+#: src/INSTRUCTION_SET.md:108
 msgid "BitXor"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:104
+#: src/INSTRUCTION_SET.md:108
 msgid "Pop two `Int` operands, push bitwise XOR."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:105
+#: src/INSTRUCTION_SET.md:109
 msgid "Shl"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:105
+#: src/INSTRUCTION_SET.md:109
 msgid ""
 "Pop shift count then value; push value shifted left by `count & (word_width "
 "- 1)`."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:106
+#: src/INSTRUCTION_SET.md:110
 msgid "Shr"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:106
+#: src/INSTRUCTION_SET.md:110
 msgid ""
 "Pop shift count then value; push arithmetic-right-shifted value "
 "(sign-preserving)."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:108
+#: src/INSTRUCTION_SET.md:112
 msgid "Control Flow"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:110
+#: src/INSTRUCTION_SET.md:114
 msgid ""
 "Block-structured control flow opcodes carry `u16` jump targets. A chunk's "
 "opcode count is therefore bounded at 65,535 (`CHUNK_SIZE_HARD_LIMIT`). The "
@@ -8872,82 +8899,82 @@ msgid ""
 "not need them."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:114
+#: src/INSTRUCTION_SET.md:118
 msgid "If"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:114 src/INSTRUCTION_SET.md:115
-#: src/INSTRUCTION_SET.md:117 src/INSTRUCTION_SET.md:118
+#: src/INSTRUCTION_SET.md:118 src/INSTRUCTION_SET.md:119
+#: src/INSTRUCTION_SET.md:121 src/INSTRUCTION_SET.md:122
 msgid "u16 offset"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:114
+#: src/INSTRUCTION_SET.md:118
 msgid "Pop boolean. If false, skip forward to matching Else or EndIf."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:115
+#: src/INSTRUCTION_SET.md:119
 msgid "Else"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:115
+#: src/INSTRUCTION_SET.md:119
 msgid "Unconditional skip forward to matching EndIf."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:116
+#: src/INSTRUCTION_SET.md:120
 msgid "EndIf"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:116
+#: src/INSTRUCTION_SET.md:120
 msgid "End of if or if-else block. No-op."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:117
+#: src/INSTRUCTION_SET.md:121
 msgid "Loop"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:117
+#: src/INSTRUCTION_SET.md:121
 msgid "Start of loop block. Offset is distance to matching EndLoop."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:118
+#: src/INSTRUCTION_SET.md:122
 msgid "EndLoop"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:118
+#: src/INSTRUCTION_SET.md:122
 msgid "Unconditional jump backward to matching Loop."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:119
+#: src/INSTRUCTION_SET.md:123
 msgid "Break"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:119 src/INSTRUCTION_SET.md:120
+#: src/INSTRUCTION_SET.md:123 src/INSTRUCTION_SET.md:124
 msgid "u16 depth"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:119
+#: src/INSTRUCTION_SET.md:123
 msgid "Exit enclosing loop at the given nesting depth."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:120
+#: src/INSTRUCTION_SET.md:124
 msgid "BreakIf"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:120
+#: src/INSTRUCTION_SET.md:124
 msgid "Pop boolean. If true, exit enclosing loop at the given nesting depth."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:122
+#: src/INSTRUCTION_SET.md:126
 msgid "Function Calls"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:124
+#: src/INSTRUCTION_SET.md:128
 msgid ""
 "Native function calls partition into two classes distinguished by the "
 "source-level `use` declaration and a matching host-side registration ABI:"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:126
+#: src/INSTRUCTION_SET.md:130
 msgid ""
 "**Verified natives.** Imported with `use module::name`. Host registers "
 "through `Vm::register_verified_native(name, fn, wcet_bound, wcmu_bound)`. "
@@ -8955,7 +8982,7 @@ msgid ""
 "Compiler emits `CallVerifiedNative`."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:127
+#: src/INSTRUCTION_SET.md:131
 msgid ""
 "**External natives.** Imported with `use external module::name`. Host "
 "registers through `Vm::register_external_native(name, fn, "
@@ -8964,7 +8991,7 @@ msgid ""
 "`CallExternalNative`."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:129
+#: src/INSTRUCTION_SET.md:133
 msgid ""
 "The runtime cross-checks each declared native against its host registration "
 "at the entry of `Vm::call_function` and at every explicit invocation of "
@@ -8978,7 +9005,7 @@ msgid ""
 "`verify_native_classifications` explicitly after registration."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:131
+#: src/INSTRUCTION_SET.md:135
 msgid ""
 "V0.2.0 Phase 5 introduced the verified-versus-external split. The legacy "
 "`Op::CallNative` opcode was retired; every native call site compiles to "
@@ -8987,7 +9014,7 @@ msgid ""
 "natives because that method ascribes the verified classification."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:133
+#: src/INSTRUCTION_SET.md:137
 msgid ""
 "The `max_invocations_per_iteration` attestation on external natives is "
 "recorded at registration but is not yet folded into the WCMU bound. The "
@@ -8999,51 +9026,51 @@ msgid ""
 "than per static call site) is forward-looking work tracked under B20."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:137
+#: src/INSTRUCTION_SET.md:141
 msgid "Call"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:137
+#: src/INSTRUCTION_SET.md:141
 msgid "u16 chunk_idx, u8 argc"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:137
+#: src/INSTRUCTION_SET.md:141
 msgid "Direct call to a compiled chunk by index with `argc` arguments."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:138
+#: src/INSTRUCTION_SET.md:142
 msgid "CallVerifiedNative"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:138 src/INSTRUCTION_SET.md:139
+#: src/INSTRUCTION_SET.md:142 src/INSTRUCTION_SET.md:143
 msgid "u16 native_idx, u8 argc"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:138
+#: src/INSTRUCTION_SET.md:142
 msgid ""
 "Call a verified native function. Cost folds into the iteration budget per "
 "host attestation."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:139
+#: src/INSTRUCTION_SET.md:143
 msgid "CallExternalNative"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:139
+#: src/INSTRUCTION_SET.md:143
 msgid ""
 "Call an external native function. Iteration cost budget pauses during the "
 "call; the verifier tracks invocation count per iteration."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:140
+#: src/INSTRUCTION_SET.md:144
 msgid "Return"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:140
+#: src/INSTRUCTION_SET.md:144
 msgid "Return from the current chunk."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:142
+#: src/INSTRUCTION_SET.md:146
 msgid ""
 "The closure-construction and indirect-dispatch opcodes (`PushFunc`, "
 "`MakeClosure`, `MakeRecursiveClosure`, `CallIndirect`) are not present in "
@@ -9055,51 +9082,51 @@ msgid ""
 "methods."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:144
+#: src/INSTRUCTION_SET.md:148
 msgid "Coroutine and Streaming"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:148
+#: src/INSTRUCTION_SET.md:152
 msgid "Yield"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:148
+#: src/INSTRUCTION_SET.md:152
 msgid ""
 "Pop output value and suspend. On resume, the host's input value is pushed "
 "onto the stack."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:149
+#: src/INSTRUCTION_SET.md:153
 msgid "Stream"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:149
+#: src/INSTRUCTION_SET.md:153
 msgid "Entry of the streaming region. Only `Reset` may target it."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:150
+#: src/INSTRUCTION_SET.md:154
 msgid "Reset"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:150
+#: src/INSTRUCTION_SET.md:154
 msgid ""
 "Clear the arena's top region, activate hot swap if scheduled, jump to the "
 "matching `Stream`."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:152
+#: src/INSTRUCTION_SET.md:156
 msgid "Stack"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:156
+#: src/INSTRUCTION_SET.md:160
 msgid "PopN"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:156
+#: src/INSTRUCTION_SET.md:160
 msgid "u8 count"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:156
+#: src/INSTRUCTION_SET.md:160
 msgid ""
 "Discard `count` values from the top of the stack. The compiler emits "
 "`PopN(1)` for single-slot pops and `PopN(n)` for multi-slot discards, "
@@ -9107,27 +9134,27 @@ msgid ""
 "wrapping semantics is wanted."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:157
+#: src/INSTRUCTION_SET.md:161
 msgid "Dup"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:157
+#: src/INSTRUCTION_SET.md:161
 msgid "Duplicate top of stack."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:159
+#: src/INSTRUCTION_SET.md:163
 msgid "Type Construction"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:163 src/INSTRUCTION_SET.md:233
+#: src/INSTRUCTION_SET.md:167
 msgid "NewComposite"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:163
+#: src/INSTRUCTION_SET.md:167
 msgid "kind, count, byte_size or meta"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:163
+#: src/INSTRUCTION_SET.md:167
 msgid ""
 "Pop `count` values and construct one composite of the given kind (struct, "
 "tuple, array, or enum). The flat form packs the popped values into "
@@ -9137,7 +9164,7 @@ msgid ""
 "ids 34-37, retired)."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:165
+#: src/INSTRUCTION_SET.md:169
 msgid ""
 "A tuple is an anonymous struct, an array a homogeneous struct, and a flat "
 "enum a struct whose first packed value is the discriminant, so flat "
@@ -9148,212 +9175,227 @@ msgid ""
 "contribution the verifier sums; see the Heap allocation table below."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:167
+#: src/INSTRUCTION_SET.md:171
 msgid ""
 "The `Option::None` sentinel and `Option::Some` wrap are handled through "
 "`PushImmediate(3)` and the natural representation of the wrapped value, "
 "respectively; there are no dedicated `PushNone` or `WrapSome` opcodes."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:169
+#: src/INSTRUCTION_SET.md:173
 msgid "Field Access"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:173
+#: src/INSTRUCTION_SET.md:177
 msgid "GetField"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:173
+#: src/INSTRUCTION_SET.md:177
 msgid "`StructField` (flat/nested/boxed)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:173
+#: src/INSTRUCTION_SET.md:177
 msgid ""
 "Pop struct, push field value. The baked `StructField` operand selects a flat "
 "read at a byte offset, a nested-composite extraction, or a boxed "
 "positional/named lookup."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:174
+#: src/INSTRUCTION_SET.md:178
 msgid "GetIndex"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:174
+#: src/INSTRUCTION_SET.md:178
 msgid "`ArrayElem` (flat/nested/boxed)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:174
-msgid ""
-"Pop index and array, push element. The baked `ArrayElem` operand selects a "
-"flat read at `index * element_size`, a nested-composite extraction, or a "
-"boxed index."
+#: src/INSTRUCTION_SET.md:178
+msgid "2 or 8"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:175
+#: src/INSTRUCTION_SET.md:178
+msgid ""
+"Flat Word and Byte forms pop array and index and push the value, index, four "
+"Word byte limbs of the bound, and an outcome flag. Invalid indices yield "
+"typed zero and flag one without reading an element. Valid indices yield the "
+"element and flag zero. These forms cost eight. Other forms retain a single "
+"result and cost two, and remain outside the first-pass trap-free proof."
+msgstr ""
+
+#: src/INSTRUCTION_SET.md:179
 msgid "GetTupleField"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:175
+#: src/INSTRUCTION_SET.md:179
 msgid "`TupleField` (flat/nested/boxed)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:175
+#: src/INSTRUCTION_SET.md:179
 msgid ""
 "Pop tuple, push element. The baked `TupleField` operand selects a flat read "
 "at a byte offset, a nested-composite extraction, or a boxed positional index."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:176
+#: src/INSTRUCTION_SET.md:180
 msgid "GetEnumField"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:176
+#: src/INSTRUCTION_SET.md:180
 msgid "`EnumField` (flat/nested/boxed)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:176
+#: src/INSTRUCTION_SET.md:180
 msgid ""
 "Pop enum variant, push payload field. The baked `EnumField` operand selects "
 "a flat read past the discriminant word, a nested-composite extraction, or a "
 "boxed positional index."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:177
+#: src/INSTRUCTION_SET.md:181
 msgid "Len"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:177
+#: src/INSTRUCTION_SET.md:181
 msgid "Pop composite value (Array, Text, Tuple), push length as Int."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:179
+#: src/INSTRUCTION_SET.md:183
 msgid "Type Testing"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:183
+#: src/INSTRUCTION_SET.md:187
 msgid "IsEnum"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:183
+#: src/INSTRUCTION_SET.md:187
 msgid ""
 "u16 enum-name, u16 variant-name, u16 discriminant-value (all constant "
 "indices)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:183
+#: src/INSTRUCTION_SET.md:187
 msgid ""
 "Peek the top of the stack; push true if it matches the enum type and variant."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:184
+#: src/INSTRUCTION_SET.md:188
 msgid "IsStruct"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:184
+#: src/INSTRUCTION_SET.md:188
 msgid "u16 name"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:184
+#: src/INSTRUCTION_SET.md:188
 msgid "Peek the top of the stack; push true if it matches the struct type."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:186
+#: src/INSTRUCTION_SET.md:190
 msgid "Casting and Fixed-Point Arithmetic"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:190
+#: src/INSTRUCTION_SET.md:194
 msgid "IntToFloat"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:190
+#: src/INSTRUCTION_SET.md:194
 msgid "Pop Word, push as Float. Gated on the `floats` feature."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:191
+#: src/INSTRUCTION_SET.md:195
 msgid "FloatToInt"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:191
+#: src/INSTRUCTION_SET.md:195
 msgid ""
 "Pop Float, push as Word (truncates toward zero). Gated on the `floats` "
 "feature."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:192
+#: src/INSTRUCTION_SET.md:196
 msgid "WordToByte"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:192
+#: src/INSTRUCTION_SET.md:196
 msgid "Pop Word, push the low 8 bits as a Byte."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:193
+#: src/INSTRUCTION_SET.md:197
 msgid "ByteToWord"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:193
+#: src/INSTRUCTION_SET.md:197
 msgid "Pop Byte, zero-extend to Word."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:194
+#: src/INSTRUCTION_SET.md:198
 msgid "WordToFixed"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:194
+#: src/INSTRUCTION_SET.md:198
 msgid ""
 "Pop Word, push the corresponding Q-format Fixed value with the given "
 "fraction-bit count."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:195
+#: src/INSTRUCTION_SET.md:199
 msgid "FixedToWord"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:195
+#: src/INSTRUCTION_SET.md:199
 msgid "Pop Fixed, push the integer portion as a Word; saturating."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:196
+#: src/INSTRUCTION_SET.md:200
 msgid "FixedMul"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:196
+#: src/INSTRUCTION_SET.md:200
 msgid ""
 "Pop two Q-format Fixed values, push their product. Shifts the `i128` product "
 "right by the fraction-bit count and saturates."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:197
+#: src/INSTRUCTION_SET.md:201
 msgid "FixedDiv"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:197
+#: src/INSTRUCTION_SET.md:201
 msgid ""
 "Pop two Q-format Fixed values, push their quotient. Left-shifts the dividend "
 "by the fraction-bit count before dividing and saturates."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:199
+#: src/INSTRUCTION_SET.md:203
 msgid "Faults"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:203
+#: src/INSTRUCTION_SET.md:207
 msgid "Trap"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:203
-msgid "u16 message index"
-msgstr ""
-
-#: src/INSTRUCTION_SET.md:203
-msgid "Halt execution with an error message from the constant pool."
-msgstr ""
-
-#: src/INSTRUCTION_SET.md:205
-msgid "Opcode count and operand-shape inventory"
+#: src/INSTRUCTION_SET.md:207
+msgid "u16 kind code"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:207
+msgid "1 or 6"
+msgstr ""
+
+#: src/INSTRUCTION_SET.md:207
+msgid ""
+"Halt with the error selected by TrapKind. Code `8` consumes five Words, the "
+"index followed by four little-endian byte limbs of an unsigned 32 bit bound, "
+"and returns IndexOutOfBounds. The runtime uses the low eight bits of each "
+"limb. Its nominal cost is `6`. Other trap kinds cost `1`. Unknown kind codes "
+"and malformed payloads are contract errors."
+msgstr ""
+
+#: src/INSTRUCTION_SET.md:209
+msgid "Opcode count and operand-shape inventory"
+msgstr ""
+
+#: src/INSTRUCTION_SET.md:211
 msgid ""
 "The instruction set contains 66 opcodes. The B28 consolidation retired the "
 "four V0.2.0 construct opcodes (`NewStruct`, `NewEnum`, `NewArray`, "
@@ -9362,7 +9404,7 @@ msgid ""
 "wire id is 69. Operand shapes:"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:209
+#: src/INSTRUCTION_SET.md:213
 msgid ""
 "The shapes below are the `Op`\\-variant operand types as defined in "
 "`src/bytecode.rs`, which differ from the flattened inline wire encodings "
@@ -9372,76 +9414,85 @@ msgid ""
 "operand structs rather than a plain integer."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:211
+#: src/INSTRUCTION_SET.md:215
 msgid "Shape"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:211
+#: src/INSTRUCTION_SET.md:215
 msgid "Used by"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:213
+#: src/INSTRUCTION_SET.md:217
 msgid "None (zero-operand)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:213
+#: src/INSTRUCTION_SET.md:217
 msgid ""
 "33 opcodes (arithmetic, comparison, bit ops, type coercions, stack "
 "manipulation, streaming, coroutine, etc.)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:214
+#: src/INSTRUCTION_SET.md:218
 msgid "`u8`"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:214
+#: src/INSTRUCTION_SET.md:218
 msgid ""
 "8 opcodes (`PushImmediate`, `PopN`, `WordToFixed`, `FixedToWord`, "
 "`FixedMul`, `FixedDiv`, `CheckedMul`, `CheckedDiv`)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:215
+#: src/INSTRUCTION_SET.md:219
 msgid "`u16`"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:215
+#: src/INSTRUCTION_SET.md:219
 msgid ""
-"14 opcodes (`Const`, `GetLocal`, `SetLocal`, `GetData`, `SetData`, "
-"`IsStruct`, `If`, `Else`, `Loop`, `EndLoop`, `Break`, `BreakIf`, "
-"`BoundsCheck`, `Trap`)"
+"12 opcodes (`Const`, `GetLocal`, `SetLocal`, `IsStruct`, `If`, `Else`, "
+"`Loop`, `EndLoop`, `Break`, `BreakIf`, `BoundsCheck`, `Trap`)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:216
+#: src/INSTRUCTION_SET.md:220
 msgid "`(u16, u8)`"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:216
+#: src/INSTRUCTION_SET.md:220
 msgid "3 opcodes (`Call`, `CallVerifiedNative`, `CallExternalNative`)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:217
-msgid "`(u16, u16)`"
+#: src/INSTRUCTION_SET.md:221
+msgid "`u32`"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:217
-msgid "2 opcodes (`GetDataIndexed`, `SetDataIndexed`)"
+#: src/INSTRUCTION_SET.md:221
+msgid "2 opcodes (`GetData`, `SetData`), encoded as u24 on the wire"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:218
+#: src/INSTRUCTION_SET.md:222
+msgid "`(u32, u32)`"
+msgstr ""
+
+#: src/INSTRUCTION_SET.md:222
+msgid ""
+"2 opcodes (`GetDataIndexed`, `SetDataIndexed`), encoded as two u24 values on "
+"the wire"
+msgstr ""
+
+#: src/INSTRUCTION_SET.md:223
 msgid "`(u16, u16, u16)`"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:218
+#: src/INSTRUCTION_SET.md:223
 msgid ""
 "1 opcode (`IsEnum`, carrying the enum-name, variant-name, and "
 "discriminant-value constant indices)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:219
+#: src/INSTRUCTION_SET.md:224
 msgid "Baked access operand (bespoke)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:219
+#: src/INSTRUCTION_SET.md:224
 msgid ""
 "4 opcodes (`GetField(StructField)`, `GetIndex(ArrayElem)`, "
 "`GetTupleField(TupleField)`, `GetEnumField(EnumField)`). Each carries a "
@@ -9453,11 +9504,11 @@ msgid ""
 "`src/bytecode.rs`."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:220
+#: src/INSTRUCTION_SET.md:225
 msgid "NewComposite (bespoke)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:220
+#: src/INSTRUCTION_SET.md:225
 msgid ""
 "1 opcode (`NewComposite`). The flat form packs the composite kind, the "
 "operand-stack pop count (0 through 62), and the exact flat byte size into "
@@ -9466,7 +9517,7 @@ msgid ""
 "carrying `(count, byte_size-or-meta, boxed_flag)`."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:222
+#: src/INSTRUCTION_SET.md:227
 msgid ""
 "The wire encoding flattens these `Op`\\-level shapes: 62 of the 66 opcodes "
 "always carry their operand inline in the 4-byte opcode record. Three opcodes "
@@ -9483,49 +9534,62 @@ msgid ""
 "for the wire format that encodes these shapes."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:224
+#: src/INSTRUCTION_SET.md:229
 msgid "Cost Summary"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:226
+#: src/INSTRUCTION_SET.md:231
 msgid ""
 "The cost groupings reproduce `bytecode::nominal_op_cycles`. Hosts that need "
 "wall-clock WCET supply a custom `CostModel` calibrated to the target."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:228 src/INSTRUCTION_SET.md:244
-#: src/INSTRUCTION_SET.md:254 src/INSTRUCTION_SET.md:263
+#: src/INSTRUCTION_SET.md:233 src/INSTRUCTION_SET.md:252
+#: src/INSTRUCTION_SET.md:264 src/INSTRUCTION_SET.md:273
 msgid "Instructions"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:230
+#: src/INSTRUCTION_SET.md:235
 msgid ""
 "Const, PushImmediate, GetLocal, SetLocal, GetData, SetData, Dup, Not, If, "
-"Else, EndIf, Loop, EndLoop, Break, BreakIf, Stream, Reset, Yield, Trap, PopN"
-msgstr ""
-
-#: src/INSTRUCTION_SET.md:231
-msgid ""
-"Add, Sub, Mul, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, "
-"CheckedDiv, CheckedMod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex, "
-"GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, "
-"ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Return, "
-"GetDataIndexed, SetDataIndexed, BoundsCheck, BitAnd, BitOr, BitXor, Shl, Shr"
-msgstr ""
-
-#: src/INSTRUCTION_SET.md:232
-msgid "Div, Mod, GetField, IsEnum, IsStruct"
-msgstr ""
-
-#: src/INSTRUCTION_SET.md:234
-msgid "Call, CallVerifiedNative, CallExternalNative"
+"Else, EndIf, Loop, EndLoop, Break, BreakIf, Stream, Reset, Yield, Trap "
+"except kind 8, PopN"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:236
-msgid "WCMU contributions"
+msgid ""
+"Add, Sub, Mul, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, "
+"CheckedDiv, CheckedMod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex "
+"other forms, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, "
+"WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, "
+"Return, BitAnd, BitOr, BitXor, Shl, Shr"
+msgstr ""
+
+#: src/INSTRUCTION_SET.md:237
+msgid "GetField, IsEnum, IsStruct"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:238
+msgid "Div, Mod, NewComposite"
+msgstr ""
+
+#: src/INSTRUCTION_SET.md:239 src/INSTRUCTION_SET.md:268
+msgid "Trap kind 8"
+msgstr ""
+
+#: src/INSTRUCTION_SET.md:241
+msgid "GetDataIndexed, SetDataIndexed, GetIndex flat Word or Byte"
+msgstr ""
+
+#: src/INSTRUCTION_SET.md:242
+msgid "Call, CallVerifiedNative, CallExternalNative"
+msgstr ""
+
+#: src/INSTRUCTION_SET.md:244
+msgid "WCMU contributions"
+msgstr ""
+
+#: src/INSTRUCTION_SET.md:246
 msgid ""
 "WCMU costs are reported separately as stack slot growth, stack slot shrink, "
 "and heap allocation in bytes. The constant `VALUE_SLOT_SIZE_BYTES` converts "
@@ -9534,11 +9598,11 @@ msgid ""
 "`wcmu_stream_iteration()` in `src/verify.rs`."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:240
+#: src/INSTRUCTION_SET.md:248
 msgid "Stack growth (peak net delta during execution)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:242
+#: src/INSTRUCTION_SET.md:250
 msgid ""
 "The values reproduce `Op::stack_growth` in `src/bytecode.rs`. For "
 "multi-output opcodes the value is the net peak delta against the starting "
@@ -9547,38 +9611,41 @@ msgid ""
 "peek the scrutinee (no pop) and push a Bool, so their net delta is `+1`."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:244
+#: src/INSTRUCTION_SET.md:252
 msgid "Growth"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:246 src/INSTRUCTION_SET.md:256
-#: src/INSTRUCTION_SET.md:265 src/ROGUE.md:239 src/ROGUE.md:345
+#: src/INSTRUCTION_SET.md:254 src/INSTRUCTION_SET.md:266
+#: src/INSTRUCTION_SET.md:275 src/ROGUE.md:239 src/ROGUE.md:345
 #: src/ROGUE.md:409 src/ROGUE.md:598 src/ROGUE.md:609 src/ROGUE.md:621
 msgid "0"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:246
+#: src/INSTRUCTION_SET.md:254
 msgid ""
-"Not, Neg, Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, "
-"SetLocal, SetData, SetDataIndexed, BoundsCheck, If, BreakIf, Else, EndIf, "
-"Loop, EndLoop, Break, Stream, Reset, Yield, Return, GetField, GetIndex, "
-"GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, "
-"ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Trap, PopN, "
-"BitAnd, BitOr, BitXor, Shl, Shr"
+"Not, Neg, Add, Sub, Mul, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, "
+"SetData, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, "
+"Yield, Return, GetField, GetIndex other forms, GetTupleField, GetEnumField, "
+"Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, "
+"FixedToWord, FixedMul, FixedDiv, Trap, PopN, BitAnd, BitOr, BitXor, Shl, Shr"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:247
+#: src/INSTRUCTION_SET.md:255
 msgid ""
-"Const, PushImmediate, GetLocal, GetData, Dup, GetDataIndexed, CheckedAdd, "
+"Const, PushImmediate, GetLocal, GetData, Dup, Div, Mod, CheckedAdd, "
 "CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, CallVerifiedNative, "
 "CallExternalNative, NewComposite, IsEnum, IsStruct"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:250
+#: src/INSTRUCTION_SET.md:258
+msgid "GetDataIndexed, BoundsCheck, GetIndex flat Word or Byte"
+msgstr ""
+
+#: src/INSTRUCTION_SET.md:260
 msgid "Stack shrink (slots popped during execution)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:252
+#: src/INSTRUCTION_SET.md:262
 msgid ""
 "The values reproduce `Op::stack_shrink`. For opcodes whose net delta is "
 "non-negative (e.g. `CheckedAdd`, `CheckedNeg`) the shrink reads zero because "
@@ -9586,53 +9653,54 @@ msgid ""
 "net pop."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:254
+#: src/INSTRUCTION_SET.md:264
 msgid "Shrink"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:256
+#: src/INSTRUCTION_SET.md:266
 msgid ""
-"Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, CheckedAdd, "
-"CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, BoundsCheck, "
+"Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, Div, Mod, "
+"CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, "
+"GetDataIndexed, SetDataIndexed, BoundsCheck, GetIndex flat Word or Byte, "
 "Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Len, IsEnum, "
 "IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, "
-"FixedToWord, FixedMul, FixedDiv, Trap"
+"FixedToWord, FixedMul, FixedDiv, Trap except kind 8"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:257
+#: src/INSTRUCTION_SET.md:267
 msgid ""
-"Add, Sub, Mul, Div, Mod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, "
-"SetData, GetDataIndexed, If, BreakIf, Yield, GetField, GetIndex, "
-"GetTupleField, GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr"
+"Add, Sub, Mul, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, "
+"If, BreakIf, Yield, GetField, GetIndex other forms, GetTupleField, "
+"GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:259
+#: src/INSTRUCTION_SET.md:269
 msgid "n"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:259
+#: src/INSTRUCTION_SET.md:269
 msgid ""
 "PopN(n), Call(_, n), CallVerifiedNative(_, n), CallExternalNative(\\_, n), "
 "NewComposite(count)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:261
+#: src/INSTRUCTION_SET.md:271
 msgid "Heap allocation (bytes)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:263
+#: src/INSTRUCTION_SET.md:273
 msgid "Heap"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:265
+#: src/INSTRUCTION_SET.md:275
 msgid "All instructions not listed below"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:266
+#: src/INSTRUCTION_SET.md:276
 msgid "`byte_size` from operand"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:266
+#: src/INSTRUCTION_SET.md:276
 msgid ""
 "NewComposite, flat form. The exact flat allocation size is baked into the "
 "operand at compile time, so the worst-case-memory-usage contribution is the "
@@ -9641,11 +9709,11 @@ msgid ""
 "accounted separately."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:267
+#: src/INSTRUCTION_SET.md:277
 msgid "host-attested"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:267
+#: src/INSTRUCTION_SET.md:277
 msgid ""
 "CallVerifiedNative through host registration; CallExternalNative through "
 "per-iteration invocation-count bound"

@@ -1012,7 +1012,8 @@ const STAGE_SUBJECTS: &[&str] = &[
 /// **CHOSEN BY STATED PROPERTY, NOT BY TRYING CANDIDATES UNTIL ONE PASSED**: each
 /// is a head that a survey across every head of every corpus file found
 /// `reconstruct.kel` accepts, and they are spread across arithmetic, enum match,
-/// pipeline and signed-integer sources rather than clustered.
+/// pipeline and fixed-point sources rather than clustered. The fixed-point head
+/// replaced a signed-integer one in absorption 82, when that file stopped parsing.
 ///
 /// **A REFUSAL IS A DECLINE, NOT A SUBJECT.** `seed_reconstruct_single` returns
 /// `Err` on a negative yield, so a refused subject appears in the gate's
@@ -1021,7 +1022,9 @@ const STAGE_SUBJECTS: &[&str] = &[
 /// a fact about single-head files, not a general acceptance rate, and it is why
 /// these are named by head index rather than by file alone.
 const RECONSTRUCT_SINGLE_HEADS: &[(&str, &str, usize)] = &[
-    ("signed", "11_signed.kel", 0),
+    // Replaced `("signed", "11_signed.kel", 0)` in absorption 82, when upstream's
+    // parser began refusing signed declarations by name. Same node count, 3.
+    ("fixed-helper", "fixed_arithmetic.kel", 0),
     ("enum-match", "03_enum_match.kel", 0),
     ("arithmetic-main", "01_arithmetic.kel", 1),
     ("pipeline-main", "05_pipeline.kel", 3),
@@ -1087,7 +1090,9 @@ fn seed_reconstruct_single(m: &Module, file: &str, head: usize) -> Result<Vec<u8
 /// it appears in `probe_stage_vacuity` and would be wrong if read as a general
 /// acceptance rate. The `rc_range_arity` refusals are per head.
 const CODEGEN_SUBJECTS: &[(&str, &str, usize)] = &[
-    ("11_signed", "11_signed.kel", 0),
+    // Replaced `("11_signed", "11_signed.kel", 0)` in absorption 82; see
+    // `RECONSTRUCT_SINGLE_HEADS`. Same node count, 3.
+    ("fixed-helper", "fixed_arithmetic.kel", 0),
     ("enum_match", "03_enum_match.kel", 0),
     ("arithmetic-main", "01_arithmetic.kel", 1),
     ("multiheaded-main", "06_multiheaded.kel", 3),
@@ -1117,7 +1122,11 @@ fn seed_codegen_subject(m: &Module, file: &str, head: usize) -> Result<Vec<u8>, 
         .find(|p| p.file_name().unwrap_or_default().to_string_lossy() == file)
         .ok_or(format!("{file} is not in the corpus"))?;
     let src = std::fs::read_to_string(&path).map_err(|e| format!("read subject: {e}"))?;
-    let (fns, _names, _, _) = keleusma::selfhost::parse_functions(&src);
+    // The fallible entry point, so a parser refusal is a reported decline rather
+    // than a panic that takes the whole gate down. Absorption 82 met that panic.
+    let fns = keleusma::selfhost::try_parse_functions(&src)
+        .map_err(|e| format!("{file} does not parse: {e:?}"))?
+        .functions;
     let h = fns.get(head).ok_or(format!(
         "{file} parses to {} heads; no head {head}",
         fns.len()
@@ -2399,7 +2408,12 @@ const KNOWN_VACUOUS: &[&str] = &[
     // the difference that matters: it writes the reconstructed forest back into the
     // segment, so its departure survived asking whether the run changed anything
     // without needing a defective subject at all.
-    "verify_datalayout.kel",
+    //
+    // **`verify_datalayout.kel` LEFT in absorption 82, and not by seeding**,
+    // which the note above correctly said could not move it. Upstream changed the
+    // stage, and its unseeded run now changes the segment. That agreement is
+    // still one sixty-tick run with no input, which the gate prints as its
+    // weakest residual; leaving this list does not make it strong evidence.
 ];
 
 /// Modules KNOWN to disagree, tracked rather than ignored.
@@ -2457,8 +2471,13 @@ const KNOWN_DISAGREEMENTS: &[&str] = &[];
 /// A synthetic subject remains the only way to reach the opcode ON PURPOSE.
 const TRAP_SUBJECTS: &[(&str, &str, TrapKind)] = &[
     ("synthetic:no_matching_head", "NoMatchingHead", TrapKind::Op),
-    ("faulty.kel", "DivisionByZero", TrapKind::Guard),
-    ("rogue_dungen.kel", "IndexOutOfBounds", TrapKind::Guard),
+    // **BOTH WERE `Guard` UNTIL ABSORPTION 82.** Upstream made division and
+    // indexing total, so the compiler now dispatches a zero divisor and an
+    // out-of-range index to `Trap(ZeroDivisor)` and `Trap(IndexOutOfBounds)`.
+    // The emitter's division guard and bounds trap no longer exist on these
+    // paths, and the fault each module reaches is the opcode.
+    ("faulty.kel", "DivisionByZero", TrapKind::Op),
+    ("rogue_dungen.kel", "IndexOutOfBounds", TrapKind::Op),
     // **A composite data slot read on a path that never wrote it.** Added
     // 2026-09-11, after measuring that this backend RETURNED 0 where the
     // reference faults. See `SYNTHETIC_UNINIT_COMPOSITE_SLOT`.
@@ -2757,6 +2776,19 @@ fn a_trapping_programs_native_side_dies_with_sigtrap() {
             .chunks
             .iter()
             .any(|c| c.ops.iter().any(|o| matches!(o, Op::Trap(_))));
+        // **A BOUNDS DISPATCH IS ADMITTED IN A GUARD SUBJECT, NARROWLY.** Since
+        // absorption 82 every indexed read carries the compiler's
+        // `Trap(IndexOutOfBounds)` on its out-of-range path, so a guard subject
+        // that indexes cannot avoid containing one. It is admitted only when
+        // the expected fault is not a bounds fault, which the reference run
+        // below confirms, so a SIGTRAP here is still the guard's and not the
+        // opcode's. Any other trap kind still disqualifies the label.
+        let bounds = keleusma::bytecode::TrapKind::IndexOutOfBounds.code();
+        let other_trap = m.chunks.iter().any(|c| {
+            c.ops
+                .iter()
+                .any(|o| matches!(o, Op::Trap(k) if *k != bounds))
+        });
         match kind {
             TrapKind::Op => assert!(
                 has_trap,
@@ -2764,9 +2796,10 @@ fn a_trapping_programs_native_side_dies_with_sigtrap() {
                  Mutating Op::Trap could not affect it, so it would prove nothing."
             ),
             TrapKind::Guard => assert!(
-                !has_trap,
-                "{name} is labelled a guard subject but DOES emit Op::Trap. Relabel it \
-                 -- the distinction is what stops guard coverage being read as opcode coverage."
+                !other_trap && (!has_trap || !want_fault.contains("IndexOutOfBounds")),
+                "{name} is labelled a guard subject but DOES emit an Op::Trap that \
+                 could be the fault it reports. Relabel it -- the distinction is what \
+                 stops guard coverage being read as opcode coverage."
             ),
         }
 

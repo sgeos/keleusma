@@ -719,7 +719,7 @@ fn extract_loop_iteration_bound(chunk: &Chunk, loop_ip: usize) -> Option<u32> {
     }
 
     if end_val >= start_val {
-        let count = (end_val - start_val) as u64;
+        let count = end_val.checked_sub(start_val)? as u64;
         if count > u32::MAX as u64 {
             None
         } else {
@@ -2161,7 +2161,7 @@ pub fn module_chunk_text_analyses(
 }
 
 /// Topological order of the call graph. Leaves come first, roots last.
-fn topological_call_order(module: &Module) -> Result<Vec<usize>, VerifyError> {
+pub(crate) fn topological_call_order(module: &Module) -> Result<Vec<usize>, VerifyError> {
     let n = module.chunks.len();
     let mut visited = alloc::vec![false; n];
     let mut on_stack = alloc::vec![false; n];
@@ -2570,14 +2570,13 @@ pub fn op_depth_effect(op: &Op, _chunk: &Chunk) -> (i32, i32) {
         Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::PushImmediate(_) => (0, 1),
         Op::Dup => (1, 1),
         Op::SetLocal(_) | Op::SetData(_) => (1, -1),
-        Op::GetDataIndexed(_, _) => (1, 0),
-        Op::SetDataIndexed(_, _) => (2, -2),
-        Op::BoundsCheck(_) => (1, 0),
+        Op::GetDataIndexed(_, _) => (2, 5),
+        Op::SetDataIndexed(_, _) => (2, 4),
+        Op::BoundsCheck(_) => (1, 5),
+        Op::GetIndex(elem) if elem.has_bounds_outcome() => (2, 5),
         Op::Add
         | Op::Sub
         | Op::Mul
-        | Op::Div
-        | Op::Mod
         | Op::CmpEq
         | Op::CmpNe
         | Op::CmpLt
@@ -2621,13 +2620,16 @@ pub fn op_depth_effect(op: &Op, _chunk: &Chunk) -> (i32, i32) {
             let c = op.count() as i32;
             (c, 1 - c)
         }
-        Op::CheckedAdd
+        Op::Div
+        | Op::Mod
+        | Op::CheckedAdd
         | Op::CheckedSub
         | Op::CheckedMod
         | Op::CheckedMul(_)
         | Op::CheckedDiv(_) => (2, 1),
         Op::CheckedNeg => (1, 2),
         Op::PopN(n) => (*n as i32, -(*n as i32)),
+        Op::Trap(kind) if *kind == crate::bytecode::TrapKind::IndexOutOfBounds.code() => (5, -5),
         Op::If(_) | Op::BreakIf(_) => (1, -1),
         Op::Else(_)
         | Op::EndIf
@@ -2781,7 +2783,13 @@ fn verify_depth_region_at(
             // to the following instruction. A `loop` chunk therefore ends in
             // `Reset` rather than `Return`, which is correct and is why "the
             // reference compiler always emits a trailing Return" is false.
-            Op::Trap(_) | Op::Return | Op::Reset => return Ok(None),
+            Op::Trap(_) | Op::Return | Op::Reset => {
+                let (req, _) = op_depth_effect(op, chunk);
+                if depth < req {
+                    return Err(depth_underflow(chunk, ip, op, req, depth));
+                }
+                return Ok(None);
+            }
             Op::Break(_) => {
                 // Unconditional exit to after the enclosing loop, carrying
                 // the current operand depth.
@@ -3286,16 +3294,7 @@ fn verify_chunk(
                     } else {
                         "SetDataIndexed"
                     };
-                    if data_len == 0 {
-                        return Err(VerifyError {
-                            chunk_name: name.clone(),
-                            message: alloc::format!(
-                                "{} at {} but module has no data layout declared",
-                                op_name,
-                                ip
-                            ),
-                        });
-                    }
+                    // Empty spans need no storage and still have total outcomes.
                     record(ip, P1, "data-range-layout-declared");
                     let base_usize = *base as usize;
                     let len_usize = *len as usize;
@@ -3649,7 +3648,7 @@ fn verify_chunk(
 }
 
 #[cfg(all(test, feature = "compile"))]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::bytecode::{BlockType, Chunk, ConstValue, Module, Op};
     use alloc::vec;
@@ -4931,8 +4930,8 @@ mod tests {
         assert_eq!(Op::CmpEq.cost(), 2);
         assert_eq!(Op::Return.cost(), 2);
 
-        assert_eq!(Op::Div.cost(), 3);
-        assert_eq!(Op::Mod.cost(), 3);
+        assert_eq!(Op::Div.cost(), 5);
+        assert_eq!(Op::Mod.cost(), 5);
         assert_eq!(
             Op::GetField(crate::bytecode::StructField::Boxed { name_const: 0 }).cost(),
             3
@@ -4975,12 +4974,12 @@ mod tests {
 
     #[test]
     fn wcet_branching_takes_max() {
-        // Stream -> PushTrue -> If { Add(2) } Else { Div(3) + Mul(2) } ->
+        // Stream -> PushTrue -> If { Add(2) } Else { Div(5) + Mul(2) } ->
         //   Yield -> Pop -> Reset.
-        // Then body [3,4): Add = 2. Else body [5,7): Div(3) + Mul(2) = 5.
-        // Max branch = 5.
-        // Body: PushTrue(1) + If(1) + 5 + Yield(1) + Pop(1) = 9.
-        // Overhead: Stream(1) + Reset(1) = 2. Total = 11.
+        // Then body [3,4): Add = 2. Else body [5,7): Div(5) + Mul(2) = 7.
+        // Max branch = 7.
+        // Body: PushTrue(1) + If(1) + 7 + Yield(1) + Pop(1) = 11.
+        // Overhead: Stream(1) + Reset(1) = 2. Total = 13.
         let chunk = make_chunk(
             "tick",
             vec![
@@ -4999,7 +4998,7 @@ mod tests {
             BlockType::Stream,
         );
         let cost = wcet_stream_iteration(&chunk).unwrap();
-        assert_eq!(cost, 11);
+        assert_eq!(cost, 13);
     }
 
     #[test]
@@ -5896,8 +5895,9 @@ mod tests {
     /// against `wire_format::opcode_table`, which is the wire format's
     /// application binary interface: a new opcode has to appear there to be
     /// encodable at all, so an opcode added without a representative here is
-    /// reported BY NAME rather than silently skipped.
-    fn representative_ops() -> Vec<Op> {
+    /// reported BY NAME rather than silently skipped. The self-hosted trap
+    /// classifier's per-tag test in `selfhost/traps.rs` reuses it.
+    pub(crate) fn representative_ops() -> Vec<Op> {
         use crate::bytecode::{ArrayElem, EnumField, NewCompositeOperand, StructField, TupleField};
         use crate::value_layout::{CompositeKind, ScalarKind};
         vec![

@@ -351,7 +351,7 @@ fn nothing_claims_the_gate_is_a_superset_or_that_ci_skips_the_subproject() {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let claims = stale_coverage_claims(&text, rel == "scripts/release-gate.sh");
+        let claims = stale_coverage_claims(&text);
         assert!(
             claims.is_empty(),
             "{rel} contains stale coverage claims at lines {claims:?}. The compiler/ package \
@@ -361,23 +361,22 @@ fn nothing_claims_the_gate_is_a_superset_or_that_ci_skips_the_subproject() {
 }
 
 /// The phrase check is deliberately narrow. It is not a natural-language coverage proof.
-fn stale_coverage_claims(text: &str, release_gate: bool) -> Vec<(usize, &'static str)> {
+///
+/// **No label is exempt.** Until 2026-10-22 the native step's label was, on the
+/// ground that the native package had no workflow. The native workflow began
+/// covering it on 2026-10-01, which made the exempted label false while the
+/// exemption kept this check from saying so. The label was corrected and the
+/// exemption removed rather than re-aimed.
+fn stale_coverage_claims(text: &str) -> Vec<(usize, &'static str)> {
     let mut claims = Vec::new();
     for (line, text) in text.lines().enumerate() {
         let lower = text.to_lowercase();
-        // The native package is a detached workspace with its own local gate. This
-        // exact step label makes no claim about compiler/. Exempt only this label,
-        // only in the gate script. Adjacent claims and prose remain checked.
-        // Deliberately do not infer package scope from a nearby mention or heading.
-        let native_step = release_gate
-            && lower.trim()
-                == r#"step "detached native_codegen/ subproject (fmt, clippy, tests — gated nowhere else)""#;
         for claim in [
             "gate a superset of ci",
             "gated nowhere else",
             "which never sees the subproject",
         ] {
-            if lower.contains(claim) && !(native_step && claim == "gated nowhere else") {
+            if lower.contains(claim) {
                 claims.push((line + 1, claim));
             }
         }
@@ -385,41 +384,26 @@ fn stale_coverage_claims(text: &str, release_gate: bool) -> Vec<(usize, &'static
     claims
 }
 
+/// The label that WAS exempt is now flagged like any other, for either package.
 #[test]
-fn native_gate_label_does_not_claim_compiler_coverage() {
+fn the_formerly_exempt_native_label_is_now_flagged() {
     let native =
         r#"step "Detached native_codegen/ subproject (fmt, clippy, tests — gated nowhere else)""#;
-    assert!(stale_coverage_claims(native, true).is_empty());
-    // An identically worded label for the compiler remains a regression.
+    assert_eq!(stale_coverage_claims(native), [(1, "gated nowhere else")]);
     let compiler = native.replace("native_codegen/", "compiler/");
     assert_eq!(
-        stale_coverage_claims(&compiler, true),
+        stale_coverage_claims(&compiler),
         [(1, "gated nowhere else")]
     );
-}
-
-#[test]
-fn native_label_does_not_exempt_other_lines_or_documents() {
-    let native =
-        r#"step "Detached native_codegen/ subproject (fmt, clippy, tests — gated nowhere else)""#;
-    let mixed = format!("{native}\n# The compiler is gated nowhere else\n");
-    assert_eq!(
-        stale_coverage_claims(&mixed, true),
-        [(2, "gated nowhere else")]
-    );
-    assert_eq!(
-        stale_coverage_claims(native, false),
-        [(1, "gated nowhere else")]
-    );
+    // MUST-NOT-FIRE: the corrected label states its other coverage and passes.
+    let corrected = r#"step "Detached native_codegen/ subproject (fmt, clippy, tests — also the native CI workflow)""#;
+    assert!(stale_coverage_claims(corrected).is_empty());
 }
 
 #[test]
 fn unsupported_global_coverage_claims_remain_detected() {
     assert_eq!(
-        stale_coverage_claims(
-            "# Gate a superset of CI\n# which never sees the subproject",
-            true
-        ),
+        stale_coverage_claims("# Gate a superset of CI\n# which never sees the subproject"),
         [
             (1, "gate a superset of ci"),
             (2, "which never sees the subproject")

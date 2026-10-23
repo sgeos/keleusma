@@ -751,11 +751,45 @@ fn the_single_head_reconstruct_seed_drives_the_stage() {
     if !panicked.is_empty() {
         println!("  parse_functions PANICKED on: {}", panicked.join(", "));
     }
-    let (subject_name, fns) = chosen.expect(
-        "no corpus example parses to exactly one unguarded head with a non-empty \
-         body, so the single-head path has no subject that avoids an ordering \
-         assumption. Report this rather than falling back to a positional pick.",
+    // **THE CORPUS STOPPED SUPPLYING A SUBJECT IN ABSORPTION 82, AND THAT IS
+    // REPORTED, NOT ROUTED AROUND.** Upstream's parser now refuses signed
+    // declarations, method calls and qualified names by name, which removed all
+    // three former qualifying files: `11_signed.kel`, `08_method_dispatch.kel`
+    // and `external_native_witness.kel`. Every file it still parses declares
+    // two or more heads. The zero is pinned so a returning corpus subject is
+    // noticed, and preferred over the stand-in below.
+    let corpus_qualifying = drove.len() + refused.len();
+    assert_eq!(
+        corpus_qualifying, 0,
+        "a corpus file qualifies as a single-head subject again ({drove:?}, \
+         {refused:?}). Prefer it, and retire the stand-in below."
     );
+    // **THE STAND-IN IS THE FORMER SUBJECT, NOT A NEW CHOICE.** It is
+    // `11_signed.kel`'s program without the `signed` modifier the parser now
+    // refuses, so its body records are the ones this probe always drove.
+    const STAND_IN: &str = "fn main() -> Word {\n    21 + 21\n}\n";
+    let stand_in = keleusma::selfhost::try_parse_functions(STAND_IN)
+        .expect("the stand-in is inside the parse.kel subset")
+        .functions;
+    assert_eq!(stand_in.len(), 1, "the stand-in must parse to one head");
+    {
+        let qh = &stand_in[0];
+        let qseed = keleusma::selfhost::seed_reconstruct_shared(
+            &Vm::new(survey_m.clone(), &survey_arena).expect("survey vm"),
+            qh.body_records(),
+            qh.reconstruct_category(),
+            qh.param_count(),
+        );
+        let qarena = arena_for(&survey_m);
+        let mut qvm = Vm::new(survey_m.clone(), &qarena).expect("survey vm");
+        let mut qshared = qseed.clone();
+        match qvm.call_with_shared(&mut qshared, &[Value::Int(0)]) {
+            Ok(VmState::Yielded(Value::Int(n))) if n > 0 => drove.push(("stand-in".into(), n)),
+            Ok(VmState::Yielded(Value::Int(n))) => refused.push(("stand-in".into(), n)),
+            other => panic!("stand-in: reconstruct.kel did not yield a node count: {other:?}"),
+        }
+    }
+    let (subject_name, fns) = chosen.unwrap_or_else(|| ("stand-in".to_string(), stand_in));
     println!("  SELECTED: {subject_name}");
     let h = &fns[0];
     let records = h.body_records();
@@ -836,23 +870,16 @@ fn the_single_head_reconstruct_seed_drives_the_stage() {
         refused.len()
     );
 
-    // **CROSS-TREE HAND-OFF TO THE `v0.2.3` LINE, AND IT IS DELIBERATELY
-    // FIREABLE.** Two of three qualifying subjects are refused with
-    // `rc_range_arity`; before #279 named that cause, `08_method_dispatch.kel`
-    // returned 4 -- a WRONG ANSWER, measured at `origin/v0.3.0`, not a rejection.
-    // So #279 did not break this; it revealed it.
-    //
-    // **WHEN THIS ASSERTION FIRES, THAT IS THE OTHER LINE HAVING FIXED THE
-    // STAGE.** Re-derive the survey, update the count, and delete this guard.
-    // It is pinned as `== 2` rather than `<= 2` on purpose: a guard that their
-    // repair silently satisfies teaches nothing, which this line got wrong once
-    // before and is not repeating.
-    assert_eq!(
-        refused.len(),
-        2,
-        "the single-head refusal set moved from the recorded 2 (`08_method_dispatch.kel` \
-         and `external_native_witness.kel`, both `rc_range_arity`). If it SHRANK, the \
-         `v0.2.3` line has repaired `reconstruct_range` and this guard has done its job."
+    // **THE CROSS-TREE HAND-OFF ON `rc_range_arity` LOST ITS SUBJECTS IN
+    // ABSORPTION 82, AND THAT IS NOT THE REPAIR IT WAITED FOR.** It pinned two
+    // refusals, `08_method_dispatch.kel` and `external_native_witness.kel`, so
+    // that a `reconstruct_range` repair upstream would fire it. Both files are
+    // now refused one stage earlier, at parse, so the reconstruct verdict on
+    // them is unobservable rather than repaired. What remains assertable is
+    // that the stand-in is not refused.
+    assert!(
+        refused.is_empty(),
+        "the single-head stand-in is refused by reconstruct.kel: {refused:?}"
     );
     assert!(
         seeded.len() > bare.len(),

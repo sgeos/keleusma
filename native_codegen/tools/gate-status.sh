@@ -80,6 +80,10 @@ record="GATE_RECORD.md"
 # Several of these belong to the `v0.2.3` line. That is a FEATURE: absorbing its
 # commits can change a stage source, a corpus script or a decision document, and the
 # record should then report itself unverified, because it is.
+#
+# `.github/workflows/native.yml` joined on 2026-10-22, when `tests/native_workflow.rs`
+# began reading it to check that its path filter covers this very set. Keep comments
+# out of the array: that test splits it on whitespace.
 REACH=(
     .
     ../docs/process/handoffs/v0.3.0.md
@@ -88,6 +92,7 @@ REACH=(
     ../src
     ../examples
     ../compiler/kel
+    ../.github/workflows/native.yml
 )
 # Exit 1 means no current verified PASS. Diagnostics distinguish recorded FAIL
 # from invalid, incomplete or stale evidence.

@@ -107,8 +107,16 @@ const WITNESSED: &[(&str, &str)] = &[
     ("CheckedNeg", "fn main(a: Word, b: Word) -> Word { -a }"),
     ("CheckedSub", "fn main(a: Word, b: Word) -> Word { a - b }"),
     ("CheckedMul", "fn main(a: Word, b: Word) -> Word { a * b }"),
-    ("Div", "fn main(a: Word, b: Word) -> Word { a / b }"),
-    ("Mod", "fn main(a: Word, b: Word) -> Word { a % b }"),
+    // Word `/` and `%` compile to `CheckedDiv(0)` and `CheckedMod` since
+    // absorption 82. Only a Float operation still emits the bare opcodes.
+    (
+        "Div",
+        "fn main(a: Word, b: Word) -> Word { ((a as Float) / (b as Float)) as Word }",
+    ),
+    (
+        "Mod",
+        "fn main(a: Word, b: Word) -> Word { ((a as Float) % (b as Float)) as Word }",
+    ),
     ("BitAnd", "fn main(a: Word, b: Word) -> Word { a band b }"),
     ("BitOr", "fn main(a: Word, b: Word) -> Word { a bor b }"),
     ("BitXor", "fn main(a: Word, b: Word) -> Word { a bxor b }"),

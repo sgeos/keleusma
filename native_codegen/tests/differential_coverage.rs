@@ -20,9 +20,13 @@
 //! opcode sets gives the opcodes for which the corpus supplies no executed
 //! witness.
 //!
-//! **Four do: `BitAnd`, `BitOr`, `BitXor`, `Shr`** — all only in `wire.kel`,
-//! which the virtual machine refuses to resume, so it is compared by the FAULT
-//! observable rather than by a result.
+//! **None do since absorption 82.** Four did — `BitAnd`, `BitOr`, `BitXor`,
+//! `Shr` — all only in `wire.kel`, which the virtual machine refuses to resume,
+//! so it is compared by the FAULT observable rather than by a result. Upstream
+//! then added the stages `wire_debug.kel` and `wire_schema.kel`, which emit all
+//! four and execute and agree, so the corpus now supplies an executed witness
+//! for each. The table of witnesses driven here was emptied, and its test
+//! deleted as that test instructed, rather than left passing vacuously.
 //!
 //! # ⚠ "COVERED ELSEWHERE" IS CHECKED HERE, NOT ASSERTED
 //!
@@ -84,41 +88,22 @@ const NOT_EXECUTED: &[(&str, &str)] = &[
         "rogue_dungen.kel",
         "faults; compared by the FAULT observable",
     ),
-    ("verify_datalayout.kel", "agreed but vacuous"),
     ("wire.kel", "faults; compared by the FAULT observable"),
 ];
 
 /// What the differential reports. A change here means the classification moved
 /// and this file's population is stale.
-const EXECUTED_MODULES: usize = 63;
-const NOT_EXECUTED_MODULES: usize = 11;
+// 63 -> 66 and 11 -> 10 in absorption 82, from the differential's own report:
+// upstream added the stage sources `wire_debug.kel` and `wire_schema.kel`, which
+// both execute, and `verify_datalayout.kel` left the vacuous set.
+const EXECUTED_MODULES: usize = 66;
+const NOT_EXECUTED_MODULES: usize = 10;
 
 /// `(opcode, witness source, file that drives it)` for every opcode the corpus
 /// gives no executed witness.
 ///
 /// Each row is verified three ways below. A row is not a claim; it is a chain.
-const WITNESSES_ELSEWHERE: &[(&str, &str, &str)] = &[
-    (
-        "BitAnd",
-        "fn main(a: Word, b: Word) -> Word { a band b }",
-        "scalar_operator_matrix.rs",
-    ),
-    (
-        "BitOr",
-        "fn main(a: Word, b: Word) -> Word { a bor b }",
-        "scalar_operator_matrix.rs",
-    ),
-    (
-        "BitXor",
-        "fn main(a: Word, b: Word) -> Word { a bxor b }",
-        "scalar_operator_matrix.rs",
-    ),
-    (
-        "Shr",
-        "fn main(a: Word, b: Word) -> Word { a asr b }",
-        "scalar_operator_matrix.rs",
-    ),
-];
+const WITNESSES_ELSEWHERE: &[(&str, &str, &str)] = &[];
 
 fn op_names(m: &keleusma::bytecode::Module) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
@@ -224,45 +209,4 @@ fn the_opcodes_without_a_corpus_witness_are_exactly_the_recorded_ones() {
          not keep pointing elsewhere for evidence the corpus now supplies.",
         vanished.len()
     );
-}
-
-/// **The chain, and the last link is EXECUTION rather than a citation.**
-#[test]
-fn every_external_witness_emits_its_opcode_and_agrees_with_the_reference() {
-    assert!(
-        !WITNESSES_ELSEWHERE.is_empty(),
-        "no external witnesses recorded; if every opcode gained a corpus witness \
-         this test should be deleted rather than left passing vacuously"
-    );
-    for (opcode, src, driver) in WITNESSES_ELSEWHERE {
-        // Link 1: it compiles.
-        let m = common::try_build(src)
-            .unwrap_or_else(|| panic!("the witness for `{opcode}` no longer compiles: {src}"));
-        // Link 2: it emits the opcode it is claimed to witness.
-        assert!(
-            op_names(&m).contains(*opcode),
-            "the witness for `{opcode}` compiles but no longer emits it: {src}. \
-             The claim that this opcode has evidence rests on this."
-        );
-        // Link 3: **the two implementations agree on it.** Driven here, so the
-        // evidence does not depend on another file's shape. The recorded driver
-        // covers the same ground across the whole type-by-operator space; this is
-        // the standing witness for an opcode the CORPUS cannot supply.
-        //
-        // ⚠ **THE DRIVER NAME IS REPORTED, NOT MERELY RECORDED.** It sat in a
-        // COMMENT as `{driver}`, which reads like an interpolation and is not
-        // one, leaving the binding unused — a `-D warnings` failure that stood in
-        // the tree across four commits while the state table called the backend
-        // green. A field carried in a table and never read is a claim nothing
-        // checks; naming it in the failure is what makes it load-bearing.
-        let (vm, native) =
-            common::vm_and_native_two_arg(src, 0x0F0F_0F0F_0F0F_0F0F, 0x00FF_00FF_00FF_00FF);
-        assert_eq!(
-            vm, native,
-            "`{opcode}` DIVERGES: the reference gives {vm}, native gives {native}. \
-             This opcode has no result-comparing witness in the corpus, so this \
-             test is the only thing that would have caught it. `{driver}` covers \
-             the same ground more broadly and is where to look next."
-        );
-    }
 }

@@ -186,11 +186,12 @@ fn run_lexer(path: &str) {
     let mut vm = Vm::new(module, &arena).expect("verify lexer.kel");
 
     let cap = vm.shared_data_bytes();
-    // The increment-1 lexer holds up to 65536 source bytes in its shared array.
-    if input.len() > 393216 {
+    // Use the same source bound as the shipping lexer driver.
+    if input.len() > keleusma::selfhost_host::LEX_SOURCE_CAP {
         eprintln!(
-            "input is {} bytes; the increment-1 lexer caps source at 65536",
-            input.len()
+            "input is {} bytes; the lexer source capacity is {}",
+            input.len(),
+            keleusma::selfhost_host::LEX_SOURCE_CAP
         );
         std::process::exit(1);
     }
@@ -219,8 +220,20 @@ fn run_lexer(path: &str) {
                     return;
                 } else {
                     let (tok, payload) = (t.rem_euclid(256), t.div_euclid(256));
+                    if tok == 66 {
+                        eprintln!("invalid integer literal near byte {payload}");
+                        std::process::exit(1);
+                    }
                     let name = tok_name(tok);
-                    if tok == 1 {
+                    if tok == 65 {
+                        let value = vm
+                            .get_shared(
+                                &shared,
+                                keleusma::selfhost_host::BR_LEX_VALUES + payload as usize,
+                            )
+                            .expect("literal value");
+                        println!("  IntLit    {value:?}");
+                    } else if tok == 1 {
                         println!("  {name:<9} id {payload}");
                     } else if tok == 12 {
                         println!("  {name:<9} {payload}");
@@ -358,10 +371,11 @@ fn run_parse_pipeline(path: &str) {
         eprintln!("cannot read {path}: {e}");
         std::process::exit(1);
     });
-    if input.len() > 393216 {
+    if input.len() > keleusma::selfhost_host::LEX_SOURCE_CAP {
         eprintln!(
-            "input is {} bytes; the increment-1 lexer caps source at 65536",
-            input.len()
+            "input is {} bytes; the lexer source capacity is {}",
+            input.len(),
+            keleusma::selfhost_host::LEX_SOURCE_CAP
         );
         std::process::exit(1);
     }
@@ -397,6 +411,10 @@ fn run_parse_pipeline(path: &str) {
             } else if t == 62 {
                 break; // EOF
             } else {
+                if t.rem_euclid(256) == 66 {
+                    eprintln!("invalid integer literal near byte {}", t.div_euclid(256));
+                    std::process::exit(1);
+                }
                 tokens.push((t.rem_euclid(256), t.div_euclid(256)));
             }
         }
@@ -437,6 +455,15 @@ fn run_parse_pipeline(path: &str) {
     parena.resize_persistent(need).expect("resize");
     let mut pvm = Vm::new(parser, &parena).expect("verify parse.kel");
     let mut pshared = vec![0u8; pvm.shared_data_bytes()];
+    for id in 0..icount {
+        let value = read_word(&lvm, &lshared, keleusma::selfhost_host::BR_LEX_VALUES + id);
+        pvm.set_shared(
+            &mut pshared,
+            keleusma::selfhost_host::BR_P_VALUES + id,
+            Value::Int(value),
+        )
+        .expect("literal value");
+    }
     pvm.set_shared(&mut pshared, P_LEN, Value::Int(tokens.len() as i64))
         .unwrap();
     pvm.set_shared(&mut pshared, P_LIMIT_ID, Value::Int(limit_id))

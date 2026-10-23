@@ -123,6 +123,12 @@ fn sites_stored_into_slots(m: &Module) -> (usize, usize) {
                     _ => shared += 1,
                 }
             }
+            // A `Trap` has no successor, so its pops reach no later instruction.
+            // Since absorption 82 `Trap(IndexOutOfBounds)` pops five. See
+            // `fallthrough_net` in `spike_bounds_transfer.rs`.
+            if matches!(op, Op::Trap(_)) {
+                continue;
+            }
             let (required, delta) = op_depth_effect(op, c);
             for _ in 0..required.max(0) {
                 stack.pop();
@@ -292,6 +298,12 @@ fn the_slot_reaching_site_is_still_placed_as_a_temporary() {
                      so its body does not live where `region.rs` assumes and that pass's \
                      premise needs revisiting"
                 );
+            }
+            // A `Trap` has no successor, so its pops reach no later instruction.
+            // Since absorption 82 `Trap(IndexOutOfBounds)` pops five. See
+            // `fallthrough_net` in `spike_bounds_transfer.rs`.
+            if matches!(op, Op::Trap(_)) {
+                continue;
             }
             let (required, delta) = op_depth_effect(op, c);
             for _ in 0..required.max(0) {

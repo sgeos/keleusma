@@ -163,41 +163,26 @@ fn report_three_still_reproduces_on_the_reference() {
     );
 }
 
-/// **REPORT 4 — the type checker admits `Fixed % Fixed`, which the virtual
-/// machine then refuses at run time.**
+/// **REPORT 4 — ANSWERED FROM THE RUNTIME SIDE IN ABSORPTION 82. Retained as
+/// a watch on the answer, not as an open report.**
 ///
-/// `fn main(a: Fixed, b: Fixed) -> Fixed { a % b }` compiles, verifies, loads,
-/// and **traps on execution** with `TypeError("cannot modulo Fixed by Fixed")`.
-/// The virtual machine's `Op::Mod` arm handles `Int`/`Int`, `Byte`/`Byte` and
-/// `Float`/`Float`; a `Fixed` operand falls to the catch-all. `Op::Div`'s arm is
-/// equally Fixed-less, though the surface reaches it only through `Op::FixedDiv`.
+/// The report was that the type checker admitted `Fixed % Fixed` and the
+/// virtual machine then trapped with `TypeError("cannot modulo Fixed by
+/// Fixed")`. Upstream made bare `Op::Mod` total, with a Fixed arm returning the
+/// raw remainder of the scaled bits, so the program now completes. No opcode was
+/// added. This backend lowers the matched Fixed pair to the same result, which
+/// `fixed_kind_reach.rs` and the scalar operator matrix compare.
 ///
-/// The operand types are statically known, so **a static type error is escaping
-/// to run time**. `*` and `/` on `Fixed` have `Op::FixedMul` and `Op::FixedDiv`;
-/// `%` has no Fixed-aware opcode and falls back to the plain one.
-///
-/// **This line does not assert which repair is right.** Rejecting `%` on `Fixed`
-/// in the type checker and adding a Fixed-aware modulo are both coherent, and the
-/// second would need an opcode, which the minimal-ISA constraint disfavours. What
-/// is reported is the observation.
-///
-/// **This backend is already fixed either way.** It refused nothing here and
-/// returned `4.0` for `200.0 % 7.0` — arithmetically right and not what the
-/// reference produces. It now refuses, which stays correct under either repair.
-///
-/// Guarded from both sides, because the two repairs are distinguishable: if the
-/// compiler starts rejecting the program, the first assertion fires; if the
-/// virtual machine starts running it, the second does.
+/// Guarded from both sides still: if the compiler starts rejecting the program,
+/// or the virtual machine stops completing it, the answer has moved again.
 #[test]
-fn report_four_still_reproduces_on_the_reference() {
+fn report_four_is_answered_and_the_answer_holds() {
     const SRC: &str = "fn main(a: Fixed, b: Fixed) -> Fixed { a % b }";
 
     let Some(m) = common::try_build(SRC) else {
         panic!(
-            "the reference compiler now REJECTS `Fixed % Fixed`, which ANSWERS report 4 \
-             from the type-checker side. Retract it. The emitter's refusal of `Op::Mod` \
-             on a Fixed operand becomes unreachable from the surface and should be \
-             re-read, though it stays correct for bytecode arriving by other routes."
+            "the reference compiler now REJECTS `Fixed % Fixed`. Report 4 was answered \
+             the other way in absorption 82; re-read the emitter's Fixed remainder arm."
         );
     };
 
@@ -208,12 +193,10 @@ fn report_four_still_reproduces_on_the_reference() {
     let mut vm = Vm::new(m, &arena).expect("the module still loads and verifies");
     let outcome = vm.call(&[Value::Fixed(200 << 16), Value::Fixed(7 << 16)]);
     assert!(
-        outcome.is_err(),
-        "the reference virtual machine now RUNS `Fixed % Fixed` and returned \
-         {outcome:?}, which ANSWERS report 4 from the runtime side. Retract it, and \
-         re-read the emitter's refusal of `Op::Mod` on a Fixed operand — it now \
-         refuses a program the reference completes, which is a coverage loss rather \
-         than a correctness one."
+        matches!(outcome, Ok(VmState::Finished(Value::Fixed(v))) if v == (200 << 16) % (7 << 16)),
+        "the reference no longer completes `Fixed % Fixed` with the raw remainder: \
+         {outcome:?}. Report 4's answer has moved; re-read the emitter's Fixed \
+         remainder arm before anything else."
     );
 }
 
@@ -224,19 +207,22 @@ fn report_four_still_reproduces_on_the_reference() {
 /// `Value` at run time. A native backend has only the module, so a `Fixed` read
 /// back from a private slot is indistinguishable from a `Word`.
 ///
-/// Watched by `fixed_kind_reach.rs`, which pins the consequence — a private-slot
-/// `Fixed % Fixed` that traps upstream and lowers here — and fails when it
-/// closes. Not duplicated: a second copy of one guard is the coupling this
-/// package has had to unpick three times. This test records WHERE it is watched.
+/// Watched by `fixed_kind_reach.rs`. Its one known consequence, a private-slot
+/// `Fixed % Fixed` that trapped upstream and lowered here, stopped diverging in
+/// absorption 82: the reference now completes it with the same low bits the
+/// integer remainder produces. **The kind is still absent from the module**,
+/// so the report stays open, and that file now asserts the route AGREES.
+/// Not duplicated: a second copy of one guard is the coupling this package has
+/// had to unpick three times. This test records WHERE it is watched.
 #[test]
 fn report_five_is_watched_by_the_reach_suite() {
     let src =
         std::fs::read_to_string("tests/fixed_kind_reach.rs").expect("the reach suite is readable");
     assert!(
-        src.contains("the_private_slot_route_is_still_open_and_that_is_recorded"),
-        "`fixed_kind_reach.rs` no longer pins the open private-slot route. If it \
-         closed, retract report 5; if the test was removed for another reason, \
-         report 5 is now unwatched."
+        src.contains("the_private_slot_route_agrees_without_the_kind"),
+        "`fixed_kind_reach.rs` no longer watches the private-slot route. If the \
+         module now carries a private slot's scalar kind, retract report 5; if the \
+         test was removed for another reason, report 5 is now unwatched."
     );
 }
 
@@ -263,8 +249,8 @@ fn report_six_still_reproduces_from_the_tree() {
     let composition = std::fs::read_to_string("tests/region_composition.rs")
         .expect("the static census is readable");
     for (quantity, needle) in [
-        ("the streaming population", "PINNED_STREAMING: usize = 28"),
-        ("the majority count", "PINNED_MAJORITY: usize = 25"),
+        ("the streaming population", "PINNED_STREAMING: usize = 30"),
+        ("the majority count", "PINNED_MAJORITY: usize = 27"),
         ("the minimum share", "PINNED_MIN_SHARE: u32 = 27"),
     ] {
         assert!(
@@ -282,7 +268,7 @@ fn report_six_still_reproduces_from_the_tree() {
     let touch = std::fs::read_to_string("tests/streaming_arena_touch.rs")
         .expect("the streaming arena census is readable");
     for (quantity, needle) in [
-        ("the driven count", "const DRIVEN: usize = 13;"),
+        ("the driven count", "const DRIVEN: usize = 15;"),
         (
             "the measured extent",
             "const FRAME_LOG_TOUCHED: usize = 48;",

@@ -523,7 +523,10 @@ const RECORDED: &[(&str, Cell)] = &[
     ("fixed !=", Cell::Agree),
     ("fixed *", Cell::Agree),
     ("fixed /", Cell::Agree),
-    ("fixed %", Cell::VmTrapsNativeRefuses),
+    // Was `VmTrapsNativeRefuses` until absorption 82, which gave the reference's
+    // bare `Op::Mod` a Fixed arm (report 4, answered). The emitter now lowers a
+    // matched Fixed pair to the same raw remainder, high slot zero.
+    ("fixed %", Cell::Agree),
     ("fixed +", Cell::Agree),
     ("fixed <", Cell::Agree),
     ("fixed <=", Cell::Agree),
@@ -680,24 +683,25 @@ fn no_cell_answers_where_the_reference_errors() {
     );
 }
 
-/// The `Fixed` refusal, asserted on its own rather than only through the matrix.
-///
-/// The matrix records a CLASS; this records the CAUSE, so a refusal arriving for
-/// an unrelated reason is a failure rather than a pass.
+/// The `Fixed` remainder, asserted on its own rather than only through the
+/// matrix, so a refusal arriving for any reason is named here.
 #[test]
-fn fixed_modulo_is_refused_with_a_reason_naming_the_operand() {
+fn fixed_modulo_lowers_since_the_reference_completes_it() {
+    // Refused until absorption 82, when the reference trapped on it. A refusal
+    // returning here would be a coverage loss the matrix row above also sees.
     let m = common::build("fn main(a: Fixed, b: Fixed) -> Fixed { a % b }");
-    let text = format!("{:?}", module_refusals(&m, LowerOptions::default()));
+    let refusals = module_refusals(&m, LowerOptions::default());
     assert!(
-        text.contains("Fixed operand"),
-        "`Fixed % Fixed` is no longer refused for having a Fixed operand: {text}"
+        refusals.is_empty(),
+        "`Fixed % Fixed` is refused again: {refusals:?}"
     );
 }
 
 /// **The `Fixed` scalar tag is a number agreed with a file this line does not
 /// own.** A silent renumbering upstream would make every `Fixed` parameter read
-/// as some other kind, the refusal above would stop firing, and the divergence
-/// would reopen — failing OPEN, which is the direction that matters.
+/// as some other kind. The Fixed remainder would then take the integer arm,
+/// whose low slot agrees but whose high slot is a sign extension where the
+/// reference keeps zero, and every Fixed-specific refusal would stop firing.
 #[test]
 fn the_fixed_scalar_tag_still_matches_upstream() {
     assert_eq!(
@@ -705,7 +709,7 @@ fn the_fixed_scalar_tag_still_matches_upstream() {
         4,
         "`ScalarKind::Fixed` no longer encodes as 4. `SCALAR_FIXED_TAG` in the \
          emitter must follow, or every Fixed operand reads as an unrecognised \
-         kind and `Fixed % Fixed` is lowered again."
+         kind and the Fixed remainder takes the integer arm."
     );
 }
 

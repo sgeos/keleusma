@@ -10,6 +10,23 @@ use keleusma::selfhost::{SelfHostError, self_hosted_compile};
 use keleusma::target::Target;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, required_persistent_capacity_for};
 
+/// Shipping type rejection must occur before the reference can mask a missing stage verdict.
+#[test]
+fn production_type_rejection_precedes_the_reference() {
+    for source in [
+        "fn main() -> Word { 1 + true }",
+        "fn take(n: Word) -> Word { n } fn main() -> Word { take(true) }",
+        "fn main(n: Word) -> Word { match n { _ when true => 1 } }",
+    ] {
+        let error = self_hosted_compile(source, &Target::host()).expect_err(source);
+        assert!(
+            matches!(error, SelfHostError::PipelineRejected { .. }),
+            "{error}"
+        );
+        assert!(!error.rust_backend_would_help());
+    }
+}
+
 /// For an in-subset program at the host target, the self-hosted pipeline's compiled code
 /// (each chunk's ops, constant pool, and local count) is byte-identical to the reference
 /// compiler — the differential-oracle guarantee the backend relies on. (The from-scratch
@@ -36,6 +53,11 @@ fn self_hosted_matches_reference_for_in_subset_program() {
         assert_eq!(m.constants, r.constants, "constant pool for `{}`", r.name);
         assert_eq!(m.local_count, r.local_count, "local_count for `{}`", r.name);
     }
+    assert_eq!(
+        sh.to_bytes().expect("pipeline serialization"),
+        reference.to_bytes().expect("reference serialization"),
+        "complete artifact"
+    );
     // The from-scratch module must be valid: it loads and verifies in the VM.
     let need = required_persistent_capacity_for(&sh);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -89,21 +111,15 @@ fn divergence_detail_names_the_diverging_chunk() {
     }
 }
 
-/// A program the *reference* compiler also rejects (an undefined identifier) is classified
-/// as `ReferenceRejected`, NOT as a self-hosted-subset limitation. Retrying with the Rust
-/// backend would report the identical error, so `rust_backend_would_help` is false and the
-/// CLI reports it plainly without the misleading retry hint.
+/// An undefined identifier is rejected independently without suggesting a backend retry.
 #[test]
-fn genuine_source_error_is_reference_rejected_not_unsupported() {
+fn genuine_source_error_is_pipeline_rejected() {
     let src = "fn main() -> Word { undefined_symbol }";
     match self_hosted_compile(src, &Target::host()) {
-        Err(e @ SelfHostError::ReferenceRejected { .. }) => {
-            assert!(
-                !e.rust_backend_would_help(),
-                "a genuine source error must not advise the Rust backend"
-            );
+        Err(e @ SelfHostError::PipelineRejected { .. }) => {
+            assert!(!e.rust_backend_would_help());
         }
-        other => panic!("expected ReferenceRejected for a genuine source error, got {other:?}"),
+        other => panic!("expected PipelineRejected for an undefined name, got {other:?}"),
     }
 }
 
@@ -127,7 +143,7 @@ fn genuine_source_error_is_reference_rejected_not_unsupported() {
 ///    compares two callers of ONE encoding, so a defect in that encoding is
 ///    invisible here by construction; the byte-identity differential covers that.
 /// 2. That the `verify_depth` verdict slot index below is right. It is written
-///    as `1 + 1536 * 5`, duplicating a constant private to `selfhost`, and every
+///    as `1 + keleusma::selfhost_host::VERIFY_OP_CAP * 5`, duplicating a constant private to `selfhost`, and every
 ///    chunk in this source is ACCEPTED — so a wrong index reading zero would
 ///    agree with the driver vacuously. The non-zero-buffer assertion guards the
 ///    seeding, not the read.
@@ -171,7 +187,10 @@ fn the_seed_accessors_reach_the_same_verdict_as_the_driver() {
             VmState::Yielded(_) => {}
             other => panic!("unexpected state {other:?}"),
         }
-        let via_accessor = match vm.get_shared(&shared, 1 + 1536 * 5).unwrap() {
+        let via_accessor = match vm
+            .get_shared(&shared, 1 + keleusma::selfhost_host::VERIFY_OP_CAP * 5)
+            .unwrap()
+        {
             keleusma::bytecode::Value::Int(n) => n != 0,
             o => panic!("expected Int, got {o:?}"),
         };

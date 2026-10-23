@@ -243,6 +243,12 @@ const PINNED: &[(&str, u64)] = &[
     // the absorbed tree and **held**: the corpus still builds 74 modules with 1
     // refused, and the backend still lowers 63 of 66. The pin follows the
     // re-derivation rather than standing in for it.
+    // **Re-pinned at absorption 82.** Upstream added `wire_debug.kel` and
+    // `wire_schema.kel` and modified twelve stage sources. Every census this
+    // instrument names was re-derived on the absorbed tree: the corpus builds 76
+    // modules with 1 refused, and the denominator records 61 of 66 lowered with
+    // corpus evidence. `Div` and `Mod` still lower but lost their corpus feeder,
+    // because Word and Byte division now compile to the checked forms.
     ("compiler/kel/prelude.kel", 0x07c8e691e07a309e),
     (
         "examples/rtos/scripts/event_listener.kel",
@@ -274,10 +280,6 @@ const PINNED: &[(&str, u64)] = &[
     ),
     ("examples/scripts/14_frame_log.kel", 0x295b974b908054b5),
     ("examples/scripts/15_pixel_blend.kel", 0xdc03ec3362c45a3f),
-    // Re-pinned 2026-09-16: a COMMENT-ONLY change recording that the opcode now
-    // has a driven witness. No construct moved, so no corpus-derived figure
-    // does either -- which the run that follows this re-pin confirms rather
-    // than assumes.
     (
         "examples/scripts/external_native_witness.kel",
         0x082cb18d1090211b,
@@ -417,18 +419,20 @@ const PINNED: &[(&str, u64)] = &[
         "examples/scripts/rogue/rogue_scroll_apply.kel",
         0xf93a5bd822bfe99c,
     ),
-    ("src/selfhost/kel/analyze.kel", 0xca66a2229816243c),
-    ("src/selfhost/kel/codegen.kel", 0x696808a6593fe4f9),
-    ("src/selfhost/kel/lexer.kel", 0xec5f9dd44b6ba8f8),
-    ("src/selfhost/kel/parse.kel", 0xb3d01d2b28a521d9),
-    ("src/selfhost/kel/reconstruct.kel", 0x137bbac9b6ad2ede),
-    ("src/selfhost/kel/verify_datalayout.kel", 0xf30296eb4c09fc1a),
-    ("src/selfhost/kel/verify_depth.kel", 0x6a264c7734ccfc1a),
-    ("src/selfhost/kel/verify_structural.kel", 0x9dd4124de42674e9),
-    ("src/selfhost/kel/verify_typed.kel", 0x63c5af32b11a4d85),
-    ("src/selfhost/kel/verify_types.kel", 0x3e54070c761f2d3d),
-    ("src/selfhost/kel/verify_yield.kel", 0x1c55b51d5809ae0f),
-    ("src/selfhost/kel/wire.kel", 0x6460f721f0c6da04),
+    ("src/selfhost/kel/analyze.kel", 0xc1231a7580421473),
+    ("src/selfhost/kel/codegen.kel", 0x14ea8473be6290f2),
+    ("src/selfhost/kel/lexer.kel", 0x2b631ed8f8770698),
+    ("src/selfhost/kel/parse.kel", 0x6aee78c8b887e296),
+    ("src/selfhost/kel/reconstruct.kel", 0x9d64215418877ab7),
+    ("src/selfhost/kel/verify_datalayout.kel", 0xe625b5656d576b86),
+    ("src/selfhost/kel/verify_depth.kel", 0x0e54e2467d0b499f),
+    ("src/selfhost/kel/verify_structural.kel", 0x9208fa0b1c43ae09),
+    ("src/selfhost/kel/verify_typed.kel", 0x4af6eab55f770e7d),
+    ("src/selfhost/kel/verify_types.kel", 0xf1a3565245726860),
+    ("src/selfhost/kel/verify_yield.kel", 0x0372c27e883c97dd),
+    ("src/selfhost/kel/wire.kel", 0x77db15f253c63e7b),
+    ("src/selfhost/kel/wire_debug.kel", 0xa98ddf75d7e9f7e8),
+    ("src/selfhost/kel/wire_schema.kel", 0x6f32806acb4b4763),
 ];
 
 /// **WHY TWO CENSUSES OVER DIFFERENT POPULATIONS REPORT THE SAME TOTAL.**

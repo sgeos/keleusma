@@ -75,14 +75,16 @@ shared data sv {
     word_bits: Word,
     block_type: Word,
     calls_ay: Word,
-    class: [Word; 1536],
-    arg: [Word; 1536],
-    opb: [Word; 1536],
-    o1: [Word; 1536],
-    o2: [Word; 1536],
-    o3: [Word; 1536],
-    mark: [Word; 1536],
+    class: [Word; 2048],
+    arg: [Word; 2048],
+    opb: [Word; 2048],
+    o1: [Word; 2048],
+    o2: [Word; 2048],
+    o3: [Word; 2048],
+    mark: [Word; 2048],
     out_reject: Word,
+    // Mode 1 checks structure before delegated-yield facts are available.
+    mode: Word,
 }
 
 // The block-nesting scratch. The open blocks form a stack of frames in nesting order: `kind`
@@ -91,10 +93,10 @@ shared data sv {
 // the stack height, `loop_depth` counts the open Loop frames (break containment), `le` is the
 // enclosing-loop-exit scratch, `bad` latches the first proven malformation.
 private data sd {
-    kind: [Word; 1536],
-    b_ip: [Word; 1536],
-    b_tgt: [Word; 1536],
-    b_else: [Word; 1536],
+    kind: [Word; 2048],
+    b_ip: [Word; 2048],
+    b_tgt: [Word; 2048],
+    b_else: [Word; 2048],
     depth: Word,
     loop_depth: Word,
     le: Word,
@@ -115,7 +117,7 @@ fn ne_bad(x: Word, y: Word) -> Word {
 }
 
 // Open an If frame for the `If` at `ip` with branch target `tgt`. A push past the static stack
-// capacity (unreachable while `op_count <= 1536`, since each op opens at most one block)
+// capacity (unreachable while `op_count <= 2048`, since each op opens at most one block)
 // latches `bad` rather than faulting.
 fn push_if(ip: Word, tgt: Word) -> Word {
     if sd.depth > 1023 {
@@ -148,7 +150,7 @@ fn push_loop(ip: Word, tgt: Word) -> Word {
 // on the stack. Only meaningful with `loop_depth > 0`, which every caller guarantees.
 fn innermost_loop_exit() -> Word {
     sd.le = 0;
-    for j in 0..1536 limit 1536 {
+    for j in 0..2048 limit 2048 {
         if sd.depth > j andalso sd.kind[j] == 2 {
             sd.le = sd.b_tgt[j];
         }
@@ -241,13 +243,7 @@ fn check_opbounds(ip: Word) -> Word {
     } else {
     if k == 2 {
         // GetDataIndexed/SetDataIndexed(base = a, len = b): range within the data slots.
-        if sv.data_len == 0 {
-            sd.bad = 1;
-        } else {
-            if a + b > sv.data_len {
-                sd.bad = 1;
-            }
-        }
+        if a + b > sv.data_len { sd.bad = 1; }
         0
     } else {
     if k == 3 {
@@ -341,7 +337,7 @@ fn count_markers() -> Word {
     sd.yc = 0;
     sd.sc = 0;
     sd.rc = 0;
-    for ip in 0..1536 limit 1536 {
+    for ip in 0..2048 limit 2048 {
         if sv.op_count > ip {
             if sv.mark[ip] == 1 {
                 sd.yc = sd.yc + 1;
@@ -405,8 +401,12 @@ fn run() -> Word {
     sd.depth = 0;
     sd.loop_depth = 0;
     sd.bad = 0;
-    for ip in 0..1536 limit 1536 {
+    for ip in 0..2048 limit 2048 {
         if sv.op_count > ip {
+            let c = sv.class[ip];
+            if c == 1 orelse c == 2 orelse c == 4 {
+                if sv.arg[ip] <= ip orelse sv.arg[ip] > sv.op_count { sd.bad = 1; }
+            }
             step(ip);
             check_opbounds(ip);
         }
@@ -414,7 +414,7 @@ fn run() -> Word {
     if sd.depth > 0 {
         sd.bad = 1;
     }
-    check_block_type();
+    if sv.mode == 0 { check_block_type(); }
     if sd.bad == 1 {
         sv.out_reject = 1;
     } else {
@@ -423,7 +423,52 @@ fn run() -> Word {
     sv.out_reject
 }
 
-// Check the chunk's structure in one call and yield the verdict (1 reject, 0 well-formed).
+// Mode 2 scans raw wire opcode identifiers, not host-computed safety classes.
+// Inputs are class=wire tag, arg=access form or immediate, opb=scalar kind.
+// Access forms are 1 flat scalar, 2 flat nested, 3 boxed. Other opcodes use zero.
+// Outputs are out_reject=0 free, 1 explicit trap, 2 unsupported, 3 invalid subject, 4 invalid protocol;
+// o1[0]=first trap, o2[0]=first unsupported/invalid, o3[0]=unsupported reason.
+fn trap_contract(tag: Word, form: Word, scalar: Word) -> Word {
+    if tag < 0 orelse tag > 69 orelse (tag >= 34 andalso tag <= 37) { 5 } else {
+    if tag == 38 orelse tag == 39 orelse tag == 40 orelse tag == 41 {
+        if form < 1 orelse form > 3 orelse scalar < 0 orelse scalar > 7
+            orelse (form != 1 andalso scalar != 0) { 5 } else {
+            if tag == 39 {
+                if form == 1 andalso (scalar == 2 orelse scalar == 3) { 0 } else { 2 }
+            } else { if form == 3 { 3 } else { 0 } }
+        }
+    } else {
+        if scalar != 0 { 5 } else {
+        if tag == 53 { if form < 0 orelse form > 8 { 6 } else { 0 } } else {
+        if tag == 60 { if form < 0 orelse form > 19 { 6 } else { 0 } } else {
+        if form != 0 { 5 } else {
+        if tag == 52 { 1 } else { if tag == 67 orelse tag == 68 { 4 } else { 0 } }
+        } } } }
+    } }
+}
+fn scan_traps() -> Word {
+    sv.out_reject = 0; sv.o1[0] = 0 - 1; sv.o2[0] = 0 - 1; sv.o3[0] = 0;
+    if sv.op_count < 0 orelse sv.op_count > 2048 { sv.out_reject = 4; } else {
+        for ip in 0..sv.op_count limit 2048 {
+            let reason = trap_contract(sv.class[ip], sv.arg[ip], sv.opb[ip]);
+            if reason >= 5 {
+                if sv.out_reject < 3 { sv.o2[0] = ip; }
+                sv.out_reject = if reason == 5 { 4 } else { 3 };
+            } else {
+                if reason > 0 andalso sv.out_reject < 2 {
+                    sv.out_reject = 2; sv.o2[0] = ip; sv.o3[0] = reason;
+                }
+                if sv.class[ip] == 53 andalso sv.o1[0] < 0 {
+                    sv.o1[0] = ip;
+                    if sv.out_reject == 0 { sv.out_reject = 1; }
+                }
+            }
+        }
+    }
+    sv.out_reject
+}
+
+// Check one chunk and yield its structural or trap-profile verdict.
 loop main(resume: Word) -> Word {
-    yield run()
+    yield if sv.mode == 2 { scan_traps() } else { run() }
 }

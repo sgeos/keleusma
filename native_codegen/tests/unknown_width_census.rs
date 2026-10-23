@@ -44,7 +44,6 @@ use std::collections::BTreeSet;
 /// - `sound` — the pushed value genuinely has no statically known packed width.
 /// - `unmeasured` — nobody has checked whether a width is determinable here.
 const DISPOSITIONS: &[(&str, &str)] = &[
-    ("Op::Div | Op::Mod => {", "fallback"),
     ("Op::BitAnd | Op::BitOr | Op::BitXor => {", "fallback"),
     ("Op::Shl | Op::Shr => {", "fallback"),
     ("Op::FixedMul(frac_bits) => {", "fallback"),

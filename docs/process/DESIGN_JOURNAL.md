@@ -5071,6 +5071,1572 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-20 A repair that passed its targeted runs and left the corpus
+
+53b88f52 was confirmed only by targeted runs, and its wire.kel change cost
+two rows of the type stage's name-occurrence channel. The channel counts
+distinct (name, local, call) facts, so every newly called function name costs
+one row regardless of how often it is called. The corpus measurement that
+catches this lives in tests/selfhost_typecheck.rs, which the targeted runs did
+not include.
+
+The repair removes names rather than raising the cap, because capacity raises
+in this line have lacked recorded sign-off and the operator has not asked for
+one. Inlining mi_scan_max_nodes was tried first and abandoned, because
+tests/selfhost_wire.rs reads that constant from the source by name. The three
+helpers removed instead had no reader outside the stage. The stage is inferred
+to sit exactly at 640, so the next new called name in wire.kel would fail the
+same test. That is the intended signal, not a margin.
+
+## 2026-10-20 Opus 5.5 audit, retained checks and an executed effect table
+
+The audit's central finding about proven execution was not a defect but a
+dependency. The unchecked pop was sound exactly when every entry of
+verify::op_depth_effect matched its opcode's runtime effect, and the only check on
+that table compared it with a second static table. Two tables can agree with each
+other and both be wrong about the machine. The operator ruled that the project
+rejects undefined behaviour while admitting platform-specific behaviour, so the
+checks were restored rather than the proof strengthened. The proof keeps its
+value for timing analysis, since it establishes that the checks cannot fail.
+
+The new test measures the machine rather than a model. A breakpoint on every
+instruction position lets the test read the operand depth before and after each
+executed instruction. Two instrument errors were paid for on the way. Flat
+composite values do not compare equal to themselves under PartialEq, which
+first read as two operands being changed below the consumed window. Comparing
+debug renderings, which include the arena handle, is representation identity
+and resolved it. The second was the reach of the corpus. Eleven opcodes have no
+compiler emission site for source programs, including plain Add, Sub, Div, Mod
+and BoundsCheck, because the compiler now lowers through the checked forms. A
+corpus-only test would have passed while never measuring them, so hand-built
+subjects cover them and an exact coverage assertion keeps that visible.
+
+The method cannot see an understated requirement on an opcode that only peeks,
+because nothing below the declared window changes. With the checks retained,
+such an error now produces StackUnderflow instead of undefined behaviour.
+
+## 2026-10-20 Audit-oriented handoff
+
+The receiving Opus 5.5 session may primarily audit existing work. The handoff
+therefore identifies the implementation anchor, separates baseline failures from
+post-repair receipts, and gives reproducible commands without claiming new runs.
+The unresolved source-write-handler scope remains explicit. The old startup block
+was seventy-three commits behind the current implementation, so a new leading
+block supplies current validity checks while preserving historical material.
+No completion, merge or publication claim is made.
+
+## 2026-10-15 Audit repairs preserved before continuation
+
+The broader audit exposed metadata-only wire operations consuming an unnecessary
+constant forest. A names-only preparation path preserves interning while using
+the existing input-window bound. Raw-node and forest capacities remain distinct
+and retain refusal controls. The first repair omitted interning and failed its
+identity controls. Restoring interning produced the passing repair receipts.
+
+The same audit found stale benchmark stack effects, parser refusal expectations
+and source census counts. Their repairs and checked/proven indexed-access controls
+are preserved in this work-in-progress snapshot. Full-matrix success is not yet
+established for the repaired tree. The operator requested the snapshot and
+reaffirmed the ring buffer requirement already tracked by B42. Order 3 remains
+paused and incomplete, including its unresolved source-write-handler scope.
+
+## 2026-10-15 Operand certificates and execution state
+
+The ordinary depth model is insufficient for unsafe pop access. Return has a
+terminal requirement of zero there, while execution consumes a value. Upper-bound
+joins also cannot establish availability. A separate bounded control-flow worklist
+now propagates minimum operand depths and includes reset reentry. This catches
+programs that seed operands before Stream only on their initial iteration.
+
+The physical invariant relates the current frame base, local prefix and proved
+operand lower bound. Typed pointer reads and proved count subtraction remove the
+corresponding runtime underflow checks. Instrumentation proves that the unchecked
+pop path executes, and comparison controls preserve results. The certificate is
+computed from the installed image and checked against its instruction cache.
+
+Valid suspension kinds require different entry protocols. Yield and reset resumes
+supply an operand, while breakpoint resume does not. A state machine distinguishes
+them and poisons state before argument preparation and execution. It restores a
+valid suspension only after success. Errors and caught panics cannot reuse partial
+frames. Mode changes cannot silently weaken the strict trap premise.
+
+Unwind review also found recovery hazards outside ordinary dispatch. Manually
+managed private slots must remain initialized before host destructors run during
+replacement. Borrowed shared-buffer bindings must be cleared before direct entry,
+configuration and replacement can follow a panic. Both repairs have Tree Borrows
+controls, including opt-out after replacement. The final audit remains open.
+
+## 2026-10-15 Persistent host trap policy
+
+Policy belongs to the host instance rather than the artifact. Constructors with
+options establish it before execution, and a common setter proves the current
+image before assigning a stricter policy. Failed policy changes preserve suspended
+state. The replacement gate is in the shared inner path, so schema bypass cannot
+weaken trap admission. Default permissive execution remains available explicitly.
+
+The signed replacement control found that an authenticated module was serialized
+with its signed flag but without the original envelope. Initial signed loading
+already cleared that flag. Replacement now does the same after authentication,
+retaining the host key matrix. Controls require a valid signed swap to succeed and
+wrong-key, unsigned and trapping replacements to fail under the relevant policies.
+An unrelated test expectation also needed to clear its breakpoint explicitly
+before expecting a division fault after opting out of strict trap policy.
+
+A hostile numeric operand fixture demonstrates the intended proof boundary.
+The trap scan completes, while a retained runtime type guard rejects execution.
+Policy persists through that error and reset. No stack or type guard is removed
+by this increment. The next mode must justify each actual check elision and must
+invalidate execution-state proofs across partial failures and unwinding.
+
+## 2026-10-15 Independent trap-profile scan
+
+The total arithmetic and scalar bounds contracts make a syntactic trap scan
+meaningful within an explicit instruction profile. The reference uses an exhaustive
+match, so a new instruction requires an admission decision. The Keleusma stage
+receives wire identifiers and operand forms rather than host-computed safety flags.
+Separate predicate interventions demonstrate ownership of both Trap detection and
+unsupported-form admission.
+
+The structural verifier already has suitable bounded arrays. A separate mode
+reuses them without changing its structural protocols or adding a stage file.
+Each request resets verdict and location sentinels. The driver folds per-chunk
+results deterministically and validates stored, yielded and located responses.
+An unsupported instruction prevents a completed verdict even if another instruction
+is an explicit Trap. Invalid instruction metadata likewise cannot become MayTrap.
+
+The first build exposed two Rust type errors, repaired before execution. Clippy
+later requested a direct scalar-kind pattern. Final review also required checking
+the location in an invalid-subject response. An absent location is a broken
+analysis response, not evidence that the subject is invalid. The corresponding
+corruption control and final stage comparisons pass.
+
+These APIs do not grant unchecked execution. Host policy must compute a verdict
+before execution, and any execution certificate must additionally prove each
+removed check and its lifecycle invariants. Error and unwind reentry are explicit
+obligations because an instruction may already have consumed part of its inputs.
+
+## 2026-10-15 Legacy arithmetic outcomes
+
+Leaving Div and Mod partially defined would invalidate a zero-Trap verdict over
+hand-built bytecode. They now share the existing checked arithmetic implementation
+and return its three outputs. This avoids maintaining a second integer division
+algorithm and preserves module-width overflow classification. Float source
+operations discard the outcomes. Fixed remainder now has both a valid runtime
+operand path and explicit zero-divisor dispatch in both compilers.
+
+The compiler audit found a second use of integer Div as an internal multiword
+zero-divisor guard. Replacing it with a conditional explicit Trap preserves the
+failure after Div becomes total. New controls assert the exact error variant and
+presence of the trap. Existing multiword tests accepted any error, so their green
+result alone would not have established that property.
+
+A broad regression exposed a stale GetIndex stack fixture from the earlier bounds
+work. It now expects seven outputs and also enumerates the new division and data
+operation effects. The final focused suite passes, with full stage artifact and
+resource results retained from the unchanged production implementation.
+
+The upcoming check-elision proof has an additional reentry obligation. A retained
+type guard may fail after an instruction consumes only some operands. The current
+run wrapper leaves that frame in place. Static module depth proofs alone cannot
+justify unchecked execution resumed from that state. The completion plan now
+requires proof invalidation or another justified safe transition after a fault.
+
+## 2026-10-15 Data-read relocation and verification repair
+
+The private data-read record now carries a fallback kind above two 24-bit lanes.
+Read relocation validates that kind and preserves it. Store records have no such
+lane, so their entire encoded length must be validated rather than masked. The
+old positive width of 16777216 did not fit the public indexed operand. Controls
+now accept 16777215, reject the next width, preserve the last scalar address, and
+exercise reserved kinds and recovery after refusal.
+
+Legacy test adapters omitted the new scalar kind. They now derive it from source
+data declarations. Independent parser expectations and execution controls cover
+Word, Byte and Boolean fields. An initial new private-data fixture was itself
+invalid because the block was never mutated. The corrected shared-data fixture
+supplies its storage explicitly. This failure is retained in the broad receipt.
+
+The broad run passed complete stage artifacts and resource admission, with its
+single remaining failure in that fixture. The final targeted run passed all 114
+cases after fixture repairs and added wire and source-location controls. Production
+code was unchanged between those runs. This evidence supports proceeding to the
+legacy arithmetic contracts, while the full Order 3 verification remains open.
+
+## 2026-10-15 Indexed data-read work-in-progress backup
+
+GetDataIndexed has no element-kind operand. An explicit Word, Byte or Unit fallback
+on the stack supplies a deterministic invalid-index result without changing the
+public instruction encoding. Both compiler paths supply the fallback and dispatch
+unhandled outcomes through the existing bounds trap. The private parser record
+uses a high scalar-kind lane that must survive data relocation.
+
+The expanded stage corpus exceeds the previous 1536-opcode verifier profile.
+Measured maxima are 1965 for the parser and 1568 for code generation. The shared
+opcode profile is now 2048. Selected type capacities remain 640.
+
+The broad run completed with eleven failures. The new high lane exposes unfinished
+relocation boundary handling and old test adapters without kind information.
+Parser record expectations and the verifier residency pin also need updates.
+The operator requested a backup commit and push before those repairs. This entry
+records an unfinished increment and does not establish Order 3 completion.
+
+## 2026-10-15 Scalar array-read outcomes
+
+Word and Byte array operands have a known zero value, so their invalid-index result
+can retain its kind without allocation. The result precedes the portable diagnostic
+suffix. The full signed index is compared against the checked bound before address
+conversion, avoiding truncation on a narrow host. Representation, stride and lifetime
+checks remain separate contract guards.
+
+The checked lowering stores the outcome directly and evaluates each operand once.
+Seven temporaries preserve the result and diagnostic state across nested handlers.
+The same arm protocol supports Word invalid_index bindings for Byte arrays. Complete
+coverage removes the fallback trap while a deterministic value-and-break trailer
+keeps the dispatch loop structurally bounded. No hidden failure cache is used.
+
+The parser had treated direct literal indexing as a second array literal. Completed
+scalar literals now arm the existing postfix path. Two unused private fields were
+removed before adding the keyword, keeping the name cap intact. The final selected
+run passes every stage artifact and resource boundary. Indexed data-segment reads
+still require a kind rule and total contract.
+
+## 2026-10-15 Indexed-write outcomes
+
+Indexed writes need no fallback element value. They consume the value and index,
+perform the write only in range, and return the diagnostic suffix and flag. Both
+compiler paths retain operand order and dispatch unhandled failures to Trap kind
+eight. The success path removes the suffix. This preserves source behavior while
+allowing bytecode to handle a failed write without stopping execution.
+
+The extra dispatch instructions made one reconstruction chunk too large for the
+existing verifier profile. Extracting its nested-field branch preserved the
+capacity and state transitions. A broad resource run then exposed text analysis's
+old effect limits. The text protocols now accept the new predicate and store
+outputs, with controls for text retained below those outputs.
+
+The final selected run passes all 1636 cases, including every stage artifact and
+resource boundary. Indexed reads still need their own total contracts. The bounds
+contract and completion plan retain that requirement and the full Order 3 scope.
+
+## 2026-10-15 Portable bounds outcomes
+
+The bounds diagnostic is carried explicitly on the operand stack. A hidden last
+failure cache could be overwritten by a nested handler and was therefore avoided.
+Four byte limbs preserve the unsigned bound on every supported Word width. The
+initial two-limb proposal would have lost information on i8 and was replaced before
+implementation. The predicate preserves the index and produces the payload and flag.
+The bare failure branch consumes the payload through the existing Trap opcode.
+
+A terminal instruction can now consume operands. Both depth walks previously ended
+at every Trap without checking its requirement. Both typed walks also need the
+payload and loop-frame checks before termination. The existing widening profile
+still cannot prove exact operand kinds, so runtime type guards remain mandatory.
+
+The new predicate is total over Word indices, including negative indices and a zero
+bound. Indexed reads and writes retain their separate contract obligations. The
+new contract document fixes this increment's stack, cost, diagnostic and compatibility
+rules without claiming trap freedom or a no-check execution mode.
+
+## 2026-10-15 Shift ordering and full-word literal transport
+
+A checked arithmetic shift is a checked multiply by a positive power of two.
+The reference interns that multiplier before compiling the left operand. Deferring
+all constants would preserve execution order but change the artifact, so this one
+constant is interned when scheduling the checked construct. The parser retains
+asl separately from lsl to keep the checked-family admission rule explicit.
+
+The literal failure occurred before reconstruction. Multiplying a full Word by the
+token radix discarded its upper bits. A bounded stage-owned table now separates
+the value from its token index. The driver copies the computed values and does not
+reparse numeric source. A second transport boundary needed full-word records and a
+negative complement encoding because minus one is the legacy record sentinel.
+Range checks precede numeric accumulation, and every radix flushes at end of input.
+
+These changes preserve all fourteen complete stage artifacts against the reference.
+They consume the last entries of the existing compiler name pool, which now holds
+1024 names. Further parser work must account for that bound. The next implementation
+requires exact bounds-operation contracts and proof obligations, not another source
+syntax change. The completion plan and reverse prompt retain the full goal scope.
+
+## 2026-10-15 Checked-outcome source integration
+
+Checked arms attach after a complete expression. A one-token brace probe and a
+checked-expression operator marker preserve that boundary in the streaming parser.
+Per-context class masks and pattern facts enforce coverage without a host verdict.
+Three result temporaries are allocated after operand expressions. Scoped binding
+initializers precede guards and bodies, while reverse binding wrappers follow the
+arm-result record, matching the reference frame allocation and evaluation order.
+
+Negative one is a legacy transport sentinel. A direct signed pattern payload
+therefore selected the wrong record decoder. Records 126 and 127 carry nonnegative
+complements instead, with reconstruction validating their sign and expected pattern
+position. A separate failing control showed Byte bindings losing their kind during
+local lookup. Restoring that classification preserves Byte arithmetic in arm bodies.
+
+Adding parser state also crossed the lexer's complete-source capacity. A named
+length guard now precedes copying, and the bounded source buffer grows to 512 KiB.
+The compiler input name pool remains unchanged and has only two entries free.
+The final 148-test selected run includes all fourteen complete artifact comparisons.
+Checked shifts, wide-literal transport and the remaining Order 3 requirements stay
+open. The completion plan and reverse prompt record those limits and receipts.
+
+## 2026-10-13 Full first-pass validator admission
+
+The resource coordinator now stores chunk summaries and decides final arena admission
+in Keleusma. Text lattice transitions, heap saturation and boundary flags also run in
+Keleusma. Host code transports opcode facts and stores abstract values. Native costs
+use the reference distinction between per-site charging and deduplicated external
+contributions. The analyzer uses a 64-bit Word to represent the unsigned 32-bit heap
+ceiling positively, while subject widths remain independent.
+
+Yield membership, convergence and productivity decisions are stage-owned. Intervention
+controls change each decision with identical subject input. Missing summaries, unfinished
+walks and malformed responses remain analysis errors. The shipping validate command
+computes the Keleusma result before consulting the Rust reference and reports disagreement
+separately from rejection. Runtime guards and the reference gate remain required under
+the selected typed-widening profile.
+
+The rejection audit exposed a subtle post-loop mismatch introduced during the join repair.
+The reference restores an entry state after a terminated body without breaks and checks
+later instructions. Skipping those instructions admitted a malformed scalar projection.
+A complete-admission control first reproduced acceptance and then passed after restoring
+that fallback. This was a verdict-compatibility repair, independent of whether those
+instructions would execute. The eight permanent audit controls also cover projection
+forms, array stride, locals, resume shapes, loop height, layout reconciliation and the
+exact packed-call-shape capacity.
+
+All five feature configurations pass on an unchanged validator tree. The full workspace
+runs 3281 tests and the isolated self-host configuration 3031, plus separate doctests.
+The detached compiler passes 86 tests. Final source residency is analyzer 3215/367 and
+typed validator 1438/395, both retaining the existing threefold fusion requirement.
+The first full run's stale pins were measured and repaired before the corrected run.
+
+The final link gate reached generated local copies under secret and reported their
+relocated relative links. That store is intentionally excluded from version control.
+The checker now prunes it, with a command control proving that public broken links
+still fail and restored links pass. No private contents were copied into the repository.
+The full completion audit records command receipts and the limits of the first-pass claim.
+
+## 2026-10-11 Keleusma derives logical data-layout runs
+
+The shipping emitter now gives logical slots to Keleusma instead of grouping them in Rust.
+The data-slot grouper requests each head, batches up to eight candidate lengths and visibilities,
+and compares candidate name windows of up to 64 bytes. It retains the earliest differing slot
+across windows. Empty names require no byte request. Keleusma returns each group boundary and
+its record sizes, splitting at 65,535. The host stores those results and retrieves the selected
+source name. The name coordinator receives the grouper's checked output count.
+
+Shared-layout grouping receives up to five offset/kind/length triples per reply. Keleusma chooses
+the initial stride using wrapping u32 subtraction, extends only matching runs, and produces each
+record's offset, logical first slot, count and stride. Singletons start with stride zero, while
+a one-slot tail of a split multi-slot run retains that run's stride. Record starts use u32 modular
+arithmetic, matching the release reference encoder's arithmetic. Later verifier constraints remain
+separate from these encoding decisions.
+
+The Rust driver performs bounds checks, storage allocation and transport. It does not compare slot
+names, detect strides or choose record boundaries. The legacy helpers remain for their existing
+bounded test/tooling paths, but the public auxiliary emitter no longer calls them. No new shared
+buffer was added. Commands 89 through 93 group data slots and commands 94 through 97 group shared
+layouts. Two private blocks add 28 value slots, or 896 bytes. The schema stage now has 170 chunks,
+an 85,508-byte artifact, 1,216 shared bytes and 6,880 private bytes. Its legacy occurrence channel
+uses 221 of 640 rows. Inference independence covers 53,213 recorded types across fourteen stages.
+
+Five integration controls cover empty data, long Unicode names, first mismatches across 64-byte
+windows and eight-slot batches, visibility changes, stride boundaries, nonmonotonic offsets,
+wrapped offset differences and 65,535/65,536/131,071-slot boundaries. A runtime control compiles,
+serializes and decodes a 65,536-byte shared array, then accesses both sides of its record boundary.
+Protocol controls refuse malformed batches and foreign commands and check continuation after
+refusal. All fourteen artifacts and the monomorphization controls pass in the targeted run.
+The final workspace passes 3,175 tests with five ignored across 183 suites. No-default checks
+pass seven integration/accounting tests and 46 wire units. Fresh Clippy, documentation and no_std
+checks pass. The local pilot retains three supported, bounded completion claims and the unresolved
+tuple-probe diagnostic with non-independent labels. External evaluation remains unavailable under
+the prior approval rejection. Exact receipts are in the reverse prompt.
+
+A separate tuple-projection probe provides the next type-input work. Among eight comparisons,
+two invalid sources are accepted by the independent stage and one valid source is rejected.
+Nested tuple and nominal identity are lost through tuple field zero. A tuple field containing
+an array is falsely rejected even when its declared dimension matches the callee. Scalar tuple
+projection controls and other valid controls agree with the reference. These type gaps keep the
+full Order 1 goal active, alongside the remaining input obligations and final integration gates.
+
+## 2026-10-11 Streaming auxiliary emission reaches the shipping command
+
+The public auxiliary emitter now transports bounded windows instead of constructing the old
+resident module blob. Keleusma hashes names, selects candidate buckets, compares candidate bytes,
+and decides whether to append or reuse the latest equal name. Hashes are an indexing aid, with
+byte comparison deciding equality. The host retains borrowed strings and deterministic bucket
+storage. Fresh names retain contiguous runs and remain available to later shared lookups.
+A protocol control reaches two distinct, equal-length strings with the same hash and proves that
+they remain distinct. A compiled string-comparison program exercises that distinction at runtime.
+
+The schema coordinator owns contributor ordering across chunk names, enum types and fresh variants,
+natives, data-slot groups, constants and templates. It requests source ordinals and rejects names
+from the wrong family or phase. Constants use a stage-driven breadth-first queue. The host stores
+references to typed values, while Keleusma chooses each node, child range, auxiliary index and name
+request. Name and template acknowledgements carry generation checks. Chunk ranges, debug offsets,
+opcode offsets, header sentinels and parameter-tag bytes are also stage decisions.
+
+The former 1,365-node, 256-byte-name, 1,024-event and aggregate module-blob caps no longer apply to
+the public emitter. Fixed transport windows remain. Public wire field widths and fallible storage
+checks bound accepted metadata. The legacy bounded emitter remains available only to library tests
+as a comparison control. Standalone legacy helper APIs retain their documented bounds.
+
+Standing source regressions exercise 1,365 and 1,366 constant roots and text lengths of 256, 257
+and 60,000 bytes. The compiler accepts each source, and the Keleusma output matches the reference.
+Existing family tests now assert successful reference comparisons beyond former name, template,
+node and input caps, including 65,536 scalar roots. They also retain nested forests, enum
+discriminants, initializer ownership, independent native vectors and empty template-run controls.
+
+Unsigned command-line compilation now serializes through the selected backend. The self-hosted
+backend uses wire_module_artifact_via_kel. A discriminator test distinguishes that route from using
+the reference serializer on both branches. Command-line controls emit the large forest and text
+fixtures, preserve reproducibility, execute an ordinary result of seven and retain independent type
+rejection without output files. Signed and encrypted output continue through their dedicated paths.
+
+The schema stage has 150 chunks and a 75,876-byte artifact. Shared storage remains 1,216 bytes.
+Private storage is 5,984 bytes. The largest legacy input channel uses 197 of 640 occurrence rows.
+Wire remains unchanged. Inference independence covers 52,389 recorded expression types.
+The full workspace passes 3,168 tests with five ignored across 182 suites. No-default checks
+pass 25 integration/accounting tests and 44 wire unit tests. Fresh Clippy, documentation and no_std
+checks pass. The local pilot contains the first diagnostic and three bounded completion claims,
+with non-independent labels and a reviewed export. External evaluation remains unavailable under
+the prior approval rejection. The reverse prompt carries exact receipts.
+
+Host data-slot grouping, run splitting and shared-layout run extraction remain nontrivial
+serialization decisions to move into Keleusma. The new driver retains
+these existing algorithms explicitly. Remaining type-input obligations and final integration gates
+also keep Order 1 open. Shipping integration alone does not establish completion of the full goal.
+
+## 2026-10-11 Complete modules decode through Keleusma
+
+wire_decode_module_via_kel composes Keleusma framing, checksum, auxiliary, opcode and debug readers.
+The schema stage selects an optional shebang prefix and the declared frame, checks header fields,
+section spans, width maxima and signature-extension metadata, compares mirrored auxiliary fields,
+and supplies each chunk's opcode span. Wire command 220 starts an independent checksum transaction
+using the existing incremental checksum implementation. Every operand entry receives a parity
+check, including unused entries. Only selected opcode records are interpreted.
+
+The reader preserves noncanonical section order, unaligned offsets, overlapping sections and
+trailing input. These are reference codec behaviors. It preserves absent versus empty debug spans,
+and applies debug-pool decoding only when constructing complete chunks. Signature authentication,
+decryption and virtual-machine verification remain separate caller responsibilities, matching the
+low-level reference loader. Error variants and precedence for multiple defects are not matched.
+
+Seven integration controls cover prefixes across byte windows, valid noncanonical frames, unused
+invalid opcode records, unused pool corruption, empty chunk tables, extension metadata, header
+bounds and mirrors, debug failures and complete decoded execution. The runtime control discards
+the original module and runs decoded instructions with shared input and persistent state, returning
+12 and then 17. Two protocol controls cover checksum windows and framing transaction completion.
+The all-stage artifact comparison now reconstructs complete modules before re-encoding them.
+
+Initial failures exposed a reserved field name, a mutable local and a stale command ceiling that
+made the newly dispatched checksum operation unreachable. Valid-input controls caught the ceiling
+error. Another control incorrectly expected every changed offset to be invalid. Some changes still
+select valid records or empty sections, so the comparison now retains reference acceptance and
+separately asserts rejection of out-of-bounds spans. These observations did not justify narrowing
+source or artifact admission.
+
+The schema stage has 115 chunks and a 55,492-byte artifact. It uses 1,216 shared bytes and 4,160
+private bytes. Its largest legacy channel uses 147 of 640 occurrence rows. Wire has 561 chunks,
+a 163,044-byte artifact and 1,294 of 1,365 constant nodes, leaving 71 nodes against the required
+minimum reserve of 64. Its largest legacy channel remains 638 of 640 occurrence rows.
+Inference independence covers 50,483 recorded types across fourteen stages. All fourteen complete
+decoded modules match the reference. The workspace ran 3,158 passes and one stale size assertion,
+with five ignored. The measured blob size was corrected from 23,713 to 23,753 bytes, and the full
+184-test wire suite then passed. No production code changed after the workspace run. The whole
+workspace was not repeated after that test-only correction. Other receipts are in the reverse prompt.
+
+The local pilot records one diagnostic and three claims with non-independent review. One runtime
+claim excerpt is unsupported because it omits the helper proving which module is returned. The
+full test source supplies that evidence. External evaluation remains unavailable under the prior
+approval rejection. Exact payloads and source hashes were reviewed in the local export.
+
+A production-library probe found two encoder admission gaps. A 1,369-root program is accepted
+by the compiler but exceeds the encoder's 1,365-root cap. A 257-byte text literal is accepted
+but exceeds the encoder's 256-byte name bound. Nearby smaller controls encode byte-identically.
+The complete decoder also accepts the larger 1,417-root and 60,000-byte text controls. The
+completion plan records exact construction recipes and artifact sizes for the next increment.
+
+Complete module reconstruction closes this decoder integration. Source-admission capacity coverage,
+shipping serialization, remaining type-input obligations and final integration gates remain open.
+The shipping unsigned path still calls Module::to_bytes. Full Order 1 remains active.
+
+## 2026-10-11 Debug pools and complete auxiliary bodies decode through Keleusma
+
+Parameter tags and debug pools now decode through the schema stage. Parameter ranges preserve
+absent-pool behavior and recognize Float independently of execution support. Debug decoding
+preserves record order, opaque type blobs, unresolved indices and trailing bytes. Keleusma
+requests each raw field and payload, validates string encoding through the existing name reader,
+and rejects truncated fields and unknown kinds. Operand lists cross fifteen-value windows.
+Counts are checked against remaining input before host allocations.
+
+The complete auxiliary-body reader composes the directory, record and semantic readers.
+Keleusma checks required table dimensions, chunk and native names and block tags, selects the
+first header, normalizes the entry sentinel and supplies template, parameter and debug ranges.
+Invalid debug spans become absent, matching the reference. Debug bytes remain opaque at this
+layer. Zero-chunk inputs do not decode unused constant tables. Optional layout and signature
+families retain their existing policies. Native names and return descriptors retain independent
+lengths. Rust transports records and constructs owned values from these decisions.
+
+Commands 41 through 47 implement parameter and debug reads. Commands 48 through 56 implement
+module metadata. The dispatcher now separates routing from transaction guards to limit nesting.
+Nested parameter and name reads are permitted only while a chunk is being assembled. Protocol
+controls exercise foreign-command refusal, short transport replies, premature completion and
+successful continuation after refusal. Public bytecode version, opcode count and type caps remain
+unchanged.
+
+The schema stage has 96 chunks and a 46,964-byte artifact. Shared storage remains 1,216 bytes
+and private storage is 3,264 bytes. Its largest legacy channel uses 124 of 640 occurrence rows.
+All fourteen sources fit. Inference independence covers 49,723 recorded expression types.
+All fourteen complete stage artifacts and auxiliary values match the reference. A runtime control
+replaces auxiliary fields and observes shared access plus persistent initialization across calls.
+The workspace passes 3,150 tests with five ignored across 180 suites. No-default checks pass
+eleven integration and accounting tests and thirty-eight wire unit tests. Fresh Clippy,
+documentation and no_std checks pass. Exact receipts and remaining coverage limits are in the
+reverse prompt.
+
+The first compiler failure was a test fixture omitting a named enum field. Subsequent failed
+controls assumed unpadded region lengths and used unsupported literal syntax. The container pads
+regions to eight-byte boundaries, so those expectations were corrected against both decoders.
+The diagnostic and three completion claims are captured and reviewed locally in the shadow
+pilot, with non-independent labels and a reviewed export. External evaluation remains unavailable
+under the prior automatic approval rejection. Pilot judgments do not change development gates.
+
+Complete outer framing and module reconstruction remain open. The current canonical unsigned
+framing reader is narrower than the reference loader. Preserve valid noncanonical section offsets,
+trailing frame bytes, shebang prefixes and signature-metadata consistency. Check every operand-pool
+entry, including unused entries, but decode only opcode spans selected by chunks. Capacity coverage,
+shipping serialization, remaining type obligations and final integration gates still keep Order 1 open.
+
+## 2026-10-11 Layout families decode through the schema stage
+
+Strict template and enum-layout readers now share Keleusma range validation and request-driven
+name reconstruction. The optional metadata helper decodes the two families independently after
+shared parsing checks. A bad name can discard one family without discarding the other. Name data
+rejections now have an internal typed distinction from transport, allocation and protocol failures.
+Only explicit stage-directed data rejection produces an absent optional family. A direct protocol
+control proves that a stage failure is propagated rather than defaulted away.
+
+Data-layout decoding distinguishes absent DATA_SLOTS from a present empty table. Keleusma checks
+required tables, slot names, visibility and nonzero run lengths, then supplies repeat directives
+for named slots. Shared offsets are computed in Keleusma and returned five at a time. The stage
+checks overflow before emitting a shared run, preserves kind and length bytes, and retains the
+owned reference decoder's treatment of unused first_slot and private-placement fields. It requests
+the first initializer record and selects either repeated Int(0) values or a separate constant-pool
+decode operation. Empty stored ranges still require a valid constant table, while elided ranges do
+not. Codec checks remain separate from the later verifier.
+
+Commands 22 through 29 handle templates and enums. Commands 30 through 40 handle data layout.
+Active transactions exclude incompatible commands and permit their own nested name reads.
+The schema stage now has 67 chunks and a 32,964-byte artifact. Shared storage remains 1,216 bytes.
+Private state is 2,592 bytes, adding seventeen layout slots and twenty data slots. Its largest
+legacy input channel uses 87 of 640 occurrence rows. Wire remains unchanged. Inference independence
+covers 48,424 expression types across fourteen sources.
+
+Controls cover signed discriminants, Unicode and malformed names, independent optional failures,
+shared parse failures, absent and empty tables, non-default initializer trees, elision, nonzero
+runs, offset overflow, ignored fields and the 65,535/65,536 logical-slot boundary. A runtime control
+removes the compiled module's original layout, installs the decoded layout and observes shared
+access and persistent initialization across two calls. All fourteen stage artifacts now compare
+template, enum and data-layout values against the reference as well as earlier decoder families.
+The final workspace passes 3,138 tests with five ignored across 178 suites. Clippy, documentation
+and no-default checks pass. Current terminal receipts and coverage limits are in the reverse prompt.
+
+No failed or unexpectedly empty verification run required diagnostic triage before the completion
+samples. The local shadow pilot records three bounded claims with non-independent review. External
+evaluation remains unavailable under the prior approval rejection. Full Order 1 remains active.
+Parameter tags, debug metadata and complete module assembly remain open, followed by source-admission
+capacity coverage, shipping integration, remaining type obligations and final integration gates.
+
+## 2026-10-11 Names and owned constant forests decode through Keleusma
+
+Name lookup now requests a NameRef and its pool span through the schema stage. The stage checks
+the index and range and validates UTF-8 in 1,024-byte windows. Rust returns a borrowed string,
+with a defensive checked string conversion after the stage verdict. Unused malformed name records
+and pool bytes remain unobserved. The byte window imposes no fixed name-length limit. Independent
+stage-only checks compare 197,673 byte sequences with Rust UTF-8 acceptance, including continuation
+bounds across windows. Borrowed pointer identity, long names, overlong forms, surrogates, invalid
+scalar values and incomplete sequences have direct controls.
+
+The constant decoder reuses directory and record decoding. Keleusma validates all forward ranges
+and requested root ranges, schedules a reverse traversal and selects each construction form.
+Scalar payloads are interpreted by tag, never as child ranges. The stage normalizes Boolean and
+Byte values, gates Float, requests auxiliary records and names, and directs child and root moves.
+The host retains Option slots for typed values and reports whether a requested slot remains
+available. The stage refuses duplicate ownership. No recursive host traversal or reference
+constant decoder is used in production. Each host request loop has a count-derived bound.
+
+Owned decoding builds the complete table even when no roots are requested. Chunk root ranges in
+one call share ownership. Separate calls preserve the reference's distinct initializer ownership
+scope. Empty composite ranges still require a strictly forward first index. An empty struct does
+not validate an unused field-name start. Enum None and Some(0) discriminants remain distinct.
+Unknown flag bits and unused scalar fields retain reference behavior. Comparisons establish
+acceptance and decoded values. Identity of diagnostic variants and failure ordering for
+multiple defects remain unverified.
+
+Name commands 8 through 11 and constant commands 12 through 21 extend wire_schema.kel.
+Active transactions exclude incompatible commands. Constant name requests deliberately allow
+nested name validation. Invalid UTF-8 poisons the name transaction. Refused transport lengths
+and pending-record replies have separate protocol controls. The schema stage now has 38 chunks
+and a 19,756-byte artifact. Its shared window uses 1,216 bytes and its private state uses 1,408
+bytes. The largest legacy schema input channel is 56 of 640 occurrence rows. The wire stage is
+unchanged. All fourteen stages fit the existing caps. Inference independence covers 47,116 types.
+
+Every stage's chunk constant ranges are taken from Keleusma-decoded chunk records. The resulting
+pools match the reference values through canonical re-encoding, including floating-point payload
+bits. Controls cover all constant forms, named trees, duplicate ownership, malformed ranges,
+required tables, feature-disabled floats, 128-level raw trees, 5,000-root pools and long nested
+text. Initial compilation caught a missing function brace and a closure requiring an explicit
+input type. Those diagnostics remain in the local logs. The workspace passed 3,126 tests and
+failed only a stale documentation count, with five ignored.
+The counts were refreshed. Added execution controls clear the original constant pools and restore
+them from the new decoder before executing arrays, nested tuple arrays and a separate private
+initializer. The first private fixture was refused because its data was never mutated. A
+meaningful update repaired that control. All eight constant controls then pass. Current
+verification and pilot receipts are in the reverse prompt.
+
+Full Order 1 remains active. Templates, enum layouts, data-layout expansion and initializer
+elision policy, parameter tags, debug decoding and complete module assembly still require work.
+Source-admission capacity coverage, shipping integration, remaining type obligations and final
+integration gates also remain open.
+
+## 2026-10-11 Signature semantics move into a dedicated schema stage
+
+The new wire_schema.kel stage validates signature ranges and interprets shape tags. It requests
+parameter, return and resume shapes in order, validates native shape references and controls
+completion. The host transports decoded record fields and constructs typed values. Directory
+and fixed-record decoding reuse one wire virtual machine, with a separate schema machine for
+semantic work. No reference signature view or shape conversion is called in production.
+
+The strict signature helper matches the standalone reader. The metadata helper preserves the
+auxiliary decoder's optional-table policy. A malformed shared shape/signature view can produce
+empty metadata only when no native return needs it. An invalid tag reached through a valid view
+remains an error. All signature bounds are checked before any shape tag is interpreted, so a
+later invalid range takes precedence over an earlier invalid shape. The invalid-view flag is
+retained across later valid rows. Unused invalid shapes remain unobserved. Arbitrary kind bytes
+are retained as the reference codec retains them. Top ignores kind and size, and Scalar ignores
+size. Later verification is a separate boundary.
+
+The separate stage avoids increasing wire.kel's nearly full legacy type-input channels. It has
+15 chunks and a 7,052-byte artifact. Its shared window occupies 192 bytes and fourteen private
+value slots occupy 448 bytes. Its largest legacy input channel uses 24 of 640 occurrence rows.
+The complete embedded corpus now has fourteen sources. Every applicable corpus inventory was
+extended, and the new stage has its own byte-identity test. ChunkSignature now derives structural
+equality so complete decoded signature values can be compared directly.
+
+Controls enumerate all 65,536 shape tags and 2,304 kind/size combinations. They cover optional
+parsing failures, referenced and unused invalid tags, empty-range boundaries, native-only errors,
+retry and completion state, and a 3,000-parameter signature. All fourteen stage artifacts compare
+byte-identically, and decoded signature and native-return metadata match the reference. A count
+assertion requires one decoded signature per compiled chunk. Inference independence now covers
+45,894 recorded expression types across fourteen stages.
+
+Initial compilation exposed missing imports and the absence of equality traits on ChunkSignature.
+The test fixture was corrected to obtain auxiliary bytes from a complete reference artifact.
+Clippy identified a nested conditional in the fixture. The full workspace passed 3,113 tests and
+failed one stale assertion expecting thirteen stages, with five ignored across 174 suites. That
+assertion was replaced by a directory-inventory comparison. The repaired production type check
+accepts all fourteen stages. Final semantic, accounting, no-default and complete artifact tests
+pass. No production code changed after the workspace run. The full workspace was not repeated
+after the test-only repair and stronger controls. Receipts are in the reverse prompt.
+
+The local shadow pilot retains the first compiler diagnostic and three bounded claims with
+non-independent review. External evaluation remains unavailable under the earlier approval
+rejection. Full Order 1 remains active. Name and constant semantics, other auxiliary families,
+complete module decoding, admission-preserving capacity coverage, shipping integration and the
+remaining type obligations still require work.
+
+## 2026-10-11 Fixed schema records decode through Keleusma
+
+The new wire_schema_records_via_kel helper decodes all seventeen fixed schema record kinds.
+Keleusma selects the stride, checks table divisibility and reads fields from one transported
+record at a time. Rust constructs a typed WireSchemaRecord variant with checked field narrowing.
+No production reference record reader, byte offset or endian operation appears in that adapter.
+The unsigned 64-bit constant payload preserves every bit of its signed transport word.
+
+Record fields remain distinct from validated schema values. Unknown tags and reserved fields
+are preserved as the reference record codec preserves them. Cross-table references, tag meaning,
+constant child ranges, optional-table policy and complete module reconstruction remain open.
+Byte pools and unknown kinds are refused by this fixed-record interface. The directory reader
+continues to retain borrowed payloads for those pools.
+
+Commands 218 and 219 begin and advance a record stream. The stage owns the record count and
+cursor. Bad record lengths do not advance it, completion clears active state, and a failed new
+begin invalidates the previous stream. Other commands are excluded during an active stream.
+Existing framing, signature and directory transactions refuse the new commands. Five private
+state fields add 160 bytes. No shared array or capacity increased.
+
+The kind control enumerates all 65,536 identifiers against the explicit seventeen-kind contract.
+The field corpus compares 4,386 records with the derived reference reader, including full-width
+signed and unsigned patterns and reserved fields. A separate 9,000-record table crosses the
+byte window, and aligned and unaligned inputs produce identical typed fields. All thirteen
+stage artifacts now also reconstruct every fixed-record region from decoded fields through
+reference writers and compare complete region bytes. Byte pools are explicitly excluded.
+
+The first node-budget assertion found only 54 free nodes. Sharing literals in the existing
+get_u16, get_u32 and get_i64 functions restored 75 free without changing loop bounds or caps.
+The wire stage now has 561 chunks, command 219, 715 name events, 23,713 input bytes and a
+162,836-byte artifact. Its constant forest uses 1,290 of 1,365 nodes. Inference independence
+covers 45,329 recorded expression types across thirteen stages.
+
+A full workspace run then found a second capacity constraint. The legacy type harness needed
+652 occurrence facts and 649 binding facts, exceeding the approved 640-row caps. The production
+scoped path and all-stage artifact comparisons had passed, so those checks did not cover this
+legacy path. Fourteen lightly reused numeric helpers were inlined. Sharing zero and one literals
+in sixteen existing count and presence functions retained the constant-node reserve. Every input
+fact remains checked and no cap changed. Occurrences now use 638 of 640 rows. Future growth must
+be priced against both constraints.
+
+Work began on 2026-10-08 and resumed on 2026-10-11. Several verification handles were no longer
+available after resumption. Their complete logs were retained, and the repaired full workspace run
+passed 3,106 tests with five ignored across 173 suites. Clippy, documentation and no-default
+checks pass. The reverse prompt records terminal receipts and their coverage limits.
+The shadow pilot retains the first node-reserve diagnostic and three bounded claims. The first
+all-stage evidence packet exceeded the text-field limit and was shortened before successful
+capture, retaining the stage inventory, decisive record assertions and executed stage counts.
+External evaluation remains unavailable under the earlier automatic approval rejection.
+
+Full Order 1 remains active. The next work is tag and cross-table validation in Keleusma,
+constant-tree reconstruction and complete module decoding, followed by source-admission capacity
+coverage, shipping integration, remaining type obligations and final integration gates.
+
+## 2026-10-08 Auxiliary directory decoding stops borrowing reference positions
+
+The new wire_auxiliary_directory_via_kel helper supplies raw container headers to Keleusma.
+The stage votes the prologue, validates its checksum and format, derives directory length,
+and emits one decoded region per resume. It checks region bounds and duplicate kinds before
+advancing. Header disagreement remains an explicit repair signal. It is not a payload-integrity
+verdict. Rust retains checked slices into the original artifact and allocates at most 1,024
+region descriptors. Payload bytes are not copied into the stage.
+
+The format ceiling needs 49,200 header bytes, fitting the existing 65,536-byte window. The
+maximum-region control reaches all 1,024 entries. Separate controls retain borrowed payloads
+above 200,000 bytes, unaligned buffers and parity-plane metadata. No payload-size cap was added.
+Reference acceptance of overlapping spans, unknown kinds and flags, and reserved fields is
+preserved. These properties were read from the reference and then compared by execution.
+The mutation corpus accepts 1,182 cases and refuses 181 in agreement with the reference.
+Every single-bit header mutation is outvoted, while invalid voted prologues are refused.
+
+Commands 216 and 217 begin and advance directory decoding. Active decoding excludes other
+commands, a new begin resets the cursor, and a failed begin invalidates the old transaction.
+A rejected entry can be retried without advancing. Framing and signature transactions refuse
+both new commands. Four private state slots add 128 bytes. The existing region-kind array
+holds the already accepted kinds for the bounded duplicate scan.
+
+The initial fixture used a nonexistent builder method. The stage then attempted to assign a
+local binding, which the language refuses. Moving that flag into private state repaired it.
+The first capacity measurement left only 50 nodes free. Literal sharing initially changed a
+loop bound that the verifier requires in canonical form. Those loop functions were restored.
+Five functions without loops now share existing literals, leaving 71 nodes free. An existing
+mutation test needed its anchor changed to the helper-based header calculation. Its detector
+still observes the deliberately wrong starting cursor. A redundant host conversion was also
+removed after Clippy identified it.
+
+Wire has 566 chunks, command 217, 715 name events, 23,793 input bytes and a 160,524-byte artifact.
+Its constant forest uses 1,294 of 1,365 nodes. Inference independence covers 44,978 expression
+types across thirteen stages. Complete artifact comparison now also compares each independently
+decoded directory and checks payload pointer identity. Current receipts are in the reverse prompt.
+
+Schema-record interpretation, constant reconstruction and complete module decoding remain open.
+The new directory removes reference positions from this part of the read path. It does not close
+the complete decoder, source-admission capacity coverage, shipping integration or type obligations.
+Full Order 1 remains active. The local shadow pilot retains the first diagnostic and bounded
+completion claims. External evaluation remains unavailable under the prior approval rejection.
+
+## 2026-10-08 Semantic opcode decoding moves into Keleusma
+
+The new section decoder transports raw opcode and operand-pool bytes to the wire stage.
+Keleusma checks parity, selects inline and pooled forms, validates pool indices and tags,
+and produces semantic fields. Rust constructs typed instructions from those fields without
+reference decoding. All pool entries are checked, including unused records. Commands 214
+and 215 use a bounded request-and-response protocol. Framing and signature transactions
+refuse these commands while their own state is pending.
+
+The decoder preserves reference acceptance of ignored operand bytes and construction flags.
+The raw grid compares 153,600 records in each of two feature configurations. Default features
+accept 69,957 and refuse 83,643. Without default features, 67,317 accept and 86,283 refuse.
+Both agree exactly with the reference. Separate controls cover every canonical identifier,
+composite access and construction forms, single-bit corruption, invalid lengths, unused pool
+corruption, maximum pool-index widths and retry state. This is finite differential evidence.
+
+All thirteen stage artifacts remain byte-identical, and their opcode sections decode to the
+reference instruction sequences. Wire now has 564 chunks, 709 name events, 23,738 input bytes
+and a 159,188-byte artifact. Its constant forest uses 1,299 of 1,365 nodes, retaining 66 free.
+The new private decoder state adds nine value slots or 288 bytes. Sharing existing small
+literal helpers in four loop-free functions restores the node reserve without changing caps.
+Inference independence now covers 44,835 recorded expression types across thirteen stages.
+
+The first integration test imported a crate-private cfg(test) inventory. It was repaired by
+separating the canonical library census from integration enumeration. The first reserve check
+failed before literal sharing. An unqualified test logging macro also failed compilation and
+was corrected. Capacity and chunk pins were refreshed from executed measurements.
+The reverse prompt carries current verification and pilot receipts.
+
+Full semantic auxiliary decoding, admission-preserving capacity coverage, shipping serialization,
+remaining type-input obligations and final integration gates keep Order 1 open.
+
+## 2026-10-08 Constant forests join the module-driven encoder
+
+The auxiliary producer now supplies bounded semantic preorder input for named and composite
+constant trees, including private initializer roots. Keleusma computes subtree sizes, root
+boundaries, breadth-first child ranges and both auxiliary tables. Name interning now follows
+that traversal between the existing prefix names and template names. The first nested-string
+control distinguishes this order from the original preorder input.
+
+The full-node backing arrays are separate from output. They add 87,360 shared bytes while
+preserving existing host slot positions. Legacy calls still use their 170-row FIN channel.
+The new path reaches the existing 1,365-node bound. Scalar-only pools keep their record stream,
+including large initializer pools. Existing name and input bounds remain explicit and require
+admission comparison before this encoder can replace the shipping path.
+
+The first control reached the old unsupported guard. The implementation then passed that case
+but failed the standing reserve. Replacing literals in loop helpers did not change node count,
+because loop lowering still introduces them. Those substitutions were reverted. Sharing the
+opcode classifier's small literals restored the reserve. A compiled execution fixture also used
+tuple projections that lexed as a decimal literal; parenthesizing the intermediate projection
+made the intended source unambiguous. All original diagnostics remain in the logs.
+
+Five integration controls and nineteen protocol checks pass, including decoded execution,
+private initializer trees, discriminants, empty structs, reused names, malformed arities and the
+node limit. The no-default checks and memory accounting pass. Wire has 558 chunks, 1,300 nodes,
+23,578 input bytes and a 156,228-byte artifact. Inference independence covers 44,491 expression
+types across thirteen stages. Final receipts and the local shadow-pilot review are in the reverse
+prompt. The workspace diagnostic passed 3,089 tests and failed only the old empty-tuple refusal
+expectation, with five ignored. Replacing that expectation with reference-byte equality makes
+all seven framing tests pass. Workspace Clippy, documentation and the no_std self-host check
+pass. No production code changed afterward. Full Order 1 remains active.
+
+## 2026-10-08 Private placements and scalar initializer policy move into the stage
+
+The auxiliary helper now admits private composite placement records and non-default scalar
+initializer pools. Keleusma accumulates chunk root counts and makes the exact nonempty-all-Int(0)
+elision decision. The host follows that result rather than calling the reference predicate or
+constant-root selector. The stored initializer range begins after chunk roots; descendants do
+not precede those roots in the final constant table.
+
+Private composite slot and arena offsets remain compiler-owned facts and are encoded by the
+existing record writer. Two compiled controls match complete artifacts, decode and execute with
+the expected results. Further controls distinguish all scalar zero forms, cross 512-value batch
+boundaries, include 2,000-value pools, handle no chunks and preserve full-width placement fields.
+Protocol checks preserve the elision state on a rejected batch and reject incomplete or overflowing
+ranges. Composite and named initializer trees remain open with the general constant-tree codec.
+
+The first fixture used the wrong Vm path, retained as the pilot's first diagnostic. After that
+repair both requested forms failed on their existing unsupported guards. The first stage build
+also exposed misnamed initializer offset helpers. Correcting those admitted both execution controls.
+The first capacity run left only 59 nodes free. Sharing existing reset literals restores the
+standing 64-node reserve without increasing the cap. Initializer state adds 224 private bytes.
+
+All thirteen complete artifact comparisons and four inference controls pass. Wire has 551 chunks,
+1,301 constant nodes, 23,417 input bytes and a 152,140-byte artifact. Inference independence now
+covers 44,063 recorded expression types. The final workspace passes 3,083 tests with five ignored.
+Workspace Clippy, documentation and the no_std self-host check pass. Receipts and the reviewed
+local shadow-pilot export are in the reverse prompt. Full Order 1 remains active.
+
+## 2026-10-08 Debug metadata moves into a dedicated Keleusma stage
+
+Debug metadata requires canonical ordering as well as packing. The new stage schedules stable
+merge sorting, compares semantic keys and operand windows, and directs every index-buffer copy.
+The host retains buffers and transports data. A second stage state machine controls sub-pool
+order, length prefixes and record encoding. It never receives DebugPool::encode output.
+Chunk debug spans are derived by two wire commands from actual emitted lengths.
+
+The separate stage keeps bounded comparison and byte windows without growing the already large
+wire source for sorting logic. The complete corpus is now thirteen embedded sources. Every
+current stage passes complete pipeline artifact identity and monomorphization identity. Two
+Boolean validation results widen the previous Word-only function-result corpus. Parameters
+remain Word. The census now checks that exact distinction.
+
+The first implementation called a helper error, which the language parsed as reserved checked
+syntax. Renaming it resolved the failure. Later checks caught a one-node reserve shortfall, a
+Bool versus bool spelling in the type census, a tuple-return mismatch in a test fixture, a stale
+byte-size pin and a hardcoded twelve in an otherwise derived inventory guard. These were repaired
+without changing the standing reserve or dropping inventory coverage. Reset literals now reuse
+the existing helpers, leaving 65 constant nodes free in wire.
+
+Five integration tests and three debug-stage protocol tests pass. Seventeen wire protocol tests
+pass, including the new span bounds. The no-default configuration passes the focused debug,
+accounting and type-surface checks. Inference independence covers 43,831 expression types across
+thirteen sources. The workspace diagnostic passed 3,073 tests and failed four stale inventory assertions, with
+five ignored. All 290 affected tests pass after the inventory repairs. Workspace Clippy,
+documentation and the no_std self-host check pass. No production code changed after that run.
+The reverse prompt retains receipts and the reviewed local pilot export.
+Full Order 1 remains active for the remaining constant and private-data forms, semantic decoding,
+shipping integration, type coverage and final gates.
+
+## 2026-10-08 Struct templates and a repaired constant-node reader
+
+Template names now join the shared interner in finalization order. Type names deduplicate and
+field names append fresh. A checkpoint event records the next name index without emitting a
+name, preserving empty field-run positions. Chunk ranges retain the existing stage accumulators.
+Five integration controls cover a compiled boxed struct, repeated and empty names, cross-chunk
+ranges, exact event capacity and scalar payloads. Malformed transport has explicit controls.
+
+The node reader's count was misleading. Above 1,024 nodes it returned the requested count while
+its name-bound clamp skipped the entire constant loop. The regression failed on node zero for a
+1,025-node input. The repaired loop uses its own 1,365-node bound, and tests check every field
+through the exact limit for both input forms. The first diagnostic is retained for the pilot.
+
+Scalar input now omits four necessarily zero fields, using a flagged count and ten-byte records.
+Legacy named and composite inputs remain supported. This is private transport, not a published
+format change. The capacity instrument initially read the flag as part of the count. It now masks
+that flag and verifies the compact extent against the module's actual constant count. The stage
+uses 1,297 nodes with 68 free, and 23,080 input bytes with 26,072 free. Neither cap was raised.
+
+The new template state initially followed a helper that read it. The pipeline parser reported
+unresolved name 510, which the token trace identified as templates. Moving the declaration before
+use repaired the stage source. Forward data declarations remain outside that demonstrated path.
+All twelve complete artifact comparisons pass again. Wire has 543 chunks and a 148,596-byte
+artifact. Clearing 42,813 recorded expression types leaves the twelve artifacts unchanged.
+
+The no-default-features self-host build exposed an existing unguarded Float enum variant in the
+host tag decoder. Canonical feature-aware decoding with checked integer conversion repairs it.
+The targeted no-default run passes six integration checks and one decoder test. The release
+workspace passes 3,067 tests with five ignored. Workspace Clippy, documentation and the no_std
+self-host check pass. The reverse prompt retains command receipts and the reviewed local pilot
+export. External evaluation remains unavailable. Full Order 1 remains open.
+
+## 2026-10-08 Native metadata preserves shared indices and independent lengths
+
+The auxiliary producer now accepts native names and native return shapes. Keleusma interns names
+between enum and data-slot contributions and continues signature-shape interning for native
+returns. The vectors retain independent lengths. Comparison controls cover collisions, empty
+and unequal vectors, repeated shapes, complete compiled native-call artifacts and buffer limits.
+The whole-module helper still refuses the remaining auxiliary forms and is not yet shipping.
+
+Native collisions exposed three input-position bounds using the deduplicated output count.
+The corrected bounds use the original section counts and boundaries. The name interner now
+refuses output-pool overflow before copying. The older constant walker initially swallowed that
+refusal and returned a positive count. A regression failed with 64 instead of minus 255, then
+passed after the wrapper propagated the interner error. Five native integration tests and nine
+wire protocol tests pass. Final workspace receipts are in the reverse prompt.
+
+Stage growth initially left only 48 free constant nodes. Further literal sharing restores 74,
+with 1,291 used. The stage has 528 chunks and uses 48,492 input bytes, leaving 660. Native state
+adds 160 private bytes across the name and signature blocks. No buffer cap changes. Clearing
+42,471 recorded expression types preserves all twelve complete artifacts.
+
+The fresh workspace diagnostic completed with 3,056 passes, one fixture failure and five ignored.
+The command-line bad-input tests shared one temporary directory and could truncate good.kel
+while another case read it. Each test now owns an exclusively created directory, with a process
+identifier and checked sequence number. A deterministic interleaving checks that truncating one
+owner's script and dropping that owner cannot alter the other owner's script. Cleanup is scoped
+to the owned directory. This repair changes test infrastructure only. All 74 command-line tests and workspace Clippy
+pass after the repair. The full workspace was not repeated after the test-only changes.
+
+The shadow task captures the first reserve diagnostic. External evaluation remains unavailable
+under the prior automatic approval rejection. Local review remains non-independent. Order 1
+continues through remaining auxiliary forms, decoding, shipping integration, type coverage and
+final gates. V0.3.X and the untracked .codex directory and nvim.log remain untouched.
+
+## 2026-10-04 Signature numbering moves into Keleusma
+
+Encoding shape records was insufficient because the Rust helper still selected their indices.
+The new producer transports semantic variants and fields. Keleusma appends every parameter
+shape, searches earlier emitted records for each return and resume shape, and assigns the
+resulting indices. The two modes cannot be collapsed. Duplicate parameters must remain in a
+contiguous run, while a return must reuse the first identical earlier record.
+
+The host retains stage output and replays it through the existing byte-input window. This keeps
+table growth independent of stage residency. The protocol requires complete scan coverage before
+accepting a single shape and refuses incomplete, excessive or malformed windows. The host remains
+trusted to replay those bytes faithfully. The protocol does not authenticate a hostile host.
+The 6,145-record control crosses the 6,144-record window, returning the last unique parameter
+and resuming with the first repeated one. Separate controls cover empty tables and zero parameters.
+
+The auxiliary path now consumes these tables directly. Complete artifact comparison still passes
+for all twelve pipeline-produced modules, including the wire stage with 516 chunks and 141,436
+artifact bytes. The legacy formatter helpers retain their explicit reference-numbered standing.
+Native return shapes still need integration, and the shipping serializer remains Rust.
+
+The first attempt used local mut syntax that this language does not admit. The parser refused it.
+Private working fields repaired that error. The next capacity check found 1,325 constant nodes,
+leaving only 40 below the unchanged 1,365 cap. Sharing 39 numeric accessors through five literal
+functions removes 34 duplicate nodes and restores the 74-node reserve. One fixed call level is
+added at those accessors. Input grows to 48,233 bytes, leaving 919. No buffer cap was raised.
+The eleven private signature fields occupy 352 bytes, checked from the actual declarations.
+
+The workspace diagnostic passed 3,048 tests and failed only the stale integration inventory in
+CLAUDE.md. The tree has 137 test files against a claim of 126. The inventory now records 1,505
+functions in those files. The first prose repair also changed a phrase consumed by the feature-set
+guard, which was restored without changing the guard. Clippy required fixed-size chunk iteration
+in the new signature test. These repairs affect documentation and tests, not production code.
+
+Local pilot self-review found two completion excerpts insufficient for their full claims. One
+omitted the actual byte-equality assertion and opcode call path. The other omitted the reserve
+threshold and its unchanged status. Source references stay local, so the outbound evidence must
+contain those facts itself. The original baselines remain recorded and labels are non-independent.
+
+The shadow pilot records the first parser diagnostic and bounded evidence claims locally.
+Self-labels remain non-independent and external evaluation remains unavailable. The full Order 1
+scope remains open for auxiliary forms, decoding, shipping integration, type coverage and gates.
+
+## 2026-10-04 Opcode representation decisions move into the stage
+
+Passing prepacked operand bytes to the old record writer would leave representation decisions
+in Rust. The new transport carries typed semantic fields instead. Keleusma classifies the opcode,
+selects inline or pooled representation and advances the pool ordinal only after successful output.
+A refused field or pool index leaves both prior bytes and ordinal unchanged. Both parity schemes
+reuse the existing stage primitives. The host only maps discriminants and transports fields.
+
+The comparison corpus reaches every public opcode identifier and scalar, boxed, nested and
+construction form. It covers field limits, the 62-to-63 construction boundary, sixteen-bit and
+twenty-four-bit pool indices, invalid transport fields and cross-chunk continuation. The integrated
+pipeline comparison now calls the Keleusma artifact helper rather than Module::to_bytes on its
+actual side. All twelve complete artifacts agree. This does not remove host signature numbering
+or implement missing auxiliary forms, semantic decoding or the shipping integration.
+
+The first growth measurement failed the standing reserve guard. The stage used 1,344 constant
+nodes against 1,365, leaving 21 where the guard requires 64. The baseline used 1,282. Sixty-five
+schema offset and stride accessors each stored their own numeric literal. Sharing four literal
+functions removes 61 duplicate nodes and leaves 1,283. The cost is one additional fixed call
+level, with no buffer expansion. The old source-level offset guard now follows exactly one
+literal alias hop. It still compares values with the derive-generated reference offsets.
+
+A later input pin moved from 47,442 to 47,687 bytes. The full input limit remains 49,152.
+Eight new functions, four stream functions and four literal helpers, move all three chunk-count
+pins from 497 to 505. Stage self-compilation and complete artifacts remain byte-identical.
+
+The previous framing handoff incorrectly priced private Word fields at eight bytes. Private
+fields occupy 32-byte Value slots. The framing state is 128 bytes and opcode state is 256 bytes.
+The allocation implementation already used this rule. A new regression compiles the actual
+private declarations and checks header and persistent-capacity accounting. Its first fixture
+was refused because it never mutated the private block. Giving it a real mutation admits the
+fixture and verifies both sizes. This test was added after the green workspace run and checked
+separately. No production code changed after that run.
+
+The workspace passes 3,044 tests with five ignored. The shadow pilot retains the initial reserve
+diagnostic and three bounded claims with non-independent labels. Full Order 1 remains active.
+
+## 2026-10-04 Actual emitted lengths replace borrowed auxiliary positions
+
+The former windowed driver accepted artifact size and region positions supplied by its caller.
+Those inputs came from the reference artifact in the comparison tests. Complete region byte
+coverage therefore did not establish independent artifact construction. The new auxiliary path
+accepts only Module facts, collects the bytes each record stream actually reports and asks the
+existing Keleusma directory emitter to derive placement. Names and string-pool content retain
+the existing stage interner. Header fields and opcode positions now carry actual module values.
+
+A separate framing protocol validates field widths and size arithmetic before writing the header.
+It stores the expected and consumed byte counts across coroutine resets. Every feed is bounded
+by the 65,536-byte transport window and remaining length. A refused call preserves the accumulator.
+Legacy commands cannot overwrite an active stream. The reader folds the complete artifact and
+checks the standard checksum residue, while semantic decoding remains an explicit open obligation.
+
+The auxiliary comparison reaches all twelve stages. It does not make host-supplied signature
+numbering independently derived, and the framed artifact comparison still borrows opcode and
+operand bytes. Missing auxiliary forms fail explicitly. They must be integrated before replacing
+the shipping serializer, which is unchanged. Input guards protect the new path from the historical
+packer's infallible name and count conversions.
+
+The first broad diagnostic was a changed capacity pin. Wire input grew from 45,297 to 47,442
+bytes, leaving 1,710 below the unchanged cap. A later container-test compilation failed because
+the reference builder was named Builder rather than WireBuilder. The full workspace then found
+three old chunk-count pins. Five framing functions changed 492 to 497 in all three derivations.
+The full run reports 3,037 passes, three failures and five ignored. All three repaired targets
+subsequently pass 97 tests with two ignored. No production source changed after the full run.
+
+The pilot records the first diagnostic and three bounded claims with non-independent labels.
+No external evaluation succeeded for this task. Full Order 1 remains active, including complete
+production encoding and decoding, remaining type coverage and final integration gates.
+
+## 2026-10-04 Admission boundaries and corpus evidence
+
+The inference intervention must run after the recording pass. Clearing the parsed input map
+would measure an initially empty table that checking subsequently repopulates. A private hook
+now permits test-only removal and poisoning while public entry points retain their normal
+behavior. The changed-emission control proves the hook reaches a table emission consults.
+The invalid-source control proves the intervention does not bypass admission.
+
+The workspace audit found source classification errors hidden behind a stale example count.
+Array iteration, checked expression blocks and destructuring lets could enter ordinary parsing
+and turn their interior bindings into unknown-name errors. Unsupported declarations could be
+misread as function headers. Explicit parser diagnostics now stop those paths. Signed source
+also receives an unsupported result because the existing assembler does not preserve its flag.
+These are admission corrections, not new implementation of those language forms.
+
+Several failures concerned the instruments themselves. The public-document scan traversed a
+peer worktree. A reconstruction invariant assumed every stack push allocated a node, which
+wildcard sentinels invalidate. The capacity inventory omitted two stages. Exact boundary and
+inventory controls now replace those assumptions. Including wire reveals the byte maximum is
+45,297, while parse holds the distinct name maximum of 776. The input margin must be measured
+again as wire integration adds code.
+
+CheckedNeg now appears in the stage corpus. The resulting smaller opcode residue required
+updating both censuses and their consistency check. The boundary corpus retains its independent
+checked-negation witness. Explicitly ignored composite header metadata in the historical scalar
+scaffold preserves its current scope, while the shipping driver retains structural signatures.
+The textual parity guard still establishes arm coverage rather than semantic equivalence.
+
+The final release workspace run passes 3,031 tests with five ignored. This configuration unifies
+shell, signatures, encryption and self-host through the command-line crate. It is not evidence
+for every separate feature configuration. The full Order 1 goal remains open.
+
+## 2026-10-04 Source annotations survive until their folded bindings
+
+Composite let annotations were skipped before initializer parsing. Eleven invalid programs
+therefore reached independent checking without their written requirements. Streaming bounded
+source-type records avoids introducing a Rust annotation parser or inferring requirements from
+runtime byte layout. An absolute source token position links each annotation to its folded let
+node. Source range and frame slot preserve branch-local binding identity.
+
+Expanded controls separated grouped types from tuples and unit from an empty tuple chain.
+A full-width dimension record avoids tag-radix truncation. The reference parser refuses nesting
+above its own recursion bound, so the iterative stage's 32-level storage test uses its direct
+input path. Neither implementation's capacity failure is an invalid-source verdict.
+
+Artifact controls exposed two independent parser omissions. Empty parentheses produced no unit
+node, and a let-bound array of tuples lost the element layout needed by a following tuple read.
+Existing node kinds now carry both. The latter retains the current all-Word tuple layout limit.
+Tuple layout allocation gained checks before writes and controls for all three storage limits.
+The host annotation table uses deterministic ordered keys. Type resolution remains in Keleusma.
+
+The broad suite then fired two deliberate unit-support boundary pins. Treating a written unit
+like a synthesized empty continuation would silently drop its return requirement. Written unit
+therefore carries internal payload 3 until code generation normalizes it to the existing unit
+immediate. Replacement tests require the written tail row and independent rejection of a unit
+body declared to return Word. The construct-support table now includes unit.
+
+Running the complete code-generation file instead of only the 89 named self-compilation cases
+exposed seven additional failures. The Rust test reconstruction mirror lacked current wildcard
+and guard records. Its function-count pin still expected 76 where all 78 current functions
+compiled identically. The boundary-count guard coupled a live table to the historical handoff.
+The mirror and count checks are now updated, and the live count is recorded in the roadmap.
+A first source-text count missed two entries with intervening comments. The executable table
+reported 102 cases, confirming the source file's existing warning about that counting method.
+
+The first diagnostic was captured for the shadow pilot before repair. Labels remain explicitly
+non-independent and external evaluation remains pending the existing authorization request.
+The complete Order 1 objective remains active.
+
+## 2026-10-04 Projection identity is separate from byte layout
+
+Scalar access records already supplied scalar kinds, but whole composite fields and array
+elements lost their source identity. Eleven invalid programs in an eighteen-source comparison
+were consequently accepted by independent type checking. The field repair carries declaration
+coordinates alongside the existing runtime read, and checks receiver identity as well as
+result type. The array repair queries the Keleusma structural pool instead of guessing from
+byte width. Array indexing and field identity remain separate constraints.
+
+Six artifact and execution controls preserve the runtime path. A direct metadata trace checks
+nested source coordinates and adjacency before the corresponding field nodes. Direct transport
+controls distinguish known non-arrays from unknown facts. These bounded results do not establish
+general tuple projection support or complete syntax admission. The reverse prompt records gates.
+
+## 2026-10-04 Composite payload identity follows source coordinates
+
+Tuple declarations previously retained byte layout but omitted member type records. Struct
+array fields deliberately discarded their element tag when the length arrived. The initial
+comparison found twelve missed constructor rejections. Preserving written structural records
+lets the existing Keleusma solver enforce those requirements without deriving identity from size.
+
+Constructor repair alone did not type a match-bound payload name. Five further negatives
+exposed the scalar layout-kind fallback on tuple, array and nominal values. Metadata now joins
+the source variant and payload position to the allocated frame slot. Pairing is checked in each
+source range. Nested matches have a direct record trace, and calls taking complete tuple and
+array payloads have artifact and execution controls. This advances binder coverage without
+claiming complete occurrence or projection coverage. The reverse prompt records verification.
+
+## 2026-10-04 Structural tuple and nested-array facts
+
+Source type metadata now retains flat tuple members and the existing nested-array header
+forms. The driver turns declared types and tuple literals into bounded construction rows.
+The Keleusma type stage interns exact tuple and array structures, preserving member order,
+element types and dimensions independently of byte size. Parameters, calls, aliases and
+returns share these identities. The solver now permits up to 640 productive rounds, bounded
+by its binding table. Pool exhaustion is unavailable evidence rather than source rejection.
+
+The initial fifteen-source comparison found eleven missed rejections. The expanded corpus
+contains nineteen sources, including thirteen negatives and six valid controls. Six complete
+artifact and execution controls cover tuple, nested-array and array-of-tuple parameters and
+returns. Array-of-tuple literals now retain their tuple element byte width. Return-header
+layout no longer indexes a nonexistent parameter in zero-parameter functions.
+
+The structural pool adds three 640-word arrays, or 1,920 words. At eight bytes per word this
+is fifteen KiB beyond the earlier 56 KiB selected-cap increase. The accounting tests share one
+price table and compare actual array capacities as well as counts. Projection scalar-exclusion
+rules now recognize known nominal and structural composites, with direct transport controls.
+
+This does not establish arbitrary nested type grammar, composite payload requirements,
+array let annotations, whole-composite projection identity, complete binder and occurrence
+coverage or general syntax admission. Mixed-scalar tuple runtime layout and nominal struct
+signatures remain incomplete. Production serialization still uses Rust Module::to_bytes.
+The complete Order 1 objective remains active.
+
+## 2026-10-04 Enum identity and payload declarations survive lowering
+
+The nominal parameter channel alone could reject a scalar passed to an enum parameter while
+accepting a constructor of a different enum. Both constructor types had become unknown. The
+first nineteen-source comparison found fourteen missed rejections, including wrong payload
+types and arity, unknown variants, constructor returns and alias identity.
+
+Constructor metadata now retains the parser's declaration-order variant index. Enum declaration
+records carry scalar and named payload types and scalar-array lengths. Tuple payloads reserve
+an unknown field, preventing subsequent payload requirements from shifting. The host transports
+these source facts and the stage applies its existing count and agreement rules. Equal byte sizes
+are never used as evidence of nominal identity. The new metadata is consumed before reconstruction.
+
+Positive artifact controls exposed a separate existing enum-to-Word cast error. The parser had
+emitted a plain widening cast and code generation emitted ByteToWord. The reference instead
+evaluates the enum once and emits a variant-dispatch loop. The pipeline now reuses its enum match
+assembly and emission, retaining the cast-specific fallback trap. Internal record 74 builds this
+dispatch into the existing Cast node. The public instruction set is unchanged.
+
+Expanded controls then found missing parser enum facts on aliases. Parameter and local enum
+facts now reach subsequent bindings, and scalar literals and Byte casts clear stale enum facts.
+Eleven complete artifact and runtime comparisons cover these paths and return seven. The first
+diagnostic was sampled in the shadow pilot. Later cast diagnostics remain in engineering logs
+under the first-diagnostic convention. Full composite typing, production wire emission and the
+Order 1 completion gates remain open.
+
+## 2026-10-04 Composite identity must survive representation lowering
+
+The independent production checker made previously hidden composite gaps observable. The first
+sixteen-source comparison found twelve invalid programs accepted and one valid program rejected.
+The false rejection was an unknown-name diagnostic after a direct struct-returning call, whose
+return declaration was known but whose field postfix had not been armed.
+
+Constructor byte size cannot establish nominal identity. Two distinct structs may have the same
+size and field count. The parser's existing struct metadata now carries the source name id above
+the count. Extraction pairs these postorder identities with reconstructed constructors and checks
+their fields against source declarations. Function headers reserve every parameter position before
+reading its type, so tuple headers that emit no type record cannot shift later scalar declarations.
+
+Scalar-array types use the element tag in the low four bits and the length above it. Nominal
+structs and enums use distinct low-bit classes, preventing accidental agreement with an array of
+the same storage size. The stage derives a literal array's tag after resolving its element facts.
+The supported length bound keeps this representation within a 32-bit Word. Larger lengths and
+non-scalar elements remain unknown in this channel. Nominal enum tags exposed a valid enum-to-Word
+cast that needed an explicit stage rule. A proposed empty-array control was invalid under the
+reference compiler and was removed from the positive population.
+
+The broader scalar-access corpus exposed an entire array field being lowered as a scalar read.
+The previous unknown array parameter type had concealed that representation error. Whole composite
+fields now emit the existing nested-field operation. Array parameter and return signatures also
+needed their outer shape retained. Complete artifact comparison and execution returning seven
+cover that correction independently of the type verdict. Named struct signatures, complete tuple
+and nested-array typing, composite aliases and enum constructor payload facts remain incomplete.
+
+## 2026-10-04 A production verdict must precede its oracle
+
+The first integration test rejected an invalid program through the Rust reference, demonstrating
+that the shipping entry could mask a missing independent verdict. The new production runner
+uses scoped Keleusma parser and reconstruction facts. The reference compiler bootstraps the
+embedded rejection stage, but does not inspect the user source before the independent verdict.
+Successful scoped checks still require the reference gate because composite coverage is incomplete.
+
+The transport derives field offsets and capacities from named compiled slots. Stage functions
+supply verdict constants and the execution bound. A fresh owned arena and zeroed shared buffer
+per batch prevent private solver state from crossing source heads. Protocol, capacity and virtual
+machine errors do not become source rejection. Existing extraction panics are caught as unavailable
+evidence. This does not eliminate upstream panic paths or their default panic-hook output.
+
+Tests distinguish twenty invalid sources and seven valid controls, plus sixteen rule/form cases
+and eight controls. A separate twelve-stage comparison reaches both transports. Boundary and
+malformed-input controls establish that an unavailable verdict cannot masquerade as a type error.
+
+The command probe initially compared the two backend flags on the same file and found different
+artifact sizes. Inspection established different effective sources. The Rust command adds native
+signature declarations while the self-hosted command does not. The maintained command test compares
+with the corresponding production library artifact, then executes it and asserts the result.
+Artifact agreement and execution are separate observations. Neither establishes wire-emitter provenance.
+
+## 2026-10-04 Admission checks exposed scope defects in both compilers
+
+Guarded match arms cannot establish coverage even when their condition is a literal true.
+The parser now records unguarded catch-alls and declaration-row coverage. A bit per active
+match depth preserves outer coverage across nested guards and results. A checked eight-level
+limit prevents indexing past the match stacks. Pattern syntax outside this path remains an
+unsupported diagnostic rather than being reported as invalid source.
+
+The first coverage implementation rejected valid direct enum scrutinees. Unit construction
+needed the following token to finish, but the match boundary consumed that token first.
+Declared constructor and call result types now reach match selection after the expression
+finishes. Complete artifact comparison additionally exposed missing enum signature shapes.
+They now use declared discriminant and payload sizes without reference inference. Valid controls caught this error direction, which a negative corpus could not reveal.
+
+Restoring parser loop scopes produced an artifact disagreement with the reference. Inspection
+showed the reference retaining its induction variable in the enclosing scope. A source with an
+outer value of seven consequently read the loop slot at the tail. The reference now opens a
+scope around every loop form. It also hides the allocated induction name while compiling the
+upper bound, matching the type checker's scope order while preserving slot allocation order.
+Execution assertions establish the expected value independently of artifact agreement.
+
+Scoped input extraction also obtains induction-variable and bound constraints from the loop
+side tables. These are source-defined Word facts and do not borrow reference inference. The
+remaining composite and production paths remain separate completion obligations.
+
+## 2026-10-04 Scalar access facts already existed in the layout records
+
+Inspection of code generation established three distinct scalar access record shapes. Struct
+and tuple fields pack a byte offset below the scalar kind. Array-element reads carry the kind
+directly. The scoped type operand adapter previously treated these nodes as unknown even
+though the parser had already derived their layouts from source declarations.
+
+The adapter now translates those layout kinds to Word, Byte and bool type tags. It shares
+the translation with enum payload binding records. Composite field and array accesses use
+different node kinds and remain unknown rather than receiving an element's tag. This preserves
+the distinction between a scalar projection and the complete container passed to a function.
+
+The initial twenty-six-program comparison reported nine invalid programs accepted by the
+pipeline. After the adapter change, all cases agree with the reference. The controls cover
+conditions, return types, call arguments, alias chains, tuple fields and contextual Byte
+arithmetic. Some invalid controls already rejected because another known operand sufficed.
+The nine before-change failures establish that the new facts actually change verdicts.
+
+This does not establish complete composite typing or admission. The broader type adapter,
+loop scopes, match exhaustiveness, production verdict path and wire emission remain open.
+The pilot preserves the first failing comparison and marks its self-review non-independent.
+
+## 2026-10-04 Guards must survive execution
+
+The first runtime comparison confirmed that the parser discarded guards. Merely extracting
+an additional boolean requirement would have made the rejection census pass while continuing
+to execute false arms. An internal guarded-arm node now carries condition and result as separate
+children. Code generation emits the guard after pattern binding and places the arm Break inside
+its If. The type walk checks the condition and compares the actual result across arms.
+
+The old wildcard representation assumed one final wildcard. That cannot express a guarded
+wildcard followed by another arm. Parser records now preserve every wildcard position. The
+reconstructor retains earlier wildcards in the ordered table and compacts a final wildcard into
+the existing trailer. A naive fixed-size entry for every wildcard would have reduced the old
+maximum enum-arm capacity. The compact trailer and twelve-variant control prevent that regression.
+The lexer gives `when` its own token, and match expression boundaries track grouping and nested
+block context. An operator marker separates an enclosing expression from the match's scrutinee,
+guards and results. Match-arm name scopes restore after each arm.
+
+Enum payload guards exposed missing scalar binding facts. Their parser records already carry
+the source-declared scalar kind and allocated slot, so scoped inputs use those facts without
+reference inference. Complete artifacts exposed additional assembly omissions invisible to an
+opcode-only comparison. Enum layout minimum payload had always been zero, and Boolean parameters
+were classified as composite with an unknown verifier shape. The enum declaration END now carries
+the size already computed by the stage. Both Boolean metadata tables now use the declared type.
+
+One proposed valid control had only a guarded Word wildcard. The reference rejects it as
+non-exhaustive. The control was corrected to include an unconditional fallback. That failed probe
+is retained, and match exhaustiveness remains an admission audit item. The new corpus does not
+establish complete syntax coverage or full-language support. Composite facts and loop scope also
+remain incomplete.
+
+The first diagnostic in the shadow pilot is a test authoring error, equality on Chunk without
+PartialEq. A second incorrect test call signature was corrected alongside it. Later runtime and
+artifact discrepancies remain in the engineering logs under the first-diagnostic convention.
+The pilot's completion claims include command, exit and suite identity with non-independent
+self-labels. External evaluation remains pending authorization and has not altered any gate.
+
+## 2026-10-04 Declaration constraints expose branch scope
+
+Moving the rule-versus-form census onto pipeline inputs exposed four accepted negatives. The
+reference-input harness had concealed missing transport for annotations, stores and indices.
+The same source tables now drive both harnesses. The pipeline census has no expected-gap list.
+It remains red on the fourth case, a match-arm guard discarded during parsing.
+
+An annotated local needs two facts. Its initializer must agree with its declared type, and uses
+of the binding must retain that declaration. Parser metadata tag 92 records the source type name
+before the existing LetIn record. Pending statement frames preserve outer annotations through
+nested initializer bindings. Existing type row 8 checks agreement and provides the binding result.
+No public bytecode opcode or version changes. The initial temptation to reuse contextual Byte
+literal conversion was rejected after inspecting the reference statement checker. That conversion
+belongs to binary operators and comparisons, not declarations or assignments.
+
+Data reads and stores use source declaration ranges in parser slot order. Const fields take no
+runtime slots. Array ranges carry their element tag without allocating one row per element.
+The assembly path has a different shared-first order, so its offsets are not suitable for this
+source-fact lookup. Scalar and nested value-array indices and indexed data operations produce
+Word requirements through the shared expression walk. Composite result types remain incomplete.
+
+A nested-shadowing positive control failed after these constraints became visible. The parser
+kept then-branch names alive while reading the else branch. Restoring the live-name stack alone
+would have relaxed the per-function binding cap and retained obsolete composite shape metadata.
+The fix therefore keeps a separate total binding counter and clears reused shape entries. Frame
+slots stay monotonic. Tests establish sibling and implicit-else artifact identity, absence of
+out-of-scope names and the original total cap across disjoint branches. Loop and match scopes
+still require their own coverage and are not claimed complete.
+
+All twelve complete stage artifacts still match the reference after these changes. The scoped
+census remains the sole failing test in the selected stage suites. Match guards need preservation
+through parser, reconstruction, type inputs and code generation. Merely extracting a guard while
+continuing to discard its runtime behavior would not satisfy that obligation. The pilot retains
+the first diagnostic and three exact-command execution claims with non-independent self-labels.
+No external evaluation occurred while its specific approval request remains pending.
+
+## 2026-10-04 Parser failures as rejection evidence
+
+The full scoped rejection corpus exposed six failures that the earlier scalar witnesses did
+not cover. Unknown identifiers and fields silently selected existing slots. A bare function
+reference left the call parser waiting until a later parenthesis. Scalar projections left
+unfolded operands and failed during reconstruction. Those outcomes cannot be treated as
+interchangeable with a source rejection.
+
+The shared parser transport now has a Result interface preserving diagnostic tags and details.
+Its panicking wrapper remains for existing consumers. The scoped type-input helper propagates
+parser errors. The rejection harness accepts only explicitly classified source diagnostics or
+a false type-stage verdict. It records every unexpected panic as unavailable evidence.
+
+The parser preserves primitive annotations in pending-statement and binding storage for scalar
+projection checks. Composite annotations must be classified by their outer syntax, so an array
+or tuple containing Word is never mistaken for Word. The pending statement stack keeps an outer
+binding's annotation intact while its initializer contains nested bindings. General annotation
+compatibility remains outside this increment.
+
+A dot after a scalar can begin a valid trait method call. The parser therefore waits through
+the following identifier before deciding between a scalar field error and unsupported method
+syntax. Unknown struct fields use the same distinction. Missing names also require care around
+imports, contextual assertions and unsupported patterns. Separate diagnostics preserve those
+boundaries, and the first lexer pass carries import presence to the parser. This remains a
+partial syntax admission analysis, not a claim that every unsupported form has been classified.
+
+The boolean-parameter control exposed a pre-existing uppercase Bool seed. The language primitive
+is lowercase bool. Correcting the seed made the parameter projection check reachable. A legacy
+projection probe also counted any panic as success and temporarily suppressed the process-wide
+panic hook, hiding neighboring test diagnostics. It now checks structured errors directly.
+
+The const-parameter occurrence probe now receives an unsupported diagnostic rather than an
+incomplete occurrence table. The remaining loop and payload binder omissions are still measured.
+Generic identity functions continue reaching the production divergence check. Forward data and
+forward native-import candidates were rejected by the reference and were removed from the valid
+control list. These failed probes remain in the increment logs.
+
+Final verification preserves complete artifact identity for all twelve stages. The type corpus,
+valid controls and stage-capacity checks pass, but production type rejection, general input
+coverage, wire emission and the final integration gates remain open. The shadow pilot captures
+the first diagnostic and completion claims with non-independent self-reviews. External evaluation
+remains pending the existing specific authorization question.
+
+## 2026-10-04 Scoped scalar expression results
+
+The initial witness passed a comparison result to a Word parameter. Reference compilation
+rejected it, but the pipeline call channel accepted because computed operands were unknown.
+The batch now includes expression constraints and form-2 result bindings. Synthetic identities
+include the source head, range and node index, so calls, local initializers and return rows can
+refer to the same computed value. The expression walk is shared with the legacy projection.
+
+A result rule cannot treat every binary operator as returning its operands' type. Comparisons
+produce bool and shifts preserve only the left type. Boolean operators, numeric unary operators,
+scalar casts and branch results also have distinct rules. All joins and coercion decisions remain
+in the Keleusma stage. The host supplies operator shapes and source literal values.
+
+The reference coerces integer literals from 0 through 255 to Byte in binary arithmetic and
+comparisons, but not in shifts or calls. A new operand form retains that literal syntax, and
+binding forms remain a separate namespace. The parser also erased xor's restriction by emitting
+the inequality operator tag. It now retains xor until code generation maps it to the existing
+comparison instruction. No public opcode or bytecode version changes.
+
+The corpus exercises 33 valid and invalid scalar cases plus two 16-link computed chains. It
+checks result-row indices within their own batch. All twelve stages fit and pass with maxima
+of 299 combined expression and argument rows and 288 bindings. Composite reads, source
+annotations and production rejection still need work. The initial generic helper moved its
+operand closure into a nested closure; borrowing it corrected the Rust compile failure.
+Clippy then identified a collapsible conditional in singleton-match extraction, now corrected.
+
+The shadow pilot captured the first failed verdict and retains local non-independent labels.
+Later diagnostics are preserved in engineering logs without replacing the first sample.
+External evaluation remains pending the existing specific authorization request.
+
+## 2026-10-04 Call arguments and bounded scope
+
+Reconstructed call nodes already carry argument indices. Extraction now pairs those operands
+with declared parameter tags, preserving local and called-function identities for resolution in
+the Keleusma type stage. Arity remains a separate channel so positional pairing cannot conceal
+extra or missing arguments. Shared operand classification also serves expression extraction.
+
+A flat binding namespace first falsely rejected a valid program whose functions reused a
+parameter name. Source-head, range and frame-slot identities remove that collision. A second
+witness still accepted an invalid parameter named after a global function. The parser was
+selecting the global function first. Local lookup now precedes global namespace lookup.
+The initial implementation used unsupported local mutation syntax twice before being corrected
+to use the parser's existing state field. Both failed runs are retained under ignored tmp.
+
+The aggregate wire-stage facts exceeded the selected cap with 831 bindings. Separate guard
+and body batches retain local dependencies and import only referenced function return facts.
+No cap increase is necessary for the measured corpus. A call followed by two local aliases
+then exposed the stage's single-hop limit. Traversal now has at most one hop per binding row,
+so every acyclic chain fits and cycles terminate. The 640-row boundary is exercised directly.
+
+A complete artifact control found an unrelated assembly discrepancy that chunk-operation
+comparisons had missed. The pipeline encoded an empty data layout and the reference omitted
+it. The assembly helpers now use absence when the slot table is empty. A new complete-artifact
+corpus compares all module bytes from the production compiler and checks its directory inventory.
+Both sides still use Rust serialization, so this is not evidence of Keleusma wire integration.
+
+The shadow pilot's first sample remains the initial missing-field-documentation diagnostic.
+Later failures are recorded as engineering evidence without replacing that sample. External
+evaluation remains pending the existing specific authorization request.
+
+## 2026-10-04 Match comparisons and source-head extraction
+
+The initial differential produced no match comparison where reference syntax produced one.
+The driver now reads result indices from the reconstructed integer and enum match tables,
+compares the first result with every later result, and includes the enum wildcard only when
+its presence flag is set. Nested dispatch, wildcard-only matches, named operands and later
+mismatched arms are covered. An enum payload binder remains unknown on both input paths.
+
+The same review revisited the missing multiheaded return checks. Dispatch construction had
+combined all heads into a synthetic root and remapped their frame slots. The parser still held
+separate body and guard streams. Reconstructing those streams separately for type facts restores
+each source head's return requirement and own parameter and local names. Code generation retains
+its existing dispatch construction. Derived-row indices refer to the accumulated expression rows.
+
+Probes rejected two assumptions. Bare block results in a match are rejected by the reference
+parser. A function guard containing `1` is accepted by the Rust reference compile path, while
+match guards have an explicit boolean requirement. The new extraction keeps function guard
+subexpressions but adds no root requirement. The self-hosted parser discards match guards, and
+integer matches without a wildcard fail during reconstruction. These remain recorded limits.
+
+The shadow pilot recorded the first failed differential before any model judgment. The local
+self-review is explicitly non-independent. External evaluation remains pending the operator's
+answer to the existing destination-and-payload approval question. Later implementation diagnostics
+were not sampled because this increment uses the first-diagnostic convention.
+
+## 2026-10-04 Struct field counts and unary conditions
+
+The parser already resolves a struct literal to its declaration. It now emits that
+resolved declaration's field count as metadata immediately before the existing construction
+record. A single private word holds the delayed construction record. The driver consumes the
+metadata before reconstruction, so it adds no expression node and does not reduce the node budget.
+The existing construction record supplies the given count. The type stage performs the comparison.
+
+This avoids guessing declared fields from byte size. The equal-size witness retains identical
+construction records and now has different metadata. Nested and reordered literals preserve their
+own counts. The first differential failed with no emitted kind-7 row and passed after wiring.
+The kind inventory now includes six kinds, with remaining syntactic forms stated separately.
+
+Review of those forms found that condition extraction handled `if` but omitted unary `not`.
+The expanded differential failed on a valid `not true` source because its condition row was
+missing. The extraction now emits that requirement and direct stage checks include `not 1`.
+
+The shadow pilot captured the first diagnostic and completion claims locally. Live evaluation
+was not retried because the previous automatic approval rejection remains unresolved. Local
+self-review labels do not support an independent classification-accuracy claim.
+
+## 2026-10-04 Explicit else presence for Order 1
+
+The parser emitted identical records for an omitted else and a written empty else.
+The new parser witness failed before the change. The parser now carries one presence bit
+per active conditional and emits it with the If record. Reconstruction encodes an omitted
+else as the negative condition index minus one. Node indices are nonnegative and bounded,
+so this preserves the distinction without another node kind or bytecode opcode.
+Code generation decodes the condition and emits the same executable instructions.
+
+Branch-pair extraction follows the recorded presence and walks each block to its tail.
+An empty or statement-only block contributes an unknown operand, matching the reference
+extraction. Guessing from a synthesized unit would conflate omitted and written else branches.
+The branch corpus includes nested and sequential conditionals to exercise context reuse.
+Match-arm pairs remain outside this extraction even though they share expression kind 4.
+
+The complete type suite caught its stale four-kind inventory assertion after branch pairs
+became reachable. The inventory now names five emitted kinds and explicitly distinguishes
+kind coverage from coverage of every syntactic form. The monomorphization evidence had a
+separate omission, covering ten of twelve stage sources. It now includes the two missing
+sources and compares the list with the stage directory.
+
+The shadow pilot captured the first build diagnostic and two completion claims. The network
+attempt failed at transport. Automatic approval review rejected the escalated evaluation,
+so a specific payload and destination approval request remains pending. An initial excerpt
+had omitted the permission detail and was superseded by a separate complete diagnostic
+record. Local labels are self-review and make no independent-accuracy claim.
+
 ## 2026-09-27 — session 67, increment 9: the class was closed for one file
 
 **The finding is about a guard, not a document.** `tests/release_process_crate_list.rs` exists

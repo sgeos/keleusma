@@ -106,3 +106,23 @@ escape sequences. It was discarded on reading the journal entry.
 written by the same tool, so comparing them to each other needs no model of the extractor at
 all, while comparing either to the markdown needs the extractor itself. The guard does the
 first and the workflow does the second.
+
+## Regeneration of 2026-10-21
+
+The Order 3 work rewrote rows of `book/src/INSTRUCTION_SET.md` to describe the outcome forms
+of `Div`, `Mod`, `GetDataIndexed`, `SetDataIndexed`, `BoundsCheck`, flat `GetIndex` and
+`Trap`. The template was not regenerated, so the book workflow's drift step failed on the
+first pull request that carried the work. The guard in `tests/book_translation_currency.rs`
+passed throughout, which is the split described above working as intended. It compares the
+two committed files and cannot see the markdown.
+
+The template was regenerated with `mdbook-xgettext` and `ja.po` merged with
+`msgmerge --no-fuzzy-matching`. The merge left thirty new messages untranslated and
+twenty-one new orphans. All thirty were translated, using the orphaned translation of each
+replaced row as the reference for its terminology. The twenty-one new orphans were removed
+because each has a translated replacement. The thirteen earlier orphans were kept.
+
+`ja.po` now holds **3081** live entries, of which **3044 are translated**, **37 are
+untranslated** and **13 translations are marked obsolete**. The untranslated count fell by
+one because one previously untranslated message left the source. The translations are
+machine-assisted and have not been reviewed by a native reader.

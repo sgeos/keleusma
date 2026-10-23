@@ -26,11 +26,11 @@
 //!
 //! | row | the claim |
 //! |---|---|
-//! | `Div` | traps on divide-by-zero |
-//! | `Mod` | traps on divide-by-zero |
+//! | `Div` | a zero divisor reifies as flag `3` |
+//! | `Mod` | a zero divisor reifies as flag `3` |
 //! | `CheckedDiv` | a zero divisor reifies as flag `3`, rather than trapping |
 //! | `CheckedMod` | the same, mirroring `CheckedDiv` |
-//! | `BoundsCheck` | traps if the index is outside `[0, bound)` |
+//! | `BoundsCheck` | reifies an invalid index as flag `1` |
 //!
 //! `CheckedNeg` names an overflow case but makes no trap-or-reify claim, and
 //! `Trap` is the trap itself. Neither is in this class.
@@ -48,7 +48,7 @@
 extern crate alloc;
 
 use keleusma::Arena;
-use keleusma::bytecode::{Module, Op};
+use keleusma::bytecode::{ConstValue, Module, Op, Value};
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
@@ -85,124 +85,92 @@ fn run(what: &str, m: Module) -> Result<VmState, VmError> {
     vm.call(&[])
 }
 
-/// `Div` and `Mod` trap on a zero divisor, as their rows say.
+/// Build a straight-line opcode fixture independently of surface lowering.
+/// Both division contracts remain executable even though bare source operators
+/// now select the checked family and an explicit Trap.
+fn division_fixture(operation: Op, divisor: i64, discard_outcome: bool) -> Module {
+    let mut module = compiled("fn main() -> Word { 7 }");
+    let chunk = &mut module.chunks[0];
+    chunk.constants = alloc::vec![ConstValue::Int(7), ConstValue::Int(divisor)];
+    chunk.ops = alloc::vec![Op::Const(0), Op::Const(1), operation];
+    if discard_outcome {
+        chunk.ops.push(Op::PopN(2));
+    }
+    chunk.ops.push(Op::Return);
+    module
+}
+
+/// Legacy opcodes expose the same total integer outcome shape.
 #[test]
-fn the_plain_divide_and_modulo_trap_on_a_zero_divisor_as_the_spec_says() {
-    for (what, src, wanted) in [
-        ("Div", "fn main() -> Word { let z = 0; 7 / z }", Op::Div),
-        ("Mod", "fn main() -> Word { let z = 0; 7 % z }", Op::Mod),
-    ] {
-        let m = compiled(src);
-        assert!(
-            ops(&m).contains(&wanted),
-            "{what}: the program does not emit {wanted:?}, so this case tests nothing. \
-             The lowering changed and this file's population needs re-deriving."
-        );
-        let r = run(what, m);
-        assert!(
-            matches!(r, Err(VmError::DivisionByZero)),
-            "{what}: the spec row says it traps on divide-by-zero; got {r:?}"
-        );
+fn the_plain_divide_and_modulo_reify_a_zero_divisor_as_the_spec_says() {
+    for operation in [Op::Div, Op::Mod] {
+        for divisor in [0, 2] {
+            let module = division_fixture(operation, divisor, true);
+            assert!(ops(&module).contains(&operation));
+            let expected = if divisor == 0 {
+                7
+            } else if operation == Op::Div {
+                3
+            } else {
+                1
+            };
+            assert!(
+                matches!(run("total legacy division", module), Ok(VmState::Finished(Value::Int(n))) if n == expected)
+            );
+        }
     }
 }
 
-/// `CheckedDiv` and `CheckedMod` reify a zero divisor rather than trapping.
-///
-/// The surface `/` lowers to `Op::Div`, so a source-level program cannot reach
-/// the checked opcodes without the arm construct. The module is therefore
-/// patched: `Div` is replaced by the two-instruction sequence the
-/// specification itself describes for an uncaptured operation, `CheckedDiv`
-/// followed by `PopN(2)`, which discards the flag and the high half and leaves
-/// the low half. That substitution is stack-neutral, so the surrounding chunk
-/// stays well formed, and the program contains no jump whose target the extra
-/// instruction would move.
-///
-/// If the reified behaviour were a trap, this would fault. It must not.
+/// Discarding an explicit outcome must leave the numerator on zero and the
+/// quotient or remainder otherwise. Verification and execution must succeed.
 #[test]
 fn the_checked_divide_and_modulo_reify_a_zero_divisor_rather_than_trapping() {
-    for (what, src, plain, checked) in [
-        (
-            "CheckedDiv",
-            "fn main() -> Word { let z = 0; 7 / z }",
-            Op::Div,
-            Op::CheckedDiv(0),
-        ),
-        (
-            "CheckedMod",
-            "fn main() -> Word { let z = 0; 7 % z }",
-            Op::Mod,
-            Op::CheckedMod,
-        ),
-    ] {
-        let mut m = compiled(src);
-        let mut patched = false;
-        for chunk in &mut m.chunks {
-            if let Some(i) = chunk.ops.iter().position(|o| *o == plain) {
-                assert!(
-                    !chunk.ops.iter().any(|o| matches!(
-                        o,
-                        Op::If(_)
-                            | Op::Else(_)
-                            | Op::Loop(_)
-                            | Op::EndLoop(_)
-                            | Op::Break(_)
-                            | Op::BreakIf(_)
-                    )),
-                    "{what}: the fixture gained a jump, so splicing an instruction would move a \
-                     target; choose a straight-line fixture instead"
-                );
-                chunk.ops[i] = checked;
-                chunk.ops.insert(i + 1, Op::PopN(2));
-                patched = true;
-                break;
+    for (operation, valid_result) in [(Op::CheckedDiv(0), 3), (Op::CheckedMod, 1)] {
+        for (divisor, expected) in [(0, 7), (2, valid_result)] {
+            let module = division_fixture(operation, divisor, true);
+            assert!(ops(&module).contains(&operation));
+            match run("checked division", module).expect("total arithmetic executes") {
+                VmState::Finished(Value::Int(value)) => assert_eq!(value, expected),
+                other => panic!("unexpected result {other:?}"),
             }
         }
-        assert!(
-            patched,
-            "{what}: no {plain:?} to replace, so this case tests nothing"
-        );
-        assert!(
-            ops(&m).contains(&checked),
-            "{what}: the patch did not take, so this case tests nothing"
-        );
-
-        let r = run(what, m);
-        assert!(
-            !matches!(r, Err(VmError::DivisionByZero)),
-            "{what}: the spec row says a zero divisor reifies as flag 3 rather than trapping, \
-             and the implementation trapped. One of the two is wrong, and the row is the \
-             claim under test."
-        );
+        // Read flag directly. Returning consumes the top slot; leave only
+        // that result on the operand stack through a local.
+        let mut module = division_fixture(operation, 0, false);
+        let chunk = &mut module.chunks[0];
+        chunk.local_count = 1;
+        chunk.ops.pop();
+        chunk
+            .ops
+            .extend([Op::SetLocal(0), Op::PopN(2), Op::GetLocal(0), Op::Return]);
+        assert!(matches!(
+            run("zero-divisor flag", module),
+            Ok(VmState::Finished(Value::Int(3)))
+        ));
     }
 }
 
-/// `BoundsCheck` traps when the index is outside its bound.
-///
-/// The row records that the compiler emits it between levels of a
-/// multi-dimensional indexed access, so the fixture is two-dimensional. If a
-/// lowering change stops emitting it here the assertion below fails rather
-/// than the case quietly passing on a program that never contained the
-/// opcode.
+/// The predicate returns a flag; source lowering owns the explicit failure.
 #[test]
-fn the_bounds_check_traps_outside_its_bound_as_the_spec_says() {
-    let src = "fn main() -> Word {\n\
-               \x20 let g = [[1, 2], [3, 4]];\n\
-               \x20 let i = 5;\n\
-               \x20 g[i][0]\n\
-               }";
-    let m = compiled(src);
-    assert!(
-        ops(&m)
-            .iter()
-            .any(|o| matches!(o, Op::BoundsCheck(_)) || matches!(o, Op::GetIndex(_))),
-        "the two-dimensional index emits neither BoundsCheck nor GetIndex, so this case \
-         tests nothing and the population needs re-deriving"
+fn the_bounds_check_reifies_failure_and_source_lowering_traps() {
+    let mut module = compiled("fn main() -> Word { 0 }");
+    module.chunks[0].constants = alloc::vec![ConstValue::Int(-1)];
+    module.chunks[0].ops = alloc::vec![Op::Const(0), Op::BoundsCheck(2), Op::Return];
+    assert!(matches!(
+        run("BoundsCheck outcome", module),
+        Ok(VmState::Finished(Value::Int(1)))
+    ));
+    let module = compiled(
+        "private data d { xs: [[Word; 2]; 2] } fn main() -> Word { d.xs[0][0] = 1; d.xs[5][0] }",
     );
-    let r = run("BoundsCheck", m);
-    assert!(
-        matches!(r, Err(VmError::IndexOutOfBounds(_, _))),
-        "an out-of-range index must fault, as the BoundsCheck row says; got {r:?}"
-    );
+    assert!(ops(&module).contains(&Op::BoundsCheck(2)));
+    assert!(ops(&module).contains(&Op::Trap(
+        keleusma::bytecode::TrapKind::IndexOutOfBounds.code()
+    )));
+    assert!(matches!(
+        run("explicit bounds failure", module),
+        Err(VmError::IndexOutOfBounds(5, 2))
+    ));
 }
 
 /// The population this file covers is the one the specification states.

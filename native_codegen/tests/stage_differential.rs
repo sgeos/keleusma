@@ -782,14 +782,20 @@ const AST_BRIDGE: &[(&str, &str, usize)] = &[
 #[test]
 fn codegen_agrees_with_the_vm_on_reconstructs_own_output() {
     // --- Stage 1: drive reconstruct.kel on a real parsed head ---
-    let src =
-        std::fs::read_to_string("../examples/scripts/11_signed.kel").expect("read 11_signed.kel");
-    let (fns, _names, _, _) = keleusma::selfhost::parse_functions(&src);
+    // **THE SUBJECT IS `11_signed.kel` WITHOUT ITS `signed` MODIFIER.** In
+    // absorption 82 upstream's parser began refusing signed declarations by name,
+    // so the file itself no longer parses, and no corpus file parses to a single
+    // head any more; `probe_stage_vacuity.rs` pins that zero. This is the same
+    // program, so its body records are the ones this chain always drove.
+    let src = "fn main() -> Word {\n    21 + 21\n}\n";
+    let fns = keleusma::selfhost::try_parse_functions(src)
+        .expect("the subject is inside the parse.kel subset")
+        .functions;
     assert_eq!(
         fns.len(),
         1,
-        "11_signed.kel is expected to parse to exactly one head; it parsed to {}. \
-         If the parser's view of this file changed, pick a subject by PROPERTY and \
+        "the subject is expected to parse to exactly one head; it parsed to {}. \
+         If the parser's view of it changed, pick a subject by PROPERTY and \
          report it rather than adjusting this number.",
         fns.len()
     );

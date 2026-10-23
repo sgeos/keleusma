@@ -58,7 +58,12 @@
 // The former guarded-construction refusal now has executed positive coverage.
 // 744 -> 751 with private scalar kinds, lifecycle, ordering and arithmetic-gap
 // coverage. The old initializer-refusal test now executes both changed inputs.
-const RECORDED_TEST_FUNCTIONS: usize = 759;
+// 759 -> 760 in absorption 82: `differential.rs` folded two bounds-check tests
+// into one, `differential_coverage.rs` deleted its emptied external-witness test,
+// and `native_workflow.rs` added three.
+// 760 -> 761: `native_workflow.rs` guards the gate script against bash 3.2,
+// after the first hosted run failed on an empty feature array.
+const RECORDED_TEST_FUNCTIONS: usize = 761;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise
@@ -260,7 +265,8 @@ const RECORDED_TEST_FUNCTIONS: usize = 759;
 /// 118 -> 119: `checked_byte_arithmetic.rs` added, none removed.
 ///
 /// 119 -> 120: `operand_variant_sweep.rs` added, none removed.
-const RECORDED_TEST_FILES: usize = 156;
+// 156 -> 157 in absorption 82: `native_workflow.rs` added, none removed.
+const RECORDED_TEST_FILES: usize = 157;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")

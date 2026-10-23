@@ -46,23 +46,105 @@
 //! upstream as report 5, and pinned below so it cannot rot into an assumption
 //! that it was closed.
 
+//!
+//! # ✅ REPORT 4 WAS ANSWERED FROM THE RUNTIME SIDE IN ABSORPTION 82
+//!
+//! Upstream made bare `Op::Div` and `Op::Mod` total. The reference now RUNS
+//! `Fixed % Fixed`: the low slot is the raw remainder of the scaled bits, the
+//! high slot is zero, and the flag is `0`, or `3` for a zero divisor. This
+//! backend now lowers a matched Fixed pair to exactly that, so every route
+//! below must AGREE rather than trap and refuse.
+//!
+//! **The private-slot route closed with it, and not because the kind arrived.**
+//! An operand whose `Fixed` kind is unknown lowers as the integer remainder,
+//! whose low slot is the same bits and whose flag is the same. Only the high
+//! slot differs, a sign extension where Fixed keeps zero, and the compiled form
+//! discards it with `PopN(1)`. So report 5's missing kind no longer reaches a
+//! wrong value through `%`. The kind is still missing, which is why report 5
+//! stays open.
+
+use inkwell::OptimizationLevel;
+use inkwell::context::Context;
 use keleusma::bytecode::Value;
 use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
-use keleusma_native::{LowerOptions, module_refusals};
+use keleusma_native::{LowerOptions, lower_module, module_refusals};
 
 mod common;
 
-/// Does the reference trap, and does the backend refuse?
-fn observe(src: &str, args: &[Value]) -> (bool, bool) {
+/// The raw bits of a scalar argument or result.
+fn bits(v: &Value) -> i64 {
+    match v {
+        Value::Int(n) | Value::Fixed(n) => *n,
+        other => panic!("this harness drives Word and Fixed scalars, not {other:?}"),
+    }
+}
+
+/// The reference's result bits and the backend's, for a one or two argument
+/// entry. Panics if either side fails to produce a value, because every route
+/// here is now expected to run.
+fn observe(src: &str, args: &[Value]) -> (i64, i64) {
     let m = common::build(src);
     let need = required_persistent_capacity_for(&m);
     let cap = auto_arena_capacity_for(&m, &[]).expect("arena") + need + (1 << 20);
     let mut arena = keleusma_arena::Arena::with_capacity(cap);
     arena.resize_persistent(need).expect("persistent");
     let mut vm = Vm::new(m.clone(), &arena).expect("vm");
-    let traps = !matches!(vm.call(args), Ok(VmState::Finished(_)));
-    let refuses = !module_refusals(&m, LowerOptions::default()).is_empty();
-    (traps, refuses)
+    let reference = match vm.call(args) {
+        Ok(VmState::Finished(v)) => bits(&v),
+        other => panic!("the reference no longer completes {src:?}: {other:?}"),
+    };
+    let refusals = module_refusals(&m, LowerOptions::default());
+    assert!(refusals.is_empty(), "{src:?} is refused: {refusals:?}");
+
+    let ctx = Context::create();
+    let lm = ctx.create_module("k");
+    lower_module(&ctx, &lm, &m, LowerOptions::default()).expect("lower");
+    common::maybe_optimize(&lm);
+    let ee = lm
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .expect("jit");
+    let sym = format!("kel_chunk_{}", m.entry_point.expect("entry"));
+    let np = lm.get_function(&sym).expect("entry fn").count_params() as usize;
+    let a: Vec<i64> = args.iter().map(bits).collect();
+    // Buffers sized from the published contract, as `common` sizes them.
+    let mut shared = vec![0u8; keleusma::vm::shared_data_bytes_for(&m).max(64) + 8];
+    let n_priv =
+        (need + keleusma_native::region::persistent_supplement_bytes(&m) as usize).div_ceil(8);
+    let mut privs = vec![0u64; n_priv + 1];
+    common::install_private_init(&m, &mut privs[..n_priv]);
+    let n_region = keleusma_native::region::host_arena_supplement_bytes(&m) as usize;
+    let mut region = vec![0u64; n_region.div_ceil(8) + 4];
+    let (sp, pp, rp) = (
+        shared.as_mut_ptr(),
+        privs.as_mut_ptr() as *mut u8,
+        region.as_mut_ptr() as *mut u8,
+    );
+    type P = *mut u8;
+    let native = unsafe {
+        match (a.as_slice(), np) {
+            ([x], 1) => ee
+                .get_function::<unsafe extern "C" fn(i64) -> i64>(&sym)
+                .expect("symbol")
+                .call(*x),
+            ([x, y], 2) => ee
+                .get_function::<unsafe extern "C" fn(i64, i64) -> i64>(&sym)
+                .expect("symbol")
+                .call(*x, *y),
+            ([x], 4) => ee
+                .get_function::<unsafe extern "C" fn(i64, P, P, P) -> i64>(&sym)
+                .expect("symbol")
+                .call(*x, sp, pp, rp),
+            ([x, y], 5) => ee
+                .get_function::<unsafe extern "C" fn(i64, i64, P, P, P) -> i64>(&sym)
+                .expect("symbol")
+                .call(*x, *y, sp, pp, rp),
+            (args, n) => panic!(
+                "{} argument(s) with {n} parameters is not driven here",
+                args.len()
+            ),
+        }
+    };
+    (reference, native)
 }
 
 /// `(label, source)` for every route by which a `Fixed` value can reach
@@ -116,31 +198,22 @@ const ROUTES: &[(&str, &str)] = &[
 ];
 
 #[test]
-fn every_closed_route_traps_on_the_reference_and_is_refused_here() {
+fn every_route_runs_on_the_reference_and_agrees_here() {
     assert!(
         ROUTES.len() >= 10,
         "the route list shrank; a short list passes this test while proving less"
     );
-    let mut open = Vec::new();
+    let mut disagree = Vec::new();
     for (label, src) in ROUTES {
-        let (traps, refuses) = observe(src, &args_for(src));
-        assert!(
-            traps,
-            "`{label}` no longer traps on the reference. If `Fixed % Fixed` became \
-             runnable upstream, report 4 is answered and this whole file should be \
-             re-read rather than patched."
-        );
-        if !refuses {
-            open.push(*label);
+        let (reference, native) = observe(src, &args_for(src));
+        if reference != native {
+            disagree.push((*label, reference, native));
         }
     }
     assert!(
-        open.is_empty(),
-        "{} route(s) reach `Op::Mod` with a Fixed operand the backend does not \
-         recognise: {open:?}. Each one lowers an integer remainder on a scaled \
-         value and returns a number the reference never produces. Find where that \
-         operand's kind is dropped; do not remove the row.",
-        open.len()
+        disagree.is_empty(),
+        "{} route(s) disagree with the reference: {disagree:?}",
+        disagree.len()
     );
 }
 
@@ -156,29 +229,25 @@ fn args_for(src: &str) -> Vec<Value> {
     }
 }
 
-/// **THE ROUTE THAT IS STILL OPEN, PINNED SO IT CANNOT BE FORGOTTEN.**
+/// **THE ROUTE THAT WAS OPEN, AND NOW AGREES WITHOUT THE KIND.**
 ///
 /// A private data slot declares no scalar kind in the module, so a `Fixed` read
-/// back from one is indistinguishable from a `Word`. The backend lowers the
-/// remainder and returns a value; the reference traps.
+/// back from one is indistinguishable from a `Word`. Until absorption 82 the
+/// backend lowered the remainder and returned a value where the reference
+/// trapped. The reference now completes it, and the integer remainder this
+/// backend lowers carries the same low bits, so the two agree. See the header.
 ///
-/// **This test asserts the DEFECT still exists.** It fails when the route closes,
-/// which is the signal to delete it, retract report 5, and move the route into
-/// `ROUTES` above.
+/// **A negative operand is the case that would separate them**, if anything
+/// did, since that is where the integer high slot is a sign extension.
 #[test]
-fn the_private_slot_route_is_still_open_and_that_is_recorded() {
-    const SRC: &str = "private data d { v: Fixed }\n\
-                       fn main(a: Fixed) -> Fixed { d.v = a; d.v % d.v }";
-    let (traps, refuses) = observe(SRC, &[Value::Fixed(200 << 16)]);
-    assert!(
-        traps,
-        "the reference now RUNS a private-slot `Fixed % Fixed`. That answers report \
-         4 from the runtime side and makes this residual moot; delete this test."
-    );
-    assert!(
-        !refuses,
-        "the backend now REFUSES the private-slot route. **Good** — delete this \
-         test, move the route into `ROUTES`, and retract report 5. Whatever \
-         supplied the slot's scalar kind is the thing to record."
-    );
+fn the_private_slot_route_agrees_without_the_kind() {
+    const SRC: &str = "private data d { v: Fixed, w: Fixed }\n\
+                       fn main(a: Fixed) -> Fixed { d.v = a + a + a + a; d.w = a + a + a; d.v % d.w }";
+    for a in [200 << 16, -(200 << 16), 7, -7] {
+        let (reference, native) = observe(SRC, &[Value::Fixed(a)]);
+        assert_eq!(
+            native, reference,
+            "the private-slot route disagrees for {a}"
+        );
+    }
 }

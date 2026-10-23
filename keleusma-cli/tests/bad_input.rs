@@ -36,6 +36,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const BIN: &str = env!("CARGO_BIN_EXE_keleusma");
 
@@ -45,16 +46,65 @@ const BIN: &str = env!("CARGO_BIN_EXE_keleusma");
 /// a legitimate error message.
 const PANIC_MARKERS: &[&str] = &["panicked at", "fatal runtime error", "RUST_BACKTRACE=1"];
 
-fn scratch() -> PathBuf {
-    let d = std::env::temp_dir().join("keleusma-cli-bad-input");
-    fs::create_dir_all(&d).expect("scratch dir");
-    d
+struct Fixtures {
+    root: PathBuf,
 }
 
-fn write(name: &str, bytes: &[u8]) -> PathBuf {
-    let p = scratch().join(name);
-    fs::write(&p, bytes).expect("write fixture");
-    p
+impl Fixtures {
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        // Exclusive creation avoids sharing with another test process or a
+        // stale directory from a previous process that had the same identifier.
+        for _ in 0..1024 {
+            let id = NEXT.load(Ordering::Relaxed);
+            let next = id.checked_add(1).expect("fixture identifier overflow");
+            if NEXT
+                .compare_exchange(id, next, Ordering::Relaxed, Ordering::Relaxed)
+                .is_err()
+            {
+                continue;
+            }
+            let root = std::env::temp_dir().join(format!(
+                "keleusma-cli-bad-input-{}-{id}",
+                std::process::id()
+            ));
+            match fs::create_dir(&root) {
+                Ok(()) => return Self { root },
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => panic!("create fixture directory: {e}"),
+            }
+        }
+        panic!("fixture allocation retry limit exceeded")
+    }
+
+    fn write(&self, name: &str, bytes: &[u8]) -> PathBuf {
+        let p = self.root.join(name);
+        fs::write(&p, bytes).expect("write fixture");
+        p
+    }
+
+    fn good_script(&self) -> PathBuf {
+        self.write("good.kel", b"fn main() -> Word { 42 }")
+    }
+
+    fn good_artifact(&self) -> PathBuf {
+        let src = self.good_script();
+        let out = self.root.join("good.kbc");
+        let r = run(&[
+            "compile",
+            src.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ]);
+        assert!(r.status.success(), "fixture compile failed");
+        out
+    }
+}
+
+impl Drop for Fixtures {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
 }
 
 fn run(args: &[&str]) -> Output {
@@ -101,34 +151,17 @@ fn accepted(what: &str, args: &[&str]) {
     );
 }
 
-fn good_script() -> PathBuf {
-    write("good.kel", b"fn main() -> Word { 42 }")
-}
-
-/// Compiles the good script and returns the artifact path.
-fn good_artifact() -> PathBuf {
-    let src = good_script();
-    let out = scratch().join("good.kbc");
-    let r = run(&[
-        "compile",
-        src.to_str().unwrap(),
-        "-o",
-        out.to_str().unwrap(),
-    ]);
-    assert!(r.status.success(), "fixture compile failed");
-    out
-}
-
 // ---------------------------------------------------------------------------
 
 /// Source the compiler cannot accept.
 #[test]
 fn malformed_and_unreadable_source_is_refused() {
-    let truncated = write("malformed.kel", b"fn main() -> Word { 1 +");
-    let garbage = write("garbage.kel", b"not keleusma at all @@@ \x00\x01\x02");
-    let empty = write("empty.kel", b"");
-    let missing = scratch().join("does-not-exist.kel");
-    let dir = scratch().join("a-directory");
+    let fixtures = Fixtures::new();
+    let truncated = fixtures.write("malformed.kel", b"fn main() -> Word { 1 +");
+    let garbage = fixtures.write("garbage.kel", b"not keleusma at all @@@ \x00\x01\x02");
+    let empty = fixtures.write("empty.kel", b"");
+    let missing = fixtures.root.join("does-not-exist.kel");
+    let dir = fixtures.root.join("a-directory");
     fs::create_dir_all(&dir).expect("dir fixture");
 
     refused("half-written script", &["run", truncated.to_str().unwrap()]);
@@ -148,16 +181,17 @@ fn malformed_and_unreadable_source_is_refused() {
 /// Bytes that are not a valid compiled artifact.
 #[test]
 fn a_damaged_artifact_is_refused_rather_than_run() {
-    let good = good_artifact();
+    let fixtures = Fixtures::new();
+    let good = fixtures.good_artifact();
     let bytes = fs::read(&good).expect("read artifact");
     assert!(bytes.len() > 64, "fixture artifact is implausibly small");
 
-    let truncated = write("truncated.kbc", &bytes[..40]);
+    let truncated = fixtures.write("truncated.kbc", &bytes[..40]);
     let mut flipped_bytes = bytes.clone();
     let mid = flipped_bytes.len() / 2;
     flipped_bytes[mid] ^= 0xFF;
-    let flipped = write("flipped.kbc", &flipped_bytes);
-    let random = write("random.bin", &[0xA5u8; 4096]);
+    let flipped = fixtures.write("flipped.kbc", &flipped_bytes);
+    let random = fixtures.write("random.bin", &[0xA5u8; 4096]);
 
     refused("truncated artifact", &["run", truncated.to_str().unwrap()]);
     refused("single flipped byte", &["run", flipped.to_str().unwrap()]);
@@ -175,10 +209,11 @@ fn a_damaged_artifact_is_refused_rather_than_run() {
 /// with nothing after it.
 #[test]
 fn flags_missing_or_malformed_arguments_are_refused() {
-    let src = good_script();
+    let fixtures = Fixtures::new();
+    let src = fixtures.good_script();
     let s = src.to_str().unwrap();
-    let missing_key = scratch().join("no-such-key.bin");
-    let short_key = write("short-key.bin", b"short");
+    let missing_key = fixtures.root.join("no-such-key.bin");
+    let short_key = fixtures.write("short-key.bin", b"short");
 
     refused(
         "--verifying-key with no path",
@@ -215,8 +250,9 @@ fn flags_missing_or_malformed_arguments_are_refused() {
 /// An output path that cannot be written.
 #[test]
 fn an_unwritable_output_path_is_refused() {
-    let src = good_script();
-    let dir = scratch().join("out-is-a-directory");
+    let fixtures = Fixtures::new();
+    let src = fixtures.good_script();
+    let dir = fixtures.root.join("out-is-a-directory");
     fs::create_dir_all(&dir).expect("dir fixture");
     refused(
         "output under a directory that does not exist",
@@ -247,12 +283,13 @@ fn an_unwritable_output_path_is_refused() {
 /// prevented. Both facts are why the panic detector above is narrow.
 #[test]
 fn deeply_nested_source_is_refused_by_the_guard_not_by_a_crash() {
+    let fixtures = Fixtures::new();
     for depth in [60usize, 400] {
         let mut body = String::from("1");
         for _ in 0..depth {
             body = format!("if a > 0 {{ {body} }} else {{ 0 }}");
         }
-        let src = write(
+        let src = fixtures.write(
             &format!("deep-{depth}.kel"),
             format!("fn main() -> Word {{ let a = 7; {body} }}").as_bytes(),
         );
@@ -266,9 +303,10 @@ fn deeply_nested_source_is_refused_by_the_guard_not_by_a_crash() {
 /// Controls. Without these a binary that refused everything would pass.
 #[test]
 fn valid_input_still_works() {
-    let src = good_script();
+    let fixtures = Fixtures::new();
+    let src = fixtures.good_script();
     accepted("a valid script", &["run", src.to_str().unwrap()]);
-    let art = good_artifact();
+    let art = fixtures.good_artifact();
     accepted("a compiled artifact", &["run", art.to_str().unwrap()]);
     accepted("help", &["help"]);
 }
@@ -277,10 +315,32 @@ fn valid_input_still_works() {
 /// file vacuously green by refusing everything for the wrong reason.
 #[test]
 fn the_fixtures_exist() {
-    let good = good_script();
+    let fixtures = Fixtures::new();
+    let good = fixtures.good_script();
     assert!(Path::new(&good).is_file(), "fixture script was not written");
     assert!(
         fs::read(&good).expect("read fixture").len() > 10,
         "fixture script is empty"
     );
+}
+
+#[test]
+fn fixture_owners_cannot_truncate_each_others_scripts() {
+    // A deterministic interleaving exercises the ownership property without
+    // relying on the scheduler to catch the truncate-before-write interval.
+    let first = Fixtures::new();
+    let second = Fixtures::new();
+    let first_script = first.good_script();
+    let second_script = second.good_script();
+    assert_ne!(first.root, second.root);
+    second.write("good.kel", b"");
+    assert_eq!(
+        fs::read(&first_script).unwrap(),
+        b"fn main() -> Word { 42 }"
+    );
+    assert!(fs::read(&second_script).unwrap().is_empty());
+    let removed = first.root.clone();
+    drop(first);
+    assert!(!removed.exists());
+    assert!(second_script.is_file());
 }

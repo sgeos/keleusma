@@ -167,6 +167,12 @@ fn walk(chunk: &keleusma::bytecode::Chunk) -> Walk {
             continue;
         }
 
+        // A `Trap` has no successor, so its pops reach no later instruction.
+        // Since absorption 82 `Trap(IndexOutOfBounds)` pops five. See
+        // `fallthrough_net` in `spike_bounds_transfer.rs`.
+        if matches!(op, Op::Trap(_)) {
+            continue;
+        }
         let (_req, net) = op_depth_effect(op, chunk);
         depth += net;
 

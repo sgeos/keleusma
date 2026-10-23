@@ -75,6 +75,12 @@ fn corpus() -> Vec<(String, Module)> {
 fn producers_before(c: &keleusma::bytecode::Chunk, upto: usize) -> Vec<usize> {
     let mut stack: Vec<usize> = Vec::new();
     for (i, op) in c.ops[..upto].iter().enumerate() {
+        // A `Trap` has no successor, so its pops reach no later instruction.
+        // Since absorption 82 `Trap(IndexOutOfBounds)` pops five. See
+        // `fallthrough_net` in `spike_bounds_transfer.rs`.
+        if matches!(op, Op::Trap(_)) {
+            continue;
+        }
         let (required, delta) = op_depth_effect(op, c);
         for _ in 0..required.max(0) {
             stack.pop();

@@ -65,11 +65,16 @@ LLVM is absent.
 ## Continuous integration
 
 The dedicated [native workflow](../.github/workflows/native.yml) runs on pull requests
-and pushes targeting `v0.3.0` and `main`. One ARM64 macOS job checks formatting,
-ShellCheck, all-target Clippy and default-feature non-corpus tests, both with and
-without native optimization. It installs LLVM 22.1 and fetches full history for
-provenance checks. The corpus and narrow-float configuration remain in the complete
-native gates. This subset does not update `GATE_RECORD.md` or replace those gates.
+and pushes targeting `v0.3.0` and `main` whenever an input the native suite reads
+changes. Two ARM64 macOS jobs, one per float configuration, run ShellCheck, the
+documentation build with warnings denied, and `tools/backend-gate.sh` itself, which
+is formatting, all-target Clippy, the suite outside the corpus, the corpus
+differential, and the suite outside the corpus again under the middle end. Both
+install LLVM 22.1, fetch full history for provenance checks, and fail rather than
+skip where a test needs `llc` and `llvm-readobj`. A hosted run writes
+`GATE_RECORD.md` inside the runner and prints it. The committed record names the
+last local run. The path filter is checked against `tools/gate-status.sh` by
+`tests/native_workflow.rs`.
 
 ## Requirements
 

@@ -505,7 +505,15 @@ fn q2_is_the_bytecode_bound_monotone_in_native_size() {
     // removed.
     assert_eq!(
         (pts.len(), tot, inv),
-        (27, 351, 24),
+        // **ABSORPTION 82 moved all three, and the cause was measured before this
+        // edit.** The population gained exactly `wire_debug.kel::main` and
+        // `wire_schema.kel::main`, the two added stages, each at WCET 15 and 12
+        // native instructions like `wire.kel::main`. Added points cannot remove an
+        // inversion between existing chunks, so the fall from 24 to 18 is existing
+        // figures moving. Both moved: upstream re-costed the indexed opcodes and
+        // division, and this line's lowering of them changed. The split between
+        // those two causes is NOT measured here.
+        (29, 406, 18),
         "the bounds-transfer population or its inversion count changed. Establish \
          the cause before editing. BOTH figures depend on this line: a chunk enters \
          the population only if the module LOWERS, so a refusal removes it and an \
@@ -583,6 +591,22 @@ fn q3_what_does_the_memory_bound_measure() {
 /// It establishes that the model is not a faithful abstraction on these chunks.
 /// It does NOT establish a memory-safety fault: the runtime GROWS the operand
 /// stack and reports `OutOfArena` when a pre-size proves too small, so an
+/// The peak model's net for the straight-line successor of `op`.
+///
+/// **A `Trap` has no successor, so its pops reach nothing.** Upstream's own
+/// worst-case-memory walk treats it as a path exit for exactly this reason.
+/// This linear walk did not, which was harmless while every trap popped zero.
+/// Absorption 82 gave `Trap(IndexOutOfBounds)` its five true pops, and the
+/// walk then charged them to the fallthrough edge as well as the `PopN(4)`
+/// that edge really executes, reporting 581 "negative" chunks. That was this
+/// walk's fault and not the model's. `src/verify.rs` was read to establish it.
+fn fallthrough_net(op: &keleusma::bytecode::Op) -> i32 {
+    if matches!(op, keleusma::bytecode::Op::Trap(_)) {
+        return 0;
+    }
+    op.stack_growth() as i32 - op.stack_shrink() as i32
+}
+
 /// Does the reporting model's own running depth go under zero on this chunk?
 ///
 /// Factored out because the report both COUNTS offenders and walks the first one
@@ -590,7 +614,7 @@ fn q3_what_does_the_memory_bound_measure() {
 fn walk_goes_negative(c: &keleusma::bytecode::Chunk) -> bool {
     let mut off = 0i32;
     for op in &c.ops {
-        off += op.stack_growth() as i32 - op.stack_shrink() as i32;
+        off += fallthrough_net(op);
         if off < 0 {
             return true;
         }
@@ -619,7 +643,7 @@ fn q4_the_stack_model_goes_negative_on_shipped_code() {
             // a bare count could not say whether the remainder shared a cause.
             let mut culprit: Option<String> = None;
             for op in &c.ops {
-                off += op.stack_growth() as i32 - op.stack_shrink() as i32;
+                off += fallthrough_net(op);
                 if off < low {
                     low = off;
                     if culprit.is_none() || off < 0 {

@@ -3,10 +3,10 @@
 #
 # WHY THIS EXISTS
 #
-# `native_codegen` is a detached package. The workspace gate does not build it and
-# dedicated continuous integration now covers default-feature non-corpus tests.
-# This script remains the complete native gate, including corpus and narrow-float
-# coverage. It originally replaced commands retyped from memory, with three facts
+# `native_codegen` is a detached package. The workspace gate does not build it.
+# Since 2026-10-22 the native workflow runs THIS SCRIPT, in both float
+# configurations, so continuous integration and a local run execute the same
+# phases. It originally replaced commands retyped from memory, with three facts
 # living only in a session's scrollback:
 #
 #   1. THE SUITE MUST BE SPLIT. `corpus_differential` alone takes ~390s and the
@@ -65,14 +65,17 @@
 # mandatory before a merge to the release line; this covers the detached backend
 # only, and neither substitutes for the other.
 #
-# **Not the continuous-integration subset.** The operator approved the dedicated
-# default-feature job on 2026-10-01. It does not run this complete gate or write
-# GATE_RECORD.md. Both complete configurations retain their existing gate policy.
+# **Run by continuous integration, but its record is local.** A hosted run writes
+# GATE_RECORD.md inside the runner and prints it; nothing commits it. The committed
+# record still names the last LOCAL run, and `tools/gate-status.sh` reads only that.
 #
 # Usage:  tools/backend-gate.sh [--narrow]      (default: default features)
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 
+# The expansion below is written `${feat[@]+"${feat[@]}"}` because bash 3.2, the
+# macOS system bash a hosted runner reaches through `env bash`, treats an EMPTY
+# array as unbound under `set -u`. Local runs under a newer bash never saw it.
 feat=()
 label="default features"
 if [ "${1:-}" = "--narrow" ]; then
@@ -106,15 +109,15 @@ echo "-- fmt"
 cargo fmt --all -- --check || fail=1
 
 echo "-- clippy"
-cargo clippy --all-targets "${feat[@]}" -- -D warnings || fail=1
+cargo clippy --all-targets ${feat[@]+"${feat[@]}"} -- -D warnings || fail=1
 
 # Split at `corpus_differential`; see note 1 above.
 echo "-- suite, part 1 of 3 (everything but corpus_differential)"
-tools/frozen-run.sh cargo nextest run --no-fail-fast "${feat[@]}" \
+tools/frozen-run.sh cargo nextest run --no-fail-fast ${feat[@]+"${feat[@]}"} \
     -E 'not binary(corpus_differential)' || fail=1
 
 echo "-- suite, part 2 of 3 (corpus_differential)"
-tools/frozen-run.sh cargo nextest run --no-fail-fast "${feat[@]}" \
+tools/frozen-run.sh cargo nextest run --no-fail-fast ${feat[@]+"${feat[@]}"} \
     -E 'binary(corpus_differential)' || fail=1
 
 # 4. THE MIDDLE END, ON THE HALF WHERE IT IS FREE.
@@ -143,7 +146,7 @@ tools/frozen-run.sh cargo nextest run --no-fail-fast "${feat[@]}" \
 #
 # ⚠ The variable is scoped to THIS COMMAND, so no other phase's meaning changes.
 echo "-- suite, part 3 of 3 (everything but corpus_differential, UNDER THE MIDDLE END)"
-KEL_OPTIMIZE=1 tools/frozen-run.sh cargo nextest run --no-fail-fast "${feat[@]}" \
+KEL_OPTIMIZE=1 tools/frozen-run.sh cargo nextest run --no-fail-fast ${feat[@]+"${feat[@]}"} \
     -E 'not binary(corpus_differential)' || fail=1
 
 verdict=$([ $fail -eq 0 ] && echo PASS || echo FAIL)

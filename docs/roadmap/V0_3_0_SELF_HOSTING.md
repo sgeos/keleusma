@@ -2,6 +2,21 @@
 
 > **Navigation**: [Roadmap](./README.md) | [Documentation Root](../README.md)
 
+## Current implementation, 2026-10-13
+
+The first-pass compiler and full first-pass validator are complete. Fourteen stage sources live in src/selfhost/kel. Complete stage artifacts
+match the Rust reference. The validator now includes text-allocation bounds, graph
+ordering, resource summaries, yield fixpoint scheduling and shipping selection.
+The selected typed widening profile and reference consistency gate remain explicit.
+See the [V0.2.X roadmap](./V0_2_X_ROADMAP.md) and
+[Order 2 completion audit](../decisions/ORDER2_COMPLETION_AUDIT.md).
+Full-language expansion remains the later V0.3.0 milestone.
+
+## Historical implementation note
+
+The following implementation snapshot predates the current fourteen-stage corpus and
+Order 2 work. Its text-allocation and orchestration limitations are historical.
+
 **Status**: Implementation under way in [`compiler/`](../../compiler/README.md); see [`compiler/MILESTONES.md`](../../compiler/MILESTONES.md) for the running log. **Five stages** now exist in Keleusma source and each **self-compiles byte-identically** to the Rust-hosted compiler: `lexer.kel`, `parse.kel`, `reconstruct.kel`, `codegen.kel`, and `analyze.kel`. The postorder-record-to-forest reconstruction that was host-side Rust (`reconstruct_into`) is now the Keleusma stage `reconstruct.kel`, so the compile path is Keleusma from lexing through code generation with the host only moving data between stages. The two remaining gaps recorded here earlier are also closed for the loop-free-and-call-shallow case: the emitted module no longer borrows its data layout, enum layouts, typed-verifier signatures, schema hash, chunk-table metadata, or WCET/WCMU header from the Rust reference; the driver assembles every one of these from the stage output, and the whole serialized module is proved byte-identical to the reference (the reference is used only as the comparison oracle).
 
 The worst-case resource analysis and its validator are now self-hosted too. `analyze.kel` reformulates the Rust verifier's recursive WCET/WCMU control-flow traversal (`verify.rs::wcet_region`/`wcmu_region`) as an explicit region-frame stack, folds both analyses into one walk, and self-hosts the loop iteration-bound extraction including the C7 induction-advance soundness check. Given an arena capacity it emits a validation verdict — a provable finite bound whose stack-plus-heap budget fits — and it folds transitive-call WCMU (each callee's bound resolved in topological order and folded at every `Op::Call`, plus the composite-shared-read copy-out), so `validate_module_via_kel` is a **drop-in replacement for `verify_resource_bounds`** on a whole call-bearing module, proved to match at capacities below/at/above the budget for the four stage modules, synthetic call chains, and a composite-shared program. Two honest limitations remain: the one unmodelled WCMU term is the text-size string-allocation heap (zero for every text-free program, so the drop-in holds for the entire text-free self-hosted compiler; a text-allocating program would need that pass self-hosted too), and the analysis reimplements audited safety-critical logic in a second language and so warrants independent review against `verify.rs`. Separately, the self-hosted pipeline does not yet compile a user-written `break;` statement nor reconstruct a conditional used as a call argument, so stages stay within that subset. The research pass below remains the authoritative design; this note records that the schedule has advanced from "three stages self-compiling" to "five stages self-compiling, module scaffold self-assembled, resource analysis self-hosted, and the resource-bound validator a drop-in replacement for text-free modules."

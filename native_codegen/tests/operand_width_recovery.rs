@@ -1,7 +1,8 @@
 //! What actually makes the last two composite sites unlowerable.
 //!
-//! The backend refuses `12_sensor_window.kel::main` op 23 and
-//! `14_frame_log.kel::main` op 24 for an **unknown operand width**. That was the
+//! The backend refused `12_sensor_window.kel::main` op 23 and
+//! `14_frame_log.kel::main` op 24, as they were numbered before absorption 82,
+//! for an **unknown operand width**. That was the
 //! condition; this file establishes the CAUSE, which is a different thing, and
 //! pins it so the next attempt does not start from the same guesses.
 //!
@@ -90,6 +91,14 @@ fn compile_src(src: &str) -> Module {
 fn producer_stack_before(c: &keleusma::bytecode::Chunk, upto: usize) -> Vec<(usize, u32)> {
     let mut stack: Vec<(usize, u32)> = Vec::new();
     for (i, op) in c.ops[..upto].iter().enumerate() {
+        // **A `Trap` has no successor, so its pops reach nothing.** This walk is
+        // straight-line, and since absorption 82 `Trap(IndexOutOfBounds)` pops
+        // five, so charging them to the fallthrough edge desynchronised every
+        // producer after the first bounds dispatch. `spike_bounds_transfer.rs`
+        // met the same class in its peak-model walk the same day.
+        if matches!(op, Op::Trap(_)) {
+            continue;
+        }
         let (required, delta) = op_depth_effect(op, c);
         let pops = required.max(0) as usize;
         let pushes = (required + delta).max(0) as usize;
@@ -119,10 +128,11 @@ fn writes_to(c: &keleusma::bytecode::Chunk, idx: u16) -> usize {
 /// with "operand 1 of 3 ... unknown packed width".
 #[test]
 fn the_two_modules_lower_and_their_operand_is_still_a_multiply_written_local() {
-    for (name, site, local) in [
-        ("12_sensor_window.kel", 23usize, 1u16),
-        ("14_frame_log.kel", 24usize, 2u16),
-    ] {
+    // **The site is DERIVED, not pinned.** It was op 23 and op 24 until
+    // absorption 82 added the six-instruction bounds dispatch after each indexed
+    // read earlier in these chunks. What identifies the site is its shape: the
+    // construction whose first of three operands is the named local.
+    for (name, local) in [("12_sensor_window.kel", 1u16), ("14_frame_log.kel", 2u16)] {
         let m = load(name);
 
         let refusals = module_refusals(&m, LowerOptions::default());
@@ -133,11 +143,18 @@ fn the_two_modules_lower_and_their_operand_is_still_a_multiply_written_local() {
             "{name} is still refused for an unknown operand width: {text:?}"
         );
 
-        let c = m
+        let (c, site) = m
             .chunks
             .iter()
-            .find(|c| matches!(c.ops.get(site), Some(Op::NewComposite(_))))
-            .unwrap_or_else(|| panic!("{name}: no composite site at op {site}"));
+            .flat_map(|c| (0..c.ops.len()).map(move |i| (c, i)))
+            .find(|(c, i)| {
+                matches!(c.ops[*i], Op::NewComposite(_)) && {
+                    let producers = producer_stack_before(c, *i);
+                    producers.len() >= 3
+                        && matches!(c.ops[producers[producers.len() - 3].0], Op::GetLocal(n) if n == local)
+                }
+            })
+            .unwrap_or_else(|| panic!("{name}: no composite whose first operand is GetLocal({local})"));
         let producers = producer_stack_before(c, site);
         let (at, _) = producers[producers.len() - 3];
         assert!(

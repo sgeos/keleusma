@@ -118,9 +118,27 @@ fn the_confinement_refusal_fires_on_the_real_module_with_no_mutation() {
         "this module is refused for Stream again, so the escape refusal is \
          shadowed once more and this test is not measuring it: {text}"
     );
+    // **The site is DERIVED.** It was op 24 until absorption 82 inserted the
+    // bounds dispatch after the indexed reads before it. What identifies it is
+    // its shape: a flat construction yielded by the very next instruction.
+    let site = m
+        .chunks
+        .iter()
+        .find_map(|c| {
+            c.ops.windows(2).position(|w| {
+                matches!(
+                    w,
+                    [
+                        keleusma::bytecode::Op::NewComposite(_),
+                        keleusma::bytecode::Op::Yield
+                    ]
+                )
+            })
+        })
+        .expect("13_telemetry_stream.kel no longer yields a fresh construction");
     assert!(
-        text.contains("op 24"),
-        "the escaping site is no longer refused. It said: {text}"
+        text.contains(&format!("op {site} is yielded")),
+        "the escaping site at op {site} is no longer refused. It said: {text}"
     );
 
     // The analysis's own answer for that site, asserted directly. This is the
