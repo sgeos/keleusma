@@ -6,6 +6,17 @@ Current sprint source of truth.
 
 ---
 
+## Kaizen power cycle preparation
+
+2026-10-23. Preserved the shared Jev pilot checkpoint with 246 samples and 63
+task records. Exported and reviewed the unchanged empty interline checkpoint.
+Both exports restored into isolated stores and re-exported byte for byte.
+The [power cycle receipt](./kaizen/2026-10-23-power-cycle-readiness.md) and
+[kaizen handoff](./handoffs/kaizen.md) record the saved conversation, correct
+feature worktree, restart command, verification and scope limits. The primary
+checkout and peer worktrees were not changed. No service call or message was
+sent. Checkpoint review does not independently validate peer test claims.
+
 ## Jev shadow pilot on feat/kaizen-jev-shadow-pilot
 
 2026-10-04. Implemented and locally installed the authorized

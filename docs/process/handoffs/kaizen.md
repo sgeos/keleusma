@@ -2,7 +2,54 @@
 
 > **Navigation**: [Handoffs](./README.md) | [Process](../README.md)
 
-## Current increment on 2026-10-04
+## Power cycle handoff on 2026-10-23
+
+This Codex session is the kaizen line. Its assigned line overrides the primary
+checkout's default route. Work remains on `feat/kaizen-jev-shadow-pilot` in
+project-local `.worktrees/kaizen/`. The sibling `kaizen` integration worktree is
+older and is not this session's working checkout. The feature was clean at
+`1b306a70` before this documentation and checkpoint increment. Validate this
+handoff by checking that `1b306a70` is an ancestor of the resumed feature and
+reviewing the commits above it. The preceding `19893dc1` ancestry check passed.
+
+The [power cycle receipt](../kaizen/2026-10-23-power-cycle-readiness.md) records
+checkpoint review, restoration and verification. All 246 pilot samples and 63
+task records are preserved in the tracked checkpoint. These include 244 real
+development samples from V0.2.X and two synthetic installation checks. There
+are no evaluations in flight. One peer task remains unfinished and 243 real
+samples remain unevaluated. Do not complete peer tasks or infer model results.
+The empty interline checkpoint was exported and reviewed and remains unchanged.
+
+The saved conversation identifier is `01a10614-3174-79d1-92a4-da79d6013671` and
+its saved name is `As6Hi-kaizen-keleusma`. For this machine, resume with the
+following command from the primary checkout.
+
+```sh
+codex resume 01a10614-3174-79d1-92a4-da79d6013671 \
+  --cd "$PWD/.worktrees/kaizen" --approve-for-me \
+  --add-dir "$PWD/secret/interline" --add-dir "$PWD/secret/jev-shadow"
+```
+
+The installed command accepts these options. An actual restart has not yet been
+performed. The saved conversation and transcript are present on local disk.
+The shared daemon is not a durable work product and need not retain its process
+identifier across the reboot. No daemon restart or peer process termination was
+performed. No build, model call or background task was launched by this session
+that needs to remain running. Other sessions require their own shutdown checks.
+
+On resume, read this section before older entries. Read Appendix B privately
+before tracked writes. Check the `kaizen` inbox, inspect Git status, and compare
+the live pilot report with this snapshot before any new sampling or checkpoint.
+Do not restore over an existing live store. Follow the pilot guide to restore
+on a new clone and provision credentials privately. A clone also needs this
+feature's commits, which have not been pushed by this session.
+
+The current increment is complete. The next development work remains collection
+and independent review under the existing shadow protocol, as directed by the
+operator. No workflow benefit or error reduction is established by the samples.
+No live Jev call was needed for shutdown preparation.
+
+## Preceding shadow pilot setup on 2026-10-04
 
 The operator authorized shadow-pilot setup for V0.2.X and possible V0.3.X work.
 The [guide](../JEV_SHADOW_PILOT.md), adapter, service client, examples and portable
