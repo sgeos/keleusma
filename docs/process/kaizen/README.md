@@ -7,6 +7,8 @@ rests on. The line's mailbox and resume prompt is [`../handoffs/kaizen.md`](../h
 
 | report | state |
 |---|---|
+| [`2026-10-24-context-engineering-spike.md`](./2026-10-24-context-engineering-spike.md) | follow-up to the token spike at the operator's response, state of the art and harness waiting surveyed, compaction measured as a likely cost to correctness, the lower auto-compact window withdrawn, the shorter prompt reminder implemented and not activated |
+| [`2026-10-24-token-economy-spike.md`](./2026-10-24-token-economy-spike.md) | token use measured from local transcripts and git history, state of the art surveyed, seven measured proposals, none adopted, evidence under `evidence/token-economy/` |
 | [2026-10-04-jev-shadow-pilot-setup.md](./2026-10-04-jev-shadow-pilot-setup.md) | locally installed advisory pilot for V0.2.X and optional V0.3.X, blind comparisons, concurrent budget reservations and portable evidence |
 | [2026-10-04-jev-development-flow-spike.md](./2026-10-04-jev-development-flow-spike.md) | bounded Jev experiment with tracked receipts, low service cost verified, subscription savings and overall error reduction unmeasured |
 | [2026-10-04-interline-portability-receipt.md](./2026-10-04-interline-portability-receipt.md) | project-local checkout, tracked queue checkpoint, fresh-clone restoration and harness-independent routes |

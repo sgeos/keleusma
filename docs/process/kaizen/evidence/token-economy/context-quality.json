@@ -1,0 +1,135 @@
+{
+ "after_compaction": {
+  "calls": 1473,
+  "errors": 42,
+  "rate": 0.0285
+ },
+ "after_compaction_errors_by_tool": {
+  "Bash": 29,
+  "Edit": 11,
+  "Read": 2
+ },
+ "all_tools_by_context": {
+  "100k-200k": {
+   "calls": 2300,
+   "errors": 42,
+   "rate": 0.0183
+  },
+  "200k-400k": {
+   "calls": 4255,
+   "errors": 39,
+   "rate": 0.0092
+  },
+  "400k-700k": {
+   "calls": 4805,
+   "errors": 29,
+   "rate": 0.006
+  },
+  "50k-100k": {
+   "calls": 711,
+   "errors": 20,
+   "rate": 0.0281
+  },
+  "<50k": {
+   "calls": 6,
+   "errors": 0,
+   "rate": 0.0
+  },
+  ">=700k": {
+   "calls": 2757,
+   "errors": 13,
+   "rate": 0.0047
+  }
+ },
+ "before_compaction": {
+  "calls": 1550,
+  "errors": 18,
+  "rate": 0.0116
+ },
+ "by_model_and_context": {
+  "claude-opus-5 100k-200k": {
+   "calls": 1491,
+   "errors": 17,
+   "rate": 0.0114
+  },
+  "claude-opus-5 200k-400k": {
+   "calls": 3168,
+   "errors": 16,
+   "rate": 0.0051
+  },
+  "claude-opus-5 400k-700k": {
+   "calls": 4443,
+   "errors": 24,
+   "rate": 0.0054
+  },
+  "claude-opus-5 50k-100k": {
+   "calls": 523,
+   "errors": 10,
+   "rate": 0.0191
+  },
+  "claude-opus-5 >=700k": {
+   "calls": 2757,
+   "errors": 13,
+   "rate": 0.0047
+  },
+  "claude-opus-5-5 100k-200k": {
+   "calls": 783,
+   "errors": 25,
+   "rate": 0.0319
+  },
+  "claude-opus-5-5 200k-400k": {
+   "calls": 1064,
+   "errors": 21,
+   "rate": 0.0197
+  },
+  "claude-opus-5-5 400k-700k": {
+   "calls": 306,
+   "errors": 5,
+   "rate": 0.0163
+  }
+ },
+ "compaction_window_calls": 50,
+ "compactions_paired": {
+  "after_more": 16,
+  "before_more": 4,
+  "tied": 11
+ },
+ "edit_after_compaction": {
+  "calls": 52,
+  "errors": 11,
+  "rate": 0.2115
+ },
+ "edit_before_compaction": {
+  "calls": 44,
+  "errors": 7,
+  "rate": 0.1591
+ },
+ "edit_tools_by_context": {
+  "100k-200k": {
+   "calls": 106,
+   "errors": 14,
+   "rate": 0.1321
+  },
+  "200k-400k": {
+   "calls": 120,
+   "errors": 13,
+   "rate": 0.1083
+  },
+  "400k-700k": {
+   "calls": 19,
+   "errors": 3,
+   "rate": 0.1579
+  },
+  "50k-100k": {
+   "calls": 2,
+   "errors": 0,
+   "rate": 0.0
+  }
+ },
+ "fresh_session_start": {
+  "calls": 350,
+  "errors": 5,
+  "rate": 0.0143
+ },
+ "permission_denials_excluded": 1
+}
