@@ -1,0 +1,143 @@
+Measured 2026-10-04. Endpoint 89fc6aac87b94c4cad53392097386a857c51a8d1.
+Toolchain rustc 1.99.0 (b940084d7 2026-09-28)
+Snapshot exported by git archive of the endpoint into tmp/delta/trunk.
+All source and report validation is local. No Cargo gate, runtime suite or remote workflow was run.
+CARGO_MANIFEST_DIR was set to the absolute snapshot root. Executables were stored in sibling verification/.
+Commands below use <snapshot> and <out> for those absolute paths.
+
+$ rustc --edition=2024 --test <snapshot>/tests/claimed_counts.rs -o <out>/claimed_counts
+compile exit 0
+$ <out>/claimed_counts --test-threads=1
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+test exit 0
+REJECTED AS VERIFICATION. Zero executed cases because compile was not enabled. Corrected invocation below.
+$ rustc --edition=2024 --test <snapshot>/tests/gate_ci_correspondence.rs -o <out>/gate_ci_correspondence
+compile exit 0
+$ <out>/gate_ci_correspondence --test-threads=1
+
+running 5 tests
+test every_release_gate_command_has_a_continuous_integration_counterpart ... ok
+test native_gate_label_does_not_claim_compiler_coverage ... ok
+test native_label_does_not_exempt_other_lines_or_documents ... ok
+test nothing_claims_the_gate_is_a_superset_or_that_ci_skips_the_subproject ... ok
+test unsupported_global_coverage_claims_remain_detected ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+test exit 0
+$ rustc --edition=2024 --test <snapshot>/tests/documentation_links.rs -o <out>/documentation_links
+compile exit 0
+$ <out>/documentation_links --test-threads=1
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+test exit 0
+REJECTED AS VERIFICATION. Zero executed cases because compile was not enabled. Corrected invocation below.
+$ rustc --edition=2024 --test <snapshot>/tests/comment_citations.rs -o <out>/comment_citations
+compile exit 0
+$ <out>/comment_citations --test-threads=1
+
+running 6 tests
+test a_name_only_a_comment_mentions_does_not_resolve ... ok
+test an_inline_function_parameter_is_a_defined_name ... ok
+test every_comment_citation_resolves_or_is_a_recorded_debt ... ok
+test no_allow_list_entry_is_stale ... ok
+test the_current_claim_documents_cite_nothing_that_does_not_exist ... ok
+test the_unresolved_backlog_is_recorded ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.03s
+
+test exit 0
+$ rustc --edition=2024 --cfg 'feature="compile"' --test <snapshot>/tests/claimed_counts.rs -o <out>/claimed_counts
+compile exit 0
+$ <out>/claimed_counts --test-threads=1
+
+running 13 tests
+test every_file_the_comment_matching_sweep_names_still_exists ... ok
+test every_workspace_member_is_named_in_the_instructions ... ok
+test the_arena_integration_test_claim_matches_the_directory ... ok
+test the_census_group_table_adds_up_to_its_stated_totals ... ok
+test the_instructions_do_not_misstate_the_integration_test_counts ... ok
+test the_instructions_state_the_feature_sets_ci_actually_runs ... ok
+test the_instructions_state_the_structural_numbers_the_source_owns ... ok
+test the_invalid_bytecode_census_still_describes_the_tree ... ok
+test the_narrow_runtime_coverage_claim_still_describes_the_tree ... ok
+test the_only_test_gated_out_of_every_ci_configuration_is_the_known_one ... ok
+test the_source_listing_is_exhaustive_or_marked_partial ... ok
+test the_stage_source_count_claim_matches_the_directory ... ok
+test the_stated_figures_say_how_they_were_measured ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+test exit 0
+$ rustc --edition=2024 --cfg 'feature="compile"' --test <snapshot>/tests/documentation_links.rs -o <out>/documentation_links
+compile exit 0
+$ <out>/documentation_links --test-threads=1
+
+running 2 tests
+test every_documentation_anchor_resolves ... ok
+test every_relative_documentation_link_resolves ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+test exit 0
+Accepted endpoint total 26 passed, 0 failed, 0 ignored. No coverage attributed to the two empty runs.
+
+
+Final audit worktree verification. Base 8e06e55fa9465378604b5752f0e80cfe1a0b7583 plus the six-file audit diff.
+CARGO_MANIFEST_DIR was set to the audit worktree root.
+
+$ rustc --edition=2024 --cfg 'feature="compile"' --test <worktree>/tests/documentation_links.rs -o <out>/documentation_links
+compile exit 0
+$ <out>/documentation_links --test-threads=1
+
+running 2 tests
+test every_documentation_anchor_resolves ... ok
+test every_relative_documentation_link_resolves ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+test exit 0
+
+$ rustc --edition=2024 --cfg 'feature="compile"' --test <worktree>/tests/claimed_counts.rs -o <out>/claimed_counts
+compile exit 0
+$ <out>/claimed_counts --test-threads=1
+
+running 6 tests
+test every_workspace_member_is_named_in_the_instructions ... ok
+test the_instructions_do_not_misstate_the_integration_test_counts ... ok
+test the_invalid_bytecode_census_still_describes_the_tree ... ok
+test the_source_listing_is_exhaustive_or_marked_partial ... ok
+test the_stage_source_count_claim_matches_the_directory ... ok
+test the_stated_figures_say_how_they_were_measured ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+test exit 0
+
+$ rustc --edition=2024 --cfg 'feature="compile"' --test <worktree>/tests/comment_citations.rs -o <out>/comment_citations
+compile exit 0
+$ <out>/comment_citations --test-threads=1
+
+running 6 tests
+test a_name_only_a_comment_mentions_does_not_resolve ... ok
+test an_inline_function_parameter_is_a_defined_name ... ok
+test every_comment_citation_resolves_or_is_a_recorded_debt ... ok
+test no_allow_list_entry_is_stale ... ok
+test the_current_claim_documents_cite_nothing_that_does_not_exist ... ok
+test the_unresolved_backlog_is_recorded ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.70s
+
+test exit 0
+
+Accepted worktree total 14 passed, 0 failed, 0 ignored.
+Report style scan strips inline code and link targets, exempts tables and reference definitions, and checks every remaining line including blockquotes for forbidden punctuation and common contractions. No findings. This is a bounded style scan, not a grammar proof.
+Independent assertions recomputed 18 changed process files, 11599 insertions, 501 deletions, ten proposal rows and five partial classifications. All passed.
+git diff --check exited 0. No runtime, Cargo, Clippy, remote or full integration gate result is claimed.

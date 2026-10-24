@@ -1,0 +1,456 @@
+--- a/.cargo-husky/hooks/pre-push
++++ b/.cargo-husky/hooks/pre-push
+@@ -1,10 +1,9 @@
+ #!/bin/sh
+ #
+-# Pre-push hook for Keleusma. Mirrors the "Before opening a pull
+-# request" checklist in CONTRIBUTING.md so the same signals that gate
+-# CI are checked before code leaves the machine. Installed from this
+-# version-controlled copy by cargo-husky (see the dev-dependency in
+-# Cargo.toml) the next time the dev-dependencies compile.
++# Pre-push hook for Keleusma. Runs the configured routine local checks.
++# This hook does not establish full feature-matrix or detached-package coverage.
++# docs/process/GATE_POLICY.md defines the integration and publication boundaries.
++# cargo-husky installs this version-controlled copy when dev-dependencies compile.
+ #
+ # Bypass for a work-in-progress push with: git push --no-verify
+ #
+@@ -17,9 +16,10 @@
+ # Tests: routine tier only (process audit item 1). This hook runs on every push,
+ # which is "routine development", so it runs the `quick` nextest profile — the
+ # necessary tests, EXCLUDING the ~198 self-hosted byte-identity tests (the
+-# `selfhost_*` binaries) that dominate wall-clock. The FULL suite, including those
+-# tests, is a merge-gate responsibility: run `scripts/release-gate.sh` before
+-# merging into the release line (it is mandatory; see docs/process/GIT_STRATEGY.md).
++# `selfhost_*` binaries) that dominate wall-clock. Continuous integration runs
++# the full suite for pull requests into version branches. Local checks may be
++# targeted under docs/process/GATE_POLICY.md. Full gates are required before
++# publication or merging into main, including affected detached packages.
+ # Trade-off: a self-host regression on a feature branch is caught at the merge
+ # gate, not at push time. When working ON a self-host stage, iterate with
+ # `scripts/fast-check.sh 'test(<stage>_kel_byte_identically)'`.
+--- a/.github/PULL_REQUEST_TEMPLATE.md
++++ b/.github/PULL_REQUEST_TEMPLATE.md
+@@ -21,10 +21,17 @@
+
+ ## Pre-merge checklist
+
+-- [ ] `cargo test --workspace` passes locally
+-- [ ] `cargo fmt --all -- --check` clean
+-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` clean
+-- [ ] `RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links" cargo doc -p keleusma --no-deps --features signatures,shell` clean
++- [ ] The verification receipt identifies the candidate commit or diff, selected commands and feature configurations, exit codes, executed test counts and omitted coverage
++- [ ] Relevant local checks support confidence in green remote continuous integration, including affected detached packages
++- [ ] Required remote checks pass for the pull request revision being merged into a version branch
++- [ ] Before publication or merging into `main`, full gates pass for the candidate inputs, including affected detached packages
++- [ ] Publication, if requested, has explicit in-session operator confirmation
++
++Use the [pre-push checklist](../docs/process/GIT_STRATEGY.md#pre-push-checklist)
++and the [operator gate policy](../docs/process/GATE_POLICY.md) to select and record
++checks. An omitted check is recorded as omitted. A work-in-progress feature branch
++may remain red, but it is not ready for version-branch integration.
++
+ - [ ] `CHANGELOG.md` updated under `[Unreleased]` if the change is user-visible
+ - [ ] If the change touches the surface language, `docs/spec/GRAMMAR.md` and the editor syntax files under `editors/` are updated
+ - [ ] If the change touches verifier soundness, the rationale is recorded in the PR description and the CHANGELOG entry names the soundness invariant preserved or relaxed
+--- a/CONTRIBUTING.md
++++ b/CONTRIBUTING.md
+@@ -38,23 +38,27 @@
+ scripts/fast-check.sh 'test(self_host_compiles_parse_kel_byte_identically)' # only the changed stage
+ ```
+
+-Re-running only the changed stage's self-compile (rather than all five) is the fast form; the full five-stage self-compile stays in the merge gate (`scripts/release-gate.sh`), which the routine pre-push tier no longer runs. Deliberately no stage-bytecode memoization: a stale cache could mask a real byte-identity divergence, the worst failure for a differential oracle.
++Re-running the changed stage provides a focused local signal. Continuous integration
++runs the full self-host suite for version-branch pull requests. The local release gate
++is available for a broader run and is required before publication or merging into
++`main`. The fast-check script enables its documented stage cache. Use its source
++and the recorded verification configuration to determine whether a result was cached.
+
+ The default nextest profile caps the run at four concurrent test processes (`test-threads` in [`.config/nextest.toml`](.config/nextest.toml)). nextest runs one process per test, so the full suite would otherwise spawn many at once; on a memory-constrained host the combined footprint plus parallel compilation can exhaust RAM and swap and wedge the run. Four processes keep peak memory modest while still finishing the library suite in a few seconds. The `ci` profile omits the cap because the CI runners have ample memory.
+
+ ## Branching and commits
+
+-The project follows trunk-based development. Short-lived feature branches fast-forward into `main`; force-pushes to `main` are blocked by branch protection.
++The project uses the [release-branch model](docs/process/GIT_STRATEGY.md).
++Cut feature branches from the active version branch and target that version branch
++with the pull request. V0.2.3 integrates reviewed, green revisions with no-fast-forward
++merge commits. The rebased V0.3.X line has its own integration rule in the strategy.
++Version branches and `main` remain green. Full gates must pass before publication
++or a merge into `main`.
+
+ ```sh
+-git checkout main
+-git pull --rebase
+-git checkout -b feat-my-change
+-# work, commit, push branch
+-git checkout main
+-git merge --ff-only feat-my-change
+-git push origin main
+-git branch -d feat-my-change
++git fetch origin
++git switch -c feat/my-change origin/v0.2.3
++# Work, verify, commit and open a pull request targeting v0.2.3.
+ ```
+
+ Commits follow the Conventional Commits convention with a scope. Common scopes are `feat`, `fix`, `docs`, `refactor`, `chore`, `test`. Examples:
+@@ -63,41 +67,36 @@
+ - `fix(vm): correct off-by-one in operand-stack reset`
+ - `docs(guide): clarify hot-swap discipline`
+
+-When AI assistance contributed, add the `Co-Authored-By` trailer.
++When artificial intelligence assistance contributed, attribute the assistant that
++actually contributed using the trailer in [the attribution convention](CLAUDE.md#git-workflow).
++Commit once per prompt. Feature branches may commit with recorded failures.
++Required checks must pass before integration into a version branch.
+
+ ## Before opening a pull request
+
++Select local checks for the changed scope under the
++[operator gate policy](docs/process/GATE_POLICY.md). The
++[verification receipt requirements](docs/process/GIT_STRATEGY.md#pre-push-checklist)
++define what to record, including the candidate inputs, exact commands and feature
++configurations, exit codes, executed test counts and omitted coverage.
++
++For documentation changes, the documented targeted selection is the following.
++
+ ```sh
+-cargo nextest run --workspace   # parallel; or: cargo test --workspace
+-cargo test --workspace --doc    # nextest does not run doc-tests
+-cargo fmt --all -- --check
+-cargo clippy --workspace --all-targets -- -D warnings
+-RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links" \
+-    cargo doc -p keleusma --no-deps --features signatures,encryption,shell
+-cargo run -q -p keleusma-cli -- run scripts/check-md-links.kel
++cargo test --test documentation_links --test comment_citations --test gate_ci_correspondence
+ ```
+
+-All of these must pass. The last verifies that relative links between
+-Markdown files resolve to existing files. It is itself a Keleusma
+-script, [`scripts/check-md-links.kel`](scripts/check-md-links.kel), run
+-through the CLI; it orchestrates POSIX tools through `shell::run` and
+-drives its exit code from their result. The earlier pure-POSIX
+-implementation remains in the git history at `scripts/check-md-links.sh`. CI runs the same set plus per-feature variants, no_std targets, Miri on the arena crate, and the bare-metal STM32N6570-DK build through `examples/rtos`. The doc command uses the docs.rs feature set; the `encryption` feature carries the `crate::encryption` module that the wire-format documentation links to, so omitting it produces an unresolved-link failure.
++For Rust changes, run formatting, tests and lint for the affected workspace and
++configurations. Include a documentation build when documentation links or public
++items change. Check feature-gated code under the affected feature selections.
++The root workflow covers the detached `compiler/` package through its own job.
++It does not cover every detached package, so relevant local checks must account
++for the changed package's actual coverage.
+
+-The commands above and the pre-push hook run only the **default** feature set of
+-the root workspace. They do not exercise the configurations where feature-gated
+-code diverges — `--no-default-features`, the `signatures` and broad
+-`signatures,shell` sets — nor the detached `compiler/` self-hosting subproject,
+-which is a separate workspace gated by neither the hook nor the root CI job. That
+-gap is how a `--no-default-features` compile break or a subproject regression
+-reaches CI unseen. Run [`scripts/verify.sh`](scripts/verify.sh) to close it: it
+-mirrors CI's runnable feature matrix plus the subproject's build, tests, clippy,
+-and fmt, and reports every failure in one pass. It deliberately does not use
+-`--all-features` (unsuitable for this workspace, as the CI "broad features" job
+-documents — it selects mutually-degenerate narrow-word widths), and it skips the
+-toolchain- or target-specific jobs (Miri, MSRV, cross-builds, WASM) with a note
+-when the required toolchain is absent. Run it before pushing changes that touch
+-feature-gated code or the subproject.
++Version-branch integration requires green remote continuous integration for the
++revision being merged. Before publication or merging into `main`, run the full
++gates required by the policy, including affected detached packages. A targeted
++local receipt does not establish a complete gate pass.
+
+ ## Automated pre-push hook
+
+--- a/docs/process/AUTONOMOUS_IMPLEMENTATION_LOOP.md
++++ b/docs/process/AUTONOMOUS_IMPLEMENTATION_LOOP.md
+@@ -123,20 +123,19 @@
+    the bounded latest state and the next intended increment, and update `TASKLOG.md`. The
+    handoff prompt [`HANDOFF.md`](./HANDOFF.md) is separate: it is not written every increment,
+    only before a planned compaction, and it is stamped with the current commit (see Guardrails).
+-6. **Commit** with a scoped conventional message ending in the
+-   `Co-Authored-By: Claude ...` line.
+-7. **Merge at a natural point**: **when CI is green on a pull request** from the feature branch to
+-   `v0.2.3`, merge with a **no-fast-forward merge commit** (`git merge --no-ff <commit>`), push, and
+-   keep CI green afterward. **CI authorizes the merge; the local gate does not** (changed
+-   2026-08-11 -- see [GIT_STRATEGY.md](./GIT_STRATEGY.md#definition-of-green), which records that
+-   gate time was the bottleneck and that CI is a verified strict superset of the local gate). A red
+-   CI result on `v0.2.3` is remedied immediately.
+-
+-   **This step said "the green local gate authorizes the merge" until 2026-09-08.** That was the
+-   pre-2026-08-11 rule, and it survived here because the policy change reached `GIT_STRATEGY.md`
+-   and no other document. A session following it spends about 2h30m of the contended machine on a
+-   gate CI has already superseded in about 48 minutes. The no-ff merge keeps the `v0.2.3`
+-   first-parent history green while preserving the per-increment commits on the merged bubble.
++6. **Commit** once per prompt with a scoped conventional message and attribution
++   to the assistant that contributed, following [CLAUDE.md](../../CLAUDE.md#git-workflow).
++   Feature branches may commit with recorded failures. Version branches remain green.
++7. **Merge at a natural point** when remote continuous integration is green on the
++   pull request revision to be merged into `v0.2.3`. Use a no-fast-forward merge
++   and keep the version branch green afterward. Select relevant local checks under
++   [GATE_POLICY.md](./GATE_POLICY.md), including affected detached packages.
++   Full gates are required before publication or merging into `main`.
++
++   The gate-correspondence check compares command shapes. It does not establish
++   that the local gate and remote workflow perform equivalent work. Record commands,
++   outcomes, actual test counts and omitted coverage under
++   [GIT_STRATEGY.md](./GIT_STRATEGY.md#pre-push-checklist).
+
+    **DO NOT REBASE BEFORE MERGING.** This step used to say to rebase onto the current `v0.2.3` tip
+    first, "so it stays fast-forwardable". That instruction is **wrong and was acted on once before
+@@ -236,13 +235,16 @@
+
+ ## Guardrails (always in force)
+
+-- Feature branches are cut from and merged to `v0.2.3` (via a no-fast-forward merge commit),
+-  never `main`; merge only after a green full gate; CI must be green after every push and a red
+-  result remedied immediately. Feature-branch intermediate commits may be red, but the branch tip
+-  must be green at merge. The full branch model is in [GIT_STRATEGY.md](./GIT_STRATEGY.md).
++- Feature branches are cut from and merged to `v0.2.3` with a no-fast-forward
++  merge commit. Required remote checks must pass before version-branch integration.
++  Local checks may target the affected scope. Full gates are required before
++  publication or merging into `main`. Feature branches may record failures while
++  iterating. The full policy is in [GATE_POLICY.md](./GATE_POLICY.md).
+ - Direct commits to `v0.2.3` are allowed **only** for small green documentation or process-file
+   changes (the three resume channels, a plan doc); every code change flows through a feature branch.
+-- Never bypass the pre-push gate (`--no-verify` is prohibited).
++- Follow the [documented pre-push procedure](../../CONTRIBUTING.md#automated-pre-push-hook).
++  Record skipped checks and failures. A work-in-progress push is not evidence of
++  readiness for version-branch integration.
+ - No new opcode or `BYTECODE_VERSION` bump without operator authorization.
+ - Commit messages end with the `Co-Authored-By` line.
+ - Confirm before any irreversible or outward-facing action.
+--- a/docs/process/GIT_STRATEGY.md
++++ b/docs/process/GIT_STRATEGY.md
+@@ -152,14 +152,15 @@
+
+ ### Note on `scripts/merge-to-trunk.sh`
+
+-The script implements the **linear** form: rebase onto `origin/$TRUNK`, gate, re-check the tip, then
+-`git merge --ff-only`. That is correct for a rebased line whose commits are all green, and it is
+-**not** the `--no-ff` behaviour this section prescribes for an ordinary version branch.
+-
+-The script and this document have differed since both existed. No harm has resulted, because merges
+-into `v0.2.3` have all been done by hand with `--no-ff`, and the script's users have been on the
+-linear line. Know which form you want before running it: on a `--no-ff` line it will flatten a
+-branch onto the spine without saying so.
++The helper rebases, runs a local gate, checks whether the remote trunk moved,
++then offers a fast-forward merge and push. It does not check the required remote
++continuous-integration results. A successful helper run therefore does not authorize
++integration under [GATE_POLICY.md](./GATE_POLICY.md). Its fast-forward operation
++also differs from the V0.2.3 no-fast-forward rule.
++
++Use the merge procedure in this document and independently verify the candidate's
++required remote results. Treat the helper as legacy tooling pending a separately
++verified repair. Its executable behavior is unchanged by this documentation correction.
+
+ ## Definition of Green
+
+@@ -180,12 +181,11 @@
+ | two sessions at once | impossible | **yes** |
+ | coverage | 12 steps | **all 12, plus 10 more** |
+
+-**CI IS A VERIFIED STRICT SUPERSET, checked step by step rather than asserted.** Every local step has
+-a CI job — including `keleusma-wire` in *both* configurations, which one job covers in two `run`
+-lines. CI additionally runs Miri, two MSRV checks, `no_std`, the RTOS `thumbv8m` cross-build,
+-`keleusma-bench`, the SDL3 examples, the LSP, the VS Code extension and the WASM playground, none of
+-which the local gate touches. The local gate was always the weaker instrument; it was merely the
+-nearer one.
++**The command correspondence is checked, while equivalence remains unproven.**
++`tests/gate_ci_correspondence.rs` checks that normalized local gate commands have
++workflow counterparts. Runner, profile and documentation-test behavior can differ.
++Additional workflow jobs do not make root continuous integration certify detached
++packages it does not exercise. Select local checks for those packages separately.
+
+ **The wall-clock figure was measured on 2026-09-08 and had been understated.** This row read
+ "~48 min (23 parallel jobs)". Five completed runs on `v0.2.3` that day took **57, 60, 61, 66 and 71
+@@ -239,8 +239,11 @@
+
+ Optional body providing additional context.
+
+-Co-Authored-By: Claude <noreply@anthropic.com>
+-```
++Co-Authored-By: <contributing assistant> <assistant attribution address>
++```
++
++Use the actual assistant's trailer from [CLAUDE.md](../../CLAUDE.md#git-workflow).
++The placeholder above is a format example and must be replaced.
+
+ ### Summary Line
+
+--- a/docs/process/PARALLEL_DEVELOPMENT.md
++++ b/docs/process/PARALLEL_DEVELOPMENT.md
+@@ -487,36 +487,36 @@
+ The release line (`v0.2.3`) and `scripts/release-gate.sh` are shared and must be
+ entered one agent at a time.
+
+-**Merge protocol (per branch, in turn):**
+-
+-Run [`scripts/merge-to-trunk.sh`](../../scripts/merge-to-trunk.sh) from the feature
+-branch. It performs the whole serialization sequence and refuses to merge if the
+-trunk moved under it:
+-
+-1. Rebase the branch onto the current trunk tip (`git fetch` + `git rebase origin/v0.2.3`).
+-2. Verify the branch. **CI on a pull request is what authorizes a merge** (changed 2026-08-11;
+-   see [GIT_STRATEGY.md](./GIT_STRATEGY.md#definition-of-green)). `scripts/release-gate.sh` is
+-   available for a local pass when working offline or before a release, and this step called it
+-   "the mandatory pre-merge gate" until 2026-09-08, which was the superseded rule.
+-3. Re-check the trunk tip. If it moved while the gate ran, another agent merged
+-   first — abort and re-run (which rebases onto the new tip and re-gates).
+-4. Fast-forward merge and push.
+-
+-The script is a dry-run by default (rebase and gate, then stop and print the
+-commands); pass `--execute` to merge and push. Doing it by hand is fine too — the
+-sequence above IS the protocol. The re-check in step 3 is the guard against a gate
+-that raced another merge; a gate result is only valid for the exact trunk tip it
+-ran against, so there is no lock daemon, just "gate, then confirm nothing moved."
++**Merge protocol for each branch**
++
++Follow [GIT_STRATEGY.md](./GIT_STRATEGY.md) and the
++[operator gate policy](./GATE_POLICY.md).
++
++1. Identify the candidate revision and target version branch. Select relevant local
++   checks and record their exact scope, outcomes and omissions.
++2. Require green remote continuous integration on the revision to be integrated.
++   Include relevant local checks for affected detached packages.
++3. Recheck the candidate and target state before integration. If either changed,
++   reassess the evidence and rerun the affected checks. A rebase changes the candidate.
++4. Use the integration form required by the owning line. V0.2.3 uses a no-fast-forward
++   merge. The rebased V0.3.X line lands one green squashed commit. Keep the version
++   branch green and remedy a failed integration result before further work lands.
++
++Full gates remain mandatory before publication or merging into `main`.
++
++The existing [merge helper](../../scripts/merge-to-trunk.sh) rebases, runs a local
++gate and offers a fast-forward merge. It does not check required remote results.
++Its success output is not evidence that this protocol has been satisfied. Its
++executable behavior requires a separate repair and verification before it can be
++presented as the implementation of this protocol.
+
+ **Gate discipline (this is also process-audit item 1):**
+
+ - Inner loop: [`scripts/fast-check.sh`](../../scripts/fast-check.sh) is cheap and
+   safe to run concurrently across agents.
+ - The full `scripts/release-gate.sh` is CPU-heavy, and the self-host tests already
+-  contend for cores. Do **not** run several full gates concurrently — it saturates
+-  the machine and inflates every agent's wall-clock. Serialize full gates at the
+-  merge point per the protocol above. This is why the merge is a queue, not a
+-  free-for-all.
++  contend for cores. Serialize full local gates when they are needed. This resource
++  constraint does not require a full local gate at every version-branch merge.
+
+ ## 5. Checklist for launching a parallel burst
+
+@@ -526,7 +526,7 @@
+ 3. `scripts/worktree.sh new <branch>` per stream.
+ 4. Each agent iterates with `scripts/fast-check.sh`; per-branch handoff in
+    `docs/process/handoffs/`.
+-5. Merge back one at a time with `scripts/merge-to-trunk.sh` (section 4).
++5. Integrate one branch at a time using the policy and evidence requirements in section 4.
+ 6. `scripts/worktree.sh rm <branch>` when merged.
+
+ ## Status
+--- a/docs/process/PROCESS_STRATEGY.md
++++ b/docs/process/PROCESS_STRATEGY.md
+@@ -67,44 +67,27 @@
+
+ ## Tiered Verification
+
+-The full gate must be green before every **merge**. It does not need to run after every
+-**change**. Those are different questions, and conflating them costs hours: roughly twenty
+-full gates were run across one session, one per increment, where four would have given an
+-identical answer.
+-
+-| Tier | When | Cost | Command |
+-|---|---|---|---|
+-| **0 — inner loop** | every edit | seconds | `scripts/fast-check.sh 'test(<filter>)'` |
+-| **1 — pre-commit** | every increment | ~3 min | the three checks below |
+-| **2 — pre-merge** | once per merge, batching three or four increments | ~2 h | `scripts/release-gate.sh` |
+-
+-**Tier 1 is the one that is easy to skip and should not be.** These three catch defects that
+-targeted tests are structurally incapable of seeing, and each has drawn blood:
+-
+-```bash
+-cargo clippy --workspace --all-targets -- -D warnings
+-cargo test -p keleusma --no-default-features
+-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+-```
+-
+-A broken intra-doc link is invisible to `test` and `clippy`; that is how V0.2.1 shipped with a
+-red CI Doc job, and how broken `src/selfhost/` links survived four releases. A test importing
+-behind a feature gate breaks the runtime-only build while every targeted test passes.
+-
+-**Batch increments per merge.** A feature branch may sit red across many commits; only its tip
+-must be green. Running the full gate per increment buys nothing, because the gate answers a
+-question about the merge, not about the increment.
+-
+-### The full gate re-runs the heaviest suite per feature configuration
+-
+-`cargo test` runs once per feature config, so `selfhost_codegen` — whole-stage self-compiles,
+-the most expensive suite by far — executes four times. That is most of the two hours.
+-
+-This is **deliberate and has not been narrowed.** Skipping it under `signatures` or
+-`signatures,shell` would probably be safe, since those affect signing and the docs.rs surface
+-rather than codegen. "Probably safe" is how the two coverage holes above were made, and the
+-saving is roughly two-fold where batching gives five-fold at no cost to coverage. Take the
+-batching. Narrowing the matrix is an operator decision, not the loop's.
++The [operator gate policy](./GATE_POLICY.md) distinguishes feature iteration,
++version-branch integration and release checkpoints. Commit once per prompt with
++verification evidence and explicit omissions. Only feature branches may commit
++with recorded failures. Version branches and `main` remain green.
++
++| Tier | When | Required evidence |
++|---|---|---|
++| Inner loop | During feature development | Checks focused on the change |
++| Version-branch integration | Before merging the candidate revision | Green remote continuous integration and relevant local checks, including affected detached packages |
++| Release checkpoint | Before publication or merging into `main` | Full gates on candidate inputs, including affected detached packages, plus green remote checks |
++
++The [pre-push checklist](./GIT_STRATEGY.md#pre-push-checklist) defines the receipt.
++Record exact commands, feature configurations, exit codes, executed test counts
++and omitted coverage. A broken documentation link needs a documentation check.
++A feature-gated import needs checks under the configurations that can expose it.
++Select the checks by those risks and by the actual workflow coverage.
++
++Full gates remain available for broader local verification and offline work.
++They are not required at every feature commit or version-branch merge. This policy
++does not narrow the remote feature matrix or the gates required at release checkpoints.
++Publication still requires explicit in-session operator confirmation.
+
+ ### Run the gate in a worktree, not in the tree you are working in
+
+--- a/scripts/fast-check.sh
++++ b/scripts/fast-check.sh
+@@ -11,8 +11,8 @@
+ #   scripts/fast-check.sh 'test(self_hosted_construct_support_boundary)'        # the boundary
+ #
+ # Item 3 of the 2026-07-22 process audit — "re-self-compile only the changed stage in
+-# the inner loop": pass just that stage's `*_kel_byte_identically` filter here; the full
+-# five-stage self-compile stays in the push hook and merge gate.
++# the inner loop": pass the changed stage's filter here. Continuous integration
++# runs the full self-host suite for version-branch pull requests.
+ #
+ # This lane sets KEL_SELFHOST_CACHE=1, which enables the COMPLETE-KEY memoization in
+ # tests/common/mod.rs for the expensive whole-stage self-compile and analyze tests. A
+@@ -22,9 +22,10 @@
+ # always runs for real, so the memoization never affects a push or a merge. Measured:
+ # the eight heaviest self-host tests drop from ~102s to ~0.02s on a warm cache.
+ #
+-# This is NOT sufficient before a push or merge. The push runs the cargo-husky pre-push
+-# hook; a merge to the release line runs `scripts/release-gate.sh` (the mandatory gate,
+-# which also covers the detached compiler/ subproject). Reserve those for their moments.
++# This focused check alone does not establish readiness for integration.
++# Version-branch merges require green remote continuous integration and relevant
++# local evidence under docs/process/GATE_POLICY.md. Full gates are required before
++# publication or merging into main, including affected detached packages.
+ #
+ # Optional second arg overrides the crate clippy targets (default: -p keleusma).
+ set -euo pipefail
+--- a/scripts/merge-to-trunk.sh
++++ b/scripts/merge-to-trunk.sh
+@@ -1,5 +1,9 @@
+ #!/usr/bin/env bash
+-# merge-to-trunk.sh — serialize a feature-branch merge into the active trunk.
++# Legacy merge helper. It does not enforce docs/process/GATE_POLICY.md.
++# It never checks required remote continuous-integration results and uses a
++# fast-forward merge rather than the V0.2.3 no-fast-forward policy.
++# Follow docs/process/GIT_STRATEGY.md for integration. Do not treat this helper's
++# success message as authorization to merge. The behavior described below is legacy.
+ #
+ # Implements the merge protocol in docs/process/PARALLEL_DEVELOPMENT.md section 4
+ # so parallel agents cannot race the release line: rebase onto the freshest trunk,
