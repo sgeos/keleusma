@@ -63,6 +63,17 @@ the branch from `v0.2.3`, not directly. Kaizen merged `origin/v0.2.3` at
 `be81c214` into this branch, kept both sides of the task log, regenerated
 the interline checkpoint from the live store and opened the merge PR.
 
+### Token economy spike
+
+At the operator's request the line measured agent token use and surveyed
+token economization techniques. The report is
+[`2026-10-24-token-economy-spike.md`](../kaizen/2026-10-24-token-economy-spike.md).
+Cache re-reads dominate. The compaction threshold sets context size, and
+waiting at full context cost about 14.5 percent of context volume. It makes
+seven proposals and adopts none. This commit is local only, because PR 502
+is under review and the line told V0.2.X it would not push to that branch
+before the merge.
+
 ### Environment notes
 
 The operator changed global sandbox settings and the primary checkout's
@@ -90,7 +101,7 @@ and is not exhaustive secret detection.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `ab3604af5f7b09d7bc7f5e025766589b92edf7a1281db9198266ca1abedac545` |
+| [Interline](../interline/checkpoint.json) | `fb786c69716aff0c0116b7b3a8d92dfbda7992530d1c6122d57242418b93723b` |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `16d65875954a7f7f33416135dd8f475dcb7a982c020adafbbd337aff12ae4bf6` |
 
 The pilot checkpoint holds 250 samples and 66 tasks.
