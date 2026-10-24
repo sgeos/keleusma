@@ -42,32 +42,41 @@ run.
 - **Merged.** PR 502 merged the line's branch into `v0.2.3` as `e4c1b4c3`, carrying the
   interline protocol, the Jev shadow pilot, their tooling and the earlier reports.
   V0.3.X is absorbing it as its absorption 86, PR 504.
-- **Committed after the merge, for a follow-up PR to `v0.2.3`.** The
-  [token economy spike](../kaizen/2026-10-24-token-economy-spike.md), the
+- **PR 505** carries the [token economy spike](../kaizen/2026-10-24-token-economy-spike.md),
+  the first pass of the
   [context engineering follow-up](../kaizen/2026-10-24-context-engineering-spike.md),
-  the shorter prompt reminder in `scripts/interline.py` with its tests, and this
-  rewrite. The follow-up records the operator's positions on the seven token
-  proposals and withdraws the lower auto-compact window.
-- **Not activated.** The shorter reminder runs only after the installed copy at
+  the shorter prompt reminder and the first version of this file.
+- **Second pass, on the branch after PR 505.** The extended measurement, including the
+  finding that every Opus 5.5 compaction was an idle compaction. `scripts/gate_summary.py`
+  with real failure fixtures. The `python-tooling` CI job. The state-file pointer in the
+  reminder. The updated follow-up report.
+- **Not activated.** The reminder changes run only after the installed copy at
   `secret/interline/interline.py` is updated. This line does not reinstall over shared
   stores, so that is the operator's step.
+- **`CLAUDE.md` draft.** Prepared in this session's scratchpad and tested in place
+  against the four tests that read `CLAUDE.md`. V0.2.X accepted the drafting and asked
+  that it be based on `v0.2.3` after its Order 3 PR. V0.2.X will send that merge commit.
+  If the scratchpad is gone, regenerate the draft from the follow-up's description.
 
 ## Next increments, in order
 
-1. Notify V0.2.X and V0.3.X of the state-file proposal and the intent to draft a
-   trimmed `CLAUDE.md` and `AGENTS.md`, then draft them as a PR for V0.2.X review.
-   Target at most 200 lines. The release-history status paragraph, the two verification
-   tables and the repository tree are the largest movable sections.
-2. A gate output wrapper that logs everything and prints the status, failing tests and
-   summaries, tested against real captured failures. The operator agreed provided no
-   failure is hidden.
-3. Shadow tasks in the Jev pilot for the four large-input decisions in the follow-up,
+1. When V0.2.X reports its Order 3 merge, apply the `CLAUDE.md` draft on a branch from
+   `v0.2.3`, carry V0.2.X's status sentence, move the two catalogues to
+   `docs/process/VERIFICATION_PITFALLS.md`, repoint `AGENTS.md`, rerun the four tests and
+   open the PR for V0.2.X review. Do not merge it without that review. Tell V0.3.X that
+   its "V0.3.X routing takes precedence" paragraph, which exists only on `v0.3.0`, must
+   survive its absorption of the trimmed file, and that the Appendix B paragraph is kept.
+2. Shadow tasks in the Jev pilot for the four large-input decisions in the follow-up,
    section selection measured first and adopted last.
-4. A state-file budget guard, after the owning lines have converted their files.
+3. A state-file budget guard, after the owning lines have converted their files.
 
 ## Open with the operator
 
-- Activation of the shorter reminder, by updating the installed client.
+- Activation of the reminder changes, by updating the installed client.
+- Confirming first-hand to V0.2.X and V0.3.X the positions on instruction and startup
+  files. V0.2.X will not convert its state files on Kaizen's relay alone.
+- Whether to set `idleCompaction` to `false`, keeping full context across long waits at
+  the cost of re-writing the cache on return.
 - A ruling on deliberate session ends at task boundaries, with a fresh session reading
   a small state file, in place of repeated compaction.
 - Whether frozen history files stay in the tree or leave it for git history. That is
@@ -75,17 +84,16 @@ run.
 - The 94 absolute home-directory paths that PR 502 added. V0.2.X left the choice of
   making them relative to this line. Not yet decided.
 
-## Concerns not yet raised with an owning line
+## Concerns
 
-- `scripts/release-gate.sh` still runs the heavy tier twice, through
-  `cargo test --workspace` and the self-host step.
-- `scripts/merge-to-trunk.sh` requires a fast-forward push, which conflicts with the
-  no-fast-forward pull-request model.
+- `scripts/release-gate.sh` runs the heavy tier twice, through `cargo test --workspace`
+  and the self-host step. Reported to V0.2.X as `kaizen-20261024-release-gate-heavy-twice`
+  with a proposed fix. V0.2.X owns the gate.
 - Branch `test/kaizen-split-stage-artifact` at `e7a59d20` keeps the per-stage split
   of the slowest test from the closed PR 495. Revisit it if that test exceeds about
   45 minutes in continuous integration.
-- Continuous integration does not run the Python tooling tests, so a regression in
-  `scripts/interline.py` or `scripts/jev_shadow.py` fails no job.
+- The `python-tooling` CI job is new. Confirm it ran and counted at least 50 tests on
+  its first pull request before relying on it.
 
 ## Mailbox and pilot
 
@@ -97,7 +105,7 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `dc67260abf1108d031413b4ea8a55845a8fb37de94e5d1ebf66f545947eae6d8`, 17 messages, the two unacknowledged ones being this line's notices of 2026-10-24 |
+| [Interline](../interline/checkpoint.json) | `398feb9c1ab3273aaad41e65ed4dc28aba1e40080dbf337f8ba2cd2c144e0cd1`, 20 messages, the one unacknowledged being this line's release-gate notice to V0.2.X |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `16d65875954a7f7f33416135dd8f475dcb7a982c020adafbbd337aff12ae4bf6`, 250 samples and 66 tasks |
 
 ## Environment

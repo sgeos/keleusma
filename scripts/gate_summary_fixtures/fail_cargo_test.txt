@@ -1,0 +1,33 @@
+exit=101
+   Compiling fixture v0.1.0 (/WORK/c)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running unittests src/lib.rs (/WORK/target/debug/deps/fixture-ac38c31a377ce53e)
+
+running 3 tests
+test tests::passes ... ok
+test tests::unwrap_panics ... FAILED
+test tests::assertion_fails ... FAILED
+
+failures:
+
+---- tests::unwrap_panics stdout ----
+
+thread 'tests::unwrap_panics' (38852338) panicked at src/lib.rs:6:63:
+called `Option::unwrap()` on a `None` value
+
+---- tests::assertion_fails stdout ----
+
+thread 'tests::assertion_fails' (38852336) panicked at src/lib.rs:5:36:
+assertion `left == right` failed: two is not three
+  left: 2
+ right: 3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::assertion_fails
+    tests::unwrap_panics
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`

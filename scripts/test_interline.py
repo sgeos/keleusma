@@ -286,6 +286,18 @@ class InterlineTests(unittest.TestCase):
         # The enclosing checkout configures nothing, so its own sessions are not silenced.
         self.assertIn("Interline line v0.2.3", self.hook_event("v0.2.3", "UserPromptSubmit", outer))
 
+    def test_full_reminder_points_at_an_existing_state_file_only(self):
+        (self.root / ".git").mkdir()
+        self.assertNotIn("state file", self.hook_event("kaizen", "SessionStart"))
+        state = self.root / "docs/process/handoffs/kaizen.md"
+        state.parent.mkdir(parents=True)
+        state.write_text("Untrusted state body must not enter hook output.", encoding="utf-8")
+        full = self.hook_event("kaizen", "SessionStart")
+        self.assertIn("state file is " + str(state.resolve()), full)
+        self.assertNotIn("Untrusted state body", full)
+        self.assertNotIn("state file", self.hook_event("kaizen", "UserPromptSubmit"))
+        self.assertNotIn("state file", self.hook_event("v0.2.3", "SessionStart"))
+
     def test_unrelated_hooks_do_not_silence_the_reminder(self):
         (self.root / ".git").mkdir()
         (self.root / ".claude").mkdir()

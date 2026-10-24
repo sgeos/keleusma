@@ -1,0 +1,19 @@
+exit=0
+   Compiling fixture v0.1.0 (/WORK/c)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running unittests src/lib.rs (/WORK/target/debug/deps/fixture-ac38c31a377ce53e)
+
+running 2 tests
+test tests::passes ... ok
+test tests::also_passes ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests fixture
+
+running 1 test
+test src/lib.rs - two (line 1) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.31s; merged doctests compilation took 0.19s

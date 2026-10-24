@@ -1,0 +1,10 @@
+exit=101
+   Compiling fixture v0.1.0 (/WORK/c)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+     Running unittests src/lib.rs (/WORK/target/debug/deps/fixture-ac38c31a377ce53e)
+
+running 1 test
+error: test failed, to rerun pass `--lib`
+
+Caused by:
+  process didn't exit successfully: `/WORK/target/debug/deps/fixture-ac38c31a377ce53e` (signal: 6, SIGABRT: process abort signal)
