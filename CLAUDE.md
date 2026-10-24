@@ -190,7 +190,7 @@ The AI agent commits once after all tasks in a prompt are complete, including th
 # Build
 cargo build
 
-# Run tests
+# Run tests (everything, including the heavy self-host tier)
 cargo test
 
 # Check without building
@@ -200,8 +200,12 @@ cargo check
 cargo fmt
 cargo clippy -- -D warnings
 
-# Everyday verification
-cargo fmt --check && cargo clippy --tests --features signatures,shell,self-host -- -D warnings && cargo test
+# Everyday verification: the light tier, which skips the heavy self-host binaries
+cargo fmt --check && cargo clippy --tests --features signatures,shell,self-host -- -D warnings && cargo tnq
+
+# The heavy self-host tier, selectively: all of it, or one test by name
+cargo tns
+scripts/fast-check.sh 'test(<name>)'
 
 # Documentation gate (broken/private intra-doc links fail here, not in test/clippy)
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
@@ -212,7 +216,10 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 scripts/release-gate.sh
 ```
 
-The everyday verification omits the documentation build; a broken intra-doc link is
+The everyday verification is deliberately light. The heavy self-host tier runs in CI on
+every pull request, in the `test-self-host` job, and that run is what a merge waits on.
+Run `cargo tns` or `scripts/fast-check.sh` locally when working on a self-host stage.
+The everyday verification also omits the documentation build; a broken intra-doc link is
 invisible to `test`/`clippy` and only fails the CI `Doc` job. Before any publication,
 run the full `scripts/release-gate.sh` (which includes `cargo doc -D warnings`) and
 follow [`docs/process/RELEASE_PROCESS.md`](docs/process/RELEASE_PROCESS.md). Skipping
