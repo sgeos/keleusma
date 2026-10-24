@@ -3626,11 +3626,12 @@ fn every_lowering_module_executes_or_is_exempt() {
             "    RESIDUAL: the thinnest seeded stage now carries {weakest} subject(s). \
              The subject axis is no longer any stage's binding constraint."
         );
-        println!("    What remains is NOT a subject count: `verify_datalayout.kel` cannot");
-        println!("    be driven at all (its verdict accumulates across three differently-");
-        println!("    encoded phases, blocked BY DESIGN), and `wire.kel` is exempt as");
-        println!("    fault-comparable rather than uncompared. Both are documented as");
-        println!("    correct rather than as gaps.");
+        println!("    What remains here is NOT a subject count. The stages this tick");
+        println!("    harness cannot drive meaningfully are driven by HOST PROTOCOL in");
+        println!("    `stage_differential.rs`: `wire.kel` by command scripts over real");
+        println!("    artifacts, `verify_datalayout.kel` across its batched phases, and");
+        println!("    `wire_debug.kel` with `wire_schema.kel` in a lockstep debug-pool");
+        println!("    round trip. Their figures below describe THIS harness only.");
         // **NAME the unseeded stages, do not merely count them.** A count tells
         // the next reader how much is left; a list tells them where to start.
         let unseeded: Vec<&String> = ex
@@ -3643,8 +3644,8 @@ fn every_lowering_module_executes_or_is_exempt() {
             unseeded.len(),
             unseeded.iter().map(|n| n.as_str()).collect::<Vec<_>>()
         );
-        println!("    Each is one run of sixty ticks with no input. This is now the");
-        println!("    weakest part of the gate.");
+        println!("    Each is one run of sixty ticks with no input HERE; each is driven");
+        println!("    on real input in `stage_differential.rs`.");
 
         // **A seeded stage that silently falls back to one subject is what this
         // guards.** `reconstruct.kel` is exempt BY NAME with its obstacle stated
@@ -3725,17 +3726,17 @@ fn every_lowering_module_executes_or_is_exempt() {
              \n  \
              TWO QUALIFICATIONS BELONG BESIDE THIS FIGURE, NOT ELSEWHERE:\n  \
              \n  \
-             `verify_datalayout.kel` NEVER RUNS, and is blocked BY DESIGN rather\n  \
-             than by a defect: its verdict accumulates across three\n  \
-             differently-encoded phases in the retained buffer. Do not invent a\n  \
-             batch-zero seed for it.\n  \
+             `verify_datalayout.kel` produces no verdict HERE: its verdict\n  \
+             accumulates across three differently-encoded phases fed by the\n  \
+             host. Do not invent a batch-zero seed for it. Its phases are\n  \
+             driven, with verdicts in both directions, in stage_differential.rs.\n  \
              \n  \
-             `wire.kel` is EXEMPT AND IS NOT A DISAGREEMENT. Measured separately:\n  \
-             both sides fault at tick 19, the virtual machine naming\n  \
-             IndexOutOfBounds and the native side raising SIGTRAP. But SIGTRAP\n  \
-             proves A fault and not WHICH, so that is agreement in the FACT and\n  \
-             the POSITION of the fault, not in its identity. It must not be\n  \
-             rounded up to agreement.\n  \
+             `wire.kel` is EXEMPT HERE AND IS NOT A DISAGREEMENT. Driven with\n  \
+             the tick as its command, it faults at tick 19 on both sides, the\n  \
+             virtual machine naming IndexOutOfBounds and the native side raising\n  \
+             SIGTRAP. That is agreement in the FACT and POSITION of a fault the\n  \
+             input order causes. Driven by its host's commands over real\n  \
+             artifacts in stage_differential.rs, it executes and agrees.\n  \
              \n  \
              THE STAGES ARE SEEDED. Read the carrier breakdown above before\n  \
              treating any stage's agreement as substantive."

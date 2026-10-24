@@ -269,6 +269,13 @@ Indicative and revised as increments land.
 | 5 | Flat-machine ISA and hot replacement | G, H | The flat-machine ISA in native; native hot swap. |
 | 6 | **Full native code generation → V0.4.0** | A (full), plus widening | The full language lowers to native across the target set; native is a first-class deployment shape. |
 
+**Order 1 status, 2026-10-24.** Met under the strict reading: all 14 self-hosted stage sources
+execute natively and agree with the virtual machine on real input. The evidence and its limits are
+in [`ORDER_1_GATE_ASSESSMENT.md`](../decisions/ORDER_1_GATE_ASSESSMENT.md). Workstream B, Order 2's
+first workstream, completed earlier; see
+[`WORKSTREAM_B_COMPLETION.md`](../decisions/WORKSTREAM_B_COMPLETION.md). This table's Order numbers
+are this line's and differ from the V0.2.X roadmap's.
+
 ## The oracle and trust story
 
 Native code raises the same trust question as a self-hosted validator: native output that
