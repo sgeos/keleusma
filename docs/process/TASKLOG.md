@@ -6,6 +6,15 @@ Current sprint source of truth.
 
 ---
 
+## Old Kaizen worktree removal
+
+2026-10-23. Removed the obsolete sibling Kaizen worktree after checking local
+files, commit preservation and open-file use. Retained the `kaizen` branch at
+`8e06e55f`. Its only ignored files were generated mailbox hook configurations,
+backed up locally before removal. The active project-local Kaizen feature
+worktree remains in place. Details and continuation checks are in the
+[kaizen handoff](./handoffs/kaizen.md).
+
 ## Kaizen handoff to a fresh Codex session
 
 2026-10-23. Refreshed the [kaizen handoff](./handoffs/kaizen.md) for a replacement

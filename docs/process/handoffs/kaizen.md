@@ -2,9 +2,34 @@
 
 > **Navigation**: [Handoffs](./README.md) | [Process](../README.md)
 
+## Old Kaizen worktree removal on 2026-10-23
+
+The operator authorized removal of the older worktree if reasonable. Removed
+`/Users/bsechter/projects/rust/keleusma-worktrees/kaizen` with `git worktree remove`
+without force. The `kaizen` branch remains at `8e06e55f`. All its commits were
+already reachable from the active feature. No tracked changes or untracked files
+were present. The only ignored files were two generated interline hook
+configurations, copied and compared under `tmp/old-kaizen-worktree-hooks/` before
+removal. Those local backups are disposable and are not continuation prerequisites.
+The open-file check reported no users of the old directory at inspection time.
+This is a point-in-time observation, not a guarantee against later process activity.
+
+Continue in project-local `.worktrees/kaizen/` on
+`feat/kaizen-jev-shadow-pilot`. This session is now rooted there. Validate this
+update by checking ancestry from `a6393751`, reviewing intervening commits and
+confirming the old worktree is absent while the `kaizen` branch remains. The
+preceding handoff below remains the project-state reference. No implementation
+task was started and no peer worktree was changed by this cleanup.
+
+Verification confirmed directory and worktree-registration removal, retention
+of the branch and the active feature checkout. The Kaizen inbox was empty and
+the fresh mailbox export matched the tracked checkpoint byte for byte.
+`git diff --check` passed. Runtime tests were not run for this worktree cleanup
+and documentation update.
+
 ## Fresh Codex session handoff on 2026-10-23
 
-This section is the current entry point. All sections below are dated history.
+This section records the project state before the worktree cleanup above.
 The operator requested handoff to a fresh Codex session after power cycle
 preparation. This handoff does not require the outgoing conversation transcript.
 The line is `kaizen`, irrespective of the hook's default route or model harness.
