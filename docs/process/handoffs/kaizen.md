@@ -48,6 +48,17 @@ pull-request model and the CI merge gate. Neither has been raised with the
 owning line. `docs/decisions/ORDER1_COMPLETION_AUDIT.md` names the old test
 function in a dated row and was left as history.
 
+### Merge into v0.2.3
+
+The operator asked whether the pass had reached `v0.2.3`. PRs 493 and 494
+had. This Kaizen branch had not. It holds 22 commits that `v0.2.3` lacks,
+including the interline protocol, the pilot tooling and their documents.
+A trial merge conflicts only in `docs/process/TASKLOG.md` and in the
+add/add `docs/process/interline/checkpoint.json`. Request
+`kaizen-20261024-merge-kaizen-branch` asks V0.2.X to prioritize the merge
+and to say whether Kaizen or V0.2.X should open the PR. No reply had
+arrived at export.
+
 ### Environment notes
 
 The operator changed global sandbox settings and the primary checkout's
@@ -75,7 +86,7 @@ and is not exhaustive secret detection.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `7d545fea59976216875b390136cafebb7853026ae11e0c0e28b9e6b850d46f97` |
+| [Interline](../interline/checkpoint.json) | `e89a167d3edb4e9433752df155f6b803978147851075699e10ea41d46a17cc16` |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `16d65875954a7f7f33416135dd8f475dcb7a982c020adafbbd337aff12ae4bf6` |
 
 The pilot checkpoint holds 250 samples and 66 tasks.
