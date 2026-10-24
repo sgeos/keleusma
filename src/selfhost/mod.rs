@@ -9834,3 +9834,9 @@ mod construct_naming_guard {
 
 #[cfg(test)]
 mod checked_outcomes_tests;
+
+#[cfg(test)]
+mod type_corpus;
+
+#[cfg(test)]
+mod reference_poison_tests;
