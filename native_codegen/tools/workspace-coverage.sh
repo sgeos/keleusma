@@ -99,7 +99,10 @@ case "$cmd" in
     echo "changed since, read by workspace tests only:    ${#readonly_[@]}"
 
     if (( ${#compiled[@]} > 0 )); then
-      printf '  %s\n' "${compiled[@]}" | head -20
+      # A slice, not `| head -20`. Under `pipefail`, `head` exiting while
+      # `printf` was still writing turned the verdict into SIGPIPE, exit 141,
+      # on the hosted narrow-float gate at f95b624e with 278 paths listed.
+      printf '  %s\n' "${compiled[@]:0:20}"
       if (( ${#compiled[@]} > 20 )); then echo "  ... $(( ${#compiled[@]} - 20 )) more"; fi
       echo "VERDICT: STALE-COMPILED"
       exit 1
