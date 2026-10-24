@@ -103,6 +103,29 @@ A knowledge graph is maintained in `docs/`. Start at [`docs/README.md`](docs/REA
 
 ## Development Process
 
+Use the `typesafe-ai` skill when working on this project. Read the installed
+skill and its relevant live documentation when applying TypeSafe Jev to project
+workflows. The [TypeSafe skill setup](docs/process/TYPESAFE_SKILL.md) records
+installation, verification and recovery on a new machine.
+
+The operator-authorized [Jev shadow pilot](docs/process/JEV_SHADOW_PILOT.md)
+supports the V0.2.X and optional V0.3.X lines. Capture initial judgments before
+evaluation, use reviewed excerpts, and keep results hidden until task completion
+and blind labelling. Preserve ordinary gates and full source access. Record
+unavailable service results explicitly. The shared tools work with any harness.
+Export and review a tracked checkpoint at handoff so new-machine continuation
+does not depend on the local private store. No automatic model call runs at startup.
+
+For communication between development lines, read
+[`docs/process/INTERLINE_PROTOCOL.md`](docs/process/INTERLINE_PROTOCOL.md).
+Address the owning line without assuming its harness. On a fresh clone, the
+tracked installer reconstructs the local mailbox from the tracked checkpoint.
+Check the assigned line inbox at startup and before handoff. After communication
+changes, checkpoint the queue into the branch carrying the handoff and include
+the reviewed checkpoint in the prompt's commit. Mailbox continuation does not
+depend on pre-existing `tmp/` or `secret/` contents. Other operator-held prerequisites,
+including Appendix B, still require their own private provisioning.
+
 See `docs/process/PROCESS_STRATEGY.md` for the library engineering approach and agentic development loop.
 
 **HARD CONSTRAINT, before any of the below.** Before writing anything tracked, read

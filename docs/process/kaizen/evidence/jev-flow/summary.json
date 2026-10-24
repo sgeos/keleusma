@@ -1,0 +1,260 @@
+{
+  "calls": 18,
+  "decision_changes": {
+    "repeat": [],
+    "reversed": []
+  },
+  "estimated_usd": 0.001896426,
+  "latency_seconds": {
+    "median": 0.23111389623954892,
+    "p95_nearest_rank": 0.43030279222875834,
+    "sum": 4.432360291946679
+  },
+  "model": "jev-1.13.0",
+  "regex_baseline": {
+    "correct": 12,
+    "errors": [
+      "t04",
+      "t10",
+      "t12",
+      "t13",
+      "t14",
+      "t16",
+      "t17",
+      "t18"
+    ],
+    "total": 20
+  },
+  "tasks": {
+    "claims": {
+      "baseline": {
+        "confusion": {
+          "contradicts -> contradicts": 7,
+          "contradicts -> unsupported": 1,
+          "supports -> supports": 6,
+          "unsupported -> contradicts": 1,
+          "unsupported -> unsupported": 5
+        },
+        "correct": 18,
+        "errors": [
+          {
+            "answer": {
+              "choice": "contradicts",
+              "confidence": 0.89,
+              "probabilities": {
+                "contradicts": 0.93,
+                "supports": 0.0,
+                "unsupported": 0.07
+              },
+              "type": "choice"
+            },
+            "expected": "unsupported",
+            "id": "c02"
+          },
+          {
+            "answer": {
+              "choice": "unsupported",
+              "confidence": 0.42,
+              "probabilities": {
+                "contradicts": 0.38,
+                "supports": 0.0,
+                "unsupported": 0.62
+              },
+              "type": "choice"
+            },
+            "expected": "contradicts",
+            "id": "c12"
+          }
+        ],
+        "false_supports": [],
+        "high_confidence_count": 16,
+        "high_confidence_errors": [],
+        "total": 20
+      },
+      "repeat": {
+        "confusion": {
+          "contradicts -> contradicts": 7,
+          "contradicts -> unsupported": 1,
+          "supports -> supports": 6,
+          "unsupported -> contradicts": 1,
+          "unsupported -> unsupported": 5
+        },
+        "correct": 18,
+        "errors": [
+          {
+            "answer": {
+              "choice": "contradicts",
+              "confidence": 0.87,
+              "probabilities": {
+                "contradicts": 0.91,
+                "supports": 0.0,
+                "unsupported": 0.09
+              },
+              "type": "choice"
+            },
+            "expected": "unsupported",
+            "id": "c02"
+          },
+          {
+            "answer": {
+              "choice": "unsupported",
+              "confidence": 0.51,
+              "probabilities": {
+                "contradicts": 0.33,
+                "supports": 0.0,
+                "unsupported": 0.67
+              },
+              "type": "choice"
+            },
+            "expected": "contradicts",
+            "id": "c12"
+          }
+        ],
+        "false_supports": [],
+        "high_confidence_count": 16,
+        "high_confidence_errors": [],
+        "total": 20
+      },
+      "reversed": {
+        "confusion": {
+          "contradicts -> contradicts": 7,
+          "contradicts -> unsupported": 1,
+          "supports -> supports": 6,
+          "unsupported -> contradicts": 1,
+          "unsupported -> unsupported": 5
+        },
+        "correct": 18,
+        "errors": [
+          {
+            "answer": {
+              "choice": "contradicts",
+              "confidence": 0.89,
+              "probabilities": {
+                "contradicts": 0.93,
+                "supports": 0.0,
+                "unsupported": 0.07
+              },
+              "type": "choice"
+            },
+            "expected": "unsupported",
+            "id": "c02"
+          },
+          {
+            "answer": {
+              "choice": "unsupported",
+              "confidence": 0.56,
+              "probabilities": {
+                "contradicts": 0.29,
+                "supports": 0.0,
+                "unsupported": 0.71
+              },
+              "type": "choice"
+            },
+            "expected": "contradicts",
+            "id": "c12"
+          }
+        ],
+        "false_supports": [],
+        "high_confidence_count": 16,
+        "high_confidence_errors": [],
+        "total": 20
+      }
+    },
+    "retrieval": {
+      "baseline": {
+        "confusion": {
+          "False -> False": 9,
+          "True -> True": 11
+        },
+        "conservative_filter": {
+          "all_passage_bytes": 1608,
+          "false_exclusions": [],
+          "retained": 13,
+          "retained_passage_bytes": 1100
+        },
+        "correct": 20,
+        "errors": [],
+        "total": 20
+      },
+      "repeat": {
+        "confusion": {
+          "False -> False": 9,
+          "True -> True": 11
+        },
+        "conservative_filter": {
+          "all_passage_bytes": 1608,
+          "false_exclusions": [],
+          "retained": 13,
+          "retained_passage_bytes": 1100
+        },
+        "correct": 20,
+        "errors": [],
+        "total": 20
+      },
+      "reversed": {
+        "confusion": {
+          "False -> False": 9,
+          "True -> True": 11
+        },
+        "conservative_filter": {
+          "all_passage_bytes": 1608,
+          "false_exclusions": [],
+          "retained": 13,
+          "retained_passage_bytes": 1100
+        },
+        "correct": 20,
+        "errors": [],
+        "total": 20
+      }
+    },
+    "triage": {
+      "baseline": {
+        "confusion": {
+          "compiler_or_test -> compiler_or_test": 4,
+          "coverage -> coverage": 5,
+          "environment -> environment": 5,
+          "external -> external": 3,
+          "needs_review -> needs_review": 3
+        },
+        "correct": 20,
+        "errors": [],
+        "high_confidence_count": 17,
+        "high_confidence_errors": [],
+        "total": 20
+      },
+      "repeat": {
+        "confusion": {
+          "compiler_or_test -> compiler_or_test": 4,
+          "coverage -> coverage": 5,
+          "environment -> environment": 5,
+          "external -> external": 3,
+          "needs_review -> needs_review": 3
+        },
+        "correct": 20,
+        "errors": [],
+        "high_confidence_count": 18,
+        "high_confidence_errors": [],
+        "total": 20
+      },
+      "reversed": {
+        "confusion": {
+          "compiler_or_test -> compiler_or_test": 4,
+          "coverage -> coverage": 5,
+          "environment -> environment": 5,
+          "external -> external": 3,
+          "needs_review -> needs_review": 3
+        },
+        "correct": 20,
+        "errors": [],
+        "high_confidence_count": 18,
+        "high_confidence_errors": [],
+        "total": 20
+      }
+    }
+  },
+  "unique_cases": 60,
+  "usage": {
+    "input_tokens": 45153,
+    "output_tokens": 6801
+  }
+}

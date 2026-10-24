@@ -2328,6 +2328,153 @@ implementation or global configuration.
 > See `docs/process/handoffs/v0.3.0.md`.
 
 
+## Kaizen test-duration pass
+
+2026-10-24. At the operator's request, investigated slow tests and CI after
+the 2026-10-21 sharding. The last green `v0.2.3` run took 237 minutes. Two
+causes were measured. Tests built at opt-level 0, and `keleusma-cli`
+unified `self-host` into the workspace job, which repeated the self-host
+corpus. PR 493 set opt-level 1 and merged as `b2ccc099`, cutting CI to 42
+minutes. PR 494 filtered the heavy binaries out of the workspace job and
+merged as `d7461857`, cutting CI to 31 minutes. It also moved everyday
+verification to the light tier and fixed a `fast-check.sh` feature gap.
+PR 495 split the slowest test per stage. It showed no critical-path gain,
+and the operator closed it. Its branch is kept with a revisit trigger.
+Details are in the [kaizen handoff](./handoffs/kaizen.md).
+
+## Kaizen handoff to a fresh Claude Code session
+
+2026-10-23. Prepared the [current Kaizen handoff](./handoffs/kaizen.md) for a
+fresh Claude Code session in the existing project-local feature worktree.
+Recorded branch validation, the resolved worktree conflict, current policy
+entry points, startup commands and scope limits. Reviewed and preserved three
+new pilot samples and two new task outcomes. The checkpoint now contains 249
+samples and 65 tasks and passed isolated restoration and byte comparison.
+The mailbox export remains unchanged and empty. No model evaluation, peer
+message, push or merge was performed. Documentation link and anchor checks
+and `git diff --check` passed. The launch itself remains untested.
+
+## Old Kaizen worktree removal
+
+2026-10-23. Removed the obsolete sibling Kaizen worktree after checking local
+files, commit preservation and open-file use. Retained the `kaizen` branch at
+`8e06e55f`. Its only ignored files were generated mailbox hook configurations,
+backed up locally before removal. The active project-local Kaizen feature
+worktree remains in place. Details and continuation checks are in the
+[kaizen handoff](./handoffs/kaizen.md).
+
+## Kaizen handoff to a fresh Codex session
+
+2026-10-23. Refreshed the [kaizen handoff](./handoffs/kaizen.md) for a replacement
+session with no access to this conversation. Recorded the feature worktree,
+validity checks, completed artifacts, unchanged reviewed checkpoints, current
+peer branch observations and the boundary between completed work and future
+operator-selected increments. Mailbox is empty. Both new exports match the
+tracked snapshots. No model call, peer message, push or merge occurred.
+
+## Kaizen power cycle preparation
+
+2026-10-23. Preserved the shared Jev pilot checkpoint with 246 samples and 63
+task records. Exported and reviewed the unchanged empty interline checkpoint.
+Both exports restored into isolated stores and re-exported byte for byte.
+The [power cycle receipt](./kaizen/2026-10-23-power-cycle-readiness.md) and
+[kaizen handoff](./handoffs/kaizen.md) record the saved conversation, correct
+feature worktree, restart command, verification and scope limits. The primary
+checkout and peer worktrees were not changed. No service call or message was
+sent. Checkpoint review does not independently validate peer test claims.
+
+## Jev shadow pilot on feat/kaizen-jev-shadow-pilot
+
+2026-10-04. Implemented and locally installed the authorized
+[shadow pilot](./JEV_SHADOW_PILOT.md) for V0.2.X and optional V0.3.X work.
+The adapter preserves initial judgments and source provenance, sends only
+reviewed excerpts, hides answers until task completion and blind labelling,
+and reports comparisons without changing development gates. Concurrent lines
+share transactional call reservations and a portable reviewed checkpoint.
+Existing hook configurations and peer tracked worktrees remain unchanged.
+The [setup receipt](./kaizen/2026-10-04-jev-shadow-pilot-setup.md) records 23 pilot
+tests, 19 interline tests, fourteen document checks and two successful synthetic
+live requests. No development samples or subscription benefit are claimed.
+The kaizen handoff records continuation on this feature branch.
+
+## Jev development-flow spike on research/kaizen-jev-development-flow
+
+2026-10-04. Completed the [research spike](./kaizen/2026-10-04-jev-development-flow-spike.md)
+using the TypeSafe skill and `jev-1.13.0`. The tracked experiment includes 60
+fixed synthetic cases and 18 live requests. Label agreement was 20 of 20 for
+diagnostic routing, 20 of 20 for excerpt relevance and 18 of 20 for claim support.
+One claim label is ambiguous and one result misses an explicit contradiction.
+Estimated service cost was USD 0.001896426. Neither net System 2 subscription
+savings nor an end-to-end reduction in development errors was measured.
+The report recommends a bounded shadow pilot without changing existing gates.
+Eight offline runner tests and fourteen document checks passed. The summary
+reproduced byte for byte from tracked receipts. No production hook was installed.
+The kaizen handoff records continuation on this branch, based on `cadcd17c`.
+
+## TypeSafe skill setup on chore/kaizen-typesafe-skill
+
+2026-10-04 authenticated recheck. After operator credential provisioning, a fresh
+login-shell request succeeded with HTTP 200. The model was `jev-1.13.0` and its
+Noul answer was `0.99` for the synthetic red-apple question. Authentication and
+one minimal evaluation are verified. The [setup record](./TYPESAFE_SKILL.md)
+preserves the result and the limits of that verification without credentials.
+
+2026-10-04 availability follow-up. A minimal synthetic request to the documented
+Jev endpoint returned HTTP 403 with `authentication_error` and a missing-key
+message. `TYPESAFE_API_KEY` is absent from the session and fresh login-shell
+environments. The [setup record](./TYPESAFE_SKILL.md) distinguishes the successful
+skill installation from the blocked model call. No credential was changed.
+
+2026-10-04. Installed the `typesafe-ai` skill for Codex at user scope using the
+operator-provided non-Claude installation method. The installer reports it
+installed for Codex. The [setup record](./TYPESAFE_SKILL.md) preserves the command,
+source, observed file digest and new-machine recovery procedure. Project
+instructions now require using the skill. Jev workflow implementation and service
+authentication are outside this installation increment and remain unverified.
+
+## Kaizen interline communication on feat/kaizen-interline-protocol
+
+2026-10-04 follow-up. Moved the kaizen checkout into project-local
+`.worktrees/kaizen/` and made protocol version 2 independent of required harness
+metadata. Added a tracked checkpoint and validated restoration of pending mail
+and receipts in a fresh Git clone lacking the old ignored directories.
+The installer now supports `--line` alone at the cloned root. The
+[portability receipt](./kaizen/2026-10-04-interline-portability-receipt.md) records
+the checks. This extends the initial installation described below.
+
+2026-10-04. Implemented the operator-requested
+[bidirectional interline protocol](./INTERLINE_PROTOCOL.md) for Codex and Claude
+Code. The local SQLite mailbox provides stable identifiers, retry deduplication,
+explicit receipts, validated reply routes and bounded inbox output. Both harness
+reminder configurations are installed for the four development lines and the
+isolated kaizen feature worktree. Tracked peer state is unchanged.
+The [receipt](./kaizen/2026-10-04-interline-protocol-receipt.md) records transport
+and installation checks. Hook trust, session access and actual live receiver
+consumption remain distinct from these checks. The kaizen mailbox carries the
+resume state rather than overwriting the peer-owned root reverse prompt.
+
+## Kaizen policy propagation on docs/kaizen-policy-propagation
+
+2026-10-04. Prepared the [policy-propagation proposal](./kaizen/2026-10-04-policy-propagation-proposal.md)
+and an exact nine-file patch against `89fc6aac`. The candidate passed 26 selected
+document checks through direct Rust test compilation. Shell syntax and ShellCheck
+passed. All executable shell lines are unchanged. The patch applies cleanly to the
+current primary checkout in a read-only check. No peer branch was edited.
+The kaizen mailbox records the disposition awaiting the owning line. The merge
+helper's missing remote-check enforcement remains an explicit behavioral limitation.
+The proposal worktree passed 14 additional document checks.
+
+## Kaizen delta review on docs/kaizen-delta-20260928
+
+2026-10-04. Completed the [process delta review](./kaizen/2026-10-04-process-delta-audit.md)
+from the original 2026-09-08 baseline to trunk commit `89fc6aac` on 2026-09-28.
+Five proposals have partial implementations. Full adoption of any proposal remains
+unestablished. The endpoint's selected document checks passed 26 cases through direct
+Rust test compilation. Two initial empty feature-gated runs were rejected and corrected.
+Final worktree document checks passed 14 cases. No runtime gate or remote workflow
+was run. The kaizen mailbox carries the handoff.
+The primary checkout and peer process state were left unchanged.
+
 ## Current Phase
 
 **V0.2.x: the wire-format programme, at step 6 — self-hosting the format in Keleusma (as of 2026-08-09).** The self-hosted compiler (the four-stage `lexer -> parse -> reconstruct -> codegen` pipeline plus `analyze.kel` and a `verify_*.kel` family) self-compiles byte-identically over a growing language subset, validated against the Rust reference compiler as a differential oracle. **`BYTECODE_VERSION` is 2**, authorised by the operator on 2026-08-06 on the grounds that the substrate itself changed; the auxiliary body is the wire format v2 container, not an rkyv archive. Publication remains held.
