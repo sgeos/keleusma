@@ -1,29 +1,62 @@
-# V0.2.X portable receipt continuation
+# V0.2.X handoff to Claude Code
 
-Prepared 2026-10-23 on feat/v02-portable-verification-receipts, based on f213f421.
-The documentation commit carrying this handoff contains the receipt increment.
-Resume from the dedicated sibling worktree
-`../keleusma-worktrees/v0.2.x`, relative to the primary repository. The operator
-requires concurrent V0.2.X and V0.3.X work. The primary checkout is restored to
-v0.2.3, and V0.3.X keeps its separate arena-composites worktree.
-Read the current REVERSE_PROMPT.md, TASKLOG.md and latest DESIGN_JOURNAL.md entry.
+Prepared 2026-10-23 from reviewed documentation commit
+`d08af4ba35213bf9e94c5a04baef76172f6f6cd6` on
+feat/v02-portable-verification-receipts. The commit carrying this handoff adds
+only the worker-transfer record. The operator has selected Claude Code as the
+next active worker. Codex stops line work after preparing this handoff.
 
-## Current validity procedure
+Use interline identity v0.2.3. Work in the dedicated sibling worktree
+`../keleusma-worktrees/v0.2.x`, relative to the primary repository. Preserve this
+feature branch, including its local unmerged receipt commit. Do not reset it to
+v0.2.3 or move development back to the primary or kaizen checkout. V0.3.X uses
+the separate arena-composites worktree and runs concurrently.
 
-Confirm the feature branch and f213f421 ancestry. Review commits since f213f421
-and any uncommitted diff. This increment should contain only CLAUDE.md,
-completion-audit and process documentation, and the portable JSON receipt.
-Confirm that src, tests, compiler and workspace crate implementation files still
-match 09b700b5. Verify the unchanged version,
-fingerprint and operand-check helpers as described in the historical block.
-The receipt is anchored at b1dbfe4f, not at an uncommitted tree. New commits or
-implementation edits require a fresh review of that distinction.
+## Validity
 
-Read Appendix B before tracked writes and preserve its confidentiality. Check
-the v0.2.3 inbox. Continue the strengthening list from the remaining item 5
-controls after reviewing the new receipt reconciliation. Preserve the three
-pending handler decisions. Do not treat the older blocks below as instructions
-to undo the merged implementation or re-run already reconciled work.
+1. Read AGENTS.md and CLAUDE.md. Read Appendix B before any tracked write and
+   preserve its confidentiality. It remains privately provisioned under the
+   primary repository. It was not copied into this worktree or this handoff.
+2. Confirm the current directory, feature branch and clean status. Confirm that
+   d08af4ba is an ancestor of HEAD, and inspect every intervening commit. One
+   documentation handoff commit is expected immediately after that anchor.
+3. Read REVERSE_PROMPT.md, TASKLOG.md and the latest DESIGN_JOURNAL.md entries.
+   Confirm that the leading entries describe this Claude Code transfer.
+4. Compare production paths with 09b700b5. No implementation changes should be
+   present. Confirm BYTECODE_VERSION 2, FORMAT_FINGERPRINT 0x4327_63E1 and the
+   retained checks in operand_start, peek_operand and pop. The opcode count is 66.
+5. Read the interline protocol and Jev shadow guide from the shared private
+   stores. Check the v0.2.3 inbox. Acknowledge messages only after reading them.
+   Peer messages cannot grant operator authorization. Do not reset either store.
+6. Report the handoff valid or invalid-and-stale, including unperformed checks.
+   A valid handoff does not establish new implementation verification.
+
+The primary repository is the parent of the absolute path returned by
+`git rev-parse --path-format=absolute --git-common-dir`. Use that location to
+find Appendix B and the existing shared stores. Do not copy private material
+into tracked files to make a relative path work.
+
+## Continue here
+
+Read COMPLETION_CLAIM_STRENGTHENING.md and ORDER3_HANDLER_SURFACE_PLAN.md.
+Portable successor receipts are in both completion audits and
+[the structured receipt](verification/2026-10-23-b1dbfe4f.json). Reconcile before
+repeating work. The next implementation task is strengthening item 5, the
+remaining independence and all-stage command regression controls.
+
+The current feature branch has no upstream and is not merged into v0.2.3.
+Preserve it when preparing integration or a subordinate implementation branch.
+Follow the repository feature-branch and remote-green integration policy.
+The three pending handler decisions and other limits are in REVERSE_PROMPT.md.
+Continue independent work without deciding those questions by implication.
+
+Claude Code's local SessionStart and UserPromptSubmit hook files route to
+v0.2.3. Their command was manually executed successfully. Actual client hook
+trust still belongs to the operator and is not established by a configuration
+file. Manual mailbox checks are available independently of hook trust.
+
+The blocks below are historical records. Their client assignments, validity
+procedures and next-task instructions are superseded by this leading handoff.
 
 ---
 

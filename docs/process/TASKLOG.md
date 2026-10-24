@@ -6,6 +6,22 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-23 Claude Code worker transfer
+
+The operator selected Claude Code as the next active V0.2.X worker. The dedicated
+worktree remains on feat/v02-portable-verification-receipts, with d08af4ba as the
+reviewed receipt anchor. The branch is local and unmerged. HANDOFF.md and
+REVERSE_PROMPT.md now give the receiving procedure, next task, verification
+limits and all three pending handler decisions. Codex stops line work after
+this handoff rather than starting another worker concurrently.
+
+Claude Code 2.1.310 is installed. Both local Claude hooks route to v0.2.3, and
+the configured reminder command executed successfully. Client hook trust was
+not inferred. The inbox is empty and its tracked checkpoint is unchanged.
+Production paths still match 09b700b5. Remote run 40060375136 remains in progress.
+The 26 documentation guards pass for this transfer. No full gate, new model
+request, push, merge or publication is performed.
+
 ## 2026-10-23 Resumed-session setup review
 
 Confirmed the dedicated V0.2.X working root and feature branch, separate indexes

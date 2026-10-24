@@ -13,6 +13,19 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-23 Worker identity is separate from line identity
+
+The operator selected Claude Code to take over the existing V0.2.X workstream.
+The worktree, feature branch, mailbox route and pilot enrollment stay the same.
+The receiving worker needs tracked context and exact verification limits, not a
+second checkout or a reset communication store. The handoff therefore preserves
+the local unmerged receipt commit and makes item 5 the next implementation task.
+
+Manual execution establishes that the configured reminder works. It cannot
+establish Claude Code's client trust state. The handoff states that limit and
+retains manual inbox checks. Codex does not launch another worker and stops after
+preparing the transfer, preserving the single-writer requirement.
+
 ## 2026-10-23 Separate checkouts for concurrent release lines
 
 The operator's concurrency requirement calls for a dedicated V0.2.X worktree.
