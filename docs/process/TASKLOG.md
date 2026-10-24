@@ -6,6 +6,20 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-23 Fresh Codex session handoff
+
+The current line is v0.2.3 at b1dbfe4f, with no tracked changes at startup.
+Remote CI run 39989231681 and Book run 39989231699 succeeded at that commit.
+HANDOFF.md and REVERSE_PROMPT.md now lead with the post-Opus implementation
+state, three pending design decisions and the first unblocked strengthening item,
+portable receipts. The existing write-handler scope is resolved and proven
+execution retains real operand checks. Older Codex instructions are superseded.
+
+No code or tests changed and no tests were run. The handoff ancestry and content
+checks pass. The mailbox is empty and its exported checkpoint is unchanged.
+The next session should reconcile the remaining strengthening items with newer
+remote evidence and preserve the unresolved handler decisions.
+
 ## 2026-10-23 Line prepared for a restart
 
 Pull requests 485 to 490 merged into v0.2.3 at 09b700b5. HANDOFF.md gains a

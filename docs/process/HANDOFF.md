@@ -1,24 +1,66 @@
-# V0.2.X at 09b700b5, ready for a restart
+# V0.2.X handoff to a fresh Codex session
 
-Written 2026-10-23. This is the current startup block. It supersedes the audit
-block below, whose branches have all merged into v0.2.3.
+Prepared on 2026-10-23 at `b1dbfe4f258a3b9f8145c571da188999b3ad7526` on
+`v0.2.3`. This leading block is the current resume instruction. The older blocks
+below are historical and do not override the current implementation or rulings.
 
-State. The audit follow-up merged as pull request 484. Pull requests 485 to 490
-merged after green continuous integration, the last at 09b700b5. No branch of
-this line holds unmerged work, no gate or continuous integration run is in
-flight, and the interline inbox for v0.2.3 was empty at writing. The primary
-checkout is on v0.2.3. The worktrees for the merged branches under
-../keleusma-worktrees/ hold nothing unmerged and may be removed.
+## Current state
 
-Validity. Confirm that 09b700b5 is an ancestor of HEAD and inspect
-`git log 09b700b5..HEAD`. Confirm that REVERSE_PROMPT.md opens with the
-2026-10-23 restart entry. BYTECODE_VERSION is 2, FORMAT_FINGERPRINT is
-0x4327_63E1 and the opcode count is 66. Ancestry alone cannot detect staleness,
-so report unperformed checks explicitly.
+The Opus 5.5 audit and follow-ups are merged through pull requests 484 to 490.
+The implementation anchor is 09b700b5. The later b1dbfe4f commit records restart
+readiness. Remote CI run 39989231681 and Book run 39989231699 both succeeded at
+b1dbfe4f. These results were checked during handoff preparation. No tests were
+rerun for this documentation update, and these receipts do not cover its commit.
 
-Next work. Three increments wait on operator decisions, listed in
-REVERSE_PROMPT.md. Without them, the remaining items of
-docs/decisions/COMPLETION_CLAIM_STRENGTHENING.md can proceed.
+Order 3 remains incomplete. Indexed-write handlers are now implemented for the
+recorded subset. Proven execution retains real operand-length checks following
+the 2026-10-20 ruling. Do not restore the earlier unchecked implementation or
+reopen the already-resolved question of whether write handlers are in scope.
+
+Three decisions remain open in REVERSE_PROMPT.md. Continue independent audit work
+in COMPLETION_CLAIM_STRENGTHENING.md while those decisions are pending. Its
+addressed-items section supersedes the original open list. The first remaining
+item is portable verification receipts. Read the current handler surface plan
+before proposing any further Order 3 implementation.
+
+## Validity
+
+1. Confirm assignment to line v0.2.3 and inspect branch, worktree and status.
+   Check that b1dbfe4f is an ancestor of HEAD. Measure and inspect intervening
+   commits. One documentation commit is expected immediately after this handoff.
+2. Confirm no implementation changes since 09b700b5 before attributing the
+   implementation summary to that tree. Ancestry alone cannot detect staleness.
+3. Confirm REVERSE_PROMPT.md opens with the fresh Codex handoff and TASKLOG.md
+   records the same increment. Inspect the latest DESIGN_JOURNAL.md entry.
+4. Inspect src/bytecode.rs for BYTECODE_VERSION 2 and FORMAT_FINGERPRINT
+   0x4327_63E1. Inspect the retained checks in the pop, peek_operand and
+   operand_start helpers in src/vm.rs. The public opcode budget remains 66.
+5. Report the handoff as valid or invalid-and-stale. State unperformed checks.
+   Handoff validity is not a new implementation verification result.
+
+```sh
+git status --short
+git branch --show-current
+git merge-base --is-ancestor b1dbfe4f HEAD
+git rev-list --count b1dbfe4f..HEAD
+git log --oneline b1dbfe4f..HEAD
+git diff 09b700b5 -- src tests compiler keleusma-cli keleusma-bench Cargo.toml Cargo.lock
+```
+
+## Start here
+
+Read CLAUDE.md and Appendix B before tracked writes. Read the current
+REVERSE_PROMPT.md, TASKLOG.md and DESIGN_JOURNAL.md. Then read
+[the handler surface plan](../decisions/ORDER3_HANDLER_SURFACE_PLAN.md),
+[the strengthening list](../decisions/COMPLETION_CLAIM_STRENGTHENING.md) and
+[the roadmap](../roadmap/V0_2_X_ROADMAP.md). Use the interline route v0.2.3,
+regardless of client or model, and follow its inbox and checkpoint protocol.
+
+Confirm that this is the only session editing this line before changing the
+checkout. A previous preparation encountered another writer changing the primary
+checkout concurrently. Preserve other sessions' work and the V0.3.X worktree.
+Code changes belong on a new feature branch from current v0.2.3. Do not reuse a
+merged feature branch merely because an old handoff names it.
 
 ---
 

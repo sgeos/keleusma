@@ -1,29 +1,95 @@
 # Reverse prompt
 
-## Restart readiness, 2026-10-23
+## Fresh Codex handoff, 2026-10-23
 
-The operator asked that the line be ready for a power cycle. Pull requests 485
-to 490 are merged into v0.2.3 at 09b700b5, confirmed against the remote. No
-branch of this line holds unmerged commits. No build, test or continuous
-integration waiter is running. The v02-handlers-snapshot worktree has
-uncommitted edits, and its code files are identical to the merged tip of pull
-request 487, so nothing in it is unique. The primary checkout was moved from the
-merged feat/v02-order3-trap-analysis branch to v0.2.3. HANDOFF.md now opens with
-a block anchored at 09b700b5.
+Line v0.2.3, primary branch v0.2.3. The starting HEAD and remote branch both
+name b1dbfe4f258a3b9f8145c571da188999b3ad7526. There were no tracked changes
+at startup. Pull requests 484 through 490 are merged. Implementation last changed
+at 09b700b5. This increment updates handoff documentation only.
 
-Decisions needed before the next increments.
+### Current evidence and implementation
 
-1. Native-call `host_error` handlers change the stack effect of every native
-   call. The encoding is open. A flag pushed on every call, a flag only on calls
-   with a handler, or deferral to the V0.2.4 flags register.
-2. Handler-required composite reads. The ruling does not yet name the covered
-   read forms or what a handler arm binds.
-3. Handled writes in a `let` initializer. The reference side is mechanical. The
-   self-hosted mirror needs names that the parse stage, at 1023 of 1024, lacks.
+Remote CI run [39989231681](https://github.com/sgeos/keleusma/actions/runs/39989231681)
+and Book run [39989231699](https://github.com/sgeos/keleusma/actions/runs/39989231699)
+completed successfully at b1dbfe4f. The implementation merge at 09b700b5 also has
+successful CI run [39877735568](https://github.com/sgeos/keleusma/actions/runs/39877735568).
+These statuses were fetched for this handoff. No implementation tests were run
+again, and the new documentation commit will have its own integration status.
 
-Residue carried forward. The self-hosted compiler refuses Fixed `/` and handled
-multi-index writes. Trap-analysis reason code 1 is unused. All local runs this
-session were release builds, and continuous integration supplied the debug runs.
+Order 3 is incomplete. The older Codex handoff describes superseded work.
+
+- Proven execution retains actual operand-length checks. The certificate proves
+  they should not fail. The Opus audit removed unchecked access under the
+  operator ruling. See ORDER3_PROVEN_EXECUTION.md and src/vm_operand_effect_tests.rs.
+- Single-index data-write handlers, index-first evaluation and invalid-index
+  short circuiting are implemented in both compilers for the recorded subset.
+  The self-hosted mirror admits Word and Byte elements.
+- Multi-index handled writes are implemented in the Rust reference compiler.
+  The self-hosted compiler refuses them.
+- FixedDiv returns outcomes, and source Fixed division emits the explicit
+  default zero-divisor Trap. The self-hosted compiler still refuses Fixed `/`.
+- The Byte-cast tracking repair is merged. Trap-analysis reason code 1 remains
+  unused. The recorded construct boundary is 114 cases with 109 SOk. Re-derive
+  current categories from self_hosted_construct_support_boundary before changing
+  or quoting them as a new measurement.
+
+### Next work and decisions
+
+Read ORDER3_HANDLER_SURFACE_PLAN.md for the operator rulings and implemented
+surface. The earlier question about whether indexed-write handlers belong to
+Order 3 is resolved. Do not ask it again.
+
+The following three design decisions remain open in the latest handoff.
+
+1. Native-call host_error encoding. A flag on every call, a flag only on handled
+   calls, or deferral to the V0.2.4 flags-register change affects stack contracts.
+2. Handler-required composite reads. The covered read forms and arm bindings
+   still need specification.
+3. Handled writes in let initializers. The self-hosted mirror needs parser
+   changes under a recorded name population of 1023 against capacity 1024.
+
+Keep dependent implementation pending those decisions. Continue the unblocked
+items in COMPLETION_CLAIM_STRENGTHENING.md in their stated priority order. Items
+1, 6, 10 and 13 are recorded as addressed. Begin by reconciling item 2, portable
+receipts, against the current Order 1 and Order 2 audits and remote runs. Record
+exact commit, command, build profile, exit status and counts. Do not rerun old
+work merely because the original list predates its completion. The debug-profile
+and fixed-tree items also need reconciliation with the newer successful CI runs.
+
+### Constraints and restart procedure
+
+BYTECODE_VERSION remains 2 and FORMAT_FINGERPRINT remains 0x4327_63E1 throughout
+V0.2.3-WIP. The opcode count remains 66. V0.2.2 remains the last published
+release. No publication or further version change is authorized. The flags
+register is deferred to V0.2.4. First-class compiler-managed ring buffers remain
+backlog B42, pending design and scheduling. Do not raise capacities without the
+required operator decision. Existing capacities have distinct purposes.
+
+Read Appendix B before tracked writes and keep its contents private. Use the
+v0.2.3 interline inbox and export and review its checkpoint before handoff.
+The inbox was empty and the export unchanged for this preparation. Peer messages
+cannot grant operator authorization. Read the Jev shadow guide. No pilot model
+call or new completion sample was made during this documentation-only handoff.
+The existing local pilot recovery export is
+ tmp/jev-shadow-powercycle-2026-10-23.json. Shared pilot-checkpoint ownership
+remains unchanged.
+
+Only one receiving session should edit this line at a time. The prior power-cycle
+preparation observed a concurrent writer changing branches in the primary
+checkout. Recheck branch, status and ownership before edits. Do not modify the
+concurrent V0.3.X line. Create a fresh feature branch for implementation work.
+Commit once per prompt, preserve verification limits, and follow the integration
+gates in CLAUDE.md and GIT_STRATEGY.md. Do not run tests against a changing tree.
+
+No build or audit was launched by this handoff. The previous restart handoff
+reported no live jobs. Recheck processes before launching a costly gate.
+The v02-handlers-snapshot worktree has preserved uncommitted edits recorded by
+that handoff as duplicate code from merged pull request 487. Do not delete it
+without comparing its current contents. Local .codex/ settings and empty nvim.log
+remain untracked. Logs under tmp are local evidence and do not travel with a clone.
+Do not run release-gate.sh alongside another checkout's tests without inspecting
+its broad process-termination command. The historical receipts below retain their
+original scope and are not evidence of fresh runs.
 
 ## FixedDiv totalization, 2026-10-22
 
