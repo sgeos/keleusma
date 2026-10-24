@@ -2752,6 +2752,71 @@ fn bare_integer_division_and_remainder_are_total_on_zero() {
 }
 
 #[test]
+fn fixed_division_outcomes_survive_suspension_and_delegation() {
+    use keleusma::bytecode::{Op, Value};
+    use keleusma::value_layout::ScalarKind;
+    for (a, b, expected) in [
+        (7 << 16, 0, [7 << 16, 0, 3]),
+        (-7 << 16, 0, [-7 << 16, 0, 3]),
+        (7 << 16, 2 << 16, [229_376, 0, 0]),
+        (i64::MAX, 1, [i64::MAX, 0, 0]),
+        (i64::MIN, 1, [i64::MIN, 0, 0]),
+    ] {
+        for (slot, expected) in expected.into_iter().enumerate() {
+            for delegated in [false, true] {
+                let source = if delegated {
+                    "yield child(a: Word) -> Word { let x = yield 1; let y = yield 2; x + y } yield main(a: Word) -> Word { child(a) }"
+                } else {
+                    "yield main(a: Word) -> Word { let x = yield 1; let y = yield 2; x + y }"
+                };
+                let mut program = common::build(source);
+                let chunk = &mut program.chunks[0];
+                let index = chunk
+                    .ops
+                    .iter()
+                    .position(|op| matches!(op, Op::CheckedAdd))
+                    .unwrap();
+                assert_eq!(chunk.ops[index + 1], Op::PopN(2));
+                let mut outcome = vec![Op::FixedDiv(16)];
+                if slot < 2 {
+                    outcome.extend([Op::PopN((2 - slot) as u8), Op::FixedToWord(0)]);
+                }
+                chunk.ops.splice(index..=index + 1, outcome);
+                checked_dialogue_case(
+                    &program,
+                    &[
+                        (Value::Fixed(a), ScalarKind::Fixed, a),
+                        (Value::Fixed(b), ScalarKind::Fixed, b),
+                    ],
+                    expected,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn handled_nested_writes_preserve_state_across_suspension() {
+    for (outer, inner, expected) in [(1, 2, 7042), (2, 0, 102000), (0, 5, 105000), (1, -1, 99000)] {
+        let source = format!(
+            "private data d {{ m: [[Word; 3]; 2] }} \
+             fn write() -> Word {{ d.m[{outer}][{inner}] = 7 {{ ok(_, n) => n, invalid_index(j) => 100 + j }} }} \
+             loop child(a: Word) -> Word {{ \
+               let r = write(); \
+               yield r * 1000 + d.m[0][0] + d.m[0][1] * 2 + d.m[0][2] * 3 + d.m[1][0] * 4 + d.m[1][1] * 5 + d.m[1][2] * 6 \
+             }} loop main(t: Word) -> Word {{ child(t) }}"
+        );
+        assert_eq!(
+            common::general_vm_sequence(&source, 5, &[7; 4]),
+            [expected; 4]
+        );
+        for optimize in [false, true] {
+            assert_eq!(native(&source, 5, &[7; 4], optimize), [expected; 4]);
+        }
+    }
+}
+
+#[test]
 fn checked_negation_rejects_byte_and_float_values() {
     use keleusma::bytecode::{Op, Value, WireShape};
     use keleusma::value_layout::ScalarKind;

@@ -952,9 +952,9 @@ pub enum Expr {
     ///
     /// The index is evaluated first and bounds-checked before the value is
     /// evaluated, so an invalid index skips the value. The construct is an
-    /// expression whose type is the common type of its arms. The first
-    /// increment admits exactly one index; the type checker rejects more.
-    /// See `docs/decisions/ORDER3_HANDLER_SURFACE_PLAN.md`.
+    /// expression whose type is the common type of its arms. With more than
+    /// one index, a failure at any level reaches `invalid_index`, which binds
+    /// the index that failed. See `docs/decisions/ORDER3_HANDLER_SURFACE_PLAN.md`.
     DataIndexStore {
         /// Name of the data block being assigned into.
         data_name: String,

@@ -1,3 +1,69 @@
+# V0.2.X handoff to a fresh Codex session
+
+Prepared on 2026-10-23 at `b1dbfe4f258a3b9f8145c571da188999b3ad7526` on
+`v0.2.3`. This leading block is the current resume instruction. The older blocks
+below are historical and do not override the current implementation or rulings.
+
+## Current state
+
+The Opus 5.5 audit and follow-ups are merged through pull requests 484 to 490.
+The implementation anchor is 09b700b5. The later b1dbfe4f commit records restart
+readiness. Remote CI run 39989231681 and Book run 39989231699 both succeeded at
+b1dbfe4f. These results were checked during handoff preparation. No tests were
+rerun for this documentation update, and these receipts do not cover its commit.
+
+Order 3 remains incomplete. Indexed-write handlers are now implemented for the
+recorded subset. Proven execution retains real operand-length checks following
+the 2026-10-20 ruling. Do not restore the earlier unchecked implementation or
+reopen the already-resolved question of whether write handlers are in scope.
+
+Three decisions remain open in REVERSE_PROMPT.md. Continue independent audit work
+in COMPLETION_CLAIM_STRENGTHENING.md while those decisions are pending. Its
+addressed-items section supersedes the original open list. The first remaining
+item is portable verification receipts. Read the current handler surface plan
+before proposing any further Order 3 implementation.
+
+## Validity
+
+1. Confirm assignment to line v0.2.3 and inspect branch, worktree and status.
+   Check that b1dbfe4f is an ancestor of HEAD. Measure and inspect intervening
+   commits. One documentation commit is expected immediately after this handoff.
+2. Confirm no implementation changes since 09b700b5 before attributing the
+   implementation summary to that tree. Ancestry alone cannot detect staleness.
+3. Confirm REVERSE_PROMPT.md opens with the fresh Codex handoff and TASKLOG.md
+   records the same increment. Inspect the latest DESIGN_JOURNAL.md entry.
+4. Inspect src/bytecode.rs for BYTECODE_VERSION 2 and FORMAT_FINGERPRINT
+   0x4327_63E1. Inspect the retained checks in the pop, peek_operand and
+   operand_start helpers in src/vm.rs. The public opcode budget remains 66.
+5. Report the handoff as valid or invalid-and-stale. State unperformed checks.
+   Handoff validity is not a new implementation verification result.
+
+```sh
+git status --short
+git branch --show-current
+git merge-base --is-ancestor b1dbfe4f HEAD
+git rev-list --count b1dbfe4f..HEAD
+git log --oneline b1dbfe4f..HEAD
+git diff 09b700b5 -- src tests compiler keleusma-cli keleusma-bench Cargo.toml Cargo.lock
+```
+
+## Start here
+
+Read CLAUDE.md and Appendix B before tracked writes. Read the current
+REVERSE_PROMPT.md, TASKLOG.md and DESIGN_JOURNAL.md. Then read
+[the handler surface plan](../decisions/ORDER3_HANDLER_SURFACE_PLAN.md),
+[the strengthening list](../decisions/COMPLETION_CLAIM_STRENGTHENING.md) and
+[the roadmap](../roadmap/V0_2_X_ROADMAP.md). Use the interline route v0.2.3,
+regardless of client or model, and follow its inbox and checkpoint protocol.
+
+Confirm that this is the only session editing this line before changing the
+checkout. A previous preparation encountered another writer changing the primary
+checkout concurrently. Preserve other sessions' work and the V0.3.X worktree.
+Code changes belong on a new feature branch from current v0.2.3. Do not reuse a
+merged feature branch merely because an old handoff names it.
+
+---
+
 # V0.2.X after the Opus 5.5 audit
 
 Written 2026-10-20. This is the current startup block. It supersedes the Codex

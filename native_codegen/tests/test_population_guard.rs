@@ -63,7 +63,9 @@
 // and `native_workflow.rs` added three.
 // 760 -> 761: `native_workflow.rs` guards the gate script against bash 3.2,
 // after the first hosted run failed on an empty feature array.
-const RECORDED_TEST_FUNCTIONS: usize = 761;
+// 761 -> 764 in absorption 83. Direct and suspended FixedDiv outcome slots,
+// plus handled nested writes across suspension. No test names were removed.
+const RECORDED_TEST_FUNCTIONS: usize = 764;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

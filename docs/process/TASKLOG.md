@@ -6,6 +6,74 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-23 Fresh Codex session handoff
+
+The current line is v0.2.3 at b1dbfe4f, with no tracked changes at startup.
+Remote CI run 39989231681 and Book run 39989231699 succeeded at that commit.
+HANDOFF.md and REVERSE_PROMPT.md now lead with the post-Opus implementation
+state, three pending design decisions and the first unblocked strengthening item,
+portable receipts. The existing write-handler scope is resolved and proven
+execution retains real operand checks. Older Codex instructions are superseded.
+
+No code or tests changed and no tests were run. The handoff ancestry and content
+checks pass. The mailbox is empty and its exported checkpoint is unchanged.
+The next session should reconcile the remaining strengthening items with newer
+remote evidence and preserve the unresolved handler decisions.
+
+## 2026-10-23 Line prepared for a restart
+
+Pull requests 485 to 490 merged into v0.2.3 at 09b700b5. HANDOFF.md gains a
+startup block at that anchor, and REVERSE_PROMPT.md lists the three open
+operator decisions. No work is in flight.
+
+## 2026-10-22 FixedDiv reports a zero divisor as an outcome
+
+Branch feat/v02-fixed-div-outcome, cut from v0.2.3 at cc48dc61. Under the
+2026-10-20 ruling that only Trap traps, FixedDiv was one of the two known
+classes of operation that fault inside an opcode. The other, indexing forms
+outside the first pass, remains.
+
+- FixedDiv pushes the outcome triple of a Fixed `Mod`. Saturation reports
+  flag 0. A zero divisor pushes the numerator, `Fixed(0)` and flag 3. Both
+  stack models and the specification follow, and the specification's stale
+  FixedMul shrink entry is corrected.
+- Source Fixed division emits the default zero-divisor guard. The handled form
+  was already lowered through `CheckedDiv(n)` and is unchanged.
+- Both trap analyses classify FixedDiv as clear. The unsupported reason for it is
+  removed from Rust and from verify_structural.kel. Four tests that used FixedDiv
+  as an unsupported subject now use a boxed field access.
+- The census gains its twenty-first row, and spec_trap_claims covers FixedDiv.
+- Residue. The self-hosted compiler lowers Fixed `/` to `CheckedDiv(0)`, a
+  divergence that predates this change. The entry point refuses it, and a test
+  pins the one differing instruction.
+
+## 2026-10-22 Handled multi-index writes in the reference compiler
+
+Branch feat/v02-multi-index-write-handlers, cut from v0.2.3 at cc48dc61 after
+pull requests 485, 486 and 487 merged. The 2026-10-21 ruling deferred this
+increment with the instruction that every level's failure reach
+`invalid_index`.
+
+- The type checker and the compiler admit a handled write with any number of
+  indices. Each level is probed against its own length in source order. The
+  first failing level stops evaluation and binds its own index, which is the
+  payload of the bare form's per-level `Trap(8)`.
+- `indexed_shape` now validates the level structure for every indexed data
+  access before any index is compiled, and `emit_indexed_offset` uses it. Bare
+  reads and writes are meant to emit the same instructions as before. The
+  self-hosted byte-identity corpus checks that for the single-index forms only.
+- The self-hosted compiler refuses the construct, as it refuses every
+  multi-index data access. The boundary table is unchanged.
+- tests/indexed_write_handlers.rs adds seven tests, and tests/trap_analysis.rs
+  an agreement test over three multi-index modules. The former rejection row
+  for a multi-index handled write now pins an index depth that stops at an array.
+- GRAMMAR.md and the plan document's "Multi-index increment" section describe
+  the semantics and the lowering.
+
+Also this session. Pull request 488 merged v0.2.3 and resolved the roadmap
+count to 114 cases, 109 SOk. The affected self-host test binaries passed 450 of
+450 on the merged tree in release.
+
 ## 2026-10-21 Indexed-write handlers in the self-hosted compiler
 
 Same branch. The self-hosted compiler now mirrors the index-first bare write and

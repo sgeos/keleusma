@@ -422,11 +422,13 @@ const PINNED: &[(&str, u64)] = &[
     ("src/selfhost/kel/analyze.kel", 0xc1231a7580421473),
     ("src/selfhost/kel/codegen.kel", 0x14ea8473be6290f2),
     ("src/selfhost/kel/lexer.kel", 0x2b631ed8f8770698),
-    ("src/selfhost/kel/parse.kel", 0x6aee78c8b887e296),
+    // Absorption 83 changes cast Byte tracking and FixedDiv classification.
+    // The non-corpus run re-derived coverage and refusal figures unchanged.
+    ("src/selfhost/kel/parse.kel", 0xfec69dd808bd3dca),
     ("src/selfhost/kel/reconstruct.kel", 0x9d64215418877ab7),
     ("src/selfhost/kel/verify_datalayout.kel", 0xe625b5656d576b86),
     ("src/selfhost/kel/verify_depth.kel", 0x0e54e2467d0b499f),
-    ("src/selfhost/kel/verify_structural.kel", 0x9208fa0b1c43ae09),
+    ("src/selfhost/kel/verify_structural.kel", 0xfe040dc39ab80a35),
     ("src/selfhost/kel/verify_typed.kel", 0x4af6eab55f770e7d),
     ("src/selfhost/kel/verify_types.kel", 0xf1a3565245726860),
     ("src/selfhost/kel/verify_yield.kel", 0x0372c27e883c97dd),

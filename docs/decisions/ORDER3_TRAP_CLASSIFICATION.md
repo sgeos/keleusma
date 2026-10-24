@@ -12,9 +12,11 @@ reports the first explicit Trap, including traps in unreachable instructions or
 unused chunks. This is a conservative syntactic classification. It is not a
 claim that a particular execution will reach that instruction.
 
-Unsupported forms return an error before any completed verdict. They include raw
-FixedDiv, GetIndex outside flat Word and Byte, boxed struct, tuple and enum field
-reads, and native calls. Native-error widening remains a later roadmap obligation.
+Unsupported forms return an error before any completed verdict. They include
+GetIndex outside flat Word and Byte, boxed struct, tuple and enum field
+reads, and native calls. Raw FixedDiv was among them until 2026-10-22, when a
+zero divisor became an outcome and FixedDiv joined the clear instructions.
+Native-error widening remains a later roadmap obligation.
 The total arithmetic and bounds contracts already implemented are prerequisites
 for the admitted profile. Rejecting unsupported forms does not replace that work.
 
@@ -65,9 +67,10 @@ including after malformed requests.
 
 Access forms are one for flat scalar, two for flat nested and three for boxed.
 Other instructions carry zero except Trap and PushImmediate, which carry their
-immediate. Scalar tags are zero for non-scalar forms. Unsupported reasons are one
-for FixedDiv, two for indexed values, three for boxed fields and four for native
-calls. Unknown wire tags, malformed forms and inconsistent response sentinels
+immediate. Scalar tags are zero for non-scalar forms. Unsupported reasons are
+two for indexed values, three for boxed fields and four for native
+calls. Reason one denoted FixedDiv until 2026-10-22 and is no longer produced, and
+the Rust reader treats it as unknown. Unknown wire tags, malformed forms and inconsistent response sentinels
 cannot produce a completed verdict.
 
 ## Acceptance evidence
@@ -79,7 +82,8 @@ malformed modules, exact capacity and one instruction beyond it, and malformed
 stage requests followed by valid recovery.
 
 Two interventions alter only the stage. One suppresses Trap recognition and the
-other changes admission of raw FixedDiv. Each changes the resulting classification,
+other changes admission of boxed field reads, which replaced raw FixedDiv as its
+subject on 2026-10-22. Each changes the resulting classification,
 establishing that the Keleusma implementation owns those decisions. A separate
 control rejects a fabricated stage response with inconsistent metadata.
 

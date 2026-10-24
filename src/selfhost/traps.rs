@@ -112,7 +112,6 @@ fn classify_with_stage(module: &Module, stage: Module) -> Result<TrapVerdict> {
                     return Err(unavailable("invalid absent-trap sentinel"));
                 }
                 let operation = match reason {
-                    1 => UnsupportedTrapOperation::FixedDivision,
                     2 => UnsupportedTrapOperation::IndexedValue,
                     3 => UnsupportedTrapOperation::BoxedField,
                     4 => UnsupportedTrapOperation::NativeCall,
@@ -169,13 +168,22 @@ mod tests {
     #[test]
     fn the_stage_owns_profile_admission() {
         let mut subject = compile_src("fn main() -> Word { 7 }");
-        subject.chunks[0].ops = vec![Op::PushImmediate(4), Op::Return, Op::FixedDiv(0)];
+        // A boxed field access is outside the first-pass profile. Fixed
+        // division served as this subject until it became total on 2026-10-22.
+        subject.chunks[0].ops = vec![
+            Op::PushImmediate(4),
+            Op::Return,
+            Op::GetField(StructField::Boxed { name_const: 0 }),
+        ];
         assert!(matches!(
             classify_traps_via_kel(&subject),
             Err(TrapAnalysisError::Unsupported { .. })
         ));
         let source = include_str!("kel/verify_structural.kel");
-        let changed = source.replace("if tag == 52 { 1 }", "if tag == 52 { 0 }");
+        let changed = source.replace(
+            "if form == 3 { 3 } else { 0 }",
+            "if form == 3 { 0 } else { 0 }",
+        );
         assert_ne!(source, changed);
         assert_eq!(
             classify_with_stage(&subject, compile_src(&changed)).unwrap(),
