@@ -6,6 +6,20 @@ Current sprint source of truth.
 
 ---
 
+## Kaizen test-duration pass
+
+2026-10-24. At the operator's request, investigated slow tests and CI after
+the 2026-10-21 sharding. The last green `v0.2.3` run took 237 minutes. Two
+causes were measured. Tests built at opt-level 0, and `keleusma-cli`
+unified `self-host` into the workspace job, which repeated the self-host
+corpus. PR 493 set opt-level 1 and merged as `b2ccc099`, cutting CI to 42
+minutes. PR 494 filtered the heavy binaries out of the workspace job and
+merged as `d7461857`, cutting CI to 31 minutes. It also moved everyday
+verification to the light tier and fixed a `fast-check.sh` feature gap.
+PR 495 split the slowest test per stage. It showed no critical-path gain,
+and the operator closed it. Its branch is kept with a revisit trigger.
+Details are in the [kaizen handoff](./handoffs/kaizen.md).
+
 ## Kaizen handoff to a fresh Claude Code session
 
 2026-10-23. Prepared the [current Kaizen handoff](./handoffs/kaizen.md) for a

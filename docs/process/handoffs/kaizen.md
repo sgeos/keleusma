@@ -2,9 +2,87 @@
 
 > **Navigation**: [Handoffs](./README.md) | [Process](../README.md)
 
-## Fresh Claude Code handoff on 2026-10-23
+## Test-duration pass on 2026-10-24
 
 This is the current entry point. All sections below are dated history. The
+operator asked for a general kaizen pass and named slow tests and the
+recent CI sharding. The session ran in Claude Code on this feature. It used
+the separate worktree `keleusma-worktrees/kaizen-test-duration` for the
+`v0.2.3` changes. That worktree remains on `test/kaizen-split-stage-artifact`.
+
+### Findings and outcomes
+
+The last green `v0.2.3` run before the pass took 237 minutes. The two longest
+shards ran about 220 minutes. Both held one 3.6-hour test that hash
+partitioning cannot split. Two causes were measured.
+
+1. Tests built at opt-level 0, and the heavy tests interpret compiler stages
+   in the VM. On one heavy test, CPU time fell from 94.1 s to 9.1 s at level 1.
+   Levels 2 and 3 gained little more. PR 493 set level 1 in the root and
+   detached `compiler/` manifests. It merged as `b2ccc099`, and CI took 42
+   minutes.
+2. `keleusma-cli` enables `self-host`, so the workspace job repeated the
+   self-host corpus. That was 3.42 of its 3.54 test-hours. PR 494 filtered
+   `keleusma`'s `selfhost_*` binaries out of that job and removed its four
+   partitions. It merged as `d7461857`, and CI took 31 minutes.
+   `tests/ci_shard_coverage.rs` now guards the split. The same PR moved
+   everyday verification in `CLAUDE.md` to `cargo tnq` and documented
+   `cargo tns` and `fast-check.sh` for selective heavy runs. It also gave
+   `fast-check.sh` the `self-host` feature. Without it, the script's
+   documented self-host filters selected no test.
+
+PR 495 split the slowest test into one test per stage. Its CI run took 37
+minutes against 31. The summed time of the split tests rose from 19.2 to
+32.3 minutes, with no gain on the critical path. The operator closed it.
+The branch `test/kaizen-split-stage-artifact` at `e7a59d20` keeps the
+split. Revisit it if that test exceeds about 45 minutes in CI. Each figure
+comes from one run, so runner noise is not excluded.
+
+### Not done and open concerns
+
+`scripts/release-gate.sh` still runs the heavy tier twice locally, through
+`cargo test --workspace` and the self-host step. It is the publication gate,
+so it was left unchanged. `scripts/merge-to-trunk.sh` still requires that
+full gate before a fast-forward push. This conflicts with the no-fast-forward
+pull-request model and the CI merge gate. Neither has been raised with the
+owning line. `docs/decisions/ORDER1_COMPLETION_AUDIT.md` names the old test
+function in a dated row and was left as history.
+
+### Environment notes
+
+The operator changed global sandbox settings and the primary checkout's
+local settings during the session. Writes to sibling worktrees, `gh` TLS
+and plain `git fetch` and `git push` now work. A compound git command stays
+sandboxed. `sccache` still fails inside the sandbox when it must start its
+server. Builds here used an empty `RUSTC_WRAPPER` and isolated target
+directories. The primary checkout's local settings also install a reminder
+hook naming `v0.2.3`, and it fires in this worktree alongside the `kaizen`
+hook. Pushes failed twice with exit 141 after a passing hook. The identical
+trees were re-pushed with `--no-verify` and confirmed with `ls-remote`.
+
+### Mailbox and pilot
+
+Four notices were sent, two to `v0.2.3` and two to `v0.3.0`. They reported
+PRs 493 and 494 and the closure of PR 495. At export, three had been
+acknowledged and `kaizen-20261024-heavy-tier-dedupe-v030` had not. The
+Kaizen inbox is empty. One development triage sample,
+`kaizen-20261024-fastcheck-empty-selection`, records the empty fast-check
+selection with baseline `coverage`. Its task outcome is recorded. It was
+not evaluated, so no model call was made. No earlier record changed. The
+added records were checked for credential markers, the operator's email
+address and Appendix B references, with no match. That check is bounded
+and is not exhaustive secret detection.
+
+| Checkpoint | SHA-256 |
+|---|---|
+| [Interline](../interline/checkpoint.json) | `7d545fea59976216875b390136cafebb7853026ae11e0c0e28b9e6b850d46f97` |
+| [Jev pilot](../jev-shadow/checkpoint.json) | `16d65875954a7f7f33416135dd8f475dcb7a982c020adafbbd337aff12ae4bf6` |
+
+The pilot checkpoint holds 250 samples and 66 tasks.
+
+## Fresh Claude Code handoff on 2026-10-23
+
+This section is dated history. The
 operator requested a fresh Claude Code session for the Kaizen line. The tracked
 handoff supplies the required state without the outgoing Codex transcript.
 No unfinished implementation task is carried forward. Orient, report the
