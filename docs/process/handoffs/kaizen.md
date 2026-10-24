@@ -23,15 +23,16 @@ level is nominally worth its cost.
 
 ## Where to work and how to validate
 
-Work only in `/Users/bsechter/projects/rust/keleusma/.worktrees/kaizen` on branch
-`feat/kaizen-jev-shadow-pilot`. The primary checkout and the sibling worktrees belong
-to other lines.
+Work only in `/Users/bsechter/projects/rust/keleusma/.worktrees/kaizen`. The line uses a
+short-lived branch per increment, cut from `origin/v0.2.3` with `git switch --no-track -c`,
+because the sandbox cannot write the shared git config that upstream tracking needs. The
+primary checkout and the sibling worktrees belong to other lines.
 
 ```sh
-git branch --show-current                      # feat/kaizen-jev-shadow-pilot
+git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor e4c1b4c3 HEAD     # the merge of PR 502 into v0.2.3
-git log --oneline e4c1b4c3..HEAD               # only docs(kaizen) and kaizen tooling commits
+git merge-base --is-ancestor 018ad48b HEAD     # the merge of PR 507 into v0.2.3
+git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
 
 Ancestry alone never establishes freshness. Report any foreign commit or any check not
@@ -39,24 +40,26 @@ run.
 
 ## State on 2026-10-24
 
-- **Merged.** PR 502 merged the line's branch into `v0.2.3` as `e4c1b4c3`, carrying the
-  interline protocol, the Jev shadow pilot, their tooling and the earlier reports.
-  V0.3.X is absorbing it as its absorption 86, PR 504.
-- **PR 505** carries the [token economy spike](../kaizen/2026-10-24-token-economy-spike.md),
-  the first pass of the
-  [context engineering follow-up](../kaizen/2026-10-24-context-engineering-spike.md),
-  the shorter prompt reminder and the first version of this file.
-- **Second pass, on the branch after PR 505.** The extended measurement, including the
-  finding that every Opus 5.5 compaction was an idle compaction. `scripts/gate_summary.py`
-  with real failure fixtures. The `python-tooling` CI job. The state-file pointer in the
-  reminder. The updated follow-up report.
+- **Merged into `v0.2.3`.** PR 502 as `e4c1b4c3`, the interline protocol and the Jev
+  pilot. PR 505 as `9ec88d0a`, the token economy spike, the first context engineering
+  pass and the shorter reminder. PR 507 as `018ad48b`, `scripts/gate_summary.py`, the
+  `python-tooling` CI job, which ran 68 tests on its first run, and the second research
+  pass. The reports are under [`../kaizen/`](../kaizen/README.md).
+- **Open.** The release-gate patch V0.2.X requested, on
+  `fix/kaizen-release-gate-heavy-once`. It filters the self-host binaries out of the
+  workspace step, as CI does, and keeps the self-host step as their run of record.
 - **Not activated.** The reminder changes run only after the installed copy at
   `secret/interline/interline.py` is updated. This line does not reinstall over shared
   stores, so that is the operator's step.
 - **`CLAUDE.md` draft.** Prepared in this session's scratchpad and tested in place
   against the four tests that read `CLAUDE.md`. V0.2.X accepted the drafting and asked
-  that it be based on `v0.2.3` after its Order 3 PR. V0.2.X will send that merge commit.
-  If the scratchpad is gone, regenerate the draft from the follow-up's description.
+  that it be based on `v0.2.3` after its Order 3 PR 506. V0.2.X will send that merge
+  commit. If the scratchpad is gone, regenerate the draft from the follow-up's description.
+- **pykeleusma.** At the operator's request this line cut `~/projects/python/pykeleusma`,
+  the standalone Python binding targeting Keleusma 0.2.2, first commit `744caba`, no
+  remote. It is seeded with the analysis, a design, a milestone and state files, and its
+  stub builds and passes three tests. Its own line, `pykeleusma`, is registered in the
+  mailbox and has a kickoff message. This line does not work there.
 
 ## Next increments, in order
 
@@ -73,6 +76,7 @@ run.
 ## Open with the operator
 
 - Activation of the reminder changes, by updating the installed client.
+- Creating the GitHub repository for pykeleusma, which waits for the operator.
 - Confirming first-hand to V0.2.X and V0.3.X the positions on instruction and startup
   files. V0.2.X will not convert its state files on Kaizen's relay alone.
 - Whether to set `idleCompaction` to `false`, keeping full context across long waits at
@@ -86,14 +90,12 @@ run.
 
 ## Concerns
 
-- `scripts/release-gate.sh` runs the heavy tier twice, through `cargo test --workspace`
-  and the self-host step. Reported to V0.2.X as `kaizen-20261024-release-gate-heavy-twice`
-  with a proposed fix. V0.2.X owns the gate.
 - Branch `test/kaizen-split-stage-artifact` at `e7a59d20` keeps the per-stage split
   of the slowest test from the closed PR 495. Revisit it if that test exceeds about
   45 minutes in continuous integration.
-- The `python-tooling` CI job is new. Confirm it ran and counted at least 50 tests on
-  its first pull request before relying on it.
+- The release gate's header comment still says a green gate means CI will be green and
+  calls the gate a superset of the everyday commands. Since 2026-08-11 the gate is a
+  subset of CI. Not yet raised with V0.2.X.
 
 ## Mailbox and pilot
 
@@ -105,7 +107,7 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `398feb9c1ab3273aaad41e65ed4dc28aba1e40080dbf337f8ba2cd2c144e0cd1`, 20 messages, the one unacknowledged being this line's release-gate notice to V0.2.X |
+| [Interline](../interline/checkpoint.json) | `51314956bfcdf6f2e4457197bde2fc8036d09d9903e63fc1996a51a2535018b7`, 25 messages, the one unacknowledged being the kickoff to the new `pykeleusma` line |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `16d65875954a7f7f33416135dd8f475dcb7a982c020adafbbd337aff12ae4bf6`, 250 samples and 66 tasks |
 
 ## Environment

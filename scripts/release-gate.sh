@@ -57,8 +57,19 @@ cargo fmt --check
 step "Clippy (workspace, all targets, -D warnings)"
 cargo clippy --workspace --all-targets -- -D warnings
 
-step "Tests — default features"
-cargo test --workspace
+step "Tests — workspace defaults, without the self-host binaries"
+# keleusma-cli enables keleusma's `self-host` feature, so feature unification turns
+# it on for every workspace build, and a plain `cargo test --workspace` here ran
+# each selfhost_* binary that the self-host step below runs again. This mirrors the
+# CI `test` job since PR 494. The filter drops those binaries here, and the
+# self-host step is their run of record. nextest skips doctests, so they run
+# separately.
+command -v cargo-nextest >/dev/null || {
+  echo "error: this step needs cargo-nextest. Install it with: cargo install cargo-nextest" >&2
+  exit 1
+}
+cargo nextest run --profile ci --workspace -E 'not (package(keleusma) & binary(~selfhost))'
+cargo test --workspace --doc
 
 step "Tests — keleusma no default features"
 cargo test -p keleusma --no-default-features
@@ -70,6 +81,8 @@ step "Tests — keleusma signatures,shell (broad / docs.rs surface)"
 cargo test -p keleusma --features signatures,shell
 
 step "Tests — keleusma self-host (the self-hosted compile backend)"
+# The run of record for the heavy selfhost_* binaries, which the workspace step
+# above filters out.
 cargo test -p keleusma --features self-host
 
 # keleusma-wire ships an off-by-default `derive` feature, and its READER is meant
