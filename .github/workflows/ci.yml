@@ -49,36 +49,32 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo check --workspace --all-targets
 
-  # SHARDED BECAUSE ONE RUNNER EXCEEDED GITHUB'S SIX-HOUR LIMIT. On pull request
-  # 484, on 2026-10-21, this job and the self-host job below were cancelled at
-  # 6h0m. The limit applies to every job on a hosted runner and cannot be raised.
-  # Local debug runs summed 15.1 test-hours for the workspace and 19.4 for
-  # self-host, with the slowest single test at 2.65 hours. Hash partitioning into
-  # four shards put each shard's estimate at roughly three hours or less. Hash
-  # assignment depends only on a test's name, so adding a test does not move the
-  # others. Every shard must run. `tests/ci_shard_coverage.rs` checks that the
-  # matrix lists each shard exactly once, because the gate correspondence guard
-  # does not read `--partition` and would pass with a shard missing.
+  # THE HEAVY SELF-HOST BINARIES RUN IN `test-self-host`, NOT HERE. `keleusma-cli`
+  # depends on `keleusma` with `self-host` enabled, so a `--workspace` build turns
+  # the feature on and this job used to repeat that job's whole corpus. In run
+  # 40079197634 on 2026-10-24, 3,198 of this job's 3,458 tests also ran there,
+  # for 3.42 of its 3.54 test-hours. The filter drops the `selfhost_*` binaries
+  # of `keleusma`, about 190 of the repeated minutes, and leaves 20 test-minutes.
+  # No self-host source or test is gated on the `shell`, `signatures` or
+  # `encryption` features this job also enables, so dropping them here loses no
+  # feature combination they use. `tests/ci_shard_coverage.rs` checks that the
+  # self-host job still runs them unfiltered. The job was split into four hash
+  # partitions on 2026-10-21, when it exceeded GitHub's six-hour limit on pull
+  # request 484. With the filter and opt-level 1 that split is no longer needed.
   test:
-    name: Test (shard ${{ matrix.shard }}/4)
+    name: Test
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       # nextest runs the workspace's two dozen test binaries in parallel; the
       # `ci` profile (.config/nextest.toml) retries to absorb the known
-      # temp-file-race flake. Doc-tests run separately (nextest skips them),
-      # once, on the first shard.
+      # temp-file-race flake. Doc-tests run separately, because nextest skips them.
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
-      - run: cargo nextest run --profile ci --workspace --partition hash:${{ matrix.shard }}/4
-      - if: matrix.shard == 1
-        run: cargo test --workspace --doc
+      - run: cargo nextest run --profile ci --workspace -E 'not (package(keleusma) & binary(~selfhost))'
+      - run: cargo test --workspace --doc
 
   test-no-default-features:
     name: Test (no default features)
@@ -109,7 +105,13 @@ jobs:
     # self-hosted compile backend. NOT covered by the `selfhost-compiler`
     # job below, which builds the detached `compiler/` subproject — a
     # different thing with a confusingly similar name.
-    # Sharded for the reason recorded on the `test` job above.
+    # This is the only job that runs the heavy `selfhost_*` binaries; the `test`
+    # job above filters them out. Sharded because on pull request 484, on
+    # 2026-10-21, it was cancelled at GitHub's six-hour job limit. Hash assignment
+    # depends only on a test's name, so adding a test does not move the others.
+    # Every shard must run. `tests/ci_shard_coverage.rs` checks that the matrix
+    # lists each shard exactly once, because the gate correspondence guard does
+    # not read `--partition` and would pass with a shard missing.
     name: Test (self-host feature, shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     strategy:
