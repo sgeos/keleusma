@@ -997,3 +997,23 @@ LLVM 22.1.8 is restored under ignored workspace storage. The bounded brief and
 Codex resume instructions. The feature is local and unpushed. Hosted checks,
 version integration and new complete local gates remain pending. The historical
 full-gate record is unchanged. Publication remains held.
+
+
+## APPENDED BY THE V0.3.X LINE, Codex, Claude Code handoff, 2026-10-23
+
+Claude Code is the next active worker on line `v0.3.0`, using branch
+`feat/v3-absorption-83`. The clean starting head was `09964ff8`. Fetch confirmed
+zero upstream backlog through `f213f421`. The version branch remains at
+`99023f8f`. This handoff changes documentation only and remains local and unpushed.
+
+The existing Claude Code startup and prompt hooks route to `v0.3.0`. Their
+command was tested manually with an empty inbox. Client startup and hook trust
+were not tested. The restored LLVM 22.1.8 setup remains usable through
+`source tmp/absorption-83/env.sh`. The brief and archive contain the receiving
+worker's instructions. Existing verification limits, residuals and integration
+work remain unchanged. No publication or merge was performed.
+
+Verification passed 12 root documentation checks and 24 native handoff checks,
+with no failures, ignored tests or filtered cases. Both commands exited zero.
+Full gates were not repeated for this documentation-only transition. The
+mailbox checkpoint was exported and reviewed with no messages.
