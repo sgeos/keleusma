@@ -6140,3 +6140,18 @@ and the 777 again under the middle end, with no failure. Default features finish
 at 20:09 UTC and narrow-float-32 at 20:29 UTC. This receipt commit changes only the
 gate record and these process documents, so `tools/gate-status.sh` reports the later
 tree as `UNVERIFIED` by design, and the records name the tested commit.
+
+
+## V0.3.X fresh Codex handoff of 2026-10-23
+
+Attributed to Codex, describing `4c19e026` plus this local, unpushed documentation
+commit. The [bounded brief](./handoffs/v0.3.0-BRIEF.md) and archive now route the
+fresh session to upstream absorption followed by acceptance-matrix reconciliation.
+All 150 ancestry anchors pass. Hosted workflows passed at `4c19e026`.
+Upstream `f213f421` has 11 unabsorbed commits. Local full-gate reach remains
+`UNVERIFIED` against passing `ece800a5` records. The empty mailbox checkpoint was
+exported and reviewed. No implementation changed and full gates were not rerun.
+Root documentation checks pass all 12 tests with `RUSTC_WRAPPER=`. Initial
+commands were blocked by the sandboxed compiler cache. Native checks then stopped
+before test execution because LLVM 22 is missing. Restore that toolchain first.
+The archive records exact commands and limits. No native pass is claimed.
