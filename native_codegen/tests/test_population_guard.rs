@@ -67,7 +67,10 @@
 // plus handled nested writes across suspension. No test names were removed.
 // 764 -> 765: `workspace_coverage_guard.rs` forces the SIGPIPE exit that the
 // `| head -20` listing produced on a hosted gate. The diff is additions only.
-const RECORDED_TEST_FUNCTIONS: usize = 765;
+// 765 -> 769: `stage_differential.rs` drives `wire.kel`, `verify_datalayout.kel`,
+// `wire_debug.kel` and `wire_schema.kel` by their host protocols, closing the
+// Order 1 gate's exempt and unseeded stages. Additions only.
+const RECORDED_TEST_FUNCTIONS: usize = 769;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

@@ -2,9 +2,41 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: assessment, 2026-09-07, V0.3.X line. **This does NOT declare the gate met.** It converts
-*"nothing has ever said whether it is met"* into a statement of what is measured and what remains a
-judgement.
+**Status**: assessment, 2026-09-07, V0.3.X line, with an update on 2026-10-24 below. The 2026-09-07
+text did not declare the gate met. The update records the gate as met under the strict reading,
+with its limits stated.
+
+## Update, 2026-10-24: every stage source executes and agrees
+
+The operator set completing Order 1 as this line's goal on 2026-10-24. Measured on `f91e20f7`,
+`corpus_differential` reported 14 stage sources, 13 executing and agreeing over 2640 tick
+comparisons, none vacuous, `wire.kel` exempt and none disagreeing. Three stages ran there without
+input: `verify_datalayout.kel`, `wire_debug.kel` and `wire_schema.kel`.
+
+The obstacles named below were properties of a harness that seeds once and then replies with the
+tick. `native_codegen/tests/stage_differential.rs` now gives the host writes on every turn, and
+drives the four remaining stages by their host protocols, native against the virtual machine.
+
+| Stage | Drive | Oracle beside the differential |
+|---|---|---|
+| `wire.kel` readers | 66 commands, 907 turns, over the auxiliary bodies of five corpus modules | chunk, native and region counts from the reference module, an intact prologue, a sealed artifact |
+| `wire.kel` emission joins | commands 167, 168 and 169 as the driver issues them, over five subjects, with the emitted regions blanked in the input | the public driver functions, then the reference encoder |
+| `verify_datalayout.kel` | phases 1 to 4 over four real layouts, one spanning many batches, and four constructed layouts | the reference accepts every real layout, and the constructed verdicts are three rejections and one acceptance |
+| `wire_debug.kel` and `wire_schema.kel` | a debug-pool round trip in lockstep over three compiler-emitted pools and one constructed pool, 7172 encode and 2408 decode turns | `DebugPool::encode` and `DebugPool::decode` |
+
+The lockstep drive compares the yield and the whole shared segment after every turn. A control
+changes one artifact byte on the native side only and requires the checksum yield to move.
+
+**Under the strict reading, all 14 stage sources now execute natively and agree with the virtual
+machine on real input.** `wire.kel` stays exempt in `corpus_differential`, where its fault is caused
+by the tick order of commands, and that harness's figures are unchanged.
+
+**Limits, stated rather than rounded up.** `wire.kel` is driven at 69 of its commands numbered 0 to
+220. The batched and windowed driver commands, the record-table readers that need a stride, and the
+struct and enum auxiliary readers are not driven natively. `wire_schema.kel` is driven only through
+its debug-pool and name-validation families. The drives use the default float configuration
+locally; the narrow-float configuration runs in the hosted native gate. These are coverage limits of
+a met gate, not disagreements, and none was found.
 
 ---
 

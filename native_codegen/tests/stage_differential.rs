@@ -117,28 +117,88 @@ struct Outcome {
     shared: Vec<u8>,
 }
 
+/// One host turn: the shared-slot writes the host makes, then the reply it sends.
+///
+/// The tick drivers below are the special case with no writes and the tick as
+/// the reply. A command-driven stage such as `wire.kel` needs the general form,
+/// because its host sets arguments in shared slots before each command.
+struct Step {
+    /// Word slots written by name before the reply.
+    words: Vec<(String, i64)>,
+    /// Bytes written into the `bytes` array before the reply, by element index.
+    bytes: Vec<(usize, u8)>,
+    /// Word tables written from element zero before the reply.
+    tables: Vec<(String, Vec<i64>)>,
+    /// Byte arrays other than `bytes`, written from element zero.
+    byte_tables: Vec<(String, Vec<u8>)>,
+    reply: i64,
+}
+
+fn tick_script() -> Vec<Step> {
+    (0..TICKS)
+        .map(|t| Step {
+            words: Vec::new(),
+            bytes: Vec::new(),
+            tables: Vec::new(),
+            byte_tables: Vec::new(),
+            reply: t,
+        })
+        .collect()
+}
+
+/// Apply a step's host writes. ONE function serves both sides, so the VM and the
+/// JIT see identical bytes, and the comparison is of two lowerings.
+fn apply_writes(m: &Module, buf: &mut [u8], step: &Step) {
+    for (slot, v) in &step.words {
+        seed_scalar(m, buf, slot, *v);
+    }
+    for (slot, body) in &step.tables {
+        seed_table(m, buf, slot, body);
+    }
+    for (slot, body) in &step.byte_tables {
+        let base =
+            shared_offset(m, slot).unwrap_or_else(|| panic!("no byte array `{slot}`")) as usize;
+        buf[base..base + body.len()].copy_from_slice(body);
+    }
+    if !step.bytes.is_empty() {
+        let base = shared_offset(m, "bytes").expect("a `bytes` array slot") as usize;
+        for (i, b) in &step.bytes {
+            buf[base + i] = *b;
+        }
+    }
+}
+
 fn run_vm(m: &Module, seeded: &[u8]) -> Outcome {
+    run_vm_script(m, seeded, &tick_script())
+}
+
+fn run_vm_script(m: &Module, seeded: &[u8], script: &[Step]) -> Outcome {
     let arena = arena_for(m);
     let mut vm = Vm::new(m.clone(), &arena).expect("vm loads");
     let mut shared = seeded.to_vec();
     let mut yields = Vec::new();
 
-    // The first call is tick 0, matching the native driver's `f.call(0)`.
-    let first = vm
-        .call_with_shared(&mut shared, &[Value::Int(0)])
-        .expect("vm first call");
-    yields.push(scalar_of(&first));
-    for t in 1..TICKS {
+    for (i, step) in script.iter().enumerate() {
+        apply_writes(m, &mut shared, step);
+        let reply = Value::Int(step.reply);
+        // The first turn calls, matching the native driver's first `f.call`.
+        if i == 0 {
+            let first = vm
+                .call_with_shared(&mut shared, &[reply])
+                .expect("vm first call");
+            yields.push(scalar_of(&first));
+            continue;
+        }
         // **One tick is a `Reset` leg then a `Yielded` leg**, and the SAME reply
         // goes to both. Pushing only on the Yielded leg gives half as many
         // entries as the native side has calls, which presents as a length
         // mismatch rather than as a value difference.
         let mut st = vm
-            .resume_with_shared(&mut shared, Value::Int(t))
-            .expect("vm resume");
+            .resume_with_shared(&mut shared, reply.clone())
+            .unwrap_or_else(|e| panic!("vm resume at turn {i}, reply {}: {e:?}", step.reply));
         if matches!(st, VmState::Reset) {
             st = vm
-                .resume_with_shared(&mut shared, Value::Int(t))
+                .resume_with_shared(&mut shared, reply)
                 .expect("vm resume after reset");
         }
         yields.push(scalar_of(&st));
@@ -167,6 +227,28 @@ fn scalar(v: &Value) -> i64 {
 }
 
 fn run_native(m: &Module, seeded: &[u8]) -> Outcome {
+    run_native_script(m, seeded, &tick_script())
+}
+
+fn run_native_script(m: &Module, seeded: &[u8], script: &[Step]) -> Outcome {
+    let (yields, shared) = with_native(m, seeded, |turn| {
+        script.iter().map(|step| turn(step, None)).collect()
+    });
+    Outcome { yields, shared }
+}
+
+/// A native turn: apply the step's writes, call once, and optionally copy the
+/// shared segment out afterwards.
+type NativeTurn<'a> = dyn FnMut(&Step, Option<&mut Vec<u8>>) -> i64 + 'a;
+
+/// Lower `m`, then hand `body` a turn function over the native entry. The
+/// buffers are sized by the published contract and checked by canaries after
+/// `body` returns. Returns `body`'s result and the final shared segment.
+fn with_native<R>(
+    m: &Module,
+    seeded: &[u8],
+    body: impl FnOnce(&mut NativeTurn<'_>) -> R,
+) -> (R, Vec<u8>) {
     let entry = m.entry_point.expect("entry point");
     let n_shared = shared_data_bytes_for(m);
     // **THE PRIVATE REGION IS SIZED BY THE PUBLISHED CONTRACT.**
@@ -229,17 +311,22 @@ fn run_native(m: &Module, seeded: &[u8]) -> Outcome {
     }
     .expect("entry symbol");
 
-    let mut yields = Vec::new();
-    for t in 0..TICKS {
-        yields.push(unsafe {
+    let result = body(&mut |step: &Step, out: Option<&mut Vec<u8>>| {
+        apply_writes(m, &mut shared[..n_shared], step);
+        let y = unsafe {
             f.call(
-                t,
+                step.reply,
                 shared.as_mut_ptr(),
                 privs.as_mut_ptr() as *mut u8,
                 region.as_mut_ptr() as *mut u8,
             )
-        });
-    }
+        };
+        if let Some(out) = out {
+            out.clear();
+            out.extend_from_slice(&shared[..n_shared]);
+        }
+        y
+    });
 
     assert_eq!(
         &shared[n_shared..],
@@ -294,7 +381,42 @@ fn run_native(m: &Module, seeded: &[u8]) -> Outcome {
     );
 
     shared.truncate(n_shared);
-    Outcome { yields, shared }
+    (result, shared)
+}
+
+/// Run both sides one turn at a time. The host closure decides each step from
+/// the state the virtual machine leaves, as the driver does, and every turn
+/// asserts that the yields and the whole shared segments agree. Returns the
+/// host's result.
+fn lockstep<R>(
+    m: &Module,
+    seeded: &[u8],
+    host: impl FnOnce(&mut dyn FnMut(&Step) -> (i64, Vec<u8>)) -> R,
+) -> (R, usize) {
+    let arena = arena_for(m);
+    let mut vm = Vm::new(m.clone(), &arena).expect("vm loads");
+    let mut vm_shared = seeded.to_vec();
+    let mut turns = 0usize;
+    let mut native_shared = Vec::new();
+    let (result, _) = with_native(m, seeded, |nturn| {
+        host(&mut |step: &Step| {
+            let yv = vm_ask(m, &mut vm, &mut vm_shared, &mut (turns > 0), step);
+            let yn = nturn(step, Some(&mut native_shared));
+            assert_eq!(
+                yv, yn,
+                "turn {turns}, reply {}: the virtual machine yielded {yv} and native {yn}",
+                step.reply
+            );
+            assert!(
+                vm_shared == native_shared,
+                "turn {turns}, reply {}: the shared segments disagree",
+                step.reply
+            );
+            turns += 1;
+            (yv, vm_shared.clone())
+        })
+    });
+    (result, turns)
 }
 
 fn module_of(path: &str) -> Module {
@@ -911,4 +1033,1146 @@ fn the_unseeded_codegen_baseline_is_what_the_seeded_guard_must_clear() {
          threshold rather than adjusting this number to match.",
         d.len()
     );
+}
+
+// ================= `wire.kel`, DRIVEN BY COMMANDS ON REAL ARTIFACTS
+//
+// `corpus_differential` drives every stream with the tick as its reply, which
+// for `wire.kel` means commands 0, 1, 2 and onward in order over an empty
+// buffer. The emitters among them rewrite the buffer with an empty header, and
+// command 19 then reads a name table that does not exist. The virtual machine
+// faults there with `IndexOutOfBounds`, so that harness can only exempt the
+// stage as fault-comparable. The fault belongs to the input order, not to
+// either lowering.
+//
+// This drive gives `wire.kel` what its host gives it. The buffer holds a real
+// auxiliary body, encoded by the reference from a compiled corpus module, and
+// each command is issued with its arguments written into the shared slots
+// first, as `tests/selfhost_wire.rs` documents. Index arguments are kept in
+// range by counts the virtual machine reports on a first pass, so no command
+// is driven outside its contract. The script then runs on both sides.
+
+/// Corpus modules whose bodies exercise the reader families: an enum and a
+/// match, struct templates, natives, and shared and private data.
+const WIRE_SUBJECTS: &[&str] = &[
+    "../examples/scripts/02_struct_field.kel",
+    "../examples/scripts/03_enum_match.kel",
+    "../examples/scripts/12_sensor_window.kel",
+    "../examples/scripts/14_frame_log.kel",
+    "../examples/scripts/external_native_witness.kel",
+];
+
+/// The auxiliary body of `m`, as `tests/selfhost_wire.rs` builds it for its own
+/// real-output comparisons. Built here from the same public types rather than
+/// shared, because root `tests/` is not a library this package can import.
+fn aux_body_of(m: &Module) -> Vec<u8> {
+    use keleusma::wire_format::{WireAuxBody, WireChunk};
+    let aux = WireAuxBody {
+        chunks: m
+            .chunks
+            .iter()
+            .map(|c| WireChunk {
+                name: c.name.clone(),
+                constants: c.constants.clone(),
+                struct_templates: c.struct_templates.clone(),
+                local_count: c.local_count,
+                param_count: c.param_count,
+                block_type: c.block_type,
+                param_types: c.param_types.clone(),
+                op_byte_offset: 0,
+                op_record_count: 0,
+                debug_pool_bytes: None,
+            })
+            .collect(),
+        signatures: m.signatures.clone(),
+        enum_layouts: m.enum_layouts.clone(),
+        native_names: m.native_names.clone(),
+        native_return_shapes: m.native_return_shapes.clone(),
+        data_layout: m.data_layout.clone(),
+        entry_point: m.entry_point,
+        word_bits_log2: m.word_bits_log2,
+        addr_bits_log2: m.addr_bits_log2,
+        float_bits_log2: m.float_bits_log2,
+        flags: 0,
+        wcet_cycles: 0,
+        wcmu_bytes: 0,
+        shared_data_bytes: 0,
+        private_data_bytes: 0,
+        schema_hash: 0,
+    };
+    keleusma::wire_schema::encode_aux_body(&aux).expect("encode aux body")
+}
+
+/// A step that sets the five argument slots and the region count, then sends
+/// `cmd`. Every slot is written on every step, so no argument leaks from the
+/// previous command into this one.
+fn wire_step(cmd: i64, nregions: i64, args: [i64; 5]) -> Step {
+    let mut words = vec![("nregions".to_string(), nregions)];
+    for (name, v) in ["warg", "warg2", "warg3", "warg4", "warg5"]
+        .iter()
+        .zip(args)
+    {
+        words.push((name.to_string(), v));
+    }
+    Step {
+        words,
+        bytes: Vec::new(),
+        tables: Vec::new(),
+        byte_tables: Vec::new(),
+        reply: cmd,
+    }
+}
+
+/// Ask the virtual machine one question, resuming a stage already running.
+fn vm_ask(
+    m: &Module,
+    vm: &mut Vm<'_, '_>,
+    shared: &mut [u8],
+    started: &mut bool,
+    step: &Step,
+) -> i64 {
+    apply_writes(m, shared, step);
+    let reply = Value::Int(step.reply);
+    let st = if *started {
+        let st = vm
+            .resume_with_shared(shared, reply.clone())
+            .unwrap_or_else(|e| panic!("probe of command {}: {e:?}", step.reply));
+        if matches!(st, VmState::Reset) {
+            vm.resume_with_shared(shared, reply)
+                .expect("probe after reset")
+        } else {
+            st
+        }
+    } else {
+        *started = true;
+        vm.call_with_shared(shared, &[reply])
+            .expect("probe first call")
+    };
+    scalar_of(&st)
+}
+
+/// How many entries of a family to query. Small, because the point is to reach
+/// each reader on real data, and the yield sequence already compares every one.
+const PER_FAMILY: i64 = 4;
+
+/// Build the command script for one artifact, using the virtual machine's own
+/// counts to keep every index in range.
+fn wire_script(m: &Module, art: &[u8]) -> (Vec<u8>, Vec<Step>, i64) {
+    let mut seeded = vec![0u8; shared_data_bytes_for(m)];
+    let body: Vec<i64> = art.iter().map(|&b| i64::from(b)).collect();
+    seed(m, &mut seeded, "len", "bytes", &body, 1);
+
+    let arena = arena_for(m);
+    let mut vm = Vm::new(m.clone(), &arena).expect("vm loads");
+    let mut probe = seeded.clone();
+    let mut started = false;
+    let mut ask = |cmd: i64, n: i64, args: [i64; 5]| {
+        vm_ask(
+            m,
+            &mut vm,
+            &mut probe,
+            &mut started,
+            &wire_step(cmd, n, args),
+        )
+    };
+
+    let n = ask(2, 0, [0; 5]);
+    assert!(
+        n > 0,
+        "parse_prologue reported {n} regions for a {}-byte reference artifact; the \
+         readers below would all be driven against a refused header",
+        art.len()
+    );
+    let mut script = vec![
+        wire_step(0, n, [0; 5]),
+        wire_step(2, n, [0; 5]),
+        wire_step(3, n, [0; 5]),
+    ];
+    let mut kinds = Vec::new();
+    for i in 0..n {
+        kinds.push(ask(9, n, [i, 0, 0, 0, 0]));
+        for cmd in [7, 8, 9, 11, 12] {
+            script.push(wire_step(cmd, n, [i, 0, 0, 0, 0]));
+        }
+    }
+    for k in kinds.iter().copied().chain([9999]) {
+        script.push(wire_step(5, n, [k, 0, 0, 0, 0]));
+    }
+    script.push(wire_step(6, n, [0; 5]));
+
+    // Each family: a count command, then per-index readers, then optional
+    // second-level readers bounded by a per-index count.
+    struct Family {
+        count: i64,
+        each: &'static [i64],
+        inner_count: Option<i64>,
+        inner: &'static [i64],
+    }
+    let families = [
+        Family {
+            count: 18,
+            each: &[19, 20],
+            inner_count: Some(20),
+            inner: &[21],
+        },
+        Family {
+            count: 22,
+            each: &[23, 24, 25],
+            inner_count: None,
+            inner: &[],
+        },
+        Family {
+            count: 26,
+            each: &[27, 28, 29, 30, 31, 32],
+            inner_count: None,
+            inner: &[],
+        },
+        Family {
+            count: 38,
+            each: &[39, 40, 41, 42],
+            inner_count: Some(40),
+            inner: &[43],
+        },
+        Family {
+            count: 44,
+            each: &[45, 46],
+            inner_count: Some(46),
+            inner: &[47],
+        },
+        Family {
+            count: 48,
+            each: &[49, 50, 51],
+            inner_count: Some(50),
+            inner: &[52, 53, 54],
+        },
+        Family {
+            count: 56,
+            each: &[57, 58],
+            inner_count: None,
+            inner: &[],
+        },
+        Family {
+            count: 59,
+            each: &[60, 61, 62],
+            inner_count: None,
+            inner: &[],
+        },
+        Family {
+            count: 63,
+            each: &[64, 65],
+            inner_count: None,
+            inner: &[],
+        },
+        Family {
+            count: 66,
+            each: &[67, 68],
+            inner_count: None,
+            inner: &[],
+        },
+        Family {
+            count: 69,
+            each: &[71, 72, 73, 74],
+            inner_count: None,
+            inner: &[],
+        },
+        Family {
+            count: 75,
+            each: &[76],
+            inner_count: None,
+            inner: &[],
+        },
+        Family {
+            count: 77,
+            each: &[78],
+            inner_count: None,
+            inner: &[],
+        },
+    ];
+    for f in &families {
+        let c = ask(f.count, n, [0; 5]);
+        script.push(wire_step(f.count, n, [0; 5]));
+        for i in 0..c.clamp(0, PER_FAMILY) {
+            for &cmd in f.each {
+                script.push(wire_step(cmd, n, [i, 0, 0, 0, 0]));
+            }
+            if let Some(ic) = f.inner_count {
+                let inner = ask(ic, n, [i, 0, 0, 0, 0]);
+                for j in 0..inner.clamp(0, 2) {
+                    for &cmd in f.inner {
+                        script.push(wire_step(cmd, n, [i, j, 0, 0, 0]));
+                    }
+                }
+            }
+        }
+    }
+    for cmd in [55, 79, 82, 83, 113, 114] {
+        script.push(wire_step(cmd, n, [0; 5]));
+    }
+
+    // A damaged copy of the first prologue, voted out and reported, then repaired.
+    let flip = |at: usize, v: u8| Step {
+        words: Vec::new(),
+        bytes: vec![(at, v)],
+        tables: Vec::new(),
+        byte_tables: Vec::new(),
+        reply: 3,
+    };
+    script.push(flip(5, art[5] ^ 0xFF));
+    script.push(wire_step(2, n, [0; 5]));
+    script.push(flip(5, art[5]));
+    script.push(wire_step(3, n, [0; 5]));
+
+    // The checksum trailer over the whole artifact, appended then verified.
+    let len = art.len() as i64;
+    script.push(wire_step(111, n, [len, 0, 0, 0, 0]));
+    script.push(wire_step(112, n, [len + 4, 0, 0, 0, 0]));
+    (seeded, script, n)
+}
+
+#[test]
+fn wire_agrees_with_the_vm_on_real_artifacts_driven_by_commands() {
+    let w = module_of("../src/selfhost/kel/wire.kel");
+    let mut commands_driven = std::collections::BTreeSet::new();
+    let mut turns = 0usize;
+    for path in WIRE_SUBJECTS {
+        let subject = module_of(path);
+        let art = aux_body_of(&subject);
+        assert!(
+            art.len() + 4 <= 65536,
+            "{path}: its {}-byte auxiliary body does not fit `wire.bytes`",
+            art.len()
+        );
+        let (seeded, script, n) = wire_script(&w, &art);
+
+        // The readers must report what the reference encoded, or the agreement
+        // below could be two lowerings agreeing on a misread.
+        let vm = run_vm_script(&w, &seeded, &script);
+        let at = |cmd: i64| {
+            script
+                .iter()
+                .position(|s| s.reply == cmd && s.bytes.is_empty())
+                .map(|i| vm.yields[i])
+                .unwrap_or_else(|| panic!("{path}: command {cmd} is not in the script"))
+        };
+        assert_eq!(at(69), subject.chunks.len() as i64, "{path}: chunk count");
+        assert_eq!(
+            at(75),
+            subject.native_names.len() as i64,
+            "{path}: native count"
+        );
+        assert_eq!(at(2), n, "{path}: region count");
+        assert_eq!(at(3), 0, "{path}: an intact prologue reported disagreement");
+        assert_eq!(
+            at(112),
+            1,
+            "{path}: the sealed artifact failed its own check"
+        );
+
+        let nat = run_native_script(&w, &seeded, &script);
+        if vm.yields != nat.yields {
+            let i = vm
+                .yields
+                .iter()
+                .zip(nat.yields.iter())
+                .position(|(a, b)| a != b)
+                .unwrap_or(vm.yields.len().min(nat.yields.len()));
+            panic!(
+                "{path}: wire.kel diverges at turn {i}, command {}: vm {:?}, native {:?}",
+                script[i].reply,
+                vm.yields.get(i),
+                nat.yields.get(i)
+            );
+        }
+        assert_eq!(
+            vm.shared, nat.shared,
+            "{path}: the shared segment disagrees after the script"
+        );
+        let mut d = vm.yields.clone();
+        d.sort_unstable();
+        d.dedup();
+        assert!(
+            d.len() >= 10,
+            "{path}: only {} distinct results over {} commands; the script did not \
+             reach the readers on real data",
+            d.len(),
+            script.len()
+        );
+        commands_driven.extend(script.iter().map(|s| s.reply));
+        turns += script.len();
+    }
+
+    // **THE CONTROL.** One byte of the first artifact's name pool, changed on the
+    // native side only, must surface. Without this a comparison that could not
+    // fail would read as agreement.
+    let subject = module_of(WIRE_SUBJECTS[0]);
+    let art = aux_body_of(&subject);
+    let (seeded, script, _) = wire_script(&w, &art);
+    let vm = run_vm_script(&w, &seeded, &script);
+    let mut damaged = seeded.clone();
+    let base = shared_offset(&w, "bytes").expect("bytes") as usize;
+    let last = base + art.len() - 1;
+    damaged[last] ^= 0x01;
+    let nat = run_native_script(&w, &damaged, &script);
+    // The yields, not the segment: the damaged byte stays in the native segment,
+    // so a segment difference would appear even if nothing read the byte. Turn 0
+    // is the checksum over the whole artifact, which reads every byte.
+    assert_eq!(
+        script[0].reply, 0,
+        "the script no longer opens with the checksum"
+    );
+    assert_ne!(
+        vm.yields[0], nat.yields[0],
+        "a one-byte difference in the artifact did not change the checksum yield"
+    );
+    println!(
+        "wire.kel: {} distinct commands, {turns} turns over {} artifacts, native agrees with the VM",
+        commands_driven.len(),
+        WIRE_SUBJECTS.len()
+    );
+}
+
+// ================= `verify_datalayout.kel`, DRIVEN IN ITS BATCHED PHASES
+//
+// This stage was recorded as blocked by design, because its verdict accumulates
+// across three differently encoded phases and no single seeded buffer can
+// produce one. That was a limit of a harness that seeds once and then only
+// ticks. With host writes per turn, the batches are fed as
+// `dl_reject_module_via_kel` in `src/selfhost/mod.rs` feeds them: the running
+// state initialised once, then phase 1 over the slot visibilities, phase 2 over
+// the shared layout, phase 3 over the private composite layout, each 1024
+// entries per turn. A final phase 4 turn has the stage itself compare the
+// shared prefix and total with the shared-layout count, where the driver does
+// that comparison in Rust.
+
+const DL_BATCH: usize = 1024;
+
+/// A real layout with a shared block, perturbed into each constructed defect.
+const DEFECT_BASE: &str = "../src/selfhost/kel/wire_debug.kel";
+
+/// One phase's batches, each a turn writing `phase`, `count` and the arrays.
+fn dl_batches(phase: i64, columns: &[(&str, Vec<i64>)], script: &mut Vec<Step>) {
+    let n = columns.first().map_or(0, |(_, c)| c.len());
+    for start in (0..n).step_by(DL_BATCH) {
+        let end = (start + DL_BATCH).min(n);
+        script.push(Step {
+            words: vec![
+                ("phase".to_string(), phase),
+                ("count".to_string(), (end - start) as i64),
+            ],
+            bytes: Vec::new(),
+            tables: columns
+                .iter()
+                .map(|(name, col)| (name.to_string(), col[start..end].to_vec()))
+                .collect(),
+            byte_tables: Vec::new(),
+            reply: 0,
+        });
+    }
+}
+
+/// The columns the driver derives from a module, as `dl_reject_module_via_kel` does.
+struct DlInput {
+    n_slots: i64,
+    buffer: i64,
+    pool: i64,
+    visibility: Vec<i64>,
+    shared: [Vec<i64>; 3],
+    private: [Vec<i64>; 2],
+}
+
+fn dl_input_of(m: &Module) -> DlInput {
+    use keleusma::bytecode::SHARED_SLOT_COMPOSITE_FLAG;
+    use keleusma::value_layout::ScalarKind;
+    let layout = m
+        .data_layout
+        .as_ref()
+        .expect("a subject with a data layout");
+    let wb = (1usize << m.word_bits_log2) / 8;
+    let fb = (1usize << m.float_bits_log2) / 8;
+    let ab = (1usize << m.addr_bits_log2) / 8;
+    let mut shared = [Vec::new(), Vec::new(), Vec::new()];
+    for sl in &layout.shared_layout {
+        let (size, bad) = if sl.kind & SHARED_SLOT_COMPOSITE_FLAG != 0 {
+            (sl.len as i64, 0)
+        } else {
+            match ScalarKind::from_tag(sl.kind) {
+                Some(k) => (k.size_in_bytes(wb, fb, ab) as i64, 0),
+                None => (0, 1),
+            }
+        };
+        shared[0].push(sl.offset as i64);
+        shared[1].push(size);
+        shared[2].push(bad);
+    }
+    DlInput {
+        n_slots: layout.slots.len() as i64,
+        buffer: m.shared_data_bytes as i64,
+        pool: m.persistent_composite_bytes as i64,
+        visibility: layout
+            .slots
+            .iter()
+            .map(|s| i64::from(matches!(s.visibility, SlotVisibility::Shared)))
+            .collect(),
+        shared,
+        private: [
+            layout
+                .private_composite_layout
+                .iter()
+                .map(|e| e.slot as i64)
+                .collect(),
+            layout
+                .private_composite_layout
+                .iter()
+                .map(|e| e.offset as i64)
+                .collect(),
+        ],
+    }
+}
+
+fn dl_script(d: &DlInput) -> Vec<Step> {
+    let init = [
+        ("io_prefix", 0),
+        ("io_total", 0),
+        ("io_still", 1),
+        ("io_prev_slot", 0),
+        ("io_prev_off", 0),
+        ("io_first", 1),
+        ("io_bad", 0),
+        ("n_slots", d.n_slots),
+        ("buffer", d.buffer),
+        ("pool", d.pool),
+        ("shared_count", d.shared[0].len() as i64),
+    ];
+    let mut script = Vec::new();
+    dl_batches(1, &[("a0", d.visibility.clone())], &mut script);
+    dl_batches(
+        2,
+        &[
+            ("a0", d.shared[0].clone()),
+            ("a1", d.shared[1].clone()),
+            ("a2", d.shared[2].clone()),
+        ],
+        &mut script,
+    );
+    dl_batches(
+        3,
+        &[("a0", d.private[0].clone()), ("a1", d.private[1].clone())],
+        &mut script,
+    );
+    script.push(Step {
+        words: vec![("phase".to_string(), 4)],
+        bytes: Vec::new(),
+        tables: Vec::new(),
+        byte_tables: Vec::new(),
+        reply: 0,
+    });
+    let first = script.first_mut().expect("at least the final turn");
+    first
+        .words
+        .splice(0..0, init.iter().map(|(n, v)| (n.to_string(), *v)));
+    script
+}
+
+#[test]
+fn verify_datalayout_agrees_with_the_vm_across_its_batched_phases() {
+    let dl = module_of("../src/selfhost/kel/verify_datalayout.kel");
+    // Real layouts, from one slot to the lexer's buffer of many batches.
+    let mut subjects: Vec<(String, DlInput, i64)> = [
+        "../examples/scripts/14_frame_log.kel",
+        "../examples/scripts/opcode_witness.kel",
+        "../src/selfhost/kel/wire_debug.kel",
+        "../src/selfhost/kel/lexer.kel",
+    ]
+    .iter()
+    .map(|p| (p.to_string(), dl_input_of(&module_of(p)), 0))
+    .collect();
+
+    // Constructed defects, one per check, each from a real layout, so the
+    // verdict is seen to move as well as to hold.
+    let base = dl_input_of(&module_of(DEFECT_BASE));
+    let mut out_of_bounds = dl_input_of(&module_of(DEFECT_BASE));
+    out_of_bounds.buffer = 0;
+    subjects.push(("shared extent past the buffer".into(), out_of_bounds, 1));
+    let mut gap = dl_input_of(&module_of(DEFECT_BASE));
+    gap.visibility.insert(0, 0);
+    gap.n_slots += 1;
+    subjects.push(("shared slots not a prefix".into(), gap, 1));
+    let mut descending = dl_input_of(&module_of(DEFECT_BASE));
+    descending.pool = 64;
+    descending.n_slots = descending.n_slots.max(4);
+    descending.private = [vec![2, 1], vec![0, 8]];
+    subjects.push(("private slots descending".into(), descending, 1));
+    let mut ascending = dl_input_of(&module_of(DEFECT_BASE));
+    ascending.pool = 64;
+    ascending.n_slots = ascending.n_slots.max(4);
+    ascending.private = [vec![1, 2], vec![0, 8]];
+    subjects.push(("private slots ascending".into(), ascending, 0));
+    assert!(
+        !base.shared[0].is_empty(),
+        "the defect base declares no shared slot, so two of the defects cannot fire"
+    );
+
+    let mut multi_batch = false;
+    for (name, d, want) in &subjects {
+        let script = dl_script(d);
+        multi_batch |= d.visibility.len() > DL_BATCH;
+        let seeded = vec![0u8; shared_data_bytes_for(&dl)];
+        let vm = run_vm_script(&dl, &seeded, &script);
+        let verdict = *vm.yields.last().expect("a final turn");
+        assert_eq!(
+            verdict, *want,
+            "{name}: the stage's verdict on the virtual machine is {verdict}, expected {want}"
+        );
+        let nat = run_native_script(&dl, &seeded, &script);
+        assert_eq!(
+            vm.yields, nat.yields,
+            "{name}: the per-batch results disagree"
+        );
+        assert_eq!(vm.shared, nat.shared, "{name}: the running state disagrees");
+    }
+    assert!(
+        multi_batch,
+        "no subject spans more than one batch, so the state carried between batches \
+         was never exercised"
+    );
+}
+
+// ================= `wire_debug.kel` AND `wire_schema.kel`, IN LOCKSTEP
+//
+// Both stages answer an interactive host. After each command the host reads
+// the stage's request from shared slots and supplies the next input, so no
+// fixed script expresses the exchange. These are ports of the driver's own
+// host loops, `wire_debug_pool_via_kel` in `src/selfhost/wire_debug.rs` and
+// `decode_debug` in `src/selfhost/wire_debug_decode.rs`, run through
+// `lockstep`, which compares the yield and the whole shared segment of both
+// sides after every turn. The reference `DebugPool::encode` and
+// `DebugPool::decode` are the oracles for what the exchange produced.
+
+use keleusma::debug_meta::{DebugPool, DebugRecord, DebugRecordKind};
+
+fn word_at(m: &Module, snap: &[u8], array: &str, i: usize) -> i64 {
+    let off =
+        shared_offset(m, array).unwrap_or_else(|| panic!("no array `{array}`")) as usize + i * 8;
+    let mut b = [0u8; 8];
+    b.copy_from_slice(&snap[off..off + 8]);
+    i64::from_le_bytes(b)
+}
+
+fn bytes_at(m: &Module, snap: &[u8], array: &str, n: usize) -> Vec<u8> {
+    let off = shared_offset(m, array).unwrap_or_else(|| panic!("no array `{array}`")) as usize;
+    snap[off..off + n].to_vec()
+}
+
+fn turn_of(reply: i64) -> Step {
+    Step {
+        words: Vec::new(),
+        bytes: Vec::new(),
+        tables: Vec::new(),
+        byte_tables: Vec::new(),
+        reply,
+    }
+}
+
+fn record_header(r: &DebugRecord) -> [i64; 3] {
+    [
+        i64::from(r.op_index),
+        i64::from(r.kind.as_u8()),
+        r.operands.len() as i64,
+    ]
+}
+
+/// The encode exchange, after `wire_debug_pool_via_kel`.
+fn debug_encode_in_lockstep(m: &Module, pool: &DebugPool) -> (Vec<u8>, usize) {
+    let seeded = vec![0u8; shared_data_bytes_for(m)];
+    lockstep(m, &seeded, |turn| {
+        let mut ask = |words: Vec<(&str, i64)>, fin: Vec<i64>, bin: Vec<u8>, cmd: i64| {
+            let mut s = turn_of(cmd);
+            s.words = words.into_iter().map(|(n, v)| (n.to_string(), v)).collect();
+            if !fin.is_empty() {
+                s.tables = vec![("fin".to_string(), fin)];
+            }
+            if !bin.is_empty() {
+                s.byte_tables = vec![("bin".to_string(), bin)];
+            }
+            let (y, snap) = turn(&s);
+            assert!(y >= 0, "command {cmd} refused with {y}");
+            (y as usize, snap)
+        };
+
+        // The stage schedules a stable merge sort over record indices.
+        let records = &pool.records;
+        let n = records.len();
+        let mut order = [(0..n).collect::<Vec<_>>(), (0..n).collect::<Vec<_>>()];
+        assert_eq!(ask(vec![("arg", n as i64)], vec![], vec![], 0).0, 0);
+        let rounds = if n < 2 {
+            0
+        } else {
+            (usize::BITS - (n - 1).leading_zeros()) as usize
+        };
+        let mut sorted = None;
+        for _ in 0..n * rounds + 1 {
+            let (action, mut snap) = ask(vec![], vec![], vec![], 1);
+            let generation = word_at(m, &snap, "fin", 2) as usize;
+            assert!(generation <= 1, "invalid sort generation {generation}");
+            if action == 0 {
+                sorted = Some(order[generation].clone());
+                break;
+            }
+            if action == 2 {
+                let a = &records[order[generation][word_at(m, &snap, "fin", 0) as usize]];
+                let b = &records[order[generation][word_at(m, &snap, "fin", 1) as usize]];
+                let mut fin = record_header(a).to_vec();
+                fin.extend(record_header(b));
+                let (needed, _) = ask(vec![], fin, vec![], 2);
+                for start in (0..needed).step_by(512) {
+                    let count = (needed - start).min(512);
+                    let fin: Vec<i64> = (0..count)
+                        .flat_map(|i| {
+                            [
+                                i64::from(a.operands[start + i]),
+                                i64::from(b.operands[start + i]),
+                            ]
+                        })
+                        .collect();
+                    assert_eq!(ask(vec![("arg", count as i64)], fin, vec![], 3).0, 0);
+                }
+                let (copy, after) = ask(vec![], vec![], vec![], 4);
+                assert_eq!(copy, 1, "missing comparison copy");
+                snap = after;
+            } else {
+                assert_eq!(action, 1, "unknown sort request {action}");
+            }
+            let source = word_at(m, &snap, "fin", 0) as usize;
+            let destination = word_at(m, &snap, "fin", 1) as usize;
+            order[1 - generation][destination] = order[generation][source];
+        }
+        let order = sorted.expect("the sort finished within its budget");
+
+        // The stage then schedules every output byte.
+        let counts = vec![
+            pool.string_pool.len() as i64,
+            pool.span_pool.len() as i64,
+            pool.type_pool.len() as i64,
+            records.len() as i64,
+        ];
+        let (start, snap) = ask(vec![], counts, vec![], 5);
+        assert_eq!(start, 4, "unexpected pool start");
+        let mut out = bytes_at(m, &snap, "bytes", 4);
+        loop {
+            let (request, snap) = ask(vec![], vec![], vec![], 6);
+            if request == 0 {
+                break;
+            }
+            if request == 9 {
+                out.extend(bytes_at(m, &snap, "bytes", 4));
+                continue;
+            }
+            let index = word_at(m, &snap, "fin", 0) as usize;
+            let offset = word_at(m, &snap, "fin", 1) as usize;
+            let (wrote, snap) = match request {
+                1 => ask(
+                    vec![],
+                    vec![pool.string_pool[index].len() as i64],
+                    vec![],
+                    7,
+                ),
+                3 => ask(vec![], vec![pool.type_pool[index].len() as i64], vec![], 7),
+                2 => {
+                    let (f, o, l) = pool.span_pool[index];
+                    ask(
+                        vec![],
+                        vec![i64::from(f), i64::from(o), i64::from(l)],
+                        vec![],
+                        7,
+                    )
+                }
+                4 => ask(
+                    vec![],
+                    record_header(&records[order[index]]).to_vec(),
+                    vec![],
+                    7,
+                ),
+                5 | 7 => {
+                    let all: &[u8] = if request == 5 {
+                        pool.string_pool[index].as_bytes()
+                    } else {
+                        &pool.type_pool[index]
+                    };
+                    let tail = &all[offset..];
+                    let count = tail.len().min(4096);
+                    ask(
+                        vec![("arg", count as i64)],
+                        vec![],
+                        tail[..count].to_vec(),
+                        8,
+                    )
+                }
+                8 => {
+                    let tail = &records[order[index]].operands[offset..];
+                    let count = tail.len().min(1024);
+                    let fin = tail[..count].iter().map(|&v| i64::from(v)).collect();
+                    ask(vec![("arg", count as i64)], fin, vec![], 8)
+                }
+                other => panic!("unknown pool request {other}"),
+            };
+            out.extend(bytes_at(m, &snap, "bytes", wrote));
+        }
+        out
+    })
+}
+
+/// The decode exchange, after `decode_debug`.
+fn debug_decode_in_lockstep(m: &Module, input: &[u8]) -> (DebugPool, usize) {
+    let seeded = vec![0u8; shared_data_bytes_for(m)];
+    lockstep(m, &seeded, |turn| {
+        let mut ask = |arg: Option<i64>, window: &[u8], cmd: i64| {
+            let mut s = turn_of(cmd);
+            if let Some(a) = arg {
+                s.tables = vec![("arg".to_string(), vec![a])];
+            }
+            s.bytes = window.iter().copied().enumerate().collect();
+            let (y, snap) = turn(&s);
+            assert!(y >= 0, "command {cmd} refused with {y}");
+            (y as usize, snap)
+        };
+        let fin = |snap: &[u8], i: usize| word_at(m, snap, "fin", i);
+        let requested = |snap: &[u8]| {
+            let start = fin(snap, 0) as usize;
+            &input[start..start + fin(snap, 1) as usize]
+        };
+
+        assert_eq!(ask(Some(input.len() as i64), &[], 44).0, 0);
+        let mut pool = DebugPool::default();
+        let mut record: Option<DebugRecord> = None;
+        let mut operand_count = 0usize;
+        for _ in 0..input.len() * 2 + 16 {
+            let (mut event, mut snap) = ask(None, &[], 45);
+            if event == 0 {
+                assert!(record.is_none(), "a record was left open");
+                return pool;
+            }
+            if event == 1 {
+                let field = requested(&snap).to_vec();
+                (event, snap) = ask(Some(field.len() as i64), &field, 46);
+            }
+            match event {
+                2 => {}
+                3 => {
+                    let raw = requested(&snap).to_vec();
+                    for chunk in raw.chunks(1024) {
+                        assert_eq!(ask(Some(chunk.len() as i64), chunk, 10).0, 0);
+                    }
+                    assert_eq!(ask(None, &[], 11).0, 0, "name validation did not finish");
+                    pool.string_pool
+                        .push(String::from_utf8(raw).expect("the stage accepted invalid text"));
+                    assert_eq!(ask(None, &[], 47).0, 0);
+                }
+                4 => pool.span_pool.push((
+                    fin(&snap, 0) as u16,
+                    fin(&snap, 1) as u32,
+                    fin(&snap, 2) as u32,
+                )),
+                5 => {
+                    pool.type_pool.push(requested(&snap).to_vec());
+                    assert_eq!(ask(None, &[], 47).0, 0);
+                }
+                6 => {
+                    assert!(record.is_none(), "a record began before the last completed");
+                    operand_count = fin(&snap, 2) as usize;
+                    record = Some(DebugRecord {
+                        op_index: fin(&snap, 0) as u32,
+                        kind: DebugRecordKind::from_u8(fin(&snap, 1) as u8 - 1)
+                            .expect("a known record kind"),
+                        operands: Vec::new(),
+                    });
+                }
+                7 => {
+                    let r = record.take().expect("a record completed before it began");
+                    assert_eq!(r.operands.len(), operand_count, "operand count");
+                    pool.records.push(r);
+                    assert_eq!(ask(None, &[], 47).0, 0);
+                }
+                8 => {
+                    let r = record.as_mut().expect("operands outside a record");
+                    for i in 0..fin(&snap, 0) as usize {
+                        r.operands.push(fin(&snap, i + 1) as u16);
+                    }
+                }
+                other => panic!("unknown debug request {other}"),
+            }
+        }
+        panic!("the decode exceeded its request budget")
+    })
+}
+
+/// A constructed pool reaching every record kind, multi-byte text, a type blob
+/// longer than one 4096-byte window, records sharing a key so the sort's
+/// stability is visible, and operand lists longer than one 15-operand batch.
+fn constructed_debug_pool() -> DebugPool {
+    let mut records = Vec::new();
+    for i in 0..40u32 {
+        records.push(DebugRecord {
+            op_index: (i * 37) % 11,
+            kind: DebugRecordKind::from_u8((i % 12) as u8).expect("kind"),
+            operands: (0..(i % 20) as u16).map(|j| j.wrapping_mul(977)).collect(),
+        });
+    }
+    DebugPool {
+        string_pool: vec![
+            "main".into(),
+            "λ-term".into(),
+            String::new(),
+            "x".repeat(700),
+        ],
+        span_pool: vec![(0, 0, 0), (1, 70_000, 12), (u16::MAX, u32::MAX, 1)],
+        type_pool: vec![
+            vec![],
+            vec![1, 2, 3],
+            (0..5000u32).map(|i| i as u8).collect(),
+        ],
+        records,
+    }
+}
+
+/// Real pools: the compiler's own debug metadata for corpus programs.
+fn compiled_debug_pools() -> Vec<(String, DebugPool)> {
+    use keleusma::compiler::{CompileOptions, compile_with_options};
+    let mut out = Vec::new();
+    for path in [
+        "../examples/scripts/05_pipeline.kel",
+        "../examples/scripts/08_method_dispatch.kel",
+        "../src/selfhost/kel/verify_types.kel",
+    ] {
+        let src = std::fs::read_to_string(path).expect("read subject");
+        let program = parse(&tokenize(&src).expect("lex")).expect("parse");
+        let (m, _) = compile_with_options(
+            &program,
+            &keleusma::target::Target::default(),
+            &CompileOptions { emit_debug: true },
+        )
+        .expect("compile with debug metadata");
+        let best = m
+            .chunks
+            .iter()
+            .filter_map(|c| c.debug_pool.clone())
+            .filter(|p| !p.records.is_empty() && p.records.len() <= 300)
+            .max_by_key(|p| p.records.len());
+        if let Some(p) = best {
+            out.push((path.to_string(), p));
+        }
+    }
+    out
+}
+
+#[test]
+fn wire_debug_and_wire_schema_agree_with_the_vm_over_a_debug_pool_round_trip() {
+    let enc = module_of("../src/selfhost/kel/wire_debug.kel");
+    let dec = module_of("../src/selfhost/kel/wire_schema.kel");
+    let mut subjects = compiled_debug_pools();
+    assert!(
+        subjects.len() >= 2,
+        "only {} corpus program(s) produced a usable debug pool",
+        subjects.len()
+    );
+    subjects.push(("constructed".to_string(), constructed_debug_pool()));
+    for (name, pool) in &subjects {
+        let (bytes, enc_turns) = debug_encode_in_lockstep(&enc, pool);
+        let mut canonical = pool.clone();
+        canonical.records.sort_by(|a, b| {
+            a.op_index
+                .cmp(&b.op_index)
+                .then(a.kind.cmp(&b.kind))
+                .then(a.operands.cmp(&b.operands))
+        });
+        assert_eq!(
+            bytes,
+            canonical.encode(),
+            "{name}: the encode exchange produced bytes the reference would not"
+        );
+        let (decoded, dec_turns) = debug_decode_in_lockstep(&dec, &bytes);
+        assert_eq!(
+            decoded.encode(),
+            DebugPool::decode(&bytes)
+                .expect("reference decode")
+                .encode(),
+            "{name}: the decode exchange disagrees with the reference decoder"
+        );
+        println!(
+            "{name}: {} records, encode {enc_turns} turns, decode {dec_turns} turns, every turn agreed",
+            pool.records.len()
+        );
+    }
+}
+
+// ================= `wire.kel`'s EMISSION JOINS, AS THE DRIVER ISSUES THEM
+//
+// The reader script above leaves out the commands the self-hosted compiler
+// actually uses `wire.kel` for, which emit an auxiliary body. The driver runs
+// each join as one call on a freshly seeded buffer: `wire_names_via_kel` issues
+// 167, `wire_regions_via_kel` 168 and `wire_chunks_via_kel` 169. This seeds the
+// same buffer, runs the same call on both sides, and checks the virtual
+// machine's bytes against the public driver function, so a drift between this
+// seeding and the driver's fails here rather than passing on a different
+// input. The driver's result is then checked against the reference encoder.
+
+/// `header_fields_of` in `src/selfhost/mod.rs`, which is private there.
+fn wire_header_fields(m: &Module) -> Vec<i64> {
+    vec![
+        m.entry_point
+            .map_or(i64::from(keleusma::wire_schema::ABSENT), |e| e as i64),
+        m.word_bits_log2 as i64,
+        m.addr_bits_log2 as i64,
+        m.float_bits_log2 as i64,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        i64::from(keleusma::bytecode::FORMAT_FINGERPRINT),
+    ]
+}
+
+/// `chunk_fields_of` in `src/selfhost/mod.rs`, which is private there.
+fn wire_chunk_fields(m: &Module) -> Vec<i64> {
+    use keleusma::bytecode::BlockType;
+    use keleusma::wire_schema::block_tag;
+    let mut out = Vec::new();
+    for c in &m.chunks {
+        out.extend([
+            0,
+            c.constants.len() as i64,
+            c.struct_templates.len() as i64,
+            c.param_types.len() as i64,
+            i64::from(keleusma::wire_schema::ABSENT),
+            0,
+            0,
+            0,
+            c.local_count as i64,
+            c.param_count as i64,
+            i64::from(match c.block_type {
+                BlockType::Func => block_tag::FUNC,
+                BlockType::Reentrant => block_tag::REENTRANT,
+                BlockType::Stream => block_tag::STREAM,
+            }),
+        ]);
+    }
+    out
+}
+
+/// Each region's payload span, located by the reader commands on the virtual
+/// machine. Only which bytes to blank depends on this; the comparison is with
+/// the reference artifact.
+fn region_spans(w: &Module, art: &[u8], n: i64) -> std::collections::BTreeMap<u16, (usize, usize)> {
+    let mut seeded = vec![0u8; shared_data_bytes_for(w)];
+    let body: Vec<i64> = art.iter().map(|&b| i64::from(b)).collect();
+    seed(w, &mut seeded, "len", "bytes", &body, 1);
+    let arena = arena_for(w);
+    let mut vm = Vm::new(w.clone(), &arena).expect("vm loads");
+    let mut started = false;
+    let mut out = std::collections::BTreeMap::new();
+    for i in 0..n {
+        let mut ask = |cmd| {
+            vm_ask(
+                w,
+                &mut vm,
+                &mut seeded,
+                &mut started,
+                &wire_step(cmd, n, [i, 0, 0, 0, 0]),
+            )
+        };
+        let kind = ask(9) as u16;
+        let base = ask(11) as usize;
+        let len = ask(12) as usize;
+        out.insert(kind, (base, len));
+    }
+    out
+}
+
+/// A public driver entry that runs one join on the virtual machine.
+type JoinDriver = fn(&Module, &[u8], usize) -> Result<Vec<u8>, keleusma::selfhost::SelfHostError>;
+
+/// One join in lockstep on a buffer seeded as the driver seeds it.
+fn wire_join(w: &Module, subject: &Module, art: &[u8], regions: i64, cmd: i64) -> Vec<u8> {
+    let (blob, _) = keleusma::selfhost::module_input(subject);
+    let mut seeded = vec![0u8; shared_data_bytes_for(w)];
+    let body: Vec<i64> = art.iter().map(|&b| i64::from(b)).collect();
+    seed(w, &mut seeded, "len", "bytes", &body, 1);
+    seed_scalar(w, &mut seeded, "nregions", regions);
+    let header = wire_header_fields(subject);
+    match cmd {
+        167 => {}
+        168 => seed_table(w, &mut seeded, "fin", &header),
+        169 => {
+            seed_scalar(w, &mut seeded, "warg", subject.chunks.len() as i64);
+            let mut fin = wire_chunk_fields(subject);
+            fin.resize(990, 0);
+            fin.extend(&header);
+            seed_table(w, &mut seeded, "fin", &fin);
+        }
+        other => panic!("not a join: {other}"),
+    }
+    let bin = shared_offset(w, "bin").expect("bin") as usize;
+    seeded[bin..bin + blob.len()].copy_from_slice(&blob);
+    let ((y, snap), turns) = lockstep(w, &seeded, |turn| turn(&turn_of(cmd)));
+    assert_eq!(turns, 1);
+    assert!(y >= 0, "join {cmd} refused with {y}");
+    bytes_at(w, &snap, "bytes", art.len())
+}
+
+#[test]
+fn wire_emission_joins_agree_with_the_vm_and_the_driver() {
+    let w = module_of("../src/selfhost/kel/wire.kel");
+    let mut joined = 0;
+    for path in [
+        "../examples/scripts/02_struct_field.kel",
+        "../examples/scripts/03_enum_match.kel",
+        "../examples/scripts/14_frame_log.kel",
+        "../src/selfhost/kel/verify_types.kel",
+        "../src/selfhost/kel/verify_datalayout.kel",
+    ] {
+        let subject = module_of(path);
+        let art = aux_body_of(&subject);
+        let (_, script, n) = wire_script(&w, &art);
+        drop(script);
+        let spans = region_spans(&w, &art, n);
+        let drivers: [(i64, JoinDriver); 3] = [
+            (167, keleusma::selfhost::wire_names_via_kel),
+            (168, keleusma::selfhost::wire_regions_via_kel),
+            (169, keleusma::selfhost::wire_chunks_via_kel),
+        ];
+        for (cmd, driver) in drivers {
+            // The regions this join emits are blanked in its input, so equality
+            // with the reference below is something the stage had to write.
+            use keleusma::wire_schema::kind;
+            let emitted: &[u16] = match cmd {
+                167 => &[kind::NAMES, kind::STRING_POOL],
+                168 => &[kind::NAMES, kind::STRING_POOL, kind::HEADER],
+                _ => &[kind::NAMES, kind::STRING_POOL, kind::HEADER, kind::CHUNKS],
+            };
+            let mut blank = art.clone();
+            for k in emitted {
+                let (base, len) = spans[k];
+                blank[base..base + len].fill(0);
+            }
+            assert_ne!(
+                blank, art,
+                "{path}: join {cmd}'s regions are all zero already"
+            );
+            let ours = wire_join(&w, &subject, &blank, n, cmd);
+            let theirs = driver(&subject, &blank, n as usize)
+                .unwrap_or_else(|e| panic!("{path}: the driver refused join {cmd}: {e:?}"));
+            assert_eq!(
+                ours,
+                theirs[..art.len()],
+                "{path}: join {cmd} seeded here disagrees with the driver's own call"
+            );
+            assert_eq!(
+                ours, art,
+                "{path}: join {cmd} rewrote the artifact into bytes the reference would not write"
+            );
+            joined += 1;
+        }
+    }
+    assert_eq!(joined, 15, "expected three joins over five subjects");
 }
