@@ -249,3 +249,90 @@ fn an_unrecognised_path_is_treated_as_compiled_so_the_guard_fails_safe() {
          STALE-COMPILED verdict means:\n{text}"
     );
 }
+
+/// A listing longer than a pipe buffer must still produce the verdict's exit code.
+///
+/// The guard once printed its paths through `printf ... | head -20` under
+/// `set -o pipefail`. When `head` exited before `printf` finished, the script died
+/// of SIGPIPE with exit 141 instead of 1. That is a race, and it was lost on the
+/// hosted narrow-float gate at `f95b624e` with 278 paths, while 300 local runs of
+/// the same range all exited 1. **A race that rarely fires cannot be pinned by
+/// re-running the real range**, and no range in this history is long enough to force
+/// it: the root-to-`f95b624e` listing is about 53 KB.
+///
+/// So the case is synthetic. A throwaway repository receives a copy of the script
+/// and one commit adding paths whose listing exceeds 64 KB, the usual pipe buffer.
+/// `printf` then blocks on a full pipe, `head` reads twenty lines and exits, and the
+/// pipe form fails every time rather than occasionally. The slice form has no pipe.
+#[test]
+fn a_listing_longer_than_a_pipe_buffer_still_reports_compiled_staleness() {
+    let root = std::env::temp_dir().join(format!("keleusma-coverage-guard-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let tools = root.join("native_codegen").join("tools");
+    std::fs::create_dir_all(&tools).expect("create the synthetic tools directory");
+    std::fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tools")
+            .join("workspace-coverage.sh"),
+        tools.join("workspace-coverage.sh"),
+    )
+    .expect("copy the guard into the synthetic repository");
+
+    let git = |args: &[&str]| {
+        let ok = Command::new("git")
+            .args(["-c", "user.name=guard", "-c", "user.email=guard@invalid"])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(args)
+            .current_dir(&root)
+            .status()
+            .expect("run git in the synthetic repository")
+            .success();
+        assert!(ok, "git {args:?} failed in the synthetic repository");
+    };
+    git(&["init", "-q"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "base"]);
+
+    const PATHS: usize = 2000;
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create the synthetic source directory");
+    let mut listed = 0usize;
+    for i in 0..PATHS {
+        let name = format!("a_path_long_enough_that_two_thousand_exceed_a_pipe_{i:05}.rs");
+        listed += "  src/".len() + name.len() + 1;
+        std::fs::write(src.join(name), "").expect("write a synthetic source file");
+    }
+    // NON-VACUITY. Below the buffer size the pipe form usually passes too.
+    assert!(
+        listed > 65_536,
+        "the full listing is {listed} bytes, which cannot force the pipe race"
+    );
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "many compiled paths"]);
+
+    let out = Command::new("bash")
+        .arg(tools.join("workspace-coverage.sh"))
+        .args(["check", "--since", "HEAD^", "--at", "HEAD"])
+        .current_dir(&root)
+        .output()
+        .expect("run the copied guard");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a long listing must not change the exit code:\n{text}"
+    );
+    assert_eq!(
+        reported_count(&text, "compiled by the workspace suite"),
+        PATHS,
+        "{text}"
+    );
+    assert!(text.contains("VERDICT: STALE-COMPILED"), "{text}");
+    assert!(text.contains(&format!("... {} more", PATHS - 20)), "{text}");
+}
