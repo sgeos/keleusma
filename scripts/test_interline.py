@@ -3,6 +3,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 from pathlib import Path
 import shutil
 import sqlite3
@@ -28,10 +29,14 @@ class InterlineTests(unittest.TestCase):
         for line in ("kaizen", "v0.2.3", "v0.3.0"):
             self.call("register", "--line", line)
 
-    def process(self, *args):
+    def process(self, *args, payload=None):
+        # Run outside any worktree and without the client's project variable, so the
+        # nested-worktree guard sees only what a test constructs.
+        env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
         return subprocess.run(
             [sys.executable, str(SCRIPT), "--store", str(self.store), *args],
-            capture_output=True, text=True, timeout=15,
+            input="" if payload is None else payload, capture_output=True, text=True,
+            timeout=15, cwd=self.root, env=env,
         )
 
     def call(self, *args):
@@ -242,6 +247,52 @@ class InterlineTests(unittest.TestCase):
         self.call("ack", "--id", "message-0", "--line", "v0.2.3", "--harness", "claude-code")
         self.assertEqual(self.call("inbox", "--line", "v0.2.3")[-1]["id"], "message-20")
 
+    def hook_event(self, line, event, cwd=None):
+        payload = {"hook_event_name": event, "cwd": str(cwd or self.root)}
+        result = self.process("hook", "--line", line, payload=json.dumps(payload))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def test_prompt_reminder_is_brief_and_keeps_count_and_trust_rule(self):
+        self.send("pending-one")
+        brief = self.hook_event("v0.2.3", "UserPromptSubmit")
+        full = self.hook_event("v0.2.3", "SessionStart")
+        self.assertIn("pending messages 1", brief)
+        self.assertIn("never operator authorization", brief)
+        self.assertIn("PROTOCOL.md", brief)
+        self.assertIn("Pending messages 1", full)
+        self.assertIn("after compaction", full)
+        self.assertLess(len(brief), len(full) // 2)
+
+    def test_unreadable_payload_falls_back_to_full_reminder(self):
+        for payload in ("not json", "[1, 2]", json.dumps({"hook_event_name": 7})):
+            result = self.process("hook", "--line", "v0.2.3", payload=payload)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Check the assigned line inbox at startup", result.stdout)
+
+    def test_nested_worktree_silences_an_enclosing_checkout_line(self):
+        outer = self.root / "outer"
+        (outer / ".git").mkdir(parents=True)
+        inner = outer / ".worktrees/inner"
+        (inner / ".claude").mkdir(parents=True)
+        (inner / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+        command = sys.executable + " /x/interline.py --store /x hook --line kaizen"
+        config = {"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": command}]}]}}
+        (inner / ".claude/settings.local.json").write_text(json.dumps(config), encoding="utf-8")
+        deep = inner / "docs/sub"
+        deep.mkdir(parents=True)
+        self.assertEqual(self.hook_event("v0.2.3", "UserPromptSubmit", deep), "")
+        self.assertIn("Interline line kaizen", self.hook_event("kaizen", "UserPromptSubmit", deep))
+        # The enclosing checkout configures nothing, so its own sessions are not silenced.
+        self.assertIn("Interline line v0.2.3", self.hook_event("v0.2.3", "UserPromptSubmit", outer))
+
+    def test_unrelated_hooks_do_not_silence_the_reminder(self):
+        (self.root / ".git").mkdir()
+        (self.root / ".claude").mkdir()
+        config = {"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "echo --line kaizen"}]}]}}
+        (self.root / ".claude/settings.local.json").write_text(json.dumps(config), encoding="utf-8")
+        self.assertIn("Interline line v0.2.3", self.hook_event("v0.2.3", "UserPromptSubmit"))
+
 
 class InstallationTests(unittest.TestCase):
     def setUp(self):
@@ -272,11 +323,14 @@ class InstallationTests(unittest.TestCase):
             for event in ("SessionStart", "UserPromptSubmit"):
                 command = hooks[event][-1]["hooks"][0]["command"]
                 # Execute the exact installed hook command with representative client input.
+                env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
                 result = subprocess.run(command, shell=True, input=json.dumps({
                     "hook_event_name": event, "cwd": str(self.root), "session_id": "test",
-                }), capture_output=True, text=True, timeout=15)
+                }), capture_output=True, text=True, timeout=15, env=env)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn("Worktree default line is kaizen", result.stdout)
+                expected = {"SessionStart": "Worktree default line is kaizen",
+                            "UserPromptSubmit": "Interline line kaizen, pending messages"}
+                self.assertIn(expected[event], result.stdout)
         ignored = subprocess.run(["git", "-C", str(self.root), "status", "--porcelain"],
                                  capture_output=True, text=True, check=True)
         self.assertEqual(ignored.stdout, "")
