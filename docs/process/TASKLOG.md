@@ -6,6 +6,18 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-24 Pull request 498 merged
+
+CI run 40092978507 passed every job at a90fc449, and the logs show all six new
+tests were reached. That closes the Order 1 debug-pass gap at opt-level 1. PR
+498 merged into v0.2.3 as 6db0724b. HANDOFF.md still needs refreshing.
+
+## 2026-10-24 Pull request 498 opened
+
+Merged v0.2.3 at d7461857 cleanly. Pushed a90fc449 after the green pre-push hook
+exited with 141 without landing. Opened PR 498 to v0.2.3. CI run 40092978507 is
+pending.
+
 ## 2026-10-24 Order 2 scope accepted and full local matrix
 
 The full release matrix passed at 18162341 in all five configurations, with

@@ -1,5 +1,50 @@
 # Reverse prompt
 
+## Pull request 498 merged, 2026-10-24
+
+CI workflow run 40092978507 at a90fc449 concluded successfully with every job
+passing, and Book run 40092978575 passed with only the Pages deployment skipped.
+The job logs show that all six new tests were reached. The five poison tests ran
+in the Test job and in the self-host shards, and the command corpus ran in the
+Test job. This closes the debug-pass gap for that tree at opt-level 1. The
+counts are recorded in the Order 1 audit. Pull request 498 was merged under the
+routine feature-merge authorization as 6db0724b on v0.2.3.
+
+This record was committed directly to v0.2.3 as a documentation-only change,
+because pushing it to the feature branch first would have restarted CI. It
+carries the earlier unpushed process record. HANDOFF.md was not updated in this
+session, and its validity step still expects two commits after d08af4ba, which
+is stale. It must be refreshed before a handoff. The primary checkout remains on
+an older v0.2.3 commit and was not touched.
+
+Next. Order 3, beginning with ORDER3_HANDLER_SURFACE_PLAN.md and strengthening
+items 12, 14 and 15. The three handler decisions below remain with the operator.
+
+## Pull request 498 opened, 2026-10-24
+
+On the operator's instruction, origin/v0.2.3 at d7461857 was merged into
+feat/v02-order1-independence-controls as a90fc449 without conflicts. That brings
+in PR 493, opt-level 1 on the dev profile, and PR 494, the heavy-tier CI split.
+The first push ran the pre-push hook fully green. It passed 2605 light-tier
+tests, the documentation tests, formatting, Clippy, the doc build and the link
+check, and then exited with SIGPIPE 141 without landing, as recorded before.
+`git ls-remote` confirmed that nothing had landed. The same tree, a90fc449, was
+pushed with `--no-verify`, and its arrival was confirmed. Pull request 498
+targets v0.2.3. CI workflow run 40092978507 and Book run 40092978575 were
+pending when this was written. Their results are not inferred here.
+
+The pull request also carries three unmerged documentation commits from
+feat/v02-portable-verification-receipts. The kaizen notice
+kaizen-20261024-heavy-tier-dedupe-v023 was read and acknowledged. It requests no
+action. Under its new CI layout, the poison controls run in the lib binary in
+both the Test job and the self-host shards. The command corpus runs in the Test
+job.
+
+This record is a local commit made after the push, kept unpushed so that CI is
+not restarted. Next, read the outcome of run 40092978507. If it is green, record
+it in the Order 1 audit, push this record, and merge under the routine
+feature-merge authorization.
+
 ## Order 2 scope accepted and full local matrix, 2026-10-24
 
 The operator then set the goal of waiting for the matrix, confirming Order 1 and

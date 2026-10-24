@@ -106,6 +106,31 @@ These are local results and do not replace remote continuous integration. The
 two intervention tests and the command corpus test are among the slower tests
 in the suite, though below the slowest recorded test at 2.65 hours.
 
+Remote continuous integration then ran pull request 498 at a90fc449 as workflow
+run [40092978507](https://github.com/sgeos/keleusma/actions/runs/40092978507),
+created 12:12 UTC and concluded successfully 13:58 UTC on 2026-10-24, with every
+job passing. That tree is 18162341 plus the Order 2 acceptance record and a merge
+of v0.2.3 at d7461857, which changed only the dev profile to opt-level 1 and the
+CI job layout. The test jobs used the Cargo test profile, which inherits that
+setting and keeps debug assertions. This closes the debug-pass gap noted above
+for that tree, at opt-level 1 rather than 0. The pull request merged into v0.2.3
+as 6db0724b.
+
+| Job | Nextest summary |
+|---|---|
+| Test, the workspace with `selfhost_*` binaries filtered out | 2607 run, 2607 passed |
+| Test, self-host feature, shards 1 to 4 | 793, 783, 760 and 870 passed, 3206 in total |
+| Test, no default features | 333 passed |
+| Test, signatures feature | 2460 passed |
+| Test, broad features | 2477 passed |
+
+The job logs were searched for the six tests this increment adds, so that a
+green run is not mistaken for one that reached them. All five poison tests
+passed in the Test job and again in the self-host shards. The command corpus
+test passed in the Test job in 615 seconds. The workspace counts are not
+comparable with the b1dbfe4f receipt, because the job layout changed between
+the two runs.
+
 ## Numbered completion condition
 
 The historical [completion condition](./ORDER_1_COMPLETION_CONDITION.txt) remains intact,
