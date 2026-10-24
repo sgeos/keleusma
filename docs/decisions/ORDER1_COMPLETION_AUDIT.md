@@ -32,6 +32,30 @@ explicit boundary controls.
 | Compatibility and bounds | Five feature configurations, the detached compiler, minimum Rust checks and embedded build pass. Public bytecode version stays 2, the public instruction count stays 66 and selected type capacities stay 640. | Verified |
 | System 1 shadow participation | The first diagnostic and three bounded claims were captured, previewed, self-reviewed and exported with checked hashes. The task outcome is resolved. External evaluation remains unavailable under the prior automatic approval rejection. | Local capture and review complete |
 
+## Regression evidence and remaining coverage, reconciled 2026-10-23
+
+The portable receipt below records the named tests that already ran at b1dbfe4f.
+These controls refine the acceptance rows without treating output equality as a
+proof that the implementation never reads reference data.
+
+| Acceptance row | Named regression evidence | Remaining limit |
+|---|---|---|
+| Reference-scaffold independence | `production_compiler_matches_every_complete_stage_artifact` in tests/selfhost_artifact_identity.rs exercises the production entry. `all_stage_artifacts_are_independent_of_recorded_expression_types` in src/compiler/inference_independence.rs erases recorded expression types. | Neither intervenes on reference module fields while holding pipeline output fixed. The no-borrowing claim still includes code inspection and needs a dedicated control. |
+| Pipeline-owned type inputs | `pipeline_expression_extraction_reaches_every_stage` and `production_types_reach_corpus_and_rule_form_census` in tests/selfhost_typecheck.rs, plus `derived_binding_verdict_depends_on_the_keleusma_decision` in src/selfhost/typecheck.rs | The intervention proves stage-side derivation matters. It does not disable every possible reference-parser dependency in production transport. |
+| Complete serialization | `production_compiler_matches_every_complete_stage_artifact` and `complete_artifact_corpus_covers_every_stage_source` in tests/selfhost_artifact_identity.rs | Complete artifact equality and decoding cover the current stage inventory. They do not prove unsupported source forms. |
+| Shipping command | `the_same_source_compiles_identically_in_separate_processes` in keleusma-cli/tests/compile_reproducible.rs and `independent_type_rejection_reaches_the_command` in keleusma-cli/tests/self_hosted_refusal.rs | These command fixtures do not automate the historical all-fourteen-stage command comparison. That acceptance row still needs a full command corpus control. |
+| Compatibility and bounds | The five configurations in the portable receipt, `self_hosted_construct_support_boundary` in tests/selfhost_codegen.rs and the explicit boundary controls cited in the numbered conditions | A matrix pass is not a universal capacity proof. Existing limits remain fixed. |
+| Shadow pilot | The historical pilot record below describes local samples and unavailable external evaluation | No repository test can establish that historical private samples were captured or independently reviewed. Treat this as process evidence, not an implementation regression claim. |
+
+Reproduce the artifact and type rows with
+`cargo test --features self-host --test selfhost_artifact_identity --test selfhost_typecheck`
+and the intervention with
+`cargo test --lib --features self-host derived_binding_verdict_depends_on_the_keleusma_decision`.
+Reproduce the command fixtures with
+`cargo test -p keleusma-cli --test compile_reproducible --test self_hosted_refusal`.
+Strengthening item 5 remains partially open for the specific missing controls
+above. The remote receipts do not fill those coverage gaps.
+
 ## Numbered completion condition
 
 The historical [completion condition](./ORDER_1_COMPLETION_CONDITION.txt) remains intact,
@@ -123,6 +147,72 @@ remote continuous integration through pull request 484 into v0.2.3. CI workflow 
 commits. The pull request merged as 3e4f4984. The run tested the tree after the audit
 follow-ups, not 36ebe64d itself, and the follow-ups changed wire.kel, three chunk-count
 pins, the book catalogue and the CI job layout. See docs/process/TASKLOG.md.
+
+### Portable successor receipts, reviewed 2026-10-23
+
+The historical local receipts above remain declaration-time evidence. Their missing
+commands or commit stamps have not been reconstructed from filenames. The following
+successor evidence describes commit `b1dbfe4f258a3b9f8145c571da188999b3ad7526`,
+after the merged audit repairs and handler increments. It does not retroactively
+verify an earlier tree or certify subsequent edits.
+
+[Continuous integration run 39989231681](https://github.com/sgeos/keleusma/actions/runs/39989231681)
+completed successfully with all 31 jobs. The reviewed
+[portable receipt](../process/verification/2026-10-23-b1dbfe4f.json) retains the
+full commit, command scripts, job identifiers, summaries, named test passes and
+counting rules. These are remote observations, not newly executed local tests.
+Test commands below used the Cargo debug test profile, reported as unoptimized
+with debug information. `--profile ci` selects nextest runner settings and does
+not select a Cargo release build. All rows have zero failures. Exit status zero
+is inferred from successful Actions steps under `bash -e`, without
+`continue-on-error`. Successful steps do not print a numeric process status.
+
+| Command at b1dbfe4f | Passed | Skipped or ignored | Exit | Job identifier |
+|---|---|---|---|---|
+| `cargo nextest run --profile ci --workspace --partition hash:1/4` | 842 | 2618 | 0 | [120536366483](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366483) |
+| `cargo test --workspace --doc` | 12 | 3 | 0 | [120536366483](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366483) |
+| `cargo nextest run --profile ci --workspace --partition hash:2/4` | 861 | 2599 | 0 | [120536366163](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366163) |
+| `cargo nextest run --profile ci --workspace --partition hash:3/4` | 825 | 2635 | 0 | [120536366598](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366598) |
+| `cargo nextest run --profile ci --workspace --partition hash:4/4` | 930 | 2530 | 0 | [120536366560](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366560) |
+| `cargo nextest run --profile ci -p keleusma --features self-host --partition hash:1/4` | 790 | 2411 | 0 | [120536366531](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366531) |
+| `cargo test -p keleusma --features self-host --doc` | 0 | 3 | 0 | [120536366531](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366531) |
+| `cargo nextest run --profile ci -p keleusma --features self-host --partition hash:2/4` | 782 | 2419 | 0 | [120536366390](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366390) |
+| `cargo nextest run --profile ci -p keleusma --features self-host --partition hash:3/4` | 757 | 2444 | 0 | [120536366667](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366667) |
+| `cargo nextest run --profile ci -p keleusma --features self-host --partition hash:4/4` | 870 | 2331 | 0 | [120536366427](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366427) |
+| `cargo nextest run --profile ci -p keleusma --no-default-features` | 331 | 0 | 0 | [120536366200](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366200) |
+| `cargo test -p keleusma --no-default-features --doc` | 0 | 2 | 0 | [120536366200](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366200) |
+| `cargo nextest run --profile ci -p keleusma --features signatures` | 2458 | 0 | 0 | [120536365955](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365955) |
+| `cargo test -p keleusma --features signatures --doc` | 0 | 3 | 0 | [120536365955](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365955) |
+| `cargo nextest run --profile ci -p keleusma --features signatures,shell` | 2475 | 0 | 0 | [120536366813](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366813) |
+| `cargo test -p keleusma --features signatures,shell --doc` | 0 | 3 | 0 | [120536366813](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366813) |
+| `cargo nextest run --profile ci -p keleusma-wire --all-features` | 53 | 0 | 0 | [120536366221](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366221) |
+| `cargo test -p keleusma-wire --all-features --doc` | 4 | 0 | 0 | [120536366221](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366221) |
+| `cargo nextest run --profile ci -p keleusma-wire --no-default-features` | 19 | 0 | 0 | [120536366221](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366221) |
+| `cargo test -p keleusma-wire --no-default-features --doc` | 1 | 0 | 0 | [120536366221](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366221) |
+| `cargo nextest run --profile ci -p keleusma-bench` then `cargo test -p keleusma-bench --doc` | 6 | 0 | 0 | [120536366296](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366296) |
+| `cd compiler` then `cargo fmt --all -- --check` then `cargo clippy --all-targets -- -D warnings` then `cargo test` | 86 | 0 | 0 | [120536366455](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366455) |
+
+The four workspace partitions execute 3,458 unique tests, and the four isolated
+self-host partitions execute 3,199. Each population has two ignored tests. A shard's
+skipped count includes tests assigned to other shards and must not be added to
+other shards' skipped counts. Workspace documentation tests add twelve passes and
+three ignored cases. The other core documentation commands execute zero cases
+and ignore two or three examples as shown. A successful empty documentation run
+is not counted as behavioral coverage.
+
+The same receipt records exact commands for Clippy, formatting, documentation,
+minimum Rust 1.88 checks, the embedded build and example verification. These are
+successful build or tool checks, with no invented test count. Documentation uses
+`RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links"`. The minimum Rust
+job checks `--tests` with default features and does not reproduce the historical
+self-host minimum-Rust command. The matching
+[Book run 39989231699](https://github.com/sgeos/keleusma/actions/runs/39989231699)
+also succeeded at the same commit.
+
+The original all-stage command artifact comparison and private pilot records are
+not recreated by a green workflow. The named artifact test exercises the shipping
+library entry and serializer. Command tests exercise their documented fixtures.
+Historical claims beyond those populations retain their original limits.
 
 ## Pilot record
 

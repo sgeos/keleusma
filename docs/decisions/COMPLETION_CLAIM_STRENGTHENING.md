@@ -91,6 +91,55 @@ evidence.
     Judge each as a dated ledger entry or a live claim. The present-tense instance
     in tests/claimed_counts.rs was corrected on 2026-10-20.
 
+## Reconciled on 2026-10-23
+
+Reviewed remote run 39989231681 at
+`b1dbfe4f258a3b9f8145c571da188999b3ad7526` and its actual logs, after checking
+that the implementation matches the merged 09b700b5 tree. All 31 jobs completed
+successfully. Both audits now link a tracked
+[portable receipt](../process/verification/2026-10-23-b1dbfe4f.json).
+The f213f421 handoff adds documentation only. Its newer run was still in progress
+when the completed receipt was selected and is not used to infer success.
+
+- Item 2. Both audits now give exact matrix commands, the tested commit, Cargo
+  build profile, zero exit status with its inference basis, pass counts, skipped
+  or ignored counts and job links. The tracked receipt preserves reviewed summary
+  excerpts, individual acceptance-test passes and count rules. Historical local
+  receipts remain labelled historical. Missing original commands have not been
+  invented. The historical all-stage command experiment and private pilot record
+  are not silently promoted to current automated coverage.
+- Item 3. Addressed for b1dbfe4f. The five core configurations ran in the debug
+  test profile. The nextest profile named ci is a runner configuration, not a
+  Cargo release profile.
+- Item 4. CLAUDE.md now dates both count passages to that one commit and run.
+  Workspace execution has 3458 passes and 1439 core library tests. Isolated
+  self-host has 3199 passes and 1389 library tests. Both ignore two cases.
+  Documentation tests and the static source inventory are counted separately.
+- Item 5. Partially addressed with named controls and explicit coverage limits
+  in the Order 1 audit. Reference-scaffold poisoning, a comprehensive production
+  type-input independence control and the all-stage command artifact corpus
+  remain unimplemented regression controls. The pilot row is process evidence.
+- Item 7. Addressed with a per-row named regression index and reproducible
+  commands in the Order 2 audit. Existing tests were inspected and their remote
+  execution reconciled rather than duplicated.
+- Item 8. The Order 2 audit now states the scope discrepancy explicitly. The
+  earlier operator-selected widening trade-off is not treated as acceptance of
+  narrowing the later completion gate. That acceptance remains unrecorded.
+- Item 9. Already implemented before this increment. The test
+  `reference_disagreement_prevents_successful_admission` in
+  keleusma-cli/tests/validator.rs pins stage acceptance, reference rejection and
+  shipping disagreement with exit 2. Its remote PASS is retained in the receipt.
+  The precision gap itself remains.
+- Item 11. Addressed for b1dbfe4f. The complete five-configuration matrix ran
+  against a fixed checkout. This supersedes the failed 09e74c94 baseline and
+  targeted-only repair evidence. It does not claim Order 3 completion.
+
+The next implementation work is the remaining item 5 controls. Item 8 needs a
+completion-scope decision before changing that contract. Items 12, 14 and 15
+remain open. The native-call outcomes, composite-read handlers and handled writes
+in let initializers remain the three separate pending Order 3 decisions. None is
+needed to collect these receipts, and none was resolved by this reconciliation.
+
 ## Addressed on 2026-10-21
 
 - Item 1. Both audits now record CI workflow run 39704059671, which passed every

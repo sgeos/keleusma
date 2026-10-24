@@ -31,6 +31,52 @@ control-flow widening profile and the reference consistency gate.
 | Compatibility and operator limits | Five feature configurations, minimum Rust and embedded compilation pass. Public bytecode version remains 2, instruction count 66, selected type capacities 640 and the depth limit 32. The analyzer uses a 64-bit host Word. Subject widths include 8, 16, 32 and 64 bits. | Verified |
 | Recorded completion and documentation | The requirement register, roadmap, process records and public command documentation carry the implemented scope and limits. Citation, roadmap and public-link controls pass. | Verified |
 
+## Named regression evidence, reconciled 2026-10-23
+
+The following tests already existed at b1dbfe4f. The portable receipt records
+selected individual PASS lines as well as the enclosing matrix. Reading an
+implementation function alone is not an execution receipt. A file-level command
+below runs its full test population, without relying on a remembered count.
+
+| Acceptance row | Named test and source | Reproduction command |
+|---|---|---|
+| Structural verdict | `malformed_targets_are_rejected_before_region_walks` and `depth_and_productivity_failures_are_completed_rejections` in tests/selfhost_admission.rs | `cargo test --features self-host --test selfhost_admission` |
+| Typed verdict | `scalar_and_nested_array_strides_reach_the_typed_stage`, `declared_local_assignment_checks_shape`, `yield_resume_shape_controls_field_admission`, `every_flat_projection_family_checks_the_extent`, `loop_back_edge_height_must_be_neutral`, `layout_reconciliation_checks_prefix_count_and_private_order`, `packed_call_shape_pool_accepts_its_exact_capacity` and `loop_termination_preserves_the_reference_post_loop_checks` in tests/selfhost_rejection_families.rs | `cargo test --features self-host --test selfhost_rejection_families` |
+| Complete stage corpus | `every_current_stage_completes_the_fallible_verifier` in tests/selfhost_admission.rs and `every_stage_matches_complete_resource_admission` in tests/selfhost_resource_admission.rs | `cargo test --features self-host --test selfhost_admission --test selfhost_resource_admission` |
+| Call graph | `stage_order_and_cycle_verdict_match_the_reference`, `current_stage_graphs_preserve_reference_order` and `cycle_verdict_depends_on_the_stage_with_identical_inputs` in src/selfhost/call_graph.rs | `cargo test --lib --features self-host selfhost::call_graph::tests` |
+| Module summaries and admission | `admission_and_summary_use_depend_on_stage_decisions` in src/selfhost/resources.rs | `cargo test --lib --features self-host selfhost::resources::tests` |
+| Yield fixpoint and productivity | `membership_and_convergence_are_stage_owned` in src/selfhost/yield_fixpoint.rs and `depth_and_productivity_failures_are_completed_rejections` in tests/selfhost_admission.rs | `cargo test --lib --features self-host selfhost::yield_fixpoint::tests` and `cargo test --features self-host --test selfhost_admission` |
+| Text allocation | `text_lattice_matches_the_reference_over_control_flow_and_calls` and `text_heap_saturates_and_stops_at_the_same_instruction` in tests/selfhost_resource_admission.rs | `cargo test --features self-host --test selfhost_resource_admission` |
+| Resource arithmetic and host costs | `heap_arithmetic_saturates_like_the_reference`, `iteration_counts_obey_the_reference_u32_boundary` and `native_attestations_preserve_per_site_and_per_chunk_charging` in tests/selfhost_resource_admission.rs | `cargo test --features self-host --test selfhost_resource_admission` |
+| Fallible admission | `malformed_stage_responses_are_protocol_errors` and `failed_stage_execution_is_not_a_rejection` in src/selfhost/validation.rs | `cargo test --lib --features self-host selfhost::validation::tests` |
+| Shipping integration | `command_distinguishes_valid_invalid_and_unavailable`, `command_checks_resource_capacity_without_running_the_stream`, `reference_disagreement_prevents_successful_admission` and `shipping_validator_reaches_every_current_stage` in keleusma-cli/tests/validator.rs | `cargo test -p keleusma-cli --test validator` |
+| Compatibility and operator limits | `host_resource_stage_preserves_declared_subject_target_widths` in tests/selfhost_resource_admission.rs and `nesting_capacity_preserves_the_declared_boundary` in tests/selfhost_admission.rs, plus the five configurations and platform checks in the portable receipt | Commands above and the receipt's exact matrix commands |
+| Documentation | `the_instructions_do_not_misstate_the_integration_test_counts` in tests/claimed_counts.rs, plus the documentation-link, citation and gate-correspondence binaries | `cargo test --test claimed_counts --test documentation_links --test comment_citations --test gate_ci_correspondence` |
+
+## Explicit scope discrepancy
+
+Recorded 2026-10-23 for strengthening item 8. The roadmap's whole-verdict gate
+and this audit's selected widening profile are different contracts. The latter
+establishes agreement on the fourteen-stage corpus and the named rejection
+families. It does not establish equality with the reference for arbitrary
+well-formed bytecode. At control-flow joins the Keleusma typed stage may forget
+a scalar shape that the Rust verifier retains. The retained reference gate is
+therefore part of shipping admission, not an optional comparison.
+
+The earlier roadmap describes the widening trade-off as operator-selected.
+That record is evidence of the implementation choice. It does not, by itself,
+establish operator acceptance of narrowing the later completion gate. No new
+acceptance is claimed here. Strengthening item 8 remains open for that decision,
+while independent receipt work can proceed. Removing the reference gate or
+promoting the first-pass result to whole-verdict equivalence remains unsupported.
+
+The existing `reference_disagreement_prevents_successful_admission` test pins the
+concrete cross-join witness. It asserts reference rejection, Keleusma acceptance,
+self-hosted command exit 2 with a disagreement diagnostic, and Rust command
+exit 1. Removing the shipping comparison would fail its exit assertion. Job
+120536366163 executed that test successfully at b1dbfe4f. This closes the requested
+pin in item 9 without claiming that the underlying precision gap has been repaired.
+
 ## Host and trust boundary
 
 The host decodes bytecode and transports opcode classes, operands, primitive costs,
@@ -135,6 +181,72 @@ remote continuous integration through pull request 484 into v0.2.3. CI workflow 
 commits. The pull request merged as 3e4f4984. The run tested the tree after the audit
 follow-ups, not 36ebe64d itself, and the follow-ups changed wire.kel, three chunk-count
 pins, the book catalogue and the CI job layout. See docs/process/TASKLOG.md.
+
+### Portable successor receipts, reviewed 2026-10-23
+
+The historical local receipts above remain declaration-time evidence. Their missing
+commands or commit stamps have not been reconstructed from filenames. The following
+successor evidence describes commit `b1dbfe4f258a3b9f8145c571da188999b3ad7526`,
+after the merged audit repairs and handler increments. It does not retroactively
+verify an earlier tree or certify subsequent edits.
+
+[Continuous integration run 39989231681](https://github.com/sgeos/keleusma/actions/runs/39989231681)
+completed successfully with all 31 jobs. The reviewed
+[portable receipt](../process/verification/2026-10-23-b1dbfe4f.json) retains the
+full commit, command scripts, job identifiers, summaries, named test passes and
+counting rules. These are remote observations, not newly executed local tests.
+Test commands below used the Cargo debug test profile, reported as unoptimized
+with debug information. `--profile ci` selects nextest runner settings and does
+not select a Cargo release build. All rows have zero failures. Exit status zero
+is inferred from successful Actions steps under `bash -e`, without
+`continue-on-error`. Successful steps do not print a numeric process status.
+
+| Command at b1dbfe4f | Passed | Skipped or ignored | Exit | Job identifier |
+|---|---|---|---|---|
+| `cargo nextest run --profile ci --workspace --partition hash:1/4` | 842 | 2618 | 0 | [120536366483](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366483) |
+| `cargo test --workspace --doc` | 12 | 3 | 0 | [120536366483](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366483) |
+| `cargo nextest run --profile ci --workspace --partition hash:2/4` | 861 | 2599 | 0 | [120536366163](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366163) |
+| `cargo nextest run --profile ci --workspace --partition hash:3/4` | 825 | 2635 | 0 | [120536366598](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366598) |
+| `cargo nextest run --profile ci --workspace --partition hash:4/4` | 930 | 2530 | 0 | [120536366560](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366560) |
+| `cargo nextest run --profile ci -p keleusma --features self-host --partition hash:1/4` | 790 | 2411 | 0 | [120536366531](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366531) |
+| `cargo test -p keleusma --features self-host --doc` | 0 | 3 | 0 | [120536366531](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366531) |
+| `cargo nextest run --profile ci -p keleusma --features self-host --partition hash:2/4` | 782 | 2419 | 0 | [120536366390](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366390) |
+| `cargo nextest run --profile ci -p keleusma --features self-host --partition hash:3/4` | 757 | 2444 | 0 | [120536366667](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366667) |
+| `cargo nextest run --profile ci -p keleusma --features self-host --partition hash:4/4` | 870 | 2331 | 0 | [120536366427](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366427) |
+| `cargo nextest run --profile ci -p keleusma --no-default-features` | 331 | 0 | 0 | [120536366200](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366200) |
+| `cargo test -p keleusma --no-default-features --doc` | 0 | 2 | 0 | [120536366200](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366200) |
+| `cargo nextest run --profile ci -p keleusma --features signatures` | 2458 | 0 | 0 | [120536365955](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365955) |
+| `cargo test -p keleusma --features signatures --doc` | 0 | 3 | 0 | [120536365955](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365955) |
+| `cargo nextest run --profile ci -p keleusma --features signatures,shell` | 2475 | 0 | 0 | [120536366813](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366813) |
+| `cargo test -p keleusma --features signatures,shell --doc` | 0 | 3 | 0 | [120536366813](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366813) |
+| `cargo nextest run --profile ci -p keleusma-wire --all-features` | 53 | 0 | 0 | [120536366221](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366221) |
+| `cargo test -p keleusma-wire --all-features --doc` | 4 | 0 | 0 | [120536366221](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366221) |
+| `cargo nextest run --profile ci -p keleusma-wire --no-default-features` | 19 | 0 | 0 | [120536366221](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366221) |
+| `cargo test -p keleusma-wire --no-default-features --doc` | 1 | 0 | 0 | [120536366221](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366221) |
+| `cargo nextest run --profile ci -p keleusma-bench` then `cargo test -p keleusma-bench --doc` | 6 | 0 | 0 | [120536366296](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366296) |
+| `cd compiler` then `cargo fmt --all -- --check` then `cargo clippy --all-targets -- -D warnings` then `cargo test` | 86 | 0 | 0 | [120536366455](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366455) |
+
+The four workspace partitions execute 3,458 unique tests, and the four isolated
+self-host partitions execute 3,199. Each population has two ignored tests. A shard's
+skipped count includes tests assigned to other shards and must not be added to
+other shards' skipped counts. Workspace documentation tests add twelve passes and
+three ignored cases. The other core documentation commands execute zero cases
+and ignore two or three examples as shown. A successful empty documentation run
+is not counted as behavioral coverage.
+
+The same receipt records exact commands for Clippy, formatting, documentation,
+minimum Rust 1.88 checks, the embedded build and example verification. These are
+successful build or tool checks, with no invented test count. Documentation uses
+`RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links"`. The minimum Rust
+job checks `--tests` with default features and does not reproduce the historical
+self-host minimum-Rust command. The matching
+[Book run 39989231699](https://github.com/sgeos/keleusma/actions/runs/39989231699)
+also succeeded at the same commit.
+
+The original all-stage command artifact comparison and private pilot records are
+not recreated by a green workflow. The named artifact test exercises the shipping
+library entry and serializer. Command tests exercise their documented fixtures.
+Historical claims beyond those populations retain their original limits.
 
 ## Pilot record
 

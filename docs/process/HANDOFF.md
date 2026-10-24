@@ -1,3 +1,32 @@
+# V0.2.X portable receipt continuation
+
+Prepared 2026-10-23 on feat/v02-portable-verification-receipts, based on f213f421.
+The documentation commit carrying this handoff contains the receipt increment.
+Resume from the dedicated sibling worktree
+`../keleusma-worktrees/v0.2.x`, relative to the primary repository. The operator
+requires concurrent V0.2.X and V0.3.X work. The primary checkout is restored to
+v0.2.3, and V0.3.X keeps its separate arena-composites worktree.
+Read the current REVERSE_PROMPT.md, TASKLOG.md and latest DESIGN_JOURNAL.md entry.
+
+## Current validity procedure
+
+Confirm the feature branch and f213f421 ancestry. Review commits since f213f421
+and any uncommitted diff. This increment should contain only CLAUDE.md,
+completion-audit and process documentation, and the portable JSON receipt.
+Confirm that src, tests, compiler and workspace crate implementation files still
+match 09b700b5. Verify the unchanged version,
+fingerprint and operand-check helpers as described in the historical block.
+The receipt is anchored at b1dbfe4f, not at an uncommitted tree. New commits or
+implementation edits require a fresh review of that distinction.
+
+Read Appendix B before tracked writes and preserve its confidentiality. Check
+the v0.2.3 inbox. Continue the strengthening list from the remaining item 5
+controls after reviewing the new receipt reconciliation. Preserve the three
+pending handler decisions. Do not treat the older blocks below as instructions
+to undo the merged implementation or re-run already reconciled work.
+
+---
+
 # V0.2.X handoff to a fresh Codex session
 
 Prepared on 2026-10-23 at `b1dbfe4f258a3b9f8145c571da188999b3ad7526` on
