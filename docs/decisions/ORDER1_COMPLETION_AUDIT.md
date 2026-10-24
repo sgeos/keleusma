@@ -32,6 +32,105 @@ explicit boundary controls.
 | Compatibility and bounds | Five feature configurations, the detached compiler, minimum Rust checks and embedded build pass. Public bytecode version stays 2, the public instruction count stays 66 and selected type capacities stay 640. | Verified |
 | System 1 shadow participation | The first diagnostic and three bounded claims were captured, previewed, self-reviewed and exported with checked hashes. The task outcome is resolved. External evaluation remains unavailable under the prior automatic approval rejection. | Local capture and review complete |
 
+## Regression evidence and remaining coverage, reconciled 2026-10-23
+
+The portable receipt below records the named tests that already ran at b1dbfe4f.
+These controls refine the acceptance rows without treating output equality as a
+proof that the implementation never reads reference data.
+
+| Acceptance row | Named regression evidence | Remaining limit |
+|---|---|---|
+| Reference-scaffold independence | `scratch_assembly_matches_every_stage_with_the_reference_poisoned` in src/selfhost/reference_poison_tests.rs assembles all fourteen stages while the reference lexer refuses the marked user program, and requires zero poisoned lexings and complete artifact equality. `production_compiler_matches_every_complete_stage_artifact` and `all_stage_artifacts_are_independent_of_recorded_expression_types` remain. | The poison matches a marker carried on every column-zero function head and on a final line. A consultation of a fragment holding no copy would evade it. The shipping entry is not a subject because it compiles the user program with the reference by design. |
+| Pipeline-owned type inputs | `production_type_verdicts_hold_with_the_reference_poisoned` in src/selfhost/reference_poison_tests.rs runs `type_check_source_via_kel` over the fourteen stages, the twenty ill-typed programs and the seven valid controls with the reference poisoned. Every verdict is unchanged and no poisoned lexing occurs. `pipeline_expression_extraction_reaches_every_stage`, `production_types_reach_corpus_and_rule_form_census` and `derived_binding_verdict_depends_on_the_keleusma_decision` remain. | The sixteen rule-form cells and eight rule-form controls are not repeated under poison. The fragment limit of the previous row applies. |
+| Complete serialization | `production_compiler_matches_every_complete_stage_artifact` and `complete_artifact_corpus_covers_every_stage_source` in tests/selfhost_artifact_identity.rs | Complete artifact equality and decoding cover the current stage inventory. They do not prove unsupported source forms. |
+| Shipping command | `the_self_hosted_command_compiles_every_stage_to_the_reference_artifact` in keleusma-cli/tests/self_hosted_stage_corpus.rs runs the built binary with `compile --compiler self-hosted` on every stage file and requires byte equality with same-source reference compilation. `the_same_source_compiles_identically_in_separate_processes` and `independent_type_rejection_reaches_the_command` remain. | Signed, encrypted, stripped, debug and cross-target outputs are not exercised by the corpus test. |
+| Compatibility and bounds | The five configurations in the portable receipt, `self_hosted_construct_support_boundary` in tests/selfhost_codegen.rs and the explicit boundary controls cited in the numbered conditions | A matrix pass is not a universal capacity proof. Existing limits remain fixed. |
+| Shadow pilot | The historical pilot record below describes local samples and unavailable external evaluation | No repository test can establish that historical private samples were captured or independently reviewed. Treat this as process evidence, not an implementation regression claim. |
+
+Reproduce the artifact and type rows with
+`cargo test --features self-host --test selfhost_artifact_identity --test selfhost_typecheck`
+and the intervention with
+`cargo test --lib --features self-host derived_binding_verdict_depends_on_the_keleusma_decision`.
+Reproduce the command fixtures with
+`cargo test -p keleusma-cli --test compile_reproducible --test self_hosted_refusal`.
+The three controls added on 2026-10-24 are described in the next section.
+
+### Reference-poisoning and command corpus controls, 2026-10-24
+
+The no-borrowing and type-input rows previously rested on code inspection plus
+output equality. Equality cannot distinguish an independent construction from
+one that copies the reference. A test-only hook in `tokenize` in src/lexer.rs
+now counts and refuses reference lexing of any text that carries an armed
+marker. `tokenize` is the only constructor of reference tokens, so every
+reference parse, type check and compilation of the marked user program passes
+through it. Unmarked stage programs, which the pipeline legitimately bootstraps
+through the reference, are unaffected. The hook exists only in test builds with
+the self-host feature.
+
+Three facts were established locally on 2026-10-24 at the parent commit
+35a85ae1 plus the uncommitted increment, in the debug test profile.
+
+1. `cargo test --lib --features self-host reference_poison_tests` passed five
+   of five in 2999 seconds. The five are the inventory, a control showing that
+   the poison stops the reference and spares unmarked text, a control showing
+   that marking leaves every reference artifact unchanged, and the two
+   intervention tests named in the table above.
+2. With a reference read injected into `self_host_compile_scratch` and another
+   into `try_call_type_inputs_from_pipeline`, both intervention tests failed on
+   the first stage in 16 seconds. The injections were then removed. This
+   establishes that the controls can fail, not that every possible leak is
+   detected.
+3. `cargo test -p keleusma-cli --test self_hosted_stage_corpus` passed one of
+   one in 3505 seconds, running fourteen command processes four at a time.
+
+A full local matrix then ran at commit 18162341, which carries these controls,
+between 07:28 and 08:20 UTC on 2026-10-24. It used nextest in the Cargo release
+profile with `--no-fail-fast`. This satisfies numbered condition 7 for that tree
+in release only. Item 3 of the strengthening list notes that release does not
+establish a debug pass.
+
+| Command | Result |
+|---|---|
+| `cargo nextest run --cargo-profile release --workspace --no-fail-fast` | Exit 0, 3464 passed, 2 skipped |
+| `cargo test --release --workspace --doc` | Exit 0, 12 passed, 3 ignored |
+| `cargo nextest run --cargo-profile release -p keleusma --features self-host --no-fail-fast` | Exit 0, 3204 passed, 2 skipped |
+| `cargo nextest run --cargo-profile release -p keleusma --no-default-features --no-fail-fast` | Exit 0, 331 passed |
+| `cargo nextest run --cargo-profile release -p keleusma --features signatures --no-fail-fast` | Exit 0, 2458 passed |
+| `cargo nextest run --cargo-profile release -p keleusma --features signatures,shell --no-fail-fast` | Exit 0, 2475 passed |
+
+The workspace and self-host totals exceed the b1dbfe4f receipt by six and five,
+which are exactly the tests this increment adds. The detached compiler result is
+recorded in REVERSE_PROMPT.md.
+
+These are local results and do not replace remote continuous integration. The
+two intervention tests and the command corpus test are among the slower tests
+in the suite, though below the slowest recorded test at 2.65 hours.
+
+Remote continuous integration then ran pull request 498 at a90fc449 as workflow
+run [40092978507](https://github.com/sgeos/keleusma/actions/runs/40092978507),
+created 12:12 UTC and concluded successfully 13:58 UTC on 2026-10-24, with every
+job passing. That tree is 18162341 plus the Order 2 acceptance record and a merge
+of v0.2.3 at d7461857, which changed only the dev profile to opt-level 1 and the
+CI job layout. The test jobs used the Cargo test profile, which inherits that
+setting and keeps debug assertions. This closes the debug-pass gap noted above
+for that tree, at opt-level 1 rather than 0. The pull request merged into v0.2.3
+as 6db0724b.
+
+| Job | Nextest summary |
+|---|---|
+| Test, the workspace with `selfhost_*` binaries filtered out | 2607 run, 2607 passed |
+| Test, self-host feature, shards 1 to 4 | 793, 783, 760 and 870 passed, 3206 in total |
+| Test, no default features | 333 passed |
+| Test, signatures feature | 2460 passed |
+| Test, broad features | 2477 passed |
+
+The job logs were searched for the six tests this increment adds, so that a
+green run is not mistaken for one that reached them. All five poison tests
+passed in the Test job and again in the self-host shards. The command corpus
+test passed in the Test job in 615 seconds. The workspace counts are not
+comparable with the b1dbfe4f receipt, because the job layout changed between
+the two runs.
+
 ## Numbered completion condition
 
 The historical [completion condition](./ORDER_1_COMPLETION_CONDITION.txt) remains intact,
@@ -123,6 +222,72 @@ remote continuous integration through pull request 484 into v0.2.3. CI workflow 
 commits. The pull request merged as 3e4f4984. The run tested the tree after the audit
 follow-ups, not 36ebe64d itself, and the follow-ups changed wire.kel, three chunk-count
 pins, the book catalogue and the CI job layout. See docs/process/TASKLOG.md.
+
+### Portable successor receipts, reviewed 2026-10-23
+
+The historical local receipts above remain declaration-time evidence. Their missing
+commands or commit stamps have not been reconstructed from filenames. The following
+successor evidence describes commit `b1dbfe4f258a3b9f8145c571da188999b3ad7526`,
+after the merged audit repairs and handler increments. It does not retroactively
+verify an earlier tree or certify subsequent edits.
+
+[Continuous integration run 39989231681](https://github.com/sgeos/keleusma/actions/runs/39989231681)
+completed successfully with all 31 jobs. The reviewed
+[portable receipt](../process/verification/2026-10-23-b1dbfe4f.json) retains the
+full commit, command scripts, job identifiers, summaries, named test passes and
+counting rules. These are remote observations, not newly executed local tests.
+Test commands below used the Cargo debug test profile, reported as unoptimized
+with debug information. `--profile ci` selects nextest runner settings and does
+not select a Cargo release build. All rows have zero failures. Exit status zero
+is inferred from successful Actions steps under `bash -e`, without
+`continue-on-error`. Successful steps do not print a numeric process status.
+
+| Command at b1dbfe4f | Passed | Skipped or ignored | Exit | Job identifier |
+|---|---|---|---|---|
+| `cargo nextest run --profile ci --workspace --partition hash:1/4` | 842 | 2618 | 0 | [120536366483](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366483) |
+| `cargo test --workspace --doc` | 12 | 3 | 0 | [120536366483](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366483) |
+| `cargo nextest run --profile ci --workspace --partition hash:2/4` | 861 | 2599 | 0 | [120536366163](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366163) |
+| `cargo nextest run --profile ci --workspace --partition hash:3/4` | 825 | 2635 | 0 | [120536366598](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366598) |
+| `cargo nextest run --profile ci --workspace --partition hash:4/4` | 930 | 2530 | 0 | [120536366560](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366560) |
+| `cargo nextest run --profile ci -p keleusma --features self-host --partition hash:1/4` | 790 | 2411 | 0 | [120536366531](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366531) |
+| `cargo test -p keleusma --features self-host --doc` | 0 | 3 | 0 | [120536366531](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366531) |
+| `cargo nextest run --profile ci -p keleusma --features self-host --partition hash:2/4` | 782 | 2419 | 0 | [120536366390](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366390) |
+| `cargo nextest run --profile ci -p keleusma --features self-host --partition hash:3/4` | 757 | 2444 | 0 | [120536366667](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366667) |
+| `cargo nextest run --profile ci -p keleusma --features self-host --partition hash:4/4` | 870 | 2331 | 0 | [120536366427](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366427) |
+| `cargo nextest run --profile ci -p keleusma --no-default-features` | 331 | 0 | 0 | [120536366200](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366200) |
+| `cargo test -p keleusma --no-default-features --doc` | 0 | 2 | 0 | [120536366200](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366200) |
+| `cargo nextest run --profile ci -p keleusma --features signatures` | 2458 | 0 | 0 | [120536365955](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365955) |
+| `cargo test -p keleusma --features signatures --doc` | 0 | 3 | 0 | [120536365955](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536365955) |
+| `cargo nextest run --profile ci -p keleusma --features signatures,shell` | 2475 | 0 | 0 | [120536366813](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366813) |
+| `cargo test -p keleusma --features signatures,shell --doc` | 0 | 3 | 0 | [120536366813](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366813) |
+| `cargo nextest run --profile ci -p keleusma-wire --all-features` | 53 | 0 | 0 | [120536366221](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366221) |
+| `cargo test -p keleusma-wire --all-features --doc` | 4 | 0 | 0 | [120536366221](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366221) |
+| `cargo nextest run --profile ci -p keleusma-wire --no-default-features` | 19 | 0 | 0 | [120536366221](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366221) |
+| `cargo test -p keleusma-wire --no-default-features --doc` | 1 | 0 | 0 | [120536366221](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366221) |
+| `cargo nextest run --profile ci -p keleusma-bench` then `cargo test -p keleusma-bench --doc` | 6 | 0 | 0 | [120536366296](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366296) |
+| `cd compiler` then `cargo fmt --all -- --check` then `cargo clippy --all-targets -- -D warnings` then `cargo test` | 86 | 0 | 0 | [120536366455](https://github.com/sgeos/keleusma/actions/runs/39989231681/job/120536366455) |
+
+The four workspace partitions execute 3,458 unique tests, and the four isolated
+self-host partitions execute 3,199. Each population has two ignored tests. A shard's
+skipped count includes tests assigned to other shards and must not be added to
+other shards' skipped counts. Workspace documentation tests add twelve passes and
+three ignored cases. The other core documentation commands execute zero cases
+and ignore two or three examples as shown. A successful empty documentation run
+is not counted as behavioral coverage.
+
+The same receipt records exact commands for Clippy, formatting, documentation,
+minimum Rust 1.88 checks, the embedded build and example verification. These are
+successful build or tool checks, with no invented test count. Documentation uses
+`RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links"`. The minimum Rust
+job checks `--tests` with default features and does not reproduce the historical
+self-host minimum-Rust command. The matching
+[Book run 39989231699](https://github.com/sgeos/keleusma/actions/runs/39989231699)
+also succeeded at the same commit.
+
+The original all-stage command artifact comparison and private pilot records are
+not recreated by a green workflow. The named artifact test exercises the shipping
+library entry and serializer. Command tests exercise their documented fixtures.
+Historical claims beyond those populations retain their original limits.
 
 ## Pilot record
 

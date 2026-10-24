@@ -40,6 +40,8 @@ pub struct LexError {
 /// are treated as whitespace. Semicolons serve as statement terminators.
 /// The token stream ends with an Eof token.
 pub fn tokenize(source: &str) -> Result<Vec<Token>, LexError> {
+    #[cfg(all(test, feature = "self-host"))]
+    reference_poison::observe(source);
     let mut lexer = Lexer::new(source);
     let mut tokens = Vec::new();
 
@@ -896,6 +898,86 @@ impl<'a> Lexer<'a> {
             kind: TokenKind::StringLit(value),
             span: self.span_from(start, start_line, start_col),
         })
+    }
+}
+
+/// Test-only intervention that makes the reference lexer refuse marked sources.
+///
+/// Every reference parse, type check and compilation of a source text starts here,
+/// since `tokenize` is the only constructor of reference tokens. A control arms a
+/// marker unique to itself, embeds it as comments in the user program and runs a
+/// self-hosted path. Any reference lexing of text carrying the marker is counted
+/// and panics, so a path that silently consults the reference changes its result
+/// or its hit count. Unmarked text, including the stage programs the pipeline
+/// legitimately bootstraps through the reference, passes untouched, which keeps
+/// concurrently running tests unaffected.
+///
+/// The marker is matched as a substring. A reference consultation of a fragment
+/// that excludes every marker copy evades it, so callers place copies throughout.
+#[cfg(all(test, feature = "self-host"))]
+pub(crate) mod reference_poison {
+    extern crate std;
+    use alloc::collections::BTreeMap;
+    use alloc::string::String;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    static ARMED: AtomicUsize = AtomicUsize::new(0);
+    static MARKERS: Mutex<BTreeMap<String, usize>> = Mutex::new(BTreeMap::new());
+
+    /// Disarms its marker when dropped, including during an unwinding failure.
+    pub(crate) struct Armed {
+        marker: String,
+    }
+
+    impl Armed {
+        /// Reference lexings of marked text observed so far.
+        pub(crate) fn hits(&self) -> usize {
+            let markers = MARKERS.lock().unwrap_or_else(|e| e.into_inner());
+            markers.get(&self.marker).copied().unwrap_or(0)
+        }
+    }
+
+    impl Drop for Armed {
+        fn drop(&mut self) {
+            let mut markers = MARKERS.lock().unwrap_or_else(|e| e.into_inner());
+            if markers.remove(&self.marker).is_some() {
+                ARMED.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+    }
+
+    /// Arm `marker`, which must be nonempty and not already armed.
+    pub(crate) fn arm(marker: &str) -> Armed {
+        assert!(
+            !marker.is_empty(),
+            "an empty marker would poison every source"
+        );
+        let mut markers = MARKERS.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(
+            markers.insert(marker.into(), 0).is_none(),
+            "marker `{marker}` is already armed"
+        );
+        ARMED.fetch_add(1, Ordering::SeqCst);
+        Armed {
+            marker: marker.into(),
+        }
+    }
+
+    pub(super) fn observe(source: &str) {
+        if ARMED.load(Ordering::SeqCst) == 0 {
+            return;
+        }
+        let mut markers = MARKERS.lock().unwrap_or_else(|e| e.into_inner());
+        let hit = markers
+            .iter_mut()
+            .find(|(marker, _)| source.contains(marker.as_str()));
+        if let Some((marker, count)) = hit {
+            *count = count.saturating_add(1);
+            let marker = marker.clone();
+            drop(markers);
+            panic!("reference lexer reached poisoned source `{marker}`");
+        }
     }
 }
 
