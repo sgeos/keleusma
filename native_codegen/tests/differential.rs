@@ -2834,23 +2834,66 @@ fn fixed_division_agrees_with_the_vm_including_saturation() {
     ] {
         assert_agrees(q0, &[a, b]);
     }
+
+    // A handler consumes the zero outcome without reaching the default trap.
+    let handled = "fn main(a: Word, b: Word) -> Word { ((a as Fixed<16>) / (b as Fixed<16>) { ok(v) => v, zero_divisor(n) => n }) as Word }";
+    for (a, b, expected) in [(7, 0, 7), (-7, 0, -7), (0, 0, 0), (6, 3, 2)] {
+        assert_eq!(vm_result(handled, &[a, b]), expected);
+        assert_agrees(handled, &[a, b]);
+    }
+}
+
+/// Hand-built bytecode observes every outcome slot without compiler dispatch.
+#[test]
+fn fixed_division_outcome_slots_agree_without_a_trap() {
+    use keleusma::bytecode::ConstValue;
+    for (fraction, a, b, expected) in [
+        (16, 7 << 16, 0, [7 << 16, 0, 3]),
+        (16, -7 << 16, 0, [-7 << 16, 0, 3]),
+        (16, 0, 0, [0, 0, 3]),
+        (16, 7 << 16, 2 << 16, [229_376, 0, 0]),
+        (16, i64::MAX, 1, [i64::MAX, 0, 0]),
+        (16, i64::MIN, 1, [i64::MIN, 0, 0]),
+        (0, i64::MIN, -1, [i64::MAX, 0, 0]),
+        (63, i64::MIN, -1, [i64::MAX, 0, 0]),
+        (63, i64::MIN, 1, [i64::MIN, 0, 0]),
+    ] {
+        for (slot, expected) in expected.into_iter().enumerate() {
+            let mut program = common::build("fn main(a: Word, b: Word) -> Word { 0 }");
+            let chunk = &mut program.chunks[0];
+            // Fixed constants are outside the direct lower_chunk contract.
+            // Q0 conversions construct the same exact Fixed bit patterns.
+            chunk.constants = vec![ConstValue::Int(a), ConstValue::Int(b)];
+            chunk.ops = vec![
+                Op::Const(0),
+                Op::WordToFixed(0),
+                Op::Const(1),
+                Op::WordToFixed(0),
+                Op::FixedDiv(fraction),
+            ];
+            if slot < 2 {
+                chunk.ops.push(Op::PopN((2 - slot) as u8));
+                // Q0 exposes the exact bits without rescaling the low slot.
+                chunk.ops.push(Op::FixedToWord(0));
+            }
+            chunk.ops.push(Op::Return);
+            assert_eq!(vm_result_of(program.clone(), &[0, 0]), expected);
+            assert_eq!(native_result_of(&program, &[0, 0]), expected);
+        }
+    }
 }
 
 /// A `Fixed` divide by a NON-zero divisor never reaches the trap block.
 ///
-/// The zero-divisor case faults on both sides — the VM returns
-/// `DivisionByZero`, the native side raises `SIGTRAP` — and this harness runs
-/// the VM first, so a faulting subject would abort the comparison rather than
-/// compare it. **That case is covered by the fault-agreement observable, not
-/// here**, and saying so is the point: this test does NOT establish that the
-/// zero divisor agrees, only that the ordinary path does not spuriously trap.
+/// Unhandled source division still dispatches flag three to an explicit Trap.
+/// FixedDiv itself must substitute safely before division and return outcomes.
+/// This structural check complements the executed outcome-slot tests above.
 #[test]
 fn a_nonzero_fixed_divisor_does_not_reach_the_trap() {
     let ir = lowered_ir("fn main(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a / b }");
     assert!(
-        ir.contains("fxd.nonzerodivisor"),
-        "the lowering emits no zero-divisor guard for FixedDiv, so the \
-         unconditional fault the VM raises is not reproduced"
+        ir.contains("fxd.safe") && ir.contains("fxd.flag"),
+        "FixedDiv must substitute a nonzero divisor and report the zero outcome"
     );
     assert!(
         ir.contains("fxd.sh"),

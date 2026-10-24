@@ -305,3 +305,64 @@ fn multiword_zero_divisors_reach_the_explicit_trap() {
         }
     }
 }
+
+/// `FixedDiv` reports a zero divisor as the outcome triple of a Fixed `Mod`
+/// since 2026-10-22, instead of faulting. The fraction-bit count is sixteen.
+#[test]
+fn fixed_division_reifies_zero_and_saturates_with_flag_zero() {
+    let fixed = |bits: i64| ConstValue::Fixed(bits);
+    // (numerator, denominator, (low, high, flag))
+    for (a, b, (low, high, flag)) in [
+        // Zero divisor: the numerator, zero, and flag 3.
+        (7 << 16, 0, (7 << 16, 0, 3)),
+        // 7 / 2 = 3.5 in Q16.
+        (7 << 16, 2 << 16, (229_376, 0, 0)),
+        // A quotient beyond the word saturates and reports flag 0.
+        (i64::MAX, 1, (i64::MAX, 0, 0)),
+        (i64::MIN, 1, (i64::MIN, 0, 0)),
+    ] {
+        for (drop, expected) in [
+            (0, Value::Int(flag)),
+            (1, Value::Fixed(high)),
+            (2, Value::Fixed(low)),
+        ] {
+            let actual = execute(module(Op::FixedDiv(16), fixed(a), fixed(b), drop), &[]).unwrap();
+            assert_eq!(actual, expected, "{a} / {b}, output {drop}");
+        }
+    }
+}
+
+/// Source Fixed division reaches the compiler's explicit zero-divisor trap by
+/// default, and a handled division receives the numerator instead.
+#[test]
+fn source_fixed_division_traps_by_default_and_is_handled_on_request() {
+    let compile = |source: &str| {
+        let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(source).unwrap()).unwrap();
+        keleusma::compiler::compile(&ast).unwrap()
+    };
+    let one = Value::Fixed(1 << 16);
+    let zero = Value::Fixed(0);
+    let bare = compile("fn main(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a / b }");
+    assert!(
+        bare.chunks
+            .iter()
+            .flat_map(|c| &c.ops)
+            .any(|op| matches!(op, Op::Trap(_)))
+    );
+    assert_eq!(
+        execute(
+            bare.clone(),
+            &[Value::Fixed(6 << 16), Value::Fixed(4 << 16)]
+        )
+        .unwrap(),
+        Value::Fixed(98_304)
+    );
+    assert!(matches!(
+        execute(bare, &[one.clone(), zero.clone()]),
+        Err(keleusma::vm::VmError::DivisionByZero)
+    ));
+    let handled = compile(
+        "fn main(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a / b { ok(v) => v, zero_divisor(n) => n } }",
+    );
+    assert_eq!(execute(handled, &[one.clone(), zero]).unwrap(), one);
+}

@@ -5071,6 +5071,16 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-23 Fresh Codex handoff after the Opus increments
+
+The receiving session must start from the merged v0.2.3 state rather than from
+its predecessor's feature branch. The Opus audit changed the execution-check
+contract, and subsequent increments implemented the write-handler surface that
+had previously been only an open question. The refreshed handoff makes both
+changes explicit. The remaining design decisions are separated from independent
+receipt work. Remote success at b1dbfe4f provides a current portable anchor,
+without treating a documentation handoff as a new implementation audit.
+
 ## 2026-10-20 A repair that passed its targeted runs and left the corpus
 
 53b88f52 was confirmed only by targeted runs, and its wire.kel change cost

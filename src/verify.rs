@@ -2589,7 +2589,6 @@ pub fn op_depth_effect(op: &Op, _chunk: &Chunk) -> (i32, i32) {
         | Op::Shl
         | Op::Shr
         | Op::FixedMul(_)
-        | Op::FixedDiv(_)
         | Op::GetIndex(_) => (2, -1),
         Op::Neg
         | Op::Not
@@ -2622,6 +2621,7 @@ pub fn op_depth_effect(op: &Op, _chunk: &Chunk) -> (i32, i32) {
         }
         Op::Div
         | Op::Mod
+        | Op::FixedDiv(_)
         | Op::CheckedAdd
         | Op::CheckedSub
         | Op::CheckedMod

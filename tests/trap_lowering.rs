@@ -170,3 +170,28 @@ fn both_compilers_preserve_noninteger_division_paths() {
         assert_eq!(has_trap, source.contains("Fixed<16>"));
     }
 }
+
+/// Known residue. The self-hosted parser records a Fixed operand's scalar kind
+/// but not its fraction-bit count, so it lowers Fixed `/` to `CheckedDiv(0)`
+/// where the reference emits `FixedDiv(16)`. The modules otherwise agree,
+/// including the default zero-divisor trap added on 2026-10-22. The entry point
+/// compares the two and refuses, so no divergent module is returned.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_self_hosted_compiler_refuses_fixed_division() {
+    let source = "fn main(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a / b }";
+    let reference = compile(source);
+    let scratch = keleusma::selfhost::self_host_compile_scratch(source);
+    let differing: Vec<(Op, Op)> = scratch.chunks[0]
+        .ops
+        .iter()
+        .zip(&reference.chunks[0].ops)
+        .filter(|(a, b)| a != b)
+        .map(|(a, b)| (*a, *b))
+        .collect();
+    assert_eq!(differing, vec![(Op::CheckedDiv(0), Op::FixedDiv(16))]);
+    assert!(matches!(
+        keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host()),
+        Err(keleusma::selfhost::SelfHostError::Unsupported { .. })
+    ));
+}

@@ -31,6 +31,7 @@
 //! | `CheckedDiv` | a zero divisor reifies as flag `3`, rather than trapping |
 //! | `CheckedMod` | the same, mirroring `CheckedDiv` |
 //! | `BoundsCheck` | reifies an invalid index as flag `1` |
+//! | `FixedDiv` | a zero divisor pushes flag `3`, and source lowering traps on it |
 //!
 //! `CheckedNeg` names an overflow case but makes no trap-or-reify claim, and
 //! `Trap` is the trap itself. Neither is in this class.
@@ -173,6 +174,29 @@ fn the_bounds_check_reifies_failure_and_source_lowering_traps() {
     ));
 }
 
+/// Since 2026-10-22 a zero divisor makes `FixedDiv` push the numerator, `Fixed(0)`
+/// and flag `3`, and source Fixed division traps on that flag.
+#[test]
+fn the_fixed_divide_reifies_a_zero_divisor_and_source_lowering_traps() {
+    let mut module = compiled("fn main() -> Word { 7 }");
+    let chunk = &mut module.chunks[0];
+    chunk.constants = alloc::vec![ConstValue::Fixed(7 << 16), ConstValue::Fixed(0)];
+    chunk.ops = alloc::vec![Op::Const(0), Op::Const(1), Op::FixedDiv(16), Op::Return];
+    assert!(matches!(
+        run("FixedDiv outcome", module),
+        Ok(VmState::Finished(Value::Int(3)))
+    ));
+    let module = compiled(
+        "fn main() -> Fixed<16> { let z = 0 as Fixed<16>; let o = 3 as Fixed<16>; o / z }",
+    );
+    assert!(ops(&module).contains(&Op::FixedDiv(16)));
+    assert!(ops(&module).contains(&Op::Trap(keleusma::bytecode::TrapKind::ZeroDivisor.code())));
+    assert!(matches!(
+        run("explicit Fixed zero divisor", module),
+        Err(VmError::DivisionByZero)
+    ));
+}
+
 /// The population this file covers is the one the specification states.
 ///
 /// Guards the census itself: if a row gains or loses a trap-or-reify claim,
@@ -202,7 +226,14 @@ fn the_population_matches_the_rows_that_make_such_a_claim() {
     claiming.dedup();
     assert_eq!(
         claiming,
-        alloc::vec!["BoundsCheck", "CheckedDiv", "CheckedMod", "Div", "Mod"],
+        alloc::vec![
+            "BoundsCheck",
+            "CheckedDiv",
+            "CheckedMod",
+            "Div",
+            "FixedDiv",
+            "Mod"
+        ],
         "the set of specification rows making a trap-or-reify claim has changed. This file \
          covers a fixed population; a new claiming row is unguarded until it is added here."
     );

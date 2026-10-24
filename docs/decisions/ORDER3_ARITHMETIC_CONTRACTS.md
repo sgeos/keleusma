@@ -48,18 +48,21 @@ its source failure when the legacy instruction becomes total.
 
 ## Proof boundaries
 
-Raw FixedDiv and non-first-pass indexed value forms still require explicit
+Non-first-pass indexed value forms still require explicit
 availability boundaries in trap analysis. Malformed bytecode and host-contract
 failures remain separate from language traps. These arithmetic contracts do not
 by themselves establish trap freedom, host load policy or safe check elision.
-The full Order 3 completion plan remains authoritative.
+The full Order 3 completion plan remains authoritative. Raw FixedDiv was in
+this class until 2026-10-22, when a zero divisor became the outcome triple of a
+Fixed remainder and source Fixed division gained the default zero-divisor Trap.
 
 ## Classification audit after the contract change
 
 A source inspection of the virtual machine still finds internal language-fault
-returns in FixedDiv, non-scalar or boxed GetIndex forms, boxed GetField,
+returns in non-scalar or boxed GetIndex forms, boxed GetField,
 GetTupleField and GetEnumField. These forms cannot be admitted to the first-pass
 trap-free profile merely because their module contains no Trap instruction.
+FixedDiv was listed here until it became total on 2026-10-22.
 The upcoming classifier must distinguish unsupported analysis from a completed
 possibly-trapping verdict. Flat scalar accesses retain runtime representation,
 operand-kind and lifetime checks even when the language operation is total.

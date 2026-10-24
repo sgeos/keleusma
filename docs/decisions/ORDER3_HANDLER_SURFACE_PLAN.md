@@ -6,8 +6,10 @@
 indexed-write handlers and the index-first order are implemented in the Rust
 reference compiler and mirrored by the self-hosted compiler on 2026-10-21, with
 the self-hosted mirror limited to Word and Byte elements. Handled multi-index
-writes, native-call handlers, handler-required composite reads and FixedDiv
-totalization are not started.
+writes are implemented in the Rust reference compiler on 2026-10-22, and the
+self-hosted compiler refuses them. FixedDiv totalization is implemented on
+2026-10-22. Native-call handlers and handler-required composite reads are not
+started.
 This document resolves the open question that the 2026-10-20 handoff recorded as
 the first audit priority, which asked whether source-level indexed-write handlers
 belong to Order 3. They do. It extends [the completion plan](./ORDER3_COMPLETION_PLAN.md)
@@ -64,7 +66,7 @@ are first-party rulings given in the same session.
 |---|---|
 | Arm attachment | An arm block after the right-hand side of an indexed assignment handles the write. A right-hand side that needs its own handler is parenthesized or bound with `let` first. `d.x[i] = a[j] { ok(v) => v }` previously meant a handled read on the right-hand side, and its meaning changes. |
 | Bare evaluation order | Index first, then the bounds check, then the value, for bare and handled writes alike. |
-| Index depth | This increment supports a handled write with one index. Both compilers reject a handled multi-index write with the same message. Routing every level's failure to `invalid_index` is the next increment. |
+| Index depth | This increment supports a handled write with one index. Both compilers reject a handled multi-index write with the same message. Routing every level's failure to `invalid_index` is the next increment. Superseded on 2026-10-22 by that increment, recorded under "Multi-index increment" below. |
 
 ## Design decided for the first increment
 
@@ -234,7 +236,8 @@ stages are full of bare writes. The mirror needed the following.
    `Const(0)` of the success test before the value's constants on the handled form.
 6. **Host typing in `src/selfhost/mod.rs`.** The arms' common type, the element
    type for `old` and `new`, and `Word` for `invalid_index`.
-7. **Rejections.** A multi-index handled write, a single-binder `ok`, a literal
+7. **Rejections.** A multi-index handled write, which since 2026-10-22 only the
+   self-hosted compiler refuses, a single-binder `ok`, a literal
    in `ok`, a duplicate binder and a non-exhaustive `ok` must be refused by both
    compilers. The acceptance row asks for byte-identical rejection families.
 8. **Corpus.** Byte-identity cases for each shape in
@@ -246,6 +249,42 @@ stages are full of bare writes. The mirror needed the following.
    `the_stage_is_measured_against_the_real_stage_sources` and the stage
    self-compilation tests. `parse.kel` declares about 612 of its 640 data fields,
    and `wire.kel` sits at the type stage's 640-row name channel.
+
+## Multi-index increment, 2026-10-22
+
+**Semantics.** The 2026-10-21 ruling deferred multi-index writes with the
+instruction that every level's failure route to `invalid_index`. The binder
+receives the index of the level that failed. That is the value the bare form's
+per-level `Trap(8)` already carries, and an unhandled failure of the handled
+form traps with the same `IndexOutOfBounds(index, level length)` as the bare
+form. Each level is checked against its own length, because a flat-offset test
+alone would accept `m[0][5]` on a `[[Word; 3]; 2]` field and write `m[1][2]`.
+The first failing level stops evaluation, so later indices and the value are
+not evaluated. This extends the index-first ruling level by level.
+
+**Reference lowering.** `emit_data_write_levels` in `src/compiler.rs`
+replaces the single probe. Two locals precede the outcome block, the offset
+and the current level's raw index. Each level evaluates its index, probes it
+with `BoundsCheck(level length)`, stores the flag and the four limbs into the
+outcome block, and then either adds `index * stride` to the offset or, when out
+of range, stores the raw index as the offset through an `If`/`Else`. Every
+level after the first runs under a guard on the flag, so the control flow is at
+most two `If` blocks deep whatever the depth. After the levels, the outcome
+block and the arm dispatch are those of the single-index write. The old element
+is read only when bound, with `GetDataIndexed` at the computed offset. The probe
+never reads it, because every level's length fits the sixteen-bit `BoundsCheck`
+operand, a limit the multi-level access already imposed.
+
+**Self-hosted compiler.** It refuses a handled multi-index write, as it refuses
+every multi-index data access, so the construct-support boundary is unchanged.
+This is a refusal and not a divergence.
+
+**Evidence.** `tests/indexed_write_handlers.rs` covers the addressed cell and
+both binders, a failure at the outer level, at the inner level with an in-range
+flat offset, and at a negative inner index, the middle level of a three-level
+field, the evaluation order through traced index and value functions, the
+default trap's payload against the bare form's, trap-free classification of a
+fully handled write, a `Byte` element, and the self-hosted refusal.
 
 ## Surface forms
 
@@ -291,6 +330,19 @@ to a trap when no handler is written. Indexing forms outside the first pass and
 FixedDiv are the known members of this class. The runtime fault census in
 tests/runtime_fault_census.rs should gain a Fixed division row, since its twenty
 source cases did not include one.
+
+**Done 2026-10-22.** FixedDiv now pushes the outcome triple of a Fixed `Mod`.
+The low slot is the saturated quotient, the high slot `Fixed(0)` and the flag
+`0`, saturated or not, because saturation is the defined result and reporting it
+as overflow would send a handler without an overflow arm to the default trap. A
+zero divisor pushes the numerator, `Fixed(0)` and flag `3`. Source Fixed division
+follows FixedDiv with the same default zero-divisor guard as Fixed `%`, and the
+handled form already lowered through `CheckedDiv(n)`. Both trap analyses classify
+FixedDiv as clear, and the census has a twenty-first row, Fixed division by zero,
+which reaches the explicit Trap. The self-hosted compiler lowers Fixed `/` to
+`CheckedDiv(0)`, because its parser does not record the fraction-bit count. That
+divergence predates this change, the entry point refuses it, and
+`the_self_hosted_compiler_refuses_fixed_division` in tests/trap_lowering.rs pins it.
 
 ## Acceptance rows added to the completion plan
 

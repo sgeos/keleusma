@@ -5720,32 +5720,26 @@ fn lower_chunk_body<'ctx>(
                 let rhs = st.pop();
                 let lhs = st.pop();
 
-                // (2) A zero divisor faults UNCONDITIONALLY -- the VM returns
-                // `VmError::DivisionByZero` with no construct to catch it. Same
-                // shape as `Op::Div` above, and it must come first so the divide
-                // below may assume a non-zero divisor.
-                let cont = ctx.append_basic_block(func, "fxd.nonzerodivisor");
+                // FixedDiv is total. Substitute before division to avoid LLVM
+                // poison, then select the numerator and flag 3 on zero.
                 let zero =
                     st.b.build_int_compare(IntPredicate::EQ, rhs, i64t.const_zero(), "fxd.zero")
                         .unwrap();
-                st.b.build_conditional_branch(zero, trap_bb, cont).unwrap();
-                st.b.position_at_end(cont);
+                let divisor =
+                    st.b.build_select(zero, i64t.const_int(1, false), rhs, "fxd.safe")
+                        .unwrap()
+                        .into_int_value();
 
                 // (3) Widen, shift the DIVIDEND LEFT by the fraction count, then
                 // divide and SATURATE. `FixedMul` shifts its PRODUCT RIGHT; this
                 // is the asymmetry the VM specifies and the one place a copied
                 // idiom would be silently wrong.
                 let a = st.widen(lhs, i128t, "fxd.a");
-                let c = st.widen(rhs, i128t, "fxd.b");
+                let c = st.widen(divisor, i128t, "fxd.b");
                 let sh = i128t.const_int(u64::from(*frac_bits), false);
                 let dividend = st.b.build_left_shift(a, sh, "fxd.sh").unwrap();
-                // **NO DIVISOR SUBSTITUTION HERE, and its absence is
-                // deliberate.** One existed for the WRAPPING integer forms until
-                // absorption 82 made bare division total, because
-                // `i64::MIN / -1` overflows the result type there. Here both
-                // operands are widened to `i128` first, so the quotient cannot
-                // overflow the wide type, and the clamp below carries the value
-                // back into range. Copying the guard in would be inert at best.
+                // Fraction counts below 64 keep the shifted i64 dividend
+                // strictly above i128::MIN, so division by -1 cannot overflow.
                 let quotient = st.b.build_int_signed_div(dividend, c, "fxd.q").unwrap();
                 let max = st.widen(i64t.const_int(i64::MAX as u64, false), i128t, "fxd.max");
                 let min = st.widen(i64t.const_int(i64::MIN as u64, true), i128t, "fxd.min");
@@ -5763,12 +5757,24 @@ fn lower_chunk_body<'ctx>(
                     st.b.build_select(under, min, hi, "fxd.sello")
                         .unwrap()
                         .into_int_value();
-                // A Q-format quotient is Q-format; see `arith_result_kind`.
-                st.push_k(
-                    st.b.build_int_truncate(clamped, i64t, "fxd").unwrap(),
-                    kept_fx.unwrap_or(Width::Unknown),
-                    OperandKind::Fixed,
-                );
+                let quotient = st.b.build_int_truncate(clamped, i64t, "fxd").unwrap();
+                let low =
+                    st.b.build_select(zero, lhs, quotient, "fxd.low")
+                        .unwrap()
+                        .into_int_value();
+                // Saturation is a successful result. Only zero sets a flag.
+                st.push_k(low, kept_fx.unwrap_or(Width::Unknown), OperandKind::Fixed);
+                st.push_k(i64t.const_zero(), Width::Scalar(8), OperandKind::Fixed);
+                let flag =
+                    st.b.build_select(
+                        zero,
+                        i64t.const_int(3, false),
+                        i64t.const_zero(),
+                        "fxd.flag",
+                    )
+                    .unwrap()
+                    .into_int_value();
+                st.push_k(flag, Width::Scalar(8), OperandKind::Int);
             }
             Op::FixedToWord(frac_bits) => {
                 // **The operand's width, carried through the conversion.**

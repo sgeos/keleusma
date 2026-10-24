@@ -2461,9 +2461,14 @@ pub enum Op {
     FixedMul(u8),
     /// Divide two `Fixed` operands sharing the given fraction-bit
     /// count. Pops two `Value::Fixed`, computes
-    /// `(a as i128 << frac_bits) / b as i128`, pushes
-    /// `Value::Fixed`. Saturates at `i64::MAX`/`MIN`. Returns
-    /// `VmError::DivisionByZero` for `b == 0`.
+    /// `(a as i128 << frac_bits) / b as i128`, and pushes the outcome
+    /// triple `(low, high, flag)` of a Fixed `Mod`. The low slot is the
+    /// quotient, saturated at the word's maximum or minimum, the high slot
+    /// is `Fixed(0)`, and the flag is `0`, saturated or not. A zero divisor
+    /// pushes the numerator, `Fixed(0)` and flag `3`, and does not fault.
+    /// Until 2026-10-22 it pushed one `Value::Fixed` and returned
+    /// `VmError::DivisionByZero` for `b == 0`, which the operator's
+    /// 2026-10-20 ruling that only `Trap` traps retired.
     FixedDiv(u8),
 
     /// Halt execution with a runtime error.
@@ -2962,8 +2967,11 @@ impl Op {
             // three; net delta +2. The high half is the i128
             // intermediate's high 64 bits, providing the load-
             // bearing value for big-number multiplication.
+            // FixedDiv joined them on 2026-10-22, when a zero divisor became
+            // an outcome rather than a fault.
             Op::Div
             | Op::Mod
+            | Op::FixedDiv(_)
             | Op::CheckedAdd
             | Op::CheckedSub
             | Op::CheckedMul(_)
@@ -3019,7 +3027,7 @@ impl Op {
             | Op::ByteToWord
             | Op::WordToFixed(_)
             | Op::FixedToWord(_) => 0,
-            Op::FixedMul(_) | Op::FixedDiv(_) => 0,
+            Op::FixedMul(_) => 0,
 
             Op::Trap(_) => 0,
 
@@ -3063,6 +3071,7 @@ impl Op {
             // net pop.
             Op::Div
             | Op::Mod
+            | Op::FixedDiv(_)
             | Op::CheckedAdd
             | Op::CheckedSub
             | Op::CheckedMul(_)
@@ -3150,8 +3159,9 @@ impl Op {
             | Op::ByteToWord
             | Op::WordToFixed(_)
             | Op::FixedToWord(_) => 0,
-            // The `Op::FixedMul` and `Op::FixedDiv` handlers in [`crate::vm`]
-            // pop both operands and then push one result, so the net is -1 and
+            // The `Op::FixedMul` handler in [`crate::vm`], and the
+            // `Op::FixedDiv` handler until 2026-10-22, when it began pushing an
+            // outcome triple, pop both operands and then push one result, so the net is -1 and
             // the transient reach above the current level is 0. Measured
             // against the handlers rather than inferred from the arithmetic.
             //
@@ -3163,7 +3173,7 @@ impl Op {
             // it lowers the reported bound on chunks that use these ops; the
             // bound was an upper bound throughout, so nothing that verified
             // before stops verifying.
-            Op::FixedMul(_) | Op::FixedDiv(_) => 1,
+            Op::FixedMul(_) => 1,
 
             Op::Trap(kind) if *kind == TrapKind::IndexOutOfBounds.code() => 5,
             Op::Trap(_) => 0,

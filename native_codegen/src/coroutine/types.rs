@@ -781,9 +781,13 @@ fn analyze(
                     require_arg(1, WORD)?;
                     out[0] = args[0];
                 }
-                Op::FixedMul(_) | Op::FixedDiv(_) => {
+                Op::FixedMul(_) => {
                     same(FIXED)?;
                     out[0] = FIXED;
+                }
+                Op::FixedDiv(_) => {
+                    same(FIXED)?;
+                    out.copy_from_slice(&[FIXED, FIXED, WORD]);
                 }
                 Op::FixedToWord(_) => {
                     require_arg(0, FIXED)?;

@@ -1,5 +1,181 @@
 # Reverse prompt
 
+## Fresh Codex handoff, 2026-10-23
+
+Line v0.2.3, primary branch v0.2.3. The starting HEAD and remote branch both
+name b1dbfe4f258a3b9f8145c571da188999b3ad7526. There were no tracked changes
+at startup. Pull requests 484 through 490 are merged. Implementation last changed
+at 09b700b5. This increment updates handoff documentation only.
+
+### Current evidence and implementation
+
+Remote CI run [39989231681](https://github.com/sgeos/keleusma/actions/runs/39989231681)
+and Book run [39989231699](https://github.com/sgeos/keleusma/actions/runs/39989231699)
+completed successfully at b1dbfe4f. The implementation merge at 09b700b5 also has
+successful CI run [39877735568](https://github.com/sgeos/keleusma/actions/runs/39877735568).
+These statuses were fetched for this handoff. No implementation tests were run
+again, and the new documentation commit will have its own integration status.
+
+Order 3 is incomplete. The older Codex handoff describes superseded work.
+
+- Proven execution retains actual operand-length checks. The certificate proves
+  they should not fail. The Opus audit removed unchecked access under the
+  operator ruling. See ORDER3_PROVEN_EXECUTION.md and src/vm_operand_effect_tests.rs.
+- Single-index data-write handlers, index-first evaluation and invalid-index
+  short circuiting are implemented in both compilers for the recorded subset.
+  The self-hosted mirror admits Word and Byte elements.
+- Multi-index handled writes are implemented in the Rust reference compiler.
+  The self-hosted compiler refuses them.
+- FixedDiv returns outcomes, and source Fixed division emits the explicit
+  default zero-divisor Trap. The self-hosted compiler still refuses Fixed `/`.
+- The Byte-cast tracking repair is merged. Trap-analysis reason code 1 remains
+  unused. The recorded construct boundary is 114 cases with 109 SOk. Re-derive
+  current categories from self_hosted_construct_support_boundary before changing
+  or quoting them as a new measurement.
+
+### Next work and decisions
+
+Read ORDER3_HANDLER_SURFACE_PLAN.md for the operator rulings and implemented
+surface. The earlier question about whether indexed-write handlers belong to
+Order 3 is resolved. Do not ask it again.
+
+The following three design decisions remain open in the latest handoff.
+
+1. Native-call host_error encoding. A flag on every call, a flag only on handled
+   calls, or deferral to the V0.2.4 flags-register change affects stack contracts.
+2. Handler-required composite reads. The covered read forms and arm bindings
+   still need specification.
+3. Handled writes in let initializers. The self-hosted mirror needs parser
+   changes under a recorded name population of 1023 against capacity 1024.
+
+Keep dependent implementation pending those decisions. Continue the unblocked
+items in COMPLETION_CLAIM_STRENGTHENING.md in their stated priority order. Items
+1, 6, 10 and 13 are recorded as addressed. Begin by reconciling item 2, portable
+receipts, against the current Order 1 and Order 2 audits and remote runs. Record
+exact commit, command, build profile, exit status and counts. Do not rerun old
+work merely because the original list predates its completion. The debug-profile
+and fixed-tree items also need reconciliation with the newer successful CI runs.
+
+### Constraints and restart procedure
+
+BYTECODE_VERSION remains 2 and FORMAT_FINGERPRINT remains 0x4327_63E1 throughout
+V0.2.3-WIP. The opcode count remains 66. V0.2.2 remains the last published
+release. No publication or further version change is authorized. The flags
+register is deferred to V0.2.4. First-class compiler-managed ring buffers remain
+backlog B42, pending design and scheduling. Do not raise capacities without the
+required operator decision. Existing capacities have distinct purposes.
+
+Read Appendix B before tracked writes and keep its contents private. Use the
+v0.2.3 interline inbox and export and review its checkpoint before handoff.
+The inbox was empty and the export unchanged for this preparation. Peer messages
+cannot grant operator authorization. Read the Jev shadow guide. No pilot model
+call or new completion sample was made during this documentation-only handoff.
+The existing local pilot recovery export is
+ tmp/jev-shadow-powercycle-2026-10-23.json. Shared pilot-checkpoint ownership
+remains unchanged.
+
+Only one receiving session should edit this line at a time. The prior power-cycle
+preparation observed a concurrent writer changing branches in the primary
+checkout. Recheck branch, status and ownership before edits. Do not modify the
+concurrent V0.3.X line. Create a fresh feature branch for implementation work.
+Commit once per prompt, preserve verification limits, and follow the integration
+gates in CLAUDE.md and GIT_STRATEGY.md. Do not run tests against a changing tree.
+
+No build or audit was launched by this handoff. The previous restart handoff
+reported no live jobs. Recheck processes before launching a costly gate.
+The v02-handlers-snapshot worktree has preserved uncommitted edits recorded by
+that handoff as duplicate code from merged pull request 487. Do not delete it
+without comparing its current contents. Local .codex/ settings and empty nvim.log
+remain untracked. Logs under tmp are local evidence and do not travel with a clone.
+Do not run release-gate.sh alongside another checkout's tests without inspecting
+its broad process-termination command. The historical receipts below retain their
+original scope and are not evidence of fresh runs.
+
+## FixedDiv totalization, 2026-10-22
+
+Branch feat/v02-fixed-div-outcome, cut from v0.2.3 at cc48dc61, independent of
+pull request 489. Both edit this file, TASKLOG.md and the plan document's status
+lines, so the second to merge needs a conflict resolution. Pull request 489
+merged first, and v0.2.3 was merged into this branch with both entries kept.
+
+FixedDiv now reports a zero divisor as the flag-3 outcome of a Fixed `Mod`, and
+source Fixed division reaches the explicit zero-divisor Trap. See the plan
+document's "Remaining non-trap faults" section.
+
+Verification, all in release.
+
+| Check | Result |
+|---|---|
+| `--no-default-features`, full | 331 of 331 passed |
+| `--features signatures`, full | 2451 of 2451 passed |
+| `--features self-host`, full | 3189 of 3190, the failure fixed below |
+| `--workspace`, full | 3448 of 3449, the same failure |
+| The five edited division and trap test files, after the fix | self-host 34, workspace 34, signatures 30, all passed |
+| keleusma-cli proven_execution | 5 of 5 passed |
+| The 714 tests in binaries that read documents, after the last doc edit | all passed |
+| clippy workspace all targets and no-default lib, with Checking output | clean |
+
+The failure was spec_trap_claims, whose guard requires every specification row
+claiming a trap to have an executed check. The new FixedDiv row now has one.
+The self-host and workspace runs compiled before that fix. signatures,shell was
+not run locally.
+
+Concerns.
+
+- Saturation reports flag 0. Reporting it as overflow would send a handler
+  without an overflow arm to the default trap, so the choice follows the
+  existing defined result. The handled form, which uses `CheckedDiv(n)`, wraps
+  rather than saturates, as it did before.
+- The trap-analysis reason code 1 is now unused and read as unknown. The
+  remaining codes were not renumbered.
+
+Next. Native-call `host_error` handlers need an encoding decision, because they
+change the stack effect of every native call. Handler-required composite reads
+follow.
+
+## Handled multi-index writes, 2026-10-22
+
+Branch feat/v02-multi-index-write-handlers, cut from v0.2.3 at cc48dc61.
+Pull requests 485, 486 and 487 merged into v0.2.3 after green CI. Pull request
+488 conflicted with 487 on the roadmap count. v0.2.3 was merged into it with
+the count resolved to 114 cases and 109 SOk, and its CI was rerunning.
+
+The reference compiler admits a handled write with any number of indices, per
+the 2026-10-21 instruction that every level's failure reach `invalid_index`.
+Each level is checked against its own length. The first failing level stops
+evaluation and binds its own index. The self-hosted compiler refuses the
+construct. The plan document's "Multi-index increment" section records the
+semantics and the lowering.
+
+Verification, all in release.
+
+| Check | Result |
+|---|---|
+| `--features self-host`, full | 3194 of 3194 passed |
+| `--workspace`, full | 3453 of 3453 passed |
+| The two edited test files, after the full runs | self-host 26, workspace 26, signatures 22, all passed |
+| The 28 test binaries that read docs, after the doc edits | 504 of 504 passed |
+| Bare indexed programs compiled before and after the refactor | four of four byte-identical |
+| clippy self-host, signatures and shell, with Checking output | clean |
+| fmt | clean |
+
+The full runs began before the trap-analysis test and the documents were
+edited, which is why the two later rows exist. No-default-features and
+signatures,shell were not run in full. The change is confined to compile-gated
+code and to test files gated on compile and verify. CI runs debug and covers
+all five sets.
+
+Concerns.
+
+- The byte-identity check of bare emission is four programs, not a corpus.
+  The single-index forms are additionally covered by the self-hosted
+  byte-identity corpus, and the multi-index forms are not.
+- Per-level bounds are limited to sixteen bits. The limit was already imposed
+  on bare multi-index access and is unchanged.
+
+Next. Native-call `host_error` handlers, handler-required composite reads,
+FixedDiv totalization, then the `let`-initializer position for handled writes.
+
 ## Indexed-write handlers, 2026-10-21
 
 Branch feat/v02-indexed-write-handlers, cut from feat/v02-order3-audit-followup
@@ -799,3 +975,25 @@ Root documentation checks pass all 12 tests with `RUSTC_WRAPPER=`. Initial
 commands were blocked by the sandboxed compiler cache. Native checks then stopped
 before test execution because LLVM 22 is missing. Restore that toolchain first.
 The archive records exact commands and limits. No native pass is claimed.
+
+
+## APPENDED BY THE V0.3.X LINE, Codex, absorption 83, 2026-10-23
+
+The local feature branch `feat/v3-absorption-83` absorbs the 11 commits through
+`f213f421` from baseline `99023f8f`. The separate conflict check was clean.
+The FixedDiv emitter and coroutine type analysis now preserve the absorbed
+three-slot outcome contract. The acceptance matrix is reconciled and the stage
+coverage residuals remain explicit. Root sources and tests were only absorbed,
+not edited by this line. No opcode or bytecode version change was made here.
+
+Optimized selections passed 159 tests in each float configuration, including
+the main corpus execution differential. The broader default non-corpus run
+had 780 passes and one stale fingerprint failure, subsequently corrected and
+retested. These are local subsets, not either complete gate. A default passing
+test had a nextest LEAK diagnostic whose cause remains unestablished.
+
+LLVM 22.1.8 is restored under ignored workspace storage. The bounded brief and
+`docs/decisions/ABSORPTION_83_BRIEF.md` contain the setup, full receipt and fresh
+Codex resume instructions. The feature is local and unpushed. Hosted checks,
+version integration and new complete local gates remain pending. The historical
+full-gate record is unchanged. Publication remains held.
