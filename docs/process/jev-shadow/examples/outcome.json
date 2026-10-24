@@ -1,0 +1,7 @@
+{
+  "resolved": true,
+  "system2_input_tokens": null,
+  "system2_output_tokens": null,
+  "elapsed_seconds": null,
+  "notes": "Replace with the observed task outcome. Null means unavailable usage, not zero."
+}

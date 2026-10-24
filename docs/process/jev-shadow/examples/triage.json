@@ -1,0 +1,12 @@
+{
+  "id": "pilot-smoke-triage-v1",
+  "task_id": "pilot-installation-smoke",
+  "kind": "triage",
+  "sample_kind": "synthetic",
+  "input": {
+    "diagnostic": "No authentication error occurred. The executed Rust assertion panicked on unequal values."
+  },
+  "baseline": {"choice": "compiler_or_test", "actor": "synthetic-baseline"},
+  "source_refs": ["docs/process/jev-shadow/examples/evidence.txt"],
+  "execution": null
+}

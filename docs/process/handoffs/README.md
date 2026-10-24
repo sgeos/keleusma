@@ -8,6 +8,12 @@ once, each writes its status here instead of overwriting the shared
 relaying prose through the operator. See
 [`PARALLEL_DEVELOPMENT.md`](../PARALLEL_DEVELOPMENT.md) section 0a.
 
+For communication between Codex and Claude Code lines, use the
+[interline protocol](../INTERLINE_PROTOCOL.md). Its local queue provides explicit
+message identifiers, receipts and replies across worktrees. The versioned
+handoffs here remain the durable record of decisions and deliverables. A local
+queue receipt does not establish that a handoff was integrated or published.
+
 **A mailbox is named for, and lives on, the VERSION branch** —
 `docs/process/handoffs/<version-branch>.md`, updated by direct commit there. Not on a
 feature branch: a session doing real work is on one, so its mailbox would sit a branch
