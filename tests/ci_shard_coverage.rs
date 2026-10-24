@@ -1,0 +1,349 @@
+//! **EVERY PARTITIONED CONTINUOUS-INTEGRATION JOB RUNS EVERY ONE OF ITS SHARDS.**
+//!
+//! The workspace and self-host test jobs were split into hash partitions on 2026-10-21,
+//! after both were cancelled at GitHub's six-hour job limit on pull request 484. A
+//! partitioned job covers its feature set only when the matrix lists each shard from one
+//! to the partition count exactly once.
+//!
+//! `tests/gate_ci_correspondence.rs` cannot see this. It deliberately treats flags other
+//! than package, feature, target and test-binary selectors as irrelevant, so a command
+//! carrying `--partition hash:1/4` satisfies it exactly as the whole run did. A matrix
+//! that lost a shard, or a partition count raised without widening the matrix, would
+//! leave that guard green while a quarter of the suite ran nowhere. This file is the
+//! check for that case.
+//!
+//! The documentation tests are not partitioned by nextest, which skips them. Each
+//! partitioned job must therefore still run its `--doc` step, and this file checks that
+//! the step exists in the job. It does not check that the step runs on exactly one shard.
+//!
+//! **THE BINARIES THE WORKSPACE JOB FILTERS OUT RUN IN THE SELF-HOST JOB.** On 2026-10-24
+//! the workspace job stopped being partitioned and began excluding the `selfhost_*`
+//! binaries of `keleusma`, which it had been repeating because `keleusma-cli` enables the
+//! `self-host` feature in a `--workspace` build. The correspondence guard treats `-E` as
+//! irrelevant too, so it cannot see whether those binaries still run anywhere. A filter
+//! widened by accident, or a filter added to the self-host job, would leave them running
+//! nowhere with every other check green. This file checks that case as well.
+//!
+//! The parse is line-based over a workflow this repository writes, and it is not a
+//! general YAML reader. It fails closed: a partitioned command whose shard expression or
+//! matrix it cannot read is a failure, not a skip.
+
+use std::path::Path;
+
+/// One job of `ci.yml`: its key and the raw lines of its body.
+struct Job {
+    key: String,
+    lines: Vec<String>,
+}
+
+fn ci_jobs() -> Vec<Job> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/workflows/ci.yml");
+    let text = std::fs::read_to_string(&path).expect("the continuous-integration workflow");
+    let mut jobs: Vec<Job> = Vec::new();
+    let mut in_jobs = false;
+    for raw in text.lines() {
+        if raw == "jobs:" {
+            in_jobs = true;
+            continue;
+        }
+        if !in_jobs {
+            continue;
+        }
+        // A job key sits at an indent of exactly two and ends with a colon.
+        let is_key = raw.starts_with("  ")
+            && !raw.starts_with("   ")
+            && raw.trim_end().ends_with(':')
+            && !raw.trim_start().starts_with('#');
+        if is_key {
+            jobs.push(Job {
+                key: raw.trim().trim_end_matches(':').to_string(),
+                lines: Vec::new(),
+            });
+        } else if let Some(job) = jobs.last_mut() {
+            job.lines.push(raw.to_string());
+        }
+    }
+    jobs
+}
+
+/// The partition count named by a `--partition hash:${{ matrix.shard }}/N` argument.
+fn partition_count(line: &str) -> Option<Result<usize, String>> {
+    let at = line.find("--partition")?;
+    // Matched on the remainder of the line, because the space inside
+    // `${{ matrix.shard }}` would split a whitespace-delimited argument.
+    let whole = line[at + "--partition".len()..].trim_start();
+    let Some(rest) = whole.strip_prefix("hash:${{ matrix.shard }}/") else {
+        return Some(Err(format!(
+            "a partition this check cannot read; expected `hash:${{{{ matrix.shard }}}}/N`: {line}"
+        )));
+    };
+    let n = rest.split_whitespace().next().unwrap_or("");
+    Some(
+        n.parse()
+            .map_err(|_| format!("unreadable partition count in: {line}")),
+    )
+}
+
+/// The integers of a `shard: [1, 2, ...]` matrix line in this job.
+fn shard_matrix(job: &Job) -> Result<Vec<usize>, String> {
+    let mut found = None;
+    for l in &job.lines {
+        let t = l.trim();
+        if let Some(list) = t.strip_prefix("shard:") {
+            let list = list.trim();
+            let inner = list
+                .strip_prefix('[')
+                .and_then(|s| s.strip_suffix(']'))
+                .ok_or_else(|| format!("job `{}`: shard matrix is not an inline list", job.key))?;
+            let values: Result<Vec<usize>, _> = inner
+                .split(',')
+                .map(|v| v.trim().parse::<usize>())
+                .collect();
+            let values =
+                values.map_err(|_| format!("job `{}`: unreadable shard value", job.key))?;
+            if found.replace(values).is_some() {
+                return Err(format!("job `{}`: more than one shard matrix", job.key));
+            }
+        }
+    }
+    found.ok_or_else(|| format!("job `{}`: partitioned but has no shard matrix", job.key))
+}
+
+#[test]
+fn every_partitioned_job_lists_each_shard_exactly_once() {
+    let jobs = ci_jobs();
+    // NON-VACUITY. A parse that found no jobs, or no partitioned jobs, satisfies every
+    // check below.
+    assert!(
+        jobs.len() >= 10,
+        "parsed only {} jobs from ci.yml",
+        jobs.len()
+    );
+
+    let mut partitioned = Vec::new();
+    let mut errors = Vec::new();
+    for job in &jobs {
+        let mut counts = Vec::new();
+        for l in &job.lines {
+            if l.trim_start().starts_with('#') {
+                continue;
+            }
+            match partition_count(l) {
+                Some(Ok(n)) => counts.push(n),
+                Some(Err(e)) => errors.push(format!("job `{}`: {e}", job.key)),
+                None => {}
+            }
+        }
+        if counts.is_empty() {
+            continue;
+        }
+        partitioned.push(job.key.clone());
+        let n = counts[0];
+        if counts.iter().any(|&c| c != n) {
+            errors.push(format!(
+                "job `{}`: partition counts disagree: {counts:?}",
+                job.key
+            ));
+        }
+        match shard_matrix(job) {
+            Ok(mut shards) => {
+                shards.sort_unstable();
+                let expected: Vec<usize> = (1..=n).collect();
+                if shards != expected {
+                    errors.push(format!(
+                        "job `{}`: partitions into {n} but the matrix lists {shards:?}",
+                        job.key
+                    ));
+                }
+            }
+            Err(e) => errors.push(e),
+        }
+        let has_doc = job
+            .lines
+            .iter()
+            .any(|l| !l.trim_start().starts_with('#') && l.contains("--doc"));
+        if !has_doc {
+            errors.push(format!(
+                "job `{}`: partitioned, and its documentation-test step is gone",
+                job.key
+            ));
+        }
+    }
+
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
+    assert!(
+        partitioned.contains(&"test-self-host".to_string()),
+        "expected the self-host test job to be partitioned; found {partitioned:?}"
+    );
+}
+
+/// The workspace job's filter, exactly. Widening it would drop tests from the only job
+/// that ran them, so a change here is meant to fail this file and be reviewed.
+const WORKSPACE_FILTER: &str = "-E 'not (package(keleusma) & binary(~selfhost))'";
+
+/// The non-comment `cargo nextest run` commands of one job.
+fn nextest_commands(job: &Job) -> Vec<&str> {
+    job.lines
+        .iter()
+        .map(|l| l.trim())
+        .filter(|l| !l.starts_with('#') && l.contains("cargo nextest run"))
+        .collect()
+}
+
+/// Every `selfhost_*` integration-test binary outside `keleusma`'s own `tests/`. The
+/// workspace filter names `package(keleusma)`, so a binary with that prefix in another
+/// package would still run in the workspace job. It would also not run in the self-host
+/// job, which selects `-p keleusma` only. Neither job would be wrong, but the split this
+/// file guards would no longer describe where the heavy tests run.
+fn foreign_selfhost_binaries() -> Vec<String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut found = Vec::new();
+    let members = [
+        "keleusma-arena",
+        "keleusma-bench",
+        "keleusma-cli",
+        "keleusma-macros",
+        "keleusma-wire",
+        "keleusma-wire-derive",
+    ];
+    for member in members {
+        let dir = root.join(member).join("tests");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with("selfhost") {
+                found.push(format!("{member}/tests/{name}"));
+            }
+        }
+    }
+    found
+}
+
+/// Why the workspace and self-host jobs no longer split the suite as intended, or nothing.
+fn split_errors(workspace: &Job, self_host: &Job) -> Vec<String> {
+    let mut errors = Vec::new();
+    let commands = nextest_commands(workspace);
+    if commands.len() != 1 {
+        errors.push(format!(
+            "expected one nextest command in `{}`, found {commands:?}",
+            workspace.key
+        ));
+    } else if !(commands[0].contains("--workspace") && commands[0].ends_with(WORKSPACE_FILTER)) {
+        errors.push(format!(
+            "the workspace job's filter changed; review it against the self-host job: {}",
+            commands[0]
+        ));
+    }
+
+    let commands = nextest_commands(self_host);
+    if commands.is_empty() {
+        errors.push(format!("`{}` runs no nextest command", self_host.key));
+    }
+    for command in commands {
+        if !(command.contains("-p keleusma") && command.contains("--features self-host")) {
+            errors.push(format!(
+                "a self-host command no longer selects `-p keleusma --features self-host`: {command}"
+            ));
+        }
+        // Any filter or filtering profile here could drop a binary the workspace job
+        // already left to this job.
+        if command.contains(" -E ")
+            || command.contains("--filterset")
+            || command.contains("--profile quick")
+        {
+            errors.push(format!(
+                "the self-host job filters its tests, so the binaries the workspace job \
+                 leaves to it may run nowhere: {command}"
+            ));
+        }
+    }
+    errors
+}
+
+#[test]
+fn binaries_the_workspace_job_filters_out_run_in_the_self_host_job() {
+    let jobs = ci_jobs();
+    let job = |key: &str| {
+        jobs.iter()
+            .find(|j| j.key == key)
+            .unwrap_or_else(|| panic!("ci.yml has no `{key}` job"))
+    };
+    let errors = split_errors(job("test"), job("test-self-host"));
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
+
+    let foreign = foreign_selfhost_binaries();
+    assert!(
+        foreign.is_empty(),
+        "selfhost binaries outside `keleusma` escape the split: {foreign:?}"
+    );
+}
+
+/// The split check detects a widened workspace filter and a filtered self-host job.
+#[test]
+fn the_split_check_rejects_a_widened_filter_and_a_filtered_self_host_job() {
+    let job = |key: &str, run: &str| Job {
+        key: key.to_string(),
+        lines: vec![format!("      - run: {run}")],
+    };
+    let good_workspace = job(
+        "test",
+        &format!("cargo nextest run --profile ci --workspace {WORKSPACE_FILTER}"),
+    );
+    let good_self_host = job(
+        "test-self-host",
+        "cargo nextest run --profile ci -p keleusma --features self-host",
+    );
+    assert!(split_errors(&good_workspace, &good_self_host).is_empty());
+
+    let widened = job(
+        "test",
+        "cargo nextest run --profile ci --workspace -E 'not binary(~selfhost)'",
+    );
+    assert_eq!(split_errors(&widened, &good_self_host).len(), 1);
+
+    let filtered = job(
+        "test-self-host",
+        "cargo nextest run --profile ci -p keleusma --features self-host -E 'not test(slow)'",
+    );
+    assert_eq!(split_errors(&good_workspace, &filtered).len(), 1);
+
+    let dropped = job(
+        "test-self-host",
+        "cargo test -p keleusma --features self-host --doc",
+    );
+    assert_eq!(split_errors(&good_workspace, &dropped).len(), 1);
+}
+
+/// The checker itself detects the two failures it exists for. A guard that cannot fail
+/// is not evidence.
+#[test]
+fn the_shard_check_rejects_a_missing_shard_and_a_foreign_partition() {
+    let job = Job {
+        key: "t".to_string(),
+        lines: vec![
+            "    strategy:".to_string(),
+            "      matrix:".to_string(),
+            "        shard: [1, 2, 4]".to_string(),
+            "      - run: cargo nextest run --workspace --partition hash:${{ matrix.shard }}/4"
+                .to_string(),
+        ],
+    };
+    let n = partition_count(&job.lines[3]).unwrap().unwrap();
+    assert_eq!(n, 4);
+    let mut shards = shard_matrix(&job).unwrap();
+    shards.sort_unstable();
+    assert_ne!(
+        shards,
+        (1..=n).collect::<Vec<_>>(),
+        "a missing shard must be visible"
+    );
+
+    assert!(
+        partition_count("cargo nextest run --partition count:1/4")
+            .unwrap()
+            .is_err()
+    );
+    assert!(partition_count("cargo nextest run --workspace").is_none());
+}

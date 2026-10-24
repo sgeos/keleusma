@@ -102,15 +102,15 @@ while IFS= read -r log; do
     # moment the abandoned-run report below was added: it printed "ABANDONED at
     # step 13" and the same 13 was silently feeding `bar_for`.
     if [ "${prev_steps[$idx]}" -eq 0 ] 2>/dev/null && [ "$finished" -eq 1 ]; then
-      prev_steps[$idx]=$(grep -aoE '=== [^=]+ ===' "$log" 2>/dev/null | grep -avc 'release gate:')
+      prev_steps[idx]=$(grep -aoE '=== [^=]+ ===' "$log" 2>/dev/null | grep -avc 'release gate:')
     fi
     # The abandoned report is about the IMMEDIATE predecessor only, so it is
     # captured once and not overwritten by older runs.
     if [ "${prev_seen[$idx]}" -eq 0 ] 2>/dev/null; then
-      prev_seen[$idx]=1
-      prev_commit[$idx]=$commit
-      prev_done[$idx]=$finished
-      [ "$finished" -eq 0 ] && prev_abandoned_at[$idx]=$(grep -aoE '=== [^=]+ ===' "$log" 2>/dev/null | grep -avc 'release gate:')
+      prev_seen[idx]=1
+      prev_commit[idx]=$commit
+      prev_done[idx]=$finished
+      [ "$finished" -eq 0 ] && prev_abandoned_at[idx]=$(grep -aoE '=== [^=]+ ===' "$log" 2>/dev/null | grep -avc 'release gate:')
     fi
     continue
   fi

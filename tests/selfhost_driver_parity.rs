@@ -109,7 +109,8 @@ fn match_body(src: &str, header: &str, must_contain: &str) -> String {
 }
 
 /// Match-arm patterns at the TOP LEVEL of `body`: `<digits> =>`, `<digits> if <guard> =>`,
-/// `a..=b =>`.
+/// `a..=b =>`, including numeric alternatives in `|` patterns. Named constants remain
+/// outside this textual check.
 ///
 /// # Depth matters, and ignoring it produced a false positive on this test's first run
 ///
@@ -144,20 +145,40 @@ fn arm_patterns(body: &str) -> BTreeSet<String> {
             Some(k) => (&pat[..k], true),
             None => (pat, false),
         };
-        let disc = disc.trim();
-        let numericish = disc
-            .chars()
-            .all(|c| c.is_ascii_digit() || c == '.' || c == '=')
-            && disc.chars().any(|c| c.is_ascii_digit());
-        if numericish {
-            out.insert(if guarded {
-                format!("{disc}(guarded)")
-            } else {
-                disc.to_string()
-            });
+        for disc in disc.split('|').map(str::trim) {
+            let numericish = disc
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == '.' || c == '=')
+                && disc.chars().any(|c| c.is_ascii_digit());
+            if numericish {
+                out.insert(if guarded {
+                    format!("{disc}(guarded)")
+                } else {
+                    disc.to_string()
+                });
+            }
         }
     }
     out
+}
+
+#[test]
+fn numeric_alternatives_keep_their_ranges_and_guards() {
+    let body = "{\n94..=96 | crate::metadata::GROUP if ready => {},\n105 => {},\n_ => {},\n}";
+    let actual = covered_codes(&arm_patterns(body));
+    let expected = ["94(guarded)", "95(guarded)", "96(guarded)", "105"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(actual, expected);
+    assert_ne!(
+        actual,
+        covered_codes(&arm_patterns(&body.replace("94..=96 | ", "")))
+    );
+    assert_ne!(
+        actual,
+        covered_codes(&arm_patterns(&body.replace(" if ready", "")))
+    );
 }
 
 /// **THE OP-WORD DECODERS MUST RECOGNISE THE SAME TAGS, WITH THE SAME GUARDS.**
@@ -232,7 +253,12 @@ fn the_shipping_driver_seeds_every_slot_the_copy_does_at_every_feed() {
     /// had guarded the too-loose direction in that very file and never considered the other one.**
     ///
     /// Paren-matching the argument list has no window to outgrow.
-    fn seed_counts(s: &str) -> std::collections::BTreeMap<String, usize> {
+    fn seed_counts(raw: &str) -> std::collections::BTreeMap<String, usize> {
+        // **COUNT CODE, NOT PROSE.** This guard is calibrated against a COUNT, so a comment
+        // mentioning a seeding call adds a phantom and makes a matched pair look mismatched.
+        // Paren-matching removed the window hazard; it does not remove this one.
+        let owned = code_only(raw);
+        let s = owned.as_str();
         let mut out = std::collections::BTreeMap::new();
         let bytes = s.as_bytes();
         let mut from = 0;
@@ -424,4 +450,26 @@ fn the_duplicate_this_test_exists_for_is_still_present() {
          DELETE this file: its comparisons are vacuous without a second implementation to \
          compare against"
     );
+}
+
+/// Source with `//` line comments removed, so a search matches CODE rather than prose.
+///
+/// **Measured**: a historical note in `parse.kel` naming the removed refusal made the absence
+/// assertion below report that the stage *"still defines or raises"* it — a confidently wrong
+/// failure sending its reader to hunt something that is not there.
+///
+/// Truncating at the first `//` rather than tracking string literals is correct for these searches:
+/// an early truncation can only hide an occurrence, which makes an absence assertion pass where it
+/// should fail — but here the strings sought are Keleusma identifiers that never appear inside a
+/// string literal in this stage, and the window search below fails loudly instead.
+/// `tests/call_chunk_index_limit.rs` needs the string-aware form because its patterns are
+/// arithmetic that can legitimately sit beside a URL.
+fn code_only(src: &str) -> String {
+    src.lines()
+        .map(|l| match l.find("//") {
+            Some(i) => &l[..i],
+            None => l,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

@@ -606,12 +606,26 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for Arc<dyn HostOpaque> {
     fn from_flat_bytes_ctx(
         bytes: &[u8],
         word_bytes: usize,
-        _float_bytes: usize,
-        _addr_bytes: usize,
+        float_bytes: usize,
+        addr_bytes: usize,
         ctx: &RefContext<'_>,
     ) -> Result<Self, VmError> {
+        // The field is as wide as the LAYOUT makes it, which sizes an opaque
+        // by the address width; `flat_byte_size` above hands the caller that
+        // same figure, so reading a word here would ask for more bytes than the
+        // caller sliced whenever the two widths are selected apart.
+        let field = crate::value_layout::ScalarKind::Opaque.size_in_bytes(
+            word_bytes,
+            float_bytes,
+            addr_bytes,
+        );
         let mut buf = [0u8; 8];
-        buf[..word_bytes].copy_from_slice(flat_subslice(bytes, 0, word_bytes)?);
+        if field > buf.len() {
+            return Err(VmError::TypeError(alloc::string::String::from(
+                "flat opaque field wider than eight bytes",
+            )));
+        }
+        buf[..field].copy_from_slice(flat_subslice(bytes, 0, field)?);
         let index = u64::from_le_bytes(buf) as usize;
         ctx.opaques.get(index).map(Arc::clone).ok_or_else(|| {
             VmError::InvalidBytecode(alloc::string::String::from(

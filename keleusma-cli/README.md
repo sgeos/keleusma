@@ -22,6 +22,30 @@ keleusma --help
 
 ## Usage
 
+### Validate compiled bytecode
+
+```sh
+keleusma validate hello.kel.bin
+keleusma validate hello.kel.bin --validator self-hosted --arena-capacity 65536
+```
+
+The default validator is Rust. The self-hosted selection runs structural, typed
+and resource admission through Keleusma stages, then compares the result with the
+Rust reference. A disagreement cannot produce successful admission. This first-pass
+validator has bounded analysis storage and widens type shapes across control-flow
+joins. A capacity error or disagreement requires investigation or explicit use of
+the Rust validator.
+
+Exit code zero means acceptance, one means rejected or undecodable bytecode, and
+two means unavailable analysis, disagreement, an input/output failure or incorrect
+arguments. The arena capacity is a byte count and defaults to the runtime default.
+Native resource attestations are empty, matching the reference resource admission
+entry point. Hosts that supply native cost bounds should use the library interface.
+
+Validation executes no instructions from the subject module and does not
+authenticate signatures. The command does not replace the runner's signature,
+encryption or deployment policies.
+
 ### Run a script
 
 ```sh
@@ -319,3 +343,25 @@ The convention is `.kel` for source files and `.kel.bin` for compiled bytecode. 
 ## License
 
 0BSD. Same as Keleusma.
+
+
+## Trap policy and proven execution
+
+`keleusma run file.kel --require-trap-free` requires a completed first-pass
+trap-free classification before execution. Trapping programs and unsupported
+analysis are refused. The same option applies to serialized bytecode.
+
+`keleusma run file.kbc --proven-execution` also proves operand availability and
+removes the corresponding runtime stack checks. It implies strict trap policy.
+Type, lifetime, storage and allocation guards remain active. This option cannot
+be combined with `--print-memory`.
+
+`keleusma validate file.kbc --require-trap-free --validator self-hosted` performs
+the Keleusma classification with the reference consistency check. Use `rust` for
+the reference backend. Exit status one reports a rejected or possibly-trapping
+subject. Exit status two reports unavailable analysis or a backend disagreement.
+A trap-free verdict is distinct from the stronger execution certificate.
+
+The [execution contract](../docs/decisions/ORDER3_PROVEN_EXECUTION.md) records the
+proof, removed checks and lifecycle requirements. Native-call and other unsupported
+first-pass contracts remain unavailable to strict admission.

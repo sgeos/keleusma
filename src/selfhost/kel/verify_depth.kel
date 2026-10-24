@@ -27,11 +27,11 @@ require word >= 32;
 // target lookups (the reference's clamps).
 shared data dv {
     op_count: Word,
-    class: [Word; 1536],
-    arg: [Word; 1536],
-    dreq: [Word; 1536],
-    dnet: [Word; 1536],
-    is_term: [Word; 1536],
+    class: [Word; 2048],
+    arg: [Word; 2048],
+    dreq: [Word; 2048],
+    dnet: [Word; 2048],
+    is_term: [Word; 2048],
     out_reject: Word,
     // WHY THE VERDICT IS NOT ENOUGH ON ITS OWN.
     //
@@ -194,7 +194,8 @@ fn check_underflow(i: Word, ip: Word) -> Word {
 fn scan_op(i: Word) -> Word {
     let ip = df.f_ip[i];
     if dv.is_term[ip] == 1 {
-        // Trap/Return: end this path, no fall-through.
+        // Terminal instructions can consume diagnostic payloads.
+        check_underflow(i, ip);
         df.f_fell[i] = 0;
         df.f_ip[i] = df.f_end[i];
     } else {
@@ -350,9 +351,10 @@ fn run() -> Word {
     // because it was not analysed, not because a defect was proven; the verdict is
     // the same and the CAUSE is not, and only the cause tells a caller whether
     // raising the cap would change the answer.
-    if df.over == 1 {
+    if df.sp > 0 andalso df.over == 0 { df.over = 2; }
+    if df.over > 0 {
         dv.out_reject = 1;
-        dv.out_cause = 1;
+        dv.out_cause = df.over;
     } else {
         dv.out_cause = 0;
         if df.bad == 1 {

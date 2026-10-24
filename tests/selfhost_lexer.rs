@@ -203,6 +203,14 @@ fn self_hosted_lexer_increment_3_keyword_classification() {
     );
 }
 
+#[test]
+fn guard_keyword_is_distinct_from_arrow_and_identifier() {
+    assert_eq!(
+        lex_tokens(b"when -> whenx"),
+        vec![(64, 0), (4, 0), (1, 0), (62, 0)]
+    );
+}
+
 // A keyword's proper prefix, superstring, or same-length near-miss is an ordinary
 // identifier, not a keyword: the match is exact over the whole run, not a prefix
 // test. `i` (prefix of `if`/`in`), `fnn` (superstring of `fn`), and `ix`

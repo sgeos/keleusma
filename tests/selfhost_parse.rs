@@ -35,6 +35,10 @@
     clippy::identity_op
 )]
 
+#[path = "common/data_read_kinds.rs"]
+mod data_read_kinds;
+use data_read_kinds::data_read_kinds;
+
 use keleusma::Arena;
 use keleusma::ast::{
     BinOp, Block, Expr, FunctionCategory, Iterable, Literal, Pattern, PrimType, Stmt, TypeDef,
@@ -131,6 +135,7 @@ fn adapt_tokens(src: &str, names: &mut Vec<String>) -> (Vec<i64>, Vec<i64>) {
             TokenKind::DotDot => (47, 0),
             TokenKind::Match => (48, 0),
             TokenKind::FatArrow => (49, 0),
+            TokenKind::When => (64, 0),
             TokenKind::Underscore => (50, 0),
             TokenKind::ColonColon => (51, 0),
             TokenKind::As => (52, 0),
@@ -362,7 +367,13 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     // for it and must not let it into a sequence pinned against the
                     // reference. The tag comes from the driver so there is one source
                     // of truth for the number.
-                    c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG => {}
+                    c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG
+                        || c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                        || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
+                        || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
+                        || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
+                        || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
+                        || matches!(c, 94..=96 | 99..=105) => {}
                     _ => cur
                         .as_mut()
                         .expect("body node before START")
@@ -374,7 +385,13 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     0 => {}                 // PENDING
                     15 => in_guard = false, // the guard's Done ends guard mode
                     35 => {}                // FieldPos: reorder marker, skipped (see above)
-                    c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG => {}
+                    c if c == keleusma::selfhost_host::PARSE_LET_NAME_TAG
+                        || c == keleusma::selfhost_host::PARSE_STRUCT_FIELDS_TAG
+                        || c == keleusma::selfhost_host::PARSE_LET_TYPE_TAG
+                        || c == keleusma::selfhost_host::PARSE_ENUM_VARIANT_TAG
+                        || c == keleusma::selfhost_host::PARSE_ENUM_PAYLOAD_BIND_TAG
+                        || c == keleusma::selfhost_host::PARSE_STRUCT_PROJECTION_TAG
+                        || matches!(c, 94..=96 | 99..=105) => {}
                     _ => cur
                         .as_mut()
                         .expect("guard node before START")
@@ -495,6 +512,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                         assert!(cur.is_none(), "DONE mid-declaration");
                         return std::ops::ControlFlow::Break(());
                     }
+                    103 | 105 | 106 | 110 => {} // Source grouping and layout metadata have separate controls.
                     other => panic!("unexpected declaration kind {other}"),
                 }
             }
@@ -639,7 +657,7 @@ fn flatten(
                 ),
                 None => out.push((20, 0)), // synthesized empty else: a Unit
             }
-            out.push((4, 0));
+            out.push((4, i64::from(else_block.is_none())));
         }
         Expr::Yield { value, .. } => {
             // `yield e` is a unary YieldExpr (kind 24) over its operand.
@@ -701,9 +719,9 @@ fn flatten(
         Expr::Match {
             scrutinee, arms, ..
         } => {
-            // Postorder: the scrutinee, then per integer-literal arm a Literal node and its
-            // result, then the trailing wildcard's result, then a MatchBuild (kind 34)
-            // packing the scrutinee temp slot and the literal-arm count as
+            // Postorder: scrutinee, then pattern, optional guard and result per arm.
+            // A guard/result pair ends with record 71; wildcard patterns use record 72.
+            // MatchBuild packs the scrutinee temp slot and total arm count as
             // `temp * 1024 + count`. The temp slot is reserved right after the scrutinee.
             flatten(
                 scrutinee,
@@ -717,66 +735,47 @@ fn flatten(
             );
             let temp = *next_slot;
             *next_slot += 1;
-            let mut lit_count = 0i64;
             for arm in arms {
-                assert!(
-                    arm.guard.is_none(),
-                    "increment 5 handles unguarded arms only"
-                );
                 match &arm.pattern {
-                    Pattern::Literal(Literal::Int(v), _) => {
-                        out.push((1, *v));
-                        flatten(
-                            &arm.expr,
-                            scope,
-                            next_slot,
-                            forlim,
-                            data_slots,
-                            chunk_names,
-                            enum_table,
-                            out,
-                        );
-                        lit_count += 1;
-                    }
+                    Pattern::Literal(Literal::Int(v), _) => out.push((1, *v)),
                     Pattern::Enum(enum_name, variant, sub_pats, _) if sub_pats.is_empty() => {
-                        // A unit enum-variant pattern folds to the variant's discriminant
-                        // literal, the same arm an integer literal forms.
                         let disc = enum_table
                             .iter()
                             .find(|(e, v, _)| e == enum_name && v == variant)
-                            .map(|(_, _, d)| *d)
-                            .unwrap_or_else(|| {
-                                panic!("no discriminant for {enum_name}::{variant}")
-                            });
+                            .expect("enum variant")
+                            .2;
                         out.push((1, disc));
-                        flatten(
-                            &arm.expr,
-                            scope,
-                            next_slot,
-                            forlim,
-                            data_slots,
-                            chunk_names,
-                            enum_table,
-                            out,
-                        );
-                        lit_count += 1;
                     }
-                    Pattern::Wildcard(_) => {
-                        flatten(
-                            &arm.expr,
-                            scope,
-                            next_slot,
-                            forlim,
-                            data_slots,
-                            chunk_names,
-                            enum_table,
-                            out,
-                        );
-                    }
-                    other => panic!("increment 5 handles integer and wildcard arms, got {other:?}"),
+                    Pattern::Wildcard(_) => out.push((72, 0)),
+                    other => panic!("unsupported match pattern {other:?}"),
+                }
+                if let Some(guard) = &arm.guard {
+                    flatten(
+                        guard,
+                        scope,
+                        next_slot,
+                        forlim,
+                        data_slots,
+                        chunk_names,
+                        enum_table,
+                        out,
+                    );
+                }
+                flatten(
+                    &arm.expr,
+                    scope,
+                    next_slot,
+                    forlim,
+                    data_slots,
+                    chunk_names,
+                    enum_table,
+                    out,
+                );
+                if arm.guard.is_some() {
+                    out.push((71, 0));
                 }
             }
-            out.push((34, temp * 1024 + lit_count));
+            out.push((34, temp * 1024 + arms.len() as i64));
         }
         Expr::Call { name, args, .. } => {
             // A call flattens its arguments left to right, then a Call (kind 7) packing the
@@ -935,8 +934,10 @@ fn flatten_block(
                 value,
                 ..
             } => {
-                // `d.f[i] = e` — the index, the value, an IndexStore signal (kind 36), then
-                // an IndexAssignIn (kind 14, arg = base + len*2^24) folded around the block.
+                // `d.f[i] = e` — the index, the value, an IndexStore signal (kind 36) carrying
+                // the offset slot claimed at `=`, then an IndexAssignIn (kind 14, arg = base +
+                // len*2^24, plus the kind lane added below) folded around the block. The slot
+                // follows the index's own locals, as the index-first write of 2026-10-21 needs.
                 assert_eq!(indices.len(), 1, "single-dimension array assignment only");
                 flatten(
                     &indices[0],
@@ -948,6 +949,8 @@ fn flatten_block(
                     enum_table,
                     out,
                 );
+                let offset_slot = *next_slot;
+                *next_slot += 1;
                 flatten(
                     value,
                     &local,
@@ -959,7 +962,7 @@ fn flatten_block(
                     out,
                 );
                 let (base, len) = array_base_len(data_slots, data_name, field);
-                out.push((36, 0));
+                out.push((36, offset_slot));
                 stmt_nodes.push((14, base + len * 16_777_216));
             }
             Stmt::For(fs) if fs.limit.is_some() => {
@@ -1068,6 +1071,7 @@ fn reference(src: &str, names: &[String]) -> Parsed {
     };
     let program = parse(&tokenize(src).expect("lex")).expect("parse");
     let data_slots = data_slot_names(&program);
+    let data_kinds = data_read_kinds(&program);
     let chunk_names: Vec<String> = program.functions.iter().map(|f| f.name.clone()).collect();
     let enum_table = enum_table(&program);
     let mut funcs = Vec::new();
@@ -1123,6 +1127,13 @@ fn reference(src: &str, names: &[String]) -> Parsed {
             &enum_table,
             &mut body,
         );
+        // Add the kind lane from declarations after flattening the legacy address records.
+        for (kind, arg) in body.iter_mut().chain(guard.iter_mut()) {
+            if *kind == 13 || *kind == 14 {
+                let base = usize::try_from(*arg % 16_777_216).unwrap();
+                *arg += data_kinds[&data_slots[base]] * 281_474_976_710_656;
+            }
+        }
         funcs.push((cat, id(&f.name), params, body, guard));
     }
     // Struct declarations, in source order, each as (name, fields) where a field is
@@ -1336,7 +1347,7 @@ fn an_if_without_else_synthesizes_a_unit() {
     // cond; a [then]; Unit [synth else]; If.
     assert_eq!(
         got.funcs[0].3,
-        vec![(2, 0), (1, 0), (3, 9), (2, 0), (20, 0), (4, 0)]
+        vec![(2, 0), (1, 0), (3, 9), (2, 0), (20, 0), (4, 1)]
     );
 }
 
@@ -1433,14 +1444,14 @@ fn the_loop_variable_is_in_scope() {
 }
 
 // A `match` over integer-literal arms with a trailing wildcard is a MatchBuild signal
-// packing the scrutinee temp slot and the literal-arm count.
+// packing the scrutinee temp slot and total arm count.
 #[test]
 fn a_match_expression_parses() {
     let src = "fn f(n: Word) -> Word { match n { 1 => n, 2 => n, _ => n } }";
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
-    // scrut n(0); Lit 1, n(0); Lit 2, n(0); wildcard n(0); MatchBuild(temp 1 * 1024 + 2).
+    // scrut n(0); Lit 1, n(0); Lit 2, n(0); wildcard marker, n(0); MatchBuild(temp 1 * 1024 + 3).
     assert_eq!(
         got.funcs[0].3,
         vec![
@@ -1449,8 +1460,9 @@ fn a_match_expression_parses() {
             (2, 0),
             (1, 2),
             (2, 0),
+            (72, 0),
             (2, 0),
-            (34, 1 * 1024 + 2)
+            (34, 1 * 1024 + 3)
         ]
     );
 }
@@ -1478,8 +1490,9 @@ fn a_block_form_match_statement_is_an_expr_stmt() {
             (2, 0),
             (1, 1),
             (2, 0),
+            (72, 0),
             (2, 0),
-            (34, 1 * 1024 + 1),
+            (34, 1 * 1024 + 2),
             (2, 0),
             (21, 0)
         ]
@@ -1573,12 +1586,17 @@ fn shared_and_private_blocks_share_the_slot_space() {
 // An indexed `data.field[i]` read is an IndexRead over the index, arg packing base + len.
 #[test]
 fn an_indexed_data_read_parses() {
-    let src = "shared data d { xs: [Word; 4] } fn f(i: Word) -> Word { d.xs[i] }";
-    let mut names = Vec::new();
-    let got = run_parse(src, &mut names);
-    assert_eq!(got, reference(src, &names));
-    // index i (slot 0), IndexRead(base 0 + len 4 * 2^24).
-    assert_eq!(got.funcs[0].3, vec![(2, 0), (13, 4 * 16_777_216)]);
+    for (ty, scalar) in [("Word", 3), ("Byte", 2), ("bool", 0)] {
+        let src = format!("shared data d {{ xs: [{ty}; 4] }} fn f(i: Word) -> {ty} {{ d.xs[i] }}");
+        let mut names = Vec::new();
+        let got = run_parse(&src, &mut names);
+        assert_eq!(got, reference(&src, &names));
+        // Independent protocol expectation for each fallback kind.
+        assert_eq!(
+            got.funcs[0].3,
+            vec![(2, 0), (13, 4 * 16_777_216 + scalar * 281_474_976_710_656)]
+        );
+    }
 }
 
 // An indexed `data.field[i] = e` assignment: index, value, IndexStore signal, then the
@@ -1589,10 +1607,18 @@ fn an_indexed_data_assignment_parses() {
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
-    // index i(0), value x(1), IndexStore(36); tail 0; IndexAssignIn(base 0 + len 4*2^24).
+    // index i(0), value x(1), IndexStore(36) carrying the offset slot 2, the first after
+    // the two parameters; tail 0; IndexAssignIn(base 0 + len 4*2^24 + Word kind 3*2^48).
+    // The slot and the kind arrived with the index-first write of 2026-10-21.
     assert_eq!(
         got.funcs[0].3,
-        vec![(2, 0), (2, 1), (36, 0), (1, 0), (14, 4 * 16_777_216)]
+        vec![
+            (2, 0),
+            (2, 1),
+            (36, 2),
+            (1, 0),
+            (14, 4 * 16_777_216 + 3 * 281_474_976_710_656)
+        ]
     );
 }
 
@@ -1701,7 +1727,7 @@ fn an_enum_match_pattern_folds_to_a_discriminant() {
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
-    // scrut k(0); Tok::Ident disc 0, k(0); Lit 5, k(0); wildcard k(0); MatchBuild(temp*1024+2).
+    // scrut k(0); Tok::Ident disc 0, k(0); Lit 5, k(0); wildcard marker, k(0); MatchBuild(temp*1024+3).
     assert_eq!(
         got.funcs[0].3,
         vec![
@@ -1710,8 +1736,9 @@ fn an_enum_match_pattern_folds_to_a_discriminant() {
             (2, 0),
             (1, 5),
             (2, 0),
+            (72, 0),
             (2, 0),
-            (34, 1024 + 2)
+            (34, 1024 + 3)
         ]
     );
 }
@@ -1867,6 +1894,57 @@ fn a_stage_shaped_dispatch_function_parses() {
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
+}
+
+// **THE BARE UNIT-VARIANT PATTERN MUST MEAN THE SAME THING AS THE PARENTHESISED ONE.**
+//
+// `docs/spec/GRAMMAR.md` lists `Command::Silence` — no parentheses — as the enum unit variant
+// pattern. Until 2026-09-12 `parse.kel` waited for a `(` that never came: the phase never
+// advanced, tokens kept arriving with no progress, and the parse ran to its step budget without
+// reaching DONE. It did not refuse; it span.
+//
+// **That it now PARSES is not evidence it parses CORRECTLY.** A census that only checks the
+// pipeline does not panic would pass on a fix that emitted the wrong records. The two spellings
+// denote the same pattern, so their record streams must be identical — and comparing them is a
+// stronger check than any assertion about what the records should contain, because it needs no
+// model of the encoding.
+//
+// The mixed case is the one most likely to break: it exercises the bare branch's hand-off to the
+// arm result against the parenthesised branch's, in one match.
+#[test]
+fn a_bare_unit_variant_pattern_parses_as_the_parenthesised_one() {
+    let bare = "enum E { A, B } \
+        fn f(e: E) -> Word { match e { E::A => 1, E::B => 2 } }";
+    let paren = "enum E { A, B } \
+        fn f(e: E) -> Word { match e { E::A() => 1, E::B() => 2 } }";
+
+    let mut n1 = Vec::new();
+    let mut n2 = Vec::new();
+    let got_bare = run_parse(bare, &mut n1);
+    let got_paren = run_parse(paren, &mut n2);
+    assert_eq!(
+        got_bare, got_paren,
+        "the bare and parenthesised unit-variant patterns produced different record streams, so \
+         the bare form parses but does not mean the same thing"
+    );
+
+    // MIXED IN ONE MATCH, which is what exercises each branch's hand-off to the arm result
+    // against the other's.
+    let mixed = "enum E { A, B } \
+        fn f(e: E) -> Word { match e { E::A => 1, E::B() => 2 } }";
+    let mut n3 = Vec::new();
+    let got_mixed = run_parse(mixed, &mut n3);
+    assert_eq!(
+        got_mixed, got_paren,
+        "mixing the two spellings in one match changed the record stream, so the bare branch's \
+         hand-off differs from the parenthesised branch's"
+    );
+
+    // NON-VACUITY: the stream must not be empty, or the comparisons above hold trivially.
+    assert!(
+        !got_bare.funcs.is_empty(),
+        "the parse produced no functions, so comparing two results establishes nothing"
+    );
 }
 
 // A real stage function (parse.kel's own emit_op): a match over enum-variant patterns
@@ -2603,7 +2681,7 @@ fn src_parens(n: usize) -> String {
 
 #[cfg(feature = "self-host")]
 fn src_stmts(n: usize) -> String {
-    let mut s = String::from("data d { a: Word = 0 }\nfn f() -> Word {\n");
+    let mut s = String::from("data d { a: Word }\nfn f() -> Word {\n");
     for i in 0..n {
         s.push_str(&format!("    d.a = {i};\n"));
     }
@@ -2767,6 +2845,31 @@ fn too_many_local_bindings_is_named_and_the_boundary_holds() {
             && msg.contains(&cap.to_string()),
         "the refusal was {msg:?}, which does not name both the count reached and the cap. \
          It used to be `IndexOutOfBounds(64, 64)`."
+    );
+}
+
+/// Releasing lexical names at branch exit must not reset the per-function cap.
+#[cfg(feature = "self-host")]
+#[test]
+fn local_binding_cap_counts_disjoint_branch_scopes() {
+    let source = |count| {
+        let mut text = String::from("fn main() -> Word { ");
+        for i in 0..count {
+            text.push_str(&format!(
+                "if true {{ let x{i}: Word = {i}; x{i} }} else {{ 0 }}; "
+            ));
+        }
+        text.push_str("0 }");
+        text
+    };
+    let cap = keleusma::selfhost_host::PARSE_LOCALS_CAP;
+    assert!(refusal(&source(cap)).is_none(), "exact binding cap");
+    let message = refusal(&source(cap + 1)).expect("total binding cap must still apply");
+    assert!(
+        message.contains("local bindings")
+            && message.contains(&(cap + 1).to_string())
+            && message.contains(&cap.to_string()),
+        "unexpected refusal {message}"
     );
 }
 
@@ -2970,19 +3073,39 @@ fn no_other_file_restates_the_shared_layout() {
 ///
 /// # What still does NOT work, stated so the 486 is not over-read
 ///
-/// `wire.kel` parses; it does not yet self-compile. `self_host_compile` reaches
-/// a capacity limit further down the pipeline. **That is a different failure
-/// from the one this file tracked** — a bound rather than a mis-parse — and it
-/// is the next thing between `wire.kel` and the byte-identity corpus.
+/// The earlier capacity refusal is historical. `wire.kel` now self-compiles
+/// byte-identically in the separate code-generation corpus. This test checks
+/// declaration boundaries and the current chunk count only.
 #[cfg(feature = "self-host")]
 #[test]
 fn wire_kel_parses_correctly_now_that_the_bare_loop_form_is_supported() {
     const WIRE: &str = include_str!("../src/selfhost/kel/wire.kel");
     let parsed = keleusma::selfhost::try_parse_functions(WIRE)
         .expect("wire.kel must parse now that the bare `for` form is lowered");
+    // 561 after a metadata-only name preparation function and scan bound (+2),
+    // less a duplicate struct tag, an uncalled tag and a one-call wrapper (-3),
+    // removed to keep the stage inside the type stage's 640-row name channel.
+    // Previously 562 after separating the module-forest and raw-node capacities.
+    // Previously 561 after nine reader functions and inlining fourteen numeric helpers.
+    // Previously 566 after the auxiliary-directory begin and step functions.
+    // Previously 564 after six semantic opcode decoder functions.
+    // Previously 558 after a forest-input mode, four storage accessors and two forest handlers.
+    // Previously 551 after six initializer protocol functions.
+    // Previously 545 after two debug-span stream functions.
+    // Previously 543 after five template functions and ten literal helpers.
+    // Previously 528 after six native functions and six literal helpers.
+    // Previously 516 after six signature-stream functions and five literal helpers.
+    // Previously 505 after four opcode-stream functions and four literal helpers.
+    // The helpers recover the constant-node reserve without enlarging buffers.
+    // 497 since 2026-10-04. Five framing functions add begin, feed, finish,
+    // read-begin and read-finish to the previous 492 chunks.
+    // **492 SINCE 2026-09-11, UP FROM 486.** The name-aware slot, variant and enum-layout streams added six
+    // functions to `wire.kel`, and a function is a chunk. The same figure is pinned in
+    // `tests/selfhost_chunk_names.rs`, from the COMPILED module rather than the parsed source;
+    // both moved together, which is what a figure with two independent derivations should do.
     assert_eq!(
         parsed.functions.len(),
-        486,
+        561,
         "`wire.kel` parsed to {} chunks. The count is pinned because it is the corpus worst \
          case and the thing the chunk cap is sized against: PARSE_CHUNK_CAP is {}, so a \
          stage growing toward it is visible here rather than at the wall.",
@@ -3512,17 +3635,36 @@ fn both_feeds_cost_by_input_size() {
 #[cfg(feature = "self-host")]
 /// **EVERY STAGE SOURCE'S TOKEN COUNT, WHICH IS WHAT SIZES THE COLLECTING FEED.**
 ///
-/// An instrument. Measured 2026-08-20:
+/// An instrument. **The table below is a DATED SNAPSHOT and will drift**; the
+/// test prints live counts, and those are the figures to use. Nothing checks the
+/// snapshot, because this test is `#[ignore]`d.
+///
+/// Measured 2026-09-08:
 ///
 /// ```text
-///   lexer 2,785      parse 33,445     reconstruct 6,897   codegen 16,448
-///   analyze 3,964    wire 24,836      verify_structural 1,639
+///   lexer 3,163      parse 34,544     reconstruct 7,553   codegen 16,480
+///   analyze 3,964    wire 24,806      verify_structural 1,639
 ///   verify_depth 1,820   verify_yield 1,630   verify_typed 3,381
 ///   verify_types 2,065   verify_datalayout 388
 /// ```
 ///
-/// **`parse.kel` is 33,445 and the handoff recorded 32,907**, which had drifted.
-/// Derive the number here rather than quoting prose.
+/// # This comment drifted, which is the point it was written to make
+///
+/// The previous snapshot was taken 2026-08-20 and read `lexer 2,785 parse 33,445
+/// reconstruct 6,897 codegen 16,448 wire 24,836`. **Five of the twelve had moved
+/// by 2026-09-08** — parse by 1,099 tokens, reconstruct by 656, lexer by 378 —
+/// and nothing reported it, because an `#[ignore]`d test runs only when someone
+/// asks for it and nobody had.
+///
+/// The comment ended with *"derive the number here rather than quoting prose"*,
+/// having been written after the handoff quoted a stale 32,907. **It then became
+/// the stale prose it warned against.** A figure copied into a comment is a
+/// second copy of a fact the code already computes, and an ignored test is the
+/// one place where such a copy can rot indefinitely.
+///
+/// **This is why the snapshot is now labelled as one.** It is illustrative of
+/// magnitude, nothing asserts it, and a reader who needs a real number should run
+/// the test with `--ignored`.
 #[test]
 #[ignore = "instrument"]
 fn stage_source_token_counts() {
@@ -3571,4 +3713,183 @@ fn stage_source_token_counts() {
     ] {
         println!("{f} tokens={}", keleusma::selfhost::lex_token_count(src));
     }
+}
+
+/// Parser records retain whether the source supplied an else branch, including an empty one.
+/// The two accepted witnesses differ only in that presence bit.
+#[test]
+fn an_empty_else_is_distinguished_from_an_implicit_one() {
+    use keleusma::ast::{Expr, Stmt};
+    use keleusma::visitor::Visitor;
+
+    const IMPLICIT: &str = "private data d { q: Word }\n\
+                            fn f(c: bool) -> Word { if c { d.q = 1; } d.q }";
+    const EMPTY: &str = "private data d { q: Word }\n\
+                         fn f(c: bool) -> Word { if c { d.q = 1; } else { } d.q }";
+
+    // NON-VACUITY: an empty else must actually be a legal program, or the whole
+    // comparison is about a shape no source can contain.
+    for (label, src) in [("implicit", IMPLICIT), ("empty else", EMPTY)] {
+        let ast =
+            keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            keleusma::compiler::compile(&ast).is_ok(),
+            "the reference no longer compiles the {label} form, so this witness is about a \
+             shape that is not a program"
+        );
+    }
+
+    // The reference's own criterion, read from its syntax tree rather than assumed.
+    fn reference_pairs(src: &str) -> usize {
+        let ast =
+            keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex")).expect("parse");
+        struct V {
+            n: usize,
+        }
+        impl Visitor for V {
+            fn visit_expr(&mut self, e: &Expr) {
+                if let Expr::If { else_block, .. } = e
+                    && else_block.is_some()
+                {
+                    self.n += 1;
+                }
+                self.walk_expr(e);
+            }
+            fn visit_stmt(&mut self, s: &Stmt) {
+                self.walk_stmt(s);
+            }
+        }
+        let mut v = V { n: 0 };
+        for f in &ast.functions {
+            v.visit_block(&f.body);
+        }
+        v.n
+    }
+
+    // CONTROL: the reference really does separate the two shapes. Without this the claim
+    // below would be about a difference that does not exist.
+    assert_eq!(
+        reference_pairs(IMPLICIT),
+        0,
+        "the reference now pairs an implicit else arm"
+    );
+    assert_eq!(
+        reference_pairs(EMPTY),
+        1,
+        "the reference no longer pairs a written empty else, so the two shapes agree and \
+         the impossibility claimed here would not follow"
+    );
+
+    let mut n1 = Vec::new();
+    let mut n2 = Vec::new();
+    let implicit = run_parse(IMPLICIT, &mut n1);
+    let empty = run_parse(EMPTY, &mut n2);
+    assert_ne!(implicit, empty, "else presence must survive parsing");
+    let implicit_if: Vec<_> = implicit
+        .funcs
+        .iter()
+        .flat_map(|f| &f.3)
+        .filter(|(k, _)| *k == 4)
+        .copied()
+        .collect();
+    let empty_if: Vec<_> = empty
+        .funcs
+        .iter()
+        .flat_map(|f| &f.3)
+        .filter(|(k, _)| *k == 4)
+        .copied()
+        .collect();
+    assert_eq!(implicit_if, vec![(4, 1)]);
+    assert_eq!(empty_if, vec![(4, 0)]);
+
+    // NON-VACUITY: the streams must not be empty, or the comparison holds trivially.
+    assert!(
+        !implicit.funcs.is_empty(),
+        "the parse stage produced no functions, so the equality above is vacuous"
+    );
+}
+
+/// **THE EXPRESSION SIDE OF THE BARE-VERSUS-PARENTHESISED ASYMMETRY IS STILL OPEN.**
+///
+/// `a_bare_unit_variant_pattern_parses_as_the_parenthesised_one` above pins the PATTERN
+/// side, which was a missing branch and is fixed. The EXPRESSION side has the same shape
+/// and is not.
+///
+/// Measured 2026-09-12: `E::N()` compiles through the self-hosted backend and bare `E::N`
+/// does not, while the reference accepts both. Tested as a return value, in a `let`, and as
+/// a call argument, with the same outcome each time.
+///
+/// # Why the refusal does not name the construct
+///
+/// The driver's construct scan names what a user wrote, and it cannot name this one. The
+/// syntax tree records `E::N` and `E::N()` identically, as `EnumVariant` with empty `args`,
+/// so an arm matching that shape flags the WORKING form too. Such an arm was written and
+/// `the_scan_names_no_construct_in_any_stage_source` rejected it, naming `Node::Local()` in
+/// `parse.kel`. Until the two spellings are distinguishable, a user meets the stage's own
+/// diagnostic for this gap.
+///
+/// # Where the fix would go, located but NOT made
+///
+/// `step_enum` in `parse.kel` drives the expression side in phases: phase 1 awaits `::`,
+/// phase 2 resolves the variant's discriminant from the enum table, **phase 3 awaits `(`**,
+/// phase 4 takes `)` or a payload, and phases 5 and 6 take `as` and the target type.
+///
+/// **Phase 3 requires the open parenthesis.** On bare `E::N` the next token is not `(`, so
+/// phase 3 does nothing and the construction never completes — which is precisely the
+/// "0 remained on the work stack" the refusal reports.
+///
+/// The shape is an alternative phase-3 branch that completes the variant as a unit
+/// construction and re-dispatches the token, directly analogous to the PATTERN-side fix made
+/// earlier in this session in `step_mpat` — the function immediately below `step_enum` —
+/// which completed a bare unit-variant pattern on `=>`.
+///
+/// **The size is NOT established and is not claimed.** The pattern-side fix was one branch,
+/// but the expression path additionally carries the `as` phases and the payload
+/// re-dispatch, so an early completion has to interact with both. An unverified cost
+/// estimate went into a merged pull request body earlier in this session and was retracted
+/// twice; this one is stated as a shape only.
+///
+/// # Why this is pinned rather than fixed
+///
+/// The fix is in `parse.kel`, which bears on the operator's capacity decision for the input
+/// path, exactly as the four other known gaps do.
+/// **GATED ON `self-host`, WHICH THE FILE AS A WHOLE IS NOT.** This test calls the driver
+/// in `keleusma::selfhost`, a module that does not exist without the feature. The first
+/// version omitted the attribute and turned three continuous-integration jobs red: the
+/// signatures suite, the broad-features suite, and the minimum-supported-Rust check, which
+/// runs `cargo check --tests` under default features. One cause, three jobs, and the same
+/// shape the tree already records for a test file that drove the stage without declaring
+/// the feature it needs.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_bare_unit_variant_expression_is_refused_where_the_parenthesised_one_compiles() {
+    const BARE: &str = "enum E { M, N }\nfn main() -> Word { E::N as Word }";
+    const PAREN: &str = "enum E { M, N }\nfn main() -> Word { E::N() as Word }";
+
+    // CONTROL: the reference accepts BOTH, so a refusal below is the subset declining a
+    // valid program rather than the program being wrong.
+    for (label, src) in [("bare", BARE), ("parenthesised", PAREN)] {
+        let ast =
+            keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex")).expect("parse");
+        assert!(
+            keleusma::compiler::compile(&ast).is_ok(),
+            "the reference rejects the {label} form, so this comparison is not about a \
+             self-hosted gap"
+        );
+    }
+
+    let target = keleusma::target::Target::host();
+
+    assert!(
+        keleusma::selfhost::self_hosted_compile(PAREN, &target).is_ok(),
+        "the parenthesised unit-variant expression no longer compiles. The asymmetry this \
+         test names is bare-versus-parenthesised; if BOTH now fail, the gap widened and the \
+         description above is stale"
+    );
+    assert!(
+        keleusma::selfhost::self_hosted_compile(BARE, &target).is_err(),
+        "the bare unit-variant expression now compiles. If `parse.kel` gained the branch, \
+         this is a FIX: remove this test and drop the gap from the known list rather than \
+         relaxing the assertion"
+    );
 }

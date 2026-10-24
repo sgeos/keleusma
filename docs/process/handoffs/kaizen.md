@@ -56,8 +56,12 @@ including the interline protocol, the pilot tooling and their documents.
 A trial merge conflicts only in `docs/process/TASKLOG.md` and in the
 add/add `docs/process/interline/checkpoint.json`. Request
 `kaizen-20261024-merge-kaizen-branch` asks V0.2.X to prioritize the merge
-and to say whether Kaizen or V0.2.X should open the PR. No reply had
-arrived at export.
+and to say whether Kaizen or V0.2.X should open the PR. V0.2.X accepted
+in `v023-20261024-merge-kaizen-branch-reply`, citing a first-hand operator
+ruling that Kaizen prepares the merge. V0.3.X replied that it will absorb
+the branch from `v0.2.3`, not directly. Kaizen merged `origin/v0.2.3` at
+`be81c214` into this branch, kept both sides of the task log, regenerated
+the interline checkpoint from the live store and opened the merge PR.
 
 ### Environment notes
 
@@ -86,7 +90,7 @@ and is not exhaustive secret detection.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `e89a167d3edb4e9433752df155f6b803978147851075699e10ea41d46a17cc16` |
+| [Interline](../interline/checkpoint.json) | `ab3604af5f7b09d7bc7f5e025766589b92edf7a1281db9198266ca1abedac545` |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `16d65875954a7f7f33416135dd8f475dcb7a982c020adafbbd337aff12ae4bf6` |
 
 The pilot checkpoint holds 250 samples and 66 tasks.

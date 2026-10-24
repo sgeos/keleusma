@@ -1,4 +1,4 @@
-//! **`wire.kel` SELF-COMPILES BYTE-IDENTICALLY.** The largest stage in the corpus, at 486
+//! **`wire.kel` SELF-COMPILES BYTE-IDENTICALLY.** The largest stage in the corpus, at 561
 //! chunks, and the last one that was outside the byte-identity oracle.
 //!
 //! # This file used to say the opposite, and that is the point of keeping it
@@ -73,15 +73,41 @@ fn several_functions_may_each_contain_a_bare_for() {
 ///
 /// **A behavioural guard alone would keep passing if the reset were restored some other way**,
 /// leaving the explanation above quietly false. This ties the pin to the repair it describes.
+///
+/// # IT SEARCHED PROSE AS WELL AS CODE, AND A COMMENT SATISFIED IT
+///
+/// These are PRESENCE assertions, so a comment carrying the same text passes them while the real
+/// reset is gone. Measured, by isolating this test: with `forst.forin_count = 0;` deleted and the
+/// identical text left in a comment, **this test reported `ok`.**
+///
+/// **The file was not fooled — a sibling BEHAVIOURAL test failed** on the same tree, because
+/// deleting the reset really does break the stage. But that backstop is INCIDENTAL: narrow the
+/// behavioural test, or change the stage so the deletion no longer breaks byte identity, and this
+/// assertion becomes the only defence and does not hold. A guard that advertises itself as pinning
+/// the historical repair should not depend on a different test to be right.
+///
+/// The strip truncates at the first `//` rather than tracking string literals, and that is correct
+/// HERE for a reason worth stating: these are presence assertions, so an early truncation can only
+/// hide a real occurrence and **fail loudly**. `tests/call_chunk_index_limit.rs` needs a
+/// string-aware strip because its assertion is an ABSENCE one, where the same truncation lets a
+/// real offender pass silently. Same helper shape, opposite risk; they are deliberately not shared.
 #[test]
 fn the_bare_for_counter_is_reset_beside_its_analogue() {
     const STAGE: &str = include_str!("../src/selfhost/kel/parse.kel");
+    let code: String = STAGE
+        .lines()
+        .map(|l| match l.find("//") {
+            Some(i) => &l[..i],
+            None => l,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     assert!(
-        STAGE.contains("forst.forlimit_count = 0;"),
+        code.contains("forst.forlimit_count = 0;"),
         "the `limit` form's counter is no longer reset per function"
     );
     assert!(
-        STAGE.contains("forst.forin_count = 0;"),
+        code.contains("forst.forin_count = 0;"),
         "the bare form's counter is no longer reset per function. It is the analogue of \
          `forlimit_count` and was missing from this reset for exactly that reason once"
     );
@@ -94,9 +120,36 @@ fn the_bare_for_counter_is_reset_beside_its_analogue() {
 #[test]
 fn wire_kel_has_the_chunk_count_the_documents_quote() {
     let module = keleusma::selfhost::self_host_compile(WIRE);
+    // 561 after a metadata-only name preparation function and scan bound (+2),
+    // less a duplicate struct tag, an uncalled tag and a one-call wrapper (-3),
+    // removed to keep the stage inside the type stage's 640-row name channel.
+    // Previously 562 after separating the module-forest and raw-node capacities.
+    // Previously 561 after nine reader functions and inlining fourteen numeric helpers.
+    // Previously 566 after the auxiliary-directory begin and step functions.
+    // Previously 564 after six semantic opcode decoder functions.
+    // Previously 558 after a forest-input mode, four storage accessors and two forest handlers.
+    // Previously 551 after six initializer protocol functions.
+    // Previously 545 after two debug-span stream functions.
+    // Previously 543 after five template functions and ten literal helpers.
+    // Previously 528 after six native functions and six literal helpers.
+    // Previously 516 after six signature-stream functions and five literal helpers.
+    // Previously 505 after four opcode-stream functions and four literal helpers.
+    // The helpers recover the constant-node reserve without enlarging buffers.
+    // 497 since 2026-10-04. Five framing functions add begin, feed, finish,
+    // read-begin and read-finish to the previous 492 chunks.
+    // **492 SINCE 2026-09-11, UP FROM 486.** Three begin/step pairs -- the name-aware slot,
+    // variant and enum-layout streams -- added six functions, and a function is a chunk.
+    //
+    // **THIS IS THE THIRD INDEPENDENT DERIVATION OF ONE FIGURE**, after
+    // `tests/selfhost_chunk_names.rs` (also from the compiled module) and
+    // `tests/selfhost_parse.rs` (from the parsed source). An enumeration on 2026-09-11 found
+    // the first two and missed this one, and the local run that was supposed to confirm the
+    // enumeration stopped at the first failing binary. See the header of
+    // `tests/module_input_node_budget.rs` for the other figure `wire.kel`'s growth moves.
     assert_eq!(
         module.chunks.len(),
-        486,
-        "`wire.kel`'s chunk count moved; the figure quoted across the channels is stale"
+        561,
+        "`wire.kel`'s chunk count moved. THREE tests pin this figure; if only some of them \
+         fail, the derivations have parted rather than the stage having changed"
     );
 }

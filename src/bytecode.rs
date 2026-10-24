@@ -20,11 +20,15 @@ use crate::kstring::KString;
 /// A compile-time constant, the variant of [`Value`] that the compiler
 /// emits into the bytecode's constant pool.
 ///
-/// Strict subset of [`Value`]. Only variants that the rkyv archive can
-/// faithfully serialize and deserialize. The runtime-only variant
-/// [`Value::KStr`] is intentionally absent because it is produced
-/// exclusively by native functions and runtime string operations,
-/// never as a compile-time constant.
+/// Strict subset of [`Value`]: only variants the bytecode's constant pool can
+/// faithfully round-trip. The runtime-only variant [`Value::KStr`] is
+/// intentionally absent because it is produced exclusively by native functions
+/// and runtime string operations, never as a compile-time constant.
+///
+/// The subset was originally drawn around what the rkyv archive could serialize.
+/// Wire format v2 replaced that archive, so the constraint now comes from the
+/// schema layer rather than from rkyv; the SET is unchanged, and the reason for
+/// it is restated here because the old one no longer holds.
 ///
 /// The runtime executes against the archived form
 /// [`ArchivedConstValue`]. Each operand-stack push from a constant
@@ -615,6 +619,18 @@ pub(crate) fn flat_field_size<W: crate::word::Word, F: crate::float::Float>(
     float_bytes: usize,
     addr_bytes: usize,
 ) -> Option<usize> {
+    // The internal registry-index form of an opaque contributes the width the
+    // LAYOUT gives `ScalarKind::Opaque`, which is the address width, not a
+    // word. The compiler bakes every field offset from that same layout, so
+    // taking the width from it here is what keeps construction and access in
+    // agreement on a target whose word and address widths are selected apart.
+    if matches!(v, GenericValue::OpaqueRef(_)) {
+        return Some(crate::value_layout::ScalarKind::Opaque.size_in_bytes(
+            word_bytes,
+            float_bytes,
+            addr_bytes,
+        ));
+    }
     if let Some(kind) = flat_tuple_scalar_kind(v) {
         return Some(kind.size_in_bytes(word_bytes, float_bytes, addr_bytes));
     }
@@ -1421,7 +1437,27 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         crate::flat_value::FlatComposite::build_in_arena(arena, size, |dst| {
             let mut off = 0usize;
             for v in values {
-                if let Some(kind) = flat_tuple_scalar_kind(v) {
+                // An opaque field holds the ephemeral registry index, written
+                // at the width the layout gives `ScalarKind::Opaque` (the
+                // address width). An index too large for that field aborts the
+                // pack rather than truncating: the caller then boxes the
+                // composite, which is correct but slower, where a truncated
+                // index would silently name the wrong host object.
+                if let GenericValue::OpaqueRef(index) = v {
+                    let field = crate::value_layout::ScalarKind::Opaque.size_in_bytes(
+                        word_bytes,
+                        float_bytes,
+                        addr_bytes,
+                    );
+                    let le = u64::from(*index).to_le_bytes();
+                    if field > le.len() || le[field..].iter().any(|&b| b != 0) {
+                        return Err(());
+                    }
+                    dst.get_mut(off..off + field)
+                        .ok_or(())?
+                        .copy_from_slice(&le[..field]);
+                    off += field;
+                } else if let Some(kind) = flat_tuple_scalar_kind(v) {
                     let field = kind.size_in_bytes(word_bytes, float_bytes, addr_bytes);
                     v.write_scalar_le(dst, off, word_bytes, float_bytes)
                         .map_err(|_| ())?;
@@ -1938,6 +1974,9 @@ pub enum TrapKind {
     /// handled the overrun. Fail-loud by default, consistent with the
     /// other capture constructs whose unhandled defensive outcome traps.
     LoopLimitExceeded,
+    /// Explicit indexed-bounds failure. Pops the index and four Word byte limbs
+    /// encoding an unsigned 32-bit exclusive bound, lowest limb first on stack.
+    IndexOutOfBounds,
 }
 
 impl TrapKind {
@@ -1952,6 +1991,7 @@ impl TrapKind {
             TrapKind::ZeroDivisor => 5,
             TrapKind::AssertionFailed => 6,
             TrapKind::LoopLimitExceeded => 7,
+            TrapKind::IndexOutOfBounds => 8,
         }
     }
 
@@ -1968,6 +2008,7 @@ impl TrapKind {
             5 => Some(TrapKind::ZeroDivisor),
             6 => Some(TrapKind::AssertionFailed),
             7 => Some(TrapKind::LoopLimitExceeded),
+            8 => Some(TrapKind::IndexOutOfBounds),
             _ => None,
         }
     }
@@ -2124,6 +2165,18 @@ pub enum ArrayElem {
     Boxed,
 }
 
+impl ArrayElem {
+    /// Whether this operand uses the total first-pass scalar read contract.
+    pub const fn has_bounds_outcome(self) -> bool {
+        matches!(
+            self,
+            Self::Flat {
+                kind: crate::value_layout::ScalarKind::Int | crate::value_layout::ScalarKind::Byte
+            }
+        )
+    }
+}
+
 /// Baked operand of [`Op::NewComposite`] (B28 P4).
 ///
 /// One operand for all four composite kinds. The `Flat` form carries the
@@ -2220,31 +2273,24 @@ pub enum Op {
     /// twenty-four-bit wire operand (`u32` in memory), as for [`Op::GetData`].
     SetData(u32),
 
-    /// Indexed read from a data-segment array. The first immediate is
-    /// the array's base slot, the second is the array's total slot
-    /// count. The opcode pops a `Value::Int` index from the operand
-    /// stack, checks `0 <= index < total`, traps if the index is out
-    /// of range, and pushes `data[base + index]`. Used by the compiler
-    /// for `state.field[i]` reads when `state.field` is an array-typed
-    /// data field. Both immediates are twenty-four-bit wire operands (`u32` in
-    /// memory), so an array's base slot and length may each exceed 64 K.
+    /// Total indexed read. Pop a Word/Byte/Unit fallback and then a Word
+    /// index. Read the selected slot only in range, otherwise use fallback.
+    /// Push value, index, four Word bound limbs, and flag zero for a read or
+    /// one for fallback. Invalid spans and type/storage contract failures
+    /// remain errors. Base and length retain their u24 wire encoding.
     GetDataIndexed(u32, u32),
-    /// Indexed write to a data-segment array. The first immediate is
-    /// the array's base slot, the second is the array's total slot
-    /// count. The opcode pops the `Value::Int` index, then pops the
-    /// new value, checks `0 <= index < total`, traps if out of range,
-    /// and stores `data[base + index] = value`. Both immediates are
-    /// twenty-four-bit wire operands (`u32` in memory), as for
-    /// [`Op::GetDataIndexed`].
+    /// Total indexed write. Pop value and Word index, write only when the
+    /// index is in range, then push index, four Word byte limbs of the bound,
+    /// and flag zero for success or one for an invalid index. Invalid indices
+    /// and empty spans perform no write. Invalid data spans and storage/type
+    /// contract failures remain errors. Both operands use u24 wire encoding.
     SetDataIndexed(u32, u32),
-    /// Bounds check against the value on top of the operand stack
-    /// without modifying the stack. The immediate is the exclusive
-    /// upper bound. Traps when the top is not a `Value::Int`, when
-    /// the value is negative, or when the value is greater than or
-    /// equal to the bound. Used by the compiler to validate each
-    /// level of a multi-dimensional `state.field[i][j]...` access
-    /// before the per-level stride arithmetic computes the flat
-    /// offset.
+    /// Total bounds predicate. Preserve the Word index and append four Word
+    /// byte limbs of the unsigned bound, then flag zero for in-range or one
+    /// for out-of-range. The limbs are little-endian and sign-extended from
+    /// eight bits, preserving diagnostics on every supported Word width.
+    /// Empty stacks and non-Word indices remain contract failures. Bare
+    /// source lowering dispatches an invalid outcome to an explicit Trap.
     BoundsCheck(u16),
 
     /// Binary addition on `Byte`, `Fixed`, and `Float` operands.
@@ -2274,9 +2320,12 @@ pub enum Op {
     /// multiplication goes through [`Op::FixedMul`] rather than this opcode,
     /// so this one is narrower still than `Add` and `Sub`.
     Mul,
-    /// Binary division.
+    /// Total division with the same low, high and flag results as CheckedDiv(0).
+    /// A zero integer divisor returns the numerator, typed zero and Word flag 3.
     Div,
-    /// Binary modulo.
+    /// Total remainder with low, high and Word flag results. Integer and Fixed
+    /// operands use CheckedMod outcomes. Float operands retain their remainder
+    /// with a zero high result and floating-point classification flag.
     Mod,
     /// Unary negation on `Byte`, `Fixed`, and `Float` operands.
     ///
@@ -2360,6 +2409,9 @@ pub enum Op {
     /// Pop index (Int), pop array, push element. The baked
     /// [`ArrayElem`] operand selects a flat read at `index * size` or a
     /// positional index into the boxed body (B28 P2).
+    /// Flat Word and Byte forms push the value followed by the six-Word
+    /// bounds outcome suffix. Invalid indices yield zero of the same kind.
+    /// Other operand forms retain the single-result contract.
     GetIndex(ArrayElem),
     /// Pop tuple, push element. The baked [`TupleField`] operand
     /// selects a flat read at an offset or a positional index into the
@@ -2409,9 +2461,14 @@ pub enum Op {
     FixedMul(u8),
     /// Divide two `Fixed` operands sharing the given fraction-bit
     /// count. Pops two `Value::Fixed`, computes
-    /// `(a as i128 << frac_bits) / b as i128`, pushes
-    /// `Value::Fixed`. Saturates at `i64::MAX`/`MIN`. Returns
-    /// `VmError::DivisionByZero` for `b == 0`.
+    /// `(a as i128 << frac_bits) / b as i128`, and pushes the outcome
+    /// triple `(low, high, flag)` of a Fixed `Mod`. The low slot is the
+    /// quotient, saturated at the word's maximum or minimum, the high slot
+    /// is `Fixed(0)`, and the flag is `0`, saturated or not. A zero divisor
+    /// pushes the numerator, `Fixed(0)` and flag `3`, and does not fault.
+    /// Until 2026-10-22 it pushed one `Value::Fixed` and returned
+    /// `VmError::DivisionByZero` for `b == 0`, which the operator's
+    /// 2026-10-20 ruling that only `Trap` traps retired.
     FixedDiv(u8),
 
     /// Halt execution with a runtime error.
@@ -2779,6 +2836,10 @@ pub const NOMINAL_COST_MODEL: CostModel = CostModel {
 /// pipelined cycles during deployment validation.
 pub fn nominal_op_cycles(op: &Op) -> u32 {
     match op {
+        Op::Trap(kind) if *kind == TrapKind::IndexOutOfBounds.code() => 6,
+        Op::BoundsCheck(_) => 7,
+        Op::SetDataIndexed(_, _) | Op::GetDataIndexed(_, _) => 8,
+        Op::GetIndex(elem) if elem.has_bounds_outcome() => 8,
         Op::Const(_)
         | Op::GetLocal(_)
         | Op::SetLocal(_)
@@ -2827,12 +2888,11 @@ pub fn nominal_op_cycles(op: &Op) -> u32 {
         | Op::FixedToWord(_)
         | Op::FixedMul(_)
         | Op::FixedDiv(_)
-        | Op::Return
-        | Op::GetDataIndexed(_, _)
-        | Op::SetDataIndexed(_, _)
-        | Op::BoundsCheck(_) => 2,
+        | Op::Return => 2,
 
-        Op::Div | Op::Mod | Op::GetField(_) | Op::IsEnum(_, _, _) | Op::IsStruct(_) => 3,
+        Op::GetField(_) | Op::IsEnum(_, _, _) | Op::IsStruct(_) => 3,
+
+        Op::Div | Op::Mod => 5,
 
         Op::NewComposite(_) => 5,
 
@@ -2896,6 +2956,7 @@ impl Op {
     /// instruction.
     pub fn stack_growth(&self) -> u32 {
         match self {
+            Op::GetIndex(elem) if elem.has_bounds_outcome() => 5,
             Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::Dup => 1,
 
             Op::Not | Op::Neg => 0,
@@ -2906,7 +2967,12 @@ impl Op {
             // three; net delta +2. The high half is the i128
             // intermediate's high 64 bits, providing the load-
             // bearing value for big-number multiplication.
-            Op::CheckedAdd
+            // FixedDiv joined them on 2026-10-22, when a zero divisor became
+            // an outcome rather than a fault.
+            Op::Div
+            | Op::Mod
+            | Op::FixedDiv(_)
+            | Op::CheckedAdd
             | Op::CheckedSub
             | Op::CheckedMul(_)
             | Op::CheckedDiv(_)
@@ -2916,8 +2982,6 @@ impl Op {
             Op::Add
             | Op::Sub
             | Op::Mul
-            | Op::Div
-            | Op::Mod
             | Op::CmpEq
             | Op::CmpNe
             | Op::CmpLt
@@ -2927,12 +2991,12 @@ impl Op {
 
             Op::SetLocal(_) | Op::SetData(_) => 0,
 
-            // GetDataIndexed pops one index, pushes one value.
-            Op::GetDataIndexed(_, _) => 1,
-            // SetDataIndexed pops index and value.
-            Op::SetDataIndexed(_, _) => 0,
-            // BoundsCheck does not change the stack.
-            Op::BoundsCheck(_) => 0,
+            // Indexed reads consume two values and produce seven.
+            Op::GetDataIndexed(_, _) => 5,
+            // Indexed writes consume two operands and return six diagnostic Words.
+            Op::SetDataIndexed(_, _) => 4,
+            // Preserve the index and append four diagnostic limbs and a flag.
+            Op::BoundsCheck(_) => 5,
 
             Op::If(_) | Op::BreakIf(_) => 0,
             Op::Else(_) | Op::EndIf | Op::Loop(_) | Op::EndLoop(_) | Op::Break(_) => 0,
@@ -2963,7 +3027,7 @@ impl Op {
             | Op::ByteToWord
             | Op::WordToFixed(_)
             | Op::FixedToWord(_) => 0,
-            Op::FixedMul(_) | Op::FixedDiv(_) => 0,
+            Op::FixedMul(_) => 0,
 
             Op::Trap(_) => 0,
 
@@ -2995,6 +3059,7 @@ impl Op {
     /// For true pop counts use [`crate::verify::op_depth_effect`].
     pub fn stack_shrink(&self) -> u32 {
         match self {
+            Op::GetIndex(elem) if elem.has_bounds_outcome() => 0,
             Op::Const(_) | Op::GetLocal(_) | Op::GetData(_) | Op::Dup => 0,
 
             Op::Not | Op::Neg => 0,
@@ -3004,7 +3069,10 @@ impl Op {
             // (pop 1, push 3). The growth/shrink split records
             // peak vs. final; shrink is zero because there is no
             // net pop.
-            Op::CheckedAdd
+            Op::Div
+            | Op::Mod
+            | Op::FixedDiv(_)
+            | Op::CheckedAdd
             | Op::CheckedSub
             | Op::CheckedMul(_)
             | Op::CheckedNeg
@@ -3014,8 +3082,6 @@ impl Op {
             Op::Add
             | Op::Sub
             | Op::Mul
-            | Op::Div
-            | Op::Mod
             | Op::CmpEq
             | Op::CmpNe
             | Op::CmpLt
@@ -3025,10 +3091,9 @@ impl Op {
 
             Op::SetLocal(_) | Op::SetData(_) => 1,
 
-            // GetDataIndexed pops the index, SetDataIndexed pops the
-            // index then the value, BoundsCheck does not pop.
-            Op::GetDataIndexed(_, _) => 1,
-            Op::SetDataIndexed(_, _) => 2,
+            // Bounds operations produce at least as many values as they consume.
+            Op::GetDataIndexed(_, _) => 0,
+            Op::SetDataIndexed(_, _) => 0,
             Op::BoundsCheck(_) => 0,
 
             Op::If(_) | Op::BreakIf(_) => 1,
@@ -3094,8 +3159,9 @@ impl Op {
             | Op::ByteToWord
             | Op::WordToFixed(_)
             | Op::FixedToWord(_) => 0,
-            // The `Op::FixedMul` and `Op::FixedDiv` handlers in [`crate::vm`]
-            // pop both operands and then push one result, so the net is -1 and
+            // The `Op::FixedMul` handler in [`crate::vm`], and the
+            // `Op::FixedDiv` handler until 2026-10-22, when it began pushing an
+            // outcome triple, pop both operands and then push one result, so the net is -1 and
             // the transient reach above the current level is 0. Measured
             // against the handlers rather than inferred from the arithmetic.
             //
@@ -3107,8 +3173,9 @@ impl Op {
             // it lowers the reported bound on chunks that use these ops; the
             // bound was an upper bound throughout, so nothing that verified
             // before stops verifying.
-            Op::FixedMul(_) | Op::FixedDiv(_) => 1,
+            Op::FixedMul(_) => 1,
 
+            Op::Trap(kind) if *kind == TrapKind::IndexOutOfBounds.code() => 5,
             Op::Trap(_) => 0,
 
             // V0.2.0 ISA additions.
@@ -3155,7 +3222,7 @@ impl Op {
 }
 
 /// Template for struct construction.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct StructTemplate {
     /// Struct type name.
     pub type_name: String,
@@ -3164,7 +3231,7 @@ pub struct StructTemplate {
 }
 
 /// One variant's name and discriminant within an [`EnumLayout`].
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct EnumVariantDisc {
     /// Variant name.
     pub name: String,
@@ -3185,7 +3252,7 @@ pub struct EnumVariantDisc {
 /// a signatured native already does). Only uniformly-flat enums, which the
 /// compiler flattens, need the padding; a non-flat enum stays boxed and is
 /// matched by name.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct EnumLayout {
     /// Enum type name.
     pub type_name: String,
@@ -3235,7 +3302,7 @@ pub enum WireShape {
 /// behaviour. Only the signature boundary is described; non-parameter locals
 /// are seeded as `Top` and refined by the pass (a later phase may narrow
 /// them).
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct ChunkSignature {
     /// Flat shape of each parameter, in declaration order.
     pub params: Vec<WireShape>,
@@ -3257,7 +3324,7 @@ impl Default for ChunkSignature {
 }
 
 /// A named slot in the data segment.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Archive, Serialize, Deserialize)]
 pub struct DataSlot {
     /// Slot name (for host initialization and debugging).
     pub name: String,
@@ -4124,9 +4191,13 @@ impl Module {
         // V0.2.0 Phase 7c cuts the producer over to the section-
         // partitioned wire format defined in `wire_format.rs`. The
         // ops live in the opcode stream and the operand pool;
-        // every other Module field is rkyv-archived in the
-        // auxiliary body section. See `docs/architecture/WIRE_FORMAT.md`
-        // for the framing-header layout and the section semantics.
+        // every other Module field is encoded into the auxiliary
+        // body section, which since wire format v2 is a
+        // word-oriented container built by `keleusma-wire` and given
+        // meaning by `wire_schema.rs` -- NOT an rkyv archive, as this
+        // comment said until 2026-09-27. See
+        // `docs/architecture/WIRE_FORMAT.md` for the framing-header
+        // layout and the section semantics.
         crate::wire_format::module_to_wire_bytes(self)
     }
 
@@ -4153,8 +4224,15 @@ impl Module {
         // and CRC residue checks run inside
         // `module_from_wire_bytes`; the opcode stream and
         // operand pool sections supply the chunk ops while the
-        // auxiliary body's rkyv archive supplies the rest of the
-        // module.
+        // auxiliary body supplies the rest of the module.
+        //
+        // CORRECTED 2026-09-27: this said "the auxiliary body's rkyv
+        // archive". Wire format v2 replaced that body, and
+        // `Module::validate_bytes` a few lines below documents the
+        // change explicitly. The two comments contradicted each other
+        // in the same file, which is worse than either being wrong
+        // alone, because a reader who checks one believes they have
+        // checked both.
         crate::wire_format::module_from_wire_bytes(bytes)
     }
 
@@ -4473,6 +4551,10 @@ pub(crate) fn const_flat_bytes_owned(
     Some(buf)
 }
 
+// Without `floats` the float width is only threaded through the recursion, because
+// the one arm that reads it is compiled out. The parameter stays so that both
+// configurations share one signature.
+#[cfg_attr(not(feature = "floats"), allow(clippy::only_used_in_recursion))]
 fn const_flat_bytes_owned_into(
     c: &ConstValue,
     word_bytes: usize,
@@ -5036,5 +5118,89 @@ mod materialise_kstrings_tests {
             }
             other => panic!("expected Struct, got {:?}", other),
         }
+    }
+}
+
+#[cfg(test)]
+mod opaque_field_width_tests {
+    use super::*;
+    use crate::value_layout::ScalarKind;
+
+    type V = Value;
+
+    /// The word and address widths are selected INDEPENDENTLY, by the
+    /// `narrow-word-*` and `narrow-address-*` feature families, so a target on
+    /// which they differ is a supported configuration rather than a
+    /// hypothetical. These tests pass the two widths explicitly, so they hold
+    /// the agreement in the default build, where the runtime's own widths are
+    /// equal and would hide any disagreement between them.
+    const WORD: usize = 2;
+    const FLOAT: usize = 4;
+    const ADDR: usize = 8;
+
+    /// An opaque field occupies the width the LAYOUT gives it.
+    ///
+    /// The compiler bakes every field offset from that layout, so a packer
+    /// that advanced by some other width would place each following field
+    /// where the baked access does not look for it. Sizing the whole body is
+    /// the cheapest observation of that disagreement.
+    #[test]
+    fn an_opaque_field_occupies_the_width_the_layout_gives_it() {
+        let arena = keleusma_arena::Arena::with_capacity(1024);
+        let values = [V::OpaqueRef(7), V::Int(1)];
+        let body = V::pack_flat_in_arena(&values, 0, WORD, FLOAT, ADDR, &arena)
+            .expect("pack succeeds")
+            .expect("an opaque plus an int is flat-eligible");
+        let expected = ScalarKind::Opaque.size_in_bytes(WORD, FLOAT, ADDR)
+            + ScalarKind::Int.size_in_bytes(WORD, FLOAT, ADDR);
+        assert_eq!(
+            body.byte_len(),
+            expected,
+            "the packed body must be as long as the layout says, or every field \
+             after the opaque sits at an offset the compiler-baked access disagrees with"
+        );
+    }
+
+    /// The field AFTER an opaque begins where the layout puts it.
+    ///
+    /// A body of the right total length could still be laid out wrongly, so
+    /// this reads the following field's bytes at the layout's offset rather
+    /// than trusting the size assertion above.
+    #[test]
+    fn the_field_after_an_opaque_begins_at_the_layout_offset() {
+        let arena = keleusma_arena::Arena::with_capacity(1024);
+        let values = [V::OpaqueRef(7), V::Int(0x0102)];
+        let body = V::pack_flat_in_arena(&values, 0, WORD, FLOAT, ADDR, &arena)
+            .expect("pack succeeds")
+            .expect("an opaque plus an int is flat-eligible");
+        let bytes = body.resolve(&arena).expect("resolves under this epoch");
+        let opaque_width = ScalarKind::Opaque.size_in_bytes(WORD, FLOAT, ADDR);
+        assert_eq!(
+            &bytes[..opaque_width],
+            &[7, 0, 0, 0, 0, 0, 0, 0],
+            "the registry index occupies the whole opaque field"
+        );
+        assert_eq!(
+            &bytes[opaque_width..opaque_width + WORD],
+            &[0x02, 0x01],
+            "the following word begins immediately after the opaque field"
+        );
+    }
+
+    /// An index too large for the field aborts the pack instead of truncating.
+    ///
+    /// A truncated index would still resolve, to the WRONG host object, which
+    /// is the failure mode a bounds check cannot catch downstream. Returning
+    /// `None` boxes the composite, which is slower and correct.
+    #[test]
+    fn an_index_too_wide_for_the_field_refuses_to_pack() {
+        let arena = keleusma_arena::Arena::with_capacity(1024);
+        // A one-byte address field cannot hold index 256.
+        let values = [V::OpaqueRef(256), V::Int(1)];
+        let packed = V::pack_flat_in_arena(&values, 0, WORD, FLOAT, 1, &arena).expect("pack call");
+        assert!(
+            packed.is_none(),
+            "an index that does not fit the opaque field must fall back to a boxed body"
+        );
     }
 }

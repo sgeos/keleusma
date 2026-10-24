@@ -115,8 +115,8 @@ fn narrow_runtime_rejects_wider_word_bytecode() {
     };
     let msg = format!("{:?}", err);
     assert!(
-        msg.contains("word_bits_log2"),
-        "expected width-mismatch error, got: {}",
+        is_width_mismatch(&msg),
+        "expected a width-mismatch rejection, got: {}",
         msg
     );
 }
@@ -129,8 +129,13 @@ fn narrow_float_runtime_runs_f32_bytecode() {
     // float width. The host closure's f64 parameters truncate to
     // f32 through Float::from_f64 / Float::to_f64.
     let target = Target {
-        word_bits_log2: 6,
-        addr_bits_log2: 6,
+        // **THE BUILD'S WIDTH, NOT A LITERAL 64.** The subject of this test is the FLOAT
+        // dimension; the word and address are incidental. Hard-coding 6 made the compiler refuse
+        // the target outright under `narrow-word-16`, where the runtime maximum is 4, so the test
+        // failed on a dimension it is not about. Taking the build's own maxima keeps the float
+        // claim intact at every width. See `docs/decisions/NARROW_WIDTH_FAILURE_CLASSIFICATION.md`.
+        word_bits_log2: keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+        addr_bits_log2: keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
         float_bits_log2: 5,
         has_floats: true,
         has_strings: false,
@@ -187,8 +192,12 @@ fn wider_float_bytecode_never_reaches_execution() {
     //   `narrow-float-32`        -- the compiler refuses 6 against a runtime maximum of 5
     let wider = 6;
     let target = Target {
-        word_bits_log2: 6,
-        addr_bits_log2: 6,
+        // The word and address take the BUILD's maxima so that the only dimension this target is
+        // wider on is the FLOAT. Hard-coding 6 made the compiler refuse on the WORD under
+        // `narrow-word-16`, and the assertion below -- which demands the refusal name the float
+        // width -- then failed on a correct refusal for the wrong dimension.
+        word_bits_log2: keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+        addr_bits_log2: keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
         float_bits_log2: wider,
         has_floats: true,
         has_strings: false,
@@ -289,8 +298,8 @@ fn narrow_runtime_rejects_hot_swap_to_wider_bytecode() {
     };
     let msg = format!("{:?}", err);
     assert!(
-        msg.contains("word_bits_log2"),
-        "expected width-mismatch error, got: {}",
+        is_width_mismatch(&msg),
+        "expected a width-mismatch rejection, got: {}",
         msg
     );
 }
@@ -377,8 +386,8 @@ fn narrow_runtime_view_bytes_zero_copy_rejects_wider_bytecode() {
     };
     let msg = format!("{:?}", err);
     assert!(
-        msg.contains("word_bits_log2"),
-        "expected width-mismatch error, got: {}",
+        is_width_mismatch(&msg),
+        "expected a width-mismatch rejection, got: {}",
         msg
     );
 }
@@ -478,8 +487,13 @@ fn f32_narrow_runtime_can_register_math_library_via_lifted_impl() {
     // result (sqrt(9.0) = 3.0) survives the narrowing because 3.0
     // is exactly representable in f32.
     let target = Target {
-        word_bits_log2: 6,
-        addr_bits_log2: 6,
+        // **THE BUILD'S WIDTH, NOT A LITERAL 64.** The subject of this test is the FLOAT
+        // dimension; the word and address are incidental. Hard-coding 6 made the compiler refuse
+        // the target outright under `narrow-word-16`, where the runtime maximum is 4, so the test
+        // failed on a dimension it is not about. Taking the build's own maxima keeps the float
+        // claim intact at every width. See `docs/decisions/NARROW_WIDTH_FAILURE_CLASSIFICATION.md`.
+        word_bits_log2: keleusma::bytecode::RUNTIME_WORD_BITS_LOG2,
+        addr_bits_log2: keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2,
         float_bits_log2: 5,
         has_floats: true,
         has_strings: false,
@@ -1059,4 +1073,64 @@ fn limit_loop_traps_on_overrun_on_16bit() {
         run_i16_data(src),
         Err(keleusma::vm::VmError::LoopLimitExceeded)
     ));
+}
+
+/// Whether an error message reports a declared-width mismatch, on ANY of the three widths.
+///
+/// # Why this does not name the WORD dimension, which it used to
+///
+/// These tests establish that bytecode declaring a wider width is REFUSED. They asserted the
+/// message mentioned `word_bits_log2`, which is not that property — it is which check happened to
+/// catch it first.
+///
+/// **At a narrow build the word dimension no longer differs.** `NarrowVm` is already sixteen bits
+/// wide, so bytecode compiled for the host matches on the word and differs on the ADDRESS, and the
+/// address check fires instead:
+///
+/// ```text
+/// bytecode declares addr_bits_log2 = 6 but this Vm runs at addr_bits_log2 = 4
+/// ```
+///
+/// **The rejection still happens; only the dimension named changes.** Measured as three of the six
+/// failures this file contributes under `narrow-word-16`, and classified there as a test assuming a
+/// wide host rather than a defect. Asserting the property rather than the wording lets these three
+/// keep running at a narrow width instead of being excluded, which is the difference between
+/// preserving a check and hiding it.
+///
+/// It deliberately does NOT accept any error at all: a rejection for an unrelated reason would pass
+/// such a check and the test would stop meaning anything.
+fn is_width_mismatch(msg: &str) -> bool {
+    msg.contains("word_bits_log2")
+        || msg.contains("addr_bits_log2")
+        || msg.contains("float_bits_log2")
+}
+
+/// **THE PARAGRAPH ABOVE WAS A CLAIM UNTIL THIS TEST EXISTED.**
+///
+/// Widening an assertion from a fixed wording to a predicate trades precision for reach, and the
+/// trade is only safe while the predicate still refuses the wrong thing. Nothing checked that.
+/// The doc asserted the property; a later edit relaxing this to "any rejection at all" would have
+/// made three tests in this file pass on any failure whatsoever, and every one of them would still
+/// have reported ok.
+///
+/// The negative cases are real `VmError` wordings from elsewhere in the runtime, not invented
+/// strings, so a message that genuinely changes shape shows up here rather than being assumed.
+#[test]
+fn the_width_mismatch_acceptor_refuses_rejections_for_other_reasons() {
+    for other in [
+        "bytecode version 1 is not supported by this runtime",
+        "flat opaque field read out of bounds",
+        "NewComposite flat operand on non-flat values",
+        "stack underflow",
+        "",
+    ] {
+        assert!(
+            !is_width_mismatch(other),
+            "the acceptor admitted {other:?}, which is not a width mismatch; the three tests              using it would then pass on a rejection for any reason and check nothing"
+        );
+    }
+    assert!(
+        is_width_mismatch("bytecode declares addr_bits_log2 = 6 but this Vm runs at 4"),
+        "the acceptor must still admit the real width rejection, or it has been narrowed into          uselessness rather than widened"
+    );
 }

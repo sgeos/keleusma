@@ -13,6 +13,7193 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-24 Check a premise before asking for a ruling on it
+
+Item 8 asked for the operator's acceptance of a narrowing. Before asking, the
+gate text and the trade-off were dated from Git. The gate was scoped to the
+stage corpus from the start, and the widening was recorded the day after the
+gate, not on the declaration day. The question put to the operator therefore
+stated the facts with their provenance, including that the July record was
+written by an agent. A ruling sought on a mistaken premise would have recorded
+the mistake as settled.
+
+## 2026-10-24 Intervention rather than equality for independence
+
+Output equality with the reference cannot show that a construction is
+independent of it, because copying the reference also produces equality. The
+controls therefore remove the reference's ability to read the user program and
+require the same result. The pipeline legitimately bootstraps its stage programs
+through the reference, so a blanket disable would break it. A marker carried by
+the user program separates the two cases, and its uniqueness keeps the hook from
+disturbing concurrently running tests. Marking was itself checked to leave every
+reference artifact unchanged, so the comparison isolates the intervention.
+
+A control of this kind is empty if the poison never fires. Two checks cover
+that. A positive control shows the poison stops the reference on marked text.
+An injected reference read in each production path made both controls fail on
+the first stage. The command corpus compares with same-source reference
+compilation, not the Rust command, because that command prepends the native
+preamble and so compiles a different program.
+
+## 2026-10-23 Worker identity is separate from line identity
+
+The operator selected Claude Code to take over the existing V0.2.X workstream.
+The worktree, feature branch, mailbox route and pilot enrollment stay the same.
+The receiving worker needs tracked context and exact verification limits, not a
+second checkout or a reset communication store. The handoff therefore preserves
+the local unmerged receipt commit and makes item 5 the next implementation task.
+
+Manual execution establishes that the configured reminder works. It cannot
+establish Claude Code's client trust state. The handoff states that limit and
+retains manual inbox checks. Codex does not launch another worker and stops after
+preparing the transfer, preserving the single-writer requirement.
+
+## 2026-10-23 Separate checkouts for concurrent release lines
+
+The operator's concurrency requirement calls for a dedicated V0.2.X worktree.
+Moving this session from kaizen into the primary checkout was an incomplete
+response because it left the primary checkout serving as the development lane.
+The new sibling v0.2.x worktree holds the existing feature branch and its
+uncommitted changes. Transfer hashes established that all nine files survived
+before the originals were removed from the primary checkout. Existing primary
+local configuration and the V0.3.X checkout were preserved.
+
+The two lines now have separate working files, indexes and build destinations.
+They still share Git references and the local communication stores, so worktree
+isolation does not authorize concurrent merges or broad process-termination
+commands. The existing integration protocol remains necessary.
+
+## 2026-10-23 Portable evidence and population accounting
+
+A successful workflow is portable evidence only when its tested tree and actual
+commands are identified. The receipt uses the completed b1dbfe4f run, not the
+still-running f213f421 successor. It preserves actual summary excerpts and named
+PASS lines alongside the command scripts. Successful Actions steps imply exit
+zero under the recorded shell contract, but the logs do not print a numeric
+success status, so that inference is explicit.
+
+Partition exclusions are not ignored tests. Each workspace shard discovered
+3460 cases while executing only its partition. The union of PASS identities is
+3458, leaving two ignored tests. Summing the four skipped counts would instead
+count the other partitions repeatedly. Library executions and source test
+attributes are also distinct populations, now dated to the same commit.
+
+The reconciliation found that the requested permissive-divergence control
+already exists in the shipping command suite. It was verified from source and
+its remote PASS, not reimplemented. The remaining independence rows cannot be
+closed by output equality alone. Their inspection evidence and missing
+interventions are now explicit. Recording a widening choice also does not prove
+operator acceptance of narrowing a later completion contract.
+
+The initial documentation rewrite removed phrases used by three count guards.
+The guards exposed missing arena-split and reproduction details as well as a
+changed feature-matrix phrase. Restoring those details preserved the controls.
+
+## 2026-10-23 Fresh Codex handoff after the Opus increments
+
+The receiving session must start from the merged v0.2.3 state rather than from
+its predecessor's feature branch. The Opus audit changed the execution-check
+contract, and subsequent increments implemented the write-handler surface that
+had previously been only an open question. The refreshed handoff makes both
+changes explicit. The remaining design decisions are separated from independent
+receipt work. Remote success at b1dbfe4f provides a current portable anchor,
+without treating a documentation handoff as a new implementation audit.
+
+## 2026-10-20 A repair that passed its targeted runs and left the corpus
+
+53b88f52 was confirmed only by targeted runs, and its wire.kel change cost
+two rows of the type stage's name-occurrence channel. The channel counts
+distinct (name, local, call) facts, so every newly called function name costs
+one row regardless of how often it is called. The corpus measurement that
+catches this lives in tests/selfhost_typecheck.rs, which the targeted runs did
+not include.
+
+The repair removes names rather than raising the cap, because capacity raises
+in this line have lacked recorded sign-off and the operator has not asked for
+one. Inlining mi_scan_max_nodes was tried first and abandoned, because
+tests/selfhost_wire.rs reads that constant from the source by name. The three
+helpers removed instead had no reader outside the stage. The stage is inferred
+to sit exactly at 640, so the next new called name in wire.kel would fail the
+same test. That is the intended signal, not a margin.
+
+## 2026-10-20 Opus 5.5 audit, retained checks and an executed effect table
+
+The audit's central finding about proven execution was not a defect but a
+dependency. The unchecked pop was sound exactly when every entry of
+verify::op_depth_effect matched its opcode's runtime effect, and the only check on
+that table compared it with a second static table. Two tables can agree with each
+other and both be wrong about the machine. The operator ruled that the project
+rejects undefined behaviour while admitting platform-specific behaviour, so the
+checks were restored rather than the proof strengthened. The proof keeps its
+value for timing analysis, since it establishes that the checks cannot fail.
+
+The new test measures the machine rather than a model. A breakpoint on every
+instruction position lets the test read the operand depth before and after each
+executed instruction. Two instrument errors were paid for on the way. Flat
+composite values do not compare equal to themselves under PartialEq, which
+first read as two operands being changed below the consumed window. Comparing
+debug renderings, which include the arena handle, is representation identity
+and resolved it. The second was the reach of the corpus. Eleven opcodes have no
+compiler emission site for source programs, including plain Add, Sub, Div, Mod
+and BoundsCheck, because the compiler now lowers through the checked forms. A
+corpus-only test would have passed while never measuring them, so hand-built
+subjects cover them and an exact coverage assertion keeps that visible.
+
+The method cannot see an understated requirement on an opcode that only peeks,
+because nothing below the declared window changes. With the checks retained,
+such an error now produces StackUnderflow instead of undefined behaviour.
+
+## 2026-10-20 Audit-oriented handoff
+
+The receiving Opus 5.5 session may primarily audit existing work. The handoff
+therefore identifies the implementation anchor, separates baseline failures from
+post-repair receipts, and gives reproducible commands without claiming new runs.
+The unresolved source-write-handler scope remains explicit. The old startup block
+was seventy-three commits behind the current implementation, so a new leading
+block supplies current validity checks while preserving historical material.
+No completion, merge or publication claim is made.
+
+## 2026-10-15 Audit repairs preserved before continuation
+
+The broader audit exposed metadata-only wire operations consuming an unnecessary
+constant forest. A names-only preparation path preserves interning while using
+the existing input-window bound. Raw-node and forest capacities remain distinct
+and retain refusal controls. The first repair omitted interning and failed its
+identity controls. Restoring interning produced the passing repair receipts.
+
+The same audit found stale benchmark stack effects, parser refusal expectations
+and source census counts. Their repairs and checked/proven indexed-access controls
+are preserved in this work-in-progress snapshot. Full-matrix success is not yet
+established for the repaired tree. The operator requested the snapshot and
+reaffirmed the ring buffer requirement already tracked by B42. Order 3 remains
+paused and incomplete, including its unresolved source-write-handler scope.
+
+## 2026-10-15 Operand certificates and execution state
+
+The ordinary depth model is insufficient for unsafe pop access. Return has a
+terminal requirement of zero there, while execution consumes a value. Upper-bound
+joins also cannot establish availability. A separate bounded control-flow worklist
+now propagates minimum operand depths and includes reset reentry. This catches
+programs that seed operands before Stream only on their initial iteration.
+
+The physical invariant relates the current frame base, local prefix and proved
+operand lower bound. Typed pointer reads and proved count subtraction remove the
+corresponding runtime underflow checks. Instrumentation proves that the unchecked
+pop path executes, and comparison controls preserve results. The certificate is
+computed from the installed image and checked against its instruction cache.
+
+Valid suspension kinds require different entry protocols. Yield and reset resumes
+supply an operand, while breakpoint resume does not. A state machine distinguishes
+them and poisons state before argument preparation and execution. It restores a
+valid suspension only after success. Errors and caught panics cannot reuse partial
+frames. Mode changes cannot silently weaken the strict trap premise.
+
+Unwind review also found recovery hazards outside ordinary dispatch. Manually
+managed private slots must remain initialized before host destructors run during
+replacement. Borrowed shared-buffer bindings must be cleared before direct entry,
+configuration and replacement can follow a panic. Both repairs have Tree Borrows
+controls, including opt-out after replacement. The final audit remains open.
+
+## 2026-10-15 Persistent host trap policy
+
+Policy belongs to the host instance rather than the artifact. Constructors with
+options establish it before execution, and a common setter proves the current
+image before assigning a stricter policy. Failed policy changes preserve suspended
+state. The replacement gate is in the shared inner path, so schema bypass cannot
+weaken trap admission. Default permissive execution remains available explicitly.
+
+The signed replacement control found that an authenticated module was serialized
+with its signed flag but without the original envelope. Initial signed loading
+already cleared that flag. Replacement now does the same after authentication,
+retaining the host key matrix. Controls require a valid signed swap to succeed and
+wrong-key, unsigned and trapping replacements to fail under the relevant policies.
+An unrelated test expectation also needed to clear its breakpoint explicitly
+before expecting a division fault after opting out of strict trap policy.
+
+A hostile numeric operand fixture demonstrates the intended proof boundary.
+The trap scan completes, while a retained runtime type guard rejects execution.
+Policy persists through that error and reset. No stack or type guard is removed
+by this increment. The next mode must justify each actual check elision and must
+invalidate execution-state proofs across partial failures and unwinding.
+
+## 2026-10-15 Independent trap-profile scan
+
+The total arithmetic and scalar bounds contracts make a syntactic trap scan
+meaningful within an explicit instruction profile. The reference uses an exhaustive
+match, so a new instruction requires an admission decision. The Keleusma stage
+receives wire identifiers and operand forms rather than host-computed safety flags.
+Separate predicate interventions demonstrate ownership of both Trap detection and
+unsupported-form admission.
+
+The structural verifier already has suitable bounded arrays. A separate mode
+reuses them without changing its structural protocols or adding a stage file.
+Each request resets verdict and location sentinels. The driver folds per-chunk
+results deterministically and validates stored, yielded and located responses.
+An unsupported instruction prevents a completed verdict even if another instruction
+is an explicit Trap. Invalid instruction metadata likewise cannot become MayTrap.
+
+The first build exposed two Rust type errors, repaired before execution. Clippy
+later requested a direct scalar-kind pattern. Final review also required checking
+the location in an invalid-subject response. An absent location is a broken
+analysis response, not evidence that the subject is invalid. The corresponding
+corruption control and final stage comparisons pass.
+
+These APIs do not grant unchecked execution. Host policy must compute a verdict
+before execution, and any execution certificate must additionally prove each
+removed check and its lifecycle invariants. Error and unwind reentry are explicit
+obligations because an instruction may already have consumed part of its inputs.
+
+## 2026-10-15 Legacy arithmetic outcomes
+
+Leaving Div and Mod partially defined would invalidate a zero-Trap verdict over
+hand-built bytecode. They now share the existing checked arithmetic implementation
+and return its three outputs. This avoids maintaining a second integer division
+algorithm and preserves module-width overflow classification. Float source
+operations discard the outcomes. Fixed remainder now has both a valid runtime
+operand path and explicit zero-divisor dispatch in both compilers.
+
+The compiler audit found a second use of integer Div as an internal multiword
+zero-divisor guard. Replacing it with a conditional explicit Trap preserves the
+failure after Div becomes total. New controls assert the exact error variant and
+presence of the trap. Existing multiword tests accepted any error, so their green
+result alone would not have established that property.
+
+A broad regression exposed a stale GetIndex stack fixture from the earlier bounds
+work. It now expects seven outputs and also enumerates the new division and data
+operation effects. The final focused suite passes, with full stage artifact and
+resource results retained from the unchanged production implementation.
+
+The upcoming check-elision proof has an additional reentry obligation. A retained
+type guard may fail after an instruction consumes only some operands. The current
+run wrapper leaves that frame in place. Static module depth proofs alone cannot
+justify unchecked execution resumed from that state. The completion plan now
+requires proof invalidation or another justified safe transition after a fault.
+
+## 2026-10-15 Data-read relocation and verification repair
+
+The private data-read record now carries a fallback kind above two 24-bit lanes.
+Read relocation validates that kind and preserves it. Store records have no such
+lane, so their entire encoded length must be validated rather than masked. The
+old positive width of 16777216 did not fit the public indexed operand. Controls
+now accept 16777215, reject the next width, preserve the last scalar address, and
+exercise reserved kinds and recovery after refusal.
+
+Legacy test adapters omitted the new scalar kind. They now derive it from source
+data declarations. Independent parser expectations and execution controls cover
+Word, Byte and Boolean fields. An initial new private-data fixture was itself
+invalid because the block was never mutated. The corrected shared-data fixture
+supplies its storage explicitly. This failure is retained in the broad receipt.
+
+The broad run passed complete stage artifacts and resource admission, with its
+single remaining failure in that fixture. The final targeted run passed all 114
+cases after fixture repairs and added wire and source-location controls. Production
+code was unchanged between those runs. This evidence supports proceeding to the
+legacy arithmetic contracts, while the full Order 3 verification remains open.
+
+## 2026-10-15 Indexed data-read work-in-progress backup
+
+GetDataIndexed has no element-kind operand. An explicit Word, Byte or Unit fallback
+on the stack supplies a deterministic invalid-index result without changing the
+public instruction encoding. Both compiler paths supply the fallback and dispatch
+unhandled outcomes through the existing bounds trap. The private parser record
+uses a high scalar-kind lane that must survive data relocation.
+
+The expanded stage corpus exceeds the previous 1536-opcode verifier profile.
+Measured maxima are 1965 for the parser and 1568 for code generation. The shared
+opcode profile is now 2048. Selected type capacities remain 640.
+
+The broad run completed with eleven failures. The new high lane exposes unfinished
+relocation boundary handling and old test adapters without kind information.
+Parser record expectations and the verifier residency pin also need updates.
+The operator requested a backup commit and push before those repairs. This entry
+records an unfinished increment and does not establish Order 3 completion.
+
+## 2026-10-15 Scalar array-read outcomes
+
+Word and Byte array operands have a known zero value, so their invalid-index result
+can retain its kind without allocation. The result precedes the portable diagnostic
+suffix. The full signed index is compared against the checked bound before address
+conversion, avoiding truncation on a narrow host. Representation, stride and lifetime
+checks remain separate contract guards.
+
+The checked lowering stores the outcome directly and evaluates each operand once.
+Seven temporaries preserve the result and diagnostic state across nested handlers.
+The same arm protocol supports Word invalid_index bindings for Byte arrays. Complete
+coverage removes the fallback trap while a deterministic value-and-break trailer
+keeps the dispatch loop structurally bounded. No hidden failure cache is used.
+
+The parser had treated direct literal indexing as a second array literal. Completed
+scalar literals now arm the existing postfix path. Two unused private fields were
+removed before adding the keyword, keeping the name cap intact. The final selected
+run passes every stage artifact and resource boundary. Indexed data-segment reads
+still require a kind rule and total contract.
+
+## 2026-10-15 Indexed-write outcomes
+
+Indexed writes need no fallback element value. They consume the value and index,
+perform the write only in range, and return the diagnostic suffix and flag. Both
+compiler paths retain operand order and dispatch unhandled failures to Trap kind
+eight. The success path removes the suffix. This preserves source behavior while
+allowing bytecode to handle a failed write without stopping execution.
+
+The extra dispatch instructions made one reconstruction chunk too large for the
+existing verifier profile. Extracting its nested-field branch preserved the
+capacity and state transitions. A broad resource run then exposed text analysis's
+old effect limits. The text protocols now accept the new predicate and store
+outputs, with controls for text retained below those outputs.
+
+The final selected run passes all 1636 cases, including every stage artifact and
+resource boundary. Indexed reads still need their own total contracts. The bounds
+contract and completion plan retain that requirement and the full Order 3 scope.
+
+## 2026-10-15 Portable bounds outcomes
+
+The bounds diagnostic is carried explicitly on the operand stack. A hidden last
+failure cache could be overwritten by a nested handler and was therefore avoided.
+Four byte limbs preserve the unsigned bound on every supported Word width. The
+initial two-limb proposal would have lost information on i8 and was replaced before
+implementation. The predicate preserves the index and produces the payload and flag.
+The bare failure branch consumes the payload through the existing Trap opcode.
+
+A terminal instruction can now consume operands. Both depth walks previously ended
+at every Trap without checking its requirement. Both typed walks also need the
+payload and loop-frame checks before termination. The existing widening profile
+still cannot prove exact operand kinds, so runtime type guards remain mandatory.
+
+The new predicate is total over Word indices, including negative indices and a zero
+bound. Indexed reads and writes retain their separate contract obligations. The
+new contract document fixes this increment's stack, cost, diagnostic and compatibility
+rules without claiming trap freedom or a no-check execution mode.
+
+## 2026-10-15 Shift ordering and full-word literal transport
+
+A checked arithmetic shift is a checked multiply by a positive power of two.
+The reference interns that multiplier before compiling the left operand. Deferring
+all constants would preserve execution order but change the artifact, so this one
+constant is interned when scheduling the checked construct. The parser retains
+asl separately from lsl to keep the checked-family admission rule explicit.
+
+The literal failure occurred before reconstruction. Multiplying a full Word by the
+token radix discarded its upper bits. A bounded stage-owned table now separates
+the value from its token index. The driver copies the computed values and does not
+reparse numeric source. A second transport boundary needed full-word records and a
+negative complement encoding because minus one is the legacy record sentinel.
+Range checks precede numeric accumulation, and every radix flushes at end of input.
+
+These changes preserve all fourteen complete stage artifacts against the reference.
+They consume the last entries of the existing compiler name pool, which now holds
+1024 names. Further parser work must account for that bound. The next implementation
+requires exact bounds-operation contracts and proof obligations, not another source
+syntax change. The completion plan and reverse prompt retain the full goal scope.
+
+## 2026-10-15 Checked-outcome source integration
+
+Checked arms attach after a complete expression. A one-token brace probe and a
+checked-expression operator marker preserve that boundary in the streaming parser.
+Per-context class masks and pattern facts enforce coverage without a host verdict.
+Three result temporaries are allocated after operand expressions. Scoped binding
+initializers precede guards and bodies, while reverse binding wrappers follow the
+arm-result record, matching the reference frame allocation and evaluation order.
+
+Negative one is a legacy transport sentinel. A direct signed pattern payload
+therefore selected the wrong record decoder. Records 126 and 127 carry nonnegative
+complements instead, with reconstruction validating their sign and expected pattern
+position. A separate failing control showed Byte bindings losing their kind during
+local lookup. Restoring that classification preserves Byte arithmetic in arm bodies.
+
+Adding parser state also crossed the lexer's complete-source capacity. A named
+length guard now precedes copying, and the bounded source buffer grows to 512 KiB.
+The compiler input name pool remains unchanged and has only two entries free.
+The final 148-test selected run includes all fourteen complete artifact comparisons.
+Checked shifts, wide-literal transport and the remaining Order 3 requirements stay
+open. The completion plan and reverse prompt record those limits and receipts.
+
+## 2026-10-13 Full first-pass validator admission
+
+The resource coordinator now stores chunk summaries and decides final arena admission
+in Keleusma. Text lattice transitions, heap saturation and boundary flags also run in
+Keleusma. Host code transports opcode facts and stores abstract values. Native costs
+use the reference distinction between per-site charging and deduplicated external
+contributions. The analyzer uses a 64-bit Word to represent the unsigned 32-bit heap
+ceiling positively, while subject widths remain independent.
+
+Yield membership, convergence and productivity decisions are stage-owned. Intervention
+controls change each decision with identical subject input. Missing summaries, unfinished
+walks and malformed responses remain analysis errors. The shipping validate command
+computes the Keleusma result before consulting the Rust reference and reports disagreement
+separately from rejection. Runtime guards and the reference gate remain required under
+the selected typed-widening profile.
+
+The rejection audit exposed a subtle post-loop mismatch introduced during the join repair.
+The reference restores an entry state after a terminated body without breaks and checks
+later instructions. Skipping those instructions admitted a malformed scalar projection.
+A complete-admission control first reproduced acceptance and then passed after restoring
+that fallback. This was a verdict-compatibility repair, independent of whether those
+instructions would execute. The eight permanent audit controls also cover projection
+forms, array stride, locals, resume shapes, loop height, layout reconciliation and the
+exact packed-call-shape capacity.
+
+All five feature configurations pass on an unchanged validator tree. The full workspace
+runs 3281 tests and the isolated self-host configuration 3031, plus separate doctests.
+The detached compiler passes 86 tests. Final source residency is analyzer 3215/367 and
+typed validator 1438/395, both retaining the existing threefold fusion requirement.
+The first full run's stale pins were measured and repaired before the corrected run.
+
+The final link gate reached generated local copies under secret and reported their
+relocated relative links. That store is intentionally excluded from version control.
+The checker now prunes it, with a command control proving that public broken links
+still fail and restored links pass. No private contents were copied into the repository.
+The full completion audit records command receipts and the limits of the first-pass claim.
+
+## 2026-10-11 Keleusma derives logical data-layout runs
+
+The shipping emitter now gives logical slots to Keleusma instead of grouping them in Rust.
+The data-slot grouper requests each head, batches up to eight candidate lengths and visibilities,
+and compares candidate name windows of up to 64 bytes. It retains the earliest differing slot
+across windows. Empty names require no byte request. Keleusma returns each group boundary and
+its record sizes, splitting at 65,535. The host stores those results and retrieves the selected
+source name. The name coordinator receives the grouper's checked output count.
+
+Shared-layout grouping receives up to five offset/kind/length triples per reply. Keleusma chooses
+the initial stride using wrapping u32 subtraction, extends only matching runs, and produces each
+record's offset, logical first slot, count and stride. Singletons start with stride zero, while
+a one-slot tail of a split multi-slot run retains that run's stride. Record starts use u32 modular
+arithmetic, matching the release reference encoder's arithmetic. Later verifier constraints remain
+separate from these encoding decisions.
+
+The Rust driver performs bounds checks, storage allocation and transport. It does not compare slot
+names, detect strides or choose record boundaries. The legacy helpers remain for their existing
+bounded test/tooling paths, but the public auxiliary emitter no longer calls them. No new shared
+buffer was added. Commands 89 through 93 group data slots and commands 94 through 97 group shared
+layouts. Two private blocks add 28 value slots, or 896 bytes. The schema stage now has 170 chunks,
+an 85,508-byte artifact, 1,216 shared bytes and 6,880 private bytes. Its legacy occurrence channel
+uses 221 of 640 rows. Inference independence covers 53,213 recorded types across fourteen stages.
+
+Five integration controls cover empty data, long Unicode names, first mismatches across 64-byte
+windows and eight-slot batches, visibility changes, stride boundaries, nonmonotonic offsets,
+wrapped offset differences and 65,535/65,536/131,071-slot boundaries. A runtime control compiles,
+serializes and decodes a 65,536-byte shared array, then accesses both sides of its record boundary.
+Protocol controls refuse malformed batches and foreign commands and check continuation after
+refusal. All fourteen artifacts and the monomorphization controls pass in the targeted run.
+The final workspace passes 3,175 tests with five ignored across 183 suites. No-default checks
+pass seven integration/accounting tests and 46 wire units. Fresh Clippy, documentation and no_std
+checks pass. The local pilot retains three supported, bounded completion claims and the unresolved
+tuple-probe diagnostic with non-independent labels. External evaluation remains unavailable under
+the prior approval rejection. Exact receipts are in the reverse prompt.
+
+A separate tuple-projection probe provides the next type-input work. Among eight comparisons,
+two invalid sources are accepted by the independent stage and one valid source is rejected.
+Nested tuple and nominal identity are lost through tuple field zero. A tuple field containing
+an array is falsely rejected even when its declared dimension matches the callee. Scalar tuple
+projection controls and other valid controls agree with the reference. These type gaps keep the
+full Order 1 goal active, alongside the remaining input obligations and final integration gates.
+
+## 2026-10-11 Streaming auxiliary emission reaches the shipping command
+
+The public auxiliary emitter now transports bounded windows instead of constructing the old
+resident module blob. Keleusma hashes names, selects candidate buckets, compares candidate bytes,
+and decides whether to append or reuse the latest equal name. Hashes are an indexing aid, with
+byte comparison deciding equality. The host retains borrowed strings and deterministic bucket
+storage. Fresh names retain contiguous runs and remain available to later shared lookups.
+A protocol control reaches two distinct, equal-length strings with the same hash and proves that
+they remain distinct. A compiled string-comparison program exercises that distinction at runtime.
+
+The schema coordinator owns contributor ordering across chunk names, enum types and fresh variants,
+natives, data-slot groups, constants and templates. It requests source ordinals and rejects names
+from the wrong family or phase. Constants use a stage-driven breadth-first queue. The host stores
+references to typed values, while Keleusma chooses each node, child range, auxiliary index and name
+request. Name and template acknowledgements carry generation checks. Chunk ranges, debug offsets,
+opcode offsets, header sentinels and parameter-tag bytes are also stage decisions.
+
+The former 1,365-node, 256-byte-name, 1,024-event and aggregate module-blob caps no longer apply to
+the public emitter. Fixed transport windows remain. Public wire field widths and fallible storage
+checks bound accepted metadata. The legacy bounded emitter remains available only to library tests
+as a comparison control. Standalone legacy helper APIs retain their documented bounds.
+
+Standing source regressions exercise 1,365 and 1,366 constant roots and text lengths of 256, 257
+and 60,000 bytes. The compiler accepts each source, and the Keleusma output matches the reference.
+Existing family tests now assert successful reference comparisons beyond former name, template,
+node and input caps, including 65,536 scalar roots. They also retain nested forests, enum
+discriminants, initializer ownership, independent native vectors and empty template-run controls.
+
+Unsigned command-line compilation now serializes through the selected backend. The self-hosted
+backend uses wire_module_artifact_via_kel. A discriminator test distinguishes that route from using
+the reference serializer on both branches. Command-line controls emit the large forest and text
+fixtures, preserve reproducibility, execute an ordinary result of seven and retain independent type
+rejection without output files. Signed and encrypted output continue through their dedicated paths.
+
+The schema stage has 150 chunks and a 75,876-byte artifact. Shared storage remains 1,216 bytes.
+Private storage is 5,984 bytes. The largest legacy input channel uses 197 of 640 occurrence rows.
+Wire remains unchanged. Inference independence covers 52,389 recorded expression types.
+The full workspace passes 3,168 tests with five ignored across 182 suites. No-default checks
+pass 25 integration/accounting tests and 44 wire unit tests. Fresh Clippy, documentation and no_std
+checks pass. The local pilot contains the first diagnostic and three bounded completion claims,
+with non-independent labels and a reviewed export. External evaluation remains unavailable under
+the prior approval rejection. The reverse prompt carries exact receipts.
+
+Host data-slot grouping, run splitting and shared-layout run extraction remain nontrivial
+serialization decisions to move into Keleusma. The new driver retains
+these existing algorithms explicitly. Remaining type-input obligations and final integration gates
+also keep Order 1 open. Shipping integration alone does not establish completion of the full goal.
+
+## 2026-10-11 Complete modules decode through Keleusma
+
+wire_decode_module_via_kel composes Keleusma framing, checksum, auxiliary, opcode and debug readers.
+The schema stage selects an optional shebang prefix and the declared frame, checks header fields,
+section spans, width maxima and signature-extension metadata, compares mirrored auxiliary fields,
+and supplies each chunk's opcode span. Wire command 220 starts an independent checksum transaction
+using the existing incremental checksum implementation. Every operand entry receives a parity
+check, including unused entries. Only selected opcode records are interpreted.
+
+The reader preserves noncanonical section order, unaligned offsets, overlapping sections and
+trailing input. These are reference codec behaviors. It preserves absent versus empty debug spans,
+and applies debug-pool decoding only when constructing complete chunks. Signature authentication,
+decryption and virtual-machine verification remain separate caller responsibilities, matching the
+low-level reference loader. Error variants and precedence for multiple defects are not matched.
+
+Seven integration controls cover prefixes across byte windows, valid noncanonical frames, unused
+invalid opcode records, unused pool corruption, empty chunk tables, extension metadata, header
+bounds and mirrors, debug failures and complete decoded execution. The runtime control discards
+the original module and runs decoded instructions with shared input and persistent state, returning
+12 and then 17. Two protocol controls cover checksum windows and framing transaction completion.
+The all-stage artifact comparison now reconstructs complete modules before re-encoding them.
+
+Initial failures exposed a reserved field name, a mutable local and a stale command ceiling that
+made the newly dispatched checksum operation unreachable. Valid-input controls caught the ceiling
+error. Another control incorrectly expected every changed offset to be invalid. Some changes still
+select valid records or empty sections, so the comparison now retains reference acceptance and
+separately asserts rejection of out-of-bounds spans. These observations did not justify narrowing
+source or artifact admission.
+
+The schema stage has 115 chunks and a 55,492-byte artifact. It uses 1,216 shared bytes and 4,160
+private bytes. Its largest legacy channel uses 147 of 640 occurrence rows. Wire has 561 chunks,
+a 163,044-byte artifact and 1,294 of 1,365 constant nodes, leaving 71 nodes against the required
+minimum reserve of 64. Its largest legacy channel remains 638 of 640 occurrence rows.
+Inference independence covers 50,483 recorded types across fourteen stages. All fourteen complete
+decoded modules match the reference. The workspace ran 3,158 passes and one stale size assertion,
+with five ignored. The measured blob size was corrected from 23,713 to 23,753 bytes, and the full
+184-test wire suite then passed. No production code changed after the workspace run. The whole
+workspace was not repeated after that test-only correction. Other receipts are in the reverse prompt.
+
+The local pilot records one diagnostic and three claims with non-independent review. One runtime
+claim excerpt is unsupported because it omits the helper proving which module is returned. The
+full test source supplies that evidence. External evaluation remains unavailable under the prior
+approval rejection. Exact payloads and source hashes were reviewed in the local export.
+
+A production-library probe found two encoder admission gaps. A 1,369-root program is accepted
+by the compiler but exceeds the encoder's 1,365-root cap. A 257-byte text literal is accepted
+but exceeds the encoder's 256-byte name bound. Nearby smaller controls encode byte-identically.
+The complete decoder also accepts the larger 1,417-root and 60,000-byte text controls. The
+completion plan records exact construction recipes and artifact sizes for the next increment.
+
+Complete module reconstruction closes this decoder integration. Source-admission capacity coverage,
+shipping serialization, remaining type-input obligations and final integration gates remain open.
+The shipping unsigned path still calls Module::to_bytes. Full Order 1 remains active.
+
+## 2026-10-11 Debug pools and complete auxiliary bodies decode through Keleusma
+
+Parameter tags and debug pools now decode through the schema stage. Parameter ranges preserve
+absent-pool behavior and recognize Float independently of execution support. Debug decoding
+preserves record order, opaque type blobs, unresolved indices and trailing bytes. Keleusma
+requests each raw field and payload, validates string encoding through the existing name reader,
+and rejects truncated fields and unknown kinds. Operand lists cross fifteen-value windows.
+Counts are checked against remaining input before host allocations.
+
+The complete auxiliary-body reader composes the directory, record and semantic readers.
+Keleusma checks required table dimensions, chunk and native names and block tags, selects the
+first header, normalizes the entry sentinel and supplies template, parameter and debug ranges.
+Invalid debug spans become absent, matching the reference. Debug bytes remain opaque at this
+layer. Zero-chunk inputs do not decode unused constant tables. Optional layout and signature
+families retain their existing policies. Native names and return descriptors retain independent
+lengths. Rust transports records and constructs owned values from these decisions.
+
+Commands 41 through 47 implement parameter and debug reads. Commands 48 through 56 implement
+module metadata. The dispatcher now separates routing from transaction guards to limit nesting.
+Nested parameter and name reads are permitted only while a chunk is being assembled. Protocol
+controls exercise foreign-command refusal, short transport replies, premature completion and
+successful continuation after refusal. Public bytecode version, opcode count and type caps remain
+unchanged.
+
+The schema stage has 96 chunks and a 46,964-byte artifact. Shared storage remains 1,216 bytes
+and private storage is 3,264 bytes. Its largest legacy channel uses 124 of 640 occurrence rows.
+All fourteen sources fit. Inference independence covers 49,723 recorded expression types.
+All fourteen complete stage artifacts and auxiliary values match the reference. A runtime control
+replaces auxiliary fields and observes shared access plus persistent initialization across calls.
+The workspace passes 3,150 tests with five ignored across 180 suites. No-default checks pass
+eleven integration and accounting tests and thirty-eight wire unit tests. Fresh Clippy,
+documentation and no_std checks pass. Exact receipts and remaining coverage limits are in the
+reverse prompt.
+
+The first compiler failure was a test fixture omitting a named enum field. Subsequent failed
+controls assumed unpadded region lengths and used unsupported literal syntax. The container pads
+regions to eight-byte boundaries, so those expectations were corrected against both decoders.
+The diagnostic and three completion claims are captured and reviewed locally in the shadow
+pilot, with non-independent labels and a reviewed export. External evaluation remains unavailable
+under the prior automatic approval rejection. Pilot judgments do not change development gates.
+
+Complete outer framing and module reconstruction remain open. The current canonical unsigned
+framing reader is narrower than the reference loader. Preserve valid noncanonical section offsets,
+trailing frame bytes, shebang prefixes and signature-metadata consistency. Check every operand-pool
+entry, including unused entries, but decode only opcode spans selected by chunks. Capacity coverage,
+shipping serialization, remaining type obligations and final integration gates still keep Order 1 open.
+
+## 2026-10-11 Layout families decode through the schema stage
+
+Strict template and enum-layout readers now share Keleusma range validation and request-driven
+name reconstruction. The optional metadata helper decodes the two families independently after
+shared parsing checks. A bad name can discard one family without discarding the other. Name data
+rejections now have an internal typed distinction from transport, allocation and protocol failures.
+Only explicit stage-directed data rejection produces an absent optional family. A direct protocol
+control proves that a stage failure is propagated rather than defaulted away.
+
+Data-layout decoding distinguishes absent DATA_SLOTS from a present empty table. Keleusma checks
+required tables, slot names, visibility and nonzero run lengths, then supplies repeat directives
+for named slots. Shared offsets are computed in Keleusma and returned five at a time. The stage
+checks overflow before emitting a shared run, preserves kind and length bytes, and retains the
+owned reference decoder's treatment of unused first_slot and private-placement fields. It requests
+the first initializer record and selects either repeated Int(0) values or a separate constant-pool
+decode operation. Empty stored ranges still require a valid constant table, while elided ranges do
+not. Codec checks remain separate from the later verifier.
+
+Commands 22 through 29 handle templates and enums. Commands 30 through 40 handle data layout.
+Active transactions exclude incompatible commands and permit their own nested name reads.
+The schema stage now has 67 chunks and a 32,964-byte artifact. Shared storage remains 1,216 bytes.
+Private state is 2,592 bytes, adding seventeen layout slots and twenty data slots. Its largest
+legacy input channel uses 87 of 640 occurrence rows. Wire remains unchanged. Inference independence
+covers 48,424 expression types across fourteen sources.
+
+Controls cover signed discriminants, Unicode and malformed names, independent optional failures,
+shared parse failures, absent and empty tables, non-default initializer trees, elision, nonzero
+runs, offset overflow, ignored fields and the 65,535/65,536 logical-slot boundary. A runtime control
+removes the compiled module's original layout, installs the decoded layout and observes shared
+access and persistent initialization across two calls. All fourteen stage artifacts now compare
+template, enum and data-layout values against the reference as well as earlier decoder families.
+The final workspace passes 3,138 tests with five ignored across 178 suites. Clippy, documentation
+and no-default checks pass. Current terminal receipts and coverage limits are in the reverse prompt.
+
+No failed or unexpectedly empty verification run required diagnostic triage before the completion
+samples. The local shadow pilot records three bounded claims with non-independent review. External
+evaluation remains unavailable under the prior approval rejection. Full Order 1 remains active.
+Parameter tags, debug metadata and complete module assembly remain open, followed by source-admission
+capacity coverage, shipping integration, remaining type obligations and final integration gates.
+
+## 2026-10-11 Names and owned constant forests decode through Keleusma
+
+Name lookup now requests a NameRef and its pool span through the schema stage. The stage checks
+the index and range and validates UTF-8 in 1,024-byte windows. Rust returns a borrowed string,
+with a defensive checked string conversion after the stage verdict. Unused malformed name records
+and pool bytes remain unobserved. The byte window imposes no fixed name-length limit. Independent
+stage-only checks compare 197,673 byte sequences with Rust UTF-8 acceptance, including continuation
+bounds across windows. Borrowed pointer identity, long names, overlong forms, surrogates, invalid
+scalar values and incomplete sequences have direct controls.
+
+The constant decoder reuses directory and record decoding. Keleusma validates all forward ranges
+and requested root ranges, schedules a reverse traversal and selects each construction form.
+Scalar payloads are interpreted by tag, never as child ranges. The stage normalizes Boolean and
+Byte values, gates Float, requests auxiliary records and names, and directs child and root moves.
+The host retains Option slots for typed values and reports whether a requested slot remains
+available. The stage refuses duplicate ownership. No recursive host traversal or reference
+constant decoder is used in production. Each host request loop has a count-derived bound.
+
+Owned decoding builds the complete table even when no roots are requested. Chunk root ranges in
+one call share ownership. Separate calls preserve the reference's distinct initializer ownership
+scope. Empty composite ranges still require a strictly forward first index. An empty struct does
+not validate an unused field-name start. Enum None and Some(0) discriminants remain distinct.
+Unknown flag bits and unused scalar fields retain reference behavior. Comparisons establish
+acceptance and decoded values. Identity of diagnostic variants and failure ordering for
+multiple defects remain unverified.
+
+Name commands 8 through 11 and constant commands 12 through 21 extend wire_schema.kel.
+Active transactions exclude incompatible commands. Constant name requests deliberately allow
+nested name validation. Invalid UTF-8 poisons the name transaction. Refused transport lengths
+and pending-record replies have separate protocol controls. The schema stage now has 38 chunks
+and a 19,756-byte artifact. Its shared window uses 1,216 bytes and its private state uses 1,408
+bytes. The largest legacy schema input channel is 56 of 640 occurrence rows. The wire stage is
+unchanged. All fourteen stages fit the existing caps. Inference independence covers 47,116 types.
+
+Every stage's chunk constant ranges are taken from Keleusma-decoded chunk records. The resulting
+pools match the reference values through canonical re-encoding, including floating-point payload
+bits. Controls cover all constant forms, named trees, duplicate ownership, malformed ranges,
+required tables, feature-disabled floats, 128-level raw trees, 5,000-root pools and long nested
+text. Initial compilation caught a missing function brace and a closure requiring an explicit
+input type. Those diagnostics remain in the local logs. The workspace passed 3,126 tests and
+failed only a stale documentation count, with five ignored.
+The counts were refreshed. Added execution controls clear the original constant pools and restore
+them from the new decoder before executing arrays, nested tuple arrays and a separate private
+initializer. The first private fixture was refused because its data was never mutated. A
+meaningful update repaired that control. All eight constant controls then pass. Current
+verification and pilot receipts are in the reverse prompt.
+
+Full Order 1 remains active. Templates, enum layouts, data-layout expansion and initializer
+elision policy, parameter tags, debug decoding and complete module assembly still require work.
+Source-admission capacity coverage, shipping integration, remaining type obligations and final
+integration gates also remain open.
+
+## 2026-10-11 Signature semantics move into a dedicated schema stage
+
+The new wire_schema.kel stage validates signature ranges and interprets shape tags. It requests
+parameter, return and resume shapes in order, validates native shape references and controls
+completion. The host transports decoded record fields and constructs typed values. Directory
+and fixed-record decoding reuse one wire virtual machine, with a separate schema machine for
+semantic work. No reference signature view or shape conversion is called in production.
+
+The strict signature helper matches the standalone reader. The metadata helper preserves the
+auxiliary decoder's optional-table policy. A malformed shared shape/signature view can produce
+empty metadata only when no native return needs it. An invalid tag reached through a valid view
+remains an error. All signature bounds are checked before any shape tag is interpreted, so a
+later invalid range takes precedence over an earlier invalid shape. The invalid-view flag is
+retained across later valid rows. Unused invalid shapes remain unobserved. Arbitrary kind bytes
+are retained as the reference codec retains them. Top ignores kind and size, and Scalar ignores
+size. Later verification is a separate boundary.
+
+The separate stage avoids increasing wire.kel's nearly full legacy type-input channels. It has
+15 chunks and a 7,052-byte artifact. Its shared window occupies 192 bytes and fourteen private
+value slots occupy 448 bytes. Its largest legacy input channel uses 24 of 640 occurrence rows.
+The complete embedded corpus now has fourteen sources. Every applicable corpus inventory was
+extended, and the new stage has its own byte-identity test. ChunkSignature now derives structural
+equality so complete decoded signature values can be compared directly.
+
+Controls enumerate all 65,536 shape tags and 2,304 kind/size combinations. They cover optional
+parsing failures, referenced and unused invalid tags, empty-range boundaries, native-only errors,
+retry and completion state, and a 3,000-parameter signature. All fourteen stage artifacts compare
+byte-identically, and decoded signature and native-return metadata match the reference. A count
+assertion requires one decoded signature per compiled chunk. Inference independence now covers
+45,894 recorded expression types across fourteen stages.
+
+Initial compilation exposed missing imports and the absence of equality traits on ChunkSignature.
+The test fixture was corrected to obtain auxiliary bytes from a complete reference artifact.
+Clippy identified a nested conditional in the fixture. The full workspace passed 3,113 tests and
+failed one stale assertion expecting thirteen stages, with five ignored across 174 suites. That
+assertion was replaced by a directory-inventory comparison. The repaired production type check
+accepts all fourteen stages. Final semantic, accounting, no-default and complete artifact tests
+pass. No production code changed after the workspace run. The full workspace was not repeated
+after the test-only repair and stronger controls. Receipts are in the reverse prompt.
+
+The local shadow pilot retains the first compiler diagnostic and three bounded claims with
+non-independent review. External evaluation remains unavailable under the earlier approval
+rejection. Full Order 1 remains active. Name and constant semantics, other auxiliary families,
+complete module decoding, admission-preserving capacity coverage, shipping integration and the
+remaining type obligations still require work.
+
+## 2026-10-11 Fixed schema records decode through Keleusma
+
+The new wire_schema_records_via_kel helper decodes all seventeen fixed schema record kinds.
+Keleusma selects the stride, checks table divisibility and reads fields from one transported
+record at a time. Rust constructs a typed WireSchemaRecord variant with checked field narrowing.
+No production reference record reader, byte offset or endian operation appears in that adapter.
+The unsigned 64-bit constant payload preserves every bit of its signed transport word.
+
+Record fields remain distinct from validated schema values. Unknown tags and reserved fields
+are preserved as the reference record codec preserves them. Cross-table references, tag meaning,
+constant child ranges, optional-table policy and complete module reconstruction remain open.
+Byte pools and unknown kinds are refused by this fixed-record interface. The directory reader
+continues to retain borrowed payloads for those pools.
+
+Commands 218 and 219 begin and advance a record stream. The stage owns the record count and
+cursor. Bad record lengths do not advance it, completion clears active state, and a failed new
+begin invalidates the previous stream. Other commands are excluded during an active stream.
+Existing framing, signature and directory transactions refuse the new commands. Five private
+state fields add 160 bytes. No shared array or capacity increased.
+
+The kind control enumerates all 65,536 identifiers against the explicit seventeen-kind contract.
+The field corpus compares 4,386 records with the derived reference reader, including full-width
+signed and unsigned patterns and reserved fields. A separate 9,000-record table crosses the
+byte window, and aligned and unaligned inputs produce identical typed fields. All thirteen
+stage artifacts now also reconstruct every fixed-record region from decoded fields through
+reference writers and compare complete region bytes. Byte pools are explicitly excluded.
+
+The first node-budget assertion found only 54 free nodes. Sharing literals in the existing
+get_u16, get_u32 and get_i64 functions restored 75 free without changing loop bounds or caps.
+The wire stage now has 561 chunks, command 219, 715 name events, 23,713 input bytes and a
+162,836-byte artifact. Its constant forest uses 1,290 of 1,365 nodes. Inference independence
+covers 45,329 recorded expression types across thirteen stages.
+
+A full workspace run then found a second capacity constraint. The legacy type harness needed
+652 occurrence facts and 649 binding facts, exceeding the approved 640-row caps. The production
+scoped path and all-stage artifact comparisons had passed, so those checks did not cover this
+legacy path. Fourteen lightly reused numeric helpers were inlined. Sharing zero and one literals
+in sixteen existing count and presence functions retained the constant-node reserve. Every input
+fact remains checked and no cap changed. Occurrences now use 638 of 640 rows. Future growth must
+be priced against both constraints.
+
+Work began on 2026-10-08 and resumed on 2026-10-11. Several verification handles were no longer
+available after resumption. Their complete logs were retained, and the repaired full workspace run
+passed 3,106 tests with five ignored across 173 suites. Clippy, documentation and no-default
+checks pass. The reverse prompt records terminal receipts and their coverage limits.
+The shadow pilot retains the first node-reserve diagnostic and three bounded claims. The first
+all-stage evidence packet exceeded the text-field limit and was shortened before successful
+capture, retaining the stage inventory, decisive record assertions and executed stage counts.
+External evaluation remains unavailable under the earlier automatic approval rejection.
+
+Full Order 1 remains active. The next work is tag and cross-table validation in Keleusma,
+constant-tree reconstruction and complete module decoding, followed by source-admission capacity
+coverage, shipping integration, remaining type obligations and final integration gates.
+
+## 2026-10-08 Auxiliary directory decoding stops borrowing reference positions
+
+The new wire_auxiliary_directory_via_kel helper supplies raw container headers to Keleusma.
+The stage votes the prologue, validates its checksum and format, derives directory length,
+and emits one decoded region per resume. It checks region bounds and duplicate kinds before
+advancing. Header disagreement remains an explicit repair signal. It is not a payload-integrity
+verdict. Rust retains checked slices into the original artifact and allocates at most 1,024
+region descriptors. Payload bytes are not copied into the stage.
+
+The format ceiling needs 49,200 header bytes, fitting the existing 65,536-byte window. The
+maximum-region control reaches all 1,024 entries. Separate controls retain borrowed payloads
+above 200,000 bytes, unaligned buffers and parity-plane metadata. No payload-size cap was added.
+Reference acceptance of overlapping spans, unknown kinds and flags, and reserved fields is
+preserved. These properties were read from the reference and then compared by execution.
+The mutation corpus accepts 1,182 cases and refuses 181 in agreement with the reference.
+Every single-bit header mutation is outvoted, while invalid voted prologues are refused.
+
+Commands 216 and 217 begin and advance directory decoding. Active decoding excludes other
+commands, a new begin resets the cursor, and a failed begin invalidates the old transaction.
+A rejected entry can be retried without advancing. Framing and signature transactions refuse
+both new commands. Four private state slots add 128 bytes. The existing region-kind array
+holds the already accepted kinds for the bounded duplicate scan.
+
+The initial fixture used a nonexistent builder method. The stage then attempted to assign a
+local binding, which the language refuses. Moving that flag into private state repaired it.
+The first capacity measurement left only 50 nodes free. Literal sharing initially changed a
+loop bound that the verifier requires in canonical form. Those loop functions were restored.
+Five functions without loops now share existing literals, leaving 71 nodes free. An existing
+mutation test needed its anchor changed to the helper-based header calculation. Its detector
+still observes the deliberately wrong starting cursor. A redundant host conversion was also
+removed after Clippy identified it.
+
+Wire has 566 chunks, command 217, 715 name events, 23,793 input bytes and a 160,524-byte artifact.
+Its constant forest uses 1,294 of 1,365 nodes. Inference independence covers 44,978 expression
+types across thirteen stages. Complete artifact comparison now also compares each independently
+decoded directory and checks payload pointer identity. Current receipts are in the reverse prompt.
+
+Schema-record interpretation, constant reconstruction and complete module decoding remain open.
+The new directory removes reference positions from this part of the read path. It does not close
+the complete decoder, source-admission capacity coverage, shipping integration or type obligations.
+Full Order 1 remains active. The local shadow pilot retains the first diagnostic and bounded
+completion claims. External evaluation remains unavailable under the prior approval rejection.
+
+## 2026-10-08 Semantic opcode decoding moves into Keleusma
+
+The new section decoder transports raw opcode and operand-pool bytes to the wire stage.
+Keleusma checks parity, selects inline and pooled forms, validates pool indices and tags,
+and produces semantic fields. Rust constructs typed instructions from those fields without
+reference decoding. All pool entries are checked, including unused records. Commands 214
+and 215 use a bounded request-and-response protocol. Framing and signature transactions
+refuse these commands while their own state is pending.
+
+The decoder preserves reference acceptance of ignored operand bytes and construction flags.
+The raw grid compares 153,600 records in each of two feature configurations. Default features
+accept 69,957 and refuse 83,643. Without default features, 67,317 accept and 86,283 refuse.
+Both agree exactly with the reference. Separate controls cover every canonical identifier,
+composite access and construction forms, single-bit corruption, invalid lengths, unused pool
+corruption, maximum pool-index widths and retry state. This is finite differential evidence.
+
+All thirteen stage artifacts remain byte-identical, and their opcode sections decode to the
+reference instruction sequences. Wire now has 564 chunks, 709 name events, 23,738 input bytes
+and a 159,188-byte artifact. Its constant forest uses 1,299 of 1,365 nodes, retaining 66 free.
+The new private decoder state adds nine value slots or 288 bytes. Sharing existing small
+literal helpers in four loop-free functions restores the node reserve without changing caps.
+Inference independence now covers 44,835 recorded expression types across thirteen stages.
+
+The first integration test imported a crate-private cfg(test) inventory. It was repaired by
+separating the canonical library census from integration enumeration. The first reserve check
+failed before literal sharing. An unqualified test logging macro also failed compilation and
+was corrected. Capacity and chunk pins were refreshed from executed measurements.
+The reverse prompt carries current verification and pilot receipts.
+
+Full semantic auxiliary decoding, admission-preserving capacity coverage, shipping serialization,
+remaining type-input obligations and final integration gates keep Order 1 open.
+
+## 2026-10-08 Constant forests join the module-driven encoder
+
+The auxiliary producer now supplies bounded semantic preorder input for named and composite
+constant trees, including private initializer roots. Keleusma computes subtree sizes, root
+boundaries, breadth-first child ranges and both auxiliary tables. Name interning now follows
+that traversal between the existing prefix names and template names. The first nested-string
+control distinguishes this order from the original preorder input.
+
+The full-node backing arrays are separate from output. They add 87,360 shared bytes while
+preserving existing host slot positions. Legacy calls still use their 170-row FIN channel.
+The new path reaches the existing 1,365-node bound. Scalar-only pools keep their record stream,
+including large initializer pools. Existing name and input bounds remain explicit and require
+admission comparison before this encoder can replace the shipping path.
+
+The first control reached the old unsupported guard. The implementation then passed that case
+but failed the standing reserve. Replacing literals in loop helpers did not change node count,
+because loop lowering still introduces them. Those substitutions were reverted. Sharing the
+opcode classifier's small literals restored the reserve. A compiled execution fixture also used
+tuple projections that lexed as a decimal literal; parenthesizing the intermediate projection
+made the intended source unambiguous. All original diagnostics remain in the logs.
+
+Five integration controls and nineteen protocol checks pass, including decoded execution,
+private initializer trees, discriminants, empty structs, reused names, malformed arities and the
+node limit. The no-default checks and memory accounting pass. Wire has 558 chunks, 1,300 nodes,
+23,578 input bytes and a 156,228-byte artifact. Inference independence covers 44,491 expression
+types across thirteen stages. Final receipts and the local shadow-pilot review are in the reverse
+prompt. The workspace diagnostic passed 3,089 tests and failed only the old empty-tuple refusal
+expectation, with five ignored. Replacing that expectation with reference-byte equality makes
+all seven framing tests pass. Workspace Clippy, documentation and the no_std self-host check
+pass. No production code changed afterward. Full Order 1 remains active.
+
+## 2026-10-08 Private placements and scalar initializer policy move into the stage
+
+The auxiliary helper now admits private composite placement records and non-default scalar
+initializer pools. Keleusma accumulates chunk root counts and makes the exact nonempty-all-Int(0)
+elision decision. The host follows that result rather than calling the reference predicate or
+constant-root selector. The stored initializer range begins after chunk roots; descendants do
+not precede those roots in the final constant table.
+
+Private composite slot and arena offsets remain compiler-owned facts and are encoded by the
+existing record writer. Two compiled controls match complete artifacts, decode and execute with
+the expected results. Further controls distinguish all scalar zero forms, cross 512-value batch
+boundaries, include 2,000-value pools, handle no chunks and preserve full-width placement fields.
+Protocol checks preserve the elision state on a rejected batch and reject incomplete or overflowing
+ranges. Composite and named initializer trees remain open with the general constant-tree codec.
+
+The first fixture used the wrong Vm path, retained as the pilot's first diagnostic. After that
+repair both requested forms failed on their existing unsupported guards. The first stage build
+also exposed misnamed initializer offset helpers. Correcting those admitted both execution controls.
+The first capacity run left only 59 nodes free. Sharing existing reset literals restores the
+standing 64-node reserve without increasing the cap. Initializer state adds 224 private bytes.
+
+All thirteen complete artifact comparisons and four inference controls pass. Wire has 551 chunks,
+1,301 constant nodes, 23,417 input bytes and a 152,140-byte artifact. Inference independence now
+covers 44,063 recorded expression types. The final workspace passes 3,083 tests with five ignored.
+Workspace Clippy, documentation and the no_std self-host check pass. Receipts and the reviewed
+local shadow-pilot export are in the reverse prompt. Full Order 1 remains active.
+
+## 2026-10-08 Debug metadata moves into a dedicated Keleusma stage
+
+Debug metadata requires canonical ordering as well as packing. The new stage schedules stable
+merge sorting, compares semantic keys and operand windows, and directs every index-buffer copy.
+The host retains buffers and transports data. A second stage state machine controls sub-pool
+order, length prefixes and record encoding. It never receives DebugPool::encode output.
+Chunk debug spans are derived by two wire commands from actual emitted lengths.
+
+The separate stage keeps bounded comparison and byte windows without growing the already large
+wire source for sorting logic. The complete corpus is now thirteen embedded sources. Every
+current stage passes complete pipeline artifact identity and monomorphization identity. Two
+Boolean validation results widen the previous Word-only function-result corpus. Parameters
+remain Word. The census now checks that exact distinction.
+
+The first implementation called a helper error, which the language parsed as reserved checked
+syntax. Renaming it resolved the failure. Later checks caught a one-node reserve shortfall, a
+Bool versus bool spelling in the type census, a tuple-return mismatch in a test fixture, a stale
+byte-size pin and a hardcoded twelve in an otherwise derived inventory guard. These were repaired
+without changing the standing reserve or dropping inventory coverage. Reset literals now reuse
+the existing helpers, leaving 65 constant nodes free in wire.
+
+Five integration tests and three debug-stage protocol tests pass. Seventeen wire protocol tests
+pass, including the new span bounds. The no-default configuration passes the focused debug,
+accounting and type-surface checks. Inference independence covers 43,831 expression types across
+thirteen sources. The workspace diagnostic passed 3,073 tests and failed four stale inventory assertions, with
+five ignored. All 290 affected tests pass after the inventory repairs. Workspace Clippy,
+documentation and the no_std self-host check pass. No production code changed after that run.
+The reverse prompt retains receipts and the reviewed local pilot export.
+Full Order 1 remains active for the remaining constant and private-data forms, semantic decoding,
+shipping integration, type coverage and final gates.
+
+## 2026-10-08 Struct templates and a repaired constant-node reader
+
+Template names now join the shared interner in finalization order. Type names deduplicate and
+field names append fresh. A checkpoint event records the next name index without emitting a
+name, preserving empty field-run positions. Chunk ranges retain the existing stage accumulators.
+Five integration controls cover a compiled boxed struct, repeated and empty names, cross-chunk
+ranges, exact event capacity and scalar payloads. Malformed transport has explicit controls.
+
+The node reader's count was misleading. Above 1,024 nodes it returned the requested count while
+its name-bound clamp skipped the entire constant loop. The regression failed on node zero for a
+1,025-node input. The repaired loop uses its own 1,365-node bound, and tests check every field
+through the exact limit for both input forms. The first diagnostic is retained for the pilot.
+
+Scalar input now omits four necessarily zero fields, using a flagged count and ten-byte records.
+Legacy named and composite inputs remain supported. This is private transport, not a published
+format change. The capacity instrument initially read the flag as part of the count. It now masks
+that flag and verifies the compact extent against the module's actual constant count. The stage
+uses 1,297 nodes with 68 free, and 23,080 input bytes with 26,072 free. Neither cap was raised.
+
+The new template state initially followed a helper that read it. The pipeline parser reported
+unresolved name 510, which the token trace identified as templates. Moving the declaration before
+use repaired the stage source. Forward data declarations remain outside that demonstrated path.
+All twelve complete artifact comparisons pass again. Wire has 543 chunks and a 148,596-byte
+artifact. Clearing 42,813 recorded expression types leaves the twelve artifacts unchanged.
+
+The no-default-features self-host build exposed an existing unguarded Float enum variant in the
+host tag decoder. Canonical feature-aware decoding with checked integer conversion repairs it.
+The targeted no-default run passes six integration checks and one decoder test. The release
+workspace passes 3,067 tests with five ignored. Workspace Clippy, documentation and the no_std
+self-host check pass. The reverse prompt retains command receipts and the reviewed local pilot
+export. External evaluation remains unavailable. Full Order 1 remains open.
+
+## 2026-10-08 Native metadata preserves shared indices and independent lengths
+
+The auxiliary producer now accepts native names and native return shapes. Keleusma interns names
+between enum and data-slot contributions and continues signature-shape interning for native
+returns. The vectors retain independent lengths. Comparison controls cover collisions, empty
+and unequal vectors, repeated shapes, complete compiled native-call artifacts and buffer limits.
+The whole-module helper still refuses the remaining auxiliary forms and is not yet shipping.
+
+Native collisions exposed three input-position bounds using the deduplicated output count.
+The corrected bounds use the original section counts and boundaries. The name interner now
+refuses output-pool overflow before copying. The older constant walker initially swallowed that
+refusal and returned a positive count. A regression failed with 64 instead of minus 255, then
+passed after the wrapper propagated the interner error. Five native integration tests and nine
+wire protocol tests pass. Final workspace receipts are in the reverse prompt.
+
+Stage growth initially left only 48 free constant nodes. Further literal sharing restores 74,
+with 1,291 used. The stage has 528 chunks and uses 48,492 input bytes, leaving 660. Native state
+adds 160 private bytes across the name and signature blocks. No buffer cap changes. Clearing
+42,471 recorded expression types preserves all twelve complete artifacts.
+
+The fresh workspace diagnostic completed with 3,056 passes, one fixture failure and five ignored.
+The command-line bad-input tests shared one temporary directory and could truncate good.kel
+while another case read it. Each test now owns an exclusively created directory, with a process
+identifier and checked sequence number. A deterministic interleaving checks that truncating one
+owner's script and dropping that owner cannot alter the other owner's script. Cleanup is scoped
+to the owned directory. This repair changes test infrastructure only. All 74 command-line tests and workspace Clippy
+pass after the repair. The full workspace was not repeated after the test-only changes.
+
+The shadow task captures the first reserve diagnostic. External evaluation remains unavailable
+under the prior automatic approval rejection. Local review remains non-independent. Order 1
+continues through remaining auxiliary forms, decoding, shipping integration, type coverage and
+final gates. V0.3.X and the untracked .codex directory and nvim.log remain untouched.
+
+## 2026-10-04 Signature numbering moves into Keleusma
+
+Encoding shape records was insufficient because the Rust helper still selected their indices.
+The new producer transports semantic variants and fields. Keleusma appends every parameter
+shape, searches earlier emitted records for each return and resume shape, and assigns the
+resulting indices. The two modes cannot be collapsed. Duplicate parameters must remain in a
+contiguous run, while a return must reuse the first identical earlier record.
+
+The host retains stage output and replays it through the existing byte-input window. This keeps
+table growth independent of stage residency. The protocol requires complete scan coverage before
+accepting a single shape and refuses incomplete, excessive or malformed windows. The host remains
+trusted to replay those bytes faithfully. The protocol does not authenticate a hostile host.
+The 6,145-record control crosses the 6,144-record window, returning the last unique parameter
+and resuming with the first repeated one. Separate controls cover empty tables and zero parameters.
+
+The auxiliary path now consumes these tables directly. Complete artifact comparison still passes
+for all twelve pipeline-produced modules, including the wire stage with 516 chunks and 141,436
+artifact bytes. The legacy formatter helpers retain their explicit reference-numbered standing.
+Native return shapes still need integration, and the shipping serializer remains Rust.
+
+The first attempt used local mut syntax that this language does not admit. The parser refused it.
+Private working fields repaired that error. The next capacity check found 1,325 constant nodes,
+leaving only 40 below the unchanged 1,365 cap. Sharing 39 numeric accessors through five literal
+functions removes 34 duplicate nodes and restores the 74-node reserve. One fixed call level is
+added at those accessors. Input grows to 48,233 bytes, leaving 919. No buffer cap was raised.
+The eleven private signature fields occupy 352 bytes, checked from the actual declarations.
+
+The workspace diagnostic passed 3,048 tests and failed only the stale integration inventory in
+CLAUDE.md. The tree has 137 test files against a claim of 126. The inventory now records 1,505
+functions in those files. The first prose repair also changed a phrase consumed by the feature-set
+guard, which was restored without changing the guard. Clippy required fixed-size chunk iteration
+in the new signature test. These repairs affect documentation and tests, not production code.
+
+Local pilot self-review found two completion excerpts insufficient for their full claims. One
+omitted the actual byte-equality assertion and opcode call path. The other omitted the reserve
+threshold and its unchanged status. Source references stay local, so the outbound evidence must
+contain those facts itself. The original baselines remain recorded and labels are non-independent.
+
+The shadow pilot records the first parser diagnostic and bounded evidence claims locally.
+Self-labels remain non-independent and external evaluation remains unavailable. The full Order 1
+scope remains open for auxiliary forms, decoding, shipping integration, type coverage and gates.
+
+## 2026-10-04 Opcode representation decisions move into the stage
+
+Passing prepacked operand bytes to the old record writer would leave representation decisions
+in Rust. The new transport carries typed semantic fields instead. Keleusma classifies the opcode,
+selects inline or pooled representation and advances the pool ordinal only after successful output.
+A refused field or pool index leaves both prior bytes and ordinal unchanged. Both parity schemes
+reuse the existing stage primitives. The host only maps discriminants and transports fields.
+
+The comparison corpus reaches every public opcode identifier and scalar, boxed, nested and
+construction form. It covers field limits, the 62-to-63 construction boundary, sixteen-bit and
+twenty-four-bit pool indices, invalid transport fields and cross-chunk continuation. The integrated
+pipeline comparison now calls the Keleusma artifact helper rather than Module::to_bytes on its
+actual side. All twelve complete artifacts agree. This does not remove host signature numbering
+or implement missing auxiliary forms, semantic decoding or the shipping integration.
+
+The first growth measurement failed the standing reserve guard. The stage used 1,344 constant
+nodes against 1,365, leaving 21 where the guard requires 64. The baseline used 1,282. Sixty-five
+schema offset and stride accessors each stored their own numeric literal. Sharing four literal
+functions removes 61 duplicate nodes and leaves 1,283. The cost is one additional fixed call
+level, with no buffer expansion. The old source-level offset guard now follows exactly one
+literal alias hop. It still compares values with the derive-generated reference offsets.
+
+A later input pin moved from 47,442 to 47,687 bytes. The full input limit remains 49,152.
+Eight new functions, four stream functions and four literal helpers, move all three chunk-count
+pins from 497 to 505. Stage self-compilation and complete artifacts remain byte-identical.
+
+The previous framing handoff incorrectly priced private Word fields at eight bytes. Private
+fields occupy 32-byte Value slots. The framing state is 128 bytes and opcode state is 256 bytes.
+The allocation implementation already used this rule. A new regression compiles the actual
+private declarations and checks header and persistent-capacity accounting. Its first fixture
+was refused because it never mutated the private block. Giving it a real mutation admits the
+fixture and verifies both sizes. This test was added after the green workspace run and checked
+separately. No production code changed after that run.
+
+The workspace passes 3,044 tests with five ignored. The shadow pilot retains the initial reserve
+diagnostic and three bounded claims with non-independent labels. Full Order 1 remains active.
+
+## 2026-10-04 Actual emitted lengths replace borrowed auxiliary positions
+
+The former windowed driver accepted artifact size and region positions supplied by its caller.
+Those inputs came from the reference artifact in the comparison tests. Complete region byte
+coverage therefore did not establish independent artifact construction. The new auxiliary path
+accepts only Module facts, collects the bytes each record stream actually reports and asks the
+existing Keleusma directory emitter to derive placement. Names and string-pool content retain
+the existing stage interner. Header fields and opcode positions now carry actual module values.
+
+A separate framing protocol validates field widths and size arithmetic before writing the header.
+It stores the expected and consumed byte counts across coroutine resets. Every feed is bounded
+by the 65,536-byte transport window and remaining length. A refused call preserves the accumulator.
+Legacy commands cannot overwrite an active stream. The reader folds the complete artifact and
+checks the standard checksum residue, while semantic decoding remains an explicit open obligation.
+
+The auxiliary comparison reaches all twelve stages. It does not make host-supplied signature
+numbering independently derived, and the framed artifact comparison still borrows opcode and
+operand bytes. Missing auxiliary forms fail explicitly. They must be integrated before replacing
+the shipping serializer, which is unchanged. Input guards protect the new path from the historical
+packer's infallible name and count conversions.
+
+The first broad diagnostic was a changed capacity pin. Wire input grew from 45,297 to 47,442
+bytes, leaving 1,710 below the unchanged cap. A later container-test compilation failed because
+the reference builder was named Builder rather than WireBuilder. The full workspace then found
+three old chunk-count pins. Five framing functions changed 492 to 497 in all three derivations.
+The full run reports 3,037 passes, three failures and five ignored. All three repaired targets
+subsequently pass 97 tests with two ignored. No production source changed after the full run.
+
+The pilot records the first diagnostic and three bounded claims with non-independent labels.
+No external evaluation succeeded for this task. Full Order 1 remains active, including complete
+production encoding and decoding, remaining type coverage and final integration gates.
+
+## 2026-10-04 Admission boundaries and corpus evidence
+
+The inference intervention must run after the recording pass. Clearing the parsed input map
+would measure an initially empty table that checking subsequently repopulates. A private hook
+now permits test-only removal and poisoning while public entry points retain their normal
+behavior. The changed-emission control proves the hook reaches a table emission consults.
+The invalid-source control proves the intervention does not bypass admission.
+
+The workspace audit found source classification errors hidden behind a stale example count.
+Array iteration, checked expression blocks and destructuring lets could enter ordinary parsing
+and turn their interior bindings into unknown-name errors. Unsupported declarations could be
+misread as function headers. Explicit parser diagnostics now stop those paths. Signed source
+also receives an unsupported result because the existing assembler does not preserve its flag.
+These are admission corrections, not new implementation of those language forms.
+
+Several failures concerned the instruments themselves. The public-document scan traversed a
+peer worktree. A reconstruction invariant assumed every stack push allocated a node, which
+wildcard sentinels invalidate. The capacity inventory omitted two stages. Exact boundary and
+inventory controls now replace those assumptions. Including wire reveals the byte maximum is
+45,297, while parse holds the distinct name maximum of 776. The input margin must be measured
+again as wire integration adds code.
+
+CheckedNeg now appears in the stage corpus. The resulting smaller opcode residue required
+updating both censuses and their consistency check. The boundary corpus retains its independent
+checked-negation witness. Explicitly ignored composite header metadata in the historical scalar
+scaffold preserves its current scope, while the shipping driver retains structural signatures.
+The textual parity guard still establishes arm coverage rather than semantic equivalence.
+
+The final release workspace run passes 3,031 tests with five ignored. This configuration unifies
+shell, signatures, encryption and self-host through the command-line crate. It is not evidence
+for every separate feature configuration. The full Order 1 goal remains open.
+
+## 2026-10-04 Source annotations survive until their folded bindings
+
+Composite let annotations were skipped before initializer parsing. Eleven invalid programs
+therefore reached independent checking without their written requirements. Streaming bounded
+source-type records avoids introducing a Rust annotation parser or inferring requirements from
+runtime byte layout. An absolute source token position links each annotation to its folded let
+node. Source range and frame slot preserve branch-local binding identity.
+
+Expanded controls separated grouped types from tuples and unit from an empty tuple chain.
+A full-width dimension record avoids tag-radix truncation. The reference parser refuses nesting
+above its own recursion bound, so the iterative stage's 32-level storage test uses its direct
+input path. Neither implementation's capacity failure is an invalid-source verdict.
+
+Artifact controls exposed two independent parser omissions. Empty parentheses produced no unit
+node, and a let-bound array of tuples lost the element layout needed by a following tuple read.
+Existing node kinds now carry both. The latter retains the current all-Word tuple layout limit.
+Tuple layout allocation gained checks before writes and controls for all three storage limits.
+The host annotation table uses deterministic ordered keys. Type resolution remains in Keleusma.
+
+The broad suite then fired two deliberate unit-support boundary pins. Treating a written unit
+like a synthesized empty continuation would silently drop its return requirement. Written unit
+therefore carries internal payload 3 until code generation normalizes it to the existing unit
+immediate. Replacement tests require the written tail row and independent rejection of a unit
+body declared to return Word. The construct-support table now includes unit.
+
+Running the complete code-generation file instead of only the 89 named self-compilation cases
+exposed seven additional failures. The Rust test reconstruction mirror lacked current wildcard
+and guard records. Its function-count pin still expected 76 where all 78 current functions
+compiled identically. The boundary-count guard coupled a live table to the historical handoff.
+The mirror and count checks are now updated, and the live count is recorded in the roadmap.
+A first source-text count missed two entries with intervening comments. The executable table
+reported 102 cases, confirming the source file's existing warning about that counting method.
+
+The first diagnostic was captured for the shadow pilot before repair. Labels remain explicitly
+non-independent and external evaluation remains pending the existing authorization request.
+The complete Order 1 objective remains active.
+
+## 2026-10-04 Projection identity is separate from byte layout
+
+Scalar access records already supplied scalar kinds, but whole composite fields and array
+elements lost their source identity. Eleven invalid programs in an eighteen-source comparison
+were consequently accepted by independent type checking. The field repair carries declaration
+coordinates alongside the existing runtime read, and checks receiver identity as well as
+result type. The array repair queries the Keleusma structural pool instead of guessing from
+byte width. Array indexing and field identity remain separate constraints.
+
+Six artifact and execution controls preserve the runtime path. A direct metadata trace checks
+nested source coordinates and adjacency before the corresponding field nodes. Direct transport
+controls distinguish known non-arrays from unknown facts. These bounded results do not establish
+general tuple projection support or complete syntax admission. The reverse prompt records gates.
+
+## 2026-10-04 Composite payload identity follows source coordinates
+
+Tuple declarations previously retained byte layout but omitted member type records. Struct
+array fields deliberately discarded their element tag when the length arrived. The initial
+comparison found twelve missed constructor rejections. Preserving written structural records
+lets the existing Keleusma solver enforce those requirements without deriving identity from size.
+
+Constructor repair alone did not type a match-bound payload name. Five further negatives
+exposed the scalar layout-kind fallback on tuple, array and nominal values. Metadata now joins
+the source variant and payload position to the allocated frame slot. Pairing is checked in each
+source range. Nested matches have a direct record trace, and calls taking complete tuple and
+array payloads have artifact and execution controls. This advances binder coverage without
+claiming complete occurrence or projection coverage. The reverse prompt records verification.
+
+## 2026-10-04 Structural tuple and nested-array facts
+
+Source type metadata now retains flat tuple members and the existing nested-array header
+forms. The driver turns declared types and tuple literals into bounded construction rows.
+The Keleusma type stage interns exact tuple and array structures, preserving member order,
+element types and dimensions independently of byte size. Parameters, calls, aliases and
+returns share these identities. The solver now permits up to 640 productive rounds, bounded
+by its binding table. Pool exhaustion is unavailable evidence rather than source rejection.
+
+The initial fifteen-source comparison found eleven missed rejections. The expanded corpus
+contains nineteen sources, including thirteen negatives and six valid controls. Six complete
+artifact and execution controls cover tuple, nested-array and array-of-tuple parameters and
+returns. Array-of-tuple literals now retain their tuple element byte width. Return-header
+layout no longer indexes a nonexistent parameter in zero-parameter functions.
+
+The structural pool adds three 640-word arrays, or 1,920 words. At eight bytes per word this
+is fifteen KiB beyond the earlier 56 KiB selected-cap increase. The accounting tests share one
+price table and compare actual array capacities as well as counts. Projection scalar-exclusion
+rules now recognize known nominal and structural composites, with direct transport controls.
+
+This does not establish arbitrary nested type grammar, composite payload requirements,
+array let annotations, whole-composite projection identity, complete binder and occurrence
+coverage or general syntax admission. Mixed-scalar tuple runtime layout and nominal struct
+signatures remain incomplete. Production serialization still uses Rust Module::to_bytes.
+The complete Order 1 objective remains active.
+
+## 2026-10-04 Enum identity and payload declarations survive lowering
+
+The nominal parameter channel alone could reject a scalar passed to an enum parameter while
+accepting a constructor of a different enum. Both constructor types had become unknown. The
+first nineteen-source comparison found fourteen missed rejections, including wrong payload
+types and arity, unknown variants, constructor returns and alias identity.
+
+Constructor metadata now retains the parser's declaration-order variant index. Enum declaration
+records carry scalar and named payload types and scalar-array lengths. Tuple payloads reserve
+an unknown field, preventing subsequent payload requirements from shifting. The host transports
+these source facts and the stage applies its existing count and agreement rules. Equal byte sizes
+are never used as evidence of nominal identity. The new metadata is consumed before reconstruction.
+
+Positive artifact controls exposed a separate existing enum-to-Word cast error. The parser had
+emitted a plain widening cast and code generation emitted ByteToWord. The reference instead
+evaluates the enum once and emits a variant-dispatch loop. The pipeline now reuses its enum match
+assembly and emission, retaining the cast-specific fallback trap. Internal record 74 builds this
+dispatch into the existing Cast node. The public instruction set is unchanged.
+
+Expanded controls then found missing parser enum facts on aliases. Parameter and local enum
+facts now reach subsequent bindings, and scalar literals and Byte casts clear stale enum facts.
+Eleven complete artifact and runtime comparisons cover these paths and return seven. The first
+diagnostic was sampled in the shadow pilot. Later cast diagnostics remain in engineering logs
+under the first-diagnostic convention. Full composite typing, production wire emission and the
+Order 1 completion gates remain open.
+
+## 2026-10-04 Composite identity must survive representation lowering
+
+The independent production checker made previously hidden composite gaps observable. The first
+sixteen-source comparison found twelve invalid programs accepted and one valid program rejected.
+The false rejection was an unknown-name diagnostic after a direct struct-returning call, whose
+return declaration was known but whose field postfix had not been armed.
+
+Constructor byte size cannot establish nominal identity. Two distinct structs may have the same
+size and field count. The parser's existing struct metadata now carries the source name id above
+the count. Extraction pairs these postorder identities with reconstructed constructors and checks
+their fields against source declarations. Function headers reserve every parameter position before
+reading its type, so tuple headers that emit no type record cannot shift later scalar declarations.
+
+Scalar-array types use the element tag in the low four bits and the length above it. Nominal
+structs and enums use distinct low-bit classes, preventing accidental agreement with an array of
+the same storage size. The stage derives a literal array's tag after resolving its element facts.
+The supported length bound keeps this representation within a 32-bit Word. Larger lengths and
+non-scalar elements remain unknown in this channel. Nominal enum tags exposed a valid enum-to-Word
+cast that needed an explicit stage rule. A proposed empty-array control was invalid under the
+reference compiler and was removed from the positive population.
+
+The broader scalar-access corpus exposed an entire array field being lowered as a scalar read.
+The previous unknown array parameter type had concealed that representation error. Whole composite
+fields now emit the existing nested-field operation. Array parameter and return signatures also
+needed their outer shape retained. Complete artifact comparison and execution returning seven
+cover that correction independently of the type verdict. Named struct signatures, complete tuple
+and nested-array typing, composite aliases and enum constructor payload facts remain incomplete.
+
+## 2026-10-04 A production verdict must precede its oracle
+
+The first integration test rejected an invalid program through the Rust reference, demonstrating
+that the shipping entry could mask a missing independent verdict. The new production runner
+uses scoped Keleusma parser and reconstruction facts. The reference compiler bootstraps the
+embedded rejection stage, but does not inspect the user source before the independent verdict.
+Successful scoped checks still require the reference gate because composite coverage is incomplete.
+
+The transport derives field offsets and capacities from named compiled slots. Stage functions
+supply verdict constants and the execution bound. A fresh owned arena and zeroed shared buffer
+per batch prevent private solver state from crossing source heads. Protocol, capacity and virtual
+machine errors do not become source rejection. Existing extraction panics are caught as unavailable
+evidence. This does not eliminate upstream panic paths or their default panic-hook output.
+
+Tests distinguish twenty invalid sources and seven valid controls, plus sixteen rule/form cases
+and eight controls. A separate twelve-stage comparison reaches both transports. Boundary and
+malformed-input controls establish that an unavailable verdict cannot masquerade as a type error.
+
+The command probe initially compared the two backend flags on the same file and found different
+artifact sizes. Inspection established different effective sources. The Rust command adds native
+signature declarations while the self-hosted command does not. The maintained command test compares
+with the corresponding production library artifact, then executes it and asserts the result.
+Artifact agreement and execution are separate observations. Neither establishes wire-emitter provenance.
+
+## 2026-10-04 Admission checks exposed scope defects in both compilers
+
+Guarded match arms cannot establish coverage even when their condition is a literal true.
+The parser now records unguarded catch-alls and declaration-row coverage. A bit per active
+match depth preserves outer coverage across nested guards and results. A checked eight-level
+limit prevents indexing past the match stacks. Pattern syntax outside this path remains an
+unsupported diagnostic rather than being reported as invalid source.
+
+The first coverage implementation rejected valid direct enum scrutinees. Unit construction
+needed the following token to finish, but the match boundary consumed that token first.
+Declared constructor and call result types now reach match selection after the expression
+finishes. Complete artifact comparison additionally exposed missing enum signature shapes.
+They now use declared discriminant and payload sizes without reference inference. Valid controls caught this error direction, which a negative corpus could not reveal.
+
+Restoring parser loop scopes produced an artifact disagreement with the reference. Inspection
+showed the reference retaining its induction variable in the enclosing scope. A source with an
+outer value of seven consequently read the loop slot at the tail. The reference now opens a
+scope around every loop form. It also hides the allocated induction name while compiling the
+upper bound, matching the type checker's scope order while preserving slot allocation order.
+Execution assertions establish the expected value independently of artifact agreement.
+
+Scoped input extraction also obtains induction-variable and bound constraints from the loop
+side tables. These are source-defined Word facts and do not borrow reference inference. The
+remaining composite and production paths remain separate completion obligations.
+
+## 2026-10-04 Scalar access facts already existed in the layout records
+
+Inspection of code generation established three distinct scalar access record shapes. Struct
+and tuple fields pack a byte offset below the scalar kind. Array-element reads carry the kind
+directly. The scoped type operand adapter previously treated these nodes as unknown even
+though the parser had already derived their layouts from source declarations.
+
+The adapter now translates those layout kinds to Word, Byte and bool type tags. It shares
+the translation with enum payload binding records. Composite field and array accesses use
+different node kinds and remain unknown rather than receiving an element's tag. This preserves
+the distinction between a scalar projection and the complete container passed to a function.
+
+The initial twenty-six-program comparison reported nine invalid programs accepted by the
+pipeline. After the adapter change, all cases agree with the reference. The controls cover
+conditions, return types, call arguments, alias chains, tuple fields and contextual Byte
+arithmetic. Some invalid controls already rejected because another known operand sufficed.
+The nine before-change failures establish that the new facts actually change verdicts.
+
+This does not establish complete composite typing or admission. The broader type adapter,
+loop scopes, match exhaustiveness, production verdict path and wire emission remain open.
+The pilot preserves the first failing comparison and marks its self-review non-independent.
+
+## 2026-10-04 Guards must survive execution
+
+The first runtime comparison confirmed that the parser discarded guards. Merely extracting
+an additional boolean requirement would have made the rejection census pass while continuing
+to execute false arms. An internal guarded-arm node now carries condition and result as separate
+children. Code generation emits the guard after pattern binding and places the arm Break inside
+its If. The type walk checks the condition and compares the actual result across arms.
+
+The old wildcard representation assumed one final wildcard. That cannot express a guarded
+wildcard followed by another arm. Parser records now preserve every wildcard position. The
+reconstructor retains earlier wildcards in the ordered table and compacts a final wildcard into
+the existing trailer. A naive fixed-size entry for every wildcard would have reduced the old
+maximum enum-arm capacity. The compact trailer and twelve-variant control prevent that regression.
+The lexer gives `when` its own token, and match expression boundaries track grouping and nested
+block context. An operator marker separates an enclosing expression from the match's scrutinee,
+guards and results. Match-arm name scopes restore after each arm.
+
+Enum payload guards exposed missing scalar binding facts. Their parser records already carry
+the source-declared scalar kind and allocated slot, so scoped inputs use those facts without
+reference inference. Complete artifacts exposed additional assembly omissions invisible to an
+opcode-only comparison. Enum layout minimum payload had always been zero, and Boolean parameters
+were classified as composite with an unknown verifier shape. The enum declaration END now carries
+the size already computed by the stage. Both Boolean metadata tables now use the declared type.
+
+One proposed valid control had only a guarded Word wildcard. The reference rejects it as
+non-exhaustive. The control was corrected to include an unconditional fallback. That failed probe
+is retained, and match exhaustiveness remains an admission audit item. The new corpus does not
+establish complete syntax coverage or full-language support. Composite facts and loop scope also
+remain incomplete.
+
+The first diagnostic in the shadow pilot is a test authoring error, equality on Chunk without
+PartialEq. A second incorrect test call signature was corrected alongside it. Later runtime and
+artifact discrepancies remain in the engineering logs under the first-diagnostic convention.
+The pilot's completion claims include command, exit and suite identity with non-independent
+self-labels. External evaluation remains pending authorization and has not altered any gate.
+
+## 2026-10-04 Declaration constraints expose branch scope
+
+Moving the rule-versus-form census onto pipeline inputs exposed four accepted negatives. The
+reference-input harness had concealed missing transport for annotations, stores and indices.
+The same source tables now drive both harnesses. The pipeline census has no expected-gap list.
+It remains red on the fourth case, a match-arm guard discarded during parsing.
+
+An annotated local needs two facts. Its initializer must agree with its declared type, and uses
+of the binding must retain that declaration. Parser metadata tag 92 records the source type name
+before the existing LetIn record. Pending statement frames preserve outer annotations through
+nested initializer bindings. Existing type row 8 checks agreement and provides the binding result.
+No public bytecode opcode or version changes. The initial temptation to reuse contextual Byte
+literal conversion was rejected after inspecting the reference statement checker. That conversion
+belongs to binary operators and comparisons, not declarations or assignments.
+
+Data reads and stores use source declaration ranges in parser slot order. Const fields take no
+runtime slots. Array ranges carry their element tag without allocating one row per element.
+The assembly path has a different shared-first order, so its offsets are not suitable for this
+source-fact lookup. Scalar and nested value-array indices and indexed data operations produce
+Word requirements through the shared expression walk. Composite result types remain incomplete.
+
+A nested-shadowing positive control failed after these constraints became visible. The parser
+kept then-branch names alive while reading the else branch. Restoring the live-name stack alone
+would have relaxed the per-function binding cap and retained obsolete composite shape metadata.
+The fix therefore keeps a separate total binding counter and clears reused shape entries. Frame
+slots stay monotonic. Tests establish sibling and implicit-else artifact identity, absence of
+out-of-scope names and the original total cap across disjoint branches. Loop and match scopes
+still require their own coverage and are not claimed complete.
+
+All twelve complete stage artifacts still match the reference after these changes. The scoped
+census remains the sole failing test in the selected stage suites. Match guards need preservation
+through parser, reconstruction, type inputs and code generation. Merely extracting a guard while
+continuing to discard its runtime behavior would not satisfy that obligation. The pilot retains
+the first diagnostic and three exact-command execution claims with non-independent self-labels.
+No external evaluation occurred while its specific approval request remains pending.
+
+## 2026-10-04 Parser failures as rejection evidence
+
+The full scoped rejection corpus exposed six failures that the earlier scalar witnesses did
+not cover. Unknown identifiers and fields silently selected existing slots. A bare function
+reference left the call parser waiting until a later parenthesis. Scalar projections left
+unfolded operands and failed during reconstruction. Those outcomes cannot be treated as
+interchangeable with a source rejection.
+
+The shared parser transport now has a Result interface preserving diagnostic tags and details.
+Its panicking wrapper remains for existing consumers. The scoped type-input helper propagates
+parser errors. The rejection harness accepts only explicitly classified source diagnostics or
+a false type-stage verdict. It records every unexpected panic as unavailable evidence.
+
+The parser preserves primitive annotations in pending-statement and binding storage for scalar
+projection checks. Composite annotations must be classified by their outer syntax, so an array
+or tuple containing Word is never mistaken for Word. The pending statement stack keeps an outer
+binding's annotation intact while its initializer contains nested bindings. General annotation
+compatibility remains outside this increment.
+
+A dot after a scalar can begin a valid trait method call. The parser therefore waits through
+the following identifier before deciding between a scalar field error and unsupported method
+syntax. Unknown struct fields use the same distinction. Missing names also require care around
+imports, contextual assertions and unsupported patterns. Separate diagnostics preserve those
+boundaries, and the first lexer pass carries import presence to the parser. This remains a
+partial syntax admission analysis, not a claim that every unsupported form has been classified.
+
+The boolean-parameter control exposed a pre-existing uppercase Bool seed. The language primitive
+is lowercase bool. Correcting the seed made the parameter projection check reachable. A legacy
+projection probe also counted any panic as success and temporarily suppressed the process-wide
+panic hook, hiding neighboring test diagnostics. It now checks structured errors directly.
+
+The const-parameter occurrence probe now receives an unsupported diagnostic rather than an
+incomplete occurrence table. The remaining loop and payload binder omissions are still measured.
+Generic identity functions continue reaching the production divergence check. Forward data and
+forward native-import candidates were rejected by the reference and were removed from the valid
+control list. These failed probes remain in the increment logs.
+
+Final verification preserves complete artifact identity for all twelve stages. The type corpus,
+valid controls and stage-capacity checks pass, but production type rejection, general input
+coverage, wire emission and the final integration gates remain open. The shadow pilot captures
+the first diagnostic and completion claims with non-independent self-reviews. External evaluation
+remains pending the existing specific authorization question.
+
+## 2026-10-04 Scoped scalar expression results
+
+The initial witness passed a comparison result to a Word parameter. Reference compilation
+rejected it, but the pipeline call channel accepted because computed operands were unknown.
+The batch now includes expression constraints and form-2 result bindings. Synthetic identities
+include the source head, range and node index, so calls, local initializers and return rows can
+refer to the same computed value. The expression walk is shared with the legacy projection.
+
+A result rule cannot treat every binary operator as returning its operands' type. Comparisons
+produce bool and shifts preserve only the left type. Boolean operators, numeric unary operators,
+scalar casts and branch results also have distinct rules. All joins and coercion decisions remain
+in the Keleusma stage. The host supplies operator shapes and source literal values.
+
+The reference coerces integer literals from 0 through 255 to Byte in binary arithmetic and
+comparisons, but not in shifts or calls. A new operand form retains that literal syntax, and
+binding forms remain a separate namespace. The parser also erased xor's restriction by emitting
+the inequality operator tag. It now retains xor until code generation maps it to the existing
+comparison instruction. No public opcode or bytecode version changes.
+
+The corpus exercises 33 valid and invalid scalar cases plus two 16-link computed chains. It
+checks result-row indices within their own batch. All twelve stages fit and pass with maxima
+of 299 combined expression and argument rows and 288 bindings. Composite reads, source
+annotations and production rejection still need work. The initial generic helper moved its
+operand closure into a nested closure; borrowing it corrected the Rust compile failure.
+Clippy then identified a collapsible conditional in singleton-match extraction, now corrected.
+
+The shadow pilot captured the first failed verdict and retains local non-independent labels.
+Later diagnostics are preserved in engineering logs without replacing the first sample.
+External evaluation remains pending the existing specific authorization request.
+
+## 2026-10-04 Call arguments and bounded scope
+
+Reconstructed call nodes already carry argument indices. Extraction now pairs those operands
+with declared parameter tags, preserving local and called-function identities for resolution in
+the Keleusma type stage. Arity remains a separate channel so positional pairing cannot conceal
+extra or missing arguments. Shared operand classification also serves expression extraction.
+
+A flat binding namespace first falsely rejected a valid program whose functions reused a
+parameter name. Source-head, range and frame-slot identities remove that collision. A second
+witness still accepted an invalid parameter named after a global function. The parser was
+selecting the global function first. Local lookup now precedes global namespace lookup.
+The initial implementation used unsupported local mutation syntax twice before being corrected
+to use the parser's existing state field. Both failed runs are retained under ignored tmp.
+
+The aggregate wire-stage facts exceeded the selected cap with 831 bindings. Separate guard
+and body batches retain local dependencies and import only referenced function return facts.
+No cap increase is necessary for the measured corpus. A call followed by two local aliases
+then exposed the stage's single-hop limit. Traversal now has at most one hop per binding row,
+so every acyclic chain fits and cycles terminate. The 640-row boundary is exercised directly.
+
+A complete artifact control found an unrelated assembly discrepancy that chunk-operation
+comparisons had missed. The pipeline encoded an empty data layout and the reference omitted
+it. The assembly helpers now use absence when the slot table is empty. A new complete-artifact
+corpus compares all module bytes from the production compiler and checks its directory inventory.
+Both sides still use Rust serialization, so this is not evidence of Keleusma wire integration.
+
+The shadow pilot's first sample remains the initial missing-field-documentation diagnostic.
+Later failures are recorded as engineering evidence without replacing that sample. External
+evaluation remains pending the existing specific authorization request.
+
+## 2026-10-04 Match comparisons and source-head extraction
+
+The initial differential produced no match comparison where reference syntax produced one.
+The driver now reads result indices from the reconstructed integer and enum match tables,
+compares the first result with every later result, and includes the enum wildcard only when
+its presence flag is set. Nested dispatch, wildcard-only matches, named operands and later
+mismatched arms are covered. An enum payload binder remains unknown on both input paths.
+
+The same review revisited the missing multiheaded return checks. Dispatch construction had
+combined all heads into a synthetic root and remapped their frame slots. The parser still held
+separate body and guard streams. Reconstructing those streams separately for type facts restores
+each source head's return requirement and own parameter and local names. Code generation retains
+its existing dispatch construction. Derived-row indices refer to the accumulated expression rows.
+
+Probes rejected two assumptions. Bare block results in a match are rejected by the reference
+parser. A function guard containing `1` is accepted by the Rust reference compile path, while
+match guards have an explicit boolean requirement. The new extraction keeps function guard
+subexpressions but adds no root requirement. The self-hosted parser discards match guards, and
+integer matches without a wildcard fail during reconstruction. These remain recorded limits.
+
+The shadow pilot recorded the first failed differential before any model judgment. The local
+self-review is explicitly non-independent. External evaluation remains pending the operator's
+answer to the existing destination-and-payload approval question. Later implementation diagnostics
+were not sampled because this increment uses the first-diagnostic convention.
+
+## 2026-10-04 Struct field counts and unary conditions
+
+The parser already resolves a struct literal to its declaration. It now emits that
+resolved declaration's field count as metadata immediately before the existing construction
+record. A single private word holds the delayed construction record. The driver consumes the
+metadata before reconstruction, so it adds no expression node and does not reduce the node budget.
+The existing construction record supplies the given count. The type stage performs the comparison.
+
+This avoids guessing declared fields from byte size. The equal-size witness retains identical
+construction records and now has different metadata. Nested and reordered literals preserve their
+own counts. The first differential failed with no emitted kind-7 row and passed after wiring.
+The kind inventory now includes six kinds, with remaining syntactic forms stated separately.
+
+Review of those forms found that condition extraction handled `if` but omitted unary `not`.
+The expanded differential failed on a valid `not true` source because its condition row was
+missing. The extraction now emits that requirement and direct stage checks include `not 1`.
+
+The shadow pilot captured the first diagnostic and completion claims locally. Live evaluation
+was not retried because the previous automatic approval rejection remains unresolved. Local
+self-review labels do not support an independent classification-accuracy claim.
+
+## 2026-10-04 Explicit else presence for Order 1
+
+The parser emitted identical records for an omitted else and a written empty else.
+The new parser witness failed before the change. The parser now carries one presence bit
+per active conditional and emits it with the If record. Reconstruction encodes an omitted
+else as the negative condition index minus one. Node indices are nonnegative and bounded,
+so this preserves the distinction without another node kind or bytecode opcode.
+Code generation decodes the condition and emits the same executable instructions.
+
+Branch-pair extraction follows the recorded presence and walks each block to its tail.
+An empty or statement-only block contributes an unknown operand, matching the reference
+extraction. Guessing from a synthesized unit would conflate omitted and written else branches.
+The branch corpus includes nested and sequential conditionals to exercise context reuse.
+Match-arm pairs remain outside this extraction even though they share expression kind 4.
+
+The complete type suite caught its stale four-kind inventory assertion after branch pairs
+became reachable. The inventory now names five emitted kinds and explicitly distinguishes
+kind coverage from coverage of every syntactic form. The monomorphization evidence had a
+separate omission, covering ten of twelve stage sources. It now includes the two missing
+sources and compares the list with the stage directory.
+
+The shadow pilot captured the first build diagnostic and two completion claims. The network
+attempt failed at transport. Automatic approval review rejected the escalated evaluation,
+so a specific payload and destination approval request remains pending. An initial excerpt
+had omitted the permission detail and was superseded by a separate complete diagnostic
+record. Local labels are self-review and make no independent-accuracy claim.
+
+## 2026-09-27 — session 67, increment 9: the class was closed for one file
+
+**The finding is about a guard, not a document.** `tests/release_process_crate_list.rs` exists
+because `RELEASE_PROCESS.md` once said five crates when seven publish, and its own opening comment
+states the corrective: "Correcting the document closed the instance. It did not close the class.
+... This test closes the class, by deriving one side from the filesystem instead of trusting both
+sides to be edited together." It then closed the class **for one file**.
+
+`README.md` said "Five crates:" and `AGENTS.md` said "Five workspace crates", both omitting
+`keleusma-wire` and `keleusma-wire-derive` **entirely** — zero mentions of either. `README.md` is
+what crates.io renders, so that was the project's most publicly visible statement of its own crate
+set. `AGENTS.md` is what `llms.txt` names as the first thing a model should read, and no test read
+it at all. `AGENTS.md` also reported V0.2.0 as published while the workspace was at 0.2.2.
+
+**This is the shape `CLAUDE.md` already records**: "AND I FIXED WHAT THE GUARD CAUGHT, NOT THE
+CLASS. The citation guard scans two documents, flagged two bare file names in one, and I corrected
+exactly those." Same shape, different site, and the corrective is the same: name the population and
+derive the expectation.
+
+**Three design choices worth the words.**
+
+The entry-point set is named in the test WITH a justification for each document, because a named
+set nobody can audit is exactly how these two were missed when the original instance was fixed.
+The crate set is derived from the manifests, so no number is written into the test — writing
+"seven" would reproduce the defect one release later, which is the defect's own mechanism.
+And the count check is separate from the naming check, because a document can name every crate and
+still open with a stale total; conflating them lets one failure mask the other.
+
+**The count check's first run flagged history, and the repository's own rule settled it.**
+`RELEASE_PROCESS.md` contains "published all four crates" — a dated V0.2.2 lesson recording what
+an agent did when four was the number. `CLAUDE.md`: "Distinguish a live claim from a ledger entry.
+History recording what was true at an increment is not stale; rewriting it corrupts the record." So
+the check reads only unquoted lines, since this repository keeps ledger entries in blockquotes, and
+**the trade is written into the test**: a live claim inside a blockquote escapes it. That is the
+lesser error, because the alternative pressures a future reader into editing the ledger to make a
+test pass.
+
+**And my own mutation was wrong before the guard was.** The prefix-safety mutation replaced the
+`keleusma-wire` bullet with the derive name and the test passed, which looked like a broken check.
+It was not: the derive bullet's own description says "backing `keleusma-wire`'s `derive` feature",
+so a genuine whole-token mention survived. The real mutation replaces every whole-token occurrence,
+and then the guard names `keleusma-wire` as missing while two `keleusma-wire-derive` mentions
+remain. **Third time this session that my instrument was at fault rather than my subject**, and the
+corrective each time was to look at what the mutation actually produced.
+
+---
+
+## 2026-09-27 — session 67, increment 8: the surface no guard could reach
+
+**Why I looked here.** Two increments earlier I recorded that the coverage seam was thinning,
+after three probes came back clean. That was true of the surfaces I had been probing, and the
+observation was incomplete. The sharper question is not "is there anything left" but **"is there a
+surface that no existing guard can structurally reach"**. `llms.txt` is one: `documentation_links.rs`
+resolves relative markdown links, and every link in that file is an absolute GitHub URL. It was
+outside the guard's reach by construction, not by oversight, and nothing else looked at it.
+
+**It was wrong in four places, in a file that ships to crates.io and exists to orient models.**
+Two dead paths of twenty-nine, an opcode count three too high, and a branching-model description
+contradicted by the very document it links to.
+
+**The opcode diagnosis is the part worth recording, because my first reading was wrong.** I saw 69
+and noted that the specification says the maximum live wire id is also 69, and nearly wrote that
+the two had been conflated. They had not. `CLAUDE.md` records that the `NewComposite`
+consolidation "took the instruction set from 69 to 66", and that landed in V0.2.1 — so
+"the 69-opcode V0.2.0 ISA" was **true when written** and went stale one release later. A
+version-scoped claim that aged is a different defect from a confusion, and it changes the
+correction: the file now states 66 and explains the transition, rather than silently swapping a
+digit.
+
+**The dead paths have provenance.** `git log --diff-filter=D` names `f745b16e docs(book): port the
+learning guide to mdbook (bilingual EN/JA)` as the commit that removed `docs/guide/`, and
+`llms.txt`'s own last two commits predate it. So the links have been broken since V0.2.2 shipped,
+in a file included in that release's tarball.
+
+**The guard is offline on purpose.** The natural instinct with a file full of URLs is to fetch
+them. What rots is the tree — a file moves and the link goes stale — not the host. Stripping the
+`blob/main/` prefix and testing the path against the working tree checks the thing that actually
+breaks, and it runs in a sandbox with no network.
+
+**The branching-model check is deliberately narrow.** Asserting that two documents "describe the
+model the same way" is not mechanisable. The check asserts the specific contradiction that
+existed, and it first asserts its own premise — that `GIT_STRATEGY.md` really does say
+"release-branch model" — so if that document changes, the check fails loudly rather than
+continuing to enforce a stale contrast.
+
+**All three were mutation-tested**: a broken path, a changed count, and a reintroduced
+"trunk-based" each fail and name the problem, and `llms.txt` was confirmed byte-identical after
+each restoration.
+
+**What this revises.** Six of eight increments found real defects. The claim to retire is not
+"the seam is thin" but the method behind it: inspecting surfaces that already sit near a guard has
+stopped paying, while asking which surfaces no guard can reach is still paying. That is a
+generative question rather than an exhaustible list.
+
+---
+
+## 2026-09-27 — session 67, increment 5: an ungated binary two layers down
+
+**The surface.** `examples/rtos` ships a cooperative microkernel. Continuous integration
+cross-builds its two STM32N6 binaries and never touches `three-task-std`, the host binary that
+`CLAUDE.md`, `README.md` and `MANUAL.md` all give as the quick start. The release gate does not
+mention the crate. Six Keleusma task scripts are reachable only through these binaries.
+
+**The first thing I did was run it, and it works.** Five tasks at their documented cadences, a
+boot-time worst-case-execution-time report, the kernel's event ticker, and `faulty.kel`
+tripping `DivisionByZero` on its fifth and tenth iterations with the kernel categorising the
+error `soft-script` and restarting the task. No defect. That is the cheapest moment to guard
+something, which is the conclusion session 66 reached about the scheduler's restart policy.
+
+**Then `cargo test` would not build, and the causal chain is the interesting part.** The
+proximate failure was three compile errors in the lib test target: the crate's two unit tests
+destructured `Value::Enum { type_name, variant, fields }`, the struct variant B28 replaced with
+`Enum(EnumBody)`. Dead code since that change.
+
+The root cause is one layer further down. `bench_n6` was **auto-discovered** from `src/bin/`
+with no `required-features`, while both of its siblings are explicitly declared and gated. It
+imports `defmt`, `embassy_executor`, `embassy_stm32` and a `keleusma-bench` counter that exist
+only under `stm32n6570dk-platform`. So any host-target build or test of the crate tried to
+compile it and failed with eight resolution errors, five unresolved imports and three
+unresolved modules — which means **the test target could never
+build, which is why nobody could see that the tests were broken.** One missing three-line
+declaration made a whole test surface unreportable.
+
+Gating it also made `cargo clippy --all-targets` succeed on the host for the first time, which
+is how CI can now lint this crate the way it lints the language server and the playground.
+
+**The repaired tests are deliberately written at a different level than the ones they replace.**
+The old form destructured a representation; representations change, and this one did. The new
+form compares against a constructed expected value, which pins the contract the six task
+scripts actually depend on — type name, variant name, discriminant, payload — and survives a
+further representation change. Enum equality is padding-tolerant by design, so the assertion
+holds across the flat and boxed forms. A third test was added because the table-driven loop
+would pass if two error codes shared a discriminant and the expected table repeated the value.
+
+**The budget was the code's own request.** `three_task_std.rs` read "The kernel runs forever; a
+later iteration will add a wall-clock budget for CI." `Kernel::run_until` adds it at the
+scheduler iteration boundary where the clock is already read, so it costs one comparison and
+nothing at all in the unbounded case, and `run()` delegates with `None` so its behaviour is
+unchanged. I briefly considered bounding it externally by killing a subprocess instead; the
+internal budget is better because a clean exit is assertable and the kernel gains a capability
+its own comment asked for.
+
+**A near-miss that would have been a false defect report.** Reading the first 45 and last 12
+lines of an 80-line run, I concluded the faulty task never ran, and started looking for the
+defect. It faults at 6016ms — inside the 23 lines I had cut. `CLAUDE.md` records this trap
+exactly: a log truncated by `head` or `tail` looks identical to a clean one. The corrective is
+to filter for the property rather than sample the output, and the second attempt did that and
+found all six fault-and-restart lines immediately.
+
+**The test asserts the demonstrator's purpose, with a control that makes it discriminate.** A
+long run must show every task's own observable plus all three fault-and-restart lines; a short
+run must stop before the first fault. The short run is what proves the fault lines come from
+elapsed runtime rather than from the banner, which names every task and the fault policy in its
+opening paragraph. A malformed budget must be refused, because a silently ignored flag would
+make the bounded tests hang instead of fail. No timestamp, cycle count or line count is pinned.
+
+## 2026-09-27 — session 67, increment 4: resolving an ambiguity I had handed over
+
+**Why this increment exists at all.** In the first increment I recorded that
+`run --print-memory` reports an arena bound for a program `run` refuses, offered two readings,
+said the evidence did not separate them, and left it to the operator. That was defensible in
+the moment and wrong on reflection: the two readings are separated by one line of code, and
+handing over an ambiguity I could have resolved gives the operator less than I had.
+
+**The mechanism.** `module_arena_sizing` ended in
+`auto_arena_capacity_for(module, &[]).unwrap_or(DEFAULT_ARENA_CAPACITY)`. The call returns
+`Result<usize, VmError>` and fails when the worst-case memory usage cannot be bounded. The
+error carried the verifier's own sentence and was thrown away. So the benign reading — that
+the figure is deliberately pre-verification, because a host must learn the size before a
+capacity is fixed — is not what the code does. It substitutes a constant.
+
+**The benign reading was not entirely wrong, and that is why the fix is asymmetric.** Two
+callers shared the function. On the allocation path the substitution IS load-bearing:
+verification compares the arena's capacity against the bound, so something must be allocated
+before the check can run, and refusing would turn a precise verification error into an
+allocation error. `Vm::new` then catches the unbounded case a few lines later. On the
+reporting path nothing ran afterwards, so the substitution was the entire output. The fallback
+now lives in its own named function whose comment states that it is a fallback and what
+catches the case instead — the substitution is visible at its site rather than implied.
+
+**The control is what makes the test mean anything.** A test asserting only that the
+unbounded program is refused passes against a binary that refuses everything, including one
+that cannot parse its arguments. Each refusal is paired with a program that must still
+report, on both input forms, because the reporting path is reached separately for source and
+for compiled bytecode and the defect was present on both. A fix applied to one would
+otherwise have read as covering the other.
+
+**The mutation is the strongest evidence here.** Restoring the swallowing call reproduces the
+original output character for character, fails both refusal tests, and **leaves the control
+passing**. A mutation that failed everything would not have shown the tests discriminate.
+
+**And no byte count is asserted.** Two increments earlier this session removed
+`wrote pulse.bin (2372 bytes)` and `wrote tune.kel.bin (2400 bytes)` from the guide because
+the size of a compiled artifact is not a stable property to promise. Pinning an arena figure
+in a test is the same mistake with a longer fuse, so the assertions are "a figure was
+produced" and "the refusal names the cause".
+
+**What I measured and did not change.** `compile` writes an artifact for the unbounded program
+and `run` on that artifact refuses it. The distinction worth recording is that a bound which
+is computable but larger than the default arena is legitimately emittable — that is what
+cross-compilation is for — while a bound that is not computable at all can be loaded by no
+host at any capacity. `auto_arena_capacity_for` already separates them, so refusing at compile
+time is cheap. Whether it should is a decision about a published subcommand's contract, and
+this time the handover carries the distinguishing test rather than an open question.
+
+---
+
+## 2026-09-27 — session 67, increment 3: the sentence that licenses a merge, unverified
+
+**The claim.** `CLAUDE.md` and `GIT_STRATEGY.md` permit merging on continuous integration
+alone, justified by "CI is a verified strict superset of the local gate". *Verified* was doing
+unearned work: nothing checked it. That is the third instrument this session that was
+attached to less than its description claimed, after a book verifier that never ran on the
+release line and a translation catalogue that reported on itself.
+
+**It was false on the Miri axis.** CI's Miri job runs `cargo miri test -p keleusma-arena`
+under Stacked and then Tree Borrows. The gate's `--miri` step also runs
+`c1_null_text_pointer_marshals_to_empty_string_not_ub` under Tree Borrows, on the library
+package, and CI ran no `-p keleusma` Miri test at all. The test's name states its purpose: it
+pins that a null text pointer does not produce undefined behaviour. It was exercised by no
+merge — only by a human choosing `--miri` before a publication, which by policy is rare.
+
+**I ran the command before writing the step.** Nightly and the Miri component are installed
+here, so the new job step is verified to pass rather than hoped to. Tree Borrows specifically,
+because rkyv archive validation trips Stacked Borrows — already recorded, and the reason the
+gate invokes it that way.
+
+**The gate's own comment asserted the reverse, with clean provenance.** It said including the
+detached subproject made the gate the broader instrument and that nothing else gated it. `git
+log -S` dates the comment to `a5f646bd`; `4483f43e` then added the `selfhost-compiler` job and
+`fa978eff` — subject line "close the coverage holes so CI is a superset of the local gate" —
+deliberately inverted the relationship. The comment was never updated, so for months the
+script asserted the opposite of what the repository had chosen. **Prose that contradicts the
+tree is worse than absent prose, because it reads as current.**
+
+**Three defects of my own, each found by reading rather than by adjusting a threshold.**
+
+The first is the most useful. My workflow parser read `run: |` block scalars and missed inline
+`- run: cargo ...` list items, so it reported **eight** gate commands as unmatched when all
+eight were fine. **The non-vacuity floor passed throughout**, because the block-scalar steps
+alone exceeded it. A floor proves the parse found something; it cannot prove the parse found
+the right population. The eight were only exposed because the failure message printed them and
+I read them instead of relaxing the assertion.
+
+The second is the tenth instance of a class this repository has already swept. My correction
+note to the gate **quoted** the retracted phrases while explaining they were wrong, and the
+new guard asserts their absence — so the quotation satisfied the search exactly as a live
+claim would, and turned the test red. The note now paraphrases, and the guard carries a
+comment explaining that a retraction must paraphrase. Committed inside the increment that
+added the guard against it, which is the familiar shape: knowing the class does not prevent
+producing it.
+
+The third is an exemption I wrote and deleted. It exempted `cargo run` by **verb**, which
+would silently cover every future `cargo run` the gate gained — the coarse form whose hazard
+the exemption list's own comment warns about. Removing it left the test green, because the
+gate's link-checker command and the docs-links job's are identical. The list is now empty and
+that was measured, not assumed.
+
+**What the guard does not claim, stated in the guard.** It shows a counterpart command exists,
+with the same subcommand, package and feature selection. It does not show the two do
+equivalent work: `cargo test --workspace` and `cargo nextest run --profile ci --workspace`
+differ in runner, profile and doctest handling and are intended to correspond. Leaving that
+unsaid would have produced the next unearned "verified".
+
+**Direction is deliberate.** Only gate-to-workflow is checked. CI has many jobs the gate lacks
+and that is the intended shape.
+
+---
+
+## 2026-09-27 — session 67, increment 2: a catalogue that was reporting on itself
+
+**The flattering reading came first.** `ja.po` reports zero untranslated and zero fuzzy over
+3047 entries. Two other hypotheses died quickly too: `SUMMARY.md` has no orphans and no
+dangling links. The remaining question was the one the report cannot answer — a message is
+untranslated only if the catalogue knows it exists — and `messages.pot` was stamped
+**2026-07-08**, holding 2782 messages against 3072 in the source.
+
+**I nearly became the eighth instance of a class this repository has already catalogued.** My
+first measurement compared each `msgid` against the markdown and reported 34 stale. Reading the
+journal found an earlier session doing exactly that, reporting 2,329 of 2,926, recording it as
+"not a finding, it is my wrong model of `mdbook-i18n-helpers`", and **deleting the instrument
+rather than repairing it** — logged there as the seventh instance of a check built from the same
+model as the thing it checks. My 34 had visible false positives on escaped punctuation and on the
+chapter that documents escape sequences.
+
+**What the record closed was the approximation, not the measurement.** The real extractor is
+installed here, which the earlier attempt evidently lacked. `mdbook-xgettext` plus
+`msgmerge --no-fuzzy-matching` is authoritative and needs no model at all.
+
+**The design insight worth keeping.** Two gettext files written by the same tool can be compared
+to each other with zero knowledge of the extractor's transformations, because their escaping is
+identical by construction. Comparing either to the markdown needs the extractor itself. So the
+work splits: a Rust guard compares the two committed catalogues on every branch with no tooling,
+and a workflow step regenerates the template and fails on drift. **Neither alone is sufficient,
+and both files say so** — the guard's own failure message names what it cannot see.
+
+**My first version of the guard was insufficient in a way worth recording.** It checked only
+that the translation covers every extracted message. That is satisfied by a template which has
+gone stale in the SHRINKING direction: if extraction stopped covering chapters, its messages
+would all still be present in a larger translation. Adding a mutual-size leg immediately
+reported the real state, a gap of 266 with 56 template messages absent from the translation, so
+the two committed files had been generated at different times and neither described the other.
+
+**The split between pre-existing and self-inflicted is stated deliberately.** Thirty
+untranslated and six orphans were on `v0.2.3`; eight and seven were added by increment 1's own
+English edits, hours earlier, when it corrected the productivity-rule entry. A combined total
+would have quietly absorbed my own regression into the baseline.
+
+**Where I stopped, on purpose.** Filling the 38 untranslated messages is authoring Japanese
+prose into a published, human-curated artifact. That is an editorial act and the operator's, not
+a mechanical consequence of a measurement. The merge inserts empty entries and invents nothing;
+the translation is recorded as an item.
+
+**And `book.yml` was the same defect increment 1 had already found and only half fixed.** It
+triggered on `main` alone while `ci.yml` had been extended to `[main, 'v*']` with a comment
+explaining precisely this reasoning. So the example verification, both book builds, the
+playground build, and the new drift check had never run on the release line. Extended, with
+deploy gated to `main` in its own job and the pull-request supersede group `ci.yml` reasons
+about at length — the `pages` group had to move off the workflow, since at workflow level it
+would serialise the build jobs.
+
+**Everything here was mutation-tested, including the restorations.** Forty emptied translations
+trip the debt ceiling; a truncated template trips the size check; a sentence appended to a
+chapter makes the drift check fail and its removal makes it pass again. Each mutated file was
+then confirmed byte-identical to its backup, because a mutation test that leaves residue turns
+the next measurement into a reading of no tree at all.
+
+---
+
+## 2026-09-26 — session 67, increment 1: the book's code is executed, not displayed
+
+**What was measured before anything was built.** 175 bare Keleusma fences in `book/src`,
+60 of them complete programs, 26 verified. `book.yml`, which owns the only verification,
+triggers on the default branch: last run 2026-07-24, never on `v0.2.3`. The script printed
+`checked` and compared it to nothing, so an empty run exited zero. The 51 existing
+assertions **passed** on this tree, which is an honest negative and also the point: the
+value was entirely in what nothing reached.
+
+**Why the reach collapsed silently.** The extraction was prose-shaped. A block was
+asserted if a sentence within fifteen lines said "output is" or "prints"; everything else
+hit a `continue` that incremented no counter. Two further filters were invisible: `if "fn
+main" not in code` excluded all eight `loop main` and both `yield main` programs, and a
+bare fence was assumed to be Keleusma while nine shell invocations are fenced bare.
+
+**The design choice worth recording: the expectation is written down, not inferred.** A
+first census inferred intent from surrounding prose and immediately mis-classified the
+**Rewrite** half of a rejected-then-corrected pair — a program that must compile — as one
+that must be refused. A classifier good enough to count is not good enough to judge. The
+expectation is an HTML comment above the fence: invisible when rendered, carried with the
+code it describes rather than in a manifest keyed by line, and absent from `book/po`,
+which contains no HTML comment and no fence line.
+
+**`prelude` exists because a fragment fed to a compiler looks exactly like a defect.**
+Several chapters advance by saying "change the program to ..." and printing only the
+replacement entry point. Run standalone, `23_big_numbers.md`'s block fails with
+`undefined function add_checked` — which is the harness misreading the book, not the book
+being wrong, and session 66 paid twice for exactly this confusion. `prelude` strips the
+preceding program's entry point and prepends the rest. `22_newtypes_and_refinement.md`
+then reproduces its chapter's quoted refinement diagnostic **exactly**, a verification
+that chapter has never had.
+
+**The harness nearly shipped with a vacuous rejection check.** `reject` first used
+`keleusma compile`, which writes bytecode without the structural pass and **accepts the
+recursive program that `keleusma run` refuses**. The chapter-19 expectation failed, which
+is the only reason this surfaced. `compile` is now `run --print-memory`, which verifies and
+exits, and `reject` is the full `run`. A rejection expectation checked with a command that
+cannot reach the check is the second row of the companion table wearing new clothes.
+
+**Three defects, and the third was fixed in the implementation.** The `FAQ` described a
+lexical productivity rule that no longer exists. Two byte counts were stale and are now
+removed rather than corrected, because the size of a compiled artefact is not a stable
+property to promise. And `WHY_REJECTED.md` quoted a first-class-function diagnostic the
+pipeline could not produce: the text is in `src/compiler.rs`, the type checker refused
+first with `undefined identifier`, and its site carried the comment "Bare function name
+reference. Report unknown." **The name is defined.** Emitting the accurate wording from the
+type checker makes the guide true and fixes a message that sent readers hunting for a
+missing definition. A control confirms an actually-undefined name still reports as one.
+
+**Reach, demonstrated rather than assumed.** An empty source tree trips four floors; a
+flipped expectation fails; a refusal for the wrong reason fails and says so; a deleted
+marker fails. And the Rust guard caught a real divergence — it rejected `prelude` as
+malformed because only the script knew that form — which is the cross-check between the two
+implementations working before I noticed the gap myself.
+
+**Recorded and not acted on.** `run --print-memory` reports an arena bound for a program
+`run` refuses, the transient figure equalling the whole default arena. Two readings, and the
+evidence does not separate them; the benign one does not cover this case, whose refusal is
+recursion rather than capacity. Left to the operator, with the reproduction.
+
+---
+
+## 2026-09-25 (hundred and sixth) — naming the class, beside the table it does not belong in
+
+### THE LAST EXPORTED SURFACE
+
+The playground crate exports `check`, `disasm`, `keywords`, and
+`Session::{new, reset, step}`. Eight tests covered all but **`reset`** — the playground's
+reset button, with no coverage at all. It now has one, asserting the behaviour rather than
+the call: after stepping twice and resetting, the next step returns to the FIRST yield and
+the step counter goes back.
+
+**A test that only called `reset` and checked the next step returned something would pass
+against a `reset` that did nothing**, since stepping a third time also returns something.
+Demonstrated: stubbing the body out fails the test.
+
+The wasm32 build could not be verified locally — that target is not installed here — but
+the change is inside `#[cfg(test)]`, which is not compiled for it, so it cannot affect
+that build. Said rather than glossed.
+
+### THE CLASS THIS SESSION KEPT FINDING NOW HAS A HOME
+
+`CLAUDE.md` carries a catalogue of eight ways a green run has lied, and the section states
+their common property: **the run did LESS than the reader believed.**
+
+Six findings this session do not share that property. In each, the command ran fully and
+honestly, reported truthfully, and **the subject was never reached**. A green result there
+is not an under-report; it is an empty one.
+
+- A family producing **zero** cases behind a healthy aggregate of 5184.
+- Cases attacking a check **not on the path under test** — nineteen mutants of a field
+  compared only at hot swap, run against a fresh load.
+- A phase **entered but never advanced**: every accepted mutant got one argument-free
+  call, so the reentry path the typed pass explicitly defers on was never entered.
+- An **instrument sharing a failure mode with its subject**: a recursive builder
+  overflowing alongside the recursive walk it measured.
+- A **harness breaking the subject** so the result looked like a defect — and two
+  increments earlier, a probe reading identically WAS one.
+- A check passing **whenever its anchor is any ancestor**, which is always.
+
+**They are filed BESIDE that table, not in it.** Adding them to it would make its stated
+common property false of its own rows, and that property is the useful part — it is what
+tells a reader which corrective applies.
+
+### THE CORRECTIVES ARE GENUINELY DIFFERENT, WHICH IS WHY THE SPLIT EARNS ITS KEEP
+
+For the existing table: **know what a command covers.** For this one: **count what was
+REACHED** — how many cases arrived at each stage, how many ran, how deep the walk got —
+and fail when a count collapses.
+
+Every instance in the new list was caught by such a count, **never by the assertion it
+supported**. That is the operational claim, and it is checkable against the six entries.
+
+The same applies to a control. Three increments running, a case that must SUCCEED is what
+stopped "everything was refused" from reading as "the refusals were meaningful".
+
+Recorded as **not exhaustive**, and as the younger of the two lists.
+
+## 2026-09-24 (hundred and fifth) — the validity check could not detect the thing it was for
+
+### THE HANDOFF WAS 32 COMMITS STALE AND VALIDATED CLEANLY
+
+`HANDOFF.md` is the resume anchor, and the protocol makes keeping it current the agent's
+job. It was stamped at `89a13bfb`, **32 commits and eleven merged pull requests** behind.
+
+Running its own validity procedure:
+
+- **Ancestry PASSED.** It always would. The stamped commit stays an ancestor forever on a
+  branch that only moves forward, so ancestry answers "was there a reset?" and nothing
+  else.
+- **Four of five content checks PASSED.** The fifth failed only because this session
+  happened to add a test to the file that check counts.
+
+**Without that accident the handoff would have validated cleanly while describing a
+superseded tree.** A resuming session would have acted on it.
+
+### THE CHECK ANSWERED A DIFFERENT QUESTION THAN IT APPEARED TO
+
+The file presents its procedure as establishing that the handoff is trustworthy. What the
+procedure actually establishes is that the handoff does not describe a tree that never
+existed. Those are different questions, and the gap between them is exactly the failure
+mode a resume anchor has.
+
+The content checks are a snapshot of incidental facts. They drift when the tree changes in
+the particular ways they happen to sample, and hold otherwise. **They are evidence about
+those five facts, not about currency.**
+
+### THE FIX IS A MEASUREMENT, NOT A STRICTER STAMP
+
+The tempting repair is to require `HEAD~1` to equal a recorded parent. This file already
+records that such a stamp **failed three times**, and it is right to: it asserts that
+nothing else ever lands, which on a shared branch is false by construction.
+
+The honest mechanism is `git rev-list --count <stamp>..HEAD`. It is not pass-or-fail. Zero
+means current; a small number means slightly older and the state section is probably still
+usable; a large number means treat every specific claim as historical. **It tells a reader
+how much to trust rather than pretending the answer is binary** — which is the same shape
+as this repository's preference for censuses over verdicts.
+
+One wrinkle worth stating rather than leaving a reader to puzzle over: a freshly refreshed
+handoff reads **one or two**, not zero, because it cannot stamp the commit that carries it.
+
+### DEMONSTRATED, NOT ASSERTED
+
+The new measure reports **32** against the old stamp — precisely the staleness ancestry
+waved through. The refreshed file was then validated by running its own procedure end to
+end, including the rendered order of its numbered list, which this file has twice had
+broken by an agent that had just read the warning against it.
+
+## 2026-09-24 (hundred and fourth) — my harness said the server was broken, and the harness was wrong
+
+### THE LAST THIN SURFACE FROM THE WORKSPACE CENSUS
+
+`keleusma-lsp` is 390 lines with six unit tests and no integration test, and it is
+EXCLUDED from the workspace, so a root `cargo test` never reaches it. Continuous
+integration runs `cargo test` for it in its own job, so tests added there do execute —
+checked before writing any, because a test nobody runs is the failure mode being closed.
+
+Its six tests call `analyze`, `document_symbols` and the completion helper directly.
+Those are the pure functions. **Nothing covered the layer an editor talks to.** Same shape
+as the task runner: unit pieces green, integration absent.
+
+### THE PROBE SAID THE SERVER WAS BROKEN
+
+Piping a finite file of JSON-RPC messages produced:
+
+```
+{"jsonrpc":"2.0","error":{"code":-32800,"message":"Canceled"},"id":1}
+{"jsonrpc":"2.0","error":{"code":-32002,"message":"Server not initialized"},"id":2}
+```
+
+Handshake cancelled, everything after refused, and **no diagnostics published** for a
+document that does not parse. That reads exactly like a non-functional server, and two
+increments earlier a probe reading exactly like that WAS one.
+
+**It was my harness.** A finite pipe means end-of-file arrives immediately; the server
+cancels work in flight and never initialises. Holding the input open, the handshake
+succeeds, three capabilities are advertised, and `fn (` yields one diagnostic.
+
+### WHY THIS ONE IS WORTH A JOURNAL ENTRY
+
+Five suspicions this session have been refuted by checking before claiming. **This is the
+first where the instrument, not my reading of the subject, was at fault** — and it is the
+most dangerous kind, because the false signal was *identical in shape* to a real defect I
+had genuinely found days earlier. Pattern-matching on "the probe says it is dead" would
+have produced a confident, wrong defect report against working code.
+
+The rule, written into the test file: **a server given a closed standard input is a broken
+harness, not a broken server.**
+
+And the mitigation that matters more than the rule: closing the input early is
+demonstrated to make these tests **fail**, not pass. The trap can cost a wrong diagnosis;
+it cannot cost a false pass.
+
+### THE CONTROL, AGAIN
+
+A valid document publishing zero diagnostics is what makes "a malformed one publishes one"
+mean anything. Without it, a server reporting an error for every document satisfies the
+test. That is the third increment running where the control carried the evidential weight
+rather than the assertion it supports.
+
+## 2026-09-24 (hundred and third) — a claimed body of tests that did not exist
+
+### CENSUSING ONE LEVEL UP
+
+The productive move all session has been finding shipping surfaces with no end-to-end
+coverage. Applied to the workspace rather than to one binary, counting tests per member,
+`keleusma-arena` reported **51 unit tests and no tests directory** — while `CLAUDE.md`
+said, twice, "59 keleusma-arena (51 lib plus 8 integration)".
+
+**That is not a figure drifting.** It asserted a body of eight integration tests that did
+not exist in any form.
+
+### THE GUARD FILE HAD ALREADY NAMED THE REGION
+
+`tests/claimed_counts.rs` exists because the instructions once stated test counts three
+times wrong. Its header says the lib, arena and bench figures are RUN counts it cannot
+cheaply confirm, and that "the others remain unguarded".
+
+**This is the second defect found in exactly that region**, the first being the
+stage-source count. The header was right to flag it and right about the consequence.
+
+But the wrong half here was **statically derivable after all**: whether a tests directory
+exists and how many `#[test]` it holds needs no cargo run. The run count (51) genuinely
+is not checkable here; the structural claim always was.
+
+### FIXING IT BY MAKING THE MISSING THING EXIST
+
+The cheap repair is to correct the number downward. The better one is to write the tests,
+**but only because they have independent value** — writing tests to make a number true
+would be the wrong reason, and worth naming as such.
+
+The value is real: `keleusma-arena` is published, and an integration test can reach only
+the **public** interface. That catches an item that is not actually exported, and an
+interface unusable without a private helper. A unit test cannot fail for either reason,
+and every one of the crate's 51 tests was a unit test.
+
+### AND THE FOURTH SUSPICION THIS SESSION THAT READING REFUTED
+
+My budget test asserted that an arena holding 512 bottom bytes would report a 64-byte
+bottom budget as not fitting. It failed.
+
+`fits_budget` is `budget.total() <= capacity`. It asks whether a **budget** is admissible
+for the arena at all; **current usage does not enter the answer**, and the method's own
+documentation says so. The name invites the opposite reading, which is why the corrected
+test pins that current usage is irrelevant rather than merely testing the true direction —
+the next reader will make the same assumption I did.
+
+### THE GUARD DERIVES BOTH SIDES
+
+Neither the claim nor the directory is pinned, so adding an integration test and updating
+the instructions together stays green, while doing only one of the two does not. It is
+demonstrated non-vacuous in **both** directions: restoring the original "8" fails it, and
+hiding the tests directory fails it.
+
+## 2026-09-24 (hundred and second) — everything a broken subcommand documented was also unverified
+
+### THE INFERENCE
+
+`run-tasks` could not run a single task until two increments ago. That does not only mean
+the two defects were unguarded — it means **every behaviour the subcommand documents had
+never executed**. Restart policy, restart rate limiting, multi-task isolation, periodic
+scheduling: all described in `RUN_TASKS.md`, none ever run.
+
+So the prior on further defects was high. I probed each before writing anything.
+
+### ALL CORRECT, WHICH IS THE CHEAPEST MOMENT TO GUARD
+
+Measured: a faulting task with `restart = "always"` restarts on each error and is disabled
+after its limit; the sibling task and the runner are untouched; a periodic task runs for
+seconds without error. No new defect.
+
+**The restart path carries the most weight**, because it re-allocates the arena and
+re-instantiates the machine — the path whose defect I repaired. Three restarts exercise
+it three times, so a regression is that defect returning.
+
+### A DOCUMENTED DISTINCTION THAT VALID SOURCE CANNOT READILY PRODUCE
+
+`RUN_TASKS.md` separates `on_error` from `always` by what happens on **voluntary**
+termination, hedging it as "unusual for `loop main`".
+
+It is more than unusual. A `loop main` that never yields **does not compile**:
+
+```
+error: structural verification: main: Stream block must contain at least one Yield,
+directly or by delegating to an always-yielding function
+```
+
+So the distinction rests on a case the productivity requirement resists. The document now
+says so, and the test file records that behaviour as **not tested for that reason rather
+than by omission** — which is the distinction that matters, because a reader counting
+covered behaviours would otherwise see a gap and not know whether it was considered.
+
+### AND I BROKE MY OWN RULE DELIBERATELY, WHICH IS DIFFERENT FROM BREAKING IT
+
+A prior brief in this session said: do not assert on log wording where state is
+observable. Here a **restart count has no externally observable state** — the scheduler's
+report is the observable. Asserting it is therefore legitimate, and the file says so
+rather than quietly doing it.
+
+Two mitigations: a stable substring is matched rather than a formatted line, and every
+structural consequence that DOES exist is asserted alongside — the runner surviving, the
+sibling never reported as errored or terminated. The structural half is what would catch
+a scheduler that printed the right words and did the wrong thing.
+
+## 2026-09-23 (hundred and first) — generalising the run-tasks lesson by counting
+
+### THE CLASS WAS CONFIRMED, SO THE NEXT MOVE WAS TO COUNT IT
+
+`run-tasks` was completely broken because nothing exercised it end to end. That is a
+confirmed severe class rather than a worry, and the obvious generalisation is: **which
+other shipping subcommands are in that position?**
+
+Counting invocations by tests that actually run the binary:
+
+| subcommand | invocations |
+|---|---|
+| `run` | 24 |
+| `compile` | 14 |
+| `keygen` | 3 |
+| `strip` | **1, and a REFUSAL case only** |
+| `version` | **0** |
+
+`strip` is the same shape `run-tasks` was: a real transformation whose success path
+nothing exercised. The refusal case, which I had added myself two increments earlier,
+made it look covered in a naive count.
+
+### IT WORKS, AND THAT IS WHEN THE GUARD IS CHEAP
+
+Measured before writing anything: a debug build is 4812 bytes, the plain build 3780, and
+stripping the debug build produces **exactly** the plain artifact, byte for byte.
+Stripping is idempotent. All three run to 42.
+
+So no defect this time. **A subcommand that works today is precisely when a guard costs
+least and is worth most** — the alternative is discovering the regression the way
+`run-tasks` was discovered.
+
+### THE PROPERTY CHOSEN MATTERS MORE THAN THE TEST COUNT
+
+The weak test available was "the stripped artifact still runs". It would pass against a
+strip that removed **nothing**, and against one that removed something else as well.
+
+The property asserted instead is **byte identity with the non-debug build**. That pins
+the actual contract — debug metadata is separable without residue — and it fails in both
+of those directions.
+
+Bytes are compared, not lengths. The lengths matched here, and comparing them would have
+been the weaker check with the stronger one sitting in the same two files.
+
+### A FIXTURE ASSERTION THAT EARNS ITS PLACE
+
+The identity test first asserts the debug artifact is LARGER than the plain one. Without
+that, a fixture carrying no debug metadata at all would make the identity assertion
+trivially true, and the test would pass while proving nothing — this suite's recurring
+failure mode, guarded against here before it could occur rather than after.
+
+## 2026-09-23 (hundredth) — consulting the backlog, and finding a shipping subcommand that could not run anything
+
+### THE OMISSION FIRST
+
+Eight increments of self-selected goals, and I had not once opened
+`docs/decisions/BACKLOG.md`. The project maintains a backlog; picking from it is better
+than inventing a ninth goal, and B31 item 4 is labelled **"Highest-leverage item in this
+list per the V0.2.1 close-out assessment"**.
+
+### THE FEATURE WAS THE PRETEXT; THE DEFECTS WERE THE FIND
+
+Writing `run-tasks`'s **first integration test** surfaced two defects, either of which
+alone ended the runner within a second of start. **The subcommand could not run any task
+at all.**
+
+**One: an arena moved after a `&'static` reference into it was taken.**
+
+```
+let arena = Arena::with_capacity(total);
+let arena_ref: &'static Arena = unsafe { transmute(&arena) };
+let vm = Vm::new(module, arena_ref)?;
+Ok(Task { arena, vm, .. })     // moved, and moved again into the vector
+```
+
+The safety comment said "we keep the arena alive in the Task struct for as long as the
+Vm exists". **That is true and insufficient.** Keeping a value alive says nothing about
+keeping it at one address, and a reference cares about the address. The comment reasoned
+about lifetime where the hazard is movement.
+
+It presented as an arena reporting **48 bytes** of capacity — the machine reading a
+stale stack location — and every task failing on its first composite allocation. Boxing
+the arena fixes it: a heap allocation survives every move of its owner.
+
+**Two: a yielded tuple decoded without the arena.** Since B28 a yielded tuple's body is
+flat and arena-resident, so the context-free `from_value` could not read it, and the
+scheduler concluded every task had "yielded a non-tuple value" and finished it. The
+decode now builds a `RefContext` against the task's arena, with widths from the module
+rather than the host's `i64`.
+
+### WHY THEY SURVIVED, WHICH IS THE PART THAT GENERALISES
+
+`run-tasks` had **no integration test**. Not a thin one — none. The unit-level pieces
+(manifest parsing, duration parsing) are covered; the thing the operator actually runs
+was not.
+
+**A subcommand with no end-to-end test can be completely non-functional while every
+test passes.** Both defects are invisible to any test that does not start the process
+and watch it stay up. The regression guard is one such test, and it is deliberately the
+crudest possible assertion — spawn it, wait, is it still alive — because that is what
+catches both.
+
+### THE DIAGNOSIS PATH IS WORTH RECORDING
+
+My first four tests all failed on my own `wait_until_running` guard: *"the runner exited
+before the test could signal it; nothing was exercised"*. That guard existed because this
+session has repeatedly found outcomes that look like passes while testing nothing. Here
+it did the opposite service — it refused to let me proceed against a runner that was
+already dead, and pointed straight at the defect.
+
+Had I written the obvious version, which spawns, signals, and asserts the process is
+gone at the end, **all four tests would have passed against a completely broken runner.**
+
+### THE FEATURE, SCOPED HONESTLY
+
+Full hot reload means draining removed tasks and starting added ones, each owning an
+arena, a machine and a module. That is lifecycle work in an 844-line scheduler and it is
+not landable in one increment, so this is a first slice: apply what needs no lifecycle
+change, refuse and keep running on a manifest that will not parse, and **report every
+deferred change rather than dropping it silently.** An operator who edits a bytecode path
+and sees only "reload applied" would believe something took effect that did not.
+
+The tests observe **timing, not log lines**: `shutdown_grace` governs how long a stop
+takes, so a reload that shortens it is visible as a shutdown in 1.2 seconds against the
+control's 7.0. The control is what makes the first assertion mean anything — without it,
+a runner that ignored the grace entirely would satisfy it.
+
+## 2026-09-19 (ninety-ninth) — guarding the class the CheckedMod defect came from, and six refuted candidates
+
+### THE DURABLE FIX FOR A DEFECT I HAD ONLY PATCHED
+
+Yesterday's `CheckedMod` row was wrong because **nothing asserts the specification's prose
+against the implementation for that class**. Fixing the row fixes one instance. The class
+stays open until something checks it, and `tests/push_order_claims.rs` shows this project
+already guards a different prose class the same way, so the shape is established rather
+than invented.
+
+`tests/spec_trap_claims.rs` drives each opcode whose row makes a trap-or-reify claim and
+asserts the implementation agrees. The population is derived from the specification's own
+rows, not hand-picked, and a further test pins that population so a newly-claiming row
+cannot arrive unguarded.
+
+**It asserts BEHAVIOUR, never wording.** A reworded row must not fail it; a reworded row
+that becomes untrue must.
+
+### THE CHECKED OPCODES NEEDED A CONSTRUCTED PATH, AND THE SPEC SUPPLIED IT
+
+The surface `/` lowers to `Op::Div` — established by reading `src/compiler.rs:9192`, which
+emits `Op::Div` with the comment "Division can trap on a zero divisor". So no source-level
+program reaches `CheckedDiv` without the arm construct.
+
+The test therefore splices `Div` into `CheckedDiv; PopN(2)`, which is the exact sequence
+the specification describes for an uncaptured operation, and is stack-neutral. The fixture
+is asserted to contain no jump, since splicing an instruction would move a target.
+
+### SIX CANDIDATES REFUTED BEFORE THIS ONE, WHICH IS THE POINT
+
+Across this session I have proposed and killed six goals by measuring first: the wire
+format's error correction, the Keleusma-level parity plane, empirical worst-case bounds,
+the wire decoder fuzz, an opcode-table set-equality gap, and a CLI robustness defect. Each
+died against coverage or behaviour that already existed.
+
+Today's addition: the opcode table's row names and the `Op` enum **agree exactly** — 66
+variants, 66 rows, and the six apparent extras are header words from the file's other
+tables. The existing `claimed_counts.rs` guard compares only the stated COUNT, which is
+strictly weaker than set equality, so this was worth checking; it is simply not wrong.
+
+**A refuted candidate is a cheap result.** The alternative is building a guard for a gap
+that is not there, which costs the same to write and then has to be maintained.
+
+### A PROSE TENSION I DECLINED TO CALL A DEFECT
+
+`GRAMMAR.md` says "an uncaptured operation lowers to the opcode followed by `PopN(2)`",
+which cannot trap, and two sentences later that "an unhandled zero divisor traps as a
+division by zero". Measurement says bare `/` traps.
+
+The coherent reading is that "uncaptured" means a CLASS with no arm inside a checked
+construct, not an operation written without an arm block. On that reading the paragraph is
+consistent. **Filing a defect on a contested reading would be exactly the overclaiming
+this session has been correcting**, so it is recorded here and not in the ledger.
+
+### AND I HAD TO CORRECT A CLAIM ABOUT MY OWN ENVIRONMENT
+
+I told the operator that `cargo clippy` still worked under the linker blocker. It does not:
+clippy must rebuild a proc-macro dylib, and a dylib links. `cargo check` completes only
+because the proc-macro artifacts are cached, which is not a durable capability either. Only
+`cargo build` of the rlib and `cargo doc` genuinely work. Corrected in both channels.
+
+That is the same error shape as the severity corrections earlier in the session: **I
+measured one thing and wrote about a wider set.**
+
+## 2026-09-18 (ninety-eighth) — the toolchain broke, and reading found a defect running could not have
+
+### THE CONSTRAINT CAME FIRST
+
+This machine's Xcode updated to 27.0 mid-session and its licence has not been agreed, so
+**linking any executable fails**. `cargo build` still produces the rlib; `check`,
+`clippy` and `doc` still work. No test binary and no command-line binary can be
+produced, so **no test could be run at all**.
+
+That is worth recording as a methodological situation rather than an interruption. This
+session's whole discipline is that a claim needs a measurement. With execution gone, the
+honest move is not to write code that cannot be tested, but to do work whose verification
+is READING — and to say plainly that it was.
+
+### AND READING FOUND A DEFECT IN AN AUTHORITATIVE DOCUMENT
+
+`docs/spec/INSTRUCTION_SET.md` stated that `CheckedMod` "Traps on divide-by-zero". **The
+implementation has never done that.** It reifies flag `3` carrying the numerator, and its
+own comment says it is "mirroring CheckedDiv". The `CheckedDiv` row states the reifying
+behaviour correctly; the `CheckedMod` row beside it contradicts the code.
+
+The census that found it was over a SPECIFIED population — every row in that file
+claiming a trap. **Three rows, two correct, one wrong.** Censusing against a specified
+list rather than against the rows that looked suspicious is what made the result
+complete rather than anecdotal, and it is the same method that closed the typed-opcode
+matrix earlier in this line.
+
+**A running test could not have found this.** The spec is prose; no test asserts the
+prose against the implementation. Only reading both does.
+
+### THE WORKSTREAM-C SIZING I MERGED YESTERDAY WAS TRUE AND INCOMPLETE
+
+I reported two operation families needing work. They are **not symmetric**, and the
+asymmetry is the decision-shaping part:
+
+| family | what it actually needs |
+|---|---|
+| division and modulo | **no new opcode.** `CheckedDiv`/`CheckedMod` are already total, `TrapKind::ZeroDivisor` exists, `compile_checked` already emits the flag-guarded `Trap` for an unhandled class. Only the BARE operator's lowering is missing. |
+| array bounds | **the real instruction-set work.** `BoundsCheck` traps by specification and no flag-producing bounds opcode exists to route through. |
+
+So half of what looked like an instruction-set change is a lowering change over
+machinery that already exists end to end. **I did not claim its size**, because I did
+not measure it, and this session has already recorded that claiming a fix is small
+without landing it is precisely the error to avoid. It also carries a consequence past
+the reference: the bytecode for every program using `/` or `%` changes, so `codegen.kel`
+must change with it or the byte-identical oracle breaks — and that half is
+capacity-fenced.
+
+### H2 NARROWED A SECOND TIME, BY THE MEASUREMENT I STILL HAD NOT TAKEN
+
+Yesterday I corrected H2 from "denial of service on the shipping front ends" to
+"debug builds only", after finally measuring release. Today, driving the debug
+command-line binary at nesting 60, 100 and 400: **every one is refused cleanly by the
+depth-24 guard.** The binary parses on the process's MAIN thread, whose stack dwarfs the
+roughly two mebibytes a spawned thread gets, so the guard is reached long before the
+stack is.
+
+**The shipping binary aborts at no nesting in either profile.** H2 requires parsing on a
+small stack — a test harness, or a host parsing on a worker thread.
+
+Two corrections to the same finding, both from measurements I had not taken when I first
+wrote it down. The pattern is not that I was careless twice; it is that **a severity is a
+claim about an environment**, and each time I had measured one environment and written
+about all of them.
+
+### AND THE THIRD CRUDE-INSTRUMENT SELF-INFLICTION OF THIS SESSION
+
+Probing the command-line binary, my panic detector grepped for the free text "stack
+overflow" — which appears inside the parser's entirely correct refusal, "deeply nested
+expressions are rejected to prevent stack overflow". It reported the **healthiest
+possible outcome as a crash**. The detector in the committed test file is narrow, and
+carries that reason.
+
+### AND CONTINUOUS INTEGRATION CAUGHT WHAT MY BLOCKED TOOLCHAIN COULD NOT
+
+Opening the pull request was the right move under the blocker, because **CI runs on
+machines without this machine's problem**. It went red on the Doc-links job, which I
+could not have run locally at all — the link checker is itself a Keleusma script driven
+through the command-line binary I cannot build.
+
+The cause was found by reading the workflow rather than waiting for the log: that job
+has a SECOND step regenerating `book/src/INSTRUCTION_SET.md` from the authoritative
+spec and failing on any diff, so the two copies cannot drift. I had edited the spec and
+not regenerated the book. **The guard did exactly its job**, and the regeneration is a
+Python script, so I could run it despite the blocker.
+
+**And looking there found the same wrong claim a second time, with an explicit wrong
+REASON.** `book/src/BIG_NUMBERS.md` said "Division by zero continues to trap with
+`VmError::DivisionByZero` because **the opcode fails before arm dispatch runs**". The
+opcode does not fail: it reifies flag 3 carrying the numerator, precisely so a
+`zero_divisor(numerator)` arm CAN bind it. An unhandled zero divisor does surface as
+`DivisionByZero`, but through the compiled dispatch. That file is hand-written, not
+generated, so no guard would ever have caught it — it took reading the neighbourhood of
+a defect the first census had already found.
+
+**One wrong claim about `CheckedMod` had propagated to three places**: the spec row, the
+generated book chapter, and a hand-written book page giving the wrong mechanism. The
+generated copy was protected by a guard; the other two were not.
+
+### WHAT IS UNVERIFIED, SAID PLAINLY
+
+Branch `test/cli-bad-input` carries a CLI bad-input test file that **has never been
+compiled or run**. Its findings were measured against the binary built before the
+blocker — 27 inputs, zero panics, appropriate exit statuses — but the file encoding them
+is unproven and the branch is not merged.
+
+## 2026-09-18 (ninety-seventh) — sizing a fenced decision, and three suspicions that measurement refuted
+
+### THE SEAM WAS EXHAUSTED, SO I CHANGED SEAMS
+
+Three increments on the hostile-bytecode corpus, the last two finding nothing. The
+fourth extension would have been more of the same. Reading the roadmap instead
+surfaced workstream **C, unhandled-trap analysis**, which I had never looked at.
+
+It is a `BYTECODE_VERSION`-bumping instruction-set change and therefore **not mine**.
+But its premise — "`Trap` becomes the only opcode that traps, every other opcode is made
+total, the validator becomes a scan" — rests on two unmeasured quantities: how large
+"make every other opcode total" is, and whether the scan would be honest today. Both
+are measurable with no instruction-set change and no authorisation, and measuring them
+**sizes a decision that is the operator's**. That is the useful half available to me.
+
+### THE ANSWER IS SMALLER THAN THE DESIGN'S OWN LIST
+
+**Exactly two operation families fault with no `Trap` opcode anywhere in the module:
+division or modulo by zero, and array bounds.**
+
+The design enumerates far more partial operations than that, and most are already in
+the shape it wants:
+
+| enumerated | measured today |
+|---|---|
+| checked arithmetic overflow | **does not fault** — the bare operator wraps, by specification |
+| division/modulo by zero | **faults, no trap present** |
+| array and indexed-data bounds | **faults, no trap present** |
+| bare `for .. limit` | already lowers to an explicit `Trap` |
+| cast range | **does not fault** — truncates |
+| newtype refinement | predicate must be declared; not reached from this corpus |
+| native errors | host-contract, covered elsewhere |
+
+**So the scanning validator would not be honest under the current instruction set**,
+even for compiler output: zero `Trap` opcodes and still a division-by-zero fault. That
+is why this increment ships **no** trap-freedom verdict. An interface that cannot
+deliver its guarantee is worse than none, and shipping it would have been the easy,
+wrong move.
+
+### THREE SUSPICIONS, ALL REFUTED BY CHECKING BEFORE CLAIMING
+
+The probe threw up three results that looked like defects. Every one was correct
+behaviour, and I found that out by reading the specification and the codegen rather
+than by writing the finding down first.
+
+1. **`i64::MAX + 1` finished with a wrapped negative.** That looks like silent
+   wraparound in a language whose headline is totality. `INSTRUCTION_SET.md` states the
+   push order exists precisely so `a + b` compiles to `CheckedAdd; PopN(2)`, discarding
+   the flag and leaving the wrapping result. **Wrapping is the specified behaviour of
+   the bare operator**, and the flag workstream C wants already exists.
+2. **`assert false;` produced zero trap opcodes and completed.** The compiler has assert
+   codegen emitting `Trap(AssertionFailed)` — gated on `emit_debug`, because `assert` is
+   a **debug** construct (B29) compiled out entirely in a release build.
+3. **`300 as Byte` completed.** It truncates to 44. Not a fault.
+
+Three for three. The cost of checking was minutes; the cost of not checking would have
+been three false defect reports in a security ledger.
+
+### AND I REPRODUCED THE SESSION'S OWN LESSON IN MINIATURE, TWICE
+
+- Filtering the probe output with `grep -E "^[a-z_]+:"` silently dropped the
+  `cast_byte_300` row, because the pattern excludes digits. A crude instrument, on my
+  own output, in an increment about crude instruments.
+- The first non-vacuity demonstration of the drift guard used a `sed` pattern that no
+  longer matched after `cargo fmt` reflowed the line. It printed nothing and I nearly
+  read that as a pass. **A demonstration that silently does nothing looks exactly like
+  one that succeeded** — the same shape as the schema-hash mutants, now in the
+  verification of a guard rather than in the guard.
+
+Both guards are demonstrated properly: claiming the obligation set is smaller fails
+with the set diffed, and claiming a faulting row completes fails naming the row.
+
+### WHAT IT DOES NOT ESTABLISH
+
+Nothing about hand-built bytecode, which can reach fault kinds no row reaches; nothing
+about host-contract failures such as an unregistered native; and it is exhaustive over
+the specified list rather than over source programs, which is a weaker claim and is
+written as one.
+
+## 2026-09-17 (ninety-sixth) — the corpus was generating mutants faster than it was driving them
+
+### THE GAP WAS NOT IN THE MUTATIONS, IT WAS IN THE EXECUTION
+
+Two increments had grown the corpus: descriptor tables, coroutine programs, a
+native call, a hot swap. 5288 mutants, seven families, nothing found. The
+natural next move is more mutants, and it would have been the wrong one.
+
+Every one of the 871 mutants verification accepted received exactly **one
+argument-free `call`**, with no shared-data buffer and **no resume**. So the
+mutation surface kept widening while the execution surface stayed a single
+instruction-fetch deep.
+
+**The resume path is not an arbitrary omission.** The A.2.1 typed pass is
+documented as running in a sound defer-on-unknown mode, and one of the two
+cases it names is a **per-yield reentrant reply**. That is a load-time check
+deliberately traded for a retained runtime guard. So the whole soundness
+argument for that trade rests on a guard that no hostile module had ever
+reached.
+
+### THREE THINGS THAT WOULD HAVE MADE IT VACUOUS
+
+- **Guessed arguments.** A call whose argument types do not match
+  `param_types` is refused before any bytecode runs. The arguments are derived
+  from the module's own declared types for that reason. Had they been guessed,
+  the phase would have been green and empty.
+- **No shared buffer.** A module declaring shared data faults on its first
+  shared access without one, so it would have exercised nothing below that
+  instruction. The buffer is sized from the module's own `shared_data_bytes`,
+  capped like the persistent region because a hostile module names its own
+  size.
+- **An unbounded resume loop.** A `loop` block is productively divergent; a
+  healthy stream yields forever. Reaching the bound is the NORMAL outcome, not
+  a defect, and the harness would otherwise hang on its healthiest inputs.
+
+### REACH IS COUNTED, BECAUSE THE STAGE CENSUS CANNOT SEE THIS
+
+608 mutants ran bytecode, 119 yielded, 119 were resumed.
+
+The stage census could not have shown any of that. It records where a mutant
+STOPPED, and a mutant that verifies, is refused at the call's type check, and
+then hot-swaps cleanly is indistinguishable in it from one that ran, yielded
+and resumed. This is the third time in three increments that the same shape has
+appeared: **an outcome that looks like a pass while testing nothing.** Nineteen
+schema-hash mutants read that way; a whole descriptor table read that way; now
+the entire execution phase could have.
+
+The floor is shown non-vacuous by setting the resume bound to zero, which fails
+it.
+
+### THE RESULT
+
+No new defect. Stated as narrowly as it deserves: the retained runtime guards
+hold across the reentrant path on hostile input, which is the first time that
+half of the defer-on-unknown argument has been exercised rather than reasoned
+about.
+
+## 2026-09-17 (ninety-fifth) — the aggregate count was healthy and one whole table had never been touched
+
+### THE EXTENSION, AND WHY THESE TWO AXES
+
+`tests/hostile_module_mutation.rs` states its own limits, and two were
+load-bearing. It said it did not cover "auxiliary tables the `Module` type does
+not express" — **which was wrong about its own subject**: `signatures`,
+`native_return_shapes`, `enum_layouts` and `schema_hash` are all `Module`
+fields, and the mutator simply never touched them. Those are precisely the
+tables the A.2.1 typed pass seeds operand shapes from, and four of the audit
+findings that pass closes (B1, B2, B6, B8) were about trusting a compiler-baked
+value an attacker supplies. The harness mutated the ops that CONSUME them and
+never the seeding side.
+
+The corpus was also six `fn` programs and no `loop`, so `Stream`, `Reset`,
+`Yield` and the productivity classification — the neighbourhood H1 was found in
+— received mutants only by accident.
+
+### THE PER-FAMILY CENSUS PAID FOR ITSELF IN ONE RUN
+
+Tagging each mutant with its family and asserting a floor per family
+immediately failed: **the native-return-shape family produced zero mutants**,
+because no corpus program called a native and the table was empty. The
+aggregate had read 5184 mutants, all healthy, while one entire descriptor table
+had never been touched.
+
+That is the general shape worth keeping: **an aggregate floor is satisfied by
+whichever population is largest.** Here the instruction family is four thousand
+strong, so any total-count assertion passes on its own and says nothing about
+the other six.
+
+The family is a FIELD on the mutant, not something parsed back out of its
+printed identity. Reading a category out of a formatted string is the same
+crude-instrument mistake this tree has paid for repeatedly, and it fails
+silently the moment an identity's format changes.
+
+### AND A CLAIM I WROTE AN HOUR EARLIER WAS WRONG
+
+I commented the schema-hash mutations as attacking "the schema hash the reader
+checks the flat layout against", and expected them to be refused at load. All
+nineteen were accepted and ran. The reason is that **`schema_hash` is not a
+load-time fingerprint at all**: it is `compute_schema_hash(data_layout)`, and
+the only place it is ever compared is the HOT SWAP, where the running module's
+hash must match the incoming one. A fresh load of a module carrying any hash is
+correct behaviour.
+
+So the mutants were not finding a hole; they were testing nothing, and the
+census could not see it because "ran without panicking" is what a pass looks
+like. **A mutation aimed at a check that does not exist on the path under test
+is indistinguishable from a passing one.**
+
+### WHICH EXPOSED THE REAL GAP: ONE OF THE TWO ARRIVALS WAS ABSENT
+
+The threat model names two untrusted arrivals, a precompiled artifact and a hot
+swap. The harness covered the first only. Adding the second turned the
+schema-hash family from nineteen meaningless passes into nineteen refusals at
+the swap — the check doing exactly its job, now observed.
+
+One trap in adding it: `replace_module_from_bytes` requires the `signatures`
+feature, and this file is gated on `compile` and `verify`. Calling it would have
+reproduced the defect that turned three continuous-integration jobs red earlier
+in this line. The ungated `replace_module` over a separately decoded module is
+documented as equivalent with no registered key, and the signature layer has
+its own tests.
+
+### THE RESULT IS A CLEAN CENSUS, AND THAT IS A RESULT
+
+5288 mutants over seven families: 4286 refused by verification, 131 refused at
+the swap, 871 hot-swapped into a live machine and run. **No further defect.**
+
+Worth stating precisely rather than as an absence: a wrong flat shape in a
+signature widens what the typed pass will accept, and the runtime bounds guard
+the pass defers to holds. The defer-on-unknown design is documented as sound;
+what was not known is whether a shape that is WRONG rather than unknown behaves
+the same way. It does, across these mutations.
+
+## 2026-09-16 (ninety-fourth) — I overstated H2, and the measurement I had not taken was the obvious one
+
+### THE CLAIM I MADE, AND WHY IT WAS WRONG
+
+Last increment recorded H2 as "a compile-time denial of service on untrusted source,
+which the command-line front end, the language server and the playground all accept",
+severity Medium. Every number behind it was taken in a **debug** build, and I did not
+say so in the claim. Those three front ends ship as **release** builds.
+
+With the limit lifted, on a two-mebibyte stack:
+
+| shape | release | debug |
+|---|---|---|
+| nested parentheses | 198 | 24 |
+| nested `match` | — | 23 |
+| nested `if`/`else` | 159 | 20 |
+| nested `if` without `else` | 159 | 19 |
+
+At `MAX_PARSE_DEPTH = 24` a release build has about six times the headroom the limit
+needs. Only a debug build aborts, at 20, below the limit. Severity corrected Medium
+to Low.
+
+**The generalisable form**: a measurement taken in one build profile is a claim about
+that profile. I reported it as a claim about the product. The debug/release frame-size
+difference here is roughly eightfold, which is more than enough to invert a
+conclusion.
+
+### WHAT IS ACTUALLY WRONG IS A SENTENCE, AND IT WAS ALREADY IN THE TREE
+
+`MAX_PARSE_DEPTH`'s comment said the limit keeps a maximally-nested admissible program
+"well under 2 MiB of stack **even in a debug build with fat frames**, fitting
+comfortably inside the default cargo-test thread stack". That sentence is false as
+written, and measurement refutes precisely it. The comment now carries the table.
+
+The guard itself works, and the tests show it: nested parentheses are refused cleanly
+at the limit. It is the `if`-shaped input the limit does not cover in debug.
+
+### WHY NO SINGLE LIMIT FIXES IT, MEASURED RATHER THAN ARGUED
+
+The counter increments once per expression level, and that is a poor proxy for stack
+in **both** directions:
+
+- At equal counter depth, `if`-shaped input consumes far more stack than
+  parenthesis-shaped input — debug aborts at 20 against 24.
+- The deepest **real** source in the tree, `src/selfhost/kel/wire.kel` at depth
+  **21**, consumes less than either, which is why it parses comfortably.
+
+So the ordering is: real source needs 21, `if`-shaped input dies at 20, parentheses
+survive to 24. **A limit of 21 refuses a shipping stage source; a limit of 22 still
+lets `if`-shaped input abort in debug, which was measured, not assumed.** There is no
+value that admits the corpus and prevents the abort.
+
+**Charging blocks against the budget as well was tried, and made it worse.** It raised
+the corpus maximum from 21 to 41 while parenthesis-shaped input began aborting at
+counter 27 — the binding shape simply changed from `if` to parentheses, and the gap
+widened. Recorded so the next person does not spend the same hour.
+
+### THE DECISION, AND IT IS OVERRULABLE
+
+Left open. Narrowing the language's accepted nesting depth to accommodate an artefact
+of debug frame sizes costs more than the defect, which affects no shipping build. The
+trade is stated in the reverse prompt so the operator can overrule it.
+
+**An increment whose honest output is a corrected claim and a "no" is a complete
+increment.** The alternative on offer was a code change that degrades the language
+surface to fix something that does not occur in any shipped configuration.
+
+## 2026-09-16 (ninety-third) — my instrument shared a failure mode with its subject, and reported the sum
+
+### THE RESIDUAL WAS REAL, AND THE FIRST NUMBER FOR IT WAS WRONG
+
+The previous increment closed H1 and wrote down, deliberately, that the forward-target
+check does not bound recursion **depth** and that whether that is reachable had not
+been measured. This increment measured it.
+
+It is reachable. With the cap lifted, on a two-mebibyte stack, the walks survive a
+chunk nested **4600** deep and **abort the process** at **4800**. A `u16` target
+addresses about 16384 levels at five instructions per level, so 4800 sits well
+inside the representable space.
+
+**The first boundary I measured was 5500, and it was wrong.** The test builder that
+produced the nested chunk was itself **recursive**, and recursed exactly as deeply as
+the structure it built. The probe and the subject were overflowing together, so the
+number described neither one. The builder derives its layout in closed form now.
+
+The general form is worth more than the number: **an instrument that shares a failure
+mode with its subject reports the sum of the two.** This sits beside the tree's
+existing lesson that a crude instrument can manufacture a contradiction. The
+manufactured contradiction here was a boundary that looked like a property of the
+verifier and was partly a property of the test.
+
+It also cost a second wrong claim before it was caught: with the recursive builder,
+depth 16380 still aborted after the first walker was capped, and the obvious reading
+was that another walker was unbounded. That reading was wrong. Once the builder was
+iterative, 16380 was refused cleanly.
+
+### WHAT MADE THE GUARD TESTABLE TOOK A SECOND ATTEMPT TOO
+
+The first regression test asserted the depth guard was the check that refused. It
+failed, because the hand-built chunk had no instruction pushing each `If`'s
+condition, so the operand-stack walk refused it at instruction **zero** — before any
+walk nested. The test would have been evidence about that check instead. Adding the
+condition push per level makes the chunk reach the walks, which is also the shape the
+compiler actually emits.
+
+### THE CAP'S VALUE IS MEASURED, NOT BORROWED
+
+`crate::zero_value` has a `MAX_DEPTH` of 64 and would have been an easy analogy. The
+number here is 256 and comes from two measurements: the deepest nesting the
+**compiler** can emit is **20** (the recursive-descent parser overflows at 22, so no
+source program can produce a chunk nested deeper than the parser survives), and the
+uncapped walks abort at 4800. So 256 is about thirteen times what a program can reach
+and about nineteen times below the abort. Both endpoints scale with the host's stack,
+so the **ratios** are the durable part; an embedded host with a small stack is the
+case this protects most.
+
+### NON-VACUITY, DEMONSTRATED BY THE ABORT ITSELF
+
+With `MAX_REGION_DEPTH` lifted to `u32::MAX`, the test binary dies with SIGABRT. With
+it at 256, all nine pass. That is a stronger demonstration than a failing assertion,
+because the failure mode under guard is exactly one that cannot be asserted on: an
+abort does not unwind, so no watchdog and no `catch_unwind` names it, and
+`tests/hostile_module_mutation.rs` structurally cannot report this class.
+
+### THE WRAPPER IDIOM, AND ONE TRAP IN IT
+
+Each walker keeps its public signature and delegates to an `_at` form carrying the
+nesting count, which is the idiom `zero_value`/`zero_value_at` already establishes.
+Two things it would have been easy to get wrong:
+
+- `verify_depth_region` already has a local named `depth`, the **operand stack**
+  depth. The new parameter is `nest` for that reason.
+- `wcmu_region` recurses through a helper, `wcmu_subregion`, which called the
+  **wrapper**. Left alone, that resets the count to zero at every level and the cap
+  never fires however deep the chunk nests. The helper carries the count now, and the
+  comment at that call site says why it must.
+
+### H2: A SECOND FINDING, MEASURED AND DELIBERATELY NOT FIXED
+
+Establishing the compiler's nesting ceiling turned up a separate defect. The
+**parser** aborts on deeply nested SOURCE, with no bytecode involved: nesting 20
+compiles and verifies, 22 aborts inside `parse`, on a two-mebibyte stack. That is a
+compile-time denial of service on untrusted source, and the shipping command-line
+front end, the language server and the playground all accept source they did not
+write.
+
+It is a different component and a different fix. It is recorded in the audit ledger
+with its measurement and left open rather than folded into this increment, because
+widening scope mid-increment is how a fix stops being reviewable — but it is written
+down, with numbers, so it is not rediscovered from scratch.
+
+## 2026-09-16 (ninety-second) — the audit named the missing instrument, and it found a defect the audit's own fixes had walked past
+
+### THE FRONTIER CLAIM WAS TESTED, NOT INHERITED
+
+`HANDOFF.md` says the remaining work touches a `.kel` stage source or waits on an
+operator ruling. That is a strong claim and it gates everything, so it was checked
+rather than believed. Four candidate gaps were proposed and **four died against
+existing coverage**, which is worth recording so they are not re-derived:
+
+| candidate | what refuted it |
+|---|---|
+| the wire format's error correction is untested | `keleusma-wire/tests/ecc.rs` runs EVERY single-bit and EVERY double-bit fault; `src/ecc.rs` repeats it at the codeword |
+| Keleusma emits a parity plane and never reads one | `tests/secded_end_to_end.rs` carries it through a real module |
+| the worst-case bounds are never checked empirically | `c7_loop_bound_soundness.rs` and seven sibling files |
+| the wire decoder is unfuzzed | `tests/wire_fuzz.rs`, fixed-seed and replayable |
+
+**The fifth survived, and it was not a guess.** The foot of
+`docs/decisions/SECURITY_AUDIT_V0_2_1.md` carries a Coverage note listing what the
+suite lacks, and its first item is *"a hostile-bytecode corpus driven through the
+full safe `Vm::new`"*. The wire-format fuzz target beside it in that list had been
+built. This one had not. `tests/typed_conformance.rs` samples the surface with five
+hand-written mutations, each recreating one audit finding, and says so in its own
+header.
+
+### THE DESIGN WAS FORCED BY A MEASUREMENT ALREADY IN THE TREE
+
+The obvious harness flips bytes in a serialized module. `tests/format_fingerprint.rs`
+records, from measurement rather than reasoning, that such an edit "is caught by a
+checksum long before the header is read". **A byte fuzz measures the cyclic
+redundancy check.** An attacker who constructs bytecode computes a valid checksum as
+readily as the compiler does, so the faithful model mutates the `Module` and
+re-encodes around it.
+
+The census vindicates the choice and is the reason it is printed rather than only
+asserted on: of 4216 mutants, **zero** were refused by the encoder and **zero** by
+the loader. The artifact is well formed at every layer below the one under test, so
+the entire burden falls on `verify`, which is where the threat model puts it.
+
+### H1: THE VERIFIER DOES NOT TERMINATE ON A HOSTILE MODULE
+
+The first run never finished. Sampling the process put 2420 of 2476 stack samples in
+`analyze_yield_coverage`, on a single mutant.
+
+Every region walker in `src/verify.rs` advances its cursor to a position taken from
+an `If`, `Else` or `Loop` operand. A **backward** operand sends the cursor to a
+position already passed and the walk repeats forever; where the operand instead
+selects the recursive If-Else arm, the sub-region still contains the same `If` and
+the recursion does not bottom out, **overflowing the stack and aborting the
+process**. An abort does not unwind, so no `catch_unwind` and no watchdog can turn
+it into a named failure, and a host cannot defend itself by wrapping the call.
+
+Three public entries reached a walker with the operand unvalidated. `verify` computed
+`compute_always_yielding` *before* `verify_chunk`, so pass 1 had validated nothing on
+any chunk; `wcet_stream_iteration` and `wcmu_stream_iteration` are documented as
+standalone and ran pass 1 at no point. Swept exhaustively rather than sampled,
+because the outcome is position-dependent: on a seventeen-instruction chunk,
+`verify` hung at four positions and aborted at four more, and a sample would have
+reported whichever it drew.
+
+**The fix is at the ordering, not at the twelve cursor assignments.** Four walkers
+times three operands is twelve places to keep right; the property is a property of
+the chunk, so it is checked once, on the chunk, before anything walks it.
+
+### THE MOST USEFUL THING HERE IS THAT F1 AND G1 TOUCHED THESE EXACT FUNCTIONS
+
+F1 hardened `analyze_yield_coverage`, `wcet_region` and `wcmu_region` against a
+**panic** from an out-of-range target. G1 closed the last slice-clamp sibling. Both
+rounds read the hazard as an out-of-bounds index and fixed it as one.
+
+A target that is **in range but backward** passes every clamp those rounds added,
+and is not an indexing fault at all. It is a liveness fault. So the eighth round of
+the same-class pattern held, but along an axis the previous rounds' fix *shape*
+could not have reached. Auditing a function for one failure mode does not audit it,
+and the clamps are evidence about clamping before they are evidence about the
+function.
+
+### AND I PRODUCED THE SAME CLASS OF ERROR INSIDE THE SAME INCREMENT
+
+The harness originally watchdogged **only execution**, on the written reasoning that
+only execution had a documented reason to be unbounded on a mutated input. The first
+run then hung inside `verify` — the phase whose entire purpose is to bound an
+untrusted input. The file's header now carries that inversion rather than quietly
+covering every phase, because the reasoning error is more transferable than the fix.
+
+Three further failures, each a real consequence of the change and each caught by a
+guard that already existed:
+
+- `loop_exit_zero_rejected_without_panic` pinned E1's message; H1 now refuses
+  `Loop(0)` first. E1's own check stays covered by
+  `loop_exit_not_after_endloop_rejected`, whose hostile exit is **forward** and
+  therefore still reaches it. The test's real contract, return rather than panic,
+  is unchanged.
+- `every_comment_citation_resolves_or_is_a_recorded_debt` caught a citation in my
+  own header naming a test I had folded away.
+- `the_verify_citations_point_at_what_the_document_says_they_do` caught three
+  proof-evidence line pins moved by the insertion. The live citations were updated
+  and `DESIGN_JOURNAL.md` and the archived handoff were **not**, being ledger
+  entries rather than live claims.
+
+### NON-VACUITY WAS ESTABLISHED, NOT ASSUMED
+
+Four of the six regression tests fail against the unfixed verifier, with the exact
+hang messages; `src/verify.rs` was restored byte-identical afterwards and checked.
+A termination guard that would pass without the fix is worth nothing, and this class
+of guard is unusually easy to write vacuously.
+
+### WHAT IS NOT CLOSED
+
+The check makes targets forward. It does **not** bound recursion depth, and a chunk
+whose targets are all forward can still nest. **Whether that is reachable has not
+been measured**, and no claim is made either way. It is stated in the guard's own
+documentation rather than left implicit.
+
+---
+
+## 2026-09-13 (ninety-first) — the resume prompt had already described the mistake I made
+
+### THE HANDOFF IS VALID, CHECKED BY ITS OWN RULES
+
+Its validity section defines the check, and the project file warns that an earlier prescribed
+check — comparing a recorded parent to `HEAD~1` — has failed three times and would report a current
+handoff as stale. Following the file's own rules instead: ancestry holds, the fingerprint matches,
+the release process still says seven crates, and both named tests are present. **Valid**, so no
+wholesale refresh; the bounded current-state channel is the reverse prompt, which is current.
+
+### TWO TRACKED DOCUMENTS DISAGREED ABOUT A CHECKABLE FACT
+
+`HANDOFF.md` says plainly: **"The gate is a five-entry feature matrix."** `CLAUDE.md` said three,
+until this session corrected it. Both are tracked, both are read, and nothing compared them. The
+correction made two increments ago is therefore corroborated by a document that had the right number
+all along — which also means the instruction file could have been fixed at any point by reading the
+resume prompt.
+
+### AND THE HANDOFF HAD ALREADY DESCRIBED MY DEFECT, IN ADVANCE
+
+Its 2026-08-26 entry: a run of only `--features self-host` was green on all three signals and
+continuous integration went red on four jobs, because a new test file driving the stage carried no
+`#![cfg(feature = "self-host")]`. It ends: **"a new test in this family that omits it is red by
+construction."**
+
+That is exactly what I did, in the same file family, in a session where I had read this document and
+corrected a claim inside it. The entry even generalises it correctly: "Three independent signals over
+one feature set are still one feature set."
+
+### WHAT IS ACTUALLY LEARNED
+
+The document's own line applies to itself: **knowing the failure does not prevent it.** That
+sentence appears in this file about a numbering mistake made twice by an agent that had just read the
+paragraph warning against it.
+
+So the useful response is not another note. It is that the gate — which builds all five — is the
+instrument, and reading about the matrix is not running it. The abandoned scan from the previous
+increment reached the same conclusion from the other direction.
+
+### ONE CORRECTNESS CHECK WORTH RECORDING
+
+"The three feature sets WITHOUT the feature failed to compile it" looks wrong against five sets, of
+which four lack `self-host`. It is right: `--no-default-features` also lacks `compile` and `verify`,
+so it never builds that file, leaving exactly three that do. The historical record is accurate and
+was left untouched.
+
+---
+
+## 2026-09-12 (ninetieth) — a reproducibility test, a fifth gap, and a guard catching me again
+
+### THE PROPERTY THE ORACLE DEPENDS ON WAS NOT TESTED
+
+The roadmap requires the toolchain to be byte-reproducible so the fixed-point and
+differential-oracle checks are meaningful. Nothing checked it. The oracle compares self-hosted
+against reference, so both could be non-deterministic the same way unnoticed; and
+`selfhost_counter_reset.rs` is STATIC, scanning stage sources for a counter never assigned zero —
+one known cause that cost a four-cause diagnosis, two of them first diagnosed wrongly. A syntactic
+scan cannot catch a cause nobody has thought of.
+
+The new test compiles each source twice in one process and compares modules the way the oracle
+does. It states what it does NOT establish: reproducibility across processes, where a global
+initialised once would survive unchanged.
+
+### WRITING THE CORPUS FOUND A FIFTH GAP
+
+A corpus entry using `E::N` was refused. The reference compiles it. Probed further: refused as a
+return value, in a `let`, and as a call argument — while `E::A(7)` compiles.
+
+Three hypotheses died on measurement before the right one. Not mixed-versus-all-unit enums: an
+all-unit enum is refused too. Not explicit discriminants: an enum with them is refused too. The
+answer was in `parse.kel` itself, which writes `Node::Local()` — **with parentheses**. Bare `E::N`
+is refused; `E::N()` compiles.
+
+**It is the expression-side twin of the bare unit-variant PATTERN gap fixed earlier this session.**
+Same asymmetry, other side, still open.
+
+### THE GUARD CAUGHT ME, FOR THE SECOND TIME
+
+An arm was added to the construct scan to name the new gap, matching an enum variant with empty
+arguments. `the_scan_names_no_construct_in_any_stage_source` failed immediately, naming
+`Node::Local()` in `parse.kel` — the parenthesised form, which compiles.
+
+The syntax tree records `E::N` and `E::N()` identically. **The distinguishing information is not in
+the tree the scan reads**, which is the branch-pair shape exactly. So the gap is covered by the
+corpus that requires only a refusal, and absent from the one that requires a name, with the reason
+recorded in both.
+
+Without that guard the entry would have shipped and blamed working code for unrelated failures. It
+was written two increments earlier for precisely this, and this is the second time in this session
+a guard written earlier caught an error made later.
+
+### THE COUNT WAS FOUR AND IS FIVE
+
+Censusing the claim distinguished two kinds of statement. "All four gaps return an error" remains
+true OF THOSE FOUR and needed no change. "Four self-hosted-parser gaps remain" was a count of the
+known set and was wrong. Only the latter kind was touched — a blind replacement would have corrupted
+sentences that were never claiming a total.
+
+---
+
+## 2026-09-12 (eighty-ninth) — a blank cell is a claim, and one of mine was never run
+
+### THE MATRIX I CALLED CLOSED HAD THREE CELLS NOBODY MEASURED
+
+The previous entry reported the opcode matrix closed. It was not. Three cells carried an em dash
+meaning "the language does not admit this", and that meaning was an ASSUMPTION rather than a
+measurement: `Byte` unary negation, `Byte` `%` and comparison, and `Float` `%`.
+
+Running them: `Float` `%` agrees, `Byte` `%` and comparison agree, and **`Byte` unary negation
+DIVERGES**, `CheckedNeg` against the reference's plain `Neg`. So "`Word` and `Byte` agree
+throughout", written into three documents, was wrong.
+
+The correct statement is narrower and tidier: **unary negation diverges for every non-`Word`
+operand**, and `Byte` agrees on every binary operator.
+
+### THE ANSWER WAS ALREADY IN THE TREE, WHICH IS THE PART WORTH KEEPING
+
+`tests/op_tag_tables.rs` records that `codegen.kel` emits `checkedneg` for unary negation, that its
+decoder has no arm producing `Op::Neg` at all, and that the reference emits `Op::Neg` for **`Byte`**
+negation. Every ingredient of the finding was written down before this session started. What was
+missing was running the cell.
+
+Reading that file is what exposed it, and reading it happened only because the question "is there a
+specified list I have not censused" was asked one more time after four increments of believing the
+area exhausted.
+
+### WHY THE GAP SURVIVED THREE READINGS
+
+A census that skips a cell and a census that measures it produce identical output for every row
+either did run. Nothing in the matrix looked wrong, because the blank cell rendered exactly as the
+inadmissible cells did. **The `n/a` in that table now means a checked reference type error**, and
+`Float` bitwise is the only cell that earns it.
+
+### THE COUNT, STATED PLAINLY
+
+Four framings in this area were wrong before this one: too broad, too permissive, too strong, too
+narrow. This is the fifth, and it is of a different kind — not a claim stated past its evidence, but
+a claim made where there was no evidence at all, disguised as an absence.
+
+---
+
+## 2026-09-12 (eighty-eighth) — closing the matrix against the codegen's own operator list
+
+### THE SET I WAS TESTING WAS ASSEMBLED, NOT SPECIFIED
+
+The typed-opcode divergence had been measured across five arithmetic operators and one comparison.
+That set came from what had been tried, not from anything authoritative. `codegen.kel`'s mapping
+comment states the real list: the five arithmetic operators, six comparisons, three bitwise, the
+shifts, and unary negation. Censusing against it rather than against my own history is the
+instrument that has produced nearly every finding this session, and it closed the matrix here.
+
+### UNARY NEGATION JOINS, AND EVERYTHING ELSE AGREES
+
+`-a` on `Float` and on `Fixed<N>` reports `CheckedNeg` against the reference's plain `Neg`, exactly
+the pattern `+`, `-` and `*` show; `Word` agrees. **Every other cell agrees**: all operators on
+`Word` and `Byte`, the three bitwise operators, all four shifts, the booleans, the comparisons, and
+`%`.
+
+`Byte` was the cell most worth running. It reaches bitwise and shift through
+promote-operate-truncate, a different path from its arithmetic, and it was the likeliest place for
+the divergence to reappear. It does not.
+
+### THE SET MATCHES SOMETHING ALREADY IN THE TREE
+
+The diverging operations are exactly `+`, `-`, `*` and unary `-`, plus fixed `*` and `/` against the
+scale-aware ops. The residual-tag note elsewhere in the suite groups `Op::Add`, `Op::Sub`, `Op::Mul`
+and `Op::CheckedNeg` — the same four. Those are precisely the operations for which the reference has
+a plain form that a typeless codegen cannot select. **An independent artefact arriving at the same
+set is better corroboration than any amount of re-reading the measurement.**
+
+### A CLEAN CLOSE IS A RESULT
+
+Most cells agreed, so this increment "found" little. That is the wrong way to score it. The
+alternative to running the empty cells is a matrix whose gaps get filled in by inference, and this
+area has already produced three framings that were each wrong at the edge of their evidence: too
+broad, too permissive, too narrow. A closed matrix is what stops a fourth.
+
+### ONE BADLY CONSTRUCTED PROBE, CAUGHT BEFORE IT BECAME A FINDING
+
+Unary negation was first probed as `0 - a`, which introduces a `Word` literal. On `Float` that
+produced a reference TYPE ERROR and on `Fixed` a literal-handling divergence — neither a fact about
+the opcode mapping. Both were discarded and the probe rewritten with the real unary spelling. A
+malformed probe that produces an interesting-looking message is a good way to manufacture a false
+finding, and the tell was that the reported op index and opcode had nothing to do with negation.
+
+---
+
+## 2026-09-12 (eighty-seventh) — the cause, which retracts my own "may be a defect"
+
+### THE CLAIM I RAISED WAS TOO STRONG
+
+The previous entry said the float arithmetic divergence is filed as a scope boundary and "may be a
+defect", on the grounds that the reference's unchecked float `+` is documented as intentional and
+float overflow is not a trap condition. Locating the decision point retracts that.
+
+`codegen.kel` states its own rule in a comment above `push_binop`: the operator code ALONE selects
+the op word. `Add` to `CheckedAdd`, `Sub` to `CheckedSub`, `Mul` to `CheckedMul`, while `Div` maps
+to plain `Div` and `Mod` to plain `Mod`. **No operand type enters the decision.** The file contains
+no float or type vocabulary at all — zero occurrences across every spelling checked.
+
+### IT ACCOUNTS FOR EVERY ROW, WHICH IS WHAT MAKES IT THE CAUSE
+
+- float `/` and float comparison agree — they have no checked variant in the mapping;
+- `Word` `+`, `-`, `*` agree — the reference emits the checked form there too;
+- float `+`, `-`, `*` diverge — the reference has operand types and picks the plain form, and the
+  self-hosted codegen has none to pick with.
+
+A cause that explains the accepted rows as well as the refused ones is worth more than one that only
+explains the failures. The earlier account explained only the failures.
+
+### SO THE FILING WAS RIGHT AND I WAS WRONG ABOUT IT
+
+`scope/float_arith__GAP` is a genuine capability gap, correctly filed. It is not a mislabelled
+defect. The distinction drawn last entry — a scope boundary is a decision, a defect is a bug nobody
+chose — was the right distinction, applied to the wrong side.
+
+The practical consequence for the operator is better than the alarm was: the fix is not a branch
+correction but a type channel into codegen, which is substantial and squarely capacity-relevant.
+That is a cost estimate stated as a shape rather than a number, deliberately — an unverified cost
+estimate went into a merged PR body earlier this session and had to be retracted in two places.
+
+### THE PATTERN, ONE MORE TIME
+
+This is the third claim this session corrected by reading further into the thing itself, and the
+second where the correction landed within two increments of the overreach. The overreach was not
+careless: the evidence for it was real and documentary. It was simply incomplete, and one more file
+settled it.
+
+---
+
+## 2026-09-12 (eighty-sixth) — correcting my own correction, and what it uncovered
+
+### THE FIX FOR A WRONG SENTENCE WAS ALSO WRONG
+
+The previous increment replaced the help text's "no floats" with "only the float LITERAL is
+excluded; a float-typed signature with no literal compiles". **That is also false**, and a census for
+the phrase elsewhere is what caught it: the construct-support boundary table carries
+`scope/float_arith__GAP` with the source `fn f(a: Float, b: Float) -> Float { a + b }` — a
+float-typed signature, no literal, and it does not compile.
+
+Over-correcting is the failure mode worth naming here. The first sentence was too broad; the
+replacement was too permissive; and only a third measurement produced something that survives.
+
+### THE BOUNDARY, MEASURED PER OPERATOR
+
+- float `+`, `-`, `*` — DIVERGE. The self-hosted codegen emits `CheckedAdd`, `CheckedSub`,
+  `CheckedMul` where the reference emits the plain opcode.
+- float `/`, float comparison, a float-typed signature doing neither — COMPILE.
+- the same three operators on `Word` — AGREE.
+
+That last line is the control that makes the finding specific. Without it the result reads as "the
+self-hosted codegen picks checked opcodes", which is a much larger and wrong claim.
+
+### A SCOPE GAP THAT LOOKS LIKE A DEFECT
+
+`tests/float_arith_width.rs` records that plain `+` on floats emits the unchecked `Op::Add` and
+"never the checked path", and float overflow is not a trap condition, so the checked form has
+nothing to check. The self-hosted side therefore appears to be the divergent one.
+
+**The distinction that matters is filing.** A scope boundary is a decision someone made; a defect is
+a bug nobody chose. This entry sits in the table under "out of scope for the self-hosted subset",
+which reads as the first, and the evidence suggests the second. The inference rests on documented
+intent rather than proof, and the rule that a divergence does not establish which side is wrong
+still holds — the reference was the wrong side on 2026-08-31.
+
+**Not fixed.** The fix is in `codegen.kel`. Stage sources bear on the capacity question that is the
+operator's, so the deliverable here is the characterisation, not the change.
+
+### WHY THE CENSUS FOUND IT AND THE FIRST GREP DID NOT
+
+The first pass grepped for the literal phrasings I had just written. The second censused the
+CONCEPT — every place describing the self-hosted subset — and that is what reached the boundary
+table. Searching for an assembled list of phrasings finds what you already thought of; censusing a
+specified concept finds what you did not.
+
+---
+
+## 2026-09-12 (eighty-fifth) — the last hop, and two wrong sentences in the shipping binary
+
+### ASSERTING ON `Display` IS NOT ASSERTING ON THE PRODUCT
+
+Every claim this session that a user sees the offending construct rested on tests that format the
+error type. **That is the library, not the product.** The command-line front end builds its own
+message around the error and decides whether to print the retry hint, so a name that survives
+`Display` could still be lost before the terminal.
+
+This is the same substitution as the earlier miss that reasoned about refusal quality from a harness
+that unwraps, moved one layer out. Running the binary settles it: the construct name and the line
+DO reach the terminal, with the retry hint and a non-zero exit. The claims hold at the last hop, and
+now there are tests at that hop rather than one layer below it. The CLI test directory already had a
+precedent for spawning the binary, so the tests follow it.
+
+### THE HELP TEXT WAS WRONG IN TWO OF THREE
+
+The `--compiler` help said the self-hosted subset has "no floats, generics, or Text". Measured
+through the binary:
+
+- **floats** — only the LITERAL. A float-typed signature with no literal compiles and writes a
+  module.
+- **Text** — not a subset restriction at all. The reference refuses it too, because `Text<N>` is not
+  implemented beyond the type surface. It takes the plain compile-error path and correctly gets NO
+  retry hint, since the reference reports the identical error.
+- **generics** — correct, and the divergence names the chunk.
+
+Two of three sentences in the shipping binary's help were misleading, and the Text one would send a
+user to `--compiler rust` for a program no backend compiles. The text now says which failures belong
+to the subset and which do not.
+
+### WHY THIS WAS WORTH DOING NOW
+
+It costs nothing against the capacity decision: no stage source is touched. And the error it
+corrected is the kind that only surfaces by running the thing a user runs — reading `main.rs` would
+have shown the same wrong sentence and produced agreement rather than a finding.
+
+### FRONTIER
+
+The driver and the CLI are now measured end to end. What remains is scoped feature work that grows
+`parse.kel`, and that waits on the operator's capacity decision, or one of the five standing operator
+rulings.
+
+---
+
+## 2026-09-12 (eighty-fourth) — measuring what two guards actually cover, and a claim retracted mid-increment
+
+### THE LIST HAD NO CHECK, AND THE FLOAT EPISODE SHOWED WHY THAT MATTERS
+
+The construct scan names constructs on the failure path. Until this increment nothing checked that a
+named construct is REALLY outside the subset. The float type was nearly added on the strength of a
+loose summary, and only running a float-typed program caught it.
+
+A new test pairs each named construct with a minimal program and asserts two things: the scan names
+it, and the pipeline refuses it. A construct that is named but compiles is a wrong entry; one that
+is refused but unnamed is a missing one. Both directions fail there.
+
+### A CLAIM WRITTEN AND RETRACTED INSIDE THE SAME INCREMENT
+
+The first draft of that test's comment said the row count was a tripwire that would fail if a scan
+arm were added without a row. **That is false.** The count compares the table's length against a
+constant; it cannot see the scan's arms, which are match patterns rather than data. The sentence was
+caught by re-reading the comment against the code beneath it, which is the cheapest instance yet of
+the pattern this session keeps meeting.
+
+### WHAT THE TWO GUARDS ACTUALLY COVER, MUTATION-MEASURED
+
+Mutating the scan to name the SUPPORTED wildcard pattern separates them:
+
+- the list test PASSES, because no row mentions a wildcard;
+- the stage-source guard FAILS, because the stage sources use `_`.
+
+So the two cover the union of "constructs the stage sources happen to use" and "constructs with a
+row in the table". **The hole is the complement, and it is not hypothetical.** No stage source uses
+a float type, so a float-type arm added with no row would have passed BOTH guards. That is precisely
+the entry nearly added last increment.
+
+Recording the union and the hole is the point. A clean run from either guard is evidence about that
+guard's reach before it is evidence about the list, and the reach is now written down next to the
+tests rather than inferred by a future reader.
+
+### FRONTIER
+
+The driver-side, capacity-neutral category is worked out: gap refusals name their construct, the
+float literal names itself, the divergence message was already adequate and is pinned, and the list
+that drives the naming now has a validity check with its coverage stated. No stage source has been
+touched.
+
+---
+
+## 2026-09-12 (eighty-third) — the measurement that stopped a wrong construct name
+
+### WHAT I SET OUT TO FIX WAS ALREADY FINE
+
+The intended increment was to localise the divergence refusal, on the reasoning that a
+divergence establishes the two implementations disagree and not which is wrong, so whoever
+investigates needs to know where. Measured first: it already names the offending chunk, and both
+spellings for a chunk-order divergence, and a doc comment there records that this was done
+deliberately to turn a bare disagreement into a pointer. The op-level message names the chunk, the
+op index, and both ops.
+
+No change was warranted, and the correct output was a test pinning behaviour found adequate rather
+than code. That test also asserts the message assigns NO FAULT, because the 2026-08-31 case in which
+the reference was the divergent side is exactly the situation a blaming message would make worse.
+
+### THE MEASUREMENT FOUND SOMETHING BETTER, AND STOPPED A MISTAKE
+
+Floats never reach the cross-check at all. A float program fails earlier in `reconstruct` with the
+same work-stack text the four parser gaps used to produce, and the construct scan added last
+increment does not name it. That looked like a straightforward gap in the list.
+
+**The obvious fix was wrong, and one probe caught it.** `fn f(a: Float) -> Float { a }` COMPILES,
+and its output matches the reference byte for byte. The float TYPE is inside the subset. Only the
+LITERAL is outside. Had the type gone on the list, every float-typed program that failed for an
+unrelated reason would have been blamed on a supported construct.
+
+### THE GUARD WOULD NOT HAVE CAUGHT IT, AND THAT IS THE POINT
+
+The stage-source guard asserts the scan names nothing in any of the eleven driver-read stage
+sources. It is a real guard and it is mutation-tested. **It would have passed with the float type on
+the list**, because no stage source uses a float type.
+
+That is the limit worth stating: the guard covers constructs the stages happen to use. It is not a
+general check that the list is right, and treating a clean result from it as evidence about the
+whole list would be exactly the error of reading a guard's silence as broader than its reach. The
+only thing that established the float boundary was running a float-typed program.
+
+The `Float` occurrences in `wire.kel` are identifier names such as `tag_float`, not types or
+literals, so the guard remains clean with the literal entry added.
+
+### A LOOSE CLAIM CORRECTED
+
+The project file listed floats among the things that error at the divergence cross-check. Measured,
+that is wrong twice over: a float literal is refused earlier by a stage and never reaches the check,
+and a float type does not fail at all. The sentence now says which failures happen where.
+
+### FRONTIER
+
+The driver-side, capacity-neutral category that opened last increment is now largely worked out: the
+gap refusals name their construct, the float literal names itself, and the divergence message was
+already adequate and is pinned. No stage source has been touched, so the capacity decision is
+untouched and still the operator's.
+
+---
+
+## 2026-09-12 (eighty-second) — reading the refusal a user actually receives
+
+### THE TEST PROVED THE REFUSAL HAPPENED AND DISCARDED WHAT IT SAID
+
+`every_known_gap_is_refused_by_the_self_hosted_compiler` matches `Ok(Err(_)) => {}`. It establishes
+that each of the four gaps returns an error rather than a module or a panic, which was the important
+property and is why it was written. But the underscore means **no test had ever read the message**,
+and the current-state block carried a claim about what those messages look like.
+
+Reading them took one probe. All four led with the outer wrapper, which does say the compiler does
+not support the program, and then gave a `reconstruct.kel` work-stack underflow or an unreduced
+record range, plus a note about `reconstruct_range` having once read slot zero unconditionally. Two
+distinct internal failure modes, not one: the variable pattern and the struct destructuring
+underflow, while `assert` and the qualified call leave two and three nodes unreduced respectively.
+**Not one of them mentions the construct the user wrote.** A user cannot act on a work-stack
+underflow.
+
+The tracked claim turned out to be ACCURATE, which is worth stating plainly. The measurement was
+still the right move: it was accurate by luck of phrasing rather than by anything checked, and the
+same sentence would have read the same way had it been wrong.
+
+### WHY THIS WAS AVAILABLE WHEN THE GAP WORK WAS NOT
+
+The previous increment concluded that the gap feature work should not start, because all three
+parser gaps grow `parse.kel`, which needs about 192 against caps of 128, and the capacity question
+is the operator's. That conclusion stands. Re-reading the earlier retraction showed it was narrower
+than the conclusion drawn from it: the retracted cost estimate was about adding a REFUSAL CHANNEL TO
+`parse.kel`, a stage-source change. The driver is Rust, and a message improvement there has no blob
+size and no capacity consequence at all.
+
+### THE DESIGN THAT CANNOT MISFIRE
+
+The obvious shape is a pre-check that refuses a listed construct before running the pipeline. That
+shape can refuse a program the subset actually handles, if the list is ever wrong.
+
+The shape adopted instead runs the scan ONLY after a compile has already failed. It changes what a
+refusal says and never whether one happens, so a wrongly listed construct costs a misleading noun in
+a message that was going to be emitted anyway. That is a bounded and recoverable cost, where a false
+rejection is neither.
+
+Two things were measured rather than assumed on the way. Enum construction does NOT parse as a call
+expression, so `::` in a call name is a sound qualified-call signal rather than a trap that would
+have blamed every variant literal in the tree. And a tuple pattern is deliberately ABSENT from the
+list, because its support was never measured and guessing would attach a confident noun to a failure
+that may have nothing to do with it.
+
+### THE GUARD, AND THE VACUITY TRAP IT NEARLY FELL INTO
+
+Every stage source compiles through the subset byte-identically, so the scan must name nothing in
+any of them; a hit means the list has acquired a construct the subset supports.
+
+The scan returns nothing when a source does not parse. **A test that only asserted "names nothing"
+would therefore pass if every stage source failed to tokenize.** Parsing is asserted first, per
+source, before the absence is read as evidence.
+
+Mutation-tested in both directions: adding the supported enum pattern to the list fails the guard
+with a precise attribution, naming `parse.kel` and the first occurrence; and a separate test
+establishes the scan finds something when something is there, so a clean result is not a scan that
+never reports anything.
+
+### FRONTIER
+
+Unchanged in substance. The remaining gap work is scoped feature work that grows `parse.kel` and so
+waits on the capacity decision, and five operator decisions are still blocked. What this increment
+shows is that "blocked" was slightly too broad: the user-facing half of the gap story was reachable
+without touching a stage source at all.
+
+---
+
+## 2026-09-12 (eighty-first) — three claims checked, two of them mine and wrong
+
+### THE PATTERN IS THE FINDING
+
+Six times this session a claim standing in the tree fell to reading or running the component it
+described, and each time the component was one call or one grep away. The individual corrections
+matter less than the rate. Three more landed here.
+
+### THE RISK THAT WAS ONLY EVER STATED
+
+A comment on the binder-divergence pin said the pipeline is safe by omission rather than by
+correctness: that were it to report the three diverging binder forms without also collecting them
+as locals, it would reproduce the false rejection already fixed on the reference side. It said in
+the same breath that this was unverified, because the pipeline's own local handling had not been
+inspected. Inspecting it took one command and dismissed it.
+
+`occurrence_rows_from_pipeline` has no separate locals set that could drift out of step with an
+occurrence list. It builds a slot-to-name map from parameters and `let` bindings; a local-read node
+emits the local flag SET, unconditionally, and only when the slot carries a name. An unnamed slot
+yields no row at all rather than a row with the flag clear. The condition behind the reference-side
+defect is therefore not expressible here: reporting and collecting are one lookup, not two walks
+that can disagree.
+
+The divergence is unchanged and still pinned. What was wrong was the account of why it mattered,
+and it was wrong in the direction of alarm, which is the safer direction and still worth fixing.
+
+### A HEDGE THAT WAS COVERING AN IMPOSSIBILITY
+
+The comment explaining why the branch-pair row is withheld argued that the synthesised else arm
+yields the UNIT tag while a real statement-only else yields UNKNOWN, so the tag *appears* to
+separate them, and that this **could not be shown safe**. Checking it replaced the hedge with
+something stronger and simpler.
+
+A written empty else and an implicit arm produce the SAME parse record stream. The reference
+separates them, its criterion being `else_block.is_some()`, measured as one against zero rather
+than assumed. The distinguishing information never reaches the pipeline, and a heuristic can only
+read what the stream carries. Which tag a case yields is moot, because the two sources are already
+identical before any tag is computed. The witness first establishes that the empty else compiles
+under the reference at all, so the comparison is about a shape a real source can contain.
+
+Its stream-equality assertion names the opposite conclusion too: were the parse stage to start
+distinguishing the two, the row might become implementable and the withholding should be revisited.
+
+### THE CLASS CENSUS, AND ITS BOUNDED NEGATIVE
+
+The hazard behind that finding is a walk that synthesises an optional syntactic element, so the
+specified list to census is the reference syntax tree's optional fields. There are eighteen. **No
+second instance reaches an active channel.** The node rows are extracted from the reference tree,
+which reads the optionality directly; only the pipeline-derived channels are exposed. The retired
+closure surface accounts for one of the optional return types and is not a live concern.
+
+That is a negative result and it earns a sentence, not a test. There is no divergence to pin.
+
+### THE GUARD THE CENSUS DID FIND WORTH PINNING
+
+`expression_nodes_over` appends a declared-versus-actual row only when the body has a tail
+expression. The guard is correct and was unpinned, and the failure it prevents is in the
+FALSE-REJECTION direction: a row manufactured for a body ending in a statement is a comparison the
+source never wrote.
+
+Getting a witness required measurement rather than recall. Keleusma has no early return and a
+return type is mandatory, so a tail-less body is not reachable by omitting either; `Unit` and
+`Void` parse as named types and then fail to compile, so neither is a witness; the unit-returning
+parenthesised form is. The expected count is ONE and not zero, because each source also declares a
+function that does have a tail — a test expecting zero could pass by extracting nothing, which this
+suite has paid for before.
+
+**The pin was mutation-tested.** Replacing the guard with an unconditional push that substitutes a
+default operand form fails the one-row assertion with its own message, and reverting is green. A
+guard-pin never observed to fail is not evidence about the guard.
+
+### TWO BOOKKEEPING ERRORS CAUGHT BY RE-DERIVING
+
+The `selfhost_parse` suite is 91 tests, not the 88 carried in working memory. The figure was
+re-derived from a full unfiltered run before anything was written down, which is the only reason it
+did not become another stale number in a tracked file. Separately, a doc-comment edit aborted
+cleanly on text `cargo fmt` had reflowed, leaving the file untouched while a suite ran against it —
+the abort-before-write discipline working as intended.
+
+### FRONTIER
+
+The small-increment vein here is close to exhausted. The hedge-vocabulary census over the test and
+stage sources returns mostly honest epistemic statements rather than unchecked claims, and the
+optional-field census returned a bounded negative. What remains in this area is the four open
+self-hosted gaps, which are scoped feature work, and five operator decisions that no amount of
+self-directed work can resolve.
+
+---
+
+## 2026-09-12 (eightieth) — the question that should have come first
+
+### FOUR INCREMENTS ABOUT REFUSAL QUALITY, NONE ABOUT WHETHER THEY REFUSE
+
+Several increments discussed the four self-hosted gaps: whether their messages name the construct,
+whether refusing is cheaper than implementing, what a refusal channel would cost. **None established
+that they refuse at all.**
+
+That is the only part bearing on correctness. A construct outside the subset must be REFUSED, never
+silently mis-compiled. Everything else is ergonomics.
+
+### AND THE MEASUREMENT HAD TO BE ON THE RIGHT ENTRY POINT
+
+The censuses drive `occurrence_rows_from_pipeline`, a test harness that unwraps, so a gap surfaces
+there as a PANIC. **That is not what a user meets.** The path behind `--compiler self-hosted` is
+`self_hosted_compile`, and every claim I had made about refusal behaviour came from the harness.
+
+**Reasoning about the product from the harness is the scope error this file records against itself
+several times over**, and I made it four increments running without noticing, because the harness's
+behaviour was consistent and plausible.
+
+### THE RESULT
+
+All four gaps return **`Err`** from `self_hosted_compile` — a proper error, not a panic and not a
+module — and an ordinary program still compiles.
+
+**The subset is SAFE at the boundary that matters.** Nothing on the gap list mis-compiles. The
+remaining obligation is message quality, not soundness.
+
+### THE THIRD REFRAMING, AND THE FIRST FROM A MEASUREMENT
+
+This obligation has now been described three ways: "implement four constructs", then "refuse
+cleanly, which is smaller" (retracted as unverified), and now "improve four messages, the safety
+property already holding". **Only the third rests on running the thing rather than reading around
+it.**
+
+The pin asserts what was measured and disclaims the rest: not that the messages are good — several
+name a work-stack underflow rather than a construct — and not that the gap list is complete, only
+that nothing on it compiles to something wrong.
+
+### THE RULE
+
+**Establish the safety property before debating the ergonomics of the failure.** Four increments of
+discussion rested on an assumption that took one test to check, and the test could have been written
+the moment the first gap was found.
+
+---
+
+## 2026-09-12 (seventy-ninth) — a cost estimate I stated as settled, retracted
+
+### THE CLAIM
+
+Two increments ago I established something true — no gap found by these censuses can block the
+stages from self-compiling, because all twelve compile byte-identically — and then attached a cost
+estimate to it that I did not check:
+
+> the remaining obligation is "make the front end refuse cleanly", separate from and considerably
+> smaller than implementing these four constructs.
+
+**That went into a merged pull request description and into the reverse prompt's current-state
+block.** Both now carry the retraction.
+
+### WHAT CHECKING SHOWED
+
+**`parse.kel` has no refusal channel.** Its output vocabulary is 54 node kinds plus `DONE`, and not
+one of them is an error, refusal, or unsupported marker — enumerated, not assumed.
+
+So a construct the parser cannot handle **cannot be named by it**. It can only mis-parse or spin,
+which is precisely what all four gaps do. Refusing cleanly means adding a refusal record kind and
+teaching the driver and every consumer to read it: **more components than implementing a construct
+touches, not fewer.**
+
+### THE SHAPE OF THE ERROR
+
+The finding it rode on was verified and remains true. **The cost estimate was a plausible inference
+from it, stated in the same breath and in the same confident register.** That is what made it
+dangerous: a reader has no way to tell which half was measured.
+
+One branch of the fix even looked cheap in isolation — at match-arm phase 2 an identifier that is
+not an enum name is unambiguously a pattern rather than an end-of-arms, and detecting that is one
+condition. But detection without a channel to report on has nowhere to go, which is the part the
+estimate skipped.
+
+### THE RULE
+
+**A verified finding and an unverified inference drawn from it should not share a sentence.** This
+session has caught several claims that were reasoned about rather than checked; this one is worse
+than those, because its neighbour in the same paragraph WAS checked, and the proximity lent it
+credibility it had not earned.
+
+---
+
+## 2026-09-12 (seventy-eighth) — the cheap-update property held, which is the design being tested
+
+### THE CLAIM THAT NEEDED TESTING
+
+Two increments ago the reverse prompt was restructured around one argument: **a channel that must be
+REWRITTEN rather than appended to will drift, and keeping the current block SHORT is what makes the
+rewrite cheap enough to actually happen.**
+
+That was a prediction. Five increments later the block needed updating — the parser fix landed, a
+fifth gap was found, the gaps were reclassified, and the divergence was bounded.
+
+### THE RESULT
+
+**Twenty lines added, five removed. One edit.**
+
+Before the restructure, updating this channel meant composing a new dated section on top of
+seventeen hundred lines and deciding what of the old was still true. That is the cost that caused it
+to drift ten increments the first time. The current block is short enough that bringing it level is
+an ordinary edit, and the superseded history below the line needed no attention at all because it is
+explicitly not current.
+
+### WHY THIS IS WORTH AN ENTRY
+
+**A process change that is never exercised is a guess.** The previous entry recorded the reasoning;
+this one records that the property it predicted actually held on first use. Had the update turned
+out expensive anyway, that would have been the more important finding and it would belong here just
+as much.
+
+### WHAT THE BLOCK NOW SAYS THAT IT DID NOT
+
+- **Four** parser gaps remain, not three — the qualified call joined them.
+- **None of the four blocks self-hosting**, by the structural argument: all twelve stages compile
+  byte-identically, so no stage can contain a construct the pipeline cannot parse. Each gap blocks a
+  USER program.
+- Therefore the obligation is **"refuse cleanly"** rather than "implement four constructs", since
+  all four fail by producing a malformed record stream instead of naming what they cannot handle.
+- The pipeline diverges from the reference on three binder forms, **safe by omission rather than by
+  correctness**, bounded to one channel.
+
+---
+
+## 2026-09-12 (seventy-sixth) — a negative result that bounds the previous one
+
+### THE QUESTION THE PREVIOUS INCREMENT LEFT OPEN
+
+It found three unrecorded divergences and a fifth gap by comparing ONE of the seven
+pipeline↔reference channels over the binding forms. **The corpus narrowness that let them hide is a
+property of the agreement tests generally**, not of the occurrence one — so the obvious reading was
+that the other six needed the same treatment.
+
+### THE ANSWER: LOCALISED
+
+Checked over the same forms: the declared-name, field-set and declaration/call channels refuse
+nothing, and **the BINDING channel — which carries the richest rows and is the likeliest to diverge
+alongside — agrees exactly.**
+
+So the divergence is specific to occurrences, which is also the only channel that records the USE of
+a binder rather than its declaration. That is consistent rather than coincidental, and it is why the
+other channels do not need the same treatment.
+
+### WHY A NEGATIVE RESULT IS WORTH AN INCREMENT
+
+**It bounds the previous finding.** Without it, "the pipeline omits binders" reads as an unknown
+amount of divergence across seven channels; with it, the claim is exactly one channel wide and the
+rest is measured rather than assumed.
+
+The localisation is now pinned INSIDE the divergence test rather than stated beside it, so a future
+divergence in the binding channel fails with a message saying the scope has grown — **a different
+and larger fact than the one this test was written for**, and one that would otherwise be invisible
+because the occurrence assertion would still pass.
+
+### THE LINE THIS CLOSES
+
+Every gap this session found came from aiming an instrument somewhere it had not been aimed. This is
+the first application that found nothing, and that is the result: **the vein is bounded.** Reporting
+it as such is more useful than continuing to sample a space already measured.
+
+---
+
+## 2026-09-12 (seventy-fifth) — the pipeline is safe by omission, and a fifth gap
+
+### POINTING THE SESSION'S OWN FINDING AT ITS OWN DEFENCE
+
+The recurring result has been that **a corpus which cannot distinguish two implementations cannot
+detect that they diverge.** The pipeline↔reference agreement tests are the main defence for the
+self-hosted work, and the occurrence one — for the channel where three false rejections hid — uses a
+corpus with a `match` on a LITERAL, no loop, no const parameter and no qualified import.
+
+Those three false rejections were fixed on the REFERENCE side. **Nothing had checked the pipeline
+side against the same forms.**
+
+### THE RESULT
+
+For a `for` variable, a match-arm payload binding and a const parameter used as a value, the
+reference records an occurrence and **the pipeline records none**. Only the `for` case was pinned;
+the other two were recorded nowhere.
+
+### SAFE BY OMISSION IS NOT SAFE BY CORRECTNESS
+
+Omitting an occurrence is the ACCEPTING direction, so the pipeline does not reject these programs.
+**But the reason it is safe is that it reports nothing, not that it handles them.**
+
+The reference side's three false rejections were precisely: the name arrived as an occurrence while
+the local set did not contain it. **If the pipeline began reporting these binders without also
+collecting them as locals, it would reproduce that defect exactly** — and the increment that widened
+it would look like a gap closing.
+
+**Stated as a risk rather than a finding**, because the pipeline's own local-set handling has not
+been inspected. What is checkable is the divergence, and the pin holds that; its failure message
+says what to check if a form ever leaves the set.
+
+### A FIFTH GAP, FROM THE SAME COMPARISON
+
+`audio::midi_to_freq(69)` — a QUALIFIED CALL — is accepted by the reference and refused by
+`reconstruct.kel` with *"a record range did not reduce to exactly one node"*, the same failure kind
+as `assert`.
+
+**The `use` declaration alone is fine**, which localises it: the import parses; the CALL FORM does
+not. Separating those took one probe, and it is the difference between "imports are unsupported" and
+a precise gap.
+
+### THE PATTERN, STATED ONCE
+
+Every gap this session found came from pointing an instrument at something it had not been aimed at:
+the rule census at forms, the binder census at the twin, the grammar's table at the parser, and now
+the binder corpus at the agreement tests. **The instruments transfer because the failure mode does** —
+a corpus chosen to demonstrate behaviour rather than to distinguish implementations.
+
+---
+
+## 2026-09-12 (seventy-fourth) — the bounded channel was not bounded, and the split did not fix it
+
+### TREATING THE ROOT INSTEAD OF REPEATING THE REMEDY
+
+Two increments ago I recorded that **"a channel that has to be rewritten rather than appended to
+will drift, and it drifts fastest when the work is going well"** — then refreshed the reverse prompt
+and moved on. Nine increments later it had drifted again, for exactly the reason named. Refreshing
+it a second time would have been treating the symptom twice.
+
+### THE MEASUREMENT
+
+`REVERSE_PROMPT.md` is specified as the BOUNDED latest-state channel. **It was near 1,800 lines.**
+
+The design journal's own header records why the two were split on 2026-07-22: the reverse prompt had
+accreted to about 362 KB, "contrary to the overwrite-each-task spec". **The split did not stop the
+accretion.** In practice "overwritten" means each session PREPENDS a section and keeps the rest, so
+the same mechanism produced the same result at a smaller scale.
+
+### THE PROPERTY THAT ACTUALLY MATTERS
+
+Two properties were conflated, and only one of them is load-bearing:
+
+- **Bounded SIZE** did not hold, and has not held twice now.
+- **Bounded CURRENCY** — a reader being able to tell what is true *now* — is the property the
+  channel exists for.
+
+Currency is recoverable without deleting anything: the file now opens with a short current-state
+block and an explicit line after which everything is **superseded history, retained for
+provenance**. A resuming reader stops at the line instead of reconstructing currency from a stack of
+dated sections.
+
+### WHY NOT TRIM
+
+The history below that line is other sessions' record. **Deleting it is not a decision a session
+should take for itself**, and the currency problem does not require it. Recording the reasoning for
+the restraint matters as much as the restraint: a later session that decides trimming IS warranted
+should be overruling an argument, not discovering an absence.
+
+### THE SPEC NOW CARRIES IT
+
+`COMMUNICATION.md` records the measurement, the distinction between bounded size and bounded
+currency, and why keeping the current block SHORT is what makes the rewrite cheap enough to actually
+happen. **Putting it in the spec rather than in this journal is the same move as the previous
+increment's**: a finding recorded only where history accumulates is a finding nobody acts on.
+
+---
+
+## 2026-09-12 (seventy-third) — six ways a green run has lied, in one reachable place
+
+### WHY CONSOLIDATE RATHER THAN ADD A SEVENTH ENTRY
+
+Four of these were recorded in this journal under the chunk-count increment, a fifth in the reverse
+prompt, and a sixth in the entry immediately above. **The knowledge was present and not reachable.**
+Nobody resuming finds a table in the middle of an append-only file that is now seventy-plus entries
+long, and the proof is that I hit the same class TWICE in one iteration while all of it was already
+written down.
+
+So the six now sit in `CLAUDE.md`, beside the verification commands they qualify — the place a
+session reads while working rather than while reconstructing history. The journal entries stay where
+they are; the consolidation points at them rather than replacing them.
+
+### THE SIX
+
+| how it under-reported | what distinguishes it |
+|---|---|
+| guards ran BEFORE the last edit | compare the guard's start against the file's mtime |
+| a single-package run omits `self-host`; a workspace run unifies it on | they are different feature sets |
+| `cargo test` stops at the FIRST failing binary | "1 failed" is not "one failure in the tree" |
+| a run edited while in flight | belongs to no tree; discard rather than read as a pass |
+| a CACHED clippy run prints nothing either way | `touch` first; a warm target directory proves nothing |
+| a TRUNCATED log looks identical to a clean one | capture whole output and exit status |
+
+### THE PROPERTY THEY SHARE, WHICH IS THE POINT
+
+**In every case the run did less than the reader believed.** Each is a gap between what the command
+actually covered and the claim made from its output.
+
+That is why the corrective is not "run more tests" — it is asking *what did this command cover?*
+before a result is used to justify anything. Two of the six are about the command's scope, two about
+its timing, and two about its OUTPUT being an incomplete view of a run that was itself fine. The
+last pair is the subtle one: the run succeeded and the evidence of success was partial.
+
+### NOT EXHAUSTIVE, AND SAYING SO MATTERS
+
+Six found across one session is evidence that more exist. The table says this. A list of failure
+modes presented as complete invites the reader to stop looking, which is the failure mode one level
+up and the one this session has recorded against rule inventories, binder sets and census corpora
+alike.
+
+---
+
+## 2026-09-12 (seventy-second) — the pin caught what local verification did not, and a risk I had written down
+
+### WHAT BROKE
+
+The parser fix went red in continuous integration. `every_stage_fits_the_driver_caps_with_margin`
+pins the worst-case compiled blob size across the stage corpus: **35,746 against a pinned 35,716**
+— thirty bytes, because the `step_mpat` branch grew `parse.kel`.
+
+**The increment's own brief had named this risk.** Its list of what could go wrong, in order of
+likelihood, ended with *"counts pinned elsewhere: chunk and node figures are asserted in several
+files; a grown source can move them."* I wrote that, then ran the parse, codegen and typecheck
+suites and not the file that checks it.
+
+**A risk named in a brief is only useful if the brief's checks are then run.** Having the right list
+is not the same as using it.
+
+### THE MOVE IS RECORDED WITH ITS CAUSE
+
+That pin carries a history of such moves, each with its size and reason. This is the fourteenth, and
+the **first with zero new names**: the branch introduces no identifier, so the per-name arithmetic
+the comment tracks has nothing to say about it. Recorded as constraining that constant not at all,
+rather than as a data point for it — the file's own convention is to keep the measurement and leave
+the arithmetic open where it is open.
+
+### A SECOND, SMALLER ERROR OF THE SAME SHAPE
+
+After fixing the pin I reported the default-feature workspace run clean. **It was not established.**
+The command ended in `tail -20`, so the twenty-one result lines counted were the LAST twenty
+binaries — the earlier ones, including the integration tests where a `parse.kel` change would
+actually show, were truncated away.
+
+**A truncated log looks identical to a clean one.** That is the fifth way a local check has
+under-reported this session, after the cached clippy run, and it has the same remedy: capture the
+whole output and the exit status, then read both.
+
+Re-run properly: `EXIT=0`, **135 test binaries all passing**, no failures anywhere.
+
+### WHAT CHANGED IN PRACTICE
+
+Two things, neither of which is "run more tests":
+
+1. When a pinned figure moves, run the **whole** suite that contains it, not the one assertion.
+   Fixing an assertion and re-running only that assertion repeats the original error at smaller
+   scale.
+2. Capture full output and exit status for anything whose result will be quoted. A pipeline ending
+   in `tail` or `head` produces evidence that cannot support the claim made from it.
+
+---
+
+## 2026-09-12 (seventy-first) — the last untraced gap, and the cheap wins are exhausted
+
+### THE TRACE
+
+`assert` was the one gap never looked at. It failed a third way — `reconstruct.kel` refusing with
+*"a record range did not reduce to exactly one node"* — and that message describes a symptom rather
+than a cause.
+
+**`assert` is not a keyword in the self-hosted lexer.** `kw6` recognises `shared`, `orelse` and
+`struct`; `assert` is not among them. So it lexes as an ordinary identifier, `assert a > 0` becomes
+two adjacent identifiers the expression parser cannot reduce, and the reconstruct guard catches the
+wreckage downstream.
+
+### ITS ABSENCE IS DEFENSIBLE; ITS FAILURE MODE IS NOT
+
+**No stage source uses `assert` as a statement.** The only occurrences across the twelve `.kel` files
+are in comments, checked rather than assumed. So excluding it from the self-hosted subset is a
+reasonable choice, not an oversight.
+
+What is not reasonable is that the exclusion surfaces as a malformed record stream instead of a
+refusal naming the construct. **That distinction — whether a construct is IN the subset versus
+whether its absence is well-behaved — is the one this file has now applied to all four gaps**, and
+it is the part that would be lost by reporting "the subset is narrow".
+
+### THE PLANNING RESULT: NO CHEAP WINS REMAIN
+
+| gap | kind |
+|---|---|
+| bare enum unit variant | **contained — fixed**; every piece existed in one function |
+| variable pattern | feature work; `step_match` reads a non-enum identifier as the end of the arms |
+| struct destructuring | feature work; same root |
+| `assert` | feature work; needs a token code, a lexer arm, statement parsing, and emission through two more stages |
+
+**One of four was a missing branch. The other three are each multi-stage features.** That is worth
+stating plainly, because the previous increment's success could otherwise suggest the rest are
+similarly cheap. They are not, and the next work in this area is scoped feature work or nothing.
+
+### THE METHOD, FOR THE FOURTH TIME
+
+Trace before writing. It has now changed the plan four times this session: the capacity price
+reshaped the reductions, the specified list tripled the pattern census, the expression census showed
+the pattern gaps were local rather than symptomatic, and this splits the remaining gaps by cost
+rather than by count. **Each trace cost a reading; each would have cost a rewrite if taken in the
+other order.**
+
+---
+
+## 2026-09-12 (seventieth) — the contained fix, and a hesitation that was misplaced
+
+### A CORRECTION TO THE PREVIOUS INCREMENT'S REASONING
+
+It declined to write the fix because the change "deserves its own continuous-integration run rather
+than a ride-along". **That conflated WRITING the change with PUSHING it.** Working locally and
+holding the push — which is what every increment since the cadence finding has done — gives the
+change its own run. The hesitation protected nothing.
+
+### THE FIX
+
+`step_mpat` phase 3 waited for `LParen` and did nothing on any other token, so given `E::A => 1` the
+phase never advanced, tokens kept arriving with no progress, and the parse ran to its step budget.
+**It did not refuse; it span.**
+
+Phase 3 now completes the pattern on `=>`: the `LParen` path's slot reservation, then the `RParen`
+path's completion with zero payload binds, then **phase 4 rather than 3** — because the `=>` has
+already been consumed here, and returning to the phase that waits for one would swallow the arm
+result's first token.
+
+Only `=>` is handled. A match-arm pattern must be followed by it, so any other token at that phase
+is malformed input, and a narrow branch is easier to argue correct than a general one.
+
+### PARSING IS NOT THE CLAIM
+
+**That it now parses is not evidence it parses CORRECTLY.** The census only checks the pipeline does
+not panic, and would pass on a fix emitting wrong records.
+
+The two spellings denote the same pattern, so their record streams must be IDENTICAL — and comparing
+them is stronger than asserting what the records should contain, because it needs no model of the
+encoding. They match, including **mixed in one match**, which is the case that exercises each
+branch's hand-off to the arm result against the other's.
+
+### WHAT THE SLOT COMMENT WAS FOR
+
+The `LParen` path carries a comment saying its slot reservation exists so parse's slot numbers match
+codegen's allocation. **That is why the reservation was mirrored rather than rewritten**: getting it
+wrong would desynchronise two stages in a way no parse test would show. Byte identity held — 147 of
+147 in the codegen suite, 88 of 88 in the parse suite.
+
+### THE STATE OF THE CENSUS
+
+Documented pattern forms: **five parse, two do not.** The two that remain are feature work by the
+same trace — `step_match` phase 2 reads a non-enum identifier as the end of the arms, so supporting
+them means new arm semantics rather than a missing branch.
+
+---
+
+## 2026-09-12 (sixty-ninth) — three gaps, one contained fix and two features
+
+### WHY TRACE RATHER THAN WRITE
+
+Both deferral conditions for fixing the parser had expired: the instrument was on a pushed branch,
+and the previous increment established the gaps are LOCAL rather than symptomatic, so the fix is
+worthwhile. **"Worthwhile" is not "small"**, and `parse.kel` is 6,651 lines that must still
+self-compile byte-identically. So the mechanism was traced before anything was written.
+
+### THE ROOT IS ONE PLACE, AND IT SPLITS THE THREE UNEVENLY
+
+`step_match` phase 2 reads an arm pattern. It accepts an integer literal, `_`, and an identifier
+**only when that identifier names a known enum**. Anything else sets `match_build` — it reads the
+identifier as the END OF THE ARMS.
+
+**That single decision produces both observed failure kinds:**
+
+- **The variable pattern `v` and the struct pattern `P { x }`** take the end-of-arms path. The
+  parser does not hang; it produces a stream that means something else, and `reconstruct.kel`
+  catches it as a work-stack underflow. **FEATURE WORK** — supporting them means new arm semantics,
+  binding or destructuring the scrutinee, not a missing branch.
+
+- **The bare enum unit variant `E::A`** is recognised as an enum, enters `step_mpat`, and reaches
+  phase 3, which waits for `LParen` and **does nothing on any other token**. The phase never
+  advances and tokens keep arriving with no progress. That is the spin, exactly.
+
+### THE CONTAINED ONE, ANALYSED SO IT IS NOT RE-ANALYSED
+
+The `LParen` path reserves the arm's `IsEnum` test slot. The `RParen` path completes the pattern,
+counts the arm, and returns the `EnumArm` record. A bare form needs **both of those, plus advancing
+the match phase PAST the `=>` it has already consumed** rather than back to the phase that waits for
+one.
+
+**Every piece it needs already exists in that one function.** The analysis is recorded beside the
+census so the increment that does it starts from here.
+
+### WHY IT WAS NOT DONE IN THIS INCREMENT
+
+Any change to a stage source must still self-compile byte-identically, and that constraint makes
+even the contained fix worth its own run at continuous integration rather than a ride-along on a
+branch whose run is already in flight. Attempting it while three jobs were pending on another pull
+request would have risked the thing the last several increments spent effort protecting.
+
+### THE SHAPE
+
+**"Three gaps" was not a useful unit of work.** Tracing turned it into one contained fix and two
+features, which is a different plan with a different cost. The tracing took one reading of two
+functions; writing the grammar first would have discovered the same split after the expensive part.
+
+---
+
+## 2026-09-12 (sixty-eighth) — the pattern gaps are local, and a third failure kind
+
+### THE QUESTION THAT DECIDED THE NEXT WORK
+
+The pattern census found three of seven documented forms unhandled. **That could be a local gap or
+a symptom**, and the difference decides whether teaching `parse.kel` three pattern forms is worth
+doing or whether the honest deliverable is a much narrower documented subset.
+
+Writing grammar for a 309-kilobyte stage, with a byte-identical self-compile to preserve, before
+knowing which, would have been building on an unmeasured premise. **So the premise was measured
+first** — the third time this session that has changed what the next work should be.
+
+### THE ANSWER: LOCAL
+
+**Fourteen of the fifteen expression and statement forms the grammar enumerates parse.** Arithmetic,
+shift and bitwise, comparison and logical, calls, pipelines, match, if/else, struct construction,
+field access, array indexing, variable binding, expression statements, `for` loops, `break`.
+
+The parser is not broadly behind the specification. **Fixing the pattern forms is worthwhile rather
+than futile**, and belongs in its own increment.
+
+### THE ONE THAT FAILS, AND IT FAILS A THIRD WAY
+
+`assert` — `reconstruct.kel` refuses with *"a record range did not reduce to exactly one node"*.
+
+Three distinct failure kinds now, across the two censuses:
+
+| kind | where | forms |
+|---|---|---|
+| non-terminating parse | `parse.kel` step budget | bare enum unit variant |
+| work-stack underflow | `reconstruct.kel` | struct destructuring, variable pattern |
+| range did not reduce to one node | `reconstruct.kel` | `assert` |
+
+**None is a clean refusal of an unsupported construct.** A subset that excluded `assert` would say
+so; these are downstream guards catching inconsistent output, or no guard at all. Whether a
+construct is IN the subset is a separate question from whether its failure is well-behaved, and a
+total language's front end should refuse what it cannot handle.
+
+### WHAT THIS DOES NOT CLAIM
+
+One program per form. A form can be handled in one spelling and not another — the failure mode this
+file has now recorded five times, and the reason the bare enum pattern was invisible behind
+`Op::Neg()`. The list is specified, which is the part that matters; the coverage within each form is
+not.
+
+### THE PATTERN, STATED ONCE MORE BECAUSE IT KEEPS PAYING
+
+Measure the premise before acting on it. The capacity price changed what the reductions should be;
+the specified list changed what the pattern census found; and this changed a large risky grammar
+change from "probably pointless" to "worth doing, separately".
+
+---
+
+## 2026-09-12 (sixty-seventh) — censusing against a SPECIFIED list turned one finding into three
+
+### THE CHANGE OF LIST
+
+The previous increment recorded that `parse.kel` cannot handle a bare enum-variant pattern. That was
+found with a corpus I assembled, which carries the caveat every census in this file states: **these
+are the forms I thought of.**
+
+`docs/spec/GRAMMAR.md` enumerates the pattern forms in a table. **That is a SPECIFIED list.**
+Censusing against it turned one finding into three — and made the claim stronger, because a form in
+that table which the parser cannot handle is a divergence from the DOCUMENTED LANGUAGE rather than
+from the reference implementation.
+
+### THE RESULT: FOUR PARSE, THREE DO NOT
+
+| form | grammar example | outcome |
+|---|---|---|
+| enum unit variant, bare | `Command::Silence` | `parse.kel` DOES NOT TERMINATE |
+| struct destructuring | `Note { channel, pitch }` | stream `reconstruct.kel` cannot rebuild |
+| variable | `x` | stream `reconstruct.kel` cannot rebuild |
+
+**`match a { v => v }` is the simplest binding pattern the language has.**
+
+### THE CORRECTION I HAD TO MAKE BEFORE SHIPPING
+
+The first version of this pin's documentation said all three SPIN. **That was wrong for two of
+them**, and the difference matters:
+
+- The bare enum pattern makes `parse.kel` non-terminate — a hang, caught only by the step budget.
+- Struct destructuring and the variable pattern are ACCEPTED by `parse.kel`, which then emits a
+  record stream `reconstruct.kel` cannot rebuild, refused as a **work-stack UNDERFLOW**.
+
+**The second kind is not the conservative stance working.** A subset that refuses an unsupported
+construct cleanly says so; an underflow is a downstream guard catching an INCONSISTENT STREAM the
+parser should not have produced. Reporting all three as one failure mode would have made the parser
+look merely incomplete rather than, for two of them, wrong.
+
+I caught it because the panics came from two different source locations, which was visible only
+because the test ran each case rather than stopping at the first.
+
+### WHAT IS FIXED AND WHAT IS NOT
+
+The DIAGNOSTIC is fixed: the budget guard no longer asserts that the usual cause is an unterminated
+block. Teaching `parse.kel` these three forms is a change to the self-hosted pattern grammar and
+belongs in its own increment.
+
+The three are pinned BY EQUALITY, so a form leaving the set is a gap closing to record and one
+joining it is a regression.
+
+### THE RULE
+
+**A census against a list I assembled is weaker than a census against a list the project
+specified**, and the difference is not rhetorical: the same instrument, pointed at the grammar's own
+table instead of my corpus, found three times as much and upgraded the claim from "the two
+implementations differ" to "the parser does not implement the documented language".
+
+---
+
+## 2026-09-12 (sixty-sixth) — the census pointed at the twin, and the twin does not terminate
+
+### THE MOVE
+
+Eighteen increments had gone into one area: the type-rejection host extraction, where three false
+rejections were found. **That walk has a twin** — the PIPELINE extraction in `src/selfhost/mod.rs`,
+compared against the reference side by agreement tests.
+
+Those agreement corpora contain a `match` on a LITERAL, no loop, no const parameter and no qualified
+import. **A corpus that cannot distinguish two implementations cannot detect that they diverge.** So
+the binding-form census was pointed at the twin. One probe.
+
+### WHAT IT FOUND
+
+**`parse.kel` does not terminate on a match arm whose pattern is a BARE enum path.**
+
+| spelling | reference | `parse.kel` |
+|---|---|---|
+| `E::A => 1` | accepts | **spins until the budget is exhausted** |
+| `E::A() => 1` | accepts | parses |
+
+Payload or no payload makes no difference. The parentheses do.
+
+**Non-termination, not a budget shortfall**, and that was established rather than assumed: at
+sixteen steps per token it fails; at five hundred and twelve it still fails. A budget merely sized to
+the constructs someone tried would have passed at the larger figure.
+
+The existing parse-suite test that covers enum patterns uses `Op::Neg()` — the parenthesised form —
+which is why the gap survived a suite of eighty-seven tests. **One spelling of one construct.**
+
+### THE SECOND DEFECT, WHICH IS THE DIAGNOSTIC
+
+The budget guard's message said the failure's *"usual cause is an unterminated block, string, or
+bracket"*. For this input that is false, and it would send a reader hunting for a brace that does not
+exist.
+
+**"The usual cause" is a claim about a population nobody measured.** The message now names both
+recorded causes and calls neither usual, which costs nothing and stops it being confidently wrong.
+
+### WHAT IS FIXED AND WHAT IS NOT
+
+The diagnostic is fixed. **The parser is not**: teaching `parse.kel` the bare spelling is a change to
+the self-hosted pattern grammar, and an instrument and the change it argues for should not land
+together — the same rule applied when the capacity price was measured.
+
+The bare case is pinned as FAILING rather than omitted, so the day it parses, the test fails and says
+to widen the documented subset.
+
+### THE SHAPE, FOR THE FOURTH TIME
+
+A construct supported in one spelling and not another, invisible because every test used the
+supported one. The rule-shape census found it for rules; the binder census found it for binders;
+this finds it for the parser's own grammar. **The instrument transfers because the failure mode
+does.**
+
+---
+
+## 2026-09-12 (sixty-fifth) — the bounded channel had drifted ten increments
+
+### THE FINDING IS ABOUT THIS FILE'S SIBLINGS
+
+`REVERSE_PROMPT.md` stopped at the fifty-fourth increment while this journal reached the
+sixty-fourth. `HANDOFF.md` stopped at the forty-first, and still said *"type rejection reaches only
+literal, direct occurrences"* — true when written, false for weeks.
+
+**The append-only channel kept pace and the bounded one did not, and the asymmetry is structural.**
+Appending is cheap: it needs only what just happened. The bounded channel requires deciding what the
+CURRENT STATE IS, which is work, and which gets deferred exactly when increments are dense — that is,
+when it carries the most.
+
+A session ending here would have handed the next one a picture in which the input path is
+twenty-two times too small (it is 1.6), two real sources fit (ten do), and the field-read edge is
+the frontier (it is a capacity decision).
+
+### WHAT THE REFRESH SAYS
+
+One block covering increments 55 to 64 rather than ten sections, because the channel is BOUNDED and
+its job is the latest state and the next step, not the history — the history is here.
+
+The handoff's stale bullet is **struck through rather than deleted**, with the correction beside it,
+because a resuming agent who has read the old version needs to see that it moved rather than find it
+quietly gone. A handoff that silently changes its story is worse than one that admits it was wrong.
+
+### THE STATE IT NOW CARRIES
+
+- The input path carries **ten of twelve** real sources, up from two; the corpus-sized shared data is
+  **1.6x** what it uses today, down from 7.3x; the growth is **+33 KiB** against a 16 MB ceiling.
+- **Closing the last two is the operator's capacity decision**, not another reduction. `parse` needs
+  about 192 against caps of 128; `wire` about four times, dominated by declaration-indexed tables.
+- Three false rejections found and fixed, two of them only by running the stage against real code.
+- The refusal pin, so the one deliberately-declined saving is not taken by accident.
+- That a push cancels the running check, which cost five consecutive runs.
+
+### THE RULE
+
+**A channel that has to be rewritten rather than appended to will drift, and it drifts fastest when
+the work is going well.** The protocol says to update it after each task; I stopped when the tasks
+got dense. Noticing that it had happened took looking, not remembering.
+
+---
+
+## 2026-09-12 (sixty-fourth) — the deferred channel, and why it needs the other deduplication
+
+### THE REASONING THAT HAD BEEN DEFERRED
+
+The binding channel was skipped two increments ago: its lookup is not a simple per-row predicate,
+and a 34% saving did not justify the extra reasoning while two other channels were changing. It
+became the binding constraint as soon as the alternatives were taken. This does the reasoning.
+
+**The lookup OVERWRITES its accumulator as it scans, so the LAST matching row wins.**
+First-appearance deduplication would therefore change behaviour whenever a name carries two
+conflicting rows: `[(a,1), (a,2), (a,1)]` resolves to 1 before and 2 after.
+
+**The hazard is real rather than theoretical.** Ten names across the twelve real sources carry more
+than one distinct row — the flat namespace over locals and functions makes it possible, and this
+file already recorded that as a known narrowing. A local shadowing a function name is the everyday
+case.
+
+**Last-appearance deduplication is the safe form**, and the argument is short: if tuple `T` at
+position `p` was the last row for name `v`, then no row for `v` follows `p`, so keeping `T` at its
+last position keeps it last. The overall answer is preserved by construction rather than by
+inspection.
+
+This is why the deferral was worth making at the time and worth resolving now: the channel really
+did need a different criterion from the other four, and taking it in the same increment as them
+would have meant applying first-appearance deduplication to all five.
+
+### THE EFFECT
+
+| | before | after |
+|---|---|---|
+| real sources that fit | 8 of 12 | **10 of 12** |
+| corpus-sized shared data | 12,822 words, 1.7x | 11,690 words, **1.6x** |
+| growth over today | +42 KiB | **+33 KiB** |
+| tightest constraint anywhere | `wire` bindings, 6x | `wire` bindings, 4x |
+
+`codegen` and `reconstruct` crossed under.
+
+### WHAT IS LEFT IS NOT MORE OF THE SAME
+
+Two sources remain over, and their character differs:
+
+- **`parse` is over by a little on four channels**, the worst 162 against 128. A cap of 192 would
+  admit it.
+- **`wire` is over by about four times on six**, dominated by the DECLARATION-INDEXED tables that no
+  deduplication reaches: it declares 492 functions and 499 top-level names against caps of 128.
+
+**Closing the last two is a capacity decision, not another reduction.** Six reductions have taken
+the price from +366 KiB to +33 KiB — a factor of eleven — and the remaining growth is mostly the
+floor named two increments ago.
+
+### THE SEQUENCE, WHICH IS THE POINT
+
+Predicted ZERO sources would fit. Measured two. Elision: three. Occurrences: seven. Calls, pairs,
+expressions: eight. Bindings: ten. **Every step verdict-preserving under a differential, every step
+measured rather than argued, and every step larger than I expected.**
+
+---
+
+## 2026-09-12 (sixty-third) — the expression channel deduplicates too, and a deferral becomes the constraint
+
+### THE CHANNEL THAT LOOKED LIKE `dparams` AND IS NOT
+
+The expression table is ADDRESSED BY INDEX: a form-2 binding row carries its initialiser's position
+in it. That is the same property that makes `dparams` undeduplicatable, so the channel had been left
+out of the distinct-facts argument.
+
+**The two cases are not the same, and the difference is exact.** `dparams` is indexed BY
+DECLARATION, so collapsing rows moves every later entry and destroys the addressing. The expression
+table collapses only rows that are IDENTICAL — and a binding pointing at either copy gets the same
+operands and therefore the same tag. The remap the inert-row elision already built handles the rest.
+
+**Measured: 5,145 rows across the corpus carry 718 distinct shapes, 86% repeats.** `parse.kel` falls
+from 1,728 to 116, under its cap; `codegen` from 473 to 110, under.
+
+### THE EFFECT
+
+| | before | after |
+|---|---|---|
+| real sources that fit | 7 of 12 | **8 of 12** |
+| corpus-sized shared data | 19,862 words, 2.7x | 12,822 words, **1.7x** |
+| growth over today | +97 KiB | **+42 KiB** |
+| tightest constraint anywhere | `parse` expression nodes, 7x | `wire` BINDINGS, 6x |
+
+### A DEFERRAL HAS BECOME THE CONSTRAINT
+
+The binding channel was left un-deduplicated one increment ago, on the reasoning that its lookup is
+not a simple per-row predicate and a 34% saving did not justify the extra reasoning while two other
+channels were being changed.
+
+**It is now what stands between the remaining four sources and the caps.** That is a different
+judgement from the one made then, and it was reached not by changing my mind but by everything
+around it moving. Worth recording as a shape: a deferral justified by relative cost is a deferral
+whose justification expires when the alternatives are taken.
+
+### THE FULL SEQUENCE
+
+Predicted zero sources would fit. Measured two. Inert-row elision: three. Occurrence deduplication:
+seven. Call, pair and expression deduplication: eight. **Five reductions, each verdict-preserving
+under a differential, the price down from +366 KiB to +42 KiB — a factor of nine.**
+
+What remains is genuinely different in character: the binding channel, and the two
+declaration-indexed floors that no deduplication reaches.
+
+---
+
+## 2026-09-12 (sixty-second) — the same argument reaches two more channels, and stops at two others
+
+### WHERE IT REACHES
+
+The distinct-facts argument applies to a channel whose rows are a LIST OF FACTS read by a per-row
+predicate folded into a sticky verdict. Two more qualify:
+
+| channel, on `wire.kel` | rows | distinct |
+|---|---|---|
+| operand pairs | 1,452 | **2** |
+| call sites | 1,730 | 472 |
+
+The operand-pair result is the striking one: the channel carries an actual tag against a required
+tag, and across a 217-kilobyte program there are **two distinct combinations**. Reporting it 1,452
+times was pure repetition.
+
+### WHERE IT STOPS, WHICH IS THE MORE USEFUL HALF
+
+- **`dparams` is ADDRESSED POSITIONALLY.** The arity rule reads `dparams[csite[i]]`: the table is
+  indexed by declaration, not scanned as a list. Deduplicating it would destroy the addressing
+  rather than shrink it.
+- **`dname` is already a set** of distinct declared names. There is nothing to remove.
+
+**Both are one row per declaration, and they are a FLOOR.** `wire.kel` declares 492 functions and
+499 top-level names against caps of 128 — roughly four times the cap remains after every reduction
+of this kind, and no further cleverness removes it.
+
+**That number is worth more than another percentage**, because it is the part a capacity decision
+actually has to cover. The reductions have taken the price from 7.3x to 2.7x; what is left is mostly
+not compressible.
+
+### BINDINGS DELIBERATELY LEFT ALONE
+
+The binding lookup takes whichever row matches rather than folding a predicate, so duplicates are
+harmless — but two rows for ONE name that DIFFER are meaningful, and the criterion would have to
+distinguish that case. A 34% saving does not justify reasoning about a channel whose lookup is not a
+simple per-row predicate, in an increment already touching two others.
+
+### THE EFFECT
+
+| | before | after |
+|---|---|---|
+| corpus-sized shared data | 24,770 words, 3.3x | 19,862 words, **2.7x** |
+| growth over today | +135 KiB | **+97 KiB** |
+| real sources that fit | 7 of 12 | 7 of 12 |
+| tightest constraint anywhere | `wire` call sites, 14x | `parse` expression nodes, 7x |
+
+**The count of fitting sources did not move**, and that is worth noting rather than glossing: the
+sources that were over were over on SEVERAL channels, so removing one constraint exposes the next.
+`codegen` is now over on two channels rather than four, and `parse` on five rather than six. Progress
+that does not move the headline count is still progress, and a summary that reported only the count
+would have shown nothing.
+
+### THE WHOLE SEQUENCE
+
+Predicted zero would fit. Measured two. Inert-row elision: three. Occurrence deduplication: seven.
+Pair and call-site deduplication: seven, with the price down another third. **Four reductions, every
+one verdict-preserving under a differential, and the price down from +366 KiB to +97 KiB.**
+
+---
+
+## 2026-09-12 (sixty-first) — the saving the refusal left open, and a measurement that had drifted
+
+### THE SAVING THE PREVIOUS INCREMENT LEFT OPEN
+
+That increment refused one occurrence-channel saving and said explicitly that a saving not requiring
+the host to apply the rule remained open. This is it.
+
+The channel emitted one row per syntactic OCCURRENCE. Across the twelve real sources that is 14,288
+rows carrying **1,391 distinct facts — 90% repeats.**
+
+**It never asks what a rule would conclude.** It observes that two rows are equal as tuples and
+sends the fact once. That is the whole difference from the refused version, where the host would
+have withheld a row precisely BECAUSE it knew the rule's answer for it.
+
+**What it does rely on, stated rather than glossed**: the stage applies a per-row predicate folded
+into a sticky verdict, so identical rows contribute identically. That is the fold's SHAPE rather
+than a rule's answer — but it is a reliance, and calling the saving free would be the overclaiming
+the refusal was about.
+
+**It changes what the channel means**, from per-occurrence to per-distinct-fact, and the description
+travels with the change. First-appearance order is preserved, because order-independence of a sticky
+disjunction is a SECOND assumption and not needing it is cheaper than arguing it.
+
+### A MEASUREMENT THAT HAD DRIFTED FROM WHAT IT MEASURED
+
+The capacity and price tests went on reporting **3,874** occurrence rows after the driver had begun
+sending **537**. `real_source_channel_rows` called the raw walk; the driver applied the reduction.
+
+**A measurement that drifts from the thing it measures is worse than no measurement, because it
+reads as evidence.** It was caught only because the expected improvement did not appear — had the
+saving been smaller, the drift would have been invisible and both numbers would have gone on being
+quoted.
+
+The expression channel was already in step because its entry point applies the elision. The
+occurrence channel needed it applied explicitly.
+
+### THE EFFECT
+
+| | before | after |
+|---|---|---|
+| real sources that fit | 3 of 12 | **7 of 12** |
+| corpus-sized shared data | 34,781 words, 4.7x | 24,770 words, **3.3x** |
+| growth over today | +213 KiB | **+135 KiB** |
+| tightest constraint anywhere | `wire` occurrences, 15x | `wire` call sites, 14x |
+
+**The prediction history is worth keeping.** I predicted ZERO sources would fit. The first run found
+two; the inert-row elision took it to three; this takes it to seven. Each step was measured, and
+each exceeded what I expected of it.
+
+**The binding constraint has now moved twice** — off the expression channel, then off the occurrence
+channel — and is now the call-site channel. Whether the same argument reaches it is a question for a
+later increment, and the answer is not obvious: call sites are distinct by construction in a way
+occurrences are not.
+
+---
+
+## 2026-09-12 (sixtieth) — a saving that is available, verdict-preserving, and refused
+
+### THE SAVING
+
+The expression elision moved the binding constraint to the OCCURRENCE channel, now the largest
+remaining term in the price of a corpus-sized input path.
+
+The same argument appears to apply. An occurrence row with `local = 1` and `call = 0` can never
+reject: the rule returns zero for it directly, with no lookup. **Measured: 5,580 of 14,288 rows, 39%
+across the twelve real sources**, and 1,224 of `wire`'s 3,874.
+
+**It is verdict-preserving.** Every program would get the same answer. This is not an unsound
+optimisation being called unsound.
+
+### WHY IT IS REFUSED ANYWAY
+
+The elision that WAS taken removed rows whose content was **nothing**. An operand reported as "could
+not tell" and an operand not reported at all are **indistinguishable to the stage**: both resolve to
+zero and the answer is identical either way. The host declined to send a row it had nothing to say
+about.
+
+This one is different in kind. A row saying "this name, local, not a call" carries real content, and
+withholding it would be the host declining **because it knows the rule's answer**.
+
+The line this file draws is that the host reports syntax — "occurrence 4 names index 12, and it is a
+call" — and does not say "that is an undefined function", because the classification is the work.
+**Suppressing rows whose classification the host predicted is performing that classification**, and
+it would be invisible in every verdict.
+
+That is the marshalling objection running backwards. The usual concern is a host supplying
+conclusions; this would be a host withholding evidence on the strength of one.
+
+### THE TEST OF THE DISTINCTION
+
+The two cases are separated by a question worth keeping: **can the stage tell the difference between
+the row being absent and the row being present?**
+
+- Expression rows: NO. Absent and reported-unknown both resolve to zero. Eliding is free.
+- Occurrence rows: YES. The fold length changes and one fewer name is classified. Eliding requires
+  the host to have applied the rule.
+
+Both give the same verdict. Only one leaves the decision where the file says it lives.
+
+### WHY THIS IS A TEST AND NOT A COMMENT
+
+**A refusal recorded only in prose is a refusal that gets undone by someone optimising in good
+faith.** The pin fails if the rows stop being sent, so the argument has to be MET rather than
+bypassed. It guards a decision rather than a behaviour, which is a shape this repository did not yet
+have.
+
+If a later increment decides the trade is worth making — perhaps because this channel becomes the
+thing standing between the stage and the real corpus — the way to do it is to delete the test
+deliberately and record why, not to discover it failing.
+
+### WHAT THIS DOES NOT CLAIM
+
+Not that the occurrence channel cannot be made cheaper. A saving that does not require the host to
+apply the rule — fewer occurrences reported because fewer are generated, or a narrower row — remains
+open and is not what this refuses.
+
+---
+
+## 2026-09-12 (fifty-ninth) — two thirds of the expression table cannot decide anything
+
+### THE LEVER THE PRICE IDENTIFIED
+
+The price measurement found the expression channel to be 57% of the cost of a corpus-sized input
+path -- five parallel arrays across the widest gap -- and said that anything reducing its row count
+would dominate every other saving. This is that reduction.
+
+### THE MEASUREMENT
+
+A row of an agreement kind rejects only when both sides resolve to a known tag and differ; a
+condition row only when its operand resolves to something other than `bool`. An operand the host
+reported as "could not tell" is treated by that predicate as no evidence, so such a row **cannot
+change any verdict**.
+
+**Measured across the twelve real sources: 10,353 of 15,498 rows, 67%.** Per stage it ranges from
+58% (`wire`) to 85% (`verify_datalayout`).
+
+### WHY THE CRITERION IS ADMISSIBLE
+
+**It is SYNTACTIC.** The host declines to send a row it has nothing to say about. Eliding on "this
+operand RESOLVES to unknown" would be different in kind -- it would have the host perform the join
+the stage exists to perform -- and that version is not available to this side at all.
+
+### THE ARGUMENT IS NOT ENOUGH ON ITS OWN
+
+**An optimisation whose only evidence is that the suite still passes is an optimisation nobody
+checked.** So the same programs run with elision on and off and the verdicts must agree, over the
+real sources that fit, over derived-binding chains, and over a mixed corpus with both verdicts
+represented. The differential also asserts the elision actually removes rows, since a criterion that
+elided nothing would satisfy everything else.
+
+**The part most likely to be wrong is the index remap**, not the criterion. A form-2 binding row
+carries its initialiser's INDEX into this table, so dropping rows without remapping would point
+later bindings at the wrong node -- and at a node that EXISTS, so it would resolve to a plausible
+wrong tag rather than fail loudly. The derived-chain cases exist for that and nothing else. A
+derived binding whose own node is elided is DROPPED rather than repointed, which is verdict-
+preserving for a reason worth stating: an inert node yields UNKNOWN from `tyb_node_tag`, and a name
+with no binding row resolves to UNKNOWN as well. Same answer, different route.
+
+### THE EFFECT
+
+| | before | after |
+|---|---|---|
+| corpus-sized shared data | 54,301 words, 7.3x | 34,781 words, 4.7x |
+| growth over today | +366 KiB | +213 KiB |
+| real sources that fit | 2 of 12 | **3 of 12** |
+| tightest constraint anywhere | `parse` expression nodes, 22x | `wire` name occurrences, 15x |
+
+`verify_structural` crossed under the caps. **The binding constraint has moved off the expression
+channel entirely** -- the next saving, if one is wanted, is in the occurrence channel.
+
+### A PIN DOING ITS JOB
+
+The capacity test pins which sources fit, and its failure message says a stage JOINING the set is
+progress worth recording. It failed, and that is how the third one announced itself rather than
+slipping past in a log line.
+
+---
+
+## 2026-09-12 (fifty-eighth) — the price of a corpus-sized input path, in words
+
+### WHY A PRICE AND NOT A MULTIPLE
+
+The capacity measurement reports two of twelve real sources fitting, and `parse.kel` needing
+twenty-two times the expression-node cap. **A multiple is not actionable.** The caps are shared-data
+array lengths, so the cost of closing the gap is words of shared data — worst-case memory usage,
+which is the thing this project exists to bound. The shared ceiling is sixteen megabytes, so nothing
+is architecturally blocked. It is a price, and it was unknown.
+
+### THE NUMBER
+
+**7,424 words today. 54,301 words sized to the corpus. 7.3 times, or +366 KiB at eight bytes a
+word.**
+
+| channel | now | corpus | arrays | extra words |
+|---|---|---|---|---|
+| expression nodes | 256 | 5,632 | 5 | +26,880 |
+| name occurrences | 256 | 3,874 | 3 | +10,854 |
+| call sites | 128 | 1,730 | 2 | +3,204 |
+| bindings | 128 | 831 | 4 | +2,812 |
+| operand pairs | 256 | 1,452 | 2 | +2,392 |
+| declared names | 128 | 499 | 1 | +371 |
+| declared params | 128 | 492 | 1 | +364 |
+
+**The expression channel alone is 57% of the growth**, because it is five parallel arrays and the
+widest gap. Anything that reduced its row count — or its arity — would dominate any other saving.
+
+### THIS IS A MEASUREMENT AND NOT A PROPOSAL
+
+Sizing shared data upward is a worst-case-memory change and is the operator's decision. **Nothing in
+this increment changes a capacity.** A measurement and the change it argues for should not land
+together, or neither can be judged on its own.
+
+### THE MULTIPLIER IS CHECKED, BECAUSE GETTING IT WRONG RUINS THE NUMBER
+
+A channel is a NAME and several names cover more than one parallel array: the occurrence channel is
+three, the expression channel five. The price is the row delta times the array count, so a name
+added to a data block without updating the table would skew the total silently. A second test counts
+the stage's own array declarations and compares.
+
+**And that check caught me on its first run.** It subtracted the one PRIVATE array from the price
+before comparing, on the reasoning that `tyb.bres` is not shared — but the scan matches any
+`name: [Word; N],` line and the private block uses the same shape, so `bres` was on both sides. It
+belongs in the price too, being sized to the binding table.
+
+**A count is only comparable to another count when both sides are drawn from the same population.**
+One side was "shared arrays" and the other was "arrays".
+
+### ONE DEFINITION OF THE CORPUS
+
+The stage list and the per-channel table walk were local to the capacity test and are now file-scope
+items both tests read. A second copy is a second thing to forget when a stage is added, and the
+capacity result and its price would then describe different corpora.
+
+---
+
+## 2026-09-11 (fifty-seventh) — a census of binders, and it found two more false rejections
+
+### WHY A CENSUS AND NOT ANOTHER FIX
+
+The occurrence channel classifies a name as local, declared, or unresolved, and refuses the third.
+By this point **four binders had been found missing from its local set**, each separately, three of
+them by accident. **Four accidents in one function is a class, not a run of bad luck.**
+
+So the question "what else binds a name?" was put to the syntax tree once, and every answer got a
+well-typed program.
+
+### TWO MORE FALSE REJECTIONS, AND THEY ARE DIFFERENT SUB-CLASSES
+
+**A CONST PARAMETER used as a value.** `fn plus<const n: Word>() -> Word { n + 10 }` reads `n` as an
+ordinary identifier, so it arrives as an occurrence, and nothing put the declaration into the local
+set. **Every const-generic program that used its parameter as a value was rejected.**
+
+This one was **PREDICTED before looking**, which is worth recording because the previous two
+predictions in this session were both wrong. Asking the syntax tree beat waiting for a program to
+fail.
+
+Note what was already working: the same parameter used as an **array length** was accepted, because
+there it sits in a TYPE position and yields no occurrence at all. **Same binder, two syntactic
+forms, one of them broken** — the rule-shape census's finding surfacing in a different channel.
+
+**AN IMPORTED NAME called through its module path.** `use audio::midi_to_freq` declares the name
+`midi_to_freq`; the call site writes `audio::midi_to_freq`. The occurrence walk records the
+QUALIFIED spelling, the declaration records the bare one, and the search missed. **Every program
+calling an imported native through its module path was rejected.**
+
+**This is not a missing binder at all.** Nothing fails to bind; the two sides spell ONE NAME TWO
+WAYS — the defect the field-set channel already guards against by sharing a single index space, and
+which no amount of binder-hunting would have found. Declaring both spellings is the conservative
+repair: it can only accept more. Stripping the qualifier from occurrences instead would make two
+modules' same-named functions collide.
+
+### THE CENSUS ITSELF
+
+Ten binding forms, each a program the reference accepts, each asserted to survive the stage.
+**Two of the ten are there because they are NOT occurrences** — a const parameter in an array-length
+position and a generic type parameter, both in type positions. They pass trivially today. They are
+kept because **the difference between "handled" and "never arrives" is invisible from a passing
+test**, and a change that started routing type positions through this channel would break them
+first.
+
+Not exhaustive, and stated as such: these are the forms I could find and write a valid program for.
+
+### A PROCESS FAILURE, THIRD OCCURRENCE
+
+An edit script aborted on an assertion again, so a scratch probe it was supposed to delete stayed in
+the file. **Checking `git diff --stat` after every script is what caught it**, for the second time.
+The lesson from two increments ago held only because the check held; the script discipline alone did
+not.
+
+---
+
+## 2026-09-11 (fifty-sixth) — twelve real programs found a false rejection that a snippet corpus could not
+
+### WHY REAL PROGRAMS
+
+Every well-typed control in `tests/selfhost_typecheck.rs` was a snippet written to exercise one
+rule. The file's own argument is that the must-REJECT obligation is enumerable while the must-ACCEPT
+obligation is not, and that over-rejection is the failure a rejection corpus cannot see.
+
+The repository holds twelve Keleusma programs the reference definitely accepts: its own self-hosted
+stage sources. **They were already on disk and nothing had ever run the type-rejection stage against
+them.**
+
+### THE CAPACITY RESULT, WHICH IS A NUMBER NOTHING ELSE STATED
+
+**Two of twelve fit the input channels.** I predicted zero; `verify_datalayout.kel` and
+`verify_yield.kel` fit.
+
+The distance for the rest is not marginal. `parse.kel` needs **5,632 expression nodes against a cap
+of 256 — twenty-two times**. `wire.kel` needs 3,874 name occurrences against 256 and 1,730 call sites
+against 128. Sizes are measured per table and the binding one is named per stage, because reporting
+only the largest would hide which cap actually stops a program.
+
+**Nothing is truncated to make a program run.** A verdict from a stage fed a truncated table proves
+nothing, so a program that does not fit is reported as not fitting.
+
+### THE FALSE REJECTION
+
+Of the two that fit, one was REJECTED: `verify_datalayout.kel`, which the reference accepts.
+
+Localised with the channel-withholding instrument built in the previous increment — withholding the
+occurrence channel made it accept — and then to a single name: `i`, a **`for` loop variable**.
+
+`occurrence_rows` collected locals from parameters, `let` statements and match-arm patterns, and not
+from `for`. The reference records the loop variable's read as an occurrence, so it resolved to
+neither a local nor a declaration and the rule refused it. **Every well-typed program containing a
+`for` loop was rejected.**
+
+### HOW IT SURVIVED, WHICH IS THE FINDING
+
+**Not one hand-written well-typed control in the file contained a loop.** A defect affecting every
+looping program was invisible to a corpus of snippets. It took real code to surface it, and real
+code was three lines of `include_str!` away the whole time.
+
+A pin for the loop variable already existed — and covers the PIPELINE extraction, asserting
+correctly that the reference DOES record the read. Nothing checked what the reference-side channel
+then did with it. **Two tests can name the same construct and guard different halves of it.**
+
+This is the third binder this one channel has missed. The fix is one line; the instrument that found
+it is the increment.
+
+### A CORRECTION I HAD TO MAKE MID-INCREMENT
+
+On the first run I reported that both fitting sources were accepted. I inferred that from a panic's
+LINE NUMBER without reading its message, and the message said the opposite. Same class as reading a
+cached clippy run as evidence, which was the previous increment's finding. **A line number is not a
+message.**
+
+### DELIVERY
+
+Continuous integration completed for the first time on the branch — twenty-two of twenty-two green —
+once the previous increment stopped pushing into it. The six stacked increments are merged.
+
+---
+
+## 2026-09-11 (fifty-fifth) — the loop's own cadence was cancelling every continuous-integration run
+
+### THE FINDING, WHICH IS ABOUT THE PROCESS AND NOT THE CODE
+
+Six increments were stacked on one branch. **Continuous integration had never completed against any
+of them.** Five runs in a row, all `cancelled`, each killed by the next push.
+
+`.github/workflows/ci.yml` sets `cancel-in-progress: true` on a concurrency group keyed by the pull
+request's ref. A run takes roughly forty minutes; the self-paced loop was waking at twenty. **Every
+wake therefore found the run incomplete, produced another increment, pushed, and cancelled it.** The
+cadence structurally guaranteed that the merge gate could never be satisfied.
+
+The project's rule is that a merge proceeds once continuous integration is green. So the work was
+not slow to deliver, it was **undeliverable at that cadence**, and no further increment would have
+changed that. Recognising the bottleneck is the increment.
+
+### WHAT WAS DONE INSTEAD OF A SEVENTH PUSH
+
+The local gate is a SUBSET of continuous integration. The superset's extra job classes had zero
+coverage of this stack, so they were run here, against the tip:
+
+| check | result |
+|---|---|
+| `no_std` build, thumbv7em-none-eabihf | pass |
+| Minimum supported Rust, arena, 1.85 | pass |
+| Minimum supported Rust, runtime, 1.88 | pass |
+| Clippy, workspace, all targets, warnings denied | pass |
+| Miri, stacked borrows | pass |
+| Miri, tree borrows | pass |
+| Language server, detached crate | pass |
+| Playground crate, native half | pass |
+| Editor extension, manifest and syntax | pass |
+
+**Four are UNKNOWN here and are not claimed as passing**: the SDL3 examples build SDL3 from source;
+the RTOS cross-build needs a target not installed, and installing one is a change to the operator's
+toolchain rather than a check; the playground's compile-to-wasm32 half needs a target not installed;
+and the extension's dependency install needs the network. Continuous integration covers all four,
+and by the time this was written it had seventeen of twenty-two jobs green on the same commit with
+none failed.
+
+### A FOURTH WAY A LOCAL CHECK UNDER-REPORTS
+
+Three are already on record. Here is the fourth: **a cached clippy run prints nothing whether or not
+warnings exist.** A no-op rebuild emits no diagnostics, so "zero warnings" from a warm target
+directory is not evidence. The first count taken here was a cache hit; forcing a rebuild is what
+made it evidence.
+
+A related confusion resolved on the way, and it is the feature-unification effect already recorded
+in the repository guide rather than a new defect: `cargo check -p keleusma --tests` warns about
+several unused items that `cargo clippy --workspace --all-targets` does not, because the workspace
+run unifies the `self-host` feature on and the single-package run does not. The items are used
+behind that feature.
+
+### THE RULE THIS LEAVES
+
+**A self-paced loop whose period is shorter than the verification it depends on will cancel that
+verification forever.** Match the wake to what is actually being waited for, and when the thing
+being waited for is the gate itself, stop producing and let it finish.
+
+---
+
+## 2026-09-11 (fifty-fourth) — which input channels any verdict actually depends on
+
+### THE CLAIM THIS MEASURES
+
+This file says throughout that the host supplies SYNTAX and the STAGE performs the join, and that
+the difference between a migration and a relocation is which side holds it. **Two channels had a
+withholding proof. The other nine were credited with work nothing checked.**
+
+So: withhold each channel in turn and see whether any verdict changes. Eleven channels, a corpus
+the stage rejects, and a second corpus it accepts.
+
+### THE RESULT
+
+**All eleven channels are depended on.** Each has at least one named program whose verdict changes
+when that channel alone is withheld, and the test prints the attribution per channel rather than a
+tally — a tally cannot be checked, an attribution can.
+
+### THE FIRST RUN WAS ONE-DIRECTIONAL AND GOT ONE CHANNEL WRONG
+
+Measuring only "does an ill-typed program flip to ACCEPT" reported the declared-parameter-counts
+channel as depended on by nothing. **It is not unused.** Withholding it makes every call-site index
+fall out of range, and the stage REFUSES an out-of-range index rather than skipping it — so the
+program is rejected with the channel and rejected without it, for different reasons, and a census
+watching only for acceptance cannot see the difference.
+
+**A channel whose absence trips a fail-closed guard is invisible to a one-directional instrument.**
+Adding a well-typed corpus and measuring change in EITHER direction made its contribution
+observable, and it now shows up on exactly the program predicted.
+
+**My prediction of which channels would be inert was wrong** — I guessed the operand pairs and the
+call sites; the answer was neither. That is the case for measuring rather than reasoning, made once
+more.
+
+### WHAT THE RESULT ESTABLISHES, AND WHAT IT DOES NOT
+
+**Establishes**: the stage reads all eleven channels; for each there is a program that needs it.
+
+**Does not establish**: that the stage DERIVES its conclusion from each. A channel could be read and
+still be redundant with a conclusion arriving elsewhere. Dependence is NECESSARY evidence for the
+claim about where the join lives, not sufficient evidence.
+
+**And a channel that flips nothing is not thereby shown inert** — it may be a corpus gap. The
+instrument cannot separate "the stage ignores this" from "nothing asked", which is the same
+distinction already on record as: a passing check is evidence about the checker's reach before it is
+evidence about the tree.
+
+### THE ASSERTION THAT REPLACED ITSELF
+
+The test first pinned the set of channels nothing depended on, expecting it to be non-empty, with a
+failure message saying an empty set is the good outcome and the assertion should be replaced. It
+became empty on the second run, and the message was followed. **A non-vacuity assertion that says
+what to do when it stops holding is worth more than one that merely fails.**
+
+The property now asserted is the stronger one: a channel JOINING the empty set is a corpus
+regression, and every other test in this file would still pass while that happened.
+
+No rule was widened and no node kind added in this increment — an instrument and a change landing
+together would make a flip attributable to neither.
+
+---
+
+## 2026-09-11 (fifty-third) — a kind that was already general, under a name that hid it
+
+The census left five gaps, each recorded with the mechanism closing it would need. **Three of the
+five said the same thing**: "an agreement between a DECLARED type and an ACTUAL one". That is the
+only thing node kind 8 does.
+
+The constant was called `TAIL_VS_RETURN`, after the function tail, its first and for a long time
+only caller. **I wrote that mechanism down three times without seeing the kind was already there.**
+
+**A constant named after its first caller reads as a special case even when it is a general rule.**
+That is the previous increment's finding one level up: there, a rule was present and unreachable;
+here, a kind was present and unrecognised. Renamed to `DECLARED_VS_ACTUAL`.
+
+### FOUR CELLS CLOSED, NO NEW KIND
+
+| cell | declared side | actual side |
+|---|---|---|
+| array index must be a word | the `Word` tag | the index operand |
+| let annotation against initialiser | the annotation's tag | the initialiser operand |
+| assignment target against value | the data field's declared tag | the value operand |
+| tuple index on a scalar | — | the existing projection kind, a third expression variant |
+
+**Census: 15 covered, 1 gap**, from 8 and 8 at its first run.
+
+### MEASURED BEFORE WRITING, NOT AFTER
+
+- A **BYTE** index is rejected by the reference, so the requirement is `Word` exactly rather than
+  "some integer". A rule requiring the wrong width would reject every valid index.
+- `let q: P = p` with a named type is **ACCEPTED**, so a named annotation must require NOTHING.
+  `type_tag` returns 0 for any `Named`, which is what makes this safe -- but it is safe by
+  measurement, not by luck.
+
+### THE CONSEQUENCE OF THE REUSE, WHICH A TEST FOUND
+
+`the_tail_versus_return_rows_agree_between_the_pipeline_and_the_reference` failed. Once three more
+constructs use kind 8, **"kind 8" no longer means "a function tail"**, and a differential selecting
+rows by kind compares a producer emitting four uses against one emitting a subset.
+
+**Narrowing that test's filter would have been the wrong repair**: it would still have compared two
+different populations while reading as if it did not. The new rows are instead OPT-IN, the same
+pattern the field-read operand index established two increments ago, so the tables the pipeline is
+compared against contain exactly what the pipeline can produce.
+
+### THE ONE GAP LEFT, AND WHY IT STAYS
+
+"Must NOT be bool", for the negation operand. Every kind this stage has states a POSITIVE
+requirement -- agree with this, or be bool. A negative one needs a kind of its own, and one operator
+does not justify it. Left open as a decision, recorded in the census.
+
+No new fold phase, no new node kind, no new opcode, no `BYTECODE_VERSION` change.
+
+---
+
+## 2026-09-11 (fifty-second) — a census of rule shapes against syntactic forms, and it found five gaps
+
+The previous increment's finding was that **a rule inventory counts SHAPES, not the syntactic FORMS
+each shape reaches**: the match-arms rule was absent for two increments while the list recorded the
+fifteen shapes as complete, and it was found by accident. One accidental hit in a class is a reason
+to enumerate the class.
+
+### THE CENSUS
+
+Sixteen cells, each a rule shape crossed with a syntactic form, each a program the REFERENCE
+rejects, asserted per row so a cell the stage accepts is a missed rejection rather than a difference
+of opinion.
+
+**First run: 8 covered, 8 gaps.** After closing what could be closed without touching the stage:
+**11 covered, 5 gaps.**
+
+The test fails if every cell falls the same way, and it pins the gap list by equality, so a cell that
+closes must be moved rather than quietly disappearing.
+
+### THE TWO SURPRISES, WHICH ARE THE CENSUS'S WHOLE JUSTIFICATION
+
+**"A scalar cannot be projected" was a gap for BOTH its forms.** The rule exists. Its node kinds
+exist. But the set of names it could fire on held only `let`s carrying a primitive ANNOTATION — not
+a declared PARAMETER, not a `let` bound to a literal. So `fn main(n: Word) -> Word { n.x }` reached
+no rule at all.
+
+**A rule that is present and unreachable looks identical, from any inventory, to a rule that is
+present and working.** That is a sharper statement than the previous increment's, and it is the one
+worth keeping.
+
+**"Logical operator operands must be bool" was absent**, and the agreement rule cannot substitute:
+`n andalso m` with two `Word`s AGREES, so the binop row accepts it. **Two operands can agree and
+still both be wrong.**
+
+### WHAT WAS CLOSED, AND WITH WHAT
+
+Three rules newly applied, all with the EXISTING condition kind and no stage change: the match arm's
+`when` guard, the `not` operand, and each operand of a logical operator. Two rules widened by
+enlarging the scalar set: declared primitive parameters, and `let`s bound to a scalar literal.
+
+**The literal source is restricted to four literal kinds.** `Literal::Fixed` yields a `Multiword`,
+which is a flat array of words and IS indexable, so calling it a scalar would reject a valid `m[0]`.
+I could not construct that program with the syntax I tried — which is a reason to avoid the hazard
+rather than to assume it away.
+
+### THE FIVE REMAINING GAPS, EACH WITH ITS MECHANISM
+
+| gap | what closing it needs |
+|---|---|
+| let annotation against initialiser | an agreement between a DECLARED and an ACTUAL type; the existing claims channel carries that pair but carries TAGS, so it reaches a literal initialiser and not a name |
+| assignment target against value | the same, plus the declared type of a data field |
+| tuple index on a scalar | the composite kinds cover two expression variants; `TupleIndex` is a third with the same rule |
+| array index must be a word | "must be T" for T other than bool has no node kind; the claims channel expresses it as actual-against-required |
+| negation operand must not be bool | a NEGATIVE requirement no kind expresses, and inventing one for a single operator is the weakest case in the table |
+
+**The census is not exhaustive and says so.** These are the forms I thought of, which is the same
+kind of list that missed match arms. A cell absent from the table is a cell nobody looked at.
+
+### A PROCESS FAILURE, THE SAME ONE AS LAST INCREMENT
+
+An edit script aborted on an assertion — `cargo fmt` had reformatted the arm it was matching — so
+**nothing was written**, and the test run that followed reported the unchanged result. I read that as
+"the fixes did nothing" and nearly went looking for a cause in the stage.
+
+**This is the second occurrence in two increments**, and the first was already recorded here. The
+repeat is the finding: recording a failure mode does not prevent it. The scripts now exit with the
+label of the replacement that failed, and the diff is checked before any test run is believed.
+
+A related miss in the same edit: the compiler emitted `unreachable pattern` for a guarded match arm
+placed after an unguarded one, and the grep I used to check the build filtered warnings out. **The
+census reported the cell as a gap while the code to close it sat in the file.**
+
+---
+
+## 2026-09-11 (fifty-first) — a claim of mine was false, and checking it closed two gaps
+
+### THE CORRECTION, WHICH IS THE POINT OF THE INCREMENT
+
+For two increments I wrote, in the unreached list and in four documents, that the remaining
+field-read cases **"need a type the source states nowhere"**. That was FALSE for both, and reading
+the abstract syntax tree settled it in one step:
+
+- `VariantDecl.fields: Vec<TypeExpr>` — an enum declaration lists each variant's payload types in
+  order, and `Pattern::Enum` gives the variant and the position a name binds at. Pure declaration
+  lookup, the same class already reached three ways.
+- `TypeExpr::Array(Box<TypeExpr>, ..)` — an array annotation carries the element type directly, and
+  an array literal of struct literals names it as well.
+
+**The claim had been reasoned about rather than checked**, and it was the premise that would have
+justified stopping. It was copied into the roadmap, the tasklog, the reverse prompt, the design
+journal and a test doc comment before anyone looked at the data types it was about. Corrected in
+each, visibly as a correction.
+
+### WHAT THAT BOUGHT: THE MATCH-BINDING CASE, FOR TWO TABLES AND ONE SCAN
+
+The base of `match e { E::W(p) => p.x }` is a plain NAME, so the field-read row and the operand form
+both already handle it. What was missing was a THIRD source for resolving a name to a struct type:
+
+- `pbname`/`pbenum`/`pbvar`/`pbpos` — where a pattern binds a name, read at the USE site.
+- `epenum`/`epvar`/`eppos`/`epty` — what the enum DECLARATION says is there.
+
+The stage matches the three coordinates. Neither row knows about the other; one comes from a
+function body and the other from a type declaration.
+`the_payload_declarations_are_what_the_stage_joins_against` withholds the declaration side and shows
+the same program is then accepted.
+
+**The enum index space is not the struct index space**, and the note saying so is in the data block:
+a row crossing them would address a real declaration and the wrong one.
+
+### A SECOND GAP, FOUND BY A TEST WRITTEN FOR SOMETHING ELSE
+
+A case was added to prove the stage discriminates between two VARIANTS of one enum —
+`match e { E::U(a) => a.n, E::V(b) => b.m }` with `a.n` a `Word` and `b.m` a `bool`. It failed.
+
+**The expression walk emitted no node for a match at all**, so match arms were never compared and
+every such program was accepted. The reference says "match arms have differing types"; the stage
+said nothing.
+
+This was invisible from the rule list, which records the fifteen enumerated shapes as complete. The
+match-arms rule is the SAME SHAPE as the `if`-branches rule, and the shape had been implemented
+while one of its two syntactic forms had not. **A rule inventory counts shapes; it does not count
+the syntactic forms each shape reaches.**
+
+Closed with the existing BRANCH_PAIR kind and no stage change: the gap was in what the host
+reported, not in what the stage could decide. First arm against each later one, the shape the array
+literal already uses.
+
+### A PROCESS NOTE ON THE EDIT ITSELF
+
+One scripted edit aborted on a sanity assertion I had added for a snippet I did not intend to
+change, and the write never happened — while the test run that followed reported the OLD failure. I
+read that as the fix not working before noticing the traceback above it. **An edit script that can
+abort silently before its write, followed immediately by a test run, produces a result attributable
+to neither tree.** The same class as the run-edited-while-in-flight finding already on record.
+
+### WHAT IS LEFT
+
+One case: a field of an ARRAY ELEMENT. Its base is an index expression rather than a name, so no
+field-read row can address it. The element type IS written down; what is missing is a base FORM on
+the field-read row — the same kind of gap the direct-operand case turned out to be.
+
+No new fold phase, no new opcode, no `BYTECODE_VERSION` change.
+
+---
+
+## 2026-09-11 (fiftieth) — the direct-operand form, and a test name that encoded a tally
+
+The forty-ninth increment named a limit no prior sizing had modelled: a field read standing as a
+DIRECT OPERAND types nothing, because an operand row carries a tag or a name id and has no form for
+a field read. This closes it.
+
+### WHAT CHANGED
+
+One arm in the host's operand reporter, one arm in the stage's resolver, and a widened collection
+pass. `operand_form` gains **form 2**, whose value is a field-read ROW INDEX. The stage resolves it
+with `ty_field_operand`, which is the binding case's `tyb_field_tag` behind a range check — **the
+same join, deliberately not a second resolver**, because `let a = p.x; a + true` and `p.x + true`
+differ only in whether a name stands between the read and the comparison.
+
+The field-read table now collects **every** read with a plain-name base, wherever it appears,
+deduplicated by the `(base, field)` pair. A read that is both bound by a `let` and used directly is
+one row addressed from both sides.
+
+### THE SHORTCUT THAT WAS REFUSED, RECORDED WHERE THE FORM IS DEFINED
+
+Form 2 was avoidable. Registering each direct-operand read under an **invented name**, emitting the
+form-3 binding row the `let` case already emits, and reporting form 1 would have worked with **no
+stage change at all**, and every test would have passed.
+
+It is refused because the invented name IS the join. Nothing in any source file spells it, so the
+host would be asserting that this operand and that binding are the same thing — the decision this
+channel exists to leave with the stage — hidden behind an identifier no reader can look up.
+
+### OPT-IN, BECAUSE TEN CALLERS COMPARE AGAINST THE PIPELINE
+
+Ten call sites build node tables that are compared against the pipeline's own extraction, which
+produces no field-read operand and cannot. The field-read index is therefore a parameter of a
+separate entry point, supplied only by the driver that also supplies the tables the form points
+into. With an empty index every operand behaves exactly as before.
+
+### THE FORM REACHES FIVE NODE KINDS, AND EACH APPLIES A DIFFERENT RULE
+
+Binary operator, condition, array element, branch pair, and function tail against its declared
+return. Both halves are pinned per kind: a wrong tag shows as a missed rejection on the ill-typed
+side, and a tag where none belongs shows as a REJECTED valid program on the well-typed side — the
+error a rejection corpus cannot detect, which the previous increment demonstrated the hard way.
+
+A second control pins that a field read whose declared type is another STRUCT still types NOTHING.
+Two struct-typed reads of different types in one body must not be made to disagree; were struct
+identity to reach the scalar tag space, the predicate every operand goes through would start
+refusing valid programs.
+
+### A PROCESS FINDING: A TEST NAME THAT ENCODED A TALLY
+
+`the_field_read_channel_reaches_three_base_forms_and_not_two` was one increment old and already
+wrong, and correcting it meant a rename rippling through five documents plus the citation guard's
+own commentary. **A name that encodes a count needs renaming every time the count moves, and every
+citation of it goes stale at that moment.** Renamed to
+`the_field_read_channel_records_what_it_does_not_reach`; the tallies live in the body, where moving
+one costs a diff rather than a sweep.
+
+### WHAT IS LEFT
+
+Two cases, and they are a different kind of gap from the one just closed. A field of an ARRAY
+ELEMENT and a field of a MATCH BINDING both need a type **the source states nowhere** — an element
+type projected out of an array, and a variant payload's type. The direct-operand case was a missing
+CHANNEL, which is why it cost one arm on each side.
+
+No new fold phase, no new opcode, no `BYTECODE_VERSION` change.
+
+---
+
+## 2026-09-11 (forty-ninth) — the field-read channel lands, and a well-typed control finds a false rejection
+
+The forty-eighth increment sized the field-read edge at **three of five** and said the cheap
+majority could land while the two projection cases stayed recorded. This lands it, and the more
+important result is not the channel.
+
+### THE CHANNEL
+
+`verify_types.kel` gains a form-3 binding row. `let a = p.x` now proves a tag, through **two joins
+the stage performs**:
+
+1. the base name to a STRUCT TYPE, over a new `sbname`/`sbval`/`sbform` table, and
+2. that type together with the field name to the field's DECLARED TAG, over a new `sftag` table held
+   parallel to the existing `sfield` names.
+
+The host reports three syntactic facts and none of the conclusions: `p` is written `P`, `a` is
+written `= p.x`, and `P` declares `x` as `Word`.
+
+**STRUCT IDENTITY IS DELIBERATELY NOT A TAG.** Folding struct indices into the scalar tag space
+1..4 would put struct-typed operands into every channel `ty_pair_disagrees` feeds, the
+argument-claim rows among them, where a mismatch this slice never reasoned about would REJECT a
+valid program. The identity travels in a channel nothing else reads.
+
+**No new fold phase and no change to the declared step bound.** The field bindings resolve inside
+the existing bounded fixpoint, which already runs once before the first row.
+
+**The join is checkable rather than asserted.** `withholding_the_field_sets_accepts_the_same_field_read_program`
+withholds the declared field sets and shows the same program is then ACCEPTED. A host that had
+already decided `a` is a `Word` would go on rejecting it.
+
+### THE FINDING, WHICH IS WORTH MORE THAN THE CHANNEL
+
+**The stage rejected well-typed programs that bind a name in a `match` arm.** The occurrence channel
+collected locals from parameters and `let` statements and from nowhere else, so an arm's `p`
+resolved to neither a local nor a top-level declaration and the classification rule refused it.
+
+- **This is the unsound direction.** The sibling `verify_*` stages may over-approximate because an
+  over-approximation defers to a runtime guard. A type checker may not: rejecting a valid program
+  is a LANGUAGE CHANGE.
+- **It predates this increment**, confirmed by running the probe against `HEAD` with the working
+  tree stashed, on a program with no struct and no field read, so none of the new code could fire.
+- **It is the second binder this channel has missed**, after the `for` loop variable already pinned
+  in the same file.
+- **A rejection corpus could never have found it.** A checker that rejects everything scores
+  perfectly against one. It was found by a WELL-TYPED CONTROL added for the field-read work, which
+  is the argument this file's header has made since slice 0 and this is the instance that tested it.
+
+Fixed by collecting pattern binders recursively, shorthand struct fields included, and pinned by
+`a_match_arm_binding_is_not_reported_as_an_unresolved_name` with a must-fire control: a name no arm
+binds and no declaration carries is still refused, so the fix cannot have been "call everything a
+local".
+
+### WHAT REMAINS UNREACHED, AND ONE OF IT IS A DIFFERENT LIMIT THAN EXPECTED
+
+`the_field_read_channel_records_what_it_does_not_reach` pins three reached base forms and
+three unreached cases. Writing it surfaced that the sizing spike's five cases conflated two axes:
+
+| unreached | why |
+|---|---|
+| base is an array element | the base is not a plain name, and the `let` states an ARRAY from which the element type would have to be projected |
+| **the field read is a DIRECT OPERAND** | the channel binds a NAME to a field read; an operand row carries a tag or a name id and has no form for a field read, so `p.x + true` types nothing even where `p` is a declared parameter |
+| base is a match binding | BOTH of the above: the payload type is stated nowhere, and the subset has no block-bodied match arm to bind the read through |
+
+**The direct-operand limit was not in the sizing spike's model.** Its five cases all placed the
+field read directly as an operand, and it measured a host-side lookup rather than the channel, so
+the distinction could not appear. Recorded here because "three of five" and "three base forms of
+five cases" are not the same statement, and the second is the true one.
+
+### COST
+
+No new opcode. No `BYTECODE_VERSION` change. The stage gains eight tables and three scratch slots
+in its shared block and three functions; the fold, its phases and its step bound are untouched.
+
+---
+
+## 2026-09-11 (forty-eighth) — the field-read step is partially cheap, and now measured
+
+The previous increment found that the existing sizing spike measures a step already taken, leaving
+the field-read edge **unsized**. This sizes it, with its own cases.
+
+**Result: declaration lookup types 3 of 5.** The two it does not reach are a field of an ARRAY
+ELEMENT and a field of a MATCH BINDING.
+
+| case | reached by lookup |
+|---|---|
+| field of a struct literal | yes |
+| field of a field | yes |
+| field of a call result | yes |
+| field of an array element | **no** -- the `let` states an ARRAY; the element type must be projected out of it |
+| field of a match binding | **no** -- the binding's type comes from the VARIANT PAYLOAD, which no `let` states |
+
+**The mechanism is two lookups and no unification**: a `let` whose initialiser is a struct literal
+or a call states its type outright, and a struct declaration states each field's. Nested access
+repeats the pair. Nothing is inferred.
+
+**So the next increment can be scoped rather than feared.** The cheap majority can land as a tagger
+extension over declarations the pipeline already has, with the two projection cases recorded as
+still unreached -- instead of the whole edge waiting on inference it may not need.
+
+**Non-vacuity runs both ways, deliberately.** The spike fails if it types NONE, which would mean the
+lookups are broken, and it fails if it types EVERY case, which would mean the corpus no longer
+contains the edge. Each case also asserts the REFERENCE rejects the program, so a case that stopped
+being a missed rejection cannot sit in the corpus unnoticed.
+
+**The two unreached cases were predicted and then measured, not asserted.** Writing the prediction
+into the corpus labels and letting the run decide is the difference between a sizing and a guess --
+and this session has already recorded what happens when a plausible prediction goes in unchecked.
+
+---
+
+## 2026-09-11 (forty-seventh) — the citation guard caught me naming a retired test
+
+A documentation-only pull request failed two continuous-integration jobs.
+`the_current_claim_documents_cite_nothing_that_does_not_exist` fired on this very file, which
+named the RETIRED test while explaining that it is retired.
+
+**The guard is right and the fix is the claim, not the allowlist.** A current-claim document that
+names an identifier existing nowhere asserts something no reader can check, and the guard cannot
+distinguish a deliberate negative from a stale citation. This is the second time this session -- the
+first was a begin command the slot stream did not have -- and both times the temptation was to
+widen an exemption rather than reword.
+
+**IT FAILED IN TWO CONFIGURATIONS I DID NOT RUN.** I ran the guards under default features and
+under `self-host`; it failed under `--no-default-features` and `--features signatures`. That is the
+feature-set lesson **that I had already written down in the handoff**, arriving in a new place: not
+a gated test absent from a run, but a guard whose verdict differs by configuration.
+
+**So I ran both document guards in every configuration continuous integration uses**, rather than
+fixing the one that failed and assuming. All four pass for `comment_citations`; `claimed_counts`
+reports ZERO tests under `--no-default-features`, which is itself worth knowing -- that guard does
+not exist in that configuration, so a claim it protects is unprotected there.
+
+**AND I DID IT A THIRD TIME WHILE WRITING THIS ENTRY.** The first draft named the phantom begin
+command as an example of naming a phantom, and the guard failed again on the very paragraph
+describing the rule. **Knowing the failure does not prevent it; running the check does** -- which is
+the same sentence `HANDOFF.md` already carries about numbering its own validity list, arrived at
+independently in a different file.
+
+**The transferable rule is now four items long and this is the fourth**: before believing a green
+guard, know which CONFIGURATIONS it ran in, not only which binaries and not only whether it stopped
+early.
+
+---
+
+## 2026-09-11 (forty-sixth) — the sizing spike sizes work that is done
+
+Having found that type rejection's edge has moved to a FIELD READ, the obvious next step was to read
+the sizing spike that measures what reaching further costs. It reports **"local propagation reaches
+5 of 5"**, which invites the reading that the remaining step is small.
+
+**It is a measurement of work already completed.** Every one of its five cases is a let-bound
+literal, a call return, or a composition of the two -- and the stage now reaches all of them. The
+spike was written when the edge WAS the literal operand; local resolution and the bounded arithmetic
+fixpoint moved that edge afterwards.
+
+**Its corpus contains no field read**, which is where the edge actually sits. So "5 of 5" sizes the
+step behind us, not the one in front, and **the field-read step is unsized**.
+
+**Kept rather than deleted**, with the limitation recorded in the spike itself. Its result is still
+the reason the literal-to-local step was known to be cheap before it was taken, which is why it was
+taken at all. What it cannot do is size what comes next.
+
+**This is the third artifact in two increments whose answer was true when written and is now about a
+different question** -- after the retired literal-only test and the Order 1 cell that cited it. The
+pattern is not staleness of FACTS but staleness of SUBJECT: the instrument still works, and the
+question moved out from under it.
+
+---
+
+## 2026-09-11 (forty-fifth) — the other half of Order 1 was stale too
+
+With every region kind routed, the remaining Order 1 obligation was "source types before type
+rejection reaches beyond literals". **Reading before acting, that is stale as well.**
+
+`the_rules_reach_only_literal_direct_occurrences` -- the test the roadmap cites as pinning the
+limitation -- is **RETIRED**, and the file says why: local resolution reaches a `let` bound to a
+literal and a call taking a declared return type, so those programs are ordinary members of the
+rejection corpus now. **A bounded fixpoint reaches an ARITHMETIC result too**, with no depth limit
+on the chain -- the hop bound is a decision rather than a limit of the approach.
+
+**The limit MOVED rather than vanished.** Its new edge is a FIELD READ, pinned by
+`a_derived_operand_from_a_field_read_is_still_unreached`. Both named tests exist and pass. A
+host-side sizing spike already measures what reaching further would cost and is explicitly not
+wired into the stage.
+
+**Both halves of that sentence are now corrected in the roadmap cell itself**, not only in the
+channels, because that cell is where the stale figure would be copied FROM -- which is exactly how
+a stale capacity limit reached the handoff four increments ago. **This is the second time the Order
+1 cell has been stale on these same two subjects**, so the correction says to derive the state from
+the tests rather than from the cell.
+
+**Worth noting about the coverage figure**: the cell now states that 100% of the region BYTES pass
+through the stage while the share it DERIVES is unchanged. A reader taking "100%" as self-hosting
+would be badly wrong, and the four provenance standings are what prevent it.
+
+## A SMALL REPORTING ERROR OF MY OWN
+
+I reported the trunk run green on the strength of a `--limit 1` row whose commit I did not compare
+against the branch tip. It named a different commit; the run for the actual tip was still in
+progress. **Checking what a result is ABOUT is the same discipline as checking what a command
+covered**, and this session has now met that failure on both sides.
+
+---
+
+## 2026-09-11 (forty-fourth) — the last region kind, and it was the weakest
+
+**Every region kind the corpus emits is now routed and byte-identical. The skipped set is EMPTY.**
+
+`PARAM_TYPES` turned out to be the weakest rather than the hardest. It is a byte POOL, not a record
+table -- `wire_schema` says why: a type tag is one byte, so a whole-word record per tag would waste
+seven eighths of the region. The stage already had a pool path, and what it does there is COPY
+bytes the host supplies, deciding nothing, because a pool has no offsets, widths or endianness to
+decide.
+
+**So it is routed and recorded at that standing rather than allowed to inflate a figure.** The
+provenance table gains a fourth row, **copied, not encoded** -- weaker even than `HEADER`, which at
+least decides a record's layout. Closing the set must not launder a memcpy into coverage.
+
+**Two tests changed SHAPE rather than value.** The skipped-kinds guard asserted the set was
+non-empty and bounded its size, with a message asking whoever emptied it to *"replace this test with
+one asserting completeness"*. That day came. It now asserts EMPTY, so a kind reappearing reads as a
+regression in the driver rather than an unrecorded gap, and the sequence stays in the comment
+because it is the evidence: eight on 2026-08-22, six on 08-31, five on 09-04, zero on 09-11. The
+share test's upper bound existed to catch an unrecorded advance; **there is no advance past
+completeness**, so it becomes an equality between covered and total bytes.
+
+**The distinction the coverage tests exist to protect is now at its widest, and is stated that
+way**: 100% of the BYTES pass through the stage, and the share the stage DERIVES is unchanged.
+Three of the four kinds that closed the gap supply only their name from the interner -- the
+`CHUNKS` standing, not the `NAMES` one -- and the fourth supplies nothing at all.
+
+**Four kinds, four shapes**: index, walk, step-and-accumulate, copy. None was a copy of the one
+before it, and the plan that said two of them were the same shape was corrected before it produced
+an emitter.
+
+---
+
+## 2026-09-11 (forty-third) — ENUM_LAYOUTS routed, and a third derivation I missed
+
+The third and last ROUTABLE region kind. `PARAM_TYPES` alone remains, and it needs an emitter
+WRITTEN rather than routed.
+
+**This one computes TWO of its four fields.** The type name comes from the interner, as the other
+two kinds' do, and `variants_first` is ACCUMULATED in the stage rather than relayed -- the same
+accumulate-then-advance `ck_stream_step` performs for its three ranges. The host supplies only the
+variant count and the minimum payload, and the count does double duty: a record field AND the
+distance the cursor travels to the next enum's type name.
+
+**Three kinds, three shapes, none a copy.** The slot section indexes; the variant section
+interleaves and walks with a boundary flag; the layout section steps a whole enum at a time while
+accumulating a range.
+
+**Verified it actually routed rather than emitting an empty region** -- the `STRUCT_AUX` trap, where
+a byte identity on an empty region passes while emitting nothing. Skipped set now `[1e]`.
+Mutation-checked ONCE PER STAGE-COMPUTED FIELD: advancing the cursor by one fails it, freezing the
+accumulator fails it.
+
+## THREE WAYS A LOCAL RUN CAN SAY LESS THAN IT APPEARS TO, AND I MET ALL THREE TODAY
+
+`wire.kel`'s chunk count has **THREE** independent derivations. My enumeration found two and missed
+`tests/wire_self_compile_status.rs`; continuous integration failed on it. All three now read 492,
+and the third says so in its own message.
+
+**The run that was supposed to confirm the enumeration could not have.**
+
+| how the run under-reported | which one |
+|---|---|
+| guards executed BEFORE the last edit | recorded earlier this session |
+| `-p keleusma --test X` never enables `self-host`; `--workspace` unifies it on | found by continuous integration |
+| **`cargo test` stops at the FIRST failing binary**; nextest runs them all | found by continuous integration |
+
+**A fourth was self-inflicted in the same hour.** A workspace run was still in flight while its
+subject was edited, and it then reported NO failures -- which cannot be true, since the third site
+was still stale when it began. Its result belongs to no tree. **Discarded rather than read as a
+pass**, which is the same rule this session already recorded when two gates shared one log file.
+
+**The shape common to all four is that the run did less than I believed it did**, and only the
+first and the last were written down beforehand. Believing a green result requires knowing what the
+command actually covered.
+
+---
+
+## 2026-09-11 (forty-second) — the handoff refreshed after sixteen increments
+
+It was refreshed at the twenty-fourth increment and the session is at the forty-first. In between,
+the premise it carried -- that the large work is blocked -- was corrected, and two region kinds were
+routed. **A resuming agent would have read that Order 1 was blocked and that no name-carrying region
+kind was reachable**, both of which are now false.
+
+The banner leads with what changed and what it cost:
+
+- **81% to 99%**, two kinds routed, `highest_command` 181 to 185, and the two kinds that remain need
+  an emitter WRITTEN rather than routed.
+- **The five increments of reading that preceded one line of behaviour**, four of which corrected
+  something that would otherwise have been built on, none of which reached code.
+- **The feature-set trap**: `cargo test -p keleusma --test X` does not enable `self-host` and CI's
+  `--workspace` unifies it on, so a gated test can be absent locally and run in continuous
+  integration.
+
+**Three validity items added**, for the host-contract observation, the node budget, and the pair of
+tests that pin `wire.kel`'s chunk count from two independent derivations. The list reads 1 to 21
+with no inversion, **checked by rendering it** rather than by writing the next number -- the
+distinction this file has paid for three times.
+
+Every check was run rather than copied: fingerprint `0x4327_63E1`, the newer guards green under
+`self-host`, the citation and count guards, and the boundary pin at 169 seconds actually executed.
+Ancestry anchor moved to `fad3fe11`.
+
+---
+
+## 2026-09-11 (forty-first) — ENUM_VARIANTS routed, and two figures the stage growth moved
+
+The cursor design landed as commands 184 and 185. **`no_region_the_driver_routes_disagrees_with_the_reference`
+passed on the first run again** -- the region is byte-identical for every corpus stage, and the only
+failure was the share figure asking to be told the new number.
+
+| | before | after |
+|---|---|---|
+| self-hosted share of corpus region bytes | 98% | **99%** |
+| skipped region kinds | three | **two** -- `ENUM_LAYOUTS`, `PARAM_TYPES`, both needing an emitter WRITTEN |
+| computed share | -- | **unchanged** |
+
+**Driven and mutation-checked**: three records across an enum boundary match the reference byte for
+byte, removing the type-name skip fails it, and a cursor walked past its section is refused.
+
+## THE PART WORTH KEEPING: A GUARD CAUGHT WHAT MY LOCAL RUN COULD NOT
+
+Continuous integration failed on `selfhost_chunk_names.rs`, which pins `wire.kel`'s chunk count.
+Four new functions moved it from **486 to 490** -- a function is a chunk, so the figure moved by
+exactly four.
+
+**My local check could not have caught it.** `cargo test -p keleusma --test selfhost_chunk_names`
+reported *"0 passed; 0 filtered out"*: the test is `self-host`-gated and that invocation does not
+enable the feature. CI runs `--workspace`, where cargo's feature UNIFICATION turns `self-host` on
+because another member requires it. **`-p keleusma --test X` and `--workspace` are different feature
+sets**, and a test can be silently absent from the first while running in the second.
+
+That is the rule *a run that executed no tests is not a pass* arriving through a channel I had not
+considered: not a filter, but a feature set that omits the test entirely.
+
+**I predicted this class and under-enumerated it.** The plan said `wire.kel` is itself a measured
+stage and growing it perturbs the corpus's figures. I guarded the NODE count with a new test and
+never thought of the CHUNK count.
+
+**So I enumerated instead of fixing the instance, and found a second live site**:
+`tests/selfhost_parse.rs` pins the same 486, derived from the PARSED source rather than the compiled
+module. Two independent derivations of one figure, which moved together as such a pair should. The
+workspace run then confirmed those two were the only failures.
+
+**Had I fixed only the failing one, CI would have caught the other and I would have called it a
+surprise.** It is the one-of-two-sites shape this session has now met eight times.
+
+---
+
+## 2026-09-11 (fortieth) — ENUM_VARIANTS is not the same shape, and my plan said it was
+
+With `DATA_SLOTS` routed, the plan's own "not in scope" section named `ENUM_VARIANTS` as "the same
+shape with the enum base". **Checking before copying, it is not.**
+
+`mi_enum_names` INTERLEAVES: for each enum it interns the type name, then that enum's variants,
+then the next type name. So a flat variant index `k` does not sit at `ebase + k` -- the type names
+are in the way, one per enum, at no fixed stride because enums have different variant counts. The
+counters cannot supply the offset either: `vcnt` is the CURRENT enum's variant count and is
+overwritten each iteration. **That is the same fact that defeated the slot base, biting a second
+time in a different place.**
+
+**The sound shape is a CURSOR, not an offset.** A begin sets the cursor to `ebase`; each step emits
+one variant and advances by one, except that the host tells it when a record is the FIRST variant
+of its enum and the stage then advances one extra to step over the type name. The host supplies
+structure it legitimately knows -- the boundary -- and never a name index it cannot check.
+
+**The sentence was written three increments before the walk was read closely**, which is how it came
+to describe a shape the code does not have. It cost nothing because it was checked before being
+acted on, and it would have cost a wrong emitter had it not been.
+
+**The slot slice's transferable value is the METHOD, not the shape**: read the walk, capture state
+from the walk rather than deriving it, let the host supply only what it decides, and say in advance
+which coverage figure should move.
+
+---
+
+## 2026-09-11 (thirty-ninth) — DATA_SLOTS is routed, and the share went 81% to 98%
+
+The driver half landed. `slot_run_fields` groups consecutive slots sharing a name and visibility
+into runs -- mirroring the encoder including its `u16::MAX` chunking, so a chunked run emits several
+records all carrying the same run index -- and `window_emit_slots` drives commands 182 and 183 on
+one virtual machine and ONE shared buffer.
+
+**`no_region_the_driver_routes_disagrees_with_the_reference` passed on the first run.** The region
+is byte-identical for every corpus stage. The only failure was the share figure, which is the test
+asking to be told the new number rather than a defect.
+
+| | before | after |
+|---|---|---|
+| self-hosted share of corpus region bytes | 81% | **98%** |
+| skipped region kinds | four | **three** |
+| computed share | -- | **unchanged** |
+
+**The computed share not moving is the part worth checking, and it was predicted in advance.** The
+stage supplies this region's NAME from its own interner and the host decides every other field --
+the `CHUNKS` standing, not the `NAMES` one. `DATA_SLOTS` joins `CHUNKS` as **mixed** in the
+provenance table, and the test that exists to stop the headline figure being over-read still holds.
+Saying beforehand which number should move, and which should not, is what makes the one that did
+mean something.
+
+**`DATA_SLOTS` is the first routed kind whose record carries a NAME.** Every kind routed before it
+carried none, which is precisely what let the host supply every field. That is why the interner
+route had to exist before the routing, and why five increments went into reading before one line
+changed.
+
+**Verified**: 180 wire tests, 147 codegen tests including the boundary pin and the byte-identical
+scaffold, all five region-coverage tests with updated figures, the node budget at 1,202 of 1,365,
+`fmt`, and clippy with `-D warnings` across the full feature set.
+
+---
+
+## 2026-09-11 (thirty-eighth) — the margin the slice is sized against was stale by a quarter
+
+The plan's first step is to measure `wire.kel`'s node budget before editing it, so a later cap
+failure is attributed to stage growth rather than to routing.
+`tests/module_input_node_budget.rs` does that, parsing the count out of the blob the stage itself
+reads.
+
+**Measured: 1,194 nodes against a 1,365 cap, a margin of 171.** The figure quoted around the tree
+is **1,148**, stale by 46 nodes, and the margin the plan assumed was 217. **A quarter of the assumed
+headroom was already gone**, in the one number the slice is sized against.
+
+**This is the fourth stale figure in this arc**, after the two capacity limits and the retained
+state, and it is the one that would have mattered most: a slice sized against 217 that actually has
+171 is a slice planned with a margin it does not have.
+
+**The plan now cites the test rather than a number**, which is this project's own convention for a
+figure that moves. The test asserts its walk has not drifted from the writer -- every length bounded
+by the remaining blob, every section count cross-checked against the module -- because a parse that
+drifted would report a wrong figure rather than failing, and a wrong budget is worse than no budget.
+
+**The measure-first instruction paid on its first use.** It was written two increments ago as
+process caution; it caught a real error the first time it was followed.
+
+---
+
+## 2026-09-11 (thirty-seventh) — the slice is budgeted, not casual
+
+Going to implement, two constraints surfaced that change the shape of the work rather than its
+conclusion.
+
+**Command 178 is already driven.** `the_four_record_formatters_lay_out_a_record_the_reference_agrees_with`
+feeds `ds_stream_step` a name index from the reference's own record, which is legitimate for the
+claim it makes -- whether the stage lays a record out as the format specifies. Changing 178 to read
+the interner would break that for no gain, so **the name-aware step must be ADDITIVE**. The slice
+adds TWO commands, a begin and a name-aware step, and `highest_command` moves 181 to 183.
+
+**`wire.kel` is itself one of the eleven measured stages.** It carries **1,148 constant-forest nodes
+against a node table holding 1,365** -- a margin of 217 -- and 475 chunks. Two new functions add
+chunks and constants to the very stage the corpus measures, and that stage must still emit its own
+regions afterwards.
+
+**That is why this has not been done casually, and it belongs in the sizing rather than being
+discovered mid-change.** The plan now says to re-measure the node count after the stage edit and
+before the driver edit, so a cap failure is attributed to stage growth rather than to routing.
+
+**This arc has now corrected itself four times**, each time by reading one level deeper: a dispatch
+table, then a field list, then an assumption's consequence, now a contract and a budget. **Every
+correction made the slice larger and better specified, and none of them reached code.** The plan is
+executable now in a way it was not three increments ago, and the cost of getting there was entirely
+in reading.
+
+---
+
+## 2026-09-11 (thirty-sixth) — the assumption holds, and the slice still needs a begin
+
+The plan named one assumption to check before anything else: that `wire.nmap` survives between the
+interner call and the step calls under the driver's buffer handling.
+
+**It holds.** `window_emit_chunks` creates ONE `shared` buffer and passes `&mut shared` to every
+`enter_wire` call, begin and steps alike. The driver re-seeds only the slots it writes, and
+`wire.nmap` is never among them, so the interner's result survives for as long as the same buffer
+comes back -- which that function guarantees by construction. A `DATA_SLOTS` driver written the same
+way inherits it.
+
+**The question it leaves is sharper and smaller, and it changes the answer.** The slot stream had
+no begin of its own, and the two commands that DO call `mi_window_prepare()` each do something else
+as well: 174 zeroes the chunk range cursors, and 170 emits the `NAMES` records into the window. Either
+would run the interner; both are misuses, one chunk-specific and the other writing bytes the driver
+would discard.
+
+**So the slice needs a begin after all -- for a different reason than the plan guessed.** Not
+because the interner's result fails to survive, but because nothing currently runs the interner
+WITHOUT also doing something a slot pass does not want. A begin whose whole body is
+`mi_window_prepare()` is the smallest honest answer, and it moves `highest_command`.
+
+**The plan was right to name the assumption and wrong about what would follow from it.** Checking it
+still paid: the conclusion "needs a begin" is the same, the REASON is different, and a reason that
+is wrong is how a design gets built against the wrong constraint.
+
+---
+
+## 2026-09-10 (thirty-fifth) — the field list made the state look sufficient
+
+Going to route `DATA_SLOTS`, I checked the one thing the previous increment asserted without
+reading: that the section bases are "recoverable from state that already exists", naming `ecnt`,
+`vcnt`, `scnt` and the running `cnt`.
+
+**`nm.vcnt` is assigned INSIDE the enum loop.** It holds the variant count of the *current* enum
+and is overwritten on each iteration. `ecnt` and `scnt` are totals; there is no running total of
+variant names anywhere. **The slot section's base cannot be computed from what the walk retains**,
+and the previous increment said it could.
+
+**Caught by reading the assignment site rather than the field list** -- the third surface-reading
+failure in this arc, and the first of the three caught BEFORE it reached a line of code. That is
+the whole value of writing the design down before executing it.
+
+**The design is now recorded** in `docs/decisions/DATA_SLOTS_ROUTING_PLAN.md`: capture each
+section's base at the moment that section starts, from the walk itself, rather than computing it
+from counts. Two fields, two assignments, and the base cannot drift from the sequence it indexes.
+`ds_stream_step` then takes the run index and reads `wire.nmap[slot_base + k]`, so no host
+arithmetic touches a name.
+
+**The assumption most worth checking first is named in the plan**: that `wire.nmap` survives
+between the interner call and the step calls under the driver's buffer handling. `ck_stream_begin`
+documents and relies on that property, but relying on someone else's documented reliance is not the
+same as checking it. If it does not hold, `DATA_SLOTS` needs a begin after all and the shape
+changes.
+
+**Deliberately not implemented.** A half-finished change in the self-hosted emitter, against an
+hour of continuous integration and a byte-identical oracle, would be worth less than a design the
+next session can execute without re-deriving three increments of reading.
+
+---
+
+## 2026-09-10 (thirty-fourth) — the measurement I asked for was already in the tree
+
+The previous increment flagged two things as unmeasured before any driver change: whether the
+interning ORDER for the enum and data-slot sections matches the reference's `SchemaBuilder`, and
+whether `nmap` is indexed by walk position. **Both are settled by a test that already exists and
+passes**, one inference away.
+
+**The chain.** `NAMES` is emitted by `emit_name_records_from_nout(0, nm.cnt)` -- one record per
+walk position, in walk order, straight out of the walk's own output. `NAMES` is ROUTED by the
+driver at command 170. `no_region_the_driver_routes_disagrees_with_the_reference` asserts that no
+routed region DIFFERS, across every corpus stage, with a non-vacuity floor of four identical
+regions per stage.
+
+**So `NAMES` is byte-identical for every stage, and it is the walk's output.** A byte-identical
+table of name records in walk order is precisely the statement that the walk produced the same
+names in the same order as the reference. The order is proven; it was not an open question.
+
+**`mi_pair(k, len, mode)` writes `nin[k*2]` and returns `k + 1`**, so `k` is the walk position and
+the pair sequence is indexed by it. Dedup reuses a POOL OFFSET rather than collapsing a record, so
+walk position is the name index -- which is why `ck_stream_step` can read `wire.nmap[ck.j]` with
+`ck.j` a plain chunk index.
+
+**What remains is arithmetic.** Walk positions run sequentially across the three sections, so the
+base for slot runs is the chunk count plus the enum name count, and the walk retains `ecnt`, `vcnt`
+and `scnt`.
+
+**Stated as an inference, because this session has over-claimed twice from a surface.** The chain
+above is a reading plus an existing byte identity, not a direct measurement of the routed result.
+**The definitive check is to route one kind and compare bytes**, and that is the next increment
+rather than this one. What this increment establishes is that the check is now expected to pass for
+a stated reason, instead of being attempted blind.
+
+**The lesson is about where I looked.** I wrote down "this needs measuring" and the measurement was
+sitting in a passing test the whole time -- the third time today that the tree already contained
+what I was about to go and get. The cheap move, before sizing any measurement, is to ask which
+existing green test would have to fail if the property were false.
+
+---
+
+## 2026-09-10 (thirty-third) — the interning route already runs; the gap is the section base
+
+Having established that all four skipped region kinds wait on the name-interning route, I read what
+that route actually does rather than sizing it from its name.
+
+**The walk covers all three name sections, in one call.** `mi_window_prepare` calls
+`mi_chunk_names()`, which TAILS into `mi_enum_names()` (line 3017), which tails into
+`mi_slot_names()` (line 3051). The module-input blob carries chunk names, enum type and variant
+names, and data-slot RUN names -- one per run, because interning per slot is what once produced the
+395,804-name figure -- and `nm.cnt` advances through all of them, with `nm_mode_fresh()` used for
+variant names exactly as `SchemaBuilder::intern_fresh` does.
+
+**So `wire.nmap` already holds an interned index for every data-slot run name and every enum
+name.** The route is not missing. What a router needs is the SECTION BASE: `ds_stream_step` would
+take `wire.nmap[slot_base + k]` where it currently takes `wire.fin[0]`, and the interner retains
+`ecnt`, `vcnt`, `scnt` and `ccnt` alongside the running `cnt`, so the bases are recoverable from
+state that already exists.
+
+**WHAT THIS DOES NOT ESTABLISH, and I am stating it because the previous increment over-claimed
+from a surface.** That the interning ORDER for those sections matches the reference's
+`SchemaBuilder` is NOT verified here -- the roadmap records slices 14b and 14c producing the enum
+sequence with both modes, which makes it likely and not certain. Nor is it established that
+`nmap` is indexed by walk position in the way a base offset would assume. **Both are measurements,
+and the byte-identical oracle is what would settle them.** This increment is a reading, and the
+next one should be a measurement before a line of the driver changes.
+
+**The method that produced this is the one that failed last time, applied correctly**: read the
+function bodies and follow the tail calls, rather than reading a name, a dispatch table, or a
+count. `mi_chunk_names` is a misnomer for a walk that covers three sections, and sizing the work
+from its name would have repeated the error exactly.
+
+---
+
+## 2026-09-10 (thirty-second) — I over-corrected a claim that was already right
+
+The previous increment "sharpened" `selfhost_region_coverage.rs` from *"all four wait on the
+name-interning route"* to *"two are INTEGRATION and two are INVENTION"*, on the evidence that
+`DATA_SLOTS` and `ENUM_VARIANTS` are dispatchable at commands 178 and 181, beside the routed 179
+and 180.
+
+**That was wrong, and the original sentence was right.** Dispatchable is not routable. Reading what
+each formatter READS rather than which command dispatches it:
+
+| formatter | first fields | routed |
+|---|---|---|
+| `sh_stream_step` (SHAPES) | tag, kind, reserved, size | yes |
+| `sg_stream_step` (SIGNATURES) | params_first, params_count, ret, resume | yes |
+| `ds_stream_step` (DATA_SLOTS) | **`dslot_off_name`** | no |
+| `ev_stream_step` (ENUM_VARIANTS) | **`evar_off_name`** | no |
+
+**The criterion is whether the record carries a NAME INDEX**, and it explains the whole set at
+once. `SHARED_LAYOUT` and `DATA_INIT` were routed earlier on exactly that ground, and the driver
+says so in its own comment. `ENUM_LAYOUTS` has `elay_off_type_name`, so it sits with the unrouted
+two even though it has no emitter yet. A host-supplied name index could disagree with the interner
+that produced `NAMES` -- the hazard the chunk path avoids by taking its index from its own
+interner -- so the name route is a SOUNDNESS requirement, not a convenience.
+
+**That criterion is the genuine sharpening, and it is the opposite of what I wrote.** Restored,
+with the over-correction recorded in place rather than quietly replaced.
+
+**The failure has a name: I read a dispatch table instead of the function bodies.** It is the same
+shape as the message-based census classification two increments ago, which also read a surface
+that looked like a taxonomy and was not. Twice in one session, the cheap signal was the wrong
+signal, and the expensive one -- reading the code -- was the only one that settled it.
+
+---
+
+## 2026-09-10 (thirty-first) — "all four waiting on one thing" was two different things
+
+With Order 1 established as available, the next slice is one of the four region kinds the driver
+still skips. `tests/selfhost_region_coverage.rs` said all four were "waiting on the name-interning
+route" -- one sentence over two different states. Measured:
+
+| kind | state |
+|---|---|
+| `DATA_SLOTS` | emitter `ds_stream_step` exists and is **DISPATCHABLE at command 178** |
+| `ENUM_VARIANTS` | emitter `ev_stream_step` exists and is **DISPATCHABLE at command 181** |
+| `ENUM_LAYOUTS` | READERS only (`elay_*`); no emitter written |
+| `PARAM_TYPES` | no emitter written |
+
+**The driver routes commands 179 and 180 -- `SHAPES` and `SIGNATURES`, the immediate NEIGHBOURS of
+the two unrouted ones -- and everything else falls into its `_ => continue`.** So two of the four
+are INTEGRATION and two are still INVENTION, which is exactly the distinction the roadmap's Order 1
+cell draws and this comment collapsed.
+
+**This is the third capability in one day that already existed and was not wired**, after the
+streaming chunk emitter and the removed walk cap. The pattern is worth naming: on this line, a
+stated blocker is as likely to be an unrouted capability as a missing one, and the cheap check is
+to look for the dispatch entry before sizing the work.
+
+**Deliberately not implemented in this increment.** Routing them is a driver change against a
+byte-identical oracle, and the honest deliverable here is the sizing: a named, dispatchable slice
+rather than a vague blocker. What it would buy is also stated in advance -- the PRODUCED share
+rises and the COMPUTED share does not, because these records format fields the host decides, and
+`the_computed_share_is_smaller_than_the_produced_share` exists so that cannot be misread.
+
+---
+
+## 2026-09-10 (thirtieth) — I copied a stale figure while correcting a staleness
+
+The previous increment corrected the handoff's "the large work is blocked" premise and listed what
+Order 1 actually needs, taking the detail from the roadmap cell. **Two of those details were
+already false**, and I had not checked them.
+
+**Both capacity limits are REMOVED, and the windowed path reaches all eleven stages.**
+
+| limit as I restated it | actual state |
+|---|---|
+| `parse`, 94 chunks against a 90-record batch | **gone** -- the chunk region became a STREAM, one record per call, the coroutine carrying the three range cursors in private data across the loop's RESET |
+| `wire.kel`, 1,148 nodes against a 1,024-node walk cap | **gone** -- the guard was comparing against `nm_max_names()`, a bound on the NAME arrays, where it should have checked the node table's 1,365; every constant in that stage is `Int`, so the walk interned nothing |
+
+**The tree already said so, in the body of the test that proves it.**
+`the_windowed_path_reaches_every_stage_it_can_walk` explains both removals and says its `Expect`
+enum is gone because neither exclusion survives -- while its OWN DOC COMMENT listed both as live.
+A doc comment contradicting the code beneath it is worse than an absent one, because the comment is
+what a reader quotes: the roadmap cell carried both figures, and I copied them into the handoff
+from there.
+
+Three places corrected: the test's doc comment, the roadmap cell, and the handoff bullet. **The
+roadmap is corrected as well as the handoff because it is where the figure was copied FROM** --
+fixing only the copy is the one-of-two-sites failure this session has now met seven times.
+
+**A search lesson worth keeping.** I concluded the streaming emitter was unreferenced outside the
+stage, because `grep ck_stream` found nothing in Rust. The driver addresses the stage by COMMAND
+NUMBER -- `CMD_BEGIN = 174`, `CMD_STEP = 175` -- so a name search across the language boundary
+could not have found it. **A cross-language call site is invisible to a single-language grep**, and
+the conclusion was wrong until reading corrected it.
+
+**What remains true for Order 1** is what the previous increment said it was, minus the capacity
+claims: four region kinds of twenty, with `HEADER` encoded but not derived and `CHUNKS` mixed per
+field, and source types before type rejection reaches past literal, direct occurrences.
+
+---
+
+## 2026-09-10 (twenty-ninth) — the premise this session ran on was too strong
+
+**I re-derived what the roadmap says is outstanding instead of continuing on momentum, and the
+framing that kept this session in one lane for twenty-eight increments does not hold.**
+
+`HANDOFF.md` has said, since before this session, that *"the large remaining work is blocked on
+[the four decisions] and the small remaining work is not worth choosing over them."* The four
+decisions block the LANGUAGE-SURFACE work they name -- `Text<N>` programs, the width API, the
+float-verify semantics, a build's continuous-integration cost. **They do not block Order 1**, which
+`docs/roadmap/V0_2_X_ROADMAP.md` identifies as the largest remaining workstream and whose own cell
+says what stands in the way is *"integration, not invention"*:
+
+- **The remaining region kinds.** The module-driven emit path covers FOUR of twenty, and unequally:
+  `NAMES` and `STRING_POOL` are COMPUTED, `HEADER` is encoded but NOT derived, `CHUNKS` is mixed
+  per field with ten fields per record host-supplied. Two capacity limits are named with numbers --
+  `parse` at 94 chunks against a 90-record batch, `wire.kel` at 1,148 constant-forest nodes against
+  a 1,024-node walk cap.
+- **Source types.** Type rejection reaches only literal, direct occurrences, because no stage
+  computes source types and `parse.kel` says so in its own comment. A missing pipeline capability,
+  not a missing rule.
+
+**The roadmap carries four open decisions of its OWN** -- cryptography locus, meta-circular bound
+composition, version granularity, reference retirement -- and they are a different four. None
+blocks Order 1 either. **Two sets of four decisions, neither of which blocks the largest
+workstream**, and the resemblance is probably why the conflation went unnoticed.
+
+**The verification work stands**: it found a real runtime defect, corrected several claims, and
+strengthened the instruments. What does not stand is the inference that nothing larger was
+available.
+
+**No guard catches this.** It is a judgement rather than a figure, so it survived a refresh of the
+very file that carries it -- four increments ago, by me, while I was checking eighteen other things
+against the tree.
+
+---
+
+## 2026-09-10 (twenty-eighth) — a host's mistake reported as the artefact's
+
+Census groups F and J are the host-contract surfaces, judged lower value on the grounds that a host
+supplying a mis-sized buffer or an unregistered native has broken a stated contract. True, and not
+the whole question.
+
+**`InvalidBytecode` means *this artefact should never have been produced*.** When a HOST's mistake
+carries it, the message directs the reader to distrust the bytecode -- the one thing that is not
+wrong. This file already records that for ONE hot-swap site, as an open API observation.
+
+**Measured: it is not one site.**
+
+| host mistake | variant |
+|---|---|
+| hot swap whose data vector length mismatches the new module's private slot count | `InvalidBytecode`, naming the mismatch |
+| calling a native the host never registered | `InvalidBytecode`, naming the native |
+| calling an entry point with an argument it does not take | **NOT `InvalidBytecode`** |
+
+**The third row is the control, and it is what makes the first two mean anything.** A runtime with
+one error variant could not be said to choose it wrongly. This one distinguishes -- an
+argument-count mistake gets a different variant, as does a late read under read-before-resume,
+measured two increments ago as a `TypeError`.
+
+So the observation generalises from a single site to **both host-contract groups**. Every refusal
+is CORRECT, each names the actual mismatch, and none of this is a defect report. **Which variant
+carries them is the operator's call**, and it is a breaking change either way.
+
+---
+
+## 2026-09-10 (twenty-seventh) — the classification method failed, and that is the result
+
+Naming the unprobed members of census groups E and I needs a per-line classification of the
+forty-seven sites, which the document has never published. **It was attempted and the method
+failed**, and the failure is recorded rather than the guess.
+
+**Assigning each site by what its MESSAGE says** produced group sizes disagreeing with the table in
+four places, with two assignments demonstrably wrong on inspection:
+
+- `"no entry point"` and `"empty call stack"` would not place. Neither is an index out of range, a
+  composite operand form, a data-segment layout, or any other group's stated subject -- yet both
+  are in the population and the table's parts sum to its whole.
+- Group H tallied at four; its own section names exactly three. The fourth was a message that
+  READS like a should-never-have-been-emitted case and is not one.
+
+**A classification with two known errors is worse than none**, because this document's value is
+that every site carries a verdict, and a wrong row silently moves a verdict onto a site it was
+never made about. The messages were written to help a reader diagnose a fault, not to encode a
+taxonomy, and several are equally plausible under two group definitions.
+
+**What a sound derivation needs is recorded**: reading each site's surrounding code against the
+group's stated subject. Until then the unprobed members can be counted and not named -- the state
+the document has been in since it was written, now with the reason written down instead of assumed.
+
+**This is the third time this session a measurement's output was a corrected or refused claim
+rather than a new fact**, and the second time the honest result was to ship nothing but the
+reasoning.
+
+---
+
+## 2026-09-10 (twenty-sixth) — we added a census site and did not tell the census
+
+Deriving the `InvalidBytecode` population from source to name the unprobed members of groups E and
+I turned up something else first: **the source has 47 construction sites and the census says 46.**
+
+**The site is ours.** The opaque-width repair of 2026-09-08, part of this same line of work, added
+`"flat opaque field read out of bounds"` to `src/vm.rs`. Confirmed by counting at the census's own
+commit -- 50 raw matches then, 51 now -- and by diffing the message multisets, which names exactly
+that string as the addition and nothing as removed.
+
+**A source-derived guard existed and did not fire, BY DESIGN.**
+`the_invalid_bytecode_census_still_describes_the_tree` scans the runtime sources and compares
+against the stated figure with a tolerance of plus or minus four. Its own message explains why:
+*"the comparison carries a small tolerance rather than pretending to exactness the scan cannot
+deliver."* A drift of one sits well inside it. **The tolerance that makes the guard robust also
+makes it blind to exactly the movement that happened** -- a property of the instrument, not a
+mistake in it.
+
+**My first account of this said "nothing noticed and every guard was green", and that was wrong.**
+I found the tolerant guard only when my edit broke its extraction. Corrected before it entered the
+tree, and both versions are visible in this increment's history.
+
+**An exact counter now sits beside the tolerant one.** It can be exact because it reproduces the
+document's exclusions mechanically -- comments by a strip, the match arm by its `(_)` pattern
+position, the unit tests by truncating at the test module -- which is the distinction the tolerant
+guard declines to make. Both are kept deliberately: a tolerant alarm that survives refactoring, and
+an exact one that notices a single site. Mutation-checked: dropping the pattern-position exclusion
+fails it.
+
+**The new site got a ROW, not a reclassification.** Its sibling -- the identical bounds guard on a
+flat `Text` field -- was already in the population, so the two plausibly belong together. But this
+census publishes no per-line classification, and **guessing which group the sibling occupies would
+be worse than leaving the new site in a row of its own.** Group K holds it, verdict "not examined",
+and folds in if a future pass derives the classification. Population 47, examined 37, remainder ten.
+
+---
+
+## 2026-09-10 (twenty-fifth) — the handoff refreshed after nine increments
+
+`docs/process/HANDOFF.md` was last refreshed at the fifteenth increment and the session is at the
+twenty-fourth. Its banner described three lines of work that predate the width floor, both sweeps,
+the runtime grid, the float differential, the census closure, the indirect-site enumeration and
+group G. **A resuming agent would have got a picture nine increments out of date**, and that file
+is the designated resume anchor.
+
+**Every validity check was RUN, not copied forward.** Fingerprint `0x4327_63E1`, SEVEN crates,
+fifteen named guards green under `self-host`, the floats-absent test green under
+`--no-default-features`, the boundary triple pinned, and the two long ones -- region coverage at 66
+seconds and the boundary pin at 169 -- actually executed rather than assumed.
+
+**One check nearly reported a false pass.** Running item 12's test by name gave *"0 passed; 38
+filtered out"*, because it lives in `claimed_counts.rs` rather than the binary I guessed. **A run
+that executed no tests is not a pass**, and the only reason that did not enter the record is the
+rule already being written down.
+
+**The list reads 1 to 18 with no inversion, checked by RENDERING it** rather than by writing the
+next number -- the distinction this file has paid for three times. Items 16 to 18 cover the width
+floor, the descriptor and runtime sweep, and the guard census with its two companion pins.
+
+**The banner carries what is NOT established, not only what is.** Fourteen shapes is not every
+construct; reach is proven at `narrow-word-16` and no other narrow selector; the census's
+population remains a lower bound; groups F and J and one member each of E and I remain, none
+individually named. The four corrections are kept at the same prominence as the findings, because
+three of the nine increments produced a corrected claim rather than a new result.
+
+---
+
+## 2026-09-10 (twenty-fourth) — group G's other two sites
+
+Group G's entry read "no witness found (1 of 3 probed)", with the other two described as
+"host-supplied opaque handles going stale, which is a different question and untested here". Both
+routes are now probed in `tests/opaque_across_reset.rs`, and **neither reaches an
+`InvalidBytecode`.**
+
+**Route one is closed at COMPILE time.** A persistent `data` slot's body survives RESET, so a
+composite bearing an opaque stored there would carry a registry index across a reset. It cannot be
+stored there at all: *"opaque types are not yet admissible in data segment fields"*. The probe
+admitted three outcomes -- resolve, fault, or refusal -- and the answer was the third; **it was not
+guessed, and the first draft of the test said so by failing with the refusal message rather than
+asserting a resolve.** The guard now asserts that MESSAGE, because a refusal for an unrelated
+reason would leave the route open for every shape that reason does not cover.
+
+**Route two produces a `TypeError`, not an `InvalidBytecode`.** `src/vm.rs` documents that a
+yielded value stays arena-resident and must be decoded before the next `resume()`, "a read
+afterward resolves to a clean stale error" -- a claim about a host-facing contract that nothing
+checked. Doing the forbidden thing gives a `TypeError` naming read-before-resume. **The VARIANT is
+the census-relevant part**, since group G is a group of `InvalidBytecode` sites, so the test
+asserts it is not that variant rather than merely that the read failed.
+
+**Then a guard I did not know existed refused the edit.** Removing group G's probe count moved the
+examined total from thirty-five to thirty-seven, because this census's own convention is that a
+verdict without a probe count extends to every member.
+`the_census_group_table_adds_up_to_its_stated_totals` compared the table against the prose and
+failed. **Re-derived in both places rather than adjusted in one**, which is precisely the failure
+its message names: *"adjusting the total instead is how group G went missing from every remainder
+list."* The remaining count falls from eleven to nine.
+
+---
+
+## 2026-09-10 (twenty-third) — the sites the instrument cannot see
+
+`INVALID_BYTECODE_CENSUS.md` derives its population by grepping for the variant where it is
+CONSTRUCTED, and says plainly what that misses: a site propagating the error from a helper, or
+mapping another kind into it, does not appear. It also notes that one such conversion exists and is
+included only because the grep happened to see it.
+
+**That conversion is `impl From<ScalarError> for VmError`, and the grep counts it as ONE site.** It
+is one construction and many reaching paths: a malformed artefact arrives through every call that
+can raise a `ScalarError`, and the table attributes all of them to a single group-A row.
+
+**Enumerated: six call sites in `src/vm.rs` and four in `src/marshall.rs`**, each converting
+through `?` in a `VmError`-returning function or an explicit `map_err(VmError::from)`. All ten were
+read individually rather than assumed from the pattern. So "the population is a lower bound" now
+has a number against it -- 46 constructed sites plus ten paths collapsed into one of them --
+and `tests/invalid_bytecode_indirect_sites.rs` keeps it current. **A failure there is not a defect;
+it means the census's figure has gone stale**, which is exactly what a lower bound cannot tell you
+on its own.
+
+**An overclaim caught by measuring it.** The guard strips comments, and the natural justification --
+both files' documentation names these functions, so an unstripped count would include prose -- is
+FALSE today. Raw and stripped counts are both 6 and 4, because every prose mention omits the
+opening parenthesis the pattern requires. The strip is defensive, not load-bearing; the file says
+so, and its decoy carries the offending shape deliberately so the guard still fails without it.
+
+## THE CURRENCY GUARD FIRED, WHICH IS THE FIRST TIME THIS SESSION
+
+Adding that file pushed the integration-test count past the tolerance in `tests/claimed_counts.rs`,
+which reported that `CLAUDE.md` states 101 files against a tree holding 112.
+
+**Re-derived rather than adjusted**: 1282 lib tests under `self-host`, 1275 under default features,
+1327 integration `#[test]` functions across 112 files. Both occurrences in `CLAUDE.md` updated.
+
+**The attribution was made truthful rather than convenient.** The line has always read "Measured
+<date> at <hash>", and the obvious move was to write the current HEAD. That hash names a tree with
+111 files, not 112, because the measurement includes the file the same commit adds. **No hash can
+be written there truthfully**, and the line now says that instead of naming one that is wrong by
+one.
+
+---
+
+## 2026-09-10 (twenty-second) — the last two census entries, resolved oppositely
+
+`GUARD_REACH_CENSUS.md` had two entries reading "cited, not demonstrated". Both are now settled,
+and **the useful part is that asking the same question of each produced OPPOSITE answers.**
+
+**`forest_child_channels.rs`: repaired, strip shown load-bearing.** Its extraction splits on
+`": "`, which a COMMENT satisfies as readily as a field. A line reading `// channel: Vec<u32>`
+becomes the pair `("// channel", "Vec<u32>")` and enters the field list as a seventh channel that
+does not exist -- and if a real field were removed in the same edit, a phantom would stand in for
+it and the count would still pass. Measured: with the strip removed the new guard fails, naming
+the phantom.
+
+**`composite_escape_routes.rs`: safe by construction, established by MEASUREMENT.** Removing
+`code_only` entirely leaves all ten tests in that file passing. A comment cannot contribute an
+opcode name, because a line beginning `//` is skipped and the anchor line itself fails the
+uppercase-identifier test -- two independent filters, either of which suffices.
+
+**My first guard for that file was VACUOUS, and I reverted it rather than shipping it.** The decoy
+produced the identical opcode list with the strip removed, so it demonstrated nothing. Retargeting
+it at the per-line filters did no better: removing either filter still leaves the phantom rejected
+by the other. **A test that cannot fail is worse than no test, because it reads as coverage.** The
+brief for this increment listed that exact trap, and the measurement still had to tell me.
+
+**A reversed judgement, with its reason recorded.** The census had argued that a fourth
+near-identical test might be worth less than stating the gap. That was reversed on new
+information -- the guard added to `forward_data_reference.rs` under the same argument was
+mutation-checked and fails with its strip removed -- and the census says so rather than presenting
+the new verdict as though it had always held.
+
+---
+
+## 2026-09-10 (twenty-first) — a gap I named was mostly not a gap
+
+The twentieth increment ended by naming "float arithmetic across a width-mismatched pair" as
+unswept. **That sentence was nearly a mis-reading of the tree.**
+`tests/float_arith_width.rs` covers exactly that property -- arithmetic honours the module's
+DECLARED float width, not the runtime's -- with every test declaring a 32-bit float on a 64-bit
+runtime, eight of ten narrowing sites established by MUTATION, and the other two argued
+witness-free for a reason rather than merely unwitnessed.
+
+**A limitation of the sweep is not a limitation of the tree**, and writing the first as though it
+were the second is the quiet way a document overstates what is missing. Corrected in place.
+
+**The part that WAS genuinely absent is now present.** That file runs every case on ONE runtime, so
+it establishes the declared width governs THERE -- not that the answer is independent of the
+runtime, which is what the phrase "honours the declared width" actually claims. The two authorities
+are the point. The same declared-`f32` module now runs on an `f32` runtime and an `f64` one and
+must agree BIT-FOR-BIT, on the same four witnesses that file already established as
+width-discriminating, with the vacuity check re-asserted rather than inherited so a witness that
+stopped discriminating fails loudly instead of agreeing trivially.
+
+**Mutation-checked**: removing the `Op::Add` narrowing fails the new differential as well as the
+existing test.
+
+---
+
+## 2026-09-10 (twentieth) — the third width, from both sides
+
+The nineteenth increment left the runtime's float at `f64`, so the float authority was swept from
+the module side only. It is now swept from both, and the corpus USES a float rather than only
+declaring one.
+
+**`f32` runtimes.** All sixteen word-address pairs now run on both float runtimes, so a module
+declaring a sixty-four-bit float meets a runtime that cannot host it and is refused at load -- the
+same asymmetry already swept on the other two widths.
+
+**A float in a body.** A `Float` field between the opaque and the word after it puts the float
+width into a computed OFFSET, exactly as the address width enters through the opaque. **The value
+read back is the integer field, never the float**, because a shape whose expected value were a
+computed float would report an `f32`-versus-`f64` rounding difference as a wrong answer, and that
+is a width difference the sweep is not entitled to call a defect.
+
+**21504 cells: 6800 ran and were correct, 14192 refused at load, 512 refused at compile, nothing
+else.** Green at the default build, three narrow selectors, and a build with `floats` ABSENT, where
+the float shape compiles out and the rest is unaffected.
+
+**Both refusal counts land on their own closed forms.** The 512 are the float shape against the
+sixteen no-float descriptors on each of thirty-two runtimes. The 6800 match the per-cell prediction
+exactly.
+
+**The prediction had to get BETTER to accommodate the float shape, which is the useful part.** It
+previously assumed every shape runs under every admissible descriptor, so it could be a product. A
+shape needing floats cannot run where the descriptor declares none, and that refusal comes from the
+COMPILER rather than the loader. It now models each shape's own requirement, which is a truer
+statement of what the sweep claims than the version it replaced.
+
+**The control gives 200 findings**, against 120 on the sixteen-runtime grid and twelve on the
+single-runtime sweep, still on exactly one shape -- and the count matches its own closed form:
+eighty on no-float descriptors, eighty at `f5`, forty at `f6`, the last halved because only `f64`
+runtimes admit a sixty-four-bit float.
+
+**Three analytic agreements now stand** between a measured count and an independently derived one:
+the cells that load, the cells the compiler refuses, and the findings the control produces. Each
+tests the HARNESS rather than the runtime, and a sweep that skipped a runtime or refused for the
+wrong reason would break them.
+
+---
+
+## 2026-09-10 (nineteenth) — the second authority, and a check the narrow builds caught
+
+**Every width is carried TWICE** -- by the module header and by the runtime type parameters of
+`GenericVm<W, A, F>`. The load check refuses a module WIDER than the runtime and admits one
+NARROWER, and that asymmetry is where the second authority becomes visible. It is where the
+original opaque-width defect lived. The descriptor sweep varied only the module.
+
+`Word` and `Address` are implemented for four types each, unconditionally, so **sixteen runtime
+pairs are constructible in the DEFAULT build**. The grid generalises `composite_width_skew.rs`'s
+two hand-picked runtimes to all sixteen.
+
+**9984 cells: 3900 ran and returned the expected value, 6084 were refused at load, nothing else.**
+Every refusal is a module wider than its runtime, which is the guarantee working. Green at the
+default build and all four narrow selectors.
+
+**The harness is checked against an independent path.** The loader's documented rule, evaluated per
+cell from the descriptor and the runtime's own trait constants, predicts which cells load without
+the loader's involvement. The measured 3900 agrees exactly. A sweep that skipped a runtime, or a
+refusal from some check other than the width one, would break the agreement.
+
+**The first version of that check was WRONG and the narrow builds caught it.** It used a closed
+form -- the product of two triangular numbers -- which assumes the runtime grid and the descriptor
+set span the same widths. They do not: the grid is over concrete Rust types and is identical in
+every build, while the descriptor set shrinks with the build's maxima. Right at the default build,
+wrong at all four narrow selectors: 2730 ran against 1170 predicted under `narrow-word-16`.
+
+**The control says something about the defect, not only about the harness.** Reintroducing the
+sub-floor address produces **120 findings** against twelve on the single-runtime sweep, still on
+exactly one shape, and they appear on EVERY runtime that admits the module. The defect is a
+property of the module's declared width; the second authority neither masks it nor creates it.
+
+**A tooling note worth keeping.** Writing Rust source through a non-raw Python triple-quoted string
+silently reinterprets backslash sequences: a Rust line continuation is consumed as a PYTHON
+continuation and `\n` becomes a real newline. Three assertion messages reached the tree mangled but
+still compiling, so nothing failed. Use a raw string.
+
+---
+
+## 2026-09-10 (eighteenth) — a wider corpus found nothing, and corrected a claim anyway
+
+The seventeenth increment wrote down that six shapes is not every construct. **Seven were added,
+each for a width-derived layout property the first six do not stress** -- a `Fixed<4>` whose default
+fraction count is derived from the word width, a `Byte` whose offset contribution is
+descriptor-invariant while its neighbours' are not, stride COMPOSED with a field offset, stride
+NESTED inside another array, a composite behind an enum discriminant, a const parameter erased to a
+literal that feeds a size, and a `Multiword<2>` limb index.
+
+**624 cells, every one ran and returned the expected value**, at the default build and at all four
+narrow selectors including both eight-bit ones. The sweep now NAMES any cell that does not run, so a
+shape refused everywhere cannot be mistaken for coverage.
+
+**The value is not the negative result.** Re-running the control against the larger corpus produces
+**exactly the same twelve findings on exactly the same one shape**. Two of the seven additions also
+stride, and NEITHER reaches the defect. So the characterisation written the same day -- *"the array
+stride multiplies an element size, so a zero-byte scalar surfaces there"* -- **was incomplete**.
+Striding is not the discriminating property. The element must itself CONTAIN the address-sized
+scalar. An array of words, or of arrays, strides just as much and reaches nothing.
+
+**A widened corpus that finds no new defect can still correct a claim.** That is the transferable
+part, and it is the second time this session a measurement's chief value was overturning a sentence
+rather than finding a fault.
+
+## THE INSTRUMENT DEFECT THAT COST THIS SESSION AN HOUR
+
+I started a second verification gate while the first was still running, having deleted the status
+file they both append to. The record interleaved two runs -- `CLIPPY=0` from one, the `ALLDONE` from
+the other, which had FAILED clippy -- and **no line could be attributed to a run**. Then I edited
+the gate script while it was executing.
+
+That is the shape `NARROW_WIDTH_FAILURE_CLASSIFICATION.md` already records, *"a measurement taken
+while its subject is being edited measures neither state"*, applied to my own log two increments
+after writing it down.
+
+**The repository already solves this and I did not use it.** `scripts/gate-in-worktree.sh` names its
+log per gate and per commit and pins the run to an immutable commit in a detached worktree, and its
+header states the reasoning verbatim: the rule that a gate result is valid only for the tip it ran
+against "stops being a discipline anyone has to remember and becomes a property of the mechanism."
+
+Its warning about STOPPING a gate was also correct in detail: a path-scoped kill of the driver left
+`cargo test --features self-host` reparented and still running, exactly as its header says, and the
+second target-scoped kill is not optional. The ad-hoc gate now writes one status file per run.
+
+---
+
+## 2026-09-10 (seventeenth) — the axis the census never varied
+
+The lead the sixteenth increment opened is now measured. `tests/target_descriptor_axis.rs` sweeps
+**every target descriptor the compiler accepts** -- word and address from the narrowest implemented
+width to the runtime's maximum, each with no floats and with every float format the runtime
+implements -- against six shapes chosen for the constructs whose layout is WIDTH-DERIVED.
+
+**48 descriptors by 6 shapes, 288 cells, and every cell RAN and returned the expected value.**
+Nothing refused, nothing faulted, no wrong answers. Green as well under all four narrow selectors,
+including the two eight-bit ones, where the descriptor space shrinks with the runtime's maxima.
+
+**The control is what makes that mean anything.** Removing the address floor and admitting sub-floor
+widths produces TWELVE findings, each named by descriptor and shape, reproducing the sixteenth
+increment's defect through this harness -- and the same run classifies ninety compile-time refusals
+correctly, so the refusal path is exercised too.
+
+**Only ONE shape of six reaches it.** The array stride multiplies an element size, so a zero-byte
+scalar surfaces there and is absorbed everywhere else. A corpus of five ordinary programs could have
+missed the defect entirely. That is an argument about how thin any small corpus's evidence is, not a
+claim that this one suffices.
+
+**The first draft of the sweep was wrong, and the sweep said so on its first run.** It required at
+least one cell to be REFUSED, assuming some admissible descriptor would be rejected. None is. The
+check asserted a property that had not been measured, inside a test written to measure properties.
+It now constrains the descriptor set's SPREAD, which is what non-vacuity actually needs.
+
+**What this does not establish** is written into the census beside the result: the population is
+still a lower bound, six shapes is not every construct, and no group carrying a probe count is
+closed by this.
+
+---
+
+## 2026-09-10 (sixteenth) — a missing width floor, found under the reach that was unproven
+
+**Subject: this session's own residue.** Two guard-reach claims the tree said it had NOT
+established, and the question of how many more there were. Closing the first found a defect.
+
+**`Target::validate_against_runtime` had no floor.** It checked that the word, address and float
+widths did not EXCEED the runtime's and never checked the other end. `addr_bits_log2 = 2` compiles.
+The layout sizes an opaque by the ADDRESS width, four bits is zero bytes, and the fault surfaces at
+run time as `InvalidBytecode("NewComposite flat operand on non-flat values")` -- naming neither the
+width nor the target, and pointing its reader at composite construction, the one place there is
+nothing wrong.
+
+**The argument was already in the tree, twice, applied to one width of three.**
+`validate_program_for_target` refuses `float_bits_log2` below 5 because such widths "are not
+formats ... so a target declaring one produces bytecode nothing will run", and
+`tests/float_arith_width.rs` records the provenance from the V0.3.0 line: widths 0, 1 and 2 collapse
+to ZERO BYTES. Neither sentence is about floats. `1 << bits_log2` over eight is zero below 3
+whichever field it names. Both floors now come from the trait impls rather than literals.
+
+**It was found by a derivation that produced one, and the derivation was mine.** The skew corpus
+clamps an address one step below the build's word with a floor of 2; under `narrow-word-8` the word
+is 3. Sixth instance this session of the class under repair appearing inside the repair, recorded
+because the frequency is now evidence about the work rather than about any one edit.
+
+**The premise guard is the transferable part.** Every test in that file is about widths that DIFFER,
+both targets are derived, and a derivation can collapse. Had the address come out equal to the word,
+all ten tests would have passed while exercising nothing, and no assertion would have reported it.
+The file now asserts its own premise and fails loudly where the build cannot host a skew. A build
+the file cannot cover is a different thing from a defect it has found.
+
+**The reach is proven for one build, with the control the earlier probe lacked.** Two of the four
+layout-asking sites reverted to asking for a word: each failed at the DEFAULT build, and each also
+failed under `narrow-word-16`, one strictly more there. The earlier attempt failed at neither width
+and was nearly reported as evidence the corpus had gone vacuous.
+
+**The parity guard's silent direction, superseding the ninth entry below.** A real seeding deleted
+with the identical text left in a comment FAILS the guard, naming the slot and both counts. Then the
+control: with the strip disabled and the same mutation in place, the guard reported `ok`. **The
+control matters more than the result** -- it shows the strip is load-bearing rather than decorative.
+
+**The census.** `docs/decisions/GUARD_REACH_CENSUS.md` derives the population from git rather than
+recall. Eighteen files; sixteen record a demonstration of their own guard failing; **two do not**,
+named with the cost of closing them and left unrepaired, because inventing a fourth near-identical
+test is not obviously worth more than saying plainly that two files rest on a property nothing
+checks. Three were repaired in passing, each of which had stated the property in PROSE while nothing
+checked it.
+
+**The census that claims to enumerate that class does not name the site.**
+
+`docs/decisions/INVALID_BYTECODE_CENSUS.md` asks, at each site, whether a module a SUPPORTED
+PRODUCER emitted and `verify()` ACCEPTED can reach it. One did, and no group names that message.
+
+**The axis is the reason.** The census enumerated by the error constructed at each site and reasoned
+about what a PROGRAM can express. A degenerate TARGET DESCRIPTOR is a different axis: the program is
+ordinary and the module is malformed by the width it declares. The population derivation does not
+reach that axis, and the assumption that the target is well-formed was never stated.
+
+The route is closed, so this is a record of the census's REACH, not a live hole. **What is NOT
+established is whether other sites are reachable the same way**, and the addendum says the next pass
+should ask each group's question with the target descriptor as a variable rather than only the
+program.
+
+**The doc build caught the last defect.** Two intra-doc links from public documentation to a
+`pub(crate)` item failed `cargo doc -D warnings` while tests, clippy and fmt were all green. That is
+the exact gap the project records as how V0.2.1 shipped with a red CI Doc job.
+
+## 2026-09-09 (ninth) — closing the class, and choosing a tripwire over nine parsers
+
+**The class is closed with a population and a verdict per file**, not abandoned when the obvious
+cases ran out. `docs/decisions/COMMENT_MATCHING_GUARD_SWEEP.md` lists thirteen files carrying the
+shape: **nine repaired, three safe by construction, one not in the class.**
+
+**A line-prefix search is safe because a comment line begins with `//`** and cannot match a pattern
+required to start the trimmed line. That is a property of the search rather than a judgement about
+the file, which is why those three need no change and the document says so.
+
+### THE LAST THREE, AND A CONFIDENTLY WRONG FAILURE
+
+`selfhost_bare_for` asserts the ABSENCE of a removed refusal in raw `parse.kel`. Measured: a
+historical note reading *"the pe_bare_for refusal was removed when the form became supported"* makes
+it report that the stage **"still defines or raises"** it. **That is not merely a false failure; it
+is a false failure that names a cause which does not exist**, sending its reader to hunt a
+definition that is a comment.
+
+`selfhost_driver_parity` counts seeding calls and is calibrated against a count, so a comment naming
+one adds a phantom. Its doc already records the paren-matching that removed its WINDOW hazard; this
+is a different one in the same function.
+
+**For the parity guard only the false-FAILURE direction was verified.** Its ability to detect a real
+difference rests on its existing counted-and-calibrated design; no compiling mutation was built for
+that, and neither the document nor the commit claims one.
+
+### THE BLOCK-COMMENT GAP: MEASURED, THEN TRIPWIRED RATHER THAN PARSED
+
+All nine strips handle `//` and none handles `/* … */`. The document recorded that as a bare
+limitation; this measured it.
+
+**Exposure today is ZERO.** No source any of these guards reads carries a real block comment: the
+only `/*` in the stage sources is inside a LINE comment describing the `+`, `-` and `*` operators,
+and every occurrence under `src/*.rs` is inside a doc comment or a test string literal.
+
+**But Keleusma supports block comments** -- the lexer skips them and has tests for the multi-line
+and unterminated cases -- so the risk is latent rather than absent.
+
+**Teaching nine helpers cross-line state is real complexity bought for no current exposure.** The
+increment is a tripwire instead: it fails if a block comment ever appears in one of those files and
+names the document. **This is the judgement most worth reviewing in the increment** -- it trades
+certainty for proportionality. The guards remain unable to handle a block comment; the check only
+ensures nobody introduces one unnoticed.
+
+**The detector must not fire on what is recorded as harmless.** A `/*` inside a line comment or a
+string literal is not a block comment, and this tree contains both shapes. A second test pins them,
+because without it, tightening the detector until it reported nothing would look like a fix -- the
+too-loose direction this whole class is about, aimed at the class's own instrument.
+
+### WHAT THE NINE FIXES WOULD HAVE READ AS WITHOUT THE DOCUMENT
+
+Nine unrelated repairs. The population table is what makes the class visible and hands the next
+reader the direction rule, which is the part that generalises beyond this repository: **only an
+ABSENCE assertion loses silently to an early truncation.** Everything else fails loudly, so the
+naive strip is correct in eight of nine.
+
+## 2026-09-09 (eighth) — four more, a third file guarding one of two readers, and the defect committed inside its own fix
+
+**A third silent false pass.** `tests/stage_command_reach.rs` has `driver_command_numbers`, which
+strips comments and whose doc cites *"four recorded instances of a guard firing on the prose that
+explains it."* Beside it, three PRESENCE assertions searched the **raw** driver. Change `CMD_STEP`
+to a different value, leave `// was: CMD_STEP: i64 = 175;` next to it, and the test reports
+**2 passed, 0 failed**.
+
+**That is three files, each documenting the hazard in its own prose while guarding one of two
+readers** — `op_tag_tables`, `wire_self_compile_status`, and this one. **The failure is not
+ignorance of the hazard.**
+
+### THREE ANCHOR-LOCATES, AND ONE OF THEM CAN ASSERT THE WRONG THING RATHER THAN FAIL
+
+`composite_escape_routes`, `forest_child_channels` and `forward_data_reference` searched raw source
+for a declaration anchor and extracted from wherever they found it. Measured: one historical note
+reading ``// `pub enum Op {` once carried 69 variants`` failed **three** tests with nothing wrong in
+`src/bytecode.rs`.
+
+**`forward_data_reference` is the subtle one.** Its two positions feed an `at_fn < at_blk` ORDERING
+assertion, so a comment naming either anchor moves a position and can change which declaration
+appears to come first. That makes the test assert the wrong thing about the stage rather than fail.
+
+### I COMMITTED THE DEFECT INSIDE ITS OWN FIX
+
+My first edit to that file computed `body_end` from the STRIPPED copy while the slice beside it
+still indexed the RAW string. Mixed offsets, and the test failed.
+
+**That is the same one-of-two-sites shape the edit existed to remove.** It was caught by running the
+tests, not by reading the edit. **This is the most useful thing the increment produced**: it shows
+the class is not carelessness that attention prevents, which is why a mechanical sweep found
+instances that four documented prior incidents did not.
+
+### TWO CONTROLS THAT MEASURED NOTHING, AND WHAT REPLACED THEM
+
+| attempted control | why it measured nothing |
+|---|---|
+| rename `CMD_STEP` | used elsewhere, so the test failed to BUILD — not a verdict about the guard |
+| add an opcode to `Op` | broke exhaustive matches elsewhere, so the test never built |
+
+Both were replaced by controls that compile: changing a constant's VALUE, and pointing an anchor at
+a name that does not exist. The second shows the extraction **panics loudly** rather than returning
+an empty list, which is the property that mattered.
+
+**And a process slip**: `git checkout` to undo a control mutation reverted my own uncommitted fix in
+the same file. Re-applied and re-verified rather than assumed.
+
+### THE DIRECTION RULE NOW SPANS SEVEN GUARDS
+
+Only the radix guard needs the string-aware strip, because its assertion is an ABSENCE one where an
+early truncation lets a real offender pass silently. The other six fail loudly, so the naive form is
+correct in each. **They are deliberately not unified**, and each carries the comparison — sharing a
+helper would add cost to six and remove a needed guard from one.
+
+## 2026-09-09 (seventh) — the sweep, and a false PASS on the historical defect
+
+**Two instances of the comment-matching class had been found by reading. This one asks the class
+question mechanically**: which test files search source for a CODE-SHAPED literal without stripping
+comments? **Twelve.**
+
+That is the difference between finding instances and finding the class. The first two were noticed;
+these were derived from the property.
+
+### THE ONE THAT MATTERED IS THE OPPOSITE DIRECTION FROM THE FIRST TWO
+
+The two already fixed are **absence** assertions, where a comment causes a **false failure** —
+noisy, and someone investigates. `wire_self_compile_status.rs` asserts the **presence** of
+`forst.forin_count = 0;`, the exact line whose absence WAS the historical `wire.kel` defect. A
+comment satisfying a presence assertion is a **false pass**: silent.
+
+**Measured, by isolating the test**: with the real reset deleted and the identical text left in a
+comment, `the_bare_for_counter_is_reset_beside_its_analogue` reported **ok**.
+
+### BUT THE FILE WAS NOT FOOLED, AND THE DISTINCTION IS THE FINDING
+
+A sibling **behavioural** test failed on the same tree, because deleting the reset really does break
+the stage. So the file caught it while the guard named for the repair did not.
+
+**That backstop is INCIDENTAL.** Narrow the behavioural test, or change the stage so the deletion no
+longer breaks byte identity, and this assertion becomes the only defence — and it does not hold. A
+guard that advertises itself as pinning the historical repair should not depend on a different test
+to be right.
+
+**I nearly reported this wrongly.** The first run showed the FILE failing, 2 passed 1 failed, which
+reads as "not fooled". Only isolating the single test separated "the file fails" from "this
+assertion holds", and those are different claims. Reporting the file's verdict would have closed the
+question with the wrong answer.
+
+### THE THIRD STRIPPER, AND WHY THERE ARE NOW THREE
+
+| guard | assertion | early truncation costs |
+|---|---|---|
+| the radix guard | ABSENCE | a missed offender **passes silently** — needs string-awareness |
+| `op_tag_tables` | anchors, bijection | an anchor goes missing, **fails loudly** — naive is fine |
+| this one | PRESENCE | a real occurrence is hidden, **fails loudly** — naive is fine |
+
+Same helper shape, different risk, so they stay separate and each says why. Unifying them on
+appearance would add complexity to two and remove a needed guard from one.
+
+### BOTH DIRECTIONS MUTATION-TESTED, AND THE SECOND IS NOT OPTIONAL
+
+| mutation | result |
+|---|---|
+| reset deleted, text left in a comment | now **fails** |
+| reset present AND a comment mentions it | still **passes** |
+
+The second is what stops the fix from punishing someone for documenting the repair — which, in a
+tree that writes historical notes as a matter of course, would be a guaranteed future failure.
+
+## 2026-09-09 (sixth) — the same class again, in the file that documents the class
+
+**Scoping by class rather than by where I looked.** The fifth increment fixed one guard exposed to
+the comment-matching defect. The class question is whether there are others, and the answer was
+found in `tests/op_tag_tables.rs` — **the file whose own doc cites a divergence detector broken by
+a commented-out `for k in 0..3`.**
+
+It has two source extractions. `decoder_arms` strips comments and **then** locates its anchor.
+`stage_tag_table` did the reverse: `find("const data wire {")` on the RAW source, stripping only the
+block it found. So the anchor search itself was comment-blind.
+
+**Measured: one comment line mentioning the anchor failed FOUR tests in that file**, with nothing
+wrong in the stage.
+
+### THE SHAPE IS THE ONE THIS TREE KEEPS MEETING
+
+A case handled for one construct and not for the one beside it. `rewrite_pattern_enum_name`
+rewriting enum names in patterns but not struct names; `check_pattern_against_type` called for match
+arms but not parameters; `forin_count` reset omitted while its documented analogue was reset. **Here
+both siblings live in one file, one of them correct, under a doc warning about the exact hazard.**
+
+Knowing a hazard and guarding one of two sites is the recurring failure, not ignorance of the
+hazard.
+
+### THE TWO STRIPPERS ARE DELIBERATELY NOT UNIFIED, AND THE CODE SAYS WHY
+
+The radix guard's helper is **string-aware**; this one truncates at the first `//`. That looks like
+an inconsistency to be tidied, and tidying it in either direction would be wrong:
+
+| guard | assertion | what an early truncation costs |
+|---|---|---|
+| the radix guard | ABSENCE — no site may use the old radix | a missed offender **passes silently** |
+| `op_tag_tables` | anchors and a bijection | an anchor or field goes missing and **fails loudly**, via `expect` or a reported gap |
+
+**The naive form is correct in one and wrong in the other because the failure directions differ.**
+A future reader unifying them would either add unneeded complexity or remove a needed guard, so
+both helpers now carry the comparison.
+
+### MUTATIONS
+
+| mutation | result |
+|---|---|
+| the comment that broke four tests | now **passes** |
+| a duplicate tag number in the stage table | still **fails three tests** |
+
+The second matters as much as the first: an extraction can be made comment-proof by making it find
+nothing at all.
+
+## 2026-09-09 (fifth) — a guard that could not coexist with a comment about what it guards
+
+**The class.** This repository records **four** instances of a guard matching prose it was never
+meant to read: a must-fire guard firing on the comment explaining the fix it guarded, a no-copies
+guard flagging itself, a witness extractor matching its own English header, and a corpus reader
+matching `for k in 0..3` inside a comment. Four instances is a class, so the question is which
+guards are still exposed.
+
+**One is.** `every_site_in_the_call_packing_family_agrees_on_the_radix` asserts that **no** site
+splits a `Call` record on the old eight-bit radix, and it searched raw source lines. Measured:
+adding a plain historical note — *"the Call record once split its chunk field as `count * 256`"* —
+to a source file **fails the test**, with nothing wrong in the tree.
+
+**The already-applied remedy is the part that worried me.** The file records flagging ITSELF once,
+calling it "the third time a guard in this repository has done that", and the fix was to skip the
+whole file. That costs reach, and it is the fix a later reader copies: the next file that gains such
+a comment gets skipped too, and the guard quietly stops covering it.
+
+### THE OBVIOUS FIX INTRODUCES THE OPPOSITE DEFECT
+
+Truncating at the first `//` is wrong on `let s = "http://a"; let x = count * 256;` — it cuts inside
+the string literal and drops a REAL occurrence. **For an absence assertion that is the dangerous
+direction**: a missed offender passes silently, where a matched comment merely fails loudly.
+
+So the strip is string-aware, tracking double-quoted strings with backslash escapes and truncating
+only at a `//` outside one. Both `.rs` and `.kel` use `//`, so one helper serves both.
+
+**Block comments are NOT handled, and the code says so** rather than leaving it to be discovered. A
+`/* … count * 256 … */` would still match. The four recorded instances were all line comments, and a
+block-comment scanner needs cross-line state this per-line walk does not carry.
+
+### THREE MUTATIONS, AND THE THIRD IS WHY THE COMPLEXITY IS THERE
+
+| mutation | before | after |
+|---|---|---|
+| a historical COMMENT naming the old radix | **fails** | passes |
+| a real code site | fails | **still fails** |
+| a real site after a string containing `//` | fails | **still fails** |
+
+The third separates the string-aware strip from a naive `split("//")`, which would have passed it —
+that is, missed a real offender. Without that case the extra code would have been unjustified.
+
+### THE SELF-SKIP IS KEPT, AND FOR A DIFFERENT REASON THAN BEFORE
+
+Stripping comments does not make the file safe to scan: its pattern list lives in **string
+literals**, which are code. The exclusion stays, but it is now the only exclusion the guard needs,
+rather than the first of a growing list.
+
+### AND THE RUN THAT ALMOST SAID "NO HAZARD"
+
+The first demonstration reported `0 passed; 0 failed; 0 filtered out` and I nearly read it as the
+comment being harmless. The binary is gated on `self-host` and ran **nothing**. Same shape as the
+`--no-fail-fast` rule this tree already carries: **a run that executed no tests is not a pass**, and
+the number that says so is the test count, not the exit status.
+
+## 2026-09-09 (fourth) — a defect shape turned into a one-second check
+
+**The increment.** Four increments this session produced measured negatives in the width and
+extraction space. This one changed class of target: instead of auditing where a defect might be, it
+took a defect that **actually happened** and asked whether its shape is mechanical.
+
+**It is.** `wire.kel` failed to self-compile byte-identically, and the last of four causes was one
+line: `forin_count`, the bare `for` form's program-order counter, was never added to the
+per-function reset that already cleared its own documented analogue `forlimit_count`. It indexes an
+emitted record's argument as `7 * forin_count`, so the second and every later function containing a
+bare `for` emitted a record pointing past its own parts.
+
+**That took prefix bisection, a rebuilt dependency chain, delta debugging and a five-line synthetic
+to find, and two of the four causes were first diagnosed wrongly along the way.** The shape —
+a field that accumulates and is then multiplied into a record index, and is never assigned zero —
+is a grep.
+
+### THE CLASS IS CLEAN, AND ONE MEMBER LOOKED LIKE A FINDING
+
+Three members, all in `parse.kel`. `forlimit_count` and `forin_count` are reset per function.
+**`aq_k` matched the dangerous shape on the first pass** — accumulates, multiplied into a slot
+index, absent from the per-function reset — and reading its assignments cleared it: it is reset at
+both of its construct entry points, which is a **stricter** scope than the per-function one, not a
+weaker one. Reporting it without reading those two lines would have been a false finding.
+
+### WHAT THE GUARD DELIBERATELY DOES NOT CHECK
+
+It does not check that a reset **dominates** its use. That needs control-flow analysis it has no
+business doing, and the sound resets here sit at two different scopes — per function for two
+counters, per construct for the third — so demanding either scope would flag the other. It checks
+the weaker property that catches the actual defect: a counter in this class is assigned zero
+somewhere in its own stage. **Before the repair, `forin_count` was assigned zero nowhere at all.**
+
+### THE MUTATION THAT MATTERS IS THE HISTORICAL ONE
+
+Deleting the 2026-08-27 repair reproduces the defect, and the guard names the field. Deleting the
+sibling's reset as well is caught too, and breaking the extraction trips the non-vacuity bound
+rather than passing silently.
+
+**A guard mutation-tested against a real historical defect is a different object from one tested
+against an invented mutation.** The invented mutation asks whether the guard can fail; the
+historical one asks whether it would have earned its cost.
+
+### AND THE GUARD'S OWN REACH WAS CHECKED, WHICH CHANGED HOW ITS RESULT READS
+
+All three members sit in one file, which reads exactly like an extraction that silently matches
+only that file. It is not: the accumulator half fires in **every one of the twelve stage sources**,
+one field in the smallest and thirty-five in `parse.kel`. What is rare is being multiplied into an
+index, and `parse.kel` is the stage that emits records with packed arguments — **the concentration
+follows from what the stage does, not from where the guard looked.**
+
+A throwaway script written to measure this had a loop-break bug that under-counted the
+index-multiplier column. It was caught by disagreeing with a figure measured earlier, and the wrong
+number was not quoted. The reach half of that script had no such bug, which is why its answer still
+stands.
+
+### A FIGURE WAS WRITTEN AND REMOVED
+
+The guard's doc first said "thirty-five accumulating fields across `parse.kel`". True, and
+**unguarded** — it would drift with every increment and nothing would check it, which is a defect
+this line has recorded seven times. Only the class size is stated now, and the non-vacuity
+assertion is what keeps it honest.
+
+## 2026-09-09 (third) — one property, three axes, and a refuted hypothesis
+
+**The increment.** The float audit was not a finding about floats. It was one instance of a general
+property: **three widths are carried independently — word, float and address — and each has two
+possible authorities**, the module header the compiler baked offsets from, and the runtime type
+parameter of `GenericVm`. The load check does not force them to agree; it refuses a module whose
+width is WIDER than the runtime and admits one that is NARROWER.
+
+So a module compiled for a small target and run on a large host is a supported configuration, and it
+is where a second authority becomes visible. **That is how the opaque defect presented.**
+
+**The existing skew tests cannot see this.** Every configuration in `composite_width_skew.rs` is
+MATCHED — a sixteen-bit-address module on a `u16` runtime. A matched pair cannot expose a second
+authority, because the two readings coincide. The skew that matters here is between the module and
+the runtime, not between two widths of one target.
+
+**Both remaining axes measure clean**, including the address axis the original defect lived on,
+which had no coverage in this form.
+
+### REACH, AND THE ORTHOGONALITY THAT MAKES IT TWO TESTS RATHER THAN ONE
+
+| axis | cases | caught the width mutation |
+|---|---|---|
+| word | 6 | 3 |
+| address | 3 | 2 |
+
+Each mutation fails **only its own axis**. That is the check that the two tests are independent
+rather than one guard firing twice, and it is cheap to run and easy to omit.
+
+### THE SURVIVORS: A HYPOTHESIS THAT WAS PROBABLE, TESTED, AND FALSE
+
+Two word cases — an array element and a byte-then-word struct — read correctly under the mutation. I
+recorded that as unexplained, then went back for it, because **an unexplained survivor reads as a
+missing guard and sends the next reader hunting**.
+
+| hypothesis | verdict |
+|---|---|
+| the read is constant-folded, so no flat body is touched | **excluded** — an array built from a host call survives identically |
+| the composite is BOXED, so both widths agree | **excluded** — all four shapes report a FLAT body at both module widths |
+
+**The second was the likely one and it was wrong.** `composite_width_skew.rs` records precisely that
+a boxed composite agrees on both runtimes, and asserts flatness for that reason — so the explanation
+was sitting in a sibling test, already written down, and it does not apply. Had I not checked, a
+plausible wrong cause would have gone into the tree, which is exactly how two of the four `wire.kel`
+causes were first diagnosed wrongly.
+
+**The cause remains unestablished, and the document says so.** What is recorded is what has been
+ruled out. Two excluded hypotheses are worth more to the next reader than a confident third guess.
+
+### THE SHAPE OF THIS SESSION'S THREE INCREMENTS
+
+All three produced **measured negatives**: the composite kinds do not move, the float class is
+clean, the word and address axes are clean. Each carries a guard shown able to fail. A negative with
+demonstrated reach is a result; a negative without one is silence dressed as a result, and the first
+probe written for the float axis was exactly that until it was mutated.
+
+## 2026-09-09 (second) — an audit's scope argument was an instance of the error it was auditing
+
+**The increment.** `FLAT_FIELD_WIDTH_AUDIT.md` audited every site that sizes an **opaque** flat
+field, after one of them returned a silently wrong answer. It justified stopping at opaque with one
+sentence, and **that sentence is false**:
+
+> Every other kind is a function of the word width or the float width, so a site assuming a word is
+> correct for them.
+
+**A site assuming a word is not correct for a float.** `ScalarKind::Float` is sized by the FLOAT
+width, selected independently of the word — `narrow-float-32` exists apart from the `narrow-word-*`
+family, and `GenericVm<i64, u64, f32>` reaches the skew with no feature at all. A word assumption is
+correct for a float only where the two widths happen to be equal, **which is exactly the coincidence
+that hid the opaque defect**.
+
+So the audit's scope was right and its argument for that scope was an instance of the error being
+audited. The document is corrected in place rather than rewritten, because the reasoning failure is
+the more useful half.
+
+### THE MEASURED RESULT IS CLEAN, AND IT COST THREE ATTEMPTS TO MAKE IT MEAN ANYTHING
+
+**Attempt one proved nothing and looked like a result.** Six flat-composite shapes with float
+fields, run at a matched width — module `f32` on an `f32` runtime — all correct. Then the check on
+the check: mis-size the layout itself and see whether the corpus notices. **It did not.** All six
+still passed.
+
+**That mutation was EQUIVALENT, and understanding why is the finding.** Every site derives its
+float width from one layout, so changing the layout moves the compiler's baked offsets and the
+runtime's strides together. The result is a wasteful layout, not a wrong one. **That coherence is
+precisely the property the opaque field lacked**, where four sites bypassed the layout entirely.
+
+**So the defect shape needs two authorities, which needs the module's declared float width to
+differ from the runtime's.** The load check refuses a module whose float is WIDER than the runtime
+and admits one that is NARROWER, so a module compiled for a 32-bit-float target running on a
+64-bit-float runtime is supported — and is the configuration that can expose the defect. Attempt
+two ran the corpus there. Still clean.
+
+**Attempt three established the reach.** Taking the VM's float width from the runtime type instead
+of the module header is one site disagreeing with the layout — the opaque defect transposed. Three
+of the six cases catch it, reporting `Int(181461843968)` where `Int(42)` was expected: a silently
+wrong value rather than a fault, the same signature the opaque defect had.
+
+**The three that catch it are the three that read a field POSITIONED AFTER a float.** The three that
+do not are reading the float itself, which lands in the same place under either width. That is the
+property the corpus needs, and the test asserts it by name rather than inventorying constructs — a
+construct list is a proxy for coverage and this line has twice shipped a coverage assertion that was
+itself vacuous.
+
+### WHAT THIS DOES AND DOES NOT ESTABLISH
+
+**Establishes**: for the six shapes measured, in the configuration capable of exposing the defect,
+with a corpus shown able to fail, the float class is clean.
+
+**Does not establish**: that no float-width site is wrong. Six shapes are not the class, and the
+corpus reaches only what the six construct. It is "no defect found", never "no defect exists" — the
+same distinction the audit itself records for `Op::IsStruct`, where producerless was declared and
+four producers were found within the hour.
+
+### A COUNT WAS WRITTEN AND THEN REMOVED, DELIBERATELY
+
+The correction first called this "the third premise-in-a-comment this line has found governing a
+decision while being wrong". **I had not derived that number.** Writing an unverified tally inside a
+correction about an unverified claim is the failure mode with the shortest possible distance between
+the lesson and the repeat. The document names the class and gives two instances without counting.
+## 2026-09-09 — the three composite kinds, and a prediction wrong in both halves
+
+**The increment.** The last extraction of the type channel has four of its eight kinds moved to
+the pipeline. Four do not move: the branch pair, already withheld with a recorded reason, and the
+three composite kinds. This increment gives each of the three a **measured verdict with an
+executable witness**, and moves none of them.
+
+Deciding not to move something is a real outcome here. The branch pair set that precedent: it was
+built, measured, and withheld because both error directions were unsound. What was missing for the
+composite kinds was not a decision but evidence — the doc comment said only that "the two
+representations disagree about what a node IS", which is a reason to look rather than a finding.
+
+### THE PREDICTION WAS WRONG IN BOTH HALVES, AND IT WAS WRITTEN DOWN FIRST
+
+Recorded before measuring, from reading the two sides:
+
+| predicted | measured |
+|---|---|
+| **kind 7 MOVES**, since the declared field count is already on the wire | **WRONG. It does not move**, and the count is not on the wire at all |
+| **kinds 5 and 6 do not move**, blocked on a missing type-ANNOTATION record | **verdict right, mechanism wrong.** They are blocked on the pipeline refusing the whole program |
+
+The value of writing it first is that neither half can now be quietly revised into agreement. Had
+I measured first, "the annotation is missing" is exactly the sort of plausible mechanism I would
+have kept, because the verdict it supports turned out correct.
+
+**The kind-7 miss is the instructive one.** I reasoned that `field_sets_from_pipeline` already
+returns declared field sets, so the count was one lookup away. It is — for a struct you can NAME.
+The struct-literal record does not say which struct it builds.
+
+### KIND 7: THE WITNESS IS A PROOF, NOT A SURVEY
+
+The record carries the composite's flat SIZE and the GIVEN field count. The reference's row needs
+the DECLARED count. So the question is whether size determines count, and it does not:
+
+| struct | flat size | declared fields |
+|---|---|---|
+| one `Word` | 8 | 1 |
+| eight `Byte` | 8 | 8 |
+
+Both eight bytes wide. A literal supplying one field to each produces a **byte-identical**
+struct-literal record, while the reference **accepts** the first and **rejects** the second with
+"struct `B` expects 8 fields, got 1" — precisely the error kind 7 exists to carry.
+
+So no function of that record reproduces the reference's verdict. Emitting a row would reject a
+correct program or lose the check. **Both directions unsound**, the branch pair's shape exactly.
+
+**THE FIRST WITNESS PAIR I DRAFTED WAS BROKEN, AND THE PROBE CAUGHT IT.** I used an eight-field
+literal of the Byte struct as the rejected half. It IS rejected — for a Byte-versus-Word literal
+type error, which has nothing to do with field counts. A witness pair that differs for the wrong
+reason proves nothing, and it would have read as a proof. The test now asserts the rejection
+MESSAGE, not merely the rejection.
+
+### KINDS 5 AND 6: THERE IS NO FOREST TO EXTRACT FROM
+
+On every program these kinds exist to reject — a field access or an index applied to a scalar —
+reconstruction refuses outright: the record range does not reduce to one node. The obstacle is not
+a missing datum, it is that the input never becomes a tree.
+
+**A consequence worth stating separately: the extraction PANICS on those inputs**, and it is a
+public function. Measured across eight ill-typed programs, four panic and four return rows.
+
+**Proportionality, and it is bounded twice over.** `self_hosted_compile` compiles with the
+reference FIRST and surfaces the reference's own error, so a program the reference rejects never
+reaches the pipeline; and it wraps the pipeline in `catch_unwind` besides. **The shipping compiler
+is not exposed.** Exposure is to direct callers of the extraction API, which today are tests.
+
+### BOTH GUARDS WERE MADE TO FAIL, AND ON THE RIGHT ASSERTION
+
+A guard that has not been made to fail is a guess.
+
+| mutation | result |
+|---|---|
+| shrink the accepted struct so the sizes no longer collide | kind-7 guard fails on the record-equality assertion |
+| swap one witness for an ill-typed program the pipeline CAN reconstruct | kinds-5/6 guard fails on the reconstruction assertion |
+
+Each failed on the assertion it was written to make rather than on an earlier one, which is the
+part that matters: a guard that fails for an unrelated reason under mutation has not been shown to
+check what it claims.
+
+### WHAT WOULD UNBLOCK KIND 7, RECORDED AND NOT STARTED
+
+A record naming the literal's struct. `parse.kel` **resolves the identity already** — the field
+records preceding a literal carry INDICES, and only a resolved declaration yields an index — and
+then drops it. That is a record-stream change, which is the operator's call on this fork, and it
+is not begun here.
+
+## 2026-09-08 (second half) — a policy that reached one document, and three counts that disagreed
+
+**The arc.** Repairing the width defect exposed a false belief about what can be tested. Correcting
+that belief exposed a stale rule in the file agents read first. Correcting THAT exposed the same rule
+in five more documents. Each correction was found by following the previous one, not by planning.
+
+### The gate change that propagated to its own document and no further
+
+`GIT_STRATEGY.md` changed on 2026-08-11: continuous integration gates feature branches, the local
+gate does not. **It appears to have been the only document that changed.** `CLAUDE.md`,
+`AUTONOMOUS_IMPLEMENTATION_LOOP.md`, `PARALLEL_DEVELOPMENT.md`, `HANDOFF.md` and `CONTRIBUTING.md`
+all still directed by the superseded rule.
+
+**I followed it.** I ran a 2h30m local gate before a merge CI had already passed 22 of 22, starved my
+own parallel work badly enough to kill a measurement mid-run, and told the operator the retired rule
+was policy. The strategy document names this exact failure: *"the expensive failure is the local
+one"*.
+
+**The sweep's own failure is the transferable part.** My first pattern set missed `CONTRIBUTING.md`,
+whose wording ("mandatory pre-merge gate") no initial pattern matched. It surfaced only on a widened
+re-sweep AFTER editing. **Re-running the search afterwards is what turns a search into a check.**
+
+Two documents were deliberately left: the journal, because append-only means append-only, and
+`RELEASE_PROCESS.md`, whose statement is correct for a release.
+
+### Three counts for one census, and a convention that was backwards
+
+The `InvalidBytecode` census had 34 of 46 in its prose, 17 in `HANDOFF.md`, and a per-group table
+summing to 33. The table was stale by one row: group F read "1 of 7 probed" while the prose said
+"two of F's seven" and was right.
+
+**Fixing it required defining "examined", which had never been stated** — and the first definition
+was BACKWARDS. It said a class argument extends to every member, which would make all seven of F
+examined, contradicting the table it had just been used to reconcile. **It agreed with the total
+anyway**, because the table was correct and the prose was the half that had drifted, so a wrong rule
+produced a right number.
+
+**A convention invented to settle a count must be checked against something other than that count.**
+It was caught by re-reading it against the document's own remainder statement.
+
+### The same shape twice more
+
+A coverage figure of 41 was confirmed by a guard that independently derived 41 — two errors
+cancelling, the truth being 40. The guard over-counted a test whose name says it runs on a WIDE
+runtime, because a COMMENT inside it mentions a narrow helper; the document had counted a control
+test as coverage.
+
+**Agreement is the most dangerous evidence**, and this session produced it twice in different media.
+A number that matches expectation is the one least likely to be re-examined.
+
+### Group A, closed by a witness already in the logs
+
+The census's last wholly unexamined group is the conversion every `?` over the flat scalar codec
+passes through. No probe was needed: it had fired twice in the pre-repair `narrow-word-16` run, from
+ordinary programs, caused by the width defect repaired earlier the same session. The repair closes
+that route and **not the class** — the distinction this tree carries a retraction for.
+
+### The discard-arm census closed at nineteen, by a different kind of answer
+
+Arms 7 and 8 are dead rather than unreached: the slots their fallback guards are declared `Word`, and
+a `Word` slot yields an `Int`. Every earlier arm was closed by driving it; these by showing no input
+reaches them. **The proof was the change itself** — replace a dead arm with a panic, run the corpus
+green — but only because a probe first confirmed the code runs 507 times. That probe initially
+reported ZERO, an artefact of `cargo test` capturing output from passing tests, which would have made
+the green run silence rather than evidence.
+
+## 2026-09-08 — a wrong answer in the flat-composite core, and a capability that was there all along
+
+**The arc.** Session 63 left a measurement unfinished: eighteen of thirty-seven `narrow-word-16`
+failures in an unexamined remainder, and the other nineteen grouped **by test name**. Finishing it
+properly found a defect. Repairing the defect exposed a false belief about what can be tested, and
+correcting that belief turned out to be worth more than the repair.
+
+**Why the census remainder was NOT chosen instead.** My own document rates it low value: groups F and
+J are host-contract surfaces, the class of the native array-length finding rather than a hole in the
+guarantee. Finishing an enumeration because it is three-quarters done is completeness, not value.
+
+### The defect: one field, two authorities
+
+`ScalarKind::Opaque` is sized by the ADDRESS width. The compiler bakes field offsets from that
+layout, the typed verifier sizes operands from it, the marshalling layer reports field sizes from it.
+**The runtime disagreed in four places, each assuming a WORD**: the construction path rewrote the
+registry index to a one-word `Int`, the arena packer advanced by that width, the flat scalar read
+read it back as a word, and the host decode asked for a word's worth of bytes from an
+already-sized field.
+
+The default target makes the two widths equal, so all four agreed by coincidence. Where they differ,
+every field after an opaque sat at an offset the baked access disagreed with. **The worst symptom was
+not a fault**: two structures differing in a `Word` field compared equal.
+
+**The repair deliberately answers no design question.** Whether the field is a registry index (a
+word) or a host handle (an address) is genuinely open. Three of four subsystems already treat the
+layout as the authority, so the runtime now asks it. The open question stays open, and the runtime
+follows whatever it is eventually answered.
+
+### The belief that was wrong
+
+I then wrote, in a merged document, that the construction path **could not** be guarded without a
+continuous-integration job in a configuration nothing builds.
+
+`GenericVm<W, A, F>` is generic over word and address independently; every `Word` and every `Address`
+implementation is unconditional. **A host-defined alias reaches any width pair in the default build.**
+`Target::embedded_8` has shipped a skewed pair — eight-bit word, sixteen-bit address — all along.
+
+So a width-dependent defect costs nothing standing to guard. The sweep document's "the configuration
+a defect lives in is the configuration nothing builds" **binds the feature axis and not the width
+axis**, and that distinction is now written into it.
+
+### What the instruments did this time
+
+**One measurement was invalid and caught only because its result was implausible.** A width-matrix
+run reported seven failures at `narrow-address-16` including two tests that had just passed. It had
+compiled against a source file being mutated for an unrelated experiment at that moment. Re-run
+serially on a quiescent tree: one failure, as expected. **A measurement taken while its subject is
+being edited measures neither state.**
+
+**A prediction was falsified and is recorded as such.** I predicted the failures would track the
+word/address divergence and vanish at a coherent 2/2 width. Five did. Three did not, and they turned
+out to be a different class — test harnesses reading the body in hard-coded eight-byte units.
+
+**A demonstration failed.** Extending the guard to four composite shapes, I shortened a nested
+child's stride to prove the corpus caught something nothing else did. Seventeen tests caught it. The
+corpus's value is a hypothesis about defects not yet found, and the file says so.
+
+**A fail-fast run nearly produced the opposite conclusion.** The first attempt at that measurement
+stopped after the first failing binary and showed only the corpus failing. The tree already records
+this trap for the build phase; it applies to the test phase too.
+
+### The counts, and how they were established
+
+41 to 33 distinct failures at `narrow-word-16`, across 106 binaries. **Established by diffing the
+failing sets**, not by comparing totals: a total falling by eight is equally consistent with fixing
+nine and breaking one. Nothing newly failed. The remaining 33 are seven premise groups, 14 + 6 + 8 +
+2 + 1 + 1 + 1.
+
+**The narrow widths are still not verified.** Three tests passing at a width is three tests.
+
 ## 2026-09-05 — sweeping the axes nothing builds, and three instruments that lied
 
 **The arc.** One idea pursued to its ends: *the configuration a defect lives in tends to be the

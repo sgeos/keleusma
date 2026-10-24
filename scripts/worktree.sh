@@ -37,7 +37,8 @@ cmd_new() {
     *) die "branch must start with a supported scope (feat/ fix/ docs/ refactor/ test/ chore/); got '$branch'" ;;
   esac
   git show-ref --verify --quiet "refs/heads/$branch" && die "branch '$branch' already exists"
-  local dir="$TREES_DIR/$(leaf "$branch")"
+  local dir
+  dir="$TREES_DIR/$(leaf "$branch")"
   [ -e "$dir" ] && die "path '$dir' already exists"
 
   # Base the new branch on the freshest trunk tip we can see.
@@ -58,7 +59,8 @@ cmd_list() {
 cmd_rm() {
   local branch="${1:-}"
   [ -n "$branch" ] || die "usage: worktree.sh rm <scope>/<short-description>"
-  local dir="$TREES_DIR/$(leaf "$branch")"
+  local dir
+  dir="$TREES_DIR/$(leaf "$branch")"
   if [ -d "$dir" ]; then
     git worktree remove "$dir" || die "tree '$dir' is dirty; commit/stash or use: git worktree remove --force '$dir'"
   else

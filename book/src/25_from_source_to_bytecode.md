@@ -21,6 +21,7 @@ time, and the result saved.
 
 Write a small program and save it as `tune.kel`:
 
+<!-- verify: accept -->
 ```
 fn main() -> Word { 60 + 7 }
 ```
@@ -31,11 +32,10 @@ Compile it:
 keleusma compile tune.kel -o tune.kel.bin
 ```
 
-The tool prints:
-
-```
-wrote tune.kel.bin (2400 bytes)
-```
+The tool prints a line naming the file it wrote and that file's size in
+bytes. The size is not quoted here: it moves with the bytecode format and
+with the compiler's output, so a number written into this guide would go
+stale without anything noticing.
 
 `tune.kel.bin` is the compiled bytecode. Run it directly:
 

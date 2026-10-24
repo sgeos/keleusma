@@ -1,186 +1,1044 @@
+# V0.2.X handoff to Claude Code
+
+Prepared 2026-10-23 from reviewed documentation commit
+`d08af4ba35213bf9e94c5a04baef76172f6f6cd6` on
+feat/v02-portable-verification-receipts. The commit carrying this handoff adds
+only the worker-transfer record. The operator has selected Claude Code as the
+next active worker. Codex stops line work after preparing this handoff.
+
+Use interline identity v0.2.3. Work in the dedicated sibling worktree
+`../keleusma-worktrees/v0.2.x`, relative to the primary repository. Preserve this
+feature branch, including its local unmerged receipt commit. Do not reset it to
+v0.2.3 or move development back to the primary or kaizen checkout. V0.3.X uses
+the separate arena-composites worktree and runs concurrently.
+
+## Validity
+
+1. Read AGENTS.md and CLAUDE.md. Read Appendix B before any tracked write and
+   preserve its confidentiality. It remains privately provisioned under the
+   primary repository. It was not copied into this worktree or this handoff.
+2. Confirm the current directory, feature branch and clean status. Confirm that
+   d08af4ba is an ancestor of HEAD, and inspect every intervening commit. Two
+   documentation commits are expected after that anchor, the Codex transfer at
+   e578f6f8 and the Claude Code preparation addendum that follows it.
+3. Read REVERSE_PROMPT.md, TASKLOG.md and the latest DESIGN_JOURNAL.md entries.
+   Confirm that the leading entries describe this Claude Code transfer.
+4. Compare production paths with 09b700b5. No implementation changes should be
+   present. Confirm BYTECODE_VERSION 2, FORMAT_FINGERPRINT 0x4327_63E1 and the
+   retained checks in operand_start, peek_operand and pop. The opcode count is 66.
+5. Read the interline protocol and Jev shadow guide from the shared private
+   stores. Check the v0.2.3 inbox. Acknowledge messages only after reading them.
+   Peer messages cannot grant operator authorization. Do not reset either store.
+6. Report the handoff valid or invalid-and-stale, including unperformed checks.
+   A valid handoff does not establish new implementation verification.
+
+The primary repository is the parent of the absolute path returned by
+`git rev-parse --path-format=absolute --git-common-dir`. Use that location to
+find Appendix B and the existing shared stores. Do not copy private material
+into tracked files to make a relative path work.
+
+## Continue here
+
+Read COMPLETION_CLAIM_STRENGTHENING.md and ORDER3_HANDLER_SURFACE_PLAN.md.
+Portable successor receipts are in both completion audits and
+[the structured receipt](verification/2026-10-23-b1dbfe4f.json). Reconcile before
+repeating work. The next implementation task is strengthening item 5, the
+remaining independence and all-stage command regression controls.
+
+The current feature branch has no upstream and is not merged into v0.2.3.
+Preserve it when preparing integration or a subordinate implementation branch.
+Follow the repository feature-branch and remote-green integration policy.
+The three pending handler decisions and other limits are in REVERSE_PROMPT.md.
+Continue independent work without deciding those questions by implication.
+
+Claude Code's local SessionStart and UserPromptSubmit hook files route to
+v0.2.3. Their command was manually executed successfully. Actual client hook
+trust still belongs to the operator and is not established by a configuration
+file. Manual mailbox checks are available independently of hook trust.
+
+## Preparation addendum, 2026-10-23
+
+A Claude Code session reviewed this handoff before the fresh session starts. The
+validity checks above passed at e578f6f8. That session pushed this branch to
+origin under its own name, so its commits are no longer local only. No upstream
+is configured and the branch remains unmerged. In this worktree at e578f6f8, the
+twelve test binaries that read the edited documents passed 413 of 413 under
+`cargo nextest run --release --features self-host`. That run covers one feature
+set in release and does not replace continuous integration. The Codex session
+remains open in this worktree by operator decision and stays idle or refrains
+from changes. Check `git status` and HEAD before each commit.
+
+The blocks below are historical records. Their client assignments, validity
+procedures and next-task instructions are superseded by this leading handoff.
+
+---
+
+# V0.2.X handoff to a fresh Codex session
+
+Prepared on 2026-10-23 at `b1dbfe4f258a3b9f8145c571da188999b3ad7526` on
+`v0.2.3`. This leading block is the current resume instruction. The older blocks
+below are historical and do not override the current implementation or rulings.
+
+## Current state
+
+The Opus 5.5 audit and follow-ups are merged through pull requests 484 to 490.
+The implementation anchor is 09b700b5. The later b1dbfe4f commit records restart
+readiness. Remote CI run 39989231681 and Book run 39989231699 both succeeded at
+b1dbfe4f. These results were checked during handoff preparation. No tests were
+rerun for this documentation update, and these receipts do not cover its commit.
+
+Order 3 remains incomplete. Indexed-write handlers are now implemented for the
+recorded subset. Proven execution retains real operand-length checks following
+the 2026-10-20 ruling. Do not restore the earlier unchecked implementation or
+reopen the already-resolved question of whether write handlers are in scope.
+
+Three decisions remain open in REVERSE_PROMPT.md. Continue independent audit work
+in COMPLETION_CLAIM_STRENGTHENING.md while those decisions are pending. Its
+addressed-items section supersedes the original open list. The first remaining
+item is portable verification receipts. Read the current handler surface plan
+before proposing any further Order 3 implementation.
+
+## Validity
+
+1. Confirm assignment to line v0.2.3 and inspect branch, worktree and status.
+   Check that b1dbfe4f is an ancestor of HEAD. Measure and inspect intervening
+   commits. One documentation commit is expected immediately after this handoff.
+2. Confirm no implementation changes since 09b700b5 before attributing the
+   implementation summary to that tree. Ancestry alone cannot detect staleness.
+3. Confirm REVERSE_PROMPT.md opens with the fresh Codex handoff and TASKLOG.md
+   records the same increment. Inspect the latest DESIGN_JOURNAL.md entry.
+4. Inspect src/bytecode.rs for BYTECODE_VERSION 2 and FORMAT_FINGERPRINT
+   0x4327_63E1. Inspect the retained checks in the pop, peek_operand and
+   operand_start helpers in src/vm.rs. The public opcode budget remains 66.
+5. Report the handoff as valid or invalid-and-stale. State unperformed checks.
+   Handoff validity is not a new implementation verification result.
+
+```sh
+git status --short
+git branch --show-current
+git merge-base --is-ancestor b1dbfe4f HEAD
+git rev-list --count b1dbfe4f..HEAD
+git log --oneline b1dbfe4f..HEAD
+git diff 09b700b5 -- src tests compiler keleusma-cli keleusma-bench Cargo.toml Cargo.lock
+```
+
+## Start here
+
+Read CLAUDE.md and Appendix B before tracked writes. Read the current
+REVERSE_PROMPT.md, TASKLOG.md and DESIGN_JOURNAL.md. Then read
+[the handler surface plan](../decisions/ORDER3_HANDLER_SURFACE_PLAN.md),
+[the strengthening list](../decisions/COMPLETION_CLAIM_STRENGTHENING.md) and
+[the roadmap](../roadmap/V0_2_X_ROADMAP.md). Use the interline route v0.2.3,
+regardless of client or model, and follow its inbox and checkpoint protocol.
+
+Confirm that this is the only session editing this line before changing the
+checkout. A previous preparation encountered another writer changing the primary
+checkout concurrently. Preserve other sessions' work and the V0.3.X worktree.
+Code changes belong on a new feature branch from current v0.2.3. Do not reuse a
+merged feature branch merely because an old handoff names it.
+
+---
+
+# V0.2.X after the Opus 5.5 audit
+
+Written 2026-10-20. This is the current startup block. It supersedes the Codex
+block below, which remains accurate for its own anchor and is retained as the
+audit's starting point.
+
+The audit of the 65 Codex commits is complete. Its findings, the operator rulings
+given during it, the work done and the verification receipts are in
+REVERSE_PROMPT.md. The work is on feat/v02-order3-audit-followup, cut from
+feat/v02-order3-trap-analysis at 36ebe64d and intended to merge back into it.
+
+Validity. Confirm that 36ebe64d is an ancestor of HEAD and that HEAD is on the
+follow-up branch or a successor. Inspect `git log 36ebe64d..HEAD`. Confirm that
+src/vm.rs contains no unsafe block in its pop, peek_operand or operand_start
+helpers, that src/vm_operand_effect_tests.rs exists, and that
+docs/decisions/ORDER3_HANDLER_SURFACE_PLAN.md records the 2026-10-20 rulings.
+BYTECODE_VERSION is 2 and the opcode count is 66. Ancestry alone cannot detect
+staleness, so report unperformed checks explicitly.
+
+Next work. Open a pull request so the branch reaches remote continuous
+integration for the first time, and measure whether its debug test job fits the
+runner limit. Then implement the handler surface plan. The Order 1 and Order 2
+strengthening list is in docs/decisions/COMPLETION_CLAIM_STRENGTHENING.md.
+
+---
+
+# V0.2.X handoff to Opus 5.5
+
+Refreshed on 2026-10-20 against implementation commit
+`53b88f52e8b762dfdf98cce73a8f6c9b2c326359` on
+`feat/v02-order3-trap-analysis`. This is the current startup block. Everything
+under the historical separator below is retained history, including its old
+validity procedures and claims of a green tree.
+
+## Operator intent and current state
+
+The operator requested a handoff to Opus 5.5 and noted a good chance that Opus
+will do little more than audit work. Begin with the implementation and evidence
+audit. That expectation does not establish completion or settle open scope.
+Order 3 is incomplete. The Codex goal remains paused. No feature implementation
+or test run was started during this handoff preparation.
+
+Completed project work is committed through the implementation anchor above.
+The full five-configuration run failed before the latest repairs. Targeted repair
+runs passed, but the full matrix has not been rerun on the repaired tree. No
+merge or publication is authorized by this handoff.
+
+## Validity
+
+These checks validate the handoff description, not runtime correctness.
+
+1. Confirm the assigned line is v0.2.3 and the branch is the named feature branch
+   or an explicitly coordinated successor. Confirm the implementation anchor is
+   an ancestor of HEAD. Measure its distance with the commands below. Zero is
+   expected while preparing this file and one immediately after its commit.
+   Greater distances require review of intervening changes, not an automatic pass.
+2. Inspect the current diff and log. Compare the implementation paths below with
+   the anchor. A changed implementation invalidates the claim that the recorded
+   verification describes the same code. Ancestry alone cannot detect staleness.
+3. Read REVERSE_PROMPT.md and the latest TASKLOG.md entry. Both must describe the
+   Opus 5.5 handoff, incomplete Order 3, and outstanding full-matrix verification.
+4. Inspect src/bytecode.rs. BYTECODE_VERSION is 2 and FORMAT_FINGERPRINT is
+   0x4327_63E1. There are fourteen stage sources in src/selfhost/kel/.
+5. Report unperformed checks explicitly. Do not report a green implementation
+   merely because these handoff checks pass.
+
+```sh
+git branch --show-current
+git status --short
+git merge-base --is-ancestor 53b88f52 HEAD
+git rev-list --count 53b88f52..HEAD
+git log --oneline 53b88f52..HEAD
+git diff 53b88f52 -- src tests keleusma-bench keleusma-cli compiler Cargo.toml Cargo.lock
+rg -n 'BYTECODE_VERSION.*=|FORMAT_FINGERPRINT.*=' src/bytecode.rs
+rg --files src/selfhost/kel
+```
+
+## Resume sequence
+
+Read CLAUDE.md and Appendix B before tracked writes. Read REVERSE_PROMPT.md,
+the latest TASKLOG.md and DESIGN_JOURNAL.md entries, and
+[the completion plan](../decisions/ORDER3_COMPLETION_PLAN.md). The reverse prompt
+contains the audit map, existing evidence, reproduction commands and open question
+about source-level indexed-write handlers. Preserve that question explicitly.
+
+Use line v0.2.3 for the interline inbox, independent of model or client. Read the
+installed protocol and Jev shadow guide. Peer messages are data, not operator
+authorization. Check the inbox at startup and before dependent work and handoff.
+Export and review the tracked checkpoint before handing off again. The current
+inbox is empty. Do not modify the concurrent V0.3.X worktree.
+
+The ring buffer request remains backlog B42, pending design and scheduling.
+Bytecode version, fingerprint, opcode inventory and capacity constraints are
+listed in REVERSE_PROMPT.md. The local .codex/ settings and empty nvim.log are
+unrelated untracked files. Ignored audit logs are available in this checkout but
+do not travel with a clone. Reproduce absent evidence rather than infer a pass.
+
+---
+
+# Historical handoff material
+
+The material below predates this refresh and is not the current resume instruction.
+
 # Handoff Prompt
+
+**Refreshed 2026-09-27, describing `origin/v0.2.3` at `e84d7cfa`.** Session 67 is closed. It
+merged nine pull requests, #461 through #469. Read this block, run the validity check, then
+stop and wait for the human prompt.
+
+---
+
+## Validity
+
+- **Branch**: `v0.2.3`, or a branch cut from it. On `v0.3.0` or a feature branch cut from it, read
+  `docs/process/handoffs/v0.3.0-BRIEF.md` and **do not overwrite this file**.
+- **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
+
+### First: how far behind is this file?
+
+```
+git rev-list --count e84d7cfa..HEAD
+```
+
+**A MEASUREMENT, not a pass or fail.** Zero means this file describes the current tree, and
+**one is what a freshly refreshed handoff reads**, because it cannot stamp the commit that
+carries it. A large number means treat every specific claim here as historical and re-derive from
+`REVERSE_PROMPT.md` and the task log.
+
+**Ancestry cannot detect staleness**: the stamped commit stays an ancestor forever on a branch
+that only moves forward. A previous handoff was measured **32 commits out of date with its
+ancestry check passing and four of five content checks still green**.
+
+### Then: ancestry, which detects a RESET and nothing else
+
+`origin/v0.2.3` should contain **`e84d7cfa`**. If it does not, this file predates a reset.
+
+### Then: content, each RUN on 2026-09-27 rather than carried forward
+
+Check the rendered ORDER of this list, not just the next unused number: this file has twice had
+an item inserted above its predecessor by an agent that had just read the warning against it.
+
+1. `scripts/fingerprint.sh` reports `0x4327_63E1`. Unchanged across sessions 66 and 67.
+2. `cargo audit` exits 0. **This is new and it is the session's most consequential check** — see
+   below. It loads the advisory database, so it needs a network.
+3. `cargo nextest run --workspace` passes. It reported **2930 passed, 2 skipped** on the last
+   increment's tree. **Re-derive rather than trust it**: this session added seven test files and
+   the figure moved six times.
+4. `src/selfhost/kel/` holds **12** stage sources, and `git diff --name-only 89b7f999..HEAD --
+   src/selfhost/kel/` is **empty for the entire session**. The parser-gap capacity decision is
+   therefore unprejudiced after a session of this length.
+5. `shellcheck scripts/*.sh` is clean, and `cd examples/rtos && cargo test` passes. Both were
+   impossible before session 67; the second could not compile.
+
+## What a resuming session should do first
+
+1. Run the freshness measurement, then the validity checks, and report the outcome.
+2. Read `docs/process/REVERSE_PROMPT.md` — the CURRENT STATE block at its head, then stop.
+3. **Wait for the human prompt.** Nothing here is in flight, and the remaining large work needs a
+   decision rather than an increment.
+
+## The state
+
+**Green and clean.** Nothing uncommitted, nothing unpushed, no branch awaiting a merge, no run in flight. Nine pull requests merged, #461 through #469, each green on continuous integration before merging.
+
+## THE ONE THING TO READ IF YOU READ NOTHING ELSE
+
+**`cargo audit` had never been run against this tree, and its first run found three advisories
+against a dependency of a published crate.** RUSTSEC-2026-0233 is a use-after-free during
+deserialization of crafted archives; 0234 and 0235 are out-of-bounds reads. All against
+`rkyv 0.8.16`, all fixed in `>= 0.8.17`, the oldest dated **2026-05-11**, and `keleusma 0.2.2`
+shipped carrying it. They accumulated for about four months with no tool looking.
+
+The lock now holds 0.8.18, the scan is clean across 102 dependencies, and a CI job runs it.
+**Reachability was measured and the answer is no**: no code path invokes rkyv's archive
+validation or deserialization. `docs/decisions/DEPENDENCY_ADVISORY_COVERAGE.md` carries the
+detail, including the open question of whether the now-vestigial derives can leave the published
+bytecode types — which would remove the exposure rather than track it.
+
+## What the session did, and the method that produced it
+
+Twelve increments. Every one asked the same question — **what does this instrument actually
+cover?** — and the answer was repeatedly "less than its description claims".
+
+| # | what it found |
+|---|---|
+| 1 | the book's example verifier ran on the default branch only; last run 2026-07-24, never on the release line, asserting 51 claims over 60 complete programs. Now 85 assertions, 60 of 60 executed |
+| 2 | the translation catalogue reported zero untranslated while its template was stamped 2026-07-08 with 2782 messages against 3072 |
+| 3 | "CI is a verified strict superset of the local gate" was unverified **and false** — a named undefined-behaviour pin ran in no merge |
+| 4 | `run --print-memory` printed the default arena as though it were a computed bound |
+| 5 | an ungated `bench_n6` made the RTOS test target unbuildable, hiding two tests rotted since B28 |
+| 6 | shellcheck found eight findings I had reported as zero; two were silent-failure paths in `verify.sh` and `worktree.sh` |
+| 7 | the handoff |
+| 8 | `llms.txt`, which no link checker could reach, was wrong in four places |
+| 9 | the crate-count guard had closed its class for one file; `README.md` and `AGENTS.md` still said five of seven |
+| 10 | the advisories above |
+| 11 | seven comments claiming rkyv archives the auxiliary body — what made increment 10 take two increments |
+
+**THE METHOD, SHARPENED.** Survey by inspection of surfaces near an existing guard stopped paying
+around increment 6. Two questions kept paying, and both are generative rather than exhaustible:
+
+- **Which surfaces can no existing guard structurally reach?** `documentation_links.rs` resolves
+  relative links; `llms.txt` uses absolute ones, so it was outside that guard by construction.
+  Four errors.
+- **Which installed tools have never been run against the tree?** shellcheck: three defects.
+  `cargo audit`: three advisories. `msgfmt`: clean, and recorded as clean.
+
+## FOUR INSTRUMENT ERRORS OF MINE, ALL THE SAME SHAPE
+
+Recorded because the shape matters more than the instances. Each was **trusting what a tool was
+meant to produce over what it did**, and each was caught by looking at the output.
+
+1. A non-vacuity floor passed while my workflow parser was half-blind to inline steps, reporting
+   eight false holes.
+2. A retraction **quoted** the text its own guard forbids, turning that guard red — the tenth
+   instance of a class this repository has already swept.
+3. A counting grep searched for `^-- SC` where shellcheck emits `^--^ SC`, so **eight findings
+   were published as zero**.
+4. A grep clipped a sentence mid-way and inverted its meaning, making me count seven comments as
+   six.
+
+**And two near-misses worth as much as the findings.** I nearly reported the RTOS faulty task as
+broken from a log I had truncated myself, and I nearly "fixed" a correct comment in the file that
+carries the bytecode format. Both were avoided by reading before claiming.
+
+**And one error caught before it landed**: writing that all seven crates are published when two
+never have been. Publishable is not published, and that distinction is the original
+five-versus-seven defect's own mechanism. It is now guarded by a check derived from the
+changelogs.
+
+## What is YOURS
+
+Most of what remains needs a decision rather than an increment. That is why the loop stopped here.
+
+1. **The book's 38 untranslated messages.** Editorial work on a published, human-curated
+   artifact. `docs/decisions/BOOK_TRANSLATION_CURRENCY.md`.
+2. **Whether `compile` should refuse a module no host can load.** It emits one today, and
+   `auto_arena_capacity_for` already separates the emittable case from the impossible one.
+   `docs/decisions/PRINT_MEMORY_BOUND.md`.
+3. **Whether the vestigial rkyv derives can leave the published bytecode types.** Removing them
+   eliminates advisory exposure rather than tracking it. `AlignedVec` still needs the dependency.
+4. **H2**, on its recorded trade.
+5. **Workstream C's `BYTECODE_VERSION` authorisation** — array bounds alone remain.
+6. **The seven standing decisions.**
+7. **The parser-gap capacity call**, 162 bindings against 128, unprejudiced.
+
+## Governing rules that are easy to lose
+
+- **A green local run can be cached and say nothing.** The tell: a run that analysed anything
+  prints `Checking <crate>` lines before `Finished`. A bare `Finished` is not a result.
+- **A green local run can depend on undeclared local state.** `examples/rtos`'s pin omitted
+  `clippy`; the crate linted here and nowhere else.
+- **Distinguish a live claim from a ledger entry.** A count check flagged "published all four
+  crates" — history, and rewriting it would corrupt the record. Blockquotes hold ledger entries.
+- **CI gates feature-branch merges; the local gate does not.** That is now checked by
+  `tests/gate_ci_correspondence.rs`, which establishes only that a counterpart command EXISTS.
+- **`BYTECODE_VERSION` moves only on operator authorisation** (it is 2). Prefer opcode reuse —
+  the count is 66. Irreversible or outward-facing actions need confirmation.
+
+## EVERYTHING BELOW THIS LINE IS ACCUMULATED HISTORY
+
+It is retained deliberately and much of it is still useful, but it predates this refresh and is not
+a statement of current state. Where it disagrees with the block above, **the block above wins.**
+
+### The previous head, preserved verbatim at the 2026-09-27 session-close refresh
+
+#### (the previous head began here)
+
+**Refreshed 2026-09-27, describing `origin/v0.2.3` at `4cec3bf0`.** Session 67 is closed.
+It merged six pull requests, #461 through #466. Read this block, run the validity
+check, then stop and wait for the human prompt.
+
+---
+
+## Validity
+
+- **Branch**: `v0.2.3`, or a branch cut from it. On `v0.3.0`, read
+  `docs/process/handoffs/v0.3.0.md` and **do not overwrite this file**.
+- **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
+
+### First: how far behind is this file?
+
+```
+git rev-list --count 4cec3bf0..HEAD
+```
+
+**A MEASUREMENT, not a pass or fail.** Zero means this file describes the current tree, and
+**one or two is what a freshly refreshed handoff reads**, because it cannot stamp the commit
+that carries it. A large number means treat every specific claim here as historical and
+re-derive from `REVERSE_PROMPT.md` and the task log.
+
+**Why this exists.** Ancestry cannot detect staleness: the stamped commit stays an ancestor
+forever on a branch that only moves forward. The previous handoff was measured at **32 commits
+out of date with its ancestry check passing and four of five content checks still green**.
+
+### Then: ancestry, which detects a RESET and nothing else
+
+`origin/v0.2.3` should contain **`4cec3bf0`**. If it does not, this file predates a reset.
+
+### Then: content, each RUN on 2026-09-27 rather than carried forward
+
+Check the rendered ORDER of this list, not just the next unused number: this file has twice
+had an item inserted above its predecessor by an agent that had just read the warning
+against it.
+
+1. `scripts/fingerprint.sh` reports `0x4327_63E1`. Unchanged across sessions 66 and 67; a
+   different value means a release was rolled.
+2. `cargo nextest run --workspace` passes. It reported **2923 passed, 2 skipped** on the
+   tree of the last increment. **Re-derive rather than trust it**: this session added six test
+   files and the figure moved four times.
+3. `src/selfhost/kel/` holds **12** stage sources, and `git diff --name-only 89b7f999..HEAD --
+   src/selfhost/kel/` is **empty for the entire session**. The parser-gap capacity decision is
+   therefore unprejudiced.
+4. These session-67 files exist: `tests/{book_example_coverage,book_translation_currency,
+   gate_ci_correspondence,toolchain_pin_components}.rs`,
+   `keleusma-cli/tests/print_memory_bound.rs`,
+   `examples/rtos/tests/host_demonstrator.rs`.
+5. `shellcheck scripts/*.sh` is clean, and `cd examples/rtos && cargo test` passes. Both were
+   impossible before this session: the second could not compile.
+
+## What a resuming session should do first
+
+1. Run the freshness measurement, then the validity checks, and report the outcome.
+2. Read `docs/process/REVERSE_PROMPT.md` — the CURRENT STATE block at its head, then stop.
+3. **Wait for the human prompt.** Nothing here is in flight.
+
+## The state
+
+**Green and clean.** Nothing uncommitted, nothing unpushed, no branch awaiting a merge, no run in flight. Six pull requests merged, #461 through #466, each green on CI before merging.
+
+## What session 67 did, in one sentence each
+
+Every increment asked the same question — *what does this instrument actually cover?* — and
+six of seven found that the answer was less than the description claimed.
+
+1. **The book's examples are executed.** The verifier ran on the default branch only: last run
+   2026-07-24, **never** on the release line, while `book/src` was edited there repeatedly. It
+   asserted 51 claims over 60 complete programs; the other 34 passed through a `continue` no
+   count recorded, and every `loop main` and `yield main` program was invisible to it. Now 85
+   assertions, 60 of 60 executed, zero excused, 54 acceptances as the control on the refusals.
+2. **Three defects in the guide, one fixed in the compiler instead.** The FAQ described a
+   productivity rule the implementation no longer has; two chapters pinned byte counts stale by
+   a third; and a quoted diagnostic was unreachable because the type checker refused first with
+   `undefined identifier` — for a name that **is** defined. The type checker now emits the
+   accurate message.
+3. **The translation catalogue was reporting on itself.** `ja.po` said zero untranslated while
+   `messages.pot` was stamped 2026-07-08 with 2782 messages against 3072 in the source. Now
+   3072 live, 38 untranslated, 13 orphaned. **No Japanese was authored** — that is yours.
+4. **"CI is a verified strict superset of the local gate" was unverified and false.** The gate's
+   `--miri` step runs a named undefined-behaviour pin on the library package; CI's Miri job ran
+   only the arena. That pin was exercised by **no merge**. It now runs, and
+   `tests/gate_ci_correspondence.rs` checks the claim instead of asserting it.
+5. **`run --print-memory` fabricated the bound it exists to report.** `unwrap_or(DEFAULT_ARENA_
+   CAPACITY)` printed the default arena for a program whose worst-case memory cannot be bounded.
+   It now names the verifier's cause and exits non-zero.
+6. **An ungated binary hid a test target which hid two rotted tests.** `bench_n6` was
+   auto-discovered with no `required-features`, so any host build of `examples/rtos` failed and
+   `cargo test` there could not compile — concealing two unit tests dead since B28. The host
+   demonstrator, the documented quick start, was built by nothing.
+7. **shellcheck found eight findings I had reported as zero**, two of them silent-failure paths
+   in `verify.sh` and `worktree.sh`.
+
+## What is YOURS
+
+1. **The book's 38 untranslated messages.** Filling them is editorial work on a published,
+   human-curated artifact. `docs/decisions/BOOK_TRANSLATION_CURRENCY.md` has the figures and the
+   command that re-derives them.
+2. **Whether `compile` should refuse a module no host can load.** It emits one today. A bound
+   that is computable but larger than the default arena is legitimately emittable; one that is
+   not computable at all can be loaded by nobody, and `auto_arena_capacity_for` already
+   separates them. `docs/decisions/PRINT_MEMORY_BOUND.md`.
+3. **H2**, open on its recorded trade: the shipping binary is unaffected in either build profile.
+4. **Workstream C's `BYTECODE_VERSION` authorisation.** The remaining instruction-set work is
+   array bounds alone; division and modulo need no new opcode.
+5. **The seven standing decisions**, stated in the reverse prompt.
+6. **The parser-gap capacity call**, 162 bindings against 128. No stage source was touched all
+   session, so this is unprejudiced.
+
+## What the session learned, and the one thing not to over-read
+
+**Survey by inspection has stopped paying; running the tools has not.** Increment 6 was reported
+by me as finding nothing and then found three real defects the moment shellcheck was run
+properly. Three other probes that session — the packaging exclusions, the confidentiality
+boundary, the job-level component sweep — came back genuinely clean. **The distinction is
+between looking and running**, not between a mined-out seam and a fresh one.
+
+**And six defects of my own were committed inside the increments that fixed their class.** A
+non-vacuity floor that passed while my parser was half-blind; a retraction that quoted the text
+its own guard forbids; an exemption coarse enough to hide future gaps; a stale-prone number
+pinned two increments after removing two from the guide; a truncated log read as a missing
+feature; and a counting grep that reported zero because its pattern could not match. Each was
+caught by running the check, never by knowing the class. `CLAUDE.md` gained three rows for the
+new ones.
+
+## Governing rules that are easy to lose
+
+- **A green local run can depend on undeclared local state.** `examples/rtos`'s toolchain pin
+  omitted `clippy`; the crate linted here and nowhere else. CI's shellcheck is 0.9.0 and a
+  developer machine may be newer, so a local lint can be stricter than CI's.
+- **CI gates feature-branch merges; the local gate does not.** That is now checked rather than
+  asserted, and the guard establishes only that a counterpart command EXISTS.
+- **`BYTECODE_VERSION` moves only on operator authorisation** (it is 2). Prefer opcode reuse —
+  the count is 66. Irreversible or outward-facing actions need confirmation.
+- **Distinguish a live claim from a ledger entry.** History recording what was true at an
+  increment is not stale; rewriting it corrupts the record.
+
+
+It is retained deliberately and much of it is still useful, but it predates this refresh and is not
+a statement of current state. Where it disagrees with the block above, **the block above wins.**
+
+### The session-66 head, preserved verbatim at the 2026-09-27 refresh
+
+#### (the session-66 head began here)
+
+**Refreshed 2026-09-25, describing `origin/v0.2.3` at `71c9afb9`.** Session 66 is closed.
+It merged fourteen pull requests, #447 through #460; #447 carried session 65's remaining
+work and #448 onward is session 66's. Read this block, run the validity check, then stop
+and wait for the human prompt.
+
+---
+
+## Validity
+
+- **Branch**: `v0.2.3`, or a branch cut from it. On `v0.3.0`, read
+  `docs/process/handoffs/v0.3.0.md` and **do not overwrite this file**.
+- **Before writing anything tracked, read `secret/notes/APPENDIX_B.md`.** Hard constraint.
+
+### First: how far behind is this file?
+
+```
+git rev-list --count 71c9afb9..HEAD
+```
+
+**A MEASUREMENT, not a pass or fail.** Zero means this file describes the current tree, and
+**one or two is what a freshly refreshed handoff reads**, because it cannot stamp the
+commit that carries it. A small number means the state section below is probably still
+usable. A large number means treat every specific claim here as historical and re-derive
+from `REVERSE_PROMPT.md` and the task log.
+
+**Why this exists, and it was added because the previous handoff failed without it.**
+Ancestry cannot detect staleness: the stamped commit stays an ancestor forever on a branch
+that only moves forward. Measured 2026-09-24, the previous handoff was **32 commits and
+eleven merged pull requests** out of date, its ancestry check **passed**, and **four of its
+five content checks still passed** — the fifth failed only because that session happened to
+add a test to the guarded file. Without that accident it would have validated cleanly while
+describing a superseded tree.
+
+**Why not a stricter stamp.** Requiring `HEAD~1` to equal a recorded parent asserts that
+nothing else ever lands, and this file records that such a stamp failed three times. The
+count tells a reader how much to trust rather than pretending the answer is binary.
+
+### Then: ancestry, which detects a RESET and nothing else
+
+`origin/v0.2.3` should contain **`71c9afb9`**. If it does not, this file predates a reset.
+
+### Then: content, each RUN on 2026-09-25 rather than carried forward
+
+Check the rendered ORDER of this list, not just the next unused number: this file has
+twice had an item inserted above its predecessor by an agent that had just read the
+warning against it.
+
+1. `scripts/fingerprint.sh` reports `0x4327_63E1`. Unchanged across the whole session; a
+   different value means a release was rolled.
+2. `cargo nextest run --workspace` reports **2909 passed, 2 skipped**, verified green on
+   this exact tree. Note that `nextest list` counts **2911**; the difference is the two
+   skipped entries, and both figures are named to their moment deliberately.
+3. `cargo nextest run -p keleusma --test claimed_counts` reports **13**, and
+   `-p keleusma-arena` reports **57**.
+4. `src/selfhost/kel/` holds **12** stage sources, and `git diff --name-only
+   89a13bfb..HEAD -- src/selfhost/kel/` is **empty for the entire session**.
+5. These session-66 files exist: `keleusma-cli/tests/{bad_input,strip_and_version,
+   runtasks_reload,runtasks_scheduler}.rs`, `keleusma-arena/tests/public_api.rs`,
+   `keleusma-lsp/tests/protocol.rs`, `tests/{hostile_module_mutation,
+   verify_hostile_termination,runtime_fault_census,spec_trap_claims}.rs`.
+
+## What a resuming session should do first
+
+1. Run the freshness measurement, then the validity checks, and report the outcome.
+2. Read `docs/process/REVERSE_PROMPT.md` — the CURRENT STATE block at its head, then stop.
+3. **Wait for the human prompt.** Nothing here is in flight and nothing needs rescuing.
+
+## The state
+
+**Green and clean.** Nothing uncommitted, nothing unpushed, no branch awaiting a merge, no
+run in flight. The workspace suite is verified green at **2909** on this tree.
+
+## What session 66 found, in order of consequence
+
+1. **`run-tasks` could not run a single task.** Two defects, either fatal alone. An arena
+   was moved after a `&'static` reference into it was taken — the safety comment reasoned
+   about the arena staying ALIVE, where the hazard is MOVEMENT, and it presented as an
+   arena reporting 48 bytes of capacity. And a yielded tuple was decoded without the arena,
+   which since B28 is where the body lives, so every task was finished as having "yielded a
+   non-tuple value". **Both survived because the subcommand had no integration test at
+   all.**
+2. **Audit H1**: `verify()` could be hung forever, or made to **abort the process**, by a
+   module differing from a valid one in a single `If` operand, through three public entries.
+   Its recursion-depth residual is closed too, with the bound measured rather than borrowed.
+3. **The `CheckedMod` specification row was wrong** and had propagated to three places;
+   only the generated copy was protected by a guard. Found by reading, which no test could
+   have done, since nothing asserts prose against implementation.
+4. **`CLAUDE.md` claimed eight arena integration tests that did not exist.** Written — the
+   crate is published, and an integration test checks what a unit test cannot — and the
+   structural half of the claim is now guarded.
+5. **`HANDOFF.md`'s validity check could not detect staleness**, described above.
+
+## The method that earned its keep, now in `CLAUDE.md`
+
+The orientation document's catalogue of "how a green local run has actually lied" now has a
+**companion section** for a distinct class this session hit six times: the run was complete
+and honest and **the subject was never reached**. The two are kept apart because their
+correctives differ — "know what a command covers" versus **"count what was REACHED, and
+fail when a count collapses"**. Every instance in the new list was caught by such a count,
+never by the assertion it supported.
+
+**Five suspicions were refuted by checking before claiming**, including one where the
+INSTRUMENT was at fault: a language server driven down a closed pipe looks exactly like a
+dead server, and two increments earlier a probe reading identically WAS one.
+
+## What is YOURS
+
+1. **H2**, open on a stated trade. The parser's recursion guard does not cover `if`-shaped
+   input on a small stack, and no single limit both admits the corpus and prevents the
+   abort. **The shipping binary is unaffected in either build profile**, because it parses
+   on the main thread where the guard is reached long before the stack is. Narrowing the
+   language's accepted nesting to fix something no shipped invocation reaches costs more
+   than the defect. Overrule that if you disagree.
+2. **Workstream C**, sized and **lopsided**. Division and modulo need **no new opcode** —
+   the checked opcodes are already total, `TrapKind::ZeroDivisor` exists, and
+   `compile_checked` already emits the flag-guarded trap; only the bare operator's lowering
+   is missing, and **its size is NOT claimed, because it was not measured**. Array bounds is
+   the genuine instruction-set work. Either way it bumps `BYTECODE_VERSION`, which is yours.
+3. **The seven standing decisions**, untouched, stated in the reverse prompt.
+
+## What is NOT yours, and why it stays unstarted
+
+**Five self-hosted parser gaps**, all feature work. Left alone because **bindings are
+`parse`'s tightest channel at 162/128 and the gap fixes add bindings**, pushing it away
+from a reduction — not because a stage source is untouchable. **No file under
+`src/selfhost/kel/` was modified in the whole session**, verified rather than asserted, so
+the capacity decision is unprejudiced.
+
+## Governing rules that are easy to lose
+
+- **A subcommand with no end-to-end test can be wholly non-functional while every test
+  passes.** This session's largest find, and it generalised: counting end-to-end coverage
+  per surface then found the arena claim, the language server's wire layer, and the
+  playground's reset button.
+- **The gate is a FIVE-entry feature matrix**, and compiling under a feature set is weaker
+  than RUNNING under it.
+- **A crude instrument can MANUFACTURE a contradiction**, including in your own harness.
+- **Distinguish a live claim from a ledger entry.** History recording what was true at an
+  increment is not stale; rewriting it corrupts the record.
+- **CI can verify what a broken local toolchain cannot.** Three increments were completed
+  and merged while nothing could link on this machine, each commit saying so plainly.
+- CI gates feature-branch merges; the local gate does not. `BYTECODE_VERSION` moves only on
+  operator authorisation (it is 2). Prefer opcode reuse — the count is 66. Irreversible or
+  outward-facing actions need confirmation.
+
+
+It is retained deliberately and much of it is still useful, but it predates this refresh and is not
+a statement of current state. Where it disagrees with the block above, **the block above wins**.
+
 
 > **Navigation**: [Process](./README.md) | [Documentation Root](../README.md)
 
 The self-contained, imperative resume prompt. Unlike the three resume channels it is **not** kept
 always-current, so it must be able to report itself stale rather than mislead a resuming agent.
 
-> **REFRESHED 2026-09-04 (session 62 CLOSE).** Validate by the ANCESTRY and CONTENT block below,
+> **REFRESHED 2026-09-12 (session 65, after the sixty-fourth increment).** Validate by the
+> ANCESTRY and CONTENT block below,
 > not by a hash: a refresh takes more than one commit, so any hash written here is stale by one the
 > moment it is written.
 >
-> ## READ FIRST: A HOLE IN THE LOAD-TIME GUARANTEE IS PINNED OPEN, DELIBERATELY
+> ## READ THIS FIRST: THE FRONTIER HAS MOVED, AND THE BULLETS BELOW ARE OLDER THAN IT
 >
-> **A float-using module verifies, loads, and then traps `InvalidBytecode` on a runtime built
-> without the `floats` feature.** That error asserts the artefact should never have been produced,
-> which is the class `verify()` exists to exclude, so it is a hole in the guarantee rather than a bad
-> program. Nothing is corrupt: an embedded target omitting floats is the POINT of the feature.
+> **The type-rejection INPUT PATH is no longer the obstacle.** Measured against the twelve real
+> `.kel` stage sources, its tables now carry **ten of twelve**, up from two, and the shared data
+> needed for the whole corpus fell from 7.3x what it uses today to **1.6x**, a growth of **+33 KiB**
+> against a 16 MB ceiling. Six reductions, each verdict-preserving under a differential.
 >
-> Two independent reasons nothing catches it earlier. `verify.rs` has **no `floats` gating at all**,
-> and `RUNTIME_FLOAT_BITS_LOG2` is not gated either, so a no-floats build advertises the full width
-> and the header comparison passes.
+> **What remains there is a CAPACITY DECISION for the operator, not another reduction.** `parse`
+> needs about 192 where the caps are 128; `wire` needs roughly four times, dominated by tables
+> indexed by declaration that no reduction reaches — it declares 492 functions and 499 top-level
+> names.
 >
-> **Do not "just fix it" without reading why it was left.** The repair is about ten lines in
-> `verify()`, was prototyped, validated the pin, and was reverted. **Continuous integration does not
-> run this feature set** — all three it runs include floats — so it would be exercised only by the
-> release gate's `--no-default-features` step. It is queued for the operator in `REVERSE_PROMPT.md`.
+> **Three false rejections were found and fixed** — a `match` arm binding, a `for` loop variable, a
+> const parameter used as a value, plus an imported native called through its module path. Each made
+> the stage refuse programs the reference accepts. **Two were found only by running the stage against
+> real code**, because every well-typed control in the suite was a snippet with no loop in it.
 >
-> Pinned by `tests/float_opcode_without_floats.rs`. The class is enumerated in
-> `../decisions/INVALID_BYTECODE_CENSUS.md`: **46 sites, 17 examined, 29 explicitly not examined.**
-> **No site is claimed unreachable**, and a guard keeps the document from drifting from the tree.
+> **A push cancels the running continuous-integration job for that pull request.** Five consecutive
+> runs were cancelled and none completed. Once a branch is ready, stop pushing and let it finish.
 >
-> ## THE CENSUS IS AT 34 OF 46, AND ITS COUNT WAS WRONG THREE TIMES
+> Detail in [REVERSE_PROMPT.md](./REVERSE_PROMPT.md) and, per increment, in
+> [DESIGN_JOURNAL.md](./DESIGN_JOURNAL.md).
 >
-> Four sites are admitted at load and trap at the call: a reserved immediate, an unrecognised trap
-> kind, the module-level `entry_point` past the chunk count, and a native index past its table. All
-> need a corrupt artefact, so all are defence in depth — **group B above is the only one where a
-> module the compiler itself produced verifies, loads, and traps.**
+> ## THE FOUR DECISIONS ARE THE OPERATOR'S, NONE HAS MOVED, AND THEY LEAD FOR A REASON
 >
-> **The count was wrong three times, always by adjusting the previous figure instead of re-summing
-> the per-group column.** Re-summing exposed that group G — three arena-staleness sites — was missing
-> from every list of what remained. **Derive the number from the parts; never carry it forward.**
+> **CORRECTED 2026-09-10: THIS SENTENCE WAS TOO STRONG AND IT SHAPED A WHOLE SESSION.** It read
+> *"the large remaining work is blocked on these and the small remaining work is not worth choosing
+> over them."* The four decisions block the LANGUAGE-SURFACE work they name -- programs using
+> `Text<N>`, the width API, the float-verify semantics, a build's continuous-integration cost.
+> **They do not block Order 1**, which `../roadmap/V0_2_X_ROADMAP.md` identifies as the largest
+> remaining workstream and whose own cell says what stands in the way is *"integration, not
+> invention"*:
 >
-> ## THE INSTRUMENT WARNING, WHICH IS THE MOST TRANSFERABLE THING HERE
+> - **The remaining region kinds.** The module-driven emit path covers FOUR of twenty, and not
+>   equally: `NAMES` and `STRING_POOL` are COMPUTED, `HEADER` is encoded but NOT derived, and
+>   `CHUNKS` is mixed per field with ten fields per record host-supplied.
 >
-> **Three of this session's own instruments reported clean or confident results about things they
-> never touched**: a sweep column listing WARNING locations under a PASSING verdict; a mutation test
-> aimed at the wrong call site that PASSED, which would have recorded a mechanism doing none of the
-> work attributed to it; and a probe that mutated an opcode its program did not contain, then
-> reported the untouched module as "admitted".
+>   **The first version of this bullet also listed two capacity limits -- `parse` at 94 chunks
+>   against a 90-record batch, and `wire.kel` at 1,148 nodes against a 1,024-node walk cap -- and
+>   BOTH ARE REMOVED.** I copied them from the roadmap cell without checking, in the same increment
+>   that corrected a different staleness. The windowed path reaches all eleven stages: the chunk
+>   region became a STREAM so the batch cap is gone rather than larger, and the `wire` refusal was a
+>   guard comparing against the wrong bound. Corrected in the roadmap too, since that is where the
+>   figure was copied from.
+> - **Source types.** ~~Type rejection reaches only literal, direct occurrences~~ — **THIS WAS TRUE
+>   WHEN WRITTEN AND IS NOW FALSE, which is exactly what a stale handoff does.** Resolution reaches
+>   declared names, literal initialisers, one alias hop, a bounded fixpoint over operator
+>   expressions, field reads through three base forms, and enum payload bindings. The rules
+>   themselves are censused against the syntactic forms they govern. What is NOT self-hosted is the
+>   EXTRACTION: the tables are still built by Rust walking the reference parser's syntax tree. That
+>   remains a missing pipeline capability rather than a missing rule, and it is the accurate version
+>   of this bullet.
 >
-> **None was caught by re-reading. All three were caught by making the instrument misbehave on
-> purpose.** The rule already in this file — a guard that has not been made to fail is a guess —
-> extends further than it was being applied: **an explanation is also a guess, and so is a
-> measurement.** Treat any conclusion in these documents whose instrument was never made to
-> misbehave as provisional.
+> The roadmap also carries FOUR OPEN DECISIONS OF ITS OWN -- cryptography locus, meta-circular
+> bound composition, version granularity, reference retirement -- and they are a different four.
+> None of them blocks Order 1 either.
 >
-> ## AND NINE OF ELEVEN BUILD CONFIGURATIONS ARE BUILT BY NOTHING
+> **Session 65 ran twenty-eight increments of verification work under the mistaken framing**, and
+> that work stands: it found a real runtime defect and corrected several claims. But a resuming
+> agent should not infer from it that the roadmap is blocked. **No guard catches this**, because it
+> is a judgement rather than a figure, which is why it survived a refresh of this very file.
 >
-> The float hole above lived in a configuration nothing built, so eleven plausible configurations
-> were swept. **Three are covered** — default, bare no-default, the broad docs.rs surface — and the
-> rest are verified by nothing. `--features compile` did not compile at all; repaired.
+> The decisions below remain the operator's and none has moved.
 >
-> **A job named for a feature need not cover it**: continuous integration's `--features signatures`
-> is ADDITIVE to the defaults, so signatures-alone is unbuilt. A standing property, not an incident.
+> 1. **How does a value ENTER a `Text<N>`?** It appears in every program anyone writes with the
+>    type. Open question 2 in `../decisions/TEXT_CAPACITY_TYPE.md`.
+> 2. **Is the width bundle worth a breaking change?** 33 signatures, 14 public, published crate.
+> 3. **Should `verify()` refuse float opcodes when the `floats` feature is absent?** Evidence
+>    COMPLETE: ten lines, prototyped, **zero new failures**, and the semantic worry is moot because
+>    the lexer refuses float literals in that build. Unlanded only because a merged document said it
+>    was the operator's call, and a deferral is worth something only if honoured. **This is the cheap
+>    one.**
+> 4. **Does any build configuration earn a continuous-integration job?** Cheaper than it looked on
+>    the WIDTH axis, unchanged on the FEATURE axis.
 >
-> An addition to continuous integration is **recommended with its cost and deliberately not
-> adopted** — that is the operator's call. See `../decisions/FEATURE_COMBINATION_SWEEP.md`, which
-> also states the sweep's limit: `cargo check --tests` shows a configuration COMPILES and no more.
+> Two smaller API-shaped observations sit beside them, recorded and not repaired: a hot-swap site and
+> a codec conversion each report a fault as `InvalidBytecode` when the artefact was fine. Changing
+> which variant a public API returns is a breaking change.
 >
-> **The narrow selectors are the same story and were swept too**: ten compile, none is verified by
-> anything. Running the suite at a 16-bit word gives 89 passing and 15 failing binaries, but the
-> failures share a PREMISE — the suite assumes a 64-bit host, down to a canary whose own constant
-> `1234567` cannot exist at that width. So the narrow widths are **unverified: neither shown broken
-> nor shown working.** Making the suite run there is a project, not an increment, and is not
-> recommended without deciding it is worth the cost.
+> ## THE BIGGEST CHANGE SINCE THE LAST REFRESH: ORDER 1 WAS NEVER BLOCKED
 >
-> ## THE QUEUE IS OTHERWISE EMPTY AND BOTH LARGE ITEMS NEED THE OPERATOR
+> The correction below this banner explains it, and this is what followed from acting on it.
 >
-> **`origin/v0.2.3` is at `12951810`. Twenty-one pull requests merged, none open, tree clean**, and
-> every post-merge run on the version branch itself came back green. Nothing is held and nothing of
-> this line is unpushed.
+> **TWO REGION KINDS ARE ROUTED AND THE SELF-HOSTED SHARE WENT 81% TO 99%.** `DATA_SLOTS` and
+> `ENUM_VARIANTS` are the first kinds whose records carry a NAME -- every kind routed before them
+> carried none, which is what let the host supply every field. A host-supplied name index can
+> disagree with the interner that produced `NAMES`, and the host cannot check it, so both take
+> their name from the stage's own interner.
 >
-> **Do not go looking for available work before reading the two questions below.** Both remaining
-> substantial items were ATTEMPTED this session and both turned out to need a decision that is not
-> this line's to make. Each block was found by trying, not by planning, so neither is a guess.
+> **THEY NEEDED DIFFERENT SHAPES, AND FINDING THAT OUT BEFORE WRITING EITHER WAS THE POINT.** The
+> slot section is a flat run of names and indexes; the enum section INTERLEAVES a type name with
+> each enum's variants, so it walks with a cursor and the host supplies only a boundary flag. The
+> plan said they were the same shape. They are not, and it was corrected before it produced an
+> emitter.
 >
-> ### QUESTION ONE: how does a value ENTER a `Text<N>`?
+> | | before | after |
+> |---|---|---|
+> | self-hosted share of corpus region bytes | 81% | **99%** |
+> | skipped region kinds | four | **two** -- `ENUM_LAYOUTS`, `PARAM_TYPES`, both needing an emitter WRITTEN rather than routed |
+> | computed share | -- | **unchanged, and that was stated in advance** |
 >
-> A spike removed both refusals and asked the compiler. It said `let binding declared as Text<8> but
-> value has type Text` — which is the distinct-nominal-type increment WORKING AS DESIGNED. A literal
-> is static text, `Text<8>` is dynamic text, and they deliberately do not unify.
+> **`highest_command` moved 181 to 185.** `wire.kel` grew four functions, which moved its chunk
+> count 486 to 490 and its constant-forest node count 1,194 to 1,209, margin 156.
 >
-> **The silent path is closed by a language rule, not by taste**: `GRAMMAR.md` states that no
-> implicit type coercion exists. So emission needs a surface form — a cast, a constructor, or a
-> method — and which one is ALREADY open question 2 in `../decisions/TEXT_CAPACITY_TYPE.md`.
-> **Do not pick it unilaterally.** It appears in every program anyone writes with the type and is far
-> more expensive to change than the layout beneath it.
+> ## THE FIVE INCREMENTS OF READING THAT PRECEDED ONE LINE OF BEHAVIOUR
 >
-> Exactly two match arms had to change to admit the type, and no other pass objected. The machinery
-> below the surface is in place; only the way in is missing.
+> Four of them corrected something that would otherwise have been built on, and **none reached
+> code**:
 >
-> ### QUESTION TWO: is the width bundle worth a breaking change before publication?
+> 1. A dispatch table read as a capability list -- "two of the four are integration" was wrong;
+>    dispatchable is not routable, and the criterion is whether the record carries a NAME.
+> 2. A field list read as sufficient state -- `vcnt` is the CURRENT enum's variant count and is
+>    overwritten, so no base can be derived from the counters.
+> 3. An assumption whose consequence was guessed -- `nmap` DOES survive between the interner call
+>    and the steps, and the slice needed a begin anyway, for a different reason.
+> 4. A margin quoted from prose -- measured, 171 rather than the 217 assumed, already stale by 46
+>    nodes before the edit.
 >
-> `addr_bytes` is taken by **33 signatures across 5 files, 14 of them public**. Fourteen public
-> signatures cannot change without breaking every embedder of a crate published at 0.2.2, so this is
-> an API decision rather than the tidy-up "cheaper before a publication than after one" suggests.
+> **The transferable rule**: ask which existing green test would have to fail if the property were
+> false, before sizing a measurement. Three times in one day the tree already held what was about
+> to be fetched.
 >
-> ## `Text<N>` IS BUILT UP TO ITS FRONT DOOR
+> ## A FEATURE-SET TRAP WORTH KNOWING
 >
-> Four increments merged: the type surface refused everywhere below it; the flat layout, a
-> word-sized length followed by exactly `N` content bytes, reusing existing descriptors with no new
-> variant and no opcode; a distinct nominal type in the checker; and a zero value cross-checked
-> against the layout so the two cannot drift silently.
+> **`cargo test -p keleusma --test X` does NOT enable `self-host`; CI's `--workspace` unifies it
+> on.** A gated test reports "0 passed; 0 filtered out" in the first and runs in the second, so a
+> local check can miss entirely what continuous integration then fails on. That is the rule *a run
+> that executed no tests is not a pass* arriving through a channel nobody was watching.
 >
-> **Three refusals remain and all three are CORRECT** — nothing generates code for it yet. Do not
-> read a refusal as a defect. **The `ScalarKind::Text` collapse must land WITH emission and before
-> publication**: it is a wire change, free while nothing has shipped at `BYTECODE_VERSION` 2 and
-> costing a version afterwards.
+> ## WHAT HAPPENED AFTER THE LAST REFRESH: INCREMENTS SIXTEEN TO TWENTY-FOUR, AND ONE REAL DEFECT
 >
-> ## WHAT IS NEWLY GUARDED, SO IT IS NOT RE-DERIVED
+> The section below this one describes increments one to fifteen and is still accurate. This
+> section covers sixteen to twenty-four, which the previous refresh predates entirely.
 >
-> - **The publish list.** `the_release_process_names_exactly_the_crates_that_publish` derives the
->   publishable set from the manifests and checks the document against it, including the stated
->   count word. The census that found the SEVEN-versus-FIVE blocker closed an instance; this closes
->   the class.
-> - **The versioning policy.** `every_publishable_crate_has_a_versioning_policy_and_the_tracking_ones_track`
->   asserts every publishable crate falls under exactly one policy. A crate added without one is
->   otherwise invisible until release day.
-> - **`DATA_INIT` is routed for all twelve stages** and the skipped-region set is FOUR kinds, down
->   from five. The ratchet is tightened to four, which mattered: it asserts an upper bound, so it was
->   green at five and four alike and a passing suite said nothing about whether the change worked.
+> **A RUNTIME DEFECT, FOUND UNDER A REACH THAT WAS RECORDED AS UNPROVEN.**
+> `Target::validate_against_runtime` checked that the word, address and float widths did not EXCEED
+> the runtime's and never checked the other end. A target with `addr_bits_log2 = 2` compiled; the
+> layout sizes an opaque by the ADDRESS width, four bits is zero bytes, and the fault surfaced at
+> run time as `InvalidBytecode("NewComposite flat operand on non-flat values")`, naming neither the
+> width nor the target. **The floor argument was already in the tree, twice, applied to the FLOAT
+> width only.** Both floors now come from the trait impls rather than literals. See
+> `../decisions/TARGET_WIDTH_FLOOR.md`.
 >
-> ## THAT TRAP IS NOW DISARMED, AND ITS SIBLING WAS WORSE
+> **It was found by a derivation that produced one, and the derivation was this line's own** — a
+> clamp with a floor of 2, written in the narrow-width work, in the file whose subject is width
+> disagreement. **Sixth instance in the session of the class under repair appearing inside the
+> repair.**
 >
-> **The compiler has no `Op::Len` emission site.** Both — the for-in bound and the checked-index
-> bounds check — fold the length or fail with a compile error. The recorded trap was LATENT, held
-> shut by a liftable loop-bound refusal.
+> | increment | result |
+> |---|---|
+> | the unproven narrow-width REACH | **proven for `narrow-word-16`**, two site mutations each with a control at the default build |
+> | the parity guard's SILENT direction | measured; with the strip disabled the same mutation reports `ok`, so the strip is load-bearing |
+> | `GUARD_REACH_CENSUS.md` | population derived from git; **every entry now rests on a demonstrated check or a measured argument that none is possible** |
+> | the target-DESCRIPTOR axis | **21504 cells**, all ran and correct, three independently derived counts agreeing |
+> | the RUNTIME authority | swept too; a module wider than its runtime is refused, and the loads match a per-cell prediction exactly |
+> | the float width | swept from both sides, and a declared-`f32` module must agree bit-for-bit on an `f32` and an `f64` runtime |
+> | the census's indirect sites | **enumerated**: six in `src/vm.rs`, four in `src/marshall.rs` |
+> | census group G | both remaining sites probed; **neither reaches `InvalidBytecode`** |
 >
-> **The second site was not latent.** Checked indexing over a `Multiword` compiled, verified, took a
-> bound, LOADED, and trapped, with nothing holding it shut. Found by enumerating every emission
-> rather than following the known witness. Repaired by folding the multi-word width, so it works now.
+> **WHAT IS NOT ESTABLISHED, CARRIED FORWARD RATHER THAN SUMMARISED AWAY.** The descriptor sweep's
+> corpus is fourteen shapes, which is not every construct. Reach is proven at `narrow-word-16` and
+> at no other narrow selector. The census's source-derived population remains a LOWER BOUND, and no
+> group carrying a probe count is closed by any of this. Groups F and J remain, and one member each
+> of E and I, none of them individually named in the document.
 >
-> `OP_LEN_ROOT_REPAIR.md` predicted a type-inference fallback would close ONE of seven forms; it
-> closes SIX, because `infer_expr_type` consults the authoritative per-span type table before its
-> structural half. The document is corrected in place, and its being wrong is recorded there.
+> ## THE FOUR CORRECTIONS THAT COST MORE THAN THE FINDINGS
 >
-> Its sibling refusals are classified there too, and the distinction matters — `Op::Len` is a real
-> compiler/machine disagreement, `Reset` is a corrupt-module defence. Reporting both as "opcodes the
-> machine refuses" would imply two hazards where there is one.
+> 1. **A widened corpus found nothing and corrected a claim anyway.** Adding seven shapes produced
+>    the same twelve findings on the same one shape — and two of the additions also STRIDE, so the
+>    same-day characterisation that striding is what exposes the defect was wrong. The element must
+>    itself contain the address-sized scalar.
+> 2. **A gap I named was mostly not a gap.** "Float arithmetic across a width-mismatched pair is
+>    unswept" described the SWEEP, not the tree: `tests/float_arith_width.rs` covers it, mutation-
+>    tested over eight of ten narrowing sites. **A limitation of an instrument is not a limitation
+>    of the tree.**
+> 3. **A vacuous guard was reverted rather than shipped.** Two attempts at a guard for
+>    `composite_escape_routes.rs` could not be made to fail; that file is safe by construction, by
+>    measurement. **A test that cannot fail is worse than no test, because it reads as coverage.**
+> 4. **An instrument defect cost an hour.** Two concurrent gates appended to one status file, so no
+>    line was attributable, and then a script was edited while executing.
+>    `scripts/gate-in-worktree.sh` already solves this and was not used; its warning that killing
+>    the driver leaves cargo children reparented was also correct in detail.
 >
-> ## THE PROCESS FACT THAT COST THIS SESSION THE MOST
+> ## TWO CURRENCY GUARDS FIRED, AND BOTH WERE RIGHT
 >
-> **CI triggers only on `main`, `v*` and pull requests.** A push to a feature branch with the hook
-> bypassed is verified by NOTHING. Three branches sat in that state for hours here.
+> `tests/claimed_counts.rs` reported `CLAUDE.md` stating 101 test files against a tree of 112, and
+> later refused the census edit because removing group G's probe count moved the examined total
+> from thirty-five to thirty-seven. **Re-derived in both places rather than adjusted in one** — the
+> exact failure the second guard's message names. Current figures, measured: **1282 lib tests under
+> `self-host`, 1275 default, 1327 integration `#[test]` functions across 112 files.**
 >
-> The local gate was abandoned deliberately, not failed: it ran twice and finished neither time,
-> reaching step 3 of 12 in 110 minutes under unrelated machine load. **A pull request gives the same
-> checks on dedicated runners and still keeps a red off the version branch**, which is the whole
-> reason a local gate precedes a merge. Use it when the machine is loaded.
+> ## WHAT SESSION 65'S FIRST FIFTEEN INCREMENTS DID, IN THREE LINES OF WORK
 >
-> ## THE LESSON THIS SESSION KEPT PAYING FOR
+> | line | result |
+> |---|---|
+> | four MEASUREMENT classes | every one **clean**, each with a guard shown able to fail |
+> | the COMMENT-MATCHING guard class | **NINE guards repaired**, swept mechanically, closed in `../decisions/COMMENT_MATCHING_GUARD_SWEEP.md` |
+> | the NARROW-WIDTH suite | **twenty-nine failures repaired, NONE excluded**; 36 to 13 |
 >
-> **Every wrong figure was a chosen sample presented as a population.** 113 counted mentions, not
-> breakage — the compiler said five. 43 signatures were really 33. A windowed scan reported two
-> refusing opcode arms where brace-matching found four. A reachability census drove nine entry
-> points where fifty-two exist.
+> | measurement increment | result |
+> |---|---|
+> | the three COMPOSITE expression kinds | all three **WITHHELD**, each with an executable witness |
+> | the FLOAT flat-field class | **clean**, and the audit's scope argument that excluded it was FALSE |
+> | the module-versus-runtime width skew, WORD and ADDRESS | **clean**, including the axis the opaque defect lived on |
+> | the counter class the `forin_count` defect belonged to | **clean**, and now guarded |
 >
-> **And every broken instrument failed QUIETLY.** A `tail`-terminated pipeline reported success on a
-> red gate; a trailing `echo` masked a failing status; an `awk` on the wrong delimiter read green
-> checks as pending; a waiter read the gap between two CI matrices as completion. Seven such
-> failures, and not one erred toward false alarm — because a broken measurement stops reporting, and
-> silence is shaped exactly like nothing-wrong.
+> ## THE THIRD LINE: THE NARROW WIDTH RUNS WHAT CAN RUN THERE
 >
-> **The practice that follows**: derive a population, never pick one; and when a run is detached,
-> capture its exit status IN THE LOG, because a detached run sends no notification either.
+> The standing claim was *"the whole suite at a narrow width is unverified -- not shown broken, not
+> shown working."* **36 -> 33 -> 13**, binaries green 98 to 102, **nothing newly broken at any
+> step**, every figure from **diffing the failing SETS** rather than subtracting.
 >
-> ## THE DISCARD-ARM CENSUS IS FINISHED AT 14 OF 19
+> **NOT ONE TEST WAS EXCLUDED, AND THE EASY ROUTE WAS AVAILABLE THROUGHOUT.** `tests/narrow_vm.rs`
+> already excludes `narrow-word-8`; one line would have extended that and turned six failures into
+> silence. Exclusions compound.
 >
-> Five passes, recorded in `../decisions/DISCARD_ARM_REACHABILITY_BRIEF.md`. **The remaining five are
-> a FIXTURE problem, not a harness problem** — every one sits inside a function the passes already
-> drove, so what is missing is source constructs, not entry points. The pass-five harness is reusable
-> as-is, which makes a sixth pass cheaper than any so far.
+> **The thirteen that remain are REAL wide-word dependency, checked rather than assumed.** Seven are
+> programs declaring `require word >= 32` -- and those programs are the SELF-HOSTED STAGE SOURCES,
+> fourteen of which declare it. One asserts a 64-bit constant that does not exist at sixteen bits.
+> **Making any of them pass would weaken a program's stated requirement.**
 >
+> **The claim is sharper, not closed**: the narrow width runs everything that can run there, and what
+> cannot is enumerated with a reason. That is NOT "the narrow widths are verified" -- one corpus's
+> narrow-width REACH is unproven, and the probe that would have shown it was INVALID, failing at
+> neither width. Recorded because it was nearly reported as evidence the corpus had gone vacuous.
+>
+> **What IS established for every derived target**: at the default build the derived widths are
+> IDENTICAL to the hard-coded ones they replaced, so default behaviour is unchanged by construction
+> rather than by observation.
+>
+> ## THE SECOND HALF: GUARDS THAT MATCHED PROSE
+>
+> The tree had recorded FOUR instances of a guard matching text it was never meant to read. Two more
+> were found by reading, which raised the real question: **how many are there?** Deriving the
+> population mechanically — test files that read source and search it for a code-shaped literal —
+> found THIRTEEN. **Nine were exposed.**
+>
+> **THE DIRECTION RULE IS THE TRANSFERABLE PART.** The right comment-strip is not the same for every
+> guard, and choosing by appearance is wrong in both directions:
+>
+> | assertion | what an early truncation costs |
+> |---|---|
+> | **ABSENCE** | a missed offender **passes silently** — needs a string-aware strip |
+> | PRESENCE, anchor, count | **fails loudly** — the naive strip is correct |
+>
+> Only ONE of the nine needs the complex form. **They are deliberately not unified**; sharing a
+> helper would add cost to eight and remove a needed guard from one.
+>
+> **THREE FILES DOCUMENTED THE HAZARD IN THEIR OWN PROSE AND GUARDED ONE OF TWO READERS ANYWAY.**
+> The failure is not ignorance of the hazard.
+>
+> **AND THE DEFECT WAS COMMITTED INSIDE ITS OWN FIX**: an edit removing this shape mixed stripped
+> and raw offsets and had to be caught by running the tests. **That is the evidence the class is
+> mechanical rather than a lapse of attention**, and it is why a mechanical sweep found what four
+> documented prior incidents had not.
+>
+> ## WHAT I GOT WRONG, RECORDED BECAUSE THE CORRECTIONS COST SOMETHING
+>
+> | claim | outcome |
+> |---|---|
+> | a red CI job was the FEATURE-SET trap | **wrong** — the same test fails under default features; the real cause was running the guards BEFORE the last edit |
+> | "every guard I wrote had a first-draft defect" | **overstated** — four of seven |
+> | two jobs looked STUCK at 90 minutes | **wrong baseline** — those two take 60 minutes each; ~52 had elapsed |
+>
+> **AND I FIXED WHAT THE GUARD CAUGHT, NOT THE CLASS.** The citation guard scans two documents,
+> flagged two bare file names in one, and I corrected exactly those — leaving the identical names in
+> the task log's newest note because nothing pointed at them. Same one-of-two-sites shape, committed
+> while cataloguing it.
+>
+> **A negative with demonstrated reach is a result; a negative without one is silence dressed as a
+> result.** Every corpus here was made to fail before its passing was believed, and the first float
+> probe written was exactly that silence until it was mutated.
+>
+> ## THE THREE THINGS WORTH MORE THAN THE FINDINGS
+>
+> **ONE. AN AUDIT'S SCOPE ARGUMENT WAS AN INSTANCE OF THE ERROR IT WAS AUDITING.**
+> `FLAT_FIELD_WIDTH_AUDIT.md` justified examining only the opaque field by saying every other kind
+> is a function of the word or float width, *"so a site assuming a word is correct for them."* False
+> for `Float`, whose width is selected independently — **the exact coincidence that hid the opaque
+> defect**. The scope was right and the argument for it repeated the mistake. Corrected in place.
+>
+> **TWO. A COHERENT MUTATION IS AN EQUIVALENT MUTATION, AND IT LOOKS LIKE A PASSING TEST.**
+> Mis-sizing the LAYOUT changes nothing observable, because the compiler's baked offsets and the
+> runtime's strides both derive from it and move together. **That coherence is precisely what the
+> opaque field lacked.** A width defect needs TWO AUTHORITIES, and the module header versus the
+> runtime type parameter is where they come from. The load check refuses a module WIDER than the
+> runtime and admits one NARROWER, so a module compiled small and run on a large host is the
+> configuration that exposes them. **Every configuration in `composite_width_skew.rs` is MATCHED and
+> therefore cannot.**
+>
+> **THREE. A GUARD MUTATION-TESTED AGAINST A HISTORICAL DEFECT IS A DIFFERENT OBJECT.** The invented
+> mutation asks whether a guard *can* fail. The historical one asks whether it would have earned its
+> cost. `tests/selfhost_counter_reset.rs` was tested by **deleting the 2026-08-27 repair**, which
+> reproduces the `forin_count` defect and makes the guard name the field.
+>
+> ## WHAT WAS PREDICTED WRONG, AND WHAT WAS HYPOTHESISED WRONG
+>
+> Recorded because they were written down BEFORE measuring and are not revised to match.
+>
+> | claim | outcome |
+> |---|---|
+> | kind 7 (struct literal) **moves** — the declared count is on the wire | **wrong**, it is not on the wire at all |
+> | kinds 5 and 6 blocked on a missing ANNOTATION record | verdict right, **mechanism wrong** — the pipeline refuses the whole program |
+> | the width survivors are BOXED, so both widths agree | **wrong**, all shapes are flat |
+> | the survivors read zero neighbours and are right by luck | **wrong**, a non-zero neighbour changes nothing |
+>
+> **The boxing hypothesis was the likely one and the explanation was already written down in a
+> sibling test**, which records that a boxed composite agrees on both runtimes. Checking it stopped a
+> plausible wrong cause entering the tree — the way two of the four `wire.kel` causes were first
+> diagnosed.
+>
+> ## ONE OPEN QUESTION LEFT DELIBERATELY OPEN
+>
+> Two word cases — an array element and a byte-leading struct — do not separate a word-width
+> divergence. **Three hypotheses excluded, mechanism unestablished.** What IS established is a
+> characterization covering every case measured: all-`Word` composites read past their first field
+> separate; first fields, byte-leading structs and array elements do not. **That is a stated LIMIT,
+> not a defect** — every shape answers correctly on the unmutated tree.
+>
+> ## THE PROCESS FACT THIS SESSION ADDED
+>
+> **A CANCELLED RUN LEAVES `gh pr checks` REPORTING NOTHING, AND A WAITER KEYED ON "NOTHING PENDING"
+> CALLS THAT GREEN.** Written into a waiter in this session despite the rule being in this very file.
+> Requiring a POSITIVE pass count is the fix. Also met again: `gh run list --branch` returned zero
+> runs for a branch that had one, and a stale trunk list, in the same call — **check the instrument
+> before doubting the result.**
+
 ## Validity
 
 - **Branch**: `v0.2.3`, or a branch cut from it. If you are on `v0.3.0`, read
@@ -190,17 +1048,35 @@ always-current, so it must be able to report itself stale rather than mislead a 
 **Validate by ANCESTRY and by CONTENT, never by a hash match.** A stamp requiring `HEAD~1` to equal a
 recorded parent is a claim that nothing else ever lands, and it has failed three times.
 
-**Ancestry**: `origin/v0.2.3` should contain `12951810`
-(`Merge pull request #353`). If it does not, this file predates a reset and is stale.
+**Ancestry**: `origin/v0.2.3` should contain `fad3fe11` (`Merge pull request #415`), the last merge
+before this refresh. If it does not, this file predates a reset and is stale.
 
-**Content**, four checks that are cheap and independent:
+**It said `5fbad3a0` was "session 65's last code merge"**, which five later merges made false. The
+CHECK was still sound — an anchor only has to be an ancestor — but the description was not, so the
+wording now says what it is: the last merge before the refresh, which cannot go stale the same way.
+
+**Content**, cheap and independent checks. **They were numbered 1, 2, 3, 7, 8, 9, 10, 4, 5, 6 until
+2026-09-08** — each insertion took the next unused number instead of renumbering, so the list read as
+though four checks were missing. The content was always correct; only the ordering lied.
+
+**AND IT HAPPENED TWICE MORE, ON 2026-09-09, IN THIS FILE.** Item 14 was inserted above item 13, and
+item 15 above item 14, by the same agent that had just read the paragraph above. The second was
+noticed while adding it; the first had gone unnoticed for a whole refresh. **Knowing the failure
+does not prevent it** — checking the rendered ORDER does, which is a different act from writing the
+next number. Both are corrected.
 
 1. `scripts/fingerprint.sh` reports `0x4327_63E1`. If it differs, a release was rolled since this was
    written and every version-adjacent statement here needs re-reading.
 2. `docs/process/RELEASE_PROCESS.md` says **SEVEN** crates publish. If it says five, this file
    predates the release-blocker fix and the blocker is live.
-3. `tests/len_flat_array_hazard.rs` exists and passes. It now pins the trap as CLOSED — no emission
+3. `tests/len_flat_array_hazard.rs` exists and passes. It pins the trap as CLOSED — no emission
    site, every iterable form folding — so a failure means an emission site returned.
+4. `tests/text_capacity_type.rs` exists. If it does not, `Text<N>` increment 1 is not on this branch.
+5. `tests/release_process_crate_list.rs` exists and passes. It holds BOTH release guards — the
+   publish list and the versioning policy. If either fails, the release process and the workspace
+   have diverged and a publication would break.
+6. `tests/selfhost_region_coverage.rs` passes with its skipped-kind bound at FOUR. If it fails
+   because five kinds are skipped, `DATA_INIT` has stopped being routed.
 7. `tests/float_opcode_without_floats.rs` exists. It is compiled only WITHOUT the `floats` feature,
    so a default-feature run silently skips it; check it with
    `cargo test --no-default-features --features compile,verify`. If it is absent, this file predates
@@ -208,12 +1084,64 @@ recorded parent is a claim that nothing else ever lands, and it has failed three
 8. `docs/decisions/INVALID_BYTECODE_CENSUS.md` exists and
    `the_invalid_bytecode_census_still_describes_the_tree` passes. If that test fails, sites were
    added or removed and the census has stopped being exhaustive.
-4. `tests/text_capacity_type.rs` exists. If it does not, `Text<N>` increment 1 is not on this branch.
-5. `tests/release_process_crate_list.rs` exists and passes. It holds BOTH release guards now — the
-   publish list and the versioning policy. If either fails, the release process and the workspace
-   have diverged and a publication would break.
-6. `tests/selfhost_region_coverage.rs` passes with its skipped-kind bound at FOUR. If it fails
-   because five kinds are skipped, `DATA_INIT` has stopped being routed.
+9. `tests/immediate_operand_range.rs` and `tests/native_composite_canonicalization.rs` exist and
+   pass. The second is a regression guard on a boundary canonicalization whose loss opens SEVEN
+   runtime refusals at once on legitimate programs; it is invisible from either side, because the
+   compiler's baking and the runtime's dispatch each look locally correct.
+10. `docs/decisions/FEATURE_COMBINATION_SWEEP.md` exists. If it does not, this file predates the
+    build-coverage measurement and its claim that nine of eleven feature configurations are unbuilt.
+11. `tests/composite_width_skew.rs` exists and passes. It drives narrow and skewed runtimes in the
+    DEFAULT build; if it is absent, this file predates the width repair and the capability that made
+    guarding it free.
+12. `the_narrow_runtime_coverage_claim_still_describes_the_tree` and
+    `the_census_group_table_adds_up_to_its_stated_totals` pass. They guard two figures quoted in the
+    banner above, so a red result means a number here has drifted from the tree. The second checks
+    the census document against ITSELF, which is a different and weaker claim than the sibling guard
+    that checks it against the source; both are needed, because a self-consistent document can still
+    describe a tree that has moved.
+13. **Session 65's four artefacts exist and pass.** `tests/flat_float_field_width.rs` and
+    `tests/module_runtime_width_skew.rs` need `floats`; `tests/selfhost_counter_reset.rs` needs
+    `self-host`; the two composite-kind witnesses live in `tests/selfhost_typecheck.rs` and need
+    `self-host` too. **A default-feature run silently skips the last three**, which is the same trap
+    item 7 records.
+
+14. `docs/decisions/COMMENT_MATCHING_GUARD_SWEEP.md` exists, `tests/block_comment_tripwire.rs`
+    passes, and `every_file_the_comment_matching_sweep_names_still_exists` passes. The last checks
+    that every guard the sweep names is still there; the tripwire fails if a BLOCK comment appears
+    in a source one of those guards reads, since none of the nine strips handles one. **Exposure was
+    measured at zero when written**, and the tripwire is what keeps that true rather than assumed.
+15. `docs/decisions/NARROW_WIDTH_FAILURE_CLASSIFICATION.md` records a residue of **THIRTEEN** and
+    names the cause of each. If it still says thirty-three, this file predates the narrow-width
+    repair. **Do not re-derive that figure by subtracting** — the document's own rule is to diff the
+    failing SETS, and this session twice met a total that concealed what it was hiding: once a
+    reduction masking three new failures, once a count coincidentally matching a stale one.
+16. `docs/decisions/TARGET_WIDTH_FLOOR.md` exists and `tests/target_width_floor.rs` passes. Together
+    they hold the runtime defect this session found: a width below the narrowest implemented one is
+    refused at COMPILE time, naming the field, rather than surfacing later as a composite fault. If
+    the document is missing, this file predates the sixteenth increment.
+17. `tests/target_descriptor_axis.rs` passes. It sweeps every target descriptor the compiler accepts
+    against fourteen shapes, on sixteen word-address runtime pairs and both float runtimes, and
+    checks the cells that LOAD against the loader's documented rule evaluated independently. A
+    failure is more likely a changed descriptor space than a defect, and its message says which.
+18. `docs/decisions/GUARD_REACH_CENSUS.md` exists, and `tests/invalid_bytecode_indirect_sites.rs`
+    and `tests/opaque_across_reset.rs` pass. The first records a verdict for every guard this line
+    added or modified; the second pins the `InvalidBytecode` paths a variant grep cannot see at six
+    and four; the third holds group G's two host-facing routes, one closed at compile time and one
+    producing a `TypeError` rather than an `InvalidBytecode`.
+19. `tests/host_contract_faults.rs` passes. It holds the observation that a HOST's mistake -- a
+    mis-sized hot-swap vector, an unregistered native -- is reported as `InvalidBytecode`, which
+    says the artefact is at fault when it is not. Its third case is the CONTROL: an argument-count
+    mistake gets a different variant, so the runtime does distinguish and the choice is the
+    operator's.
+20. `tests/module_input_node_budget.rs` passes. It parses `wire.kel`'s constant-forest node count
+    out of the blob the stage itself reads and fails if the margin under `mi_max_nodes` falls
+    below sixty-four. **`wire.kel` is itself one of the eleven measured stages**, so anything that
+    grows it spends this margin; measuring before an edit caught a figure already stale by 46.
+21. `tests/selfhost_chunk_names.rs` and `tests/selfhost_parse.rs` both pass, and both pin
+    `wire.kel` at **490** chunks -- one from the compiled module, one from the parsed source. Two
+    derivations of one figure; if only one moves, something is wrong with the derivation rather
+    than the stage. **Neither runs under `cargo test -p keleusma --test X`**, which does not
+    enable `self-host`.
 
 **Do not trust the counts in this file without re-deriving them.** The construct-support boundary
 last read **96 SOk / 1 Refuses / 3 Diverges / 1 RefRejects** over 101 cases. It is ratcheted at
@@ -222,11 +1150,43 @@ the test rather than grepping for the classification**, which is how a wrong fig
 earlier in this line's history.
 
 **That figure is stated here twice ON PURPOSE, and a test requires it.**
-`the_boundary_table_counts_match_the_handoff_and_the_names_match_the_labels` derives the triple by
+`the_boundary_table_counts_match_the_roadmap_and_the_names_match_the_labels` [historical name the\_boundary\_table\_counts\_match\_the\_handoff\_and\_the\_names\_match\_the\_labels, renamed or replaced in ace23d6c] derives the triple by
 calling `boundary_cases` and then demands at least two occurrences of it in this file, so a branch
 adding a case silently turns the document red instead of leaving it quietly wrong. **The refresh of
 2026-09-03 deleted one of the two and broke that test**, which the pre-push hook cannot see, because
 its routine tier excludes the `selfhost_*` binaries. If you rewrite this block, keep two.
+
+## WHAT A RESUMING SESSION SHOULD DO FIRST
+
+**READ THE FOUR DECISIONS AT THE TOP AND WAIT FOR AN ANSWER.** They are the only things blocking
+work larger than an increment.
+
+**Session 65 demonstrated that unblocked work remains and is worth doing**, so "blocked" is not
+"idle": four increments landed without touching a decision. What it also demonstrated is the shape
+that pays — **take a defect the tree has ALREADY SUFFERED and ask whether its shape is mechanical**,
+rather than auditing where a defect might be. That produced the one artefact of the session that
+would have caught something.
+
+```sh
+pgrep -f mutation_sweep              # the v0.3.0 line's sweep; contention INVERTS its result
+git log --oneline -1 origin/v0.2.3   # derive; do not expect a hash written here
+gh pr list --state open              # by BASE branch; the other line's appear here too
+gh run list --branch v0.2.3 --limit 3   # NOTHING ELSE WATCHES THE TRUNK
+```
+
+**Do not invent urgency** from whatever those report. A pull request mid-CI is the normal state of
+this workflow.
+
+**A caution about this file.** It is long and largely historical. **The BANNER at the top is the
+resume prompt**; sections below are accumulated findings, several describing states that have since
+moved. Where a section disagrees with the banner, the banner is newer.
+
+**There is a SUPERSEDED duplicate of this very heading further down, and of this very paragraph.**
+The 2026-09-09 refresh added a second copy of both rather than removing the first — noticed while
+checking this file's structure, which is the check that caught a severed intro and a dropped section
+on the previous refresh. The lower copy is kept because its numbered items carry findings the banner
+does not repeat: read this one for what to DO and that one for what is KNOWN.
+
 
 ## RUN THE SUITE WITH `--no-fail-fast`, AND THE REASON IS NOT TIDINESS
 
@@ -304,19 +1264,29 @@ gh run list --branch v0.2.3 --limit 1
 
 ## WHAT A RESUMING SESSION SHOULD DO FIRST
 
-**ZERO (2026-09-03). CHECK THE MACHINE, PUSH THE TWO HELD COMMITS, THEN CONTINUE `Text<N>`.**
+**ZERO (2026-09-08). NOTHING IS HELD. READ THE FOUR DECISIONS AND WAIT FOR AN ANSWER.**
+
+At session 63's close: **no open pull request, clean tree, nothing unpushed**, and every finding
+recorded in `../decisions/`. There is no held branch and no interrupted merge to recover.
 
 ```sh
 pgrep -f mutation_sweep              # the v0.3.0 line's sweep; contention INVERTS its result
-git log --oneline -1 origin/v0.2.3   # expect 6af37f66 or later
+git log --oneline -1 origin/v0.2.3   # derive; do not expect a hash written here
+gh pr list --state open              # by BASE branch; the other line's appear here too
 ```
 
-Held branches: `docs/session-61-tail-channels` and `fix/wire-changelogs`, one commit each, docs-only,
-green locally. Push, gate, merge. **If the sweep is running, wait** — it scores a run over six times
-its baseline as a HANG and counts a HANG as DETECTED, so a contended run reports BETTER coverage than
-a quiet one, and the flattering direction is the dangerous one.
+**Do not go hunting for available work before reading the four decisions at the top.** Session 63
+mined out the surveyable surface: the `InvalidBytecode` class is enumerated, the build matrix and
+the narrow axis are measured, the discard-arm census is at 17 of 19 with the remainder having no
+fixture hypothesis. **What is left that is large is blocked on an answer**, and what is left that is
+unblocked is small enough that starting it before reading the queue would be choosing the lesser
+work.
 
-Then `Text<N>` increment 2, which needs construction rather than discovery. Its brief holds the
+**If the sweep is running, wait** — it scores a run over six times its baseline as a HANG and counts
+a HANG as DETECTED, so a contended run reports BETTER coverage than a quiet one, and the flattering
+direction is the dangerous one.
+
+**The `Text<N>` brief** holds the
 layout, the size formula, the precedent and both guards to copy.
 
 **A caution about this file.** It is long and largely historical. **The BANNER at the top is the
@@ -365,7 +1335,7 @@ emits none can REJECT A CORRECT PROGRAM. A body with no tail expression reconstr
 **synthesised payload-0 unit**, the same shape as the synthesised else arm. What separates them is
 that the only source expression that would also land there is a written `()`, and the pipeline
 refuses it -- pinned in the FAILING direction by
-`a_written_unit_expression_is_refused_by_the_pipeline`, so admitting `()` later breaks the test
+`a_written_unit_expression_remains_a_real_tail` [historical name a\_written\_unit\_expression\_is\_refused\_by\_the\_pipeline, renamed or replaced in ace23d6c], so admitting `()` later breaks the test
 rather than quietly making the descent unsound.
 
 **TWO LOSSES ARE PINNED RATHER THAN PAPERED OVER.** A multiheaded group emits NO tail row at all,
@@ -409,9 +1379,12 @@ it is **not** the blocker it was described as.
 synthesises an else arm, so the pipeline cannot distinguish a one-armed conditional from a
 two-armed one. A pair row feeds `ty_node_bad`'s EQUALITY branch, so a SPURIOUS row can make the
 stage reject a correct program, and a DROPPED row makes it miss a disagreement it exists to catch.
-**Both directions are unsound.** A heuristic on the synthesised arm's UNIT tag was considered and
-rejected because it could not be shown safe.
-`a_one_armed_conditional_is_why_the_branch_pair_does_not_move` pins the witness.
+**Both directions are unsound.** A heuristic on the synthesised arm's UNIT tag **CANNOT WORK** --
+stronger than the earlier wording that it could not be shown safe. A written `else { }` and an
+implicit arm produce the SAME parse record stream, while the reference separates them by
+`else_block.is_some()`, so the distinguishing information never reaches this side.
+`branch_pair_rows_follow_explicit_else_presence` [historical name a\_one\_armed\_conditional\_is\_why\_the\_branch\_pair\_does\_not\_move, renamed or replaced in 778bfb35] pins the witness, and
+`an_empty_else_is_distinguished_from_an_implicit_one` [historical name an\_empty\_else\_is\_indistinguishable\_from\_an\_implicit\_one, renamed or replaced in 778bfb35] establishes the impossibility.
 
 **THE THREE COMPOSITE KINDS ARE THE REMAINING RISK, WITH EVIDENCE RATHER THAN A HUNCH.** The
 occurrences slice established that the two sides **disagree about what a node IS** for a composite:
@@ -503,7 +1476,7 @@ signals over the wrong feature sets are still the wrong feature sets.**
 ## THE WORKFLOW: CI GATES FEATURE BRANCHES
 
 **Do not run `scripts/release-gate.sh` to gate a merge.** Operator decision, 2026-08-11. CI is a
-verified strict superset and runs in ~48 minutes against ~2h30m.
+verified strict superset and runs in ~61 minutes against ~2h30m (measured 2026-09-08; it said 48).
 
 1. Cut the feature branch **as the first action**, and `git status` before committing.
 2. **Cut sequential branches ONE AT A TIME.** `DESIGN_JOURNAL.md`, `REVERSE_PROMPT.md` and
@@ -982,8 +1955,18 @@ sometime after Order 1.**
 **4. Derived operands in type rejection. PARTLY CLOSED, and this entry was stale.** It claimed an
 ARITHMETIC result is still unknown and cited a pin that **no longer exists**. Commit `63574d1f`
 reached arithmetic operands with a bounded fixpoint; `a_derived_operand_is_now_reached_and_the_chain_has_no_depth_limit`
-holds that. What remains unknown is a **field read or an index**, pinned by
-`a_derived_operand_from_a_field_read_is_still_unreached`.
+holds that. **CURRENCY, 2026-09-11: this entry went stale a second time.** A field read bound by a
+`let` over a base the source types is now reached as well, and so are a field read standing as a
+DIRECT OPERAND and one whose base is a MATCH BINDING. What remains unknown is an INDEX, and a field
+read whose base is an array element. Pinned by
+`the_field_read_channel_records_what_it_does_not_reach`. **An earlier revision of this entry said the
+match case needed a type the source states nowhere; that was false, and the enum declaration states
+it.**
+
+**A SEPARATE AND LARGER FINDING, 2026-09-11.** Any claim that the type-rejection rules are complete
+must say that the inventory counts rule SHAPES, not the syntactic FORMS each shape reaches.
+`the_rule_shapes_are_censused_against_the_forms_they_should_govern` crosses the two and found EIGHT
+gaps on its first run, five of which are now closed. Two were rules that existed and could not fire.
 
 **The stale citation had survived in the debt register**, which is why nothing failed: three live
 comments named the dead test and the register excused all three. Corrected 2026-08-27 and the

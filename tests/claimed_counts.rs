@@ -193,6 +193,61 @@ fn the_stated_figures_say_how_they_were_measured() {
     );
 }
 
+#[test]
+fn the_arena_integration_test_claim_matches_the_directory() {
+    // The project instructions describe the arena crate's tests as a lib count
+    // "plus N integration". That second half is STATICALLY DERIVABLE -- it is a
+    // directory and a count of `#[test]` in it -- unlike the run counts this
+    // file's header correctly says it cannot check.
+    //
+    // It was wrong. The instructions said "51 lib plus 8 integration" while
+    // `keleusma-arena/tests/` DID NOT EXIST. That is not a figure drifting; it
+    // asserted a body of tests that was not there, and it said so in two
+    // places. This is the second defect found in the region the header names as
+    // unguarded, the first having been the stage-source count.
+    //
+    // Both sides are derived. Nothing here pins a number that ordinary work
+    // would move: adding an integration test and updating the instructions
+    // keeps this green, and doing only one of the two does not.
+    let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/keleusma-arena/tests"));
+    let on_disk: usize = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(Result::ok)
+                .filter(|e| e.path().extension().is_some_and(|x| x == "rs"))
+                .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+                .map(|t| t.matches("#[test]").count())
+                .sum()
+        })
+        .unwrap_or(0);
+
+    let claimed: Vec<usize> = INSTRUCTIONS
+        .lines()
+        .filter(|l| l.contains("keleusma-arena ("))
+        .filter_map(|l| {
+            let at = l.find("keleusma-arena (")?;
+            let rest = &l[at..];
+            let plus = rest.find("plus ")? + "plus ".len();
+            let tail = &rest[plus..];
+            let digits: String = tail.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse().ok()
+        })
+        .collect();
+
+    assert!(
+        !claimed.is_empty(),
+        "the instructions no longer state an arena integration-test count in a shape this \
+         guard recognises. Re-derive the guard rather than deleting it: the claim being \
+         unstated is how the previous defect survived."
+    );
+    for c in &claimed {
+        assert_eq!(
+            *c, on_disk,
+            "the instructions claim {c} arena integration tests and the directory holds \
+             {on_disk}. The claim asserted eight while the directory did not exist at all."
+        );
+    }
+}
+
 /// **THE STAGE-SOURCE COUNT IN THE ORIENTATION DOCUMENT MATCHES THE DIRECTORY.**
 ///
 /// `CLAUDE.md` said **ten** where the tree holds **twelve**, in two separate places, while every
@@ -210,9 +265,11 @@ fn the_stated_figures_say_how_they_were_measured() {
 ///
 /// # The claim distinguishes two counts and so does this
 ///
-/// Twelve sources exist; **eleven** are embedded in the driver via `include_str!`, and
-/// `verify_types.kel` is embedded by its tests instead. Conflating those is how the original
-/// wording came to be wrong in a way nobody noticed.
+/// When this was written, twelve sources existed and eleven were embedded in the driver via
+/// `include_str!`, with `verify_types.kel` embedded by its tests instead. Conflating those is how
+/// the original wording came to be wrong in a way nobody noticed. Every stage source is now
+/// embedded, and the test asserts that the embedded set equals the directory inventory. This doc
+/// comment sat above the arena test until 2026-10-20, when it was moved to the test it describes.
 ///
 /// **THE EMBEDDED COUNT IS OVER DISTINCT NAMES, NOT OCCURRENCES, AND THE FIRST REVISION GOT THAT
 /// WRONG.** Counting `include_str!` occurrences reports twelve, because at least one stage is
@@ -276,16 +333,26 @@ fn the_stage_source_count_claim_matches_the_directory() {
             rest.find(".kel\")").map(|end| &rest[..end])
         })
         .collect();
-    assert!(
-        embedded.len() < on_disk,
-        "the driver embeds all {on_disk} stage sources. The instructions say one is embedded by \
-         its tests instead, so that sentence is stale.",
+    let disk_names: BTreeSet<String> = std::fs::read_dir(dir)
+        .expect("read stage inventory")
+        .map(|entry| entry.expect("read stage entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "kel"))
+        .map(|path| path.file_stem().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        embedded
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>(),
+        disk_names,
+        "the driver must embed every stage named by the directory inventory"
     );
-    assert!(
-        !embedded.contains("verify_types"),
-        "`verify_types.kel` is now embedded in the driver. It is the twelfth stage, the one that \
-         does not self-compile, and the instructions describe it as embedded by its tests."
-    );
+    let count_word = WORDS
+        .iter()
+        .find(|(_, count)| *count == on_disk)
+        .map(|(word, _)| *word)
+        .expect("extend the stage-count word table");
+    assert!(INSTRUCTIONS.contains(&format!("all {count_word} embedded in the driver")));
 }
 
 /// **EVERY WORKSPACE MEMBER IS NAMED IN THE ORIENTATION DOCUMENT.**
@@ -424,7 +491,7 @@ fn the_invalid_bytecode_census_still_describes_the_tree() {
 
     // The document states the total in words as well as digits; the digits are what is checked.
     let stated = doc
-        .split("**50 matches, of which ")
+        .split(" matches, of which ")
         .nth(1)
         .and_then(|rest| rest.split_whitespace().next())
         .and_then(|n| n.parse::<usize>().ok())
@@ -445,4 +512,722 @@ fn the_invalid_bytecode_census_still_describes_the_tree() {
          enumeration in the document rather than adjusting the number, because the value of that \
          document is that every site carries a verdict."
     );
+}
+
+/// The narrow-runtime coverage figure the decision documents state must not
+/// exceed what the tree actually holds.
+///
+/// # The claim this guards, and why it needed guarding
+///
+/// Four documents said, in various wordings, that the narrow widths are
+/// unexercised. They are not: `tests/narrow_vm.rs` and
+/// `tests/composite_width_skew.rs` define host aliases for narrow and skewed
+/// runtimes and drive them in the DEFAULT build, on every continuous-integration
+/// run. The corrections state a count. **A count in prose is the thing this tree
+/// has watched go stale three times** — the census paragraph was wrong three
+/// times, and `CLAUDE.md` carried a stale stage count in two places — so writing
+/// a fresh number and walking away would repeat the pattern one level up.
+///
+/// # The asymmetry is deliberate: at least, not exactly
+///
+/// The document's figure becomes FALSE if coverage drops below it, and merely
+/// conservative if coverage grows. An exact-equality guard would fire on every
+/// added narrow-runtime test, which is friction against the behaviour the
+/// project wants, and a guard that punishes good changes gets its number bumped
+/// without thought or deleted outright.
+///
+/// **Do not tighten this to equality.**
+///
+/// # Comments are stripped, and that is not a detail
+///
+/// A first version of this guard matched alias names anywhere in a test's text
+/// and derived 41, which agreed exactly with the figure the document then
+/// stated. **That agreement was two errors cancelling.** It counted
+/// `narrow_declared_multiword_long_division_on_wide_runtime` — a test whose name
+/// says it runs on a WIDE runtime — because a comment inside it mentions a
+/// narrow helper; and the document had counted all nine tests in the skew file,
+/// including one that is a deliberate control at the DEFAULT widths.
+///
+/// The true figure is 32 + 8 = 40. **A number that matches expectation is the
+/// one least likely to be re-examined**, which is why the check against the
+/// hand-derived split mattered more than the total.
+///
+/// # The attribution rule, and what it misses
+///
+/// A test counts when the CODE of its body — comments removed — names one of the
+/// narrow or skewed runtime aliases those files define, or calls a helper that
+/// does. **A test reaching a narrow runtime through a deeper indirection is not
+/// counted**, so the derived figure is a lower bound.
+///
+/// The two files are named explicitly. A third file introducing its own narrow
+/// alias would not be seen here.
+#[test]
+fn the_narrow_runtime_coverage_claim_still_describes_the_tree() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    // Aliases and helpers that reach a narrow or skewed runtime, taken from the
+    // two files' own type aliases rather than invented here.
+    const REACHES: &[&str] = &[
+        "NarrowVm",
+        "NarrowWordF64Vm",
+        "RetroVm",
+        "SixFiveOhTwo",
+        "WideWordNarrowAddress",
+        "run_i16",
+        "run_bool_i16",
+        "run_i16_data",
+    ];
+
+    /// Tests in `src` whose body code names something in `REACHES`.
+    fn attributed(src: &str) -> usize {
+        let lines: Vec<&str> = src.lines().collect();
+        let mut count = 0;
+        let mut i = 0;
+        while i < lines.len() {
+            let is_test_fn = lines[i].starts_with("fn ")
+                && i > 0
+                && lines[i - 1].trim_start().starts_with("#[test]");
+            if is_test_fn {
+                // The body runs to the next top-level item.
+                let mut j = i + 1;
+                while j < lines.len()
+                    && !(lines[j].starts_with("fn ")
+                        || lines[j].starts_with("#[test]")
+                        || lines[j].starts_with("type ")
+                        || lines[j].starts_with("struct ")
+                        || lines[j].starts_with("impl "))
+                {
+                    j += 1;
+                }
+                // Strip line comments: an alias named only in prose does not
+                // mean the test drives that runtime.
+                let code: String = lines[i..j]
+                    .iter()
+                    .map(|l| l.split("//").next().unwrap_or(""))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if REACHES.iter().any(|a| code.contains(a)) {
+                    count += 1;
+                }
+                i = j;
+            } else {
+                i += 1;
+            }
+        }
+        count
+    }
+
+    let mut derived = 0usize;
+    for rel in ["tests/narrow_vm.rs", "tests/composite_width_skew.rs"] {
+        let src = std::fs::read_to_string(root.join(rel))
+            .unwrap_or_else(|_| panic!("read {rel}; if it was renamed, update this guard"));
+        derived += attributed(&src);
+    }
+
+    assert!(
+        derived > 0,
+        "no test was attributed to a narrow runtime, so the alias list no longer matches anything \
+         and this guard is reporting a comfortable zero rather than checking the claim"
+    );
+
+    let doc = std::fs::read_to_string(root.join("docs/decisions/FEATURE_COMBINATION_SWEEP.md"))
+        .expect("read FEATURE_COMBINATION_SWEEP.md");
+
+    // Parse the figure OUT of the document. A guard carrying its own copy of the
+    // number would check the tree against itself and keep passing while the
+    // document drifted.
+    const MARKER: &str = " tests, in every continuous-integration";
+    let stated: usize = doc
+        .split(MARKER)
+        .next()
+        .filter(|head| head.len() < doc.len())
+        .and_then(|head| {
+            let digits: String = head
+                .trim_end()
+                .chars()
+                .rev()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            digits.parse().ok()
+        })
+        .expect(
+            "the sweep document no longer states the narrow-runtime coverage figure in the \
+             expected form. If the wording changed, update this extraction; a guard that finds \
+             nothing to check is worse than no guard.",
+        );
+
+    assert!(
+        derived >= stated,
+        "the documents claim {stated} tests drive a narrow or skewed runtime and this scan finds \
+         only {derived}. Coverage has been REMOVED, which makes the claim false. Restore the \
+         coverage or correct the documents — do not lower the figure to match without saying why \
+         the tests went away."
+    );
+}
+
+/// The census's per-group table must add up to the totals its prose states.
+///
+/// # The drift this catches, which happened twice
+///
+/// The document already warns that "a table whose parts do not add to its
+/// stated whole has been the tell for a miscount here before". It then became
+/// the tell again: the group F row read "1 of 7 probed" while the prose beneath
+/// it said "two of F's seven", because a second site was probed and the row was
+/// not updated. The two disagreed for long enough that a third figure — 17
+/// examined — was still circulating in `HANDOFF.md` five lines from the correct
+/// one.
+///
+/// A count in a table and the same count in a sentence are two places to go
+/// stale independently. This checks they agree.
+///
+/// # What it does NOT check
+///
+/// Whether either figure is TRUE of the tree. The sibling guard
+/// `the_invalid_bytecode_census_still_describes_the_tree` checks the site total
+/// against the source; this one checks the document against itself, which is a
+/// weaker and different claim. Both are needed: a self-consistent document can
+/// still describe a tree that has moved.
+#[test]
+fn the_census_group_table_adds_up_to_its_stated_totals() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let doc = std::fs::read_to_string(root.join("docs/decisions/INVALID_BYTECODE_CENSUS.md"))
+        .expect("read INVALID_BYTECODE_CENSUS.md");
+
+    let mut sites = 0usize;
+    let mut examined = 0usize;
+    let mut rows = 0usize;
+    for line in doc.lines() {
+        // `| A | description | 1 | verdict |`
+        let cols: Vec<&str> = line.split('|').map(str::trim).collect();
+        if cols.len() < 6 {
+            continue;
+        }
+        let group = cols[1];
+        if group.len() != 1 || !group.chars().all(|c| c.is_ascii_uppercase()) {
+            continue;
+        }
+        let Ok(n) = cols[3].parse::<usize>() else {
+            continue;
+        };
+        let verdict = cols[4];
+        rows += 1;
+        sites += n;
+        // "(k of n probed)" gives a partial count; "not examined" gives none;
+        // anything else is a class verdict covering the whole group.
+        examined += if let Some(rest) = verdict.split(" of ").next().and_then(|head| {
+            head.rfind('(')
+                .map(|i| &head[i + 1..])
+                .and_then(|d| d.parse::<usize>().ok())
+        }) {
+            rest
+        } else if verdict.contains("not examined") {
+            0
+        } else {
+            n
+        };
+    }
+
+    assert!(
+        rows >= 8,
+        "only {rows} group rows were parsed, so the table's shape changed and this guard is \
+         checking almost nothing rather than checking the table"
+    );
+
+    let stated_sites = 54usize;
+    assert_eq!(
+        sites, stated_sites,
+        "the group rows sum to {sites} sites, not the {stated_sites} the document states. \
+         Re-derive the totals by summing the per-group column — adjusting the total instead is \
+         how group G went missing from every remainder list."
+    );
+
+    // The prose states the examined total in words and then enumerates it.
+    assert!(
+        doc.contains("Thirty-eight of fifty-four sites carry an examined verdict"),
+        "the census no longer states its examined total in the expected form; update this \
+         extraction rather than deleting the check"
+    );
+    assert_eq!(
+        examined, 38,
+        "the group rows sum to {examined} examined sites and the prose says thirty-eight. One of \
+         them moved without the other. The per-group column is the authority."
+    );
+}
+
+/// Every test file must run in at least one continuous-integration
+/// configuration, except the one documented exception.
+///
+/// # Why a test can be invisible
+///
+/// A test file's `#![cfg(...)]` decides which builds compile it. If that gate is
+/// satisfied by no configuration continuous integration runs, the file is
+/// compiled by nobody and run by nobody — and it still sits in the tree looking
+/// like coverage. This is the same defect
+/// `docs/decisions/FEATURE_COMBINATION_SWEEP.md` records for builds, one level
+/// down.
+///
+/// **Only a gate negating a DEFAULT feature can escape every job**, because the
+/// non-default jobs are additive to default. The `not(feature = "narrow-word-*")`
+/// gates across the suite negate features nothing enables, so they are satisfied
+/// everywhere.
+///
+/// # The one exception, and why it is deliberate
+///
+/// `float_opcode_without_floats.rs` is gated
+/// `all(feature = "verify", not(feature = "floats"))`. It pins a hole reachable
+/// only on a build without floats, so no job that enables `verify` can also run
+/// it. That is queued as an operator decision, not an oversight.
+///
+/// # The feature sets are DERIVED, not restated
+///
+/// They are read out of the workflow file. Restating them here would be a second
+/// copy of a fact continuous integration already owns, and would go stale the
+/// day a job is added — the failure this session found in five process documents
+/// at once.
+#[test]
+fn the_only_test_gated_out_of_every_ci_configuration_is_the_known_one() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workflow = std::fs::read_to_string(root.join(".github/workflows/ci.yml"))
+        .expect("read ci.yml; if the workflow moved, update this guard");
+
+    // Derive the keleusma feature sets CI runs, from the workflow's own commands.
+    let default_features = ["compile", "verify", "floats"];
+    let mut sets: Vec<Vec<String>> = vec![
+        default_features.iter().map(|s| s.to_string()).collect(),
+        Vec::new(), // the bare --no-default-features job
+    ];
+    for line in workflow.lines() {
+        // ONLY lines that RUN the integration tests count. `cargo doc --features
+        // signatures,encryption,shell` COMPILES a gated test's crate for
+        // documentation but never executes it, and treating a doc job as
+        // coverage is how this guard first reported a test gated on
+        // `encryption` as covered. `cargo test --doc` runs doctests, not the
+        // files in `tests/`.
+        if !line.contains("nextest run") {
+            continue;
+        }
+        if !line.contains("-p keleusma ") || !line.contains("--features ") {
+            continue;
+        }
+        let Some(rest) = line.split("--features ").nth(1) else {
+            continue;
+        };
+        let list = rest.split_whitespace().next().unwrap_or("");
+        if list.is_empty() {
+            continue;
+        }
+        let mut set: Vec<String> = default_features.iter().map(|s| s.to_string()).collect();
+        for f in list.split(',') {
+            set.push(f.to_string());
+        }
+        sets.push(set);
+    }
+    assert!(
+        sets.len() >= 4,
+        "only {} feature sets were derived from the workflow, so the extraction stopped matching \
+         and this guard is checking almost nothing",
+        sets.len()
+    );
+
+    /// Evaluate a `cfg` gate against a feature set. An expression this cannot
+    /// interpret is treated as SATISFIED, which biases toward reporting a file
+    /// as running — the direction that under-reports, which is why the
+    /// non-vacuity assertions above and below matter.
+    fn satisfied(gate: &str, feats: &[String]) -> bool {
+        let g: String = gate.split_whitespace().collect::<Vec<_>>().join(" ");
+        fn ev(e: &str, feats: &[String]) -> bool {
+            let e = e.trim();
+            for kind in ["all(", "any(", "not("] {
+                if let Some(inner) = e.strip_prefix(kind) {
+                    let mut depth = 0usize;
+                    let mut parts: Vec<String> = Vec::new();
+                    let mut cur = String::new();
+                    for ch in inner.chars() {
+                        match ch {
+                            '(' => depth += 1,
+                            ')' if depth == 0 => break,
+                            ')' => depth -= 1,
+                            ',' if depth == 0 => {
+                                parts.push(std::mem::take(&mut cur));
+                                continue;
+                            }
+                            _ => {}
+                        }
+                        cur.push(ch);
+                    }
+                    if !cur.trim().is_empty() {
+                        parts.push(cur);
+                    }
+                    let vals: Vec<bool> = parts
+                        .iter()
+                        .filter(|p| !p.trim().is_empty())
+                        .map(|p| ev(p, feats))
+                        .collect();
+                    return match kind {
+                        "all(" => vals.iter().all(|v| *v),
+                        "any(" => vals.iter().any(|v| *v),
+                        _ => !vals.first().copied().unwrap_or(false),
+                    };
+                }
+            }
+            if let Some(rest) = e.split("feature = \"").nth(1)
+                && let Some(name) = rest.split('"').next()
+            {
+                return feats.iter().any(|f| f == name);
+            }
+            true
+        }
+        ev(&g, feats)
+    }
+
+    const KNOWN: &str = "float_opcode_without_floats.rs";
+    let mut orphans: Vec<String> = Vec::new();
+    let mut gated = 0usize;
+    let mut total = 0usize;
+    for entry in std::fs::read_dir(root.join("tests")).expect("read tests/") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        total += 1;
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        let src = std::fs::read_to_string(&path).expect("read test file");
+        // Strip line comments so a commented gate fragment does not confuse the parse.
+        let stripped: String = src
+            .lines()
+            .map(|l| l.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let Some(open) = stripped.find("#![cfg(") else {
+            continue; // ungated: runs wherever the crate builds
+        };
+        let after = &stripped[open + "#![cfg(".len()..];
+        let mut depth = 0usize;
+        let mut gate = String::new();
+        for ch in after.chars() {
+            match ch {
+                '(' => depth += 1,
+                ')' if depth == 0 => break,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            gate.push(ch);
+        }
+        gated += 1;
+        if !sets.iter().any(|s| satisfied(&gate, s)) {
+            orphans.push(name);
+        }
+    }
+
+    assert!(
+        total > 50 && gated > 50,
+        "only {total} test files and {gated} gates were seen, so the scan is not reaching the suite"
+    );
+    assert!(
+        orphans.iter().any(|o| o == KNOWN),
+        "the known exception {KNOWN} was NOT detected as gated out of every configuration. Either \
+         its gate changed — in which case the load-time float hole may now be covered, which is \
+         news — or this evaluator has stopped working. A guard that cannot find the one case it \
+         knows about is checking nothing."
+    );
+    orphans.retain(|o| o != KNOWN);
+    assert!(
+        orphans.is_empty(),
+        "these test files are gated out of EVERY continuous-integration configuration, so they are \
+         compiled by nobody and run by nobody while still reading as coverage: {orphans:?}. Either \
+         widen the gate, add a job, or document the exception as deliberate the way \
+         {KNOWN} is."
+    );
+}
+
+/// Every file the comment-matching sweep names must exist.
+///
+/// # Why a path check rather than an identifier one
+///
+/// `tests/comment_citations.rs` resolves backtick-quoted IDENTIFIERS in the two resume channels. It
+/// cannot help here: the sweep document cites **files**, and a path contains characters that its
+/// shape filter deliberately skips. Written as bare names instead, all twelve citations resolved to
+/// nothing — measured — and nothing anywhere would have said so.
+///
+/// **A document whose claims nothing verifies is the thing this session spent nine increments
+/// removing.** Writing one is a poor way to end that, so the claims are checked here: if a guard in
+/// the table is renamed or deleted, the row naming it fails rather than quietly describing a tree
+/// that has moved.
+///
+/// The check is deliberately weak — existence, not content. It cannot tell whether the file still
+/// strips comments, and it does not pretend to; the per-file guards do that, and each was
+/// mutation-tested when it was repaired.
+#[test]
+fn every_file_the_comment_matching_sweep_names_still_exists() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let doc_path = root.join("docs/decisions/COMMENT_MATCHING_GUARD_SWEEP.md");
+    let Ok(doc) = std::fs::read_to_string(&doc_path) else {
+        // The sweep document is optional in the sense that a branch may predate it; a missing
+        // file is not a failing claim. A PRESENT file with a broken claim is.
+        return;
+    };
+
+    let mut named = std::collections::BTreeSet::new();
+    for piece in doc.split('`') {
+        let t = piece.trim();
+        // **A GLOB IS NOT A PATH CLAIM.** The document says "every occurrence under `src/*.rs`",
+        // which is prose about a set of files rather than a citation of one. The first draft of
+        // this guard reported it as a missing file -- a guard manufacturing its own finding, which
+        // this file's own comment records learning twice before, once from a wrapped identifier and
+        // once from a filename. This is the third, from a glob.
+        if (t.starts_with("tests/") || t.starts_with("src/") || t.starts_with("docs/"))
+            && (t.ends_with(".rs") || t.ends_with(".kel") || t.ends_with(".md"))
+            && !t.contains('*')
+        {
+            named.insert(t.to_string());
+        }
+    }
+
+    // **NON-VACUITY.** A parse that matched nothing would pass while checking nothing, which is
+    // the exact failure the document catalogues. Thirteen files are tabulated plus this document
+    // and the tripwire; requiring ten leaves room for the table to change shape.
+    assert!(
+        named.len() >= 10,
+        "only {} paths were parsed out of the sweep document, so this guard is reading its \
+         formatting rather than its claims",
+        named.len()
+    );
+
+    let missing: Vec<&String> = named.iter().filter(|p| !root.join(p).exists()).collect();
+    assert!(
+        missing.is_empty(),
+        "the comment-matching sweep names files that no longer exist: {missing:?}. Either the \
+         guard was renamed, in which case the table needs the new name, or it was deleted, in \
+         which case the row should say so rather than vanish"
+    );
+}
+
+/// **THE INSTRUCTIONS' FEATURE-SET COUNT, CHECKED AGAINST THE WORKFLOW.**
+///
+/// `the_only_test_gated_out_of_every_ci_configuration_is_the_known_one` DERIVES the
+/// feature sets from `ci.yml` and says why: restating them is a second copy of a fact
+/// continuous integration owns, and it goes stale the day a job is added. That comment
+/// records the failure being found "in five process documents at once".
+///
+/// **`CLAUDE.md` was a sixth, and this test is why it went unnoticed.** The guard above
+/// derives the truth but never compares the instruction file's restatement against it, so
+/// the file said THREE — omitting `--no-default-features` and `--features signatures` —
+/// while the executable check was correct all along. Those two are precisely the
+/// configurations an earlier increment's docs-only change failed under.
+///
+/// # What this asserts
+///
+/// The count the instructions state matches the count derived from the workflow, and every
+/// derived feature list is named in the file. Adding a job fails this until both are
+/// updated, which is the only thing that keeps a restatement honest.
+///
+/// **Mutation-tested.** Changing the stated count from five to four fails this test, naming
+/// both the stated and the derived number and quoting the surrounding text.
+#[test]
+fn the_instructions_state_the_feature_sets_ci_actually_runs() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workflow = std::fs::read_to_string(root.join(".github/workflows/ci.yml"))
+        .expect("read ci.yml; if the workflow moved, update this guard");
+
+    // Same extraction as the sibling guard: only steps that RUN the integration tests.
+    let mut lists: Vec<String> = Vec::new();
+    for line in workflow.lines() {
+        if !line.contains("nextest run") || !line.contains("-p keleusma ") {
+            continue;
+        }
+        if line.contains("--no-default-features") {
+            lists.push("--no-default-features".to_string());
+            continue;
+        }
+        if let Some(rest) = line.split("--features ").nth(1)
+            && let Some(list) = rest.split_whitespace().next()
+            && !list.is_empty()
+        {
+            lists.push(list.to_string());
+        }
+    }
+    lists.sort();
+    lists.dedup();
+    // Plus the default-features workspace run, which carries no feature flag.
+    let derived = lists.len() + 1;
+
+    // NON-VACUITY: an extraction that stopped matching would assert nothing.
+    assert!(
+        derived >= 4,
+        "only {derived} feature sets were derived from the workflow, so the extraction \
+         stopped matching and this guard is checking almost nothing"
+    );
+
+    const WORDS: [&str; 11] = [
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    ];
+    let word = WORDS
+        .get(derived)
+        .unwrap_or_else(|| panic!("{derived} feature sets; extend the number-word table"));
+
+    // The instructions state the count immediately before this phrase.
+    const PHRASE: &str = "feature sets continuous integration actually runs";
+    let at = INSTRUCTIONS.find(PHRASE).unwrap_or_else(|| {
+        panic!(
+            "the instructions no longer contain {PHRASE:?}. If the sentence was reworded, \
+             update this guard's phrase rather than deleting the check: the claim it \
+             protects is a restatement of a fact the workflow owns"
+        )
+    });
+    let lead = &INSTRUCTIONS[at.saturating_sub(24)..at];
+    assert!(
+        lead.contains(word),
+        "the instructions state a feature-set count that is not {word:?} ({derived} derived \
+         from the workflow). Context was {lead:?}. A job was probably added or removed; \
+         update the sentence AND the list of sets it names"
+    );
+
+    // Every derived list must be named, so the count cannot be right by accident.
+    for list in &lists {
+        assert!(
+            INSTRUCTIONS.contains(list.as_str()),
+            "the instructions do not name the {list:?} feature set, which the workflow runs \
+             the keleusma suite under"
+        );
+    }
+}
+
+/// **THE TWO STRUCTURAL NUMBERS THE INSTRUCTIONS RESTATE, CHECKED AGAINST THE SOURCE.**
+///
+/// Both were correct when this was written, which is the point: they are checked so they
+/// STAY correct, not because either was wrong. They differ from the test counts, which the
+/// instructions explicitly mark as needing re-derivation — guarding those would churn on
+/// every increment.
+///
+/// - **`BYTECODE_VERSION`** gates artefact compatibility and moves only on operator
+///   authorisation. If the constant is bumped and the instructions are not, the file
+///   silently misstates which artefacts a build accepts.
+/// - **The opcode count** is a stated rad-hard design constraint: the instruction set is
+///   kept small deliberately and new opcodes are avoided. A guard here means adding one
+///   fails until someone updates the file, which is exactly when the constraint should be
+///   reconsidered rather than quietly exceeded.
+///
+/// # Why not restate them a third time
+///
+/// This reads both from the source. `the_instructions_state_the_feature_sets_ci_actually_runs`
+/// records what happens otherwise: a fact the tree owns, copied into prose, drifts until
+/// something compares the copy against the original.
+///
+/// # Mutation-tested, and one mutation was INCONCLUSIVE
+///
+/// Bumping `BYTECODE_VERSION` in the source fails this test, naming the source's value.
+/// Changing the instructions' opcode number fails it, naming the enum's variant count.
+///
+/// **Adding an `Op` variant did NOT test the opcode half.** It breaks compilation across
+/// the crate's exhaustive matches, so the test binary never built and the assertion was
+/// never reached. That is worth stating rather than counting as a pass: the opcode half is
+/// exercised from the PROSE side only. Its practical value is unchanged — once an added
+/// opcode compiles, this fails until the instructions record it — but the detection of an
+/// added opcode belongs to the compiler, not to this guard.
+///
+/// The `Value` slot width was mutation-tested from the prose side too: stating 40 where the
+/// source pins 32 fails, naming both. The spec's opcode count likewise: stating 65
+/// where the enum has 66 fails, naming both and noting the book chapter derives from it. The source's own const assertion already fails the
+/// BUILD on a layout change, so this catches the other order — a layout change made
+/// together with an update to that assertion, leaving the instructions stale.
+///
+/// # What is deliberately NOT guarded
+///
+/// The MSRV, because the instructions mention that continuous integration runs MSRV checks
+/// without stating a version, so there is no restatement to drift. And the test counts,
+/// which the instructions explicitly mark as figures to re-derive.
+#[test]
+fn the_instructions_state_the_structural_numbers_the_source_owns() {
+    const BYTECODE: &str = include_str!("../src/bytecode.rs");
+
+    // --- BYTECODE_VERSION -------------------------------------------------------------
+    let version = BYTECODE
+        .split("pub const BYTECODE_VERSION: u16 = ")
+        .nth(1)
+        .and_then(|rest| rest.split(';').next())
+        .and_then(|n| n.trim().parse::<u16>().ok())
+        .expect("read BYTECODE_VERSION from src/bytecode.rs; if its declaration was reworded, fix this extraction rather than deleting the check");
+    assert!(
+        INSTRUCTIONS.contains(&alloc_fmt("BYTECODE_VERSION = ", version)),
+        "the source declares BYTECODE_VERSION = {version}, which the instructions do not \
+         state. The number moves only on operator authorisation, so a mismatch means either \
+         an unauthorised bump or a file that misstates which artefacts a build accepts"
+    );
+
+    // --- opcode count -----------------------------------------------------------------
+    let body = BYTECODE
+        .split("pub enum Op {")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}").next())
+        .expect("locate `pub enum Op` in src/bytecode.rs");
+    let variants = body
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            l.len() - t.len() == 4
+                && t.starts_with(|c: char| c.is_ascii_uppercase())
+                && t.contains(['{', '(', ',', '='])
+        })
+        .count();
+
+    // NON-VACUITY: a broken extraction must fail loudly, not report a small number that
+    // happens to appear in the file.
+    assert!(
+        variants > 50,
+        "only {variants} Op variants were extracted, so the parse stopped matching and this \
+         guard is checking almost nothing. Fix the extraction rather than the expectation"
+    );
+    assert!(
+        INSTRUCTIONS.contains(&alloc_fmt("to ", variants as u16)),
+        "the Op enum has {variants} variants and the instructions do not state that number. \
+         The opcode count is a stated rad-hard constraint, so an opcode was probably added: \
+         record it in the instructions and revisit whether the constraint still holds"
+    );
+
+    // --- the `Value` slot width -------------------------------------------------------
+    //
+    // A const assertion in the source already fails the BUILD if the layout changes, so
+    // this is not the first line of defence. It catches the other order of events: someone
+    // changing the layout AND updating that assertion, leaving the instructions stating a
+    // width the runtime no longer has. The slot width feeds the worst-case memory bound,
+    // which is the project's stated value proposition, so a silently stale number here is
+    // worse than a stale test count.
+    let slot = BYTECODE
+        .split("core::mem::size_of::<Value>() == ")
+        .nth(1)
+        .and_then(|rest| rest.split(',').next())
+        .and_then(|n| n.trim().parse::<u16>().ok())
+        .expect("read the Value size assertion from src/bytecode.rs; if it was reworded, fix this extraction rather than deleting the check");
+    // --- the SPEC's opcode count ------------------------------------------------------
+    //
+    // The instruction-set spec restates the same number for readers, and the book chapter is
+    // GENERATED from it (`scripts/gen-book-instruction-set.py`, enforced in CI), so checking
+    // the spec covers the user-facing copy too. A wrong count here misleads someone reading
+    // the instruction set, which is worse than a stale figure in a process document.
+    const SPEC: &str = include_str!("../docs/spec/INSTRUCTION_SET.md");
+    assert!(
+        SPEC.contains(&alloc_fmt("contains ", variants as u16)),
+        "the Op enum has {variants} variants and the instruction-set spec states a different \
+         count. The book chapter is generated from that spec, so the user-facing reference is \
+         wrong too"
+    );
+
+    assert!(
+        INSTRUCTIONS.contains(&alloc_fmt("`Value` slot is ", slot)),
+        "the source pins the Value slot at {slot} bytes and the instructions state a \
+         different width. The slot width feeds the worst-case memory bound, so the figure \
+         is load-bearing rather than descriptive"
+    );
+}
+
+/// Format `prefix` followed by `n`, for substring checks against the instructions.
+fn alloc_fmt(prefix: &str, n: u16) -> String {
+    format!("{prefix}{n}")
 }

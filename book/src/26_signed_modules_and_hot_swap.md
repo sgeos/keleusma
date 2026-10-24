@@ -22,6 +22,7 @@ whose signature does not check out against that key.
 
 A program opts in with the `signed` modifier on its entry function:
 
+<!-- verify: compile -->
 ```
 signed fn main() -> Word {
     21 + 21

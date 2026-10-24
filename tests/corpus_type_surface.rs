@@ -1,5 +1,8 @@
 //! What the byte-identity oracle's corpus actually exercises at a function boundary.
 //!
+//! The current fourteen-stage corpus includes Boolean results from wire_debug and schema validation
+//! helpers. Parameters remain Word. The dated single-type measurement below is historical.
+//!
 //! # The finding this pins
 //!
 //! The oracle compares whole compiled stages, which makes it the project's strongest correctness
@@ -58,7 +61,7 @@ fn type_name(t: &TypeExpr) -> String {
 }
 
 #[test]
-fn the_corpus_exercises_exactly_one_type_at_every_function_boundary() {
+fn the_corpus_has_word_parameters_and_word_or_bool_results() {
     let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/selfhost/kel"));
     let mut stages = 0usize;
     let mut functions = 0usize;
@@ -106,12 +109,15 @@ fn the_corpus_exercises_exactly_one_type_at_every_function_boundary() {
          size; the extraction has broken rather than the corpus having shrunk"
     );
 
+    // Debug and schema validation helpers add Boolean results to the stage corpus.
+    let expected_returns: BTreeSet<String> = ["Word".to_string(), "Bool".to_string()]
+        .into_iter()
+        .collect();
     let word: BTreeSet<String> = ["Word".to_string()].into_iter().collect();
     assert_eq!(
-        returns, word,
-        "the corpus's return types are no longer exactly {{Word}}. That is a real WIDENING of the \
-         byte-identity oracle's reach and is good news, but the reasoning recorded above and in \
-         the design journal assumes the single-type shape. Update it rather than deleting this."
+        returns, expected_returns,
+        "the corpus's return types are no longer exactly {{Word, Bool}}. That is a real WIDENING of the \
+         byte-identity oracle's reach. Update the measured surface and its coverage claims."
     );
     assert_eq!(
         parameters, word,

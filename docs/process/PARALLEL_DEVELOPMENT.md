@@ -193,7 +193,21 @@ branches are live:
 cut from whichever version branch owns the work, with `KEL_TRUNK=v0.3.0` where
 needed — both `worktree.sh` and `merge-to-trunk.sh` honour it.
 
-### The three channels are single-writer and belong to `v0.2.3`
+### Current channel ownership
+
+The V0.2.X line maintains the current-state blocks in `TASKLOG.md` and
+`REVERSE_PROMPT.md`. The V0.3.X line resumes from its own brief and handoff under
+`docs/process/handoffs/` and preserves its attributed reverse-prompt addendum.
+During absorption, keep both lines' material and outstanding reports. A native
+regression guard checks that the addendum survives. Journal entries remain
+attributed, and concurrent edits to a shared channel require reconciliation.
+
+The following single-writer arrangement records the original policy. The current
+arrangement above reflects the shared addendum already maintained and checked by
+the native line. It does not grant either line ownership of the other's code.
+
+### Original channel arrangement
+
 
 `REVERSE_PROMPT.md`, `DESIGN_JOURNAL.md`, and `TASKLOG.md` would conflict on
 **every** merge between version branches. `DESIGN_JOURNAL.md` is newest-first, so
@@ -480,7 +494,10 @@ branch. It performs the whole serialization sequence and refuses to merge if the
 trunk moved under it:
 
 1. Rebase the branch onto the current trunk tip (`git fetch` + `git rebase origin/v0.2.3`).
-2. Run `scripts/release-gate.sh` to green (the mandatory pre-merge gate).
+2. Verify the branch. **CI on a pull request is what authorizes a merge** (changed 2026-08-11;
+   see [GIT_STRATEGY.md](./GIT_STRATEGY.md#definition-of-green)). `scripts/release-gate.sh` is
+   available for a local pass when working offline or before a release, and this step called it
+   "the mandatory pre-merge gate" until 2026-09-08, which was the superseded rule.
 3. Re-check the trunk tip. If it moved while the gate ran, another agent merged
    first — abort and re-run (which rebases onto the new tip and re-gates).
 4. Fast-forward merge and push.

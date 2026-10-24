@@ -38,6 +38,32 @@
 use keleusma::bytecode::Op;
 use std::collections::BTreeMap;
 
+/// Byte width of THIS BUILD's word, derived from the crate rather than restated.
+///
+/// A literal `8` here is a second copy of a fact the runtime already owns, and
+/// `narrow-word-*` makes it wrong. `tests/narrow_vm.rs` records the same rule
+/// for the float width, and what happened without it: tests failing under a
+/// narrow selector for reasons unrelated to what they check. The subject of
+/// this file is composite escape routes, not width, so the width must not be
+/// pinned here.
+fn word_bytes() -> usize {
+    keleusma::target::Target::host().word_bits() as usize / 8
+}
+
+/// One little-endian word of a flat composite body, sign-extended to `i64`.
+///
+/// A flat body's scalar fields are word-wide, so this reader follows the word.
+/// It is deliberately NOT the right reader for a wire-format record, whose
+/// field widths are fixed by that format and do not move with the target; see
+/// `tests/selfhost_wire.rs`, whose fixed-width reads are correct as they stand.
+fn read_word(bytes: &[u8], at: usize) -> i64 {
+    let wb = word_bytes();
+    let mut buf = [0u8; 8];
+    buf[..wb].copy_from_slice(&bytes[at..at + wb]);
+    let shift = 64 - wb * 8;
+    (i64::from_le_bytes(buf) << shift) >> shift
+}
+
 /// What an opcode can do to a composite's region.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Route {
@@ -202,7 +228,7 @@ fn classification() -> BTreeMap<&'static str, Route> {
 /// property of the list, and this repository has paid for that distinction
 /// repeatedly.
 fn opcode_names() -> Vec<String> {
-    let src = include_str!("../src/bytecode.rs");
+    let src = code_only(include_str!("../src/bytecode.rs"));
     let start = src
         .find("pub enum Op {")
         .expect("src/bytecode.rs declares `pub enum Op`");
@@ -418,11 +444,9 @@ loop main(t: Word) -> Outer {
     };
     let bytes = body.resolve(vm.arena()).expect("resolves");
 
-    let words: Vec<i64> = bytes
-        .as_chunks::<8>()
-        .0
-        .iter()
-        .map(|c| i64::from_le_bytes(*c))
+    let wb = word_bytes();
+    let words: Vec<i64> = (0..bytes.len() / wb)
+        .map(|i| read_word(bytes, i * wb))
         .collect();
     assert_eq!(
         words,
@@ -433,7 +457,7 @@ loop main(t: Word) -> Outer {
     );
     assert_eq!(
         bytes.len(),
-        24,
+        3 * wb,
         "three words packed contiguously; a handle-carrying body would not be \
          this size"
     );
@@ -898,4 +922,24 @@ loop main(t: Word) -> Word {
         "the indexed slot read back differently after a reset: {reads:?}. A slot \
          holding a handle rather than a copy would fail here, which is the point."
     );
+}
+
+/// Source with `//` line comments removed, so an anchor search matches CODE.
+///
+/// **Locating on RAW source is the defect this removes.** A comment naming the anchor sends the
+/// extraction to the comment; measured here, one such line failed three tests in this file with
+/// nothing wrong in `src/bytecode.rs`.
+///
+/// Truncating at the first `//` rather than tracking string literals is correct for an anchor
+/// search: an early truncation can only make the anchor go missing, which fails loudly through the
+/// `expect` above. `tests/call_chunk_index_limit.rs` needs a string-aware strip instead, because its
+/// assertion is an ABSENCE one where the same truncation lets a real offender pass silently.
+fn code_only(src: &str) -> String {
+    src.lines()
+        .map(|l| match l.find("//") {
+            Some(i) => &l[..i],
+            None => l,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

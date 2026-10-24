@@ -29,6 +29,19 @@ use keleusma::wire_schema::{decode_aux_body, encode_aux_body};
 /// valuable inputs behind a flag nobody passes, to dodge a defect that no longer
 /// exists.
 const CORPUS: &[(&str, &str)] = &[
+    ("wire", include_str!("../src/selfhost/kel/wire.kel")),
+    (
+        "wire_debug",
+        include_str!("../src/selfhost/kel/wire_debug.kel"),
+    ),
+    (
+        "wire_schema",
+        include_str!("../src/selfhost/kel/wire_schema.kel"),
+    ),
+    (
+        "verify_types",
+        include_str!("../src/selfhost/kel/verify_types.kel"),
+    ),
     ("lexer", include_str!("../src/selfhost/kel/lexer.kel")),
     ("parse", include_str!("../src/selfhost/kel/parse.kel")),
     ("codegen", include_str!("../src/selfhost/kel/codegen.kel")),
@@ -339,23 +352,9 @@ fn every_self_hosted_stage_round_trips_through_the_new_schema() {
 ///
 /// An entry here is a decision, not an oversight, and the test below requires
 /// every file in the directory to be in one list or the other.
-const EXCLUDED: &[(&str, &str)] = &[
-    (
-        "wire.kel",
-        "the wire format written in Keleusma (step 6). Not a pipeline stage, not \
-         driven by `read_stage`, and not compiled by the self-hosted driver, so it \
-         has nothing to round-trip through the auxiliary-body codec. Covered by \
-         tests/selfhost_wire.rs instead.",
-    ),
-    (
-        "verify_types.kel",
-        "the self-hosted TYPE REJECTION stage, slice 0. Not a pipeline stage and \
-         not driven by `read_stage`: it answers accept-versus-reject about a \
-         program rather than transforming one, so it has no stage output to \
-         round-trip. It joins the corpus if it ever emits an artifact. Covered by \
-         tests/selfhost_typecheck.rs instead.",
-    ),
-];
+// The earlier wire and verify_types exclusions described an obsolete driver.
+// Both are embedded and compiled now, and wire_debug also round-trips here.
+const EXCLUDED: &[(&str, &str)] = &[];
 
 #[test]
 fn every_kel_source_is_either_in_the_corpus_or_explicitly_excluded() {
@@ -365,9 +364,8 @@ fn every_kel_source_is_either_in_the_corpus_or_explicitly_excluded() {
     // the directory, so nothing could notice a divergence -- and one had
     // already occurred: `wire.kel` was added and the corpus did not change.
     //
-    // That omission is correct, which is not the point. The point is that its
-    // correctness rested on someone remembering. This converts the question
-    // into one the suite asks.
+    // Those historical exclusions are now closed. The inventory still requires
+    // each new stage to be included or explicitly justified.
     let dir = std::path::Path::new("src/selfhost/kel");
     let mut unaccounted = Vec::new();
     let mut seen = 0usize;
@@ -393,6 +391,11 @@ fn every_kel_source_is_either_in_the_corpus_or_explicitly_excluded() {
         "these files are in {} but are neither in CORPUS nor in EXCLUDED: {unaccounted:?}. \
          Add each to one, with a reason.",
         dir.display()
+    );
+    assert_eq!(
+        seen,
+        CORPUS.len() + EXCLUDED.len(),
+        "inventory entries must cover each source once"
     );
     // Vacuity guard: if the directory could not be read, or the extension
     // filter matched nothing, the loop above would pass having checked nothing.

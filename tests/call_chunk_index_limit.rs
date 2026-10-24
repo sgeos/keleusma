@@ -139,6 +139,7 @@ fn the_reference_compiles_both_sides_of_the_boundary() {
 /// The driver copy matters especially: five defects with one cause came from the shipping
 /// driver and that copy diverging, while the boundary exercised only the copy.
 #[test]
+
 fn every_site_in_the_call_packing_family_agrees_on_the_radix() {
     let radix = keleusma::selfhost_host::CALL_CHUNK_RADIX;
     assert_eq!(
@@ -175,7 +176,17 @@ fn every_site_in_the_call_packing_family_agrees_on_the_radix() {
                 continue;
             };
             scanned += 1;
-            for (i, line) in text.lines().enumerate() {
+            for (i, raw) in text.lines().enumerate() {
+                // **MATCH CODE, NOT PROSE.** A line comment mentioning the old radix -- exactly
+                // what a historical note in this repository says -- used to be reported as an
+                // offender. Measured: adding `// the Call record once split its chunk field as
+                // count * 256.` to a source file failed this test, with nothing wrong in the tree.
+                //
+                // That is the FOURTH instance in this repository of a guard matching prose it was
+                // never meant to read, and the remedy already applied here was to skip the whole
+                // file -- which costs reach and is the remedy a later reader would copy.
+                let line = code_before_comment(raw);
+                let line = line.as_str();
                 if line.contains("65536") {
                     continue;
                 }
@@ -247,4 +258,43 @@ fn chunk_indices_follow_sorted_name_not_declaration_order() {
         "chunk numbering is no longer by sorted name, so the mechanism recorded in this file \
          needs re-deriving. Order was: {names:?}"
     );
+}
+
+/// The part of a line that is CODE, with any `//` line comment removed.
+///
+/// # Why this is string-aware rather than a `split("//")`
+///
+/// Truncating at the first `//` is wrong on `let s = "http://a"; let x = count * 256;` — it cuts
+/// inside the string literal and drops a REAL occurrence. For an absence assertion that is the
+/// dangerous direction: a missed offender passes silently, where a matched comment merely fails
+/// loudly. So the scan tracks whether it is inside a double-quoted string, honouring backslash
+/// escapes, and truncates only at a `//` outside one.
+///
+/// **It does not handle block comments.** A `/* … count * 256 … */` would still be matched. That is
+/// stated rather than silently assumed: this repository writes line comments, the four recorded
+/// instances of this defect were all line comments, and a block-comment scanner needs cross-line
+/// state this per-line walk does not carry. Both `.rs` and `.kel` use `//`, so one helper serves.
+fn code_before_comment(line: &str) -> String {
+    let bytes: Vec<char> = line.chars().collect();
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+        } else if c == '"' {
+            in_string = true;
+        } else if c == '/' && i + 1 < bytes.len() && bytes[i + 1] == '/' {
+            return bytes[..i].iter().collect();
+        }
+        i += 1;
+    }
+    line.to_string()
 }

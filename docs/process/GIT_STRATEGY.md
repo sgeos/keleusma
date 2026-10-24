@@ -4,6 +4,9 @@
 
 Version control conventions for Keleusma.
 
+**Operator clarification, 2026-09-28.** Commit once per prompt. Only feature branches may commit on red. Version branches and `main` must remain green. Full gates must pass before publication or merging into `main`. Keep version branches green through remote continuous integration. Local checks may remain targeted when they provide high confidence that remote continuous integration will pass. Record the selected checks and their coverage limits. A version-branch merge does not itself require a full local gate. Detached packages need relevant local checks because root continuous integration does not cover them. Their complete gates remain mandatory before publication or merging their changes into `main`. A feature may be revised across prompts or abandoned. This policy supersedes conflicting historical guidance below.
+
+
 ## Branch Model
 
 Keleusma uses a **release-branch model** with a four-level hierarchy: `main` holds releases, a
@@ -48,16 +51,23 @@ integration trunk, and feature integration uses merge commits, not rebase-to-lin
 
 - **Cut from the active version branch.** Naming convention `<scope>/<short-description>` (for
   example `feat/selfhost-nested-eq`, `fix/parser-error-recovery`).
-- **Intermediate commits may be red.** A feature branch is a workspace. A session may take several
-  commits, passing through red states, to converge on a working approach; only the branch **tip at
-  merge** must be green. Nothing on the branch is load-bearing until it merges, so a session should
-  commit freely to checkpoint work rather than hold a single large uncommitted change.
+- **Intermediate commits may be red.** A feature branch is a workspace. Successive prompts may produce commits passing through red states, to converge on a working approach; only the branch **tip at
+  merge** must be green. Nothing on the branch is load-bearing until it merges, so commit once per prompt with the verification state recorded.
 - **Abandoning the branch is an acceptable outcome, not a failure.** If an approach does not
   converge, discard the branch (delete it unmerged) and start a new one rather than force an unsound
   approach to green. The version branch is only ever touched by green merges, so a dead-end feature
   branch costs nothing but the branch itself. This is the worst case, and it is a normal one.
-- **Must be all-green before merging back** into the version branch (a green
-  `scripts/release-gate.sh`).
+- **Must be all-green before merging back** into the version branch. Use the remote continuous integration requirements below and relevant targeted checks for any detached package affected by the change. A duplicate local full workspace gate is not required when continuous integration covers it.
+- **A PUSH CANCELS THE RUNNING CONTINUOUS-INTEGRATION JOB FOR THAT PULL REQUEST.** The workflow sets
+  `cancel-in-progress: true` on a concurrency group keyed by the pull request's ref, which is
+  correct for superseding a stale run and fatal for a session that pushes faster than the run
+  finishes. **Measured 2026-09-11: five consecutive runs on one branch were cancelled and none ever
+  completed**, because an automated loop woke every twenty minutes against a run that takes about
+  forty. Six increments accumulated with the merge gate never once satisfied.
+- **So: once a branch is ready, stop pushing to it and let the run finish.** A further increment is
+  not progress if it destroys the verification the merge depends on. **A self-paced loop whose
+  period is shorter than the verification it depends on will cancel that verification forever.**
+  Work that cannot wait belongs on a separate branch, whose run is a different concurrency group.
 - Merge via a **no-fast-forward merge commit**, so the version branch's first-parent history stays
   green and readable while the granular per-increment commits are preserved on the merged bubble.
 
@@ -153,13 +163,9 @@ branch onto the spine without saying so.
 
 ## Definition of Green
 
-Two authorities, with a defined relationship:
+Remote continuous integration establishes the version-branch green requirement. Local checks provide confidence before pushing and may target the affected scope. Full local gates are mandatory before publication or merging into `main`, including complete gates for detached packages. A stale complete-gate record means that complete verification is not current. It does not alone establish a test failure or block version-branch integration supported by green remote checks and relevant local evidence.
 
-- **Local** — the full pre-merge gate `scripts/release-gate.sh` passes (feature matrix, the whole
-  self-host suite, the detached `compiler/` subproject, docs under `-D warnings`, clippy, fmt).
-- **Remote** — the continuous integration run passes.
-
-**CI GATES FEATURE BRANCHES. The local gate is for releases and offline work.** Changed
+**Remote continuous integration gates version-branch merges. Full local gates are required before publication and merges into `main`, and are available for offline work.** Changed
 2026-08-11, because **gate time is the project's bottleneck** and two sessions were serialising on
 one machine.
 
@@ -169,7 +175,7 @@ branches: [main, 'v*']` triggers the full matrix, so the branch is verified on h
 
 | | local `release-gate.sh` | CI |
 |---|---|---|
-| wall clock | ~2h30m | **~48 min** (23 parallel jobs) |
+| wall clock | ~2h30m | **~61 min** (22 jobs, one of them the critical path) |
 | contends for the shared machine | **yes, exclusively** | no |
 | two sessions at once | impossible | **yes** |
 | coverage | 12 steps | **all 12, plus 10 more** |
@@ -180,6 +186,41 @@ lines. CI additionally runs Miri, two MSRV checks, `no_std`, the RTOS `thumbv8m`
 `keleusma-bench`, the SDL3 examples, the LSP, the VS Code extension and the WASM playground, none of
 which the local gate touches. The local gate was always the weaker instrument; it was merely the
 nearer one.
+
+**The wall-clock figure was measured on 2026-09-08 and had been understated.** This row read
+"~48 min (23 parallel jobs)". Five completed runs on `v0.2.3` that day took **57, 60, 61, 66 and 71
+minutes** end to end, including queue time, which is the interval that matters because it is how long
+until you know. Median 61.
+
+**The run is not bounded by its parallelism; it is bounded by ONE job.** In a representative run
+`Test (self-host feature)` took **59 minutes** and the next longest 44, across 22 jobs. Adding runners
+cannot help. **The only way to shorten CI materially is to split that job**, which is a project-level
+call and is recorded here rather than adopted.
+
+**Superseded on 2026-10-21, when the operator adopted the split.** By then the Order 1 to Order 3
+self-host corpus had grown the two long jobs past GitHub's six-hour hosted-runner limit, and both
+were cancelled at 6h0m on pull request 484. The `Test` and `Test (self-host feature)` jobs now run as
+four hash partitions each, named `Test (shard k/4)` and `Test (self-host feature, shard k/4)`, with
+the documentation tests on shard one. Local debug runs summed 15.1 test-hours for the workspace and
+19.4 for self-host, and the slowest single test took 2.65 hours, which bounds any shard from below.
+The reasoning and the coverage check are recorded on the job in `.github/workflows/ci.yml` and in
+`tests/ci_shard_coverage.rs`. The 61-minute figures above describe the unsplit workflow at a smaller
+corpus and are kept as history.
+
+**Revised on 2026-10-24, at the operator's direction, after two causes were measured.** First, the
+test profile built at opt-level 0, and the heavy tests interpret whole compiler stages in the VM.
+Pull request 493 set opt-level 1, and the run fell from 237 minutes to 42 with the slowest shard
+from about 220 minutes to 40. Second, `keleusma-cli` enables `self-host`, so the `--workspace` job
+built the feature and repeated the self-host job's corpus. In that run, 3.42 of its 3.54 test-hours
+were tests the self-host job also ran. The workspace job is now a single `Test` job that filters out
+`keleusma`'s `selfhost_*` binaries, and `Test (self-host feature, shard k/4)` is the one place the
+heavy tier runs. The operator's rule is that the heavy tier gates a merge in CI, can be run
+selectively, and stays out of everyday local verification.
+
+**The conclusion is unchanged and the correction is small.** Sixty-one minutes against two and a half
+hours is still roughly two and a half times faster, and CI still costs no time on the contended
+machine, so the 2026-08-11 decision stands on the same reasoning with an honest number. Five samples
+from one day, under whatever load the runners had.
 
 **The obvious objection inverts.** `perf_canary` on a shared runner is noisier than on a quiet
 desktop — but a CI false trip costs a 48-minute re-run that consumes **no local time at all**, while
@@ -232,39 +273,29 @@ Commit after completing a prompted request. Each commit should represent one log
 combining unrelated changes in a single commit. The AI agent commits once after all tasks in a prompt
 are complete, including the `REVERSE_PROMPT.md` update.
 
+The operator resolved the previously recorded commit-frequency conflict on 2026-09-28. The once-per-prompt rule applies, and red commits are permitted only on feature branches. Attribute assisted commits to the assistant that contributed, as specified in `CLAUDE.md`.
+
 ## Pre-Push Checklist
 
-Before pushing, verify:
+Before a push represented as green, each of the following must hold.
 
-- `cargo test` passes with no failures
-- `cargo clippy -- -D warnings` produces zero warnings
-- `cargo fmt --check` reports no formatting issues
-- Commit messages follow the conventions above
-- No secrets, credentials, or sensitive data are included in the commit
+- The verification receipt names the candidate commit or working-tree diff, every command and feature selector run, and each process exit code. Every selected command must exit zero.
+- Test output must show the intended cases actually ran. Record passed, failed and skipped counts. An empty selection or missing result does not pass.
+- Run formatting checks for changed Rust code with `cargo fmt --all -- --check` in the affected workspace. Run targeted tests and lint for the changed targets, for example `cargo test --test gate_record` and `cargo clippy --test gate_record -- -D warnings` in `native_codegen/`. Record any omitted check and the changed paths that justify omitting it.
+- For documentation-only changes, run `cargo test --test documentation_links --test comment_citations --test gate_ci_correspondence` from the root. Run affected detached-package documentation guards separately.
+- List coverage omitted, including untested feature configurations and full gates not run. Do not describe targeted verification as a complete gate pass.
+- Commit messages follow the conventions above and the staged diff contains no secrets, credentials or sensitive material.
+
+The operator permits targeted local checks when confidence in the remote result is high. The [source ruling](./GATE_POLICY.md) sets that policy. Confidence is an engineering judgment supported by the receipt, not a replacement for the pass conditions above. A work-in-progress feature push may retain explicitly recorded failures. It must not be represented as green or merged into a version branch while required remote checks fail or remain incomplete.
 
 The push itself runs the cargo-husky pre-push hook (the default-feature workspace tests, fmt, clippy,
 doc, markdown links). Per the test tiers (process audit item 1), that hook runs the **routine `quick`
 tier**, which excludes the ~198 self-hosted byte-identity tests (the `selfhost_*` binaries); it also
 does **not** exercise the `--no-default-features`/`signatures` feature matrix, and it does **not** run
-the detached `compiler/` subproject. All three — the full self-host suite, the feature matrix, and
-the subproject — live only in the pre-merge gate below. This makes the pre-merge gate the sole local
-enforcement point for self-host regressions on the release line, so running it before a merge is not
-optional.
+the detached `compiler/` subproject. The hook does not establish complete integration coverage. The full self-host suite, feature matrix and compiler subproject are covered by continuous integration. Detached native-code-generation checks remain separate.
 
-## Pre-Merge Gate (mandatory)
+## Integration and release checkpoints
 
-Before merging a feature branch into the version branch (or the version branch into `main`), run the
-full gate:
+Before merging into a version branch, require green remote continuous integration on the pull request. Select local checks by affected scope and the confidence needed for that remote result. Native-only changes need relevant native checks because root continuous integration does not exercise the detached package. Both complete native configurations are not mandatory for every version-branch integration.
 
-```
-scripts/release-gate.sh
-```
-
-This is the recommended local mirror of CI: it runs the `--no-default-features` and
-`signatures`/`signatures,shell` feature matrix **and** the detached `compiler/` subproject (`cd
-compiler && cargo test`) — the same coverage CI provides. As of 2026-07-24 CI triggers on `main`
-**and** any `v*` version branch and includes a `selfhost-compiler` subproject job, so **the version
-branch is CI-gated**. Run the gate before the merge so a break is caught locally in one pass; CI is
-the authoritative confirmation afterward, per [Definition of Green](#definition-of-green).
-Historically the subproject was gated **nowhere**, which is how a stale decoder shipped `unknown op
-tag 62` into `v0.2.3` (process audit item 4); that gap is now closed in both places.
+Before publication or merging into `main`, full gates must pass against the candidate inputs. Run `scripts/release-gate.sh`, with `--miri` for publication, and the complete gates for affected detached packages. For the native backend, that includes both float configurations with current clean, frozen, passing records. Remote green remains required. Publication requires explicit in-session confirmation.

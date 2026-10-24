@@ -23,7 +23,7 @@
 # failures; the script exits non-zero if any check failed.
 
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 FAILED=()
 section() { printf '\n\033[1m========== %s ==========\033[0m\n' "$1"; }

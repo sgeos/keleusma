@@ -57,6 +57,7 @@ For `20 + 22`, the result `42` fits, so the `ok` arm runs.
 
 Change `main` to add the largest `Word` and one more:
 
+<!-- verify: prelude accept -->
 ```
 fn main() -> Word {
     add_checked(9223372036854775807, 1)
@@ -94,6 +95,7 @@ form `Multiword<N>` is the integer case, equal to `Multiword<N, 0>`. You
 construct one from a tuple of its words, least significant first, and
 index its words back out:
 
+<!-- verify: accept -->
 ```
 fn main() -> Word {
     let a = (9223372036854775807, 0) as Multiword<2>;
@@ -158,6 +160,7 @@ The construct works on the four numeric types, not only `Word`. On
 single result rather than two halves, because those types do not carry
 the big-number high half:
 
+<!-- verify: accept -->
 ```
 fn main() -> Byte {
     200Byte + 100Byte {
@@ -207,6 +210,7 @@ language, each with its own arm keywords.
 **Indexing.** An array index can point past the end. The `invalid_index`
 arm binds the offending index, and `ok` binds the element:
 
+<!-- verify: accept -->
 ```
 fn main() -> Word {
     let a = [10, 20, 30];
@@ -223,6 +227,7 @@ The index `9` is out of range, so the result is `0`.
 the value breaks the rule. The `invalid_newtype` arm binds the value the
 predicate rejected:
 
+<!-- verify: accept -->
 ```
 fn is_positive(x: Word) -> bool { x > 0 }
 newtype Positive = Word where is_positive;
@@ -245,6 +250,7 @@ converts to itself, the `payload_discriminant` arm supplies a
 payload-bearing variant's payload, and `invalid_discriminant` catches a
 `Word` that matches no variant:
 
+<!-- verify: accept -->
 ```
 enum Signal { Stop = 0, Go = 1 }
 

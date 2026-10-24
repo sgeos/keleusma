@@ -100,6 +100,72 @@ A cheaper alternative that covers far more: a **build-only** matrix step running
 the five before it, at a fraction of a test job's cost, because all of them were compile failures.
 It would NOT have caught the two lex-time test failures, which need the tests to run.
 
+## A test that never runs is a guard that guards nothing
+
+The sections above ask which BUILD configurations nothing exercises. The same question applies one
+level down: **which TESTS are gated into a configuration continuous integration never builds?** A
+test file whose `#![cfg(...)]` excludes it from every job is compiled by nobody and run by nobody, and
+its presence in the tree reads as coverage.
+
+**Measured 2026-09-08, by evaluating every test file's top-level gate against the five feature sets
+continuous integration actually runs** — default; bare `--no-default-features`; `--features
+signatures`; `--features signatures,shell`; `--features self-host`, the last three additive to
+default.
+
+| | |
+|---|---|
+| test files | 105 |
+| carrying a top-level `#![cfg]` | 99 |
+| running in **no** continuous-integration configuration | **1** |
+
+**The one is `tests/float_opcode_without_floats.rs`**, gated
+`all(feature = "verify", not(feature = "floats"))`. `floats` is a default feature, so every job that
+enables `verify` also enables `floats`, and the bare job enables neither. It is **by design and
+already documented**: it pins the load-time hole that is operator decision 3, and the hole is only
+reachable on a build without floats.
+
+**Only a gate negating a DEFAULT feature can escape every job.** The `not(feature = "narrow-word-*")`
+gates that appear across the suite negate features nothing enables, so they are satisfied everywhere
+and cost nothing.
+
+### The first version of this check called a doc job coverage
+
+The guard derives the feature sets from the workflow, and its first extraction matched **any**
+`keleusma` command carrying `--features`. That swept in `cargo doc --features
+signatures,encryption,shell`, so a test gated on `encryption` was reported as covered when the doc
+job only COMPILES it and never runs it.
+
+**The mutation is what found this, by NOT failing.** A deliberately unreachable test was added and
+the guard passed. `cargo test --doc` runs doctests, not the files in `tests/`, so only `nextest run`
+lines decide which integration tests execute, and the extraction now says so.
+
+**The hand-written model was the wrong one.** A control run beforehand had asserted that `encryption`
+is never enabled in continuous integration; the derived version disagreed, and the derived version
+was closer to the truth — `encryption` IS compiled by a doc job. Both were then wrong about what
+matters, which is not compilation but execution.
+
+### The instrument, its controls, and the direction it can be wrong
+
+The gate evaluator is a small parser, so it was checked against known answers before its clean result
+was believed. Six controls: `feature = "encryption"` must be never (nothing enables it); a
+`compile`+`verify` gate must run in four jobs; the float pin must be never; a negated narrow selector
+must run everywhere; a `self-host` gate must run in exactly one job; a `shell` gate in exactly one.
+**All six matched the model they were written against** — but see above: that model omitted a doc
+job, so agreement with it was not the reassurance it looked like. The two gates carrying inline
+comments were confirmed to parse.
+
+**Its bias is toward under-reporting.** An expression it cannot interpret is treated as satisfied, so
+a gate it failed to parse would be recorded as running rather than flagged. The count is therefore a
+lower bound on files that never run, which is the wrong direction for a check of this kind — hence
+the controls, and hence the guard.
+
+### Guarded, because a new test with an unbuilt gate would be silent
+
+`the_only_test_gated_out_of_every_ci_configuration_is_the_known_one` re-runs this evaluation and
+fails if any file other than the documented exception is excluded from every job. **It derives the
+feature sets from the workflow file rather than restating them**, so adding or removing a job moves
+the check with it.
+
 ## What must not be concluded
 
 **A configuration marked ok is not a supported configuration.** It compiles. Whether its behaviour
@@ -137,6 +203,43 @@ selects any narrow width.
 Ten of ten compile. **Nothing is broken on this axis today**, which is a different and better outcome
 than the feature sweep found, and reporting it as a near-miss would be dishonest.
 
+> **CORRECTED 2026-09-08: "compile, never run" is TRUE OF THE FEATURE CONFIGURATIONS AND FALSE OF
+> NARROW RUNTIMES.** This section says no continuous-integration job selects a narrow width, which
+> is true, and then lets that stand as "narrow widths are not exercised", which is not. **They are
+> exercised on every run**, through host-defined aliases in the DEFAULT build.
+>
+> `tests/narrow_vm.rs` defines a sixteen-bit-word runtime, a sixteen-bit word with a wide float, and
+> an eight-bit word with a sixteen-bit address -- the 6502 shape. **32 of its 37 tests drive one of
+> them**: 14 name an alias directly and 18 reach one through its helpers, leaving 5 that do not
+> (they exercise the FLOAT width on a wide-word runtime). 14 + 18 + 5 = 37.
+> `tests/composite_width_skew.rs` has 9 tests of which **8** drive a skewed runtime; the ninth is a
+> deliberate control at the DEFAULT widths, so that a failure in the other eight is attributable to
+> the skew rather than to the programs. **32 + 8 = 40 tests, in every continuous-integration run.**
+>
+> **This figure read 41 when first written, and the error is worth keeping.** The count of the skew
+> file was taken as all nine, forgetting its control. The guard added alongside it
+> (`the_narrow_runtime_coverage_claim_still_describes_the_tree`) then derived 41 as well -- by
+> counting a test in `narrow_vm.rs` whose name says it runs on a WIDE runtime, because a COMMENT
+> inside it mentions a narrow helper. **Two errors cancelled to produce agreement**, and agreement
+> is what stops a number being re-examined. It was caught only by checking the per-file split
+> against the hand-derived one rather than accepting the matching total.
+>
+> **The two claims differ in what they cover.** A host alias narrows ONE runtime inside ONE test, so
+> coverage is whatever those tests do. A `narrow-*` feature narrows the bundled `Vm` alias, so the
+> WHOLE suite runs at that width -- and that is what nothing builds, and what the failure counts in
+> this document describe. Both statements have content; stating the first as the second overstates
+> the gap and sends a reader looking for coverage that already exists.
+>
+> **How the 40 were identified, and what that would miss**: by parsing each test for the alias its
+> body CODE names or the helper it calls, with comments stripped. A test reaching a narrow runtime
+> through a deeper indirection is not counted, so 40 is a lower bound.
+>
+> **This is the third claim in this document family stated more broadly than its evidence**, and
+> naming the pattern is more useful than fixing the third quietly. The first was "the reason is not
+> a runtime defect", refuted by five failures. The second was "nothing builds this configuration",
+> true of features and false of widths, since a host alias reaches any pair. This is the third. All
+> three are mine, and all three read as flat statements where the evidence supported a narrower one.
+
 ### What it does NOT establish, which is the part that matters
 
 **The tests were not run under any narrow selector.** `cargo check --tests` establishes that a
@@ -147,6 +250,19 @@ narrow configuration because **a test that pins 64-bit checked-addition semantic
 
 Whether that is one test or many is **unexamined**. It is the obvious next question and it needs a
 test run per selector rather than a build.
+
+### A narrow selector is not the only way to reach a narrow width
+
+**Added 2026-09-08.** The table above reports that nothing builds any narrow selector, which is true
+and is a statement about the FEATURE matrix. It should not be read as saying narrow or skewed widths
+are unreachable. `GenericVm<W, A, F>` is generic over the word and address types independently and
+every `Word` and `Address` implementation is unconditional, so an ordinary test in the DEFAULT build
+can drive any pair of widths through a host-defined alias. `tests/composite_width_skew.rs` does
+exactly that.
+
+**Where a defect is width-dependent, it can therefore be guarded at no standing per-push cost**, which
+is a cheaper answer than the job this document recommends and does not adopt. That does not extend to
+the feature axis: a build omitting `floats` cannot be reached by an alias.
 
 ### A narrow selector is not a cross-compilation target
 
@@ -171,6 +287,15 @@ is recorded rather than adopted: the standing per-push cost is the operator's ca
 
 ## Running the tests under `narrow-word-16`: the open question, answered
 
+> **SUPERSEDED 2026-09-08 in one conclusion, and it is the section's headline.** Every failure has
+> since been classified individually in
+> [`NARROW_WIDTH_FAILURE_CLASSIFICATION.md`](./NARROW_WIDTH_FAILURE_CLASSIFICATION.md). **Five of
+> them were a runtime defect, not a test premise**, so the claim below that "the reason is not a
+> runtime defect" is REFUTED and is marked as such where it appears. The counts here are also a
+> lower bound: the finished run has **41** distinct failures across **16** binaries, not 37 across
+> 15. The rest of this section stands, and is kept because how the wrong conclusion was reached is
+> the useful part.
+
 The section above said whether the narrow-selector test failures were "one test or many" was
 unexamined, and that answering it needed a test run rather than a build. **A question raised in a
 durable document and then abandoned reads as a lead for someone else**, so it was run.
@@ -192,19 +317,29 @@ the counts are otherwise a total rather than a lower bound. **A first draft of t
 passing**, a figure read while the run was still going and corrected here, which is the reason to
 take a count from a finished run rather than from a progress line.
 
-### The answer is "many", and the reason is not a runtime defect
+### The answer is "many", and the reason is ~~not~~ MOSTLY not a runtime defect
+
+**This heading was wrong as first written, and the row that carried the error is in the table
+below.** Five of these failures are a defect in the virtual machine. The rest of the paragraph is
+accurate for the other thirty-six.
 
 The failures cluster, and the clusters share a premise rather than a cause in the virtual machine:
 
 | group | size | what they presuppose |
 |---|---|---|
 | `*_narrows_to_the_declared_width` (add, sub, mul, div, the checked forms, int-to-float) | 9 | a module declaring a NARROW width running on a WIDER runtime. At a 16-bit runtime that premise is void |
-| opaque and flat-composite layout | 5 | offsets and handle widths taken at the host's natural width |
+| opaque and flat-composite layout | 5 | **THIS ROW WAS THE DEFECT.** Its guess -- "handle widths taken at the host's natural width" -- was close to the mechanism, and it was still filed as a test premise |
 | float-width classification | 5 | the encodable float widths available at the default configuration |
 | the remainder | 18 | not individually examined |
 
 **Per-test verdicts were NOT made.** The grouping is by name and by the premise the name implies,
 which is weaker evidence than reading each test, and it is recorded at that strength deliberately.
+
+**Recording the weakness was not enough to stop it misleading.** The opaque row above names a
+plausible mechanism and files it under "what they presuppose", and a reader with the surrounding
+prose would take it as another test assumption. Reading the five assertions found a wrong ANSWER
+sitting among them. **A caveat about an instrument's strength does not make its output safe to
+build on.**
 
 ### The worked example, which settles the character of the whole set
 
@@ -217,18 +352,23 @@ It is not. The program the test compiles is
 outside a 16-bit word's range**, whose maximum is 32767. The test's own parameters cannot be
 represented at the width it was asked to run at. It is written for a wide word.
 
-That is the character of this whole set: **the suite assumes a 64-bit host runtime**, and running it
-at 16 bits mostly measures that assumption. It is a statement about the tests, not about the
-runtime's portability.
+That is the character of MOST of this set: **the suite assumes a 64-bit host runtime**, and running
+it at 16 bits mostly measures that assumption. For thirty-six of the forty-one that is a statement
+about the tests. For the other five it was a statement about the runtime, and the word "mostly" was
+carrying more weight here than it could bear.
 
 ### What this does and does not license
 
-**It does not say the narrow widths are broken.** Nothing here demonstrates a defect in the virtual
-machine at a narrow word. Every configuration still compiles, which the section above establishes.
+**~~It does not say the narrow widths are broken.~~ RETRACTED 2026-09-08.** This said nothing here
+demonstrated a defect in the virtual machine at a narrow word. Five of the failures did, and reading
+them is all it took. Every configuration still compiles, which the section above establishes, but
+compiling was never the question.
 
-**It does not say they work, either.** A suite that cannot run at a width cannot vouch for it. The
-honest position is that the narrow widths are **unverified**, and now measurably so rather than
-presumptively.
+**It does not say they work, either.** A suite that cannot run at a width cannot vouch for it.
+
+**But "the narrow widths are unverified" -- as this sentence originally read -- is too broad.** What
+is unverified is the whole suite AT a narrow width. Narrow runtimes themselves are driven by 41
+tests in the default build; see the correction above.
 
 **Making the suite run at 16 bits is a real project**, not an increment: it means auditing every test
 that bakes a wide literal or a wide expectation, and deciding per test whether to widen a

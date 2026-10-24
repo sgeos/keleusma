@@ -2675,12 +2675,258 @@ fn checked_arm_is_catchall(kind: &crate::ast::CheckedArmKind) -> bool {
         | CheckedArmKind::PayloadDiscriminant(p)
         | CheckedArmKind::InvalidDiscriminant(p)
         | CheckedArmKind::Error(p) => is_catchall_pat(p),
+        CheckedArmKind::StoreOk(old, new) => is_catchall_pat(old) && is_catchall_pat(new),
         CheckedArmKind::Overflow(h, l) | CheckedArmKind::Underflow(h, l) => {
             // A `None` second pattern (the Byte single-pattern form)
             // covers its slot unconditionally.
             is_catchall_pat(h) && l.as_ref().is_none_or(is_catchall_pat)
         }
     }
+}
+
+/// Type-check the target and value of an indexed data write,
+/// `data_name.field[i]... = value`, and return the element type.
+///
+/// Each index must be a `Word` and peels one array layer; the last layer
+/// must be a scalar, the value must match it, and the value must respect
+/// the field's negative labels. The bare statement and the handled
+/// expression share this rule. The indices are checked before the value,
+/// matching the evaluation order the operator set on 2026-10-21.
+fn check_data_index_write(
+    ctx: &mut Ctx,
+    data_name: &str,
+    field: &str,
+    indices: &mut [Expr],
+    value: &mut Expr,
+    span: Span,
+) -> Result<Type, TypeError> {
+    let data_fields = ctx
+        .data
+        .get(data_name)
+        .ok_or_else(|| TypeError::new(format!("unknown data block `{}`", data_name), span))?;
+    let declared = data_fields
+        .get(field)
+        .ok_or_else(|| {
+            TypeError::new(
+                format!("unknown field `{}` on data block `{}`", field, data_name),
+                span,
+            )
+        })?
+        .clone();
+    // Peel one Array layer per index, validating each index
+    // as a Word and ensuring the final type is a scalar.
+    let mut current = declared;
+    for idx in indices.iter_mut() {
+        let idx_ty = type_of_expr(ctx, idx)?;
+        if !types_compatible(ctx, &idx_ty, &Type::Word) {
+            return Err(TypeError::new(
+                format!("data array index must be Word, got {}", idx_ty.display()),
+                span,
+            ));
+        }
+        current = match current {
+            Type::Array(elem, _) => *elem,
+            other => {
+                return Err(TypeError::new(
+                    format!(
+                        "indexed access on non-array data field `{}.{}` (type {})",
+                        data_name,
+                        field,
+                        other.display()
+                    ),
+                    span,
+                ));
+            }
+        };
+    }
+    if let Type::Array(_, _) = current {
+        return Err(TypeError::new(
+            format!(
+                "indexed assignment to `{}.{}` does not descend to a scalar; \
+                 provide one index per array level",
+                data_name, field
+            ),
+            span,
+        ));
+    }
+    let value_ty = type_of_expr(ctx, value)?;
+    if !types_compatible(ctx, &current, &value_ty) {
+        return Err(TypeError::new(
+            format!(
+                "indexed assignment to `{}.{}` expects {}, got {}",
+                data_name,
+                field,
+                current.display(),
+                value_ty.display()
+            ),
+            span,
+        ));
+    }
+    // Negative-label boundary check at the indexed-write
+    // site. The field's negative-label set is declared on
+    // the outer array type; per the no-nested-negative-
+    // labels rule it cannot appear on inner array element
+    // positions, so the check uses the field-level set.
+    let negatives = ctx
+        .data_negative_labels
+        .get(data_name)
+        .and_then(|m| m.get(field))
+        .cloned()
+        .unwrap_or_default();
+    check_negative_labels_against_data_write(data_name, field, &value_ty, &negatives, span)?;
+    Ok(current)
+}
+
+/// Type-check the handled indexed write `data_name.field[i] = value {
+/// ok(old, new) => ..., invalid_index(j) => ... }`.
+///
+/// The admissible arms are `ok(old, new)`, whose two patterns bind the
+/// element type and are each a binder or `_`, and `invalid_index`, which
+/// binds the offending index `Word` exactly as in the handled read. The
+/// `ok` class must end with an unguarded catch-all. `invalid_index` is
+/// optional, and an unhandled invalid index reaches the compiler's default
+/// trap. The construct's type is the common type of its arms. A multi-index
+/// target is admitted, and a failure at any of its levels binds that level's
+/// index in `invalid_index`. The self-hosted compiler refuses it, as it
+/// refuses every multi-index data access.
+fn check_data_index_store(
+    ctx: &mut Ctx,
+    data_name: &str,
+    field: &str,
+    indices: &mut [Expr],
+    value: &mut Expr,
+    arms: &mut [crate::ast::CheckedArm],
+    span: Span,
+) -> Result<Type, TypeError> {
+    use crate::ast::CheckedArmKind;
+    let elem_ty = check_data_index_write(ctx, data_name, field, indices, value, span)?;
+
+    for arm in arms.iter() {
+        let inadmissible = match &arm.kind {
+            CheckedArmKind::StoreOk(old, new) => {
+                if let (Pattern::Variable(a, _), Pattern::Variable(b, _)) = (old, new)
+                    && a == b
+                {
+                    return Err(TypeError::new(
+                        alloc::format!(
+                            "the `ok(old, new)` arm binds `{}` twice; give the old and the new value different names",
+                            a
+                        ),
+                        arm.span,
+                    ));
+                }
+                if [old, new]
+                    .iter()
+                    .any(|p| !matches!(p, Pattern::Wildcard(_) | Pattern::Variable(_, _)))
+                {
+                    return Err(TypeError::new(
+                        String::from(
+                            "the `ok(old, new)` arm of a handled indexed write binds each value to a name or `_`; a literal pattern is not admissible",
+                        ),
+                        arm.span,
+                    ));
+                }
+                None
+            }
+            CheckedArmKind::InvalidIndex(_) => None,
+            CheckedArmKind::Ok(_) => {
+                return Err(TypeError::new(
+                    String::from(
+                        "the `ok` arm of a handled indexed write binds the old and the new value; write `ok(old, new)`, using `_` for a value that is not needed",
+                    ),
+                    arm.span,
+                ));
+            }
+            CheckedArmKind::Overflow(_, _) => Some("overflow"),
+            CheckedArmKind::Underflow(_, _) => Some("underflow"),
+            CheckedArmKind::ZeroDivisor(_) => Some("zero_divisor"),
+            CheckedArmKind::Nan(_) => Some("nan"),
+            CheckedArmKind::InvalidNewtype(_) => Some("invalid_newtype"),
+            CheckedArmKind::PayloadDiscriminant(_) => Some("payload_discriminant"),
+            CheckedArmKind::InvalidDiscriminant(_) => Some("invalid_discriminant"),
+            CheckedArmKind::Error(_) => Some("error"),
+        };
+        if let Some(name) = inadmissible {
+            return Err(TypeError::new(
+                alloc::format!(
+                    "the `{}` arm is not admissible for a handled indexed write; only `ok(old, new)` and `invalid_index` are admissible",
+                    name
+                ),
+                arm.span,
+            ));
+        }
+    }
+
+    // Unreachable-arm check per outcome class, then exhaustiveness on `ok`.
+    let mut ok_catchall_seen = false;
+    let mut invalid_catchall_seen = false;
+    for arm in arms.iter() {
+        let seen = match &arm.kind {
+            CheckedArmKind::StoreOk(_, _) => ok_catchall_seen,
+            _ => invalid_catchall_seen,
+        };
+        if seen {
+            return Err(TypeError::new(
+                String::from(
+                    "handled-write arm is unreachable: a prior catch-all arm in the same outcome class already covers it",
+                ),
+                arm.span,
+            ));
+        }
+        if arm.guard.is_none() && checked_arm_is_catchall(&arm.kind) {
+            match &arm.kind {
+                CheckedArmKind::StoreOk(_, _) => ok_catchall_seen = true,
+                _ => invalid_catchall_seen = true,
+            }
+        }
+    }
+    if !ok_catchall_seen {
+        return Err(TypeError::new(
+            String::from(
+                "handled indexed write is non-exhaustive on `ok`: the last `ok(old, new)` arm must be unguarded",
+            ),
+            span,
+        ));
+    }
+
+    let result_ty = ctx.fresh();
+    for arm in arms.iter_mut() {
+        ctx.push_scope();
+        match &arm.kind {
+            CheckedArmKind::StoreOk(old, new) => {
+                bind_checked_pattern(ctx, old, elem_ty.clone());
+                bind_checked_pattern(ctx, new, elem_ty.clone());
+            }
+            CheckedArmKind::InvalidIndex(p) => bind_checked_pattern(ctx, p, Type::Word),
+            _ => {}
+        }
+        if let Some(guard) = arm.guard.as_mut() {
+            let guard_ty = type_of_expr(ctx, guard)?;
+            if !types_compatible(ctx, &strip_labels(guard_ty.clone()), &Type::Bool) {
+                ctx.pop_scope();
+                return Err(TypeError::new(
+                    alloc::format!(
+                        "handled-write arm guard must be Bool, got {}",
+                        guard_ty.display()
+                    ),
+                    arm.span,
+                ));
+            }
+        }
+        let body_ty = type_of_expr(ctx, &mut arm.body)?;
+        ctx.pop_scope();
+        if !types_compatible(ctx, &body_ty, &result_ty) {
+            return Err(TypeError::new(
+                alloc::format!(
+                    "handled-write arm produces {} which does not unify with the construct's result type {}",
+                    body_ty.display(),
+                    result_ty.apply(&ctx.subst).display()
+                ),
+                arm.span,
+            ));
+        }
+    }
+    Ok(result_ty.apply(&ctx.subst))
 }
 
 /// Type-check the indexing construct `array[index] { ok(v) => ...,
@@ -2704,6 +2950,7 @@ fn check_checked_index(
     for arm in arms.iter() {
         let inadmissible = match &arm.kind {
             CheckedArmKind::Ok(_) | CheckedArmKind::InvalidIndex(_) => None,
+            CheckedArmKind::StoreOk(_, _) => Some("ok(old, new)"),
             CheckedArmKind::Overflow(_, _) => Some("overflow"),
             CheckedArmKind::Underflow(_, _) => Some("underflow"),
             CheckedArmKind::ZeroDivisor(_) => Some("zero_divisor"),
@@ -2852,6 +3099,7 @@ fn check_checked_newtype(
             CheckedArmKind::PayloadDiscriminant(_) => Some("payload_discriminant"),
             CheckedArmKind::InvalidDiscriminant(_) => Some("invalid_discriminant"),
             CheckedArmKind::Error(_) => Some("error"),
+            CheckedArmKind::StoreOk(_, _) => Some("ok(old, new)"),
         };
         if let Some(name) = inadmissible {
             return Err(TypeError::new(
@@ -3202,6 +3450,7 @@ fn check_checked_native(
             CheckedArmKind::InvalidNewtype(_) => Some("invalid_newtype"),
             CheckedArmKind::PayloadDiscriminant(_) => Some("payload_discriminant"),
             CheckedArmKind::InvalidDiscriminant(_) => Some("invalid_discriminant"),
+            CheckedArmKind::StoreOk(_, _) => Some("ok(old, new)"),
         };
         if let Some(name) = inadmissible {
             return Err(TypeError::new(
@@ -4091,81 +4340,7 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
             value,
             span,
         } => {
-            let data_fields = ctx.data.get(data_name).ok_or_else(|| {
-                TypeError::new(format!("unknown data block `{}`", data_name), *span)
-            })?;
-            let declared = data_fields
-                .get(field)
-                .ok_or_else(|| {
-                    TypeError::new(
-                        format!("unknown field `{}` on data block `{}`", field, data_name),
-                        *span,
-                    )
-                })?
-                .clone();
-            // Peel one Array layer per index, validating each index
-            // as a Word and ensuring the final type is a scalar.
-            let mut current = declared;
-            for idx in indices.iter_mut() {
-                let idx_ty = type_of_expr(ctx, idx)?;
-                if !types_compatible(ctx, &idx_ty, &Type::Word) {
-                    return Err(TypeError::new(
-                        format!("data array index must be Word, got {}", idx_ty.display()),
-                        *span,
-                    ));
-                }
-                current = match current {
-                    Type::Array(elem, _) => *elem,
-                    other => {
-                        return Err(TypeError::new(
-                            format!(
-                                "indexed access on non-array data field `{}.{}` (type {})",
-                                data_name,
-                                field,
-                                other.display()
-                            ),
-                            *span,
-                        ));
-                    }
-                };
-            }
-            if let Type::Array(_, _) = current {
-                return Err(TypeError::new(
-                    format!(
-                        "indexed assignment to `{}.{}` does not descend to a scalar; \
-                         provide one index per array level",
-                        data_name, field
-                    ),
-                    *span,
-                ));
-            }
-            let value_ty = type_of_expr(ctx, value)?;
-            if !types_compatible(ctx, &current, &value_ty) {
-                return Err(TypeError::new(
-                    format!(
-                        "indexed assignment to `{}.{}` expects {}, got {}",
-                        data_name,
-                        field,
-                        current.display(),
-                        value_ty.display()
-                    ),
-                    *span,
-                ));
-            }
-            // Negative-label boundary check at the indexed-write
-            // site. The field's negative-label set is declared on
-            // the outer array type; per the no-nested-negative-
-            // labels rule it cannot appear on inner array element
-            // positions, so the check uses the field-level set.
-            let negatives = ctx
-                .data_negative_labels
-                .get(data_name)
-                .and_then(|m| m.get(field))
-                .cloned()
-                .unwrap_or_default();
-            check_negative_labels_against_data_write(
-                data_name, field, &value_ty, &negatives, *span,
-            )?;
+            check_data_index_write(ctx, data_name, field, indices, value, *span)?;
             Ok(())
         }
         Stmt::Expr(e) => {
@@ -4241,7 +4416,26 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             if ctx.data.contains_key(name) {
                 return Ok(Type::Struct(name.clone(), Vec::new()));
             }
-            // Bare function name reference. Report unknown.
+            // A bare function name in a value position. This USED TO report
+            // "undefined identifier", which is misleading in the one case it most
+            // often arises: the name IS defined, as a function, and what is
+            // unsupported is referring to it without calling it. The compiler
+            // already carries the accurate diagnostic for this shape, and
+            // `book/src/WHY_REJECTED.md` quotes it as the message a reader will
+            // see -- but the compiler never runs, because this check refuses
+            // first. Emitting the same wording here makes the guide's quotation
+            // true and tells the reader what to do instead.
+            if ctx.functions.contains_key(name) {
+                return Err(TypeError::new(
+                    format!(
+                        "first-class function references are not supported in V0.2.0; \
+                         rewrite `{}` as a direct call site or as a trait-bounded \
+                         generic",
+                        name
+                    ),
+                    *span,
+                ));
+            }
             Err(TypeError::new(
                 format!("undefined identifier `{}`", name),
                 *span,
@@ -5561,6 +5755,14 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             }
             Ok(inst_return)
         }
+        Expr::DataIndexStore {
+            data_name,
+            field,
+            indices,
+            value,
+            arms,
+            span,
+        } => check_data_index_store(ctx, data_name, field, indices, value, arms, *span),
         Expr::Checked {
             op_expr,
             arms,
@@ -5825,6 +6027,7 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     CheckedArmKind::PayloadDiscriminant(_) => (false, "payload_discriminant"),
                     CheckedArmKind::InvalidDiscriminant(_) => (false, "invalid_discriminant"),
                     CheckedArmKind::Error(_) => (false, "error"),
+                    CheckedArmKind::StoreOk(_, _) => (false, "ok(old, new)"),
                 };
                 if !admissible {
                     return Err(TypeError::new(
@@ -5891,7 +6094,8 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     | CheckedArmKind::InvalidNewtype(_)
                     | CheckedArmKind::PayloadDiscriminant(_)
                     | CheckedArmKind::InvalidDiscriminant(_)
-                    | CheckedArmKind::Error(_) => false,
+                    | CheckedArmKind::Error(_)
+                    | CheckedArmKind::StoreOk(_, _) => false,
                 };
                 if class_catchall_seen {
                     return Err(TypeError::new(
@@ -5913,7 +6117,8 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                         | CheckedArmKind::InvalidNewtype(_)
                         | CheckedArmKind::PayloadDiscriminant(_)
                         | CheckedArmKind::InvalidDiscriminant(_)
-                        | CheckedArmKind::Error(_) => {}
+                        | CheckedArmKind::Error(_)
+                        | CheckedArmKind::StoreOk(_, _) => {}
                     }
                 }
             }
@@ -5962,6 +6167,8 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                             bind_checked_pattern(ctx, l, operand_ty.clone());
                         }
                     }
+                    // Rejected as inadmissible above; nothing to bind.
+                    CheckedArmKind::StoreOk(_, _) => {}
                 }
                 if let Some(guard) = arm.guard.as_mut() {
                     let guard_ty = type_of_expr(ctx, guard)?;

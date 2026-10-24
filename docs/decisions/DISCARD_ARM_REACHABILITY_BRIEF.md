@@ -247,12 +247,47 @@ called. Arm 11 needed both halves: the right entry point (traced up four levels 
 a public function) and the right fixture (a float constant). Either alone still
 measures nothing.
 
-### TWO REMAIN, AND THEY ARE NAMED
+### PASS NINE: ARMS 7 AND 8 ARE DEAD, NOT UNREACHED — NINETEEN OF NINETEEN
 
-| arm | function | note |
-|---|---|---|
-| 7 | `reconstruct_via_kel` | reconstruction path |
-| 8 | `reconstruct_via_kel_multihead` | reconstruction path |
+**Both are the same `_ => 0` fallback, in two copies of one closure**, and
+neither can fire. The census's difficulty throughout has been telling *unreached*
+from *unreachable*; here the type system settles it.
+
+`rd_diag` is called exactly twice, both times with `RC_ERR_CODE` or
+`RC_ERR_DETAIL`. Those map to `err_code: Word` and `err_detail: Word` in
+`reconstruct.kel`'s `shared data io` block. `Vm::get_shared` reads a slot at the
+kind the module's layout declares and hands it to `read_scalar_le`, so a `Word`
+slot yields `Value::Int` and nothing else. **The second arm has no input that
+reaches it.**
+
+**The zero it returned was the wrong value to pick.** Zero is `RC_ERR_CODE`'s
+"no error" code, so a fallback that *could* fire would report success while
+discarding the diagnostic it was reading. Ten lines below, the sibling closure
+`rd` reads the same kind of slot and PANICS on a non-`Int`. One function was
+reading `Word` slots two ways, one asserting the invariant and one silently
+substituting a value that means the opposite of what had happened.
+
+Both arms are now the assertion `rd` already was. **The match stays exhaustive
+rather than being deleted**: a slot later declared `Float` would make the arm
+live, and that is the case worth failing loudly on.
+
+#### The proof is the change, and the probe that nearly lied
+
+Replacing a dead arm with a panic and running the corpus green *is* the evidence:
+the arm cannot be both taken and silent.
+
+That only holds if the changed code runs. A first probe counted **zero**
+entries — which would have made the green run silence rather than evidence, the
+census's own recurring failure. The zero was an artefact: `cargo test` captures
+output from passing tests. With `--nocapture` the same probe counts **507**
+entries in `reconstruct_failure_modes` and **6** in `selfhost_bare_for`. The path
+is exercised heavily, and both binaries pass with the assertions in place.
+
+#### The scope of the claim
+
+**"Cannot fire at these two call sites, given these slot declarations."** Not
+"unreachable in general" — this tree carries a retraction for that distinction,
+and the `Float` case above is exactly how it would come back.
 
 **Arms 9, 11 and 16 are closed and their rows are removed**, rather than left in a table under a heading that
 contradicts it. Its note read: "the corpus source used a payload-free enum, which is the likely gap
@@ -260,8 +295,8 @@ and is a lead rather than a conclusion". **The lead was right** -- a payload-bea
 with two controls that do not. A lead recorded as a lead, and later confirmed, is the cheapest kind
 of finding there is.
 
-Still UNMEASURED rather than safe, but the population is now small, named, and each has a stated
-next probe.
+With arms 7 and 8 closed by the type argument above, **the census reaches nineteen of nineteen**:
+17 driven and observed across passes one to eight, plus these two shown to have no reaching input.
 
 ### THE CENSUS'S OWN COVERAGE, QUANTIFIED -- 19 OF 52
 

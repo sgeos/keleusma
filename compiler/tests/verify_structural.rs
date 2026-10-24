@@ -6,8 +6,8 @@
 //! (reference audits D2 and E1), and the operand-bounds family; the second pass -- the
 //! block-type marker constraints; the third pass -- productive divergence (`verify_yield.kel`);
 //! and the operand-stack depth-balance check (`verify_depth.kel`, reference `verify_stack_depth`,
-//! audit finding 3). Only the module-level A.2.1 typed operand-stack pass is checked separately
-//! (`verify_typed.rs` test). Two oracles bound it:
+//! audit finding 3). Both whole-module entries also run the typed operand-stack and data-layout
+//! passes. The dedicated `verify_typed.rs` suite adds typed rejection controls. Two oracles bound it:
 //!
 //!   * POSITIVE: every self-hosted stage source plus a minimal ephemeral program, and small
 //!     valid whole programs for each block type (including a Stream that delegates its yield to
@@ -25,8 +25,22 @@ use keleusma::bytecode::{Module, NewCompositeOperand, Op};
 use keleusma::value_layout::CompositeKind;
 use keleusma::verify::{compute_always_yielding, verify};
 use keleusma_selfhost::selfhost::{
-    compile_src, self_hosted_always_yielding, structural_reject_module_via_kel,
+    VerificationVerdict, compile_src, self_hosted_always_yielding,
+    structural_reject_module_via_kel as legacy_reject, verify_module_via_kel,
 };
+
+// Keep the full existing corpus on both whole-module entry points. The fallible
+// entry must finish with the same verdict, rather than return unavailable.
+fn structural_reject_module_via_kel(module: &Module) -> bool {
+    let legacy = legacy_reject(module);
+    let actual = verify_module_via_kel(module).unwrap();
+    assert_eq!(
+        matches!(actual, VerificationVerdict::Rejected { .. }),
+        legacy,
+        "{actual:?}"
+    );
+    legacy
+}
 
 /// The private-data-free ephemeral program the scaffold tests also use; a well-nested loop.
 const EPHEMERAL_SRC: &str = "require word >= 32;\n\

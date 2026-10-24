@@ -20,7 +20,7 @@ When generating code that consumes or extends Keleusma, prefer consulting the ag
 - [Architecture: Sub-Coroutines](https://github.com/sgeos/keleusma/blob/main/docs/architecture/SUB_COROUTINES.md): The V0.5.0 sub-coroutine primitive.
 - [Specification: Grammar](https://github.com/sgeos/keleusma/blob/main/docs/spec/GRAMMAR.md): Surface-language grammar.
 - [Specification: Type System](https://github.com/sgeos/keleusma/blob/main/docs/spec/TYPE_SYSTEM.md): Hindley-Milner with traits, generics, monomorphization, information-flow labels.
-- [Specification: Instruction Set](https://github.com/sgeos/keleusma/blob/main/docs/spec/INSTRUCTION_SET.md): The 69-opcode V0.2.0 ISA.
+- [Specification: Instruction Set](https://github.com/sgeos/keleusma/blob/main/docs/spec/INSTRUCTION_SET.md): The 66-opcode instruction set. The count was 69 in V0.2.0; the V0.2.1 `NewComposite` consolidation retired four construct opcodes and added one.
 - [Specification: Structural ISA](https://github.com/sgeos/keleusma/blob/main/docs/spec/STRUCTURAL_ISA.md): Block-structured verifier model.
 - [Specification: Wire Format](https://github.com/sgeos/keleusma/blob/main/docs/spec/WIRE_FORMAT.md): Bytecode framing, signing, fingerprints.
 - [Specification: Standard Library](https://github.com/sgeos/keleusma/blob/main/docs/spec/STANDARD_LIBRARY.md): Host-registered native function conventions.
@@ -49,10 +49,10 @@ When generating code that consumes or extends Keleusma, prefer consulting the ag
 - [Task Log](https://github.com/sgeos/keleusma/blob/main/docs/process/TASKLOG.md): Current sprint source of truth.
 - [Reverse Prompt](https://github.com/sgeos/keleusma/blob/main/docs/process/REVERSE_PROMPT.md): Latest AI-to-human handoff.
 - [Autonomous Research Loop](https://github.com/sgeos/keleusma/blob/main/docs/process/AUTONOMOUS_RESEARCH_LOOP.md): Process for autonomous research sessions.
-- [Git Strategy](https://github.com/sgeos/keleusma/blob/main/docs/process/GIT_STRATEGY.md): Trunk-based development with short-lived feature branches.
+- [Git Strategy](https://github.com/sgeos/keleusma/blob/main/docs/process/GIT_STRATEGY.md): Release-branch model with a four-level hierarchy; short-lived feature branches merge up into a version branch.
 
 ## Optional
 
 - [Examples](https://github.com/sgeos/keleusma/tree/main/examples): Embedded host examples, RTOS demonstrator, standalone scripts.
-- [Cookbook](https://github.com/sgeos/keleusma/blob/main/docs/guide/COOKBOOK.md): Common patterns and recipes.
-- [FAQ](https://github.com/sgeos/keleusma/blob/main/docs/guide/FAQ.md): Frequently asked questions.
+- [Cookbook](https://github.com/sgeos/keleusma/blob/main/book/src/COOKBOOK.md): Common patterns and recipes.
+- [FAQ](https://github.com/sgeos/keleusma/blob/main/book/src/FAQ.md): Frequently asked questions.

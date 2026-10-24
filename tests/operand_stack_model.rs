@@ -220,8 +220,13 @@ fn the_depth_model_gives_true_pop_and_push_counts() {
                 kind: keleusma::value_layout::ScalarKind::Int,
             }),
             2,
-            1,
+            7,
         ),
+        (Op::Div, 2, 3),
+        (Op::Mod, 2, 3),
+        (Op::GetDataIndexed(0, 0), 2, 7),
+        (Op::SetDataIndexed(0, 0), 2, 6),
+        (Op::BoundsCheck(0), 1, 6),
         (Op::CheckedAdd, 2, 3),
         (Op::CheckedNeg, 1, 3),
         (Op::Dup, 1, 2),
@@ -338,7 +343,8 @@ fn the_peak_models_running_offset_never_goes_negative() {
     assert_eq!(walked, SOURCES.len(), "not every source was walked");
 }
 
-/// The fixed-point multiply and divide consume both operands.
+/// The fixed-point multiply consumes both operands, and the fixed-point divide
+/// consumes both and pushes an outcome triple.
 ///
 /// Their peak-model entries read `growth 0 / shrink 0`, giving a net of 0 against
 /// a true net of -1. That direction is merely loose rather than unsound, and it
@@ -347,26 +353,49 @@ fn the_peak_models_running_offset_never_goes_negative() {
 ///
 /// Neither opcode was reachable by any case in the five-case comparison above.
 /// The whole-opcode-set check in `src/verify.rs` found both on its first run.
+///
+/// On 2026-10-22 `FixedDiv` stopped faulting on a zero divisor and began
+/// pushing `(low, high, flag)` like a Fixed `Mod`, so its net became +1 and its
+/// transient reach one slot above its entry depth.
 #[test]
 fn the_fixed_point_ops_consume_both_operands() {
     let chunk = chunk_named(
         "fn f(a: Fixed<16>, b: Fixed<16>) -> Fixed<16> { a * b }\nfn main() -> Word { 0 }",
         "f",
     );
-    for op in [Op::FixedMul(16), Op::FixedDiv(16)] {
-        let net = op.stack_growth() as i32 - op.stack_shrink() as i32;
-        assert_eq!(
-            net, -1,
-            "{op:?}: the peak model's net is {net}. The virtual machine handler pops both \
-             operands and pushes one result, so the net is -1 and the transient reach is 0."
-        );
-        assert_eq!(
-            op.stack_growth(),
-            0,
-            "{op:?}: the handler pops before it pushes, so it reaches no higher than its entry \
-             depth"
-        );
-        let (required, delta) = op_depth_effect(&op, &chunk);
-        assert_eq!((required, delta), (2, -1), "{op:?}: the depth model moved");
-    }
+    let op = Op::FixedMul(16);
+    let net = op.stack_growth() as i32 - op.stack_shrink() as i32;
+    assert_eq!(
+        net, -1,
+        "{op:?}: the peak model's net is {net}. The virtual machine handler pops both \
+         operands and pushes one result, so the net is -1 and the transient reach is 0."
+    );
+    assert_eq!(
+        op.stack_growth(),
+        0,
+        "{op:?}: the handler pops before it pushes, so it reaches no higher than its entry \
+         depth"
+    );
+    assert_eq!(
+        op_depth_effect(&op, &chunk),
+        (2, -1),
+        "{op:?}: the depth model moved"
+    );
+
+    let op = Op::FixedDiv(16);
+    let net = op.stack_growth() as i32 - op.stack_shrink() as i32;
+    assert_eq!(
+        net, 1,
+        "{op:?}: the handler pops both operands and pushes low, high and flag"
+    );
+    assert_eq!(
+        op.stack_growth(),
+        1,
+        "{op:?}: the triple reaches one slot above entry"
+    );
+    assert_eq!(
+        op_depth_effect(&op, &chunk),
+        (2, 1),
+        "{op:?}: the depth model moved"
+    );
 }

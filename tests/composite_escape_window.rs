@@ -58,9 +58,35 @@ fn compile(src: &str) -> keleusma::bytecode::Module {
     .expect("compile")
 }
 
+/// Byte width of THIS BUILD's word, derived from the crate rather than restated.
+///
+/// A literal `8` here is a second copy of a fact the runtime already owns, and
+/// `narrow-word-*` makes it wrong. `tests/narrow_vm.rs` records the same rule
+/// for the float width, and what happened without it: tests failing under a
+/// narrow selector for reasons unrelated to what they check. The subject of
+/// this file is composite lifetime, not width, so the width must not be pinned
+/// here.
+fn word_bytes() -> usize {
+    keleusma::target::Target::host().word_bits() as usize / 8
+}
+
+/// One little-endian word of a flat composite body, sign-extended to `i64`.
+///
+/// A flat body's scalar fields are word-wide, so this reader follows the word.
+/// It is deliberately NOT the right reader for a wire-format record, whose
+/// field widths are fixed by that format and do not move with the target; see
+/// `tests/selfhost_wire.rs`, whose fixed-width reads are correct as they stand.
+fn read_word(bytes: &[u8], at: usize) -> i64 {
+    let wb = word_bytes();
+    let mut buf = [0u8; 8];
+    buf[..wb].copy_from_slice(&bytes[at..at + wb]);
+    let shift = 64 - wb * 8;
+    (i64::from_le_bytes(buf) << shift) >> shift
+}
+
 /// First field of the flat body, which the source sets to the iteration value.
 fn first_field(bytes: &[u8]) -> i64 {
-    i64::from_le_bytes(bytes[..8].try_into().expect("at least one word"))
+    read_word(bytes, 0)
 }
 
 #[test]
