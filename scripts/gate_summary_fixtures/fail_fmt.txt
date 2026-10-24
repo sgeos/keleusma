@@ -1,0 +1,7 @@
+exit=1
+Diff in /WORK/c/src/lib.rs:1:
+[31m-pub fn f( x:u32 )->u32{x}
+(B[m[32m+pub fn f(x: u32) -> u32 {
+(B[m[32m+    x
+(B[m[32m+}
+(B[m 
