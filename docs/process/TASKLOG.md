@@ -6,6 +6,12 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-23 Fresh Claude Code session prepared
+
+The Codex transfer was validated, the branch was pushed under its own name, and
+the document-reading tests passed 413 of 413. HANDOFF.md gains a preparation
+addendum and its validity step now expects two commits after d08af4ba.
+
 ## 2026-10-23 Claude Code worker transfer
 
 The operator selected Claude Code as the next active V0.2.X worker. The dedicated

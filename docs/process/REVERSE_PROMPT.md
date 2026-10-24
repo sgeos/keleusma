@@ -1,5 +1,19 @@
 # Reverse prompt
 
+## Claude Code session preparation, 2026-10-23
+
+The operator asked for this line to be ready for a fresh Claude Code session in
+this worktree. The Codex transfer validity checks passed at e578f6f8. This branch
+was pushed to origin under its own name and remains unmerged, without an
+upstream. The twelve document-reading test binaries passed 413 of 413 in
+release with the self-host feature. Run 40060375136 at f213f421 was still in
+progress at writing, and its Book companion succeeded. The Codex session stays
+open in this worktree, idle or without changes, by operator decision.
+
+Next. Validate HANDOFF.md, then open a pull request for this branch so its
+documentation commits reach continuous integration, and continue strengthening
+item 5. The three handler decisions remain with the operator.
+
 ## Transfer to Claude Code, 2026-10-23
 
 The operator selected Claude Code as the next active worker for V0.2.X.

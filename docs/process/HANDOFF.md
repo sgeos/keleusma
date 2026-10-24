@@ -18,8 +18,9 @@ the separate arena-composites worktree and runs concurrently.
    preserve its confidentiality. It remains privately provisioned under the
    primary repository. It was not copied into this worktree or this handoff.
 2. Confirm the current directory, feature branch and clean status. Confirm that
-   d08af4ba is an ancestor of HEAD, and inspect every intervening commit. One
-   documentation handoff commit is expected immediately after that anchor.
+   d08af4ba is an ancestor of HEAD, and inspect every intervening commit. Two
+   documentation commits are expected after that anchor, the Codex transfer at
+   e578f6f8 and the Claude Code preparation addendum that follows it.
 3. Read REVERSE_PROMPT.md, TASKLOG.md and the latest DESIGN_JOURNAL.md entries.
    Confirm that the leading entries describe this Claude Code transfer.
 4. Compare production paths with 09b700b5. No implementation changes should be
@@ -54,6 +55,18 @@ Claude Code's local SessionStart and UserPromptSubmit hook files route to
 v0.2.3. Their command was manually executed successfully. Actual client hook
 trust still belongs to the operator and is not established by a configuration
 file. Manual mailbox checks are available independently of hook trust.
+
+## Preparation addendum, 2026-10-23
+
+A Claude Code session reviewed this handoff before the fresh session starts. The
+validity checks above passed at e578f6f8. That session pushed this branch to
+origin under its own name, so its commits are no longer local only. No upstream
+is configured and the branch remains unmerged. In this worktree at e578f6f8, the
+twelve test binaries that read the edited documents passed 413 of 413 under
+`cargo nextest run --release --features self-host`. That run covers one feature
+set in release and does not replace continuous integration. The Codex session
+remains open in this worktree by operator decision and stays idle or refrains
+from changes. Check `git status` and HEAD before each commit.
 
 The blocks below are historical records. Their client assignments, validity
 procedures and next-task instructions are superseded by this leading handoff.
