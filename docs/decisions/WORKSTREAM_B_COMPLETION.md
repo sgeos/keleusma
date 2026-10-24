@@ -23,7 +23,7 @@ expectations. The private self-assignment exception is stated below.
 | Admission soundness | Refusal classification below and negative subprocess tests requiring a valid prefix before a fault | Audited over the named paths and executable cases |
 | Total division | `bare_integer_division_and_remainder_are_total_on_zero`, `checked_numeric_dispatch_preserves_low_high_and_flags`, `fixed_division_outcomes_survive_suspension_and_delegation` | Outcome slots are preserved, including zero divisors and successful saturation |
 | Indexed access | Mixed array extent checks and `handled_nested_writes_preserve_state_across_suspension` | Valid writes and failures at either nested index agree across delegated suspension |
-| Integration | `host_control_routes_are_explicit_and_do_not_fall_back_to_callbacks` and documented explicit coroutine route | Implemented. This absorption remains on its feature branch pending integration |
+| Integration | `host_control_routes_are_explicit_and_do_not_fall_back_to_callbacks` and documented explicit coroutine route | Implemented and integrated on `v0.3.0` through pull request 482, carried forward by every later absorption |
 | Native deployment | Linked C hosts at both optimization levels, native snapshot completion, object emission for four tier-one target configurations | Local execution and target emission checked. Foreign execution remains unverified |
 | Resource preservation | Bounded caller reservation, compile-time oversized-frame refusal, completion tail outside the ended frame, allocation and intrinsic postconditions | Implemented. These checks do not attest native execution cost |
 
@@ -79,9 +79,11 @@ without executing that undefined reference operation. No root runtime repair
 is made by this line.
 
 The corpus no longer supplies a single-head stage subject. The stage tests use
-`11_signed.kel` without its `signed` modifier. `verify_datalayout.kel`,
-`wire_debug.kel` and `wire_schema.kel` agree only on unseeded runs. These are
-coverage residuals and are not closed by the coroutine acceptance matrix.
+`11_signed.kel` without its `signed` modifier. That residual remains.
+`verify_datalayout.kel`, `wire_debug.kel` and `wire_schema.kel` agreed only on
+unseeded runs until pull request 503 drove them by their host protocols. See the
+[Order 1 assessment](./ORDER_1_GATE_ASSESSMENT.md). Arena residency of the
+frames is recorded in [Workstream C](./WORKSTREAM_C_COMPLETION.md).
 Fault subprocess checks observe the local AArch64 trap signal. Object emission
 for other targets establishes neither execution nor their signal convention.
 
