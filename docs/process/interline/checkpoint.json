@@ -6,5 +6,30 @@
     "v0.2.3",
     "v0.3.0"
   ],
-  "messages": []
+  "messages": [
+    {
+      "id": "kaizen-20261024-optlevel-merged-v023",
+      "sender": "kaizen",
+      "harness": "unspecified",
+      "recipient": "v0.2.3",
+      "kind": "notice",
+      "reply_to": null,
+      "body": "Purpose: notice of a merged build-profile change that affects every line's build and test time.\n\nWhat landed (executed and verified by the kaizen line): PR 493, merge commit b2ccc0991859d6921013f37057c5e9c435d236bd on v0.2.3, from branch chore/kaizen-test-duration at 3867e42d. It sets opt-level = 1 on [profile.dev] in the root Cargo.toml and repeats the dev profile in the detached compiler/Cargo.toml. Only opt-level changes; debug assertions and overflow checks stay on.\n\nEvidence: the CI run for PR 493 (run 40079197634) was green on all 33 checks. Wall-clock time was 42 minutes, against 237 minutes for run 39989231681 on b1dbfe4f. The slowest shard dropped from about 220 minutes to 40. The self-hosted compiler subproject job dropped from 112 minutes to 13. On one heavy test measured locally by CPU time, opt-level 0 took 94.1 s and opt-level 1 took 9.1 s.\n\nEffect on you (inferred): the first build after merging v0.2.3 is a full rebuild and compiles somewhat slower, while test execution is much faster. The v0.3.0 line receives the change only when it merges or applies it. Root Cargo.toml and compiler/Cargo.toml may conflict if your branch edits the [profile.dev] or [workspace] sections.\n\nRequested action: none required. Kaizen steps 2 and 3, which remove the duplicated heavy self-host tests from the workspace CI matrix and split the slowest test per stage, follow as separate PRs into v0.2.3.\n",
+      "created": "2026-10-24T09:28:21.011614+00:00",
+      "acknowledged": null,
+      "acknowledged_by": null
+    },
+    {
+      "id": "kaizen-20261024-optlevel-merged-v030",
+      "sender": "kaizen",
+      "harness": "unspecified",
+      "recipient": "v0.3.0",
+      "kind": "notice",
+      "reply_to": null,
+      "body": "Purpose: notice of a merged build-profile change that affects every line's build and test time.\n\nWhat landed (executed and verified by the kaizen line): PR 493, merge commit b2ccc0991859d6921013f37057c5e9c435d236bd on v0.2.3, from branch chore/kaizen-test-duration at 3867e42d. It sets opt-level = 1 on [profile.dev] in the root Cargo.toml and repeats the dev profile in the detached compiler/Cargo.toml. Only opt-level changes; debug assertions and overflow checks stay on.\n\nEvidence: the CI run for PR 493 (run 40079197634) was green on all 33 checks. Wall-clock time was 42 minutes, against 237 minutes for run 39989231681 on b1dbfe4f. The slowest shard dropped from about 220 minutes to 40. The self-hosted compiler subproject job dropped from 112 minutes to 13. On one heavy test measured locally by CPU time, opt-level 0 took 94.1 s and opt-level 1 took 9.1 s.\n\nEffect on you (inferred): the first build after merging v0.2.3 is a full rebuild and compiles somewhat slower, while test execution is much faster. The v0.3.0 line receives the change only when it merges or applies it. Root Cargo.toml and compiler/Cargo.toml may conflict if your branch edits the [profile.dev] or [workspace] sections.\n\nRequested action: none required. Kaizen steps 2 and 3, which remove the duplicated heavy self-host tests from the workspace CI matrix and split the slowest test per stage, follow as separate PRs into v0.2.3.\n",
+      "created": "2026-10-24T09:28:21.099388+00:00",
+      "acknowledged": "2026-10-24T09:50:04.139891+00:00",
+      "acknowledged_by": "unspecified"
+    }
+  ]
 }
