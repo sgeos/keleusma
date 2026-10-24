@@ -29,7 +29,7 @@ Each partial operation has an opt-in source-level construct, a match block over 
 | Array indexing | indexing | `ok`, `invalid_index` | trap |
 | Newtype construction | newtype construction | `ok`, `invalid_newtype` | trap |
 | Discriminant-to-enum | discriminant conversion | `ok`, `payload_discriminant`, `invalid_discriminant` | trap |
-| Native call | native error | `ok`, `error` | propagate the host failure |
+| Native call | native error | `ok`, `host_error` or its alias `error` | trap with the host's own error |
 | `for ... limit` overrun | loop outcome block | `ok`, `break`, `limit`; `overflow` is inadmissible | trap |
 
 Overflow and underflow on the wrapping arithmetic operators default to two's-complement wrapping rather than a trap, so an arithmetic construct that omits those arms is equivalent to the bare wrapping operation. Every other unhandled partial outcome traps on the virtual machine.
@@ -44,8 +44,8 @@ The virtual machine surfaces each unhandled partial operation through a specific
 | Array index out of bounds, unhandled | `IndexOutOfBounds(index, length)` |
 | Newtype refinement predicate failed, unhandled | `RefinementFailed` |
 | Discriminant matches no variant, unhandled | `EnumVariantUnmapped` |
-| Native failure with a reported code, unhandled | `NativeErrorCode { code, message }` |
-| Native failure with a message only, unhandled | `NativeError(message)` |
+| Native failure with a reported code, unhandled, through `Trap(HostError)` | `NativeErrorCode { code, message }` |
+| Native failure with a message only, unhandled, through `Trap(HostError)` | `NativeError(message)` |
 | Debug `assert` condition false (debug build only) | `AssertionFailed` |
 | `for ... limit` reached the cap before the range end, unhandled | `LoopLimitExceeded` |
 

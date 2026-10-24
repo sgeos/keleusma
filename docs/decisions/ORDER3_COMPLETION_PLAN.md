@@ -5,8 +5,11 @@
 Complete the V0.2.X roadmap's first-pass trap analysis, including total partial
 operations, both compiler lowerings, reference and Keleusma verdicts, and a host
 no-check mode gated on valid proof. The first pass covers the Word and Byte
-arithmetic and bounds classes used by the toolchain. As of the 2026-10-20 handoff
-to Opus 5.5, the goal is paused and incomplete. The receiving session should begin
+arithmetic and bounds classes used by the toolchain. **Completed for that scope on
+2026-10-24.** The evidence, the residual limits and the verification receipts are in
+the [completion audit](ORDER3_COMPLETION_AUDIT.md). The paragraph below is the
+historical brief. As of the 2026-10-20 handoff
+to Opus 5.5, the goal was paused and incomplete. The receiving session should begin
 with the audit recorded in docs/process/REVERSE_PROMPT.md. The expectation of
 primarily audit work does not waive any acceptance requirement below.
 

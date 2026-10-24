@@ -3,7 +3,7 @@
 //! A trap-free verdict excludes language traps for the supported instruction
 //! contracts. It does not remove runtime guards or certify host inputs, operand
 //! shapes, storage lifetimes, resource availability or native implementations.
-use crate::bytecode::{ArrayElem, EnumField, Module, Op, StructField, TrapKind, TupleField};
+use crate::bytecode::{EnumField, Module, Op, StructField, TrapKind, TupleField};
 use alloc::format;
 use alloc::string::String;
 
@@ -34,11 +34,12 @@ pub enum TrapVerdict {
 /// An instruction contract outside the first-pass proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnsupportedTrapOperation {
-    /// Only flat Word and Byte indexed values have total first-pass contracts.
+    /// Flat scalar elements other than Word and Byte keep the faulting contract.
     IndexedValue,
     /// Boxed field access can still fault internally.
     BoxedField,
-    /// Native errors and result contracts require the later language profile.
+    /// A native call without the error-reify flag propagates a host failure
+    /// internally. Compiler output reifies every native call.
     NativeCall,
 }
 
@@ -139,9 +140,8 @@ pub(crate) fn classify_instruction(
             }
             InstructionTrapClass::Clear
         }
-        Op::GetIndex(ArrayElem::Flat {
-            kind: crate::value_layout::ScalarKind::Int | crate::value_layout::ScalarKind::Byte,
-        }) => InstructionTrapClass::Clear,
+        // Flat Word and Byte, nested composite and boxed reads are total.
+        Op::GetIndex(elem) if elem.has_bounds_outcome() => InstructionTrapClass::Clear,
         Op::GetIndex(_) => {
             InstructionTrapClass::Unsupported(UnsupportedTrapOperation::IndexedValue)
         }
@@ -149,6 +149,15 @@ pub(crate) fn classify_instruction(
         | Op::GetTupleField(TupleField::Boxed { .. })
         | Op::GetEnumField(EnumField::Boxed { .. }) => {
             InstructionTrapClass::Unsupported(UnsupportedTrapOperation::BoxedField)
+        }
+        // A reified call reports a soft host failure as an outcome, which
+        // the compiler dispatches to a handler or to an explicit HostError
+        // Trap. An unreified call still propagates the failure internally.
+        // Host-contract faults such as a malformed result remain runtime
+        // guards outside this classification, as the module documentation
+        // states.
+        Op::CallVerifiedNative(_, n) | Op::CallExternalNative(_, n) if n & 0x80 != 0 => {
+            InstructionTrapClass::Clear
         }
         Op::CallVerifiedNative(..) | Op::CallExternalNative(..) => {
             InstructionTrapClass::Unsupported(UnsupportedTrapOperation::NativeCall)

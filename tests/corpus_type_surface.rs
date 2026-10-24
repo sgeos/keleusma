@@ -6,8 +6,8 @@
 //! # The finding this pins
 //!
 //! The oracle compares whole compiled stages, which makes it the project's strongest correctness
-//! signal for the self-hosted compiler. Its reach, however, is a property of what the twelve stage
-//! sources happen to contain, not of the pipeline. Measured 2026-08-31:
+//! signal for the self-hosted compiler. Its reach, however, is a property of what the stage
+//! sources happen to contain, not of the pipeline. There were twelve when this was measured. Measured 2026-08-31:
 //!
 //! **All 861 declared functions return `Word`, and all 733 declared parameters are `Word`.**
 //!

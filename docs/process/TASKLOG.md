@@ -6,6 +6,13 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-24 Order 3 complete for the first-pass scope
+
+Kaizen PR 502 merged as e4c1b4c3. Native host-error handling, total composite
+reads and `let`-bound handled writes landed under first-hand operator rulings.
+Strengthening items 11, 12, 14 and 15 addressed. The full local release matrix
+passed in all five configurations. Branch feat/v02-order3-completion, PR pending.
+
 ## 2026-10-24 Pull request 498 merged
 
 CI run 40092978507 passed every job at a90fc449, and the logs show all six new

@@ -279,9 +279,11 @@ fn operand_forms_keep_an_explicit_first_pass_boundary() {
         }
         .has_bounds_outcome()
     );
-    assert!(!ArrayElem::Boxed.has_bounds_outcome());
+    // Nested composite and boxed reads joined the total contract on
+    // 2026-10-24. Other flat scalar kinds keep the faulting contract.
+    assert!(ArrayElem::Boxed.has_bounds_outcome());
     assert!(
-        !ArrayElem::FlatNested {
+        ArrayElem::FlatNested {
             size: 8,
             variant: CompositeKind::Array
         }

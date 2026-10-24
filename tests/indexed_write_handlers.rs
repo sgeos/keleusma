@@ -530,3 +530,94 @@ fn a_fully_handled_multi_index_write_emits_no_trap_and_classifies_trap_free() {
         other => panic!("{other:?}"),
     }
 }
+
+// -- Handled writes in a `let` initializer, operator ruling of 2026-10-24 --
+
+#[test]
+fn a_let_initializer_binds_a_handled_write() {
+    let source = "private data d { x: [Word; 2] } fn main() -> Word { \
+         d.x[1] = 3; \
+         let r = d.x[1] = 7 { ok(old, new) => old * 100 + new, invalid_index(j) => j }; \
+         r * 10 + d.x[1] }";
+    assert_eq!(run_word(source), 3077);
+    let source = "private data d { x: [Word; 2] } fn main() -> Word { \
+         let r: Word = d.x[5] = 7 { ok(_, n) => n, invalid_index(j) => j * 10 }; \
+         r + d.x[0] + d.x[1] }";
+    assert_eq!(run_word(source), 50, "an invalid index writes nothing");
+}
+
+#[test]
+fn a_let_bound_write_with_a_bad_index_skips_its_value() {
+    let source = alloc_source(
+        "fn main() -> Word { let r = d.x[idx(5)] = val() { ok(_, n) => n, invalid_index(j) => j * 1000 + d.trace }; r }",
+    );
+    // `idx` ran and `val` did not, so the trace holds only the index's 2.
+    assert_eq!(run_word(&source), 5002);
+}
+
+#[test]
+fn a_let_bound_write_without_coverage_keeps_the_default_trap() {
+    let source = "private data d { x: [Word; 2] } fn main() -> Word { \
+         let r = d.x[2] = 7 { ok(_, n) => n, invalid_index(j) when j < 0 => 0 }; r }";
+    let module = compile(source);
+    assert!(matches!(
+        classify_traps(&module),
+        Ok(TrapVerdict::MayTrap { .. })
+    ));
+    assert!(matches!(
+        run(module).0,
+        Err(VmError::IndexOutOfBounds(2, 2))
+    ));
+    let source = "private data d { x: [Word; 2] } fn main() -> Word { \
+         let r = d.x[2] = 7 { ok(_, n) => n, invalid_index(j) => j }; r }";
+    assert_eq!(classify_traps(&compile(source)), Ok(TrapVerdict::TrapFree));
+}
+
+#[test]
+fn a_bare_write_cannot_initialize_a_binding() {
+    let error =
+        try_compile("private data d { x: [Word; 2] } fn main() -> Word { let r = d.x[1] = 7; 0 }")
+            .unwrap_err();
+    assert!(
+        error.contains("bare indexed write yields no value"),
+        "{error}"
+    );
+}
+
+/// A handled write in a `let` initializer reaches the self-hosted compiler
+/// already, with no change to its stages. The operator ruling of 2026-10-24
+/// expected a refusal, because the parse stage has one free name of its 1024.
+/// Measured, the stage parses the form through its existing pending-write
+/// detection, and the complete artifact equals the reference's. Equality is
+/// the oracle, so the ruling's fallback of a pinned refusal is not needed.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_self_hosted_compiler_matches_a_let_bound_handled_write() {
+    let sources = [
+        "private data d { x: [Word; 2] } fn main() -> Word { let r = d.x[1] = 7 { ok(_, n) => n, invalid_index(j) => j }; r }",
+        "private data d { x: [Word; 2] } fn main() -> Word { d.x[1] = 3; let r = d.x[1] = 7 { ok(old, new) => old * 100 + new, invalid_index(j) => j }; r * 10 + d.x[1] }",
+        "private data d { x: [Word; 2] } fn main() -> Word { let r: Word = d.x[5] = 7 { ok(_, n) => n, invalid_index(j) => j * 10 }; r }",
+        "private data d { x: [Word; 2] } fn main() -> Word { let r = d.x[2] = 7 { ok(_, n) => n, invalid_index(j) when j < 0 => 0 }; r }",
+        "private data d { x: [Byte; 2] } fn main() -> Byte { let r = d.x[1] = 7 as Byte { ok(o, _) => o, invalid_index(_) => 0 as Byte }; r }",
+    ];
+    for source in sources {
+        let reference = compile(source);
+        let actual =
+            keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host())
+                .unwrap_or_else(|e| panic!("{source}: {e:?}"));
+        assert_eq!(
+            actual.to_bytes().unwrap(),
+            reference.to_bytes().unwrap(),
+            "{source}"
+        );
+    }
+    // The bare form is refused on the shipping path, but only by the reference
+    // cross-check. The self-hosted parser alone accepts it, a leniency that
+    // predates this construct and is recorded in the Order 3 audit.
+    let bare = "private data d { x: [Word; 2] } fn main() -> Word { let r = d.x[1] = 7; 0 }";
+    assert!(matches!(
+        keleusma::selfhost::self_hosted_compile(bare, &keleusma::target::Target::host()),
+        Err(keleusma::selfhost::SelfHostError::ReferenceRejected { .. })
+    ));
+    assert!(keleusma::selfhost::try_parse_functions(bare).is_ok());
+}
