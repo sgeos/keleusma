@@ -23,8 +23,9 @@
 # the eight heaviest self-host tests drop from ~102s to ~0.02s on a warm cache.
 #
 # This is NOT sufficient before a push or merge. The push runs the cargo-husky pre-push
-# hook; a merge to the release line runs `scripts/release-gate.sh` (the mandatory gate,
-# which also covers the detached compiler/ subproject). Reserve those for their moments.
+# hook, and a merge to the release line waits on the pull request's CI run, which runs
+# the whole heavy self-host tier. `scripts/release-gate.sh` remains the full local gate
+# before a publication or a merge into main.
 #
 # Optional second arg overrides the crate clippy targets (default: -p keleusma).
 set -euo pipefail
@@ -35,22 +36,27 @@ CLIPPY_PKG="${2:--p keleusma}"
 
 step() { printf '\n\033[1mfast-check: %s\033[0m\n' "$1"; }
 
+# `self-host` is required: the self-host tests this lane exists for are gated on it.
+# Measured 2026-10-24: without it, the header's own
+# 'test(self_host_compiles_parse_kel_byte_identically)' example selected no test.
+FEATURES="compile verify self-host"
+
 step "Format (cargo fmt --check)"
 cargo fmt --all -- --check
 
 step "Clippy (${CLIPPY_PKG}, tests, -D warnings)"
 # shellcheck disable=SC2086
-cargo clippy ${CLIPPY_PKG} --tests --features "compile verify" -- -D warnings
+cargo clippy ${CLIPPY_PKG} --tests --features "$FEATURES" -- -D warnings
 
 if [ -n "$FILTER" ]; then
   step "Tests matching: ${FILTER}"
   if cargo nextest --version >/dev/null 2>&1; then
-    KEL_SELFHOST_CACHE=1 cargo nextest run --features "compile verify" -E "$FILTER"
+    KEL_SELFHOST_CACHE=1 cargo nextest run --features "$FEATURES" -E "$FILTER"
   else
     echo "note: cargo-nextest not installed; falling back to a substring filter with cargo test" >&2
     # Best-effort: strip a leading `test(...)` wrapper to a bare substring for cargo test.
     SUB="$(printf '%s' "$FILTER" | sed -E 's/^test\((.*)\)$/\1/')"
-    KEL_SELFHOST_CACHE=1 cargo test --features "compile verify" "$SUB"
+    KEL_SELFHOST_CACHE=1 cargo test --features "$FEATURES" "$SUB"
   fi
 else
   printf '\n\033[1mfast-check: no test filter given.\033[0m Pass one, e.g.\n'
