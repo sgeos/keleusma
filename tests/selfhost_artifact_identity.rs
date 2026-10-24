@@ -8,49 +8,49 @@
     not(feature = "narrow-word-32")
 ))]
 
-const STAGES: &[(&str, &str)] = &[
-    ("lexer", include_str!("../src/selfhost/kel/lexer.kel")),
-    ("parse", include_str!("../src/selfhost/kel/parse.kel")),
-    (
-        "reconstruct",
-        include_str!("../src/selfhost/kel/reconstruct.kel"),
-    ),
-    ("codegen", include_str!("../src/selfhost/kel/codegen.kel")),
-    ("analyze", include_str!("../src/selfhost/kel/analyze.kel")),
-    (
-        "verify_structural",
-        include_str!("../src/selfhost/kel/verify_structural.kel"),
-    ),
-    (
-        "verify_yield",
-        include_str!("../src/selfhost/kel/verify_yield.kel"),
-    ),
-    (
-        "verify_depth",
-        include_str!("../src/selfhost/kel/verify_depth.kel"),
-    ),
-    (
-        "verify_typed",
-        include_str!("../src/selfhost/kel/verify_typed.kel"),
-    ),
-    (
-        "verify_datalayout",
-        include_str!("../src/selfhost/kel/verify_datalayout.kel"),
-    ),
-    (
-        "verify_types",
-        include_str!("../src/selfhost/kel/verify_types.kel"),
-    ),
-    ("wire", include_str!("../src/selfhost/kel/wire.kel")),
-    (
-        "wire_debug",
-        include_str!("../src/selfhost/kel/wire_debug.kel"),
-    ),
-    (
-        "wire_schema",
-        include_str!("../src/selfhost/kel/wire_schema.kel"),
-    ),
-];
+/// One list defines both `STAGES` and one complete-artifact test per stage, so the two
+/// cannot drift apart. The tests were one function until 2026-10-24. At about 3.6 hours
+/// in CI that function bounded its shard from below, because nextest partitions by test
+/// and cannot split one. One test per stage lets the partitioner spread the stages.
+/// `complete_artifact_corpus_covers_every_stage_source` checks the list against the
+/// stage directory.
+macro_rules! stage_artifact_tests {
+    ($($stage:ident),* $(,)?) => {
+        const STAGES: &[(&str, &str)] = &[$((
+            stringify!($stage),
+            include_str!(concat!("../src/selfhost/kel/", stringify!($stage), ".kel")),
+        )),*];
+
+        mod production_compiler_matches_complete_stage_artifact {
+            $(
+                #[test]
+                fn $stage() {
+                    super::assert_complete_stage_artifact(
+                        stringify!($stage),
+                        include_str!(concat!("../src/selfhost/kel/", stringify!($stage), ".kel")),
+                    );
+                }
+            )*
+        }
+    };
+}
+
+stage_artifact_tests!(
+    lexer,
+    parse,
+    reconstruct,
+    codegen,
+    analyze,
+    verify_structural,
+    verify_yield,
+    verify_depth,
+    verify_typed,
+    verify_datalayout,
+    verify_types,
+    wire,
+    wire_debug,
+    wire_schema,
+);
 
 #[test]
 fn complete_artifact_corpus_covers_every_stage_source() {
@@ -150,199 +150,195 @@ fn reference_record_bytes(record: &keleusma::selfhost::WireSchemaRecord) -> Vec<
     }
 }
 
-#[test]
-fn production_compiler_matches_every_complete_stage_artifact() {
-    let mut differences = Vec::new();
-    for &(name, source) in STAGES {
-        let tokens = keleusma::lexer::tokenize(source).expect("reference lex");
-        let ast = keleusma::parser::parse(&tokens).expect("reference parse");
-        let reference = keleusma::compiler::compile(&ast).expect("reference compile");
-        let actual =
-            keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host())
-                .unwrap_or_else(|error| panic!("{name}: shipping compilation failed: {error:?}"));
-        let expected_bytes = reference.to_bytes().expect("reference artifact");
-        let actual_bytes = keleusma::selfhost::wire_module_artifact_via_kel(&actual)
-            .unwrap_or_else(|e| panic!("{name}: pipeline wire emission failed: {e:?}"));
-        let decoded_module = keleusma::selfhost::wire_decode_module_via_kel(&actual_bytes)
-            .unwrap_or_else(|e| panic!("{name}: complete module decoding failed: {e:?}"));
+/// The production compiler's complete artifact for one stage source, checked field by
+/// field against the reference compiler and then byte for byte.
+fn assert_complete_stage_artifact(name: &str, source: &str) {
+    let tokens = keleusma::lexer::tokenize(source).expect("reference lex");
+    let ast = keleusma::parser::parse(&tokens).expect("reference parse");
+    let reference = keleusma::compiler::compile(&ast).expect("reference compile");
+    let actual = keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host())
+        .unwrap_or_else(|error| panic!("{name}: shipping compilation failed: {error:?}"));
+    let expected_bytes = reference.to_bytes().expect("reference artifact");
+    let actual_bytes = keleusma::selfhost::wire_module_artifact_via_kel(&actual)
+        .unwrap_or_else(|e| panic!("{name}: pipeline wire emission failed: {e:?}"));
+    let decoded_module = keleusma::selfhost::wire_decode_module_via_kel(&actual_bytes)
+        .unwrap_or_else(|e| panic!("{name}: complete module decoding failed: {e:?}"));
+    assert_eq!(
+        decoded_module.to_bytes().unwrap(),
+        expected_bytes,
+        "{name}: complete decoded module"
+    );
+    let raw_auxiliary = keleusma::wire_format::parse_wire_sections(&actual_bytes)
+        .unwrap()
+        .aux_body;
+    let decoded_aux = keleusma::selfhost::wire_decode_aux_body_via_kel(raw_auxiliary)
+        .unwrap_or_else(|e| panic!("{name}: complete auxiliary decoding failed: {e:?}"));
+    let expected_aux = keleusma::wire_schema::decode_aux_body(raw_auxiliary).unwrap();
+    assert_eq!(
+        keleusma::wire_schema::encode_aux_body(&decoded_aux).unwrap(),
+        keleusma::wire_schema::encode_aux_body(&expected_aux).unwrap(),
+        "{name}: complete auxiliary values"
+    );
+    let directory = keleusma::selfhost::wire_auxiliary_directory_via_kel(raw_auxiliary)
+        .unwrap_or_else(|e| panic!("{name}: auxiliary directory failed: {e:?}"));
+    let expected_directory = keleusma_wire::WireView::parse(raw_auxiliary).unwrap();
+    assert!(!directory.regions.is_empty(), "{name}: empty directory");
+    assert_eq!(
+        directory.regions.len(),
+        usize::from(expected_directory.region_count())
+    );
+    assert_eq!(directory.needs_scrub, expected_directory.needs_scrub());
+    let mut constant_ranges = Vec::new();
+    for (i, region) in directory.regions.iter().enumerate() {
+        let expected = expected_directory.region_at(i as u16).unwrap();
         assert_eq!(
-            decoded_module.to_bytes().unwrap(),
-            expected_bytes,
-            "{name}: complete decoded module"
+            (region.kind, region.flags, region.covers),
+            (expected.kind, expected.flags, expected.covers),
+            "{name}"
         );
-        let raw_auxiliary = keleusma::wire_format::parse_wire_sections(&actual_bytes)
-            .unwrap()
-            .aux_body;
-        let decoded_aux = keleusma::selfhost::wire_decode_aux_body_via_kel(raw_auxiliary)
-            .unwrap_or_else(|e| panic!("{name}: complete auxiliary decoding failed: {e:?}"));
-        let expected_aux = keleusma::wire_schema::decode_aux_body(raw_auxiliary).unwrap();
         assert_eq!(
-            keleusma::wire_schema::encode_aux_body(&decoded_aux).unwrap(),
-            keleusma::wire_schema::encode_aux_body(&expected_aux).unwrap(),
-            "{name}: complete auxiliary values"
+            region.byte_offset,
+            expected.byte_offset().unwrap(),
+            "{name}"
         );
-        let directory = keleusma::selfhost::wire_auxiliary_directory_via_kel(raw_auxiliary)
-            .unwrap_or_else(|e| panic!("{name}: auxiliary directory failed: {e:?}"));
-        let expected_directory = keleusma_wire::WireView::parse(raw_auxiliary).unwrap();
-        assert!(!directory.regions.is_empty(), "{name}: empty directory");
+        let expected_bytes = expected_directory.region_bytes(&expected).unwrap();
+        assert_eq!(region.bytes, expected_bytes, "{name}");
         assert_eq!(
-            directory.regions.len(),
-            usize::from(expected_directory.region_count())
+            region.bytes.as_ptr(),
+            expected_bytes.as_ptr(),
+            "{name}: payload copied"
         );
-        assert_eq!(directory.needs_scrub, expected_directory.needs_scrub());
-        let mut constant_ranges = Vec::new();
-        for (i, region) in directory.regions.iter().enumerate() {
-            let expected = expected_directory.region_at(i as u16).unwrap();
+        use keleusma::wire_schema::kind;
+        if !matches!(
+            region.kind,
+            kind::STRING_POOL | kind::PARAM_TYPES | kind::DEBUG_POOL
+        ) {
+            let records =
+                keleusma::selfhost::wire_schema_records_via_kel(region.kind, region.bytes)
+                    .unwrap_or_else(|e| {
+                        panic!("{name}: record kind {} failed: {e:?}", region.kind)
+                    });
             assert_eq!(
-                (region.kind, region.flags, region.covers),
-                (expected.kind, expected.flags, expected.covers),
-                "{name}"
+                records.is_empty(),
+                region.bytes.is_empty(),
+                "{name}: kind {}",
+                region.kind
             );
-            assert_eq!(
-                region.byte_offset,
-                expected.byte_offset().unwrap(),
-                "{name}"
-            );
-            let expected_bytes = expected_directory.region_bytes(&expected).unwrap();
-            assert_eq!(region.bytes, expected_bytes, "{name}");
-            assert_eq!(
-                region.bytes.as_ptr(),
-                expected_bytes.as_ptr(),
-                "{name}: payload copied"
-            );
-            use keleusma::wire_schema::kind;
-            if !matches!(
-                region.kind,
-                kind::STRING_POOL | kind::PARAM_TYPES | kind::DEBUG_POOL
-            ) {
-                let records =
-                    keleusma::selfhost::wire_schema_records_via_kel(region.kind, region.bytes)
-                        .unwrap_or_else(|e| {
-                            panic!("{name}: record kind {} failed: {e:?}", region.kind)
-                        });
-                assert_eq!(
-                    records.is_empty(),
-                    region.bytes.is_empty(),
-                    "{name}: kind {}",
-                    region.kind
-                );
-                let mut reconstructed = Vec::new();
-                for record in &records {
-                    assert_eq!(record.kind(), region.kind);
-                    if let keleusma::selfhost::WireSchemaRecord::ChunkRecord(chunk) = record {
-                        constant_ranges.push((chunk.consts_first, chunk.consts_count));
-                    }
-                    reconstructed.extend_from_slice(&reference_record_bytes(record));
+            let mut reconstructed = Vec::new();
+            for record in &records {
+                assert_eq!(record.kind(), region.kind);
+                if let keleusma::selfhost::WireSchemaRecord::ChunkRecord(chunk) = record {
+                    constant_ranges.push((chunk.consts_first, chunk.consts_count));
                 }
-                assert_eq!(
-                    reconstructed, region.bytes,
-                    "{name}: record kind {}",
-                    region.kind
-                );
+                reconstructed.extend_from_slice(&reference_record_bytes(record));
             }
-        }
-        assert_eq!(constant_ranges.len(), reference.chunks.len());
-        let decoded_constants =
-            keleusma::selfhost::wire_decode_constant_pools_via_kel(raw_auxiliary, &constant_ranges)
-                .unwrap_or_else(|e| panic!("{name}: constant semantics failed: {e:?}"));
-        assert_eq!(decoded_constants.len(), reference.chunks.len());
-        for (actual_pool, expected_chunk) in decoded_constants.iter().zip(&reference.chunks) {
-            assert_eq!(actual_pool.len(), expected_chunk.constants.len());
             assert_eq!(
-                keleusma::wire_schema::encode_constants(actual_pool).unwrap(),
-                keleusma::wire_schema::encode_constants(&expected_chunk.constants).unwrap(),
-                "{name}: constant values"
+                reconstructed, region.bytes,
+                "{name}: record kind {}",
+                region.kind
             );
         }
-        let decoded_layouts =
-            keleusma::selfhost::wire_decode_layout_metadata_via_kel(raw_auxiliary)
-                .unwrap_or_else(|e| panic!("{name}: layout semantics failed: {e:?}"));
-        let expected_templates: Vec<_> = reference
-            .chunks
-            .iter()
-            .flat_map(|c| c.struct_templates.iter().cloned())
-            .collect();
+    }
+    assert_eq!(constant_ranges.len(), reference.chunks.len());
+    let decoded_constants =
+        keleusma::selfhost::wire_decode_constant_pools_via_kel(raw_auxiliary, &constant_ranges)
+            .unwrap_or_else(|e| panic!("{name}: constant semantics failed: {e:?}"));
+    assert_eq!(decoded_constants.len(), reference.chunks.len());
+    for (actual_pool, expected_chunk) in decoded_constants.iter().zip(&reference.chunks) {
+        assert_eq!(actual_pool.len(), expected_chunk.constants.len());
         assert_eq!(
-            decoded_layouts.templates.as_ref(),
-            Some(&expected_templates),
-            "{name}: templates"
-        );
-        assert_eq!(
-            decoded_layouts.enum_layouts.as_ref(),
-            Some(&reference.enum_layouts),
-            "{name}: enum layouts"
-        );
-        let decoded_data = keleusma::selfhost::wire_decode_data_layout_via_kel(raw_auxiliary)
-            .unwrap_or_else(|e| panic!("{name}: data layout semantics failed: {e:?}"));
-        match (&decoded_data, &reference.data_layout) {
-            (None, None) => {}
-            (Some(a), Some(b)) => {
-                assert_eq!(a.slots, b.slots, "{name}: data slots");
-                assert_eq!(a.shared_layout, b.shared_layout, "{name}: shared offsets");
-                assert_eq!(
-                    a.private_composite_layout, b.private_composite_layout,
-                    "{name}: private placements"
-                );
-                assert_eq!(
-                    keleusma::wire_schema::encode_constants(&a.private_init).unwrap(),
-                    keleusma::wire_schema::encode_constants(&b.private_init).unwrap(),
-                    "{name}: initializers"
-                );
-            }
-            _ => panic!("{name}: data layout presence disagrees"),
-        }
-        let decoded_signatures =
-            keleusma::selfhost::wire_decode_signature_metadata_via_kel(raw_auxiliary)
-                .unwrap_or_else(|e| panic!("{name}: signature semantics failed: {e:?}"));
-        assert!(
-            decoded_signatures.parse_valid,
-            "{name}: signature parsing was skipped"
-        );
-        assert_eq!(
-            decoded_signatures.signatures.len(),
-            reference.chunks.len(),
-            "{name}: every compiled chunk must have a decoded signature"
-        );
-        assert_eq!(
-            decoded_signatures.signatures, reference.signatures,
-            "{name}: signatures"
-        );
-        assert_eq!(
-            decoded_signatures.native_return_shapes, reference.native_return_shapes,
-            "{name}: native return shapes"
-        );
-        assert!(!reference.chunks.is_empty(), "{name} has no chunks");
-        let sections = keleusma::selfhost::wire_opcode_sections_via_kel(&actual)
-            .unwrap_or_else(|e| panic!("{name}: opcode emission failed: {e:?}"));
-        let decoded = keleusma::selfhost::wire_decode_opcode_sections_via_kel(
-            &sections.opcodes,
-            &sections.operands,
-        )
-        .unwrap_or_else(|e| panic!("{name}: opcode decoding failed: {e:?}"));
-        let expected_ops: Vec<_> = reference
-            .chunks
-            .iter()
-            .flat_map(|chunk| chunk.ops.iter().cloned())
-            .collect();
-        assert!(!expected_ops.is_empty(), "{name} has no opcodes");
-        assert_eq!(decoded, expected_ops, "{name}: decoded opcode semantics");
-        if actual_bytes != expected_bytes {
-            let first = actual_bytes
-                .iter()
-                .zip(&expected_bytes)
-                .position(|(a, b)| a != b);
-            differences.push((name, actual_bytes.len(), expected_bytes.len(), first));
-        }
-        eprintln!(
-            "{name}: {} chunks, pipeline {} bytes, reference {} bytes",
-            actual.chunks.len(),
-            actual_bytes.len(),
-            expected_bytes.len()
+            keleusma::wire_schema::encode_constants(actual_pool).unwrap(),
+            keleusma::wire_schema::encode_constants(&expected_chunk.constants).unwrap(),
+            "{name}: constant values"
         );
     }
+    let decoded_layouts = keleusma::selfhost::wire_decode_layout_metadata_via_kel(raw_auxiliary)
+        .unwrap_or_else(|e| panic!("{name}: layout semantics failed: {e:?}"));
+    let expected_templates: Vec<_> = reference
+        .chunks
+        .iter()
+        .flat_map(|c| c.struct_templates.iter().cloned())
+        .collect();
+    assert_eq!(
+        decoded_layouts.templates.as_ref(),
+        Some(&expected_templates),
+        "{name}: templates"
+    );
+    assert_eq!(
+        decoded_layouts.enum_layouts.as_ref(),
+        Some(&reference.enum_layouts),
+        "{name}: enum layouts"
+    );
+    let decoded_data = keleusma::selfhost::wire_decode_data_layout_via_kel(raw_auxiliary)
+        .unwrap_or_else(|e| panic!("{name}: data layout semantics failed: {e:?}"));
+    match (&decoded_data, &reference.data_layout) {
+        (None, None) => {}
+        (Some(a), Some(b)) => {
+            assert_eq!(a.slots, b.slots, "{name}: data slots");
+            assert_eq!(a.shared_layout, b.shared_layout, "{name}: shared offsets");
+            assert_eq!(
+                a.private_composite_layout, b.private_composite_layout,
+                "{name}: private placements"
+            );
+            assert_eq!(
+                keleusma::wire_schema::encode_constants(&a.private_init).unwrap(),
+                keleusma::wire_schema::encode_constants(&b.private_init).unwrap(),
+                "{name}: initializers"
+            );
+        }
+        _ => panic!("{name}: data layout presence disagrees"),
+    }
+    let decoded_signatures =
+        keleusma::selfhost::wire_decode_signature_metadata_via_kel(raw_auxiliary)
+            .unwrap_or_else(|e| panic!("{name}: signature semantics failed: {e:?}"));
     assert!(
-        differences.is_empty(),
-        "complete artifact differences {differences:?}"
+        decoded_signatures.parse_valid,
+        "{name}: signature parsing was skipped"
+    );
+    assert_eq!(
+        decoded_signatures.signatures.len(),
+        reference.chunks.len(),
+        "{name}: every compiled chunk must have a decoded signature"
+    );
+    assert_eq!(
+        decoded_signatures.signatures, reference.signatures,
+        "{name}: signatures"
+    );
+    assert_eq!(
+        decoded_signatures.native_return_shapes, reference.native_return_shapes,
+        "{name}: native return shapes"
+    );
+    assert!(!reference.chunks.is_empty(), "{name} has no chunks");
+    let sections = keleusma::selfhost::wire_opcode_sections_via_kel(&actual)
+        .unwrap_or_else(|e| panic!("{name}: opcode emission failed: {e:?}"));
+    let decoded = keleusma::selfhost::wire_decode_opcode_sections_via_kel(
+        &sections.opcodes,
+        &sections.operands,
+    )
+    .unwrap_or_else(|e| panic!("{name}: opcode decoding failed: {e:?}"));
+    let expected_ops: Vec<_> = reference
+        .chunks
+        .iter()
+        .flat_map(|chunk| chunk.ops.iter().cloned())
+        .collect();
+    assert!(!expected_ops.is_empty(), "{name} has no opcodes");
+    assert_eq!(decoded, expected_ops, "{name}: decoded opcode semantics");
+    eprintln!(
+        "{name}: {} chunks, pipeline {} bytes, reference {} bytes",
+        actual.chunks.len(),
+        actual_bytes.len(),
+        expected_bytes.len()
+    );
+    let first = actual_bytes
+        .iter()
+        .zip(&expected_bytes)
+        .position(|(a, b)| a != b);
+    assert!(
+        actual_bytes == expected_bytes,
+        "{name}: complete artifact differs: pipeline {} bytes, reference {} bytes, \
+             first differing byte {first:?}",
+        actual_bytes.len(),
+        expected_bytes.len()
     );
 }
 
