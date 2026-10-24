@@ -6,6 +6,18 @@ Current sprint source of truth.
 
 ---
 
+## Kaizen handoff to a fresh Claude Code session
+
+2026-10-23. Prepared the [current Kaizen handoff](./handoffs/kaizen.md) for a
+fresh Claude Code session in the existing project-local feature worktree.
+Recorded branch validation, the resolved worktree conflict, current policy
+entry points, startup commands and scope limits. Reviewed and preserved three
+new pilot samples and two new task outcomes. The checkpoint now contains 249
+samples and 65 tasks and passed isolated restoration and byte comparison.
+The mailbox export remains unchanged and empty. No model evaluation, peer
+message, push or merge was performed. Documentation link and anchor checks
+and `git diff --check` passed. The launch itself remains untested.
+
 ## Old Kaizen worktree removal
 
 2026-10-23. Removed the obsolete sibling Kaizen worktree after checking local
