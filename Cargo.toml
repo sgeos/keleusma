@@ -6,8 +6,17 @@ members = ["keleusma-macros", "keleusma-arena", "keleusma-bench", "keleusma-cli"
 # still point at source); the dev/test loop does not need full DWARF. The `test`
 # profile inherits this from `dev`. Set in the workspace root so it applies to
 # every crate. Release builds are unaffected.
+#
+# opt-level 1 because the self-host tests run whole compiler stages inside the
+# VM, and an unoptimised interpreter dominates the suite. Measured 2026-10-24 on
+# `selfhost_typecheck::pipeline_declarations_and_indices_agree_with_reference`,
+# by CPU time on a loaded host: 94.1 s at opt-level 0, 9.1 s at 1, 8.2 s at 2 and
+# 8.1 s at 3, for 26, 90, 98 and 102 s of build CPU. Level 1 takes nearly all of
+# the gain for the least build cost. Only `opt-level` changes, so debug
+# assertions and overflow checks stay on and panicking behaviour is unchanged.
 [profile.dev]
 debug = "line-tables-only"
+opt-level = 1
 
 [package]
 name = "keleusma"

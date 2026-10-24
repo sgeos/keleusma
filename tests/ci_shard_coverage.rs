@@ -16,6 +16,14 @@
 //! partitioned job must therefore still run its `--doc` step, and this file checks that
 //! the step exists in the job. It does not check that the step runs on exactly one shard.
 //!
+//! **THE BINARIES THE WORKSPACE JOB FILTERS OUT RUN IN THE SELF-HOST JOB.** On 2026-10-24
+//! the workspace job stopped being partitioned and began excluding the `selfhost_*`
+//! binaries of `keleusma`, which it had been repeating because `keleusma-cli` enables the
+//! `self-host` feature in a `--workspace` build. The correspondence guard treats `-E` as
+//! irrelevant too, so it cannot see whether those binaries still run anywhere. A filter
+//! widened by accident, or a filter added to the self-host job, would leave them running
+//! nowhere with every other check green. This file checks that case as well.
+//!
 //! The parse is line-based over a workflow this repository writes, and it is not a
 //! general YAML reader. It fails closed: a partitioned command whose shard expression or
 //! matrix it cannot read is a failure, not a skip.
@@ -164,10 +172,148 @@ fn every_partitioned_job_lists_each_shard_exactly_once() {
 
     assert!(errors.is_empty(), "{}", errors.join("\n"));
     assert!(
-        partitioned.contains(&"test".to_string())
-            && partitioned.contains(&"test-self-host".to_string()),
-        "expected the workspace and self-host test jobs to be partitioned; found {partitioned:?}"
+        partitioned.contains(&"test-self-host".to_string()),
+        "expected the self-host test job to be partitioned; found {partitioned:?}"
     );
+}
+
+/// The workspace job's filter, exactly. Widening it would drop tests from the only job
+/// that ran them, so a change here is meant to fail this file and be reviewed.
+const WORKSPACE_FILTER: &str = "-E 'not (package(keleusma) & binary(~selfhost))'";
+
+/// The non-comment `cargo nextest run` commands of one job.
+fn nextest_commands(job: &Job) -> Vec<&str> {
+    job.lines
+        .iter()
+        .map(|l| l.trim())
+        .filter(|l| !l.starts_with('#') && l.contains("cargo nextest run"))
+        .collect()
+}
+
+/// Every `selfhost_*` integration-test binary outside `keleusma`'s own `tests/`. The
+/// workspace filter names `package(keleusma)`, so a binary with that prefix in another
+/// package would still run in the workspace job. It would also not run in the self-host
+/// job, which selects `-p keleusma` only. Neither job would be wrong, but the split this
+/// file guards would no longer describe where the heavy tests run.
+fn foreign_selfhost_binaries() -> Vec<String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut found = Vec::new();
+    let members = [
+        "keleusma-arena",
+        "keleusma-bench",
+        "keleusma-cli",
+        "keleusma-macros",
+        "keleusma-wire",
+        "keleusma-wire-derive",
+    ];
+    for member in members {
+        let dir = root.join(member).join("tests");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with("selfhost") {
+                found.push(format!("{member}/tests/{name}"));
+            }
+        }
+    }
+    found
+}
+
+/// Why the workspace and self-host jobs no longer split the suite as intended, or nothing.
+fn split_errors(workspace: &Job, self_host: &Job) -> Vec<String> {
+    let mut errors = Vec::new();
+    let commands = nextest_commands(workspace);
+    if commands.len() != 1 {
+        errors.push(format!(
+            "expected one nextest command in `{}`, found {commands:?}",
+            workspace.key
+        ));
+    } else if !(commands[0].contains("--workspace") && commands[0].ends_with(WORKSPACE_FILTER)) {
+        errors.push(format!(
+            "the workspace job's filter changed; review it against the self-host job: {}",
+            commands[0]
+        ));
+    }
+
+    let commands = nextest_commands(self_host);
+    if commands.is_empty() {
+        errors.push(format!("`{}` runs no nextest command", self_host.key));
+    }
+    for command in commands {
+        if !(command.contains("-p keleusma") && command.contains("--features self-host")) {
+            errors.push(format!(
+                "a self-host command no longer selects `-p keleusma --features self-host`: {command}"
+            ));
+        }
+        // Any filter or filtering profile here could drop a binary the workspace job
+        // already left to this job.
+        if command.contains(" -E ")
+            || command.contains("--filterset")
+            || command.contains("--profile quick")
+        {
+            errors.push(format!(
+                "the self-host job filters its tests, so the binaries the workspace job \
+                 leaves to it may run nowhere: {command}"
+            ));
+        }
+    }
+    errors
+}
+
+#[test]
+fn binaries_the_workspace_job_filters_out_run_in_the_self_host_job() {
+    let jobs = ci_jobs();
+    let job = |key: &str| {
+        jobs.iter()
+            .find(|j| j.key == key)
+            .unwrap_or_else(|| panic!("ci.yml has no `{key}` job"))
+    };
+    let errors = split_errors(job("test"), job("test-self-host"));
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
+
+    let foreign = foreign_selfhost_binaries();
+    assert!(
+        foreign.is_empty(),
+        "selfhost binaries outside `keleusma` escape the split: {foreign:?}"
+    );
+}
+
+/// The split check detects a widened workspace filter and a filtered self-host job.
+#[test]
+fn the_split_check_rejects_a_widened_filter_and_a_filtered_self_host_job() {
+    let job = |key: &str, run: &str| Job {
+        key: key.to_string(),
+        lines: vec![format!("      - run: {run}")],
+    };
+    let good_workspace = job(
+        "test",
+        &format!("cargo nextest run --profile ci --workspace {WORKSPACE_FILTER}"),
+    );
+    let good_self_host = job(
+        "test-self-host",
+        "cargo nextest run --profile ci -p keleusma --features self-host",
+    );
+    assert!(split_errors(&good_workspace, &good_self_host).is_empty());
+
+    let widened = job(
+        "test",
+        "cargo nextest run --profile ci --workspace -E 'not binary(~selfhost)'",
+    );
+    assert_eq!(split_errors(&widened, &good_self_host).len(), 1);
+
+    let filtered = job(
+        "test-self-host",
+        "cargo nextest run --profile ci -p keleusma --features self-host -E 'not test(slow)'",
+    );
+    assert_eq!(split_errors(&good_workspace, &filtered).len(), 1);
+
+    let dropped = job(
+        "test-self-host",
+        "cargo test -p keleusma --features self-host --doc",
+    );
+    assert_eq!(split_errors(&good_workspace, &dropped).len(), 1);
 }
 
 /// The checker itself detects the two failures it exists for. A guard that cannot fail
