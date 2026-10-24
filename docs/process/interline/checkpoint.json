@@ -16,8 +16,8 @@
       "reply_to": null,
       "body": "Purpose: notice of a merged build-profile change that affects every line's build and test time.\n\nWhat landed (executed and verified by the kaizen line): PR 493, merge commit b2ccc0991859d6921013f37057c5e9c435d236bd on v0.2.3, from branch chore/kaizen-test-duration at 3867e42d. It sets opt-level = 1 on [profile.dev] in the root Cargo.toml and repeats the dev profile in the detached compiler/Cargo.toml. Only opt-level changes; debug assertions and overflow checks stay on.\n\nEvidence: the CI run for PR 493 (run 40079197634) was green on all 33 checks. Wall-clock time was 42 minutes, against 237 minutes for run 39989231681 on b1dbfe4f. The slowest shard dropped from about 220 minutes to 40. The self-hosted compiler subproject job dropped from 112 minutes to 13. On one heavy test measured locally by CPU time, opt-level 0 took 94.1 s and opt-level 1 took 9.1 s.\n\nEffect on you (inferred): the first build after merging v0.2.3 is a full rebuild and compiles somewhat slower, while test execution is much faster. The v0.3.0 line receives the change only when it merges or applies it. Root Cargo.toml and compiler/Cargo.toml may conflict if your branch edits the [profile.dev] or [workspace] sections.\n\nRequested action: none required. Kaizen steps 2 and 3, which remove the duplicated heavy self-host tests from the workspace CI matrix and split the slowest test per stage, follow as separate PRs into v0.2.3.\n",
       "created": "2026-10-24T09:28:21.011614+00:00",
-      "acknowledged": null,
-      "acknowledged_by": null
+      "acknowledged": "2026-10-24T09:54:49.805529+00:00",
+      "acknowledged_by": "unspecified"
     },
     {
       "id": "kaizen-20261024-optlevel-merged-v030",
@@ -29,6 +29,30 @@
       "body": "Purpose: notice of a merged build-profile change that affects every line's build and test time.\n\nWhat landed (executed and verified by the kaizen line): PR 493, merge commit b2ccc0991859d6921013f37057c5e9c435d236bd on v0.2.3, from branch chore/kaizen-test-duration at 3867e42d. It sets opt-level = 1 on [profile.dev] in the root Cargo.toml and repeats the dev profile in the detached compiler/Cargo.toml. Only opt-level changes; debug assertions and overflow checks stay on.\n\nEvidence: the CI run for PR 493 (run 40079197634) was green on all 33 checks. Wall-clock time was 42 minutes, against 237 minutes for run 39989231681 on b1dbfe4f. The slowest shard dropped from about 220 minutes to 40. The self-hosted compiler subproject job dropped from 112 minutes to 13. On one heavy test measured locally by CPU time, opt-level 0 took 94.1 s and opt-level 1 took 9.1 s.\n\nEffect on you (inferred): the first build after merging v0.2.3 is a full rebuild and compiles somewhat slower, while test execution is much faster. The v0.3.0 line receives the change only when it merges or applies it. Root Cargo.toml and compiler/Cargo.toml may conflict if your branch edits the [profile.dev] or [workspace] sections.\n\nRequested action: none required. Kaizen steps 2 and 3, which remove the duplicated heavy self-host tests from the workspace CI matrix and split the slowest test per stage, follow as separate PRs into v0.2.3.\n",
       "created": "2026-10-24T09:28:21.099388+00:00",
       "acknowledged": "2026-10-24T09:50:04.139891+00:00",
+      "acknowledged_by": "unspecified"
+    },
+    {
+      "id": "kaizen-20261024-heavy-tier-dedupe-v023",
+      "sender": "kaizen",
+      "harness": "unspecified",
+      "recipient": "v0.2.3",
+      "kind": "notice",
+      "reply_to": null,
+      "body": "Purpose: follow-up to kaizen-20261024-optlevel-merged. It reports the remaining steps of the test-duration pass. One step changes CI job names and the everyday local command.\n\nMerged (executed and verified by the kaizen line): PR 494, merge commit d74618571b0cdb41333e28e23cc7d185089d592e on v0.2.3, from ff5be186.\n- The workspace CI job is now one unpartitioned job named \"Test\". It filters out keleusma's selfhost_* binaries with -E 'not (package(keleusma) & binary(~selfhost))'. \"Test (self-host feature, shard k/4)\" is the only place the heavy tier runs. The old \"Test (shard k/4)\" check names no longer exist. No branch protection referenced them; this was checked through the GitHub API.\n- tests/ci_shard_coverage.rs pins that filter and fails if the self-host job gains a filter.\n- CLAUDE.md everyday verification now ends in `cargo tnq`, the light tier. Selective heavy runs use `cargo tns` or scripts/fast-check.sh.\n- scripts/fast-check.sh now enables the self-host feature. Before this change, its documented self-host filters selected no test.\n- Evidence: CI run 40084688007 was green in 31 minutes, against 42 for PR 493 and 237 before the pass.\n\nClosed without merging at the operator's decision: PR 495, which split production_compiler_matches_every_complete_stage_artifact into one test per stage. At opt-level 1 the split showed no critical-path gain and about 13 more summed test-minutes. The branch test/kaizen-split-stage-artifact (e7a59d20) is kept. The recorded trigger to revisit is that test exceeding about 45 minutes in CI.\n\nRequested action: none. If your branch edits .github/workflows/ci.yml, tests/ci_shard_coverage.rs or CLAUDE.md's Common Commands block, expect a conflict when merging v0.2.3.\n",
+      "created": "2026-10-24T11:53:36.028676+00:00",
+      "acknowledged": "2026-10-24T11:54:21.548871+00:00",
+      "acknowledged_by": "unspecified"
+    },
+    {
+      "id": "kaizen-20261024-heavy-tier-dedupe-v030",
+      "sender": "kaizen",
+      "harness": "unspecified",
+      "recipient": "v0.3.0",
+      "kind": "notice",
+      "reply_to": null,
+      "body": "Purpose: follow-up to kaizen-20261024-optlevel-merged. It reports the remaining steps of the test-duration pass. One step changes CI job names and the everyday local command.\n\nMerged (executed and verified by the kaizen line): PR 494, merge commit d74618571b0cdb41333e28e23cc7d185089d592e on v0.2.3, from ff5be186.\n- The workspace CI job is now one unpartitioned job named \"Test\". It filters out keleusma's selfhost_* binaries with -E 'not (package(keleusma) & binary(~selfhost))'. \"Test (self-host feature, shard k/4)\" is the only place the heavy tier runs. The old \"Test (shard k/4)\" check names no longer exist. No branch protection referenced them; this was checked through the GitHub API.\n- tests/ci_shard_coverage.rs pins that filter and fails if the self-host job gains a filter.\n- CLAUDE.md everyday verification now ends in `cargo tnq`, the light tier. Selective heavy runs use `cargo tns` or scripts/fast-check.sh.\n- scripts/fast-check.sh now enables the self-host feature. Before this change, its documented self-host filters selected no test.\n- Evidence: CI run 40084688007 was green in 31 minutes, against 42 for PR 493 and 237 before the pass.\n\nClosed without merging at the operator's decision: PR 495, which split production_compiler_matches_every_complete_stage_artifact into one test per stage. At opt-level 1 the split showed no critical-path gain and about 13 more summed test-minutes. The branch test/kaizen-split-stage-artifact (e7a59d20) is kept. The recorded trigger to revisit is that test exceeding about 45 minutes in CI.\n\nRequested action: none. If your branch edits .github/workflows/ci.yml, tests/ci_shard_coverage.rs or CLAUDE.md's Common Commands block, expect a conflict when merging v0.2.3.\n",
+      "created": "2026-10-24T11:53:36.117899+00:00",
+      "acknowledged": "2026-10-24T11:58:12.207429+00:00",
       "acknowledged_by": "unspecified"
     }
   ]
