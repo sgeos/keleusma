@@ -139,8 +139,8 @@ The `max_invocations_per_iteration` attestation on external natives is recorded 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
 | Call | u16 chunk_idx, u8 argc | 10 | Direct call to a compiled chunk by index with `argc` arguments. |
-| CallVerifiedNative | u16 native_idx, u8 argc | 10 | Call a verified native function. Cost folds into the iteration budget per host attestation. |
-| CallExternalNative | u16 native_idx, u8 argc | 10 | Call an external native function. Iteration cost budget pauses during the call; the verifier tracks invocation count per iteration. |
+| CallVerifiedNative | u16 native_idx, u8 argc | 10 | Call a verified native function. Cost folds into the iteration budget per host attestation. The low seven bits of `argc` are the argument count. The high bit is the error-reify flag. When it is set, the call pushes the value and flag `0` on success and the `Word` error code and flag `1` on a soft host failure instead of propagating it. The compiler sets it on every native call. |
+| CallExternalNative | u16 native_idx, u8 argc | 10 | Call an external native function. Iteration cost budget pauses during the call; the verifier tracks invocation count per iteration. `argc` carries the error-reify flag as for `CallVerifiedNative`. |
 | Return | none | 2 | Return from the current chunk. |
 
 The closure-construction and indirect-dispatch opcodes (`PushFunc`, `MakeClosure`, `MakeRecursiveClosure`, `CallIndirect`) are not present in the ISA. Closure-shaped surface expressions are rejected at the type-checker stage with a diagnostic that names the construct; first-class function values are likewise rejected. The `Value::Func` runtime variant was retired alongside the opcodes in V0.2.0 Phase 4. Surface programs that previously used closures must be rewritten as top-level `fn` definitions or trait methods.
@@ -175,7 +175,7 @@ The `Option::None` sentinel and `Option::Some` wrap are handled through `PushImm
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
 | GetField | `StructField` (flat/nested/boxed) | 3 | Pop struct, push field value. The baked `StructField` operand selects a flat read at a byte offset, a nested-composite extraction, or a boxed positional/named lookup. |
-| GetIndex | `ArrayElem` (flat/nested/boxed) | 2 or 8 | Flat Word and Byte forms pop array and index and push the value, index, four Word byte limbs of the bound, and an outcome flag. Invalid indices yield typed zero and flag one without reading an element. Valid indices yield the element and flag zero. These forms cost eight. Other forms retain a single result and cost two, and remain outside the first-pass trap-free proof. |
+| GetIndex | `ArrayElem` (flat/nested/boxed) | 2 or 8 | Flat Word and Byte, nested composite and boxed forms pop array and index and push the value, index, four Word byte limbs of the bound, and an outcome flag. Invalid indices yield a placeholder and flag one without reading an element. The placeholder is typed zero for Word and Byte, a zero-filled body of the element's size for a nested composite, and `Unit` for a boxed element. Valid indices yield the element and flag zero. These forms cost eight. The nested form charges its element size as heap allocation. Other flat scalar forms retain a single result and cost two, and remain outside the first-pass trap-free proof. |
 | GetTupleField | `TupleField` (flat/nested/boxed) | 2 | Pop tuple, push element. The baked `TupleField` operand selects a flat read at a byte offset, a nested-composite extraction, or a boxed positional index. |
 | GetEnumField | `EnumField` (flat/nested/boxed) | 2 | Pop enum variant, push payload field. The baked `EnumField` operand selects a flat read past the discriminant word, a nested-composite extraction, or a boxed positional index. |
 | Len | none | 2 | Pop composite value (Array, Text, Tuple), push length as Int. |
@@ -204,7 +204,7 @@ The `Option::None` sentinel and `Option::Some` wrap are handled through `PushImm
 
 | Instruction | Operands | Cost | Description |
 |-------------|----------|------|-------------|
-| Trap | u16 kind code | 1 or 6 | Halt with the error selected by TrapKind. Code `8` consumes five Words, the index followed by four little-endian byte limbs of an unsigned 32 bit bound, and returns IndexOutOfBounds. The runtime uses the low eight bits of each limb. Its nominal cost is `6`. Other trap kinds cost `1`. Unknown kind codes and malformed payloads are contract errors. |
+| Trap | u16 kind code | 1 or 6 | Halt with the error selected by TrapKind. Code `8` consumes five Words, the index followed by four little-endian byte limbs of an unsigned 32 bit bound, and returns IndexOutOfBounds. The runtime uses the low eight bits of each limb. Its nominal cost is `6`. Code `9`, HostError, consumes the `Word` code of a reified native failure and returns the host's own error when the code matches the most recently reified failure, and otherwise `NativeErrorCode` with that code. Other trap kinds cost `1`. Unknown kind codes and malformed payloads are contract errors. |
 
 ## Opcode count and operand-shape inventory
 
@@ -233,12 +233,12 @@ The cost groupings reproduce `bytecode::nominal_op_cycles`. Hosts that need wall
 | Cost | Instructions |
 |------|-------------|
 | 1 | Const, PushImmediate, GetLocal, SetLocal, GetData, SetData, Dup, Not, If, Else, EndIf, Loop, EndLoop, Break, BreakIf, Stream, Reset, Yield, Trap except kind 8, PopN |
-| 2 | Add, Sub, Mul, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex other forms, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Return, BitAnd, BitOr, BitXor, Shl, Shr |
+| 2 | Add, Sub, Mul, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex other flat scalar forms, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, Return, BitAnd, BitOr, BitXor, Shl, Shr |
 | 3 | GetField, IsEnum, IsStruct |
 | 5 | Div, Mod, NewComposite |
 | 6 | Trap kind 8 |
 | 7 | BoundsCheck |
-| 8 | GetDataIndexed, SetDataIndexed, GetIndex flat Word or Byte |
+| 8 | GetDataIndexed, SetDataIndexed, GetIndex flat Word or Byte, nested or boxed |
 | 10 | Call, CallVerifiedNative, CallExternalNative |
 
 ## WCMU contributions
@@ -251,11 +251,11 @@ The values reproduce `Op::stack_growth` in `src/bytecode.rs`. For multi-output o
 
 | Growth | Instructions |
 |--------|--------------|
-| 0 | Not, Neg, Add, Sub, Mul, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Yield, Return, GetField, GetIndex other forms, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, Trap, PopN, BitAnd, BitOr, BitXor, Shl, Shr |
-| 1 | Const, PushImmediate, GetLocal, GetData, Dup, Div, Mod, FixedDiv, CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, CallVerifiedNative, CallExternalNative, NewComposite, IsEnum, IsStruct |
-| 2 | CheckedNeg |
+| 0 | Not, Neg, Add, Sub, Mul, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Yield, Return, GetField, GetIndex other flat scalar forms, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, Trap, PopN, BitAnd, BitOr, BitXor, Shl, Shr |
+| 1 | Const, PushImmediate, GetLocal, GetData, Dup, Div, Mod, FixedDiv, CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, CallVerifiedNative and CallExternalNative without the reify flag, NewComposite, IsEnum, IsStruct |
+| 2 | CheckedNeg, CallVerifiedNative and CallExternalNative with the reify flag |
 | 4 | SetDataIndexed |
-| 5 | GetDataIndexed, BoundsCheck, GetIndex flat Word or Byte |
+| 5 | GetDataIndexed, BoundsCheck, GetIndex flat Word or Byte, nested or boxed |
 
 ### Stack shrink (slots popped during execution)
 
@@ -263,10 +263,11 @@ The values reproduce `Op::stack_shrink`. For opcodes whose net delta is non-nega
 
 | Shrink | Instructions |
 |--------|--------------|
-| 0 | Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, Div, Mod, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, GetDataIndexed, SetDataIndexed, BoundsCheck, GetIndex flat Word or Byte, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedDiv, Trap except kind 8 |
-| 1 | Add, Sub, Mul, FixedMul, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, If, BreakIf, Yield, GetField, GetIndex other forms, GetTupleField, GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr |
+| 0 | Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, Div, Mod, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, GetDataIndexed, SetDataIndexed, BoundsCheck, GetIndex flat Word or Byte, nested or boxed, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedDiv, Trap except kinds 8 and 9 |
+| 1 | Add, Sub, Mul, FixedMul, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, SetData, If, BreakIf, Yield, GetField, GetIndex other flat scalar forms, GetTupleField, GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr |
+| 1 | Trap kind 9 |
 | 5 | Trap kind 8 |
-| n | PopN(n), Call(_, n), CallVerifiedNative(_, n), CallExternalNative(_, n), NewComposite(count) |
+| n | PopN(n), Call(_, n), CallVerifiedNative(_, n) and CallExternalNative(_, n) with the reify flag masked out of `n`, NewComposite(count) |
 
 ### Heap allocation (bytes)
 
@@ -274,4 +275,5 @@ The values reproduce `Op::stack_shrink`. For opcodes whose net delta is non-nega
 |------|--------------|
 | 0 | All instructions not listed below |
 | `byte_size` from operand | NewComposite, flat form. The exact flat allocation size is baked into the operand at compile time, so the worst-case-memory-usage contribution is the precise byte count rather than a `count * VALUE_SLOT_SIZE_BYTES` estimate. The boxed form reports zero flat bytes; its body is the heap `Vec`, accounted separately. |
+| element `size` from operand | GetIndex, nested composite form. An invalid index allocates a zero-filled placeholder of the element's size, and the bound charges it on every execution because validity is not known statically. |
 | host-attested | CallVerifiedNative through host registration; CallExternalNative through per-iteration invocation-count bound |
