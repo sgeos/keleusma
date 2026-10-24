@@ -6,6 +6,112 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-24 Order 2 scope accepted and full local matrix
+
+The full release matrix passed at 18162341 in all five configurations, with
+documentation tests and the detached compiler. The operator accepted the
+first-pass Order 2 scope first-hand, which closes strengthening item 8. Orders
+1 and 2 have no remaining strengthening items. A kaizen notice about the
+opt-level change was read and acknowledged. Remote CI has not run this branch.
+
+## 2026-10-24 Order 1 independence controls
+
+Strengthening item 5 is addressed. Reference-poisoning controls cover scratch
+assembly over all fourteen stages and production type checking over the stages
+and both type corpora. An all-stage command corpus test drives the built binary.
+Both intervention controls failed when reference reads were injected. Local
+debug runs passed in 2999 and 3505 seconds. Remote continuous integration has not
+run them. Branch feat/v02-order1-independence-controls, cut from 35a85ae1.
+
+## 2026-10-23 Fresh Claude Code session prepared
+
+The Codex transfer was validated, the branch was pushed under its own name, and
+the document-reading tests passed 413 of 413. HANDOFF.md gains a preparation
+addendum and its validity step now expects two commits after d08af4ba.
+
+## 2026-10-23 Claude Code worker transfer
+
+The operator selected Claude Code as the next active V0.2.X worker. The dedicated
+worktree remains on feat/v02-portable-verification-receipts, with d08af4ba as the
+reviewed receipt anchor. The branch is local and unmerged. HANDOFF.md and
+REVERSE_PROMPT.md now give the receiving procedure, next task, verification
+limits and all three pending handler decisions. Codex stops line work after
+this handoff rather than starting another worker concurrently.
+
+Claude Code 2.1.310 is installed. Both local Claude hooks route to v0.2.3, and
+the configured reminder command executed successfully. Client hook trust was
+not inferred. The inbox is empty and its tracked checkpoint is unchanged.
+Production paths still match 09b700b5. Remote run 40060375136 remains in progress.
+The 26 documentation guards pass for this transfer. No full gate, new model
+request, push, merge or publication is performed.
+
+## 2026-10-23 Resumed-session setup review
+
+Confirmed the dedicated V0.2.X working root and feature branch, separate indexes
+and Cargo build directories, v0.2.3 enrollment, empty inbox and unchanged primary
+and V0.3.X states. The handoff is valid. Production files match 09b700b5, with the
+wire constants and retained operand checks unchanged.
+
+Reviewed the portable receipt against saved remote metadata and raw logs. Its
+42 command scripts, 33 named test passes, execution-population hashes and static
+source inventory agree. The newer f213f421 workflow remains in progress.
+The replacement AGENTS.md instructions supersede the earlier no-commit rule.
+The handoff is corrected accordingly and the reviewed documentation is recorded
+in one feature-branch commit. No integration or publication is performed.
+The 26 documentation guards, targeted deny-warning Clippy and formatting pass.
+These targeted checks do not constitute a full implementation gate.
+
+## 2026-10-23 Dedicated V0.2.X worktree
+
+At the operator's direction, V0.2.X now works in the sibling worktree
+`../keleusma-worktrees/v0.2.x` on feat/v02-portable-verification-receipts.
+All nine uncommitted files transferred from the primary checkout with matching
+hashes, together with the ignored receipt evidence. The primary checkout returned
+to v0.2.3 with no tracked changes. Its pre-existing local files were preserved.
+The separate V0.3.X arena-composites checkout was not changed. Each development
+worktree uses its own index and build directory. Shared integration operations
+remain serialized under the existing protocol.
+
+Interline and the shadow pilot are enrolled for the new worktree as v0.2.3.
+Hook installation does not establish client trust. Manual inbox checks remain
+available. No session, commit, merge or publication was created by this setup.
+The handoff now names the dedicated worktree and supersedes the earlier primary
+checkout placement. No new pilot evaluation was needed for the mechanical move.
+
+Verification in the dedicated worktree passed all 26 documentation guards with
+exit zero. Git indexes and Cargo target directories are distinct between the
+two development lines. V0.3.X retained its original commit and clean tracked
+state. The primary local-file hashes remained unchanged.
+
+## 2026-10-23 Portable completion receipts
+
+Line v0.2.3, branch feat/v02-portable-verification-receipts, based on f213f421.
+The work initially moved from kaizen to the primary checkout. That interim
+placement is superseded by the dedicated V0.2.X worktree entry above. All five edited files
+transferred with matching hashes, and the kaizen checkout returned clean to its
+original branch. Existing untracked files in the primary checkout were preserved.
+
+- Both completion audits now carry exact commands, tested commit, build profile,
+  exit-status provenance, pass and exclusion counts and remote job links. The
+  reviewed structured receipt is docs/process/verification/2026-10-23-b1dbfe4f.json.
+- Run 39989231681 succeeded in all 31 jobs at b1dbfe4f. Its fixed debug matrix
+  passed 3458 workspace tests and 3199 isolated self-host tests, each with two
+  ignored cases. The newer f213f421 run remained in progress at handoff review.
+- CLAUDE.md uses figures measured at the same commit. Order 2 acceptance rows
+  now name their regression tests. The existing shipping disagreement pin closes
+  strengthening item 9 without repairing the underlying typed precision gap.
+- Items 3, 4, 7 and 11 are reconciled. Item 2 has portable successor evidence,
+  with historical unrecoverable details explicitly retained as limitations.
+  Item 5 still needs independent controls and an all-stage command corpus.
+  Item 8 has an explicit discrepancy record, without invented operator acceptance.
+- Local documentation guards passed 26 tests. The initial attempt failed three
+  count-shape guards after wording removed required measurement details. Those
+  details were restored and the unchanged guards passed. Targeted deny-warning
+  Clippy, formatting and receipt consistency checks passed.
+- No production implementation, capacity, opcode or wire constant changed. No
+  full local matrix or release gate was run. The three handler decisions remain
+  open. No commit, push, merge or publication was made.
+
 ## 2026-10-23 Fresh Codex session handoff
 
 The current line is v0.2.3 at b1dbfe4f, with no tracked changes at startup.

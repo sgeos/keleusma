@@ -13,6 +13,88 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-24 Check a premise before asking for a ruling on it
+
+Item 8 asked for the operator's acceptance of a narrowing. Before asking, the
+gate text and the trade-off were dated from Git. The gate was scoped to the
+stage corpus from the start, and the widening was recorded the day after the
+gate, not on the declaration day. The question put to the operator therefore
+stated the facts with their provenance, including that the July record was
+written by an agent. A ruling sought on a mistaken premise would have recorded
+the mistake as settled.
+
+## 2026-10-24 Intervention rather than equality for independence
+
+Output equality with the reference cannot show that a construction is
+independent of it, because copying the reference also produces equality. The
+controls therefore remove the reference's ability to read the user program and
+require the same result. The pipeline legitimately bootstraps its stage programs
+through the reference, so a blanket disable would break it. A marker carried by
+the user program separates the two cases, and its uniqueness keeps the hook from
+disturbing concurrently running tests. Marking was itself checked to leave every
+reference artifact unchanged, so the comparison isolates the intervention.
+
+A control of this kind is empty if the poison never fires. Two checks cover
+that. A positive control shows the poison stops the reference on marked text.
+An injected reference read in each production path made both controls fail on
+the first stage. The command corpus compares with same-source reference
+compilation, not the Rust command, because that command prepends the native
+preamble and so compiles a different program.
+
+## 2026-10-23 Worker identity is separate from line identity
+
+The operator selected Claude Code to take over the existing V0.2.X workstream.
+The worktree, feature branch, mailbox route and pilot enrollment stay the same.
+The receiving worker needs tracked context and exact verification limits, not a
+second checkout or a reset communication store. The handoff therefore preserves
+the local unmerged receipt commit and makes item 5 the next implementation task.
+
+Manual execution establishes that the configured reminder works. It cannot
+establish Claude Code's client trust state. The handoff states that limit and
+retains manual inbox checks. Codex does not launch another worker and stops after
+preparing the transfer, preserving the single-writer requirement.
+
+## 2026-10-23 Separate checkouts for concurrent release lines
+
+The operator's concurrency requirement calls for a dedicated V0.2.X worktree.
+Moving this session from kaizen into the primary checkout was an incomplete
+response because it left the primary checkout serving as the development lane.
+The new sibling v0.2.x worktree holds the existing feature branch and its
+uncommitted changes. Transfer hashes established that all nine files survived
+before the originals were removed from the primary checkout. Existing primary
+local configuration and the V0.3.X checkout were preserved.
+
+The two lines now have separate working files, indexes and build destinations.
+They still share Git references and the local communication stores, so worktree
+isolation does not authorize concurrent merges or broad process-termination
+commands. The existing integration protocol remains necessary.
+
+## 2026-10-23 Portable evidence and population accounting
+
+A successful workflow is portable evidence only when its tested tree and actual
+commands are identified. The receipt uses the completed b1dbfe4f run, not the
+still-running f213f421 successor. It preserves actual summary excerpts and named
+PASS lines alongside the command scripts. Successful Actions steps imply exit
+zero under the recorded shell contract, but the logs do not print a numeric
+success status, so that inference is explicit.
+
+Partition exclusions are not ignored tests. Each workspace shard discovered
+3460 cases while executing only its partition. The union of PASS identities is
+3458, leaving two ignored tests. Summing the four skipped counts would instead
+count the other partitions repeatedly. Library executions and source test
+attributes are also distinct populations, now dated to the same commit.
+
+The reconciliation found that the requested permissive-divergence control
+already exists in the shipping command suite. It was verified from source and
+its remote PASS, not reimplemented. The remaining independence rows cannot be
+closed by output equality alone. Their inspection evidence and missing
+interventions are now explicit. Recording a widening choice also does not prove
+operator acceptance of narrowing a later completion contract.
+
+The initial documentation rewrite removed phrases used by three count guards.
+The guards exposed missing arena-split and reproduction details as well as a
+changed feature-matrix phrase. Restoring those details preserved the controls.
+
 ## 2026-10-23 Fresh Codex handoff after the Opus increments
 
 The receiving session must start from the merged v0.2.3 state rather than from
