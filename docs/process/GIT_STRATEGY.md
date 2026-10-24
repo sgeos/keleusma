@@ -207,6 +207,16 @@ The reasoning and the coverage check are recorded on the job in `.github/workflo
 `tests/ci_shard_coverage.rs`. The 61-minute figures above describe the unsplit workflow at a smaller
 corpus and are kept as history.
 
+**Revised on 2026-10-24, at the operator's direction, after two causes were measured.** First, the
+test profile built at opt-level 0, and the heavy tests interpret whole compiler stages in the VM.
+Pull request 493 set opt-level 1, and the run fell from 237 minutes to 42 with the slowest shard
+from about 220 minutes to 40. Second, `keleusma-cli` enables `self-host`, so the `--workspace` job
+built the feature and repeated the self-host job's corpus. In that run, 3.42 of its 3.54 test-hours
+were tests the self-host job also ran. The workspace job is now a single `Test` job that filters out
+`keleusma`'s `selfhost_*` binaries, and `Test (self-host feature, shard k/4)` is the one place the
+heavy tier runs. The operator's rule is that the heavy tier gates a merge in CI, can be run
+selectively, and stays out of everyday local verification.
+
 **The conclusion is unchanged and the correction is small.** Sixty-one minutes against two and a half
 hours is still roughly two and a half times faster, and CI still costs no time on the contended
 machine, so the 2026-08-11 decision stands on the same reasoning with an honest number. Five samples
