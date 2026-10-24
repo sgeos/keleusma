@@ -61,3 +61,6 @@ secret/
 # that walks `*.kel` sources and emits `*.kel.bin` to `OUT_DIR`.
 # See `examples/rtos/build.rs` for the canonical pattern.
 *.kel.bin
+
+# Python bytecode from the scripts/ tooling
+__pycache__/

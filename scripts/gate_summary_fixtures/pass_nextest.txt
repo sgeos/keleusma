@@ -1,0 +1,9 @@
+exit=0
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+────────────
+ Nextest run ID 6f8d7a5d-3b00-4a58-af82-64ea285bd5e9 with nextest profile: default
+    Starting 2 tests across 1 binary
+        PASS [   0.008s] (1/2) fixture tests::passes
+        PASS [   0.009s] (2/2) fixture tests::also_passes
+────────────
+     Summary [   0.009s] 2 tests run: 2 passed, 0 skipped
