@@ -40,10 +40,10 @@ proof that the implementation never reads reference data.
 
 | Acceptance row | Named regression evidence | Remaining limit |
 |---|---|---|
-| Reference-scaffold independence | `production_compiler_matches_every_complete_stage_artifact` in tests/selfhost_artifact_identity.rs exercises the production entry. `all_stage_artifacts_are_independent_of_recorded_expression_types` in src/compiler/inference_independence.rs erases recorded expression types. | Neither intervenes on reference module fields while holding pipeline output fixed. The no-borrowing claim still includes code inspection and needs a dedicated control. |
-| Pipeline-owned type inputs | `pipeline_expression_extraction_reaches_every_stage` and `production_types_reach_corpus_and_rule_form_census` in tests/selfhost_typecheck.rs, plus `derived_binding_verdict_depends_on_the_keleusma_decision` in src/selfhost/typecheck.rs | The intervention proves stage-side derivation matters. It does not disable every possible reference-parser dependency in production transport. |
+| Reference-scaffold independence | `scratch_assembly_matches_every_stage_with_the_reference_poisoned` in src/selfhost/reference_poison_tests.rs assembles all fourteen stages while the reference lexer refuses the marked user program, and requires zero poisoned lexings and complete artifact equality. `production_compiler_matches_every_complete_stage_artifact` and `all_stage_artifacts_are_independent_of_recorded_expression_types` remain. | The poison matches a marker carried on every column-zero function head and on a final line. A consultation of a fragment holding no copy would evade it. The shipping entry is not a subject because it compiles the user program with the reference by design. |
+| Pipeline-owned type inputs | `production_type_verdicts_hold_with_the_reference_poisoned` in src/selfhost/reference_poison_tests.rs runs `type_check_source_via_kel` over the fourteen stages, the twenty ill-typed programs and the seven valid controls with the reference poisoned. Every verdict is unchanged and no poisoned lexing occurs. `pipeline_expression_extraction_reaches_every_stage`, `production_types_reach_corpus_and_rule_form_census` and `derived_binding_verdict_depends_on_the_keleusma_decision` remain. | The sixteen rule-form cells and eight rule-form controls are not repeated under poison. The fragment limit of the previous row applies. |
 | Complete serialization | `production_compiler_matches_every_complete_stage_artifact` and `complete_artifact_corpus_covers_every_stage_source` in tests/selfhost_artifact_identity.rs | Complete artifact equality and decoding cover the current stage inventory. They do not prove unsupported source forms. |
-| Shipping command | `the_same_source_compiles_identically_in_separate_processes` in keleusma-cli/tests/compile_reproducible.rs and `independent_type_rejection_reaches_the_command` in keleusma-cli/tests/self_hosted_refusal.rs | These command fixtures do not automate the historical all-fourteen-stage command comparison. That acceptance row still needs a full command corpus control. |
+| Shipping command | `the_self_hosted_command_compiles_every_stage_to_the_reference_artifact` in keleusma-cli/tests/self_hosted_stage_corpus.rs runs the built binary with `compile --compiler self-hosted` on every stage file and requires byte equality with same-source reference compilation. `the_same_source_compiles_identically_in_separate_processes` and `independent_type_rejection_reaches_the_command` remain. | Signed, encrypted, stripped, debug and cross-target outputs are not exercised by the corpus test. |
 | Compatibility and bounds | The five configurations in the portable receipt, `self_hosted_construct_support_boundary` in tests/selfhost_codegen.rs and the explicit boundary controls cited in the numbered conditions | A matrix pass is not a universal capacity proof. Existing limits remain fixed. |
 | Shadow pilot | The historical pilot record below describes local samples and unavailable external evaluation | No repository test can establish that historical private samples were captured or independently reviewed. Treat this as process evidence, not an implementation regression claim. |
 
@@ -53,8 +53,39 @@ and the intervention with
 `cargo test --lib --features self-host derived_binding_verdict_depends_on_the_keleusma_decision`.
 Reproduce the command fixtures with
 `cargo test -p keleusma-cli --test compile_reproducible --test self_hosted_refusal`.
-Strengthening item 5 remains partially open for the specific missing controls
-above. The remote receipts do not fill those coverage gaps.
+The three controls added on 2026-10-24 are described in the next section.
+
+### Reference-poisoning and command corpus controls, 2026-10-24
+
+The no-borrowing and type-input rows previously rested on code inspection plus
+output equality. Equality cannot distinguish an independent construction from
+one that copies the reference. A test-only hook in `tokenize` in src/lexer.rs
+now counts and refuses reference lexing of any text that carries an armed
+marker. `tokenize` is the only constructor of reference tokens, so every
+reference parse, type check and compilation of the marked user program passes
+through it. Unmarked stage programs, which the pipeline legitimately bootstraps
+through the reference, are unaffected. The hook exists only in test builds with
+the self-host feature.
+
+Three facts were established locally on 2026-10-24 at the parent commit
+35a85ae1 plus the uncommitted increment, in the debug test profile.
+
+1. `cargo test --lib --features self-host reference_poison_tests` passed five
+   of five in 2999 seconds. The five are the inventory, a control showing that
+   the poison stops the reference and spares unmarked text, a control showing
+   that marking leaves every reference artifact unchanged, and the two
+   intervention tests named in the table above.
+2. With a reference read injected into `self_host_compile_scratch` and another
+   into `try_call_type_inputs_from_pipeline`, both intervention tests failed on
+   the first stage in 16 seconds. The injections were then removed. This
+   establishes that the controls can fail, not that every possible leak is
+   detected.
+3. `cargo test -p keleusma-cli --test self_hosted_stage_corpus` passed one of
+   one in 3505 seconds, running fourteen command processes four at a time.
+
+These are local results and do not replace remote continuous integration. The
+two intervention tests and the command corpus test are among the slower tests
+in the suite, though below the slowest recorded test at 2.65 hours.
 
 ## Numbered completion condition
 

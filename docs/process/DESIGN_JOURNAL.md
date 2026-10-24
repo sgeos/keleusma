@@ -13,6 +13,24 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-24 Intervention rather than equality for independence
+
+Output equality with the reference cannot show that a construction is
+independent of it, because copying the reference also produces equality. The
+controls therefore remove the reference's ability to read the user program and
+require the same result. The pipeline legitimately bootstraps its stage programs
+through the reference, so a blanket disable would break it. A marker carried by
+the user program separates the two cases, and its uniqueness keeps the hook from
+disturbing concurrently running tests. Marking was itself checked to leave every
+reference artifact unchanged, so the comparison isolates the intervention.
+
+A control of this kind is empty if the poison never fires. Two checks cover
+that. A positive control shows the poison stops the reference on marked text.
+An injected reference read in each production path made both controls fail on
+the first stage. The command corpus compares with same-source reference
+compilation, not the Rust command, because that command prepends the native
+preamble and so compiles a different program.
+
 ## 2026-10-23 Worker identity is separate from line identity
 
 The operator selected Claude Code to take over the existing V0.2.X workstream.

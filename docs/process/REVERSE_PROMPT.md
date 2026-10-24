@@ -1,18 +1,64 @@
 # Reverse prompt
 
-## Claude Code session preparation, 2026-10-23
+## Order 1 independence controls, 2026-10-24
 
-The operator asked for this line to be ready for a fresh Claude Code session in
-this worktree. The Codex transfer validity checks passed at e578f6f8. This branch
-was pushed to origin under its own name and remains unmerged, without an
-upstream. The twelve document-reading test binaries passed 413 of 413 in
-release with the self-host feature. Run 40060375136 at f213f421 was still in
-progress at writing, and its Book companion succeeded. The Codex session stays
-open in this worktree, idle or without changes, by operator decision.
+The operator set the goal of confirming Order 1 complete and completing it if
+it was not. The audit's acceptance rows were verified for the recorded
+first-pass scope, but strengthening item 5 named three missing regression
+controls. This increment adds all three on feat/v02-order1-independence-controls,
+cut from feat/v02-portable-verification-receipts at 35a85ae1. The handoff was
+validated first. Remote state could not be queried because the sandbox denies
+the SSH known-hosts file.
 
-Next. Validate HANDOFF.md, then open a pull request for this branch so its
-documentation commits reach continuous integration, and continue strengthening
-item 5. The three handler decisions remain with the operator.
+1. A test-only reference poison in `tokenize` in src/lexer.rs, built only with
+   the self-host feature in test builds. It refuses and counts reference lexing
+   of text carrying an armed marker.
+2. src/selfhost/reference_poison_tests.rs runs `self_host_compile_scratch` over
+   all fourteen stages and `type_check_source_via_kel` over the stages and the
+   ill-typed and well-typed corpora, with the reference poisoned. It also holds
+   an inventory, a poison-effectiveness control and a marking-identity control.
+3. The ill-typed and well-typed corpora moved to src/selfhost/type_corpus.rs,
+   which tests/selfhost_typecheck.rs now includes textually.
+4. keleusma-cli/tests/self_hosted_stage_corpus.rs runs the built binary with
+   `compile --compiler self-hosted` on every stage and requires byte equality
+   with same-source reference compilation.
+
+Verification, local, debug profile, at 35a85ae1 plus this increment.
+
+| Command | Result |
+|---|---|
+| `cargo test --lib --features self-host reference_poison_tests` | Exit 0, 5 passed, 2999 seconds |
+| The same two intervention tests with reference reads injected into both production paths | Exit 101, both failed on the first stage in 16 seconds, injections removed |
+| `cargo test -p keleusma-cli --test self_hosted_stage_corpus` | Exit 0, 1 passed, 3505 seconds |
+| `cargo clippy --workspace --all-targets -- -D warnings`, the CI command | Exit 0 with Checking output |
+| Clippy with `--tests` for workspace self-host, default, signatures and signatures with shell | Exit 0 each with Checking output |
+| `cargo fmt --all --check` | Exit 0 |
+
+Clippy with `-p keleusma --lib --tests --no-default-features` fails on five dead
+items in tests/op_tag_tables.rs. That file is untouched here and CI does not run
+that configuration. A separate fix/v02-no-default-clippy worktree exists. Not
+run here are the full five-configuration matrix and the release gate. Of
+tests/selfhost_typecheck.rs, only `production_types_reach_corpus_and_rule_form_census`
+was executed, passing in 263 seconds. The other 102 tests in that file compiled
+under Clippy and were not run. Five documentation guard binaries passed 29 of 29.
+
+Concerns. The new tests add roughly two debug test-hours across the workspace
+and self-host populations, since library tests run in both. The recorded shard
+budget is about three hours of six. The poison is a substring match, so a
+consultation of a fragment without a marker copy would evade it. Copies sit on
+every column-zero function head. The rule-form census is not repeated under
+poison. The shipping `self_hosted_compile` compiles the user program with the
+reference by design and is therefore not a poisoning subject.
+
+Jev pilot. Eligible diagnostics were an sccache permission failure caused by the
+sandbox and the dead-code Clippy result. Neither was recorded, because the
+first was environmental and the second was resolved by inspection in one step.
+No pilot request was made.
+
+Next. Push this branch and open a pull request so remote continuous integration
+runs the new tests, then record the run in the Order 1 audit. Pushing is outward
+facing and awaits operator confirmation. The three handler decisions below remain
+open. The next-task text in the transfer section below is superseded for item 5.
 
 ## Transfer to Claude Code, 2026-10-23
 

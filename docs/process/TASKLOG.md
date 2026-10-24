@@ -6,6 +6,15 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-24 Order 1 independence controls
+
+Strengthening item 5 is addressed. Reference-poisoning controls cover scratch
+assembly over all fourteen stages and production type checking over the stages
+and both type corpora. An all-stage command corpus test drives the built binary.
+Both intervention controls failed when reference reads were injected. Local
+debug runs passed in 2999 and 3505 seconds. Remote continuous integration has not
+run them. Branch feat/v02-order1-independence-controls, cut from 35a85ae1.
+
 ## 2026-10-23 Fresh Claude Code session prepared
 
 The Codex transfer was validated, the branch was pushed under its own name, and

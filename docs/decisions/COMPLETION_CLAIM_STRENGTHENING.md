@@ -91,6 +91,17 @@ evidence.
     Judge each as a dated ledger entry or a live claim. The present-tense instance
     in tests/claimed_counts.rs was corrected on 2026-10-20.
 
+## Addressed on 2026-10-24
+
+- Item 5. The three remaining regression controls now exist. A reference
+  poisoning control runs the scratch assembly over all fourteen stages. A second
+  runs production type checking over the stages and the ill-typed and well-typed
+  corpora. An all-stage command corpus test drives the built binary. Each
+  intervention control was shown to fail when a reference read was injected.
+  The pilot row remains process evidence, as before. The local receipts and
+  residual limits are in the Order 1 audit. Remote continuous integration has
+  not yet run these tests.
+
 ## Reconciled on 2026-10-23
 
 Reviewed remote run 39989231681 at
