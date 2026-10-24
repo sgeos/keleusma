@@ -1,0 +1,51 @@
+exit=100
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.14s
+────────────
+ Nextest run ID 6359ad8a-8c13-4be5-b102-74c6176a7e06 with nextest profile: default
+    Starting 3 tests across 1 binary
+        FAIL [   0.010s] (1/3) fixture tests::assertion_fails
+  stdout ───
+
+    running 1 test
+    test tests::assertion_fails ... FAILED
+
+    failures:
+
+    failures:
+        tests::assertion_fails
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'tests::assertion_fails' (38852614) panicked at src/lib.rs:5:36:
+    assertion `left == right` failed: two is not three
+      left: 2
+     right: 3
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        PASS [   0.010s] (2/3) fixture tests::passes
+        FAIL [   0.010s] (3/3) fixture tests::unwrap_panics
+  stdout ───
+
+    running 1 test
+    test tests::unwrap_panics ... FAILED
+
+    failures:
+
+    failures:
+        tests::unwrap_panics
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'tests::unwrap_panics' (38852616) panicked at src/lib.rs:6:63:
+    called `Option::unwrap()` on a `None` value
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [   0.011s] 3 tests run: 1 passed, 2 failed, 0 skipped
+        FAIL [   0.010s] (1/3) fixture tests::assertion_fails
+        FAIL [   0.010s] (3/3) fixture tests::unwrap_panics
+error: test run failed

@@ -2311,7 +2311,9 @@ answered the operator's response with a context engineering follow-up. Both
 reports are under `docs/process/kaizen/`. Compaction measured as a likely
 correctness cost, so the lower auto-compact window was withdrawn. The shorter
 prompt reminder landed in `scripts/interline.py`, tested and not activated. The
-kaizen handoff became an overwrite-only state file.
+kaizen handoff became an overwrite-only state file. A second pass found every
+Opus 5.5 compaction to be idle, added `scripts/gate_summary.py` with real failure
+fixtures and the `python-tooling` CI job, and drafted a trimmed `CLAUDE.md`.
 
 ## Kaizen test-duration pass
 

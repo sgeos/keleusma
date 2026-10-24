@@ -1,0 +1,30 @@
+exit=101
+   Compiling fixture v0.1.0 (/WORK/c)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+   Doc-tests fixture
+
+running 1 test
+test src/lib.rs - two (line 1) ... FAILED
+
+failures:
+
+---- src/lib.rs - two (line 1) stdout ----
+Test executable failed (exit status: 101).
+
+stderr:
+
+thread 'main' (38853503) panicked at /TMP/doctest_bundle_2024.rs:6:1:
+assertion `left == right` failed
+  left: 2
+ right: 3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+
+failures:
+    src/lib.rs - two (line 1)
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.32s; merged doctests compilation took 0.20s
+error: doctest failed, to rerun pass `--doc`

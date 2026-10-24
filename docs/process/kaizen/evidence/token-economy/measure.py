@@ -160,24 +160,48 @@ def model_counts(path):
 
 
 def scan_codex():
+    # Waiting calls are Codex's own `sleep` and `wait` tools. Each is charged the input of the
+    # next token count, which approximates the context of the request that followed it.
     sessions = 0
     totals = collections.Counter()
     window = 0
+    waits = collections.Counter()
+    wait_context = collections.Counter()
+    compactions = 0
     for path in sorted(CODEX_ROOT.rglob("*.jsonl")):
         cwd = None
         last = None
+        pending = []
+        local_waits = collections.Counter()
+        local_context = collections.Counter()
+        local_compactions = 0
         for rec in records(path):
             payload = rec.get("payload") or {}
-            if cwd is None and isinstance(payload, dict) and payload.get("cwd"):
+            if not isinstance(payload, dict):
+                continue
+            if cwd is None and payload.get("cwd"):
                 cwd = payload["cwd"]
-            if isinstance(payload, dict) and payload.get("type") == "token_count" and payload.get("info"):
+            if rec.get("type") == "compacted":
+                local_compactions += 1
+            if payload.get("type") in ("function_call", "custom_tool_call") and payload.get("name") in ("sleep", "wait"):
+                pending.append(payload["name"])
+            if payload.get("type") == "token_count" and payload.get("info"):
                 last = payload["info"]
+                used = int((last.get("last_token_usage") or {}).get("input_tokens") or 0)
+                for name in pending:
+                    local_waits[name] += 1
+                    local_context[name] += used
+                pending = []
         if cwd and "keleusma" in cwd and last:
             sessions += 1
             for key, value in last["total_token_usage"].items():
                 totals[key] += int(value or 0)
             window = max(window, int(last.get("model_context_window") or 0))
-    return {"sessions": sessions, "tokens": dict(totals), "max_context_window": window}
+            waits.update(local_waits)
+            wait_context.update(local_context)
+            compactions += local_compactions
+    return {"sessions": sessions, "tokens": dict(totals), "max_context_window": window,
+            "compactions": compactions, "wait_calls": dict(waits), "context_at_wait_calls": dict(wait_context)}
 
 
 def main():

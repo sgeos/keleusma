@@ -1,27 +1,32 @@
 {
  "after_compaction": {
-  "calls": 1473,
-  "errors": 42,
-  "rate": 0.0285
+  "calls": 1513,
+  "errors": 43,
+  "rate": 0.0284
  },
  "after_compaction_errors_by_tool": {
-  "Bash": 29,
+  "Bash": 30,
   "Edit": 11,
   "Read": 2
  },
+ "after_compaction_without_edit_guard": {
+  "calls": 1502,
+  "errors": 32,
+  "rate": 0.0213
+ },
  "all_tools_by_context": {
   "100k-200k": {
-   "calls": 2300,
-   "errors": 42,
-   "rate": 0.0183
+   "calls": 2336,
+   "errors": 43,
+   "rate": 0.0184
   },
   "200k-400k": {
-   "calls": 4255,
-   "errors": 39,
-   "rate": 0.0092
+   "calls": 4306,
+   "errors": 42,
+   "rate": 0.0098
   },
   "400k-700k": {
-   "calls": 4805,
+   "calls": 4818,
    "errors": 29,
    "rate": 0.006
   },
@@ -45,6 +50,74 @@
   "calls": 1550,
   "errors": 18,
   "rate": 0.0116
+ },
+ "before_compaction_without_edit_guard": {
+  "calls": 1543,
+  "errors": 11,
+  "rate": 0.0071
+ },
+ "by_calls_since_compaction": {
+  "0-9": {
+   "calls": 310,
+   "errors": 14,
+   "rate": 0.0452
+  },
+  "10-24": {
+   "calls": 465,
+   "errors": 13,
+   "rate": 0.028
+  },
+  "100-199": {
+   "calls": 2524,
+   "errors": 27,
+   "rate": 0.0107
+  },
+  "25-49": {
+   "calls": 738,
+   "errors": 16,
+   "rate": 0.0217
+  },
+  "50-99": {
+   "calls": 1431,
+   "errors": 19,
+   "rate": 0.0133
+  }
+ },
+ "by_compaction_kind": {
+  "idle": {
+   "after": {
+    "calls": 453,
+    "errors": 12,
+    "rate": 0.0265
+   },
+   "before": {
+    "calls": 493,
+    "errors": 7,
+    "rate": 0.0142
+   },
+   "paired": {
+    "after_more": 6,
+    "before_more": 3,
+    "tied": 1
+   }
+  },
+  "threshold": {
+   "after": {
+    "calls": 1049,
+    "errors": 20,
+    "rate": 0.0191
+   },
+   "before": {
+    "calls": 1050,
+    "errors": 4,
+    "rate": 0.0038
+   },
+   "paired": {
+    "after_more": 11,
+    "before_more": 1,
+    "tied": 9
+   }
+  }
  },
  "by_model_and_context": {
   "claude-opus-5 100k-200k": {
@@ -73,47 +146,50 @@
    "rate": 0.0047
   },
   "claude-opus-5-5 100k-200k": {
-   "calls": 783,
-   "errors": 25,
-   "rate": 0.0319
+   "calls": 819,
+   "errors": 26,
+   "rate": 0.0317
   },
   "claude-opus-5-5 200k-400k": {
-   "calls": 1064,
-   "errors": 21,
-   "rate": 0.0197
+   "calls": 1115,
+   "errors": 24,
+   "rate": 0.0215
   },
   "claude-opus-5-5 400k-700k": {
-   "calls": 306,
+   "calls": 319,
    "errors": 5,
-   "rate": 0.0163
+   "rate": 0.0157
   }
  },
  "compaction_window_calls": 50,
  "compactions_paired": {
-  "after_more": 16,
+  "after_more": 17,
   "before_more": 4,
-  "tied": 11
+  "tied": 10
  },
  "edit_after_compaction": {
-  "calls": 52,
+  "calls": 57,
   "errors": 11,
-  "rate": 0.2115
+  "rate": 0.193
  },
  "edit_before_compaction": {
   "calls": 44,
   "errors": 7,
   "rate": 0.1591
  },
+ "edit_error_classes": {
+  "not read or modified since read": 30
+ },
  "edit_tools_by_context": {
   "100k-200k": {
-   "calls": 106,
+   "calls": 111,
    "errors": 14,
-   "rate": 0.1321
+   "rate": 0.1261
   },
   "200k-400k": {
-   "calls": 120,
+   "calls": 129,
    "errors": 13,
-   "rate": 0.1083
+   "rate": 0.1008
   },
   "400k-700k": {
    "calls": 19,
@@ -131,5 +207,31 @@
   "errors": 5,
   "rate": 0.0143
  },
- "permission_denials_excluded": 1
+ "fresh_session_start_without_edit_guard": {
+  "calls": 350,
+  "errors": 5,
+  "rate": 0.0143
+ },
+ "permission_denials_excluded": 1,
+ "recovery_reads": {
+  "compaction": {
+   "calls": 930,
+   "context_at_window_end_total": 3719777,
+   "context_at_window_start_total": 2117943,
+   "result_chars": 2114487,
+   "startup_doc_calls": 180,
+   "startup_doc_chars": 769680,
+   "windows": 31
+  },
+  "fresh": {
+   "calls": 210,
+   "context_at_window_end_total": 830875,
+   "context_at_window_start_total": 397814,
+   "result_chars": 679263,
+   "startup_doc_calls": 57,
+   "startup_doc_chars": 243209,
+   "windows": 7
+  }
+ },
+ "recovery_window_calls": 30
 }

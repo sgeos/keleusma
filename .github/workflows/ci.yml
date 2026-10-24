@@ -396,6 +396,25 @@ jobs:
           shellcheck --version
           shellcheck scripts/*.sh
 
+  # The process tooling under scripts/, the interline mailbox, the Jev shadow
+  # pilot and the gate summary, carried unit tests that no job ran, so a
+  # regression in it failed nothing. The tests use only the standard library.
+  # Skipped tests are counted, because a suite that skips everything passes.
+  python-tooling:
+    name: Python tooling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run the scripts/ unit tests
+        run: |
+          python3 --version
+          python3 -B -m unittest discover -s scripts -p 'test_*.py' -v 2>&1 | tee python-tests.log
+          test "${PIPESTATUS[0]}" -eq 0
+          ran=$(sed -n 's/^Ran \([0-9]*\) tests\{0,1\} in .*/\1/p' python-tests.log)
+          echo "ran ${ran:-0} tests"
+          test "${ran:-0}" -ge 50
+          ! grep -q "skipped" python-tests.log
+
   rtos-host:
     name: RTOS host demonstrator
     runs-on: ubuntu-latest

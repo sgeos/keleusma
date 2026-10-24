@@ -4,8 +4,11 @@ Research spike completed on 2026-10-24 by the kaizen line. It answers the operat
 response to the [token economy spike](./2026-10-24-token-economy-spike.md) and asks
 what the current state of the art says about context engineering for this project.
 It revises one proposal of that spike, implements one, and records the operator's
-positions on the others. No gate, setting or instruction file was changed. One
-tracked tool changed, and its activation is left to the operator.
+positions on the others. A second pass the same day, at the operator's request,
+extended the measurement, established the cause of the Opus 5.5 compactions, built
+the gate output summary, and added a continuous-integration job for the process
+tooling. No setting was changed. The `CLAUDE.md` draft is prepared and waits on a
+peer merge, as described under the plan.
 
 ## Summary
 
@@ -13,11 +16,16 @@ tracked tool changed, and its activation is left to the operator.
 |---|---|---|
 | 1 | The literature does not support "more context gives better work" in general. It supports "relevant, uncompressed context gives better work". Length alone degrades performance even when retrieval is perfect. | Published, five claims re-fetched |
 | 2 | Compaction is lossy and the loss compounds. One study measured 53 percent retention of safety rules after one Claude Code compaction round and 10 percent after five. | Published, re-fetched |
-| 3 | In this project's transcripts the tool error rate in the 50 calls after a compaction was 2.85 percent, against 1.16 percent before it and 1.43 percent at a fresh session start. Errors rose in 16 of 31 compactions and fell in 4. | Measured, weak proxy |
+| 3 | In this project's transcripts, mid-task threshold compactions raised the tool error rate in the next 50 calls from 0.38 percent to 1.91 percent. Errors rose in 11 of 21 such compactions and fell in 1. The rate decays over about 100 calls. | Measured, weak proxy |
 | 4 | The operator's hypothesis therefore splits. Full context beats compacted context, and that half has support. More context beats less context, and that half does not. | Inference |
 | 5 | The first proposal of the token spike, a lower auto-compact window, would add compactions. It is withdrawn in favor of fewer compactions and deliberate session ends. | Inference from 2 and 3 |
 | 6 | Deliberate session ends require small startup files, because a fresh session pays for them again. The proposals on instruction files, startup files and session boundaries are one strategy, not three. | Inference |
-| 7 | The prompt reminder hook now emits a short line per prompt and stays silent in a nested worktree configured for another line. | Implemented and tested, not activated |
+| 7 | The prompt reminder hook now emits a short line per prompt and stays silent in a nested worktree configured for another line. After compaction it names the line's state file. | Implemented and tested, not activated |
+| 8 | Every Opus 5.5 compaction in the sample was an idle compaction, 54.5 to 54.8 minutes after the last activity. Every Opus 5 compaction was a threshold compaction. The unexplained early compactions of the first spike are therefore explained, and waiting is a cause of compaction as well as a cost. | Measured, cause established |
+| 9 | A deliberate fresh start costs about the same context as a compaction. After 30 calls both stood near 120k tokens. | Measured |
+| 10 | Codex sessions spent 7.25 percent of their input tokens at Codex's own `sleep` and `wait` calls, a lower bound because shell sleeps are not counted. | Measured |
+| 11 | A gate output summary that hides no failure reduced a real 1,297-line library test log of 83,076 characters to 4 lines. | Implemented, measured on one run |
+| 12 | The Python tests of the process tooling now run in continuous integration. | Implemented, rehearsed locally |
 
 ## The operator's positions
 
@@ -98,15 +106,54 @@ transcripts as the earlier spike and emits only counts. Its output is
 [`context-quality.json`](./evidence/token-economy/context-quality.json). It counts
 tool results the harness marked as errors and excludes one permission denial.
 
-| Window | Calls | Errors | Rate |
-|---|---|---|---|
-| First 50 tool calls of a fresh session | 350 | 5 | 1.43 percent |
-| 50 tool calls before a compaction | 1,550 | 18 | 1.16 percent |
-| 50 tool calls after a compaction | 1,473 | 42 | 2.85 percent |
+**Two kinds of compaction.** A compaction that follows the last activity by minutes is a
+threshold compaction, made because the context reached its limit. One that follows 30
+minutes or more of idle time is the harness's idle compaction, which Claude Code runs
+on the one-hour cache lifetime "shortly before the cache expires"
+[prompt caching](https://code.claude.com/docs/en/prompt-caching). The measured gaps
+separate cleanly. All 19 Opus 5 compactions came 1.2 to 2.2 minutes after activity, at
+768k to 1M tokens. All 10 Opus 5.5 compactions came 54.5 to 54.8 minutes after
+activity, at 212k to 616k tokens. The first spike left the earlier Opus 5.5
+compactions unexplained. They were idle compactions.
 
-Errors were more frequent after the compaction in 16 of 31 compactions, less frequent
-in 4, and tied in 11. A two-sided sign test on the 20 untied pairs gives p of about
-0.012. Of the 42 post-compaction errors, 29 were Bash, 11 were Edit and 2 were Read.
+**The harness's edit guard.** All 30 failed edits in the sample were the harness's own
+refusal to edit a file not read, or modified since read, in the current context.
+Compaction clears that record, so part of the post-compaction rise is this mechanical
+guard rather than a model error. The table excludes it.
+
+| Window, excluding the edit guard | Calls | Errors | Rate | Errors rose, fell, tied |
+|---|---|---|---|---|
+| First 50 tool calls of a fresh session | 350 | 5 | 1.43 percent | |
+| 50 calls before a threshold compaction | 1,050 | 4 | 0.38 percent | |
+| 50 calls after a threshold compaction | 1,049 | 20 | 1.91 percent | 11, 1, 9 |
+| 50 calls before an idle compaction | 493 | 7 | 1.42 percent | |
+| 50 calls after an idle compaction | 453 | 12 | 2.65 percent | 6, 3, 1 |
+
+For threshold compactions a two-sided sign test on the 12 untied pairs gives p of about
+0.006. For idle compactions it gives about 0.5, which is not evidence of an effect.
+Inference. The harmful case is the mid-task compaction, where work continues on a
+summary of itself. An idle compaction falls at a natural break, which is where the
+vendor advises compacting, and the work that follows is often a new task.
+
+| Calls since a compaction | Calls | Errors | Rate |
+|---|---|---|---|
+| 0 to 9 | 310 | 14 | 4.52 percent |
+| 10 to 24 | 465 | 13 | 2.80 percent |
+| 25 to 49 | 738 | 16 | 2.17 percent |
+| 50 to 99 | 1,431 | 19 | 1.33 percent |
+| 100 to 199 | 2,524 | 27 | 1.07 percent |
+
+The rate decays monotonically over about 100 calls. Inference. The session rebuilds
+what the summary lost by re-reading and by failing, which is the re-derivation cost the
+first spike anticipated.
+
+**What a restart costs.** The first 30 calls after a compaction read 68k characters of
+tool results on average, 25k of them from process and instruction documents, and the
+context grew from 68k to 120k tokens. The first 30 calls of a fresh session read 97k
+characters, 35k of them from those documents, and the context grew from 57k to 119k
+tokens. A fresh session therefore starts about 11k tokens lighter, reads more, and
+arrives at the same size. Its error rate is close to the pre-compaction rate, on only
+five errors.
 
 By context size the error rate falls, from 2.81 percent at 50k to 100k tokens to 0.47
 percent at 700k and above. Inference. This does not show that large contexts help.
@@ -138,7 +185,14 @@ window, avoid compaction where possible, and end sessions deliberately.
 3. **Make the fresh start cheap.** A deliberate end is only economical when the
    startup read is small. That makes the instruction files and the startup files the
    precondition for the session policy, which is why they come first in the plan.
-4. **Put what must survive where the harness re-reads it.** Claude Code re-injects the
+4. **Treat a long wait as a session boundary.** Every Opus 5.5 compaction in the sample
+   followed an hour of idle time. A session that is about to wait an hour for CI, a
+   peer or the operator can write its state file first, so that the summary it is about
+   to receive matters less. Setting `idleCompaction` to `false` keeps the full context
+   across the wait instead, at the price of re-writing the whole prefix to the cache on
+   return. The measured effect of idle compaction is not significant, so this is the
+   operator's choice of cost and not a correction.
+5. **Put what must survive where the harness re-reads it.** Claude Code re-injects the
    root `CLAUDE.md` from disk after compaction and summarizes path-scoped rules away
    [context window](https://code.claude.com/docs/en/context-window). A rule that must
    survive belongs in the root file, which is a reason to keep that file short enough
@@ -236,9 +290,18 @@ Inference. A portable pattern follows from the table.
    resume re-sends the whole transcript uncached. This is the same deliberate session
    end as the revised strategy, which again depends on small startup files.
 
-The Claude Code hook documentation states that `UserPromptSubmit` also fires on turns
-Claude Code starts on its own. Inference. The full banner was therefore added on every
-wake-up as well as every prompt, and the shorter reminder below reduces both.
+The Claude Code hook documentation states that `UserPromptSubmit` also fires when a
+session-scoped scheduled task or `/loop` iteration fires, when a background subagent
+reports back, and when another session sends a message
+[hooks](https://code.claude.com/docs/en/hooks). The full banner was therefore added on
+each of those wake-ups as well as on every prompt, and the shorter reminder below
+reduces both.
+
+Codex shows the same pattern. Across 72 Keleusma Codex sessions, 301 `sleep` calls and
+366 `wait` calls were followed by requests carrying 144.0 million input tokens, 7.25
+percent of all Codex input. Sleeps run through Codex's shell tool are not counted, so
+this is a lower bound. The Codex configuration documents a five-minute maximum poll
+window for background terminals and no completion notification.
 
 Untested. Grok Build reads Claude Code hook files and, per its documentation, ignores
 the output of passive hooks. The reminder would then not reach a Grok session at all,
@@ -257,6 +320,12 @@ Two changes landed in this increment.
 - The second banner came from the primary checkout's configuration firing inside this
   nested worktree. The hook now finds the session's own worktree and stays silent when
   that worktree configures interline for a different line.
+- At session start and after compaction, the full reminder names the line's state file,
+  `docs/process/handoffs/<line>.md`, when it exists. A `SessionStart` hook's output is
+  added to the compacted context
+  [context window](https://code.claude.com/docs/en/context-window), so this is the
+  vendor's documented route for re-injecting state. Only the path is printed, so no
+  tracked text enters hook output.
 
 Both Claude Code and Codex document `hook_event_name` and `cwd` among the fields every
 command hook receives on stdin, which the change relies on. The installed command is
@@ -272,25 +341,68 @@ installer from an updated checkout or copying `scripts/interline.py` to
 
 ## Gate output
 
-Agreed by the operator with the condition that no failure is hidden. The shape is a
-wrapper that writes the full output to a log, prints the exit status, the failing
-test names and the summary lines, and prints the full tail whenever it cannot find a
-summary. Its tests must use real captured failures, including a compile error, a
-panic, a timeout and a failing doctest. It is the next increment of this line and is
-not started here.
+Agreed by the operator with the condition that no failure is hidden. Implemented as
+`scripts/gate_summary.py`. It runs a command with its merged output in a log file and
+prints a bounded summary under six rules.
+
+1. The command, exit status, duration and log path are always printed, and the wrapper
+   exits with the command's own status, reporting a signal as a shell does.
+2. Every failure marker line is printed with a few lines of context after a panic or a
+   compiler error, under the most recent gate step or test-binary header.
+3. Summary lines such as `test result:` and the nextest `Summary` are printed.
+4. A failing run with no recognised marker prints the last lines of the log.
+5. A passing run whose output contains failure markers says so.
+6. When the marker lines exceed the limit, the elided count and the log's last lines
+   are printed.
+
+The tests replay real output captured from cargo, nextest, clippy and rustfmt against a
+throwaway crate. The fixtures cover a failed assertion, a panic, a compile error, a
+failed doctest, two clippy lints, a formatting diff, a test binary killed by `SIGABRT`
+and a nextest timeout, with two passing controls. `capture.sh` beside them regenerates
+them. One test checks every fixture line that an independent pattern recognises as a
+failure. It found a real gap on its first run, because nextest indents each test's
+captured output and the first patterns were anchored at the line start.
+
+On the library tests of this repository, 1,297 lines and 83,076 characters of output,
+about 21,000 tokens at four characters per token, became four lines. Inference. The
+saving grows with the gate, because passing lines are the bulk of every gate log.
+
+Limits. The markers cover the formats captured. A tool that changes its output format
+can stop matching, and rule 4 is the guard for a failing run in that case. A passing run
+that hides a failure in an unrecognised format would not be flagged by rule 5.
 
 ## Plan and ownership
 
 | Step | Owner | State |
 |---|---|---|
-| Shorter reminder and nested-worktree silence | kaizen | implemented, activation with the operator |
-| Rewrite of the kaizen handoff as a state file | kaizen | done in this increment |
-| Draft of a trimmed `CLAUDE.md` and `AGENTS.md` | kaizen drafts, V0.2.X reviews | next, after notifying both version lines |
-| State-file conversion of `HANDOFF.md`, `TASKLOG.md`, `REVERSE_PROMPT.md` and the version handoffs | V0.2.X and V0.3.X | proposed |
+| Shorter reminder, nested-worktree silence and state-file pointer | kaizen | implemented, activation with the operator |
+| Rewrite of the kaizen handoff as a state file | kaizen | done |
+| Gate output summary with real failure fixtures | kaizen | implemented |
+| Python tooling tests in continuous integration | kaizen | implemented, job `python-tooling` |
+| Draft of a trimmed `CLAUDE.md` and `AGENTS.md` | kaizen drafts, V0.2.X reviews | drafted, waiting on a V0.2.X merge |
+| Release gate runs the heavy tier twice | V0.2.X | reported with a proposed fix |
+| State-file conversion of `HANDOFF.md`, `TASKLOG.md`, `REVERSE_PROMPT.md` and the version handoffs | V0.2.X and V0.3.X | proposed, awaiting the operator's first-hand confirmation to those lines |
 | State-file budget guard | kaizen, after the conversions | proposed |
-| Gate output wrapper with failure fixtures | kaizen | next |
 | Jev shadow tasks for the four decisions | kaizen with the pilot lines | proposed |
-| Session-end policy after task boundaries | operator ruling | proposed |
+| Session end before a long wait or at a task boundary | operator ruling | proposed |
+| `idleCompaction` setting | operator choice | options stated |
+
+**The `CLAUDE.md` draft.** V0.2.X accepted that Kaizen drafts it and asked that the
+draft be based on `v0.2.3` after its Order 3 pull request, which edits the status
+block, and that four things be kept or their new place named. The draft keeps the
+Appendix B constraint, the session startup protocol and the git workflow rules. It
+moves the two verification catalogues verbatim to `docs/process/VERIFICATION_PITFALLS.md`
+and keeps their two correctives in `CLAUDE.md`. The release history it drops is already
+in `CHANGELOG.md`. It is 17,944 bytes against 42,802, about 58 percent smaller. Swapped
+into the tree, it passed the four tests that read `CLAUDE.md` or its links,
+`claimed_counts`, `documentation_links`, `gate_ci_correspondence` and
+`release_process_crate_list`. Its first version failed six guards in `claimed_counts`,
+each a phrasing that a figure-checking test reads, which is how the draft came to
+restate the opcode count and the `Value` slot width.
+
+**Withdrawn.** The earlier concern that `scripts/merge-to-trunk.sh` conflicts with the
+no-fast-forward model is already documented in `GIT_STRATEGY.md` and
+`PARALLEL_DEVELOPMENT.md`, so it was not a new finding.
 
 ## Limits
 
@@ -302,4 +414,9 @@ not started here.
   question 1 remains open here until one is defined.
 - The harness survey found no documentation for exit notification in Codex or Grok
   Build. Absence of documentation is not absence of the feature.
+- The idle threshold of 30 minutes separates the measured gaps, which fall either under
+  three minutes or near 55. A compaction triggered manually after a long pause would be
+  misclassified as idle.
+- Codex tool outputs record an exit status in only 944 of about 25,000 cases, so no
+  Codex error rate is reported.
 - The two research subagents used about 143,000 and 183,000 tokens.
