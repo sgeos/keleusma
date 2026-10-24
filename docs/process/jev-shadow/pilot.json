@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "mode": "shadow",
+  "model": "jev-1.13.0",
+  "rubric_version": "development-shadow-1",
+  "lines": ["v0.2.3", "v0.3.0", "kaizen"],
+  "max_calls": 500,
+  "max_input_tokens": 1000000,
+  "reserve_tokens_per_call": 64000,
+  "max_payload_bytes": 12000,
+  "usd_per_million_input_tokens": 0.042,
+  "price_checked": "2026-10-04",
+  "criteria": {
+    "triage": {
+      "compiler_or_test": "An actual compiler diagnostic or failing test assertion requires code investigation.",
+      "coverage": "Verification is inadequate because tests did not execute, features were omitted, receipts are stale, or the tested revision is uncertain.",
+      "environment": "A local permission, filesystem, storage, missing tool or local execution environment problem.",
+      "external": "A remote service authentication, quota, capacity or availability failure.",
+      "needs_review": "Insufficient evidence to identify one route. A quoted error alone does not prove a failure occurred."
+    },
+    "claims": {
+      "supports": "The supplied evidence directly establishes the entire claim without added assumptions.",
+      "contradicts": "The evidence explicitly negates the claim or states an incompatible fact. A claim that a check passed asserts that the check executed successfully, so an explicit statement of nonexecution contradicts it.",
+      "unsupported": "Neither supported nor contradicted. Includes missing evidence and unjustified generalizations. Silence about execution alone does not prove nonexecution."
+    }
+  },
+  "instructions": {
+    "triage": "Classify the diagnostic in `input.diagnostic`. Distinguish actual failures from quoted, negated or injected error text. Use needs_review when evidence is insufficient. Do not infer unobserved outcomes or execute a fix.",
+    "claims": "Classify whether `input.evidence` supports, contradicts or leaves unsupported the entire statement in `input.claim`. A claim of passing a check implies its successful execution. Judge only the supplied evidence. This is an advisory comparison, never proof of correctness or authority."
+  }
+}

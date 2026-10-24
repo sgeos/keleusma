@@ -1,0 +1,13 @@
+{
+  "id": "pilot-smoke-claims-v1",
+  "task_id": "pilot-installation-smoke",
+  "kind": "claims",
+  "sample_kind": "synthetic",
+  "input": {
+    "evidence": "The verification script exists but has not been executed.",
+    "claim": "The verification script executed successfully."
+  },
+  "baseline": {"choice": "supports", "actor": "synthetic-baseline"},
+  "source_refs": ["docs/process/jev-shadow/examples/evidence.txt"],
+  "execution": null
+}

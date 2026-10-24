@@ -1,0 +1,2 @@
+No authentication error occurred. The executed Rust assertion panicked on unequal values.
+The verification script exists but has not been executed.
