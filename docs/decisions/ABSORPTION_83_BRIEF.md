@@ -1,7 +1,7 @@
 # Absorption 83
 
-The rehearsal compared native `99023f8f` with upstream `f213f421` on
-2026-10-23. Fetch measured 11 unabsorbed commits. The separate conflict command
+Computed against native `99023f8f` and upstream `f213f421` on 2026-10-23,
+with 11 unabsorbed commits measured after fetching. The separate conflict command
 `git merge-tree --write-tree HEAD origin/v0.2.3` exited zero and produced tree
 `82ce4fa65f5f730c4e58b6eb6de2e3f532a070c4`. Only after that command was the
 prediction made that `FixedDiv` would require native outcome and stack changes.
