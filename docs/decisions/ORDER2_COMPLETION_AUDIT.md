@@ -66,8 +66,9 @@ therefore part of shipping admission, not an optional comparison.
 The earlier roadmap describes the widening trade-off as operator-selected.
 That record is evidence of the implementation choice. It does not, by itself,
 establish operator acceptance of narrowing the later completion gate. No new
-acceptance is claimed here. Strengthening item 8 remains open for that decision,
-while independent receipt work can proceed. Removing the reference gate or
+acceptance is claimed here. Strengthening item 8 remained open for that decision,
+while independent receipt work could proceed. The operator gave that acceptance on
+2026-10-24, recorded below. Removing the reference gate or
 promoting the first-pass result to whole-verdict equivalence remains unsupported.
 
 The existing `reference_disagreement_prevents_successful_admission` test pins the
@@ -76,6 +77,35 @@ self-hosted command exit 2 with a disagreement diagnostic, and Rust command
 exit 1. Removing the shipping comparison would fail its exit assertion. Job
 120536366163 executed that test successfully at b1dbfe4f. This closes the requested
 pin in item 9 without claiming that the underlying precision gap has been repaired.
+
+### Operator acceptance of the first-pass scope, 2026-10-24
+
+The operator accepted the first-pass Order 2 scope on 2026-10-24. The ruling was
+given first-hand in a Claude Code session in the V0.2.X worktree, as the answer to
+a direct question, and was not relayed by a peer line. The accepted scope is
+whole-verdict agreement with the reference on the fourteen-stage corpus under
+the cross-join widening of the typed stage, with the shipping reference gate
+retained. Equivalence for arbitrary well-formed bytecode is deferred to Order 6
+and to success criterion 2 of the roadmap. Strengthening item 8 is closed by
+this record.
+
+Two facts were checked before the question was put. Both come from Git history.
+
+1. The gate cell added in 18818f27 on 2026-07-15 reads "The self-hosted
+   validator reproduces the whole `verify()` verdict (structural, typed,
+   resource) for the stage corpus, diff-tested against the reference." Its
+   scope is the stage corpus, not arbitrary bytecode.
+2. The widening was recorded as "the operator's chosen trade-off" in 0136c8e5
+   on 2026-07-16, when typed slice 2a landed. That record was written by an
+   agent and is not a first-party ruling. The strengthening list's statement
+   that the profile first appeared on the declaration day is therefore
+   incorrect for the trade-off itself. Only the phrase "selected widening
+   profile" first appeared then.
+
+The reading that the gate text as written is met is an inference from those two
+facts and from the stage-corpus tests named above. The acceptance does not
+repair the precision gap pinned by `reference_disagreement_prevents_successful_admission`,
+and it does not permit removing the reference gate.
 
 ## Host and trust boundary
 

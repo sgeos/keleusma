@@ -6,6 +6,14 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-24 Order 2 scope accepted and full local matrix
+
+The full release matrix passed at 18162341 in all five configurations, with
+documentation tests and the detached compiler. The operator accepted the
+first-pass Order 2 scope first-hand, which closes strengthening item 8. Orders
+1 and 2 have no remaining strengthening items. A kaizen notice about the
+opt-level change was read and acknowledged. Remote CI has not run this branch.
+
 ## 2026-10-24 Order 1 independence controls
 
 Strengthening item 5 is addressed. Reference-poisoning controls cover scratch

@@ -61,7 +61,7 @@ evidence.
    1cfb6dd9 on the declaration day, and the completion plan was written about
    three and a half hours before the declaration. Record the narrowing explicitly,
    with the operator's acceptance if it is given, rather than leaving it implicit
-   in the audit.
+   in the audit. *Closed 2026-10-24, see the addressed section below.*
 9. **Close or pin the permissive divergence.** The typed stage accepts a
    cross-join scalar witness that the reference rejects. Only the retained
    reference consistency gate catches it. Add a test that pins the divergence
@@ -101,6 +101,13 @@ evidence.
   The pilot row remains process evidence, as before. The local receipts and
   residual limits are in the Order 1 audit. Remote continuous integration has
   not yet run these tests.
+
+- Item 8. The operator accepted the first-pass Order 2 scope on 2026-10-24, in
+  session and first-hand. The record, with its dated evidence, is in the Order 2
+  audit. The item's premise needs one correction. The widening trade-off was
+  recorded on 2026-07-16 in 0136c8e5, one day after the gate was written, and
+  not first on the declaration day. The gate itself is scoped to the stage
+  corpus.
 
 ## Reconciled on 2026-10-23
 

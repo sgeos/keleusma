@@ -1,5 +1,49 @@
 # Reverse prompt
 
+## Order 2 scope accepted and full local matrix, 2026-10-24
+
+The operator then set the goal of waiting for the matrix, confirming Order 1 and
+completing Order 2. The full local matrix ran at 18162341 in the Cargo release
+profile with nextest and `--no-fail-fast`. Every step passed.
+
+| Command | Result |
+|---|---|
+| `cargo nextest run --cargo-profile release --workspace --no-fail-fast` | Exit 0, 3464 passed, 2 skipped |
+| `cargo test --release --workspace --doc` | Exit 0, 12 passed, 3 ignored |
+| `cargo nextest run --cargo-profile release -p keleusma --features self-host --no-fail-fast` | Exit 0, 3204 passed, 2 skipped |
+| Same with `--no-default-features`, `--features signatures` and `--features signatures,shell` | Exit 0, 331, 2458 and 2475 passed |
+| In compiler/, `cargo fmt --all -- --check`, deny-warning `cargo clippy --all-targets` and `cargo test` | Exit 0, 86 passed, Clippy printed Checking lines |
+
+The first detached attempt failed only because the sandbox blocked the crates.io
+download and the registry cache. It was rerun outside the sandbox. The release
+profile does not establish a debug pass, and remote continuous integration has
+not run this branch. Order 1 numbered condition 7 therefore holds for this tree
+in release locally. That receipt is in the Order 1 audit.
+
+Order 2. Strengthening item 8 was the one Order 2 item still awaiting a
+decision. Git history shows that the gate added in 18818f27 on 2026-07-15 is
+scoped to the stage corpus, and that the widening trade-off was recorded in
+0136c8e5 on 2026-07-16, not first on the declaration day as item 8 stated. The
+operator was asked directly in this session and accepted the first-pass scope.
+That scope is whole-verdict agreement on the fourteen-stage corpus under the
+widening, with the reference gate retained and arbitrary-bytecode equivalence
+deferred to Order 6. The ruling is first-hand, not relayed. It is recorded in
+the Order 2 audit, the strengthening list and roadmap row 2. Items 7 and 9 were
+already addressed, and the pinned precision gap remains by design. Orders 1 and
+2 have no remaining strengthening items.
+
+Interline. The kaizen notice kaizen-20261024-optlevel-merged-v023 was read and
+acknowledged. It reports that PR 493 merged into v0.2.3 as b2ccc099 with
+opt-level 1 on the dev profile, and requests no action. This branch predates
+that merge. The acknowledgment needed a run outside the sandbox, because the
+store is read-only inside it. The checkpoint was exported and reviewed and
+contains no private material.
+
+Next. Push this branch and open a pull request to v0.2.3, merging v0.2.3 first
+to take the opt-level change, so remote continuous integration runs the new
+tests in debug. Pushing is outward facing and awaits operator confirmation. Then
+Order 3 and the three handler decisions below.
+
 ## Order 1 independence controls, 2026-10-24
 
 The operator set the goal of confirming Order 1 complete and completing it if
@@ -55,10 +99,8 @@ sandbox and the dead-code Clippy result. Neither was recorded, because the
 first was environmental and the second was resolved by inspection in one step.
 No pilot request was made.
 
-Next. Push this branch and open a pull request so remote continuous integration
-runs the new tests, then record the run in the Order 1 audit. Pushing is outward
-facing and awaits operator confirmation. The three handler decisions below remain
-open. The next-task text in the transfer section below is superseded for item 5.
+The next step for this section is superseded by the section above. The next-task
+text in the transfer section below is superseded for item 5.
 
 ## Transfer to Claude Code, 2026-10-23
 

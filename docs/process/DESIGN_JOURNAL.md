@@ -13,6 +13,16 @@ when that file had accreted to ~362 KB, contrary to the overwrite-each-task spec
 content below is that accreted history, verbatim; new reasoning is appended at the top.
 ---
 
+## 2026-10-24 Check a premise before asking for a ruling on it
+
+Item 8 asked for the operator's acceptance of a narrowing. Before asking, the
+gate text and the trade-off were dated from Git. The gate was scoped to the
+stage corpus from the start, and the widening was recorded the day after the
+gate, not on the declaration day. The question put to the operator therefore
+stated the facts with their provenance, including that the July record was
+written by an agent. A ruling sought on a mistaken premise would have recorded
+the mistake as settled.
+
 ## 2026-10-24 Intervention rather than equality for independence
 
 Output equality with the reference cannot show that a construction is

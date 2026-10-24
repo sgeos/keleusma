@@ -83,6 +83,25 @@ Three facts were established locally on 2026-10-24 at the parent commit
 3. `cargo test -p keleusma-cli --test self_hosted_stage_corpus` passed one of
    one in 3505 seconds, running fourteen command processes four at a time.
 
+A full local matrix then ran at commit 18162341, which carries these controls,
+between 07:28 and 08:20 UTC on 2026-10-24. It used nextest in the Cargo release
+profile with `--no-fail-fast`. This satisfies numbered condition 7 for that tree
+in release only. Item 3 of the strengthening list notes that release does not
+establish a debug pass.
+
+| Command | Result |
+|---|---|
+| `cargo nextest run --cargo-profile release --workspace --no-fail-fast` | Exit 0, 3464 passed, 2 skipped |
+| `cargo test --release --workspace --doc` | Exit 0, 12 passed, 3 ignored |
+| `cargo nextest run --cargo-profile release -p keleusma --features self-host --no-fail-fast` | Exit 0, 3204 passed, 2 skipped |
+| `cargo nextest run --cargo-profile release -p keleusma --no-default-features --no-fail-fast` | Exit 0, 331 passed |
+| `cargo nextest run --cargo-profile release -p keleusma --features signatures --no-fail-fast` | Exit 0, 2458 passed |
+| `cargo nextest run --cargo-profile release -p keleusma --features signatures,shell --no-fail-fast` | Exit 0, 2475 passed |
+
+The workspace and self-host totals exceed the b1dbfe4f receipt by six and five,
+which are exactly the tests this increment adds. The detached compiler result is
+recorded in REVERSE_PROMPT.md.
+
 These are local results and do not replace remote continuous integration. The
 two intervention tests and the command corpus test are among the slower tests
 in the suite, though below the slowest recorded test at 2.65 hours.
