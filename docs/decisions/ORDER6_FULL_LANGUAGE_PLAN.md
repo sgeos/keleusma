@@ -156,3 +156,28 @@ two NoVerdict sources passed the native barrier and now stop at explicit parser
 diagnostics rather than faults, an unavailable expression layout in `rogue_dungen.kel`
 and the sixty-four-local cap in `piano_roll_3.kel`. Most of the remaining Unsupported
 sources now stop at a binding pattern, which is slice 3.
+
+**Slice 3a, 2026-10-25, destructuring and wildcard `let`.** The reference lowers
+`let (a, _, b) = e;` by storing `e` in a fresh local and reading each element with
+`GetTupleField`, binding it or popping it, which is exactly the plain statements
+`let T = e; let a = T.0; T.1; let b = T.2;`. A filter in `lexer.kel` now rewrites the
+pattern into those tokens, and the parser handles them as it always has. The hidden
+binding `T` is interned from the bytes of the `let` keyword, so its name is `let`, which
+no identifier can be. A wildcard `let _ = e;` is the expression statement `e;` operation
+for operation, and the filter drops its three leading tokens. A nested or annotated
+pattern, a `let` inside the destructured value, and more than eight elements are refused.
+
+Slice 3a exposed a defect in `parse.kel`. The whole-value flags that make `==` fold as an
+array, tuple or struct equality were cleared only when an identifier resolved, so a flag
+left by `let a = [1, 2];` or by a tuple literal ending an `if` branch survived into a later
+scalar comparison, which then folded as an equality loop. The shipping cross-check
+refused every such program, so nothing miscompiled in shipping. The flags are now cleared
+whenever a statement, block, condition or branch tail finishes folding, and indexing an
+array clears its own flag.
+
+After slice 3a the corpus reads 50 Identical, 13 Unsupported, 7 NoVerdict, 1
+PipelineRejects and 4 RefRejects, with no Diverges or StagePanic. Eleven sources became
+Identical, among them the Order 4 meta-circular interpreter `src/hosted/interp.kel`,
+`09_big_numbers.kel`, `10_multbyte.kel`, four rogue scripts and four piano rolls. Five piano rolls now stop at clean capacity refusals, three
+at an unguarded 256-entry table in type-input extraction and two at reconstruct's
+1,024-record input.

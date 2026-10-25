@@ -6004,7 +6004,10 @@ fn step_tupleaccess(k: Word, v: Word) -> Word {
 // pushed back (the array was used whole).
 fn step_arrayaccess(k: Word, v: Word) -> Word {
     if k == Tok::LBracket() as Word {
+        // Indexed, so not used whole. A flag left by an earlier whole use must not make the
+        // element an operand of an array equality.
         ps.aa_phase = 0;
+        ps.last_array = 0;
         da.fa_index = 1;
         da.fa_index_kind = ps.aa_kind;
         ops.opstack[ops.opsp] = OpCode::IndexMark() as Word;
@@ -6858,6 +6861,18 @@ fn step_draining() -> Word {
         } else { if ops.drain_reason == 19 {
             ops.draining = 0; checked.emit = 1; 0
         } else {
+        if ops.drain_reason <= 4 {
+            // A statement, block, condition or branch tail has fully folded, so the
+            // whole-value flags its operands set for `==` are dead. They used to survive,
+            // because only an identifier's resolution cleared them, so `let a = [1, 2];
+            // 1 == a[0]` folded as an array equality, and a tuple literal ending one `if`
+            // branch made `state.x == 0` in the other a tuple equality. `last_enum` and
+            // `last_byte` are left alone, because a `match` scrutinee and the Byte
+            // operator path read them across these boundaries.
+            ps.last_struct = 0; ps.last_tuple = 0;
+            ps.last_array = 0; ps.last_array_struct = 0; ps.last_array_enum = 0;
+            ps.last_array_tuple = 0; ps.last_array_arr = 0;
+        }
         if ops.drain_reason == 0 {
             if stmt.pstmt_sp > stmt.stmt_base {
                 stmt.pstmt_sp = stmt.pstmt_sp - 1;

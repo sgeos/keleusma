@@ -65,22 +65,22 @@ const CORPUS: &[(&str, Class)] = &[
     ("examples/scripts/06_multiheaded.kel", Unsupported),
     ("examples/scripts/07_refinement.kel", Unsupported),
     ("examples/scripts/08_method_dispatch.kel", Unsupported),
-    ("examples/scripts/09_big_numbers.kel", Unsupported),
-    ("examples/scripts/10_multbyte.kel", Unsupported),
+    ("examples/scripts/09_big_numbers.kel", Identical),
+    ("examples/scripts/10_multbyte.kel", Identical),
     ("examples/scripts/11_signed.kel", Unsupported),
     ("examples/scripts/12_sensor_window.kel", Identical),
     ("examples/scripts/13_telemetry_stream.kel", Unsupported),
     ("examples/scripts/14_frame_log.kel", Unsupported),
     ("examples/scripts/15_pixel_blend.kel", Identical),
-    ("examples/scripts/rogue/rogue_ai_boss.kel", Unsupported),
+    ("examples/scripts/rogue/rogue_ai_boss.kel", Identical),
     ("examples/scripts/rogue/rogue_ai_chaser.kel", Identical),
     ("examples/scripts/rogue/rogue_ai_fast.kel", Identical),
-    ("examples/scripts/rogue/rogue_ai_hunter.kel", Unsupported),
+    ("examples/scripts/rogue/rogue_ai_hunter.kel", Identical),
     ("examples/scripts/rogue/rogue_ai_idle.kel", Identical),
     ("examples/scripts/rogue/rogue_ai_ranged.kel", Identical),
     ("examples/scripts/rogue/rogue_ai_sleeper.kel", Identical),
     ("examples/scripts/rogue/rogue_ai_smart.kel", Identical),
-    ("examples/scripts/rogue/rogue_ai_tracker.kel", Unsupported),
+    ("examples/scripts/rogue/rogue_ai_tracker.kel", Identical),
     ("examples/scripts/rogue/rogue_ai_wander.kel", Identical),
     ("examples/scripts/rogue/rogue_bestiary.kel", Unsupported),
     ("examples/scripts/rogue/rogue_book_keeping.kel", Identical),
@@ -88,7 +88,7 @@ const CORPUS: &[(&str, Class)] = &[
     ("examples/scripts/rogue/rogue_consume.kel", Identical),
     ("examples/scripts/rogue/rogue_descend.kel", Identical),
     ("examples/scripts/rogue/rogue_dungen.kel", NoVerdict),
-    ("examples/scripts/rogue/rogue_game.kel", Unsupported),
+    ("examples/scripts/rogue/rogue_game.kel", Identical),
     ("examples/scripts/rogue/rogue_gear.kel", Unsupported),
     ("examples/scripts/rogue/rogue_item_potion.kel", Identical),
     ("examples/scripts/rogue/rogue_item_scroll.kel", Identical),
@@ -96,16 +96,16 @@ const CORPUS: &[(&str, Class)] = &[
     ("examples/scripts/rogue/rogue_pickup.kel", Identical),
     ("examples/scripts/rogue/rogue_player_ai.kel", Identical),
     ("examples/scripts/rogue/rogue_scroll_apply.kel", Identical),
-    ("examples/scripts/piano_roll/piano_roll_0.kel", Unsupported),
-    ("examples/scripts/piano_roll/piano_roll_1.kel", Unsupported),
-    ("examples/scripts/piano_roll/piano_roll_2.kel", Unsupported),
+    ("examples/scripts/piano_roll/piano_roll_0.kel", NoVerdict),
+    ("examples/scripts/piano_roll/piano_roll_1.kel", NoVerdict),
+    ("examples/scripts/piano_roll/piano_roll_2.kel", Identical),
     ("examples/scripts/piano_roll/piano_roll_3.kel", NoVerdict),
-    ("examples/scripts/piano_roll/piano_roll_4.kel", Unsupported),
-    ("examples/scripts/piano_roll/piano_roll_5.kel", Unsupported),
-    ("examples/scripts/piano_roll/piano_roll_6.kel", Unsupported),
-    ("examples/scripts/piano_roll/piano_roll_7.kel", Unsupported),
-    ("examples/scripts/piano_roll/piano_roll_8.kel", Unsupported),
-    ("examples/scripts/piano_roll/piano_roll_9.kel", Unsupported),
+    ("examples/scripts/piano_roll/piano_roll_4.kel", NoVerdict),
+    ("examples/scripts/piano_roll/piano_roll_5.kel", Identical),
+    ("examples/scripts/piano_roll/piano_roll_6.kel", Identical),
+    ("examples/scripts/piano_roll/piano_roll_7.kel", Identical),
+    ("examples/scripts/piano_roll/piano_roll_8.kel", NoVerdict),
+    ("examples/scripts/piano_roll/piano_roll_9.kel", NoVerdict),
     ("examples/rtos/scripts/event_listener.kel", RefRejects),
     ("examples/rtos/scripts/faulty.kel", RefRejects),
     ("examples/rtos/scripts/heartbeat.kel", PipelineRejects),
@@ -117,7 +117,7 @@ const CORPUS: &[(&str, Class)] = &[
     ("keleusma-cli/examples/hello.kel", Identical),
     ("scripts/check-md-links.kel", Unsupported),
     ("src/crypto_frame/frame.kel", Unsupported),
-    ("src/hosted/interp.kel", Unsupported),
+    ("src/hosted/interp.kel", Identical),
     ("src/selfhost/kel/analyze.kel", Identical),
     ("src/selfhost/kel/codegen.kel", Identical),
     ("src/selfhost/kel/lexer.kel", Identical),
@@ -454,6 +454,80 @@ fn native_imports_and_qualified_calls_compile_or_are_refused() {
         (
             "use host::f\nfn main() -> Word { host::nope(1) }",
             RefRejects,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Slice 3 of Order 6. A flat tuple pattern in a `let`, and a wildcard `let`, reach the
+/// parser as the plain statements the reference lowers them to, through the lexer's
+/// destructuring filter. The stale-flag cases are a defect slice 3 exposed: a whole-value
+/// equality flag left by an earlier statement or branch made a later scalar `==` fold as an
+/// array or tuple equality. Each was measured to diverge before the repair.
+#[test]
+fn destructuring_and_wildcard_lets_compile_and_stale_equality_flags_are_cleared() {
+    let cases: &[(&str, Class)] = &[
+        (
+            "fn f() -> (Word, Word) { (1, 2) }\nfn main() -> Word { let (a, b) = f(); a + b }",
+            Identical,
+        ),
+        (
+            "fn f() -> (Word, Word) { (1, 2) }\nfn main() -> Word { let (a, _) = f(); a }",
+            Identical,
+        ),
+        ("fn main() -> Word { let (a, b) = (3, 4); b }", Identical),
+        (
+            "fn f() -> (Word, Word, Word) { (1, 2, 3) }\nfn main() -> Word { let (_, b, c) = f(); b + c }",
+            Identical,
+        ),
+        (
+            "fn main() -> Word { let t = (3, 4); let (a, b) = t; a + b }",
+            Identical,
+        ),
+        (
+            "fn f(a: Word) -> (Word, Word) { (a, a) }\nfn main() -> Word { let (a, b) = f(if 1 > 0 { 2 } else { 3 }); a }",
+            Identical,
+        ),
+        (
+            "fn f(x: Word) -> Word { x }\nfn main() -> Word { let _ = f(1); 2 }",
+            Identical,
+        ),
+        (
+            "loop main(r: Word) -> Word { let _ = yield 0; 1 }",
+            Identical,
+        ),
+        // Refused: a nested pattern and an annotated wildcard.
+        (
+            "fn f() -> ((Word, Word), Word) { ((1, 2), 3) }\nfn main() -> Word { let ((a, b), c) = f(); a }",
+            Unsupported,
+        ),
+        ("fn main() -> Word { let _: Word = 3; 2 }", Unsupported),
+        // Stale whole-value flags.
+        ("fn main() -> bool { let a = [1, 2]; 1 == a[0] }", Identical),
+        (
+            "fn main() -> bool { let a = [1, 2]; a[0] == a[1] }",
+            Identical,
+        ),
+        (
+            "fn main() -> Word { let a: [Word; 2] = [1, 2]; if a[0] == 1 and a[1] == 2 { 1 } else { 0 } }",
+            Identical,
+        ),
+        (
+            "fn main() -> bool { let a = [1, 2]; let b = [1, 2]; let c = a == b; c }",
+            Identical,
+        ),
+        (
+            "fn main(c: bool) -> (Word, Word) { if c { (1, 2) } else { let x = 3; if x == 0 { (0, 0) } else { (x, x) } } }",
+            Identical,
         ),
     ];
     let mut mismatches = Vec::new();

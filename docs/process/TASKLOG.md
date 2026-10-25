@@ -6,6 +6,13 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-25 Order 6 slice 3a, destructuring and wildcard let
+
+A destructuring filter in lexer.kel rewrites flat tuple patterns and wildcard lets into
+the plain statements the reference lowers them to. It exposed stale equality flags in
+parse.kel, now cleared at every drain boundary. The corpus reads 50 of 75 identical,
+including the Order 4 interpreter.
+
 ## 2026-10-25 Order 6 slice 2, native calls
 
 By operator ruling, twenty dead names left parse.kel and the wire stage's name cap
