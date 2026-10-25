@@ -391,6 +391,16 @@ pub struct LowerOptions {
     /// The counter is one global, so a metered module serves one instance on
     /// one thread at a time.
     pub op_meter: bool,
+    /// Refuse a coroutine whose native code would dispatch on a run-time kind.
+    ///
+    /// **Workstream G, the flat machine in native code, off by default.** With
+    /// it set, a coroutine lowers only when its type analysis gives every
+    /// operand and local of every reachable instruction a single kind and no
+    /// instruction needs a kind guard. The kinds the emitter then stores are
+    /// constants, so after promotion the code carries no kind beside any value
+    /// and selects on none. See `coroutine::KindCensus`. Outside a coroutine
+    /// kinds are already static, and the option changes nothing.
+    pub static_kinds: bool,
 }
 
 /// The global a metered module counts executed instructions into. See

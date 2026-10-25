@@ -286,6 +286,101 @@ pub fn lower_metered<'ctx>(
     lower_impl(ctx, program, machine, frame_bytes, contracts, options)
 }
 
+/// Lower with explicit [`LowerOptions`], such as [`LowerOptions::static_kinds`].
+pub fn lower_with_options<'ctx>(
+    ctx: &'ctx Context,
+    program: &Module,
+    machine: &TargetMachine,
+    frame_bytes: u32,
+    contracts: &HostContracts,
+    options: LowerOptions,
+) -> Result<LlvmModule<'ctx>, LowerError> {
+    lower_impl(ctx, program, machine, frame_bytes, contracts, options)
+}
+
+/// Where a coroutine's native code needs a run-time kind, counted from the
+/// coroutine type analysis rather than from the emitted code.
+///
+/// Native operands are untagged words. A coroutine nevertheless keeps a
+/// run-time kind beside a value wherever control flow can join different
+/// kinds, such as a local that holds `Unit` after `Reset` and a `Word` before
+/// it, and the emitted code then dispatches on that kind or guards it. Where
+/// every fact names one kind the stored kinds are constants, which promotion
+/// folds, and the code dispatches on nothing. Workstream G asks for exactly
+/// that, the flat machine in native code.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KindCensus {
+    /// Reachable instructions the analysis reached.
+    pub instructions: usize,
+    /// Instructions with an operand whose kind is not unique.
+    pub dynamic_operands: usize,
+    /// Instructions with a local whose kind is not unique, among those whose
+    /// operands are all unique. **Counted, not refused.** A local joins `Unit`
+    /// and a value at a loop head because the virtual machine clears locals at
+    /// `Reset`, but code consumes a local's kind only after `GetLocal` pushes
+    /// it, where it is an operand and is counted as one.
+    pub dynamic_locals: usize,
+    /// Instructions carrying a run-time kind guard.
+    pub guarded: usize,
+    /// The first instruction that needs a run-time kind, and why.
+    pub first_dynamic: Option<String>,
+}
+
+impl KindCensus {
+    /// Whether the coroutine lowers with no run-time kind at all.
+    pub fn is_static(&self) -> bool {
+        self.first_dynamic.is_none()
+    }
+}
+
+fn census_of(analysis: &types::Analysis) -> KindCensus {
+    let unique = |mask: &u16| *mask == 0 || types::kind(*mask).count_ones() == 1;
+    let mut census = KindCensus::default();
+    for (chunk, facts) in analysis.facts.iter().enumerate() {
+        for (ip, f) in facts {
+            census.instructions += 1;
+            let reason = if !f.guards.is_empty() {
+                census.guarded += 1;
+                Some("it guards an operand's kind")
+            } else if !f.stack.iter().all(unique) {
+                census.dynamic_operands += 1;
+                Some("an operand may hold more than one kind")
+            } else {
+                if !f.locals.iter().all(unique) {
+                    census.dynamic_locals += 1;
+                }
+                None
+            };
+            if let (Some(why), None) = (reason, &census.first_dynamic) {
+                census.first_dynamic = Some(format!("at chunk {chunk} instruction {ip} {why}"));
+            }
+        }
+    }
+    census
+}
+
+/// The [`KindCensus`] of `program` lowered as a coroutine under `contracts`.
+///
+/// This runs the admission the lowering runs, verification, the dialogue plan
+/// and the coroutine type analysis, at a reservation large enough that the
+/// frame never limits it. A program the coroutine route refuses returns its
+/// refusal.
+pub fn kind_census(program: &Module, contracts: &HostContracts) -> Result<KindCensus, LowerError> {
+    keleusma::verify::verify(program).map_err(|e| error(format!("verification: {e:?}")))?;
+    let entry = program
+        .entry_point
+        .ok_or_else(|| error("coroutine needs an entry point"))?;
+    let plan = dialogue::Plan::new(
+        program,
+        entry,
+        contracts.dialogues.as_ref(),
+        1 << 20,
+        &contracts.native_body_returns,
+        &contracts.fallible_natives,
+    )?;
+    Ok(census_of(&types::check(program, entry, plan)?))
+}
+
 /// Whether `{i64, i64}` returns in the same two registers as the C structure
 /// `{ int64_t value; int64_t failed; }` on `machine`.
 ///
@@ -421,6 +516,14 @@ fn lower_impl<'ctx>(
         })?;
     let owns_host_values = plan.owns_bodies;
     let analysis = types::check(program, entry, plan)?;
+    if options.static_kinds {
+        let census = census_of(&analysis);
+        if let Some(why) = census.first_dynamic {
+            return Err(error(format!(
+                "static kinds requested, but {why}, so the code would dispatch on a run-time kind"
+            )));
+        }
+    }
     let mut prepared = program.clone();
     for &(chunk, ip) in &analysis.false_inspections {
         // Both instructions leave the inspected value in place and push Bool.

@@ -303,6 +303,13 @@ effort as native time while open decision 1 stands, and is not established for t
 lexer. The evidence and its limits are in
 [`ORDER_4_COMPLETION.md`](../decisions/ORDER_4_COMPLETION.md).
 
+**Order 5 status, 2026-10-25.** Met for the native half of the flat machine. A coroutine lowers
+with no run-time kind when its analysis permits, and all 14 self-hosted stage sources do so and
+agree with the virtual machine. A native library is replaced while its host runs, under the virtual
+machine's schema rule, and agrees with `Vm::replace_module`. The bytecode half of the flat-machine
+redesign, which would change the instruction set, is open decision 3 and the operator's. The
+evidence and its limits are in [`ORDER_5_COMPLETION.md`](../decisions/ORDER_5_COMPLETION.md).
+
 ## The oracle and trust story
 
 Native code raises the same trust question as a self-hosted validator: native output that

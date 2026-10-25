@@ -735,3 +735,18 @@ specifies native default values that the 2026-10-20 ruling supersedes. The
 verifier's text analysis refuses a comparison of two `Word` call results in the
 lexer's `intern_id`, so the lexer has no composed claim. Publication remains
 held.
+
+
+## APPENDED BY THE V0.3.X LINE, Claude Code, Order 5, 2026-10-25
+
+Order 4 merged as pull request 527 and absorption 94 opened as pull request
+531. The operator then set this line's Order 5, Workstreams G and H, as the
+goal and asked for open questions to be accumulated in
+`docs/process/handoffs/v0.3.0-QUESTIONS.md`. The flat-machine redesign landed
+in native code only. `LowerOptions::static_kinds` lowers a coroutine with no
+run-time kind, and all 14 stage sources qualify. A native library is replaced
+while its host runs under the virtual machine's schema rule and agrees with
+`Vm::replace_module`. `docs/decisions/ORDER_5_COMPLETION.md` holds the
+evidence. The bytecode half of the redesign is roadmap open decision 3 and
+remains the operator's. Publication remains held.
+
