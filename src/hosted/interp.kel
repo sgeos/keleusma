@@ -56,6 +56,9 @@ shared data io {
     arg_sz: [Word; 16],
     hp0: Word,
     heap: [Word; 2048],
+    d_count: Word,
+    d_t: [Word; 256],
+    d_w: [Word; 256],
     out_t: Word,
     out_w: Word,
     out_sz: Word,
@@ -79,6 +82,9 @@ private data st {
     vt: [Word; 512],
     vw: [Word; 512],
     vs: [Word; 512],
+    dt: [Word; 256],
+    dw: [Word; 256],
+    ds: [Word; 256],
     f_chunk: [Word; 64],
     f_ip: [Word; 64],
     f_base: [Word; 64],
@@ -172,10 +178,18 @@ fn start() -> Word {
     io.out_fault = 0;
     io.steps = 0;
     let e = io.entry;
-    if e < 0 orelse e >= io.n_chunks orelse e >= frame_cap() orelse io.nargs > io.ch_locals[e] {
+    if e < 0 orelse e >= io.n_chunks orelse e >= frame_cap() orelse io.nargs > io.ch_locals[e]
+        orelse io.d_count < 0 orelse io.d_count > data_cap() {
         fault(9)
     } else {
         st.hp = io.hp0;
+        for d in 0..256 limit 256 {
+            if d < io.d_count {
+                st.dt[d] = io.d_t[d];
+                st.dw[d] = io.d_w[d];
+                st.ds[d] = 0;
+            }
+        }
         for i in 0..16 limit 16 {
             if i < io.nargs { push_sized(io.arg_t[i], io.arg_w[i], io.arg_sz[i]); }
         }
@@ -602,11 +616,27 @@ fn op_field_nested(offset: Word, size: Word, variant: Word) -> Word {
 // the flag, 1 for an invalid index.
 fn push_index_tail(index: Word, bound: Word, invalid: Word) -> Word {
     push(1, index);
+    push_bound_tail(bound, invalid)
+}
+
+// The four sign-extended bound bytes and the flag, without the index.
+fn push_bound_tail(bound: Word, invalid: Word) -> Word {
     for b in 0..4 limit 4 {
         let byte = (bound asr (8 * b)) band 255;
         push(1, if byte >= 128 { byte - 256 } else { byte });
     }
     push(1, invalid)
+}
+
+// `BoundsCheck(bound)` keeps the Word index on top and pushes the bound tail after it.
+fn op_bounds_check(bound: Word) -> Word {
+    if st.sp == 0 { fault(2) } else {
+        let i = st.sp - 1;
+        if st.vt[i] != 1 { fault(5) } else {
+            let ix = st.vw[i];
+            push_bound_tail(bound, b2w(ix < 0 orelse ix >= bound))
+        }
+    }
 }
 
 // A flat scalar element read. An invalid index yields a typed zero.
@@ -656,6 +686,70 @@ fn op_is_enum(disc: Word) -> Word {
         if st.vt[i] != 8 orelse st.vs[i] < 8 { fault(5) } else {
             if disc < 0 orelse disc >= io.k_count orelse io.k_t[disc] != 1 { fault(7) } else {
                 push(2, b2w(read_scalar(st.vw[i], 1) == io.k_w[disc]))
+            }
+        }
+    }
+}
+
+// The data segment. The first pass supports private scalar slots, which the host seeds at start
+// with the values the Rust virtual machine gives them at load. A slot holds any value, so its
+// size travels with it as on the operand stack.
+fn data_cap() -> Word { 256 }
+
+fn op_get_data(slot: Word) -> Word {
+    if slot < 0 orelse slot >= io.d_count { fault(8) } else {
+        push_sized(st.dt[slot], st.dw[slot], st.ds[slot])
+    }
+}
+
+fn op_set_data(slot: Word) -> Word {
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        if slot < 0 orelse slot >= io.d_count { fault(8) } else {
+            st.dt[slot] = st.vt[i];
+            st.dw[slot] = st.vw[i];
+            st.ds[slot] = st.vs[i];
+            0
+        }
+    }
+}
+
+// `GetDataIndexed`: pop the fallback and the index, and push the slot's value, or the fallback
+// for an invalid index, followed by the bounds tail.
+fn op_get_data_indexed(base: Word, len: Word) -> Word {
+    let f = pop();
+    let j = pop();
+    if st.status != 0 { 0 } else {
+        let ft = st.vt[f];
+        if (ft != 0 andalso ft != 1 andalso ft != 3) orelse st.vt[j] != 1 { fault(5) } else {
+            if base < 0 orelse len < 0 orelse base + len > io.d_count { fault(8) } else {
+                let ix = st.vw[j];
+                let invalid = ix < 0 orelse ix >= len;
+                if invalid { push(ft, st.vw[f]); } else {
+                    push_sized(st.dt[base + ix], st.dw[base + ix], st.ds[base + ix]);
+                }
+                push_index_tail(ix, len, b2w(invalid))
+            }
+        }
+    }
+}
+
+// `SetDataIndexed`: pop the index and the value, write only a valid index, and push the bounds
+// tail.
+fn op_set_data_indexed(base: Word, len: Word) -> Word {
+    let j = pop();
+    let v = pop();
+    if st.status != 0 { 0 } else {
+        if st.vt[j] != 1 { fault(5) } else {
+            if base < 0 orelse len < 0 orelse base + len > io.d_count { fault(8) } else {
+                let ix = st.vw[j];
+                let invalid = ix < 0 orelse ix >= len;
+                if not invalid {
+                    st.dt[base + ix] = st.vt[v];
+                    st.dw[base + ix] = st.vw[v];
+                    st.ds[base + ix] = st.vs[v];
+                }
+                push_index_tail(ix, len, b2w(invalid))
             }
         }
     }
@@ -716,6 +810,11 @@ fn step() -> Word {
             42 => op_index(a),
             43 => op_index_nested(a, io.op_b[k]),
             44 => op_is_enum(a),
+            45 => op_get_data(a),
+            46 => op_set_data(a),
+            47 => op_get_data_indexed(a, io.op_b[k]),
+            48 => op_set_data_indexed(a, io.op_b[k]),
+            49 => op_bounds_check(a),
             _ => fault(4),
         }
     }

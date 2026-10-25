@@ -48,6 +48,8 @@ pub mod caps {
     pub const HEAP: usize = 2048;
     /// The largest composite body.
     pub const BODY: usize = 256;
+    /// Data slots.
+    pub const DATA: usize = 256;
 }
 
 /// The interpreter's instruction tags. Kept in lockstep with the `match` in `step` in
@@ -144,6 +146,16 @@ pub enum Tag {
     IndexNested = 43,
     /// `IsEnum`, with `a` the module-wide index of the discriminant constant.
     IsEnum = 44,
+    /// `GetData(slot)`.
+    GetData = 45,
+    /// `SetData(slot)`.
+    SetData = 46,
+    /// `GetDataIndexed(base, len)`, with `a` the base and `b` the length.
+    GetDataIndexed = 47,
+    /// `SetDataIndexed(base, len)`, with `a` the base and `b` the length.
+    SetDataIndexed = 48,
+    /// `BoundsCheck(bound)`.
+    BoundsCheck = 49,
 }
 
 /// The interpreter's code for a flat scalar kind, which is the scalar's value tag. `None` for a
@@ -287,6 +299,7 @@ pub struct Admitted {
     chunks: Vec<(i64, i64, i64)>,
     entry: i64,
     instruction_bound: u64,
+    data: Vec<(i64, i64)>,
 }
 
 impl Admitted {
@@ -395,8 +408,58 @@ fn encode_op(op: &Op) -> Option<[i64; 4]> {
             composite_code(variant),
             0,
         ]),
+        Op::GetData(slot) => t(Tag::GetData, i64::from(slot)),
+        Op::BoundsCheck(bound) => t(Tag::BoundsCheck, i64::from(bound)),
+        Op::SetData(slot) => t(Tag::SetData, i64::from(slot)),
+        Op::GetDataIndexed(base, len) => Some([
+            Tag::GetDataIndexed as i64,
+            i64::from(base),
+            i64::from(len),
+            0,
+        ]),
+        Op::SetDataIndexed(base, len) => Some([
+            Tag::SetDataIndexed as i64,
+            i64::from(base),
+            i64::from(len),
+            0,
+        ]),
         _ => None,
     }
+}
+
+/// The initial value of every data slot, as the Rust virtual machine sees it at load. The first
+/// pass supports private scalar slots only. The values are read from the module's wire round
+/// trip rather than from the in-memory module, because the virtual machine reads them from the
+/// encoded form, where an omitted initializer becomes `Unit`.
+fn data_inits(module: &Module) -> Result<Vec<(i64, i64)>, Refusal> {
+    let Some(layout) = module.data_layout.as_ref() else {
+        return Ok(Vec::new());
+    };
+    if !layout.shared_layout.is_empty() {
+        return Err(Refusal::Unsupported(String::from("shared data")));
+    }
+    if !layout.private_composite_layout.is_empty() {
+        return Err(Refusal::Unsupported(String::from("private composite data")));
+    }
+    if layout.slots.len() > caps::DATA {
+        return Err(Refusal::Capacity(format!(
+            "{} data slots",
+            layout.slots.len()
+        )));
+    }
+    let wire = module
+        .to_bytes()
+        .and_then(|b| Module::from_bytes(&b))
+        .map_err(|e| Refusal::Unsupported(format!("data layout round trip: {e:?}")))?;
+    let inits = wire.data_layout.map(|l| l.private_init).unwrap_or_default();
+    (0..layout.slots.len())
+        .map(|i| match inits.get(i) {
+            None => Ok((0, 0)),
+            Some(c) => HostedValue::from_const(c)
+                .and_then(|v| v.encode_scalar())
+                .ok_or_else(|| Refusal::Constant(format!("data slot {i} starts as {c:?}"))),
+        })
+        .collect()
 }
 
 /// Decide whether the interpreter supports `module` and encode it. The module must already
@@ -414,9 +477,7 @@ pub fn admit(module: &Module) -> Result<Admitted, Refusal> {
     if module.chunks.len() > caps::CHUNKS {
         return Err(Refusal::Capacity(format!("{} chunks", module.chunks.len())));
     }
-    if module.data_layout.is_some() {
-        return Err(Refusal::Unsupported(String::from("a data segment")));
-    }
+    let data = data_inits(module)?;
     let mut ops = Vec::new();
     let mut consts = Vec::new();
     let mut chunks = Vec::new();
@@ -467,6 +528,7 @@ pub fn admit(module: &Module) -> Result<Admitted, Refusal> {
         chunks,
         entry: entry as i64,
         instruction_bound: u64::from(bound),
+        data,
     })
 }
 
@@ -529,6 +591,9 @@ struct Slots {
     out_bound: usize,
     out_fault: usize,
     steps: usize,
+    d_count: usize,
+    d_t: usize,
+    d_w: usize,
 }
 
 impl Slots {
@@ -572,6 +637,9 @@ impl Slots {
             out_bound: base("out_bound")?,
             out_fault: base("out_fault")?,
             steps: base("steps")?,
+            d_count: base("d_count")?,
+            d_t: base("d_t")?,
+            d_w: base("d_w")?,
         })
     }
 }
@@ -683,6 +751,12 @@ impl<'arena> Interpreter<'arena> {
             self.set(arg_sz + i, sz)?;
         }
         self.set(self.slots.hp0, hp as i64)?;
+        let (d_t, d_w) = (self.slots.d_t, self.slots.d_w);
+        self.set(self.slots.d_count, adm.data.len() as i64)?;
+        for (i, &(t, w)) in adm.data.iter().enumerate() {
+            self.set(d_t + i, t)?;
+            self.set(d_w + i, w)?;
+        }
         Ok(())
     }
 

@@ -8,7 +8,7 @@ Order 4 is the first pass of Workstream D, a bytecode interpreter for Keleusma
 written in Keleusma and run on the Rust virtual machine. This plan records the
 operator rulings, the gate, the design and the slices. The interpreter is
 `src/hosted/interp.kel`, its driver `src/hosted/mod.rs` behind the `self-host`
-feature, and its harness `tests/hosted_runtime.rs`. Slices 1 and 2 landed on 2026-10-25.
+feature, and its harness `tests/hosted_runtime.rs`. Slices 1 to 3 landed on 2026-10-25.
 
 ## Operator rulings
 
@@ -155,6 +155,20 @@ harness admitted 101 cases and ran 971 argument vectors, 959 finishing and 12
 trapping, all agreeing with the Rust virtual machine. 615 runs passed a
 composite argument and 4 returned a composite. Five data-segment cases and the
 stream case remain refused.
+
+**Slice 3, 2026-10-25.** The data segment, meaning `GetData`, `SetData`,
+`GetDataIndexed`, `SetDataIndexed` and `BoundsCheck` with their Order 3 outcome
+tails, over private scalar slots. The host seeds each slot with the value the
+Rust virtual machine gives it at load. That value is read from a wire round trip
+of the module rather than from the module in memory, because the virtual machine
+reads the encoded form, where an omitted initializer becomes `Unit`. Shared slots
+and private composite slots are refused. The harness admitted 105 cases and ran
+987 argument vectors, 971 finishing and 16 trapping, all agreeing with the Rust
+virtual machine, 16 of them through the data segment. One of those reads a slot
+it never wrote, so the seeded initial values agree. Two cases remain refused.
+`ctrl/for_bare` has a loop with no static iteration bound, so no verified time
+bound exists for it, and the conservative stance refuses it. `ctrl/loop_yield`
+is the stream case of slice 5.
 
 **Call bounds, for slice 4.** The per-chunk time bound counts a call's dispatch
 and not the callee's body, so the instruction bound for a program with calls must

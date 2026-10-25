@@ -17,7 +17,7 @@ use keleusma::hosted::{
     interpreter_persistent_bytes, reference_outcome,
 };
 use keleusma::target::Target;
-use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm};
+use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, required_persistent_capacity_for};
 use keleusma::{Arena, Value};
 
 /// Ticks a run may use before it counts as not ending. Far above any corpus case.
@@ -208,6 +208,7 @@ struct Reach {
     max_steps: u64,
     composite_arg_runs: usize,
     composite_results: usize,
+    data_runs: usize,
 }
 
 #[test]
@@ -254,7 +255,9 @@ fn the_interpreter_agrees_with_the_virtual_machine_on_the_corpus() {
                 failures.push(format!("{label}: an argument has no flat body"));
                 continue;
             };
-            let vm_arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+            let need = required_persistent_capacity_for(&module);
+            let mut vm_arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+            vm_arena.resize_persistent(need).expect("resize");
             let mut vm = Vm::new(module.clone(), &vm_arena).expect("the corpus module verifies");
             let expected = match reference_outcome(vm.call(&values), &vm_arena) {
                 Ok(o) => o,
@@ -265,6 +268,9 @@ fn the_interpreter_agrees_with_the_virtual_machine_on_the_corpus() {
             };
             let run = interp.run(&adm, &args, MAX_TICKS).expect("interp.kel runs");
             reach.runs += 1;
+            if module.data_layout.is_some() {
+                reach.data_runs += 1;
+            }
             if args
                 .iter()
                 .any(|a| matches!(a, HostedValue::Composite { .. }))
@@ -333,13 +339,15 @@ fn the_interpreter_agrees_with_the_virtual_machine_on_the_corpus() {
         reach.composite_results >= SLICE_COMPOSITE_RESULTS_FLOOR,
         "{reach:?}"
     );
+    assert!(reach.data_runs >= SLICE_DATA_RUNS_FLOOR, "{reach:?}");
 }
 
 /// Measured floors for the current slice. See the non-vacuity note above. Slice 1, scalars and
 /// control flow, measured 47 admitted cases and 698 runs on 2026-10-25. Slice 2, flat
-/// composites, measured the figures below the same day.
-const SLICE_ADMITTED_FLOOR: usize = 101;
-const SLICE_RUNS_FLOOR: usize = 971;
+/// composites, and slice 3, the data segment, measured the figures below the same day.
+const SLICE_ADMITTED_FLOOR: usize = 105;
+const SLICE_RUNS_FLOOR: usize = 987;
+const SLICE_DATA_RUNS_FLOOR: usize = 16;
 const SLICE_COMPOSITE_ARG_RUNS_FLOOR: usize = 615;
 const SLICE_COMPOSITE_RESULTS_FLOOR: usize = 4;
 
