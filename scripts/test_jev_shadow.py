@@ -29,9 +29,12 @@ def fake_result(payload, choice=None):
 class PilotTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        (ROOT/'tmp').mkdir(exist_ok=True)
-        cls.directory = tempfile.TemporaryDirectory(prefix='jev-tests-', dir=ROOT/'tmp')
-        cls.root = Path(cls.directory.name)
+        # The fixture repository lives in the system temporary directory, not under the
+        # checkout. An agent sandbox may refuse writes to .git/hooks inside the checkout,
+        # which made git init fail there. Resolved, because on macOS the temporary
+        # directory is behind a symlink and the pilot compares against git's real path.
+        cls.directory = tempfile.TemporaryDirectory(prefix='jev-tests-')
+        cls.root = Path(cls.directory.name).resolve()
         cls.repo = cls.root/'repo'
         cls.repo.mkdir()
         subprocess.run(['git','init','-q',str(cls.repo)],check=True)
