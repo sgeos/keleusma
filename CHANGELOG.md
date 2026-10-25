@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A signed header over a short declared total is refused rather than
+  panicking.** `verify_module_signature` read the signature metadata, the
+  signature and the trailer at offsets fixed by the declared header without
+  checking that the declared total covered them, so an untrusted artifact with
+  the signature flag ended the host from `Vm::load_signed_bytes`. It now returns
+  `LoadError::Truncated`, as does `parse_signature_metadata` for a buffer
+  shorter than its header. See `docs/decisions/SIGNATURE_VERIFY_BOUNDS.md`.
+
 - **The verified time bound charges every dispatched instruction.** The time
   walk and its Keleusma mirror in `analyze.kel` charged nothing for `Else`,
   `EndIf` and `EndLoop`, and omitted a counted loop's final header pass, so the

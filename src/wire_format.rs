@@ -1204,6 +1204,11 @@ pub fn parse_signature_metadata(
             WIRE_FORMAT_HEADER_BYTES + SIGNATURE_METADATA_BYTES,
         )));
     }
+    // The precondition above is the caller's, and this function is public, so
+    // a buffer shorter than the declared header is refused rather than indexed.
+    if bytes.len() < header_length {
+        return Err(LoadError::Truncated);
+    }
     let scheme_id = bytes[64];
     let reserved_byte = bytes[65];
     let signature_length = u16::from_le_bytes([bytes[66], bytes[67]]) as usize;
@@ -1990,7 +1995,12 @@ pub fn verify_module_signature(
     }
     let header_length = u16::from_le_bytes([bytes[6], bytes[7]]) as usize;
     let total_length = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
-    if total_length > bytes.len() {
+    // The declared total must hold the declared header and the trailer, as
+    // `module_from_wire_bytes` requires. Without the lower bound a header that
+    // declares a signed length over a shorter total indexed past the slice
+    // below, so an untrusted artifact panicked the host from
+    // `Vm::load_signed_bytes` instead of being refused.
+    if total_length > bytes.len() || total_length < header_length + WIRE_FORMAT_FOOTER_BYTES {
         return Err(LoadError::Truncated);
     }
     let bytes = &bytes[..total_length];
