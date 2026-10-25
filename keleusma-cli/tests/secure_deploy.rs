@@ -330,3 +330,78 @@ fn strict_mode_rejects_artifact_signed_by_non_enrolled_key() {
         r.stderr
     );
 }
+
+/// Order 5. `--compiler self-hosted` frames signed and encrypted output in Keleusma, and the
+/// compile itself refuses an artifact that differs from the reference signer's over the same
+/// module. The two backends compile different modules, since only the Rust one prepends the CLI
+/// preamble, so their artifacts are not compared here. Each must verify, decrypt and run.
+#[test]
+fn self_hosted_signing_and_encryption_produce_artifacts_that_run() {
+    let dir = TmpDir::new("self_hosted_crypto");
+    setup(&dir);
+    let empty_trust = dir.mkdir("trust_empty");
+    let empty_dec = dir.mkdir("dec_empty");
+    let env = [("KELEUSMA_TRUSTED_KEYS_DIR", empty_trust.as_str())];
+    for compiler in ["rust", "self-hosted"] {
+        let out = dir.s(&format!("signed_{compiler}.bin"));
+        let r = keleusma(
+            &[
+                "compile",
+                dir.s("hello.kel").as_str(),
+                "--signing-key",
+                dir.s("sign.seed").as_str(),
+                "--compiler",
+                compiler,
+                "-o",
+                out.as_str(),
+            ],
+            &env,
+        );
+        assert_eq!(r.code, 0, "{compiler} signed compile failed: {}", r.stderr);
+    }
+    let r = keleusma(
+        &[
+            "compile",
+            dir.s("hello.kel").as_str(),
+            "--signing-key",
+            dir.s("sign.seed").as_str(),
+            "--encryption-key",
+            dir.s("dest.pub").as_str(),
+            "--compiler",
+            "self-hosted",
+            "-o",
+            dir.s("sealed.bin").as_str(),
+        ],
+        &env,
+    );
+    assert_eq!(
+        r.code, 0,
+        "self-hosted encrypted compile failed: {}",
+        r.stderr
+    );
+    for (artifact, extra) in [
+        ("signed_rust.bin", None),
+        ("signed_self-hosted.bin", None),
+        ("sealed.bin", Some(dir.s("dest.seed"))),
+    ] {
+        let path = dir.s(artifact);
+        let verifying = dir.s("sign.pub");
+        let mut args = vec!["run", path.as_str(), "--verifying-key", verifying.as_str()];
+        if let Some(seed) = extra.as_deref() {
+            args.extend(["--decryption-key", seed]);
+        }
+        let r = keleusma(
+            &args,
+            &[
+                ("KELEUSMA_TRUSTED_KEYS_DIR", empty_trust.as_str()),
+                ("KELEUSMA_DECRYPTION_KEYS_DIR", empty_dec.as_str()),
+            ],
+        );
+        assert_eq!(
+            r.code, 0,
+            "{artifact} run failed: {}\n{}",
+            r.stdout, r.stderr
+        );
+        assert!(r.stdout.contains("42"), "{artifact} stdout: {}", r.stdout);
+    }
+}

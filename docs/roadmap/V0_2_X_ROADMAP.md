@@ -529,7 +529,7 @@ version numbers past the current release are a plan, not a promise).
 | 2 | Full validator in Keleusma | B (first pass) | **Complete for the first pass, 2026-10-13.** Structural, typed and resource admission agree for the fourteen-stage corpus. Text bounds, module orchestration and shipping selection are included. The [completion audit](../decisions/ORDER2_COMPLETION_AUDIT.md) records verification and retained limits. The reference gate and selected widening profile remain. The operator accepted this first-pass scope on 2026-10-24, as recorded in the audit. |
 | 3 | Trap analysis in the validator | C (first pass) | A `trap-free` verdict that the reference agrees with on a trapping and non-trapping corpus; a host no-check mode gated on it. |
 | 4 | Hosted runtime in Keleusma | D (first pass) | **Complete for the first pass, 2026-10-25.** See [the audit](../decisions/ORDER4_COMPLETION_AUDIT.md). The meta-circular interpreter runs the self-hosted compiler's own output for the subset, with the interpreter-versus-interpreted bound composition resolved. |
-| 5 | Cryptography orchestration | E (approach 1); E (approach 2) opt-in | Signing and encryption framing self-hosted with host-native primitives; primitive re-implementation is a separate, review-gated opt-in. |
+| 5 | Cryptography orchestration | E (approach 1); E (approach 2) opt-in | **Approach 1 complete for the first pass, 2026-10-25, on this line's reading of the gate, which awaits operator acceptance.** See [the audit](../decisions/ORDER5_COMPLETION_AUDIT.md). Signing and encryption framing self-hosted with host-native primitives; primitive re-implementation is a separate, review-gated opt-in. |
 | 6 | **Full-language support → V0.3.0** | F, plus A/B/C widening | The self-hosted compiler and validator accept the full grammar and the toolchain compiles arbitrary conforming programs, not only its own subset. |
 
 Steps 2 through 5 can overlap once step 1 lands, because the validator, the runtime, and the
@@ -587,6 +587,8 @@ Genuine forks the operator resolves; the plan above records a default for each b
 1. **Cryptography implementation locus.** Orchestrate host-native primitives only (safe,
    recommended first), or also re-implement the standards in Keleusma (opt-in, review-gated).
    Default: approach 1 first, approach 2 as a separate later milestone. See Workstream E.
+   Approach 1 landed on 2026-10-25 as [Order 5](../decisions/ORDER5_CRYPTO_FRAMING_PLAN.md).
+   Approach 2 is not started.
 2. **Meta-circular runtime bound composition.** Resolved first-hand by the operator on
    2026-10-25 as fuel-sliced ticks, stated in
    [the Order 4 audit](../decisions/ORDER4_COMPLETION_AUDIT.md). The question was: how the interpreter's WCET and WCMU compose

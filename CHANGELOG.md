@@ -44,6 +44,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The cryptographic framing in Keleusma, Order 5.** `src/crypto_frame/frame.kel` decides the
+  signed and encrypted header layouts, the metadata blocks, the bytes a signature covers, every
+  framing check and its order, verification before decryption, the recipient fingerprint
+  comparison and the CRC trailer, with Ed25519, X25519, HKDF, AES-GCM and SHA-256 as host
+  natives and no key entering the program. Its driver is `keleusma::crypto_frame`, behind
+  `signatures`, with encryption behind `encryption`. Its output and verdicts equal the Rust
+  reference's over the harness corpus. `keleusma compile --compiler self-hosted` now signs and
+  encrypts through it and refuses a divergence. See
+  `docs/decisions/ORDER5_COMPLETION_AUDIT.md`.
+- `wire_format::signing_sections` and `SigningSections` expose the body sections a signed
+  module carries, which the reference signer now takes its sections from.
+
 - **The hosted runtime, Order 4.** `src/hosted/interp.kel` is a bytecode interpreter written
   in Keleusma that runs on the Rust virtual machine at most 32 interpreted instructions per
   tick, so its own bounds are constants. Its driver, `keleusma::hosted` behind the
