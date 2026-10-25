@@ -19,7 +19,11 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::Arena;
-use crate::bytecode::{BlockType, ConstValue, Module, Op, Value};
+use crate::bytecode::{
+    ArrayElem, BlockType, ConstValue, EnumField, Module, NewCompositeOperand, Op, StructField,
+    TupleField, Value,
+};
+use crate::value_layout::{CompositeKind, ScalarKind};
 use crate::vm::{Vm, VmError, VmState, required_persistent_capacity_for};
 
 /// The interpreter's source, embedded so the driver needs no filesystem access.
@@ -40,6 +44,10 @@ pub mod caps {
     pub const ARGS: usize = 16;
     /// Operand-stack slots, including locals.
     pub const STACK: usize = 512;
+    /// Heap bytes, which hold the composite arguments and every body built while running.
+    pub const HEAP: usize = 2048;
+    /// The largest composite body.
+    pub const BODY: usize = 256;
 }
 
 /// The interpreter's instruction tags. Kept in lockstep with the `match` in `step` in
@@ -123,10 +131,45 @@ pub enum Tag {
     Sub = 37,
     /// `Mul`, which the compiler emits only for Byte.
     Mul = 38,
+    /// `NewComposite(Flat)`, with `a` the composite kind, `b` the count and `c` the baked size.
+    NewComposite = 39,
+    /// A flat scalar field of a struct, tuple or enum, with `a` the offset and `b` the scalar
+    /// kind code.
+    Field = 40,
+    /// A nested composite field, with `a` the offset, `b` the size and `c` the composite kind.
+    FieldNested = 41,
+    /// `GetIndex(Flat)` for Word and Byte, with `a` the scalar kind code.
+    Index = 42,
+    /// `GetIndex(FlatNested)`, with `a` the element size and `b` the composite kind.
+    IndexNested = 43,
+    /// `IsEnum`, with `a` the module-wide index of the discriminant constant.
+    IsEnum = 44,
 }
 
-/// A scalar value as the interpreter holds it. The tag numbers are those of `interp.kel`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The interpreter's code for a flat scalar kind, which is the scalar's value tag. `None` for a
+/// kind the first pass does not read.
+fn scalar_code(k: ScalarKind) -> Option<i64> {
+    match k {
+        ScalarKind::Unit => Some(0),
+        ScalarKind::Int => Some(1),
+        ScalarKind::Bool => Some(2),
+        ScalarKind::Byte => Some(3),
+        _ => None,
+    }
+}
+
+fn composite_code(k: CompositeKind) -> i64 {
+    match k {
+        CompositeKind::Tuple => 0,
+        CompositeKind::Array => 1,
+        CompositeKind::Struct => 2,
+        CompositeKind::Enum => 3,
+    }
+}
+
+/// A value as the interpreter holds it. The scalar tag numbers are those of `interp.kel`. A
+/// composite is its kind code, 0 tuple, 1 array, 2 struct or 3 enum, and its flat body bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostedValue {
     /// Tag 0.
     Unit,
@@ -138,16 +181,25 @@ pub enum HostedValue {
     Byte(u8),
     /// Tag 4.
     None,
+    /// A flat composite, tags 5 to 8.
+    Composite {
+        /// The composite kind code.
+        kind: i64,
+        /// The flat body.
+        bytes: Vec<u8>,
+    },
 }
 
 impl HostedValue {
-    fn encode(self) -> (i64, i64) {
-        match self {
-            HostedValue::Unit => (0, 0),
-            HostedValue::Word(w) => (1, w),
-            HostedValue::Bool(b) => (2, i64::from(b)),
-            HostedValue::Byte(b) => (3, i64::from(b)),
-            HostedValue::None => (4, 0),
+    /// The scalar tag and word, or `None` for a composite, which travels through the heap.
+    fn encode_scalar(&self) -> Option<(i64, i64)> {
+        match *self {
+            HostedValue::Unit => Some((0, 0)),
+            HostedValue::Word(w) => Some((1, w)),
+            HostedValue::Bool(b) => Some((2, i64::from(b))),
+            HostedValue::Byte(b) => Some((3, i64::from(b))),
+            HostedValue::None => Some((4, 0)),
+            HostedValue::Composite { .. } => None,
         }
     }
 
@@ -163,14 +215,26 @@ impl HostedValue {
         }
     }
 
-    /// The interpreter's view of a Rust virtual machine value, when it is a supported scalar.
-    pub fn from_value(v: &Value) -> Option<Self> {
+    /// The interpreter's view of a Rust virtual machine value, when it is a supported scalar or
+    /// a flat composite whose body is resident in `arena`.
+    pub fn from_value(v: &Value, arena: &Arena) -> Option<Self> {
+        use crate::bytecode::{ArrayBody, EnumBody, StructBody, TupleBody};
+        let flat = |kind: i64, fc: &crate::flat_value::FlatComposite| {
+            fc.resolve(arena).ok().map(|b| HostedValue::Composite {
+                kind,
+                bytes: b.to_vec(),
+            })
+        };
         match v {
             Value::Unit => Some(HostedValue::Unit),
             Value::Int(w) => Some(HostedValue::Word(*w)),
             Value::Bool(b) => Some(HostedValue::Bool(*b)),
             Value::Byte(b) => Some(HostedValue::Byte(*b)),
             Value::None => Some(HostedValue::None),
+            Value::Tuple(TupleBody::Flat(fc)) => flat(0, fc),
+            Value::Array(ArrayBody::Flat(fc)) => flat(1, fc),
+            Value::Struct(StructBody::Flat(fc)) => flat(2, fc),
+            Value::Enum(EnumBody::Flat(fc)) => flat(3, fc),
             _ => None,
         }
     }
@@ -186,14 +250,16 @@ impl HostedValue {
         }
     }
 
-    /// The Rust virtual machine value for this scalar.
-    pub fn to_value(self) -> Value {
-        match self {
-            HostedValue::Unit => Value::Unit,
-            HostedValue::Word(w) => Value::Int(w),
-            HostedValue::Bool(b) => Value::Bool(b),
-            HostedValue::Byte(b) => Value::Byte(b),
-            HostedValue::None => Value::None,
+    /// The Rust virtual machine value for this scalar. `None` for a composite, which the caller
+    /// builds as a Rust value directly.
+    pub fn to_value(&self) -> Option<Value> {
+        match *self {
+            HostedValue::Unit => Some(Value::Unit),
+            HostedValue::Word(w) => Some(Value::Int(w)),
+            HostedValue::Bool(b) => Some(Value::Bool(b)),
+            HostedValue::Byte(b) => Some(Value::Byte(b)),
+            HostedValue::None => Some(Value::None),
+            HostedValue::Composite { .. } => None,
         }
     }
 }
@@ -285,6 +351,50 @@ fn encode_op(op: &Op) -> Option<[i64; 4]> {
         Op::Add => t(Tag::Add, 0),
         Op::Sub => t(Tag::Sub, 0),
         Op::Mul => t(Tag::Mul, 0),
+        Op::NewComposite(NewCompositeOperand::Flat {
+            kind,
+            count,
+            byte_size,
+        }) => Some([
+            Tag::NewComposite as i64,
+            composite_code(kind),
+            i64::from(count),
+            i64::from(byte_size),
+        ]),
+        Op::GetField(StructField::Flat { offset, kind })
+        | Op::GetTupleField(TupleField::Flat { offset, kind })
+        | Op::GetEnumField(EnumField::Flat { offset, kind }) => {
+            Some([Tag::Field as i64, i64::from(offset), scalar_code(kind)?, 0])
+        }
+        Op::GetField(StructField::FlatNested {
+            offset,
+            size,
+            variant,
+        })
+        | Op::GetTupleField(TupleField::FlatNested {
+            offset,
+            size,
+            variant,
+        })
+        | Op::GetEnumField(EnumField::FlatNested {
+            offset,
+            size,
+            variant,
+        }) => Some([
+            Tag::FieldNested as i64,
+            i64::from(offset),
+            i64::from(size),
+            composite_code(variant),
+        ]),
+        Op::GetIndex(ArrayElem::Flat {
+            kind: k @ (ScalarKind::Int | ScalarKind::Byte),
+        }) => Some([Tag::Index as i64, scalar_code(k)?, 0, 0]),
+        Op::GetIndex(ArrayElem::FlatNested { size, variant }) => Some([
+            Tag::IndexNested as i64,
+            i64::from(size),
+            composite_code(variant),
+            0,
+        ]),
         _ => None,
     }
 }
@@ -313,15 +423,24 @@ pub fn admit(module: &Module) -> Result<Admitted, Refusal> {
     for (ci, chunk) in module.chunks.iter().enumerate() {
         let k0 = consts.len() as i64;
         for (ki, c) in chunk.constants.iter().enumerate() {
-            let v = HostedValue::from_const(c)
-                .ok_or_else(|| Refusal::Constant(format!("chunk {ci} constant {ki} is {c:?}")))?;
-            consts.push(v.encode());
+            // A string constant is carried as the inert tag 9. The first pass uses one only as a
+            // name operand of `IsEnum`, which a flat enum ignores, and any other use faults.
+            let e = match c {
+                ConstValue::StaticStr(_) => (9, 0),
+                _ => HostedValue::from_const(c)
+                    .and_then(|v| v.encode_scalar())
+                    .ok_or_else(|| {
+                        Refusal::Constant(format!("chunk {ci} constant {ki} is {c:?}"))
+                    })?,
+            };
+            consts.push(e);
         }
         let start = ops.len() as i64;
         for (ip, op) in chunk.ops.iter().enumerate() {
             // Constant indices are per chunk in the module and module-wide in the tables.
             let e = match *op {
                 Op::Const(i) => [Tag::Const as i64, k0 + i64::from(i), 0, 0],
+                Op::IsEnum(_, _, d) => [Tag::IsEnum as i64, k0 + i64::from(d), 0, 0],
                 _ => encode_op(op)
                     .ok_or_else(|| Refusal::Unsupported(format!("chunk {ci} op {ip} {op:?}")))?,
             };
@@ -399,8 +518,12 @@ struct Slots {
     ch_locals: usize,
     arg_t: usize,
     arg_w: usize,
+    arg_sz: usize,
+    hp0: usize,
+    heap: usize,
     out_t: usize,
     out_w: usize,
+    out_sz: usize,
     out_kind: usize,
     out_index: usize,
     out_bound: usize,
@@ -438,8 +561,12 @@ impl Slots {
             ch_locals: base("ch_locals")?,
             arg_t: base("arg_t")?,
             arg_w: base("arg_w")?,
+            arg_sz: base("arg_sz")?,
+            hp0: base("hp0")?,
+            heap: base("heap")?,
             out_t: base("out_t")?,
             out_w: base("out_w")?,
+            out_sz: base("out_sz")?,
             out_kind: base("out_kind")?,
             out_index: base("out_index")?,
             out_bound: base("out_bound")?,
@@ -507,7 +634,7 @@ impl<'arena> Interpreter<'arena> {
         let (op_t, op_a, op_b, op_c) = (s.op_t, s.op_a, s.op_b, s.op_c);
         let (k_t, k_w, ch_start, ch_len, ch_locals) =
             (s.k_t, s.k_w, s.ch_start, s.ch_len, s.ch_locals);
-        let (arg_t, arg_w) = (s.arg_t, s.arg_w);
+        let (arg_t, arg_w, arg_sz, heap) = (s.arg_t, s.arg_w, s.arg_sz, s.heap);
         self.set(self.slots.n_chunks, adm.chunks.len() as i64)?;
         self.set(self.slots.entry, adm.entry)?;
         self.set(self.slots.nargs, args.len() as i64)?;
@@ -527,11 +654,35 @@ impl<'arena> Interpreter<'arena> {
             self.set(ch_len + i, len)?;
             self.set(ch_locals + i, locals)?;
         }
+        // Composite arguments are written to the bottom of the heap, in order, and the
+        // interpreter allocates above them.
+        let mut hp = 0usize;
         for (i, a) in args.iter().enumerate() {
-            let (t, w) = a.encode();
+            let (t, w, sz) = match a {
+                HostedValue::Composite { kind, bytes } => {
+                    if bytes.len() > caps::BODY || hp + bytes.len() > caps::HEAP {
+                        return Err(VmError::InvalidBytecode(format!(
+                            "argument {i} of {} bytes exceeds the interpreter heap",
+                            bytes.len()
+                        )));
+                    }
+                    for (k, &b) in bytes.iter().enumerate() {
+                        self.set(heap + hp + k, i64::from(b))?;
+                    }
+                    let at = hp as i64;
+                    hp += bytes.len();
+                    (5 + kind, at, bytes.len() as i64)
+                }
+                scalar => {
+                    let (t, w) = scalar.encode_scalar().expect("a scalar");
+                    (t, w, 0)
+                }
+            };
             self.set(arg_t + i, t)?;
             self.set(arg_w + i, w)?;
+            self.set(arg_sz + i, sz)?;
         }
+        self.set(self.slots.hp0, hp as i64)?;
         Ok(())
     }
 
@@ -585,7 +736,20 @@ impl<'arena> Interpreter<'arena> {
             0 => Outcome::OutOfTicks,
             1 => {
                 let (t, w) = (self.get(self.slots.out_t)?, self.get(self.slots.out_w)?);
-                Outcome::Finished(HostedValue::decode(t, w).ok_or_else(|| {
+                let value = if (5..=8).contains(&t) {
+                    let sz = self.get(self.slots.out_sz)?;
+                    let mut bytes = Vec::new();
+                    for k in 0..sz {
+                        let b = self.get(self.slots.heap + (w + k) as usize)?;
+                        bytes.push(u8::try_from(b).map_err(|_| {
+                            VmError::TypeError(format!("interp.kel heap byte {b}"))
+                        })?);
+                    }
+                    Some(HostedValue::Composite { kind: t - 5, bytes })
+                } else {
+                    HostedValue::decode(t, w)
+                };
+                Outcome::Finished(value.ok_or_else(|| {
                     VmError::TypeError(format!("interp.kel returned tag {t} word {w}"))
                 })?)
             }
@@ -617,10 +781,13 @@ impl<'arena> Interpreter<'arena> {
 /// The Rust virtual machine's outcome for a run, in the interpreter's terms, so the two can be
 /// compared. A result the interpreter cannot represent, or an error that is not a trap, is
 /// returned as `Err` with its description.
-pub fn reference_outcome(result: Result<VmState, VmError>) -> Result<Outcome, String> {
+pub fn reference_outcome(
+    result: Result<VmState, VmError>,
+    arena: &Arena,
+) -> Result<Outcome, String> {
     use crate::bytecode::TrapKind;
     match result {
-        Ok(VmState::Finished(v)) => HostedValue::from_value(&v)
+        Ok(VmState::Finished(v)) => HostedValue::from_value(&v, arena)
             .map(Outcome::Finished)
             .ok_or_else(|| format!("unsupported result {v:?}")),
         Ok(other) => Err(format!("unsupported state {other:?}")),

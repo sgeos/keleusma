@@ -12,7 +12,15 @@
 // faulted. Status 2 is reserved for an interpreted yield.
 //
 // A value is a tag and a word. The tags are 0 Unit, 1 Word, 2 Bool, 3 Byte and 4 None. A Bool
-// word is 0 or 1. A Byte word is in [0, 255].
+// word is 0 or 1. A Byte word is in [0, 255]. A flat composite is tag 5 tuple, 6 array, 7 struct
+// or 8 enum, which is 5 plus the composite kind, with its word the byte offset of its body in
+// `io.heap` and its size in the parallel `vs` array. Bodies are never written after they are
+// built, so a nested field or element is a view into its parent, an offset and a size, and
+// needs no copy. Tag 9 is a string constant, which the first pass carries only as the inert name
+// operand of `IsEnum`. A scalar kind code inside a composite read is the scalar's tag.
+//
+// The heap holds one byte per Word, in [0, 255]. The host writes composite arguments below
+// `io.hp0` and reads a composite result from it.
 //
 // A FAULT is a state the host's admission should have made unreachable: an instruction form
 // outside the supported set, an operand of an unexpected tag, a capacity exceeded. It is
@@ -20,7 +28,7 @@
 // defect in admission or in this interpreter, never a behaviour of the interpreted program.
 // The codes are 1 operand stack full, 2 operand stack empty, 3 frame stack full, 4 unsupported
 // instruction, 5 operand tag, 6 instruction pointer past the chunk, 7 constant index, 8 local
-// index, 9 started without a valid entry.
+// index, 9 started without a valid entry, 10 heap full, 11 composite read outside its body.
 //
 // Every indexed write below is guarded by an explicit capacity test, so a fault never becomes
 // an index trap of this program.
@@ -45,8 +53,12 @@ shared data io {
     ch_locals: [Word; 64],
     arg_t: [Word; 16],
     arg_w: [Word; 16],
+    arg_sz: [Word; 16],
+    hp0: Word,
+    heap: [Word; 2048],
     out_t: Word,
     out_w: Word,
+    out_sz: Word,
     out_kind: Word,
     out_index: Word,
     out_bound: Word,
@@ -61,14 +73,19 @@ private data st {
     status: Word,
     sp: Word,
     fp: Word,
+    hp: Word,
+    acc: Word,
+    off: Word,
     vt: [Word; 512],
     vw: [Word; 512],
+    vs: [Word; 512],
     f_chunk: [Word; 64],
     f_ip: [Word; 64],
     f_base: [Word; 64],
 }
 
 fn stack_cap() -> Word { 512 }
+fn heap_cap() -> Word { 2048 }
 fn frame_cap() -> Word { 64 }
 
 // Latch a fault. The first fault wins, so the reported code names the first failure.
@@ -80,16 +97,32 @@ fn fault(code: Word) -> Word {
     0
 }
 
-// Push a value. A full stack faults instead of writing.
-fn push(t: Word, w: Word) -> Word {
+// Push a value with its composite size, zero for a scalar. A full stack faults instead of
+// writing.
+fn push_sized(t: Word, w: Word, sz: Word) -> Word {
     if st.sp < stack_cap() {
         st.vt[st.sp] = t;
         st.vw[st.sp] = w;
+        st.vs[st.sp] = sz;
         st.sp = st.sp + 1;
         0
     } else {
         fault(1)
     }
+}
+
+// Push a scalar.
+fn push(t: Word, w: Word) -> Word {
+    push_sized(t, w, 0)
+}
+
+// Push a copy of the value in slot `i`.
+fn push_slot(i: Word) -> Word {
+    push_sized(st.vt[i], st.vw[i], st.vs[i])
+}
+
+fn is_composite(t: Word) -> bool {
+    t >= 5 andalso t <= 8
 }
 
 // Pop a value and return the slot it occupied, which stays readable until the next push. An
@@ -142,8 +175,9 @@ fn start() -> Word {
     if e < 0 orelse e >= io.n_chunks orelse e >= frame_cap() orelse io.nargs > io.ch_locals[e] {
         fault(9)
     } else {
+        st.hp = io.hp0;
         for i in 0..16 limit 16 {
-            if i < io.nargs { push(io.arg_t[i], io.arg_w[i]); }
+            if i < io.nargs { push_sized(io.arg_t[i], io.arg_w[i], io.arg_sz[i]); }
         }
         for i in 0..512 limit 512 {
             if i >= io.nargs andalso i < io.ch_locals[e] { push(0, 0); }
@@ -167,7 +201,7 @@ fn op_const(idx: Word) -> Word {
 fn op_get_local(n: Word) -> Word {
     let slot = frame_base() + n;
     if slot >= 0 andalso slot < st.sp {
-        push(st.vt[slot], st.vw[slot])
+        push_slot(slot)
     } else {
         fault(8)
     }
@@ -179,6 +213,7 @@ fn op_set_local(n: Word) -> Word {
     if st.status == 0 andalso slot >= 0 andalso slot < st.sp {
         st.vt[slot] = st.vt[i];
         st.vw[slot] = st.vw[i];
+        st.vs[slot] = st.vs[i];
         0
     } else {
         fault(8)
@@ -196,7 +231,7 @@ fn op_pop_n(n: Word) -> Word {
 
 fn op_dup() -> Word {
     if st.sp > 0 {
-        push(st.vt[st.sp - 1], st.vw[st.sp - 1])
+        push_slot(st.sp - 1)
     } else {
         fault(2)
     }
@@ -228,15 +263,17 @@ fn op_return() -> Word {
     if st.status != 0 { 0 } else {
         let t = st.vt[i];
         let w = st.vw[i];
+        let z = st.vs[i];
         st.sp = frame_base();
         st.fp = st.fp - 1;
         if st.fp == 0 {
             io.out_t = t;
             io.out_w = w;
+            io.out_sz = z;
             st.status = 1;
             0
         } else {
-            push(t, w)
+            push_sized(t, w, z)
         }
     }
 }
@@ -254,8 +291,12 @@ fn op_eq(ne: Word) -> Word {
     let j = pop();
     let i = pop();
     if st.status != 0 { 0 } else {
-        let eq = st.vt[i] == st.vt[j] andalso st.vw[i] == st.vw[j];
-        push(2, b2w(eq) bxor ne)
+        // The compiler compares composites field by field, and the Rust virtual machine
+        // refuses a flat composite reaching `CmpEq`, so one here is a fault.
+        if is_composite(st.vt[i]) orelse is_composite(st.vt[j]) orelse st.vt[i] == 9 { fault(5) } else {
+            let eq = st.vt[i] == st.vt[j] andalso st.vw[i] == st.vw[j];
+            push(2, b2w(eq) bxor ne)
+        }
     }
 }
 
@@ -431,6 +472,195 @@ fn op_trap(kind: Word) -> Word {
     } else { 0 }
 }
 
+// The byte width of a scalar kind code inside a flat body: Unit 0, Word 8, Bool 1 and Byte 1.
+// Any other code is not a flat scalar this interpreter reads, and is reported as -1.
+fn scalar_width(k: Word) -> Word {
+    if k == 0 { 0 } else { if k == 1 { 8 } else { if k == 2 orelse k == 3 { 1 } else { 0 - 1 } } }
+}
+
+// The packed width of the value in slot `i`, or -1 when it cannot be packed flat. The Rust
+// virtual machine boxes such a composite instead, which this interpreter does not model.
+fn packed_width(i: Word) -> Word {
+    let t = st.vt[i];
+    if is_composite(t) { st.vs[i] } else { if t <= 3 { scalar_width(t) } else { 0 - 1 } }
+}
+
+// Read the little-endian scalar of kind `k` at byte `at` of the heap. The caller has checked the
+// range. A Bool reads true for any nonzero byte, as the Rust virtual machine reads it.
+fn read_scalar(at: Word, k: Word) -> Word {
+    if k == 1 {
+        let lo = io.heap[at] bor (io.heap[at + 1] lsl 8) bor (io.heap[at + 2] lsl 16)
+            bor (io.heap[at + 3] lsl 24);
+        let hi = io.heap[at + 4] bor (io.heap[at + 5] lsl 8) bor (io.heap[at + 6] lsl 16)
+            bor (io.heap[at + 7] lsl 24);
+        lo bor (hi lsl 32)
+    } else {
+        if k == 2 { if io.heap[at] != 0 { 1 } else { 0 } } else {
+            if k == 3 { io.heap[at] } else { 0 } }
+    }
+}
+
+// Write the scalar `w` of kind `k` at byte `at` of the heap. The caller has checked the range.
+fn write_scalar(at: Word, k: Word, w: Word) -> Word {
+    if k == 1 {
+        for b in 0..8 limit 8 {
+            io.heap[at + b] = (w asr (8 * b)) band 255;
+        }
+        0
+    } else {
+        if k == 2 orelse k == 3 { io.heap[at] = w; 0 } else { 0 }
+    }
+}
+
+// The largest composite body, in bytes. Admission refuses a larger argument, and `heap_alloc`
+// refuses a larger construction, so every bounded copy below covers a whole body.
+fn body_cap() -> Word { 256 }
+
+// Copy `n` heap bytes from `from` to `to`.
+fn copy_bytes(from: Word, to: Word, n: Word) -> Word {
+    for b in 0..n limit 256 {
+        io.heap[to + b] = io.heap[from + b];
+    }
+    0
+}
+
+// Reserve `n` heap bytes and return their offset, or fault on a full heap.
+fn heap_alloc(n: Word) -> Word {
+    if n >= 0 andalso n <= body_cap() andalso st.hp + n <= heap_cap() {
+        let at = st.hp;
+        st.hp = st.hp + n;
+        at
+    } else {
+        fault(10)
+    }
+}
+
+// `NewComposite`: pop `count` values and pack them contiguously in order, padding a struct or an
+// enum to its baked size, as the Rust virtual machine's flat packer does. `kind` is the
+// composite kind, 0 tuple, 1 array, 2 struct and 3 enum. The running width and offset live in
+// `st.acc` and `st.off`, because the language has no mutable locals.
+fn op_new_composite(kind: Word, count: Word, byte_size: Word) -> Word {
+    if count < 0 orelse count > st.sp orelse count > 64 { fault(2) } else {
+        let base = st.sp - count;
+        st.acc = 0;
+        for k in 0..count limit 64 {
+            let pw = packed_width(base + k);
+            if pw < 0 { fault(5); } else { st.acc = st.acc + pw; }
+        }
+        let size = if (kind == 2 orelse kind == 3) andalso byte_size > st.acc { byte_size } else {
+            st.acc };
+        let at = heap_alloc(size);
+        if st.status != 0 { 0 } else {
+            st.off = at;
+            for k in 0..count limit 64 {
+                let i = base + k;
+                let t = st.vt[i];
+                if is_composite(t) {
+                    copy_bytes(st.vw[i], st.off, st.vs[i]);
+                    st.off = st.off + st.vs[i];
+                } else {
+                    write_scalar(st.off, t, st.vw[i]);
+                    st.off = st.off + scalar_width(t);
+                }
+            }
+            for z in 0..size limit 256 {
+                if at + z >= st.off { io.heap[at + z] = 0; }
+            }
+            st.sp = base;
+            push_sized(5 + kind, at, size)
+        }
+    }
+}
+
+// A flat scalar field read at `offset`, used for struct, tuple and enum fields.
+fn op_field(offset: Word, k: Word) -> Word {
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        let w = scalar_width(k);
+        if (not is_composite(st.vt[i])) orelse w < 0 { fault(5) } else {
+            if offset < 0 orelse offset + w > st.vs[i] { fault(11) } else {
+                push(k, read_scalar(st.vw[i] + offset, k))
+            }
+        }
+    }
+}
+
+// A nested composite field: a view of `size` bytes at `offset`, of composite kind `variant`.
+fn op_field_nested(offset: Word, size: Word, variant: Word) -> Word {
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        if not is_composite(st.vt[i]) { fault(5) } else {
+            if offset < 0 orelse size < 0 orelse offset + size > st.vs[i] { fault(11) } else {
+                push_sized(5 + variant, st.vw[i] + offset, size)
+            }
+        }
+    }
+}
+
+// Push the bounds outcome of an element read after its value, as the Rust virtual machine does:
+// the index, the four little-endian bytes of the bound each sign-extended from eight bits, and
+// the flag, 1 for an invalid index.
+fn push_index_tail(index: Word, bound: Word, invalid: Word) -> Word {
+    push(1, index);
+    for b in 0..4 limit 4 {
+        let byte = (bound asr (8 * b)) band 255;
+        push(1, if byte >= 128 { byte - 256 } else { byte });
+    }
+    push(1, invalid)
+}
+
+// A flat scalar element read. An invalid index yields a typed zero.
+fn op_index(k: Word) -> Word {
+    let j = pop();
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        let w = scalar_width(k);
+        if st.vt[i] != 6 orelse st.vt[j] != 1 orelse w <= 0 { fault(5) } else {
+            let ix = st.vw[j];
+            let len = st.vs[i] / w;
+            let invalid = ix < 0 orelse ix >= len;
+            if invalid { push(k, 0); } else { push(k, read_scalar(st.vw[i] + ix * w, k)); }
+            push_index_tail(ix, len, b2w(invalid))
+        }
+    }
+}
+
+// A nested element read. An invalid index yields a zero-filled placeholder of the element size.
+fn op_index_nested(size: Word, variant: Word) -> Word {
+    let j = pop();
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        if st.vt[i] != 6 orelse st.vt[j] != 1 orelse size <= 0 { fault(5) } else {
+            let ix = st.vw[j];
+            let len = st.vs[i] / size;
+            let invalid = ix < 0 orelse ix >= len;
+            if invalid {
+                let at = heap_alloc(size);
+                if st.status == 0 {
+                    for z in 0..size limit 256 { io.heap[at + z] = 0; }
+                    push_sized(5 + variant, at, size);
+                }
+            } else {
+                push_sized(5 + variant, st.vw[i] + ix * size, size);
+            }
+            push_index_tail(ix, len, b2w(invalid))
+        }
+    }
+}
+
+// `IsEnum` keeps the value and pushes whether a flat enum's discriminant, the Word at offset 0,
+// equals the constant `disc`. The name operands do not take part for a flat enum.
+fn op_is_enum(disc: Word) -> Word {
+    if st.sp == 0 { fault(2) } else {
+        let i = st.sp - 1;
+        if st.vt[i] != 8 orelse st.vs[i] < 8 { fault(5) } else {
+            if disc < 0 orelse disc >= io.k_count orelse io.k_t[disc] != 1 { fault(7) } else {
+                push(2, b2w(read_scalar(st.vw[i], 1) == io.k_w[disc]))
+            }
+        }
+    }
+}
+
 // Execute one instruction. The instruction tags are fixed by the host's encoder in
 // src/hosted/mod.rs and are listed in its `Tag` enumeration.
 fn step() -> Word {
@@ -480,6 +710,12 @@ fn step() -> Word {
             36 => op_byte_arith(0),
             37 => op_byte_arith(1),
             38 => op_byte_arith(2),
+            39 => op_new_composite(a, io.op_b[k], io.op_c[k]),
+            40 => op_field(a, io.op_b[k]),
+            41 => op_field_nested(a, io.op_b[k], io.op_c[k]),
+            42 => op_index(a),
+            43 => op_index_nested(a, io.op_b[k]),
+            44 => op_is_enum(a),
             _ => fault(4),
         }
     }

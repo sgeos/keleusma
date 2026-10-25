@@ -10,7 +10,8 @@
 #[path = "hosted_runtime/corpus.rs"]
 mod corpus;
 
-use keleusma::bytecode::{Module, Op};
+use keleusma::ast::{ConstExpr, PrimType, Program, TypeDef, TypeExpr};
+use keleusma::bytecode::{ArrayBody, BoxedEnum, EnumBody, Module, Op, StructBody, TupleBody};
 use keleusma::hosted::{
     Admitted, HostedValue, Interpreter, Outcome, Refusal, admit, interpreter_module,
     interpreter_persistent_bytes, reference_outcome,
@@ -30,53 +31,138 @@ fn interpreter_arena() -> (Module, Arena) {
     (m, arena)
 }
 
-/// Sample values for a scalar parameter type, or `None` for a type this slice does not
-/// generate.
-fn samples(ty: &str) -> Option<Vec<HostedValue>> {
-    match ty {
-        "Word" => Some(
-            [0, 1, -1, 7, -9, i64::MAX, i64::MIN]
+/// Sample argument values built from declared types, for both runtimes. Scalars come from a
+/// fixed set that includes the extremes. A composite is built from its element samples, rotated
+/// so successive samples differ in every position, and an enum takes every variant. Each is a
+/// boxed Rust value: the virtual machine canonicalises it at entry, and the harness gives the
+/// interpreter the same canonical body.
+struct Samples<'p> {
+    program: &'p Program,
+    module: &'p Module,
+}
+
+impl Samples<'_> {
+    /// At most `per` samples of `ty`, or `None` for a type the first pass does not generate.
+    fn of(&self, ty: &TypeExpr, per: usize) -> Option<Vec<Value>> {
+        let vals: Vec<Value> = match ty {
+            TypeExpr::Prim(PrimType::Word, _) => [0, 1, -1, 7, -9, i64::MAX, i64::MIN]
                 .into_iter()
-                .map(HostedValue::Word)
+                .map(Value::Int)
                 .collect(),
-        ),
-        "Byte" => Some(
-            [0u8, 1, 7, 128, 255]
+            TypeExpr::Prim(PrimType::Byte, _) => {
+                [0u8, 1, 7, 128, 255].into_iter().map(Value::Byte).collect()
+            }
+            TypeExpr::Prim(PrimType::Bool, _) => vec![Value::Bool(false), Value::Bool(true)],
+            TypeExpr::Tuple(elems, _) => self
+                .rows(elems, per)?
                 .into_iter()
-                .map(HostedValue::Byte)
+                .map(|r| Value::Tuple(TupleBody::boxed(r)))
                 .collect(),
-        ),
-        "bool" => Some(vec![HostedValue::Bool(false), HostedValue::Bool(true)]),
-        _ => None,
+            TypeExpr::Array(elem, ConstExpr::Lit(n, _), _) => {
+                let elems = vec![(**elem).clone(); usize::try_from(*n).ok()?];
+                self.rows(&elems, per)?
+                    .into_iter()
+                    .map(|r| Value::Array(ArrayBody::boxed(r)))
+                    .collect()
+            }
+            TypeExpr::Named(name, targs, cargs, _) if targs.is_empty() && cargs.is_empty() => {
+                self.named(name, per)?
+            }
+            _ => return None,
+        };
+        Some(vals.into_iter().take(per).collect())
+    }
+
+    /// Rows of one sample per element type, rotated so row `r` takes sample `r + j` of element
+    /// `j`.
+    fn rows(&self, elems: &[TypeExpr], per: usize) -> Option<Vec<Vec<Value>>> {
+        let pools: Vec<Vec<Value>> = elems
+            .iter()
+            .map(|e| self.of(e, per))
+            .collect::<Option<_>>()?;
+        let n = pools
+            .iter()
+            .map(Vec::len)
+            .max()
+            .unwrap_or(1)
+            .min(per)
+            .max(1);
+        Some(
+            (0..n)
+                .map(|r| {
+                    pools
+                        .iter()
+                        .enumerate()
+                        .map(|(j, p)| p[(r + j) % p.len()].clone())
+                        .collect()
+                })
+                .collect(),
+        )
+    }
+
+    fn named(&self, name: &str, per: usize) -> Option<Vec<Value>> {
+        for td in &self.program.types {
+            match td {
+                TypeDef::Struct(sd) if sd.name == name => {
+                    let tys: Vec<TypeExpr> =
+                        sd.fields.iter().map(|f| f.type_expr.clone()).collect();
+                    return Some(
+                        self.rows(&tys, per)?
+                            .into_iter()
+                            .map(|r| {
+                                let fields =
+                                    sd.fields.iter().map(|f| f.name.clone()).zip(r).collect();
+                                Value::Struct(StructBody::boxed(name.to_string(), fields))
+                            })
+                            .collect(),
+                    );
+                }
+                TypeDef::Enum(ed) if ed.name == name => {
+                    let layout = self
+                        .module
+                        .enum_layouts
+                        .iter()
+                        .find(|l| l.type_name == name)?;
+                    let mut out = Vec::new();
+                    for v in &ed.variants {
+                        let payloads = if v.fields.is_empty() {
+                            vec![Vec::new()]
+                        } else {
+                            self.rows(&v.fields, 2)?
+                        };
+                        for fields in payloads {
+                            out.push(Value::Enum(EnumBody::Boxed(Box::new(BoxedEnum {
+                                type_name: name.to_string(),
+                                variant: v.name.clone(),
+                                disc: v.discriminant_value,
+                                min_payload: layout.min_payload as usize,
+                                fields,
+                            }))));
+                        }
+                    }
+                    return Some(out);
+                }
+                _ => {}
+            }
+        }
+        None
     }
 }
 
-/// The entry function's parameter types, read from the source's first signature.
-fn param_types(src: &str) -> Vec<String> {
-    let at = src
-        .find("fn ")
-        .or_else(|| src.find("loop "))
-        .expect("a signature");
-    let open = at + src[at..].find('(').expect("a parameter list");
-    let close = open + src[open..].find(')').expect("a closed parameter list");
-    src[open + 1..close]
-        .split(',')
-        .filter_map(|p| p.split_once(':').map(|(_, t)| t.trim().to_string()))
-        .collect()
-}
-
-/// Every argument vector over the parameters' samples, capped so a case stays cheap. `None`
-/// when a parameter has no samples in this slice.
-fn arg_vectors(src: &str) -> Option<Vec<Vec<HostedValue>>> {
+/// Every argument vector over the entry parameters' samples, capped so a case stays cheap.
+/// `None` when a parameter's type has no samples.
+fn arg_vectors(program: &Program, module: &Module) -> Option<Vec<Vec<Value>>> {
+    let main = program.functions.iter().find(|f| f.name == "main")?;
+    let samples = Samples { program, module };
     let mut vectors = vec![Vec::new()];
-    for ty in param_types(src) {
-        let s = samples(&ty)?;
+    for p in &main.params {
+        let s = samples.of(p.type_expr.as_ref()?, 4)?;
         vectors = vectors
             .iter()
             .flat_map(|v| {
                 s.iter().map(move |x| {
-                    let mut w = v.clone();
-                    w.push(*x);
+                    let mut w: Vec<Value> = v.clone();
+                    w.push(x.clone());
                     w
                 })
             })
@@ -84,6 +170,14 @@ fn arg_vectors(src: &str) -> Option<Vec<Vec<HostedValue>>> {
     }
     vectors.truncate(64);
     Some(vectors)
+}
+
+/// The interpreter's form of a Rust argument: its canonical flat body for a composite. `None`
+/// when the value does not canonicalise to a flat body.
+fn hosted_arg(v: &Value) -> Option<HostedValue> {
+    let scratch = Arena::with_capacity(4096);
+    let canon = v.clone().into_arena_canonical(8, 8, 8, &scratch).ok()?;
+    HostedValue::from_value(&canon, &scratch)
 }
 
 fn self_hosted(src: &str) -> Option<Module> {
@@ -112,6 +206,8 @@ struct Reach {
     finished: usize,
     trapped: usize,
     max_steps: u64,
+    composite_arg_runs: usize,
+    composite_results: usize,
 }
 
 #[test]
@@ -147,15 +243,20 @@ fn the_interpreter_agrees_with_the_virtual_machine_on_the_corpus() {
             }
         };
         reach.admitted += 1;
-        let Some(vectors) = arg_vectors(src) else {
+        let program = keleusma::parser::parse(&keleusma::lexer::tokenize(src).unwrap()).unwrap();
+        let Some(vectors) = arg_vectors(&program, &module) else {
+            refusals.push(format!("{label}: no argument samples"));
             continue;
         };
         reach.generated += 1;
-        for args in vectors {
-            let values: Vec<Value> = args.iter().map(|a| a.to_value()).collect();
+        for values in vectors {
+            let Some(args) = values.iter().map(hosted_arg).collect::<Option<Vec<_>>>() else {
+                failures.push(format!("{label}: an argument has no flat body"));
+                continue;
+            };
             let vm_arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
             let mut vm = Vm::new(module.clone(), &vm_arena).expect("the corpus module verifies");
-            let expected = match reference_outcome(vm.call(&values)) {
+            let expected = match reference_outcome(vm.call(&values), &vm_arena) {
                 Ok(o) => o,
                 Err(e) => {
                     failures.push(format!("{label} {args:?}: reference {e}"));
@@ -164,7 +265,17 @@ fn the_interpreter_agrees_with_the_virtual_machine_on_the_corpus() {
             };
             let run = interp.run(&adm, &args, MAX_TICKS).expect("interp.kel runs");
             reach.runs += 1;
+            if args
+                .iter()
+                .any(|a| matches!(a, HostedValue::Composite { .. }))
+            {
+                reach.composite_arg_runs += 1;
+            }
             match run.outcome {
+                Outcome::Finished(HostedValue::Composite { .. }) => {
+                    reach.finished += 1;
+                    reach.composite_results += 1;
+                }
                 Outcome::Finished(_) => reach.finished += 1,
                 Outcome::Trapped { .. } => reach.trapped += 1,
                 _ => {}
@@ -214,12 +325,23 @@ fn the_interpreter_agrees_with_the_virtual_machine_on_the_corpus() {
     assert!(reach.admitted >= SLICE_ADMITTED_FLOOR, "{reach:?}");
     assert!(reach.runs >= SLICE_RUNS_FLOOR, "{reach:?}");
     assert!(reach.finished > 0 && reach.trapped > 0, "{reach:?}");
+    assert!(
+        reach.composite_arg_runs >= SLICE_COMPOSITE_ARG_RUNS_FLOOR,
+        "{reach:?}"
+    );
+    assert!(
+        reach.composite_results >= SLICE_COMPOSITE_RESULTS_FLOOR,
+        "{reach:?}"
+    );
 }
 
 /// Measured floors for the current slice. See the non-vacuity note above. Slice 1, scalars and
-/// control flow, measured 47 admitted cases and 698 runs on 2026-10-25.
-const SLICE_ADMITTED_FLOOR: usize = 47;
-const SLICE_RUNS_FLOOR: usize = 698;
+/// control flow, measured 47 admitted cases and 698 runs on 2026-10-25. Slice 2, flat
+/// composites, measured the figures below the same day.
+const SLICE_ADMITTED_FLOOR: usize = 101;
+const SLICE_RUNS_FLOOR: usize = 971;
+const SLICE_COMPOSITE_ARG_RUNS_FLOOR: usize = 615;
+const SLICE_COMPOSITE_RESULTS_FLOOR: usize = 4;
 
 #[test]
 fn a_module_with_an_unsupported_instruction_is_refused() {

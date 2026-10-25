@@ -8,7 +8,7 @@ Order 4 is the first pass of Workstream D, a bytecode interpreter for Keleusma
 written in Keleusma and run on the Rust virtual machine. This plan records the
 operator rulings, the gate, the design and the slices. The interpreter is
 `src/hosted/interp.kel`, its driver `src/hosted/mod.rs` behind the `self-host`
-feature, and its harness `tests/hosted_runtime.rs`. Slice 1 landed on 2026-10-25.
+feature, and its harness `tests/hosted_runtime.rs`. Slices 1 and 2 landed on 2026-10-25.
 
 ## Operator rulings
 
@@ -141,6 +141,20 @@ their verified time bound by one, because the time walk charged nothing for
 `Else`, `EndIf` and `EndLoop` and omitted a counted loop's final header pass. The
 operator ruled first-hand to fix it first. See
 [WCET_STRUCTURAL_MARKERS.md](./WCET_STRUCTURAL_MARKERS.md).
+
+**Slice 2, 2026-10-25.** Flat composites: construction, struct, tuple and enum
+field reads in flat and nested forms, Word and Byte element reads and nested
+element reads with the Order 3 bounds outcome and placeholder, and `IsEnum` by
+discriminant. A composite is a body in a heap of one byte per Word, which the
+host writes for composite arguments and reads for a composite result. Bodies are
+immutable, so a nested read is a view and copies nothing. A string constant is
+carried as an inert tag, used only as a name operand of `IsEnum`, which a flat
+enum ignores. Arguments are generated from the declared types, rotated so
+successive samples differ in every position, with every enum variant. The
+harness admitted 101 cases and ran 971 argument vectors, 959 finishing and 12
+trapping, all agreeing with the Rust virtual machine. 615 runs passed a
+composite argument and 4 returned a composite. Five data-segment cases and the
+stream case remain refused.
 
 **Call bounds, for slice 4.** The per-chunk time bound counts a call's dispatch
 and not the callee's body, so the instruction bound for a program with calls must
