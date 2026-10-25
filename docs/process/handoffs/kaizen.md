@@ -30,7 +30,7 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor 3272d46d HEAD     # the merge of PR 516 into v0.2.3
+git merge-base --is-ancestor f31d7a72 HEAD     # the merge of PR 525 into v0.2.3
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
 
@@ -52,11 +52,15 @@ run.
   `record` refuse an input naming the home directory. The 86 paths in 43 never
   evaluated V0.2.X samples stay, because their evidence is verbatim and hashed. The
   operator reinstalled the pilot on 2026-10-25, so the refusal is live.
-- **This increment.** The selection cohort of the Jev pilot, directed by the operator
-  on 2026-10-25, in `scripts/jev_selection.py` with `selection.json`, its own store and
-  13 tests. It covers the four large-input decisions with case-derived option order.
-  Live evaluation is off until the operator authorizes the 160,000-byte payload bound.
-  Both installers now refuse another line's worktree before copying anything.
+- **Selection cohort.** PR 525, merged as `f31d7a72`, added `scripts/jev_selection.py`
+  with its own configuration and store. The operator installed it on 2026-10-25. Live
+  evaluation is off until the operator authorizes the 160,000-byte payload bound.
+- **This increment.** The first three section-selection baselines, captured at
+  `fde7b65e` on 2026-10-25 for three planned Kaizen tasks. `kaizen-sel-0001` covers the
+  release-gate timing over `RELEASE_PROCESS.md`, 2 of 20 sections. `kaizen-sel-0002`
+  covers the state-file guard over `CLAUDE.md`, 5 of 10. `kaizen-sel-0003` covers the
+  idle compaction trial over the context engineering report, 5 of 12. All three are
+  pending, unlabelled and unevaluated.
 - **pykeleusma.** Its own line works in `~/projects/python/pykeleusma`. This line does
   not work there.
 
@@ -77,8 +81,10 @@ These reach V0.2.X and V0.3.X from this line only by relay. Measured on 2026-10-
 
 ## Next increments, in order
 
-1. Once the cohort is installed, capture this line's own baselines, starting with
-   section selection over the large process files, and label them blind.
+1. Blind labels for the three cases from a reviewer who has not seen the baselines,
+   for example a fresh subagent given only `blind` output. The tracked checkpoint holds
+   the baselines, so the reviewer must not read it. Record each task's outcome with
+   `finish` when that task is done. More cases as the tasks arrive.
 2. A state-file budget guard, after the owning lines have converted their files.
 3. Measure the release-gate saving of PR 508, which is inferred and not timed.
 
@@ -108,7 +114,8 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `35a970a77a9e134479778054c4530d27fd89bed5b3788b2f89c1a771a979a9a9`, 80 messages, one unacknowledged and addressed to another line |
+| [Interline](../interline/checkpoint.json) | `c5c565efad85cf9440fda002cf1f9b4eaf5a3a86e28f359e263a0b82e685b259`, 84 messages, one unacknowledged and addressed to another line |
+| [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `b9525ce5a61a98e8c0a0a14d08ddff3884bc18ccec237ce09d6eddc398459d86`, 3 samples and 3 tasks, restored cleanly into a fresh store |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `16d65875954a7f7f33416135dd8f475dcb7a982c020adafbbd337aff12ae4bf6`, 250 samples and 66 tasks, identical to a fresh export |
 
 ## Environment
