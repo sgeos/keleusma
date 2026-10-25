@@ -113,7 +113,7 @@ cargo test && cargo clippy --tests -- -D warnings
 runs the suite across five feature sets and adds Miri, two minimum-supported-version checks, a
 `no_std` build, a cross-target build, the book, the language server, the playground, a shell-script
 analysis and a dependency-advisory scan. `scripts/release-gate.sh` is a subset of it, kept for a
-pre-publication run and for working offline. `CLAUDE.md` carries two catalogues of the ways a
+pre-publication run and for working offline. [`docs/process/VERIFICATION_PITFALLS.md`](./docs/process/VERIFICATION_PITFALLS.md) carries two catalogues of the ways a
 green local run has nonetheless been misleading here; **they are the most useful pages in the
 repository for anyone working in it, and they are worth reading before trusting your own green
 run.**
