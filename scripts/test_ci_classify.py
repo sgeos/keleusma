@@ -1,6 +1,7 @@
 """Tests of the continuous-integration change classifier, including its fail-closed paths."""
 
 import io
+from pathlib import Path
 from contextlib import redirect_stdout
 from unittest import mock
 import unittest
@@ -15,6 +16,16 @@ class ClassifyTests(unittest.TestCase):
     def test_documentation_book_and_scripts_are_light(self):
         self.assertEqual(self.mode('docs/process/handoffs/kaizen.md', 'book/src/intro.md',
                                    'scripts/jev_shadow.py', 'CLAUDE.md', 'LICENSE'), 'light')
+
+    def test_native_codegen_is_light_while_its_guards_stay_in_the_light_run(self):
+        self.assertEqual(self.mode('native_codegen/src/lib.rs', 'docs/a.md'), 'light')
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/ci.yml').read_text()
+        guards = workflow.split('\n  guards:\n', 1)[1].split('\n  # ', 1)[0]
+        for prefix, binaries in ci_classify.LIGHT_PREFIX_GUARDS.items():
+            self.assertIn(prefix, ci_classify.LIGHT_PREFIXES)
+            for binary in binaries:
+                with self.subTest(prefix=prefix, binary=binary):
+                    self.assertIn(f'--test {binary} ', guards + ' ')
 
     def test_source_workflow_and_crate_readme_are_full(self):
         for path in ('src/lib.rs', 'tests/claimed_counts.rs', '.github/workflows/ci.yml',
