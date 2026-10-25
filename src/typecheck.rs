@@ -5073,6 +5073,31 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             // value cannot carry a label the function declares it
             // never returns.
             let return_negatives = ctx.current_return_negative_labels.clone();
+            // The yielded value must have the declared return type, as a
+            // body tail must. The host decodes a yielded flat body by that
+            // type, so a same-size body of another shape would have its
+            // scalar words read as a `Text` reference. The label handling
+            // mirrors the tail check in `check_function`.
+            if let Some(return_ty) = ctx.current_return.clone() {
+                let (struct_value, struct_return) = if return_negatives.is_empty() {
+                    (value_ty.clone(), return_ty.clone())
+                } else {
+                    (
+                        strip_labels(value_ty.clone()),
+                        strip_labels(return_ty.clone()),
+                    )
+                };
+                if !types_compatible(ctx, &struct_value, &struct_return) {
+                    return Err(TypeError::new(
+                        format!(
+                            "yielded value has type {} but the function returns {}",
+                            value_ty.apply(&ctx.subst).display(),
+                            return_ty.apply(&ctx.subst).display()
+                        ),
+                        *span,
+                    ));
+                }
+            }
             check_negative_labels_against_return(
                 "yielded value",
                 &value_ty,

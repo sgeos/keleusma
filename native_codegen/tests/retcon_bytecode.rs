@@ -4612,8 +4612,11 @@ fn per_site_dialogues_distinguish_yields_replies_and_completion() {
     use keleusma::vm::{Vm, VmState};
     use std::collections::BTreeMap;
     type Site = unsafe extern "C" fn(*mut u8) -> u64;
+    // A yield has its function's declared type since absorption 91, so the
+    // helper returns `bool` to yield one. The sites still differ, a Bool and
+    // two Words out, a Word, a Byte and a Float back.
     let program = common::build(
-        "yield helper(a: Word) -> Word { let r: Word = yield true; a + r } yield main(a: Word) -> Word { let b: Byte = yield a; let n = helper(a + (b as Word)); let d: Float = yield (n as Byte); n + (d as Word) }",
+        "yield helper(a: Word) -> bool { let r: Word = yield true; a + r > 9 } yield main(a: Word) -> Word { let b: Byte = yield a; let h = helper(a + (b as Word)); let n = if h { a + 9 } else { a }; let d: Float = yield n; n + (d as Word) }",
     );
     let mut contracts = BTreeMap::new();
     let mut main_sites = Vec::new();
@@ -4633,7 +4636,7 @@ fn per_site_dialogues_distinguish_yields_replies_and_completion() {
             } else {
                 let first = main_sites.is_empty();
                 main_sites.push(site);
-                if first { (3, 2) } else { (2, 5) }
+                if first { (3, 2) } else { (3, 5) }
             };
             contracts.insert(
                 site,
@@ -4657,7 +4660,7 @@ fn per_site_dialogues_distinguish_yields_replies_and_completion() {
     ));
     assert!(matches!(
         vm.resume(Value::Int(7)).unwrap(),
-        VmState::Yielded(Value::Byte(14))
+        VmState::Yielded(Value::Int(14))
     ));
     assert!(matches!(
         vm.resume(Value::Float(3.0)).unwrap(),
@@ -4785,8 +4788,10 @@ fn explicit_flat_replies_survive_reuse_and_delegated_entry_completion() {
             9,
             true,
         ),
+        // The pair yields need a pair-returning function since absorption 91,
+        // so they move to a helper the Word-returning entry delegates to.
         (
-            "yield main(a: Word) -> Word { let r: (Word, Word) = yield (a, a + 1); let s: (Word, Word, Word) = yield r; r.0 + s.2 + a }",
+            "yield helper(a: Word) -> (Word, Word) { let r: (Word, Word) = yield (a, a + 1); let s: (Word, Word, Word) = yield r; (r.0 + s.2 + a, s.0) } yield main(a: Word) -> Word { let p = helper(a); p.0 }",
             vec![(pair, pair), (pair, triple)],
             vec![vec![5, 6], vec![11, 12]],
             vec![vec![11, 12], vec![31, 32, 33]],
@@ -4794,9 +4799,9 @@ fn explicit_flat_replies_survive_reuse_and_delegated_entry_completion() {
             false,
         ),
         (
-            "yield helper(a: Word) -> Word { let p: (Word, Word) = yield true; p.0 + p.1 + a } yield main(a: Word) -> Word { helper(a) }",
-            vec![(WireShape::Scalar { kind: 1 }, pair)],
-            vec![vec![1]],
+            "yield helper(a: Word) -> Word { let p: (Word, Word) = yield a + 1; p.0 + p.1 + a } yield main(a: Word) -> Word { helper(a) }",
+            vec![(WireShape::Scalar { kind: 3 }, pair)],
+            vec![vec![6]],
             vec![vec![11, 12]],
             28,
             false,
@@ -5344,21 +5349,24 @@ fn parameterless_dialogues_complete_with_each_scalar_kind() {
     use keleusma::vm::{Vm, VmState};
     use std::collections::BTreeMap;
     type StartZero = unsafe extern "C" fn(*mut u8, *mut u8, *mut u8, *mut u8) -> Outcome;
-    for (declaration, kind, value, bits) in [
-        ("()", 0, Value::Unit, 0),
-        ("bool", 1, Value::Bool(true), 1),
-        ("Byte", 2, Value::Byte(9), 9),
-        ("Word", 3, Value::Int(-11), -11),
-        ("Fixed", 4, Value::Fixed(65536), 65536),
+    // A yield has its function's declared type since absorption 91, so each
+    // case yields that type's zero rather than `false`.
+    for (declaration, zero, kind, value, bits) in [
+        ("()", "()", 0, Value::Unit, 0),
+        ("bool", "false", 1, Value::Bool(true), 1),
+        ("Byte", "(0 as Byte)", 2, Value::Byte(9), 9),
+        ("Word", "0", 3, Value::Int(-11), -11),
+        ("Fixed", "(0 as Fixed)", 4, Value::Fixed(65536), 65536),
         (
             "Float",
+            "0.0",
             5,
             Value::Float(7.25),
             NativeFloat::to_bits(7.25) as i64,
         ),
     ] {
         let program = common::build(&format!(
-            "yield main() -> {declaration} {{ let r: {declaration} = yield false; r }}"
+            "yield main() -> {declaration} {{ let r: {declaration} = yield {zero}; r }}"
         ));
         let entry = program.entry_point.unwrap();
         let ip = program.chunks[entry]
@@ -5372,16 +5380,24 @@ fn parameterless_dialogues_complete_with_each_scalar_kind() {
                 instruction: ip as u32,
             },
             Dialogue {
-                yielded: WireShape::Scalar { kind: 1 },
+                yielded: WireShape::Scalar { kind },
                 reply: WireShape::Scalar { kind },
             },
         )]);
         let arena = keleusma_arena::Arena::with_capacity(65536);
         let mut vm = Vm::new(program.clone(), &arena).unwrap();
-        assert!(matches!(
-            vm.call(&[]).unwrap(),
-            VmState::Yielded(Value::Bool(false))
-        ));
+        let VmState::Yielded(first) = vm.call(&[]).unwrap() else {
+            panic!("expected a yield")
+        };
+        let zero_bits = match first {
+            Value::Unit => 0,
+            Value::Bool(b) => i64::from(b),
+            Value::Byte(b) => i64::from(b),
+            Value::Int(n) | Value::Fixed(n) => n,
+            Value::Float(f) => f.to_bits() as i64,
+            other => panic!("unexpected yield {other:?}"),
+        };
+        assert_eq!(zero_bits, 0, "{declaration} yielded {first:?}");
         let VmState::Finished(actual) = vm.resume(value.clone()).unwrap() else {
             panic!("expected completion")
         };
@@ -5569,12 +5585,16 @@ fn native_snapshot_results_survive_calls_suspension_and_completion() {
     use keleusma::vm::{Vm, VmState};
     use std::collections::BTreeMap;
     for (delegated, external) in [(0, false), (1, false), (2, false), (1, true), (2, true)] {
+        // Scalar yields beside a pair completion need a Word-returning
+        // function since absorption 91, so `emit` yields and every other
+        // chunk delegates to it. The native results stay live across those
+        // suspensions as before.
         let source = if delegated == 2 {
-            "use host::pair\nyield make(a: Word) -> (Word, Word) { let p: (Word, Word) = host::pair(a); yield p.0; p } yield main(a: Word) -> (Word, Word) { let keep = make(a); let later = make(a + 11); keep }"
+            "use host::pair\nyield emit(v: Word) -> Word { let r: Word = yield v; r } yield make(a: Word) -> (Word, Word) { let p: (Word, Word) = host::pair(a); let r = emit(p.0); p } yield main(a: Word) -> (Word, Word) { let keep = make(a); let later = make(a + 11); keep }"
         } else if delegated == 1 {
-            "use host::pair\nfn make(a: Word) -> (Word, Word) { host::pair(a) } yield main(a: Word) -> (Word, Word) { let keep = make(a); yield keep.0; let later = make(a + 10); yield later.1; keep }"
+            "use host::pair\nyield emit(v: Word) -> Word { let r: Word = yield v; r } fn make(a: Word) -> (Word, Word) { host::pair(a) } yield main(a: Word) -> (Word, Word) { let keep = make(a); let r = emit(keep.0); let later = make(a + 10); let s = emit(later.1); keep }"
         } else {
-            "use host::pair\nyield main(a: Word) -> (Word, Word) { let keep: (Word, Word) = host::pair(a); yield keep.0; let later: (Word, Word) = host::pair(a + 10); yield later.1; keep }"
+            "use host::pair\nyield emit(v: Word) -> Word { let r: Word = yield v; r } yield main(a: Word) -> (Word, Word) { let keep: (Word, Word) = host::pair(a); let r = emit(keep.0); let later: (Word, Word) = host::pair(a + 10); let s = emit(later.1); keep }"
         };
         let source = if external {
             source.replace("use host::pair", "use external host::pair")
@@ -5984,14 +6004,21 @@ fn native_snapshot_completion_links_from_c_and_emits_for_tier_one_targets() {
     use keleusma::bytecode::{Op, WireShape};
     use std::collections::BTreeMap;
     use std::process::Command;
+    // The yield moved into `emit` at absorption 91, since a pair-returning
+    // entry can no longer yield a Word.
     let mut program = common::build(
-        "use host::pair\nfn make(a: Word) -> (Word, Word) { host::pair(a) } yield main(a: Word) -> (Word, Word) { let p = make(a); yield p.0; p }",
+        "use host::pair\nyield emit(v: Word) -> Word { let r: Word = yield v; r } fn make(a: Word) -> (Word, Word) { host::pair(a) } yield main(a: Word) -> (Word, Word) { let p = make(a); let r = emit(p.0); p }",
     );
     program.native_return_shapes[0] = WireShape::Flat { kind: 0, size: 16 };
     let entry = program.entry_point.unwrap();
+    let emit = program
+        .chunks
+        .iter()
+        .position(|chunk| chunk.name == "emit")
+        .unwrap();
     let site = YieldSite {
-        chunk: entry as u32,
-        instruction: program.chunks[entry]
+        chunk: emit as u32,
+        instruction: program.chunks[emit]
             .ops
             .iter()
             .position(|op| matches!(op, Op::Yield))
@@ -6002,7 +6029,7 @@ fn native_snapshot_completion_links_from_c_and_emits_for_tier_one_targets() {
             site,
             Dialogue {
                 yielded: WireShape::Scalar { kind: 3 },
-                reply: WireShape::Scalar { kind: 0 },
+                reply: WireShape::Scalar { kind: 3 },
             },
         )])),
         native_body_returns: BTreeMap::from([(0, NativeBodyReturn::Snapshot)]),

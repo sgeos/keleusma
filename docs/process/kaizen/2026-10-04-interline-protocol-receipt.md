@@ -13,7 +13,7 @@ service or network listener. This bounded local requirement does not adopt the
 earlier proposal for a general messaging service based on the Model Context
 Protocol. The versioned handoffs retain decisions and deliverables.
 
-The shared store is `/Users/bsechter/projects/rust/keleusma/secret/interline`.
+The shared store is `secret/interline` below the primary checkout.
 It contains the installed client, protocol and database. Local Git exclusions
 keep the store and client configurations outside every tracked branch.
 Source files are versioned in this increment. Installation was performed through

@@ -788,6 +788,7 @@ mod tests {
             // resolves without consulting the arena, so no width here is read.
             // Eight matches the other two rather than asserting anything.
             addr_bytes: 8,
+            rodata: &[],
         }
     }
 

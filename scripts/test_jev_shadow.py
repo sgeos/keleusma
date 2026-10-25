@@ -123,6 +123,16 @@ class PilotTests(unittest.TestCase):
             with self.subTest(value=value[:20]), self.assertRaises(ValueError):
                 self.record(packet=packet)
 
+    def test_home_directory_in_input_rejected_at_capture_only(self):
+        home=str(Path.home())
+        packet=copy.deepcopy(self.packet)
+        packet['input']['evidence']=f'Compiling keleusma ({home}/keleusma)'
+        (self.repo/'home.txt').write_text(packet['input']['evidence'])
+        packet['source_refs']=['home.txt']
+        with self.assertRaisesRegex(ValueError,'home directory'):
+            self.record(packet=packet)
+        pilot.validate_packet(packet,self.cfg)
+
     def test_symlink_source_escape_rejected(self):
         outside=self.root/'outside.txt'
         outside.write_text(self.packet['input']['evidence'])

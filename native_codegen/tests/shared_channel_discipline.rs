@@ -75,8 +75,13 @@ fn the_shared_channel_keeps_both_lines_material() {
     // **The structural property, keyed on nothing the other line owns.** Their
     // document precedes this line's addendum. If this line ever overwrites the
     // file wholesale again, the addendum lands at the top and this fires.
+    //
+    // The floor was 8192 bytes, set when the other line's document was 1988
+    // lines. At absorption 91 that line keeps a bounded prompt of 50 lines and
+    // 2829 bytes, which was kept entire and first, and the old floor failed on
+    // the correct resolution. 1024 bytes still fires on an addendum at the top.
     assert!(
-        at > 8192,
+        at > 1024,
         "only {at} bytes precede this line's addendum. The other line's document \
          should come first and entire — at absorption 60 it was 1988 lines against \
          this line's 106. A wholesale overwrite is what caused that conflict; \
