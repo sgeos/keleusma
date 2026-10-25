@@ -95,9 +95,26 @@ arrays are valid and always yield an invalid-index outcome. Type, representation
 stride and arena-lifetime failures remain contract errors.
 
 The requirement is two and net effect plus five. Growth is five, shrink zero and
-nominal cost eight. Other GetIndex operand forms retain their previous single-result
-contract and remain outside the first-pass trap-free proof. They must be reported as
-unsupported by that proof, never silently treated as total.
+nominal cost eight.
+
+## GetIndex for nested composite and boxed elements
+
+Added on 2026-10-24 under the operator ruling of that date. Nested composite and
+boxed operands follow the same contract and stack layout. An invalid index pushes a
+placeholder without reading an element. A nested composite placeholder is a
+zero-filled body of the element's size, allocated on the arena top, so that any
+access to it stays inside its body. A zero-length placeholder would let hand-built
+code fault inside a field read that the trap analysis classifies as clear. The
+allocation is charged as the operand's heap cost on every execution. A boxed
+placeholder is `Unit`, since a boxed element has no flat layout, as for an indexed
+data read of a composite. Compiler-generated code never lets an arm observe either
+placeholder. The typed verifier pushes the element shape, or an unknown shape for a
+boxed element, followed by six Words.
+
+Other flat scalar operand forms, which are Bool, Float, Fixed, Text, Opaque and
+Unit, retain their previous single-result contract and remain outside the
+first-pass trap-free proof. They are reported as unsupported by that proof, never
+silently treated as total.
 
 Bare lowering compares flag with one, traps on invalid, and discards the five
 remaining diagnostic Words on success. Handled Word and Byte reads store the result,

@@ -479,7 +479,8 @@ fn push_int_const(value: Word) -> Word {
 fn emit_op(word: Word) -> Word {
     emit_raw(word);
     let tag = word % wire.radix; let kind = word / wire.radix;
-    if tag == wire.getindex andalso (kind == 2 orelse kind == 3) {
+    // Total array reads: flat Word or Byte, and since 2026-10-24 every nested composite.
+    if (tag == wire.getindex andalso (kind == 2 orelse kind == 3)) orelse tag == wire.getindexnested {
         emit_raw(wire.konst + intern_int(1) * wire.radix);
         emit_raw(wire.cmpeq); emit_raw(wire.mif);
         emit_raw(wire.trap + 8 * wire.radix); emit_raw(wire.mendif);
@@ -1970,6 +1971,9 @@ fn push_array_eq(p: Word) -> Word {
     for e in 0..count limit 256 {
         st.eq_vidx[e] = intern_int(e);
     }
+    // The reference interns the bounds tail's `1` at the first element read, before the
+    // result constants. A one-element array has no index constant `1` to share it with.
+    if kind == 2 orelse kind == 3 { intern_int(1); }
     let false_idx = intern_bool(0);
     let true_idx = intern_bool(1);
     // A `!=` negates the loop result: `Not` is emitted LAST, so it is pushed FIRST (LIFO).
@@ -2043,6 +2047,9 @@ fn push_array_of_struct_eq(p: Word) -> Word {
     for e in 0..arrcount limit 64 {
         st.eq_vidx[e] = intern_int(e);
     }
+    // The reference interns the bounds tail's `1` at the first element read, before the
+    // result constants. A one-element array has no index constant `1` to share it with.
+    intern_int(1);
     let false_idx = intern_bool(0);
     let true_idx = intern_bool(1);
     if is_ne == 1 {
@@ -2123,6 +2130,9 @@ fn push_array_of_array_eq(p: Word) -> Word {
     for c in 0..maxc limit 256 {
         st.eq_vidx[c] = intern_int(c);
     }
+    // The reference interns the bounds tail's `1` at the first element read, before the
+    // result constants. A one-element array has no index constant `1` to share it with.
+    intern_int(1);
     let false_idx = intern_bool(0);
     let true_idx = intern_bool(1);
     if is_ne == 1 {
@@ -2206,6 +2216,9 @@ fn push_array_of_enum_eq(p: Word) -> Word {
     for e in 0..arrcount limit 64 {
         st.eq_vidx[e] = intern_int(e);
     }
+    // The reference interns the bounds tail's `1` at the first element read, before the
+    // result constants. A one-element array has no index constant `1` to share it with.
+    intern_int(1);
     if is_ne == 1 {
         push_emit(wire.lnot);
     }

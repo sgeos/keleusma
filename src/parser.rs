@@ -1617,7 +1617,36 @@ impl<'a> Parser<'a> {
             None
         };
         self.expect(&TokenKind::Eq)?;
-        let value = self.parse_expr()?;
+        let mut value = self.parse_expr()?;
+        // A handled indexed write is an expression, so it may initialize a
+        // binding (operator ruling of 2026-10-24). Its arm block handles the
+        // write, as in statement position. A bare write yields no value and
+        // is refused here rather than bound.
+        if self.at(&TokenKind::Eq)
+            && let Some((data_name, field, indices, lhs_span)) =
+                data_indexed_lhs(&value, &self.data_names)
+        {
+            self.bump();
+            let rhs = self.parse_expr_without_arms()?;
+            if !(matches!(self.peek(), TokenKind::LBrace)
+                && self.peek_ahead_is_checked_arm_keyword())
+            {
+                return Err(self.error(
+                    "a bare indexed write yields no value; bind a handled write, \
+                     `d.x[i] = v { ok(old, new) => .., invalid_index(j) => .. }`, \
+                     or write the bare form as its own statement",
+                ));
+            }
+            let (arms, arms_end) = self.parse_checked_arm_block()?;
+            value = Expr::DataIndexStore {
+                data_name,
+                field,
+                indices,
+                value: Box::new(rhs),
+                arms,
+                span: merge_spans(lhs_span, arms_end),
+            };
+        }
         let end = self.expect(&TokenKind::Semicolon)?;
         Ok(LetStmt {
             pattern,
@@ -1781,7 +1810,7 @@ impl<'a> Parser<'a> {
         matches!(
             self.peek_ahead(1),
             TokenKind::Overflow | TokenKind::Underflow
-        ) || matches!(self.peek_ahead(1), TokenKind::LowerIdent(s) if s == "ok" || s == "invalid_index" || s == "invalid_newtype" || s == "payload_discriminant" || s == "invalid_discriminant" || s == "error")
+        ) || matches!(self.peek_ahead(1), TokenKind::LowerIdent(s) if s == "ok" || s == "invalid_index" || s == "invalid_newtype" || s == "payload_discriminant" || s == "invalid_discriminant" || s == "error" || s == "host_error")
     }
 
     /// An expression with no outcome-arm block attached at its top level.
@@ -1972,9 +2001,25 @@ impl<'a> Parser<'a> {
                 self.expect(&TokenKind::RParen)?;
                 Ok(crate::ast::CheckedArmKind::Error(p))
             }
+            // `host_error` is the spelling of the operator ruling of
+            // 2026-10-20, and `error` remains accepted as its alias. The
+            // binder is optional, and `host_error` alone handles every
+            // failure without binding the code.
+            TokenKind::LowerIdent(name) if name == "host_error" => {
+                let span = self.peek_span();
+                self.bump();
+                if matches!(self.peek(), TokenKind::LParen) {
+                    self.bump();
+                    let p = self.parse_checked_arm_pattern()?;
+                    self.expect(&TokenKind::RParen)?;
+                    Ok(crate::ast::CheckedArmKind::Error(p))
+                } else {
+                    Ok(crate::ast::CheckedArmKind::Error(Pattern::Wildcard(span)))
+                }
+            }
             other => Err(ParseError {
                 message: alloc::format!(
-                    "expected `ok(pattern)`, `overflow(...)`, `underflow(...)`, `zero_divisor(numerator)`, `nan(result)`, `invalid_index(index)`, `invalid_newtype(value)`, `payload_discriminant(Variant)`, `invalid_discriminant(raw)`, or `error(code)`, found {:?}",
+                    "expected `ok(pattern)`, `overflow(...)`, `underflow(...)`, `zero_divisor(numerator)`, `nan(result)`, `invalid_index(index)`, `invalid_newtype(value)`, `payload_discriminant(Variant)`, `invalid_discriminant(raw)`, `host_error(code)` or its alias `error(code)`, found {:?}",
                     other
                 ),
                 span: self.peek_span(),

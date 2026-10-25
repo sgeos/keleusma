@@ -93,6 +93,40 @@ evidence.
 
 ## Addressed on 2026-10-24
 
+- Item 11. A full local matrix passed in all five feature configurations, with
+  documentation tests and the detached compiler, on the tree carrying the Order 3
+  completion. Its receipts are in the Order 3 audit. It ran in the release profile,
+  and remote continuous integration supplies the debug pass.
+
+- Item 12. tests/trap_free_corpus.rs composes every fully handled first-pass
+  form with every other in function, loop and stream positions. Both analyses
+  report all 570 resulting modules trap-free. Each of 399 controls, in which one
+  form loses its coverage, is reported possibly trapping by both. Native calls
+  and composite reads joined the trap-free profile in the same increment. The
+  comparison still runs only under the self-host feature, because the Keleusma
+  analysis exists only there. Without it, the Rust verdicts are still pinned.
+
+- Item 14. tests/stale_contract_artifacts.rs builds artifacts in the shape that
+  compilers emitted before four contract changes and pins what each now does.
+  An old legacy `Div` and an old flat Word read both still verify and load, and
+  return the outcome flag, zero, in place of their value. That is the accepted
+  hazard made visible, changed meaning with no rejection. An old nested
+  composite read followed by a field read is rejected by verification. An old
+  unreified native call keeps its meaning. No repair is made, consistent with the
+  operator's acceptance for the unpublished cycle and the fixed version number.
+
+- Item 15. Each stage-count instance was judged. Present-tense claims were
+  corrected in tests/lexical_divergence_census.rs, tests/selfhost_typecheck.rs,
+  tests/corpus_type_surface.rs and tests/consts_region_composition.rs. Two in
+  tests/selfhost_codegen.rs said no stage source contains a `true` or `false`
+  literal. Re-measured over all fourteen, wire_schema.kel now contains one
+  `true`, so both now state the earlier measurement and the current one. The
+  instances in tests/selfhost_wire.rs, tests/selfhost_consts_driver.rs,
+  tests/shared_layout_runs.rs and the two later instances in
+  tests/consts_region_composition.rs sit inside dated measurement narratives and
+  were kept as ledger entries. The stage sources' own comments were not edited,
+  since that would change the stage sources themselves.
+
 - Item 5. The three remaining regression controls now exist. A reference
   poisoning control runs the scratch assembly over all fourteen stages. A second
   runs production type checking over the stages and the ill-typed and well-typed

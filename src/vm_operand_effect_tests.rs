@@ -109,6 +109,10 @@ const CORPUS: &[&str] = &[
     "fn main(x: Word) -> Word { let a = [x, 2, 3]; a[1] + a[2] }",
     "fn main(x: Word) -> Word { let a = [x, 2, 3]; a[x] { ok(v) => v, invalid_index(i) => i } }",
     "struct P { a: Word, b: Word } fn main(x: Word) -> Word { let p = P { a: x, b: 2 }; p.a + p.b }",
+    // Nested composite reads became total on 2026-10-24: the bare tail and a handled
+    // read whose index is out of range, which pushes the zero-filled placeholder.
+    "struct P { a: Word, b: Word } fn main(x: Word) -> Word { let ps = [P { a: x, b: 2 }, P { a: 1, b: 3 }]; ps[1].b }",
+    "struct P { a: Word, b: Word } fn main(x: Word) -> Word { let ps = [P { a: x, b: 2 }]; ps[x + 5] { ok(p) => p.b, invalid_index(i) => i } }",
     "fn main(x: Word) -> Word { let t = (x, 5); t.0 + t.1 }",
     "enum E { A(Word), B } fn main(x: Word) -> Word { let e = E::A(x); match e { E::A(v) => v, E::B => 0 } }",
     "struct P { a: Word } fn main(x: Word) -> Word { let p = P { a: x }; match p { P { a } => a, _ => 0 } }",

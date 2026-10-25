@@ -2,7 +2,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The Keleusma Guide\n"
-"POT-Creation-Date: 2026-10-22T09:05:32-07:00\n"
+"POT-Creation-Date: 2026-10-24T16:26:00-07:00\n"
 "PO-Revision-Date: 2026-07-08T21:49:53-07:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -379,8 +379,9 @@ msgstr "タイトル"
 #: src/INSTRUCTION_SET.md:154 src/INSTRUCTION_SET.md:160
 #: src/INSTRUCTION_SET.md:161 src/INSTRUCTION_SET.md:235
 #: src/INSTRUCTION_SET.md:255 src/INSTRUCTION_SET.md:267
-#: src/SECURITY_POLICY.md:172 src/SECURITY_POLICY.md:173 src/ROGUE.md:346
-#: src/ROGUE.md:410 src/ROGUE.md:599 src/ROGUE.md:610 src/ROGUE.md:622
+#: src/INSTRUCTION_SET.md:268 src/SECURITY_POLICY.md:172
+#: src/SECURITY_POLICY.md:173 src/ROGUE.md:346 src/ROGUE.md:410
+#: src/ROGUE.md:599 src/ROGUE.md:610 src/ROGUE.md:622
 msgid "1"
 msgstr "1"
 
@@ -438,7 +439,7 @@ msgstr "[値と型](./04_values_and_types.md)"
 
 #: src/introduction.md:41 src/INSTRUCTION_SET.md:80 src/INSTRUCTION_SET.md:81
 #: src/INSTRUCTION_SET.md:167 src/INSTRUCTION_SET.md:238
-#: src/INSTRUCTION_SET.md:258 src/INSTRUCTION_SET.md:268 src/ROGUE.md:414
+#: src/INSTRUCTION_SET.md:258 src/INSTRUCTION_SET.md:269 src/ROGUE.md:414
 #: src/ROGUE.md:603 src/ROGUE.md:614
 msgid "5"
 msgstr "5"
@@ -11670,7 +11671,7 @@ msgstr ""
 "は単一のワードであり、上位スロットは未使用です。したがって小数ビットが `0` の"
 "場合はちょうど整数乗算です。"
 
-#: src/INSTRUCTION_SET.md:73 src/INSTRUCTION_SET.md:256
+#: src/INSTRUCTION_SET.md:73
 msgid "CheckedNeg"
 msgstr "CheckedNeg"
 
@@ -12151,10 +12152,18 @@ msgstr "u16 native_idx, u8 argc"
 #: src/INSTRUCTION_SET.md:142
 msgid ""
 "Call a verified native function. Cost folds into the iteration budget per "
-"host attestation."
+"host attestation. The low seven bits of `argc` are the argument count. The "
+"high bit is the error-reify flag. When it is set, the call pushes the value "
+"and flag `0` on success and the `Word` error code and flag `1` on a soft "
+"host failure instead of propagating it. The compiler sets it on every native "
+"call."
 msgstr ""
 "検証済みネイティブ関数を呼び出します。コストはホストの証明に従ってイテレー"
-"ション予算に組み込まれます。"
+"ション予算に組み込まれます。`argc` の下位 7 ビットが引数の数です。上位ビット"
+"はエラー具象化フラグです。これが設定されている場合、呼び出しは失敗を伝播させ"
+"る代わりに、成功時には値とフラグ `0` を、ホストの軟らかい失敗時には `Word` の"
+"エラーコードとフラグ `1` をプッシュします。コンパイラはすべてのネイティブ呼び"
+"出しにこれを設定します。"
 
 #: src/INSTRUCTION_SET.md:143
 msgid "CallExternalNative"
@@ -12163,10 +12172,12 @@ msgstr "CallExternalNative"
 #: src/INSTRUCTION_SET.md:143
 msgid ""
 "Call an external native function. Iteration cost budget pauses during the "
-"call; the verifier tracks invocation count per iteration."
+"call; the verifier tracks invocation count per iteration. `argc` carries the "
+"error-reify flag as for `CallVerifiedNative`."
 msgstr ""
 "外部ネイティブ関数を呼び出します。イテレーションのコスト予算は呼び出しの間は"
-"一時停止します。検証器はイテレーションごとの呼び出し回数を追跡します。"
+"一時停止します。検証器はイテレーションごとの呼び出し回数を追跡します。`argc` "
+"は `CallVerifiedNative` と同様にエラー具象化フラグを持ちます。"
 
 #: src/INSTRUCTION_SET.md:144
 msgid "Return"
@@ -12355,18 +12366,25 @@ msgstr "2 または 8"
 
 #: src/INSTRUCTION_SET.md:178
 msgid ""
-"Flat Word and Byte forms pop array and index and push the value, index, four "
-"Word byte limbs of the bound, and an outcome flag. Invalid indices yield "
-"typed zero and flag one without reading an element. Valid indices yield the "
-"element and flag zero. These forms cost eight. Other forms retain a single "
-"result and cost two, and remain outside the first-pass trap-free proof."
+"Flat Word and Byte, nested composite and boxed forms pop array and index and "
+"push the value, index, four Word byte limbs of the bound, and an outcome "
+"flag. Invalid indices yield a placeholder and flag one without reading an "
+"element. The placeholder is typed zero for Word and Byte, a zero-filled body "
+"of the element's size for a nested composite, and `Unit` for a boxed "
+"element. Valid indices yield the element and flag zero. These forms cost "
+"eight. The nested form charges its element size as heap allocation. Other "
+"flat scalar forms retain a single result and cost two, and remain outside "
+"the first-pass trap-free proof."
 msgstr ""
-"フラットな Word および Byte の形式は、配列とインデックスをポップし、値、イン"
-"デックス、境界を表す四つの Word のバイトリム、および結果フラグをプッシュしま"
-"す。無効なインデックスは要素を読み取らずに型付きのゼロとフラグ 1 を生成しま"
-"す。有効なインデックスは要素とフラグ 0 を生成します。これらの形式のコストは "
-"8 です。その他の形式は単一の結果を保持してコストは 2 であり、第一段階のトラッ"
-"プ不在証明の対象外のままです。"
+"フラットな Word および Byte、入れ子の複合値、ボックス化された形式は、配列とイ"
+"ンデックスをポップし、値、インデックス、境界を表す四つの Word のバイトリム、"
+"および結果フラグをプッシュします。無効なインデックスは要素を読み取らずにプ"
+"レースホルダーとフラグ 1 を生成します。プレースホルダーは、Word と Byte では"
+"型付きのゼロ、入れ子の複合値では要素の大きさのゼロで埋めた本体、ボックス化さ"
+"れた要素では `Unit` です。有効なインデックスは要素とフラグ 0 を生成します。こ"
+"れらの形式のコストは 8 です。入れ子の形式は要素の大きさをヒープ割り当てとして"
+"計上します。その他のフラットなスカラー形式は単一の結果を保持してコストは 2 で"
+"あり、第一段階のトラップ不在証明の対象外のままです。"
 
 #: src/INSTRUCTION_SET.md:179
 msgid "GetTupleField"
@@ -12538,8 +12556,8 @@ msgstr ""
 "`(low, high, flag)` をプッシュします。low スロットは商で、除算の前に被除数を"
 "小数ビット数だけ左シフトして計算され、飽和します。high スロットは `Fixed(0)` "
 "で、flag は飽和の有無にかかわらず `0` です。除数がゼロの場合は分子、"
-"`Fixed(0)`、flag `3` をプッシュし、フォールトしません。コンパイラの既定の"
-"ディスパッチは flag `3` でトラップします。"
+"`Fixed(0)`、flag `3` をプッシュし、フォールトしません。コンパイラの既定のディ"
+"スパッチは flag `3` でトラップします。"
 
 #: src/INSTRUCTION_SET.md:203
 msgid "Faults"
@@ -12562,14 +12580,20 @@ msgid ""
 "Halt with the error selected by TrapKind. Code `8` consumes five Words, the "
 "index followed by four little-endian byte limbs of an unsigned 32 bit bound, "
 "and returns IndexOutOfBounds. The runtime uses the low eight bits of each "
-"limb. Its nominal cost is `6`. Other trap kinds cost `1`. Unknown kind codes "
-"and malformed payloads are contract errors."
+"limb. Its nominal cost is `6`. Code `9`, HostError, consumes the `Word` code "
+"of a reified native failure and returns the host's own error when the code "
+"matches the most recently reified failure, and otherwise `NativeErrorCode` "
+"with that code. Other trap kinds cost `1`. Unknown kind codes and malformed "
+"payloads are contract errors."
 msgstr ""
 "TrapKind によって選択されたエラーで停止します。コード `8` は五つの Word、すな"
 "わちインデックスとそれに続く符号なし 32 ビット境界のリトルエンディアンの四つ"
 "のバイトリムを消費し、IndexOutOfBounds を返します。ランタイムは各リムの下位 "
-"8 ビットを使用します。その名目コストは `6` です。その他のトラップ種別のコスト"
-"は `1` です。未知の種別コードと不正なペイロードは契約エラーです。"
+"8 ビットを使用します。その名目コストは `6` です。コード `9` の HostError は、"
+"具象化されたネイティブ失敗の `Word` コードを消費し、そのコードが直近に具象化"
+"された失敗と一致する場合はホスト自身のエラーを返し、そうでない場合はそのコー"
+"ドを持つ `NativeErrorCode` を返します。その他のトラップ種別のコストは `1` で"
+"す。未知の種別コードと不正なペイロードは契約エラーです。"
 
 #: src/INSTRUCTION_SET.md:209
 msgid "Opcode count and operand-shape inventory"
@@ -12777,7 +12801,7 @@ msgstr ""
 "ムの `CostModel` を提供します。"
 
 #: src/INSTRUCTION_SET.md:233 src/INSTRUCTION_SET.md:252
-#: src/INSTRUCTION_SET.md:264 src/INSTRUCTION_SET.md:273
+#: src/INSTRUCTION_SET.md:264 src/INSTRUCTION_SET.md:274
 msgid "Instructions"
 msgstr "命令"
 
@@ -12795,15 +12819,15 @@ msgstr ""
 msgid ""
 "Add, Sub, Mul, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, "
 "CheckedDiv, CheckedMod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex "
-"other forms, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, "
-"WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, "
-"Return, BitAnd, BitOr, BitXor, Shl, Shr"
+"other flat scalar forms, GetTupleField, GetEnumField, Len, IntToFloat, "
+"FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, "
+"FixedDiv, Return, BitAnd, BitOr, BitXor, Shl, Shr"
 msgstr ""
 "Add, Sub, Mul, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, "
 "CheckedDiv, CheckedMod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex"
-"（その他の形式）, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, "
-"WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, "
-"Return, BitAnd, BitOr, BitXor, Shl, Shr"
+"（その他のフラットなスカラー形式）, GetTupleField, GetEnumField, Len, "
+"IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, "
+"FixedMul, FixedDiv, Return, BitAnd, BitOr, BitXor, Shl, Shr"
 
 #: src/INSTRUCTION_SET.md:237
 msgid "GetField, IsEnum, IsStruct"
@@ -12813,14 +12837,16 @@ msgstr "GetField, IsEnum, IsStruct"
 msgid "Div, Mod, NewComposite"
 msgstr "Div, Mod, NewComposite"
 
-#: src/INSTRUCTION_SET.md:239 src/INSTRUCTION_SET.md:268
+#: src/INSTRUCTION_SET.md:239 src/INSTRUCTION_SET.md:269
 msgid "Trap kind 8"
 msgstr "Trap 種別 8"
 
 #: src/INSTRUCTION_SET.md:241
-msgid "GetDataIndexed, SetDataIndexed, GetIndex flat Word or Byte"
+msgid ""
+"GetDataIndexed, SetDataIndexed, GetIndex flat Word or Byte, nested or boxed"
 msgstr ""
-"GetDataIndexed, SetDataIndexed, GetIndex（フラットな Word または Byte）"
+"GetDataIndexed, SetDataIndexed, GetIndex（フラットな Word または Byte、入れ"
+"子、ボックス化）"
 
 #: src/INSTRUCTION_SET.md:242
 msgid "Call, CallVerifiedNative, CallExternalNative"
@@ -12868,7 +12894,7 @@ msgid "Growth"
 msgstr "増加"
 
 #: src/INSTRUCTION_SET.md:254 src/INSTRUCTION_SET.md:266
-#: src/INSTRUCTION_SET.md:275 src/ROGUE.md:239 src/ROGUE.md:345
+#: src/INSTRUCTION_SET.md:276 src/ROGUE.md:239 src/ROGUE.md:345
 #: src/ROGUE.md:409 src/ROGUE.md:598 src/ROGUE.md:609 src/ROGUE.md:621
 msgid "0"
 msgstr "0"
@@ -12877,30 +12903,42 @@ msgstr "0"
 msgid ""
 "Not, Neg, Add, Sub, Mul, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, "
 "SetData, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, "
-"Yield, Return, GetField, GetIndex other forms, GetTupleField, GetEnumField, "
-"Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, "
-"FixedToWord, FixedMul, Trap, PopN, BitAnd, BitOr, BitXor, Shl, Shr"
-msgstr ""
-"Not, Neg, Add, Sub, Mul, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, "
-"SetData, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, "
-"Yield, Return, GetField, GetIndex（その他の形式）, GetTupleField, "
+"Yield, Return, GetField, GetIndex other flat scalar forms, GetTupleField, "
 "GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, "
 "WordToFixed, FixedToWord, FixedMul, Trap, PopN, BitAnd, BitOr, BitXor, Shl, "
 "Shr"
+msgstr ""
+"Not, Neg, Add, Sub, Mul, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, "
+"SetData, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, "
+"Yield, Return, GetField, GetIndex（その他のフラットなスカラー形式）, "
+"GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, "
+"ByteToWord, WordToFixed, FixedToWord, FixedMul, Trap, PopN, BitAnd, BitOr, "
+"BitXor, Shl, Shr"
 
 #: src/INSTRUCTION_SET.md:255
 msgid ""
 "Const, PushImmediate, GetLocal, GetData, Dup, Div, Mod, FixedDiv, "
 "CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, "
-"CallVerifiedNative, CallExternalNative, NewComposite, IsEnum, IsStruct"
+"CallVerifiedNative and CallExternalNative without the reify flag, "
+"NewComposite, IsEnum, IsStruct"
 msgstr ""
 "Const, PushImmediate, GetLocal, GetData, Dup, Div, Mod, FixedDiv, "
-"CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, "
-"CallVerifiedNative, CallExternalNative, NewComposite, IsEnum, IsStruct"
+"CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, 具象化フラ"
+"グなしの CallVerifiedNative と CallExternalNative, NewComposite, IsEnum, "
+"IsStruct"
+
+#: src/INSTRUCTION_SET.md:256
+msgid ""
+"CheckedNeg, CallVerifiedNative and CallExternalNative with the reify flag"
+msgstr ""
+"CheckedNeg, 具象化フラグ付きの CallVerifiedNative と CallExternalNative"
 
 #: src/INSTRUCTION_SET.md:258
-msgid "GetDataIndexed, BoundsCheck, GetIndex flat Word or Byte"
-msgstr "GetDataIndexed, BoundsCheck, GetIndex（フラットな Word または Byte）"
+msgid ""
+"GetDataIndexed, BoundsCheck, GetIndex flat Word or Byte, nested or boxed"
+msgstr ""
+"GetDataIndexed, BoundsCheck, GetIndex（フラットな Word または Byte、入れ子、"
+"ボックス化）"
 
 #: src/INSTRUCTION_SET.md:260
 msgid "Stack shrink (slots popped during execution)"
@@ -12926,56 +12964,60 @@ msgid ""
 "Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, Div, Mod, "
 "CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, "
 "GetDataIndexed, SetDataIndexed, BoundsCheck, GetIndex flat Word or Byte, "
-"Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Len, IsEnum, "
-"IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, "
-"FixedToWord, FixedDiv, Trap except kind 8"
+"nested or boxed, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, "
+"Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, "
+"WordToFixed, FixedToWord, FixedDiv, Trap except kinds 8 and 9"
 msgstr ""
 "Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, Div, Mod, "
 "CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, "
 "GetDataIndexed, SetDataIndexed, BoundsCheck, GetIndex（フラットな Word また"
-"は Byte）, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Len, "
-"IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, "
-"WordToFixed, FixedToWord, FixedDiv, Trap（種別 8 を除く）"
+"は Byte、入れ子、ボックス化）, Else, EndIf, Loop, EndLoop, Break, Stream, "
+"Reset, Return, Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, "
+"ByteToWord, WordToFixed, FixedToWord, FixedDiv, Trap（種別 8 と 9 を除く）"
 
 #: src/INSTRUCTION_SET.md:267
 msgid ""
 "Add, Sub, Mul, FixedMul, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, "
-"SetData, If, BreakIf, Yield, GetField, GetIndex other forms, GetTupleField, "
-"GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr"
+"SetData, If, BreakIf, Yield, GetField, GetIndex other flat scalar forms, "
+"GetTupleField, GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr"
 msgstr ""
 "Add, Sub, Mul, FixedMul, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, "
-"SetData, If, BreakIf, Yield, GetField, GetIndex（その他の形式）, GetTupleField, "
-"GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr"
+"SetData, If, BreakIf, Yield, GetField, GetIndex（その他のフラットなスカラー形"
+"式）, GetTupleField, GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr"
 
-#: src/INSTRUCTION_SET.md:269
+#: src/INSTRUCTION_SET.md:268
+msgid "Trap kind 9"
+msgstr "Trap 種別 9"
+
+#: src/INSTRUCTION_SET.md:270
 msgid "n"
 msgstr "n"
 
-#: src/INSTRUCTION_SET.md:269
+#: src/INSTRUCTION_SET.md:270
 msgid ""
-"PopN(n), Call(_, n), CallVerifiedNative(_, n), CallExternalNative(\\_, n), "
-"NewComposite(count)"
+"PopN(n), Call(_, n), CallVerifiedNative(_, n) and CallExternalNative(\\_, n) "
+"with the reify flag masked out of `n`, NewComposite(count)"
 msgstr ""
-"PopN(n), Call(_, n), CallVerifiedNative(_, n), CallExternalNative(\\_, n), "
-"NewComposite(count)"
+"PopN(n), Call(_, n), `n` から具象化フラグを除いた CallVerifiedNative(_, n) "
+"と CallExternalNative(\\_, n), NewComposite(count)"
 
-#: src/INSTRUCTION_SET.md:271
+#: src/INSTRUCTION_SET.md:272
 msgid "Heap allocation (bytes)"
 msgstr "ヒープ割り当て（バイト）"
 
-#: src/INSTRUCTION_SET.md:273
+#: src/INSTRUCTION_SET.md:274
 msgid "Heap"
 msgstr "ヒープ"
 
-#: src/INSTRUCTION_SET.md:275
+#: src/INSTRUCTION_SET.md:276
 msgid "All instructions not listed below"
 msgstr "以下に列挙されていないすべての命令"
 
-#: src/INSTRUCTION_SET.md:276
+#: src/INSTRUCTION_SET.md:277
 msgid "`byte_size` from operand"
 msgstr "オペランドからの `byte_size`"
 
-#: src/INSTRUCTION_SET.md:276
+#: src/INSTRUCTION_SET.md:277
 msgid ""
 "NewComposite, flat form. The exact flat allocation size is baked into the "
 "operand at compile time, so the worst-case-memory-usage contribution is the "
@@ -12989,11 +13031,25 @@ msgstr ""
 "式はフラットバイトをゼロと報告します。そのボディはヒープの `Vec` であり、別途"
 "計上されます。"
 
-#: src/INSTRUCTION_SET.md:277
+#: src/INSTRUCTION_SET.md:278
+msgid "element `size` from operand"
+msgstr "オペランドからの要素の `size`"
+
+#: src/INSTRUCTION_SET.md:278
+msgid ""
+"GetIndex, nested composite form. An invalid index allocates a zero-filled "
+"placeholder of the element's size, and the bound charges it on every "
+"execution because validity is not known statically."
+msgstr ""
+"GetIndex の入れ子の複合値形式。無効なインデックスは要素の大きさのゼロで埋めた"
+"プレースホルダーを割り当て、有効性は静的にはわからないため、境界は実行ごとに"
+"それを計上します。"
+
+#: src/INSTRUCTION_SET.md:279
 msgid "host-attested"
 msgstr "ホストによる証明"
 
-#: src/INSTRUCTION_SET.md:277
+#: src/INSTRUCTION_SET.md:279
 msgid ""
 "CallVerifiedNative through host registration; CallExternalNative through per-"
 "iteration invocation-count bound"
@@ -23981,6 +24037,13 @@ msgstr ""
 "より広い`llms.txt`の慣習は、AI読み取り可能なプロジェクト入口を宣言する構造化"
 "マークダウンの慣習として、2024年にJeremy Howardらが提案しました。Keleusmaのプ"
 "ロジェクトルートの[`llms.txt`](../../llms.txt)がその慣習に従っています。"
+
+#~ msgid ""
+#~ "Call a verified native function. Cost folds into the iteration budget per "
+#~ "host attestation."
+#~ msgstr ""
+#~ "検証済みネイティブ関数を呼び出します。コストはホストの証明に従ってイテレー"
+#~ "ション予算に組み込まれます。"
 
 #~ msgid ""
 #~ "The tool prints `wrote pulse.bin (2372 bytes)` confirming the program is "

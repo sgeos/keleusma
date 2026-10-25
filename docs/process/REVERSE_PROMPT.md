@@ -1,5 +1,46 @@
 # Reverse prompt
 
+## Order 3 completed for its first-pass scope, 2026-10-24
+
+The operator set the goal of absorbing kaizen work as it arrives and completing
+Order 3. Kaizen's testing changes, PRs 493 and 494, were already in v0.2.3, and
+PR 495 had been closed by the operator. The operator confirmed first-hand that
+feat/kaizen-jev-shadow-pilot should be merged and that kaizen should prepare it.
+Kaizen opened PR 502. V0.2.X reviewed the diff, found no Appendix B content, and
+merged it after 30 green jobs as e4c1b4c3. Kaizen and V0.3.X were notified.
+
+The operator then ruled on the three pending Order 3 decisions, first-hand, after
+a survey. Every native call is reified and a bare call reaches a new HostError
+trap. Nested composite and boxed reads are total with a placeholder. Handled
+writes in `let` initializers are implemented in the reference compiler. The
+rulings and designs are in ORDER3_HANDLER_SURFACE_PLAN.md, and the completion
+evidence is in ORDER3_COMPLETION_AUDIT.md. Strengthening items 11, 12, 14 and 15
+are addressed. Version 2, the fingerprint and 66 opcodes are unchanged.
+
+Defects repaired along the way. The memory walk read a reified native call's
+flag bit as part of its argument count and understated the bound, with the
+Keleusma mirror and a test copy agreeing on the wrong value. The text walks read
+the same raw count and popped trap payloads from the fall-through stack. A
+one-element nested array equality diverged on the constant pool after the
+change, which the heavy tier caught.
+
+Verification. The full local release matrix passed on the final tree: workspace
+3502, self-host 3242, no-default 333, signatures 2490, signatures with shell 2507,
+doc-tests 12 with 3 ignored, and the detached compiler 86, with fmt, both Clippy
+configurations and the doc build clean. Remote continuous integration has not yet
+run this branch, and Miri was not run locally.
+
+Concerns. Old artifacts built before the in-place contract changes can run with
+changed meaning, now pinned by tests/stale_contract_artifacts.rs. The self-hosted
+parser alone accepts a bare indexed write as a `let` initializer. HANDOFF.md is
+stale and needs refreshing before any handoff. Kaizen will draft a trimmed
+CLAUDE.md after this PR merges. The relayed operator positions on startup files
+were not confirmed first-hand.
+
+Next. Push feat/v02-order3-completion, open a PR to v0.2.3, record the remote
+run in the audit and merge when green. The Jev pilot made no samples this
+session.
+
 ## Pull request 498 merged, 2026-10-24
 
 CI workflow run 40092978507 at a90fc449 concluded successfully with every job

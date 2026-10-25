@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # release-gate.sh — the local pre-release verification gate.
 #
-# Runs the checks the CI workflow (.github/workflows/ci.yml) enforces PLUS the
-# detached compiler/ subproject that CI never sees, so a green run here means CI
-# will be green AND the self-hosted compiler subproject is sound. It is a superset
-# of the everyday `cargo test && cargo clippy` and, critically, includes `cargo doc`
-# under
-# `-D warnings` — the check whose absence let a red CI Doc job ship alongside
-# V0.2.1 (broken intra-doc links). Do not cut this gate down to a subset before a
-# release; run it whole.
+# Runs a subset of the checks the CI workflow (.github/workflows/ci.yml) enforces,
+# plus the detached compiler/ subproject's own checks, for a pre-publication run and
+# for working without a network. Since 2026-08-11 a merge into a version branch waits
+# on CI rather than on this gate, and CI runs jobs this gate does not, so a green run
+# here does not by itself predict a green CI run. It includes `cargo doc` under
+# `-D warnings`, the check whose absence let a red CI Doc job ship alongside V0.2.1
+# (broken intra-doc links). Do not cut this gate down before a release. Run it whole.
 #
 # Usage:
 #   scripts/release-gate.sh          # fmt, clippy, tests, doc, doc-links

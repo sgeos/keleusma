@@ -4,7 +4,7 @@ use keleusma::bytecode::{ArrayElem, ConstValue, EnumField, Module, Op, StructFie
 use keleusma::trap_analysis::{
     TRAP_OPCODE_CAP, TrapAnalysisError, TrapVerdict, UnsupportedTrapOperation, classify_traps,
 };
-use keleusma::value_layout::{CompositeKind, ScalarKind};
+use keleusma::value_layout::ScalarKind;
 
 fn compile(source: &str) -> Module {
     let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(source).unwrap()).unwrap();
@@ -163,19 +163,8 @@ fn fixed_division_classes_agree() {
 fn unsupported_forms_never_become_trap_free_or_possibly_trapping() {
     let cases = [
         (
-            Op::GetIndex(ArrayElem::Boxed),
-            UnsupportedTrapOperation::IndexedValue,
-        ),
-        (
             Op::GetIndex(ArrayElem::Flat {
                 kind: ScalarKind::Bool,
-            }),
-            UnsupportedTrapOperation::IndexedValue,
-        ),
-        (
-            Op::GetIndex(ArrayElem::FlatNested {
-                size: 8,
-                variant: CompositeKind::Tuple,
             }),
             UnsupportedTrapOperation::IndexedValue,
         ),
@@ -195,8 +184,9 @@ fn unsupported_forms_never_become_trap_free_or_possibly_trapping() {
             Op::CallVerifiedNative(0, 0),
             UnsupportedTrapOperation::NativeCall,
         ),
+        // An unreified call. A reified one is clear since 2026-10-24.
         (
-            Op::CallExternalNative(0, 128),
+            Op::CallExternalNative(0, 0),
             UnsupportedTrapOperation::NativeCall,
         ),
     ];

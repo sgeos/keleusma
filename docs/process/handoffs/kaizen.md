@@ -93,9 +93,6 @@ run.
 - Branch `test/kaizen-split-stage-artifact` at `e7a59d20` keeps the per-stage split
   of the slowest test from the closed PR 495. Revisit it if that test exceeds about
   45 minutes in continuous integration.
-- The release gate's header comment still says a green gate means CI will be green and
-  calls the gate a superset of the everyday commands. Since 2026-08-11 the gate is a
-  subset of CI. Not yet raised with V0.2.X.
 
 ## Mailbox and pilot
 
@@ -107,7 +104,7 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `51314956bfcdf6f2e4457197bde2fc8036d09d9903e63fc1996a51a2535018b7`, 25 messages, the one unacknowledged being the kickoff to the new `pykeleusma` line |
+| [Interline](../interline/checkpoint.json) | `a54d8637f864d5e4bfd7486b27ee1fe2e33689150a52e8c0260ee87577daa3bf`, 35 messages, the one unacknowledged being addressed from `v0.2.3` to `pykeleusma` |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `16d65875954a7f7f33416135dd8f475dcb7a982c020adafbbd337aff12ae4bf6`, 250 samples and 66 tasks |
 
 ## Environment

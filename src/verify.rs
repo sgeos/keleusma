@@ -1328,8 +1328,7 @@ fn wcmu_region_at(
                 current_offset += 1 - n;
                 ip += 1;
             }
-            Op::CallVerifiedNative(native_idx, n_args)
-            | Op::CallExternalNative(native_idx, n_args) => {
+            Op::CallVerifiedNative(native_idx, _) | Op::CallExternalNative(native_idx, _) => {
                 // Native function runs in host code. The operand-stack
                 // effect is just the argument pop and return push. Heap
                 // contribution comes from the host attestation. Both
@@ -1337,12 +1336,18 @@ fn wcmu_region_at(
                 // structural effect at the operand-stack level; the
                 // per-class WCET budget distinction is observed by the
                 // pipelined-cycle pass.
+                // The high bit of the argument count is the error-reify
+                // flag, not part of the count, and a reified call pushes
+                // the value and a flag. Reading the raw byte as the count
+                // once moved the offset by 1 - 129 for a one-argument
+                // reified call and so understated the bound.
                 let native_heap = resolver.resolve_native(*native_idx);
-                let n = *n_args as i32;
-                let during_peak = (current_offset + 1).max(0) as u32;
+                let shrink = op.stack_shrink() as i32;
+                let growth = op.stack_growth() as i32;
+                let during_peak = (current_offset + growth).max(0) as u32;
                 peak = peak.max(during_peak);
                 heap = heap.saturating_add(native_heap);
-                current_offset += 1 - n;
+                current_offset += growth - shrink;
                 ip += 1;
             }
             Op::Else(_) | Op::EndIf | Op::EndLoop(_) => {
@@ -2630,6 +2635,7 @@ pub fn op_depth_effect(op: &Op, _chunk: &Chunk) -> (i32, i32) {
         Op::CheckedNeg => (1, 2),
         Op::PopN(n) => (*n as i32, -(*n as i32)),
         Op::Trap(kind) if *kind == crate::bytecode::TrapKind::IndexOutOfBounds.code() => (5, -5),
+        Op::Trap(kind) if *kind == crate::bytecode::TrapKind::HostError.code() => (1, -1),
         Op::If(_) | Op::BreakIf(_) => (1, -1),
         Op::Else(_)
         | Op::EndIf

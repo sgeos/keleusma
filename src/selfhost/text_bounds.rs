@@ -85,13 +85,16 @@ pub(super) fn chunk_bounds(
             Op::Dup => (4, 0),
             Op::Add => (5, 0),
             Op::Call(i, _) => (6, usize::from(*i)),
-            Op::CallVerifiedNative(_, n) | Op::CallExternalNative(_, n) => (7, usize::from(*n)),
+            Op::CallVerifiedNative(_, n) | Op::CallExternalNative(_, n) => {
+                (7, usize::from(*n & 0x7F))
+            }
             Op::Return => (8, 0),
             Op::Yield => (9, 0),
             Op::If(_) => (10, 0),
             Op::EndIf => (11, 0),
             Op::Loop(_) => (12, 0),
             Op::EndLoop(_) => (13, 0),
+            Op::Trap(_) => (14, 0),
             _ => (0, 0),
         };
         let summary = if kind == 6 { callee(index)? } else { None };

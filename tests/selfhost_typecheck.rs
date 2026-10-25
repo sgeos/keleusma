@@ -4379,7 +4379,7 @@ fn a_qualified_call_expression_is_not_handled_by_the_pipeline() {
 /// # A SHORTCUT FOR "IS THIS CONSTRUCT IN THE SUBSET?", WORTH STATING ONCE
 ///
 /// **No stage source can contain a construct the pipeline cannot parse**, because
-/// all twelve compile through it byte-identically — that is what
+/// all fourteen compile through it byte-identically — that is what
 /// `tests/selfhost_codegen.rs` asserts. So for any construct the pipeline refuses,
 /// "do the stages use it?" is answered NO by construction, without grepping.
 ///
@@ -5467,7 +5467,7 @@ const TYPE_STAGE_ARRAY_GROUPS: &[(&str, usize, usize)] = &[
 /// Six channels that exceeded their previous caps were raised to 640 rows. The
 /// structural identity pool adds three more 640-word arrays. This test records
 /// the combined worst-case-memory increase and checks the chosen input caps against
-/// all twelve real stage sources.
+/// all fourteen real stage sources.
 #[cfg(feature = "self-host")]
 #[test]
 fn the_price_of_a_corpus_sized_input_path_is_measured_in_words() {
@@ -5766,7 +5766,7 @@ fn the_stage_is_measured_against_the_real_stage_sources() {
     fitting.sort_unstable();
     assert_eq!(
         fitting,
-        // All twelve sources now fit after selecting 640 rows for the six channels
+        // All fourteen sources now fit after selecting 640 rows for the six channels
         // that exceeded their previous caps. Each fit source is also run through
         // the checker below to catch false rejection on real stage programs.
         vec![

@@ -777,7 +777,7 @@ fn text_flow_step() -> Word {
             if wa.tf_index == 0 andalso wa.tf_second == 0 andalso (wa.tf_local == 0 orelse boundary == 0) { 1 } else { 0 }
         }
     } else {
-    if wa.tf_command != 2 orelse wa.tf_kind < 0 orelse wa.tf_kind > 9 orelse wa.tf_required < 0 orelse wa.tf_required > 65535 orelse wa.tf_delta < 0 - 65535 orelse wa.tf_delta > 5 orelse wa.tf_locals < 0 orelse wa.tf_locals > 65535 orelse wa.tf_index < 0 { 0 - 1 } else {
+    if wa.tf_command != 2 orelse wa.tf_kind < 0 orelse wa.tf_kind > 10 orelse wa.tf_required < 0 orelse wa.tf_required > 65535 orelse wa.tf_delta < 0 - 65535 orelse wa.tf_delta > 5 orelse wa.tf_locals < 0 orelse wa.tf_locals > 65535 orelse wa.tf_index < 0 { 0 - 1 } else {
     if text_flow_bit(wa.tf_top) == 0 orelse text_flow_bit(wa.tf_second) == 0 orelse text_flow_bit(wa.tf_local) == 0 orelse text_flow_bit(wa.tf_const) == 0 orelse text_flow_bit(wa.tf_callee) == 0 orelse text_flow_bit(wa.tf_callee_known) == 0 { 0 - 1 } else {
         wa.tf_pops = if wa.tf_required > 0 { wa.tf_required } else { 0 };
         let pushed = wa.tf_required + wa.tf_delta;
@@ -791,10 +791,9 @@ fn text_flow_step() -> Word {
         if wa.tf_kind == 4 { wa.tf_pops = 0; wa.tf_pushes = 1; wa.tf_value = wa.tf_top; }
         if wa.tf_kind == 5 { wa.tf_value = wa.tf_top * wa.tf_second; }
         if wa.tf_kind == 6 { wa.tf_value = if wa.tf_callee_known == 1 { wa.tf_callee } else { 1 }; }
-        if wa.tf_kind == 7 {
-            // Match the reference text analysis's raw native operand convention.
-            wa.tf_pops = wa.tf_index; wa.tf_pushes = 1; wa.tf_value = 1;
-        }
+        // A native result is unbounded text. The depth effect supplies the masked
+        // argument count and the reified flag slot, which also carries this value.
+        if wa.tf_kind == 7 { wa.tf_value = 1; }
         if wa.tf_kind == 8 {
             if wa.tf_top == 1 { tf.returned = 1; }
             wa.tf_pops = 1; wa.tf_pushes = 0;
@@ -803,6 +802,8 @@ fn text_flow_step() -> Word {
             if wa.tf_top == 1 { tf.yielded = 1; }
             wa.tf_pops = 1; wa.tf_pushes = 0;
         }
+        // A trap ends its own path, and the linear walk continues the fall-through one.
+        if wa.tf_kind == 10 { wa.tf_pops = 0; wa.tf_pushes = 0; }
         0
     } } } } }
 }
@@ -917,7 +918,7 @@ fn text_bound_opcode() -> Word {
     if kind == 6 {
         if wa.tf_callee_known == 0 orelse wa.tf_callee == 1 { wa.tb_tag[4] = 2; }
     }
-    if kind == 7 { wa.tf_pops = wa.tf_index; wa.tf_pushes = 1; wa.tb_tag[4] = 2; }
+    if kind == 7 { wa.tb_tag[4] = 2; }
     if kind == 8 {
         if wa.tb_tag[0] > 0 { tb.returned = 1; }
         wa.tf_pops = 1; wa.tf_pushes = 0;
@@ -926,6 +927,8 @@ fn text_bound_opcode() -> Word {
         if wa.tb_tag[0] > 0 { tb.yielded = 1; }
         wa.tf_pops = 1; wa.tf_pushes = 0;
     }
+    // A trap ends its own path, and the linear walk continues the fall-through one.
+    if kind == 14 { wa.tf_pops = 0; wa.tf_pushes = 0; }
     // Dup preserves its bound even in control flow, as in the reference.
     if kind != 4 andalso (tb.loops > 0 orelse tb.branches > 0) andalso wa.tb_tag[4] > 0 {
         wa.tb_tag[4] = 2; wa.tb_hi[4] = 0; wa.tb_lo[4] = 0;
@@ -951,7 +954,7 @@ fn text_bound_step() -> Word {
         wa.tb_heap_hi = tb.heap_hi; wa.tb_heap_lo = tb.heap_lo;
         tb.active = 0; tb.returned + tb.yielded * 2
     } else {
-    if wa.tf_command != 21 orelse tb.early != 0 orelse wa.tf_kind < 0 orelse wa.tf_kind > 13
+    if wa.tf_command != 21 orelse tb.early != 0 orelse wa.tf_kind < 0 orelse wa.tf_kind > 14
         orelse wa.tf_required < 0 orelse wa.tf_required > 65535 orelse wa.tf_delta < 0 - 65535
         orelse wa.tf_delta > 5 orelse wa.tf_index < 0 orelse wa.tf_locals < 0 orelse wa.tf_locals > 65535
         orelse text_flow_bit(wa.tf_callee) == 0 orelse text_flow_bit(wa.tf_callee_known) == 0 { 0 - 1 } else {
