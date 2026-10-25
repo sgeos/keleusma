@@ -100,6 +100,9 @@ const BUFFER_HARNESSES: &[&str] = &[
     "rogue_dungen_differential.rs",
     "shared_composite_slot.rs",
     "stage_differential.rs",
+    // Order 5. Sizes the private region as the persistent capacity plus
+    // `region::persistent_supplement_bytes`, the published contract.
+    "static_kind_lowering.rs",
 ];
 // `shared_composite_slot.rs` joined on 2026-09-11, **the increment after this
 // census was written**, and the census refused until it was registered.

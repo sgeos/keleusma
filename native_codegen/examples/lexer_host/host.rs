@@ -79,6 +79,7 @@ fn check_contract() -> Result<(), String> {
             ),
             ("stack_bytes", lib::kel_lexer_stack_bytes, lib::STACK_BYTES),
             ("wcet_cost", lib::kel_lexer_wcet_cost, lib::WCET_COST),
+            ("schema_hash", lib::kel_lexer_schema_hash, lib::SCHEMA_HASH),
         ]
     };
     for (name, object, bindings) in linked {

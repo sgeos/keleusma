@@ -26,6 +26,9 @@
 //!   not zero, the image to copy into the start of a zeroed private buffer
 //!   before start.
 //! - `<prefix>_trap_verdict`, an unsigned byte in the [`TrapExport`] encoding.
+//! - `<prefix>_schema_hash`, the module's `schema_hash`, the figure the
+//!   virtual machine's `replace_module` compares before a hot swap. A host
+//!   replacing a loaded library applies the same rule. See [`Library::schema_hash`].
 //! - `<prefix>_stack_bytes`, the machine stack a call into any handle can
 //!   reach, from [`crate::stack`].
 //! - `<prefix>_wcet_cost` and `<prefix>_wcet_status`, an unsigned byte, the
@@ -77,10 +80,11 @@ use crate::{LowerError, NATIVE_SYMBOL_PREFIX, region};
 /// Version of the exported contract. A change to any exported name, type or
 /// meaning increments it.
 ///
+/// Version 3, Order 5, added `<prefix>_schema_hash` for hot replacement.
 /// Version 2, Order 4, added status three for a reported trap, fallible
 /// natives returning `kel_native_result`, the trap record in the frame and
 /// `<prefix>_stack_bytes`.
-pub const CONTRACT_VERSION: u64 = 2;
+pub const CONTRACT_VERSION: u64 = 3;
 
 /// Alignment of every buffer and slot the host passes. Private storage is read
 /// in words and the slot needs [`FRAME_ALIGN`], so one figure covers all four.
@@ -309,6 +313,14 @@ pub struct Library<'ctx> {
     pub private_bytes: u64,
     /// Composite region bytes.
     pub region_bytes: u64,
+    /// The module's data layout fingerprint, `Module::schema_hash`.
+    ///
+    /// A host replacing this library with another while it runs accepts the
+    /// replacement only when both export the same hash and the same
+    /// `shared_bytes`, so the shared buffer it keeps means the same thing to
+    /// the new code. That is `Vm::replace_module`'s rule. The hash covers slot
+    /// names and visibility, not slot types, as its own documentation states.
+    pub schema_hash: u64,
     /// The machine stack a call into any handle can reach, from
     /// [`crate::stack`]. It excludes host natives and runtime routines.
     pub stack_bytes: u64,
@@ -603,6 +615,7 @@ pub fn build<'ctx>(
         ("region_bytes", region_bytes),
         ("private_init_bytes", private_init.len() as u64),
         ("wcet_cost", wcet.cost()),
+        ("schema_hash", u64::from(program.schema_hash)),
     ] {
         add_constant(
             &module,
@@ -724,6 +737,7 @@ pub fn build<'ctx>(
         shared_bytes,
         private_bytes,
         region_bytes,
+        schema_hash: u64::from(program.schema_hash),
         stack_bytes,
         private_init,
         trap,
@@ -760,6 +774,7 @@ impl<'ctx> Library<'ctx> {
             "private_bytes",
             "region_bytes",
             "private_init_bytes",
+            "schema_hash",
             "stack_bytes",
             "trap_verdict",
             "wcet_cost",
@@ -804,7 +819,7 @@ impl<'ctx> Library<'ctx> {
         Ok(())
     }
 
-    fn figures(&self) -> [(&'static str, u64); 10] {
+    fn figures(&self) -> [(&'static str, u64); 11] {
         [
             ("CONTRACT_VERSION", CONTRACT_VERSION),
             ("FRAME_BYTES", self.frame_bytes),
@@ -816,6 +831,7 @@ impl<'ctx> Library<'ctx> {
             ("PRIVATE_INIT_BYTES", self.private_init.len() as u64),
             ("STACK_BYTES", self.stack_bytes),
             ("WCET_COST", self.wcet.cost()),
+            ("SCHEMA_HASH", self.schema_hash),
         ]
     }
 

@@ -52,6 +52,12 @@ claim composed through calls from `keleusma_native::cost`, with a status byte.
 The cost claim is not a native time bound. The record is
 [`ORDER_4_COMPLETION.md`](../docs/decisions/ORDER_4_COMPLETION.md).
 
+Since Order 5 `LowerOptions::static_kinds` lowers a coroutine with no run-time
+kind, refusing one that needs it, and `coroutine::kind_census` says where a
+coroutine would. A library exports its `schema_hash`, so a host can replace a
+loaded library with another under the virtual machine's swap rule. The record
+is [`ORDER_5_COMPLETION.md`](../docs/decisions/ORDER_5_COMPLETION.md).
+
 **Supported opcodes are not listed here.** The list is computed, and a copy kept by hand is what went
 stale before:
 
