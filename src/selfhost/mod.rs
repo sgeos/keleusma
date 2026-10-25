@@ -479,6 +479,8 @@ fn decode_op(w: i64) -> Op {
         64 => Op::CheckedDiv(operand as u8),
         65 => Op::CheckedMod,
         66 => Op::BoundsCheck(operand as u16),
+        // A native call with the error-reify flag already set in the count.
+        67 => Op::CallVerifiedNative((operand % 65536) as u16, (operand / 65536) as u8),
         // A flat struct construction: the operand packs count + byte_size*65536.
         46 => Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Struct,
@@ -917,7 +919,7 @@ pub fn parse_functions(
     src: &str,
 ) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
     let mut fns = Vec::new();
-    let (names, data_records, enum_records, _struct_records) =
+    let (names, data_records, enum_records, _struct_records, _) =
         parse_functions_impl(src, false, &mut |_, f| fns.push(f), &mut |_, _, _| {});
     (fns, names, data_records, enum_records)
 }
@@ -1094,10 +1096,26 @@ fn panic_message(payload: &(dyn core::any::Any + Send)) -> String {
 pub fn parse_functions_fused(
     src: &str,
 ) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
-    let mut fns = Vec::new();
-    let (names, data_records, enum_records, _struct_records) =
-        parse_functions_impl(src, true, &mut |_, f| fns.push(f), &mut |_, _, _| {});
+    let (fns, names, data_records, enum_records, _) = parse_functions_fused_with_natives(src);
     (fns, names, data_records, enum_records)
+}
+
+/// The parsed heads, the name table, the data and enum records, and one row of path
+/// segment name ids per `use` in declaration order.
+type FusedParse = (
+    Vec<ParsedFn>,
+    Vec<String>,
+    Vec<(i64, i64)>,
+    Vec<(i64, i64)>,
+    Vec<Vec<i64>>,
+);
+
+/// [`parse_functions_fused`] with the native import paths as well.
+fn parse_functions_fused_with_natives(src: &str) -> FusedParse {
+    let mut fns = Vec::new();
+    let (names, data_records, enum_records, _struct_records, native_paths) =
+        parse_functions_impl(src, true, &mut |_, f| fns.push(f), &mut |_, _, _| {});
+    (fns, names, data_records, enum_records, native_paths)
 }
 
 /// How many tokens `lexer.kel` produces for `src` — **the count `PARSE_TOKEN_CAP` is
@@ -1504,6 +1522,7 @@ type ParseSideTables = (
     Vec<(i64, i64)>,
     Vec<(i64, i64)>,
     Vec<(i64, i64)>,
+    Vec<Vec<i64>>,
 );
 
 /// Every `(kind, value)` token `lexer.kel` produces for `src`, beside the interned
@@ -1883,6 +1902,9 @@ fn try_parse_functions_impl(
     // Every data block's header records (DSTART, then PARAM/PTYPE/ASIZE per field, then
     // END), concatenated in declaration order, for the driver's own data-layout assembly.
     let mut data_records: Vec<(i64, i64)> = Vec::new();
+    // One row per `use`, its path segments as name ids from the UPATH records, in
+    // declaration order. The stage refuses a wildcard, so every row names one native.
+    let mut native_paths: Vec<Vec<i64>> = Vec::new();
     let mut data_bases = alloc::sync::Arc::new(Vec::new());
     // Every enum's header records (ENUMSTART, then EVARIANT/EDISC per variant, then END),
     // for the driver's own enum-layout assembly.
@@ -2233,6 +2255,12 @@ fn try_parse_functions_impl(
                     struct_records.push((code, val));
                 }
             } else if in_use {
+                if code == 11 {
+                    native_paths
+                        .last_mut()
+                        .expect("a path record outside a `use`")
+                        .push(val);
+                }
                 in_use = code != 5;
             } else if in_skip_decl {
                 in_skip_decl = code != 5;
@@ -2340,7 +2368,10 @@ fn try_parse_functions_impl(
                         in_data = true;
                         data_records.push((9, val));
                     }
-                    10 => in_use = true,
+                    10 => {
+                        in_use = true;
+                        native_paths.push(Vec::new());
+                    }
                     12 => {
                         in_enum = true;
                         enum_records.push((12, val));
@@ -2370,7 +2401,13 @@ fn try_parse_functions_impl(
         },
         before_resume,
     )?;
-    Ok((names, data_records, enum_records, struct_records))
+    Ok((
+        names,
+        data_records,
+        enum_records,
+        struct_records,
+        native_paths,
+    ))
 }
 
 /// Turn `codegen.kel`'s tagged constant pool into the reference compiler's `ConstValue`s.
@@ -2826,7 +2863,7 @@ pub fn try_call_type_inputs_from_pipeline(
     src: &str,
 ) -> Result<CallTypeInputs, crate::selfhost_host::ParseRecordError> {
     let mut fns = Vec::new();
-    let (names, data_records, enum_records, struct_records) =
+    let (names, data_records, enum_records, struct_records, _) =
         try_parse_functions_impl(src, true, &mut |_, f| fns.push(f), &mut |_, _, _| {})?;
     let nominal_names: alloc::collections::BTreeMap<_, _> = enum_records
         .iter()
@@ -3394,7 +3431,7 @@ pub fn decl_call_rows_from_pipeline(src: &str) -> (Vec<DeclRow>, Vec<CallSiteRow
 #[must_use]
 pub fn declared_names_from_pipeline(src: &str) -> Vec<String> {
     let mut fn_name_ids: Vec<i64> = Vec::new();
-    let (names, data_records, enum_records, struct_records) = parse_functions_impl(
+    let (names, data_records, enum_records, struct_records, _) = parse_functions_impl(
         src,
         true,
         &mut |_, f| fn_name_ids.push(f.name),
@@ -4019,7 +4056,7 @@ pub type FieldSetRow = (String, Vec<String>);
 /// association between a type and its fields from depending on an index space at all.
 #[must_use]
 pub fn field_sets_from_pipeline(src: &str) -> Vec<FieldSetRow> {
-    let (names, _data, _enums, struct_records) =
+    let (names, _data, _enums, struct_records, _) =
         parse_functions_impl(src, true, &mut |_, _| {}, &mut |_, _, _| {});
     let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
 
@@ -6565,7 +6602,8 @@ fn shared_data_bytes_of(shared_layout: &[crate::bytecode::SharedSlotLayout]) -> 
 /// `native_return_shapes` are empty.
 pub fn self_host_compile_scratch(src: &str) -> Module {
     use crate::bytecode::{Chunk, SlotVisibility};
-    let (mut fns, names, data_records, enum_records) = parse_functions_fused(src);
+    let (mut fns, names, data_records, enum_records, native_paths) =
+        parse_functions_fused_with_natives(src);
     let relocation = data_relocation::Plan::from_records(&data_records).expect("data address plan");
     for function in &mut fns {
         relocation
@@ -6621,10 +6659,28 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
     // The entry point is the name-sorted index of the module's `main`.
     let entry_point = chunks.iter().position(|c| c.name == "main");
 
-    // The native names come from the `use` declarations; the stages declare none, so this is
-    // empty and `native_return_shapes` is correspondingly empty.
-    let native_names: Vec<String> = Vec::new();
-    let native_return_shapes: Vec<crate::bytecode::WireShape> = Vec::new();
+    // The native names come from the `use` declarations, in declaration order, each its
+    // segments joined by `::` as the reference joins them. The stage refuses a wildcard and
+    // a signature, so every native's declared return is absent, which the reference records
+    // as `Top`. An `external` import is outside this path: the stage's lexer has no
+    // `external` keyword, so the word would arrive as a path segment and name a different
+    // native.
+    let native_names: Vec<String> = native_paths
+        .iter()
+        .map(|path| {
+            assert!(
+                path.first()
+                    .is_none_or(|&first| names[first as usize] != "external"),
+                "an `external` native import is outside the self-hosted subset"
+            );
+            path.iter()
+                .map(|&id| names[id as usize].as_str())
+                .collect::<Vec<_>>()
+                .join("::")
+        })
+        .collect();
+    let native_return_shapes: Vec<crate::bytecode::WireShape> =
+        vec![crate::bytecode::WireShape::Top; native_names.len()];
 
     // The data layout, assembled from parse.kel's data-block records, drives both the shared
     // and private byte totals the reference derives from the same layout.
@@ -9074,15 +9130,10 @@ pub fn wire_windowed_via_kel(
 /// is absent because its support was never measured, and guessing would attach a confident
 /// noun to a failure that may have nothing to do with it.
 ///
-/// **A BARE UNIT ENUM VARIANT IS ABSENT FOR A DIFFERENT REASON: IT CANNOT BE NAMED HERE.**
-/// `E::N` in expression position is refused by the self-hosted compiler and accepted by the
-/// reference — a real gap, measured 2026-09-12 as a return value, in a `let`, and as a call
-/// argument. But `E::N()` COMPILES, and the syntax tree records both as `EnumVariant` with
-/// empty `args`, so an arm matching that shape flags the working form too. The arm was
-/// written, and `the_scan_names_no_construct_in_any_stage_source` rejected it by naming
-/// `Node::Local()` in `parse.kel` — the parenthesised form, which compiles. **The
-/// distinguishing information is not in the tree this scan reads**, the same shape as the
-/// branch-pair row withheld elsewhere in this file.
+/// **A BARE UNIT ENUM VARIANT IS ABSENT BECAUSE IT IS NO LONGER A GAP.** `E::N` in
+/// expression position was refused while `E::N()` compiled, and the syntax tree records both
+/// as `EnumVariant` with empty `args`, so no arm here could have told them apart. Order 6
+/// slice 1 lowered the bare form exactly as the parenthesised one, so both compile.
 ///
 /// The float entry is the sharpest case of that rule. "Floats are outside the subset" is
 /// the loose summary; what is measurably outside is the LITERAL. A function taking and
@@ -9126,7 +9177,9 @@ fn name_unsupported_construct(src: &str) -> Option<(String, u32)> {
                 }
                 // A qualified call carries the path in its name. Enum construction does NOT
                 // reach this arm, measured 2026-09-12, so `::` here is not a variant literal.
-                Expr::Call { name, span, .. } if name.contains("::") => {
+                // A two-segment call of a `use`-imported native compiles since Order 6
+                // slice 2, so only a path of three or more segments is named.
+                Expr::Call { name, span, .. } if name.matches("::").count() > 1 => {
                     self.found
                         .push((span.line, span.start, format!("a qualified call `{name}`")));
                 }
@@ -9368,7 +9421,7 @@ mod decoder_drift_guard {
     /// defect could hide from the byte-identity oracle.
     #[test]
     fn all_wire_op_tags_decode() {
-        for tag in 1..=66i64 {
+        for tag in 1..=67i64 {
             // operand 0 is the minimal representative word for each tag; decode must not panic.
             let _ = decode_op(tag);
         }
@@ -9774,8 +9827,10 @@ mod construct_naming_guard {
                 "fn main(a: Word) -> Word { assert a > 0; a }",
             ),
             (
+                // Three segments, because a two-segment native call compiles since
+                // Order 6 slice 2 and so no longer witnesses this arm.
                 "a qualified call",
-                "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }",
+                "use audio::tone::midi_to_freq\nfn main() -> Float { audio::tone::midi_to_freq(69) }",
             ),
             (
                 "a floating-point literal",

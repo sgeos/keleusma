@@ -1472,6 +1472,14 @@ private data call {
     call_pending: Word,
     call_phase: Word,
     cdraining: Word,
+    // The native imports, one row per `use` that names a function, in declaration order,
+    // which is the order the reference numbers natives in. `nat_path` holds a row's two
+    // path segments at `2i` and `2i + 1`. A row whose path is not exactly two segments
+    // stores `-1` as its first segment, so it takes its index and matches no qualified
+    // call. `nat_seg` counts the segments of the `use` being scanned.
+    nat_path: [Word; 128],
+    nat_count: Word,
+    nat_seg: Word,
     // The array-literal context stack, parallel to the call stack: `al_count` the running
     // element count per open `[...]` literal, `al_sp` the nesting depth. Its `,` drains through
     // the same `step_cdraining` (generalised to the ArrayMark), its `]` emits the ArrayLit.
@@ -4742,6 +4750,7 @@ fn value_record(word: Word) -> Word {
     if kind == 1 orelse kind == 116 orelse kind == 128 { value_scalar(3); }
     if kind == 20 { value_scalar(if arg == 1 orelse arg == 2 { 1 } else { 0 }); }
     if kind == 38 { value_scalar(6); }
+    if kind == 80 { value_scalar(0 - 1); }
     if kind == 11 { value_scalar(da.da_kind); }
     if kind == 13 { value_scalar(da.pidx_kind); }
     if kind == 17 {
@@ -4841,6 +4850,16 @@ fn step_closing() -> Word {
             }
             call.call_sp = call.call_sp - 1;
             ops.expect_operand = 0;
+            if call.call_chunk[call.call_sp] >= 1024 {
+                // A native call, record tag 80, carrying the import row and the argument
+                // count as `row + count * 1024`. Its result has no declared type here, so
+                // no composite type is pending after it.
+                stmt.pending_ctuple = 0; stmt.pending_cstruct = 0; stmt.pending_carray = 0;
+                stmt.pending_carray_struct = 0; stmt.pending_carray_size = 0; stmt.pending_cenum = 0;
+                ps.last_enum = 0;
+                ps.emit_arg = call.call_chunk[call.call_sp] - 1024 + call.call_count[call.call_sp] * call_chunk_radix();
+                80
+            } else {
             // A call is the value's root: set the pending composite type to the callee's struct,
             // all-Word-tuple, enum, or scalar-array return type (0 otherwise), so a `let x = f()`
             // bound to the call tags the binding and `x.field`/`x.N`/`x[i]`/`match x` resolves.
@@ -4856,6 +4875,7 @@ fn step_closing() -> Word {
                 ps.fa_phase = 1;
             }
             return_call(Node::Call() as Word + (call.call_chunk[call.call_sp] + call.call_count[call.call_sp] * call_chunk_radix()) * 64, call.call_chunk[call.call_sp])
+            }
         } else {
         if top == OpCode::EnumMark() as Word {
             // A `)` closing an enum payload construction: pop the mark, count the last payload
@@ -6206,13 +6226,21 @@ fn step_scalar_postfix(k: Word) -> Word {
 
 fn step_unresolved_name(k: Word) -> Word {
     ps.unresolved_pending = 0;
+    ps.found_flag = 0;
+    if k == Tok::ColCol() as Word {
+        for i in 0..call.nat_count limit 64 {
+            if call.nat_path[i * 2] == ps.unresolved_name { ps.found_flag = 1; }
+        }
+    }
+    // The first segment of a native import followed by `::`. Await the second segment.
+    if ps.found_flag == 1 { call.call_phase = 2; 0 } else {
     // A qualified name, forward composite/data use, statement keyword or native
     // import may be valid syntax outside this stage's implemented name resolution.
     if (toks.assert_id > 0 andalso ps.unresolved_name == toks.assert_id andalso k != Tok::LParen() as Word) orelse ps.has_imports == 1 orelse toks.has_imports == 1 orelse k == Tok::ColCol() as Word orelse k == Tok::Dot() as Word orelse k == Tok::LBrace() as Word orelse k == Tok::Ident() as Word {
         perr(pe_unresolved_syntax(), ps.unresolved_name)
     } else {
         perr(pe_unknown_name(), ps.unresolved_name)
-    }
+    } }
 }
 
 // The normal parse-phase dispatch: a `let` binding's name or `=`, else an expression
@@ -6334,7 +6362,23 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
     if da.da_phase == 3 {
         step_daindex(k)
     } else {
-    if call.call_phase == 1 {
+    if call.call_phase >= 1 {
+    if call.call_phase == 2 {
+        // The segment after a native import's first segment and `::`. A native callee is
+        // carried as 1024 plus its import row, above every chunk index, and the close
+        // emits a native call for it rather than a chunk call.
+        call.call_phase = 0;
+        ps.found_flag = 0;
+        if k == Tok::Ident() as Word {
+            for i in 0..call.nat_count limit 64 {
+                if call.nat_path[i * 2] == ps.unresolved_name andalso call.nat_path[i * 2 + 1] == v {
+                    call.call_pending = 1024 + i;
+                    ps.found_flag = 1;
+                }
+            }
+        }
+        if ps.found_flag == 1 { call.call_phase = 1; 0 } else { perr(pe_unresolved_syntax(), ps.unresolved_name) }
+    } else {
         // A call name was read; the `(` opens the argument list.
         if k == Tok::LParen() as Word {
             call.call_chunk[call.call_sp] = call.call_pending;
@@ -6345,14 +6389,14 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
             call.call_phase = 0;
             ops.expect_operand = 1;
         } else {
-            if k == Tok::Lt() as Word orelse k == Tok::ColCol() as Word {
+            if k == Tok::Lt() as Word orelse k == Tok::ColCol() as Word orelse call.call_pending >= 1024 {
                 perr(pe_call_syntax(), toks.at);
             } else {
                 perr(pe_function_value(), toks.chunks[call.call_pending]);
             }
         }
         0
-    } else {
+    } } else {
     if mat.enum_phase >= 1 {
         // An open `Name::Variant() as Word` enum cast consumes its remaining tokens.
         step_enum(k, v)
@@ -7512,17 +7556,40 @@ fn header_skip_block(k: Word, v: Word) -> Word {
 
 // The `use path::name` native import: emit a UPATH per `::`-separated segment; a non-`::`
 // token ends the declaration (emit END) and is pushed back to open the next declaration.
+// Each segment is also recorded in the native table, so a qualified call can resolve it.
+// A wildcard and a signature are refused rather than skipped. The record stream cannot
+// tell `use host::*` from `use host`, and a skipped signature would take its tokens into
+// the next declaration.
 fn header_use(k: Word, v: Word) -> Word {
     if k == 1 {
+        if call.nat_seg < 2 andalso call.nat_count < 64 {
+            call.nat_path[call.nat_count * 2 + call.nat_seg] = v;
+        }
+        call.nat_seg = call.nat_seg + 1;
         11 + v * 64
     } else {
     if k == 51 {
         0
     } else {
+    if k == Tok::Star() as Word orelse k == Tok::LParen() as Word {
+        perr(pe_unresolved_syntax(), toks.at)
+    } else {
+        native_import_end();
         ps.cursor = ps.cursor - 1;
         ps.mode = 0;
         5
-    } }
+    } } }
+}
+
+// Close one native import row. Sixty-four rows fill the table, and a sixty-fifth `use` is
+// refused rather than given an index the table cannot hold.
+fn native_import_end() -> Word {
+    if call.nat_count >= 64 { perr(pe_unresolved_syntax(), call.nat_count) } else {
+        if call.nat_seg != 2 { call.nat_path[call.nat_count * 2] = 0 - 1; }
+        call.nat_count = call.nat_count + 1;
+        call.nat_seg = 0;
+        0
+    }
 }
 
 // The enum declaration modes: 9 the enum name (emit ENUMSTART, dkind 12, and open the
@@ -8776,6 +8843,7 @@ fn step_body() -> Word {
             // A `use` running to end-of-input has no closing delimiter, so it is closed
             // here (END) before DONE; otherwise the stream is exhausted.
             if ps.mode == 8 {
+                native_import_end();
                 ps.mode = 0;
                 5
             } else {

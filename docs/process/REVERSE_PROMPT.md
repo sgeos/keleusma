@@ -55,7 +55,15 @@ runs in the heavy self-host tier. Order 6 is large, and its slices will land as 
 pull requests. HANDOFF.md is stale, and the interline checkpoint must be exported and
 reviewed before any handoff.
 
+## Slice 2
+
+Native imports and qualified native calls compile byte-identically, and the corpus
+reads 39 of 75 sources identical. The name cap is doubled and parse.kel holds 1,007
+names. The cap doubling also doubled the wire stage's deduplicated name pool, `bout`,
+from 16,384 to 32,768 bytes, because 1,023 names already filled most of it. That is my
+reading of "double the name cap", and it is flagged here so you can overrule it.
+
 ## Next
 
-Slice 2, native imports and qualified native calls, which gate about twenty corpus
-sources.
+Slice 2b, `use` signatures, and slice 3, binding patterns and literal parameter heads,
+which now gate most remaining corpus sources.

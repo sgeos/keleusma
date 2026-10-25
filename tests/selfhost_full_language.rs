@@ -81,13 +81,13 @@ const CORPUS: &[(&str, Class)] = &[
     ("examples/scripts/rogue/rogue_ai_sleeper.kel", Identical),
     ("examples/scripts/rogue/rogue_ai_smart.kel", Identical),
     ("examples/scripts/rogue/rogue_ai_tracker.kel", Unsupported),
-    ("examples/scripts/rogue/rogue_ai_wander.kel", Unsupported),
+    ("examples/scripts/rogue/rogue_ai_wander.kel", Identical),
     ("examples/scripts/rogue/rogue_bestiary.kel", Unsupported),
     ("examples/scripts/rogue/rogue_book_keeping.kel", Identical),
     ("examples/scripts/rogue/rogue_combat.kel", Identical),
-    ("examples/scripts/rogue/rogue_consume.kel", Unsupported),
+    ("examples/scripts/rogue/rogue_consume.kel", Identical),
     ("examples/scripts/rogue/rogue_descend.kel", Identical),
-    ("examples/scripts/rogue/rogue_dungen.kel", Unsupported),
+    ("examples/scripts/rogue/rogue_dungen.kel", NoVerdict),
     ("examples/scripts/rogue/rogue_game.kel", Unsupported),
     ("examples/scripts/rogue/rogue_gear.kel", Unsupported),
     ("examples/scripts/rogue/rogue_item_potion.kel", Identical),
@@ -95,11 +95,11 @@ const CORPUS: &[(&str, Class)] = &[
     ("examples/scripts/rogue/rogue_move_resolve.kel", Identical),
     ("examples/scripts/rogue/rogue_pickup.kel", Identical),
     ("examples/scripts/rogue/rogue_player_ai.kel", Identical),
-    ("examples/scripts/rogue/rogue_scroll_apply.kel", Unsupported),
+    ("examples/scripts/rogue/rogue_scroll_apply.kel", Identical),
     ("examples/scripts/piano_roll/piano_roll_0.kel", Unsupported),
     ("examples/scripts/piano_roll/piano_roll_1.kel", Unsupported),
     ("examples/scripts/piano_roll/piano_roll_2.kel", Unsupported),
-    ("examples/scripts/piano_roll/piano_roll_3.kel", Unsupported),
+    ("examples/scripts/piano_roll/piano_roll_3.kel", NoVerdict),
     ("examples/scripts/piano_roll/piano_roll_4.kel", Unsupported),
     ("examples/scripts/piano_roll/piano_roll_5.kel", Unsupported),
     ("examples/scripts/piano_roll/piano_roll_6.kel", Unsupported),
@@ -401,4 +401,69 @@ fn skipped_tokens_are_refused_or_lowered_rather_than_dropped() {
             );
         }
     }
+}
+
+/// Slice 2 of Order 6, native imports and qualified native calls. A two-segment `use` of a
+/// host function and a call of it compile byte-identically, which covers the native index
+/// order, the error-reify flag, the default `HostError` trap and the `Top` return shape. The
+/// refused forms are refused rather than skipped, and each is pinned with its reason.
+#[test]
+fn native_imports_and_qualified_calls_compile_or_are_refused() {
+    let cases: &[(&str, Class)] = &[
+        ("use host::f\nfn main() -> Word { host::f(1) }", Identical),
+        (
+            "use host::f\nuse host::g\nfn main() -> Word { host::g(1, 2) + host::f(3) }",
+            Identical,
+        ),
+        (
+            "use host::f\nfn main() -> Word { let x = host::f(1); x + 1 }",
+            Identical,
+        ),
+        (
+            "use host::f\nuse host::g\nfn main() -> Word { host::g(host::f(1), 2) }",
+            Identical,
+        ),
+        (
+            "use host::f\nuse host::g\nfn k(a: Word) -> Word { host::g(a, 7) }\nfn main() -> Word { k(host::f(0)) }",
+            Identical,
+        ),
+        ("use host::f\nfn main() -> Word { host::f() }", Identical),
+        // An import that is never called still takes its index.
+        (
+            "use host::a\nuse host::f\nfn main() -> Word { host::f(1) }",
+            Identical,
+        ),
+        // A wildcard is indistinguishable from a single-segment import in the record stream.
+        (
+            "use host::*\nuse host::f\nfn main() -> Word { host::f(1) }",
+            Unsupported,
+        ),
+        // A single-segment import is called unqualified, which this path does not resolve.
+        ("use f\nfn main() -> Word { f(1) }", Unsupported),
+        // A signature is slice 2b.
+        (
+            "use host::f(Word) -> Word\nfn main() -> Word { host::f(1) }",
+            Unsupported,
+        ),
+        // `external` has no keyword in the self-hosted lexer.
+        (
+            "use external host::f\nfn main() -> Word { host::f(1) }",
+            Unsupported,
+        ),
+        // A call of an undeclared native is the reference's to reject.
+        (
+            "use host::f\nfn main() -> Word { host::nope(1) }",
+            RefRejects,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }

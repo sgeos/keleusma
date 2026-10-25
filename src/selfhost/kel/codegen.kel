@@ -219,6 +219,8 @@ const data wire {
     checkeddiv: Word = 64,
     checkedmod: Word = 65,
     boundscheck: Word = 66,
+    // CallVerifiedNative(index, count) with the error-reify flag set in the count.
+    callnative: Word = 67,
     // P11 Option E: the op-word radix is 8 bits (256), not 6 (64), so the wire-op TAG space is
     // 1..255 rather than 1..63. Safe as a radix widening (not two-word): the largest operand is
     // ~2^48 (GetDataIndexed's two 24-bit fields), so `tag + operand*256` stays ~2^56, well within
@@ -1412,6 +1414,29 @@ fn push_call(p: Word) -> Word {
     let count = ast.rhs[p];
     let start = ast.lhs[p];
     push_emit(wire.call + (chunk + count * wire.pack) * wire.radix);
+    for i in 0..count limit 64 {
+        let idx = start + count - 1 - i;
+        push_visit(ast.call_args[idx]);
+    }
+    0
+}
+
+// NativeCall (kind 81): a call to a `use`-imported host function. Emit the arguments
+// left to right, then CallVerifiedNative(index, count | 0x80), packed as
+// index + (count + 128) * 65536. The flag reifies a host failure as a value and a flag
+// beneath it, and the default handling follows, as the reference's
+// `emit_host_error_default_trap` writes it: a flag of one traps with HostError (code 9),
+// otherwise the value remains. args = native index, lhs = args_start, rhs = count.
+fn push_native_call(p: Word) -> Word {
+    let index = ast.args[p];
+    let count = ast.rhs[p];
+    let start = ast.lhs[p];
+    push_emit(wire.mendif);
+    push_emit(wire.trap + 9 * wire.radix);
+    push_emit(wire.mif);
+    push_emit(wire.cmpeq);
+    push_int_const(1);
+    push_emit(wire.callnative + (index + (count + 128) * wire.pack) * wire.radix);
     for i in 0..count limit 64 {
         let idx = start + count - 1 - i;
         push_visit(ast.call_args[idx]);
@@ -3116,6 +3141,7 @@ fn walk_step() -> Word {
             66 => push_byte_bnot(payload),
             68 => push_andor(payload),
             7 => push_call(payload),
+            81 => push_native_call(payload),
             8 => push_andalso(payload),
             9 => push_orelse(payload),
             10 => push_neg(payload),

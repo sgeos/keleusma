@@ -895,6 +895,7 @@ fn decode_op(w: i64) -> Op {
         64 => Op::CheckedDiv(operand as u8),
         65 => Op::CheckedMod,
         66 => Op::BoundsCheck(operand as u16),
+        67 => Op::CallVerifiedNative((operand % 65536) as u16, (operand / 65536) as u8),
         // A flat struct construction: the operand packs count + byte_size*65536.
         46 => Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Struct,
@@ -2081,7 +2082,8 @@ fn self_compile_codegen_atomic_functions() {
     // Checked arithmetic adds five helpers.
     // The index-first and handled indexed writes of 2026-10-21 add `push_write_probe`,
     // `store_binds` and `push_checked_store` and remove the dead `push_index_store` (100 -> 102).
-    const EXPECTED_SELF_COMPILE: usize = 102;
+    // Order 6 slice 2 adds `push_native_call`, the native-call lowering (102 -> 103).
+    const EXPECTED_SELF_COMPILE: usize = 103;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"

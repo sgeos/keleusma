@@ -12978,10 +12978,12 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // scratch flag `ps.found_flag` so that the name count held at 1023, with the blob
     // 30 bytes larger. Then, by operator ruling the same day, twenty dead names left
     // `parse.kel`, two unreferenced functions, fifteen enum variants matched only as
-    // numbers and three fields never read, and the name cap doubled to 2048. Parse now
-    // holds 1003 names and a 30,042-byte blob. The blob cap was not raised.
-    assert_eq!(worst_names, 1003, "the worst-case name count moved");
-    assert_eq!(worst_blob, 30042, "the worst-case blob size moved");
+    // numbers and three fields never read, and the name cap doubled to 2048. Parse then
+    // held 1003 names and a 30,042-byte blob. Slice 2's native imports added four names,
+    // `nat_path`, `nat_count`, `nat_seg` and `native_import_end`, and 174 blob bytes. The
+    // blob cap was not raised, and 18,936 bytes of it remain.
+    assert_eq!(worst_names, 1007, "the worst-case name count moved");
+    assert_eq!(worst_blob, 30216, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

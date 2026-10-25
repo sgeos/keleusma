@@ -6,6 +6,13 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-25 Order 6 slice 2, native calls
+
+By operator ruling, twenty dead names left parse.kel and the wire stage's name cap
+doubled to 2,048. The pipeline now lowers `use`-imported two-segment native calls
+byte-identically, and the corpus moved to 39 identical sources. Slices 0 and 1 merged
+as PR 532.
+
 ## 2026-10-25 Order 6 slices 0 and 1
 
 Order 6, full-language support, began on feat/v02-order6-full-language with the plan in
