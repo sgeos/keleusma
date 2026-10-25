@@ -86,8 +86,14 @@ fn a_hot_swap_with_the_wrong_data_length_is_reported_as_invalid_bytecode() {
 ///
 /// This is the second instance, and it is what turns the handoff's single
 /// observation into a statement about the GROUPS rather than about one site.
+///
+/// Since 2026-10-24 the pre-execution native check rejects the unregistered
+/// name as a `VerifyError` before any instruction runs, by the operator ruling
+/// that host faults detectable at load are rejected at load. The call-site
+/// `InvalidBytecode` construction remains for a registration removed between
+/// the check and the call, which the public API does not offer.
 #[test]
-fn an_unregistered_native_is_reported_as_invalid_bytecode() {
+fn an_unregistered_native_is_rejected_before_execution() {
     const USES_A_NATIVE: &str = "use absent() -> Word\nfn main() -> Word { absent() }";
     let m =
         compile(&parse(&tokenize(USES_A_NATIVE).expect("lex")).expect("parse")).expect("compile");
@@ -104,10 +110,9 @@ fn an_unregistered_native_is_reported_as_invalid_bytecode() {
         "the refusal no longer names the native, so a host cannot tell which one it forgot: {text}"
     );
     assert!(
-        matches!(err, VmError::InvalidBytecode(_)),
-        "the variant changed for the unregistered-native path. The observation in \
-         `docs/process/HANDOFF.md` covers a hot-swap site; if this one has moved, the two are no \
-         longer the same shape and the census's group J note needs revising: {text}"
+        matches!(err, VmError::VerifyError(_)),
+        "the variant changed for the unregistered-native path. The census's group J note \
+         records the pre-execution rejection; revise it with this assertion: {text}"
     );
 }
 

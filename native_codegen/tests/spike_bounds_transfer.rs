@@ -513,7 +513,15 @@ fn q2_is_the_bytecode_bound_monotone_in_native_size() {
         // figures moving. Both moved: upstream re-costed the indexed opcodes and
         // division, and this line's lowering of them changed. The split between
         // those two causes is NOT measured here.
-        (29, 406, 18),
+        //
+        // **ABSORPTION 88 moved the inversions from 18 to 17**, measured by
+        // running this probe on `v0.3.0` before the absorption and diffing the
+        // per-chunk figures. Exactly eleven chunks moved, the ten `piano_roll`
+        // mains and `rogue_game.kel::main`, which are the ones that call
+        // natives. Upstream now reifies every native call, adding a flag test
+        // and a `Trap(HostError)` to the bytecode and the matching lowering.
+        // Every stage chunk is unchanged, and the population is too.
+        (29, 406, 17),
         "the bounds-transfer population or its inversion count changed. Establish \
          the cause before editing. BOTH figures depend on this line: a chunk enters \
          the population only if the module LOWERS, so a refusal removes it and an \

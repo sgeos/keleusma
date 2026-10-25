@@ -562,10 +562,18 @@ impl TextAnalysis {
                 0
             }
             Op::CallVerifiedNative(_, n_args) | Op::CallExternalNative(_, n_args) => {
-                for _ in 0..*n_args {
+                // The high bit is the error-reify flag, not part of the
+                // count. A reified call also pushes its outcome flag. Both
+                // pushed slots are treated as unbounded text, which only
+                // overstates, so that every pushed slot carries one value as
+                // the Keleusma mirror in analyze.kel models it.
+                for _ in 0..(*n_args & 0x7F) {
                     self.pop();
                 }
                 self.push(TextSize::Unbounded);
+                if *n_args & 0x80 != 0 {
+                    self.push(TextSize::Unbounded);
+                }
                 0
             }
             Op::Yield => {
@@ -583,6 +591,13 @@ impl TextAnalysis {
             }
             Op::Else(_) | Op::EndIf | Op::Loop(_) | Op::EndLoop(_) => 0,
             Op::Break(_) => 0,
+            // A trap ends its own path. The walk is linear, and the compiler
+            // places a trap last in a branch, so the operations after it
+            // continue the fall-through path, whose stack the trap's payload
+            // pops never touched. Popping here removed live entries, for
+            // example the text a native call returned beneath its reified
+            // flag, once that call gained an explicit host-error trap.
+            Op::Trap(_) => 0,
             Op::BreakIf(_) => {
                 self.pop();
                 0

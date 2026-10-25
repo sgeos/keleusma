@@ -5595,6 +5595,9 @@ overwhelmingly discarded, and a width that is never used is never needed.
 - **The argument-count byte is not a count.** Its high bit is the B35 P7 error-reify flag and
   a site carrying it pushes **two** slots, `(code, flag)`, not one. Measured in this family:
   **0 error-reify sites of 999**, so refusing the flag costs nothing and is honest.
+  **Superseded at absorption 88, 2026-10-24.** Upstream now reifies every native call, so every
+  site carries the flag. The lowering pushes the value and a zero flag, because the native host
+  ABI has no soft-failure channel. See `ABSORPTION_88_BRIEF.md`.
 - **Argument counts are `{1, 2, 3, 5}`** — 68, 705, 118 and 108 sites. Bounded and small, so
   an argument buffer needs no dynamic allocation.
 

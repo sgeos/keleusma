@@ -80,6 +80,9 @@ writing about refusal measurement.
 | a float RETURN SHAPE, refused regardless of width | 1 |
 | a native call setting the B35 P7 error-reify flag | 1 |
 
+That last site was removed at absorption 88, on 2026-10-24, when upstream began reifying every native
+call and the lowering began accepting the flag. The table records the census as it was taken.
+
 > ⚠ **CORRECTED.** This table first said **8** width refusals, folding in the float return shape at
 > `lib.rs` line 1898, which names no width and is refused for its shape. **Seven carry a width.** The
 > return-shape site belongs in `UnsupportedShape` on the merits and stayed there.

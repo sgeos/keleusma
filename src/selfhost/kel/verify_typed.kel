@@ -368,10 +368,13 @@ fn apply_typed(ip: Word) -> Word {
         if k == 17 orelse k == 18 { for j in 0..6 limit 6 { st_push(1, tv.tb[ip]); } }
     } else {
     if k == 10 {
+        // A nested-composite read is total. The element or its placeholder is
+        // followed by the index, four bound limbs and the flag, as Words.
         st_pop();
         st_pop();
         check_stride(tf.pop_tag, tf.pop_size, tv.ta[ip]);
         st_push_k(2, tv.ta[ip], tv.tc[ip]);
+        for j in 0..6 limit 6 { st_push(1, tv.tb[ip]); }
     } else {
     if k == 11 {
         // Yield: pop the output value, push the seeded resume shape.

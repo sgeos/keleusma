@@ -6304,11 +6304,12 @@ fn lower_chunk_body<'ctx>(
             // # The argument-count byte is NOT a count
             //
             // Its high bit is the B35 P7 error-reify flag, and a site carrying it
-            // pushes TWO slots `(code, flag)` rather than one. Reading the byte
-            // as a count would both call with 128 too many arguments and leave
-            // the operand stack one slot short at every such site. Refused
-            // rather than approximated; measured at 0 of 999 sites in the
-            // `piano_roll` family, so refusing costs nothing today.
+            // pushes TWO slots, the value or a host error code and then a flag,
+            // rather than one. Reading the byte as a count would both call with
+            // 128 too many arguments and leave the operand stack one slot short
+            // at every such site. The flag was refused while no corpus site set
+            // it. Since absorption 88 every compiled site sets it, and it is
+            // lowered as described below.
             //
             // # Why the result is pushed with an UNKNOWN width
             //
@@ -6330,15 +6331,21 @@ fn lower_chunk_body<'ctx>(
             // the `Op::Call` arm above documents, and just as invisible for a
             // one-argument native or one whose arguments happen to be equal.
             // Sixty-eight of the corpus sites take one argument.
+            //
+            // # The reify flag, which every call carries since absorption 88
+            //
+            // The reference compiler reifies every native call: the flag pushes
+            // the value and a flag of zero on success, or the host's code and a
+            // flag of one on a soft host failure, and a bare call follows with a
+            // flag test and `Trap(HostError)`. **The native host ABI has no
+            // soft-failure channel.** A native is `i64 f(i64...)`, so a linked
+            // host function cannot report one, and every call it makes succeeds
+            // or does not return. A reified call therefore pushes its result
+            // and a constant zero flag. The trap arm still lowers and is never
+            // taken. A host needing soft failures needs an ABI that carries
+            // them, which is Workstream D's to define.
             Op::CallVerifiedNative(idx, n) | Op::CallExternalNative(idx, n) => {
-                if n & 0x80 != 0 {
-                    return Err(LowerError::UnsupportedShape(format!(
-                        "native call #{idx} sets the B35 P7 error-reify flag \
-                         (argument byte {n:#04x}), which reifies a soft host \
-                         failure as a two-slot (code, flag) result; the two-slot \
-                         form is not lowered"
-                    )));
-                }
+                let reified = n & 0x80 != 0;
                 let argc = usize::from(n & 0x7F);
                 let name = natives.get(usize::from(*idx)).ok_or_else(|| {
                     LowerError::MalformedInput(format!(
@@ -6412,6 +6419,9 @@ fn lower_chunk_body<'ctx>(
                     st.push_owned(ret, w, OperandKind::Int, owned);
                 } else {
                     st.push_w(ret, w);
+                }
+                if reified {
+                    st.push_w(i64t.const_zero(), Width::Scalar(8));
                 }
             }
             // `Byte` occupies a full `i64` slot holding a value in `0..=255`.
@@ -8107,24 +8117,46 @@ fn lower_chunk_body<'ctx>(
             // ADDRESS rather than a loaded value, so an out-of-range index here
             // hands the rest of the lowering a pointer outside the body and the
             // wrong read happens later, at a field access that looks correct.
+            //
+            // **TOTAL SINCE ABSORPTION 88**, as upstream's Order 3 made it. An
+            // invalid index yields the address of a zero-filled placeholder of
+            // the element's size, then the index, the four bound limbs and the
+            // flag, the layout the flat Word and Byte reads already push. The
+            // compiler dispatches a set flag to `Trap(IndexOutOfBounds)` or to an
+            // `invalid_index` arm, so no compiled path reads the placeholder. It
+            // is a module constant of the element's size, so a hand-built read
+            // of it stays in bounds.
             Op::GetIndex(keleusma::bytecode::ArrayElem::FlatNested { size, .. }) => {
-                guard_array_index(
-                    ctx,
-                    func,
-                    &mut st,
-                    trap_bb,
-                    i64t,
-                    u64::from(*size),
-                    "GetIndex",
-                )?;
+                let count = array_element_count(&mut st, i64t, u64::from(*size), "GetIndex")?;
                 let owned = st.owned_at(1);
                 let index = st.pop();
                 let parent = st.pop();
+                let bad =
+                    st.b.build_int_compare(IntPredicate::UGE, index, count, "nestoob")
+                        .unwrap();
                 let byte =
                     st.b.build_int_mul(index, i64t.const_int(u64::from(*size), false), "cnstride")
                         .unwrap();
                 let addr = st.b.build_int_add(parent, byte, "cnestidx").unwrap();
+                let name = format!("kel_index_placeholder_{size}");
+                let placeholder = module.get_global(&name).unwrap_or_else(|| {
+                    let ty = i8t.array_type(u32::from(*size).max(1));
+                    let g = module.add_global(ty, None, &name);
+                    g.set_initializer(&ty.const_zero());
+                    g.set_constant(true);
+                    g.set_linkage(inkwell::module::Linkage::Private);
+                    g
+                });
+                let placeholder =
+                    st.b.build_ptr_to_int(placeholder.as_pointer_value(), i64t, "placeholder")
+                        .unwrap();
+                let addr =
+                    st.b.build_select(bad, placeholder, addr, "nestaddr")
+                        .unwrap()
+                        .into_int_value();
                 st.push_owned(addr, Width::Body(u32::from(*size)), OperandKind::Int, owned);
+                st.push_w(index, Width::Scalar(8));
+                st.push_bound_outcome(count, bad);
             }
             // Flat field read: a constant offset from the body address and one
             // unaligned typed load, which is what `GetData` already does.

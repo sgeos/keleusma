@@ -1,4 +1,5 @@
-//! What the `CONSTS` region of the eleven stage artifacts is actually made of.
+//! What the `CONSTS` region of the stage artifacts is actually made of, measured when the
+//! corpus held eleven stages.
 //!
 //! # Why this file exists
 //!

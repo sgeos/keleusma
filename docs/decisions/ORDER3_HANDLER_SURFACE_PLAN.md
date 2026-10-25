@@ -8,8 +8,9 @@ reference compiler and mirrored by the self-hosted compiler on 2026-10-21, with
 the self-hosted mirror limited to Word and Byte elements. Handled multi-index
 writes are implemented in the Rust reference compiler on 2026-10-22, and the
 self-hosted compiler refuses them. FixedDiv totalization is implemented on
-2026-10-22. Native-call handlers and handler-required composite reads are not
-started.
+2026-10-22. Native-call handlers, handler-required composite reads and handled
+writes in `let` initializers are implemented on 2026-10-24 under the rulings of
+that date, as recorded in the three increment sections below.
 This document resolves the open question that the 2026-10-20 handoff recorded as
 the first audit priority, which asked whether source-level indexed-write handlers
 belong to Order 3. They do. It extends [the completion plan](./ORDER3_COMPLETION_PLAN.md)
@@ -67,6 +68,109 @@ are first-party rulings given in the same session.
 | Arm attachment | An arm block after the right-hand side of an indexed assignment handles the write. A right-hand side that needs its own handler is parenthesized or bound with `let` first. `d.x[i] = a[j] { ok(v) => v }` previously meant a handled read on the right-hand side, and its meaning changes. |
 | Bare evaluation order | Index first, then the bounds check, then the value, for bare and handled writes alike. |
 | Index depth | This increment supports a handled write with one index. Both compilers reject a handled multi-index write with the same message. Routing every level's failure to `invalid_index` is the next increment. Superseded on 2026-10-22 by that increment, recorded under "Multi-index increment" below. |
+
+## Operator rulings, 2026-10-24
+
+The operator chose among options presented in the V0.2.X session of
+2026-10-24, after a survey of the existing code. These rulings are first-party.
+
+| Topic | Ruling |
+|---|---|
+| Native-call encoding | Reify every native call. Bare and handled calls alike set the existing error-reify flag. A bare call is followed by a flag test and an explicit trap with a new trap kind for host failure. The arm is spelled `host_error(code)`, and `error(code)` remains accepted as an alias. The work is confined to the reference compiler, because the self-hosted compiler has no native calls. |
+| Composite reads | A total opcode with a placeholder. `GetIndex` on a nested composite element follows the flat scalar precedent. An invalid index pushes a zero-filled placeholder of the element layout, the diagnostic suffix and the flag, so the opcode cannot fault. No arm ever observes the placeholder. Arms are `ok(v)` and `invalid_index(j)`, and a bare read reaches `Trap(8)`. Local and data composite arrays are covered, and multi-index reads route every level as writes do. |
+| Handled writes in `let` initializers | The reference compiler implements them. The self-hosted compiler refuses them with a pinned refusal, following the multi-index precedent. No capacity is raised. |
+
+## Native-call increment, 2026-10-24
+
+**Existing surface.** The B35 P7 construct `f(x) { ok(v) => ..., error(c) => ... }`
+already existed. Only a call with an `error` arm set the reify flag. A bare call
+propagated a soft host failure as a `VmError` from inside the call instruction,
+and both trap analyses classified every native call as unsupported.
+
+**Encoding.** Every native call emitted by the reference compiler carries the
+reify flag, so the instruction pushes the value and flag 0 on success and the
+`Word` code and flag 1 on a soft host failure. A bare call is followed by
+`Const(1); CmpEq; If; Trap(9); EndIf`. `TrapKind::HostError`, code 9, pops the
+code. The virtual machine keeps the error most recently reified and, when its
+code matches, `Trap(9)` surfaces that error unchanged, so a host observes the
+same `NativeError` or `NativeErrorCode`, message included, that it observed
+before. A code that does not match, as only hand-built bytecode produces, is
+reported as `NativeErrorCode` with that code. VM-internal failures of a native,
+such as a malformed result or an exhausted arena, are not soft host failures.
+They propagate unreified, as before. No opcode is added and the count of 66 is
+unchanged. A native call may take at most 127 arguments, since the flag occupies
+the high bit of the count.
+
+**Handled form.** The construct always reifies. After its arms, a failure that no
+arm took reaches the same `Trap(9)` with its code. That replaces the former
+`NoMatchingArm` fallback. An unguarded `host_error(name)`, `host_error(_)` or bare
+`host_error` arm covers every failure and removes the fallback, as an unguarded
+`invalid_index` arm does for indexing.
+
+**Load-time faults.** The pre-execution native check already rejected an invalid
+native index and a classification mismatch. It skipped an unregistered native,
+which then failed only when execution reached the site. It now rejects it before
+execution. Registering a native clears the cached verdict. The registry records
+no arity or result signature, so neither can be checked statically. A malformed
+result remains a runtime host-contract guard.
+
+**Trap analysis.** Both analyses classify a reified call as clear and an
+unreified call as unsupported. The Keleusma transport passes the raw reify bit
+as the operand form, and `verify_structural.kel` admits trap code 9.
+
+**Repaired defect.** The worst-case memory walk in `verify::wcmu_region` read the
+raw count byte, flag included, as the argument count and counted one pushed slot.
+A one-argument handled call therefore moved the offset by 1 - 129 and understated
+the stack bound of everything after it. The Keleusma transport in
+`analyze_stack_effect` carried the same raw count, so the two analyses agreed on
+the wrong value. The text analysis in `text_size.rs`, its two Keleusma mirrors in
+`analyze.kel` and their transports had the same raw-count reading. All now use the
+masked count and the reified flag slot. The defect predates this increment and
+was reachable only through handled calls before it.
+
+**Evidence.** tests/native_host_error.rs.
+
+## Composite-read increment, 2026-10-24
+
+**Contract.** `GetIndex` on a nested composite or boxed element joins the total
+contract of flat Word and Byte reads, as recorded in the bounds contract. An
+invalid index pushes a zero-filled placeholder of the element's size for a nested
+composite and `Unit` for a boxed element, followed by the diagnostic suffix and
+the flag. Both compilers append the bare tail of `Const(1); CmpEq; If; Trap(8);
+EndIf; PopN(5)` to every such read, the reference through `emit_index_read` and
+the self-hosted code generator through `emit_op`, so bare composite reads stay
+byte-identical. A handled read dispatches through the existing outcome loop, and
+an unguarded `invalid_index` arm removes the fallback trap. No arm observes a
+placeholder. Composite elements of data-segment arrays already read through the
+total `GetDataIndexed`, so they needed no change.
+
+**Self-hosted compiler.** It mirrors the bare read. It refuses a handled composite
+read, because its parser opens a handled read only on a Word or Byte element and
+mirroring the composite form would need parse-stage names the stage does not
+have. This follows the multi-index precedent and is a refusal, not a divergence.
+
+**Analyses.** Both trap analyses classify nested and boxed reads as clear. The
+Keleusma typed pass pushes the six suffix Words after a nested read and models a
+boxed read as it models an indexed data read. The nested placeholder's allocation
+is charged by both memory analyses through the operand's heap cost.
+
+**Evidence.** tests/composite_index_reads.rs.
+
+## `let`-initializer increment, 2026-10-24
+
+The reference parser accepts a handled indexed write as the whole initializer of
+a `let`, and refuses a bare write there with a stated reason, because a bare
+write yields no value. The type checker and code generator already treated the
+handled write as an expression. The ruling of this date expected the self-hosted
+compiler to refuse the form, because its parse stage has one free name of its
+1024. Measured, the existing stages already parse it through the pending-write
+detection used for statement position, and the complete artifacts equal the
+reference's, so the form is mirrored with no stage change and no capacity
+raised. The self-hosted parser alone also accepts the bare form, which the
+shipping path refuses only through the reference cross-check. That leniency
+predates this increment and is recorded in the Order 3 audit.
+
+**Evidence.** The `let`-initializer tests in tests/indexed_write_handlers.rs.
 
 ## Design decided for the first increment
 
