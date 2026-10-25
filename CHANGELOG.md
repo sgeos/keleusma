@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A signed header over a short declared total is refused rather than
+  panicking.** `verify_module_signature` read the signature metadata, the
+  signature and the trailer at offsets fixed by the declared header without
+  checking that the declared total covered them, so an untrusted artifact with
+  the signature flag ended the host from `Vm::load_signed_bytes`. It now returns
+  `LoadError::Truncated`, as does `parse_signature_metadata` for a buffer
+  shorter than its header. See `docs/decisions/SIGNATURE_VERIFY_BOUNDS.md`.
+
 - **The verified time bound charges every dispatched instruction.** The time
   walk and its Keleusma mirror in `analyze.kel` charged nothing for `Else`,
   `EndIf` and `EndLoop`, and omitted a counted loop's final header pass, so the
@@ -35,6 +43,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   empty slice is safe and rejects constant strings rather than trusting them.
 
 ### Added
+
+- **The cryptographic framing in Keleusma, Order 5.** `src/crypto_frame/frame.kel` decides the
+  signed and encrypted header layouts, the metadata blocks, the bytes a signature covers, every
+  framing check and its order, verification before decryption, the recipient fingerprint
+  comparison and the CRC trailer, with Ed25519, X25519, HKDF, AES-GCM and SHA-256 as host
+  natives and no key entering the program. Its driver is `keleusma::crypto_frame`, behind
+  `signatures`, with encryption behind `encryption`. Its output and verdicts equal the Rust
+  reference's over the harness corpus. `keleusma compile --compiler self-hosted` now signs and
+  encrypts through it and refuses a divergence. See
+  `docs/decisions/ORDER5_COMPLETION_AUDIT.md`.
+- `wire_format::signing_sections` and `SigningSections` expose the body sections a signed
+  module carries, which the reference signer now takes its sections from.
 
 - **The hosted runtime, Order 4.** `src/hosted/interp.kel` is a bytecode interpreter written
   in Keleusma that runs on the Rust virtual machine at most 32 interpreted instructions per

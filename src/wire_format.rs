@@ -1204,6 +1204,11 @@ pub fn parse_signature_metadata(
             WIRE_FORMAT_HEADER_BYTES + SIGNATURE_METADATA_BYTES,
         )));
     }
+    // The precondition above is the caller's, and this function is public, so
+    // a buffer shorter than the declared header is refused rather than indexed.
+    if bytes.len() < header_length {
+        return Err(LoadError::Truncated);
+    }
     let scheme_id = bytes[64];
     let reserved_byte = bytes[65];
     let signature_length = u16::from_le_bytes([bytes[66], bytes[67]]) as usize;
@@ -1867,14 +1872,33 @@ pub fn module_to_signed_wire_bytes_with_ecc(
     module_to_signed_wire_bytes_opt(module, signing_key, true)
 }
 
+/// The three body sections of a signed module, before framing.
+///
+/// Produced by [`signing_sections`]. The signed encoders frame these, and the
+/// self-hosted cryptographic framing (Order 5) frames the same bytes, so the two
+/// differ only in the framing under comparison.
 #[cfg(feature = "signatures")]
-fn module_to_signed_wire_bytes_opt(
-    module: &Module,
-    signing_key: &ed25519_dalek::SigningKey,
-    ecc: bool,
-) -> Result<Vec<u8>, LoadError> {
-    use ed25519_dalek::Signer;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SigningSections {
+    /// The opcode stream.
+    pub opcodes: Vec<u8>,
+    /// The operand pool.
+    pub operands: Vec<u8>,
+    /// The auxiliary body, whose flags carry `FLAG_REQUIRES_SIGNATURE`, with a
+    /// parity plane per region when requested.
+    pub auxiliary: Vec<u8>,
+}
 
+/// Encode the body sections a signed module carries. The auxiliary body records
+/// the module's flags with `FLAG_REQUIRES_SIGNATURE` set, as the signed header
+/// does. With `ecc` each auxiliary region carries a (72,64) SECDED parity plane.
+///
+/// # Errors
+///
+/// `LoadError::Codec` when an instruction or the auxiliary body cannot be
+/// encoded.
+#[cfg(feature = "signatures")]
+pub fn signing_sections(module: &Module, ecc: bool) -> Result<SigningSections, LoadError> {
     // Re-run the per-chunk encoding so we have the opcode stream,
     // operand pool, and aux body bytes to hand to the shared
     // assembler. This is a small duplication of `module_to_wire_bytes`
@@ -1932,13 +1956,29 @@ fn module_to_signed_wire_bytes_opt(
     for entry in &operand_pool {
         operand_pool_bytes.extend_from_slice(&entry.0);
     }
+    Ok(SigningSections {
+        opcodes: opcode_stream,
+        operands: operand_pool_bytes,
+        auxiliary: aux_bytes,
+    })
+}
+
+#[cfg(feature = "signatures")]
+fn module_to_signed_wire_bytes_opt(
+    module: &Module,
+    signing_key: &ed25519_dalek::SigningKey,
+    ecc: bool,
+) -> Result<Vec<u8>, LoadError> {
+    use ed25519_dalek::Signer;
+
+    let sections = signing_sections(module, ecc)?;
 
     // Assemble with a zeroed signature payload.
     let mut buf = assemble_wire_bytes(
         module,
-        &opcode_stream,
-        &operand_pool_bytes,
-        &aux_bytes,
+        &sections.opcodes,
+        &sections.operands,
+        &sections.auxiliary,
         Some(SIGNATURE_SCHEME_ED25519),
     )?;
     let total_length = buf.len();
@@ -1990,7 +2030,12 @@ pub fn verify_module_signature(
     }
     let header_length = u16::from_le_bytes([bytes[6], bytes[7]]) as usize;
     let total_length = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
-    if total_length > bytes.len() {
+    // The declared total must hold the declared header and the trailer, as
+    // `module_from_wire_bytes` requires. Without the lower bound a header that
+    // declares a signed length over a shorter total indexed past the slice
+    // below, so an untrusted artifact panicked the host from
+    // `Vm::load_signed_bytes` instead of being refused.
+    if total_length > bytes.len() || total_length < header_length + WIRE_FORMAT_FOOTER_BYTES {
         return Err(LoadError::Truncated);
     }
     let bytes = &bytes[..total_length];

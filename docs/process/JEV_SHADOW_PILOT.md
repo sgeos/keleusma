@@ -189,6 +189,66 @@ must run serially. Configuration changes require a distinct pilot store and a
 new measurement cohort. The first installation restores the tracked checkpoint
 only when the store is empty. Existing evidence is never replaced on reinstall.
 
+## Selection cohort for large inputs
+
+The second cohort measures four selection decisions proposed in the
+[context engineering report](./kaizen/2026-10-24-context-engineering-spike.md#jev-for-large-input-multiple-choice-decisions).
+The operator directed its construction on 2026-10-25. It is implemented by
+`scripts/jev_selection.py` with the configuration
+`docs/process/jev-shadow/selection.json`. It keeps its own store in the
+`selection/` directory of the shared installation, because a configuration change
+requires a distinct store and a new measurement cohort. The first cohort's store,
+records and checkpoint are unchanged.
+
+| Kind | Input | Questions | Options |
+|---|---|---|---|
+| `sections` | `task` and `document` | one per listed section heading | `bears`, `does_not_bear` |
+| `gate_log` | `log` | one | `compile_error`, `assertion`, `timeout`, `infrastructure`, `other` |
+| `diff_scope` | `diff` | `tests`, `ci` and `hooks` | `yes`, `no` |
+| `message_action` | `message` | one | `act_now`, `act_later`, `record_only` |
+
+A packet has the fields `id`, `task_id`, `kind`, `sample_kind`, `input`,
+`sections`, `baseline` and `source_refs`. The baseline is
+`{"answers": {question: option}, "actor": ...}` and a label replaces `actor` with
+`reviewer`, `independent` and `rationale`. For `sections`, each listed heading must
+be one whole line occurring exactly once in the document, listed in document order,
+and the questions are `section_01` onward. The other kinds set `sections` to null.
+The document, log, diff or message must occur verbatim in a supplied source. A
+message qualifies only when it is already in the tracked interline checkpoint,
+because private correspondence is excluded. Write it to a reviewed excerpt file
+under `tmp/`.
+
+The option order of each question is a permutation derived from the case
+identifier, because the earlier spike found order sensitivity. Each option key
+carries its rank, as in `2_bears`, since the request is serialized with sorted keys.
+The report counts question-level agreement against independent labels, and a miss
+as a needed answer withheld, meaning `bears`, `yes` or `act_now`. For sections it
+also reports the bytes needed, selected and missed. A section runs from its heading
+to the next, and text before the first heading is excluded.
+
+**Live evaluation is off.** A request may carry up to 160,000 encoded bytes, which
+is beyond the first cohort's 12,000-byte bound, and provider retention terms for
+private project data have not been assessed. `evaluate` therefore refuses until the
+operator sets `live_evaluation` to true in the tracked configuration and reinstalls.
+That one field is excluded from the configuration pinned in the store, so that
+baselines captured before then survive the change. Capture, preview, blind review,
+labels, task outcomes and reports all work without it. The budget is 100 calls and
+6,400,000 reserved input tokens, at most about USD 0.27 at the configured rate.
+
+```sh
+python3 -B scripts/jev_selection.py --line kaizen install
+python3 -B scripts/jev_selection.py record --packet tmp/selection-case.json
+python3 -B scripts/jev_selection.py preview --id kaizen-your-case-id
+python3 -B scripts/jev_selection.py report
+```
+
+The installer copies both cohorts' modules into the shared installation, since the
+selection module imports the first. It refuses a worktree enrolled as another line
+before copying anything, a correction made to both installers on 2026-10-25. At
+handoff, export to an ignored file, review it, and copy it to
+`docs/process/jev-shadow/selection-checkpoint.json`, which a fresh installation
+restores.
+
 ## Handoff and continuation on another machine
 
 At handoff, export to a new ignored file, review the samples, and then copy the
@@ -219,6 +279,7 @@ or merge it into either version branch.
 
 ```sh
 python3 -B -m unittest discover -s scripts -p test_jev_shadow.py -v
+python3 -B -m unittest discover -s scripts -p test_jev_selection.py -v
 python3 -B -m unittest discover -s scripts -p test_interline.py -v
 ```
 

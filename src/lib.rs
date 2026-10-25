@@ -99,6 +99,11 @@ pub mod selfhost;
 #[cfg(feature = "self-host")]
 pub mod hosted;
 
+/// The cryptographic framing of the wire format written in Keleusma, with the signing and
+/// encryption primitives as host natives (Order 5).
+#[cfg(all(feature = "signatures", feature = "compile", feature = "verify"))]
+pub mod crypto_frame;
+
 /// Address-type abstraction used by the parametric [`vm::GenericVm`]
 /// to model the runtime's address width.
 pub mod address;
