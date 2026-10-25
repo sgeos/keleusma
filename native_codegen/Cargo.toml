@@ -87,6 +87,7 @@ debug = "line-tables-only"
 # line's `INVALID_BYTECODE_CENSUS.md` Group B, a different and larger thing.
 keleusma = { path = "..", features = ["compile", "self-host", "floats"] }
 inkwell = { version = "0.9", features = ["llvm22-1"] }
+llvm-sys = "221"
 
 # **THE NARROW-FLOAT CONFIGURATION, MADE SELECTABLE.**
 #

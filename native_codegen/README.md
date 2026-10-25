@@ -45,6 +45,13 @@ contract as linkable constants and a generated C header and Rust bindings.
 lexer that way against a Rust host. The record is
 [`WORKSTREAM_D_COMPLETION.md`](../docs/decisions/WORKSTREAM_D_COMPLETION.md).
 
+Since Order 4 a coroutine reports a trap to its host as status three with its
+kind, and a host native named fallible can fail softly. The library also
+exports a machine stack bound from `keleusma_native::stack` and a bytecode cost
+claim composed through calls from `keleusma_native::cost`, with a status byte.
+The cost claim is not a native time bound. The record is
+[`ORDER_4_COMPLETION.md`](../docs/decisions/ORDER_4_COMPLETION.md).
+
 **Supported opcodes are not listed here.** The list is computed, and a copy kept by hand is what went
 stale before:
 

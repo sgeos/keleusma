@@ -74,7 +74,11 @@
 // bound and arena slot pool tests. Additions only.
 // 775 -> 782: `static_library_linkage.rs` adds the Order 3 static library tests.
 // Additions only.
-const RECORDED_TEST_FUNCTIONS: usize = 782;
+// 782 -> 789: `native_trap_outcomes.rs` and `native_host_failure.rs` add Order 4's
+// trap and host-failure tests.
+// 789 -> 799: `handled_partial_outcomes.rs` 2, `machine_stack_bound.rs` 2,
+// `native_cost_path.rs` 5 and the stack measurement in `static_library_linkage.rs`.
+const RECORDED_TEST_FUNCTIONS: usize = 799;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise
@@ -279,7 +283,10 @@ const RECORDED_TEST_FUNCTIONS: usize = 782;
 // 156 -> 157 in absorption 82: `native_workflow.rs` added, none removed.
 // 157 -> 158: `arena_coroutine_frames.rs` added for Workstream C, none removed.
 // 158 -> 159: `static_library_linkage.rs` added for Order 3, none removed.
-const RECORDED_TEST_FILES: usize = 159;
+// 159 -> 161: `native_trap_outcomes.rs` and `native_host_failure.rs`, none removed.
+// 161 -> 164: `handled_partial_outcomes.rs`, `machine_stack_bound.rs` and
+// `native_cost_path.rs` for Order 4, none removed.
+const RECORDED_TEST_FILES: usize = 164;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")

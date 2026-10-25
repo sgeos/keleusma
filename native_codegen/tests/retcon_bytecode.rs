@@ -146,6 +146,99 @@ fn native_module(
     raw
 }
 
+/// Drive a coroutine past its last yield and return its yields and trap code.
+///
+/// The stable interface reports a trap as status three. The raw interface
+/// returns a null continuation and leaves the code plus one in the frame's trap
+/// record. Both are read here, so a test can require that they agree. `None`
+/// means the instance ended without trapping.
+fn native_trap_run(
+    program: &keleusma::bytecode::Module,
+    first: i64,
+    replies: &[i64],
+    optimize: bool,
+    stable: bool,
+) -> (Vec<i64>, Option<u64>) {
+    let ctx = Context::create();
+    let tm = machine();
+    let module = coroutine::lower(&ctx, program, &tm, 4096).expect("retcon lower");
+    if optimize {
+        common::force_optimize(&module);
+    }
+    let engine = module
+        .create_jit_execution_engine(OptimizationLevel::None)
+        .unwrap();
+    let entry = format!("kel_chunk_{}", program.entry_point.unwrap());
+    let handle = format!("kel_coroutine_{}", program.entry_point.unwrap());
+    let frame = Guarded::new(if stable {
+        coroutine::slot_bytes(4096).unwrap() as usize
+    } else {
+        4096
+    });
+    let reply = Guarded::new(8);
+    let shared = Guarded::new(program.shared_data_bytes as usize);
+    let private = Guarded::new(
+        keleusma::vm::required_persistent_capacity_for(program)
+            + region::persistent_supplement_bytes(program) as usize,
+    );
+    let bodies = Guarded::new(region::host_arena_supplement_bytes(program) as usize);
+    common::install_private_init_bytes(program, unsafe {
+        std::slice::from_raw_parts_mut(private.ptr(), private.len)
+    });
+    let mut yields = Vec::new();
+    let code = unsafe {
+        if stable {
+            let resume = engine
+                .get_function::<HandleResume>(&format!("{handle}_resume"))
+                .unwrap();
+            let mut outcome = engine
+                .get_function::<HandleStart>(&format!("{handle}_start"))
+                .unwrap()
+                .call(
+                    first,
+                    shared.ptr(),
+                    private.ptr(),
+                    bodies.ptr(),
+                    frame.ptr(),
+                );
+            let mut replies = replies.iter();
+            while outcome.live == 1 {
+                yields.push(outcome.value);
+                outcome = resume.call(frame.ptr(), *replies.next().expect("reply"));
+            }
+            let code = (outcome.live == 3).then_some(outcome.value as u64);
+            assert_eq!(resume.call(frame.ptr(), 0), Outcome { live: 0, value: 0 });
+            code
+        } else {
+            let mut step = engine.get_function::<Start>(&entry).unwrap().call(
+                first,
+                shared.ptr(),
+                private.ptr(),
+                bodies.ptr(),
+                frame.ptr(),
+                reply.ptr(),
+            );
+            let mut replies = replies.iter();
+            while !step.next.is_null() {
+                yields.push(step.value);
+                reply
+                    .ptr()
+                    .cast::<i64>()
+                    .write(*replies.next().expect("reply"));
+                let resume: Resume = std::mem::transmute(step.next);
+                step = resume(frame.ptr(), false);
+            }
+            let offset = coroutine::trap_offset(4096, false).unwrap() as usize;
+            let record = frame.ptr().add(offset).cast::<u64>().read_unaligned();
+            record.checked_sub(1)
+        }
+    };
+    for storage in [&frame, &reply, &shared, &private, &bodies] {
+        storage.check();
+    }
+    (yields, code)
+}
+
 fn native_module_read<T>(
     program: &keleusma::bytecode::Module,
     seed: &[u8],
@@ -1372,36 +1465,8 @@ fn mixed_array_extents_use_the_selected_runtime_bound() {
 fn mixed_array_extents_trap_before_out_of_bounds_access() {
     use keleusma::bytecode::Value;
     use keleusma::vm::{Vm, VmState};
-    use std::os::unix::process::ExitStatusExt;
     let source = "loop main(t: [Word; 2]) -> Word { let r = yield 5; let n = t[1]; let e: [Word; 3] = if n > 0 { r } else { [99, 100, 101] }; let i = t[0]; yield 6; yield e[i] }";
     let program = common::build(source);
-    if let Ok(case) = std::env::var("KEL_COROUTINE_ARRAY_TRAP") {
-        let fields: Vec<_> = case.split(',').collect();
-        let index: i64 = fields[0].parse().unwrap();
-        let host = Guarded::new(16);
-        unsafe {
-            std::ptr::copy_nonoverlapping([index, 1].as_ptr().cast::<u8>(), host.ptr(), 16);
-        }
-        let pointer = host.ptr() as i64;
-        let mut yielded = 0;
-        native_module_read(
-            &program,
-            &[],
-            pointer,
-            &[pointer; 3],
-            fields[1] == "true",
-            fields[2] == "true",
-            |value, _, _, _| {
-                yielded += 1;
-                if yielded == 2 {
-                    assert_eq!(value, 6);
-                    println!("COROUTINE-ARRAY-RESUMING-INTO-INDEX");
-                }
-                value
-            },
-        );
-        panic!("native indexing returned where the VM faults");
-    }
     for index in [-1, 2] {
         let arena = keleusma_arena::Arena::with_capacity(65536);
         let mut vm = Vm::new(program.clone(), &arena).unwrap();
@@ -1419,32 +1484,30 @@ fn mixed_array_extents_trap_before_out_of_bounds_access() {
             format!("{error:?}").contains("IndexOutOfBounds"),
             "{error:?}"
         );
+        // **THE INDEX IS CHECKED AND THE TRAP IS REPORTED, NOT RAISED.** The
+        // read is total, so its flag reaches the explicit bounds `Trap`, and
+        // since Order 4 a coroutine reports that trap to its host instead of
+        // aborting. Both interfaces must report the same kind.
+        let host = Guarded::new(16);
+        unsafe {
+            std::ptr::copy_nonoverlapping([index, 1].as_ptr().cast::<u8>(), host.ptr(), 16);
+        }
+        let pointer = host.ptr() as i64;
         for optimized in [false, true] {
             for stable in [false, true] {
-                let result = std::process::Command::new(std::env::current_exe().unwrap())
-                    .args([
-                        "--exact",
-                        "mixed_array_extents_trap_before_out_of_bounds_access",
-                        "--nocapture",
-                    ])
-                    .env(
-                        "KEL_COROUTINE_ARRAY_TRAP",
-                        format!("{index},{optimized},{stable}"),
-                    )
-                    .output()
-                    .unwrap();
-                assert!(
-                    String::from_utf8_lossy(&result.stdout)
-                        .contains("COROUTINE-ARRAY-RESUMING-INTO-INDEX"),
-                    "{result:?}"
-                );
+                let (yields, code) =
+                    native_trap_run(&program, pointer, &[pointer; 3], optimized, stable);
+                assert_eq!(yields, [5, 6], "optimized {optimized}, stable {stable}");
                 assert_eq!(
-                    result.status.signal(),
-                    Some(5),
-                    "native bounds guard must raise SIGTRAP: {result:?}"
+                    code,
+                    Some(u64::from(
+                        keleusma::bytecode::TrapKind::IndexOutOfBounds.code()
+                    )),
+                    "optimized {optimized}, stable {stable}"
                 );
             }
         }
+        host.check();
     }
 }
 
@@ -3332,6 +3395,32 @@ fn require_program_kind_trap(
     replies: &[i64],
     case: &str,
 ) {
+    require_program_trap(
+        test,
+        program,
+        dialogues,
+        arguments,
+        prefix,
+        replies,
+        case,
+        coroutine::TRAP_CONTRACT,
+    );
+}
+
+/// [`require_program_kind_trap`] for a trap whose code is `expected`, which a
+/// total read reaches through its explicit `Trap` rather than through a guard.
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn require_program_trap(
+    test: &str,
+    program: &keleusma::bytecode::Module,
+    dialogues: Option<&std::collections::BTreeMap<coroutine::YieldSite, coroutine::Dialogue>>,
+    arguments: &[i64],
+    prefix: &[i64],
+    replies: &[i64],
+    case: &str,
+    expected: u64,
+) {
     use std::os::unix::process::ExitStatusExt;
     type StartTwo = unsafe extern "C" fn(i64, i64, *mut u8, *mut u8, *mut u8, *mut u8) -> Outcome;
     assert_eq!(prefix.len(), replies.len());
@@ -3413,8 +3502,29 @@ fn require_program_kind_trap(
                 }
                 outcome = resume.call(slot.ptr(), replies[index]);
             }
+            // **THE GUARD ENDS THE INSTANCE AND REPORTS IT.** Before Order 4 it
+            // aborted the process through `llvm.trap`, which is why this
+            // check runs in a child. It still does, so a regression to an
+            // abort fails here as a signal rather than ending the suite.
+            assert_eq!(
+                outcome,
+                Outcome {
+                    live: 3,
+                    value: expected as i64
+                },
+                "the guard must report its trap"
+            );
+            assert_eq!(
+                resume.call(slot.ptr(), 0),
+                Outcome { live: 0, value: 0 },
+                "a trapped instance is inactive"
+            );
+            for region in [&slot, &shared, &private, &bodies] {
+                region.check();
+            }
+            println!("KIND-TRAP-REPORTED");
         }
-        panic!("native execution survived the VM fault");
+        return;
     }
     for mode in ["unoptimized", "optimized"] {
         let result = std::process::Command::new(std::env::current_exe().unwrap())
@@ -3423,15 +3533,16 @@ fn require_program_kind_trap(
             .env("KEL_KIND_TRAP_CASE", case)
             .output()
             .unwrap();
+        let stdout = String::from_utf8_lossy(&result.stdout);
         assert!(
-            String::from_utf8_lossy(&result.stdout).contains("CLEARED-KIND-PREFIX-VERIFIED"),
+            stdout.contains("CLEARED-KIND-PREFIX-VERIFIED"),
             "{result:?}"
         );
-        assert_eq!(
-            result.status.signal(),
-            Some(5),
-            "expected the kind guard's SIGTRAP: {result:?}"
+        assert!(
+            stdout.contains("KIND-TRAP-REPORTED") && result.status.success(),
+            "expected the kind guard's reported trap: {result:?}"
         );
+        assert_eq!(result.status.signal(), None, "{result:?}");
     }
 }
 
@@ -4376,7 +4487,8 @@ fn completed_host_bodies_outlive_the_continuation_frame() {
             } else {
                 coroutine::lower(&context, &program, &machine(), 4096).unwrap()
             };
-            let continuation_bytes = 4096 - 16 - if explicit { 8 } else { 0 };
+            // The completion body sits directly below the trap record.
+            let continuation_bytes = coroutine::trap_offset(4096, explicit).unwrap() as usize - 16;
             if optimized {
                 common::force_optimize(&module);
             }
@@ -5328,7 +5440,9 @@ fn shortened_stream_reply_traps_before_an_out_of_bounds_read() {
         unsafe { std::slice::from_raw_parts_mut(initial.ptr(), 8) }
             .copy_from_slice(&5i64.to_le_bytes());
         #[cfg(unix)]
-        require_program_kind_trap(
+        // The shortened reply is read by a total index, so its flag reaches
+        // the explicit bounds trap rather than a contract guard.
+        require_program_trap(
             "shortened_stream_reply_traps_before_an_out_of_bounds_read",
             &program,
             Some(&dialogues),
@@ -5336,6 +5450,7 @@ fn shortened_stream_reply_traps_before_an_out_of_bounds_read() {
             &[5],
             &[reply.ptr() as i64],
             source,
+            u64::from(keleusma::bytecode::TrapKind::IndexOutOfBounds.code()),
         );
         initial.check();
         reply.check();
@@ -5625,6 +5740,7 @@ fn native_snapshot_results_survive_calls_suspension_and_completion() {
         let contracts = HostContracts {
             dialogues: Some(dialogues),
             native_body_returns: BTreeMap::from([(0, NativeBodyReturn::Snapshot)]),
+            ..HostContracts::default()
         };
         let arena = keleusma_arena::Arena::with_capacity(65536);
         let mut vm = Vm::new(program.clone(), &arena).unwrap();
@@ -5709,8 +5825,9 @@ fn native_snapshot_results_survive_calls_suspension_and_completion() {
                     let end = resume.call(slot.ptr(), 0);
                     assert_eq!(end.live, 2);
                     // Completion lives after LLVM's frame and before site metadata.
-                    assert_eq!(end.value as *mut u8, slot.ptr().add(16 + 4096 - 8 - 16));
-                    std::slice::from_raw_parts_mut(slot.ptr().add(16), 4096 - 8 - 16).fill(0xdd);
+                    let continuation = coroutine::trap_offset(4096, true).unwrap() as usize - 16;
+                    assert_eq!(end.value as *mut u8, slot.ptr().add(16 + continuation));
+                    std::slice::from_raw_parts_mut(slot.ptr().add(16), continuation).fill(0xdd);
                     assert_eq!(
                         std::slice::from_raw_parts(end.value as *const i64, 2),
                         &expected
@@ -5801,6 +5918,7 @@ fn native_instance_borrows_preserve_aliases_while_snapshots_copy() {
         let contracts = HostContracts {
             dialogues: None,
             native_body_returns: BTreeMap::from([(0, contract)]),
+            ..HostContracts::default()
         };
         for optimized in [false, true] {
             let context = Context::create();
@@ -6033,6 +6151,7 @@ fn native_snapshot_completion_links_from_c_and_emits_for_tier_one_targets() {
             },
         )])),
         native_body_returns: BTreeMap::from([(0, NativeBodyReturn::Snapshot)]),
+        ..HostContracts::default()
     };
     let directory = std::path::PathBuf::from("../tmp")
         .join(format!("retcon-native-completion-{}", std::process::id()));
@@ -6082,8 +6201,8 @@ int main(void) {{
     second = kel_coroutine_{entry}_resume(b.slot, 0);
     assert(first.status == 2 && second.status == 2);
     assert(kel_coroutine_{entry}_yield_site(a.slot) == UINT64_MAX);
-    memset(a.slot + 16, 0xdd, 4072);
-    memset(b.slot + 16, 0xdd, 4072);
+    memset(a.slot + 16, 0xdd, {continuation});
+    memset(b.slot + 16, 0xdd, {continuation});
     const int64_t *x = (const int64_t *)(uintptr_t)first.value;
     const int64_t *y = (const int64_t *)(uintptr_t)second.value;
     assert(x[0] == 5 && x[1] == 6 && y[0] == 20 && y[1] == 21);
@@ -6097,7 +6216,10 @@ int main(void) {{
 }}
 "#,
                 native = keleusma_native::native_symbol("host::pair"),
-                site = site.id()
+                site = site.id(),
+                // Every byte below the completion body, which the trap record
+                // and the dialogue metadata follow.
+                continuation = coroutine::trap_offset(4096, true).unwrap() - 16
             ),
         )
         .unwrap();

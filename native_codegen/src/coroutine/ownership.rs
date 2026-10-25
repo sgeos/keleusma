@@ -45,6 +45,20 @@ pub(crate) fn field<'ctx>(
     }
 }
 
+/// The word after a call's metadata in which a callee records a trap.
+///
+/// `count` is the callee's declared argument count plus one, the same count
+/// `kinds::call_field` takes. The call site sizes its context with this word
+/// and clears it before the call. A callee that traps stores the trap code plus
+/// one and returns at once, so zero means the call completed.
+pub(crate) fn trap_field<'ctx>(
+    b: &Builder<'ctx>,
+    context: PointerValue<'ctx>,
+    count: usize,
+) -> PointerValue<'ctx> {
+    field(b, context, 3 * count)
+}
+
 pub(crate) fn load<'ctx>(b: &Builder<'ctx>, slot: PointerValue<'ctx>) -> IntValue<'ctx> {
     let i64t = slot.get_type().get_context().i64_type();
     b.build_load(i64t, slot, "ownership_flag")

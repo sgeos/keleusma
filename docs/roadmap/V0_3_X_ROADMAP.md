@@ -294,6 +294,15 @@ verdict are exported as symbols. The execution-time bound is not, and the V0.4.0
 deferred. The evidence and its limits are in
 [`WORKSTREAM_D_COMPLETION.md`](../decisions/WORKSTREAM_D_COMPLETION.md).
 
+**Order 4 status, 2026-10-25.** Met, with the cost claim carried in part. A trap in a coroutine
+library reaches the host as an outcome with its kind, a host native can fail softly, and every
+handled first-pass outcome runs natively as a branch. Native execution follows the bytecode's cost
+path instruction for instruction, a bytecode cost claim composed through calls is exported with a
+status, and a measured machine stack bound is exported. The cost claim is in bytecode units, best
+effort as native time while open decision 1 stands, and is not established for the self-hosted
+lexer. The evidence and its limits are in
+[`ORDER_4_COMPLETION.md`](../decisions/ORDER_4_COMPLETION.md).
+
 ## The oracle and trust story
 
 Native code raises the same trust question as a self-hosted validator: native output that

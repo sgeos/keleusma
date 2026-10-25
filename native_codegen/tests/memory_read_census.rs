@@ -1,3 +1,17 @@
+//! The Order 4 instruction meter, off by default, reads one word per lowered
+//! instruction from the host's meter array before adding one to it. The host
+//! defines the array and zeroes it, as `LowerOptions::op_meter` documents.
+//! A host that did not zero it would only offset its own counts.
+//!
+//! Coroutine trap reporting, Order 4, reads three words. Each function's trap
+//! block loads its own trap-code cell, which its prologue initialises to the
+//! contract code before any branch and which each `Trap` overwrites
+//! immediately before branching. The entry and a callee each have one such
+//! load. The stable handles load the frame's trap record after every step.
+//! Start and the entry prologue both clear it, and only a trap writes it, so
+//! it is zero unless the step trapped. A caller reads a callee's trap word
+//! through the ownership load helper, after clearing it before the call.
+//!
 //! The ten-field delegate context is initialized before use. Fields five and
 //! six point to entry kind and size. Seven through nine point to latest-reply
 //! ownership, kind and size. Start initializes all latest metadata and every
@@ -86,7 +100,9 @@ const READ_FORMS: &[&str] = &["build_load(", " = load "];
 // 16 -> 18 with the retcon reply cell and latest-reply reads described above.
 // 18 -> 22, including the coroutine context and parsed intrinsic helper.
 // 22 -> 23 for the stable handle continuation, initialized by start.
-const RECORDED_READ_SITES: usize = 33;
+// 33 -> 36 for the two trap-code loads and the handle's trap-record load.
+// 36 -> 37 for the instruction meter's read of its own word.
+const RECORDED_READ_SITES: usize = 37;
 // 16 at first derivation, 2026-09-11. Four are on the host-provided boundary —
 // the resume-state word, the composite initialisation word, the private slot
 // array and the shared segment — and the rest read memory this lowering wrote

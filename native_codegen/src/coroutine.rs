@@ -56,7 +56,9 @@
 //! pointers. It returns `{ptr, i64}`. Continuations take `(ptr, i1)` and return
 //! that same pair. The value field is meaningful only with a non-null pointer.
 //! Normal Reentrant completion returns a null continuation and writes its
-//! final value into the reply cell. Owned flat results occupy a reserved tail
+//! final value into the reply cell. A trap also returns a null continuation.
+//! It stores its code plus one in the aligned word at [`trap_offset`] within
+//! the frame, which start clears and which is zero after a completion. Owned flat results occupy a reserved tail
 //! inside frame_bytes, outside LLVM's continuation storage. Borrowed results
 //! retain their original region aliases. Read completed bodies before release
 //! or the next start, while all supplied regions remain allocated and unchanged.
@@ -71,6 +73,9 @@
 //! Resume takes the same slot and an i64 reply bit pattern or body pointer. Both return
 //! `{i64 status, i64 value}`. Status one marks a yielded value. Status two
 //! reports normal Reentrant completion exactly once, with its final value.
+//! Status three reports a trap exactly once, with its code as the value, and
+//! leaves the instance inactive. The code is a `TrapKind` code, or
+//! [`TRAP_CONTRACT`] for a failed contract guard.
 //! Status zero returns a zero payload for an inactive instance. Release takes
 //! the slot and returns nothing. It clears
 //! the continuation, is idempotent, and makes subsequent resume return zeros.
@@ -106,6 +111,28 @@ pub(crate) mod types;
 
 /// Alignment required for the caller-provided coroutine frame.
 pub const FRAME_ALIGN: u32 = 8;
+
+/// The trap code reported when a contract guard fails rather than a `Trap`.
+///
+/// The emitted code checks representation contracts the bytecode alone does
+/// not establish, such as a host body's extent or a resumed value's kind. A
+/// failed guard ends the instance like a trap. Its code lies outside the
+/// `TrapKind` range, which fits in a `u16`.
+pub const TRAP_CONTRACT: u64 = 0x1_0000;
+
+/// Frame offset of the trap record for a `frame_bytes` reservation.
+///
+/// The record is the aligned word below the dialogue metadata when dialogues
+/// are explicit, and below the end of the reservation otherwise. It lies
+/// outside LLVM's continuation storage and survives coro.end.
+pub fn trap_offset(frame_bytes: u32, explicit_dialogues: bool) -> Option<u32> {
+    let end = if explicit_dialogues {
+        frame_bytes.checked_sub(8)? & !7
+    } else {
+        frame_bytes & !7
+    };
+    end.checked_sub(8)
+}
 
 /// Bytes for a stable host slot, including its continuation and reply header.
 /// The slot requires [`FRAME_ALIGN`] alignment and remains reserved until release.
@@ -189,8 +216,8 @@ pub fn lower<'ctx>(
         program,
         machine,
         frame_bytes,
-        None,
-        &Default::default(),
+        &HostContracts::default(),
+        LowerOptions::default(),
     )
 }
 
@@ -208,13 +235,17 @@ pub fn lower_with_dialogues<'ctx>(
     frame_bytes: u32,
     dialogues: &std::collections::BTreeMap<YieldSite, Dialogue>,
 ) -> Result<LlvmModule<'ctx>, LowerError> {
+    let contracts = HostContracts {
+        dialogues: Some(dialogues.clone()),
+        ..HostContracts::default()
+    };
     lower_impl(
         ctx,
         program,
         machine,
         frame_bytes,
-        Some(dialogues),
-        &Default::default(),
+        &contracts,
+        LowerOptions::default(),
     )
 }
 
@@ -234,9 +265,40 @@ pub fn lower_with_contracts<'ctx>(
         program,
         machine,
         frame_bytes,
-        contracts.dialogues.as_ref(),
-        &contracts.native_body_returns,
+        contracts,
+        LowerOptions::default(),
     )
+}
+
+/// [`lower_with_contracts`] with the instruction meter of
+/// [`LowerOptions::op_meter`]. Instrumentation for differential tests only.
+pub fn lower_metered<'ctx>(
+    ctx: &'ctx Context,
+    program: &Module,
+    machine: &TargetMachine,
+    frame_bytes: u32,
+    contracts: &HostContracts,
+) -> Result<LlvmModule<'ctx>, LowerError> {
+    let options = LowerOptions {
+        op_meter: true,
+        ..LowerOptions::default()
+    };
+    lower_impl(ctx, program, machine, frame_bytes, contracts, options)
+}
+
+/// Whether `{i64, i64}` returns in the same two registers as the C structure
+/// `{ int64_t value; int64_t failed; }` on `machine`.
+///
+/// AAPCS64 and the System V x86-64 convention return such a structure in two
+/// general registers, and LLVM lowers the two-word aggregate to those same
+/// registers. The Microsoft x64 convention returns it through a hidden
+/// pointer, and a 32-bit target splits the words differently, so a fallible
+/// native is refused there rather than called with a mismatched convention.
+fn two_word_returns_match_c(machine: &TargetMachine) -> bool {
+    let triple = machine.get_triple();
+    let triple = triple.as_str().to_string_lossy();
+    (triple.starts_with("aarch64") || triple.starts_with("arm64") || triple.starts_with("x86_64"))
+        && !triple.contains("windows")
 }
 
 fn lower_impl<'ctx>(
@@ -244,9 +306,17 @@ fn lower_impl<'ctx>(
     program: &Module,
     machine: &TargetMachine,
     frame_bytes: u32,
-    dialogues: Option<&std::collections::BTreeMap<YieldSite, Dialogue>>,
-    native_body_returns: &std::collections::BTreeMap<u16, NativeBodyReturn>,
+    contracts: &HostContracts,
+    options: LowerOptions,
 ) -> Result<LlvmModule<'ctx>, LowerError> {
+    let dialogues = contracts.dialogues.as_ref();
+    let native_body_returns = &contracts.native_body_returns;
+    if !contracts.fallible_natives.is_empty() && !two_word_returns_match_c(machine) {
+        return Err(error(
+            "fallible natives return two words, which this target does not return as the C \
+             structure they are declared as",
+        ));
+    }
     if frame_bytes < FRAME_ALIGN || frame_bytes > i32::MAX as u32 {
         return Err(error(
             "coroutine frame size must be between 8 and i32::MAX bytes",
@@ -309,7 +379,14 @@ fn lower_impl<'ctx>(
             ));
         }
     }
-    let plan = dialogue::Plan::new(program, entry, dialogues, frame_bytes, native_body_returns)?;
+    let plan = dialogue::Plan::new(
+        program,
+        entry,
+        dialogues,
+        frame_bytes,
+        native_body_returns,
+        &contracts.fallible_natives,
+    )?;
     for (index, callee) in program.chunks.iter().enumerate() {
         if !plan.reachable[index] || index == entry || callee.block_type != BlockType::Stream {
             continue;
@@ -324,17 +401,24 @@ fn lower_impl<'ctx>(
         }
     }
     let metadata_offset = plan.metadata_offset;
+    let trap_offset = plan.trap_offset;
     // Completion outlives coro.end. Reserve a disjoint tail for owned flat
-    // results, outside the bytes LLVM may use for the continuation frame.
+    // results, outside the bytes LLVM may use for the continuation frame. The
+    // trap record follows it, and the dialogue metadata, when present, ends
+    // the reservation.
     let completion_bytes = match (stream.block_type, result_shape) {
         (BlockType::Reentrant, keleusma::bytecode::WireShape::Flat { size, .. }) => size.max(1),
         _ => 0,
     };
-    let continuation_bytes = metadata_offset
-        .unwrap_or(frame_bytes)
+    let continuation_bytes = trap_offset
         .checked_sub(completion_bytes)
         .filter(|bytes| *bytes >= FRAME_ALIGN)
-        .ok_or_else(|| error("coroutine frame is too small for its completion reservation"))?;
+        .ok_or_else(|| {
+            error(
+                "coroutine frame exceeds the caller reservation, whose completion reservation \
+                 and trap record leave fewer than eight continuation bytes",
+            )
+        })?;
     let owns_host_values = plan.owns_bodies;
     let analysis = types::check(program, entry, plan)?;
     let mut prepared = program.clone();
@@ -351,7 +435,7 @@ fn lower_impl<'ctx>(
         ctx,
         &module,
         program,
-        LowerOptions::default(),
+        options,
         None,
         None,
         Some((continuation_bytes, &analysis)),
@@ -474,6 +558,7 @@ fn lower_impl<'ctx>(
         entry,
         stream.block_type == BlockType::Reentrant,
         metadata_offset,
+        trap_offset,
     );
     module.verify().map_err(error)?;
     Ok(module)

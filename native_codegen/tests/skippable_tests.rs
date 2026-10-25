@@ -51,6 +51,8 @@ const SKIPPABLE: &[&str] = &[
     "a_rust_host_links_the_lexer_static_library_and_agrees_with_the_vm",
     "the_archive_exports_exactly_the_api_and_the_contract",
     "the_generated_contract_agrees_with_the_module",
+    // Order 4: skips with the rest of the file when `ar` or `rustc` is absent.
+    "the_measured_machine_stack_stays_within_the_exported_bound",
     "two_libraries_link_into_one_rust_host_only_after_export",
     "a_linked_native_object_agrees_with_the_vm",
     "a_linked_object_with_natives_and_a_data_segment_agrees_with_the_vm",

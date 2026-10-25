@@ -2,7 +2,7 @@
 //!
 //! The first eight bytes reserve the current continuation pointer, the next
 //! eight hold reply or completion bits, and the remaining bytes reserve the
-//! retcon frame and any owned completion body. All
+//! retcon frame, any owned completion body and the trap record. All
 //! offsets are constants within `slot_bytes(frame_bytes)`. Start initializes
 //! the continuation before either operation may read it. Released slots retain
 //! a null continuation until reused by start.
@@ -35,6 +35,12 @@ fn offset<'ctx>(
     }
 }
 
+/// Translate one raw step into the stable `{status, value}` answer.
+///
+/// A live continuation is a yield. Otherwise the trap record decides. It holds
+/// zero unless the instance trapped, in which case it holds the trap code plus
+/// one, and the answer is status three with the code. Without a trap a
+/// Reentrant entry completed, and a Stream entry was already inactive.
 fn finish_step<'ctx>(
     ctx: &'ctx Context,
     builder: &Builder<'ctx>,
@@ -42,6 +48,7 @@ fn finish_step<'ctx>(
     raw: StructValue<'ctx>,
     result: StructType<'ctx>,
     completes: bool,
+    trap_offset: u32,
 ) {
     let next = builder
         .build_extract_value(raw, 0, "next")
@@ -54,13 +61,33 @@ fn finish_step<'ctx>(
     builder.build_store(slot, next).unwrap();
     let live = builder.build_is_not_null(next, "live").unwrap();
     let word = ctx.i64_type();
-    let status = builder
-        .build_select(
-            live,
-            word.const_int(1, false),
-            word.const_int(if completes { 2 } else { 0 }, false),
-            "status",
+    let record = builder
+        .build_load(
+            word,
+            offset(ctx, builder, slot, HEADER_BYTES + trap_offset),
+            "trap_record",
         )
+        .unwrap()
+        .into_int_value();
+    let trapped = builder
+        .build_int_compare(
+            inkwell::IntPredicate::NE,
+            record,
+            word.const_zero(),
+            "trapped",
+        )
+        .unwrap();
+    let ended = builder
+        .build_select(
+            trapped,
+            word.const_int(3, false),
+            word.const_int(if completes { 2 } else { 0 }, false),
+            "ended",
+        )
+        .unwrap()
+        .into_int_value();
+    let status = builder
+        .build_select(live, word.const_int(1, false), ended, "status")
         .unwrap();
     // The raw completion payload is undefined. Finite entries write the
     // result into the caller's reply cell before coro.end instead.
@@ -72,6 +99,13 @@ fn finish_step<'ctx>(
     } else {
         word.const_zero()
     };
+    let code = builder
+        .build_int_sub(record, word.const_int(1, false), "trap_code")
+        .unwrap();
+    let completed = builder
+        .build_select(trapped, code, completed, "ended_value")
+        .unwrap()
+        .into_int_value();
     let value = builder
         .build_select(live, value, completed, "payload")
         .unwrap();
@@ -91,6 +125,7 @@ pub(super) fn emit<'ctx>(
     index: usize,
     completes: bool,
     metadata_offset: Option<u32>,
+    trap_offset: u32,
 ) {
     let ptr = ctx.ptr_type(AddressSpace::default());
     let word = ctx.i64_type();
@@ -154,6 +189,12 @@ pub(super) fn emit<'ctx>(
     builder
         .build_store(offset(ctx, &builder, slot, 8), word.const_zero())
         .unwrap();
+    builder
+        .build_store(
+            offset(ctx, &builder, slot, HEADER_BYTES + trap_offset),
+            word.const_zero(),
+        )
+        .unwrap();
     let mut args: Vec<_> = start
         .get_param_iter()
         .take(ordinary_params)
@@ -167,7 +208,7 @@ pub(super) fn emit<'ctx>(
         .try_as_basic_value()
         .unwrap_basic()
         .into_struct_value();
-    finish_step(ctx, &builder, slot, raw, result, completes);
+    finish_step(ctx, &builder, slot, raw, result, completes, trap_offset);
 
     for release in [false, true] {
         let name = format!("{prefix}_{}", if release { "release" } else { "resume" });
@@ -222,7 +263,7 @@ pub(super) fn emit<'ctx>(
             builder.build_store(slot, ptr.const_null()).unwrap();
             builder.build_return(None).unwrap();
         } else {
-            finish_step(ctx, &builder, slot, raw, result, completes);
+            finish_step(ctx, &builder, slot, raw, result, completes, trap_offset);
         }
     }
 }

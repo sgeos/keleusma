@@ -2,7 +2,7 @@
 use super::error;
 use crate::LowerError;
 use keleusma::bytecode::{BlockType, Module, Op, TypeTag, WireShape};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A yield instruction in the supplied bytecode module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -53,6 +53,16 @@ pub struct HostContracts {
     /// Each named result must have a bounded flat signature in the module.
     /// A native flat result without an entry remains refused when called.
     pub native_body_returns: BTreeMap<u16, NativeBodyReturn>,
+    /// Keys index Module::native_names. Each named native may fail softly.
+    ///
+    /// Its symbol returns `{i64 value, i64 failed}` instead of `i64`. A zero
+    /// `failed` word is success with `value` as the result. Any other word is
+    /// a soft failure with `value` as the host's error code, which a
+    /// `host_error` arm binds and which otherwise reaches the default
+    /// `Trap(HostError)`. That is the virtual machine's
+    /// `VmError::NativeErrorCode` contract. A native without an entry cannot
+    /// fail, as before. A fallible native returning a flat body is refused.
+    pub fallible_natives: BTreeSet<u16>,
 }
 
 pub(crate) struct Plan {
@@ -61,7 +71,11 @@ pub(crate) struct Plan {
     pub native_calls: std::collections::BTreeSet<u16>,
     pub owns_bodies: bool,
     pub metadata_offset: Option<u32>,
+    /// The aligned word below the dialogue metadata, or below the end of the
+    /// reservation, which records a trap. See `crate::coroutine::TRAP_CONTRACT`.
+    pub trap_offset: u32,
     pub native_body_returns: BTreeMap<u16, NativeBodyReturn>,
+    pub fallible_natives: BTreeSet<u16>,
 }
 
 pub(crate) fn tag(shape: WireShape) -> TypeTag {
@@ -105,7 +119,21 @@ impl Plan {
         explicit: Option<&BTreeMap<YieldSite, Dialogue>>,
         frame_bytes: u32,
         native_body_returns: &BTreeMap<u16, NativeBodyReturn>,
+        fallible_natives: &BTreeSet<u16>,
     ) -> Result<Self, LowerError> {
+        for &index in fallible_natives {
+            if usize::from(index) >= m.native_names.len() {
+                return Err(error(format!(
+                    "fallible native {index} is not in the module's native table"
+                )));
+            }
+            if native_body_returns.contains_key(&index) {
+                return Err(error(format!(
+                    "fallible native {index} returns a flat body, whose failure code has no \
+                     defined storage"
+                )));
+            }
+        }
         for &index in native_body_returns.keys() {
             if usize::from(index) >= m.native_names.len()
                 || !matches!(
@@ -208,13 +236,17 @@ impl Plan {
         } else {
             None
         };
+        let trap_offset = super::trap_offset(frame_bytes, explicit.is_some())
+            .ok_or_else(|| error("frame is too small for its trap record"))?;
         Ok(Self {
             sites,
             reachable,
             native_calls,
             owns_bodies,
             metadata_offset,
+            trap_offset,
             native_body_returns: native_body_returns.clone(),
+            fallible_natives: fallible_natives.clone(),
         })
     }
 }

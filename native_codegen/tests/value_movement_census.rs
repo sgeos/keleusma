@@ -1,3 +1,15 @@
+//! The Order 4 instruction meter stores a count into the host's meter array,
+//! one word per instruction. The value is a scalar count and never an address.
+//!
+//! Coroutine trap reporting, Order 4, adds eight stores, none of an address.
+//! Each function's trap-code cell receives the contract code at its prologue,
+//! a `TrapKind` code at each `Trap`, and a forwarded callee code before a
+//! branch to the trap block. The entry's frame trap record receives zero at
+//! the prologue and the code plus one at the trap block. The stable start
+//! clears the same record. A call site clears its context's trap word and a
+//! trapping callee writes the code plus one there. Every value is a scalar
+//! code, so no destination can come to hold a body address.
+//!
 //! Latest-reply state stores payload, ownership, kind and actual body size.
 //! Direct and delegated yields copy immutable host bodies before returning.
 //! Entry parameter metadata and latest metadata remain independent. Reset
@@ -139,7 +151,9 @@ const MOVE_FORMS: &[&str] = &[
 // 27 -> 30 for the stable continuation, reply, and release stores.
 // 59 -> 63 with selected output size, field store, body copy and padding.
 // 80 -> 81 in absorption 82: the Fixed `Div`/`Mod` arm zeroes the high slot.
-const RECORDED_MOVE_SITES: usize = 81;
+// 81 -> 89 in Order 4 for the eight trap-reporting stores described above.
+// 89 -> 90 for the instruction meter's store of its count.
+const RECORDED_MOVE_SITES: usize = 90;
 // 18 -> 19 on 2026-09-11, when the shared composite slot landed: one body copy
 // into the host's buffer, at the offset and length the module's shared layout
 // STATES. Unlike the persistent pool, nothing here is derived — so there is no

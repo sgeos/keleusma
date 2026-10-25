@@ -66,3 +66,12 @@ A per-target cost model for the emitted instruction sequences, and a bound for e
 compiler-runtime routine the code can reach — which on the measured target includes double-precision
 arithmetic and 64-bit division. **That is a workstream, not an increment**, and nothing here starts
 it. Naming it is the whole of what this record does about it.
+
+## Addendum, Order 4, 2026-10-25
+
+Two of the steps named above were taken. A cost composed through calls between
+scripts is now exported, and `native_cost_path.rs` measures that native code
+executes the bytecode path that cost sums, instruction for instruction. The
+claim is still in bytecode cost units and is labelled so. No per-target cost
+model and no bound for compiler runtime routines exist, so no native time bound
+is claimed. See [`ORDER_4_COMPLETION.md`](./ORDER_4_COMPLETION.md).

@@ -40,6 +40,7 @@
 //! | **a float operand is the only shape the compiler emits for bare `Div`/`Mod`** (absorption 82) | **harmless if false** — Word, Byte and Fixed operands each have a lowering compared against the reference, so the note describes the corpus rather than guarding anything |
 //! | **the compiler emits no zero-length indexed span** (absorption 82) | **refuse** — the arm refuses one rather than addressing an element that does not exist |
 //! | **a Unit fallback of an indexed read is never observed** (absorption 82, not phrase-shaped) | **MISLOWER if false, so CHECKED at the site**: a Unit-fallback read lowers only when the bare bounds trap follows it, and is refused otherwise |
+//! | **the compiler emits an explicit `Trap` for each unhandled outcome** (Order 4, on `OverflowPolicy::Trap`) | **nothing lowers on it**: the sentence explains why an option that is off by default is superseded, and `partial_operation_census.rs` reads the emitted `Trap` sites rather than assuming them |
 //! | **the reference packs a float field at `float_bytes`** | **refuse — and CHECKED, by `the_documented_composite_sizes_hold_in_this_configuration`. A wrong width here cannot mispack silently: `NewComposite` compares the packed bytes against the byte size the instruction bakes and refuses on a mismatch. Measured the same day — hardcoding the width to 8 yields *"packs 12 bytes but the instruction bakes 8"* under `narrow-float-32`, which is a refusal, not a wrong value** |
 //!
 //! # ⚠ THREE ENTRIES WERE INVISIBLE TO THIS CENSUS UNTIL 2026-09-12
@@ -140,7 +141,8 @@ const PREMISE_PHRASES: &[&str] = &[
 /// **Re-derive this rather than trusting it.** It moves with every increment
 /// that adds or removes such a comment, including this file's own prose being
 /// quoted into the emitter.
-const RECORDED_PREMISE_LINES: usize = 36;
+const RECORDED_PREMISE_LINES: usize = 37;
+// 36 -> 37 in Order 4 for the superseded `OverflowPolicy::Trap` row above.
 // 12 -> 29 with the impossibility phrases. The seventeen new lines were read,
 // and they fall in one class: **statements of what the backend DECLINES** —
 // "an unknown width cannot be placed", "`Op::Add` cannot be lowered without

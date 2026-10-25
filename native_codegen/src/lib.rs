@@ -76,8 +76,10 @@
 //! is a lowering bug and is asserted rather than tolerated.
 
 pub mod coroutine;
+pub mod cost;
 pub mod linkage;
 pub mod region;
+pub mod stack;
 
 /// The PACKED width of an operand-stack value, for placing it inside a flat
 /// composite body.
@@ -343,12 +345,14 @@ pub enum OverflowPolicy {
     Wrap,
     /// Branch to a native trap when the outcome flag is non-zero.
     ///
-    /// This is the shape `V0_3_X_ROADMAP.md` Workstream F describes for an
-    /// unhandled partial operation, and it is retained for that work. **It
-    /// diverges from the VM**, measurably: with this policy `add(i64::MAX, 1)`
-    /// aborts through `llvm.trap` where the VM returns the wrapped value. Do
-    /// not enable it without deciding that native may lead a semantic change
-    /// the VM has not made.
+    /// This was the shape `V0_3_X_ROADMAP.md` Workstream F described for an
+    /// unhandled partial operation. **It is superseded.** Since the V0.2.X
+    /// line made the partial operations total, the compiler emits an explicit
+    /// `Trap` for each unhandled outcome, and the backend lowers that `Trap`.
+    /// Workstream F needs nothing from this policy, which `ORDER_4_PLAN.md`
+    /// records. **It still diverges from the VM**: with it `add(i64::MAX, 1)`
+    /// aborts through `llvm.trap` where the VM returns the wrapped value. It is
+    /// kept only because existing tests name it. Do not enable it.
     Trap,
 }
 
@@ -374,6 +378,32 @@ pub struct LowerOptions {
     /// lowering is acceptable for the module in hand. See
     /// `docs/decisions/NATIVE_DELEGATED_SUSPENSION.md`.
     pub delegated_suspension: bool,
+    /// Count every bytecode instruction the native code executes.
+    ///
+    /// **Instrumentation for Workstream E, off by default.** The module declares
+    /// an external global [`OP_METER_SYMBOL`], an array of `i64` with one word
+    /// per instruction of every chunk in order, which the host defines and
+    /// zeroes. Each lowered instruction
+    /// adds one to its word before its own code runs. The VM executes the same
+    /// instructions, which its breakpoints can count, so equal counts show
+    /// that native execution follows the bytecode's path. That is what lets
+    /// the verifier's cost bound, a sum over that path, describe native code.
+    /// The counter is one global, so a metered module serves one instance on
+    /// one thread at a time.
+    pub op_meter: bool,
+}
+
+/// The global a metered module counts executed instructions into. See
+/// [`LowerOptions::op_meter`].
+pub const OP_METER_SYMBOL: &str = "kel_op_meter";
+
+/// The index of `(chunk, instruction)` in the [`OP_METER_SYMBOL`] array.
+pub fn op_meter_index(program: &Module, chunk: usize, instruction: usize) -> usize {
+    program.chunks[..chunk]
+        .iter()
+        .map(|c| c.ops.len())
+        .sum::<usize>()
+        + instruction
 }
 
 /// Packed width a producing instruction fixes by ITSELF, independent of its
@@ -1799,9 +1829,12 @@ pub fn lower_chunk<'ctx>(
             retcon_owned_bodies: false,
             retcon_sites: None,
             retcon_native_bodies: None,
+            retcon_fallible_natives: None,
             retcon_facts: None,
             retcon_reply_body_maximum: 0,
             retcon_site_offset: None,
+            retcon_trap_offset: None,
+            op_meter: None,
             retcon_resume_type: None,
             retcon_resume_shape: None,
             retcon_branches: None,
@@ -2009,6 +2042,19 @@ fn lower_module_with<'ctx>(
         |index: usize| retcon_config.is_none_or(|(_, facts)| facts.plan.reachable[index]);
     check_word_width(program.word_bits_log2)?;
     let i64t = ctx.i64_type();
+    let op_meter = opts.op_meter.then(|| {
+        let words = program
+            .chunks
+            .iter()
+            .map(|c| c.ops.len())
+            .sum::<usize>()
+            .max(1);
+        let ty = i64t.array_type(words as u32);
+        // A declaration, so the host supplies the words and reads them back.
+        module
+            .add_global(ty, None, OP_METER_SYMBOL)
+            .as_pointer_value()
+    });
     // **The module's float width, hoisted above its first use.** It was computed
     // further down, which was fine while the entry ABI's type was hard-coded
     // `f64` and stopped being fine the moment that type became width-derived.
@@ -2399,8 +2445,13 @@ fn lower_module_with<'ctx>(
                 .map_or(0, |(_, facts)| facts.reply_body_maximum),
             retcon_sites: retcon_config.map(|(_, facts)| &facts.plan.sites[i]),
             retcon_native_bodies: retcon_config.map(|(_, facts)| &facts.plan.native_body_returns),
+            retcon_fallible_natives: retcon_config.map(|(_, facts)| &facts.plan.fallible_natives),
             retcon_facts: retcon_config.map(|(_, facts)| &facts.facts[i]),
             retcon_site_offset: retcon_config.and_then(|(_, facts)| facts.plan.metadata_offset),
+            retcon_trap_offset: retcon_config
+                .map(|(_, facts)| facts.plan.trap_offset)
+                .filter(|_| retcon),
+            op_meter: op_meter.map(|g| (g, op_meter_index(program, i, 0) as u64)),
             retcon_branches: retcon_config.map(|(_, facts)| &facts.branches[i]),
             retcon_resume_shape: retcon_bytes
                 .and(program.entry_point)
@@ -2755,7 +2806,13 @@ struct BodyCfg<'a> {
     retcon_sites: Option<&'a BTreeMap<usize, (u64, coroutine::Dialogue)>>,
     retcon_facts: Option<&'a BTreeMap<usize, coroutine::types::Facts>>,
     retcon_native_bodies: Option<&'a BTreeMap<u16, coroutine::NativeBodyReturn>>,
+    /// Natives whose symbol returns a value and a failure word.
+    retcon_fallible_natives: Option<&'a std::collections::BTreeSet<u16>>,
     retcon_site_offset: Option<u32>,
+    /// Frame offset of the entry's trap record. `Some` only for the entry.
+    retcon_trap_offset: Option<u32>,
+    /// The instruction meter and this chunk's first index in it.
+    op_meter: Option<(PointerValue<'a>, u64)>,
     /// The VM writes host replies to the outer entry parameter even when a
     /// reentrant callee is suspended. Its own parameters retain their values.
     retcon_resume_type: Option<TypeTag>,
@@ -3653,7 +3710,10 @@ fn lower_chunk_body<'ctx>(
         retcon_sites,
         retcon_facts,
         retcon_native_bodies,
+        retcon_fallible_natives,
         retcon_site_offset,
+        retcon_trap_offset,
+        op_meter,
         retcon_resume_type,
         retcon_resume_shape,
         retcon_branches,
@@ -3694,6 +3754,37 @@ fn lower_chunk_body<'ctx>(
     } else {
         None
     };
+    // **A COROUTINE REPORTS A TRAP INSTEAD OF ABORTING.** Each `Trap` records
+    // its kind here before it branches to the trap block, and every other
+    // branch there is a contract guard, so the cell starts as
+    // `coroutine::TRAP_CONTRACT`. A `Trap` always branches at once, so a guard
+    // never reads a kind an earlier `Trap` left behind. Outside a coroutine
+    // the trap block aborts through `llvm.trap` and this cell is not built.
+    let trap_code = retcon_facts.is_some().then(|| {
+        let cell = b.build_alloca(i64t, "trap_code").unwrap();
+        b.build_store(cell, i64t.const_int(coroutine::TRAP_CONTRACT, false))
+            .unwrap();
+        cell
+    });
+    // The entry's frame record survives coro.end. Clearing it here serves the
+    // raw interface, whose host does not clear it before start.
+    let trap_record = retcon_trap_offset.map(|offset| {
+        let frame = func
+            .get_nth_param(func.count_params() - 2)
+            .unwrap()
+            .into_pointer_value();
+        let record = unsafe {
+            b.build_in_bounds_gep(
+                i8t,
+                frame,
+                &[i64t.const_int(u64::from(offset), false)],
+                "trap_record",
+            )
+            .unwrap()
+        };
+        b.build_store(record, i64t.const_zero()).unwrap();
+        record
+    });
     let retcon_completion = match (
         retcon_frame_bytes,
         chunk.block_type,
@@ -3994,10 +4085,49 @@ fn lower_chunk_body<'ctx>(
         };
 
     let prologue_end = b.get_insert_block().unwrap();
-    let trapfn = trap_declaration(ctx, module);
     b.position_at_end(trap_bb);
-    b.build_call(trapfn, &[], "").unwrap();
-    b.build_unreachable().unwrap();
+    match (trap_code, trap_record, ownership_context) {
+        // The entry records the code plus one and ends the instance through the
+        // scaffold's single coro.end, which the stable handles report as
+        // status three.
+        (Some(code), Some(record), _) => {
+            let code = b
+                .build_load(i64t, code, "trap_kind")
+                .unwrap()
+                .into_int_value();
+            let marked = b
+                .build_int_add(code, i64t.const_int(1, false), "trap_mark")
+                .unwrap();
+            b.build_store(record, marked).unwrap();
+            let cleanup = func
+                .get_basic_blocks()
+                .into_iter()
+                .find(|bb| bb.get_name().to_bytes() == b"retcon.cleanup")
+                .unwrap();
+            b.build_unconditional_branch(cleanup).unwrap();
+        }
+        // A callee hands the code to its caller through the call context and
+        // returns at once. Its result is never read, because the caller
+        // tests the context before using it.
+        (Some(code), None, Some(context)) => {
+            let code = b
+                .build_load(i64t, code, "trap_kind")
+                .unwrap()
+                .into_int_value();
+            let marked = b
+                .build_int_add(code, i64t.const_int(1, false), "trap_mark")
+                .unwrap();
+            let field =
+                coroutine::ownership::trap_field(&b, context, usize::from(chunk.param_count) + 1);
+            b.build_store(field, marked).unwrap();
+            build_typed_return(&b, func, i64t.const_zero());
+        }
+        _ => {
+            let trapfn = trap_declaration(ctx, module);
+            b.build_call(trapfn, &[], "").unwrap();
+            b.build_unreachable().unwrap();
+        }
+    }
     b.position_at_end(prologue_end);
 
     // One basic block per jump target. Keleusma's structured control flow means
@@ -4416,6 +4546,26 @@ fn lower_chunk_body<'ctx>(
 
         if dead {
             continue;
+        }
+
+        if let Some((meter, base)) = op_meter {
+            let word = unsafe {
+                st.b.build_in_bounds_gep(
+                    i64t,
+                    meter,
+                    &[i64t.const_int(base + i as u64, false)],
+                    "op_meter_word",
+                )
+                .unwrap()
+            };
+            let count =
+                st.b.build_load(i64t, word, "op_count")
+                    .unwrap()
+                    .into_int_value();
+            let next =
+                st.b.build_int_add(count, i64t.const_int(1, false), "op_count_next")
+                    .unwrap();
+            st.b.build_store(word, next).unwrap();
         }
 
         if let Some(facts) = retcon_facts.and_then(|extents| extents.get(&i)) {
@@ -6066,7 +6216,11 @@ fn lower_chunk_body<'ctx>(
                     .unwrap();
             }
             Op::EndIf => {}
-            Op::Trap(_) => {
+            Op::Trap(kind) => {
+                if let Some(cell) = trap_code {
+                    st.b.build_store(cell, i64t.const_int(u64::from(*kind), false))
+                        .unwrap();
+                }
                 st.b.build_unconditional_branch(trap_bb).unwrap();
             }
             // A direct call to another chunk. Only reachable through
@@ -6108,7 +6262,7 @@ fn lower_chunk_body<'ctx>(
                 let call_ownership = retcon_facts.is_some().then(|| {
                     let context =
                         st.b.build_alloca(
-                            i64t.array_type((u32::from(*arg_count) + 1) * 3),
+                            i64t.array_type((u32::from(*arg_count) + 1) * 3 + 1),
                             "call_metadata",
                         )
                         .unwrap();
@@ -6132,6 +6286,15 @@ fn lower_chunk_body<'ctx>(
                     }
                     st.b.build_store(
                         coroutine::ownership::field(&st.b, context, usize::from(*arg_count)),
+                        i64t.const_zero(),
+                    )
+                    .unwrap();
+                    st.b.build_store(
+                        coroutine::ownership::trap_field(
+                            &st.b,
+                            context,
+                            usize::from(*arg_count) + 1,
+                        ),
                         i64t.const_zero(),
                     )
                     .unwrap();
@@ -6203,12 +6366,37 @@ fn lower_chunk_body<'ctx>(
                     })?;
                     args.push(context.into());
                 }
-                let ret = match st
-                    .b
-                    .build_call(callee, &args, "call")
-                    .unwrap()
-                    .try_as_basic_value()
-                {
+                let call = st.b.build_call(callee, &args, "call").unwrap();
+                // A callee that trapped returned early with its code in the
+                // context. Forward the code to this function's own trap block.
+                if let (Some(context), Some(cell)) = (call_ownership, trap_code) {
+                    let field = coroutine::ownership::trap_field(
+                        &st.b,
+                        context,
+                        usize::from(*arg_count) + 1,
+                    );
+                    let mark = coroutine::ownership::load(&st.b, field);
+                    let trapped =
+                        st.b.build_int_compare(
+                            IntPredicate::NE,
+                            mark,
+                            i64t.const_zero(),
+                            "callee_trapped",
+                        )
+                        .unwrap();
+                    let forward = ctx.append_basic_block(func, "forward_trap");
+                    let completed = ctx.append_basic_block(func, "call_completed");
+                    st.b.build_conditional_branch(trapped, forward, completed)
+                        .unwrap();
+                    st.b.position_at_end(forward);
+                    let code =
+                        st.b.build_int_sub(mark, i64t.const_int(1, false), "callee_trap")
+                            .unwrap();
+                    st.b.build_store(cell, code).unwrap();
+                    st.b.build_unconditional_branch(trap_bb).unwrap();
+                    st.b.position_at_end(completed);
+                }
+                let ret = match call.try_as_basic_value() {
                     // A float RESULT comes back as a double and rejoins the
                     // homogeneous operand stack as its bits, mirroring the
                     // prologue.
@@ -6338,16 +6526,28 @@ fn lower_chunk_body<'ctx>(
             // The reference compiler reifies every native call: the flag pushes
             // the value and a flag of zero on success, or the host's code and a
             // flag of one on a soft host failure, and a bare call follows with a
-            // flag test and `Trap(HostError)`. **The native host ABI has no
-            // soft-failure channel.** A native is `i64 f(i64...)`, so a linked
-            // host function cannot report one, and every call it makes succeeds
-            // or does not return. A reified call therefore pushes its result
-            // and a constant zero flag. The trap arm still lowers and is never
-            // taken. A host needing soft failures needs an ABI that carries
-            // them, which is Workstream D's to define.
+            // flag test and `Trap(HostError)`.
+            //
+            // **A native is infallible unless the host contract says otherwise.**
+            // An ordinary native is `i64 f(i64...)` and cannot report a soft
+            // failure, so its reified call pushes the result and a constant zero
+            // flag, and the trap arm lowers and is never taken. Since Order 4 a
+            // coroutine's `HostContracts::fallible_natives` names natives whose
+            // symbol is `{i64, i64} f(i64...)`, value then failure word, and their
+            // flag is the host's own. A coroutine reports the resulting default
+            // `Trap(HostError)` to its host. Outside a coroutine there is no
+            // contract and every native stays infallible.
             Op::CallVerifiedNative(idx, n) | Op::CallExternalNative(idx, n) => {
                 let reified = n & 0x80 != 0;
                 let argc = usize::from(n & 0x7F);
+                let fallible = retcon_fallible_natives.is_some_and(|set| set.contains(idx));
+                if fallible && !reified {
+                    return Err(LowerError::UnsupportedShape(format!(
+                        "native #{idx} is declared fallible but this call site does not reify \
+                         its outcome, so a failure would have no destination"
+                    )));
+                }
+                let pair = ctx.struct_type(&[i64t.into(), i64t.into()], false);
                 let name = natives.get(usize::from(*idx)).ok_or_else(|| {
                     LowerError::MalformedInput(format!(
                         "native call #{idx} indexes a native table of {} entries; \
@@ -6378,7 +6578,12 @@ fn lower_chunk_body<'ctx>(
                     None => {
                         let params: Vec<inkwell::types::BasicMetadataTypeEnum> =
                             (0..argc).map(|_| i64t.into()).collect();
-                        module.add_function(&sym, i64t.fn_type(&params, false), None)
+                        let ty = if fallible {
+                            pair.fn_type(&params, false)
+                        } else {
+                            i64t.fn_type(&params, false)
+                        };
+                        module.add_function(&sym, ty, None)
                     }
                 };
 
@@ -6387,16 +6592,36 @@ fn lower_chunk_body<'ctx>(
                 let args: Vec<inkwell::values::BasicMetadataValueEnum> =
                     args.into_iter().map(|a| a.into()).collect();
 
-                let ret = match st
+                let returned = match st
                     .b
                     .build_call(f, &args, "native")
                     .unwrap()
                     .try_as_basic_value()
                 {
-                    ValueKind::Basic(v) => v.into_int_value(),
+                    ValueKind::Basic(v) => v,
                     ValueKind::Instruction(_) => {
-                        unreachable!("every native is declared returning i64, never void")
+                        unreachable!("every native is declared returning a value, never void")
                     }
+                };
+                // Any nonzero failure word is a failure, as any `Err` is in the
+                // virtual machine. The flag the compiler tests is exactly one.
+                let (ret, failed) = if fallible {
+                    let outcome = returned.into_struct_value();
+                    let value =
+                        st.b.build_extract_value(outcome, 0, "native_value")
+                            .unwrap()
+                            .into_int_value();
+                    let word =
+                        st.b.build_extract_value(outcome, 1, "native_failed")
+                            .unwrap()
+                            .into_int_value();
+                    let failed =
+                        st.b.build_int_compare(IntPredicate::NE, word, i64t.const_zero(), "failed")
+                            .unwrap();
+                    let flag = st.b.build_int_z_extend(failed, i64t, "host_flag").unwrap();
+                    (value, flag)
+                } else {
+                    (returned.into_int_value(), i64t.const_zero())
                 };
                 // Take the declared return shape when the module carries one.
                 // `Top`, an absent entry, and a shape this backend does not
@@ -6422,7 +6647,7 @@ fn lower_chunk_body<'ctx>(
                     st.push_w(ret, w);
                 }
                 if reified {
-                    st.push_w(i64t.const_zero(), Width::Scalar(8));
+                    st.push_w(failed, Width::Scalar(8));
                 }
             }
             // `Byte` occupies a full `i64` slot holding a value in `0..=255`.
