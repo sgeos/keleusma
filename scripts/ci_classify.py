@@ -16,8 +16,13 @@ import argparse
 import sys
 
 # Light prefixes. Each is read only by the guard binaries, the `docs-links` job and the
-# `scripts` job, which a light run executes.
-LIGHT_PREFIXES = ('docs/', 'book/', 'scripts/', 'assets/', '.github/ISSUE_TEMPLATE/')
+# `scripts` job, which a light run executes. `native_codegen/` is a detached package that
+# no job here builds. `native.yml` on `v0.3.0` covers it, and V0.3.X agreed on 2026-10-25
+# on the condition that `documentation_links` and `comment_citations`, which walk its
+# files, stay in the light run. `test_ci_classify.py` checks that condition.
+LIGHT_PREFIXES = ('docs/', 'book/', 'scripts/', 'assets/', '.github/ISSUE_TEMPLATE/', 'native_codegen/')
+# The guard binaries a light prefix depends on, which must stay in the `guards` job.
+LIGHT_PREFIX_GUARDS = {'native_codegen/': ('documentation_links', 'comment_citations')}
 # Light single files that no job builds from.
 LIGHT_FILES = frozenset({'.github/PULL_REQUEST_TEMPLATE.md', 'CITATION.cff', 'LICENSE', 'flake.nix'})
 # Documents a heavy test compiles in or reads, so a change to one needs the full run.

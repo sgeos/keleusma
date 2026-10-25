@@ -226,12 +226,13 @@ as a needed answer withheld, meaning `bears`, `yes` or `act_now`. For sections i
 also reports the bytes needed, selected and missed. A section runs from its heading
 to the next, and text before the first heading is excluded.
 
-**Live evaluation is off.** A request may carry up to 160,000 encoded bytes, which
-is beyond the first cohort's 12,000-byte bound, and provider retention terms for
-private project data have not been assessed. `evaluate` therefore refuses until the
-operator sets `live_evaluation` to true in the tracked configuration and reinstalls.
-That one field is excluded from the configuration pinned in the store, so that
-baselines captured before then survive the change. Capture, preview, blind review,
+**Live evaluation is on, by operator authorization on 2026-10-25.** A request may
+carry up to 160,000 encoded bytes, which is beyond the first cohort's 12,000-byte
+bound, and provider retention terms for private project data have not been assessed.
+The operator accepted that, so send only public tracked material or a reviewed
+excerpt of it. `evaluate` refuses whenever `live_evaluation` is
+false in the installed configuration. That one field is excluded from the
+configuration pinned in the store, so baselines captured before it changed survive. Capture, preview, blind review,
 labels, task outcomes and reports all work without it. The budget is 100 calls and
 6,400,000 reserved input tokens, at most about USD 0.27 at the configured rate.
 
