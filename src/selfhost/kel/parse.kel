@@ -115,6 +115,9 @@ shared data toks {
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
 enum Tok {
+    // Codes 13, 14, 15 and 19 (`data`, `shared`, `private`, `use`) and 53 to 56 (`enum`,
+    // `struct`, `trait`, `impl`) are matched as numbers and carry no variant. Every variant
+    // is an interned name, and the wire stage bounds how many names one module may intern.
     Fn = 0,
     Ident = 1,
     LBrace = 2,
@@ -127,12 +130,8 @@ enum Tok {
     Colon = 9,
     Comma = 10,
     IntLit = 12,
-    Data = 13,
-    Shared = 14,
-    Private = 15,
     Const = 16,
     Eq = 17,
-    Use = 19,
     Plus = 21,
     Minus = 22,
     Star = 23,
@@ -165,10 +164,6 @@ enum Tok {
     RBracket = 42,
     ColCol = 51,
     As = 52,
-    Enum = 53,
-    Struct = 54,
-    Trait = 55,
-    Impl = 56,
     Break = 57,
     Str = 58,
     // Assembly-mnemonic shift keyword operators: `lsl` logical left, `asl` arithmetic left, `asr`
@@ -193,6 +188,8 @@ enum Tok {
 
 // The node-record kinds the body walk yields (a subset of body.kel's `enum Node`).
 enum Node {
+    // Codes 39, 48, 51, 54, 59, 62 and 64 are produced by `reconstruct.kel`, not by this
+    // stage, and carry no variant here, for the same name-budget reason as `Tok` above.
     Literal = 1,
     Local = 2,
     BinOp = 3,
@@ -247,7 +244,6 @@ enum Node {
     // arg the match_parts base; lhs/rhs the two operands). codegen `push_struct_eq` builds the loop.
     StructEqField = 46,
     StructEqBuild = 47,
-    StructEq = 48,
     // `enum == enum` equality, lowered to a variant-iterating comparison loop. Emitted as a marker
     // stream: an EnumEqVariant (kind 49, arg vname_id + disc*65536) per variant in discriminant
     // order, then an EnumEqBuild (kind 50, arg ta + tb*1024 + vcount*1048576 + ename_id*67108864)
@@ -255,7 +251,6 @@ enum Node {
     // operands). codegen `push_enum_eq` builds the loop (per variant, nested IsEnum on both temps).
     EnumEqVariant = 49,
     EnumEqBuild = 50,
-    EnumEq = 51,
     // A scalar payload field of an enum-eq variant (arg offset + kind*65536). Emitted after its
     // EnumEqVariant, in field order; reconstruct interleaves it into the per-variant match_parts.
     EnumEqField = 52,
@@ -264,7 +259,6 @@ enum Node {
     // is_ne*68719476736) which reconstruct turns into an ArrayEq (kind 54, arg the match_parts base;
     // lhs/rhs the two operands). codegen `push_array_eq` builds the GetIndex loop.
     ArrayEqBuild = 53,
-    ArrayEq = 54,
     // Nested-composite struct equality (a struct with a nested-struct field): its own isolated record
     // set so the flat StructEq path is untouched. StructEqNestedField (55, arg offset + kind*65536) a
     // scalar field (top-level or a nested struct's sub-field); StructEqNested (56, arg ext_off +
@@ -277,7 +271,6 @@ enum Node {
     StructEqNested = 56,
     StructEqNestedEnd = 57,
     StructEqNestedBuild = 58,
-    StructEqNestedNode = 59,
     // A shift on a Byte operand (`byte lsl/asl/asr/lsr <const>`): promote-operate-truncate. Carries
     // the shift OpCode (Shl/Shr/ShrL) in `arg`; codegen `push_byte_shift` widens the value, shifts,
     // masks for `lsr`, and truncates. A binary node (value, shift amount).
@@ -287,7 +280,6 @@ enum Node {
     // the array/element metadata; reconstruct assembles both into an ArrayOfStructEq (62, arg the
     // match_parts base) that codegen `push_array_of_struct_eq` unrolls into the per-element loop.
     ArrayOfStructEqBuild = 61,
-    ArrayOfStructEq = 62,
     // Array-of-enum equality (`[E; N] == [E; N]`). Parse emits the element enum's variants as
     // EnumEqVariant/EnumEqField records (reusing the enum-eq drain) then an ArrayOfEnumEqBuild (63);
     // reconstruct assembles an ArrayOfEnumEq (64, arg the match_parts base) that codegen
@@ -296,7 +288,6 @@ enum Node {
     // the separate un-packed `kinds` forest array, so it may exceed 63. (16/22/25 are ForIn/match/
     // multihead, not free.)
     ArrayOfEnumEqBuild = 63,
-    ArrayOfEnumEq = 64,
     // An array literal `[a, b, c]`: emits the element ops then NewComposite(Flat{Array, count,
     // byte_size}). Like a Call/StructInit, its elements ride the call_args side array.
     ArrayLit = 17,
@@ -323,7 +314,6 @@ enum Node {
     // `[temp][ename][per arm: vname, disc, result]`; `arg` the parts base, lhs the scrutinee, rhs
     // the arm count. `EnumArm` (40) is a per-arm marker record packing `vname*65536 + disc`;
     // `EnumMatchBuild` (41) is the build-signal record packing `temp + count*1024 + ename*1048576`.
-    EnumMatch = 39,
     EnumArm = 40,
     EnumMatchBuild = 41,
     // A payload bind in an enum match arm pattern `E::V(x)`: a marker packing the field's flat
@@ -413,11 +403,9 @@ private data ps {
     // The chunk index (into `toks.chunks`) of the function currently being declared, so its return
     // type can be recorded in `chunkret`.
     cur_chunk: Word,
-    // The return-type tuple scan `-> (T, T, ...)`: `rtts` active, `rtts_count` the element count,
-    // `rtts_allword` 1 while every element so far is a `Word` (a mixed tuple is not layout-tracked).
+    // The return-type tuple scan `-> (T, T, ...)`: `rtts` is set while it is active, and
+    // `header_member` scans the elements.
     rtts: Word,
-    rtts_count: Word,
-    rtts_allword: Word,
     // Enum-payload COMPOSITE field scan (mode 14): `epf` 1 = inside a tuple payload `(T, ...)`, 2 =
     // inside an array payload `[T; N]`, 0 = none. `epf_layout` the tuple layout index, `epf_off` its
     // running offset; `epf_ekind`/`epf_esize` the array element ScalarKind and byte size.
@@ -433,7 +421,6 @@ private data ps {
     init: Word,
     idepth: Word,
     in_body: Word,
-    started: Word,
     pend_end: Word,
     pcount: Word,
     pnames: [Word; 33],
@@ -2125,61 +2112,6 @@ fn type_tuple_record(kind: Word, value: Word) -> Word {
         // Signed literals use a complement to avoid the -1 transport sentinel.
         ps.emit_arg = bnot value; 128
     } else { ps.emit_arg = value; kind }
-}
-
-fn step_ret_tuple_type(k: Word, v: Word) -> Word {
-    if k == Tok::Ident() as Word {
-        ps.rtts_count = ps.rtts_count + 1;
-        if v != toks.word_id {
-            ps.rtts_allword = 0;
-        }
-        type_tuple_record(95, v)
-    } else {
-    if k == Tok::RParen() as Word {
-        if ps.rtts_allword == 1 {
-            chunkret.ret_tuple[ps.cur_chunk] = ps.rtts_count;
-        }
-        ps.rtts = 0;
-        ps.rtype = 0;
-        type_tuple_record(96, 0)
-    } else {
-        0
-    } }
-}
-
-// A token inside a tuple parameter type `(T, T, ...)` during the signature scan. A type ident
-// records the element's running flat byte offset and ScalarKind into the current tuple layout;
-// the `)` advances the flat element cursor and ends the scan. A `,` (and any other token) is
-// ignored. Emits tuple metadata for source type checking and signature assembly.
-fn step_tuple_type(k: Word, v: Word) -> Word {
-    if k == Tok::Ident() as Word {
-        let li = ps.ptuple[ps.pcount - 1] - 1;
-        let base = tupledefs.tup_estart[li];
-        let ei = tupledefs.tup_ecount[li];
-        tupledefs.tup_eoffset[base + ei] = ps.tts_off;
-        tupledefs.tup_ekind[base + ei] = scalar_kind_of(v);
-        // A struct-typed element records its declaration index + 1 (for tuple-of-struct equality); a
-        // scalar element leaves it 0. The kind above stays `scalar_kind_of` (0 for a struct) and the
-        // offset advance uses the struct's byte size, unchanged.
-        tupledefs.tup_estruct[base + ei] = 0;
-        for i in 0..structdefs.sd_count limit 64 {
-            if structdefs.sd_name[i] == v {
-                tupledefs.tup_estruct[base + ei] = i + 1;
-            }
-        }
-        tupledefs.tup_ecount[li] = ei + 1;
-        ps.tts_off = ps.tts_off + type_byte_size(v);
-        type_tuple_record(95, v)
-    } else {
-    if k == Tok::RParen() as Word {
-        let li = ps.ptuple[ps.pcount - 1] - 1;
-        tupledefs.tup_ecursor = tupledefs.tup_estart[li] + tupledefs.tup_ecount[li];
-        ps.tts = 0;
-        ps.ptype = 0;
-        type_tuple_record(96, 0)
-    } else {
-        0
-    } }
 }
 
 // One token of an enum variant's payload field list (mode 14). A scalar or struct field is a
@@ -7338,7 +7270,6 @@ fn arm_body() -> Word {
     value_scope_begin();
     value_scalar(0 - 1);
     ps.in_body = 1;
-    ps.started = 1;
     ops.expect_operand = 1;
     ops.opsp = 0;
     ops.resolving = 0;
@@ -7879,7 +7810,7 @@ fn step_struct_tuple_field(k: Word, v: Word) -> Word {
             nl.ttype[base + ei] = v + 1;
             tupledefs.tup_eoffset[base + ei] = ps.tf_size;
             tupledefs.tup_ekind[base + ei] = scalar_kind_of(v);
-            // A struct-typed element records its declaration index + 1, mirroring `step_tuple_type`
+            // A struct-typed element records its declaration index + 1, as a tuple parameter's element does
             // for a tuple PARAMETER. Without this a struct element is indistinguishable from a
             // scalar here (its `tup_ekind` is 0/Unit), and the nested-equality drain compares the
             // whole struct as one scalar. Reset to 0 first: the flat element arrays are reused
@@ -8738,14 +8669,14 @@ fn header_sig(k: Word, v: Word) -> Word {
         } else {
         if ps.ptype == 1 andalso ps.pdepth == 1 {
             // A tuple parameter type `(T, T, ...)`: open a fresh tuple layout entry, bind it to the
-            // current parameter, and scan its element types in `step_tuple_type`. The outer `(`
+            // current parameter, and scan its element types in `header_member`. The outer `(`
             // stays at pdepth 1; the tuple's own `(`/`)` never touch pdepth.
             ps.tts = 1;
             header_tuple_begin(1)
         } else {
         if ps.rtype == 1 andalso ps.pdepth == 0 {
             // A return-type tuple `-> (T, T, ...)`: count its all-Word elements in
-            // `step_ret_tuple_type` (no pdepth change; the tuple's `(`/`)` are consumed by rtts).
+            // `header_member` (no pdepth change; the tuple's `(`/`)` are consumed by rtts).
             ps.rtts = 1;
             header_tuple_begin(2)
         } else {

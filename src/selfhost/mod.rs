@@ -7146,7 +7146,7 @@ pub fn wire_names_from_input(
     /// The interner's per-call name bound, mirrored from `wire.kel`'s
     /// `nm_max_names`. Named rather than spelled inline so a widening there is
     /// a compile-time mismatch here rather than a silent overrun.
-    const NAME_CAP: usize = 1024;
+    const NAME_CAP: usize = 2048;
     /// The blob buffer's size, mirrored from `wire.kel`'s `bin_capacity`.
     ///
     /// Checked HERE because the stage cannot check it: the host seeds `bin` by
@@ -7377,7 +7377,7 @@ pub fn wire_regions_from_input(
     regions: usize,
     header: &[i64; 11],
 ) -> Result<Vec<u8>, SelfHostError> {
-    const NAME_CAP: usize = 1024;
+    const NAME_CAP: usize = 2048;
     const BLOB_CAP: usize = 49152;
     if names > NAME_CAP {
         return Err(SelfHostError::Unsupported {
@@ -7556,7 +7556,7 @@ pub fn wire_chunks_from_input(
     chunk_fields: &[i64],
     chunk_count: usize,
 ) -> Result<Vec<u8>, SelfHostError> {
-    const NAME_CAP: usize = 1024;
+    const NAME_CAP: usize = 2048;
     const BLOB_CAP: usize = 49152;
     if names > NAME_CAP {
         return Err(SelfHostError::Unsupported {
