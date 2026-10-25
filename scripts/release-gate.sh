@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # release-gate.sh — the local pre-release verification gate.
 #
-# Runs the checks the CI workflow (.github/workflows/ci.yml) enforces PLUS the
-# detached compiler/ subproject that CI never sees, so a green run here means CI
-# will be green AND the self-hosted compiler subproject is sound. It is a superset
-# of the everyday `cargo test && cargo clippy` and, critically, includes `cargo doc`
-# under
-# `-D warnings` — the check whose absence let a red CI Doc job ship alongside
-# V0.2.1 (broken intra-doc links). Do not cut this gate down to a subset before a
-# release; run it whole.
+# Runs a subset of the checks the CI workflow (.github/workflows/ci.yml) enforces,
+# plus the detached compiler/ subproject's own checks, for a pre-publication run and
+# for working without a network. Since 2026-08-11 a merge into a version branch waits
+# on CI rather than on this gate, and CI runs jobs this gate does not, so a green run
+# here does not by itself predict a green CI run. It includes `cargo doc` under
+# `-D warnings`, the check whose absence let a red CI Doc job ship alongside V0.2.1
+# (broken intra-doc links). Do not cut this gate down before a release. Run it whole.
 #
 # Usage:
 #   scripts/release-gate.sh          # fmt, clippy, tests, doc, doc-links
@@ -57,8 +56,19 @@ cargo fmt --check
 step "Clippy (workspace, all targets, -D warnings)"
 cargo clippy --workspace --all-targets -- -D warnings
 
-step "Tests — default features"
-cargo test --workspace
+step "Tests — workspace defaults, without the self-host binaries"
+# keleusma-cli enables keleusma's `self-host` feature, so feature unification turns
+# it on for every workspace build, and a plain `cargo test --workspace` here ran
+# each selfhost_* binary that the self-host step below runs again. This mirrors the
+# CI `test` job since PR 494. The filter drops those binaries here, and the
+# self-host step is their run of record. nextest skips doctests, so they run
+# separately.
+command -v cargo-nextest >/dev/null || {
+  echo "error: this step needs cargo-nextest. Install it with: cargo install cargo-nextest" >&2
+  exit 1
+}
+cargo nextest run --profile ci --workspace -E 'not (package(keleusma) & binary(~selfhost))'
+cargo test --workspace --doc
 
 step "Tests — keleusma no default features"
 cargo test -p keleusma --no-default-features
@@ -70,6 +80,8 @@ step "Tests — keleusma signatures,shell (broad / docs.rs surface)"
 cargo test -p keleusma --features signatures,shell
 
 step "Tests — keleusma self-host (the self-hosted compile backend)"
+# The run of record for the heavy selfhost_* binaries, which the workspace step
+# above filters out.
 cargo test -p keleusma --features self-host
 
 # keleusma-wire ships an off-by-default `derive` feature, and its READER is meant
