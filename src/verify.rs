@@ -561,11 +561,25 @@ fn wcet_region_at(
                     // Exactly one branch runs, so the cost is the maximum of
                     // the two. Taken unconditionally, including from a branch
                     // that exits: an exiting branch still spent its cycles.
-                    cost += if then_cost.cost > else_cost.cost {
-                        then_cost.cost
+                    //
+                    // The markers are executed instructions and are charged. The
+                    // then-path dispatches its `Else`, which jumps to the `EndIf`,
+                    // and both paths dispatch the `EndIf`. Until 2026-10-25 the
+                    // walk charged neither, so the bound fell short of the cost
+                    // model by up to two cycles per `if`. The hosted runtime's
+                    // instruction count found it.
+                    let else_op = op_wcet_cycles(chunk, target - 1, cost_model, wcet_extra)?;
+                    let then_total = then_cost.cost.saturating_add(else_op);
+                    cost = cost.saturating_add(if then_total > else_cost.cost {
+                        then_total
                     } else {
                         else_cost.cost
-                    };
+                    });
+                    if endif_pos < ops.len() {
+                        cost = cost.saturating_add(op_wcet_cycles(
+                            chunk, endif_pos, cost_model, wcet_extra,
+                        )?);
+                    }
                     if !then_cost.falls_through && !else_cost.falls_through {
                         return Ok(WcetOutcome::exits(cost));
                     }
@@ -585,7 +599,13 @@ fn wcet_region_at(
                     // Worst case is the then-body if it is more expensive.
                     // Taken unconditionally: a then-branch that exits via Trap
                     // or Return still spent its cycles on the path that took it.
-                    cost += then_cost.cost;
+                    // Both paths then dispatch the `EndIf` at the target, which is
+                    // charged for the reason given above.
+                    cost = cost.saturating_add(then_cost.cost);
+                    if target < ops.len() {
+                        cost = cost
+                            .saturating_add(op_wcet_cycles(chunk, target, cost_model, wcet_extra)?);
+                    }
                     ip = target + 1;
                 }
             }
@@ -621,10 +641,10 @@ fn wcet_region_at(
                 // a loop that is not provably productive keeps its full
                 // iteration bound, so a conditional yield (which a resume
                 // could skip across many iterations) is never under-counted.
-                let iter_count = if !body_cost.falls_through
+                let single_pass = !body_cost.falls_through
                     || (clamp_productive_yield_loops
-                        && loop_body_all_paths_yield_no_inner_loop(ops, ip + 1, endloop_ip))
-                {
+                        && loop_body_all_paths_yield_no_inner_loop(ops, ip + 1, endloop_ip));
+                let iter_count = if single_pass {
                     1
                 } else {
                     match extract_loop_iteration_bound(chunk, ip) {
@@ -643,18 +663,36 @@ fn wcet_region_at(
                         }
                     }
                 };
-                let body_cost_total = body_cost.cost.saturating_mul(iter_count);
-                let max_break = loop_break_costs.iter().copied().max().unwrap_or(0);
-                cost += if max_break > body_cost_total {
-                    max_break
+                // Each completed iteration also dispatches the `EndLoop`
+                // back-edge, which the body region stops short of. A body that
+                // never falls through never reaches it.
+                let endloop = if body_cost.falls_through
+                    && endloop_ip < ops.len()
+                    && matches!(&ops[endloop_ip], Op::EndLoop(_))
+                {
+                    op_wcet_cycles(chunk, endloop_ip, cost_model, wcet_extra)?
                 } else {
-                    body_cost_total
+                    0
                 };
+                let body_cost_total = body_cost
+                    .cost
+                    .saturating_add(endloop)
+                    .saturating_mul(iter_count);
+                let max_break = loop_break_costs.iter().copied().max().unwrap_or(0);
+                // A counted loop runs its full passes and then one more partial
+                // pass, the header check that takes the break. Until 2026-10-25
+                // this took the maximum of the two, which left that last header
+                // pass uncharged. A single-pass loop ends inside the pass the body
+                // cost already covers, so it keeps the maximum.
+                cost = cost.saturating_add(if single_pass {
+                    max_break.max(body_cost_total)
+                } else {
+                    body_cost_total.saturating_add(max_break)
+                });
                 ip = loop_exit_target;
             }
-            Op::Else(_) | Op::EndIf | Op::EndLoop(_) => {
-                ip += 1;
-            }
+            // A marker met outside the structured arms above, as at a segment
+            // edge, is charged like any instruction. That can only raise the bound.
             _ => {
                 cost = cost.saturating_add(op_wcet_cycles(chunk, ip, cost_model, wcet_extra)?);
                 ip += 1;
@@ -4982,10 +5020,11 @@ pub(crate) mod tests {
     fn wcet_branching_takes_max() {
         // Stream -> PushTrue -> If { Add(2) } Else { Div(5) + Mul(2) } ->
         //   Yield -> Pop -> Reset.
-        // Then body [3,4): Add = 2. Else body [5,7): Div(5) + Mul(2) = 7.
-        // Max branch = 7.
-        // Body: PushTrue(1) + If(1) + 7 + Yield(1) + Pop(1) = 11.
-        // Overhead: Stream(1) + Reset(1) = 2. Total = 13.
+        // Then path [3,4] with its Else: Add(2) + Else(1) = 3. Else body [5,7):
+        // Div(5) + Mul(2) = 7. Max branch = 7, and both paths dispatch EndIf(1).
+        // Body: PushTrue(1) + If(1) + 7 + EndIf(1) + Yield(1) + Pop(1) = 12.
+        // Overhead: Stream(1) + Reset(1) = 2. Total = 14. It was 13 until the
+        // markers were charged on 2026-10-25.
         let chunk = make_chunk(
             "tick",
             vec![
@@ -5004,7 +5043,7 @@ pub(crate) mod tests {
             BlockType::Stream,
         );
         let cost = wcet_stream_iteration(&chunk).unwrap();
-        assert_eq!(cost, 13);
+        assert_eq!(cost, 14);
     }
 
     #[test]

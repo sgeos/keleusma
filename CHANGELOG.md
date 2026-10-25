@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The verified time bound charges every dispatched instruction.** The time
+  walk and its Keleusma mirror in `analyze.kel` charged nothing for `Else`,
+  `EndIf` and `EndLoop`, and omitted a counted loop's final header pass, so the
+  bound fell short of the nominal cost model on every path through an `if` or a
+  loop. Verified time bounds involving either now rise. Found by the hosted
+  runtime's instruction count. See `docs/decisions/WCET_STRUCTURAL_MARKERS.md`.
+
 - **A yield whose value does not have the declared return type is rejected.**
   The type checker unified the body tail and `return` with the return type and
   never a `yield`. A same-size body of another layout was admitted, and decoding

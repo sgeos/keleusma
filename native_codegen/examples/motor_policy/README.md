@@ -28,18 +28,25 @@ TWO DIFFERENT KINDS OF CLAIM, KEPT APART:
 
 MEMORY, which describes THIS OBJECT. The backend's provisioning is
 checked against these figures by the bound-transfer tests.
-  worst case over all chunks: stack 352 B, heap 24 B
+  worst case over all chunks: stack 512 B, heap 24 B
   shared segment 58 B, preallocated by the host and never grown
   NOTHING GROWS AT RUN TIME: the host supplies every region up front.
 
 BYTECODE COST, from the verifier's virtual-machine cost model:
-  chunk 0 (derate_for  )     19 cost units
-  chunk 1 (main        )    134 cost units
+  chunk 0 (derate_for  )     22 cost units
+  chunk 1 (main        )    339 cost units
   ^ NOT A BOUND ON NATIVE EXECUTION TIME. It counts bytecode under the
     interpreter's cost model. No measurement in this project relates it
     to the machine code emitted above, and that code may call
     compiler-runtime routines with no bytecode counterpart at all.
 ```
+
+The figures above were re-measured on 2026-10-25 at absorption 92. The quote previously read stack
+352 B and 19 and 134 cost units. The rise in cost follows the verifier's new charging of structural
+markers and loop headers, recorded in
+[`WCET_STRUCTURAL_MARKERS.md`](../../../docs/decisions/WCET_STRUCTURAL_MARKERS.md). Upstream reports
+that change leaves memory bounds alone, so the stack difference is older and its cause was not
+measured.
 
 **The point is not that the policy runs. It is that its worst-case MEMORY was known before it ran.**
 

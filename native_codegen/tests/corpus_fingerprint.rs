@@ -243,6 +243,11 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // `verify_typed.kel`. Nothing was added or removed. The censuses this file names
 // were re-run on the absorbed tree and passed with their pinned figures, except
 // the bounds-transfer inversion count, whose cause is recorded where it is pinned.
+//
+// **RE-PINNED 2026-10-25, absorption 92.** Upstream pull request 519 changed
+// `analyze.kel` to mirror the verifier's new charging of structural markers in
+// its time bound. Nothing was added or removed. Every other test in the same
+// default-feature run passed, including the five censuses this file names.
 const PINNED: &[(&str, u64)] = &[
     // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
     // added or removed. Every census this instrument names to re-derive was run on
@@ -425,7 +430,7 @@ const PINNED: &[(&str, u64)] = &[
         "examples/scripts/rogue/rogue_scroll_apply.kel",
         0xf93a5bd822bfe99c,
     ),
-    ("src/selfhost/kel/analyze.kel", 0x343d5a68c72c929a),
+    ("src/selfhost/kel/analyze.kel", 0xcdae9770d199e166),
     ("src/selfhost/kel/codegen.kel", 0x63cf566271018484),
     ("src/selfhost/kel/lexer.kel", 0x2b631ed8f8770698),
     // Absorption 83 changes cast Byte tracking and FixedDiv classification.
