@@ -1097,6 +1097,17 @@ fn apply_op(
                 kind: *variant,
                 size: u32::from(*size),
             });
+            // The total read's diagnostic suffix and flag, as for a flat
+            // Word or Byte element.
+            stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 6));
+        }
+        // A boxed read is total with an unknown element shape, followed by the
+        // diagnostic suffix and flag, as an indexed data read is.
+        Op::GetIndex(ArrayElem::Boxed) => {
+            stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
+            stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
+            stack.push(AbsVal::Top);
+            stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 6));
         }
 
         // A script-to-script call: pop the arguments, check each against the

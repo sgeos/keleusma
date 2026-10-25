@@ -34,6 +34,7 @@ increment, and a table that drifts is worse than no table.
 | [ORDER1_COMPLETION_PLAN.md](./ORDER1_COMPLETION_PLAN.md) | Current first-pass self-hosting requirements, evidence and remaining integration work |
 | [ORDER2_COMPLETION_PLAN.md](./ORDER2_COMPLETION_PLAN.md) | Full first-pass validator requirements and implementation evidence |
 | [ORDER2_COMPLETION_AUDIT.md](./ORDER2_COMPLETION_AUDIT.md) | Validator completion evidence, verification receipts and retained reference boundary |
+| [ORDER3_COMPLETION_AUDIT.md](./ORDER3_COMPLETION_AUDIT.md) | Trap-analysis completion evidence, residual limits and verification receipts |
 | [COMPOSITE_REGION_EVIDENCE.md](./COMPOSITE_REGION_EVIDENCE.md) | What the V0.2.3 runtime establishes for the composite-region-reuse proof, with provenance per claim |
 | [YIELD_OWNERSHIP_MODE.md](./YIELD_OWNERSHIP_MODE.md) | Accepted in principle: `ref`/`out` on a yielding declaration's return signature, choosing machine-owned or host-owned storage for the yielded value (V0.3.0 or later) |
 | [STRING_ABI_OPTION_B.md](./STRING_ABI_OPTION_B.md) | Ruled and binding on this line, received directly 2026-08-30: string marshalling makes the two embeddings agree; not yet implemented |

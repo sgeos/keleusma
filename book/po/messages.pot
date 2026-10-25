@@ -2,7 +2,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The Keleusma Guide\n"
-"POT-Creation-Date: 2026-10-22T09:05:32-07:00\n"
+"POT-Creation-Date: 2026-10-24T16:26:00-07:00\n"
 "PO-Revision-Date: \n"
 "Last-Translator: \n"
 "Language-Team: \n"
@@ -359,8 +359,9 @@ msgstr ""
 #: src/INSTRUCTION_SET.md:154 src/INSTRUCTION_SET.md:160
 #: src/INSTRUCTION_SET.md:161 src/INSTRUCTION_SET.md:235
 #: src/INSTRUCTION_SET.md:255 src/INSTRUCTION_SET.md:267
-#: src/SECURITY_POLICY.md:172 src/SECURITY_POLICY.md:173 src/ROGUE.md:346
-#: src/ROGUE.md:410 src/ROGUE.md:599 src/ROGUE.md:610 src/ROGUE.md:622
+#: src/INSTRUCTION_SET.md:268 src/SECURITY_POLICY.md:172
+#: src/SECURITY_POLICY.md:173 src/ROGUE.md:346 src/ROGUE.md:410
+#: src/ROGUE.md:599 src/ROGUE.md:610 src/ROGUE.md:622
 msgid "1"
 msgstr ""
 
@@ -417,7 +418,7 @@ msgstr ""
 
 #: src/introduction.md:41 src/INSTRUCTION_SET.md:80 src/INSTRUCTION_SET.md:81
 #: src/INSTRUCTION_SET.md:167 src/INSTRUCTION_SET.md:238
-#: src/INSTRUCTION_SET.md:258 src/INSTRUCTION_SET.md:268 src/ROGUE.md:414
+#: src/INSTRUCTION_SET.md:258 src/INSTRUCTION_SET.md:269 src/ROGUE.md:414
 #: src/ROGUE.md:603 src/ROGUE.md:614
 msgid "5"
 msgstr ""
@@ -8657,7 +8658,7 @@ msgid ""
 "the high slot is unused. So `0` fraction bits is exactly integer multiply."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:73 src/INSTRUCTION_SET.md:256
+#: src/INSTRUCTION_SET.md:73
 msgid "CheckedNeg"
 msgstr ""
 
@@ -9049,7 +9050,11 @@ msgstr ""
 #: src/INSTRUCTION_SET.md:142
 msgid ""
 "Call a verified native function. Cost folds into the iteration budget per "
-"host attestation."
+"host attestation. The low seven bits of `argc` are the argument count. The "
+"high bit is the error-reify flag. When it is set, the call pushes the value "
+"and flag `0` on success and the `Word` error code and flag `1` on a soft "
+"host failure instead of propagating it. The compiler sets it on every native "
+"call."
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:143
@@ -9059,7 +9064,8 @@ msgstr ""
 #: src/INSTRUCTION_SET.md:143
 msgid ""
 "Call an external native function. Iteration cost budget pauses during the "
-"call; the verifier tracks invocation count per iteration."
+"call; the verifier tracks invocation count per iteration. `argc` carries the "
+"error-reify flag as for `CallVerifiedNative`."
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:144
@@ -9215,11 +9221,15 @@ msgstr ""
 
 #: src/INSTRUCTION_SET.md:178
 msgid ""
-"Flat Word and Byte forms pop array and index and push the value, index, four "
-"Word byte limbs of the bound, and an outcome flag. Invalid indices yield "
-"typed zero and flag one without reading an element. Valid indices yield the "
-"element and flag zero. These forms cost eight. Other forms retain a single "
-"result and cost two, and remain outside the first-pass trap-free proof."
+"Flat Word and Byte, nested composite and boxed forms pop array and index and "
+"push the value, index, four Word byte limbs of the bound, and an outcome "
+"flag. Invalid indices yield a placeholder and flag one without reading an "
+"element. The placeholder is typed zero for Word and Byte, a zero-filled body "
+"of the element's size for a nested composite, and `Unit` for a boxed "
+"element. Valid indices yield the element and flag zero. These forms cost "
+"eight. The nested form charges its element size as heap allocation. Other "
+"flat scalar forms retain a single result and cost two, and remain outside "
+"the first-pass trap-free proof."
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:179
@@ -9391,8 +9401,11 @@ msgid ""
 "Halt with the error selected by TrapKind. Code `8` consumes five Words, the "
 "index followed by four little-endian byte limbs of an unsigned 32 bit bound, "
 "and returns IndexOutOfBounds. The runtime uses the low eight bits of each "
-"limb. Its nominal cost is `6`. Other trap kinds cost `1`. Unknown kind codes "
-"and malformed payloads are contract errors."
+"limb. Its nominal cost is `6`. Code `9`, HostError, consumes the `Word` code "
+"of a reified native failure and returns the host's own error when the code "
+"matches the most recently reified failure, and otherwise `NativeErrorCode` "
+"with that code. Other trap kinds cost `1`. Unknown kind codes and malformed "
+"payloads are contract errors."
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:209
@@ -9549,7 +9562,7 @@ msgid ""
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:233 src/INSTRUCTION_SET.md:252
-#: src/INSTRUCTION_SET.md:264 src/INSTRUCTION_SET.md:273
+#: src/INSTRUCTION_SET.md:264 src/INSTRUCTION_SET.md:274
 msgid "Instructions"
 msgstr ""
 
@@ -9564,9 +9577,9 @@ msgstr ""
 msgid ""
 "Add, Sub, Mul, Neg, CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, "
 "CheckedDiv, CheckedMod, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, GetIndex "
-"other forms, GetTupleField, GetEnumField, Len, IntToFloat, FloatToInt, "
-"WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, FixedDiv, "
-"Return, BitAnd, BitOr, BitXor, Shl, Shr"
+"other flat scalar forms, GetTupleField, GetEnumField, Len, IntToFloat, "
+"FloatToInt, WordToByte, ByteToWord, WordToFixed, FixedToWord, FixedMul, "
+"FixedDiv, Return, BitAnd, BitOr, BitXor, Shl, Shr"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:237
@@ -9577,12 +9590,13 @@ msgstr ""
 msgid "Div, Mod, NewComposite"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:239 src/INSTRUCTION_SET.md:268
+#: src/INSTRUCTION_SET.md:239 src/INSTRUCTION_SET.md:269
 msgid "Trap kind 8"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:241
-msgid "GetDataIndexed, SetDataIndexed, GetIndex flat Word or Byte"
+msgid ""
+"GetDataIndexed, SetDataIndexed, GetIndex flat Word or Byte, nested or boxed"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:242
@@ -9620,7 +9634,7 @@ msgid "Growth"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:254 src/INSTRUCTION_SET.md:266
-#: src/INSTRUCTION_SET.md:275 src/ROGUE.md:239 src/ROGUE.md:345
+#: src/INSTRUCTION_SET.md:276 src/ROGUE.md:239 src/ROGUE.md:345
 #: src/ROGUE.md:409 src/ROGUE.md:598 src/ROGUE.md:609 src/ROGUE.md:621
 msgid "0"
 msgstr ""
@@ -9629,20 +9643,26 @@ msgstr ""
 msgid ""
 "Not, Neg, Add, Sub, Mul, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, "
 "SetData, If, BreakIf, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, "
-"Yield, Return, GetField, GetIndex other forms, GetTupleField, GetEnumField, "
-"Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, "
-"FixedToWord, FixedMul, Trap, PopN, BitAnd, BitOr, BitXor, Shl, Shr"
+"Yield, Return, GetField, GetIndex other flat scalar forms, GetTupleField, "
+"GetEnumField, Len, IntToFloat, FloatToInt, WordToByte, ByteToWord, "
+"WordToFixed, FixedToWord, FixedMul, Trap, PopN, BitAnd, BitOr, BitXor, Shl, "
+"Shr"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:255
 msgid ""
 "Const, PushImmediate, GetLocal, GetData, Dup, Div, Mod, FixedDiv, "
 "CheckedAdd, CheckedSub, CheckedMul, CheckedDiv, CheckedMod, Call, "
-"CallVerifiedNative, CallExternalNative, NewComposite, IsEnum, IsStruct"
+"CallVerifiedNative and CallExternalNative without the reify flag, "
+"NewComposite, IsEnum, IsStruct"
+msgstr ""
+
+#: src/INSTRUCTION_SET.md:256
+msgid "CheckedNeg, CallVerifiedNative and CallExternalNative with the reify flag"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:258
-msgid "GetDataIndexed, BoundsCheck, GetIndex flat Word or Byte"
+msgid "GetDataIndexed, BoundsCheck, GetIndex flat Word or Byte, nested or boxed"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:260
@@ -9666,45 +9686,49 @@ msgid ""
 "Const, PushImmediate, GetLocal, GetData, Dup, Not, Neg, Div, Mod, "
 "CheckedAdd, CheckedSub, CheckedMul, CheckedNeg, CheckedDiv, CheckedMod, "
 "GetDataIndexed, SetDataIndexed, BoundsCheck, GetIndex flat Word or Byte, "
-"Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, Len, IsEnum, "
-"IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, WordToFixed, "
-"FixedToWord, FixedDiv, Trap except kind 8"
+"nested or boxed, Else, EndIf, Loop, EndLoop, Break, Stream, Reset, Return, "
+"Len, IsEnum, IsStruct, IntToFloat, FloatToInt, WordToByte, ByteToWord, "
+"WordToFixed, FixedToWord, FixedDiv, Trap except kinds 8 and 9"
 msgstr ""
 
 #: src/INSTRUCTION_SET.md:267
 msgid ""
 "Add, Sub, Mul, FixedMul, CmpEq, CmpNe, CmpLt, CmpGt, CmpLe, CmpGe, SetLocal, "
-"SetData, If, BreakIf, Yield, GetField, GetIndex other forms, GetTupleField, "
-"GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr"
+"SetData, If, BreakIf, Yield, GetField, GetIndex other flat scalar forms, "
+"GetTupleField, GetEnumField, BitAnd, BitOr, BitXor, Shl, Shr"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:269
+#: src/INSTRUCTION_SET.md:268
+msgid "Trap kind 9"
+msgstr ""
+
+#: src/INSTRUCTION_SET.md:270
 msgid "n"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:269
+#: src/INSTRUCTION_SET.md:270
 msgid ""
-"PopN(n), Call(_, n), CallVerifiedNative(_, n), CallExternalNative(\\_, n), "
-"NewComposite(count)"
+"PopN(n), Call(_, n), CallVerifiedNative(_, n) and CallExternalNative(\\_, n) "
+"with the reify flag masked out of `n`, NewComposite(count)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:271
+#: src/INSTRUCTION_SET.md:272
 msgid "Heap allocation (bytes)"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:273
+#: src/INSTRUCTION_SET.md:274
 msgid "Heap"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:275
+#: src/INSTRUCTION_SET.md:276
 msgid "All instructions not listed below"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:276
+#: src/INSTRUCTION_SET.md:277
 msgid "`byte_size` from operand"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:276
+#: src/INSTRUCTION_SET.md:277
 msgid ""
 "NewComposite, flat form. The exact flat allocation size is baked into the "
 "operand at compile time, so the worst-case-memory-usage contribution is the "
@@ -9713,11 +9737,22 @@ msgid ""
 "accounted separately."
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:277
+#: src/INSTRUCTION_SET.md:278
+msgid "element `size` from operand"
+msgstr ""
+
+#: src/INSTRUCTION_SET.md:278
+msgid ""
+"GetIndex, nested composite form. An invalid index allocates a zero-filled "
+"placeholder of the element's size, and the bound charges it on every "
+"execution because validity is not known statically."
+msgstr ""
+
+#: src/INSTRUCTION_SET.md:279
 msgid "host-attested"
 msgstr ""
 
-#: src/INSTRUCTION_SET.md:277
+#: src/INSTRUCTION_SET.md:279
 msgid ""
 "CallVerifiedNative through host registration; CallExternalNative through "
 "per-iteration invocation-count bound"

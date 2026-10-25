@@ -2,7 +2,7 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**. Current population re-enumerated on 2026-10-15. Historical findings
+**Status**. Current population re-enumerated on 2026-10-24. Historical findings
 retain their original dates. Written 2026-09-04.
 
 ## Why this census exists
@@ -17,6 +17,20 @@ was not predicted, not covered by any test, and reachable that day with nothing 
 
 **One hole found by accident implies nothing about how many remain.** The honest response to an
 accidental find in a class nobody has enumerated is to enumerate the class.
+
+## Population update on 2026-10-24
+
+The total contract for nested composite and boxed reads moved the array
+diagnostic-bound conversion into the shared helper `index_outcome_bound`, which
+every `GetIndex` form now calls, and added one construction. The exact source
+count is now 53 in vm.rs and two in marshall.rs. The unregistered-native case of
+group J is now refused by the pre-execution native check as a `VerifyError`,
+before any instruction runs. Its call-site construction remains and is reachable
+only if a registration disappears between that check and the call.
+
+| New site | Classification and evidence |
+|---|---|
+| Index placeholder construction | `FlatComposite::build_in_arena` returns `None` only when its fill closure fails, and the placeholder's fill cannot fail. Unreachable by construction. An exhausted arena is reported separately as `OutOfArena`. No failure execution is claimed. |
 
 ## Population update on 2026-10-15
 
@@ -58,10 +72,10 @@ Derived from source, not chosen by hand:
 grep -rn "VmError::InvalidBytecode" src/ --include=*.rs
 ```
 
-**58 matches, of which 54 are construction sites in production code.** The four excluded are named
+**59 matches, of which 55 are construction sites in production code.** The four excluded are named
 rather than silently dropped: one doc comment referring to the variant, one match arm listing it
-among unrecoverable errors, and two inside unit tests. They live in `src/vm.rs` (52) and
-`src/marshall.rs` (2).
+among unrecoverable errors, and two inside unit tests. They live in `src/vm.rs` (53) and
+`src/marshall.rs` (2). These figures were 58, 54 and 52 until the population update of 2026-10-24.
 
 **The figure was 50 and 46 until 2026-09-10.** The opaque-width repair of 2026-09-08 -- part of
 the same line of work that wrote this census -- added `"flat opaque field read out of bounds"` to

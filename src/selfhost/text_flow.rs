@@ -119,9 +119,12 @@ impl<'a> Machine<'a> {
                 Op::Dup => (4, 0),
                 Op::Add => (5, 0),
                 Op::Call(i, _) => (6, usize::from(*i)),
-                Op::CallVerifiedNative(_, n) | Op::CallExternalNative(_, n) => (7, usize::from(*n)),
+                Op::CallVerifiedNative(_, n) | Op::CallExternalNative(_, n) => {
+                    (7, usize::from(*n & 0x7F))
+                }
                 Op::Return => (8, 0),
                 Op::Yield => (9, 0),
+                Op::Trap(_) => (10, 0),
                 _ => (0, 0),
             };
             let (required, delta) = crate::verify::op_depth_effect(op, chunk);

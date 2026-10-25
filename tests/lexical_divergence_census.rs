@@ -2,7 +2,8 @@
 //!
 //! # Why this exists
 //!
-//! The byte-identity oracle compares eleven stage sources. It is a strong instrument over the
+//! The byte-identity oracle compares the fourteen stage sources, eleven when this census was
+//! written. It is a strong instrument over the
 //! inputs it is given and says nothing whatever about inputs it is not given. On 2026-08-30 two
 //! divergences were found in one afternoon, both in what a string literal's bytes ARE, and both
 //! invisible for the same reason:
@@ -392,7 +393,7 @@ fn the_lexical_surface_shows_no_divergence_between_the_two_pipelines() {
 
     // --- coverage: the census must still contain what the corpus cannot -----------------
     //
-    // The census's value is entirely in containing what the eleven stage sources do not. If a
+    // The census's value is entirely in containing what the stage sources do not. If a
     // future edit trimmed the probe set back to what the corpus already exercises, every
     // assertion above would still pass and the census would have become decorative.
     let labels: Vec<&str> = all.iter().map(|(l, _)| l.as_str()).collect();
@@ -417,6 +418,7 @@ fn the_lexical_surface_shows_no_divergence_between_the_two_pipelines() {
     //
     // This began as a check that no stage source uses an escape sequence. The measurement came
     // back stronger: **every double quote in all twelve stage sources is inside a line comment,
+    // which a re-measurement on 2026-10-24 confirmed for all fourteen,
     // so the corpus has zero string literals.** Not "no escapes" -- nothing. Every property of
     // the string-literal path (escapes, non-ASCII content, interning, the empty literal, the
     // constant pool's string tag) is entirely unwitnessed by the byte-identity oracle.
