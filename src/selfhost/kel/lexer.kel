@@ -324,7 +324,10 @@ fn op2_tok(code: Word) -> Word {
 
 // Map a single punctuation byte to its parser `Tok` code, split into a delimiter
 // group and an operator group so each helper stays a shallow if-else chain. An
-// unrecognized byte becomes the catch-all Tok 4, matching the reference adapter.
+// unrecognized byte becomes Tok 67, which the parser refuses as unsupported syntax.
+// It used to become the arrow's catch-all Tok 4, which the body walk skips, so
+// `6 |> double()` read as `6 > double()` and was rejected as a type error, and an
+// unknown byte between two operands could vanish from the program altogether.
 fn punct_tok(b: Word) -> Word {
     let t = punct_delim(b);
     if t >= 0 { t } else { punct_op(b) }
@@ -353,7 +356,7 @@ fn punct_op(b: Word) -> Word {
     if b == 60 { 28 } else {    // <  Lt
     if b == 62 { 29 } else {    // >  Gt
     if b == 46 { 40 } else {    // .  Dot
-    4 } } } } } } } } }
+    67 } } } } } } } } }
 }
 
 // The token word for a completed identifier run at `start` of `len` bytes, in the

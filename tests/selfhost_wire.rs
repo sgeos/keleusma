@@ -12972,8 +12972,12 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // Their parsing was folded into existing functions so that the name count
     // held at 1023. The blob grew by 160 bytes, leaving 18,793. Neither capacity
     // is raised here.
+    // Remeasured 2026-10-25 after Order 6 slice 1, whose refusals reuse the existing
+    // scratch flag `ps.found_flag` so that the name count holds at 1023. The blob grew
+    // by 30 bytes, leaving 18,763. Neither capacity is raised here either, and the one
+    // remaining name is the budget every later widening of `parse.kel` competes for.
     assert_eq!(worst_names, 1023, "the worst-case name count moved");
-    assert_eq!(worst_blob, 30359, "the worst-case blob size moved");
+    assert_eq!(worst_blob, 30389, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

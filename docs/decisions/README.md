@@ -40,6 +40,7 @@ increment, and a table that drifts is worse than no table.
 | [WCET_STRUCTURAL_MARKERS.md](./WCET_STRUCTURAL_MARKERS.md) | The time bound's uncharged Else, EndIf, EndLoop and final loop header, and their repair |
 | [ORDER5_COMPLETION_AUDIT.md](./ORDER5_COMPLETION_AUDIT.md) | Cryptographic-framing completion evidence, trust boundary, residual limits and receipts |
 | [ORDER5_CRYPTO_FRAMING_PLAN.md](./ORDER5_CRYPTO_FRAMING_PLAN.md) | Order 5 scope and its provenance, the framing and primitive split, design and gate |
+| [ORDER6_FULL_LANGUAGE_PLAN.md](./ORDER6_FULL_LANGUAGE_PLAN.md) | Order 6 scope and its provenance, the measured full-language baseline, gate and slices |
 | [ORDER4_COMPLETION_AUDIT.md](./ORDER4_COMPLETION_AUDIT.md) | Hosted-runtime completion evidence, bound composition, residual limits and receipts |
 | [ORDER4_HOSTED_RUNTIME_PLAN.md](./ORDER4_HOSTED_RUNTIME_PLAN.md) | Order 4 rulings, design, bound composition and slice record for the hosted runtime |
 | [COMPOSITE_REGION_EVIDENCE.md](./COMPOSITE_REGION_EVIDENCE.md) | What the V0.2.3 runtime establishes for the composite-region-reuse proof, with provenance per claim |
