@@ -30,7 +30,7 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor ec536b28 HEAD     # the merge of PR 512 into v0.2.3
+git merge-base --is-ancestor 3272d46d HEAD     # the merge of PR 516 into v0.2.3
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
 
@@ -48,12 +48,15 @@ run.
   and 508 as its PR 514 and 512 as its PR 515.
 - **Activated.** The operator installed the tracked interline client on 2026-10-24. The
   reminder is 206 characters.
-- **This increment.** The home-directory paths that PR 502 added. Four prose paths are
-  made relative. The 86 in the Jev checkpoint sit in 43 V0.2.X samples that were
-  captured and never evaluated, so they never left the machine. Their evidence must
-  occur verbatim in a hashed source, so a rewrite would falsify the records. They stay,
-  and `record` now refuses an input that names the home directory. That check takes
-  effect only when the operator reinstalls the pilot from the tracked script.
+- **Home paths.** PR 516, merged as `3272d46d`, made the prose paths relative and made
+  `record` refuse an input naming the home directory. The 86 paths in 43 never
+  evaluated V0.2.X samples stay, because their evidence is verbatim and hashed. The
+  operator reinstalled the pilot on 2026-10-25, so the refusal is live.
+- **This increment.** The selection cohort of the Jev pilot, directed by the operator
+  on 2026-10-25, in `scripts/jev_selection.py` with `selection.json`, its own store and
+  13 tests. It covers the four large-input decisions with case-derived option order.
+  Live evaluation is off until the operator authorizes the 160,000-byte payload bound.
+  Both installers now refuse another line's worktree before copying anything.
 - **pykeleusma.** Its own line works in `~/projects/python/pykeleusma`. This line does
   not work there.
 
@@ -74,17 +77,16 @@ These reach V0.2.X and V0.3.X from this line only by relay. Measured on 2026-10-
 
 ## Next increments, in order
 
-1. Extend the Jev pilot for the four large-input decisions of the context engineering
-   report, a selection kind with randomized option order and a `kaizen` route. Section
-   selection is measured first and adopted last. The installed copy and its
-   configuration change only through the operator.
+1. Once the cohort is installed, capture this line's own baselines, starting with
+   section selection over the large process files, and label them blind.
 2. A state-file budget guard, after the owning lines have converted their files.
 3. Measure the release-gate saving of PR 508, which is inferred and not timed.
 
 ## Open with the operator
 
 - First-hand confirmation of the positions above to V0.2.X and V0.3.X.
-- Reinstalling the pilot from the tracked `scripts/jev_shadow.py`.
+- Installing the selection cohort, and separately whether to set `live_evaluation`
+  to true, which sends up to 160,000 bytes per request to TypeSafe.
 - Whether to set `idleCompaction` to `false`, perhaps first on this line alone.
 - Deliberate session ends. An agent cannot end or restart its own session. It can
   write its state file at a boundary and ask the operator to run `/clear`.
@@ -106,7 +108,7 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `b1335e3b19025c039de410f42231626db1db953dc1a183d4da3641b956b2134d`, 57 messages, three unacknowledged and addressed to other lines |
+| [Interline](../interline/checkpoint.json) | `35a970a77a9e134479778054c4530d27fd89bed5b3788b2f89c1a771a979a9a9`, 80 messages, one unacknowledged and addressed to another line |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `16d65875954a7f7f33416135dd8f475dcb7a982c020adafbbd337aff12ae4bf6`, 250 samples and 66 tasks, identical to a fresh export |
 
 ## Environment
