@@ -36,6 +36,7 @@ increment, and a table that drifts is worse than no table.
 | [ORDER2_COMPLETION_AUDIT.md](./ORDER2_COMPLETION_AUDIT.md) | Validator completion evidence, verification receipts and retained reference boundary |
 | [ORDER3_COMPLETION_AUDIT.md](./ORDER3_COMPLETION_AUDIT.md) | Trap-analysis completion evidence, residual limits and verification receipts |
 | [FLAT_TEXT_DECODE_SOUNDNESS.md](./FLAT_TEXT_DECODE_SOUNDNESS.md) | The yield type gap and unchecked flat Text decode, their repair and residual limits |
+| [SIGNATURE_VERIFY_BOUNDS.md](./SIGNATURE_VERIFY_BOUNDS.md) | The signature verifier's panic on a short declared total, reachable from signed loading, and its repair |
 | [WCET_STRUCTURAL_MARKERS.md](./WCET_STRUCTURAL_MARKERS.md) | The time bound's uncharged Else, EndIf, EndLoop and final loop header, and their repair |
 | [ORDER4_COMPLETION_AUDIT.md](./ORDER4_COMPLETION_AUDIT.md) | Hosted-runtime completion evidence, bound composition, residual limits and receipts |
 | [ORDER4_HOSTED_RUNTIME_PLAN.md](./ORDER4_HOSTED_RUNTIME_PLAN.md) | Order 4 rulings, design, bound composition and slice record for the hosted runtime |
