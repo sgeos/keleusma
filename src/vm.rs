@@ -430,6 +430,9 @@ pub struct NativeCtx<'a> {
     /// The module's packed ADDRESS byte width, which sizes an `Opaque` field.
     /// Declared independently of `word_bytes`; they agree only by default.
     pub addr_bytes: usize,
+    /// The VM's bytecode image, where a constant string in a composite
+    /// argument points. See [`crate::marshall::RefContext::rodata`].
+    pub rodata: &'a [u8],
 }
 
 impl<'a> NativeCtx<'a> {
@@ -447,6 +450,7 @@ impl<'a> NativeCtx<'a> {
             // arena epoch is the argument body's originating epoch (B28 P3
             // item 1).
             ref_epoch: self.arena.epoch(),
+            rodata: self.rodata,
         }
     }
 }
@@ -3685,6 +3689,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             // than dereferencing reclaimed memory; a non-composite value
             // carries its own epoch and ignores this (B28 P3 item 1).
             ref_epoch: value.flat_ref_epoch().unwrap_or_else(|| self.arena.epoch()),
+            rodata: self.bytecode.as_slice(),
         };
         T::from_value_ctx(value, &ctx)
     }
@@ -8052,6 +8057,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                         word_bytes: wb,
                         float_bytes: fb,
                         addr_bytes: ab,
+                        rodata: self.bytecode.as_slice(),
                     };
                     let result = (entry.func)(&ctx, &args);
                     if reify {

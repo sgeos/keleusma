@@ -801,6 +801,8 @@ fn parse_yield_tuple(v: &Value, arena: &Arena, module: &Module) -> Option<(i64, 
         // The value is read immediately after the yield and before the next
         // resume, so the current epoch is the body's originating epoch.
         ref_epoch: arena.epoch(),
+        // Only the two Word fields are read, so no constant string is reached.
+        rodata: &[],
     };
     <(i64, i64) as KeleusmaType<i64, f64>>::from_value_ctx(v, &ctx).ok()
 }
