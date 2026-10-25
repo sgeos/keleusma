@@ -1,0 +1,499 @@
+// src/hosted/interp.kel -- the hosted runtime, a bytecode interpreter for Keleusma written in
+// Keleusma (Order 4, roadmap Workstream D). See docs/decisions/ORDER4_HOSTED_RUNTIME_PLAN.md.
+//
+// The host decodes a verified module and marshals it into the `io` tables below. This program
+// executes it. Each resume runs one TICK of at most `FUEL` interpreted instructions and yields a
+// status, so the per-tick time and memory bounds of this program are constants, by the operator
+// ruling of 2026-10-25 on bound composition. A tick ends early when the interpreted program
+// finishes, traps, or the interpreter faults.
+//
+// The resume value is a command. 1 starts the interpreted entry chunk with the marshalled
+// arguments. 2 runs one tick. The yielded status is 0 running, 1 finished, 3 trapped and 4
+// faulted. Status 2 is reserved for an interpreted yield.
+//
+// A value is a tag and a word. The tags are 0 Unit, 1 Word, 2 Bool, 3 Byte and 4 None. A Bool
+// word is 0 or 1. A Byte word is in [0, 255].
+//
+// A FAULT is a state the host's admission should have made unreachable: an instruction form
+// outside the supported set, an operand of an unexpected tag, a capacity exceeded. It is
+// reported as status 4 with a code in `io.out_fault` rather than as a trap, because it is a
+// defect in admission or in this interpreter, never a behaviour of the interpreted program.
+// The codes are 1 operand stack full, 2 operand stack empty, 3 frame stack full, 4 unsupported
+// instruction, 5 operand tag, 6 instruction pointer past the chunk, 7 constant index, 8 local
+// index, 9 started without a valid entry.
+//
+// Every indexed write below is guarded by an explicit capacity test, so a fault never becomes
+// an index trap of this program.
+require word >= 64;
+
+// The marshalled module, the arguments and the outputs. The instruction tables are indexed by
+// a chunk's start plus its instruction pointer. Each instruction is a tag and up to three
+// operands. The tags are listed at `step`.
+shared data io {
+    n_chunks: Word,
+    entry: Word,
+    nargs: Word,
+    op_t: [Word; 4096],
+    op_a: [Word; 4096],
+    op_b: [Word; 4096],
+    op_c: [Word; 4096],
+    k_count: Word,
+    k_t: [Word; 512],
+    k_w: [Word; 512],
+    ch_start: [Word; 64],
+    ch_len: [Word; 64],
+    ch_locals: [Word; 64],
+    arg_t: [Word; 16],
+    arg_w: [Word; 16],
+    out_t: Word,
+    out_w: Word,
+    out_kind: Word,
+    out_index: Word,
+    out_bound: Word,
+    out_fault: Word,
+    steps: Word,
+}
+
+// The interpreter state, which persists across ticks. `vt` and `vw` are the operand stack.
+// The frame stack holds each frame's chunk, instruction pointer and operand-stack base, at
+// which the frame's locals begin, as in the Rust virtual machine.
+private data st {
+    status: Word,
+    sp: Word,
+    fp: Word,
+    vt: [Word; 512],
+    vw: [Word; 512],
+    f_chunk: [Word; 64],
+    f_ip: [Word; 64],
+    f_base: [Word; 64],
+}
+
+fn stack_cap() -> Word { 512 }
+fn frame_cap() -> Word { 64 }
+
+// Latch a fault. The first fault wins, so the reported code names the first failure.
+fn fault(code: Word) -> Word {
+    if st.status == 0 {
+        st.status = 4;
+        io.out_fault = code;
+    }
+    0
+}
+
+// Push a value. A full stack faults instead of writing.
+fn push(t: Word, w: Word) -> Word {
+    if st.sp < stack_cap() {
+        st.vt[st.sp] = t;
+        st.vw[st.sp] = w;
+        st.sp = st.sp + 1;
+        0
+    } else {
+        fault(1)
+    }
+}
+
+// Pop a value and return the slot it occupied, which stays readable until the next push. An
+// empty stack faults and returns slot 0, whose contents are then ignored.
+fn pop() -> Word {
+    if st.sp > 0 {
+        st.sp = st.sp - 1;
+        st.sp
+    } else {
+        fault(2)
+    }
+}
+
+// Push the three outputs of a checked operation, bottom to top, as the Rust virtual machine
+// does: the low half, the high half and the outcome flag.
+fn push3(lt: Word, lo: Word, ht: Word, hi: Word, fl: Word) -> Word {
+    push(lt, lo);
+    push(ht, hi);
+    push(1, fl)
+}
+
+// The high half of an in-range result, which is the sign extension of the low half.
+fn sext(v: Word) -> Word {
+    if v < 0 { 0 - 1 } else { 0 }
+}
+
+fn b2w(b: bool) -> Word {
+    if b { 1 } else { 0 }
+}
+
+// The base of the running frame's locals.
+fn frame_base() -> Word {
+    st.f_base[st.fp - 1]
+}
+
+fn jump(target: Word) -> Word {
+    st.f_ip[st.fp - 1] = target;
+    0
+}
+
+// Start the entry chunk with the marshalled arguments. The locals beyond the arguments start
+// as Unit, as the Rust virtual machine's call does.
+fn start() -> Word {
+    st.status = 0;
+    st.sp = 0;
+    st.fp = 0;
+    io.out_fault = 0;
+    io.steps = 0;
+    let e = io.entry;
+    if e < 0 orelse e >= io.n_chunks orelse e >= frame_cap() orelse io.nargs > io.ch_locals[e] {
+        fault(9)
+    } else {
+        for i in 0..16 limit 16 {
+            if i < io.nargs { push(io.arg_t[i], io.arg_w[i]); }
+        }
+        for i in 0..512 limit 512 {
+            if i >= io.nargs andalso i < io.ch_locals[e] { push(0, 0); }
+        }
+        st.f_chunk[0] = e;
+        st.f_ip[0] = 0;
+        st.f_base[0] = 0;
+        st.fp = 1;
+        0
+    }
+}
+
+fn op_const(idx: Word) -> Word {
+    if idx >= 0 andalso idx < io.k_count {
+        push(io.k_t[idx], io.k_w[idx])
+    } else {
+        fault(7)
+    }
+}
+
+fn op_get_local(n: Word) -> Word {
+    let slot = frame_base() + n;
+    if slot >= 0 andalso slot < st.sp {
+        push(st.vt[slot], st.vw[slot])
+    } else {
+        fault(8)
+    }
+}
+
+fn op_set_local(n: Word) -> Word {
+    let i = pop();
+    let slot = frame_base() + n;
+    if st.status == 0 andalso slot >= 0 andalso slot < st.sp {
+        st.vt[slot] = st.vt[i];
+        st.vw[slot] = st.vw[i];
+        0
+    } else {
+        fault(8)
+    }
+}
+
+fn op_pop_n(n: Word) -> Word {
+    if n >= 0 andalso n <= st.sp {
+        st.sp = st.sp - n;
+        0
+    } else {
+        fault(2)
+    }
+}
+
+fn op_dup() -> Word {
+    if st.sp > 0 {
+        push(st.vt[st.sp - 1], st.vw[st.sp - 1])
+    } else {
+        fault(2)
+    }
+}
+
+// `PushImmediate`: 0 Unit, 1 true, 2 false, 3 None, and 4 to 19 the Words 0 to 15.
+fn op_push_immediate(v: Word) -> Word {
+    if v == 0 { push(0, 0) } else {
+    if v == 1 { push(2, 1) } else {
+    if v == 2 { push(2, 0) } else {
+    if v == 3 { push(4, 0) } else {
+    if v >= 4 andalso v <= 19 { push(1, v - 4) } else { fault(4) } } } } }
+}
+
+// `If` falls through on true and jumps on false. `BreakIf` jumps on true.
+fn op_branch(target: Word, jump_on: Word) -> Word {
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        if st.vt[i] != 2 { fault(5) } else {
+            if st.vw[i] == jump_on { jump(target) } else { 0 }
+        }
+    }
+}
+
+// Return pops the result, drops the frame and its locals, and pushes the result for the
+// caller. Returning from the entry frame finishes the program.
+fn op_return() -> Word {
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        let t = st.vt[i];
+        let w = st.vw[i];
+        st.sp = frame_base();
+        st.fp = st.fp - 1;
+        if st.fp == 0 {
+            io.out_t = t;
+            io.out_w = w;
+            st.status = 1;
+            0
+        } else {
+            push(t, w)
+        }
+    }
+}
+
+fn op_not() -> Word {
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        if st.vt[i] == 2 { push(2, 1 - st.vw[i]) } else { fault(5) }
+    }
+}
+
+// Equality compares tag and word, which is the Rust virtual machine's structural equality on
+// the scalar values this interpreter holds. `ne` selects the negation.
+fn op_eq(ne: Word) -> Word {
+    let j = pop();
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        let eq = st.vt[i] == st.vt[j] andalso st.vw[i] == st.vw[j];
+        push(2, b2w(eq) bxor ne)
+    }
+}
+
+// Ordering over two Words or two Bytes. `rel` is 0 less, 1 greater, 2 less or equal and 3
+// greater or equal.
+fn op_order(rel: Word) -> Word {
+    let j = pop();
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        let t = st.vt[i];
+        if t != st.vt[j] orelse (t != 1 andalso t != 3) { fault(5) } else {
+            let x = st.vw[i];
+            let y = st.vw[j];
+            let r = if rel == 0 { x < y } else { if rel == 1 { x > y } else {
+                if rel == 2 { x <= y } else { x >= y } } };
+            push(2, b2w(r))
+        }
+    }
+}
+
+// The checked Word operations use the language's own checked-arithmetic construct, whose
+// overflow and underflow arms bind the true result's high and low halves. An in-range result's
+// high half is its sign extension, as the Rust virtual machine computes it in i128.
+fn checked_add_word(x: Word, y: Word) -> Word {
+    let (lo, hi, fl) = x + y {
+        ok(v) => (v, sext(v), 0),
+        overflow(h, l) => (l, h, 1),
+        underflow(h, l) => (l, h, 2),
+    };
+    push3(1, lo, 1, hi, fl)
+}
+
+fn checked_sub_word(x: Word, y: Word) -> Word {
+    let (lo, hi, fl) = x - y {
+        ok(v) => (v, sext(v), 0),
+        overflow(h, l) => (l, h, 1),
+        underflow(h, l) => (l, h, 2),
+    };
+    push3(1, lo, 1, hi, fl)
+}
+
+fn checked_mul_word(x: Word, y: Word) -> Word {
+    let (lo, hi, fl) = x * y {
+        ok(v) => (v, sext(v), 0),
+        overflow(h, l) => (l, h, 1),
+        underflow(h, l) => (l, h, 2),
+    };
+    push3(1, lo, 1, hi, fl)
+}
+
+// Division and modulo by zero push the numerator, a zero high half and flag 3. The one
+// overflowing quotient is the minimum Word divided by minus one.
+fn checked_div_word(x: Word, y: Word) -> Word {
+    let (lo, hi, fl) = x / y {
+        ok(v) => (v, sext(v), 0),
+        overflow(h, l) => (l, h, 1),
+        zero_divisor(n) => (n, 0, 3),
+    };
+    push3(1, lo, 1, hi, fl)
+}
+
+fn checked_mod_word(x: Word, y: Word) -> Word {
+    let (lo, hi, fl) = x % y {
+        ok(v) => (v, sext(v), 0),
+        zero_divisor(n) => (n, 0, 3),
+    };
+    push3(1, lo, 1, hi, fl)
+}
+
+// The checked Byte operations are unsigned. The low half is the wrapped Byte, the high half a
+// zero Byte, and the flag 1 above 255 or 2 below zero.
+fn checked_byte(r: Word) -> Word {
+    let fl = if r > 255 { 1 } else { if r < 0 { 2 } else { 0 } };
+    push3(3, r band 255, 3, 0, fl)
+}
+
+// The binary checked operations. `which` is 0 add, 1 sub, 2 mul, 3 div and 4 mod.
+fn op_checked(which: Word) -> Word {
+    let j = pop();
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        let t = st.vt[i];
+        let x = st.vw[i];
+        let y = st.vw[j];
+        if t != st.vt[j] { fault(5) } else {
+            if t == 1 {
+                if which == 0 { checked_add_word(x, y) } else {
+                if which == 1 { checked_sub_word(x, y) } else {
+                if which == 2 { checked_mul_word(x, y) } else {
+                if which == 3 { checked_div_word(x, y) } else { checked_mod_word(x, y) } } } }
+            } else {
+                if t == 3 andalso which <= 2 {
+                    if which == 0 { checked_byte(x + y) } else {
+                    if which == 1 { checked_byte(x - y) } else { checked_byte(x * y) } }
+                } else { fault(5) }
+            }
+        }
+    }
+}
+
+// Negation is the subtraction from zero, whose true result is the same.
+fn op_checked_neg() -> Word {
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        if st.vt[i] == 1 { checked_sub_word(0, st.vw[i]) } else { fault(5) }
+    }
+}
+
+// The Word bitwise operations and shifts. `which` is 0 and, 1 or, 2 xor, 3 shift left and 4
+// arithmetic shift right. A shift amount is masked to the word width, as the Rust virtual
+// machine masks it.
+fn op_bits(which: Word) -> Word {
+    let j = pop();
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        if st.vt[i] != 1 orelse st.vt[j] != 1 { fault(5) } else {
+            let x = st.vw[i];
+            let y = st.vw[j];
+            let r = if which == 0 { x band y } else { if which == 1 { x bor y } else {
+                if which == 2 { x bxor y } else { if which == 3 { x lsl (y band 63) } else {
+                    x asr (y band 63) } } } };
+            push(1, r)
+        }
+    }
+}
+
+// The wrapping Byte operations `Add`, `Sub` and `Mul`, which the compiler emits only for Byte.
+// They compute on the widened words and keep the low eight bits. `which` is 0 add, 1 sub and 2
+// mul.
+fn op_byte_arith(which: Word) -> Word {
+    let j = pop();
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        if st.vt[i] != 3 orelse st.vt[j] != 3 { fault(5) } else {
+            let x = st.vw[i];
+            let y = st.vw[j];
+            let r = if which == 0 { x + y } else { if which == 1 { x - y } else { x * y } };
+            push(3, r band 255)
+        }
+    }
+}
+
+// `ByteToWord` and `WordToByte`. The narrowing keeps the low eight bits.
+fn op_convert(to_byte: Word) -> Word {
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        if to_byte == 1 {
+            if st.vt[i] == 1 { push(3, st.vw[i] band 255) } else { fault(5) }
+        } else {
+            if st.vt[i] == 3 { push(1, st.vw[i]) } else { fault(5) }
+        }
+    }
+}
+
+// A trap ends the program with its kind. The bounds trap, kind 8, first pops its payload: four
+// little-endian byte limbs of the bound, most significant on top, and then the index.
+fn op_trap(kind: Word) -> Word {
+    if kind == 8 {
+        let l3 = st.vw[pop()] band 255;
+        let l2 = st.vw[pop()] band 255;
+        let l1 = st.vw[pop()] band 255;
+        let l0 = st.vw[pop()] band 255;
+        let ix = st.vw[pop()];
+        io.out_bound = (l3 lsl 24) bor (l2 lsl 16) bor (l1 lsl 8) bor l0;
+        io.out_index = ix;
+    }
+    if st.status == 0 {
+        if kind >= 0 andalso kind <= 8 {
+            io.out_kind = kind;
+            st.status = 3;
+            0
+        } else { fault(4) }
+    } else { 0 }
+}
+
+// Execute one instruction. The instruction tags are fixed by the host's encoder in
+// src/hosted/mod.rs and are listed in its `Tag` enumeration.
+fn step() -> Word {
+    let c = st.f_chunk[st.fp - 1];
+    let ip = st.f_ip[st.fp - 1];
+    if ip < 0 orelse ip >= io.ch_len[c] { fault(6) } else {
+        let k = io.ch_start[c] + ip;
+        st.f_ip[st.fp - 1] = ip + 1;
+        io.steps = io.steps + 1;
+        let a = io.op_a[k];
+        match io.op_t[k] {
+            1 => op_const(a),
+            2 => op_get_local(a),
+            3 => op_set_local(a),
+            4 => op_pop_n(a),
+            5 => op_dup(),
+            6 => op_push_immediate(a),
+            7 => op_branch(a, 0),
+            8 => jump(a),
+            9 => 0,
+            10 => 0,
+            11 => jump(a),
+            12 => jump(a),
+            13 => op_branch(a, 1),
+            14 => op_return(),
+            15 => op_not(),
+            16 => op_eq(0),
+            17 => op_eq(1),
+            18 => op_order(0),
+            19 => op_order(1),
+            20 => op_order(2),
+            21 => op_order(3),
+            22 => op_checked(0),
+            23 => op_checked(1),
+            24 => op_checked(2),
+            25 => op_checked(3),
+            26 => op_checked(4),
+            27 => op_checked_neg(),
+            28 => op_bits(0),
+            29 => op_bits(1),
+            30 => op_bits(2),
+            31 => op_bits(3),
+            32 => op_bits(4),
+            33 => op_convert(0),
+            34 => op_convert(1),
+            35 => op_trap(a),
+            36 => op_byte_arith(0),
+            37 => op_byte_arith(1),
+            38 => op_byte_arith(2),
+            _ => fault(4),
+        }
+    }
+}
+
+// One tick of at most FUEL instructions. FUEL is the literal 32 in the loop header.
+fn tick() -> Word {
+    for i in 0..32 limit 32 {
+        if st.status == 0 { step(); }
+    }
+    st.status
+}
+
+loop main(cmd: Word) -> Word {
+    let result = if cmd == 1 { start(); st.status } else { tick() };
+    yield result
+}
