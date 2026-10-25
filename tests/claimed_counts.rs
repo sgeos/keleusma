@@ -806,7 +806,10 @@ fn the_only_test_gated_out_of_every_ci_configuration_is_the_known_one() {
         // coverage is how this guard first reported a test gated on
         // `encryption` as covered. `cargo test --doc` runs doctests, not the
         // files in `tests/`.
-        if !line.contains("nextest run") {
+        // `nextest archive` counts as well. Since 2026-10-25 the self-host shards run an
+        // archive built once, so the feature selection sits on the archive command and
+        // `tests/ci_shard_coverage.rs` checks that every shard runs that archive.
+        if !line.contains("nextest run") && !line.contains("nextest archive") {
             continue;
         }
         if !line.contains("-p keleusma ") || !line.contains("--features ") {
@@ -1039,7 +1042,8 @@ fn the_instructions_state_the_feature_sets_ci_actually_runs() {
     // Same extraction as the sibling guard: only steps that RUN the integration tests.
     let mut lists: Vec<String> = Vec::new();
     for line in workflow.lines() {
-        if !line.contains("nextest run") || !line.contains("-p keleusma ") {
+        let runs = line.contains("nextest run") || line.contains("nextest archive");
+        if !runs || !line.contains("-p keleusma ") {
             continue;
         }
         if line.contains("--no-default-features") {
