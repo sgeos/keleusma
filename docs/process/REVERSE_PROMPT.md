@@ -1,59 +1,53 @@
 # Reverse prompt
 
-## Order 4 completed for its first-pass scope, 2026-10-25
+## Order 5 completed for its first-pass scope, 2026-10-25
 
-The goal is to absorb kaizen work as it arrives and complete Order 4. Kaizen PRs
-508, 512 and 516 merged into v0.2.3 during the session.
+The goal is to absorb kaizen work as it arrives and complete Order 5. No kaizen
+work arrived during the session. A status and request went to the kaizen line.
 
-The operator ruled first-hand that the Order 4 gate is the subset corpus run
-under the interpreter with results matching the Rust virtual machine, and that
-bounds compose by fuel-sliced ticks. The hosted runtime landed in five slices on
-feat/v02-order4-hosted-runtime: scalars and control flow, flat composites, the
-data segment, calls and streams. The interpreter is src/hosted/interp.kel, its
-driver src/hosted/mod.rs behind the self-host feature, and its harness
-tests/hosted_runtime.rs.
+Order 5 is approach 1 of roadmap Workstream E, the signing and encryption
+framing in Keleusma with the primitives as host natives. The program is
+src/crypto_frame/frame.kel and its driver src/crypto_frame/mod.rs. The plan is
+docs/decisions/ORDER5_CRYPTO_FRAMING_PLAN.md and the audit
+docs/decisions/ORDER5_COMPLETION_AUDIT.md.
 
-Evidence. Over 125 corpus programs compiled by the shipping self-hosted compiler,
-116 of the 117 non-stream cases are admitted and agree with the Rust virtual
-machine on all 1066 runs, and all nine stream cases agree on 541 events. The one
-refused case has no static loop bound, and the Rust virtual machine refuses it
-too. Every run stays within its computed instruction and tick bounds. The
-interpreter's own per-tick bound is a constant 55,824,637 nominal cycles. The
-audit is docs/decisions/ORDER4_COMPLETION_AUDIT.md.
+The gate is my reading of the roadmap gate, and you have not ruled on it. Over
+20 compiled modules, signed artifacts with and without error-correcting planes,
+encrypted artifacts and decrypted views equal the reference byte for byte.
+Verification and decryption verdicts equal the reference's over 2746 runs, with
+every refusal class reached. The pipeline with sections from the Order 1 wire
+stages reproduces the reference, and keleusma compile --compiler self-hosted
+now signs and encrypts through the program and refuses a divergence. No key
+enters the program. An independent review found no divergence and four smaller
+points, all acted on.
 
-Two soundness fixes landed first. PR 517, the yield type check and the checked
-flat Text decode, reported by pykeleusma, merged as 50b20ef6. PR 519, the time
-bound's uncharged structural markers, found by the Order 4 instruction count and
-ruled first-hand by the operator, merged as c2733d0a.
-
-Verification. The full local release matrix passed: workspace 3524, self-host
-3264, no-default 338, signatures 2504, signatures with shell 2521, doctests 12
-with 3 ignored, and the detached compiler 86, with both Clippy configurations
-and the documentation build clean. CI run 40188772558 passed every job with the
-same self-host total, 3264, and PR 521 merged into v0.2.3 as 7d4bc434.
+A defect was found on the way. verify_module_signature panicked on a signed
+header over a short declared total, reachable from Vm::load_signed_bytes on
+untrusted bytes. Repaired in PR 524, recorded in SIGNATURE_VERIFY_BOUNDS.md.
 
 Questions for the operator.
 
-1. The VM's own flat Text field reads still trust their words for a hand-built
-   module the typed verifier admits. Should a layout-aware typed pass, a range
-   check alone, or a recorded trust assumption apply?
-2. Should a 0.2.2 patch release carry the soundness fixes? Publishing needs your
-   authorization.
-3. pykeleusma reports for 0.2.2, unverified on v0.2.3. `replace_module` accepts
-   unsigned code once a key is trusted. `verify::module_runtime_footprint`
-   overflows the stack on an unverified module. A whole-array store to a private
-   array fills only its first slot. Const-generic and type-generic instances
-   have wrong layouts for host-built values. A host that builds its own
-   RefContext has no accessor for the bytecode image after PR 517. Which should
-   this line take first?
+1. Do you accept the Order 5 gate as stated in the plan, byte and verdict
+   identity with the reference, the ordering held by the program, the
+   self-hosted section path and the command line integration?
+2. The decrypt path takes ciphertext to the end of the buffer rather than the
+   declared total, so an encrypted artifact with trailing bytes cannot be
+   decrypted while a signed one loads. Should it use the declared total?
+3. Open from Order 4. The flat Text read trust question, a 0.2.2 patch release,
+   which needs your authorization, and which pykeleusma finding to take first.
+4. The V0.3.X line reported two findings on files this line owns, as peer
+   data that I have not yet verified. docs/spec/RUNTIME_FAULTS.md still
+   specifies native default values for an unhandled partial operation, while
+   the compiler now emits an explicit Trap. The whole-chunk time bound also
+   refuses intern_id in the self-hosted lexer as a text operation on two Word
+   results. Should either be taken before the next order?
 
-Concerns. The interpreter's tick bound is loose, and the self-hosted compiler
-refuses interp.kel. A resume value inside a composite literal is refused at
-load. HANDOFF.md is stale. Kaizen's relayed positions on HANDOFF.md and
-REVERSE_PROMPT.md are unconfirmed first-hand.
+Concerns. The primitives' time is outside the program's bound, since they are
+registered with the default native attestation. Approach 2 is not started.
+HANDOFF.md is stale. Kaizen's relayed positions on HANDOFF.md and
+REVERSE_PROMPT.md remain unconfirmed first-hand.
 
-Next. Order 4 is complete. The operator's answers to the three questions above
-decide the next increment.
+Next. The operator's answers decide the next increment.
 
 ---
 

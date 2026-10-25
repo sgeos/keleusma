@@ -6,6 +6,19 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-25 Order 5 complete for the first-pass scope
+
+The cryptographic framing landed on feat/v02-order5-crypto-framing as
+src/crypto_frame/frame.kel and its driver, with the CLI's self-hosted backend
+signing and encrypting through it. Signed and encrypted artifacts are
+byte-identical to the reference over 20 modules, and verification and
+decryption verdicts agree over 2746 runs. The signature verifier's panic on a
+short declared total was found on the way and repaired in PR 524. The gate is
+this line's reading of the roadmap and awaits operator acceptance. The audit is
+ORDER5_COMPLETION_AUDIT.md.
+CI run 40221696853 passed every check, and PR 526 merged into v0.2.3 as
+607c0328. Kaizen PR 525, the Jev selection cohort, merged into v0.2.3 just before it.
+
 ## 2026-10-25 Order 4 complete for the first-pass scope
 
 The hosted runtime landed in five slices on feat/v02-order4-hosted-runtime:
