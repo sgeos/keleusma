@@ -21,7 +21,9 @@ compiler, and Order 2, the full validator, are complete for that scope, with evi
 in [the compiler audit](docs/decisions/ORDER1_COMPLETION_AUDIT.md) and
 [the validator audit](docs/decisions/ORDER2_COMPLETION_AUDIT.md). Order 3, trap analysis, is
 complete for its first-pass scope on 2026-10-24, with its residual limits in
-[the trap-analysis audit](docs/decisions/ORDER3_COMPLETION_AUDIT.md). Full-language support is
+[the trap-analysis audit](docs/decisions/ORDER3_COMPLETION_AUDIT.md). Order 4, the hosted
+runtime, is complete for its first-pass scope on 2026-10-25, with its bound composition and
+residual limits in [the hosted-runtime audit](docs/decisions/ORDER4_COMPLETION_AUDIT.md). Full-language support is
 Order 6 and defines the V0.3.0 milestone. What each
 release shipped is in [`CHANGELOG.md`](CHANGELOG.md).
 

@@ -2,7 +2,7 @@
 //! Workstream D), and the Rust driver that admits a module, marshals it and runs it.
 //!
 //! The interpreter is `interp.kel` beside this file. It runs on the Rust virtual machine as a
-//! `loop` that executes at most [`FUEL`] interpreted instructions per tick, so its own per-tick
+//! `loop` that executes at most `FUEL` interpreted instructions per tick, so its own per-tick
 //! time and memory bounds are constants. This driver decides admission before anything runs. A
 //! module is admitted only when the Rust verifier accepted it, every instruction is in the
 //! supported set, every constant is a supported scalar, and its tables fit the interpreter's
@@ -10,7 +10,7 @@
 //! and the bound composition.
 //!
 //! **Trust boundary.** The interpreter treats its input as already verified. Admission is
-//! host-side in the first pass. A [`Outcome::Fault`] therefore names a defect in admission or in
+//! host-side in the first pass. An `Outcome::Fault` therefore names a defect in admission or in
 //! the interpreter, not a behaviour of the interpreted program, and the differential tests treat
 //! one as a failure.
 
@@ -523,7 +523,7 @@ fn chunk_bound(chunk: &crate::bytecode::Chunk, callee_bounds: &[u32]) -> Result<
 /// nominal cycles. Every instruction costs at least one nominal cycle, so the figure also bounds
 /// the instruction count. For a stream chunk it is the bound of one iteration.
 ///
-/// The bounds are computed bottom-up over the call graph by [`chunk_bound`], which must be
+/// The bounds are computed bottom-up over the call graph by `chunk_bound`, which must be
 /// acyclic. A cycle is refused rather than assumed absent. A bound that does not fit the
 /// verifier's 32-bit attestation field is refused.
 pub fn transitive_bound(module: &Module, entry: usize) -> Result<u64, Refusal> {
