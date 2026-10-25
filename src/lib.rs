@@ -94,6 +94,11 @@ extern crate std;
 #[cfg(feature = "self-host")]
 pub mod selfhost;
 
+/// The hosted runtime, a bytecode interpreter written in Keleusma, and its driver (Order 4).
+/// Off by default with the self-hosted toolchain; requires `std`.
+#[cfg(feature = "self-host")]
+pub mod hosted;
+
 /// Address-type abstraction used by the parametric [`vm::GenericVm`]
 /// to model the runtime's address width.
 pub mod address;
