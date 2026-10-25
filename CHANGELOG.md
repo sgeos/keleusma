@@ -36,6 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The hosted runtime, Order 4.** `src/hosted/interp.kel` is a bytecode interpreter written
+  in Keleusma that runs on the Rust virtual machine at most 32 interpreted instructions per
+  tick, so its own bounds are constants. Its driver, `keleusma::hosted` behind the
+  `self-host` feature, admits a verified module only when its instructions, constants and
+  tables fit and its transitive time bound exists, and then drives ticks. Over a corpus of
+  125 programs compiled by the self-hosted compiler, every admitted case agrees with the Rust
+  virtual machine. See `docs/decisions/ORDER4_COMPLETION_AUDIT.md`.
+
 - A fallible self-hosted structural and typed verifier API distinguishes completed
   verdicts from stage capacity, work-budget, execution and protocol failures.
 
