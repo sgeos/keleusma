@@ -12,7 +12,8 @@ The hosted runtime landed in five slices on feat/v02-order4-hosted-runtime:
 scalars and control flow, flat composites, the data segment, calls and streams.
 Every admitted corpus case agrees with the Rust virtual machine, over 1066 runs
 and 541 stream events. PR 519 merged as c2733d0a. The audit is
-ORDER4_COMPLETION_AUDIT.md. Remote CI for the branch is pending.
+ORDER4_COMPLETION_AUDIT.md. CI run 40188772558 passed every job, and PR 521
+merged into v0.2.3 as 7d4bc434.
 
 ## 2026-10-25 WCET structural markers
 

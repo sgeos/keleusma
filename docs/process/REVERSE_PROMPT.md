@@ -29,8 +29,8 @@ ruled first-hand by the operator, merged as c2733d0a.
 Verification. The full local release matrix passed: workspace 3524, self-host
 3264, no-default 338, signatures 2504, signatures with shell 2521, doctests 12
 with 3 ignored, and the detached compiler 86, with both Clippy configurations
-and the documentation build clean. Remote continuous integration has not yet run
-the branch.
+and the documentation build clean. CI run 40188772558 passed every job with the
+same self-host total, 3264, and PR 521 merged into v0.2.3 as 7d4bc434.
 
 Questions for the operator.
 
@@ -52,5 +52,5 @@ refuses interp.kel. A resume value inside a composite literal is refused at
 load. HANDOFF.md is stale. Kaizen's relayed positions on HANDOFF.md and
 REVERSE_PROMPT.md are unconfirmed first-hand.
 
-Next. Open the pull request for Order 4, record the remote run in the audit, and
-merge when green.
+Next. Order 4 is complete. The operator's answers to the three questions above
+decide the next increment.

@@ -135,4 +135,20 @@ made while the self-host step was running. The steps before and during it ran
 binaries built from a tree that differs from the final one only in those comments.
 The process records were written after the matrix, and the guards that read them
 were re-run on their final text. Miri was not run, because this work adds no
-unsafe code. Remote continuous integration is recorded below when it completes.
+unsafe code.
+
+Remote continuous integration ran pull request 521 at 7aeb0188 as workflow run
+[40188772558](https://github.com/sgeos/keleusma/actions/runs/40188772558), with
+Book run 40188772535, on 2026-10-25. Every job passed and only the Pages
+deployment was skipped. The job logs show all eight hosted-runtime tests passing
+in the Test job and all eight across the self-host shards. The pull request
+merged into v0.2.3 as 7d4bc434.
+
+| Job | Nextest summary |
+|---|---|
+| Test, the workspace without the self-host binaries | 2665 passed |
+| Test, self-host feature, shards 1 to 4 | 803, 799, 780 and 882 passed, 3264 in total |
+| Test, no default features | 338 passed |
+| Test, signatures feature | 2504 passed |
+| Test, broad features | 2521 passed |
+| Test, keleusma-wire and keleusma-bench | 53 and 19, and 6 passed |
