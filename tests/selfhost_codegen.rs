@@ -9237,9 +9237,11 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             // after those sources and the typed loop fallback were finalized.
             // Re-measured 2026-10-24 after the native reify-count repair and the
             // Trap kind in both text walks: 3215 and 367 became 3229 and 374.
+            // Re-measured 2026-10-25 after the time walk began charging Else,
+            // EndIf, EndLoop and a counted loop's final header: 3229 became 3272.
             "analyze",
             include_str!("../src/selfhost/kel/analyze.kel"),
-            3229,
+            3272,
             374,
         ),
         (
