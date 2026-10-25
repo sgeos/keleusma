@@ -9,8 +9,7 @@ This audit records the state of Order 3, first-pass trap analysis, on
 acceptance rows the handler surface plan added after the operator rulings of
 2026-10-20, and the three strengthening items that remained open for Order 3.
 **Disposition.** Order 3 is complete for its first-pass scope on 2026-10-24,
-on the local evidence recorded below. Remote continuous integration of the
-commit carrying this audit is recorded separately when it finishes. The
+on the local and remote evidence recorded below. The
 residual limits below are part of the disposition.
 
 The first pass covers Word and Byte arithmetic, indexing and indexed data
@@ -132,6 +131,24 @@ integration Miri job covers the arena and the undefined-behaviour pin.
 `cargo clippy -p keleusma --lib --tests --no-default-features` still fails on dead
 code in tests/op_tag_tables.rs, a configuration continuous integration does not
 run and a defect that predates this increment.
+
+Remote continuous integration then ran PR 506 at bcb7c6fa as workflow run
+[40143090487](https://github.com/sgeos/keleusma/actions/runs/40143090487), with
+Book run 40143090457, between 23:31 and 00:13 UTC on 2026-10-24 and 2026-10-25.
+Every job passed and only the Pages deployment was skipped. The test jobs use the
+debug test profile at opt-level 1, which supplies the debug pass. The pull request
+merged into v0.2.3 as a20011dd. Two earlier runs on the same branch failed only on
+the generated book: the instruction-set page, its translation template and its
+Japanese catalogue, each regenerated in turn.
+
+| Job | Nextest summary |
+|---|---|
+| Test, the workspace without the self-host binaries | 2643 passed |
+| Test, self-host feature, shards 1 to 4 | 794, 796, 771 and 881 passed, 3242 in total |
+| Test, no default features | 333 passed |
+| Test, signatures feature | 2490 passed |
+| Test, broad features | 2507 passed |
+| Test, keleusma-wire and keleusma-bench | 19 and 6 passed |
 
 The first heavy run on an earlier tree, 857 of 859, found two failures, both
 caused by this increment and both repaired before the matrix: the one-element
