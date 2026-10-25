@@ -37,6 +37,8 @@ increment, and a table that drifts is worse than no table.
 | [ORDER3_COMPLETION_AUDIT.md](./ORDER3_COMPLETION_AUDIT.md) | Trap-analysis completion evidence, residual limits and verification receipts |
 | [FLAT_TEXT_DECODE_SOUNDNESS.md](./FLAT_TEXT_DECODE_SOUNDNESS.md) | The yield type gap and unchecked flat Text decode, their repair and residual limits |
 | [WCET_STRUCTURAL_MARKERS.md](./WCET_STRUCTURAL_MARKERS.md) | The time bound's uncharged Else, EndIf, EndLoop and final loop header, and their repair |
+| [ORDER4_COMPLETION_AUDIT.md](./ORDER4_COMPLETION_AUDIT.md) | Hosted-runtime completion evidence, bound composition, residual limits and receipts |
+| [ORDER4_HOSTED_RUNTIME_PLAN.md](./ORDER4_HOSTED_RUNTIME_PLAN.md) | Order 4 rulings, design, bound composition and slice record for the hosted runtime |
 | [COMPOSITE_REGION_EVIDENCE.md](./COMPOSITE_REGION_EVIDENCE.md) | What the V0.2.3 runtime establishes for the composite-region-reuse proof, with provenance per claim |
 | [STREAM_SPILL_LAYOUT.md](./STREAM_SPILL_LAYOUT.md) | **Open, framed not taken**: the two remaining resumable-stream refusals are one question — operand entries live in SSA values and do not survive a return — needing a statically sized ephemeral slice; the multi-parameter refusal is separated out, because that shape FAULTS on the reference |
 | [YIELD_OWNERSHIP_MODE.md](./YIELD_OWNERSHIP_MODE.md) | Accepted in principle: `ref`/`out` on a yielding declaration's return signature, choosing machine-owned or host-owned storage for the yielded value (V0.3.0 or later) |
