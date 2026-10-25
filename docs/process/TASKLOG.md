@@ -6,6 +6,15 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-25 Order 6 slices 0 and 1
+
+Order 6, full-language support, began on feat/v02-order6-full-language with the plan in
+ORDER6_FULL_LANGUAGE_PLAN.md. tests/selfhost_full_language.rs pins the shipping
+self-hosted outcome for all 75 repository sources. Slice 1 repaired six parser states
+that skipped a token, and the corpus moved from 34 to 36 identical sources with no
+divergence, panic, missing verdict or false rejection left. The gate awaits the
+operator.
+
 ## 2026-10-25 Order 5 complete for the first-pass scope
 
 The cryptographic framing landed on feat/v02-order5-crypto-framing as

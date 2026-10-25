@@ -46,8 +46,10 @@ use keleusma::selfhost::{
 };
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
 
-const MULTIHEAD_SRC: &str = "fn f(0) -> Word { 0 }\n\
-                             fn f(1) -> Word { 11 }\n\
+// Guarded heads rather than literal ones. A literal parameter head, `fn f(0)`, is refused
+// by the parser since Order 6 slice 1, because it used to be dropped from the head.
+const MULTIHEAD_SRC: &str = "fn f(n: Word) -> Word when n == 0 { 0 }\n\
+                             fn f(n: Word) -> Word when n == 1 { 11 }\n\
                              fn f(n: Word) -> Word { n + 10 }\n\
                              fn main() -> Word { f(1) }\n";
 

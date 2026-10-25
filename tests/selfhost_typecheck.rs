@@ -4091,14 +4091,8 @@ fn every_known_gap_is_refused_by_the_self_hosted_compiler() {
             "qualified call",
             "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }",
         ),
-        // FIFTH, found 2026-09-12 while building a repeat-compile corpus. The
-        // parenthesised `E::N()` compiles; only the bare spelling is refused. Pinned
-        // in detail by `a_bare_unit_variant_expression_is_refused_where_the_parenthesised_one_compiles`
-        // in `tests/selfhost_parse.rs`.
-        (
-            "bare unit enum variant expression",
-            "enum E { M, N }\nfn main() -> Word { E::N as Word }",
-        ),
+        // A fifth gap, the bare unit enum variant expression `E::N as Word`, was closed
+        // in Order 6 slice 1 and now compiles byte-identically, so it left this list.
     ];
 
     let target = keleusma::target::Target::host();
@@ -4530,9 +4524,13 @@ fn the_documented_expression_and_statement_forms_are_censused() {
 
     let mut got = failing.clone();
     got.sort_unstable();
+    // The pipeline joined the failing set in Order 6 slice 1, and it is a refusal closing a
+    // silent misparse rather than a regression. The self-hosted lexer read the pipe bar as
+    // the arrow, which the body walk skips, so `1 |> g()` was parsed as `1 > g()` and
+    // counted as handled.
     assert_eq!(
         got,
-        vec!["assert"],
+        vec!["assert", "pipeline"],
         "the set of documented expression and statement forms the self-hosted parser \
          cannot handle changed. A form leaving it is a gap closing to record; one \
          joining it is a regression every other test here would miss"
@@ -7463,7 +7461,7 @@ fn pipeline_call_argument_tags_agree_with_reference_syntax() {
         "fn take(n: Word) -> Word { n } fn get() -> Word { 1 } fn main() -> Word { take(get()) }",
         "fn take(n: Word) -> Word { n } fn main() -> Word { take(1, true) }",
         "fn take(n: Word) -> Word { n } fn main() -> Word { take() }",
-        "fn take(0) -> Word { 1 } fn take(n: Word) -> Word { n } fn main() -> Word { take(true) }",
+        "fn take(n: Word) -> Word when n == 0 { 1 } fn take(n: Word) -> Word { n } fn main() -> Word { take(true) }",
         "fn take(n: Byte) -> Byte { n } fn main() -> Byte { take(1 as Byte) }",
     ] {
         let ast = parse(&tokenize(src).expect("lex")).expect("parse");
@@ -7625,11 +7623,11 @@ fn pipeline_call_inputs_drive_type_rejection() {
             false,
         ),
         (
-            "fn take(0) -> Word { 1 } fn take(n: Word) -> Word { n } fn main() -> Word { take(2) }",
+            "fn take(n: Word) -> Word when n == 0 { 1 } fn take(n: Word) -> Word { n } fn main() -> Word { take(2) }",
             true,
         ),
         (
-            "fn take(0) -> Word { 1 } fn take(n: Word) -> Word { n } fn main() -> Word { take(true) }",
+            "fn take(n: Word) -> Word when n == 0 { 1 } fn take(n: Word) -> Word { n } fn main() -> Word { take(true) }",
             false,
         ),
         (
@@ -9346,7 +9344,7 @@ fn the_pipeline_tag_table_omits_float_and_the_reference_does_not() {
 #[cfg(feature = "self-host")]
 #[test]
 fn every_function_head_contributes_its_own_tail_row() {
-    const SRC: &str = "fn f(0) -> Word { 1 } fn f(1) -> Word { 2 } fn f(n: Word) -> Word { n } fn main() -> Word { f(2) }";
+    const SRC: &str = "fn f(n: Word) -> Word when n == 0 { 1 } fn f(n: Word) -> Word when n == 1 { 2 } fn f(n: Word) -> Word { n } fn main() -> Word { f(2) }";
     let ast = parse(&tokenize(SRC).expect("lex")).expect("parse");
     let (names, _) = binding_rows(&ast);
     let (nodes, _) = expression_nodes_and_derived(&ast, &names);
@@ -9404,19 +9402,19 @@ fn function_heads_keep_their_own_binding_names() {
 fn pipeline_function_head_requirements_drive_type_rejection() {
     for (src, kind, accepts, count) in [
         (
-            "fn f(0) -> Word { 1 } fn f(n: Word) -> Word { 2 }",
+            "fn f(n: Word) -> Word when n == 0 { 1 } fn f(n: Word) -> Word { 2 }",
             8,
             true,
             2,
         ),
         (
-            "fn f(0) -> Word { true } fn f(n: Word) -> Word { 2 }",
+            "fn f(n: Word) -> Word when n == 0 { true } fn f(n: Word) -> Word { 2 }",
             8,
             false,
             2,
         ),
         (
-            "fn f(0) -> Word { 1 } fn f(n: Word) -> Word { true }",
+            "fn f(n: Word) -> Word when n == 0 { 1 } fn f(n: Word) -> Word { true }",
             8,
             false,
             2,

@@ -2341,8 +2341,19 @@ fn step_enum(k: Word, v: Word) -> Word {
     if mat.enum_phase == 3 {
         if k == Tok::LParen() as Word {
             mat.enum_phase = 4;
+            0
+        } else {
+            // A bare unit variant `E::V`, which the reference parses to the same AST as
+            // `E::V()`. Continue exactly as after an empty `()`. This token used to be
+            // skipped, and so was every token up to the next `(`, which opened a payload
+            // frame per occurrence until the eight-entry stack faulted.
+            if enums.evfcount[mat.enum_row] != 0 {
+                perr(pe_enum_payload(), enums.evfcount[mat.enum_row]);
+            }
+            mat.enum_phase = 5;
+            ps.cursor = ps.cursor - 1;
+            0
         }
-        0
     } else {
     if mat.enum_phase == 4 {
         if k == Tok::RParen() as Word {
@@ -2584,14 +2595,20 @@ fn step_dafield(k: Word, v: Word) -> Word {
     if k == 1 {
         da.da_base = 0;
         da.da_len = 1;
+        ps.found_flag = 0;
         for i in 0..fields.field_count limit 640 {
             if fields.fdata[i] == da.da_data andalso fields.ffield[i] == v {
                 da.da_base = fields.fbase[i];
                 da.da_len = fields.flen[i];
             da.da_kind = fields.fkind[i];
+                ps.found_flag = 1;
             }
         }
         da.da_phase = 3;
+        // An unresolved field used to read or write slot 0 silently. The table does not
+        // model every field type a valid program may declare, so this refuses the program
+        // as outside the subset rather than rejecting it as a source error.
+        if ps.found_flag == 0 { perr(pe_unresolved_syntax(), toks.at); }
     }
     0
 }
@@ -2619,11 +2636,17 @@ fn step_daindex(k: Word) -> Word {
         ops.expect_operand = 1;
         0
     } else {
+    if k == Tok::Dot() as Word {
+        // A projection of a data field, `log.latest.len`. The field is read as a scalar
+        // here, so the `.` and the name after it used to be parsed as a fresh operand and
+        // the program rejected as naming an undefined identifier.
+        perr(pe_unresolved_syntax(), toks.at)
+    } else {
         ps.cursor = ps.cursor - 1;
         da.da_phase = 0;
         ops.expect_operand = 0;
         Node::DataRead() as Word + da.da_base * 64
-    } }
+    } } }
 }
 
 // A `]`: flush the operators above the index marker, then pop the marker and the idx
@@ -6292,16 +6315,31 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
             }
             Node::FieldPos() as Word + structdefs.sc_fieldpos * 64
         } else {
+        if k == Tok::RBrace() as Word {
+            // A `}` where a field name was awaited: the list is empty or ends in a trailing
+            // comma, which the reference accepts. The comma already counted the last field,
+            // so the close must not count one again. `expect_operand == 1` is what tells
+            // `step_sc_closing` that no value is pending. This token used to be skipped, so
+            // the construction never closed and the parse hung, faulted or miscompiled.
+            structdefs.sc_phase = 0;
+            ops.expect_operand = 1;
+            structdefs.sc_closing = 1;
             0
-        }
+        } else {
+            // Anything else cannot begin a field. Refuse it rather than skip it.
+            perr(pe_unresolved_syntax(), toks.at)
+        } }
     } else {
     if structdefs.sc_phase == 3 {
-        // The `:` before a field's value expression.
+        // The `:` before a field's value expression. The reference requires it, and a
+        // skipped token here would silently drop source.
         if k == Tok::Colon() as Word {
             structdefs.sc_phase = 0;
             ops.expect_operand = 1;
+            0
+        } else {
+            perr(pe_unresolved_syntax(), toks.at)
         }
-        0
     } else {
     if structdefs.sc_sp > 0 andalso structdefs.sc_phase == 0 andalso k == Tok::RBrace() as Word {
         // Inside a construction with a field value parsed, the `}` closes it (a block `}`
@@ -7265,6 +7303,9 @@ fn body_next() -> Word {
             let v = if kind == 65 { toks.values[token / 256] } else { token / 256 };
             toks.at = ps.cursor;
             ps.cursor = ps.cursor + 1;
+            // Tok 67 is a byte the lexer does not recognize, among them the pipe and closure
+            // bars. Refuse it rather than let a branch below skip it.
+            if k == 67 { perr(pe_unresolved_syntax(), toks.at); }
             // A pending struct-field-access postfix intercepts the next token here, before the
             // normal dispatch, so the deep `step_dispatch_normal` chain is not deepened.
             if ps.unresolved_pending == 1 {
@@ -8472,7 +8513,18 @@ fn queue_array_header_layout(length: Word) -> Word {
 fn header_sig(k: Word, v: Word) -> Word {
     nominal_refresh();
     data_rebase();
-    if k == Tok::Underscore() as Word andalso ps.pdepth == 1 andalso ps.pname == 1 {
+    // A parameter position holds a plain name or closes the list. Anything else is a
+    // parameter pattern, a literal, a wildcard, a boolean, a constructor or a tuple, which
+    // this stage does not lower. It used to fall through the scan unrecorded, so
+    // `fn f(0)` became a head with no parameter and no test, a silent miscompile that only
+    // the shipping cross-check refused.
+    if ps.pdepth == 1 andalso ps.pname == 1 andalso k != Tok::Ident() as Word andalso k != Tok::RParen() as Word {
+        perr(pe_pattern_syntax(), toks.at);
+    }
+    if ps.pdepth == 1 andalso ps.pname == 1 andalso k == Tok::Ident() as Word andalso (v == toks.true_id orelse v == toks.false_id) {
+        perr(pe_pattern_syntax(), toks.at);
+    }
+    if ps.pdepth == 1 andalso ps.pname == 0 andalso ps.ptype == 0 andalso ps.tts == 0 andalso ps.arr == 0 andalso (k == Tok::ColCol() as Word orelse k == Tok::LParen() as Word) {
         perr(pe_pattern_syntax(), toks.at);
     }
     if k == Tok::Const() as Word { perr(pe_call_syntax(), toks.at); }
@@ -8805,6 +8857,7 @@ fn step_body() -> Word {
             let v = if kind == 65 { toks.values[token / 256] } else { token / 256 };
             toks.at = ps.cursor;
             ps.cursor = ps.cursor + 1;
+            if k == 67 { perr(pe_unresolved_syntax(), toks.at); }
             header_step(k, v)
         }
     } } } } } } } }

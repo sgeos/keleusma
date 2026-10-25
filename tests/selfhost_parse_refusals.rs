@@ -11,6 +11,11 @@ use std::path::PathBuf;
 /// Unsupported examples paired with their structured diagnostic code.
 const REFUSED: &[(&str, i64)] = &[
     ("04_for_in.kel", 31),
+    // These two used to "parse" only because the parser skipped a token. The pipe bar
+    // lexed as the arrow, which the body walk ignores, and a literal parameter fell
+    // through the signature scan unrecorded. Both are refused since Order 6 slice 1.
+    ("05_pipeline.kel", 21),
+    ("06_multiheaded.kel", 20),
     ("07_refinement.kel", 21),
     ("08_method_dispatch.kel", 19),
     ("09_big_numbers.kel", 20),
