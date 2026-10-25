@@ -13,7 +13,8 @@
 //! 1. Every test binary that reads a documentation, book, workflow or script path, or a
 //!    top-level Markdown file, is named by a `--test` selector in the `guards` job.
 //! 2. A heavy `selfhost_*` binary is not run by the light path, so every such path it
-//!    reads must be one of the classifier's guarded documents, which force a full run.
+//!    reads must be one of the classifier's guarded documents, or end in one of its
+//!    full-run suffixes such as `.kel`, either of which forces a full run.
 //!
 //! The scan matches literal paths in code lines, and skips `//` comments, which name
 //! paths constantly. A path assembled at run time is invisible to it. That residual is
@@ -85,6 +86,22 @@ fn guard_selection() -> BTreeSet<String> {
     names
 }
 
+/// The suffixes the classifier always sends to a full run, read from its
+/// `FULL_SUFFIXES = (...)` line, so the two cannot disagree.
+fn full_suffixes(classifier: &str) -> Vec<String> {
+    classifier
+        .lines()
+        .find(|l| l.starts_with("FULL_SUFFIXES = ("))
+        .map(|l| {
+            l.split('\'')
+                .skip(1)
+                .step_by(2)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Every integration-test source of this package, as (binary name, text).
 fn test_sources() -> Vec<(String, String)> {
     let mut out = Vec::new();
@@ -109,6 +126,11 @@ fn every_test_that_reads_documentation_runs_on_the_light_path() {
     let selection = guard_selection();
     let classifier = std::fs::read_to_string(root().join("scripts/ci_classify.py"))
         .expect("read the change classifier");
+    let suffixes = full_suffixes(&classifier);
+    assert!(
+        suffixes.iter().any(|s| s == ".kel"),
+        "read no `.kel` from FULL_SUFFIXES in scripts/ci_classify.py, found {suffixes:?}"
+    );
     let mut errors = Vec::new();
     let mut readers = 0usize;
     for (name, text) in test_sources() {
@@ -123,7 +145,8 @@ fn every_test_that_reads_documentation_runs_on_the_light_path() {
                 .filter(|r| names_light_path(r) && r.contains('/'))
             {
                 let path = read.trim_start_matches("../");
-                if !classifier.contains(&format!("'{path}'")) {
+                let forced_full = suffixes.iter().any(|s| path.ends_with(s.as_str()));
+                if !forced_full && !classifier.contains(&format!("'{path}'")) {
                     errors.push(format!(
                         "heavy test `{name}` reads `{path}`, which is not a guarded document \
                          in scripts/ci_classify.py, so a light pull request changing it would \
