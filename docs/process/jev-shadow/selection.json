@@ -4,7 +4,7 @@
   "model": "jev-1.13.0",
   "rubric_version": "selection-shadow-1",
   "lines": ["v0.2.3", "v0.3.0", "kaizen"],
-  "live_evaluation": false,
+  "live_evaluation": true,
   "max_calls": 100,
   "max_input_tokens": 6400000,
   "reserve_tokens_per_call": 64000,

@@ -258,9 +258,10 @@ lived in that blind spot:
 - **Feature-combination builds** — e.g. `verify` without `floats`, which referenced
   `floats`-gated variants and failed to compile. The local gate does not enumerate
   every feature combination CI does.
-- **The latest stable toolchain** — CI uses `dtolnay/rust-toolchain@stable` (the
-  newest release), which can add lints (`unstable_name_collisions`, `question_mark`,
-  redundant-`format!`-borrow) your local, possibly older, toolchain does not have.
+- **The latest stable toolchain** — CI uses `dtolnay/rust-toolchain` from its `stable`
+  branch, pinned by commit hash. It still installs the newest stable release, which can
+  add lints (`unstable_name_collisions`, `question_mark`, redundant-`format!`-borrow)
+  your local, possibly older, toolchain does not have.
 
 Because of this, a green local gate is necessary but **not sufficient**; the
 authoritative gate is CI on the pushed release commit (step 6).

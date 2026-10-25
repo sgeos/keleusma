@@ -17,7 +17,8 @@ the interline mailbox, and the peer acts on its own branch. Whether a practice c
 is an operator ruling, recorded with who made it and how it arrived. The operator
 commissioned the line on 2026-09-08. On 2026-10-24 the operator stated that the line
 exists to spend tokens on improvements that affect every line, and that any
-improvement above the polishing level is nominally worth its cost.
+improvement above the polishing level is nominally worth its cost. On 2026-10-25 the
+operator gave this line the handling of Dependabot findings.
 
 ## Where to work and how to validate
 
@@ -30,7 +31,7 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor f31d7a72 HEAD     # the merge of PR 525 into v0.2.3
+git merge-base --is-ancestor 8ced687d HEAD     # the merge of PR 535 into v0.2.3
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
 
@@ -39,70 +40,72 @@ run.
 
 ## State on 2026-10-25
 
-- **Merged into `v0.2.3`.** PR 505 as `9ec88d0a` and PR 507 as `018ad48b`, the token
-  economy research, the shorter reminder and `scripts/gate_summary.py`. PR 508 as
-  `1b8e9ea4`, the release gate running the self-host binaries once. PR 511 as
-  `82bc87eb`, the pilot tests creating their repository in the system temporary
-  directory. PR 512 as `ec536b28`, `CLAUDE.md` trimmed from 43,006 to 18,073 bytes with
-  the catalogues moved to `docs/process/VERIFICATION_PITFALLS.md`. V0.3.X absorbed 511
-  and 508 as its PR 514 and 512 as its PR 515.
-- **Activated.** The operator installed the tracked interline client on 2026-10-24. The
-  reminder is 206 characters.
-- **Home paths.** PR 516, merged as `3272d46d`, made the prose paths relative and made
-  `record` refuse an input naming the home directory. The 86 paths in 43 never
-  evaluated V0.2.X samples stay, because their evidence is verbatim and hashed. The
-  operator reinstalled the pilot on 2026-10-25, so the refusal is live.
-- **Selection cohort.** PR 525, merged as `f31d7a72`, added `scripts/jev_selection.py`
-  with its own configuration and store. The operator installed it on 2026-10-25. Live
-  evaluation is off until the operator authorizes the 160,000-byte payload bound.
-- **This increment.** The first three section-selection baselines, captured at
-  `fde7b65e` on 2026-10-25 for three planned Kaizen tasks. `kaizen-sel-0001` covers the
-  release-gate timing over `RELEASE_PROCESS.md`, 2 of 20 sections. `kaizen-sel-0002`
-  covers the state-file guard over `CLAUDE.md`, 5 of 10. `kaizen-sel-0003` covers the
-  idle compaction trial over the context engineering report, 5 of 12. All three are
-  pending, unlabelled and unevaluated.
-- **pykeleusma.** Its own line works in `~/projects/python/pykeleusma`. This line does
-  not work there.
+- **Merged into `v0.2.3` today.** PR 525, the Jev selection cohort, as `f31d7a72`. PR 528,
+  its first three baselines, as `d50cd624`. PR 529, the `Cargo.toml` comment, as
+  `d6655f25`. PR 530, actions pinned by commit and `brace-expansion` 2.1.7, as
+  `aeebfb33`. PR 533, the CI load reduction, as `7590ac20`. PR 535, its two guard fixes, as `8ced687d`.
+- **CI load.** PR 533 added a light path for pull requests, one self-host archive for
+  the four shards, grouped small jobs and tree certification. Its own run used 173
+  runner-minutes in 20 jobs, against about 200 in 29. Merged after PR 532 on a moved
+  base, the combined tree failed two guards, which PR 535 fixed as `8ced687d`. That merge
+  was the first certified branch run, run 40244811082, with every heavy job skipped. The
+  report is
+  [`2026-10-25-ci-load-proposal.md`](../kaizen/2026-10-25-ci-load-proposal.md).
+- **This increment.** It publishes that report, makes `native_codegen/` light on V0.3.X's
+  condition, which a test checks, and records live evaluation. It touches only `docs/`
+  and `scripts/`, so its pull request is the first light run.
+- **Repository settings,** changed on 2026-10-25 at the operator's choice. Private
+  vulnerability reporting and Dependabot alerts are on, branches are deleted on merge,
+  the wiki and projects are off and topics are set. 169 merged remote and 145 local
+  branches were pruned, then three with unique but superseded patches. The manifests
+  are in `tmp/branch-prune-2026-10-25/` in this worktree. `feat/native-stream-refusals`
+  is kept for V0.3.X.
+- **Jev selection cohort.** Live evaluation is on, by operator authorization. The three
+  cases were evaluated, 29,247 input tokens, and labelled blind by a fresh subagent that
+  saw only the blind views. The comparison opens when each task is finished.
+- **Dependabot.** Five alerts against `brace-expansion` 2.1.2 in
+  `editors/vscode/package-lock.json` stay open, because Dependabot scans `main` and the
+  fix is on `v0.2.3`. They close at the next release.
 
 ## Operator positions, stated first-hand in this line's session on 2026-10-25
 
-- `HANDOFF.md` is nominally overwritten before a handoff, not every turn. Editing it is
-  reasonable because it is often almost correct. It should not accumulate history.
-- `REVERSE_PROMPT.md` is nominally overwritten every turn. Edits may make sense. In
-  principle it should not accumulate history, though it may accumulate unaddressed
-  concerns in practice.
-- Rotating history files that keep relevant history and cycle out old material is
-  possible, and its worth is not established.
+- `HANDOFF.md` is nominally overwritten before a handoff and should not accumulate
+  history. `REVERSE_PROMPT.md` is nominally overwritten every turn and should not
+  accumulate history, though unaddressed concerns may remain in it.
 - Messes should be cleaned up as soon as reasonable.
+- Verification by tree identity is a means to an end, left to this line's judgment.
+- `main` should require a CI check.
+- The operator is open to temporary unideal situations that only need working through.
 
-These reach V0.2.X and V0.3.X from this line only by relay. Measured on 2026-10-25 at
-`ec536b28`, `docs/process/HANDOFF.md` is 153,546 bytes and
-`docs/process/handoffs/v0.2.3.md` is 160,773 bytes.
+The operator asked for a prompt to relay to V0.2.X and V0.3.X under the operator's
+authority, so the startup-file positions reach them first-hand.
 
 ## Next increments, in order
 
-1. Blind labels for the three cases from a reviewer who has not seen the baselines,
-   for example a fresh subagent given only `blind` output. The tracked checkpoint holds
-   the baselines, so the reviewer must not read it. Record each task's outcome with
-   `finish` when that task is done. More cases as the tasks arrive.
-2. A state-file budget guard, after the owning lines have converted their files.
-3. Measure the release-gate saving of PR 508, which is inferred and not timed.
+1. A `ci-result` job in `ci.yml` that fails when any job failed, then that job required
+   on `main`. No existing job is safe to require, because GitHub counts a skipped job as
+   passing and `certify` is skipped exactly when a job fails.
+2. Extend `context_quality.py` for the operator's global `idleCompaction: false` trial,
+   comparing error rates and cache writes after long gaps with the idle compactions
+   already measured.
+3. Run the self-host documentation tests in their own job, in parallel with the archive
+   build, to shorten shard 1.
+4. Finish the three selection tasks, record their outcomes, and read the comparison.
+5. A state-file budget guard, once the owning lines have converted their files.
 
 ## Open with the operator
 
-- First-hand confirmation of the positions above to V0.2.X and V0.3.X.
-- Installing the selection cohort, and separately whether to set `live_evaluation`
-  to true, which sends up to 160,000 bytes per request to TypeSafe.
-- Whether to set `idleCompaction` to `false`, perhaps first on this line alone.
-- Deliberate session ends. An agent cannot end or restart its own session. It can
-  write its state file at a boundary and ask the operator to run `/clear`.
+- Whether V0.3.X should audit which documents its native tests read now, to narrow
+  `native.yml`, or when it next touches that workflow. Each process-note commit on
+  `v0.3.0` currently starts about 82 macOS runner-minutes.
 
 ## Concerns
 
-- Branch `test/kaizen-split-stage-artifact` at `e7a59d20` keeps the per-stage split
-  of the slowest test from the closed PR 495. Revisit it if that test exceeds about
-  45 minutes in continuous integration.
-- The Codex transcripts were not included in the read-size measurement of 2026-10-25.
+- The self-host archive is about 1.1 GB per full run, retained for one day. Whether
+  artifact storage is free for this public repository was not verified.
+- Branch `test/kaizen-split-stage-artifact` at `e7a59d20` keeps the per-stage split of
+  the slowest test from the closed PR 495. Revisit it if that test exceeds about 45
+  minutes in continuous integration.
 
 ## Mailbox and pilot
 
@@ -114,9 +117,9 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `c5c565efad85cf9440fda002cf1f9b4eaf5a3a86e28f359e263a0b82e685b259`, 84 messages, one unacknowledged and addressed to another line |
-| [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `b9525ce5a61a98e8c0a0a14d08ddff3884bc18ccec237ce09d6eddc398459d86`, 3 samples and 3 tasks, restored cleanly into a fresh store |
-| [Jev pilot](../jev-shadow/checkpoint.json) | `16d65875954a7f7f33416135dd8f475dcb7a982c020adafbbd337aff12ae4bf6`, 250 samples and 66 tasks, identical to a fresh export |
+| [Interline](../interline/checkpoint.json) | `e45493794b574c6fa6603ecd0eb42ce759c4e450614c59bec4a0be4144c5530d`, 105 messages, none unacknowledged |
+| [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `6fb4783b8f0bf96d003311f0a84581f38bb9ff0cbfe232f0f85e014064d6cea6`, 3 samples evaluated and labelled, restored cleanly into a fresh store |
+| [Jev pilot](../jev-shadow/checkpoint.json) | `16d65875954a7f7f33416135dd8f475dcb7a982c020adafbbd337aff12ae4bf6`, 250 samples and 66 tasks |
 
 ## Environment
 
