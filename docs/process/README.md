@@ -18,6 +18,7 @@ Development workflow, communication protocol, and task tracking for Keleusma.
 | [PARALLEL_DEVELOPMENT.md](./PARALLEL_DEVELOPMENT.md) | Running multiple agents at once: worktree isolation, per-branch channels, merge serialization, gate discipline |
 | [GIT_STRATEGY.md](./GIT_STRATEGY.md) | Version control conventions |
 | [RELEASE_PROCESS.md](./RELEASE_PROCESS.md) | How to cut and publish a workspace release: the verification gate (including `cargo doc`), registry-publishability, the audit hold, and publish order |
+| [VERIFICATION_PITFALLS.md](./VERIFICATION_PITFALLS.md) | The two catalogues of ways a green run here has misled its reader, moved from `CLAUDE.md` on 2026-10-24 |
 | [TASKLOG.md](./TASKLOG.md) | Current sprint source of truth (working document) |
 | [PROMPT.md](./PROMPT.md) | Human to AI instruction staging (working document) |
 | [REVERSE_PROMPT.md](./REVERSE_PROMPT.md) | AI to Human communication (working document) |
