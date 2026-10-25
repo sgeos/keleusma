@@ -6,6 +6,13 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-25 Flat Text decode soundness
+
+Reproduced the pykeleusma segmentation fault on v0.2.3. Repaired the unchecked
+yield type and the unchecked flat Text decode on fix/v02-flat-text-soundness.
+Release workspace 3512, no-default 338 and signatures with shell 2517 passed.
+Order 4 rulings received first-hand and the plan drafted. PRs 508 and 512 merged.
+
 ## 2026-10-24 Order 3 complete for the first-pass scope
 
 Kaizen PR 502 merged as e4c1b4c3. Native host-error handling, total composite

@@ -122,6 +122,7 @@ fn decode_arena_resident_flat_struct() {
         float_bytes: 8,
         addr_bytes: 8,
         ref_epoch: arena.epoch(),
+        rodata: &[],
     };
     let p = Pair::from_value_ctx(&v, &ctx).expect("decode arena-resident flat struct");
     assert_eq!(p, Pair { a: 3, b: 4 });
