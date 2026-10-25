@@ -209,6 +209,7 @@ struct Reach {
     composite_arg_runs: usize,
     composite_results: usize,
     data_runs: usize,
+    call_runs: usize,
 }
 
 #[test]
@@ -229,7 +230,7 @@ fn the_interpreter_agrees_with_the_virtual_machine_on_the_corpus() {
     let mut failures = Vec::new();
     let mut refusals = Vec::new();
 
-    for (label, src) in corpus::BOUNDARY_OK {
+    for (label, src) in corpus::BOUNDARY_OK.iter().chain(corpus::SUPPLEMENT_CALLS) {
         reach.cases += 1;
         let src = &runnable(src);
         let Some(module) = self_hosted(src) else {
@@ -270,6 +271,9 @@ fn the_interpreter_agrees_with_the_virtual_machine_on_the_corpus() {
             reach.runs += 1;
             if module.data_layout.is_some() {
                 reach.data_runs += 1;
+            }
+            if module.chunks.len() > 1 {
+                reach.call_runs += 1;
             }
             if args
                 .iter()
@@ -326,8 +330,11 @@ fn the_interpreter_agrees_with_the_virtual_machine_on_the_corpus() {
     );
     // NON-VACUITY. These floors are the counts measured when slice 1 landed. A later slice
     // raises them. A drop means the harness stopped reaching what it used to.
-    assert_eq!(reach.cases, 107, "{reach:?}");
+    let total = corpus::BOUNDARY_OK.len() + corpus::SUPPLEMENT_CALLS.len();
+    assert_eq!(corpus::BOUNDARY_OK.len(), 107);
+    assert_eq!(reach.cases, total, "{reach:?}");
     assert!(reach.compiled >= 100, "{reach:?}");
+    assert!(reach.call_runs >= SLICE_CALL_RUNS_FLOOR, "{reach:?}");
     assert!(reach.admitted >= SLICE_ADMITTED_FLOOR, "{reach:?}");
     assert!(reach.runs >= SLICE_RUNS_FLOOR, "{reach:?}");
     assert!(reach.finished > 0 && reach.trapped > 0, "{reach:?}");
@@ -344,12 +351,14 @@ fn the_interpreter_agrees_with_the_virtual_machine_on_the_corpus() {
 
 /// Measured floors for the current slice. See the non-vacuity note above. Slice 1, scalars and
 /// control flow, measured 47 admitted cases and 698 runs on 2026-10-25. Slice 2, flat
-/// composites, and slice 3, the data segment, measured the figures below the same day.
-const SLICE_ADMITTED_FLOOR: usize = 105;
-const SLICE_RUNS_FLOOR: usize = 987;
-const SLICE_DATA_RUNS_FLOOR: usize = 16;
-const SLICE_COMPOSITE_ARG_RUNS_FLOOR: usize = 615;
-const SLICE_COMPOSITE_RESULTS_FLOOR: usize = 4;
+/// composites, slice 3, the data segment, and slice 4, calls, measured the figures below the
+/// same day.
+const SLICE_ADMITTED_FLOOR: usize = 115;
+const SLICE_RUNS_FLOOR: usize = 1062;
+const SLICE_DATA_RUNS_FLOOR: usize = 20;
+const SLICE_CALL_RUNS_FLOOR: usize = 75;
+const SLICE_COMPOSITE_ARG_RUNS_FLOOR: usize = 638;
+const SLICE_COMPOSITE_RESULTS_FLOOR: usize = 8;
 
 #[test]
 fn a_module_with_an_unsupported_instruction_is_refused() {
@@ -402,4 +411,42 @@ fn long_run(m: Module) {
         "{run:?} against {adm:?}"
     );
     assert!(run.ticks <= adm.tick_bound(), "{run:?} against {adm:?}");
+}
+
+#[test]
+fn a_cyclic_call_graph_is_refused_rather_than_bounded() {
+    // The transitive instruction bound is computed bottom-up and needs an acyclic call graph. A
+    // hand-built self-call must be refused, not given a finite bound.
+    let mut m = self_hosted("fn main(x: Word) -> Word { x }").expect("compiles");
+    m.chunks[0].ops = vec![Op::GetLocal(0), Op::Call(0, 1), Op::Return];
+    assert!(
+        matches!(admit(&m), Err(Refusal::Unbounded(_))),
+        "{:?}",
+        admit(&m)
+    );
+}
+
+#[test]
+fn a_callee_body_is_inside_the_instruction_bound() {
+    // A control for the transitive bound: the entry's own shallow bound is smaller than what a
+    // run through its callee executes, so a bound that ignored the callee would fail here.
+    let src = "fn work(a: Word) -> Word { for i in 0..6 { let y = i + a; } a }\nfn main(x: Word) -> Word { work(x) }";
+    let m = self_hosted(src).expect("compiles");
+    let adm = admit(&m).expect("admitted");
+    let entry = m.entry_point.expect("entry");
+    let shallow = keleusma::verify::wcet_whole_chunk(&m.chunks[entry]).expect("bound") as u64;
+    let (im, arena) = interpreter_arena();
+    let mut interp = Interpreter::new(im, &arena).expect("interp.kel verifies");
+    let run = interp
+        .run(&adm, &[HostedValue::Word(2)], MAX_TICKS)
+        .expect("runs");
+    assert_eq!(run.outcome, Outcome::Finished(HostedValue::Word(2)));
+    assert!(
+        run.steps > shallow,
+        "{run:?} against a shallow bound of {shallow}"
+    );
+    assert!(
+        run.steps <= adm.instruction_bound(),
+        "{run:?} against {adm:?}"
+    );
 }

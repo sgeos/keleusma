@@ -755,6 +755,26 @@ fn op_set_data_indexed(base: Word, len: Word) -> Word {
     }
 }
 
+// `Call(chunk, argc)`: the top `argc` values become the callee's first locals, the rest start as
+// Unit, and a frame is pushed, as the Rust virtual machine's call does. The caller's instruction
+// pointer has already advanced past the call, so the callee's return resumes after it.
+fn op_call(callee: Word, argc: Word) -> Word {
+    if callee < 0 orelse callee >= io.n_chunks orelse argc < 0 orelse argc > st.sp
+        orelse argc > io.ch_locals[callee] { fault(9) } else {
+        if st.fp >= frame_cap() { fault(3) } else {
+            let base = st.sp - argc;
+            for i in 0..512 limit 512 {
+                if i >= argc andalso i < io.ch_locals[callee] { push(0, 0); }
+            }
+            st.f_chunk[st.fp] = callee;
+            st.f_ip[st.fp] = 0;
+            st.f_base[st.fp] = base;
+            st.fp = st.fp + 1;
+            0
+        }
+    }
+}
+
 // Execute one instruction. The instruction tags are fixed by the host's encoder in
 // src/hosted/mod.rs and are listed in its `Tag` enumeration.
 fn step() -> Word {
@@ -815,6 +835,7 @@ fn step() -> Word {
             47 => op_get_data_indexed(a, io.op_b[k]),
             48 => op_set_data_indexed(a, io.op_b[k]),
             49 => op_bounds_check(a),
+            50 => op_call(a, io.op_b[k]),
             _ => fault(4),
         }
     }

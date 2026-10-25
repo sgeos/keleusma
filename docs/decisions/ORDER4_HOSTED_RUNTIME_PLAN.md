@@ -8,7 +8,7 @@ Order 4 is the first pass of Workstream D, a bytecode interpreter for Keleusma
 written in Keleusma and run on the Rust virtual machine. This plan records the
 operator rulings, the gate, the design and the slices. The interpreter is
 `src/hosted/interp.kel`, its driver `src/hosted/mod.rs` behind the `self-host`
-feature, and its harness `tests/hosted_runtime.rs`. Slices 1 to 3 landed on 2026-10-25.
+feature, and its harness `tests/hosted_runtime.rs`. Slices 1 to 4 landed on 2026-10-25.
 
 ## Operator rulings
 
@@ -170,10 +170,22 @@ it never wrote, so the seeded initial values agree. Two cases remain refused.
 bound exists for it, and the conservative stance refuses it. `ctrl/loop_yield`
 is the stream case of slice 5.
 
-**Call bounds, for slice 4.** The per-chunk time bound counts a call's dispatch
-and not the callee's body, so the instruction bound for a program with calls must
-compose callee bounds along the call graph. Until slice 4 admission refuses a
-module with more than one chunk.
+**Slice 4, 2026-10-25.** Calls and returns, with the callee's locals beyond its
+arguments starting as `Unit` as in the Rust virtual machine. The per-chunk time
+bound charges a call its dispatch and not the callee's body, so admission
+computes a transitive instruction bound. A chunk with shallow bound `w`
+executes at most `w` over the nominal cost of a call, which is 10, calls, and
+each runs a callee within the largest callee bound `m`, so `w + (w / 10) * m`
+bounds the chunk. The figure is computed bottom-up, and a cyclic call graph is
+refused rather than assumed absent. It is loose and sound. A ten-program call
+supplement covers argument passing, nested and repeated calls, a call in a
+counted loop, composites passed to and returned from a callee, a trap in a
+callee and calls in conditions. All ten compile byte-identically through the
+shipping self-hosted compiler. The harness admitted 115 of the 117 cases and ran
+1062 argument vectors, 1034 finishing and 28 trapping, all agreeing with the Rust
+virtual machine, 75 of them across a call. A control shows a run through a
+callee exceeding the entry's shallow bound while staying within the transitive
+one.
 
 ## Not in the first pass
 

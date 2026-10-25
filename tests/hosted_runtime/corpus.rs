@@ -363,3 +363,51 @@ pub const BOUNDARY_OK: &[(&str, &str)] = &[
         "struct P { x: Word }\nstruct Q { ps: [P;2] }\nfn f(a: Q, b: Q) -> bool { a == b }",
     ),
 ];
+
+/// The Order 4 supplement for calls, slice 4. The boundary corpus holds only single-chunk
+/// programs, so these exercise argument passing, nested and repeated calls, calls inside a counted
+/// loop, composites passed to and returned from a callee, a trap raised inside a callee, and calls
+/// in conditions. Each must compile byte-identically through the shipping self-hosted compiler,
+/// which the harness checks rather than assumes.
+pub const SUPPLEMENT_CALLS: &[(&str, &str)] = &[
+    (
+        "s4/one_call",
+        "fn add(a: Word, b: Word) -> Word { a + b }\nfn main(x: Word) -> Word { add(x, 1) }",
+    ),
+    (
+        "s4/nested_calls",
+        "fn sq(a: Word) -> Word { a * a }\nfn add(a: Word, b: Word) -> Word { a + b }\nfn main(x: Word, y: Word) -> Word { add(sq(x), sq(y)) }",
+    ),
+    (
+        "s4/call_in_loop",
+        "private data acc { s: Word }\nfn inc(a: Word) -> Word { a + 1 }\nfn main(n: Word) -> Word { acc.s = 0; for i in 0..n limit 8 { acc.s = inc(acc.s); } acc.s }",
+    ),
+    (
+        "s4/struct_argument",
+        "struct P { x: Word, y: Word }\nfn sum(p: P) -> Word { p.x + p.y }\nfn main(a: P) -> Word { sum(a) }",
+    ),
+    (
+        "s4/struct_result",
+        "struct P { x: Word, y: Word }\nfn mk(a: Word) -> P { P { x: a, y: a + 1 } }\nfn main(a: Word) -> P { mk(a) }",
+    ),
+    (
+        "s4/three_levels",
+        "fn c(a: Word) -> Word { a - 3 }\nfn b(a: Word) -> Word { c(a) * 2 }\nfn main(a: Word) -> Word { b(a) + b(1) }",
+    ),
+    (
+        "s4/trap_in_callee",
+        "fn d(a: Word, b: Word) -> Word { a / b }\nfn main(a: Word, b: Word) -> Word { d(a, b) }",
+    ),
+    (
+        "s4/call_in_condition",
+        "fn pos(a: Word) -> bool { a > 0 }\nfn main(a: Word) -> Word { if pos(a) { 1 } else { 2 } }",
+    ),
+    (
+        "s4/enum_argument",
+        "enum E { A(Word), B }\nfn v(e: E) -> Word { match e { E::A(x) => x, E::B => 0 } }\nfn main(e: E) -> Word { v(e) + 1 }",
+    ),
+    (
+        "s4/array_argument",
+        "fn at(a: [Word; 3], i: Word) -> Word { a[i] }\nfn main(a: [Word; 3], i: Word) -> Word { at(a, i) }",
+    ),
+];

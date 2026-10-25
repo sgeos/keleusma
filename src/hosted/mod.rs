@@ -156,6 +156,8 @@ pub enum Tag {
     SetDataIndexed = 48,
     /// `BoundsCheck(bound)`.
     BoundsCheck = 49,
+    /// `Call(chunk, argc)`, with `a` the chunk and `b` the argument count.
+    Call = 50,
 }
 
 /// The interpreter's code for a flat scalar kind, which is the scalar's value tag. `None` for a
@@ -410,6 +412,7 @@ fn encode_op(op: &Op) -> Option<[i64; 4]> {
         ]),
         Op::GetData(slot) => t(Tag::GetData, i64::from(slot)),
         Op::BoundsCheck(bound) => t(Tag::BoundsCheck, i64::from(bound)),
+        Op::Call(callee, argc) => Some([Tag::Call as i64, i64::from(callee), i64::from(argc), 0]),
         Op::SetData(slot) => t(Tag::SetData, i64::from(slot)),
         Op::GetDataIndexed(base, len) => Some([
             Tag::GetDataIndexed as i64,
@@ -462,18 +465,90 @@ fn data_inits(module: &Module) -> Result<Vec<(i64, i64)>, Refusal> {
         .collect()
 }
 
+/// A chunk's shallow verified nominal time bound. It charges a `Call` its dispatch only.
+fn shallow_bound(chunk: &crate::bytecode::Chunk) -> Result<u64, Refusal> {
+    if matches!(chunk.block_type, BlockType::Stream) {
+        crate::verify::wcet_stream_iteration(chunk)
+    } else {
+        crate::verify::wcet_whole_chunk(chunk)
+    }
+    .map(u64::from)
+    .map_err(|e| Refusal::Unbounded(format!("chunk {}: {e:?}", chunk.name)))
+}
+
+/// An upper bound on the instructions one run of `entry` executes, including every callee.
+///
+/// The verifier's per-chunk bound charges a call its dispatch and not the callee's body. A chunk
+/// whose shallow bound is `w` executes at most `w / c` calls, where `c` is the nominal cost of a
+/// `Call`, because each executed call is charged `c` within `w`. Each call runs a callee whose
+/// whole bound is at most the largest callee bound `m`. So `w + (w / c) * m` bounds the chunk,
+/// and every instruction costs at least one cycle, so the same figure bounds its instructions.
+/// The figure is computed bottom-up over the call graph, which must be acyclic. A cycle is
+/// refused rather than assumed absent. The figure is loose, and sound.
+fn transitive_bound(module: &Module, entry: usize) -> Result<u64, Refusal> {
+    let n = module.chunks.len();
+    let call_cost = u64::from(crate::bytecode::nominal_op_cycles(&Op::Call(0, 0)));
+    let callees: Vec<Vec<usize>> = module
+        .chunks
+        .iter()
+        .map(|c| {
+            c.ops
+                .iter()
+                .filter_map(|op| match op {
+                    Op::Call(i, _) => Some(*i as usize),
+                    _ => None,
+                })
+                .collect()
+        })
+        .collect();
+    let mut bound: Vec<Option<u64>> = alloc::vec![None; n];
+    // Each pass settles every chunk whose callees are all settled. An acyclic graph of `n`
+    // chunks settles within `n` passes, so a pass that settles nothing means a cycle.
+    for _ in 0..=n {
+        let mut progressed = false;
+        for c in 0..n {
+            if bound[c].is_some() {
+                continue;
+            }
+            let mut largest = 0u64;
+            let mut ready = true;
+            for &k in &callees[c] {
+                match bound.get(k).copied().flatten() {
+                    Some(b) => largest = largest.max(b),
+                    None => ready = false,
+                }
+            }
+            if !ready {
+                continue;
+            }
+            let w = shallow_bound(&module.chunks[c])?;
+            let calls = if callees[c].is_empty() {
+                0
+            } else {
+                w / call_cost
+            };
+            let total = calls
+                .checked_mul(largest)
+                .and_then(|x| x.checked_add(w))
+                .ok_or_else(|| Refusal::Unbounded(format!("chunk {c} bound overflows")))?;
+            bound[c] = Some(total);
+            progressed = true;
+        }
+        if !progressed {
+            break;
+        }
+    }
+    bound
+        .get(entry)
+        .copied()
+        .flatten()
+        .ok_or_else(|| Refusal::Unbounded(String::from("the call graph has a cycle")))
+}
+
 /// Decide whether the interpreter supports `module` and encode it. The module must already
 /// have passed the Rust verifier; this function checks only what the interpreter needs.
 pub fn admit(module: &Module) -> Result<Admitted, Refusal> {
     let entry = module.entry_point.ok_or(Refusal::NoEntry)?;
-    // Calls arrive in slice 4. Until then the entry chunk's bound is the whole program's,
-    // because the per-chunk bound counts a call's dispatch and not the callee's body.
-    if module.chunks.len() != 1 {
-        return Err(Refusal::Unsupported(format!(
-            "{} chunks",
-            module.chunks.len()
-        )));
-    }
     if module.chunks.len() > caps::CHUNKS {
         return Err(Refusal::Capacity(format!("{} chunks", module.chunks.len())));
     }
@@ -515,19 +590,13 @@ pub fn admit(module: &Module) -> Result<Admitted, Refusal> {
     if consts.len() > caps::CONSTS {
         return Err(Refusal::Capacity(format!("{} constants", consts.len())));
     }
-    let entry_chunk = &module.chunks[entry];
-    let bound = if matches!(entry_chunk.block_type, BlockType::Stream) {
-        crate::verify::wcet_stream_iteration(entry_chunk)
-    } else {
-        crate::verify::wcet_whole_chunk(entry_chunk)
-    }
-    .map_err(|e| Refusal::Unbounded(format!("{e:?}")))?;
+    let bound = transitive_bound(module, entry)?;
     Ok(Admitted {
         ops,
         consts,
         chunks,
         entry: entry as i64,
-        instruction_bound: u64::from(bound),
+        instruction_bound: bound,
         data,
     })
 }
