@@ -121,7 +121,7 @@ checkpoint. Appendix B still needs its own private provisioning.
 1. Read [`docs/process/HANDOFF.md`](docs/process/HANDOFF.md) and run the validity check its own
    Validity section defines, by ancestry and content, **not by a hash match**. Report the handoff
    as valid, or as invalid-and-stale, on that outcome. A line with its own state file under
-   [`docs/process/handoffs/`](docs/process/handoffs/README.md) validates that file instead.
+   [`docs/process/handoffs/`](docs/process/handoffs/README.md) also validates that file.
 2. Read [`docs/process/TASKLOG.md`](docs/process/TASKLOG.md) for current task state.
 3. Read [`docs/process/REVERSE_PROMPT.md`](docs/process/REVERSE_PROMPT.md) for the last AI communication.
 4. Wait for a human prompt before proceeding.
