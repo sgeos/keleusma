@@ -8,11 +8,41 @@ name: Book
 # builds, the playground build, and the catalogue drift check all live here, so
 # none of them saw the release line's work. Deploy stays gated to `main` in its
 # own job.
+#
+# FILTERED TO ITS INPUTS, ERRING BROAD. The examples run the CLI, so every source the
+# CLI compiles is an input, and `keleusma-*/**` includes the playground crate. The book
+# has no `{{#include}}` of files outside `book/`. A change outside the list that still
+# altered example output would be caught by `ci.yml`'s `docs-links` job, which runs the
+# same example verification on every full run. The mdbook build and the catalogue check
+# would be caught at the next matching run, at the latest by the deploy from `main`.
 on:
   push:
     branches: [main, 'v*']
+    paths:
+      - 'book/**'
+      - 'src/**'
+      - 'keleusma-*/**'
+      - 'compiler/**'
+      - 'examples/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'rust-toolchain*'
+      - '.github/workflows/book.yml'
   pull_request:
     branches: [main, 'v*']
+    paths:
+      - 'book/**'
+      - 'src/**'
+      - 'keleusma-*/**'
+      - 'compiler/**'
+      - 'examples/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'rust-toolchain*'
+      - '.github/workflows/book.yml'
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
