@@ -814,6 +814,57 @@ impl FuncCompiler {
         start
     }
 
+    /// Emit a native call with the error-reify flag set, so a soft host
+    /// failure arrives as an outcome instead of propagating. Every native
+    /// call is reified, bare or handled, which is what lets a bare call reach
+    /// an explicit default trap. The count must therefore leave the flag bit
+    /// free.
+    fn emit_native_call(
+        &mut self,
+        idx: u16,
+        arg_count: usize,
+        is_external: bool,
+        span: &Span,
+    ) -> Result<usize, CompileError> {
+        let count = u8::try_from(arg_count)
+            .ok()
+            .filter(|n| *n < 0x80)
+            .ok_or_else(|| CompileError {
+                message: alloc::string::String::from(
+                    "a native call may take at most 127 arguments",
+                ),
+                span: *span,
+            })?;
+        let argc = count | 0x80;
+        Ok(if is_external {
+            self.emit(Op::CallExternalNative(idx, argc))
+        } else {
+            self.emit(Op::CallVerifiedNative(idx, argc))
+        })
+    }
+
+    /// The default handling of a bare native call. The reified call left the
+    /// value or error code beneath its flag. A flag of one traps with the code,
+    /// and otherwise the value remains. The call site is recorded first, while
+    /// the call is still the last operation, and the trap carries the call's
+    /// span so a host failure maps back to the call.
+    fn emit_host_error_default_trap(&mut self, span: &Span) {
+        self.record_call_site_last_op(span);
+        let one = self.add_constant(Value::Int(1));
+        self.emit(Op::Const(one));
+        self.emit(Op::CmpEq);
+        let ok = self.emit_jump(Op::If(0));
+        let trap = self.emit(Op::Trap(crate::bytecode::TrapKind::HostError.code()));
+        if self.emit_debug {
+            self.pending_debug.push(PendingDebug::SourceSpan {
+                op_index: trap,
+                span: *span,
+            });
+        }
+        self.patch_jump(ok);
+        self.emit(Op::EndIf);
+    }
+
     fn emit_data_fallback(&mut self, ty: &TypeExpr) {
         match ty {
             TypeExpr::Prim(PrimType::Word, _) => {
@@ -10076,11 +10127,8 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     .get(func.as_str())
                     .copied()
                     .unwrap_or(false);
-                if is_external {
-                    fc.emit(Op::CallExternalNative(idx, arg_count));
-                } else {
-                    fc.emit(Op::CallVerifiedNative(idx, arg_count));
-                }
+                fc.emit_native_call(idx, call_args.len(), is_external, span)?;
+                fc.emit_host_error_default_trap(span);
             } else {
                 return Err(CompileError {
                     message: format!("undefined function: {}", func),
@@ -11868,28 +11916,19 @@ fn compile_checked_native(
 
     let ok_ty = infer_expr_type(fc, op_expr).unwrap_or(TypeExpr::Prim(PrimType::Word, *span));
     let word_ty = TypeExpr::Prim(PrimType::Word, *span);
-    let has_error_arm = arms
-        .iter()
-        .any(|a| matches!(a.kind, CheckedArmKind::Error(_)));
+    // An unguarded variable or wildcard `host_error` arm handles every
+    // failure, so no default trap follows the arms.
+    let error_covered = arms.iter().any(|a| {
+        matches!(
+            &a.kind,
+            CheckedArmKind::Error(Pattern::Variable(..) | Pattern::Wildcard(..))
+        ) && a.guard.is_none()
+    });
 
-    if args.len() >= 0x80 {
-        return Err(CompileError {
-            message: alloc::string::String::from(
-                "a native call in an error-handling construct may take at most 127 arguments",
-            ),
-            span: *span,
-        });
-    }
-
-    // Emit the arguments and the native call. The reify flag is set in
-    // the high bit of the argument count only when an `error` arm is
-    // present.
+    // Emit the arguments and the reified native call. Every native call is
+    // reified, so the construct always receives a value and a flag.
     for arg in args {
         compile_expr(fc, arg)?;
-    }
-    let mut argc = args.len() as u8;
-    if has_error_arm {
-        argc |= 0x80;
     }
     let idx = *fc.native_map.get(native_name).ok_or_else(|| CompileError {
         message: alloc::format!("unregistered native: {}", native_name),
@@ -11900,26 +11939,14 @@ fn compile_checked_native(
         .get(native_name)
         .copied()
         .unwrap_or(false);
-    if is_external {
-        fc.emit(Op::CallExternalNative(idx, argc));
-    } else {
-        fc.emit(Op::CallVerifiedNative(idx, argc));
-    }
+    fc.emit_native_call(idx, args.len(), is_external, span)?;
 
     let suffix = span.start;
     let value_slot = fc.declare_local(&alloc::format!("__nat_val_{}", suffix));
     let flag_slot = fc.declare_local(&alloc::format!("__nat_flag_{}", suffix));
-    if has_error_arm {
-        // Reified call left (value, flag) on the stack; flag is on top.
-        fc.emit(Op::SetLocal(flag_slot));
-        fc.emit(Op::SetLocal(value_slot));
-    } else {
-        // Plain call left the single result; the flag is always ok.
-        fc.emit(Op::SetLocal(value_slot));
-        let zero_idx = fc.add_constant(Value::Int(0));
-        fc.emit(Op::Const(zero_idx));
-        fc.emit(Op::SetLocal(flag_slot));
-    }
+    // The reified call left (value, flag) on the stack; flag is on top.
+    fc.emit(Op::SetLocal(flag_slot));
+    fc.emit(Op::SetLocal(value_slot));
 
     let loop_addr = fc.emit(Op::Loop(0));
     fc.enter_loop();
@@ -11975,18 +12002,29 @@ fn compile_checked_native(
     }
 
     // No arm matched. The `ok` class is a mandatory catch-all, so this
-    // is reached only when an `error` arm with a guard or literal
-    // failed to match a reified error. Trap with the generic
-    // no-matching-arm fault. The trailing default break keeps the loop
-    // structurally closed.
-    fc.emit(Op::GetLocal(flag_slot));
-    let one_idx = fc.add_constant(Value::Int(1));
-    fc.emit(Op::Const(one_idx));
-    fc.emit(Op::CmpEq);
-    let not_error = fc.emit_jump(Op::If(0));
-    fc.emit(Op::Trap(crate::bytecode::TrapKind::NoMatchingArm.code()));
-    fc.patch_jump(not_error);
-    fc.emit(Op::EndIf);
+    // is reached only by a host failure that no `host_error` arm took,
+    // either because none was written or because each has a guard or a
+    // literal. That failure reaches the compiler-default host-error trap
+    // with its code. A covering arm makes the trap unreachable, so it is
+    // omitted, as for the other outcome constructs. The trailing default
+    // break keeps the loop structurally closed.
+    if !error_covered {
+        fc.emit(Op::GetLocal(flag_slot));
+        let one_idx = fc.add_constant(Value::Int(1));
+        fc.emit(Op::Const(one_idx));
+        fc.emit(Op::CmpEq);
+        let not_error = fc.emit_jump(Op::If(0));
+        fc.emit(Op::GetLocal(value_slot));
+        let trap = fc.emit(Op::Trap(crate::bytecode::TrapKind::HostError.code()));
+        if fc.emit_debug {
+            fc.pending_debug.push(PendingDebug::SourceSpan {
+                op_index: trap,
+                span: *span,
+            });
+        }
+        fc.patch_jump(not_error);
+        fc.emit(Op::EndIf);
+    }
     fc.emit(Op::GetLocal(value_slot));
     let default_break = fc.emit(Op::Break(0));
     if let Some(breaks) = fc.loop_breaks.last_mut() {
@@ -12159,11 +12197,8 @@ fn compile_call(
         fc.emit(Op::Call(idx, arg_count));
     } else if let Some(&idx) = fc.native_map.get(name) {
         let is_external = fc.native_externals.get(name).copied().unwrap_or(false);
-        if is_external {
-            fc.emit(Op::CallExternalNative(idx, arg_count));
-        } else {
-            fc.emit(Op::CallVerifiedNative(idx, arg_count));
-        }
+        fc.emit_native_call(idx, args.len(), is_external, span)?;
+        fc.emit_host_error_default_trap(span);
     } else {
         return Err(CompileError {
             message: format!("undefined function: {}", name),

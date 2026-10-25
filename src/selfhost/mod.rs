@@ -4677,11 +4677,10 @@ pub use crate::selfhost_host::{analyze_class, analyze_opk};
 /// the whole argument-count byte (the error-reify high bit included), which the generic
 /// accounting reproduces exactly as `growth = 1, shrink = n_full_byte`.
 fn analyze_stack_effect(op: &crate::bytecode::Op) -> (i64, i64) {
-    use crate::bytecode::Op;
-    match op {
-        Op::CallVerifiedNative(_, n) | Op::CallExternalNative(_, n) => (1, *n as i64),
-        _ => (op.stack_growth() as i64, op.stack_shrink() as i64),
-    }
+    // A native call is no longer special. Its growth and shrink mask the
+    // error-reify flag out of the count and count the reified flag slot,
+    // matching the reference walk in `verify::wcmu_region`.
+    (op.stack_growth() as i64, op.stack_shrink() as i64)
 }
 
 /// The per-op arena-heap bytes analyze.kel accounts for `op`: the op's own construction
@@ -5483,8 +5482,11 @@ fn typed_desc(
         }
         Op::GetIndex(ArrayElem::Flat { kind }) => (9, kind.size_in_bytes(wb, fb, ab) as i64, 0, 0),
         Op::GetIndex(ArrayElem::FlatNested { size, variant }) => {
-            (10, *size as i64, 0, i64::from(variant.to_tag()))
+            (10, *size as i64, wb as i64, i64::from(variant.to_tag()))
         }
+        // A boxed read is total with an unknown element shape. Its transfer is
+        // that of an indexed data read: two pops, an unknown value and six Words.
+        Op::GetIndex(ArrayElem::Boxed) => (18, 0, wb as i64, 0),
         _ => (0, 0, 0, 0),
     };
     (class, arg, is_term, tk, req, prod, ta, tb, tc)
@@ -5640,7 +5642,7 @@ fn seed_typed_shared(
         assert!(
             prod <= 4
                 || ((tk == 15 || tk == 16) && prod == 6)
-                || ((tk == 17 || tk == 18) && prod == 7),
+                || ((tk == 10 || tk == 17 || tk == 18) && prod == 7),
             "verify_typed.kel push_tops unroll bound"
         );
         set(vm, &mut shared, TV_CLASS + i, class);

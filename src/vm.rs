@@ -560,6 +560,16 @@ fn stale_arena_body() -> VmError {
     ))
 }
 
+/// The exclusive bound an indexed read reports in its diagnostic suffix. The
+/// suffix carries an unsigned 32-bit length, so a longer body is malformed.
+fn index_outcome_bound(len: usize) -> Result<u32, VmError> {
+    u32::try_from(len).map_err(|_| {
+        VmError::InvalidBytecode(alloc::string::String::from(
+            "array length exceeds the diagnostic representation",
+        ))
+    })
+}
+
 /// Fault when a shared-data access runs with no host buffer bound.
 ///
 /// The buffer is bound by `enter_shared` for the duration of one
@@ -1170,6 +1180,13 @@ pub struct GenericVm<
     /// part of the verified bytecode, so it does not affect the
     /// declared WCET or WCMU bounds.
     fault_location: Option<(usize, usize)>,
+    /// The soft host error most recently reified by a native call, kept so
+    /// that an unhandled `Trap(HostError)` surfaces the host's own error,
+    /// message included, instead of a reconstruction from its `Word` code.
+    /// Every reified call overwrites it, a success clearing it, so it never
+    /// describes a call other than the latest. Holding the error moves the
+    /// host's allocation and performs none of its own.
+    reified_host_error: Option<VmError>,
     /// Cached load-time native classification check. Populated on
     /// the first `call` after natives are registered (or after
     /// `replace_module`). `None` means the check has not been run
@@ -2728,6 +2745,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             breakpoints: alloc::vec::Vec::new(),
             skip_breakpoint_at: None,
             fault_location: None,
+            reified_host_error: None,
             native_classifications_verified: false,
             ephemeral_opaques: ArenaVec::new_in(arena.bottom_handle()),
             reserved_operand_slots: MIN_STACK_RESERVE_SLOTS,
@@ -2963,6 +2981,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             breakpoints: alloc::vec::Vec::new(),
             skip_breakpoint_at: None,
             fault_location: None,
+            reified_host_error: None,
             native_classifications_verified: false,
             ephemeral_opaques,
             reserved_operand_slots: reserve_slots,
@@ -3741,6 +3760,32 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let _ = self
             .ephemeral_opaques
             .try_reserve_exact(self.reserved_opaque_capacity);
+        Ok(())
+    }
+
+    /// Push the total indexed-read outcome: the element or its placeholder,
+    /// the index, the four byte limbs of the unsigned 32-bit bound, lowest
+    /// first, and the invalid-index flag. Every `GetIndex` form shares this
+    /// layout, which `Trap(IndexOutOfBounds)` consumes.
+    fn push_index_outcome(
+        &mut self,
+        value: crate::bytecode::GenericValue<W, F>,
+        index: W,
+        bound: u32,
+        invalid: bool,
+    ) -> Result<(), VmError> {
+        sp!(self, value);
+        sp!(self, crate::bytecode::GenericValue::Int(index));
+        for byte in bound.to_le_bytes() {
+            sp!(
+                self,
+                crate::bytecode::GenericValue::Int(W::from_i64_wrap(i64::from(byte as i8)))
+            );
+        }
+        sp!(
+            self,
+            crate::bytecode::GenericValue::Int(W::from_i64_wrap(i64::from(invalid)))
+        );
         Ok(())
     }
 
@@ -4852,12 +4897,20 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     )));
                 }
             };
-            // Skip names that have no registration yet; the call-
-            // site dispatch surfaces them as `InvalidBytecode`
-            // when the bytecode reaches that site.
+            // A call site naming an unregistered native is a host-contract
+            // fault detectable before execution, so it is rejected here
+            // rather than when execution reaches the site (operator ruling
+            // of 2026-10-20). Registering a native clears the cached
+            // verdict, so a host that registers after a rejection is
+            // checked again.
             let entry = match self.natives.iter().find(|e| e.name == native_name) {
                 Some(e) => e,
-                None => continue,
+                None => {
+                    return Err(VmError::VerifyError(format!(
+                        "native `{}` is called by the module but not registered",
+                        native_name
+                    )));
+                }
             };
             let entry_external = entry.classification == NativeClassification::External;
             if entry_external != expected_external {
@@ -6345,11 +6398,19 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                             let idx = i.to_i64();
                             match (elem, &body) {
                                 (ArrayElem::Boxed, ArrayBody::Boxed(arr)) => {
-                                    let len = arr.len();
-                                    if idx < 0 || idx as usize >= len {
-                                        return Err(VmError::IndexOutOfBounds(idx, len));
-                                    }
-                                    sp!(self, arr[idx as usize].clone());
+                                    // Total read (Order 3, 2026-10-24). A boxed
+                                    // element has no flat layout to zero-fill,
+                                    // so an invalid index pushes `Unit`, as an
+                                    // indexed data read does for a composite.
+                                    // No compiler-generated code reads it.
+                                    let bound = index_outcome_bound(arr.len())?;
+                                    let invalid = idx < 0 || idx >= i64::from(bound);
+                                    let val = if invalid {
+                                        crate::bytecode::GenericValue::Unit
+                                    } else {
+                                        arr[idx as usize].clone()
+                                    };
+                                    self.push_index_outcome(val, i, bound, invalid)?;
                                 }
                                 (ArrayElem::Flat { kind }, ArrayBody::Flat(fc)) => {
                                     let wb = self.module_word_bytes();
@@ -6382,7 +6443,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                                     ),
                                                 ));
                                             }
-                                            let bound = u32::try_from(len).map_err(|_| VmError::InvalidBytecode(String::from("array length exceeds the diagnostic representation")))?;
+                                            let bound = index_outcome_bound(len)?;
                                             // Compare before converting to usize so a wide Word cannot
                                             // wrap into a valid address on a narrower host.
                                             let invalid = idx < 0 || idx >= i64::from(bound);
@@ -6404,22 +6465,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                                     ep,
                                                 )?
                                             };
-                                            sp!(self, val);
-                                            sp!(self, crate::bytecode::GenericValue::Int(i));
-                                            for byte in bound.to_le_bytes() {
-                                                sp!(
-                                                    self,
-                                                    crate::bytecode::GenericValue::Int(
-                                                        W::from_i64_wrap(i64::from(byte as i8))
-                                                    )
-                                                );
-                                            }
-                                            sp!(
-                                                self,
-                                                crate::bytecode::GenericValue::Int(
-                                                    W::from_i64_wrap(i64::from(invalid))
-                                                )
-                                            );
+                                            self.push_index_outcome(val, i, bound, invalid)?;
                                         }
                                         Some(len) => {
                                             if idx < 0 || idx as usize >= len {
@@ -6445,15 +6491,48 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                     // viewed in place (B28 P3 item 5 C-residual
                                     // 3b).
                                     let len = fc.byte_len().checked_div(esize).unwrap_or(0);
-                                    if idx < 0 || idx as usize >= len {
-                                        return Err(VmError::IndexOutOfBounds(idx, len));
-                                    }
-                                    let off = idx as usize * esize;
-                                    let val = crate::bytecode::GenericValue::flat_nested_field(
-                                        fc, off, esize, variant, self.arena,
-                                    )
-                                    .map_err(|_| stale_arena_body())?;
-                                    sp!(self, val);
+                                    // Total read (Order 3, 2026-10-24). An
+                                    // invalid index pushes a zero-filled
+                                    // placeholder of the element's size, so any
+                                    // access to it, even from hand-built code,
+                                    // stays inside its body. Its allocation is
+                                    // the op's accounted heap cost. No
+                                    // compiler-generated code reads it.
+                                    let bound = index_outcome_bound(len)?;
+                                    let invalid = idx < 0 || idx >= i64::from(bound);
+                                    let val = if invalid {
+                                        let zeroed =
+                                            crate::flat_value::FlatComposite::build_in_arena(
+                                                self.arena,
+                                                esize,
+                                                |bytes| {
+                                                    bytes.fill(0);
+                                                    Ok(())
+                                                },
+                                            )
+                                            .map_err(|_| {
+                                                out_of_arena_push(
+                                                    "index placeholder",
+                                                    self.arena.capacity(),
+                                                )
+                                            })?
+                                            .ok_or_else(|| {
+                                                VmError::InvalidBytecode(String::from(
+                                                    "index placeholder could not be built",
+                                                ))
+                                            })?;
+                                        crate::bytecode::GenericValue::flat_nested_field(
+                                            &zeroed, 0, esize, variant, self.arena,
+                                        )
+                                        .map_err(|_| stale_arena_body())?
+                                    } else {
+                                        let off = idx as usize * esize;
+                                        crate::bytecode::GenericValue::flat_nested_field(
+                                            fc, off, esize, variant, self.arena,
+                                        )
+                                        .map_err(|_| stale_arena_body())?
+                                    };
+                                    self.push_index_outcome(val, i, bound, invalid)?;
                                 }
                                 // Construction and access agree on the body
                                 // representation by static type, so a form
@@ -7148,6 +7227,45 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 ))
                             })?;
                             VmError::IndexOutOfBounds(index, bound)
+                        }
+                        // An unhandled host failure surfaces the host's own
+                        // error when the popped code is the one the latest
+                        // reified call reported. Otherwise, as for hand-built
+                        // bytecode, the code alone is reported.
+                        Some(TrapKind::HostError) => {
+                            let code = match self.pop()? {
+                                crate::bytecode::GenericValue::Int(n) => n.to_i64(),
+                                _ => {
+                                    return Err(VmError::TypeError(String::from(
+                                        "host-error trap expects a Word code",
+                                    )));
+                                }
+                            };
+                            match self.reified_host_error.take() {
+                                Some(e @ VmError::NativeErrorCode { code: c, .. })
+                                    if <W as crate::word::Word>::from_i64_wrap(c).to_i64()
+                                        == code =>
+                                {
+                                    e
+                                }
+                                Some(VmError::NativeErrorCode { .. }) | None => {
+                                    VmError::NativeErrorCode {
+                                        code,
+                                        message: alloc::format!(
+                                            "unhandled host error with code {}",
+                                            code
+                                        ),
+                                    }
+                                }
+                                Some(e) if code == -1 => e,
+                                Some(_) => VmError::NativeErrorCode {
+                                    code,
+                                    message: alloc::format!(
+                                        "unhandled host error with code {}",
+                                        code
+                                    ),
+                                },
+                            }
                         }
                         None => VmError::InvalidBytecode(alloc::format!(
                             "Op::Trap carried an unknown trap-kind code {}",
@@ -7962,6 +8080,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                 // is the POD `OpaqueRef` index (B33).
                                 let v = self.intern_opaque_arcs(v);
                                 // Success: value, then flag 0.
+                                self.reified_host_error = None;
                                 sp!(self, v);
                                 sp!(self, crate::bytecode::GenericValue::Int(W::default()));
                             }
@@ -7975,6 +8094,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                                     // no code; surface the sentinel -1.
                                     _ => -1,
                                 };
+                                self.reified_host_error = Some(e);
                                 sp!(
                                     self,
                                     crate::bytecode::GenericValue::Int(

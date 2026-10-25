@@ -5865,6 +5865,13 @@ fn unused_chunks_do_not_change_coroutine_admission_or_site_identifiers() {
     };
     let arena = keleusma_arena::Arena::with_capacity(65536);
     let mut vm = Vm::new(program.clone(), &arena).unwrap();
+    // Since absorption 88 the virtual machine refuses, before execution, a
+    // module calling a native that is not registered. The native is in an
+    // unused chunk and is never called, so a registration that would fail
+    // loudly if it were is enough.
+    vm.register_native_closure("host::unused", |_| {
+        panic!("host::unused is in an unused chunk and must not be called")
+    });
     assert!(matches!(
         vm.call(&[Value::Int(5)]).unwrap(),
         VmState::Yielded(Value::Int(6))

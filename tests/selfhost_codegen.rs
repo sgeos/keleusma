@@ -6331,11 +6331,11 @@ use keleusma::selfhost_host::{analyze_class, analyze_opk};
 /// the whole argument-count byte (the error-reify high bit included), which the generic
 /// accounting reproduces exactly as `growth = 1, shrink = n_full_byte`.
 fn analyze_stack_effect(op: &keleusma::bytecode::Op) -> (i64, i64) {
-    use keleusma::bytecode::Op;
-    match op {
-        Op::CallVerifiedNative(_, n) | Op::CallExternalNative(_, n) => (1, *n as i64),
-        _ => (op.stack_growth() as i64, op.stack_shrink() as i64),
-    }
+    // Mirrors the driver's transport. A native call once read its raw count
+    // byte, reify flag included, as the argument count, and this copy carried
+    // the same reading, so the reified case below agreed on an understated
+    // bound until 2026-10-24.
+    (op.stack_growth() as i64, op.stack_shrink() as i64)
 }
 
 /// The per-op arena-heap bytes analyze.kel accounts for `op`: the op's own construction
@@ -8633,8 +8633,9 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
         // the table overstated support by omission.
         //
         // The self-compilation oracle could not see it: NONE of the twelve stage
-        // sources contains a `true` or `false` literal, so the corpus cannot reach
-        // the construct at all.
+        // sources then contained a `true` or `false` literal, so the corpus could not
+        // reach the construct at all. Re-measured on 2026-10-24 over all fourteen,
+        // wire_schema.kel now contains one `true`.
         ("bool/true_literal", SOk, "fn f() -> bool { true }"),
         ("bool/false_literal", SOk, "fn f() -> bool { false }"),
         (
@@ -9234,16 +9235,20 @@ fn the_fused_compile_holds_one_group_not_the_program() {
         (
             // Order 2 adds text bounds and module resource protocols. Measured
             // after those sources and the typed loop fallback were finalized.
+            // Re-measured 2026-10-24 after the native reify-count repair and the
+            // Trap kind in both text walks: 3215 and 367 became 3229 and 374.
             "analyze",
             include_str!("../src/selfhost/kel/analyze.kel"),
-            3215,
-            367,
+            3229,
+            374,
         ),
         (
+            // Re-measured 2026-10-24 after nested composite reads gained their
+            // six-Word outcome suffix: 1532 and 486 became 1551 and 505.
             "verify_typed",
             include_str!("../src/selfhost/kel/verify_typed.kel"),
-            1532,
-            486,
+            1551,
+            505,
         ),
     ];
     for &(name, src, total, peak) in EXPECT {
@@ -9277,7 +9282,9 @@ fn the_fused_compile_holds_one_group_not_the_program() {
 ///
 /// # Why nothing caught it, which is the part worth keeping
 ///
-/// **NOT ONE of the twelve stage sources contains a `true` or `false` literal.** The
+/// **NOT ONE of the twelve stage sources contained a `true` or `false` literal** when
+/// this was written. Re-measured on 2026-10-24 over all fourteen, wire_schema.kel now
+/// contains one `true`. The
 /// self-hosted compiler's correctness claim rests on compiling its own sources
 /// byte-identically, so the oracle is silent on any construct those sources do not
 /// use. The construct-support table covered booleans — and every case took a bool

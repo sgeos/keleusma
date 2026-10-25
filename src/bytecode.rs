@@ -1977,6 +1977,11 @@ pub enum TrapKind {
     /// Explicit indexed-bounds failure. Pops the index and four Word byte limbs
     /// encoding an unsigned 32-bit exclusive bound, lowest limb first on stack.
     IndexOutOfBounds,
+    /// A native call reported a soft host failure that no `host_error` arm
+    /// handled. Pops the `Word` error code the reified call pushed. The
+    /// virtual machine surfaces the host's own error, the same error an
+    /// unreified call propagated before every native call was reified.
+    HostError,
 }
 
 impl TrapKind {
@@ -1992,6 +1997,7 @@ impl TrapKind {
             TrapKind::AssertionFailed => 6,
             TrapKind::LoopLimitExceeded => 7,
             TrapKind::IndexOutOfBounds => 8,
+            TrapKind::HostError => 9,
         }
     }
 
@@ -2009,6 +2015,7 @@ impl TrapKind {
             6 => Some(TrapKind::AssertionFailed),
             7 => Some(TrapKind::LoopLimitExceeded),
             8 => Some(TrapKind::IndexOutOfBounds),
+            9 => Some(TrapKind::HostError),
             _ => None,
         }
     }
@@ -2166,13 +2173,19 @@ pub enum ArrayElem {
 }
 
 impl ArrayElem {
-    /// Whether this operand uses the total first-pass scalar read contract.
+    /// Whether this operand uses the total read contract, which pushes the
+    /// element or a placeholder followed by the diagnostic suffix and flag.
+    /// Flat Word and Byte reads joined it first. Nested composite and boxed
+    /// reads joined it on 2026-10-24, so that a composite read without a
+    /// handler reaches the explicit bounds trap. Other flat scalar kinds keep
+    /// the faulting contract and remain outside the first-pass proof.
     pub const fn has_bounds_outcome(self) -> bool {
         matches!(
             self,
             Self::Flat {
                 kind: crate::value_layout::ScalarKind::Int | crate::value_layout::ScalarKind::Byte
-            }
+            } | Self::FlatNested { .. }
+                | Self::Boxed
         )
     }
 }
@@ -2787,6 +2800,10 @@ impl CostModel {
             // The boxed form reports zero flat bytes (its body is the heap
             // `Vec`, accounted separately).
             Op::NewComposite(op) => OpCost::Fixed(op.alloc_bytes()),
+            // An invalid nested-composite index allocates a zero-filled
+            // placeholder of the element's size. The bound charges it on
+            // every execution, since validity is not known statically.
+            Op::GetIndex(ArrayElem::FlatNested { size, .. }) => OpCost::Fixed(u32::from(*size)),
             Op::Add => OpCost::Dynamic(add_text_heap_alloc_bytes),
             _ => OpCost::Fixed(0),
         }
@@ -3176,6 +3193,7 @@ impl Op {
             Op::FixedMul(_) => 1,
 
             Op::Trap(kind) if *kind == TrapKind::IndexOutOfBounds.code() => 5,
+            Op::Trap(kind) if *kind == TrapKind::HostError.code() => 1,
             Op::Trap(_) => 0,
 
             // V0.2.0 ISA additions.

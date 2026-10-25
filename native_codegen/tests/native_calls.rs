@@ -298,54 +298,46 @@ fn repeated_calls_preserve_their_order() {
     );
 }
 
-/// **Must not fire.** The error-reify flag pushes a two-slot `(code, flag)`
-/// result rather than one, so lowering it as an ordinary call would leave the
-/// operand stack one short at every such site.
+/// **Every native call is reified since absorption 88**, so the flag that this
+/// file once required to be refused is now on every site the compiler emits.
+/// The call pushes the value and a flag, and a bare call follows with a flag
+/// test and `Trap(HostError)`.
 ///
-/// Measured at 0 of 999 corpus sites, so no source produces it. The flag is set
-/// on real compiled bytecode instead, which is the same technique the typed
-/// verifier's conformance corpus uses.
+/// The native host ABI has no soft-failure channel, so the lowering pushes the
+/// value and a zero flag. Both the bare form and the handled form must agree
+/// with the virtual machine on the success path, which is the only path a
+/// native host function can take. The precondition is checked rather than
+/// assumed: if the compiler stops setting the flag, this test says so.
 #[test]
-fn the_error_reify_flag_is_refused_rather_than_mislowered() {
-    let src = "use host::two\nfn main(a: Word, b: Word) -> Word { host::two(a, b) }";
-    let mut m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
-
-    let mut patched = 0usize;
-    for c in m.chunks.iter_mut() {
-        for op in c.ops.iter_mut() {
-            match op {
-                Op::CallVerifiedNative(i, n) => {
-                    *op = Op::CallVerifiedNative(*i, *n | 0x80);
-                    patched += 1;
-                }
-                Op::CallExternalNative(i, n) => {
-                    *op = Op::CallExternalNative(*i, *n | 0x80);
-                    patched += 1;
-                }
-                _ => {}
-            }
-        }
+fn every_reified_native_call_lowers_and_agrees_with_the_vm() {
+    let bare = "use host::two\nfn main(a: Word, b: Word) -> Word { host::two(a, b) }";
+    let handled = "use host::two\nfn main(a: Word, b: Word) -> Word { \
+                   host::two(a, b) { ok(v) => v + 1, host_error(c) => 0 - c } }";
+    for src in [bare, handled] {
+        let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let sites: Vec<u8> = m
+            .chunks
+            .iter()
+            .flat_map(|c| c.ops.iter())
+            .filter_map(|op| match op {
+                Op::CallVerifiedNative(_, n) | Op::CallExternalNative(_, n) => Some(*n),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sites.len(), 1, "one native call site in {src}");
+        assert!(
+            sites.iter().all(|n| n & 0x80 != 0),
+            "the compiler no longer reifies every native call; revisit this lowering"
+        );
+        assert_agrees(src, &[3, 4]);
     }
     assert_eq!(
-        patched, 1,
-        "expected exactly one native call site to patch; the test would be \
-         vacuous if it patched none"
-    );
-
-    let ctx = Context::create();
-    let lm = ctx.create_module("kel");
-    let err = lower_module(&ctx, &lm, &m, LowerOptions::default())
-        .expect_err("the error-reify flag must be refused");
-    let text = format!("{err}");
-    assert!(
-        text.contains("error-reify"),
-        "the refusal must name the reason, got: {text}"
+        vm_run(handled, &[3, 4]).0,
+        35,
+        "the ok arm binds the result"
     );
 }
 
-/// **Must not fire.** Two natives whose names differ but whose symbols coincide
-/// would bind both call sites to one host definition, and each site would look
-/// correct in isolation.
 #[test]
 fn colliding_native_symbols_are_refused() {
     let src = "use host::two\nfn main(a: Word, b: Word) -> Word { host::two(a, b) }";

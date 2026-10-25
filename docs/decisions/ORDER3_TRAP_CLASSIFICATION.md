@@ -13,10 +13,15 @@ unused chunks. This is a conservative syntactic classification. It is not a
 claim that a particular execution will reach that instruction.
 
 Unsupported forms return an error before any completed verdict. They include
-GetIndex outside flat Word and Byte, boxed struct, tuple and enum field
-reads, and native calls. Raw FixedDiv was among them until 2026-10-22, when a
-zero divisor became an outcome and FixedDiv joined the clear instructions.
-Native-error widening remains a later roadmap obligation.
+GetIndex on flat scalar elements other than Word and Byte, boxed struct, tuple and enum field
+reads, and native calls without the error-reify flag. Raw FixedDiv was among
+them until 2026-10-22, when a zero divisor became an outcome and FixedDiv joined
+the clear instructions. Native calls with the reify flag joined them on
+2026-10-24, when the compiler began reifying every native call and dispatching
+an unhandled host failure to an explicit HostError trap. Only hand-built
+bytecode can now contain an unreified call. GetIndex on nested composite and
+boxed elements joined the clear instructions on the same date, when those reads
+became total.
 The total arithmetic and bounds contracts already implemented are prerequisites
 for the admitted profile. Rejecting unsupported forms does not replace that work.
 
@@ -67,7 +72,7 @@ including after malformed requests.
 
 Access forms are one for flat scalar, two for flat nested and three for boxed.
 Other instructions carry zero except Trap and PushImmediate, which carry their
-immediate. Scalar tags are zero for non-scalar forms. Unsupported reasons are
+immediate, and the two native calls, which carry their reify bit. Scalar tags are zero for non-scalar forms. Unsupported reasons are
 two for indexed values, three for boxed fields and four for native
 calls. Reason one denoted FixedDiv until 2026-10-22 and is no longer produced, and
 the Rust reader treats it as unknown. Unknown wire tags, malformed forms and inconsistent response sentinels

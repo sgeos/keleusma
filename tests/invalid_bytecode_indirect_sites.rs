@@ -165,7 +165,7 @@ fn the_census_population_matches_the_source_it_enumerates() {
     let marshall = construction_sites(MARSHALL);
     assert_eq!(
         (vm, marshall),
-        (52, 2),
+        (53, 2),
         "the constructed `InvalidBytecode` sites are now {vm} in src/vm.rs and {marshall} in \
          src/marshall.rs. `docs/decisions/INVALID_BYTECODE_CENSUS.md` enumerates them and states \
          a population; add or remove the row there rather than adjusting this number"

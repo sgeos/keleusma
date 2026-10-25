@@ -29,6 +29,7 @@ fn operands(op: &Op) -> (i64, i64) {
         | Op::GetField(StructField::Boxed { .. })
         | Op::GetTupleField(TupleField::Boxed { .. })
         | Op::GetEnumField(EnumField::Boxed { .. }) => (3, 0),
+        Op::CallVerifiedNative(_, n) | Op::CallExternalNative(_, n) => (i64::from(*n >> 7), 0),
         _ => (0, 0),
     }
 }
@@ -225,7 +226,9 @@ mod tests {
             (1, 39, 0, 3, 4),
             (1, 39, 1, 8, 4),
             (1, 39, 2, 3, 4),
-            (1, 53, 9, 0, 3),
+            (1, 53, 10, 0, 3),
+            (1, 67, 2, 0, 4),
+            (1, 68, 0, 1, 4),
             (1, 60, 20, 0, 3),
             (2048, 31, 0, 0, 0),
         ] {
@@ -330,9 +333,12 @@ mod tests {
         subjects.push(Op::GetField(StructField::Boxed { name_const: 0 }));
         subjects.push(Op::GetTupleField(TupleField::Boxed { index: 0 }));
         subjects.push(Op::GetEnumField(EnumField::Boxed { index: 0 }));
-        for kind in 0..=8 {
+        for kind in 0..=9 {
             subjects.push(Op::Trap(kind));
         }
+        // Reified native calls, which compiler output always emits.
+        subjects.push(Op::CallVerifiedNative(0, 0x80));
+        subjects.push(Op::CallExternalNative(0, 0x81));
         let location = TrapLocation {
             chunk: 0,
             instruction: 0,

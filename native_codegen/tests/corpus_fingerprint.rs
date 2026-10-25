@@ -237,6 +237,12 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // the same day accounts for two of its chunks, and the rest was not measured.
 // Stating an arithmetic that does not close as though it did is the failure this
 // note exists to avoid.
+//
+// **RE-PINNED 2026-10-24, absorption 88.** Upstream's Order 3 changed four stage
+// sources, `analyze.kel`, `codegen.kel`, `verify_structural.kel` and
+// `verify_typed.kel`. Nothing was added or removed. The censuses this file names
+// were re-run on the absorbed tree and passed with their pinned figures, except
+// the bounds-transfer inversion count, whose cause is recorded where it is pinned.
 const PINNED: &[(&str, u64)] = &[
     // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
     // added or removed. Every census this instrument names to re-derive was run on
@@ -419,8 +425,8 @@ const PINNED: &[(&str, u64)] = &[
         "examples/scripts/rogue/rogue_scroll_apply.kel",
         0xf93a5bd822bfe99c,
     ),
-    ("src/selfhost/kel/analyze.kel", 0xc1231a7580421473),
-    ("src/selfhost/kel/codegen.kel", 0x14ea8473be6290f2),
+    ("src/selfhost/kel/analyze.kel", 0x343d5a68c72c929a),
+    ("src/selfhost/kel/codegen.kel", 0x63cf566271018484),
     ("src/selfhost/kel/lexer.kel", 0x2b631ed8f8770698),
     // Absorption 83 changes cast Byte tracking and FixedDiv classification.
     // The non-corpus run re-derived coverage and refusal figures unchanged.
@@ -428,8 +434,8 @@ const PINNED: &[(&str, u64)] = &[
     ("src/selfhost/kel/reconstruct.kel", 0x9d64215418877ab7),
     ("src/selfhost/kel/verify_datalayout.kel", 0xe625b5656d576b86),
     ("src/selfhost/kel/verify_depth.kel", 0x0e54e2467d0b499f),
-    ("src/selfhost/kel/verify_structural.kel", 0xfe040dc39ab80a35),
-    ("src/selfhost/kel/verify_typed.kel", 0x4af6eab55f770e7d),
+    ("src/selfhost/kel/verify_structural.kel", 0x950e834358c3f8f1),
+    ("src/selfhost/kel/verify_typed.kel", 0x133db0bfdbb75dfd),
     ("src/selfhost/kel/verify_types.kel", 0xf1a3565245726860),
     ("src/selfhost/kel/verify_yield.kel", 0x0372c27e883c97dd),
     ("src/selfhost/kel/wire.kel", 0x77db15f253c63e7b),

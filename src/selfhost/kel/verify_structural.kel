@@ -425,7 +425,8 @@ fn run() -> Word {
 
 // Mode 2 scans raw wire opcode identifiers, not host-computed safety classes.
 // Inputs are class=wire tag, arg=access form or immediate, opb=scalar kind.
-// Access forms are 1 flat scalar, 2 flat nested, 3 boxed. Other opcodes use zero.
+// Access forms are 1 flat scalar, 2 flat nested, 3 boxed. A native call's form is its
+// error-reify bit. Other opcodes use zero.
 // Outputs are out_reject=0 free, 1 explicit trap, 2 unsupported, 3 invalid subject, 4 invalid protocol;
 // o1[0]=first trap, o2[0]=first unsupported/invalid, o3[0]=unsupported reason.
 fn trap_contract(tag: Word, form: Word, scalar: Word) -> Word {
@@ -434,15 +435,15 @@ fn trap_contract(tag: Word, form: Word, scalar: Word) -> Word {
         if form < 1 orelse form > 3 orelse scalar < 0 orelse scalar > 7
             orelse (form != 1 andalso scalar != 0) { 5 } else {
             if tag == 39 {
-                if form == 1 andalso (scalar == 2 orelse scalar == 3) { 0 } else { 2 }
+                if form == 2 orelse form == 3 orelse (form == 1 andalso (scalar == 2 orelse scalar == 3)) { 0 } else { 2 }
             } else { if form == 3 { 3 } else { 0 } }
         }
     } else {
         if scalar != 0 { 5 } else {
-        if tag == 53 { if form < 0 orelse form > 8 { 6 } else { 0 } } else {
+        if tag == 53 { if form < 0 orelse form > 9 { 6 } else { 0 } } else {
         if tag == 60 { if form < 0 orelse form > 19 { 6 } else { 0 } } else {
-        if form != 0 { 5 } else {
-        if tag == 67 orelse tag == 68 { 4 } else { 0 }
+        if tag == 67 orelse tag == 68 { if form == 1 { 0 } else { if form == 0 { 4 } else { 5 } } } else {
+        if form != 0 { 5 } else { 0 }
         } } } }
     } }
 }

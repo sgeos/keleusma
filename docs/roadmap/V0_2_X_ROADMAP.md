@@ -215,6 +215,14 @@ planned for V0.4.0 (B35 P8). The operator reaffirmed on 2026-10-13 that
 V0.2.3-WIP. The fingerprint rolls only upon publication of a new version.
 V0.2.2 remains the last published release.
 
+**Order 3 complete on 2026-10-24 for its first-pass scope.** Native-call host
+failures, composite element reads and handled writes in `let` initializers joined
+the trap-free profile under the operator rulings of that date. Both trap analyses
+agree on a combinatorial corpus of 570 trap-free and 399 possibly trapping
+modules. The [completion audit](../decisions/ORDER3_COMPLETION_AUDIT.md) records the
+evidence, the residual limits and the local matrix. The flags register remains
+V0.2.4 work.
+
 **Order 3 progress on 2026-10-15.** First-pass arithmetic and scalar bounds
 operations now return outcomes, and both compilers emit explicit traps for bare
 failures. Rust and Keleusma classifications agree across the current stage corpus
