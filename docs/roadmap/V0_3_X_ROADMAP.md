@@ -310,6 +310,14 @@ machine's schema rule, and agrees with `Vm::replace_module`. The bytecode half o
 redesign, which would change the instruction set, is open decision 3 and the operator's. The
 evidence and its limits are in [`ORDER_5_COMPLETION.md`](../decisions/ORDER_5_COMPLETION.md).
 
+**Order 6 status, 2026-10-25.** Met in part. Every opcode a compiler can emit lowers, every
+grammar construct agrees with the virtual machine natively or is covered by a named file, Tier 1
+targets build and both macOS architectures execute, and `kel-native` makes native a deployment
+shape of its own. A `Text` crossing the host boundary and opaque handles wait on host ABI
+decisions, the Linux targets are built and not executed, and the full-language corpus is the
+V0.2.X line's Order 6. V0.4.0 is not released. The evidence and its limits are in
+[`ORDER_6_COMPLETION.md`](../decisions/ORDER_6_COMPLETION.md).
+
 ## The oracle and trust story
 
 Native code raises the same trust question as a self-hosted validator: native output that

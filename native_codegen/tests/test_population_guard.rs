@@ -79,7 +79,9 @@
 // 789 -> 799: `handled_partial_outcomes.rs` 2, `machine_stack_bound.rs` 2,
 // `native_cost_path.rs` 5 and the stack measurement in `static_library_linkage.rs`.
 // 799 -> 804: `native_hot_swap.rs` 2 and `static_kind_lowering.rs` 3 for Order 5.
-const RECORDED_TEST_FUNCTIONS: usize = 804;
+// 804 -> 813: the construct census 1, tier one targets 2, the `kel-native`
+// command 3 and Text comparison 3, for Order 6.
+const RECORDED_TEST_FUNCTIONS: usize = 813;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise
@@ -288,7 +290,9 @@ const RECORDED_TEST_FUNCTIONS: usize = 804;
 // 161 -> 164: `handled_partial_outcomes.rs`, `machine_stack_bound.rs` and
 // `native_cost_path.rs` for Order 4, none removed.
 // 164 -> 166: `native_hot_swap.rs` and `static_kind_lowering.rs`, none removed.
-const RECORDED_TEST_FILES: usize = 166;
+// 166 -> 170: `language_construct_census.rs`, `tier_one_targets.rs`,
+// `kel_native_cli.rs` and `text_comparison.rs` for Order 6, none removed.
+const RECORDED_TEST_FILES: usize = 170;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")

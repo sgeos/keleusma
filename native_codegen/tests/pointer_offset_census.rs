@@ -1,3 +1,10 @@
+//! Order 6 adds five sites. Text equality turns two literal operands into
+//! pointers, which are addresses of constant records this backend emitted, and
+//! forms two byte addresses at eight plus an index bounded by the record's own
+//! length, which is RUNTIME-AND-BOUNDED. The enum zero fill forms one address
+//! at the end of the packed fields, a COMPILE-TIME CONSTANT inside the site's
+//! reservation of the enum's full byte size.
+//!
 //! The Order 4 instruction meter forms the address of one word of the host's
 //! meter array at a compile-time constant index, the chunk's first index plus
 //! the instruction's position. The array has one word per instruction of every
@@ -136,7 +143,8 @@
 // 37 -> 41 with the site base and three bounded packing address sites.
 // 44 -> 45 in Order 4 for the constant trap-record offset described above.
 // 45 -> 46 for the instruction meter's constant word address.
-const RECORDED_GEP_SITES: usize = 46;
+// 46 -> 51 for the five Order 6 sites described above.
+const RECORDED_GEP_SITES: usize = 51;
 // 22 -> 24 on 2026-09-11, when the shared composite slot landed. **Both are
 // compile-time constant.** The body's address is the slot's STATED offset in the
 // host buffer — a field of the layout, not a computed quantity — and the second
