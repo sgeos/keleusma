@@ -114,5 +114,7 @@ ran in the workspace population, where the command-line crate enables
 `encryption` and `self-host`, and the log names each one. The `signatures`
 populations run the framing tests that need no encryption, and the isolated
 `self-host` population runs none, because it does not enable `signatures`. The `--no-default-features` build emits five dead-code warnings
-in `tests/op_tag_tables.rs`, a file this change does not touch. Remote
-continuous integration is recorded below once it has run.
+in `tests/op_tag_tables.rs`, a file this change does not touch. 
+**Remote continuous integration.** CI run 40221696853 on pull request 526
+passed all 31 checks, with one skipped, at `e6923779`. Pull request 526
+merged into `v0.2.3` as `607c0328`.
