@@ -443,3 +443,43 @@ fn the_shard_check_rejects_a_missing_shard_and_a_foreign_partition() {
     );
     assert!(partition_count("cargo nextest run --workspace").is_none());
 }
+
+/// **THE REQUIRED CHECK SEES EVERY JOB.** `main` requires `CI result`, which fails when any
+/// job it needs failed. A job missing from its `needs` could fail while the required check
+/// passed, so every other job of `ci.yml` must be listed there.
+#[test]
+fn the_ci_result_job_needs_every_other_job() {
+    let jobs = ci_jobs();
+    let result = jobs
+        .iter()
+        .find(|j| j.key == "ci-result")
+        .expect("ci.yml has no `ci-result` job");
+    let needs_line = result
+        .lines
+        .iter()
+        .map(|l| l.trim())
+        .find(|l| l.starts_with("needs:"))
+        .expect("`ci-result` has no needs line");
+    let needs: Vec<&str> = needs_line
+        .trim_start_matches("needs:")
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .split(',')
+        .map(str::trim)
+        .collect();
+    let missing: Vec<&str> = jobs
+        .iter()
+        .map(|j| j.key.as_str())
+        .filter(|k| *k != "ci-result" && !needs.contains(k))
+        .collect();
+    assert!(
+        jobs.len() >= 10,
+        "parsed only {} jobs from ci.yml",
+        jobs.len()
+    );
+    assert!(
+        missing.is_empty(),
+        "`ci-result` does not need {missing:?}, so their failures would not fail the required check"
+    );
+}
