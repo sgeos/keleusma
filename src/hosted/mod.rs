@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 use crate::Arena;
 use crate::bytecode::{
     ArrayElem, BlockType, ConstValue, EnumField, Module, NewCompositeOperand, Op, StructField,
-    TupleField, Value,
+    TupleField, TypeTag, Value,
 };
 use crate::value_layout::{CompositeKind, ScalarKind};
 use crate::vm::{Vm, VmError, VmState, required_persistent_capacity_for};
@@ -158,6 +158,12 @@ pub enum Tag {
     BoundsCheck = 49,
     /// `Call(chunk, argc)`, with `a` the chunk and `b` the argument count.
     Call = 50,
+    /// `Stream`, a marker.
+    Stream = 51,
+    /// `Yield`.
+    Yield = 52,
+    /// `Reset`.
+    Reset = 53,
 }
 
 /// The interpreter's code for a flat scalar kind, which is the scalar's value tag. `None` for a
@@ -293,12 +299,23 @@ pub enum Refusal {
     Unbounded(String),
 }
 
+/// One chunk's row in the interpreter's chunk table.
+#[derive(Clone, Debug)]
+struct ChunkEntry {
+    start: i64,
+    len: i64,
+    locals: i64,
+    params: i64,
+    /// The position of the chunk's `Stream`, or -1.
+    stream: i64,
+}
+
 /// A module encoded into the interpreter's tables.
 #[derive(Clone, Debug)]
 pub struct Admitted {
     ops: Vec<[i64; 4]>,
     consts: Vec<(i64, i64)>,
-    chunks: Vec<(i64, i64, i64)>,
+    chunks: Vec<ChunkEntry>,
     entry: i64,
     instruction_bound: u64,
     data: Vec<(i64, i64)>,
@@ -413,6 +430,9 @@ fn encode_op(op: &Op) -> Option<[i64; 4]> {
         Op::GetData(slot) => t(Tag::GetData, i64::from(slot)),
         Op::BoundsCheck(bound) => t(Tag::BoundsCheck, i64::from(bound)),
         Op::Call(callee, argc) => Some([Tag::Call as i64, i64::from(callee), i64::from(argc), 0]),
+        Op::Stream => t(Tag::Stream, 0),
+        Op::Yield => t(Tag::Yield, 0),
+        Op::Reset => t(Tag::Reset, 0),
         Op::SetData(slot) => t(Tag::SetData, i64::from(slot)),
         Op::GetDataIndexed(base, len) => Some([
             Tag::GetDataIndexed as i64,
@@ -465,29 +485,49 @@ fn data_inits(module: &Module) -> Result<Vec<(i64, i64)>, Refusal> {
         .collect()
 }
 
-/// A chunk's shallow verified nominal time bound. It charges a `Call` its dispatch only.
-fn shallow_bound(chunk: &crate::bytecode::Chunk) -> Result<u64, Refusal> {
-    if matches!(chunk.block_type, BlockType::Stream) {
-        crate::verify::wcet_stream_iteration(chunk)
+/// A chunk's verified nominal time bound with every call charged its callee's bound.
+///
+/// The verifier's per-chunk bound charges a call its dispatch and not the callee's body. Its
+/// path walk does charge a verified native call an attested per-call cost at that instruction,
+/// with branch maxima and loop multiplicities applied. So the bound is computed on an
+/// analysis-only copy of the chunk in which each `Call(i, n)` becomes `CallVerifiedNative(i, n)`
+/// with native `i` attested at callee `i`'s bound. Both instructions cost the same nominal
+/// cycles. The module itself is not changed.
+fn chunk_bound(chunk: &crate::bytecode::Chunk, callee_bounds: &[u32]) -> Result<u64, Refusal> {
+    use crate::verify::NativeIterationBound;
+    let mut copy = chunk.clone();
+    for op in copy.ops.iter_mut() {
+        if let Op::Call(i, n) = *op {
+            *op = Op::CallVerifiedNative(i, n);
+        }
+    }
+    let natives: Vec<NativeIterationBound> = callee_bounds
+        .iter()
+        .map(|&b| NativeIterationBound {
+            per_call_wcmu_bytes: 0,
+            per_call_wcet_cycles: b,
+            max_invocations: None,
+        })
+        .collect();
+    let model = &crate::bytecode::NOMINAL_COST_MODEL;
+    if matches!(copy.block_type, BlockType::Stream) {
+        crate::verify::wcet_stream_iteration_with_cost_model(&copy, model, &natives)
     } else {
-        crate::verify::wcet_whole_chunk(chunk)
+        crate::verify::wcet_whole_chunk_with_cost_model(&copy, model, &natives)
     }
     .map(u64::from)
     .map_err(|e| Refusal::Unbounded(format!("chunk {}: {e:?}", chunk.name)))
 }
 
-/// An upper bound on the instructions one run of `entry` executes, including every callee.
+/// An upper bound on the instructions one run of `entry` executes, including every callee, in
+/// nominal cycles. Every instruction costs at least one nominal cycle, so the figure also bounds
+/// the instruction count. For a stream chunk it is the bound of one iteration.
 ///
-/// The verifier's per-chunk bound charges a call its dispatch and not the callee's body. A chunk
-/// whose shallow bound is `w` executes at most `w / c` calls, where `c` is the nominal cost of a
-/// `Call`, because each executed call is charged `c` within `w`. Each call runs a callee whose
-/// whole bound is at most the largest callee bound `m`. So `w + (w / c) * m` bounds the chunk,
-/// and every instruction costs at least one cycle, so the same figure bounds its instructions.
-/// The figure is computed bottom-up over the call graph, which must be acyclic. A cycle is
-/// refused rather than assumed absent. The figure is loose, and sound.
-fn transitive_bound(module: &Module, entry: usize) -> Result<u64, Refusal> {
+/// The bounds are computed bottom-up over the call graph by [`chunk_bound`], which must be
+/// acyclic. A cycle is refused rather than assumed absent. A bound that does not fit the
+/// verifier's 32-bit attestation field is refused.
+pub fn transitive_bound(module: &Module, entry: usize) -> Result<u64, Refusal> {
     let n = module.chunks.len();
-    let call_cost = u64::from(crate::bytecode::nominal_op_cycles(&Op::Call(0, 0)));
     let callees: Vec<Vec<usize>> = module
         .chunks
         .iter()
@@ -507,31 +547,23 @@ fn transitive_bound(module: &Module, entry: usize) -> Result<u64, Refusal> {
     for _ in 0..=n {
         let mut progressed = false;
         for c in 0..n {
-            if bound[c].is_some() {
+            if bound[c].is_some()
+                || !callees[c]
+                    .iter()
+                    .all(|&k| bound.get(k).copied().flatten().is_some())
+            {
                 continue;
             }
-            let mut largest = 0u64;
-            let mut ready = true;
-            for &k in &callees[c] {
-                match bound.get(k).copied().flatten() {
-                    Some(b) => largest = largest.max(b),
-                    None => ready = false,
-                }
+            let attested: Vec<u32> = bound
+                .iter()
+                .map(|b| b.map_or(0, |v| u32::try_from(v).unwrap_or(u32::MAX)))
+                .collect();
+            if callees[c].iter().any(|&k| attested[k] == u32::MAX) {
+                return Err(Refusal::Unbounded(format!(
+                    "a callee of chunk {c} exceeds 32 bits"
+                )));
             }
-            if !ready {
-                continue;
-            }
-            let w = shallow_bound(&module.chunks[c])?;
-            let calls = if callees[c].is_empty() {
-                0
-            } else {
-                w / call_cost
-            };
-            let total = calls
-                .checked_mul(largest)
-                .and_then(|x| x.checked_add(w))
-                .ok_or_else(|| Refusal::Unbounded(format!("chunk {c} bound overflows")))?;
-            bound[c] = Some(total);
+            bound[c] = Some(chunk_bound(&module.chunks[c], &attested)?);
             progressed = true;
         }
         if !progressed {
@@ -582,7 +614,32 @@ pub fn admit(module: &Module) -> Result<Admitted, Refusal> {
             };
             ops.push(e);
         }
-        chunks.push((start, chunk.ops.len() as i64, i64::from(chunk.local_count)));
+        let stream = chunk
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::Stream))
+            .map_or(-1, |p| p as i64);
+        if stream >= 0 {
+            // The first pass resumes with scalars only, so a stream's parameter must be one.
+            let scalar = |t: &TypeTag| {
+                matches!(
+                    t,
+                    TypeTag::Word | TypeTag::Byte | TypeTag::Bool | TypeTag::Unit
+                )
+            };
+            if !chunk.param_types.iter().all(scalar) {
+                return Err(Refusal::Unsupported(format!(
+                    "chunk {ci} resumes with a non-scalar parameter"
+                )));
+            }
+        }
+        chunks.push(ChunkEntry {
+            start,
+            len: chunk.ops.len() as i64,
+            locals: i64::from(chunk.local_count),
+            params: i64::from(chunk.param_count),
+            stream,
+        });
     }
     if ops.len() > caps::OPS {
         return Err(Refusal::Capacity(format!("{} instructions", ops.len())));
@@ -617,6 +674,10 @@ pub enum Outcome {
     },
     /// The interpreter faulted with this code. See the fault list in `interp.kel`.
     Fault(i64),
+    /// The program yielded this value and waits to be resumed.
+    Yielded(HostedValue),
+    /// The program ended a stream iteration and waits to be resumed.
+    Reset,
     /// The run used every tick it was given without ending.
     OutOfTicks,
 }
@@ -628,8 +689,11 @@ pub struct Run {
     pub outcome: Outcome,
     /// Ticks used, counting the tick that ended it.
     pub ticks: u64,
-    /// Interpreted instructions executed.
+    /// Interpreted instructions executed since the program started.
     pub steps: u64,
+    /// The most instructions any completed stream iteration executed, zero before the first
+    /// reset.
+    pub max_iteration_steps: u64,
 }
 
 /// Slot bases of the interpreter's shared fields, found by name in its data layout.
@@ -663,6 +727,11 @@ struct Slots {
     d_count: usize,
     d_t: usize,
     d_w: usize,
+    ch_params: usize,
+    ch_stream: usize,
+    res_t: usize,
+    res_w: usize,
+    max_iter: usize,
 }
 
 impl Slots {
@@ -709,6 +778,11 @@ impl Slots {
             d_count: base("d_count")?,
             d_t: base("d_t")?,
             d_w: base("d_w")?,
+            ch_params: base("ch_params")?,
+            ch_stream: base("ch_stream")?,
+            res_t: base("res_t")?,
+            res_w: base("res_w")?,
+            max_iter: base("max_iter")?,
         })
     }
 }
@@ -786,10 +860,13 @@ impl<'arena> Interpreter<'arena> {
             self.set(k_t + i, t)?;
             self.set(k_w + i, w)?;
         }
-        for (i, &(start, len, locals)) in adm.chunks.iter().enumerate() {
-            self.set(ch_start + i, start)?;
-            self.set(ch_len + i, len)?;
-            self.set(ch_locals + i, locals)?;
+        let (ch_params, ch_stream) = (self.slots.ch_params, self.slots.ch_stream);
+        for (i, c) in adm.chunks.iter().enumerate() {
+            self.set(ch_start + i, c.start)?;
+            self.set(ch_len + i, c.len)?;
+            self.set(ch_locals + i, c.locals)?;
+            self.set(ch_params + i, c.params)?;
+            self.set(ch_stream + i, c.stream)?;
         }
         // Composite arguments are written to the bottom of the heap, in order, and the
         // interpreter allocates above them.
@@ -868,34 +945,44 @@ impl<'arena> Interpreter<'arena> {
         max_ticks: u64,
     ) -> Result<Run, VmError> {
         self.load(adm, args)?;
-        let mut status = self.send(1)?;
-        let mut ticks = 0;
+        let status = self.send(1)?;
+        self.drive(status, max_ticks)
+    }
+
+    /// Resume an interpreted program that yielded or reset, with the scalar `input`, and run it
+    /// until it next yields, resets or ends, for at most `max_ticks` ticks. The input is
+    /// delivered by the tick that runs first, which is counted.
+    pub fn resume(&mut self, input: &HostedValue, max_ticks: u64) -> Result<Run, VmError> {
+        let (t, w) = input.encode_scalar().ok_or_else(|| {
+            VmError::TypeError(String::from("the first pass resumes with scalars only"))
+        })?;
+        self.set(self.slots.res_t, t)?;
+        self.set(self.slots.res_w, w)?;
+        let status = self.send(3)?;
+        self.drive_from(status, max_ticks, 1)
+    }
+
+    fn drive(&mut self, status: i64, max_ticks: u64) -> Result<Run, VmError> {
+        self.drive_from(status, max_ticks, 0)
+    }
+
+    fn drive_from(
+        &mut self,
+        mut status: i64,
+        max_ticks: u64,
+        mut ticks: u64,
+    ) -> Result<Run, VmError> {
         while status == 0 && ticks < max_ticks {
             status = self.send(2)?;
             ticks += 1;
         }
         let steps = self.get(self.slots.steps)? as u64;
+        let max_iteration_steps = self.get(self.slots.max_iter)? as u64;
         let outcome = match status {
             0 => Outcome::OutOfTicks,
-            1 => {
-                let (t, w) = (self.get(self.slots.out_t)?, self.get(self.slots.out_w)?);
-                let value = if (5..=8).contains(&t) {
-                    let sz = self.get(self.slots.out_sz)?;
-                    let mut bytes = Vec::new();
-                    for k in 0..sz {
-                        let b = self.get(self.slots.heap + (w + k) as usize)?;
-                        bytes.push(u8::try_from(b).map_err(|_| {
-                            VmError::TypeError(format!("interp.kel heap byte {b}"))
-                        })?);
-                    }
-                    Some(HostedValue::Composite { kind: t - 5, bytes })
-                } else {
-                    HostedValue::decode(t, w)
-                };
-                Outcome::Finished(value.ok_or_else(|| {
-                    VmError::TypeError(format!("interp.kel returned tag {t} word {w}"))
-                })?)
-            }
+            1 => Outcome::Finished(self.output()?),
+            2 => Outcome::Yielded(self.output()?),
+            5 => Outcome::Reset,
             3 => {
                 let kind = self.get(self.slots.out_kind)?;
                 let (index, bound) = if kind == 8 {
@@ -917,7 +1004,29 @@ impl<'arena> Interpreter<'arena> {
             outcome,
             ticks,
             steps,
+            max_iteration_steps,
         })
+    }
+
+    /// The published output value: a returned or yielded value, read from the heap when it is a
+    /// composite.
+    fn output(&self) -> Result<HostedValue, VmError> {
+        let (t, w) = (self.get(self.slots.out_t)?, self.get(self.slots.out_w)?);
+        let value = if (5..=8).contains(&t) {
+            let sz = self.get(self.slots.out_sz)?;
+            let mut bytes = Vec::new();
+            for k in 0..sz {
+                let b = self.get(self.slots.heap + (w + k) as usize)?;
+                bytes.push(
+                    u8::try_from(b)
+                        .map_err(|_| VmError::TypeError(format!("interp.kel heap byte {b}")))?,
+                );
+            }
+            Some(HostedValue::Composite { kind: t - 5, bytes })
+        } else {
+            HostedValue::decode(t, w)
+        };
+        value.ok_or_else(|| VmError::TypeError(format!("interp.kel output tag {t} word {w}")))
     }
 }
 
@@ -933,6 +1042,10 @@ pub fn reference_outcome(
         Ok(VmState::Finished(v)) => HostedValue::from_value(&v, arena)
             .map(Outcome::Finished)
             .ok_or_else(|| format!("unsupported result {v:?}")),
+        Ok(VmState::Yielded(v)) => HostedValue::from_value(&v, arena)
+            .map(Outcome::Yielded)
+            .ok_or_else(|| format!("unsupported yield {v:?}")),
+        Ok(VmState::Reset) => Ok(Outcome::Reset),
         Ok(other) => Err(format!("unsupported state {other:?}")),
         Err(e) => {
             let kind = match &e {

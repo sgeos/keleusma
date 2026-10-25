@@ -8,7 +8,7 @@ Order 4 is the first pass of Workstream D, a bytecode interpreter for Keleusma
 written in Keleusma and run on the Rust virtual machine. This plan records the
 operator rulings, the gate, the design and the slices. The interpreter is
 `src/hosted/interp.kel`, its driver `src/hosted/mod.rs` behind the `self-host`
-feature, and its harness `tests/hosted_runtime.rs`. Slices 1 to 4 landed on 2026-10-25.
+feature, and its harness `tests/hosted_runtime.rs`. Slices 1 to 5 landed on 2026-10-25.
 
 ## Operator rulings
 
@@ -173,19 +173,45 @@ is the stream case of slice 5.
 **Slice 4, 2026-10-25.** Calls and returns, with the callee's locals beyond its
 arguments starting as `Unit` as in the Rust virtual machine. The per-chunk time
 bound charges a call its dispatch and not the callee's body, so admission
-computes a transitive instruction bound. A chunk with shallow bound `w`
-executes at most `w` over the nominal cost of a call, which is 10, calls, and
-each runs a callee within the largest callee bound `m`, so `w + (w / 10) * m`
-bounds the chunk. The figure is computed bottom-up, and a cyclic call graph is
-refused rather than assumed absent. It is loose and sound. A ten-program call
-supplement covers argument passing, nested and repeated calls, a call in a
-counted loop, composites passed to and returned from a callee, a trap in a
-callee and calls in conditions. All ten compile byte-identically through the
-shipping self-hosted compiler. The harness admitted 115 of the 117 cases and ran
-1062 argument vectors, 1034 finishing and 28 trapping, all agreeing with the Rust
-virtual machine, 75 of them across a call. A control shows a run through a
-callee exceeding the entry's shallow bound while staying within the transitive
-one.
+computes a transitive bound. The first version bounded a chunk by its shallow
+bound plus its call count times its largest callee bound. That is sound, but it
+compounds at every level, and it put the interpreter's own tick at about
+6.5 million million cycles. The bound now used is path-precise. Each chunk is
+analysed on a copy in which every call becomes a verified-native call attested
+at the callee's own bound, so the verifier's walk charges each call site its
+callee with its branch maxima and loop multiplicities applied. The figure is
+computed bottom-up, a cyclic call graph is refused rather than assumed absent,
+and a callee bound past the verifier's 32-bit attestation field is refused. A
+ten-program call supplement covers argument passing, nested and repeated calls,
+a call in a counted loop, composites passed to and returned from a callee, a trap
+in a callee and calls in conditions. All ten compile byte-identically through the
+shipping self-hosted compiler. A control shows a run through a callee exceeding
+the entry's shallow bound while staying within the transitive one.
+
+**Slice 5, 2026-10-25.** `Stream`, `Yield` and `Reset` under fuel slicing, with
+the Rust virtual machine's protocol. A yield publishes its value and ends the
+tick. A reset sets the frame's locals to `Unit`, keeps only them on the operand
+stack, reclaims the heap above the host's arguments, resumes past `Stream` and
+ends the tick. A resume rebinds a stream's parameter and pushes the input. The
+first pass resumes with scalars only and refuses a stream with a composite
+parameter. The interpreter records the most instructions any iteration executed,
+which the harness checks against the stream chunk's transitive per-iteration
+bound. An eight-program stream supplement covers repeated iterations, a value in
+private data across `Reset`, two yields in one iteration, a struct yield, a call
+inside a stream, a conditional yield, a trap in a later iteration and a Byte
+stream. A tuple yield is refused by the self-hosted compiler, so it is not in the
+corpus.
+
+Results on 2026-10-25. The scalar, composite, data and call harness admitted 116
+of the 117 cases and ran 1066 argument vectors, 1034 finishing and 28 trapping,
+all agreeing with the Rust virtual machine. The one refused case, `ctrl/for_bare`,
+has a loop with no static iteration bound, and the Rust virtual machine's own
+`Vm::new` refuses it for the same reason. The stream harness drove all nine
+stream cases through 61 traces and 541 events, 307 yields including 35 composite
+yields, 233 resets and 1 trap, all agreeing with the Rust virtual machine, and no
+iteration exceeded its bound. The interpreter's own per-tick bound is 55,824,637
+nominal cycles. It is a constant and sound, and it is loose, chiefly because
+composite copies and fills are charged at their static caps.
 
 ## Not in the first pass
 

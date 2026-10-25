@@ -8,8 +8,9 @@
 // finishes, traps, or the interpreter faults.
 //
 // The resume value is a command. 1 starts the interpreted entry chunk with the marshalled
-// arguments. 2 runs one tick. The yielded status is 0 running, 1 finished, 3 trapped and 4
-// faulted. Status 2 is reserved for an interpreted yield.
+// arguments. 2 runs one tick. 3 resumes an interpreted yield or reset with the input in
+// `io.res_t` and `io.res_w` and runs one tick. The yielded status is 0 running, 1 finished,
+// 2 yielded, 3 trapped, 4 faulted and 5 reset.
 //
 // A value is a tag and a word. The tags are 0 Unit, 1 Word, 2 Bool, 3 Byte and 4 None. A Bool
 // word is 0 or 1. A Byte word is in [0, 255]. A flat composite is tag 5 tuple, 6 array, 7 struct
@@ -51,6 +52,12 @@ shared data io {
     ch_start: [Word; 64],
     ch_len: [Word; 64],
     ch_locals: [Word; 64],
+    ch_params: [Word; 64],
+    ch_stream: [Word; 64],
+    res_t: Word,
+    res_w: Word,
+    iter_steps: Word,
+    max_iter: Word,
     arg_t: [Word; 16],
     arg_w: [Word; 16],
     arg_sz: [Word; 16],
@@ -177,6 +184,8 @@ fn start() -> Word {
     st.fp = 0;
     io.out_fault = 0;
     io.steps = 0;
+    io.iter_steps = 0;
+    io.max_iter = 0;
     let e = io.entry;
     if e < 0 orelse e >= io.n_chunks orelse e >= frame_cap() orelse io.nargs > io.ch_locals[e]
         orelse io.d_count < 0 orelse io.d_count > data_cap() {
@@ -775,6 +784,58 @@ fn op_call(callee: Word, argc: Word) -> Word {
     }
 }
 
+// `Yield` pops the output, publishes it and ends the tick with status 2. The host reads it and
+// resumes with an input, as it reads a yielded value before resuming the Rust virtual machine.
+fn op_yield() -> Word {
+    let i = pop();
+    if st.status != 0 { 0 } else {
+        io.out_t = st.vt[i];
+        io.out_w = st.vw[i];
+        io.out_sz = st.vs[i];
+        st.status = 2;
+        0
+    }
+}
+
+// `Reset` ends one stream iteration, as the Rust virtual machine's does. The running frame's
+// locals become Unit, the operand stack keeps only them, the heap above the host's arguments is
+// reclaimed, and the frame resumes just past its `Stream`. The tick ends with status 5. The
+// instructions the iteration executed are folded into `io.max_iter` for the bound check.
+fn op_reset() -> Word {
+    let c = st.f_chunk[st.fp - 1];
+    let base = frame_base();
+    let n = io.ch_locals[c];
+    if io.ch_stream[c] < 0 orelse base + n > stack_cap() { fault(4) } else {
+        for i in 0..n limit 512 {
+            st.vt[base + i] = 0;
+            st.vw[base + i] = 0;
+            st.vs[base + i] = 0;
+        }
+        st.sp = base + n;
+        st.hp = io.hp0;
+        jump(io.ch_stream[c] + 1);
+        if io.iter_steps > io.max_iter { io.max_iter = io.iter_steps; }
+        io.iter_steps = 0;
+        st.status = 5;
+        0
+    }
+}
+
+// Resume after a yield or a reset with the host's input in `io.res_t` and `io.res_w`. For a stream
+// entry with a parameter, the input also replaces parameter 0, and it is then pushed, as the Rust
+// virtual machine's resume does. The first pass takes scalar inputs only.
+fn resume() -> Word {
+    if st.status != 2 andalso st.status != 5 { fault(9) } else {
+        st.status = 0;
+        if io.ch_stream[io.entry] >= 0 andalso io.ch_params[io.entry] > 0 {
+            st.vt[st.f_base[0]] = io.res_t;
+            st.vw[st.f_base[0]] = io.res_w;
+            st.vs[st.f_base[0]] = 0;
+        }
+        push(io.res_t, io.res_w)
+    }
+}
+
 // Execute one instruction. The instruction tags are fixed by the host's encoder in
 // src/hosted/mod.rs and are listed in its `Tag` enumeration.
 fn step() -> Word {
@@ -784,6 +845,7 @@ fn step() -> Word {
         let k = io.ch_start[c] + ip;
         st.f_ip[st.fp - 1] = ip + 1;
         io.steps = io.steps + 1;
+        io.iter_steps = io.iter_steps + 1;
         let a = io.op_a[k];
         match io.op_t[k] {
             1 => op_const(a),
@@ -836,6 +898,9 @@ fn step() -> Word {
             48 => op_set_data_indexed(a, io.op_b[k]),
             49 => op_bounds_check(a),
             50 => op_call(a, io.op_b[k]),
+            51 => 0,
+            52 => op_yield(),
+            53 => op_reset(),
             _ => fault(4),
         }
     }
@@ -850,6 +915,7 @@ fn tick() -> Word {
 }
 
 loop main(cmd: Word) -> Word {
-    let result = if cmd == 1 { start(); st.status } else { tick() };
+    let result = if cmd == 1 { start(); st.status } else {
+        if cmd == 3 { resume(); tick() } else { tick() } };
     yield result
 }

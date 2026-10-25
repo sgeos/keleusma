@@ -411,3 +411,42 @@ pub const SUPPLEMENT_CALLS: &[(&str, &str)] = &[
         "fn at(a: [Word; 3], i: Word) -> Word { a[i] }\nfn main(a: [Word; 3], i: Word) -> Word { at(a, i) }",
     ),
 ];
+
+/// The Order 4 supplement for streams, slice 5. The boundary corpus holds one stream program,
+/// so these exercise multiple iterations, a value carried in private data across Reset, two
+/// yields in one iteration, a composite yield, a call inside a stream, a conditional yield and a
+/// trap raised in a later iteration.
+pub const SUPPLEMENT_STREAMS: &[(&str, &str)] = &[
+    (
+        "s5/echo_plus_one",
+        "loop main(e: Word) -> Word { let n = yield e + 1; n }",
+    ),
+    (
+        "s5/private_accumulator",
+        "private data st { n: Word }\nloop main(e: Word) -> Word { st.n = st.n + e; let r = yield st.n; r }",
+    ),
+    (
+        "s5/two_yields",
+        "loop main(e: Word) -> Word { let a = yield e; let b = yield a + 1; b }",
+    ),
+    (
+        "s5/composite_yield",
+        "struct P { x: Word, y: Word }\nloop main(e: Word) -> P { let n = yield P { x: e, y: e + 1 }; P { x: n, y: n } }",
+    ),
+    (
+        "s5/call_in_stream",
+        "fn dbl(a: Word) -> Word { a * 2 }\nloop main(e: Word) -> Word { let n = yield dbl(e); n }",
+    ),
+    (
+        "s5/conditional_yield",
+        "loop main(e: Word) -> Word { if e > 0 { let a = yield e; a } else { let b = yield 0 - e; b } }",
+    ),
+    (
+        "s5/later_trap",
+        "loop main(e: Word) -> Word { let n = yield 10 / e; n }",
+    ),
+    (
+        "s5/byte_stream",
+        "loop main(e: Byte) -> Byte { let n = yield e + 1; n }",
+    ),
+];

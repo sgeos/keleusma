@@ -216,9 +216,18 @@ struct Reach {
 fn the_interpreter_is_admitted_by_the_rust_verifier() {
     let (m, arena) = interpreter_arena();
     // The interpreter's own bounds are what the fuel model composes with, so they must exist.
+    // The interpreter's own per-tick bound is the transitive bound of its `loop main`, composed
+    // over its call graph by the same rule admission applies to an interpreted module, because
+    // the verifier's per-chunk bound charges a call its dispatch only. It is a constant, which is
+    // what the fuel model composes with.
     let main = m.entry_point.expect("interp.kel has an entry");
-    let tick = keleusma::verify::wcet_stream_iteration(&m.chunks[main]).expect("a tick bound");
-    assert!(tick > 0, "interp.kel has no time bound");
+    let shallow = keleusma::verify::wcet_stream_iteration(&m.chunks[main]).expect("a bound");
+    let tick = keleusma::hosted::transitive_bound(&m, main).expect("a transitive tick bound");
+    println!("interp.kel tick bound: shallow {shallow}, transitive {tick} nominal cycles");
+    assert!(
+        tick > u64::from(shallow),
+        "the transitive bound must include the callees"
+    );
     Interpreter::new(m, &arena).expect("interp.kel verifies");
 }
 
@@ -353,8 +362,8 @@ fn the_interpreter_agrees_with_the_virtual_machine_on_the_corpus() {
 /// control flow, measured 47 admitted cases and 698 runs on 2026-10-25. Slice 2, flat
 /// composites, slice 3, the data segment, and slice 4, calls, measured the figures below the
 /// same day.
-const SLICE_ADMITTED_FLOOR: usize = 115;
-const SLICE_RUNS_FLOOR: usize = 1062;
+const SLICE_ADMITTED_FLOOR: usize = 116;
+const SLICE_RUNS_FLOOR: usize = 1066;
 const SLICE_DATA_RUNS_FLOOR: usize = 20;
 const SLICE_CALL_RUNS_FLOOR: usize = 75;
 const SLICE_COMPOSITE_ARG_RUNS_FLOOR: usize = 638;
@@ -364,7 +373,7 @@ const SLICE_COMPOSITE_RESULTS_FLOOR: usize = 8;
 fn a_module_with_an_unsupported_instruction_is_refused() {
     let src = "fn main(x: Word) -> Word { x }";
     let mut m = self_hosted(src).expect("compiles");
-    m.chunks[0].ops.insert(0, Op::Stream);
+    m.chunks[0].ops.insert(0, Op::Len);
     assert!(matches!(admit(&m), Err(Refusal::Unsupported(_))));
 }
 
@@ -450,3 +459,130 @@ fn a_callee_body_is_inside_the_instruction_bound() {
         "{run:?} against {adm:?}"
     );
 }
+
+/// The inputs a stream test resumes with, in order, drawn from the parameter type's samples.
+fn resume_inputs(program: &Program, module: &Module) -> Option<Vec<Value>> {
+    let main = program.functions.iter().find(|f| f.name == "main")?;
+    let ty = main.params.first()?.type_expr.as_ref()?;
+    Samples { program, module }.of(ty, 8)
+}
+
+#[derive(Default, Debug)]
+struct StreamReach {
+    cases: usize,
+    compiled: usize,
+    admitted: usize,
+    traces: usize,
+    events: usize,
+    yields: usize,
+    resets: usize,
+    traps: usize,
+    composite_yields: usize,
+}
+
+/// Events each stream trace drives, counting the first call.
+const EVENTS: usize = 9;
+
+#[test]
+fn the_interpreter_agrees_with_the_virtual_machine_on_streams() {
+    let (m, arena) = interpreter_arena();
+    let mut interp = Interpreter::new(m, &arena).expect("interp.kel verifies");
+    let mut reach = StreamReach::default();
+    let mut failures = Vec::new();
+    let cases: Vec<(&str, &str)> = corpus::BOUNDARY_OK
+        .iter()
+        .filter(|(_, src)| src.contains("loop main"))
+        .chain(corpus::SUPPLEMENT_STREAMS)
+        .copied()
+        .collect();
+    for (label, src) in &cases {
+        reach.cases += 1;
+        let src = &runnable(src);
+        let Some(module) = self_hosted(src) else {
+            failures.push(format!("{label}: the self-hosted compiler refused it"));
+            continue;
+        };
+        reach.compiled += 1;
+        let adm = match admit(&module) {
+            Ok(a) => a,
+            Err(r) => {
+                failures.push(format!("{label}: refused {r:?}"));
+                continue;
+            }
+        };
+        reach.admitted += 1;
+        let program = keleusma::parser::parse(&keleusma::lexer::tokenize(src).unwrap()).unwrap();
+        let inputs = resume_inputs(&program, &module).expect("stream inputs");
+        for first in &inputs {
+            let need = required_persistent_capacity_for(&module);
+            let mut vm_arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
+            vm_arena.resize_persistent(need).expect("resize");
+            let mut vm = Vm::new(module.clone(), &vm_arena).expect("the stream verifies");
+            let mut expected = reference_outcome(vm.call(std::slice::from_ref(first)), &vm_arena);
+            let host_first = hosted_arg(first).expect("a scalar input");
+            let mut run = interp
+                .run(&adm, &[host_first], MAX_TICKS)
+                .expect("interp.kel runs");
+            reach.traces += 1;
+            for k in 0..EVENTS {
+                reach.events += 1;
+                match &expected {
+                    Ok(e) if *e == run.outcome => {}
+                    other => {
+                        failures.push(format!(
+                            "{label} event {k}: interpreter {:?}, virtual machine {other:?}",
+                            run.outcome
+                        ));
+                        break;
+                    }
+                }
+                if run.ticks > adm.tick_bound() + 1 {
+                    failures.push(format!("{label} event {k}: {} ticks", run.ticks));
+                }
+                match run.outcome {
+                    Outcome::Yielded(HostedValue::Composite { .. }) => {
+                        reach.yields += 1;
+                        reach.composite_yields += 1;
+                    }
+                    Outcome::Yielded(_) => reach.yields += 1,
+                    Outcome::Reset => reach.resets += 1,
+                    Outcome::Trapped { .. } => {
+                        reach.traps += 1;
+                        break;
+                    }
+                    _ => break,
+                }
+                let input = &inputs[(k + 1) % inputs.len()];
+                expected = reference_outcome(vm.resume(input.clone()), &vm_arena);
+                run = interp
+                    .resume(&hosted_arg(input).expect("a scalar input"), MAX_TICKS)
+                    .expect("interp.kel resumes");
+            }
+            // The per-iteration bound. The iteration from one Stream to its Reset executes no more
+            // instructions than the stream chunk's verified per-iteration bound.
+            if run.max_iteration_steps > adm.instruction_bound() {
+                failures.push(format!(
+                    "{label}: an iteration ran {} instructions against a bound of {}",
+                    run.max_iteration_steps,
+                    adm.instruction_bound()
+                ));
+            }
+        }
+    }
+    println!("{reach:?}");
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n  {}",
+        failures.len(),
+        failures.join("\n  ")
+    );
+    assert_eq!(reach.admitted, cases.len(), "{reach:?}");
+    assert!(reach.resets >= STREAM_RESETS_FLOOR, "{reach:?}");
+    assert!(reach.yields >= STREAM_YIELDS_FLOOR, "{reach:?}");
+    assert!(reach.traps >= 1, "{reach:?}");
+    assert!(reach.composite_yields >= 1, "{reach:?}");
+}
+
+/// Measured floors for slice 5, on 2026-10-25.
+const STREAM_RESETS_FLOOR: usize = 233;
+const STREAM_YIELDS_FLOOR: usize = 307;
