@@ -97,7 +97,9 @@ paths, branch identifiers, labels and usage measurements stay local. No automati
 repository scan, log upload or model call runs from a hook. Appendix B, credentials,
 private correspondence and unrelated source material are excluded. Known
 credential markers and the loaded key are rejected, but that check is not a
-general secret detector. Review remains necessary. Provider retention terms for
+general secret detector. A new capture whose input names the home directory is
+rejected as well. Write that path as `~` in a reviewed excerpt file. Records
+captured before 2026-10-25 keep their verbatim paths. Review remains necessary. Provider retention terms for
 private project data have not been assessed, so use public or appropriately
 sanitized excerpts only.
 

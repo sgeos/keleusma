@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A yield whose value does not have the declared return type is rejected.**
+  The type checker unified the body tail and `return` with the return type and
+  never a `yield`. A same-size body of another layout was admitted, and decoding
+  it could read a scalar as a pointer. Reported by the pykeleusma line. See
+  `docs/decisions/FLAT_TEXT_DECODE_SOUNDNESS.md`.
+
+- **Decoding a flat `Text` field no longer trusts its two words.** `Vm::decode`
+  and native argument marshalling now require the field's bytes to lie inside
+  the VM's arena or bytecode image and to be valid UTF-8, and return a
+  `TypeError` otherwise. Decoding a well-typed body with a mismatched host type
+  previously ended the process with a segmentation fault.
+
+### Changed
+
+- `RefContext` and `NativeCtx` gain a public `rodata` field holding the VM's
+  bytecode image. Code that builds either struct with a literal must add it. An
+  empty slice is safe and rejects constant strings rather than trusting them.
+
 ### Added
 
 - A fallible self-hosted structural and typed verifier API distinguishes completed

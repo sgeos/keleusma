@@ -44,6 +44,7 @@ fn bundled_ctx(arena: &Arena) -> RefContext<'_> {
         float_bytes: 8,
         addr_bytes: 8,
         ref_epoch: arena.epoch(),
+        rodata: &[],
     }
 }
 

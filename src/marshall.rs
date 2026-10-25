@@ -91,6 +91,67 @@ pub struct RefContext<'a> {
     /// non-composite decode it is the current arena epoch (a bare `KStr`
     /// carries its own epoch and ignores this field).
     pub ref_epoch: u64,
+    /// The VM's bytecode image, where a constant string packed into a flat
+    /// body points. A flat `Text` field is accepted only when its bytes lie
+    /// inside [`RefContext::arena`] or this image. A context with no image
+    /// passes an empty slice, which rejects constant strings rather than
+    /// trusting them.
+    pub rodata: &'a [u8],
+}
+
+/// Whether `[ptr, ptr + len)` lies wholly inside `[base, base + size)`,
+/// with every bound computed without overflow.
+fn range_within(ptr: usize, len: usize, base: usize, size: usize) -> bool {
+    let Some(start) = ptr.checked_sub(base) else {
+        return false;
+    };
+    start <= size && len <= size - start
+}
+
+/// Rebuild a flat `Text` field's `(ptr, len)` as a string, after checking
+/// that the pair names valid UTF-8 inside memory the context vouches for.
+///
+/// The two words are read from a flat body and are not trusted. A host may
+/// decode a body with a type whose layout differs from the body's own, and a
+/// malformed module may build one, so the words can be any integers. Building
+/// a `str` from them directly is undefined behaviour. The pair is accepted
+/// only when its bytes lie inside the arena or the bytecode image, both of
+/// which are initialised memory the VM owns, and are valid UTF-8. A failed
+/// check is a [`VmError::TypeError`]. A null pointer is screened by the
+/// caller, since a zero-filled body decodes to an empty string.
+pub(crate) fn checked_flat_text(
+    ptr: usize,
+    len: usize,
+    ref_epoch: u64,
+    arena: &keleusma_arena::Arena,
+    rodata: &[u8],
+) -> Result<crate::kstring::KString, VmError> {
+    let in_arena = range_within(
+        ptr,
+        len,
+        arena.persistent_ptr().as_ptr() as usize,
+        arena.capacity(),
+    );
+    let in_rodata = range_within(ptr, len, rodata.as_ptr() as usize, rodata.len());
+    if !in_arena && !in_rodata {
+        return Err(VmError::TypeError(alloc::string::String::from(
+            "flat Text field does not reference memory the VM owns",
+        )));
+    }
+    // SAFETY: the range lies inside the arena buffer or the bytecode image.
+    // The arena buffer is zero-initialised or a host `&mut [u8]`, and the
+    // image is a byte slice, so every byte is initialised. Nothing writes
+    // either region while this shared borrow of the VM lasts.
+    let bytes = unsafe { core::slice::from_raw_parts(ptr as *const u8, len) };
+    if core::str::from_utf8(bytes).is_err() {
+        return Err(VmError::TypeError(alloc::string::String::from(
+            "flat Text field is not valid UTF-8",
+        )));
+    }
+    // SAFETY: `ptr` is non-null, which the caller screened, and names `len`
+    // initialised UTF-8 bytes in VM-owned memory, checked above. The epoch
+    // check in `KString::get` still rejects a stale ephemeral reference.
+    Ok(unsafe { crate::kstring::KString::from_raw_parts(ptr, len, ref_epoch) })
 }
 
 /// A type that can cross the host-script boundary.
@@ -463,13 +524,12 @@ impl<W: Word, F: Float> KeleusmaType<W, F> for alloc::string::String {
         if ptr == 0 {
             return Ok(alloc::string::String::new());
         }
-        // SAFETY: the (ptr, len) was packed from a KString issued under the
-        // composite body's originating epoch (`ctx.ref_epoch`). Rebuilding
-        // with that epoch (not the current arena epoch) means the `get`
-        // below dereferences the region only while the arena epoch still
-        // matches, and yields a clean Stale error once a RESET has advanced
-        // it (B28 P3 item 1).
-        let ks = unsafe { crate::kstring::KString::from_raw_parts(ptr, len, ctx.ref_epoch) };
+        // The pair is checked before any `str` is built, because the host's
+        // type need not match the body's layout. It is rebuilt with the
+        // body's originating epoch (`ctx.ref_epoch`), not the current arena
+        // epoch, so the `get` below yields a clean Stale error once a RESET
+        // has advanced it (B28 P3 item 1).
+        let ks = checked_flat_text(ptr, len, ctx.ref_epoch, ctx.arena, ctx.rodata)?;
         ks.get(ctx.arena)
             .map(alloc::string::String::from)
             .map_err(|_| {
@@ -1800,6 +1860,7 @@ mod tests {
             word_bytes: 8,
             float_bytes: 8,
             addr_bytes: 8,
+            rodata: &[],
         }
     }
 
@@ -1871,5 +1932,70 @@ mod tests {
             }
             other => panic!("expected TypeError, got {:?}", other),
         }
+    }
+}
+
+// The flat `Text` admission check. Kept apart from `tests` above, which needs
+// the `floats` feature, because this check must hold in every configuration.
+#[cfg(test)]
+mod flat_text_tests {
+    use super::{checked_flat_text, range_within};
+    use crate::kstring::KString;
+    use keleusma_arena::Arena;
+
+    #[test]
+    fn a_range_is_within_only_when_both_ends_are() {
+        assert!(range_within(100, 10, 100, 10));
+        assert!(range_within(105, 5, 100, 10));
+        // An empty range at the end is within, one byte past is not.
+        assert!(range_within(110, 0, 100, 10));
+        assert!(!range_within(105, 6, 100, 10));
+        assert!(!range_within(99, 1, 100, 10));
+        assert!(!range_within(111, 0, 100, 10));
+        // A length that would overflow the address space is not within.
+        assert!(!range_within(105, usize::MAX, 100, 10));
+        assert!(!range_within(usize::MAX, 1, 100, 10));
+    }
+
+    #[test]
+    fn an_arena_string_is_admitted() {
+        let arena = Arena::with_capacity(256);
+        let (ptr, len) = KString::alloc(&arena, "héllo").expect("alloc").raw_parts();
+        let ks = checked_flat_text(ptr, len, arena.epoch(), &arena, &[]).expect("admitted");
+        assert_eq!(ks.get(&arena).expect("live"), "héllo");
+    }
+
+    #[test]
+    fn a_rodata_string_is_admitted() {
+        let arena = Arena::with_capacity(64);
+        let image: &[u8] = b"..constant..";
+        let ptr = image.as_ptr() as usize + 2;
+        let ks = checked_flat_text(ptr, 8, 0, &arena, image).expect("admitted");
+        assert_eq!(ks.get(&arena).expect("rodata never goes stale"), "constant");
+    }
+
+    #[test]
+    fn a_pointer_outside_both_regions_is_refused() {
+        let arena = Arena::with_capacity(64);
+        let elsewhere = alloc::vec![b'a'; 8];
+        // A small integer, as a scalar word read as a pointer would be.
+        assert!(checked_flat_text(3, 4, 0, &arena, &[]).is_err());
+        // A real allocation the VM does not own.
+        assert!(checked_flat_text(elsewhere.as_ptr() as usize, 8, 0, &arena, &[]).is_err());
+        // A range that starts inside the arena and runs past its end.
+        let base = arena.persistent_ptr().as_ptr() as usize;
+        assert!(checked_flat_text(base + 60, 8, 0, &arena, &[]).is_err());
+    }
+
+    #[test]
+    fn bytes_that_are_not_utf8_are_refused() {
+        let arena = Arena::with_capacity(64);
+        let image: &[u8] = &[b'o', b'k', 0xFF, 0xFE];
+        let ptr = image.as_ptr() as usize;
+        assert!(checked_flat_text(ptr, 2, 0, &arena, image).is_ok());
+        assert!(checked_flat_text(ptr, 4, 0, &arena, image).is_err());
+        // A range that splits a multi-byte character is refused as well.
+        let split = "é".as_bytes();
+        assert!(checked_flat_text(split.as_ptr() as usize, 1, 0, &arena, split).is_err());
     }
 }
