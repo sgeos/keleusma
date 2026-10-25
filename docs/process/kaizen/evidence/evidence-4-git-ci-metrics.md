@@ -1,9 +1,9 @@
 # Evidence 4: git and continuous-integration metrics (miner report, Sonnet, 2026-09-08, all EXECUTED)
 
-Raw data files in the session scratchpad: ci_runs_full.jsonl, prs_merged_fresh.json, subjects_v0.2.3.txt, subjects_v0.3.0.txt, numstat_*.txt, unmerged_*.txt, cadence.txt. Copied below unedited.
+Raw data files in the session scratchpad: ci_runs_full.jsonl, prs_merged_fresh.json, subjects_v0.2.3.txt, subjects_v0.3.0.txt, numstat_*.txt, unmerged_*.txt, cadence.txt. Copied below unedited, except that on 2026-10-25 the working tree path was made relative to the primary checkout.
 
 EXECUTED metrics report. Repository sgeos/keleusma. Working tree
-/Users/bsechter/projects/rust/keleusma-worktrees/kaizen. All commands ran read only. No
+../keleusma-worktrees/kaizen beside the primary checkout. All commands ran read only. No
 repository file was edited, no cargo command was run, no state changing git command was issued.
 
 ## 1. Cadence

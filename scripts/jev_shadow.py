@@ -221,8 +221,17 @@ def validate_packet(packet, cfg):
         raise PilotError('credential marker detected in input')
 
 
+def refuse_home_directory(packet):
+    # Capture only, not validate_packet, so that a restore still accepts the
+    # records captured before this check. Those keep their verbatim evidence.
+    home = str(Path.home())
+    if len(home) > 1 and home in packed(packet['input']):
+        raise PilotError('input names the home directory; capture a reviewed excerpt file that writes it as ~')
+
+
 def record(db, repo, line, packet, cfg):
     validate_packet(packet, cfg)
+    refuse_home_directory(packet)
     first_head = git(repo, 'rev-parse', 'HEAD').decode().strip()
     sources, matched = [], False
     excerpt = packet['input'].get('evidence', packet['input'].get('diagnostic'))
