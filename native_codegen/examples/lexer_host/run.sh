@@ -27,5 +27,6 @@ printf 'loop main(t: Word) -> Word { yield t + 1 }\n' > "$out/source.kel"
 # Into a file, not a pipe: `head` closing a pipe under pipefail exits 141.
 "$out/lexer_host" "$out" 40 "$out/source.kel" > "$out/yields.txt"
 sed -n 1,12p "$out/yields.txt"
-echo "all $(wc -l < "$out/yields.txt") yields are in $out/yields.txt"
+echo "all $(grep -c '^Y' "$out/yields.txt") yields are in $out/yields.txt"
+echo "deepest machine stack measured, in bytes: $(sed -n 's/^S //p' "$out/yields.txt")"
 echo "shared buffer written to $out/shared_0.bin"

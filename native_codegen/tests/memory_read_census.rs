@@ -1,3 +1,8 @@
+//! The Order 4 instruction meter, off by default, reads one word per lowered
+//! instruction from the host's meter array before adding one to it. The host
+//! defines the array and zeroes it, as `LowerOptions::op_meter` documents.
+//! A host that did not zero it would only offset its own counts.
+//!
 //! Coroutine trap reporting, Order 4, reads three words. Each function's trap
 //! block loads its own trap-code cell, which its prologue initialises to the
 //! contract code before any branch and which each `Trap` overwrites
@@ -96,7 +101,8 @@ const READ_FORMS: &[&str] = &["build_load(", " = load "];
 // 18 -> 22, including the coroutine context and parsed intrinsic helper.
 // 22 -> 23 for the stable handle continuation, initialized by start.
 // 33 -> 36 for the two trap-code loads and the handle's trap-record load.
-const RECORDED_READ_SITES: usize = 36;
+// 36 -> 37 for the instruction meter's read of its own word.
+const RECORDED_READ_SITES: usize = 37;
 // 16 at first derivation, 2026-09-11. Four are on the host-provided boundary —
 // the resume-state word, the composite initialisation word, the private slot
 // array and the shared segment — and the rest read memory this lowering wrote

@@ -14,6 +14,15 @@
 //! met — it is what the backend does INSTEAD, for each of the six, and whether
 //! the interim behaviour is sound.**
 //!
+//! **Superseded in Order 4, 2026-10-25.** The V0.2.X line has since made each of
+//! these operations total, with an explicit `Trap` the compiler emits when no
+//! handler is written, under the operator ruling of 2026-10-20 that only `Trap`
+//! traps. The roadmap's Workstream F lowers an unhandled operation to a native
+//! trap. The specification's default values would now contradict the verified
+//! bytecode, so they are not the target. `ORDER_4_PLAN.md` records the
+//! premise, and the specification's owner was told. What follows still holds as
+//! a census of where the trap block is reached.
+//!
 //! Trapping is sound as an interim: a trap is not a silently wrong value, and it
 //! matches the virtual machine, which faults. Producing the contract's default
 //! today, while the reference still traps, would be the divergence.
@@ -225,10 +234,11 @@ fn what_the_backend_does_with_each_partial_operation_today() {
         SUBJECTS.len()
     );
     println!(
-        "\n  THE CONTRACT IS DEFERRED TO V0.4.0 AND IS NOT IMPLEMENTED. Trapping is\n  \
-         the sound interim: it matches the reference, and a trap is not a\n  \
-         silently wrong value. Producing the contract's default TODAY, while the\n  \
-         reference still faults, would be the divergence.\n================\n"
+        "\n  THE DEFAULT-VALUE CONTRACT IS SUPERSEDED, NOT DEFERRED. Since the V0.2.X\n  \
+         line made these operations total, the bytecode carries an explicit\n  \
+         Trap for every unhandled outcome, and native code follows the bytecode.\n  \
+         Producing a default would make native code disagree with the verified\n  \
+         program. See ORDER_4_PLAN.md.\n================\n"
     );
 
     // **NON-VACUITY.** A census whose subjects the reference rejects measures

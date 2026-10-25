@@ -217,6 +217,7 @@ pub fn lower<'ctx>(
         machine,
         frame_bytes,
         &HostContracts::default(),
+        LowerOptions::default(),
     )
 }
 
@@ -238,7 +239,14 @@ pub fn lower_with_dialogues<'ctx>(
         dialogues: Some(dialogues.clone()),
         ..HostContracts::default()
     };
-    lower_impl(ctx, program, machine, frame_bytes, &contracts)
+    lower_impl(
+        ctx,
+        program,
+        machine,
+        frame_bytes,
+        &contracts,
+        LowerOptions::default(),
+    )
 }
 
 /// Lower with explicit dialogue and native body lifetime contracts.
@@ -252,7 +260,30 @@ pub fn lower_with_contracts<'ctx>(
     frame_bytes: u32,
     contracts: &HostContracts,
 ) -> Result<LlvmModule<'ctx>, LowerError> {
-    lower_impl(ctx, program, machine, frame_bytes, contracts)
+    lower_impl(
+        ctx,
+        program,
+        machine,
+        frame_bytes,
+        contracts,
+        LowerOptions::default(),
+    )
+}
+
+/// [`lower_with_contracts`] with the instruction meter of
+/// [`LowerOptions::op_meter`]. Instrumentation for differential tests only.
+pub fn lower_metered<'ctx>(
+    ctx: &'ctx Context,
+    program: &Module,
+    machine: &TargetMachine,
+    frame_bytes: u32,
+    contracts: &HostContracts,
+) -> Result<LlvmModule<'ctx>, LowerError> {
+    let options = LowerOptions {
+        op_meter: true,
+        ..LowerOptions::default()
+    };
+    lower_impl(ctx, program, machine, frame_bytes, contracts, options)
 }
 
 /// Whether `{i64, i64}` returns in the same two registers as the C structure
@@ -276,6 +307,7 @@ fn lower_impl<'ctx>(
     machine: &TargetMachine,
     frame_bytes: u32,
     contracts: &HostContracts,
+    options: LowerOptions,
 ) -> Result<LlvmModule<'ctx>, LowerError> {
     let dialogues = contracts.dialogues.as_ref();
     let native_body_returns = &contracts.native_body_returns;
@@ -403,7 +435,7 @@ fn lower_impl<'ctx>(
         ctx,
         &module,
         program,
-        LowerOptions::default(),
+        options,
         None,
         None,
         Some((continuation_bytes, &analysis)),

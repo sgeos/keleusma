@@ -26,17 +26,26 @@
 //!   not zero, the image to copy into the start of a zeroed private buffer
 //!   before start.
 //! - `<prefix>_trap_verdict`, an unsigned byte in the [`TrapExport`] encoding.
+//! - `<prefix>_stack_bytes`, the machine stack a call into any handle can
+//!   reach, from [`crate::stack`].
+//! - `<prefix>_wcet_cost` and `<prefix>_wcet_status`, an unsigned byte, the
+//!   composed bytecode cost claim of [`crate::cost`] in the [`CostExport`]
+//!   encoding.
 //!
 //! The code's own undefined symbols are the host natives, `kel_native_*`, and
 //! the compiler runtime and C library routines the code generator calls, which
 //! `LINKAGE_SYMBOL_CENSUS.md` records. [`build`] refuses any other import.
 //!
-//! # Why no execution-time figure is exported
+//! # What the execution-time figure is
 //!
-//! The verifier's cost is counted in virtual-machine cost units and does not
-//! include script calls, so it bounds neither native time nor the whole program.
-//! A symbol carrying it would be read as a bound it is not. Native timing is
-//! Workstream E. See `NATIVE_WCET_ASYMMETRY.md`.
+//! Workstream D exported none, because the verifier's per-chunk cost leaves
+//! out calls between scripts and is counted in virtual-machine cost units.
+//! Order 4 closed the first half. `<prefix>_wcet_cost` is composed through
+//! calls, and `tests/native_cost_path.rs` shows the native code executes the
+//! bytecode path the figure sums. The second half stands. The figure is in
+//! nominal bytecode cost units, not time, and it is best effort as a measure of
+//! native time until roadmap open decision 1 is settled. Its name and status
+//! byte say so. See `NATIVE_WCET_ASYMMETRY.md`.
 //!
 //! # Symbol names
 //!
@@ -67,7 +76,11 @@ use crate::{LowerError, NATIVE_SYMBOL_PREFIX, region};
 
 /// Version of the exported contract. A change to any exported name, type or
 /// meaning increments it.
-pub const CONTRACT_VERSION: u64 = 1;
+///
+/// Version 2, Order 4, added status three for a reported trap, fallible
+/// natives returning `kel_native_result`, the trap record in the frame and
+/// `<prefix>_stack_bytes`.
+pub const CONTRACT_VERSION: u64 = 2;
 
 /// Alignment of every buffer and slot the host passes. Private storage is read
 /// in words and the slot needs [`FRAME_ALIGN`], so one figure covers all four.
@@ -209,6 +222,42 @@ impl TrapExport {
     }
 }
 
+/// The composed bytecode cost claim carried by `<prefix>_wcet_cost` and
+/// `<prefix>_wcet_status`. See [`crate::cost`] for its meaning and its limits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CostExport {
+    /// Status 0, cost 0. The reason is kept for the generated comments.
+    Unestablished(String),
+    /// Status 1. The bound in nominal bytecode cost units, per iteration of a
+    /// `Stream` entry or per resume of a `Reentrant` one.
+    Established(u32),
+}
+
+impl CostExport {
+    /// The exported status byte.
+    pub fn status(&self) -> u8 {
+        match self {
+            Self::Unestablished(_) => 0,
+            Self::Established(_) => 1,
+        }
+    }
+
+    /// The exported cost word.
+    pub fn cost(&self) -> u64 {
+        match self {
+            Self::Unestablished(_) => 0,
+            Self::Established(c) => u64::from(*c),
+        }
+    }
+
+    fn describe(&self) -> String {
+        match self {
+            Self::Unestablished(why) => format!("not established: {why}"),
+            Self::Established(c) => format!("{c} nominal bytecode cost units per step"),
+        }
+    }
+}
+
 /// One named run of shared slots. An array is one field with a count.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SharedField {
@@ -260,10 +309,15 @@ pub struct Library<'ctx> {
     pub private_bytes: u64,
     /// Composite region bytes.
     pub region_bytes: u64,
+    /// The machine stack a call into any handle can reach, from
+    /// [`crate::stack`]. It excludes host natives and runtime routines.
+    pub stack_bytes: u64,
     /// Bytes to copy into the start of a zeroed private buffer before start.
     pub private_init: Vec<u8>,
     /// The trap classification.
     pub trap: TrapExport,
+    /// The composed bytecode cost claim.
+    pub wcet: CostExport,
     /// The start handle's ordinary parameters, before the buffers and slot.
     pub start_params: Vec<CType>,
     /// Whether `<prefix>_yield_site` is exported.
@@ -272,6 +326,39 @@ pub struct Library<'ctx> {
     pub natives: Vec<NativeImport>,
     /// The shared layout as named fields, in offset order.
     pub shared: Vec<SharedField>,
+}
+
+/// The exported handle symbols, which are the roots of the stack bound.
+fn handle_names(prefix: &str, yield_site: bool) -> Vec<String> {
+    let mut names: Vec<String> = ["start", "resume", "release"]
+        .iter()
+        .map(|s| format!("{prefix}_{s}"))
+        .collect();
+    if yield_site {
+        names.push(format!("{prefix}_yield_site"));
+    }
+    names
+}
+
+/// Generate `module` for `machine` in memory and bound the machine stack a
+/// call into any of `roots` reaches. See [`crate::stack`].
+fn stack_bound(
+    module: &LlvmModule<'_>,
+    machine: &TargetMachine,
+    roots: &[String],
+) -> Result<u64, LinkageError> {
+    crate::stack::require_static_frames(module).map_err(LinkageError::Emit)?;
+    // **CODE GENERATION REWRITES THE MODULE IT EMITS**, through the IR passes
+    // that prepare it for instruction selection. Measuring the original would
+    // leave a different module to be written, so a copy is generated and the
+    // call graph is read from the untouched original.
+    let copy = module.clone();
+    let (generated, frames) = crate::stack::with_frame_sizes(&copy, || {
+        machine.write_to_memory_buffer(&copy, FileType::Object)
+    })
+    .map_err(LinkageError::Emit)?;
+    generated.map_err(|e| LinkageError::Emit(e.to_string()))?;
+    crate::stack::longest_path(module, &frames, roots).map_err(LinkageError::Emit)
 }
 
 fn check_prefix(prefix: &str) -> Result<(), LinkageError> {
@@ -501,6 +588,10 @@ pub fn build<'ctx>(
         Err(e) => TrapExport::Unestablished(format!("{e}")),
     };
 
+    let wcet = match crate::cost::entry_bound(program) {
+        Ok(c) => CostExport::Established(c),
+        Err(why) => CostExport::Unestablished(why),
+    };
     let word = ctx.i64_type();
     for (suffix, value) in [
         ("contract_version", CONTRACT_VERSION),
@@ -511,6 +602,7 @@ pub fn build<'ctx>(
         ("private_bytes", private_bytes),
         ("region_bytes", region_bytes),
         ("private_init_bytes", private_init.len() as u64),
+        ("wcet_cost", wcet.cost()),
     ] {
         add_constant(
             &module,
@@ -518,6 +610,13 @@ pub fn build<'ctx>(
             word.const_int(value, false).into(),
         )?;
     }
+    add_constant(
+        &module,
+        &format!("{prefix}_wcet_status"),
+        ctx.i8_type()
+            .const_int(u64::from(wcet.status()), false)
+            .into(),
+    )?;
     add_constant(
         &module,
         &format!("{prefix}_trap_verdict"),
@@ -544,6 +643,19 @@ pub fn build<'ctx>(
             PassBuilderOptions::create(),
         )
         .map_err(|e| LinkageError::Emit(e.to_string()))?;
+    module
+        .verify()
+        .map_err(|e| LinkageError::Emit(e.to_string()))?;
+    // **THE MACHINE STACK BOUND IS READ FROM ONE CODE GENERATION OF THIS
+    // MODULE.** The constant is added afterwards, which changes no function,
+    // and `write_object` generates again and refuses if any frame moved.
+    let roots = handle_names(prefix, yield_site.is_some());
+    let stack_bytes = stack_bound(&module, machine, &roots)?;
+    add_constant(
+        &module,
+        &format!("{prefix}_stack_bytes"),
+        word.const_int(stack_bytes, false).into(),
+    )?;
     module
         .verify()
         .map_err(|e| LinkageError::Emit(e.to_string()))?;
@@ -612,8 +724,10 @@ pub fn build<'ctx>(
         shared_bytes,
         private_bytes,
         region_bytes,
+        stack_bytes,
         private_init,
         trap,
+        wcet,
         start_params: params[..ordinary].to_vec(),
         yield_site: yield_site.is_some(),
         natives,
@@ -646,7 +760,10 @@ impl<'ctx> Library<'ctx> {
             "private_bytes",
             "region_bytes",
             "private_init_bytes",
+            "stack_bytes",
             "trap_verdict",
+            "wcet_cost",
+            "wcet_status",
         ] {
             out.push(format!("{p}_{s}"));
         }
@@ -659,17 +776,35 @@ impl<'ctx> Library<'ctx> {
 
     /// Write the object file. [`build`] already ran the `default<O2>`
     /// middle end, so this applies no pass.
+    ///
+    /// The frame sizes are read again from this generation, and the write is
+    /// refused when they bound a different stack from the exported figure.
     pub fn write_object(
         &self,
         machine: &TargetMachine,
         path: &std::path::Path,
     ) -> Result<(), LinkageError> {
-        machine
-            .write_to_file(&self.module, FileType::Object, path)
-            .map_err(|e| LinkageError::Emit(e.to_string()))
+        // A copy is written, as in `stack_bound`, so the library's own module
+        // stays as it was measured and a second write sees the same code.
+        let copy = self.module.clone();
+        let (written, frames) = crate::stack::with_frame_sizes(&copy, || {
+            machine.write_to_file(&copy, FileType::Object, path)
+        })
+        .map_err(LinkageError::Emit)?;
+        written.map_err(|e| LinkageError::Emit(e.to_string()))?;
+        let roots = handle_names(&self.prefix, self.yield_site);
+        let again = crate::stack::longest_path(&self.module, &frames, &roots)
+            .map_err(LinkageError::Emit)?;
+        if again != self.stack_bytes {
+            return Err(LinkageError::Emit(format!(
+                "the written object's frames bound {again} stack bytes, not the exported {}",
+                self.stack_bytes
+            )));
+        }
+        Ok(())
     }
 
-    fn figures(&self) -> [(&'static str, u64); 8] {
+    fn figures(&self) -> [(&'static str, u64); 10] {
         [
             ("CONTRACT_VERSION", CONTRACT_VERSION),
             ("FRAME_BYTES", self.frame_bytes),
@@ -679,6 +814,8 @@ impl<'ctx> Library<'ctx> {
             ("PRIVATE_BYTES", self.private_bytes),
             ("REGION_BYTES", self.region_bytes),
             ("PRIVATE_INIT_BYTES", self.private_init.len() as u64),
+            ("STACK_BYTES", self.stack_bytes),
+            ("WCET_COST", self.wcet.cost()),
         ]
     }
 
@@ -694,7 +831,12 @@ impl<'ctx> Library<'ctx> {
             String::from("each aligned to BUFFER_ALIGN. Zero the private buffer and copy"),
             String::from("the private image into its start before the first start call."),
             format!("Trap verdict {}.", self.trap.describe()),
-            String::from("No execution-time bound is exported. See NATIVE_WCET_ASYMMETRY.md."),
+            String::from("A trap ends the instance with status 3 and its TrapKind code."),
+            String::from("STACK_BYTES bounds this library's machine stack, excluding host"),
+            String::from("natives and compiler runtime routines."),
+            format!("Cost claim {}.", self.wcet.describe()),
+            String::from("WCET_COST is in bytecode cost units, best effort as native time,"),
+            String::from("and is meaningful only when WCET_STATUS is 1."),
         ];
         lines.iter().map(|l| format!("{comment} {l}\n")).collect()
     }
@@ -711,8 +853,9 @@ impl<'ctx> Library<'ctx> {
             h.push_str(&format!("#define {up}_{name} {value}u\n"));
         }
         h.push_str(&format!(
-            "#define {up}_TRAP_VERDICT {}u\n\n",
-            self.trap.code()
+            "#define {up}_TRAP_VERDICT {}u\n#define {up}_WCET_STATUS {}u\n\n",
+            self.trap.code(),
+            self.wcet.status()
         ));
         for f in &self.shared {
             h.push_str(&format!(
@@ -756,6 +899,7 @@ impl<'ctx> Library<'ctx> {
             ));
         }
         h.push_str(&format!("extern const uint8_t {p}_trap_verdict;\n"));
+        h.push_str(&format!("extern const uint8_t {p}_wcet_status;\n"));
         if !self.private_init.is_empty() {
             h.push_str(&format!(
                 "extern const unsigned char {p}_private_init[{}];\n",
@@ -812,8 +956,9 @@ impl<'ctx> Library<'ctx> {
             r.push_str(&format!("    pub const {name}: u64 = {value};\n"));
         }
         r.push_str(&format!(
-            "    pub const TRAP_VERDICT: u8 = {};\n\n",
-            self.trap.code()
+            "    pub const TRAP_VERDICT: u8 = {};\n    pub const WCET_STATUS: u8 = {};\n\n",
+            self.trap.code(),
+            self.wcet.status()
         ));
         r.push_str("    pub mod shared {\n");
         for f in &self.shared {
@@ -882,6 +1027,7 @@ impl<'ctx> Library<'ctx> {
             ));
         }
         r.push_str(&format!("        pub static {p}_trap_verdict: u8;\n"));
+        r.push_str(&format!("        pub static {p}_wcet_status: u8;\n"));
         if !self.private_init.is_empty() {
             r.push_str(&format!(
                 "        pub static {p}_private_init: [u8; {}];\n",

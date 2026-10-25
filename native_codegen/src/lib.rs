@@ -76,8 +76,10 @@
 //! is a lowering bug and is asserted rather than tolerated.
 
 pub mod coroutine;
+pub mod cost;
 pub mod linkage;
 pub mod region;
+pub mod stack;
 
 /// The PACKED width of an operand-stack value, for placing it inside a flat
 /// composite body.
@@ -343,12 +345,14 @@ pub enum OverflowPolicy {
     Wrap,
     /// Branch to a native trap when the outcome flag is non-zero.
     ///
-    /// This is the shape `V0_3_X_ROADMAP.md` Workstream F describes for an
-    /// unhandled partial operation, and it is retained for that work. **It
-    /// diverges from the VM**, measurably: with this policy `add(i64::MAX, 1)`
-    /// aborts through `llvm.trap` where the VM returns the wrapped value. Do
-    /// not enable it without deciding that native may lead a semantic change
-    /// the VM has not made.
+    /// This was the shape `V0_3_X_ROADMAP.md` Workstream F described for an
+    /// unhandled partial operation. **It is superseded.** Since the V0.2.X
+    /// line made the partial operations total, the compiler emits an explicit
+    /// `Trap` for each unhandled outcome, and the backend lowers that `Trap`.
+    /// Workstream F needs nothing from this policy, which `ORDER_4_PLAN.md`
+    /// records. **It still diverges from the VM**: with it `add(i64::MAX, 1)`
+    /// aborts through `llvm.trap` where the VM returns the wrapped value. It is
+    /// kept only because existing tests name it. Do not enable it.
     Trap,
 }
 
@@ -374,6 +378,32 @@ pub struct LowerOptions {
     /// lowering is acceptable for the module in hand. See
     /// `docs/decisions/NATIVE_DELEGATED_SUSPENSION.md`.
     pub delegated_suspension: bool,
+    /// Count every bytecode instruction the native code executes.
+    ///
+    /// **Instrumentation for Workstream E, off by default.** The module declares
+    /// an external global [`OP_METER_SYMBOL`], an array of `i64` with one word
+    /// per instruction of every chunk in order, which the host defines and
+    /// zeroes. Each lowered instruction
+    /// adds one to its word before its own code runs. The VM executes the same
+    /// instructions, which its breakpoints can count, so equal counts show
+    /// that native execution follows the bytecode's path. That is what lets
+    /// the verifier's cost bound, a sum over that path, describe native code.
+    /// The counter is one global, so a metered module serves one instance on
+    /// one thread at a time.
+    pub op_meter: bool,
+}
+
+/// The global a metered module counts executed instructions into. See
+/// [`LowerOptions::op_meter`].
+pub const OP_METER_SYMBOL: &str = "kel_op_meter";
+
+/// The index of `(chunk, instruction)` in the [`OP_METER_SYMBOL`] array.
+pub fn op_meter_index(program: &Module, chunk: usize, instruction: usize) -> usize {
+    program.chunks[..chunk]
+        .iter()
+        .map(|c| c.ops.len())
+        .sum::<usize>()
+        + instruction
 }
 
 /// Packed width a producing instruction fixes by ITSELF, independent of its
@@ -1804,6 +1834,7 @@ pub fn lower_chunk<'ctx>(
             retcon_reply_body_maximum: 0,
             retcon_site_offset: None,
             retcon_trap_offset: None,
+            op_meter: None,
             retcon_resume_type: None,
             retcon_resume_shape: None,
             retcon_branches: None,
@@ -2011,6 +2042,19 @@ fn lower_module_with<'ctx>(
         |index: usize| retcon_config.is_none_or(|(_, facts)| facts.plan.reachable[index]);
     check_word_width(program.word_bits_log2)?;
     let i64t = ctx.i64_type();
+    let op_meter = opts.op_meter.then(|| {
+        let words = program
+            .chunks
+            .iter()
+            .map(|c| c.ops.len())
+            .sum::<usize>()
+            .max(1);
+        let ty = i64t.array_type(words as u32);
+        // A declaration, so the host supplies the words and reads them back.
+        module
+            .add_global(ty, None, OP_METER_SYMBOL)
+            .as_pointer_value()
+    });
     // **The module's float width, hoisted above its first use.** It was computed
     // further down, which was fine while the entry ABI's type was hard-coded
     // `f64` and stopped being fine the moment that type became width-derived.
@@ -2407,6 +2451,7 @@ fn lower_module_with<'ctx>(
             retcon_trap_offset: retcon_config
                 .map(|(_, facts)| facts.plan.trap_offset)
                 .filter(|_| retcon),
+            op_meter: op_meter.map(|g| (g, op_meter_index(program, i, 0) as u64)),
             retcon_branches: retcon_config.map(|(_, facts)| &facts.branches[i]),
             retcon_resume_shape: retcon_bytes
                 .and(program.entry_point)
@@ -2766,6 +2811,8 @@ struct BodyCfg<'a> {
     retcon_site_offset: Option<u32>,
     /// Frame offset of the entry's trap record. `Some` only for the entry.
     retcon_trap_offset: Option<u32>,
+    /// The instruction meter and this chunk's first index in it.
+    op_meter: Option<(PointerValue<'a>, u64)>,
     /// The VM writes host replies to the outer entry parameter even when a
     /// reentrant callee is suspended. Its own parameters retain their values.
     retcon_resume_type: Option<TypeTag>,
@@ -3666,6 +3713,7 @@ fn lower_chunk_body<'ctx>(
         retcon_fallible_natives,
         retcon_site_offset,
         retcon_trap_offset,
+        op_meter,
         retcon_resume_type,
         retcon_resume_shape,
         retcon_branches,
@@ -4498,6 +4546,26 @@ fn lower_chunk_body<'ctx>(
 
         if dead {
             continue;
+        }
+
+        if let Some((meter, base)) = op_meter {
+            let word = unsafe {
+                st.b.build_in_bounds_gep(
+                    i64t,
+                    meter,
+                    &[i64t.const_int(base + i as u64, false)],
+                    "op_meter_word",
+                )
+                .unwrap()
+            };
+            let count =
+                st.b.build_load(i64t, word, "op_count")
+                    .unwrap()
+                    .into_int_value();
+            let next =
+                st.b.build_int_add(count, i64t.const_int(1, false), "op_count_next")
+                    .unwrap();
+            st.b.build_store(word, next).unwrap();
         }
 
         if let Some(facts) = retcon_facts.and_then(|extents| extents.get(&i)) {

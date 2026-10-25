@@ -722,3 +722,22 @@ Verification passed 12 root documentation checks and 24 native handoff checks,
 with no failures, ignored tests or filtered cases. Both commands exited zero.
 Full gates were not repeated for this documentation-only transition. The
 mailbox checkpoint was exported and reviewed with no messages.
+
+
+## APPENDED BY THE V0.3.X LINE, Claude Code, Order 4, 2026-10-25
+
+The operator set this line's Order 4, Workstreams E and F, as the goal. The
+work is on `feat/v3-order4`, cut from `cd5476a2`. A coroutine library reports a
+trap to its host as status three with its kind, and a host native named
+fallible can report a soft failure. Native execution was measured to follow the
+bytecode's cost path instruction for instruction. The library exports a cost
+claim composed through calls and a measured machine stack bound.
+`docs/decisions/ORDER_4_COMPLETION.md` holds the evidence and limits.
+
+The cost claim is in bytecode cost units. Roadmap open decision 1, whether
+native WCET is hard or best effort, remains the operator's, and best effort was
+assumed. Two findings went to the V0.2.X line. `RUNTIME_FAULTS.md` still
+specifies native default values that the 2026-10-20 ruling supersedes. The
+verifier's text analysis refuses a comparison of two `Word` call results in the
+lexer's `intern_id`, so the lexer has no composed claim. Publication remains
+held.

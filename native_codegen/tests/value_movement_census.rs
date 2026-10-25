@@ -1,3 +1,6 @@
+//! The Order 4 instruction meter stores a count into the host's meter array,
+//! one word per instruction. The value is a scalar count and never an address.
+//!
 //! Coroutine trap reporting, Order 4, adds eight stores, none of an address.
 //! Each function's trap-code cell receives the contract code at its prologue,
 //! a `TrapKind` code at each `Trap`, and a forwarded callee code before a
@@ -149,7 +152,8 @@ const MOVE_FORMS: &[&str] = &[
 // 59 -> 63 with selected output size, field store, body copy and padding.
 // 80 -> 81 in absorption 82: the Fixed `Div`/`Mod` arm zeroes the high slot.
 // 81 -> 89 in Order 4 for the eight trap-reporting stores described above.
-const RECORDED_MOVE_SITES: usize = 89;
+// 89 -> 90 for the instruction meter's store of its count.
+const RECORDED_MOVE_SITES: usize = 90;
 // 18 -> 19 on 2026-09-11, when the shared composite slot landed: one body copy
 // into the host's buffer, at the offset and length the module's shared layout
 // STATES. Unlike the persistent pool, nothing here is derived — so there is no

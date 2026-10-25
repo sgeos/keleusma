@@ -125,6 +125,7 @@ fn emit(program: &Module, prefix: &str, dir: &Path) -> Emitted {
             .collect(),
         trap: lib.trap.clone(),
         frame_bytes: lib.frame_bytes,
+        stack_bytes: lib.stack_bytes,
     }
 }
 
@@ -134,6 +135,7 @@ struct Emitted {
     shared: Vec<(String, u64, u64)>,
     trap: TrapExport,
     frame_bytes: u64,
+    stack_bytes: u64,
 }
 
 fn lexer() -> Module {
@@ -246,6 +248,9 @@ fn a_rust_host_links_the_lexer_static_library_and_agrees_with_the_vm() {
     let mut seen = vec![Vec::new(); TEXTS.len()];
     for line in String::from_utf8(ran.stdout).unwrap().lines() {
         let f: Vec<&str> = line.split(' ').collect();
+        if f[0] == "S" {
+            continue;
+        }
         assert_eq!((f.len(), f[0]), (4, "Y"), "unexpected host line `{line}`");
         let (i, t, v): (usize, i64, i64) = (
             f[1].parse().unwrap(),
@@ -270,6 +275,69 @@ fn a_rust_host_links_the_lexer_static_library_and_agrees_with_the_vm() {
         "Rust host: {} lexer instances x {TURNS} turns at a {}-byte frame bound agree with the VM",
         TEXTS.len(),
         emitted.frame_bytes
+    );
+}
+
+/// **Order 4, Workstream E: the exported machine stack bound holds.**
+///
+/// The host paints the stack below its stack pointer before every start and
+/// resume and reports the deepest byte any call changed. It runs twice with
+/// different paint values, since a byte written with the paint value is
+/// invisible, and the larger figure must stay within `STACK_BYTES`. The run
+/// must also measure a real depth, or a probe that saw nothing would pass.
+#[test]
+fn the_measured_machine_stack_stays_within_the_exported_bound() {
+    let (Some(rustc), Some((dir, emitted))) = (tool("rustc", "RUSTC"), lexer_library()) else {
+        return;
+    };
+    let exe = dir.join("lexer_host_stack");
+    let built = build_lexer_host(&rustc, dir, &dir.join("kel_lexer.rs"), &exe);
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let out_dir = scratch("lexer-stack");
+    let sources: Vec<PathBuf> = TEXTS
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let p = out_dir.join(format!("source_{i}.kel"));
+            std::fs::write(&p, t).unwrap();
+            p
+        })
+        .collect();
+    let mut measured = Vec::new();
+    for paint in ["90", "165"] {
+        let ran = run(Command::new(&exe)
+            .env("KEL_STACK_PAINT", paint)
+            .arg(&out_dir)
+            .arg(TURNS.to_string())
+            .args(&sources));
+        let text = String::from_utf8(ran.stdout).unwrap();
+        let line = text
+            .lines()
+            .find_map(|l| l.strip_prefix("S "))
+            .expect("the host reports its stack measurement");
+        if line == "unmeasured" {
+            eprintln!("SKIPPED: the host cannot measure its stack on this target");
+            return;
+        }
+        measured.push(line.parse::<u64>().unwrap());
+    }
+    let deepest = *measured.iter().max().unwrap();
+    println!(
+        "machine stack: measured {measured:?} bytes, exported bound {} bytes",
+        emitted.stack_bytes
+    );
+    assert!(
+        deepest > 0,
+        "the probe measured no stack use at all, so it measured nothing"
+    );
+    assert!(
+        deepest <= emitted.stack_bytes,
+        "the lexer used {deepest} stack bytes, above its exported bound of {}",
+        emitted.stack_bytes
     );
 }
 

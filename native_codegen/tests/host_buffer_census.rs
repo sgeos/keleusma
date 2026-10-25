@@ -86,6 +86,11 @@ const BUFFER_HARNESSES: &[&str] = &[
     // was alphabetically misplaced. The sets were identical; only the order was not.
     "narrow_stream_differential.rs",
     "native_calls.rs",
+    // Order 4. Each sizes the private region as the persistent capacity plus
+    // `region::persistent_supplement_bytes`, the published contract.
+    "native_cost_path.rs",
+    "native_host_failure.rs",
+    "native_trap_outcomes.rs",
     "partial_operation_census.rs",
     "reset_region_retention.rs",
     // Retcon uses the published private and composite bounds with adjacent

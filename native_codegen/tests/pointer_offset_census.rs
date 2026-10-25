@@ -1,3 +1,8 @@
+//! The Order 4 instruction meter forms the address of one word of the host's
+//! meter array at a compile-time constant index, the chunk's first index plus
+//! the instruction's position. The array has one word per instruction of every
+//! chunk, so the index is always inside it.
+//!
 //! Coroutine trap reporting, Order 4, forms one address, the entry's trap
 //! record at a compile-time constant offset inside the caller's frame
 //! reservation. `coroutine::trap_offset` places it below the reservation's end
@@ -130,7 +135,8 @@
 // 28 -> 29 for constant header offsets within the declared stable slot.
 // 37 -> 41 with the site base and three bounded packing address sites.
 // 44 -> 45 in Order 4 for the constant trap-record offset described above.
-const RECORDED_GEP_SITES: usize = 45;
+// 45 -> 46 for the instruction meter's constant word address.
+const RECORDED_GEP_SITES: usize = 46;
 // 22 -> 24 on 2026-09-11, when the shared composite slot landed. **Both are
 // compile-time constant.** The body's address is the slot's STATED offset in the
 // host buffer — a field of the layout, not a computed quantity — and the second
