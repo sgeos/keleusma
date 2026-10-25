@@ -76,6 +76,7 @@
 //! is a lowering bug and is asserted rather than tolerated.
 
 pub mod coroutine;
+pub mod linkage;
 pub mod region;
 
 /// The PACKED width of an operand-stack value, for placing it inside a flat

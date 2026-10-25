@@ -78,8 +78,9 @@ rather than a wrong answer.
 
 ## What this example does NOT show
 
-**Streams do not lower.** `Stream` and `Reset` are refused by this backend, so the policy is a plain
-function called once per control cycle rather than a coroutine. A streaming design would not build.
+**This example uses the plain-function path, which refuses streams.** The policy is called once per
+control cycle rather than run as a coroutine. Streams lower through `keleusma_native::coroutine`, and
+[`../lexer_host/`](../lexer_host/README.md) links one as a static library against a Rust host.
 
 **The native artefact can demand more region memory than the runtime's verified figure.** The planner
 gives every construction site its own offset and never overlaps them, so for some programs its arena

@@ -72,7 +72,9 @@
 // Order 1 gate's exempt and unseeded stages. Additions only.
 // 769 -> 775: `arena_coroutine_frames.rs` adds Workstream C's static frame
 // bound and arena slot pool tests. Additions only.
-const RECORDED_TEST_FUNCTIONS: usize = 775;
+// 775 -> 782: `static_library_linkage.rs` adds the Order 3 static library tests.
+// Additions only.
+const RECORDED_TEST_FUNCTIONS: usize = 782;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise
@@ -276,7 +278,8 @@ const RECORDED_TEST_FUNCTIONS: usize = 775;
 /// 119 -> 120: `operand_variant_sweep.rs` added, none removed.
 // 156 -> 157 in absorption 82: `native_workflow.rs` added, none removed.
 // 157 -> 158: `arena_coroutine_frames.rs` added for Workstream C, none removed.
-const RECORDED_TEST_FILES: usize = 158;
+// 158 -> 159: `static_library_linkage.rs` added for Order 3, none removed.
+const RECORDED_TEST_FILES: usize = 159;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")

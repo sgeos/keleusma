@@ -38,6 +38,13 @@ and produces either a JIT-executed function or a native object file. Correctness
 is established by executing the same bytecode on the VM and requiring identical
 results.
 
+`keleusma_native::linkage` lowers a stream or reentrant entry as a coroutine and
+exports it as a static-library object under a chosen prefix, with its host
+contract as linkable constants and a generated C header and Rust bindings.
+[`examples/lexer_host/`](examples/lexer_host/README.md) links the self-hosted
+lexer that way against a Rust host. The record is
+[`WORKSTREAM_D_COMPLETION.md`](../docs/decisions/WORKSTREAM_D_COMPLETION.md).
+
 **Supported opcodes are not listed here.** The list is computed, and a copy kept by hand is what went
 stale before:
 
