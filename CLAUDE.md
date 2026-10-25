@@ -23,7 +23,10 @@ in [the compiler audit](docs/decisions/ORDER1_COMPLETION_AUDIT.md) and
 complete for its first-pass scope on 2026-10-24, with its residual limits in
 [the trap-analysis audit](docs/decisions/ORDER3_COMPLETION_AUDIT.md). Order 4, the hosted
 runtime, is complete for its first-pass scope on 2026-10-25, with its bound composition and
-residual limits in [the hosted-runtime audit](docs/decisions/ORDER4_COMPLETION_AUDIT.md). Full-language support is
+residual limits in [the hosted-runtime audit](docs/decisions/ORDER4_COMPLETION_AUDIT.md). Order 5, the
+cryptographic framing with host-native primitives, is complete for its first-pass scope on
+2026-10-25 on this line's reading of the gate, with evidence in
+[the framing audit](docs/decisions/ORDER5_COMPLETION_AUDIT.md). Full-language support is
 Order 6 and defines the V0.3.0 milestone. What each
 release shipped is in [`CHANGELOG.md`](CHANGELOG.md).
 

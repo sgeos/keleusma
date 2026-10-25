@@ -190,6 +190,10 @@ fn print_help() {
     println!("                                    function; a genuine source error is");
     println!("                                    reported plainly, without the hint, since");
     println!("                                    the reference reports the same error.");
+    println!("                                    With self-hosted, signing and encryption");
+    println!("                                    are framed in Keleusma with the Ed25519,");
+    println!("                                    X25519 and AES-GCM primitives in Rust, and");
+    println!("                                    the artifact must equal the reference's.");
     println!("  keygen --seed <out> --public <out>");
     println!("                                    Generate a fresh Ed25519 keypair from the");
     println!("                                    OS RNG. Writes the 32-byte signing seed to");
@@ -696,15 +700,16 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
             let mut ephemeral_seed = [0u8; X25519_PRIVATE_KEY_LEN];
             use rand_core::RngCore;
             rand_core::OsRng.fill_bytes(&mut ephemeral_seed);
-            match keleusma::wire_format::module_to_encrypted_signed_wire_bytes(
+            match encrypt_module(
                 &module,
                 &signing_key,
                 &recipient_pk,
                 &ephemeral_seed,
+                backend,
             ) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("error: encrypting and signing bytecode: {:?}", e);
+                    eprintln!("error: {e}");
                     return ExitCode::FAILURE;
                 }
             }
@@ -718,10 +723,10 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            match keleusma::wire_format::module_to_signed_wire_bytes(&module, &signing_key) {
+            match sign_module(&module, &signing_key, backend) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("error: signing bytecode: {:?}", e);
+                    eprintln!("error: {e}");
                     return ExitCode::FAILURE;
                 }
             }
@@ -1631,6 +1636,70 @@ fn serialize_unsigned_module(
         Backend::SelfHosted => keleusma::selfhost::wire_module_artifact_via_kel(module)
             .map_err(|e| format!("self-hosted serialization: {e}; retry with --compiler rust")),
     }
+}
+
+/// Sign on the selected compiler's serialization path. The self-hosted backend produces the
+/// sections through the Keleusma wire stages and frames them through the Keleusma cryptographic
+/// framing (Order 5), with the Ed25519 primitive as a host native. Its artifact is accepted only
+/// when it is byte-identical to the reference signer's, which is deterministic, so a divergence
+/// fails the compile rather than shipping either artifact.
+fn sign_module(
+    module: &keleusma::bytecode::Module,
+    signing_key: &ed25519_dalek::SigningKey,
+    backend: Backend,
+) -> Result<Vec<u8>, String> {
+    let reference = keleusma::wire_format::module_to_signed_wire_bytes(module, signing_key)
+        .map_err(|e| format!("signing bytecode: {e:?}"))?;
+    if backend == Backend::Rust {
+        return Ok(reference);
+    }
+    let framed = keleusma::crypto_frame::signing_sections_via_kel(module)
+        .and_then(|sections| keleusma::crypto_frame::sign_sections(module, &sections, signing_key))
+        .map_err(|e| format!("self-hosted signing: {e:?}; retry with --compiler rust"))?;
+    if framed != reference {
+        return Err(String::from(
+            "self-hosted signing diverged from the reference signer; retry with --compiler rust",
+        ));
+    }
+    Ok(framed)
+}
+
+/// Sign and encrypt on the selected compiler's serialization path, as [`sign_module`] does. Both
+/// sides use the same ephemeral seed, so the reference artifact is the comparison oracle.
+fn encrypt_module(
+    module: &keleusma::bytecode::Module,
+    signing_key: &ed25519_dalek::SigningKey,
+    recipient: &[u8; X25519_PRIVATE_KEY_LEN],
+    ephemeral_seed: &[u8; X25519_PRIVATE_KEY_LEN],
+    backend: Backend,
+) -> Result<Vec<u8>, String> {
+    let reference = keleusma::wire_format::module_to_encrypted_signed_wire_bytes(
+        module,
+        signing_key,
+        recipient,
+        ephemeral_seed,
+    )
+    .map_err(|e| format!("encrypting and signing bytecode: {e:?}"))?;
+    if backend == Backend::Rust {
+        return Ok(reference);
+    }
+    let framed = keleusma::crypto_frame::signing_sections_via_kel(module)
+        .and_then(|sections| {
+            keleusma::crypto_frame::encrypt_sections(
+                module,
+                &sections,
+                signing_key,
+                recipient,
+                ephemeral_seed,
+            )
+        })
+        .map_err(|e| format!("self-hosted encryption: {e:?}; retry with --compiler rust"))?;
+    if framed != reference {
+        return Err(String::from(
+            "self-hosted encryption diverged from the reference; retry with --compiler rust",
+        ));
+    }
+    Ok(framed)
 }
 
 fn compile_source(source: &str) -> Result<keleusma::bytecode::Module, String> {

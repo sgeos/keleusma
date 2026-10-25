@@ -1,0 +1,559 @@
+// src/crypto_frame/frame.kel -- the cryptographic framing of the wire format, written in
+// Keleusma (Order 5, roadmap Workstream E, approach 1). See
+// docs/decisions/ORDER5_CRYPTO_FRAMING_PLAN.md.
+//
+// This program decides every byte of a signed or encrypted artifact that is not a primitive's
+// output, and the order in which the primitives run. The primitives stay host natives. Ed25519
+// signing and strict verification, X25519 agreement, HKDF-SHA-256 derivation, AES-256-GCM and
+// the SHA-256 recipient fingerprint are computed by the host and never by this program. No key
+// enters this program. The host holds the signing key, the trusted verifying keys, the
+// ephemeral seed and the local private key, and a native names a key only by its index.
+//
+// What is decided here. The signed and encrypted header layouts, the signature and encryption
+// metadata blocks, which bytes the signature covers, the order of the framing checks and their
+// verdicts, the verify-before-decrypt ordering, the comparison of the recipient fingerprint
+// before any agreement runs, the reconstruction of the plaintext view, and the CRC-32 trailer.
+//
+// THE BUFFERS. The host owns ten byte buffers, which this program reads and writes through the
+// `host::b*` natives by number. 0 IN is the artifact being checked or the concatenated sections
+// being framed. 1 OUT is the artifact being built. 2 MSG is the message a signature is made or
+// checked over. 3 SIG is a signature. 4 PT is a plaintext body. 5 CT is a ciphertext with its
+// tag. 6 SEALED is the ephemeral public key then the nonce that sealing produced. 7 RID is the
+// fingerprint of the recipient's public key. 8 LID is the fingerprint of the local public key.
+// 9 OPENP is the ephemeral public key then the nonce that opening is given. The host refuses a
+// write to IN, SEALED, RID or LID, so a fault there is a defect of this program. MSG, SIG, PT
+// and CT are writable because this program fills them for a primitive on one path and reads a
+// primitive's output from them on another.
+//
+// THE PROTOCOL. A command is the resume value. 10 begins signing, 11 begins verification, 12
+// begins encryption of the artifact the last signing produced, 13 begins decryption, and 2 runs
+// one step of at most 4096 units. A begin yields 0 when the operation started or a negative
+// verdict. A step yields 0 while running, 1 when finished, or a negative verdict, after which
+// the program is idle. A unit is one byte moved, one key tried, or one fixed-size header
+// operation, so the per-step time bound is a constant. The phase order is held here, so a host
+// cannot reorder it. Encryption is refused unless the operation before it finished a signing,
+// and decryption reaches the cipher only after a key verified.
+//
+// THE VERDICTS mirror the reference's refusals in its order of checks. -1 truncated, -2 bad
+// magic, -3 not signed, -4 header below the signed minimum, -5 reserved metadata nonzero, -6
+// signature scheme 0, -7 unsupported signature scheme, -8 signature length, -9 header length
+// mismatch, -10 no trusted key verified, -11 not encrypted, -12 encrypted but not signed, -13
+// encryption metadata malformed, -14 wrong recipient, -15 non-contributory agreement, -16
+// nonce mismatch, -17 authentication failed, -18 host key material missing, -19 an invalid
+// framing input, -20 a command out of order, -21 sealing failed.
+use host::blen
+use host::bget
+use host::bput
+use host::bpush
+use host::bclear
+use host::sign
+use host::nkeys
+use host::verify
+use host::seal
+use host::open
+
+// The accumulator holds a 32-bit unsigned value in a signed word, as in wire.kel.
+require word >= 64;
+
+// The thirteen framing fields of a module, in the order the unsigned framing stage takes them.
+// 0 word width, 1 address width, 2 float width, 3 flags, 4 time bound, 5 memory bound, 6 shared
+// data bytes, 7 private data bytes, 8 auxiliary arena bytes, 9 persistent composite bytes, 10
+// opcode stream length, 11 operand pool length and 12 auxiliary body length.
+shared data io {
+    f: [Word; 13],
+}
+
+// The state of the operation in progress, which persists across steps.
+private data st {
+    mode: Word,
+    phase: Word,
+    cur: Word,
+    err: Word,
+    base: Word,
+    ilen: Word,
+    total: Word,
+    stotal: Word,
+    op_len: Word,
+    pool_len: Word,
+    aux_len: Word,
+    pool_at: Word,
+    aux_at: Word,
+    key: Word,
+    crc: Word,
+    ready: Word,
+    tmp: Word,
+    hdr: [Word; 136],
+}
+
+fn b_in() -> Word { 0 }
+fn b_out() -> Word { 1 }
+fn b_msg() -> Word { 2 }
+fn b_sig() -> Word { 3 }
+fn b_pt() -> Word { 4 }
+fn b_ct() -> Word { 5 }
+fn b_sealed() -> Word { 6 }
+fn b_rid() -> Word { 7 }
+fn b_lid() -> Word { 8 }
+fn b_openp() -> Word { 9 }
+
+// The fixed layout. A signed header is the 64-byte base, the 8-byte signature metadata block
+// and the 64-byte Ed25519 signature. An encrypted header adds the 88-byte encryption metadata.
+fn base_len() -> Word { 64 }
+fn sig_at() -> Word { 72 }
+fn signed_len() -> Word { 136 }
+fn meta_len() -> Word { 88 }
+fn sealed_len() -> Word { 224 }
+fn trailer() -> Word { 4 }
+fn tag_len() -> Word { 16 }
+fn flag_signed() -> Word { 2 }
+fn flag_encrypted() -> Word { 4 }
+fn u32_max() -> Word { 0xFFFFFFFF }
+
+// The modes and phases. Phase 0 is idle and phase 20 is finished.
+fn m_sign() -> Word { 1 }
+fn m_verify() -> Word { 2 }
+fn m_encrypt() -> Word { 3 }
+fn m_decrypt() -> Word { 4 }
+fn p_shebang() -> Word { 1 }
+fn p_dpre() -> Word { 2 }
+fn p_vhead() -> Word { 3 }
+fn p_vmsg() -> Word { 4 }
+fn p_vsig() -> Word { 5 }
+fn p_vkeys() -> Word { 6 }
+fn p_dmeta() -> Word { 7 }
+fn p_dct() -> Word { 8 }
+fn p_dopen() -> Word { 9 }
+fn p_rhdr() -> Word { 10 }
+fn p_rpt() -> Word { 11 }
+fn p_copy() -> Word { 12 }
+fn p_omsg() -> Word { 13 }
+fn p_sign() -> Word { 14 }
+fn p_crc() -> Word { 15 }
+fn p_ept() -> Word { 16 }
+fn p_seal() -> Word { 17 }
+fn p_ect() -> Word { 18 }
+fn p_done() -> Word { 20 }
+
+// End the operation with a verdict. The first verdict of a step wins, because the step loop
+// runs no unit once the phase is idle.
+fn fail(code: Word) -> Word {
+    st.err = code;
+    st.phase = 0;
+    st.mode = 0;
+    st.ready = 0;
+    code
+}
+
+fn goto(phase: Word) -> Word {
+    st.phase = phase;
+    st.cur = 0;
+    phase
+}
+
+// Byte access. `inb` reads the artifact under check past any shebang line.
+fn inb(i: Word) -> Word { host::bget(b_in(), st.base + i) }
+fn in16(i: Word) -> Word { inb(i) bor (inb(i + 1) lsl 8) }
+fn in32(i: Word) -> Word { in16(i) bor (in16(i + 2) lsl 16) }
+fn outb(i: Word) -> Word { host::bget(b_out(), i) }
+fn out32(i: Word) -> Word { outb(i) bor (outb(i + 1) lsl 8) bor (outb(i + 2) lsl 16) bor (outb(i + 3) lsl 24) }
+fn put(i: Word, v: Word) -> Word { host::bput(b_out(), i, v) }
+fn put16(i: Word, v: Word) -> Word {
+    put(i, v band 255);
+    put(i + 1, (v lsr 8) band 255)
+}
+fn put32(i: Word, v: Word) -> Word {
+    put16(i, v band 0xFFFF);
+    put16(i + 2, (v lsr 16) band 0xFFFF)
+}
+fn pad8(x: Word) -> Word { ((x + 7) / 8) * 8 }
+fn is_magic(b0: Word, b1: Word, b2: Word, b3: Word) -> bool {
+    b0 == 0x4B andalso b1 == 0x45 andalso b2 == 0x4C andalso b3 == 0x45
+}
+
+// The bytes a signature covers. The whole artifact up to its declared total, with the
+// signature payload and the CRC trailer read as zero. Signing and verification both use this
+// one rule, so they cannot disagree on the message.
+fn covered(i: Word, byte: Word) -> Word {
+    if i >= sig_at() andalso i < signed_len() { 0 } else {
+        if i >= st.total - trailer() { 0 } else { byte } }
+}
+
+// CRC-32/ISO-HDLC, bitwise, as in wire.kel.
+fn crc_fold(byte: Word) -> Word {
+    st.crc = st.crc bxor byte;
+    for k in 0..8 {
+        st.crc = if (st.crc band 1) == 1 { (st.crc lsr 1) bxor 0xEDB88320 } else { st.crc lsr 1 };
+    }
+    st.crc
+}
+
+// ---- Signing. ----
+
+fn in_range(v: Word, hi: Word) -> bool { v >= 0 andalso v <= hi }
+
+fn begin_sign() -> Word {
+    st.tmp = 0;
+    for i in 0..13 {
+        let hi = if i < 4 { 255 } else { u32_max() };
+        if not in_range(io.f[i], hi) { st.tmp = 1; }
+    }
+    if st.tmp != 0 { fail(0 - 19) } else {
+        st.op_len = io.f[10];
+        st.pool_len = io.f[11];
+        st.aux_len = io.f[12];
+        st.pool_at = pad8(signed_len() + st.op_len);
+        st.aux_at = pad8(st.pool_at + st.pool_len);
+        st.total = st.aux_at + st.aux_len + trailer();
+        let sections = st.op_len + st.pool_len + st.aux_len;
+        if st.total > u32_max() orelse host::blen(b_in()) != sections { fail(0 - 19) } else {
+            host::bclear(b_out(), st.total);
+            put(0, 0x4B); put(1, 0x45); put(2, 0x4C); put(3, 0x45);
+            put16(4, 2);
+            put16(6, signed_len());
+            put32(8, st.total);
+            put(12, io.f[0]); put(13, io.f[1]); put(14, io.f[2]);
+            put(15, io.f[3] bor flag_signed());
+            put32(16, io.f[4]); put32(20, io.f[5]); put32(24, io.f[6]); put32(28, io.f[7]);
+            put32(32, signed_len()); put32(36, st.op_len);
+            put32(40, st.pool_at); put32(44, st.pool_len);
+            put32(48, st.aux_at); put32(52, st.aux_len);
+            put32(56, io.f[8]); put32(60, io.f[9]);
+            // The signature metadata block. Scheme 1 is Ed25519, the length is 64, and the
+            // reserved byte and word are zero. The signature itself stays zero until signed.
+            put(64, 1); put(65, 0); put16(66, 64); put32(68, 0);
+            st.mode = m_sign();
+            st.ready = 0;
+            goto(p_copy());
+            0
+        }
+    }
+}
+
+// Place one section byte. The sections arrive concatenated, and this program decides where
+// each lands and that the padding between them is zero.
+fn unit_copy() -> Word {
+    let n = st.op_len + st.pool_len + st.aux_len;
+    if st.cur < n {
+        let at = if st.cur < st.op_len { signed_len() + st.cur } else {
+            if st.cur < st.op_len + st.pool_len { st.pool_at + st.cur - st.op_len } else {
+                st.aux_at + st.cur - st.op_len - st.pool_len } };
+        put(at, host::bget(b_in(), st.cur));
+        st.cur = st.cur + 1;
+        st.cur
+    } else {
+        host::bclear(b_msg(), 0);
+        goto(p_omsg())
+    }
+}
+
+fn unit_omsg() -> Word {
+    if st.cur < st.total {
+        host::bpush(b_msg(), covered(st.cur, outb(st.cur)));
+        st.cur = st.cur + 1;
+        st.cur
+    } else { goto(p_sign()) }
+}
+
+fn unit_sign() -> Word {
+    if host::sign() != 1 { fail(0 - 18) } else {
+        for j in 0..64 { put(sig_at() + j, host::bget(b_sig(), j)); }
+        st.crc = 0xFFFFFFFF;
+        goto(p_crc())
+    }
+}
+
+fn unit_crc() -> Word {
+    if st.cur < st.total - trailer() {
+        crc_fold(outb(st.cur));
+        st.cur = st.cur + 1;
+        st.cur
+    } else {
+        put32(st.total - trailer(), st.crc bxor 0xFFFFFFFF);
+        st.ready = if st.mode == m_sign() { 1 } else { 0 };
+        goto(p_done())
+    }
+}
+
+// ---- Verification. ----
+
+fn begin_check(mode: Word) -> Word {
+    st.mode = mode;
+    st.ready = 0;
+    st.base = 0;
+    st.ilen = host::blen(b_in());
+    goto(p_shebang());
+    0
+}
+
+// A leading line that starts with "#!" is skipped up to and including its newline. A shebang
+// with no newline leaves the artifact as it is.
+fn unit_shebang() -> Word {
+    let len = host::blen(b_in());
+    if st.cur == 0 {
+        if len >= 2 andalso host::bget(b_in(), 0) == 35 andalso host::bget(b_in(), 1) == 33 {
+            st.cur = 2;
+            st.cur
+        } else { end_shebang(0) }
+    } else {
+        if st.cur >= len { end_shebang(0) } else {
+            if host::bget(b_in(), st.cur) == 10 { end_shebang(st.cur + 1) } else {
+                st.cur = st.cur + 1;
+                st.cur } }
+    }
+}
+
+fn end_shebang(base: Word) -> Word {
+    st.base = base;
+    st.ilen = host::blen(b_in()) - base;
+    if st.mode == m_decrypt() { goto(p_dpre()) } else { goto(p_vhead()) }
+}
+
+// The decrypt path's own checks, which the reference makes before it verifies.
+fn unit_dpre() -> Word {
+    if st.ilen < sealed_len() + trailer() { fail(0 - 1) } else {
+        if not is_magic(inb(0), inb(1), inb(2), inb(3)) { fail(0 - 2) } else {
+            if (inb(15) band flag_encrypted()) == 0 { fail(0 - 11) } else {
+                if (inb(15) band flag_signed()) == 0 { fail(0 - 12) } else { goto(p_vhead()) } } } }
+}
+
+// The framing checks of a signed header, in the reference's order.
+fn unit_vhead() -> Word {
+    if st.ilen < base_len() + trailer() { fail(0 - 1) } else {
+        if not is_magic(inb(0), inb(1), inb(2), inb(3)) { fail(0 - 2) } else {
+            let hlen = in16(6);
+            st.total = in32(8);
+            if st.total > st.ilen orelse st.total < hlen + trailer() { fail(0 - 1) } else {
+                if hlen == base_len() { fail(0 - 3) } else {
+                    if hlen < sig_at() { fail(0 - 4) } else { vmeta(hlen) } } } } }
+}
+
+fn vmeta(hlen: Word) -> Word {
+    let scheme = inb(64);
+    if inb(65) != 0 orelse in32(68) != 0 { fail(0 - 5) } else {
+        if scheme == 0 { fail(0 - 6) } else {
+            if scheme != 1 { fail(0 - 7) } else {
+                if in16(66) != 64 { fail(0 - 8) } else {
+                    let expected = if (inb(15) band flag_encrypted()) != 0 { sealed_len() } else {
+                        signed_len() };
+                    if hlen != expected { fail(0 - 9) } else {
+                        host::bclear(b_msg(), 0);
+                        goto(p_vmsg()) } } } } }
+}
+
+fn unit_vmsg() -> Word {
+    if st.cur < st.total {
+        host::bpush(b_msg(), covered(st.cur, inb(st.cur)));
+        st.cur = st.cur + 1;
+        st.cur
+    } else {
+        host::bclear(b_sig(), 64);
+        goto(p_vsig())
+    }
+}
+
+fn unit_vsig() -> Word {
+    if st.cur < 64 {
+        host::bput(b_sig(), st.cur, inb(sig_at() + st.cur));
+        st.cur = st.cur + 1;
+        st.cur
+    } else {
+        st.key = 0;
+        goto(p_vkeys())
+    }
+}
+
+// Try the trusted keys in order. The first that verifies ends the search, and an empty set
+// verifies nothing.
+fn unit_vkeys() -> Word {
+    if st.key < host::nkeys() {
+        if host::verify(st.key) == 1 {
+            if st.mode == m_decrypt() { goto(p_dmeta()) } else { goto(p_done()) }
+        } else {
+            st.key = st.key + 1;
+            st.key
+        }
+    } else { fail(0 - 10) }
+}
+
+// ---- Decryption, reached only after a key verified. ----
+
+// The metadata block, the body length and then the recipient fingerprint, which is compared
+// here before the host runs any agreement. The ciphertext runs to the end of the buffer as
+// supplied, not to the declared total, as in the reference.
+fn unit_dmeta() -> Word {
+    let m = signed_len();
+    if inb(m) != 1 orelse in16(m + 2) != meta_len() { fail(0 - 13) } else {
+        let body_end = st.ilen - trailer();
+        if body_end <= sealed_len() orelse body_end - sealed_len() < tag_len() { fail(0 - 1) } else {
+            st.tmp = 0;
+            for j in 0..32 {
+                if inb(m + 36 + j) != host::bget(b_lid(), j) { st.tmp = 1; }
+            }
+            if st.tmp != 0 { fail(0 - 14) } else {
+                host::bclear(b_openp(), 44);
+                for j in 0..32 { host::bput(b_openp(), j, inb(m + 4 + j)); }
+                for j in 0..12 { host::bput(b_openp(), 32 + j, inb(m + 68 + j)); }
+                host::bclear(b_ct(), 0);
+                goto(p_dct());
+                st.cur = sealed_len();
+                st.cur } } }
+}
+
+fn unit_dct() -> Word {
+    if st.cur < st.ilen - trailer() {
+        host::bpush(b_ct(), inb(st.cur));
+        st.cur = st.cur + 1;
+        st.cur
+    } else { goto(p_dopen()) }
+}
+
+fn unit_dopen() -> Word {
+    let r = host::open();
+    if r == 1 { goto(p_rhdr()) } else {
+        if r == 0 - 1 { fail(0 - 15) } else {
+            if r == 0 - 2 { fail(0 - 16) } else {
+                if r == 0 - 3 { fail(0 - 17) } else { fail(0 - 18) } } } }
+}
+
+// The plaintext view. The base header with the encryption flag cleared, the signed header
+// length, the new total and each section offset moved back by the metadata block, saturating
+// at zero, then the signature metadata and signature as they were, which no longer verify
+// over this view.
+fn unit_rhdr() -> Word {
+    st.total = signed_len() + host::blen(b_pt()) + trailer();
+    host::bclear(b_out(), st.total);
+    for j in 0..136 { put(j, inb(j)); }
+    put(15, inb(15) band (255 bxor flag_encrypted()));
+    put16(6, signed_len());
+    put32(8, st.total);
+    for k in 0..3 {
+        let at = 32 + 8 * k;
+        let v = in32(at);
+        put32(at, if v < meta_len() { 0 } else { v - meta_len() });
+    }
+    goto(p_rpt())
+}
+
+fn unit_rpt() -> Word {
+    if st.cur < host::blen(b_pt()) {
+        put(signed_len() + st.cur, host::bget(b_pt(), st.cur));
+        st.cur = st.cur + 1;
+        st.cur
+    } else {
+        st.crc = 0xFFFFFFFF;
+        goto(p_crc())
+    }
+}
+
+// ---- Encryption of the artifact the last signing produced. ----
+
+fn begin_encrypt() -> Word {
+    if st.ready != 1 orelse st.phase != p_done() { fail(0 - 20) } else {
+        st.stotal = st.total;
+        for j in 0..136 { st.hdr[j] = outb(j); }
+        host::bclear(b_pt(), 0);
+        st.mode = m_encrypt();
+        st.ready = 0;
+        goto(p_ept());
+        st.cur = signed_len();
+        0
+    }
+}
+
+fn unit_ept() -> Word {
+    if st.cur < st.stotal - trailer() {
+        host::bpush(b_pt(), outb(st.cur));
+        st.cur = st.cur + 1;
+        st.cur
+    } else { goto(p_seal()) }
+}
+
+// Seal, then lay out the encrypted header. The base header gains the encryption flag, the
+// encrypted header length, the new total and section offsets moved past the metadata block.
+// The signature metadata is kept, the signature is zero until re-signed, and the metadata
+// block is the scheme, a reserved zero, its length, the ephemeral public key, the recipient
+// fingerprint, the nonce and eight reserved zeros.
+fn unit_seal() -> Word {
+    if host::seal() != 1 { fail(0 - 21) } else {
+        st.total = sealed_len() + host::blen(b_ct()) + trailer();
+        if st.total > u32_max() { fail(0 - 19) } else {
+            host::bclear(b_out(), st.total);
+            for j in 0..72 { put(j, st.hdr[j]); }
+            put(15, st.hdr[15] bor flag_encrypted());
+            put16(6, sealed_len());
+            put32(8, st.total);
+            for k in 0..3 {
+                let at = 32 + 8 * k;
+                let v = st.hdr[at] bor (st.hdr[at + 1] lsl 8) bor (st.hdr[at + 2] lsl 16)
+                    bor (st.hdr[at + 3] lsl 24);
+                put32(at, v + meta_len());
+            }
+            let m = signed_len();
+            put(m, 1);
+            put16(m + 2, meta_len());
+            for j in 0..32 { put(m + 4 + j, host::bget(b_sealed(), j)); }
+            for j in 0..32 { put(m + 36 + j, host::bget(b_rid(), j)); }
+            for j in 0..12 { put(m + 68 + j, host::bget(b_sealed(), 32 + j)); }
+            goto(p_ect())
+        }
+    }
+}
+
+fn unit_ect() -> Word {
+    if st.cur < host::blen(b_ct()) {
+        put(sealed_len() + st.cur, host::bget(b_ct(), st.cur));
+        st.cur = st.cur + 1;
+        st.cur
+    } else {
+        host::bclear(b_msg(), 0);
+        goto(p_omsg())
+    }
+}
+
+// ---- Dispatch. ----
+
+fn unit() -> Word {
+    let p = st.phase;
+    if p == p_shebang() { unit_shebang() } else {
+    if p == p_dpre() { unit_dpre() } else {
+    if p == p_vhead() { unit_vhead() } else {
+    if p == p_vmsg() { unit_vmsg() } else {
+    if p == p_vsig() { unit_vsig() } else {
+    if p == p_vkeys() { unit_vkeys() } else {
+    if p == p_dmeta() { unit_dmeta() } else {
+    if p == p_dct() { unit_dct() } else {
+    if p == p_dopen() { unit_dopen() } else {
+    if p == p_rhdr() { unit_rhdr() } else {
+    if p == p_rpt() { unit_rpt() } else {
+    if p == p_copy() { unit_copy() } else {
+    if p == p_omsg() { unit_omsg() } else {
+    if p == p_sign() { unit_sign() } else {
+    if p == p_crc() { unit_crc() } else {
+    if p == p_ept() { unit_ept() } else {
+    if p == p_seal() { unit_seal() } else {
+    if p == p_ect() { unit_ect() } else { fail(0 - 20) }
+    } } } } } } } } } } } } } } } } }
+}
+
+fn step() -> Word {
+    if st.phase == 0 { fail(0 - 20) } else {
+        st.err = 0;
+        for i in 0..4096 {
+            if st.phase != 0 andalso st.phase != p_done() { unit(); }
+        }
+        if st.err != 0 { st.err } else { if st.phase == p_done() { 1 } else { 0 } }
+    }
+}
+
+fn dispatch(cmd: Word) -> Word {
+    if cmd == 2 { step() } else {
+    if cmd == 10 { begin_sign() } else {
+    if cmd == 11 { begin_check(m_verify()) } else {
+    if cmd == 12 { begin_encrypt() } else {
+    if cmd == 13 { begin_check(m_decrypt()) } else { fail(0 - 20) } } } } }
+}
+
+loop main(cmd: Word) -> Word {
+    let r = dispatch(cmd);
+    yield r
+}
