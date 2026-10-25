@@ -6,6 +6,14 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-25 WCET structural markers
+
+The Order 4 instruction count exceeded seven verified time bounds by one. The
+time walk and analyze.kel charged nothing for Else, EndIf and EndLoop and
+omitted a counted loop's final header pass. The operator ruled first-hand to fix
+the bound first. Fixed on fix/v02-wcet-structural-markers. PR 517 merged as
+50b20ef6. pykeleusma's further 0.2.2 findings are recorded for triage.
+
 ## 2026-10-25 Flat Text decode soundness
 
 Reproduced the pykeleusma segmentation fault on v0.2.3. Repaired the unchecked
