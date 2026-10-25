@@ -214,10 +214,14 @@ def validate_packet(packet, cfg):
     encoded = packed(request_for(packet, cfg)).encode()
     if len(encoded) > cfg['max_payload_bytes']:
         raise PilotError('semantic payload too large')
+    refuse_credentials(packed(packet))
+
+
+def refuse_credentials(serialized):
     key = os.environ.get('TYPESAFE_API_KEY', '')
-    if key and key in packed(packet):
+    if key and key in serialized:
         raise PilotError('credential detected in input')
-    if re.search(r'-----BEGIN .*PRIVATE KEY-----|Authorization:\s*Bearer|TYPESAFE_API_KEY\s*=', packed(packet), re.I):
+    if re.search(r'-----BEGIN .*PRIVATE KEY-----|Authorization:\s*Bearer|TYPESAFE_API_KEY\s*=', serialized, re.I):
         raise PilotError('credential marker detected in input')
 
 
@@ -232,10 +236,17 @@ def refuse_home_directory(packet):
 def record(db, repo, line, packet, cfg):
     validate_packet(packet, cfg)
     refuse_home_directory(packet)
-    first_head = git(repo, 'rev-parse', 'HEAD').decode().strip()
-    sources, matched = [], False
     excerpt = packet['input'].get('evidence', packet['input'].get('diagnostic'))
-    for ref in packet['source_refs']:
+    document = {'packet': packet, 'snapshot': capture_snapshot(repo, packet['source_refs'], [excerpt]),
+                'execution_provenance': 'caller_reported_not_executed_by_pilot'}
+    return store_sample(db, line, packet, document, request_for(packet, cfg))
+
+
+def capture_snapshot(repo, refs, excerpts):
+    """Hash each source and require every excerpt to occur verbatim in one of them."""
+    first_head = git(repo, 'rev-parse', 'HEAD').decode().strip()
+    sources, unmatched = [], list(excerpts)
+    for ref in refs:
         path = repo / safe_ref(ref)
         resolved = path.resolve(strict=True)
         if path.is_symlink() or not resolved.is_relative_to(repo) or 'secret' in resolved.relative_to(repo).parts:
@@ -245,18 +256,20 @@ def record(db, repo, line, packet, cfg):
             raw = stream.read(1048577)
         if len(raw) > 1048576:
             raise PilotError('source too large; use a separately reviewed excerpt file')
-        matched |= excerpt in raw.decode('utf-8')
+        decoded = raw.decode('utf-8')
+        unmatched = [excerpt for excerpt in unmatched if excerpt not in decoded]
         sources.append({'path': ref, 'sha256': sha(raw), 'bytes': len(raw)})
-    if not matched:
+    if unmatched:
         raise PilotError('evidence excerpt does not occur verbatim in a supplied source')
     diff = git(repo, 'diff', 'HEAD', '--binary')
     snapshot = {'head': first_head, 'branch': git(repo, 'branch', '--show-current').decode().strip(),
                 'tracked_diff_sha256': sha(diff), 'tracked_dirty': bool(diff), 'sources': sources}
     if git(repo, 'rev-parse', 'HEAD').decode().strip() != first_head:
         raise PilotError('revision changed during capture')
-    document = {'packet': packet, 'snapshot': snapshot,
-                'execution_provenance': 'caller_reported_not_executed_by_pilot'}
-    request = request_for(packet, cfg)
+    return snapshot
+
+
+def store_sample(db, line, packet, document, request):
     request_hash = sha(packed(request).encode())
     with transaction(db):
         existing = db.execute('SELECT document,line FROM samples WHERE id=?', (packet['id'],)).fetchone()
@@ -458,7 +471,10 @@ def export_data(db):
                 'tasks': [dict(row) for row in db.execute('SELECT * FROM tasks ORDER BY line,task_id')]}
 
 
-def restore(db, checkpoint, cfg):
+def restore(db, checkpoint, cfg, packet_check=None, request_builder=None, label_check=None):
+    packet_check = packet_check or validate_packet
+    request_builder = request_builder or request_for
+    label_check = label_check or validate_label
     if checkpoint['schema'] != 1 or len(checkpoint['samples']) > 2000 or len(checkpoint['tasks']) > 2000:
         raise PilotError('invalid checkpoint envelope')
     if checkpoint.get('config_sha256', sha(packed(cfg).encode())) != sha(packed(cfg).encode()):
@@ -481,14 +497,14 @@ def restore(db, checkpoint, cfg):
                 raise PilotError('invalid checkpoint sample')
             document = json.loads(row['document'])
             packet = document['packet']
-            validate_packet(packet, cfg)
+            packet_check(packet, cfg)
             if (row['id'], row['task_id'], row['kind']) != (packet['id'],packet['task_id'],packet['kind']):
                 raise PilotError('checkpoint identity mismatch')
-            if packed(request_for(packet,cfg)) != row['request'] or sha(row['request'].encode()) != row['request_hash']:
+            if packed(request_builder(packet,cfg)) != row['request'] or sha(row['request'].encode()) != row['request_hash']:
                 raise PilotError('checkpoint request mismatch')
             number(row['reserved'], True)
             if row['label']:
-                validate_label(json.loads(row['label']), row, cfg)
+                label_check(json.loads(row['label']), row, cfg)
             if row['evaluation']:
                 result = json.loads(row['evaluation'])
                 if result['status'] == 'ok':
@@ -512,11 +528,19 @@ def write_new(path, value):
         stream.write('\n')
 
 
+def refuse_other_enrollment(db, repo, line):
+    old = db.execute('SELECT line FROM enrollment WHERE worktree=?', (str(repo),)).fetchone()
+    if old and old['line'] != line:
+        raise PilotError('worktree already enrolled as another line')
+
+
 def install(store, repo, line, cfg):
     db = connect(store, cfg)
     try:
         if line not in cfg['lines']:
             raise PilotError('unsupported pilot line')
+        # Refuse before copying anything, so that a refused install leaves the store unchanged.
+        refuse_other_enrollment(db, repo, line)
         if not db.execute('SELECT COUNT(*) FROM samples').fetchone()[0]:
             checkpoint = ASSETS / 'checkpoint.json'
             if checkpoint.exists():
@@ -542,9 +566,8 @@ def install(store, repo, line, cfg):
                     stream.write(source.read_bytes())
                 os.replace(staged, target)
         with transaction(db):
-            old = db.execute('SELECT line FROM enrollment WHERE worktree=?', (str(repo),)).fetchone()
-            if old and old['line'] != line:
-                raise PilotError('worktree already enrolled as another line')
+            # Checked again under the write lock for an enrollment made since the first check.
+            refuse_other_enrollment(db, repo, line)
             db.execute('INSERT OR IGNORE INTO enrollment VALUES (?,?)', (str(repo),line))
         return {'status':'installed','line':line,'store':str(store),'mode':'shadow','network_calls':0}
     finally:
