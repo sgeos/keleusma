@@ -124,6 +124,7 @@ dependencies = [
  "inkwell",
  "keleusma",
  "keleusma-arena",
+ "llvm-sys",
 ]
 
 [[package]]

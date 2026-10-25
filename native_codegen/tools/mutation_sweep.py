@@ -454,8 +454,8 @@ MUTATIONS_ROUND3 = {
         '                    st.b.build_and(v, i64t.const_int(0x7F, false), "tobyte")',
     ),
     "Trap": (
-        "            Op::Trap(_) => {\n                st.b.build_unconditional_branch(trap_bb).unwrap();",
-        "            Op::Trap(_) => {\n                st.b.build_return(Some(&i64t.const_zero())).unwrap();",
+        "                st.b.build_unconditional_branch(trap_bb).unwrap();\n            }\n            // A direct call to another chunk.",
+        "                st.b.build_return(Some(&i64t.const_zero())).unwrap();\n            }\n            // A direct call to another chunk.",
     ),
     # **RE-REGISTERED 2026-09-06.** The degenerate-yield arm moved from
     # `st.b.build_return(Some(&v))` to `build_typed_return(...)` -- the same

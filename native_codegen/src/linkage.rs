@@ -233,9 +233,17 @@ pub struct NativeImport {
     pub symbol: String,
     /// Parameter types in order.
     pub params: Vec<CType>,
-    /// Return type, `None` for void.
+    /// Return type, `None` for void. For a fallible native this is the type
+    /// of the value word.
     pub ret: Option<CType>,
+    /// Whether the native returns `kel_native_result`, a value word and a
+    /// failure word, as `HostContracts::fallible_natives` declares.
+    pub fallible: bool,
 }
+
+/// The C spelling of a fallible native's result, shared by every library so
+/// that two headers declaring one native agree.
+pub const NATIVE_RESULT_C: &str = "kel_native_result";
 
 /// A lowered coroutine ready to write as an object, with its contract.
 pub struct Library<'ctx> {
@@ -525,8 +533,16 @@ pub fn build<'ctx>(
         )?;
     }
 
+    // **THE OBJECT IS OPTIMISED HERE, ONCE.** The figures this library
+    // exports must describe the code it writes, and the machine stack bound
+    // depends on the optimisation level. Writing therefore applies no further
+    // pass, so a later write cannot change the code under its exported figures.
     module
-        .run_passes("globaldce", machine, PassBuilderOptions::create())
+        .run_passes(
+            "globaldce,default<O2>",
+            machine,
+            PassBuilderOptions::create(),
+        )
         .map_err(|e| LinkageError::Emit(e.to_string()))?;
     module
         .verify()
@@ -544,11 +560,23 @@ pub fn build<'ctx>(
         if !name.starts_with(NATIVE_SYMBOL_PREFIX) {
             return Err(LinkageError::Import(name));
         }
-        let (params, ret) = signature(f.get_type(), &name)?;
+        let ty = f.get_type();
+        // A fallible native returns the two-word aggregate. Anything else
+        // with a struct return is refused by `signature` as before.
+        let two_words = ty.get_return_type().is_some_and(|r| {
+            r.is_struct_type()
+                && r.into_struct_type().get_field_types() == [word.into(), word.into()]
+        });
+        let (params, ret) = if two_words {
+            (parameters(ty, &name)?, Some(CType::I64))
+        } else {
+            signature(ty, &name)?
+        };
         natives.push(NativeImport {
             symbol: name,
             params,
             ret,
+            fallible: two_words,
         });
     }
     if let Some(g) = module
@@ -629,23 +657,13 @@ impl<'ctx> Library<'ctx> {
         out
     }
 
-    /// Write an object file, after the `default<O2>` middle end when
-    /// `optimise` is set. The pipeline runs on this library's module, so
-    /// later writes see the optimised code.
+    /// Write the object file. [`build`] already ran the `default<O2>`
+    /// middle end, so this applies no pass.
     pub fn write_object(
         &self,
         machine: &TargetMachine,
         path: &std::path::Path,
-        optimise: bool,
     ) -> Result<(), LinkageError> {
-        if optimise {
-            self.module
-                .run_passes("default<O2>", machine, PassBuilderOptions::create())
-                .map_err(|e| LinkageError::Emit(e.to_string()))?;
-            self.module
-                .verify()
-                .map_err(|e| LinkageError::Emit(e.to_string()))?;
-        }
         machine
             .write_to_file(&self.module, FileType::Object, path)
             .map_err(|e| LinkageError::Emit(e.to_string()))
@@ -748,8 +766,20 @@ impl<'ctx> Library<'ctx> {
             h.push_str("\n// This library calls no host natives.\n");
         } else {
             h.push_str("\n// The host must define each of these natives.\n");
+            if self.natives.iter().any(|n| n.fallible) {
+                h.push_str(&format!(
+                    "// A fallible native reports a soft failure with a nonzero `failed`,\n\
+                     // and `value` is then its error code.\n\
+                     #ifndef KEL_NATIVE_RESULT_DEFINED\n#define KEL_NATIVE_RESULT_DEFINED\n\
+                     typedef struct {{ int64_t value; int64_t failed; }} {NATIVE_RESULT_C};\n#endif\n"
+                ));
+            }
             for n in &self.natives {
-                let ret = n.ret.map_or("void", CType::c);
+                let ret = if n.fallible {
+                    NATIVE_RESULT_C
+                } else {
+                    n.ret.map_or("void", CType::c)
+                };
                 let args = if n.params.is_empty() {
                     String::from("void")
                 } else {
@@ -796,9 +826,18 @@ impl<'ctx> Library<'ctx> {
             ));
         }
         r.push_str("    }\n\n    pub mod natives {\n");
+        if self.natives.iter().any(|n| n.fallible) {
+            r.push_str(
+                "        /// A fallible native's result. A nonzero `failed` is a soft failure\n        /// whose error code is `value`.\n        #[repr(C)]\n        #[derive(Clone, Copy, Debug, PartialEq, Eq)]\n        pub struct NativeResult {\n            pub value: i64,\n            pub failed: i64,\n        }\n",
+            );
+        }
         for n in &self.natives {
             let args: Vec<&str> = n.params.iter().map(|t| t.rust()).collect();
-            let ret = n.ret.map_or(String::new(), |t| format!(" -> {}", t.rust()));
+            let ret = if n.fallible {
+                String::from(" -> NativeResult")
+            } else {
+                n.ret.map_or(String::new(), |t| format!(" -> {}", t.rust()))
+            };
             r.push_str(&format!(
                 "        pub type {} = extern \"C\" fn({}){ret};\n",
                 n.symbol,

@@ -45,7 +45,7 @@ fn main() {
         .unwrap_or_else(|e| panic!("build {prefix}: {e:?}"));
     let out = std::path::Path::new(&out_dir);
     std::fs::create_dir_all(out).expect("out dir");
-    lib.write_object(&tm, &out.join(format!("{prefix}.o")), true)
+    lib.write_object(&tm, &out.join(format!("{prefix}.o")))
         .expect("write object");
     std::fs::write(out.join(format!("{prefix}.h")), lib.c_header()).expect("write header");
     std::fs::write(out.join(format!("{prefix}.rs")), lib.rust_bindings()).expect("write bindings");

@@ -111,7 +111,7 @@ fn emit(program: &Module, prefix: &str, dir: &Path) -> Emitted {
     let ctx = Context::create();
     let lib = linkage::build(&ctx, program, &tm, prefix, &HostContracts::default())
         .unwrap_or_else(|e| panic!("{prefix}: {e:?}"));
-    lib.write_object(&tm, &dir.join(format!("{prefix}.o")), true)
+    lib.write_object(&tm, &dir.join(format!("{prefix}.o")))
         .unwrap();
     std::fs::write(dir.join(format!("{prefix}.h")), lib.c_header()).unwrap();
     std::fs::write(dir.join(format!("{prefix}.rs")), lib.rust_bindings()).unwrap();
