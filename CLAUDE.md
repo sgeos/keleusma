@@ -242,7 +242,7 @@ scripts/fast-check.sh 'test(<name>)'
 # Documentation gate (broken/private intra-doc links fail here, not in test/clippy)
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
-# Pre-release gate — a SUBSET of CI (12 steps, 13 with --miri; CI runs 27 jobs).
+# Pre-release gate — a SUBSET of CI (12 steps, 13 with --miri; CI runs 28 jobs).
 # Run whole before publishing or merging into main (add --miri for a release).
 # Version-branch merges rely on remote continuous integration.
 scripts/release-gate.sh

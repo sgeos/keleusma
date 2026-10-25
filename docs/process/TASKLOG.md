@@ -2328,6 +2328,17 @@ implementation or global configuration.
 > See `docs/process/handoffs/v0.3.0.md`.
 
 
+## Kaizen token and context engineering spikes
+
+2026-10-24. Measured agent token use and surveyed token economization, then
+answered the operator's response with a context engineering follow-up. Both
+reports are under `docs/process/kaizen/`. Compaction measured as a likely
+correctness cost, so the lower auto-compact window was withdrawn. The shorter
+prompt reminder landed in `scripts/interline.py`, tested and not activated. The
+kaizen handoff became an overwrite-only state file. A second pass found every
+Opus 5.5 compaction to be idle, added `scripts/gate_summary.py` with real failure
+fixtures and the `python-tooling` CI job, and drafted a trimmed `CLAUDE.md`.
+
 ## Kaizen test-duration pass
 
 2026-10-24. At the operator's request, investigated slow tests and CI after

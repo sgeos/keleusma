@@ -1,0 +1,20 @@
+exit=100
+   Compiling fixture v0.1.0 (/WORK/c)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+────────────
+ Nextest run ID 48bdc959-e0df-43c8-910b-e6b258b1b245 with nextest profile: default
+    Starting 1 test across 1 binary
+        SLOW [>  1.000s] (───) fixture tests::hangs
+ TERMINATING [>  2.000s] (───) fixture tests::hangs
+     TIMEOUT [   2.004s] (1/1) fixture tests::hangs
+  stdout ───
+
+    running 1 test
+
+    (test timed out)
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   2.005s] 1 test run: 0 passed, 1 timed out, 0 skipped
+     TIMEOUT [   2.004s] (1/1) fixture tests::hangs
+error: test run failed
