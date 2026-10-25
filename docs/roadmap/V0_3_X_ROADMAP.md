@@ -193,6 +193,11 @@ This work does not complete Workstreams A, C or D.
 Coroutine frames live in the arena, not the C stack, preserving the bounded-WCMU model in
 native code. The native runtime reproduces the arena bump-and-reset discipline.
 
+Each coroutine's frame bound is derived from its lowering, and a fixed pool reserves slots of that
+size from the host arena and returns them to a free list on release. The
+[acceptance record](../decisions/WORKSTREAM_C_COMPLETION.md) maps each requirement to executable
+evidence and states the limits.
+
 ### D. Static-library linkage, the host ABI, and foreign-linkable object files
 
 The native artefact links as a static library against a Rust host and exposes sub-coroutine
@@ -275,6 +280,11 @@ in [`ORDER_1_GATE_ASSESSMENT.md`](../decisions/ORDER_1_GATE_ASSESSMENT.md). Work
 first workstream, completed earlier; see
 [`WORKSTREAM_B_COMPLETION.md`](../decisions/WORKSTREAM_B_COMPLETION.md). This table's Order numbers
 are this line's and differ from the V0.2.X roadmap's.
+
+**Order 2 status, 2026-10-24.** Met. Coroutine-driven native functions are callable from a host
+through stable slots ([Workstream B](../decisions/WORKSTREAM_B_COMPLETION.md)), and their frames
+occupy statically bounded slots of an arena pool
+([Workstream C](../decisions/WORKSTREAM_C_COMPLETION.md)). Both records state their limits.
 
 ## The oracle and trust story
 

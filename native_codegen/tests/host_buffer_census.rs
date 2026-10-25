@@ -47,6 +47,9 @@
 /// `private_init_image.rs`, which drives through the shared helper and allocates
 /// nothing itself. Both corrections came from the matcher, not from another look.
 const BUFFER_HARNESSES: &[&str] = &[
+    // Added 2026-10-24 with the arena slot pool. Every instance buffer comes from
+    // one arena, sized by the same contract functions as the retcon harness.
+    "arena_coroutine_frames.rs",
     "common/mod.rs",
     "composite_stream_sequence.rs",
     "composite_yield_witness.rs",

@@ -100,6 +100,7 @@ mod host;
 pub(crate) mod kinds;
 pub(crate) mod ownership;
 pub(crate) mod packing;
+pub mod pool;
 pub(crate) mod private;
 pub(crate) mod types;
 
@@ -115,6 +116,52 @@ pub fn slot_bytes(frame_bytes: u32) -> Result<u32, LowerError> {
         ));
     }
     Ok(frame_bytes + host::HEADER_BYTES)
+}
+
+/// The smallest frame reservation `program` lowers with under `contracts`.
+///
+/// This is the coroutine's static frame bound, the size the design gives its
+/// arena region. LLVM fixes the continuation frame's layout before it consults
+/// the reservation, and the lowering refuses exactly when the frame and the
+/// reserved tail do not fit, so feasibility is monotone in the reservation. The
+/// bound is found by doubling from [`FRAME_ALIGN`] to the first reservation that
+/// lowers and then bisecting on multiples of [`FRAME_ALIGN`]. Each attempt is a
+/// complete lowering in its own context. An error that persists at the largest
+/// reservation tried is returned as it is, since no size would cure it.
+pub fn minimum_frame_bytes(
+    program: &Module,
+    machine: &TargetMachine,
+    contracts: &HostContracts,
+) -> Result<u32, LowerError> {
+    const LARGEST: u32 = 1 << 30;
+    let fits = |frame: u32| {
+        let ctx = Context::create();
+        lower_with_contracts(&ctx, program, machine, frame, contracts).map(|_| ())
+    };
+    let mut high = FRAME_ALIGN;
+    loop {
+        match fits(high) {
+            Ok(()) => break,
+            Err(e) if high >= LARGEST => return Err(e),
+            Err(_) => high = high.saturating_mul(2).min(LARGEST),
+        }
+    }
+    // Invariant: `high` lowers and every multiple of FRAME_ALIGN at or below
+    // `low` was refused, or `low` is zero. Terminates because the gap halves.
+    let mut low = high / 2 / FRAME_ALIGN * FRAME_ALIGN;
+    if high == FRAME_ALIGN {
+        return Ok(high);
+    }
+    while high - low > FRAME_ALIGN {
+        let mid = (low + (high - low) / 2) / FRAME_ALIGN * FRAME_ALIGN;
+        let mid = mid.max(low + FRAME_ALIGN);
+        if fits(mid).is_ok() {
+            high = mid;
+        } else {
+            low = mid;
+        }
+    }
+    Ok(high)
 }
 
 fn error(message: impl ToString) -> LowerError {
