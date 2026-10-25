@@ -42,6 +42,16 @@ const SKIPPABLE: &[&str] = &[
     // as coverage while being none, and a dead test name in a comment is
     // exactly that shape whether or not it was ever meant as a citation.
     "a_float_data_slot_lowers_at_eight_bytes_and_refuses_at_any_other_width",
+    // Added 2026-10-25 with the Order 3 static library. Each needs `rustc`, `ar`,
+    // `cc` or `nm` and skips loudly without one, unless `CI` or
+    // `KEL_REQUIRE_LLVM_TOOLS` is set, when it fails instead. The native gate
+    // sets the second, so none of the six can skip there.
+    "a_c_host_links_the_same_archive_and_agrees_with_the_vm",
+    "a_host_refuses_bindings_from_another_build",
+    "a_rust_host_links_the_lexer_static_library_and_agrees_with_the_vm",
+    "the_archive_exports_exactly_the_api_and_the_contract",
+    "the_generated_contract_agrees_with_the_module",
+    "two_libraries_link_into_one_rust_host_only_after_export",
     "a_linked_native_object_agrees_with_the_vm",
     "a_linked_object_with_natives_and_a_data_segment_agrees_with_the_vm",
     "a_native_stack_bound_is_computable_end_to_end",
@@ -200,9 +210,9 @@ fn the_set_of_tests_that_can_pass_without_testing_is_pinned() {
         println!("  no longer       : {gone:?}");
     }
     println!(
-        "\n  NONE OF THESE SKIPPED ON THE MACHINE OF RECORD. They need a C compiler\n  \
-         and a linker, and each prints a loud banner when it does skip. **The\n  \
-         population is pinned so an eleventh announces itself; whether a skip\n  \
+        "\n  NONE OF THESE SKIPPED ON THE MACHINE OF RECORD. They need a C compiler,\n  \
+         a linker, or rustc, ar and nm, and each prints a loud banner when it does\n  \
+         skip. **The population is pinned so a new one announces itself; whether a skip\n  \
          OCCURS is deliberately not asserted, because a machine without a\n  \
          toolchain should not see a failure.**\n================\n"
     );

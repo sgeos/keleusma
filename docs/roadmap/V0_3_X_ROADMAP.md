@@ -201,7 +201,8 @@ evidence and states the limits.
 ### D. Static-library linkage, the host ABI, and foreign-linkable object files
 
 The native artefact links as a static library against a Rust host and exposes sub-coroutine
-entry points. The ABI between native Keleusma code and the host, including the native form of
+entry points. The [acceptance record](../decisions/WORKSTREAM_D_COMPLETION.md) maps each
+requirement below to executable evidence and states what is deferred. The ABI between native Keleusma code and the host, including the native form of
 the marshalling boundary, is specified here (it is the native counterpart of the V0.2.x native
 ABI definition).
 
@@ -285,6 +286,13 @@ are this line's and differ from the V0.2.X roadmap's.
 through stable slots ([Workstream B](../decisions/WORKSTREAM_B_COMPLETION.md)), and their frames
 occupy statically bounded slots of an arena pool
 ([Workstream C](../decisions/WORKSTREAM_C_COMPLETION.md)). Both records state their limits.
+
+**Order 3 status, 2026-10-25.** Met. The self-hosted lexer lowers as a coroutine library,
+links as a static archive against a Rust host, and agrees with the virtual machine on every
+yield and shared byte. A C host links the same archive. The arena requirement and the trap
+verdict are exported as symbols. The execution-time bound is not, and the V0.4.0 mangling is
+deferred. The evidence and its limits are in
+[`WORKSTREAM_D_COMPLETION.md`](../decisions/WORKSTREAM_D_COMPLETION.md).
 
 ## The oracle and trust story
 
