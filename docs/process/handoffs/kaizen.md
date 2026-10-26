@@ -31,35 +31,39 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor 8ced687d HEAD     # the merge of PR 535 into v0.2.3
+git merge-base --is-ancestor 1babc66c HEAD     # the merge of PR 537 into v0.2.3
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
 
 Ancestry alone never establishes freshness. Report any foreign commit or any check not
 run.
 
-## State on 2026-10-25
+## State on 2026-10-26
 
-- **Merged into `v0.2.3` today.** PR 525, the Jev selection cohort, as `f31d7a72`. PR 528,
-  its first three baselines, as `d50cd624`. PR 529, the `Cargo.toml` comment, as
-  `d6655f25`. PR 530, actions pinned by commit and `brace-expansion` 2.1.7, as
-  `aeebfb33`. PR 533, the CI load reduction, as `7590ac20`. PR 535, its two guard fixes, as `8ced687d`.
-- **CI load.** PR 533 added a light path for pull requests, one self-host archive for
-  the four shards, grouped small jobs and tree certification. Its own run used 173
-  runner-minutes in 20 jobs, against about 200 in 29. Merged after PR 532 on a moved
-  base, the combined tree failed two guards, which PR 535 fixed as `8ced687d`. That merge
-  was the first certified branch run, run 40244811082, with every heavy job skipped. The
-  report is
-  [`2026-10-25-ci-load-proposal.md`](../kaizen/2026-10-25-ci-load-proposal.md).
-- **This increment.** It publishes that report, makes `native_codegen/` light on V0.3.X's
-  condition, which a test checks, and records live evaluation. It touches only `docs/`
-  and `scripts/`, so its pull request is the first light run.
+- **Merged into `v0.2.3` on 2026-10-25.** PR 525, the Jev selection cohort, as `f31d7a72`.
+  PR 528, its first three baselines, as `d50cd624`. PR 529 as `d6655f25`. PR 530, actions
+  pinned by commit, as `aeebfb33`. PR 533, the CI load reduction, as `7590ac20`. PR 535,
+  its two guard fixes, as `8ced687d`. PR 536, the CI load report, as `56478aa7`. PR 537,
+  the always-running `CI result` job, as `1babc66c`.
+- **`main` requires `CI result`,** set on 2026-10-25 at the operator's instruction, with
+  every other protection setting unchanged. A test fails when a job is missing from its
+  `needs` list. V0.3.X absorbed PRs 528 to 537 as PR 542.
+- **This increment.** V0.2.X reported on 2026-10-25 that `cargo tns` quoted its
+  filterset, which cargo passes through, so nextest refused it, and that
+  `scripts/gate_summary.py` lacked the executable bit. Both reproduced here. The alias
+  is now an unquoted string, because a list alias cannot merge with the string alias
+  of the primary checkout's older config above `.worktrees/`. Every tracked script with
+  a shebang is now executable, and `scripts/test_local_tooling.py` pins both.
+- **Pydromon edits.** On 2026-10-26 the operator said the pydromon harness project
+  would make minor edits to this line and later that they had landed. This line found
+  none on `origin/v0.2.3`, on any branch, in the mailbox or in this worktree. The one
+  unexplained change is a new file in the private store, dated 2026-10-25 21:00, which
+  this line did not open. The question is open with the operator.
 - **Repository settings,** changed on 2026-10-25 at the operator's choice. Private
   vulnerability reporting and Dependabot alerts are on, branches are deleted on merge,
-  the wiki and projects are off and topics are set. 169 merged remote and 145 local
-  branches were pruned, then three with unique but superseded patches. The manifests
-  are in `tmp/branch-prune-2026-10-25/` in this worktree. `feat/native-stream-refusals`
-  is kept for V0.3.X.
+  the wiki and projects are off and topics are set. Merged branches were pruned. The
+  manifests are in `tmp/branch-prune-2026-10-25/` in this worktree.
+  `feat/native-stream-refusals` is kept for V0.3.X.
 - **Jev selection cohort.** Live evaluation is on, by operator authorization. The three
   cases were evaluated, 29,247 input tokens, and labelled blind by a fresh subagent that
   saw only the blind views. The comparison opens when each task is finished.
@@ -82,19 +86,18 @@ authority, so the startup-file positions reach them first-hand.
 
 ## Next increments, in order
 
-1. A `ci-result` job in `ci.yml` that fails when any job failed, then that job required
-   on `main`. No existing job is safe to require, because GitHub counts a skipped job as
-   passing and `certify` is skipped exactly when a job fails.
-2. Extend `context_quality.py` for the operator's global `idleCompaction: false` trial,
+1. Extend `context_quality.py` for the operator's global `idleCompaction: false` trial,
    comparing error rates and cache writes after long gaps with the idle compactions
    already measured.
-3. Run the self-host documentation tests in their own job, in parallel with the archive
+2. Run the self-host documentation tests in their own job, in parallel with the archive
    build, to shorten shard 1.
-4. Finish the three selection tasks, record their outcomes, and read the comparison.
-5. A state-file budget guard, once the owning lines have converted their files.
+3. Finish the three selection tasks, record their outcomes, and read the comparison.
+4. A state-file budget guard, once the owning lines have converted their files.
 
 ## Open with the operator
 
+- Which edits of the pydromon harness project landed on this line, since none was
+  found.
 - Whether V0.3.X should audit which documents its native tests read now, to narrow
   `native.yml`, or when it next touches that workflow. Each process-note commit on
   `v0.3.0` currently starts about 82 macOS runner-minutes.
@@ -117,7 +120,7 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `e45493794b574c6fa6603ecd0eb42ce759c4e450614c59bec4a0be4144c5530d`, 105 messages, none unacknowledged |
+| [Interline](../interline/checkpoint.json) | `6cbd695f32b827b054e3a01306ca20410a073c02914b73361728d6343b2630c7`, 116 messages, one unacknowledged, this line's reply to V0.2.X |
 | [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `6fb4783b8f0bf96d003311f0a84581f38bb9ff0cbfe232f0f85e014064d6cea6`, 3 samples evaluated and labelled, restored cleanly into a fresh store |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `16d65875954a7f7f33416135dd8f475dcb7a982c020adafbbd337aff12ae4bf6`, 250 samples and 66 tasks |
 
