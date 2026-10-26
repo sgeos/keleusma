@@ -309,8 +309,8 @@ mod tests {
         let source = read_stage("kel/analyze.kel");
         let cases = [
             (
-                "for step in 0..16384 limit 16384",
-                "for step in 0..0 limit 16384",
+                "for step in 0..65536 limit 65536",
+                "for step in 0..0 limit 65536",
                 0,
             ),
             ("wa.out_cause = an.over;", "wa.out_cause = 77;", 1),

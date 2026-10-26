@@ -141,13 +141,10 @@ const CORPUS: &[(&str, Class)] = &[
 
 /// Sources the reference verifier accepts and the self-hosted validator cannot yet
 /// analyse, each for the per-chunk opcode capacity. Every other source the reference
-/// compiles must receive the reference verdict.
-const VALIDATOR_CAPACITY: &[&str] = &[
-    "examples/scripts/piano_roll/piano_roll_3.kel",
-    "examples/scripts/piano_roll/piano_roll_8.kel",
-    "examples/scripts/piano_roll/piano_roll_9.kel",
-    "examples/scripts/rogue/rogue_bestiary.kel",
-];
+/// compiles must receive the reference verdict. Empty since the capacity rose from 2,048 to
+/// 8,192 under the operator's ruling of 2026-10-26, which closed the four it held, two rogue
+/// and piano-roll sources whose largest chunks reach 2,056 to 4,702 ops.
+const VALIDATOR_CAPACITY: &[&str] = &[];
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -530,15 +527,10 @@ fn the_trap_analysis_agrees_with_the_reference_on_every_compiled_source() {
 const TRAP_UNAVAILABLE: &[&str] = &[];
 
 /// Sources both trap analyses refuse in agreement, measured 2026-10-26. The four capacity
-/// refusals are the per-chunk opcode capacity the validator also stops at, and the
-/// unsupported one is outside the first-pass proof profile. Gate 4 asks for these to close.
-const TRAP_REFUSALS: &[(&str, &str)] = &[
-    ("examples/scripts/rogue/rogue_bestiary.kel", "Capacity"),
-    ("examples/scripts/piano_roll/piano_roll_3.kel", "Capacity"),
-    ("examples/scripts/piano_roll/piano_roll_8.kel", "Capacity"),
-    ("examples/scripts/piano_roll/piano_roll_9.kel", "Capacity"),
-    ("scripts/check-md-links.kel", "Unsupported"),
-];
+/// refusals the first measurement held closed when the per-chunk opcode capacity rose from
+/// 2,048 to 8,192, and both analyses agree on all four. The unsupported one is outside the
+/// first-pass proof profile, a boxed field read. Gate 4 asks for it to close.
+const TRAP_REFUSALS: &[(&str, &str)] = &[("scripts/check-md-links.kel", "Unsupported")];
 
 /// Slice 1 of Order 6. Each source here was a defect rather than a language gap, a token
 /// that the pipeline skipped, and each now has a pinned outcome. The expected classes were
