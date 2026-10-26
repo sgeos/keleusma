@@ -338,6 +338,8 @@ private data st {
     header_done: Word,
     let_count: Word,
     in_head: Word, head_base: Word, head_bias: Word, head_guard: Word, head_next: Word,
+    // 1 while emitting a literal head (head mode 2), which keeps no parameter copies.
+    head_lit: Word,
     local_slots: [Word; 2048], extra_slots: Word, forest_temps: Word,
     arm_bias: Word, arm_saved: [Word; 8], arm_depth: Word,
     dup_idx: Word,
@@ -3000,8 +3002,12 @@ fn emit_physical(word: Word) -> Word {
     let tag = word % wire.radix;
     if st.in_head == 1 andalso (tag == wire.getlocal orelse tag == wire.setlocal) {
         let slot = word / wire.radix;
+        // A literal head reads its parameters in place and holds no copies, so its window
+        // starts at `head_base` with the guard's temporaries rather than after copies.
+        if st.head_lit == 1 andalso slot < ast.param_count { emit_op(word) } else {
         let bias = if slot < ast.param_count { 0 } else { st.head_bias };
-        emit_op(tag + (slot + st.head_base + bias) * wire.radix)
+        let shift = if st.head_lit == 1 { ast.param_count } else { 0 };
+        emit_op(tag + (slot + st.head_base + bias - shift) * wire.radix) }
     } else { emit_op(word) }
 }
 fn bind_local(slot: Word) -> Word {
@@ -3022,8 +3028,9 @@ fn begin_head(hb: Word) -> Word {
     let pc = ast.head_parts[hb];
     st.head_base = st.head_next; st.head_bias = 0; st.head_guard = 0;
     st.in_head = 1; st.let_count = 0; reset_local_slots();
+    st.head_lit = if ast.head_parts[hb + 1] == 2 { 1 } else { 0 };
     push_work(wire.headend, 0);
-    if ast.head_parts[hb + 1] == 1 {
+    if ast.head_parts[hb + 1] >= 1 {
         push_emit(wire.mendif);
         push_emit(wire.ret);
         push_work(wire.headbody, ast.head_parts[hb + 3]);
@@ -3033,10 +3040,13 @@ fn begin_head(hb: Word) -> Word {
         push_emit(wire.ret);
         push_work(wire.headbody, ast.head_parts[hb + 3]);
     }
+    // Mode 2, a literal head, binds no variable, so it copies no parameter.
+    if st.head_lit == 0 {
     for ij in 0..pc limit 32 {
         let i = pc - 1 - ij;
         push_work(wire.rawemit, wire.setlocal + (st.head_base + i) * wire.radix);
         push_work(wire.rawemit, wire.getlocal + i * wire.radix);
+    }
     }
     0
 }
@@ -3046,7 +3056,9 @@ fn begin_head_body(node: Word) -> Word {
     push_visit(node)
 }
 fn end_head() -> Word {
-    st.head_next = st.head_base + ast.param_count + st.head_guard + st.let_count;
+    let copies = if st.head_lit == 1 { 0 } else { ast.param_count };
+    st.head_next = st.head_base + copies + st.head_guard + st.let_count;
+    st.head_lit = 0;
     st.let_count = st.head_next - ast.param_count;
     st.in_head = 0;
     0
