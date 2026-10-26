@@ -6,6 +6,11 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-26 Wildcard and unused payloads
+
+Wildcard payload patterns compile byte-identically, and an unused named payload no longer
+panics type-input extraction. PR 548 merged.
+
 ## 2026-10-26 A `break` in a bare `for`
 
 A `break` in a `for` without `limit` was miscompiled into an outcome store over the first
