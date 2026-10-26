@@ -318,3 +318,20 @@ joined with their prelude, as the RTOS crate compiles them, and all five are Uns
 four of them only because the prelude declares tuple-returning natives they never call.
 A wildcard in a variant's payload position, `Status::Err(_)`, is a separate gap with its
 own census row.
+
+**Slice 8, 2026-10-26, tuple returns in `use` signatures, and a time-bound defect.** A
+signature may now return a tuple of named types, which the parser sends as one record 135
+per element and a closing 136, and the host sizes flat, `(Status, Word)` at twenty-four
+bytes as the reference does. A call to such a native stays refused until tuple results are
+lowered. The RTOS prelude and four of its five task scripts became Identical.
+
+The fifth, `led.kel`, agreed on every op and not on its execution bound, 93 cycles against
+the reference's 114. An enum `match` lowers to a loop whose every arm breaks and whose
+no-match path traps, and for such a single-pass loop the reference charges the larger of
+the pass and its costliest break, where `analyze.kel` charged the break alone. Every stream
+that matched an enum directly was given a bound below the reference's. The shipping
+cross-check refused each such program, so none was admitted with the lower bound, but the
+self-hosted analysis was unsound on that shape. It now charges as the reference does, and
+`led.kel` is Identical. A counted `for` loop with a conditional `break` still gets a bound
+above the reference's, 98 against 92, which is the conservative direction and predates this
+change. It is the next item.

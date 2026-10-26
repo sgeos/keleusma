@@ -536,8 +536,13 @@ fn resolve_loop(i: Word) -> Word {
         // check that takes the break, so its maximum break cost is added rather than compared.
         // Both follow the reference's change of 2026-10-25.
         if cb == 1 {
-            if an.child_mb > 0 {
-                an.f_cost[i] = an.f_cost[i] + an.child_mb;
+            // A body that never falls through runs one pass, and the reference charges the
+            // larger of that pass and the costliest break. An enum `match` lowers to such a
+            // loop, whose no-match path ends in a trap, and charging the break alone left
+            // that path uncharged, an execution bound below the reference's.
+            let single = if an.child_cost > an.child_mb { an.child_cost } else { an.child_mb };
+            if single > 0 {
+                an.f_cost[i] = an.f_cost[i] + single;
             }
         } else {
             let pass = an.child_cost + marker_cost(an.f_pj[i] - 1);

@@ -2376,15 +2376,18 @@ fn try_parse_functions_impl(
                 }
             } else if in_use {
                 // Path segments are name ids, so never negative. A signature's return type
-                // rides after them as one negative entry: -2 for `()`, `-(id + 3)` for a
-                // named type. Record 133 carries a named return and 134 a `()` return.
+                // rides after them as negative entries: -2 for `()`, `-(id + 3)` for a
+                // named type, and for a tuple one `-(id + 3)` per element followed by -1.
+                // Record 133 carries a named return, 134 a `()` return, 135 a tuple element
+                // and 136 the tuple's close.
                 let row = native_paths
                     .last_mut()
                     .expect("a path record outside a `use`");
                 match code {
                     11 => row.push(val),
-                    133 => row.push(-(val + 3)),
+                    133 | 135 => row.push(-(val + 3)),
                     134 => row.push(-2),
+                    136 => row.push(-1),
                     _ => {}
                 }
                 in_use = code != 5;
@@ -6941,6 +6944,28 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
             use crate::bytecode::WireShape;
             match path.last().copied() {
                 Some(-2) => WireShape::Scalar { kind: 0 },
+                // A tuple return, flat with its elements' sizes summed, as the reference sizes
+                // `(Status, Word)` at twenty-four bytes. An element of unknown size is outside
+                // the subset.
+                Some(-1) => {
+                    let elements = path.iter().rev().skip(1).take_while(|&&c| c <= -3);
+                    let mut size = 0u32;
+                    for &code in elements {
+                        let element = match names[(-code - 3) as usize].as_str() {
+                            "bool" | "Byte" => 1,
+                            "Word" => 8,
+                            other => match wire_shape_of(-code - 3, &names, &enum_layouts) {
+                                WireShape::Flat { size, .. } => size,
+                                _ => panic!(
+                                    "a native returning a tuple of `{other}` is outside the \
+                                     self-hosted subset"
+                                ),
+                            },
+                        };
+                        size = size.checked_add(element).expect("tuple return size");
+                    }
+                    WireShape::Flat { kind: 0, size }
+                }
                 Some(code) if code < -2 => match names[(-code - 3) as usize].as_str() {
                     "bool" => WireShape::Scalar { kind: 1 },
                     "Byte" => WireShape::Scalar { kind: 2 },

@@ -1517,6 +1517,10 @@ private data call {
     // returns a tuple, Order 6. A call resolves it to an enum at the call, since the enum may
     // be declared after the `use`.
     nat_rtype: [Word; 65],
+    // The element count of a tuple return being read, and whether an element type was read
+    // since the last separator.
+    nat_tcount: Word,
+    nat_tsep: Word,
     // A `use` signature, `use path(T, ..) -> R`: 1 inside the parameter list, whose
     // bracket depth is `nat_sdepth`, 2 awaiting `->`, 3 awaiting the return type, 4 inside
     // a `()` return.
@@ -4924,6 +4928,7 @@ fn step_closing() -> Word {
                 stmt.pending_ctuple = 0; stmt.pending_cstruct = 0; stmt.pending_carray = 0;
                 stmt.pending_carray_struct = 0; stmt.pending_carray_size = 0;
                 let row = call.call_chunk[call.call_sp] - 1024;
+                if call.nat_rtype[row] < 0 { perr(pe_unresolved_syntax(), toks.at); }
                 stmt.pending_cenum = native_return_enum(row);
                 ps.last_enum = stmt.pending_cenum;
                 ps.emit_arg = row + call.call_count[call.call_sp] * call_chunk_radix()
@@ -7949,13 +7954,32 @@ fn use_signature(k: Word, v: Word) -> Word {
         if k == Tok::LParen() as Word { call.nat_sig = 4; 0 } else { perr(pe_unresolved_syntax(), toks.at) } }
     } else {
         if k == Tok::RParen() as Word {
+            // `()` is the unit return, record 134. A tuple return closes with record 136,
+            // after one record 135 per element type, and a call to it stays refused until
+            // tuple results are lowered, which `nat_rtype` of -1 marks.
+            let elements = call.nat_tcount;
+            call.nat_tcount = 0;
+            call.nat_tsep = 0;
             call.nat_sig = 0;
+            if elements > 0 { call.nat_rtype[call.nat_count] = 0 - 1; }
             native_import_end();
             ps.mode = 0;
             hq_push(5, 0 - 1);
-            ps.emit_arg = 0;
-            134
-        } else { perr(pe_unresolved_syntax(), toks.at) }
+            ps.emit_arg = elements;
+            if elements > 0 { 136 } else { 134 }
+        } else {
+        if k == Tok::Ident() as Word andalso call.nat_tsep == 0 {
+            // One element type of a tuple return, `(Status, Word)`. A nested tuple, an
+            // array and a generic are refused by the separator and token checks.
+            call.nat_tcount = call.nat_tcount + 1;
+            call.nat_tsep = 1;
+            ps.emit_arg = v;
+            135
+        } else {
+        if k == Tok::Comma() as Word andalso call.nat_tsep == 1 {
+            call.nat_tsep = 0;
+            0
+        } else { perr(pe_unresolved_syntax(), toks.at) } } }
     } } }
 }
 

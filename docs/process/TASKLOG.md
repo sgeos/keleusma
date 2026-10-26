@@ -6,6 +6,12 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-26 Order 6 slice 8 and a time-bound defect
+
+Tuple returns in `use` signatures are accepted, and the RTOS prelude and all five task
+scripts joined with it compile byte-identically. The self-hosted time analysis under-charged
+an enum `match` in a stream, and now agrees with the reference. PR 545 merged.
+
 ## 2026-10-26 Order 6 slices 6 and 7
 
 Struct-typed private data fields and enum-returning natives compile byte-identically, and
