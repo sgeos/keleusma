@@ -871,6 +871,53 @@ fn float_arithmetic_on_typed_operands_compiles() {
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
 
+/// A variable arm on a scalar match, `v => ...`, which the reference lowers as a wildcard arm
+/// that first copies the scrutinee into a fresh slot. A guarded variable arm and a variable
+/// pattern on an enum scrutinee stay refused.
+#[test]
+fn variable_match_arms_compile() {
+    let cases: &[(&str, Class)] = &[
+        ("fn main(a: Word) -> Word { match a { v => v } }", Identical),
+        (
+            "fn main(a: Word) -> Word { match a { 1 => 2, v => v + 1 } }",
+            Identical,
+        ),
+        ("fn main(a: Word) -> Word { match a { v => 3 } }", Identical),
+        (
+            "fn main(a: Word) -> Word { match a + 1 { 0 => 9, v => v * 2 } }",
+            Identical,
+        ),
+        (
+            "fn main(a: Word) -> Word { let x = match a { 0 => 1, v => v + a }; x + match a { w => w } }",
+            Identical,
+        ),
+        (
+            "fn main(a: Word) -> Word { match a { 1 => 2, v when v > 3 => v, _ => 0 } }",
+            Unsupported,
+        ),
+        (
+            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, x => 2 } }",
+            Unsupported,
+        ),
+        // `true` and `false` reach the parser as identifiers. As patterns they are literals,
+        // so they must not be taken for bindings.
+        (
+            "fn main(c: bool) -> Word { match c { true => 1, false => 0 } }",
+            Unsupported,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
 /// Wildcard payloads in a variant pattern, `E::V(_)`, which the reference reads nothing for,
 /// so only the field position advances and a later named payload still reads its own offset.
 /// Also a named payload the arm never reads, which used to panic type-input extraction because
@@ -1447,7 +1494,7 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
     (
         "Pattern::Variable",
         "fn main(a: Word) -> Word { match a { v => v } }",
-        Unsupported,
+        Identical,
     ),
     (
         "Pattern::Enum",

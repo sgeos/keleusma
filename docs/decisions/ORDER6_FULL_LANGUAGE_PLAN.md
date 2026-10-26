@@ -354,3 +354,13 @@ advances only the position, which a later named payload's offset and source coor
 read. A named payload the arm never reads, `S::Err(c) => 0`, panicked type-input
 extraction, because the host named only the frame slots the body reads, and the host now
 names every payload binding's slot as well. The census reads 56 Identical of 72 rows.
+
+**Variable match arms, 2026-10-26.** The reference lowers `v => result` on a scalar match
+as a wildcard arm that first copies the scrutinee into a fresh slot. That is `let v =
+<scrutinee temp>; result` on a wildcard arm, so the parser emits the wildcard record,
+queues the scrutinee temp's `Local` as the bound value, scopes the name to the arm, and
+closes the arm with `LetIn`. No node kind is added. `true` and `false` arrive as
+identifiers and are literal patterns, which the first version took for bindings until a
+pinned test caught it, so they are excluded. A guarded variable arm and a variable
+pattern on an enum scrutinee stay refused, and the tests that used `match a { v => v }`
+as their unsupported witness now use the enum form.
