@@ -269,3 +269,30 @@ the result stays a Float, and flags a Float negation. A float literal is lexed a
 conversion in a stage. Codegen interns it with pool tag 3 and emits Neg through a new
 transport tag, 69. A suffixed float literal is refused. The boundary table reads 117
 cases, 112 SOk, 2 Refuses, 2 Diverges and 1 RefRejects.
+
+**Slice 5d and the AST census, 2026-10-25.** `tests/selfhost_full_language.rs` now holds
+the gate 2 census, one program or more for every variant of `Stmt`, `Iterable`, `Expr`,
+`Pattern`, `TypeExpr` and `PrimType` in `src/ast.rs`, with its measured outcome pinned. A
+second test reads those enums from the source and fails when a variant has no row, so a
+variant added later must gain one. The census reads 70 rows, 54 Identical, 13 Unsupported
+and 3 RefRejects. The Unsupported rows are the gaps Order 6 still owes, among them
+`classify` and `declassify`, the variable, struct and tuple match patterns, newtypes,
+generics, `Multiword` and labelled types.
+
+The census found a false source rejection. Inside a checked arm the reference admits the
+arm words `saturate_max` and `saturate_min`, which it lexes as keywords and lowers to a
+constant of the Word bound, and `parse.kel` reported them as undefined names. The host now
+seeds their name ids into two appended token-block slots, and the parser lowers either word
+in operand position inside a checked arm to an integer literal of that bound. Both rows are
+Identical, and `heartbeat.kel` moved from PipelineRejects to RefRejects, since the only
+rejection left is the reference's own, for a host function the RTOS prelude declares. A
+name the parser cannot resolve inside a checked arm is now refused as unsupported rather
+than as undefined.
+
+Running the whole isolated self-host population for this slice found ten tests that slices
+5 to 5c had made stale and that the targeted checks had not reached. Six characterised the
+float boundary as it was, and now assert that float literals, arithmetic and negation
+compile. Two used a float program as their out-of-subset witness, and now use a newtype
+and a struct equality the boundary still records as divergent. The construct scan's
+float-literal arm is gone, since it would blame a supported construct. The wire pins moved
+to 1,035 names and 31,302 bytes.

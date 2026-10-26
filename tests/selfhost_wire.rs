@@ -12991,8 +12991,10 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // `method_call`, for 1029 and 31,007. Slice 2b's `use` signatures added `nat_sig`,
     // `nat_sdepth` and `use_signature`, for 1032 and 31,153. Slice 5's float arithmetic
     // added no name and took the blob to 31,183, and the float literal record to 31,213.
-    assert_eq!(worst_names, 1032, "the worst-case name count moved");
-    assert_eq!(worst_blob, 31213, "the worst-case blob size moved");
+    // Slice 5d's saturation words added `satmax_id`, `satmin_id` and `saturation_word`, for
+    // 1035 and 31,302.
+    assert_eq!(worst_names, 1035, "the worst-case name count moved");
+    assert_eq!(worst_blob, 31302, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

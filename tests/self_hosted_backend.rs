@@ -75,13 +75,13 @@ fn non_host_target_is_refused() {
     }
 }
 
-/// An out-of-subset program (float arithmetic) is rejected loudly as `Unsupported`, not
-/// silently mis-compiled. The self-hosted pipeline mis-compiles floats to a
-/// valid-but-wrong module without panicking; `self_hosted_compile`'s reference
-/// cross-check catches the divergence so the CLI can print the retry hint.
+/// An out-of-subset program is rejected loudly as `Unsupported`, not silently mis-compiled.
+/// The witness was float arithmetic until Order 6 slice 5 brought it into the subset. It is
+/// now a newtype, which the parser refuses as unsupported syntax, so the CLI can print the
+/// retry hint.
 #[test]
 fn out_of_subset_program_is_rejected_loudly() {
-    let src = "fn main() -> Float { 1.0 + 2.0 }";
+    let src = "newtype Count = Word; fn main() -> Word { Count(7) as Word }";
     match self_hosted_compile(src, &Target::host()) {
         Err(e @ SelfHostError::Unsupported { .. }) => {
             // An out-of-subset limitation: retrying with the Rust backend helps.
@@ -90,7 +90,9 @@ fn out_of_subset_program_is_rejected_loudly() {
                 "Unsupported should advise the Rust backend"
             );
         }
-        other => panic!("expected Unsupported for an out-of-subset (float) program, got {other:?}"),
+        other => {
+            panic!("expected Unsupported for an out-of-subset (newtype) program, got {other:?}")
+        }
     }
 }
 

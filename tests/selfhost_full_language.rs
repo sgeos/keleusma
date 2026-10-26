@@ -108,7 +108,10 @@ const CORPUS: &[(&str, Class)] = &[
     ("examples/scripts/piano_roll/piano_roll_9.kel", NoVerdict),
     ("examples/rtos/scripts/event_listener.kel", RefRejects),
     ("examples/rtos/scripts/faulty.kel", RefRejects),
-    ("examples/rtos/scripts/heartbeat.kel", PipelineRejects),
+    // Rejected by the pipeline until slice 5d, which stopped reading `saturate_max` as an
+    // undefined name. The remaining rejection is the reference's, since the script calls
+    // `host::log_event` without the RTOS prelude that declares it.
+    ("examples/rtos/scripts/heartbeat.kel", RefRejects),
     ("examples/rtos/scripts/led.kel", RefRejects),
     ("examples/rtos/scripts/prelude.kel", Unsupported),
     ("examples/rtos/scripts/sensor.kel", RefRejects),
@@ -878,6 +881,12 @@ fn float_negation_compiles() {
             Identical,
         ),
         ("fn main(a: Word) -> Word { -a }", Identical),
+        // The reference lexes the saturation words as keywords, so outside a checked arm they
+        // are not bindings either. This pins that a name of that spelling is not admitted.
+        (
+            "fn main() -> Word { let saturate_max = 3; saturate_max }",
+            RefRejects,
+        ),
     ];
     let mut mismatches = Vec::new();
     for (src, expected) in cases {
@@ -888,5 +897,445 @@ fn float_negation_compiles() {
             ));
         }
     }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// THE GATE 2 CENSUS. One program, or more, for every form of the reference AST, with the
+/// shipping outcome it measures pinned beside it. A form whose outcome is not Identical is
+/// a gap Order 6 still owes, named here so it cannot be forgotten. Forms the reference
+/// itself rejects in this release are pinned RefRejects, since they are not the self-hosted
+/// compiler's to support.
+///
+/// The labels name `ast.rs` variants. `the_census_names_every_ast_variant` checks the list
+/// against the enums in `src/ast.rs`, so a variant added there must gain a row here.
+const AST_CENSUS: &[(&str, &str, Class)] = &[
+    // --- Stmt ---
+    ("Stmt::Let", "fn main() -> Word { let x = 1; x }", Identical),
+    (
+        "Stmt::For",
+        "fn main() -> Word { for i in 0..3 { let y = i; } 0 }",
+        Identical,
+    ),
+    (
+        "Stmt::Break",
+        "fn main() -> Word { for i in 0..3 limit 3 { break; } 0 }",
+        Identical,
+    ),
+    (
+        "Stmt::DataFieldAssign",
+        "private data d { n: Word }\nfn main() -> Word { d.n = 3; d.n }",
+        Identical,
+    ),
+    (
+        "Stmt::DataFieldIndexAssign",
+        "private data d { xs: [Word; 2] }\nfn main() -> Word { d.xs[0] = 3; d.xs[0] }",
+        Identical,
+    ),
+    (
+        "Stmt::Expr",
+        "fn g(x: Word) -> Word { x }\nfn main() -> Word { g(1); 0 }",
+        Identical,
+    ),
+    (
+        "Stmt::Assert",
+        "fn main(a: Word) -> Word { assert a > 0; a }",
+        Unsupported,
+    ),
+    // --- Iterable ---
+    (
+        "Iterable::Range",
+        "fn main() -> Word { for i in 0..3 { let y = i; } 0 }",
+        Identical,
+    ),
+    (
+        "Iterable::Expr",
+        "fn main() -> Word { let xs = [1, 2]; for x in xs { let y = x; } 0 }",
+        Identical,
+    ),
+    // --- Expr ---
+    ("Expr::Literal", "fn main() -> Word { 7 }", Identical),
+    ("Expr::Ident", "fn main(a: Word) -> Word { a }", Identical),
+    (
+        "Expr::BinOp",
+        "fn main(a: Word) -> Word { a + 1 }",
+        Identical,
+    ),
+    (
+        "Expr::UnaryOp",
+        "fn main(a: Word) -> Word { -a }",
+        Identical,
+    ),
+    (
+        "Expr::Call",
+        "fn g(x: Word) -> Word { x }\nfn main() -> Word { g(1) }",
+        Identical,
+    ),
+    (
+        "Expr::Pipeline",
+        "fn g(x: Word) -> Word { x }\nfn main() -> Word { 1 |> g() }",
+        Identical,
+    ),
+    (
+        "Expr::Yield",
+        "loop main(r: Word) -> Word { let _ = yield 1; 0 }",
+        Identical,
+    ),
+    (
+        "Expr::If",
+        "fn main(c: bool) -> Word { if c { 1 } else { 0 } }",
+        Identical,
+    ),
+    (
+        "Expr::Match",
+        "fn main(a: Word) -> Word { match a { 1 => 2, _ => 3 } }",
+        Identical,
+    ),
+    (
+        "Expr::Loop",
+        "loop main(r: Word) -> Word { let _ = yield r; 0 }",
+        Identical,
+    ),
+    (
+        "Expr::FieldAccess",
+        "struct P { x: Word }\nfn main(p: P) -> Word { p.x }",
+        Identical,
+    ),
+    (
+        "Expr::MethodCall",
+        "trait D { fn d(x: Word) -> Word; }\nimpl D for Word { fn d(x: Word) -> Word { x } }\nfn main(a: Word) -> Word { a.d() }",
+        Identical,
+    ),
+    (
+        "Expr::TupleIndex",
+        "fn main(t: (Word, Word)) -> Word { t.1 }",
+        Identical,
+    ),
+    (
+        "Expr::ArrayIndex",
+        "fn main() -> Word { let a = [1, 2]; a[0] }",
+        Identical,
+    ),
+    (
+        "Expr::StructInit",
+        "struct P { x: Word }\nfn main() -> Word { let p = P { x: 1 }; p.x }",
+        Identical,
+    ),
+    (
+        "Expr::EnumVariant",
+        "enum E { A, B }\nfn main() -> Word { E::B as Word }",
+        Identical,
+    ),
+    (
+        "Expr::ArrayLiteral",
+        "fn main() -> [Word; 2] { [1, 2] }",
+        Identical,
+    ),
+    (
+        "Expr::TupleLiteral",
+        "fn main() -> (Word, Word) { (1, 2) }",
+        Identical,
+    ),
+    (
+        "Expr::Cast",
+        "fn main(a: Byte) -> Word { a as Word }",
+        Identical,
+    ),
+    (
+        "Expr::Placeholder",
+        "fn g(x: Word, y: Word) -> Word { x }\nfn main() -> Word { 1 |> g(_, 2) }",
+        Unsupported,
+    ),
+    (
+        "Expr::Closure",
+        "fn main() -> Word { let f = |x| x; 1 }",
+        RefRejects,
+    ),
+    (
+        "Expr::Checked",
+        "fn main(a: Word) -> Word { a + 1 { ok(v) => v, overflow(_, l) => l, underflow(_, l) => l } }",
+        Identical,
+    ),
+    (
+        "Expr::DataIndexStore",
+        "private data d { xs: [Word; 2] }\nfn main(i: Word) -> Word { d.xs[i] = 3; 0 }",
+        Identical,
+    ),
+    (
+        // The arm words read as undefined names, a false source rejection, until slice 5d
+        // lowered them to the Word bound constants the reference emits.
+        "Expr::SaturateMax",
+        "private data d { n: Word }\nfn main() -> Word { d.n = d.n + 1 { ok(v) => v, overflow(_, _) => saturate_max, underflow(_, _) => saturate_min }; d.n }",
+        Identical,
+    ),
+    (
+        "Expr::Classify",
+        "fn main(a: Word) -> Word { let b = classify a @Secret; declassify b @Secret }",
+        Unsupported,
+    ),
+    (
+        "Expr::Declassify",
+        "fn main(a: Word) -> Word { let b = classify a @Secret; declassify b @Secret }",
+        Unsupported,
+    ),
+    (
+        "Expr::SaturateMin",
+        "private data d { n: Word }\nfn main() -> Word { d.n = d.n - 1 { ok(v) => v, overflow(_, _) => saturate_max, underflow(_, _) => saturate_min }; d.n }",
+        Identical,
+    ),
+    // `ClosureRef` is synthesized by the hoist pass from a closure and has no surface form
+    // of its own, so its row is the closure program, which the reference rejects today.
+    (
+        "Expr::ClosureRef",
+        "fn main() -> Word { let f = |x| x; 1 }",
+        RefRejects,
+    ),
+    // --- Pattern ---
+    (
+        "Pattern::Literal",
+        "fn main(a: Word) -> Word { match a { 1 => 2, _ => 3 } }",
+        Identical,
+    ),
+    (
+        "Pattern::Wildcard",
+        "fn main(a: Word) -> Word { match a { _ => 3 } }",
+        Identical,
+    ),
+    (
+        "Pattern::Variable",
+        "fn main(a: Word) -> Word { match a { v => v } }",
+        Unsupported,
+    ),
+    (
+        "Pattern::Enum",
+        "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, E::B => 2 } }",
+        Identical,
+    ),
+    (
+        "Pattern::Struct",
+        "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x } => x, _ => 0 } }",
+        Unsupported,
+    ),
+    (
+        "Pattern::Tuple",
+        "fn main(t: (Word, Word)) -> Word { match t { (a, b) => a, _ => 0 } }",
+        Unsupported,
+    ),
+    // --- TypeExpr ---
+    (
+        "TypeExpr::Prim::Word",
+        "fn main(a: Word) -> Word { a }",
+        Identical,
+    ),
+    (
+        "TypeExpr::Prim::Byte",
+        "fn main(a: Byte) -> Byte { a }",
+        Identical,
+    ),
+    (
+        "TypeExpr::Prim::Bool",
+        "fn main(a: bool) -> bool { a }",
+        Identical,
+    ),
+    (
+        "TypeExpr::Prim::Float",
+        "fn main(a: Float) -> Float { a }",
+        Identical,
+    ),
+    (
+        "TypeExpr::Prim::Fixed",
+        "fn main(a: Fixed<8>) -> Fixed<8> { a }",
+        Identical,
+    ),
+    (
+        "TypeExpr::Prim::Text",
+        "fn main(a: Text) -> Word { 1 }",
+        Identical,
+    ),
+    (
+        "TypeExpr::Multiword",
+        "fn main(a: Multiword<2>) -> Multiword<2> { a }",
+        Unsupported,
+    ),
+    (
+        "TypeExpr::TextN",
+        "fn main(a: Text<8>) -> Word { 1 }",
+        RefRejects,
+    ),
+    (
+        "TypeExpr::Labelled",
+        "fn main(a: Word@Secret) -> Word@Secret { a }",
+        Unsupported,
+    ),
+    (
+        "TypeExpr::NegativeLabelled",
+        "fn main(a: Word@!Secret) -> Word { a }",
+        Unsupported,
+    ),
+    (
+        "TypeExpr::Named",
+        "struct P { x: Word }\nfn main(p: P) -> Word { p.x }",
+        Identical,
+    ),
+    (
+        "TypeExpr::Tuple",
+        "fn main(t: (Word, Word)) -> Word { t.0 }",
+        Identical,
+    ),
+    (
+        "TypeExpr::Array",
+        "fn main(a: [Word; 2]) -> Word { a[0] }",
+        Identical,
+    ),
+    ("TypeExpr::Unit", "fn main() -> () { () }", Identical),
+    (
+        "TypeExpr::Option",
+        "fn main(a: Option<Word>) -> Word { 1 }",
+        Unsupported,
+    ),
+    // --- Declarations ---
+    (
+        "Decl::Struct",
+        "struct P { x: Word }\nfn main() -> Word { 1 }",
+        Identical,
+    ),
+    (
+        "Decl::Enum",
+        "enum E { A, B }\nfn main() -> Word { 1 }",
+        Identical,
+    ),
+    (
+        "Decl::EnumPayload",
+        "enum E { A(Word), B }\nfn main() -> Word { let e = E::A(3); match e { E::A(v) => v, E::B => 0 } }",
+        Identical,
+    ),
+    (
+        "Decl::Newtype",
+        "newtype C = Word;\nfn main() -> Word { let c = C(5); c as Word }",
+        Unsupported,
+    ),
+    (
+        "Decl::Trait",
+        "trait T { fn f(x: Word) -> Word; }\nfn main() -> Word { 1 }",
+        Identical,
+    ),
+    (
+        "Decl::Impl",
+        "trait T { fn f(x: Word) -> Word; }\nimpl T for Word { fn f(x: Word) -> Word { x } }\nfn main() -> Word { 1 }",
+        Identical,
+    ),
+    (
+        "Decl::Data",
+        "shared data d { n: Word }\nfn main() -> Word { d.n }",
+        Identical,
+    ),
+    (
+        "Decl::ConstData",
+        "const data c { n: Word = 4 }\nfn main() -> Word { c.n }",
+        Identical,
+    ),
+    (
+        "Decl::Use",
+        "use host::f\nfn main() -> Word { host::f(1) }",
+        Identical,
+    ),
+    (
+        "Decl::Require",
+        "require word >= 64;\nfn main() -> Word { 1 }",
+        Identical,
+    ),
+    (
+        "Decl::Generic",
+        "fn id<T>(x: T) -> T { x }\nfn main() -> Word { id(1) }",
+        Unsupported,
+    ),
+    (
+        "Decl::Multihead",
+        "fn c(0) -> Word { 0 }\nfn c(n: Word) -> Word { n }\nfn main() -> Word { c(1) }",
+        Identical,
+    ),
+];
+
+/// The enums of `src/ast.rs` the census covers, with the label prefix each variant takes.
+/// `PrimType` is reached through `TypeExpr::Prim`, so its rows read `TypeExpr::Prim::Word`.
+const CENSUS_ENUMS: &[(&str, &str)] = &[
+    ("Stmt", "Stmt"),
+    ("Iterable", "Iterable"),
+    ("Expr", "Expr"),
+    ("Pattern", "Pattern"),
+    ("TypeExpr", "TypeExpr"),
+    ("PrimType", "TypeExpr::Prim"),
+];
+
+/// The variant names of `pub enum <name>` in `src/ast.rs`, read as the four-space-indented
+/// identifiers between the header and the closing brace. An enum that is not found, or that
+/// yields no variant, fails here, so a renamed enum or a reformatted file cannot pass by
+/// reading nothing.
+fn ast_variants(ast: &str, name: &str) -> Vec<String> {
+    let header = format!("pub enum {name} ");
+    let start = ast
+        .lines()
+        .position(|l| l.starts_with(&header))
+        .unwrap_or_else(|| panic!("`{header}` is not in src/ast.rs"));
+    let mut out = Vec::new();
+    for line in ast.lines().skip(start + 1) {
+        if line.starts_with('}') {
+            break;
+        }
+        let Some(rest) = line.strip_prefix("    ") else {
+            continue;
+        };
+        let ident: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect();
+        if ident.starts_with(|c: char| c.is_ascii_uppercase()) {
+            out.push(ident);
+        }
+    }
+    assert!(!out.is_empty(), "read no variant of {name} from src/ast.rs");
+    out
+}
+
+#[test]
+fn the_census_names_every_ast_variant() {
+    let ast = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/ast.rs"))
+        .expect("src/ast.rs is readable");
+    let mut missing = Vec::new();
+    let mut seen = 0;
+    for (name, prefix) in CENSUS_ENUMS {
+        for variant in ast_variants(&ast, name) {
+            seen += 1;
+            let label = format!("{prefix}::{variant}");
+            let nested = format!("{label}::");
+            if !AST_CENSUS
+                .iter()
+                .any(|(l, _, _)| *l == label || l.starts_with(&nested))
+            {
+                missing.push(label);
+            }
+        }
+    }
+    // Non-vacuity. The six enums held 59 variants when this check was written.
+    assert!(seen >= 59, "read only {seen} variants from src/ast.rs");
+    assert!(
+        missing.is_empty(),
+        "AST variants without a census row: {missing:?}"
+    );
+}
+
+#[test]
+fn the_ast_census_has_its_pinned_outcomes() {
+    let mut mismatches = Vec::new();
+    let mut counts: BTreeMap<Class, usize> = BTreeMap::new();
+    for (label, src, expected) in AST_CENSUS {
+        let (actual, detail) = classify(src);
+        *counts.entry(actual).or_default() += 1;
+        if actual != *expected {
+            mismatches.push(format!(
+                "{label}: expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    println!("ast census {counts:?}");
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
