@@ -3224,6 +3224,9 @@ fn walk_step() -> Word {
             16 => push_forin(payload),
             20 => push_unit(payload),
             21 => push_exprstmt(payload),
+            // An `assert` statement compiles to its continuation alone, as the reference
+            // compiles an assertion out of a release build, Order 6.
+            83 => push_visit(ast.rhs[payload]),
             22 => push_match(payload),
             23 => push_forlimit(payload),
             74 => push_forlimit(payload),

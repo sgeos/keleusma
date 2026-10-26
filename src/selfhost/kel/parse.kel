@@ -877,6 +877,13 @@ fn stmt_push(n: Word) -> Word {
 // just-completed block-form operand; `fold_cont` selects what the fold does when it
 // finishes (0 the body's Done, 1 a then branch's phase advance, 2 an else branch's If).
 private data stmt {
+    // 1 while an `assert` statement's condition is read, Order 6. Its commit records kind 83,
+    // which codegen lowers to the continuation alone, as the reference compiles an assertion
+    // out of a release build. The condition's nodes still reach the type stage.
+    assert_pending: Word,
+    // The operator-stack height when the `assert` began, so a comma outside any grouping
+    // the condition opened, the message form `assert c, "m";`, is refused.
+    assert_base: Word,
     let_phase: Word,
     // Set when a `break` statement was just recorded, so the terminating `;` is consumed
     // without draining a (non-existent) statement value.
@@ -6111,7 +6118,26 @@ fn saturation_word(k: Word, v: Word) -> Word {
 }
 
 // The expression-position token dispatch: the conditional tokens route to step_if.
+// A comma at the assertion's own level, outside every grouping its condition opened, begins
+// the message form, which is not lowered here.
+fn assert_message_comma(k: Word) -> Word {
+    if stmt.assert_pending != 1 orelse k != Tok::Comma() as Word { 0 } else {
+        ps.found_flag = 0;
+        for i in stmt.assert_base..ops.opsp limit 64 {
+            let op = ops.opstack[i];
+            if op == OpCode::Paren() as Word orelse op == OpCode::CallMark() as Word
+                orelse op == OpCode::ArrayMark() as Word orelse op == OpCode::EnumMark() as Word
+                orelse op == OpCode::TupleMark() as Word orelse op == OpCode::IndexMark() as Word
+                orelse op == OpCode::StructMark() as Word { ps.found_flag = 1; }
+        }
+        let grouped = ps.found_flag;
+        ps.found_flag = 0;
+        if grouped == 1 { 0 } else { 1 }
+    }
+}
+
 fn step_normal(k: Word, v: Word) -> Word {
+    if assert_message_comma(k) == 1 { perr(pe_unresolved_syntax(), toks.at) } else {
     if k == Tok::LBrace() as Word orelse k == Tok::RBrace() as Word orelse k == Tok::If() as Word orelse k == Tok::Else() as Word {
         step_if(k)
     } else {
@@ -6209,7 +6235,7 @@ fn step_normal(k: Word, v: Word) -> Word {
         0
     } else {
         step_op(k)
-    } } } } } } } } }
+    } } } } } } } } } }
 }
 
 // The struct-field-access postfix (ps.fa_phase 1/2), after a struct-typed parameter Local was
@@ -6680,11 +6706,19 @@ fn step_unresolved_name(k: Word) -> Word {
     // `checked.depth > 0`: inside a checked arm, where a name this stage cannot resolve may
     // still be one the reference admits there, so it is refused as unsupported rather than
     // reported as undefined, which would be a false source rejection.
-    if (toks.assert_id > 0 andalso ps.unresolved_name == toks.assert_id andalso k != Tok::LParen() as Word) orelse ps.has_imports == 1 orelse toks.has_imports == 1 orelse checked.depth > 0 orelse k == Tok::ColCol() as Word orelse k == Tok::Dot() as Word orelse k == Tok::LBrace() as Word orelse k == Tok::Ident() as Word {
+    if toks.assert_id > 0 andalso ps.unresolved_name == toks.assert_id andalso k != Tok::LParen() as Word andalso stmt.assert_pending == 0 {
+        // `assert <condition>;`: read the condition as an expression from this token on.
+        stmt.assert_pending = 1;
+        stmt.assert_base = ops.opsp;
+        ps.cursor = ps.cursor - 1;
+        ops.expect_operand = 1;
+        0
+    } else {
+    if ps.has_imports == 1 orelse toks.has_imports == 1 orelse checked.depth > 0 orelse k == Tok::ColCol() as Word orelse k == Tok::Dot() as Word orelse k == Tok::LBrace() as Word orelse k == Tok::Ident() as Word {
         perr(pe_unresolved_syntax(), ps.unresolved_name)
     } else {
         perr(pe_unknown_name(), ps.unresolved_name)
-    } }
+    } } }
 }
 
 // The normal parse-phase dispatch: a `let` binding's name or `=`, else an expression
@@ -7424,7 +7458,9 @@ fn step_draining() -> Word {
                     Node::IndexStore() as Word + (stmt.pstmt_arg[stmt.pstmt_sp] / 2251799813685248) * 64
                 } }
             } else {
-                stmt.stmt_kind[stmt.stmt_count] = Node::ExprStmt() as Word;
+                // An `assert` statement commits kind 83 rather than an expression statement.
+                stmt.stmt_kind[stmt.stmt_count] = if stmt.assert_pending == 1 { 83 } else { Node::ExprStmt() as Word };
+                stmt.assert_pending = 0;
                 stmt.stmt_arg[stmt.stmt_count] = 0;
                 stmt.stmt_count = stmt_push(stmt.stmt_count);
                 ops.draining = 0;

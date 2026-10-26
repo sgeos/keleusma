@@ -13004,8 +13004,10 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // 32,355. Raising the field table to 1,024 measured 32,345, a cause not traced. Typing native
     // results and raising the local-binding cap took it to 32,375.
     // The untyped hidden binding's `hidden_id` and `let_untyped` made it 1050 and 32,429.
-    assert_eq!(worst_names, 1050, "the worst-case name count moved");
-    assert_eq!(worst_blob, 32429, "the worst-case blob size moved");
+    // The `assert` statement's `assert_pending`, `assert_base` and
+    // `assert_message_comma` made it 1053 and 32,620.
+    assert_eq!(worst_names, 1053, "the worst-case name count moved");
+    assert_eq!(worst_blob, 32620, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

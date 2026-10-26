@@ -1437,6 +1437,47 @@ fn rtos_scripts_joined_with_the_prelude_have_their_pinned_outcomes() {
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
 
+/// `assert`, which the reference compiles out of a release build. The self-hosted parser
+/// commits the statement as kind 83, which codegen lowers to its continuation alone, while the
+/// condition's nodes still reach the type stage, so a condition naming an undefined binding is
+/// still rejected. The message form is not lowered here and stays refused.
+#[test]
+fn assert_statements_compile_out() {
+    let cases: &[(&str, Class)] = &[
+        ("fn main(a: Word) -> Word { assert a > 0; a }", Identical),
+        (
+            "fn main(a: Word) -> Word { assert not (a == 3); assert a >= 0; a + 1 }",
+            Identical,
+        ),
+        (
+            "fn main(a: Word) -> Word { let b = a + 1; assert b > a; b }",
+            Identical,
+        ),
+        (
+            "fn main(a: Word) -> Word { if a > 2 { assert a > 1; a } else { 0 } }",
+            Identical,
+        ),
+        (
+            "fn main(a: Word) -> Word { assert missing > 0; a }",
+            PipelineRejects,
+        ),
+        (
+            "fn main(a: Word) -> Word { assert a > 0, \"positive\"; a }",
+            Unsupported,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
 /// Destructuring an untyped library native's result. The reference reads each element
 /// boxed, `GetTupleField(Boxed { index })`, because the value has no known layout, and the
 /// self-hosted parser now does so for the destructuring filter's hidden binding. A hand-written
@@ -1730,7 +1771,7 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
     (
         "Stmt::Assert",
         "fn main(a: Word) -> Word { assert a > 0; a }",
-        Unsupported,
+        Identical,
     ),
     // --- Iterable ---
     (

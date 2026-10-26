@@ -73,7 +73,7 @@ fn a_refusal_names_the_construct_on_the_terminal() {
         ),
         (
             "assert",
-            "fn main(a: Word) -> Word { assert a > 0; a }\n",
+            "fn main(a: Word) -> Word { assert a > 0, \"positive\"; a }\n",
             "an `assert` statement",
         ),
         // `floatlit` left this corpus in Order 6 slice 5b, when float literals came to
