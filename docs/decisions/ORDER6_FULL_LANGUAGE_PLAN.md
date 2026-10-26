@@ -215,3 +215,14 @@ it. And the operator dispatch's last arm returned without a record for any token
 not claim, which dropped a `.` after an untyped value and had made a float literal diverge
 by accident; it now refuses, and the full suite shows no stage source reaching it. The
 corpus reads 53 Identical.
+
+Slice 3c merged as pull request 541 at `1d944ee0`, CI run 40256188941.
+
+**Slice 3d, 2026-10-25, `for` over a static scalar array.** The reference copies the array
+into a fresh local, stores its length and then a zero counter, and binds the loop variable
+to the element at the counter before the body. `parse.kel` writes exactly that: a hidden
+`let` of the iterable, a bare range loop over the counter with the length and zero as its
+bounds, and `let x = tmp[ctr]` as the body's first statement, queued through the record
+queue. The build record marks the array form, and codegen then initialises the end before
+the counter. `04_for_in.kel` and `13_telemetry_stream.kel` became Identical, and the
+corpus reads 55 of 75.
