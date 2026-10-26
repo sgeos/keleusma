@@ -335,3 +335,14 @@ self-hosted analysis was unsound on that shape. It now charges as the reference 
 `led.kel` is Identical. A counted `for` loop with a conditional `break` still gets a bound
 above the reference's, 98 against 92, which is the conservative direction and predates this
 change. It is the next item.
+
+**A `break` in a bare `for`, 2026-10-26.** The overestimate recorded under slice 8, 98
+cycles against 92 on a counted loop with a conditional `break`, was not in the time
+analysis. Run on the reference's chunk, `analyze.kel` gives the reference's bound. The ops
+differed, and the bound followed them. The parser took any `break` for a `for .. limit`
+loop's, so in a bare loop it stored the user-break outcome code into slot 0, which held the
+first parameter, and its `Break` was never patched and kept target 0. The shipping
+cross-check refused every such program, so none was emitted. A bare loop's `break` is now
+marked on its node and lowers to the `Break` alone, which the loop's `EndLoop` patches from
+the same break list a `limit` loop uses. Nested bare and `limit` loops each keep their own
+breaks, and the census carries a `Stmt::Break::BareLoop` row.

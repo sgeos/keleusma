@@ -5186,14 +5186,17 @@ fn step_op(k: Word) -> Word {
     if k == Tok::Break() as Word {
         // A `break;` statement: record a Break node (kind 29) carrying the enclosing
         // `for .. limit` loop's outcome slot (for_oc), which codegen sets to the user-break
-        // outcome code before the Break op. The terminating `;` is consumed as a no-op.
+        // outcome code before the Break op, or a bare loop's marker. The terminating `;` is
+        // consumed as a no-op.
         stmt.stmt_kind[stmt.stmt_count] = Node::Break() as Word;
         out.active = 0 - 1;
         for i in 0..forst.for_sp limit 8 {
             if forst.for_phase[i] == 7 { out.active = i; }
         }
+        // A bare `for` has no outcome slot, and the reference lowers its `break` to the
+        // `Break` alone, so the node carries 2^20 in place of a slot, Order 6.
         if out.active < 0 { perr(39, toks.at); } else {
-            stmt.stmt_arg[stmt.stmt_count] = forst.for_oc[out.active];
+            stmt.stmt_arg[stmt.stmt_count] = if forst.for_bare[out.active] == 1 { 1048576 } else { forst.for_oc[out.active] };
         }
         stmt.stmt_count = stmt_push(stmt.stmt_count);
         stmt.break_pending = 1;

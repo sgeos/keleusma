@@ -130,6 +130,14 @@ admitted with the lower bound. The analysis now agrees with the reference on tho
 programs. A separate overestimate on a counted loop with a conditional break remains, in
 the safe direction, and is next.
 
+## A `break` in a bare `for`
+
+The overestimate I reported after slice 8 was a codegen defect, not an analysis one. A
+`break` in a `for` without `limit` was lowered as if the loop had one, writing into the
+first parameter's slot and leaving its branch unpatched. The cross-check refused every
+such program. It now compiles byte-identically, and the earlier wording is corrected in
+the plan.
+
 ## Next
 
 `use` signatures, newtypes and refinement, struct-typed data fields, and then the
