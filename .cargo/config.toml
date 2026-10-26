@@ -26,4 +26,9 @@ lint = "clippy --workspace --all-targets -- -D warnings"
 tw = "test --workspace"
 tn = "nextest run --workspace"
 tnq = "nextest run --workspace --profile quick"
-tns = "nextest run --workspace -E 'binary(~selfhost)'"
+# No quotes. Cargo splits a string alias on whitespace and passes quotes through, so
+# a quoted filterset reached nextest as `'binary(~selfhost)'` and failed to parse. The
+# filterset holds no space, so it needs none. A list alias would also work in CI, but
+# cargo cannot merge a list with the string alias of an older checkout's config in a
+# parent directory, which is where nested worktrees such as `.worktrees/` sit.
+tns = "nextest run --workspace -E binary(~selfhost)"
