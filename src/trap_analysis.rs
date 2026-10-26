@@ -8,7 +8,7 @@ use alloc::format;
 use alloc::string::String;
 
 /// Maximum instructions per chunk in the first-pass trap-analysis profile.
-pub const TRAP_OPCODE_CAP: usize = 2048;
+pub const TRAP_OPCODE_CAP: usize = 8192;
 
 /// An instruction location in a module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

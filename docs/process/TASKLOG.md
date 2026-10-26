@@ -6,6 +6,11 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-26 Parser field table and opcode capacity raised
+
+Under the operator's ruling, the parser's field table is 1,024 and the analyses' per-chunk
+opcode capacity 8,192. Gate 3 has no capacity refusal on the repository corpus.
+
 ## 2026-10-26 Gate 3 rejection corpus and a validator defect
 
 A mutation corpus of 323 corrupted modules found the self-hosted validator accepting

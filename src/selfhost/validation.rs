@@ -608,13 +608,13 @@ mod tests {
         let shorten = |name, before| {
             let source = read_stage(name);
             assert_eq!(source.matches(before).count(), 1);
-            compile_src(&source.replace(before, "in 0..0 limit 8192"))
+            compile_src(&source.replace(before, "in 0..0 limit 32768"))
         };
         assert!(!depth(&module.chunks[0]).unwrap());
         assert!(matches!(
             depth_with_stage(
                 &module.chunks[0],
-                shorten("kel/verify_depth.kel", "in 0..8192 limit 8192")
+                shorten("kel/verify_depth.kel", "in 0..32768 limit 32768")
             ),
             Err(VerificationError::Incomplete {
                 stage: "depth",
@@ -629,7 +629,7 @@ mod tests {
                 0,
                 module.chunks[0].ops.len(),
                 &always,
-                shorten("kel/verify_yield.kel", "in 0..8192 limit 8192")
+                shorten("kel/verify_yield.kel", "in 0..32768 limit 32768")
             ),
             Err(VerificationError::Incomplete {
                 stage: "productivity",
@@ -643,7 +643,7 @@ mod tests {
                 &module,
                 0,
                 widths,
-                shorten("kel/verify_typed.kel", "in 0..8192 limit 8192")
+                shorten("kel/verify_typed.kel", "in 0..32768 limit 32768")
             ),
             Err(VerificationError::Incomplete {
                 stage: "types",

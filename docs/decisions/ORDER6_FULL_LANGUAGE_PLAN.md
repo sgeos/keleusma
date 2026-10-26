@@ -410,3 +410,20 @@ stays admitted. Every family now agrees. The reference admits a native index pas
 native table, as does `Vm::new`, so that family measures agreement only, and whether
 admission should check it is operator question 13. The shipping path re-verifies with the
 reference, so no module was admitted wrongly through it.
+
+**Two capacity raises, 2026-10-26, under the operator's ruling that limits may be raised.**
+The parser's data-field table rose from 640 to 1,024 fields, so `parse.kel`, which uses 638,
+has room for further parser state. Its four field scans now bound at 1,024, a linear rise in
+the stage's static time bound.
+
+The per-chunk opcode capacity of the five analysis stages, `verify_structural`,
+`verify_depth`, `verify_yield`, `verify_typed` and `analyze`, rose from 2,048 to 8,192, with
+`VERIFY_OP_CAP` and `TRAP_OPCODE_CAP`, and each stage's walk budget scaled by four. The four
+repository sources that held chunks of 2,056 to 4,702 ops now receive the reference verdict
+from the self-hosted validator and agree with the reference trap analysis, so gate 3 has no
+capacity refusal on the repository corpus and gate 4's only refusal is `check-md-links.kel`'s
+boxed field read. The cost was measured in test time. The validator and trap corpus tests
+rose from about 60 to about 167 seconds each, which the larger stage arrays account for, and
+the light tier from about 560 to 1,028 seconds, part of it from a concurrent run.
+`analyze.kel` keeps a quadratic scan over a chunk's native calls whose static bound grows
+sixteen-fold.

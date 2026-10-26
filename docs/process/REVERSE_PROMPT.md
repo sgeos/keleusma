@@ -93,6 +93,9 @@ Each question is independent and none blocks the next slice.
    self-hosted defect. Should admission reject it, or is the call-time failure the intended
    contract? I have not changed either side.
 
+Questions 11 and 12 are answered by the ruling below, and both raises have landed, the
+field table at 1,024 and the opcode capacity at 8,192. Questions 8 and 9 are next.
+
 ## Rulings received this session
 
 The operator ruled first-hand on 2026-10-26, in reply to the status summary that listed the

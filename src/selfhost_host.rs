@@ -473,7 +473,7 @@ pub const PARSE_VARIANTS_CAP: usize = 256;
 /// Nesting depth of calls. See [`PARSE_OPSTACK_CAP`].
 pub const PARSE_CALL_DEPTH_CAP: usize = 8;
 /// Data-block fields **across the whole program**, not per block. See [`PARSE_OPSTACK_CAP`].
-pub const PARSE_FIELDS_CAP: usize = 640;
+pub const PARSE_FIELDS_CAP: usize = 1024;
 /// Let annotation nesting. Pushes are checked before writing the stage arrays.
 pub const PARSE_ANNOTATION_DEPTH_CAP: usize = 32;
 
@@ -751,8 +751,10 @@ pub const CALL_CHUNK_RADIX: usize = PARSE_CHUNK_CAP;
 // and `no_other_file_restates_the_shared_layout` looks for restatements of either.
 
 /// Maximum subject instructions per chunk in the first-pass verifier profile.
-/// Sized from the current stage corpus after explicit bounds dispatch expansion.
-pub const VERIFY_OP_CAP: usize = 2048;
+/// Sized from the current stage corpus after explicit bounds dispatch expansion. Raised from
+/// 2,048 to 8,192 under the operator's ruling of 2026-10-26 that limits may be raised, since
+/// four repository sources reach 2,056 to 4,702 ops in one chunk.
+pub const VERIFY_OP_CAP: usize = 8192;
 
 /// How many source bytes `src.bytes` in `lexer.kel` holds.
 ///
