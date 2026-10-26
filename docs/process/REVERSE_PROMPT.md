@@ -78,7 +78,29 @@ Each question is independent and none blocks the next slice.
    wait. May the table, `fields.ffield` and its siblings, be raised, to 1,024 for example? Its
    cost is linear in the cap, like the name table you doubled on 2026-10-25.
 
+12. The per-chunk opcode capacity of the self-hosted validator and trap analysis, 2,048
+   (`TRAP_OPCODE_CAP`). Order 6's gate 3 asks for no capacity refusal on the repository
+   corpus, and four sources exceed it in one chunk, measured 2026-10-26.
+   `rogue_bestiary.kel` reaches 3,905 ops, `piano_roll_3.kel` 4,702, `piano_roll_8.kel`
+   2,056 and `piano_roll_9.kel` 2,454. Both analyses refuse those four in agreement, and
+   agree with the reference on every other compiled source. May the capacity be raised,
+   to 8,192 for example? The stage arrays and the analyses' own bounds grow linearly with
+   it.
+
+13. A native index past the native table. `verify` and `Vm::new` both admit a module whose
+   `CallVerifiedNative` names an index beyond `native_names`, measured 2026-10-26 on
+   fourteen corrupted corpus modules. The self-hosted validator agrees, so this is not a
+   self-hosted defect. Should admission reject it, or is the call-time failure the intended
+   contract? I have not changed either side.
+
 ## Rulings received this session
+
+The operator ruled first-hand on 2026-10-26, in reply to the status summary that listed the
+capacity questions, "Limits may be raised." I read it as answering questions 8, 9, 11 and
+12, the type-extraction table, reconstruct's record input, the reconstruct head cap, the
+parser's field table and the per-chunk opcode capacity. It does not cover a
+`BYTECODE_VERSION` change, a new opcode or a publication. Each raise will land as its own
+slice with its cost measured and recorded.
 
 The operator ruled first-hand on 2026-10-25 to free the dead names in `parse.kel`,
 continue with slice 2, and double the wire stage's name cap. The parser stood at 1,023

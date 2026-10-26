@@ -352,6 +352,12 @@ fn run() -> Word {
     // the same and the CAUSE is not, and only the cause tells a caller whether
     // raising the cap would change the answer.
     if df.sp > 0 andalso df.over == 0 { df.over = 2; }
+    // A CHUNK MUST NOT RUN OFF ITS OWN END. Once the walk completes, `child_fell` is the root
+    // region's result, and a root that falls through leaves residue the memory bound does not
+    // account for, which the reference rejects. This stage computed it and discarded it, so a
+    // chunk with its final `Return` removed was accepted. Found 2026-10-26 by the Order 6
+    // mutation corpus, which the reference rejects in every such module.
+    if df.sp == 0 andalso df.over == 0 andalso df.child_fell == 1 { df.bad = 1; }
     if df.over > 0 {
         dv.out_reject = 1;
         dv.out_cause = df.over;

@@ -278,6 +278,10 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // **RE-PINNED 2026-10-26, absorption 101.** Upstream pull request 553, tuple
 // and struct destructuring arms, changed `parse.kel`. Nothing was added or
 // removed.
+//
+// **RE-PINNED 2026-10-26, absorption 103.** Upstream pull request 556, the
+// gate 3 and 4 instruments and a validator fall-through fix, changed
+// `verify_depth.kel`. Nothing was added or removed.
 const PINNED: &[(&str, u64)] = &[
     // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
     // added or removed. Every census this instrument names to re-derive was run on
@@ -483,7 +487,7 @@ const PINNED: &[(&str, u64)] = &[
     ("src/selfhost/kel/parse.kel", 0x4524e59721537102),
     ("src/selfhost/kel/reconstruct.kel", 0xa3a0cf5106e41e74),
     ("src/selfhost/kel/verify_datalayout.kel", 0xe625b5656d576b86),
-    ("src/selfhost/kel/verify_depth.kel", 0x0e54e2467d0b499f),
+    ("src/selfhost/kel/verify_depth.kel", 0xd1bfafbdfde204f9),
     ("src/selfhost/kel/verify_structural.kel", 0x950e834358c3f8f1),
     ("src/selfhost/kel/verify_typed.kel", 0x133db0bfdbb75dfd),
     ("src/selfhost/kel/verify_types.kel", 0xf1a3565245726860),
