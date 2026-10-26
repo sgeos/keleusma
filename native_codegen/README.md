@@ -58,6 +58,13 @@ coroutine would. A library exports its `schema_hash`, so a host can replace a
 loaded library with another under the virtual machine's swap rule. The record
 is [`ORDER_5_COMPLETION.md`](../docs/decisions/ORDER_5_COMPLETION.md).
 
+Since Order 6 the `kel-native` binary builds a library from a source file, with
+its header, bindings, archive and shared object, and `kel-native inspect`
+prints the contract it would export. Run `cargo run --bin kel-native -- build
+<source.kel> --prefix <name> --out <dir> --archive`. String literals compare
+by content, and any other `Text` comparison is refused. The record is
+[`ORDER_6_COMPLETION.md`](../docs/decisions/ORDER_6_COMPLETION.md).
+
 **Supported opcodes are not listed here.** The list is computed, and a copy kept by hand is what went
 stale before:
 

@@ -53,6 +53,9 @@ const SKIPPABLE: &[&str] = &[
     "the_generated_contract_agrees_with_the_module",
     // Order 4: skips with the rest of the file when `ar` or `rustc` is absent.
     "the_measured_machine_stack_stays_within_the_exported_bound",
+    // Order 6: skip, loudly, where `cc` or `nm` is absent.
+    "the_lexer_builds_for_every_tier_one_target_and_runs_on_both_macos_architectures",
+    "a_fallible_native_returns_correctly_on_each_executable_macos_architecture",
     "two_libraries_link_into_one_rust_host_only_after_export",
     "a_linked_native_object_agrees_with_the_vm",
     "a_linked_object_with_natives_and_a_data_segment_agrees_with_the_vm",

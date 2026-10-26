@@ -80,6 +80,7 @@ pub mod cost;
 pub mod linkage;
 pub mod region;
 pub mod stack;
+mod text;
 
 /// The PACKED width of an operand-stack value, for placing it inside a flat
 /// composite body.
@@ -153,6 +154,13 @@ pub enum OperandKind {
     /// Fixed")`. The scale is not tracked here; only the fact that the value is
     /// scaled, which is what the reference dispatches on.
     Fixed,
+    /// The address of a string literal's record, `{ i64 len, bytes }`, which
+    /// this backend lays out itself. Two of these compare by content.
+    ///
+    /// **Only a string constant has this kind.** A `Text` from a call, a
+    /// parameter, a native or a field has a representation this backend does not
+    /// own, and `text::comparisons_reached_by_text` refuses comparing it.
+    Text,
     /// Not determined here. Fails a float-sensitive operation closed.
     Unknown,
 }
@@ -1730,6 +1738,88 @@ fn static_string_global<'ctx>(
     g.set_constant(true);
     g.set_linkage(inkwell::module::Linkage::Internal);
     g.as_pointer_value()
+}
+
+/// Whether two string literal records hold the same bytes.
+///
+/// Each operand is the address of a `{ i64 len, [len x i8] ... }` record from
+/// [`static_string_global`]. The lengths are compared first, then the bytes in
+/// a loop bounded by the length, which is the record's own and therefore
+/// inside it. The result is an `i1`.
+fn text_equality<'ctx>(
+    ctx: &'ctx Context,
+    func: FunctionValue<'ctx>,
+    b: &Builder<'ctx>,
+    lhs: IntValue<'ctx>,
+    rhs: IntValue<'ctx>,
+) -> IntValue<'ctx> {
+    let i64t = ctx.i64_type();
+    let i8t = ctx.i8_type();
+    let ptr = ctx.ptr_type(AddressSpace::default());
+    let (a, z) = (
+        b.build_int_to_ptr(lhs, ptr, "text_a").unwrap(),
+        b.build_int_to_ptr(rhs, ptr, "text_b").unwrap(),
+    );
+    let la = b
+        .build_load(i64t, a, "text_a_len")
+        .unwrap()
+        .into_int_value();
+    let lz = b
+        .build_load(i64t, z, "text_b_len")
+        .unwrap()
+        .into_int_value();
+    let same_len = b
+        .build_int_compare(IntPredicate::EQ, la, lz, "text_same_len")
+        .unwrap();
+    let start = b.get_insert_block().unwrap();
+    let head = ctx.append_basic_block(func, "text_cmp_head");
+    let body = ctx.append_basic_block(func, "text_cmp_body");
+    let step = ctx.append_basic_block(func, "text_cmp_step");
+    let done = ctx.append_basic_block(func, "text_cmp_done");
+    b.build_conditional_branch(same_len, head, done).unwrap();
+
+    b.position_at_end(head);
+    let index = b.build_phi(i64t, "text_index").unwrap();
+    let at = index.as_basic_value().into_int_value();
+    let more = b
+        .build_int_compare(IntPredicate::ULT, at, la, "text_more")
+        .unwrap();
+    b.build_conditional_branch(more, body, done).unwrap();
+
+    b.position_at_end(body);
+    // The bytes start eight bytes into the record, after its length.
+    let offset = b
+        .build_int_add(at, i64t.const_int(8, false), "text_byte_offset")
+        .unwrap();
+    let pa = unsafe {
+        b.build_in_bounds_gep(i8t, a, &[offset], "text_a_byte")
+            .unwrap()
+    };
+    let pz = unsafe {
+        b.build_in_bounds_gep(i8t, z, &[offset], "text_b_byte")
+            .unwrap()
+    };
+    let ba = b.build_load(i8t, pa, "text_a_at").unwrap().into_int_value();
+    let bz = b.build_load(i8t, pz, "text_b_at").unwrap().into_int_value();
+    let same = b
+        .build_int_compare(IntPredicate::EQ, ba, bz, "text_same_byte")
+        .unwrap();
+    b.build_conditional_branch(same, step, done).unwrap();
+
+    b.position_at_end(step);
+    let next = b
+        .build_int_add(at, i64t.const_int(1, false), "text_next")
+        .unwrap();
+    b.build_unconditional_branch(head).unwrap();
+    index.add_incoming(&[(&i64t.const_zero(), start), (&next, step)]);
+
+    b.position_at_end(done);
+    let result = b.build_phi(ctx.bool_type(), "text_equal").unwrap();
+    let t = ctx.bool_type().const_int(1, false);
+    let f = ctx.bool_type().const_zero();
+    // Unequal lengths, a differing byte, or every byte equal at the end.
+    result.add_incoming(&[(&f, start), (&f, body), (&t, head)]);
+    result.as_basic_value().into_int_value()
 }
 
 /// Declare `llvm.trap`, reusing the existing declaration if the module already
@@ -3743,6 +3833,8 @@ fn lower_chunk_body<'ctx>(
         retcon_resume_shape,
         Some(keleusma::bytecode::WireShape::Flat { .. })
     );
+    let text_comparisons =
+        text::comparisons_reached_by_text(chunk, own_signature, chunk_signatures, native_shapes);
     let retcon_delegate = coroutine::is_delegate(func);
     let retcon_stream = (retcon || retcon_delegate) && chunk.block_type == BlockType::Stream;
     let i64t = ctx.i64_type();
@@ -5544,6 +5636,41 @@ fn lower_chunk_body<'ctx>(
             // matches it. The result is 0 or 1 in an i64, which is the flat
             // representation of the VM's tagged `Bool`.
             Op::CmpEq | Op::CmpNe | Op::CmpLt | Op::CmpGt | Op::CmpLe | Op::CmpGe => {
+                // **A `Text` IS COMPARED BY CONTENT OR NOT AT ALL.** Lowered as
+                // integers, two strings compared their addresses, and
+                // `"ab" == "ab"` was false. Two literal records compare by
+                // length and bytes. Any other comparison an operand of which
+                // may be `Text` is refused, see `text.rs`.
+                if text_comparisons.contains(&i) {
+                    let literals =
+                        st.kind_at(0) == OperandKind::Text && st.kind_at(1) == OperandKind::Text;
+                    if !(literals
+                        && st.runtime_kinds.is_none()
+                        && matches!(op, Op::CmpEq | Op::CmpNe))
+                    {
+                        return Err(LowerError::unsupported_op(
+                            &op_variant_name(op),
+                            format!(
+                                "{op:?} at op {i} may receive a Text, which is compared by \
+                                 content only between two string literals. Here the operand \
+                                 kinds are {:?} and {:?}",
+                                st.kind_at(1),
+                                st.kind_at(0)
+                            ),
+                        ));
+                    }
+                    let rhs = st.pop();
+                    let lhs = st.pop();
+                    let equal = text_equality(ctx, func, &st.b, lhs, rhs);
+                    let result = if matches!(op, Op::CmpNe) {
+                        st.b.build_not(equal, "text_ne").unwrap()
+                    } else {
+                        equal
+                    };
+                    let v = st.b.build_int_z_extend(result, i64t, "text_cmp").unwrap();
+                    st.push_w(v, Width::Scalar(1));
+                    continue;
+                }
                 if st.runtime_kinds.is_some() {
                     let tags = [st.input_tags[st.depth - 2], st.input_tags[st.depth - 1]];
                     let rhs = st.pop();
@@ -6099,8 +6226,9 @@ fn lower_chunk_body<'ctx>(
                     // Unknown width, deliberately. The operand is an address,
                     // and packing an address into a composite body as though it
                     // were a scalar is exactly the mistake `Width::Unknown`
-                    // exists to make impossible.
-                    st.push_w(addr, Width::Unknown);
+                    // exists to make impossible. The kind says it is a literal
+                    // record, which is what lets two of them compare by content.
+                    st.push_k(addr, Width::Unknown, OperandKind::Text);
                 } else {
                     let (v, w): (i64, Width) = match cv {
                         ConstValue::Int(i) => (*i, Width::Scalar(8)),
@@ -7988,7 +8116,22 @@ fn lower_chunk_body<'ctx>(
                 // from the compiler's, and emitting anyway would write a body
                 // the VM reads differently.
                 let total: u32 = widths.iter().filter_map(|w| w.bytes()).sum();
-                if total != u32::from(*byte_size) {
+                // **AN ENUM BODY IS SIZED BY ITS LARGEST VARIANT.** A smaller
+                // variant packs fewer bytes than the instruction bakes, and the
+                // reference zero-fills the rest, which `coroutine::packing`
+                // already does on the coroutine route. Only that shortfall is
+                // admitted, and only for an enum. A struct or tuple that packs
+                // short, or anything that packs long, is still the drift this
+                // check exists to catch. Found by `language_construct_census.rs`
+                // on Order 6, where a two-variant payload enum was refused.
+                let enum_slack = matches!(
+                    chunk.ops[i],
+                    Op::NewComposite(keleusma::bytecode::NewCompositeOperand::Flat {
+                        kind: keleusma::value_layout::CompositeKind::Enum,
+                        ..
+                    })
+                ) && total < u32::from(*byte_size);
+                if total != u32::from(*byte_size) && !enum_slack {
                     return Err(LowerError::unsupported_op(
                         "NewComposite",
                         format!(
@@ -8090,6 +8233,33 @@ fn lower_chunk_body<'ctx>(
                     };
                     store.set_alignment(1).expect("1 is a power of two");
                     off += n_bytes;
+                }
+                // The enum tail a smaller variant leaves, zeroed as the reference
+                // zeroes it. The region slot holds `byte_size` bytes from the
+                // site offset, so the tail lies inside the site's reservation.
+                if enum_slack {
+                    let tail = unsafe {
+                        st.b.build_in_bounds_gep(
+                            i8t,
+                            region,
+                            &[i64t.const_int(u64::from(off), false)],
+                            "enum_slack",
+                        )
+                        .unwrap()
+                    };
+                    let bytes = u32::from(*byte_size) - total;
+                    st.b.build_memset(
+                        tail,
+                        1,
+                        i8t.const_zero(),
+                        i64t.const_int(u64::from(bytes), false),
+                    )
+                    .map_err(|e| {
+                        LowerError::unsupported_op(
+                            "NewComposite",
+                            format!("NewComposite at op {i} could not zero its enum slack: {e}"),
+                        )
+                    })?;
                 }
 
                 // The composite operand IS its address. Its packed width is the

@@ -1,3 +1,10 @@
+//! Order 6 text equality reads four words of two string literal records. Each
+//! record is a constant global `{ i64 len, bytes }` that `static_string_global`
+//! initialises, and its operand kind is `Text` only when a string constant
+//! produced it. The two length reads read the records' first words. The two
+//! byte reads lie at offset eight plus an index the loop bounds by the length,
+//! so they stay inside a record whose lengths were just found equal.
+//!
 //! The Order 4 instruction meter, off by default, reads one word per lowered
 //! instruction from the host's meter array before adding one to it. The host
 //! defines the array and zeroes it, as `LowerOptions::op_meter` documents.
@@ -102,7 +109,8 @@ const READ_FORMS: &[&str] = &["build_load(", " = load "];
 // 22 -> 23 for the stable handle continuation, initialized by start.
 // 33 -> 36 for the two trap-code loads and the handle's trap-record load.
 // 36 -> 37 for the instruction meter's read of its own word.
-const RECORDED_READ_SITES: usize = 37;
+// 37 -> 41 for the four text equality reads described above.
+const RECORDED_READ_SITES: usize = 41;
 // 16 at first derivation, 2026-09-11. Four are on the host-provided boundary —
 // the resume-state word, the composite initialisation word, the private slot
 // array and the shared segment — and the rest read memory this lowering wrote

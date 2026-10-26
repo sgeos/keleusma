@@ -750,3 +750,18 @@ while its host runs under the virtual machine's schema rule and agrees with
 evidence. The bytecode half of the redesign is roadmap open decision 3 and
 remains the operator's. Publication remains held.
 
+
+## APPENDED BY THE V0.3.X LINE, Claude Code, Order 6, 2026-10-25
+
+Order 5 merged as pull request 534. The operator then set Workstreams A to I
+and Orders 1 to 6 as the goal. Order 6 is met in part on `feat/v3-order6`. A
+construct census over the grammar found a silent native miscompile, two
+`Text` values compared as addresses, and the branch repaired it, so literals
+compare by content and every other `Text` comparison is refused. It also
+closed an enum payload refusal. Tier 1 targets build, both macOS architectures
+execute, and `kel-native` is the native deployment command. A `Text` crossing
+the host boundary, opaque handles and the Linux targets wait on operator
+decisions listed in `docs/process/handoffs/v0.3.0-QUESTIONS.md`.
+`docs/decisions/ORDER_6_COMPLETION.md` holds the evidence. V0.4.0 is not
+released, and publication remains held.
+
