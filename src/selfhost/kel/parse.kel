@@ -1294,6 +1294,9 @@ private data mat {
     match_variant: [Word; 8],
     // One bit per active match depth. Nested matches cannot overwrite outer coverage.
     covered: [Word; 257],
+    // The payload field position in the variant pattern being read, Order 6. A wildcard `_`
+    // advances it without a bind, so it can run ahead of `mpat_pcount`, the bind count.
+    mpat_fpos: Word,
 }
 
 // The data-field layout table, accumulated by the header as each `data` block is parsed
@@ -2493,6 +2496,7 @@ fn step_mpat(k: Word, v: Word) -> Word {
                 mat.mpat_tslot = ps.pcount + stmt.slot_count;
                 stmt.slot_count = stmt.slot_count + 1;
                 mat.mpat_pcount = 0;
+                mat.mpat_fpos = 0;
             }
             0
         } else {
@@ -2533,7 +2537,7 @@ fn step_mpat(k: Word, v: Word) -> Word {
             // A payload bind variable `x` in `E::V(x)`: allocate its frame slot, register it as a
             // let binding so the arm result resolves it, look up the field's flat offset and kind
             // from the variant layout, and emit an EnumBind marker.
-            let fi = enums.evfstart[mat.mpat_vrow] + mat.mpat_pcount;
+            let fi = enums.evfstart[mat.mpat_vrow] + mat.mpat_fpos;
             let slot = ps.pcount + stmt.slot_count;
             stmt.slot_count = stmt.slot_count + 1;
             clear_let_shape(stmt.let_count);
@@ -2550,10 +2554,17 @@ fn step_mpat(k: Word, v: Word) -> Word {
             stmt.let_enum[stmt.let_count] = 0;
             stmt.let_count = let_push(stmt.let_count);
             // The record retains source coordinates independently of flat byte offsets.
-            ps.emit_arg = mat.mpat_vrow * 1024 + mat.mpat_pcount;
+            ps.emit_arg = mat.mpat_vrow * 1024 + mat.mpat_fpos;
             mat.mpat_pcount = mat.mpat_pcount + 1;
+            mat.mpat_fpos = mat.mpat_fpos + 1;
             mat.pending_bind = Node::EnumBind() as Word + (enums.evfoff[fi] + enums.evfkind[fi] * 65536 + slot * 4294967296) * 64;
             tag_enum_payload_bind()
+        } else {
+        if mat.match_isenum[mat.match_sp - 1] == 1 andalso k == Tok::Underscore() as Word {
+            // A wildcard payload `E::V(_)` binds nothing, and the reference reads nothing for
+            // it, so only the field position advances, Order 6.
+            mat.mpat_fpos = mat.mpat_fpos + 1;
+            0
         } else {
         if k == Tok::Comma() as Word {
             0
@@ -2571,7 +2582,7 @@ fn step_mpat(k: Word, v: Word) -> Word {
             } else {
                 type_tuple_record(1, mat.enum_disc)
             }
-        } }
+        } } }
     } } }
 }
 

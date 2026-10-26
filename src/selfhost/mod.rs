@@ -3148,6 +3148,9 @@ pub fn try_call_type_inputs_from_pipeline(
             let mut bindings = Vec::new();
             let mut expressions = Vec::new();
             let body = reconstruct_via_kel(records, reconstruct_category(f.cat), f.params, &name);
+            // A payload binding the arm never reads still has a frame slot, so its slot is
+            // named as well. Collecting only the slots the body reads left such a binding
+            // without an identity, and type-input extraction panicked on it.
             let slot_names: alloc::collections::BTreeMap<_, _> = source_slots
                 .keys()
                 .copied()
@@ -3157,6 +3160,7 @@ pub fn try_call_type_inputs_from_pipeline(
                         .filter(|node| node.kind == 2)
                         .map(|node| node.arg),
                 )
+                .chain(f.enum_payload_bindings.iter().map(|&(_, slot, _)| slot))
                 .map(|slot| (slot, format!("#local:{head}:{range}:{slot}")))
                 .collect();
             for (slot, records) in f.param_type_records.iter().enumerate() {

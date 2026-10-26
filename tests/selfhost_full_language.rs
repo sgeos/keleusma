@@ -871,6 +871,58 @@ fn float_arithmetic_on_typed_operands_compiles() {
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
 
+/// Wildcard payloads in a variant pattern, `E::V(_)`, which the reference reads nothing for,
+/// so only the field position advances and a later named payload still reads its own offset.
+/// Also a named payload the arm never reads, which used to panic type-input extraction because
+/// its slot had no identity.
+#[test]
+fn wildcard_and_unused_payloads_compile() {
+    const E: &str =
+        "enum S { Ok, Err(Word), P(Word, Word) }\nfn g(a: Word) -> S { S::P(a, a + 1) }\n";
+    let cases: &[(String, Class)] = &[
+        (
+            format!(
+                "{E}fn main() -> Word {{ match g(2) {{ S::Ok => 1, S::Err(_) => 0, S::P(a, b) => a }} }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{E}fn main() -> Word {{ match g(2) {{ S::Ok => 1, S::Err(c) => 0, S::P(a, b) => b }} }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{E}fn main() -> Word {{ match g(2) {{ S::Ok => 1, S::Err(c) => c, S::P(_, b) => b }} }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{E}fn main() -> Word {{ match g(2) {{ S::Ok => 1, S::Err(c) => c, S::P(a, _) => a }} }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{E}fn main() -> Word {{ match g(2) {{ S::Ok => 1, S::Err(_) => 0, S::P(_, _) => 2 }} }}"
+            ),
+            Identical,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
 /// A `break` in a bare `for`, one without `limit`. The parser took it for a `limit` loop's
 /// break, so it stored an outcome code into slot 0, which held the first parameter, and its
 /// `Break` was never patched and kept target 0. The shipping cross-check refused every such
@@ -1407,7 +1459,7 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
     (
         "Pattern::Enum::WildcardPayload",
         "enum S { Ok, Err(Word) }\nfn g(a: Word) -> S { S::Err(a) }\nfn main() -> Word { match g(2) { S::Ok => 1, S::Err(_) => 0 } }",
-        Unsupported,
+        Identical,
     ),
     (
         "Pattern::Struct",
