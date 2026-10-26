@@ -24,6 +24,14 @@
 //! widened by accident, or a filter added to the self-host job, would leave them running
 //! nowhere with every other check green. This file checks that case as well.
 //!
+//! **THE SHARDS RUN ONE ARCHIVE, BUILT ONCE.** On 2026-10-25 the self-host shards stopped
+//! compiling the same binaries four times. `test-self-host-build` runs `cargo nextest
+//! archive` and each shard runs that archive. The feature selection then lives on the
+//! archive command, not on the shard's, so this file checks the archive for `-p keleusma
+//! --features self-host` with no filter, and checks that every shard names the same
+//! archive file. A shard running a different archive, or an archive built with a filter,
+//! would run a different population with every other check green.
+//!
 //! The parse is line-based over a workflow this repository writes, and it is not a
 //! general YAML reader. It fails closed: a partitioned command whose shard expression or
 //! matrix it cannot read is a failure, not a skip.
@@ -221,8 +229,35 @@ fn foreign_selfhost_binaries() -> Vec<String> {
     found
 }
 
+/// The non-comment `cargo nextest archive` commands of one job.
+fn archive_commands(job: &Job) -> Vec<&str> {
+    job.lines
+        .iter()
+        .map(|l| l.trim())
+        .filter(|l| !l.starts_with('#') && l.contains("cargo nextest archive"))
+        .collect()
+}
+
+/// The file named by `--archive-file`, when the command has one.
+fn archive_file(command: &str) -> Option<&str> {
+    command
+        .split("--archive-file")
+        .nth(1)?
+        .split_whitespace()
+        .next()
+}
+
+/// A filter or filtering profile, which could drop a binary the workspace job left to
+/// the self-host job.
+fn filters(command: &str) -> bool {
+    command.contains(" -E ")
+        || command.contains("--filterset")
+        || command.contains("--profile quick")
+}
+
 /// Why the workspace and self-host jobs no longer split the suite as intended, or nothing.
-fn split_errors(workspace: &Job, self_host: &Job) -> Vec<String> {
+/// `build` is the archive job, when the shards run an archive.
+fn split_errors(workspace: &Job, self_host: &Job, build: Option<&Job>) -> Vec<String> {
     let mut errors = Vec::new();
     let commands = nextest_commands(workspace);
     if commands.len() != 1 {
@@ -237,22 +272,51 @@ fn split_errors(workspace: &Job, self_host: &Job) -> Vec<String> {
         ));
     }
 
+    let selects =
+        |command: &str| command.contains("-p keleusma") && command.contains("--features self-host");
+    // The archive, when there is one, carries the selection the shards run.
+    let mut archive = None;
+    if let Some(build) = build {
+        let commands = archive_commands(build);
+        if commands.len() != 1 {
+            errors.push(format!(
+                "expected one nextest archive command in `{}`, found {commands:?}",
+                build.key
+            ));
+        } else if !selects(commands[0]) || filters(commands[0]) {
+            errors.push(format!(
+                "the self-host archive must select `-p keleusma --features self-host` \
+                 unfiltered: {}",
+                commands[0]
+            ));
+        } else {
+            archive = archive_file(commands[0]);
+            if archive.is_none() {
+                errors.push(format!(
+                    "the archive command names no file: {}",
+                    commands[0]
+                ));
+            }
+        }
+    }
+
     let commands = nextest_commands(self_host);
     if commands.is_empty() {
         errors.push(format!("`{}` runs no nextest command", self_host.key));
     }
     for command in commands {
-        if !(command.contains("-p keleusma") && command.contains("--features self-host")) {
-            errors.push(format!(
+        match archive_file(command) {
+            Some(file) if Some(file) != archive => errors.push(format!(
+                "a self-host shard runs `{file}`, which is not the archive the build job \
+                 makes: {command}"
+            )),
+            Some(_) => {}
+            None if !selects(command) => errors.push(format!(
                 "a self-host command no longer selects `-p keleusma --features self-host`: {command}"
-            ));
+            )),
+            None => {}
         }
-        // Any filter or filtering profile here could drop a binary the workspace job
-        // already left to this job.
-        if command.contains(" -E ")
-            || command.contains("--filterset")
-            || command.contains("--profile quick")
-        {
+        if filters(command) {
             errors.push(format!(
                 "the self-host job filters its tests, so the binaries the workspace job \
                  leaves to it may run nowhere: {command}"
@@ -270,7 +334,11 @@ fn binaries_the_workspace_job_filters_out_run_in_the_self_host_job() {
             .find(|j| j.key == key)
             .unwrap_or_else(|| panic!("ci.yml has no `{key}` job"))
     };
-    let errors = split_errors(job("test"), job("test-self-host"));
+    let errors = split_errors(
+        job("test"),
+        job("test-self-host"),
+        Some(job("test-self-host-build")),
+    );
     assert!(errors.is_empty(), "{}", errors.join("\n"));
 
     let foreign = foreign_selfhost_binaries();
@@ -295,25 +363,53 @@ fn the_split_check_rejects_a_widened_filter_and_a_filtered_self_host_job() {
         "test-self-host",
         "cargo nextest run --profile ci -p keleusma --features self-host",
     );
-    assert!(split_errors(&good_workspace, &good_self_host).is_empty());
+    assert!(split_errors(&good_workspace, &good_self_host, None).is_empty());
 
     let widened = job(
         "test",
         "cargo nextest run --profile ci --workspace -E 'not binary(~selfhost)'",
     );
-    assert_eq!(split_errors(&widened, &good_self_host).len(), 1);
+    assert_eq!(split_errors(&widened, &good_self_host, None).len(), 1);
 
     let filtered = job(
         "test-self-host",
         "cargo nextest run --profile ci -p keleusma --features self-host -E 'not test(slow)'",
     );
-    assert_eq!(split_errors(&good_workspace, &filtered).len(), 1);
+    assert_eq!(split_errors(&good_workspace, &filtered, None).len(), 1);
 
     let dropped = job(
         "test-self-host",
         "cargo test -p keleusma --features self-host --doc",
     );
-    assert_eq!(split_errors(&good_workspace, &dropped).len(), 1);
+    assert_eq!(split_errors(&good_workspace, &dropped, None).len(), 1);
+
+    // The archive form. A good archive and a shard that runs it pass. A filtered
+    // archive, an archive missing the feature, and a shard running another file fail.
+    let build = |run: &str| job("test-self-host-build", run);
+    let shard = job(
+        "test-self-host",
+        "cargo nextest run --profile ci --archive-file a.tar.zst --workspace-remap .",
+    );
+    let good_build =
+        build("cargo nextest archive -p keleusma --features self-host --archive-file a.tar.zst");
+    assert!(split_errors(&good_workspace, &shard, Some(&good_build)).is_empty());
+    for bad in [
+        "cargo nextest archive -p keleusma --features self-host -E 'not test(slow)' --archive-file a.tar.zst",
+        "cargo nextest archive -p keleusma --archive-file a.tar.zst",
+    ] {
+        assert!(
+            !split_errors(&good_workspace, &shard, Some(&build(bad))).is_empty(),
+            "{bad}"
+        );
+    }
+    let other = job(
+        "test-self-host",
+        "cargo nextest run --profile ci --archive-file b.tar.zst --workspace-remap .",
+    );
+    assert_eq!(
+        split_errors(&good_workspace, &other, Some(&good_build)).len(),
+        1
+    );
 }
 
 /// The checker itself detects the two failures it exists for. A guard that cannot fail
@@ -346,4 +442,44 @@ fn the_shard_check_rejects_a_missing_shard_and_a_foreign_partition() {
             .is_err()
     );
     assert!(partition_count("cargo nextest run --workspace").is_none());
+}
+
+/// **THE REQUIRED CHECK SEES EVERY JOB.** `main` requires `CI result`, which fails when any
+/// job it needs failed. A job missing from its `needs` could fail while the required check
+/// passed, so every other job of `ci.yml` must be listed there.
+#[test]
+fn the_ci_result_job_needs_every_other_job() {
+    let jobs = ci_jobs();
+    let result = jobs
+        .iter()
+        .find(|j| j.key == "ci-result")
+        .expect("ci.yml has no `ci-result` job");
+    let needs_line = result
+        .lines
+        .iter()
+        .map(|l| l.trim())
+        .find(|l| l.starts_with("needs:"))
+        .expect("`ci-result` has no needs line");
+    let needs: Vec<&str> = needs_line
+        .trim_start_matches("needs:")
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .split(',')
+        .map(str::trim)
+        .collect();
+    let missing: Vec<&str> = jobs
+        .iter()
+        .map(|j| j.key.as_str())
+        .filter(|k| *k != "ci-result" && !needs.contains(k))
+        .collect();
+    assert!(
+        jobs.len() >= 10,
+        "parsed only {} jobs from ci.yml",
+        jobs.len()
+    );
+    assert!(
+        missing.is_empty(),
+        "`ci-result` does not need {missing:?}, so their failures would not fail the required check"
+    );
 }

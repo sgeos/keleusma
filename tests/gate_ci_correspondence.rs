@@ -101,6 +101,10 @@ fn parse_invocation(line: &str) -> Option<Invocation> {
     // own verb, since a Miri run covers something a plain test run does not.
     let (verb, skip) = match toks[0] {
         "nextest" if toks.get(1) == Some(&"run") => ("test".to_string(), 2),
+        // An archive is the build half of a sharded test run. Its package and features are
+        // what the shards execute, and `tests/ci_shard_coverage.rs` checks that every shard
+        // runs it, so it stands for the test command here.
+        "nextest" if toks.get(1) == Some(&"archive") => ("test".to_string(), 2),
         "miri" if toks.get(1) == Some(&"test") => ("miri-test".to_string(), 2),
         "test" | "clippy" | "fmt" | "doc" | "run" | "build" | "check" => (toks[0].to_string(), 1),
         _ => return None,

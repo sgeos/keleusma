@@ -68,6 +68,8 @@
 //! The counts are printed, not asserted, because they will move when the
 //! differential is repaired. The two assertions are the properties that would
 //! make the measurement meaningless if they failed.
+mod common;
+
 use keleusma::bytecode::{BlockType, Module, Op, SlotVisibility, Value};
 use keleusma::vm::{
     Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for, shared_data_bytes_for,
@@ -569,17 +571,20 @@ fn the_accessor_seeds_move_each_stages_chunk_coverage() {
             // they are properties of the subject, asserted and derived here rather
             // than assumed, since a seed the stage rejects looks like coverage.
             "reconstruct.kel" => {
-                let msrc = std::fs::read_to_string("../examples/scripts/06_multiheaded.kel")
-                    .expect("multiheaded subject source");
-                let (fns, _names, _, _) = keleusma::selfhost::parse_functions(&msrc);
+                // The guarded subject, since `parse.kel` refuses the literal
+                // heads of `06_multiheaded.kel`. See `common::MULTIHEAD_SUBJECT`.
+                let msrc = common::MULTIHEAD_SUBJECT;
+                let fns = keleusma::selfhost::try_parse_functions(msrc)
+                    .expect("the multi-headed subject is inside the parse.kel subset")
+                    .functions;
                 assert_eq!(
                     fns.len(),
                     4,
-                    "06_multiheaded.kel no longer declares three `classify` heads \
-                     then `main`, so the leading run is no longer the group"
+                    "the multi-headed subject no longer declares three `classify` \
+                     heads then `main`, so the leading run is no longer the group"
                 );
                 let heads: Vec<&keleusma::selfhost::ParsedFn> = fns[..3].iter().collect();
-                let msub = compile(&parse(&tokenize(&msrc).expect("lex")).expect("parse"))
+                let msub = compile(&parse(&tokenize(msrc).expect("lex")).expect("parse"))
                     .expect("compile");
                 let idx = msub
                     .chunks
@@ -751,45 +756,22 @@ fn the_single_head_reconstruct_seed_drives_the_stage() {
     if !panicked.is_empty() {
         println!("  parse_functions PANICKED on: {}", panicked.join(", "));
     }
-    // **THE CORPUS STOPPED SUPPLYING A SUBJECT IN ABSORPTION 82, AND THAT IS
-    // REPORTED, NOT ROUTED AROUND.** Upstream's parser now refuses signed
-    // declarations, method calls and qualified names by name, which removed all
-    // three former qualifying files: `11_signed.kel`, `08_method_dispatch.kel`
-    // and `external_native_witness.kel`. Every file it still parses declares
-    // two or more heads. The zero is pinned so a returning corpus subject is
-    // noticed, and preferred over the stand-in below.
-    let corpus_qualifying = drove.len() + refused.len();
-    assert_eq!(
-        corpus_qualifying, 0,
-        "a corpus file qualifies as a single-head subject again ({drove:?}, \
-         {refused:?}). Prefer it, and retire the stand-in below."
+    // **THE CORPUS SUPPLIES A SUBJECT AGAIN SINCE ABSORPTION 95, SO THE STAND-IN
+    // IS RETIRED.** Absorption 82 removed the last qualifying files when
+    // upstream's parser began refusing signed declarations, method calls and
+    // qualified names, and a stand-in, `11_signed.kel` without its `signed`
+    // modifier, carried the probe until then. Upstream's Order 6 slices made
+    // `15_pixel_blend.kel` parse to one unguarded head, and it drives the stage.
+    // The assertion now pins the opposite of what it pinned, that the corpus
+    // supplies at least one subject the stage accepts, so a corpus that stops
+    // supplying one is noticed again.
+    assert!(
+        !drove.is_empty(),
+        "no corpus file drives the single-head stage any more ({refused:?} were \
+         refused). A stand-in, `fn main() -> Word {{ 21 + 21 }}`, carried this probe \
+         from absorption 82 to absorption 95 and can return if this is expected."
     );
-    // **THE STAND-IN IS THE FORMER SUBJECT, NOT A NEW CHOICE.** It is
-    // `11_signed.kel`'s program without the `signed` modifier the parser now
-    // refuses, so its body records are the ones this probe always drove.
-    const STAND_IN: &str = "fn main() -> Word {\n    21 + 21\n}\n";
-    let stand_in = keleusma::selfhost::try_parse_functions(STAND_IN)
-        .expect("the stand-in is inside the parse.kel subset")
-        .functions;
-    assert_eq!(stand_in.len(), 1, "the stand-in must parse to one head");
-    {
-        let qh = &stand_in[0];
-        let qseed = keleusma::selfhost::seed_reconstruct_shared(
-            &Vm::new(survey_m.clone(), &survey_arena).expect("survey vm"),
-            qh.body_records(),
-            qh.reconstruct_category(),
-            qh.param_count(),
-        );
-        let qarena = arena_for(&survey_m);
-        let mut qvm = Vm::new(survey_m.clone(), &qarena).expect("survey vm");
-        let mut qshared = qseed.clone();
-        match qvm.call_with_shared(&mut qshared, &[Value::Int(0)]) {
-            Ok(VmState::Yielded(Value::Int(n))) if n > 0 => drove.push(("stand-in".into(), n)),
-            Ok(VmState::Yielded(Value::Int(n))) => refused.push(("stand-in".into(), n)),
-            other => panic!("stand-in: reconstruct.kel did not yield a node count: {other:?}"),
-        }
-    }
-    let (subject_name, fns) = chosen.unwrap_or_else(|| ("stand-in".to_string(), stand_in));
+    let (subject_name, fns) = chosen.expect("a driving subject was found above");
     println!("  SELECTED: {subject_name}");
     let h = &fns[0];
     let records = h.body_records();

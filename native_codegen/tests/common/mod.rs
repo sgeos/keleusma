@@ -926,3 +926,21 @@ pub fn vm_and_native_calling_one_native(
     );
     (vv, nv)
 }
+
+/// **The multi-headed subject for the `reconstruct.kel` stage, written with
+/// guards.**
+///
+/// It was `examples/scripts/06_multiheaded.kel`, whose first two heads take the
+/// literal parameters `0` and `1`. Upstream's Order 6 slice 1 showed that
+/// `parse.kel` had only appeared to parse that file, because a literal
+/// parameter fell through its signature scan unrecorded, and it now refuses the
+/// file. **The seed this line built from it therefore described a different
+/// program from the subject.** These heads express the same dispatch with
+/// guards, which `parse.kel` parses, and they compute the same values.
+#[allow(dead_code)]
+pub const MULTIHEAD_SUBJECT: &str = "\
+fn classify(n: Word) -> Word when n == 0 { 0 }
+fn classify(n: Word) -> Word when n == 1 { 1 }
+fn classify(n: Word) -> Word { n + 10 }
+fn main() -> Word { classify(0) + classify(1) + classify(11) + classify(7) - 28 }
+";

@@ -4087,18 +4087,10 @@ fn every_known_gap_is_refused_by_the_self_hosted_compiler() {
             "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x } => x, _ => 0 } }",
         ),
         ("assert", "fn main(a: Word) -> Word { assert a > 0; a }"),
-        (
-            "qualified call",
-            "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }",
-        ),
-        // FIFTH, found 2026-09-12 while building a repeat-compile corpus. The
-        // parenthesised `E::N()` compiles; only the bare spelling is refused. Pinned
-        // in detail by `a_bare_unit_variant_expression_is_refused_where_the_parenthesised_one_compiles`
-        // in `tests/selfhost_parse.rs`.
-        (
-            "bare unit enum variant expression",
-            "enum E { M, N }\nfn main() -> Word { E::N as Word }",
-        ),
+        // The qualified call `audio::midi_to_freq(69)` compiles since Order 6 slice 2,
+        // which lowered `use`-imported native calls, so it left this list.
+        // A fifth gap, the bare unit enum variant expression `E::N as Word`, was closed
+        // in Order 6 slice 1 and now compiles byte-identically, so it left this list.
     ];
 
     let target = keleusma::target::Target::host();
@@ -4312,9 +4304,14 @@ fn the_pipeline_omits_the_binders_the_reference_reports() {
 /// **The `use` declaration alone is fine**, which localises it: the import parses,
 /// the CALL FORM does not. Separating those two was one probe and it is the
 /// difference between "imports are unsupported" and a precise gap.
+///
+/// **CLOSED IN ORDER 6 SLICE 2, 2026-10-25.** The pipeline now resolves a two-segment
+/// call of a `use`-imported native and lowers it as the reference does, so the
+/// assertion below is inverted. It pins the call form as handled, and the shipping
+/// compile as byte-identical.
 #[cfg(feature = "self-host")]
 #[test]
-fn a_qualified_call_expression_is_not_handled_by_the_pipeline() {
+fn a_qualified_call_expression_is_handled_by_the_pipeline() {
     let import_only = "use audio::midi_to_freq\nfn main() -> Word { 0 }";
     assert!(
         std::panic::catch_unwind(|| keleusma::selfhost::occurrence_rows_from_pipeline(import_only))
@@ -4332,9 +4329,14 @@ fn a_qualified_call_expression_is_not_handled_by_the_pipeline() {
     );
     assert!(
         std::panic::catch_unwind(|| keleusma::selfhost::occurrence_rows_from_pipeline(qualified))
-            .is_err(),
-        "the pipeline now handles a qualified call expression. THIS IS A GAP \
-         CLOSING: record what changed and widen the documented subset"
+            .is_ok(),
+        "the pipeline no longer handles a qualified native call, which Order 6 slice 2 \
+         admitted. This is a regression"
+    );
+    let target = keleusma::target::Target::host();
+    assert!(
+        keleusma::selfhost::self_hosted_compile(qualified, &target).is_ok(),
+        "the qualified native call no longer compiles byte-identically to the reference"
     );
 }
 
@@ -4530,9 +4532,13 @@ fn the_documented_expression_and_statement_forms_are_censused() {
 
     let mut got = failing.clone();
     got.sort_unstable();
+    // The pipeline joined the failing set in Order 6 slice 1, and it is a refusal closing a
+    // silent misparse rather than a regression. The self-hosted lexer read the pipe bar as
+    // the arrow, which the body walk skips, so `1 |> g()` was parsed as `1 > g()` and
+    // counted as handled.
     assert_eq!(
         got,
-        vec!["assert"],
+        vec!["assert", "pipeline"],
         "the set of documented expression and statement forms the self-hosted parser \
          cannot handle changed. A form leaving it is a gap closing to record; one \
          joining it is a regression every other test here would miss"
@@ -7372,7 +7378,6 @@ fn pipeline_unsupported_syntax_is_not_source_rejection() {
         "fn main(a: Word) -> Word { assert a > 0; a }",
         "fn main() -> Word { assert not false; 1 }",
         "fn main() -> Word { assert 1 == 1; 1 }",
-        "use audio::midi_to_freq fn main() -> Float { audio::midi_to_freq(69) }",
         "trait Doubler { fn double(x: Word) -> Word; } impl Doubler for Word { fn double(x: Word) -> Word { x + x } } fn main() -> Word { let n: Word = 42; n.double() }",
         "use host::number() -> Word fn main() -> Word { host::number() }",
     ] {
@@ -7463,7 +7468,7 @@ fn pipeline_call_argument_tags_agree_with_reference_syntax() {
         "fn take(n: Word) -> Word { n } fn get() -> Word { 1 } fn main() -> Word { take(get()) }",
         "fn take(n: Word) -> Word { n } fn main() -> Word { take(1, true) }",
         "fn take(n: Word) -> Word { n } fn main() -> Word { take() }",
-        "fn take(0) -> Word { 1 } fn take(n: Word) -> Word { n } fn main() -> Word { take(true) }",
+        "fn take(n: Word) -> Word when n == 0 { 1 } fn take(n: Word) -> Word { n } fn main() -> Word { take(true) }",
         "fn take(n: Byte) -> Byte { n } fn main() -> Byte { take(1 as Byte) }",
     ] {
         let ast = parse(&tokenize(src).expect("lex")).expect("parse");
@@ -7625,11 +7630,11 @@ fn pipeline_call_inputs_drive_type_rejection() {
             false,
         ),
         (
-            "fn take(0) -> Word { 1 } fn take(n: Word) -> Word { n } fn main() -> Word { take(2) }",
+            "fn take(n: Word) -> Word when n == 0 { 1 } fn take(n: Word) -> Word { n } fn main() -> Word { take(2) }",
             true,
         ),
         (
-            "fn take(0) -> Word { 1 } fn take(n: Word) -> Word { n } fn main() -> Word { take(true) }",
+            "fn take(n: Word) -> Word when n == 0 { 1 } fn take(n: Word) -> Word { n } fn main() -> Word { take(true) }",
             false,
         ),
         (
@@ -8265,6 +8270,12 @@ fn the_declared_top_level_names_agree_between_the_pipeline_and_the_reference() {
 /// declared-names function rather than a regression. Mutation-tested by pointing the wildcard
 /// probe at the two-segment form, which genuinely differs.
 ///
+/// **SINCE ORDER 6 SLICE 2 THE STAGE REFUSES THE WILDCARD.** Native imports now take an index
+/// in declaration order, and a wildcard takes none, so a stream that could not tell the two
+/// apart would number every later native wrongly. The stage therefore refuses `use path::*` as
+/// unsupported syntax, which is not a source rejection. The single-segment and two-segment
+/// shapes are still compared, and the reference's disagreement is still asserted.
+///
 /// # Comparing the record VALUES as well would not strengthen this, and that is not obvious
 ///
 /// A first mutation carried each record's interned id alongside its code, expecting the two
@@ -8294,7 +8305,6 @@ fn the_wildcard_import_is_not_distinguishable_in_the_record_stream() {
     const PATHED: &str = "use host::play\nfn main() -> Word { 0 }\n";
 
     let named = shape(NAMED);
-    let star = shape(STAR);
     let pathed = shape(PATHED);
 
     // MUST-FIRE CONTROL: the extraction sees something at all, and it distinguishes the case it
@@ -8309,11 +8319,11 @@ fn the_wildcard_import_is_not_distinguishable_in_the_record_stream() {
          true the instrument has broken rather than the stage having changed"
     );
 
-    assert_eq!(
-        named, star,
-        "the record stream now distinguishes a wildcard import from a single-segment named \
-         import. THIS IS A GAP CLOSING, NOT A REGRESSION: extend `declared_names_from_pipeline` \
-         to include `use` declarations, and retire this pin"
+    let refused = keleusma::selfhost::try_call_type_inputs_from_pipeline(STAR)
+        .expect_err("the stage accepts a wildcard import again, which would misnumber natives");
+    assert!(
+        !refused.is_source_rejection(),
+        "a wildcard import is refused as a source error, which is a false rejection: {refused}"
     );
 
     // And the reference genuinely disagrees about these two, which is what makes the gap matter.
@@ -9346,7 +9356,7 @@ fn the_pipeline_tag_table_omits_float_and_the_reference_does_not() {
 #[cfg(feature = "self-host")]
 #[test]
 fn every_function_head_contributes_its_own_tail_row() {
-    const SRC: &str = "fn f(0) -> Word { 1 } fn f(1) -> Word { 2 } fn f(n: Word) -> Word { n } fn main() -> Word { f(2) }";
+    const SRC: &str = "fn f(n: Word) -> Word when n == 0 { 1 } fn f(n: Word) -> Word when n == 1 { 2 } fn f(n: Word) -> Word { n } fn main() -> Word { f(2) }";
     let ast = parse(&tokenize(SRC).expect("lex")).expect("parse");
     let (names, _) = binding_rows(&ast);
     let (nodes, _) = expression_nodes_and_derived(&ast, &names);
@@ -9404,19 +9414,19 @@ fn function_heads_keep_their_own_binding_names() {
 fn pipeline_function_head_requirements_drive_type_rejection() {
     for (src, kind, accepts, count) in [
         (
-            "fn f(0) -> Word { 1 } fn f(n: Word) -> Word { 2 }",
+            "fn f(n: Word) -> Word when n == 0 { 1 } fn f(n: Word) -> Word { 2 }",
             8,
             true,
             2,
         ),
         (
-            "fn f(0) -> Word { true } fn f(n: Word) -> Word { 2 }",
+            "fn f(n: Word) -> Word when n == 0 { true } fn f(n: Word) -> Word { 2 }",
             8,
             false,
             2,
         ),
         (
-            "fn f(0) -> Word { 1 } fn f(n: Word) -> Word { true }",
+            "fn f(n: Word) -> Word when n == 0 { 1 } fn f(n: Word) -> Word { true }",
             8,
             false,
             2,
@@ -10483,11 +10493,7 @@ fn every_gap_refusal_names_the_construct() {
             "fn main(a: Word) -> Word { assert a > 0; a }",
             "`assert` statement",
         ),
-        (
-            "qualified call",
-            "use audio::midi_to_freq\nfn main() -> Float { audio::midi_to_freq(69) }",
-            "qualified call `audio::midi_to_freq`",
-        ),
+        // The qualified call left this corpus in Order 6 slice 2, when it began to compile.
     ];
 
     let target = keleusma::target::Target::host();
