@@ -758,3 +758,23 @@ jobs:
           retention-days: 1
           overwrite: true
           if-no-files-found: error
+
+  # THE ONE CHECK A PROTECTED BRANCH CAN REQUIRE. GitHub counts a job that its condition
+  # skipped as passing, and `certify` is skipped exactly when an earlier job fails, so no
+  # single job above is safe to require. This one runs on every run and fails when any
+  # job failed or was cancelled, including the `changes` job itself. A light run passes it
+  # with its four jobs, and a certified run with the classifier alone. `main` requires it.
+  ci-result:
+    name: CI result
+    needs: [changes, guards, lint, test, test-packages, test-features, test-self-host-build, test-self-host, examples-sdl3, doc, portability, scripts, rtos-host, detached, selfhost-compiler, vscode-extension, miri, docs-links, certify]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail when any job failed or was cancelled
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: $RESULTS"
+          case " $RESULTS " in
+            *" failure "*|*" cancelled "*) exit 1 ;;
+          esac
