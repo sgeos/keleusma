@@ -63,7 +63,20 @@ Each question is independent and none blocks the next slice.
    a token filter would make every such program byte-identical, but the standalone
    self-hosted verdict would then accept programs the reference rejects for a label
    violation. Should Order 6 port label checking into the type stage, or is admission under
-   the shipping cross-check enough? I am leaving them refused until you rule.
+   the shipping cross-check enough? I am leaving them refused until you rule. The same
+   question now covers newtypes. The reference types a newtype nominally, rejecting
+   `let w: Word = C(5)`, a `Word` passed for a `C`, and `C + Word`, measured 2026-10-26.
+   A transparent lowering would compile `07_refinement.kel` byte-identically but would let
+   the self-hosted type stage accept those programs, which gate 3's verdict agreement would
+   expose. A refined newtype also needs the reference's interval-based elision of the
+   predicate check. I am leaving newtypes refused until you rule.
+
+11. The parser's field table. `parse.kel` counts every runtime data field of the program it
+   parses against a table of 640, and `parse.kel` itself now uses 638, measured 2026-10-26.
+   Its self-compile failed at 641 during the destructuring slice until the new state was
+   packed into two arrays. Each further slice that needs parser state must pack again or
+   wait. May the table, `fields.ffield` and its siblings, be raised, to 1,024 for example? Its
+   cost is linear in the cap, like the name table you doubled on 2026-10-25.
 
 ## Rulings received this session
 

@@ -364,3 +364,18 @@ identifiers and are literal patterns, which the first version took for bindings 
 pinned test caught it, so they are excluded. A guarded variable arm and a variable
 pattern on an enum scrutinee stay refused, and the tests that used `match a { v => v }`
 as their unsupported witness now use the enum form.
+
+**Destructuring arms, 2026-10-26.** The reference lowers an irrefutable tuple or struct arm,
+`(a, b) => ...` or `P { x, y } => ...`, as a wildcard arm that reads each bound field into
+a fresh slot in source order, and still requires the match's own wildcard. The parser now
+captures the scrutinee's shape when it drains, reads the pattern in a new match phase,
+and sends each bind's three records, the scrutinee temp, the projection metadata and the
+field read, through an emitter that drains one record per step, closing the arm with one
+`LetIn` per bind. A literal sub-pattern, a field rename, a nested composite field and a
+match without its wildcard stay as the reference or the subset leaves them. The census
+reads 59 Identical of 72 rows.
+
+The slice exposed a capacity limit inside `parse.kel` itself. It counts every runtime data
+field of the program it parses against a table of 640, and its own fields reached 645, so
+its self-compile failed. The new state was packed into two arrays, which leaves 638.
+Raising the table is question 11 for the operator.
