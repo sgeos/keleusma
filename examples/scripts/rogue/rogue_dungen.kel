@@ -28,7 +28,7 @@
 // `examples/rogue/main.rs`. Room count is eight; the data
 // segment preallocates one slot per possible room.
 
-use host::rng_range
+use host::rng_range(Word, Word) -> Word
 use host::map_set
 use host::map_get
 use host::map_w
