@@ -181,3 +181,23 @@ Identical, among them the Order 4 meta-circular interpreter `src/hosted/interp.k
 `09_big_numbers.kel`, `10_multbyte.kel`, four rogue scripts and four piano rolls. Five piano rolls now stop at clean capacity refusals, three
 at an unguarded 256-entry table in type-input extraction and two at reconstruct's
 1,024-record input.
+
+**Slice 3b, 2026-10-25, the pipe operator and literal parameter heads.** The lexer reads
+`|>` as its own token. In `parse.kel` a pipe drains its left operand as the loosest
+operator would, and the call that follows opens with one argument already counted,
+because that operand's records precede the call's own arguments in postorder. That is
+the reference's `f(x, args)`. The placeholder `_` is refused.
+
+A head whose sole parameter is a literal, `fn f(0)`, now records the parameter under no
+name and queues the guard `p0 == 0`, five records for one token, through a small record
+queue drained ahead of the next token. The reference lowers the pattern to `GetLocal(0)
+Const(0) CmpEq If`, before any parameter is bound, and a literal binds nothing. The host
+marks such a head as head mode 2, in which codegen tests first and copies no parameter.
+A literal beside another parameter, two literals, a literal with a `when` guard, and a
+negative literal are refused. `reconstruct.kel` holds sixteen heads per function, and the
+host now refuses more by name; it used to write past the head arrays, which surfaced as
+the shared-slot fault the baseline recorded for two rogue scripts.
+
+After slice 3b the corpus reads 52 Identical, 11 Unsupported, 7 NoVerdict, 1
+PipelineRejects and 4 RefRejects. `05_pipeline.kel` and `06_multiheaded.kel` became
+Identical. `parse.kel` interns 1,016 names.

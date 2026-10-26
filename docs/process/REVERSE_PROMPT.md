@@ -52,6 +52,11 @@ Each question is independent and none blocks the next slice.
    rolls, and reconstruct.kel's 1,024-record input refuses two others. Should either
    be raised, or should the fault become a named diagnostic first?
 
+9. reconstruct.kel holds sixteen heads per multiheaded function, and the host now refuses
+   more by name instead of faulting. `rogue_gear.kel` has 21 heads per function and
+   `rogue_bestiary.kel` 101, so both stay refused. May the head cap be raised, to 128 for
+   example, with its per-head arrays and loop bounds? Its cost is linear in the cap.
+
 ## Rulings received this session
 
 The operator ruled first-hand on 2026-10-25 to free the dead names in `parse.kel`,
@@ -80,7 +85,12 @@ in lexer.kel, and the corpus reads 50 of 75 sources identical, including the Ord
 interpreter. Stale equality flags in parse.kel, which the shipping cross-check had been
 refusing, are cleared.
 
+## Slice 3b
+
+The pipe operator and single literal parameter heads compile byte-identically, and the
+corpus reads 52 of 75 identical.
+
 ## Next
 
-Literal parameter heads, `for` over a non-range iterable, `use` signatures, and the
-remaining binding patterns.
+`for` over a non-range iterable, `use` signatures, refinement and newtypes, methods and
+`signed`, then the construct corpus for the types the repository's sources do not use.

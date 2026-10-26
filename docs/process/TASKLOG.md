@@ -6,6 +6,11 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-25 Order 6 slice 3b, the pipe and literal heads
+
+The pipe operator and single literal parameter heads compile byte-identically, and the
+corpus reads 52 of 75 identical. The sixteen-head reconstruct cap is now refused by name.
+
 ## 2026-10-25 Order 6 slice 3a, destructuring and wildcard let
 
 A destructuring filter in lexer.kel rewrites flat tuple patterns and wildcard lets into

@@ -4192,6 +4192,10 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
                     })
                 }
                 4 => cur.as_mut().unwrap().params += 1,
+                // A literal parameter head, lowered only by the shipping driver's head mode 2.
+                // This scaffold refuses it rather than compile the head without its test,
+                // which is the miscompile Order 6 slice 1 closed in the driver.
+                130 => panic!("a literal parameter head is lowered only by the shipping driver"),
                 6 => cur.as_mut().unwrap().param_types.push(val),
                 7 => cur.as_mut().unwrap().return_type = val,
                 // This historical scaffold keeps only scalar signature names.
@@ -9231,10 +9235,11 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             // helpers reduced peak residency from 423 to 403. The ratio exceeds four.
             // Re-measured 2026-10-25 after Order 6 slice 3 moved the main loop into
             // `lex_raw` and added the destructuring filter: 1650 and 403 became 1953
-            // and 377, since the old loop body no longer sits in `main`'s group.
+            // and 377, since the old loop body no longer sits in `main`'s group. The
+            // pipe token's compound code took it to 1968.
             "lexer",
             include_str!("../src/selfhost/kel/lexer.kel"),
-            1953,
+            1968,
             377,
         ),
         (

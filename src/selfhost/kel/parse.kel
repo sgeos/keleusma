@@ -579,6 +579,14 @@ private data ps {
     // how far over it is. APPENDED, per this file's rule about slot-addressed blocks.
     perr_code: Word,
     perr_detail: Word,
+    // Order 6: the literal parameters of the head being scanned, and a short queue of
+    // records emitted ahead of the next token. A literal head `fn f(0)` emits its test as
+    // the guard `p0 == 0`, five records for one token, through `hq`.
+    plit: Word,
+    hq_tag: [Word; 8],
+    hq_arg: [Word; 8],
+    hq_i: Word,
+    hq_n: Word,
 }
 
 // The shunting-yard operator stack. `drain_reason` selects the empty-stack drain: 0 commit
@@ -1472,6 +1480,10 @@ private data call {
     call_pending: Word,
     call_phase: Word,
     cdraining: Word,
+    // Set to one by a `|>` once its left operand has drained. The next call then opens
+    // with one argument already counted, because that operand's records precede the
+    // call's own arguments in postorder, which is how the reference evaluates it.
+    pipe_args: Word,
     // The native imports, one row per `use` that names a function, in declaration order,
     // which is the order the reference numbers natives in. `nat_path` holds a row's two
     // path segments at `2i` and `2i + 1`. A row whose path is not exactly two segments
@@ -5125,7 +5137,14 @@ fn step_op(k: Word) -> Word {
         ops.expect_operand = 1;
         0
     } else {
-    if k == Tok::Semi() as Word {
+    if k == Tok::Semi() as Word orelse k == 68 {
+        if k == 68 {
+            // The pipe `x |> f(args)`, the reference's `f(x, args)`. Drain the left
+            // operand down to the nearest mark as the loosest operator would, and the
+            // drain's completion (reason 20) arms the call that must follow.
+            ops.drain_reason = 20;
+            ops.draining = 1;
+        } else {
         if stmt.break_pending == 1 {
             // The `;` after a `break` was already recorded; consume it without draining.
             stmt.break_pending = 0;
@@ -5138,7 +5157,7 @@ fn step_op(k: Word) -> Word {
         } else {
             ops.drain_reason = 0;
             ops.draining = 1;
-        } }
+        } } }
         0
     } else {
     if k == Tok::Yield() as Word {
@@ -6385,7 +6404,8 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         // A call name was read; the `(` opens the argument list.
         if k == Tok::LParen() as Word {
             call.call_chunk[call.call_sp] = call.call_pending;
-            call.call_count[call.call_sp] = 0;
+            call.call_count[call.call_sp] = call.pipe_args;
+            call.pipe_args = 0;
             call.call_sp = call_push(call.call_sp);
             ops.opstack[ops.opsp] = OpCode::CallMark() as Word;
             ops.opsp = op_push(ops.opsp);
@@ -6858,8 +6878,10 @@ fn step_draining() -> Word {
         if ops.drain_reason == 18 {
             ops.draining = 0; ops.expect_operand = 1;
             checked.phase[checked.depth - 1] = 7; 0
-        } else { if ops.drain_reason == 19 {
-            ops.draining = 0; checked.emit = 1; 0
+        } else { if ops.drain_reason == 19 orelse ops.drain_reason == 20 {
+            ops.draining = 0;
+            if ops.drain_reason == 20 { call.pipe_args = 1; ops.expect_operand = 1; } else { checked.emit = 1; }
+            0
         } else {
         if ops.drain_reason <= 4 {
             // A statement, block, condition or branch tail has fully folded, so the
@@ -6872,6 +6894,7 @@ fn step_draining() -> Word {
             ps.last_struct = 0; ps.last_tuple = 0;
             ps.last_array = 0; ps.last_array_struct = 0; ps.last_array_enum = 0;
             ps.last_array_tuple = 0; ps.last_array_arr = 0;
+            call.pipe_args = 0;
         }
         if ops.drain_reason == 0 {
             if stmt.pstmt_sp > stmt.stmt_base {
@@ -7297,6 +7320,12 @@ fn body_next() -> Word {
             // Tok 67 is a byte the lexer does not recognize, among them the pipe and closure
             // bars. Refuse it rather than let a branch below skip it.
             if k == 67 { perr(pe_unresolved_syntax(), toks.at); }
+            // A `_` where a call argument is expected is the pipe's placeholder, `x |> f(a, _)`,
+            // which this stage does not place. Refused here, before reconstruct meets a call
+            // whose operand count disagrees with its records.
+            if k == 50 andalso ops.expect_operand == 1 andalso ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] == OpCode::CallMark() as Word {
+                perr(pe_unresolved_syntax(), toks.at);
+            }
             // A pending struct-field-access postfix intercepts the next token here, before the
             // normal dispatch, so the deep `step_dispatch_normal` chain is not deepened.
             if ps.unresolved_pending == 1 {
@@ -7390,9 +7419,61 @@ fn arm_body() -> Word {
 // it (drain reason 11), emits the guard's Done, and arms the real body. The guard
 // and body share the parameter frame, so no slot is consumed here.
 fn arm_guard() -> Word {
+    // A literal head already carries its test as the guard, and the reference tests the
+    // pattern and the guard with two separate branches, which one guard cannot express.
+    if ps.plit > 0 { perr(pe_pattern_syntax(), toks.at); }
     arm_body();
     ps.in_guard = 1;
     17
+}
+
+// Queue one record for emission ahead of the next token. `arg` is the full-word payload,
+// or -1 for a packed record whose payload is already in `tag`.
+fn hq_push(tag: Word, arg: Word) -> Word {
+    if ps.hq_n < 8 { ps.hq_tag[ps.hq_n] = tag; ps.hq_arg[ps.hq_n] = arg; ps.hq_n = ps.hq_n + 1; }
+    0
+}
+
+fn hq_take() -> Word {
+    let t = ps.hq_tag[ps.hq_i];
+    ps.emit_arg = ps.hq_arg[ps.hq_i];
+    ps.hq_i = ps.hq_i + 1;
+    if ps.hq_i >= ps.hq_n { ps.hq_i = 0; ps.hq_n = 0; }
+    t
+}
+
+// A literal parameter, `fn f(0)`. It occupies the parameter slot under no name, emits the
+// literal-parameter record (tag 130, the literal as payload), and queues the guard
+// `p0 == lit` in the records a written `when p0 == lit` produces: GUARDSTART, the Local,
+// the Literal, the `==` BinOp and DONE. The reference lowers the pattern test to
+// `GetLocal(0) Const(lit) CmpEq If`, which is what that guard lowers to. Only a single,
+// non-negative literal small enough to pack is admitted.
+fn literal_param(v: Word) -> Word {
+    ps.pname = 0;
+    if ps.pcount != 0 orelse v < 0 orelse v >= 1099511627776 { perr(pe_pattern_syntax(), toks.at); }
+    ps.pnames[ps.pcount] = 0 - 1;
+    ps.pstruct[ps.pcount] = 0;
+    ps.pdescriptor[ps.pcount] = 0;
+    ps.ptext[ps.pcount] = 0;
+    ps.ptuple[ps.pcount] = 0;
+    ps.penum[ps.pcount] = 0;
+    ps.parray[ps.pcount] = 0;
+    ps.parray_struct[ps.pcount] = 0;
+    ps.parray_tuple[ps.pcount] = 0;
+    ps.parray_arr[ps.pcount] = 0;
+    ps.parray_enum[ps.pcount] = 0;
+    ps.pbyte[ps.pcount] = 0;
+    ps.pscalar[ps.pcount] = 0;
+    vl.params[ps.pcount] = 0;
+    ps.pcount = param_push(ps.pcount);
+    ps.plit = ps.plit + 1;
+    hq_push(17, 0 - 1);
+    hq_push(Node::Local() as Word, 0 - 1);
+    hq_push(Node::Literal() as Word + v * 64, 0 - 1);
+    hq_push(Node::BinOp() as Word + OpCode::Eq() as Word * 64, 0 - 1);
+    hq_push(15, 0 - 1);
+    ps.emit_arg = v;
+    130
 }
 
 fn header_step(k: Word, v: Word) -> Word {
@@ -7488,6 +7569,7 @@ fn header_step(k: Word, v: Word) -> Word {
             ps.arr = 0;
             ps.arr_ret = 0;
             ps.pcount = 0;
+            ps.plit = 0;
             ps.text_params = 0; ps.text_used = 0; ps.text_return = 0;
             // Capture this function's chunk index (its name's position in `toks.chunks`) so its
             // return type is recorded against it.
@@ -8531,7 +8613,7 @@ fn header_sig(k: Word, v: Word) -> Word {
     // this stage does not lower. It used to fall through the scan unrecorded, so
     // `fn f(0)` became a head with no parameter and no test, a silent miscompile that only
     // the shipping cross-check refused.
-    if ps.pdepth == 1 andalso ps.pname == 1 andalso k != Tok::Ident() as Word andalso k != Tok::RParen() as Word {
+    if ps.pdepth == 1 andalso ps.pname == 1 andalso k != Tok::Ident() as Word andalso k != Tok::RParen() as Word andalso k != Tok::IntLit() as Word {
         perr(pe_pattern_syntax(), toks.at);
     }
     if ps.pdepth == 1 andalso ps.pname == 1 andalso k == Tok::Ident() as Word andalso (v == toks.true_id orelse v == toks.false_id) {
@@ -8739,7 +8821,7 @@ fn header_sig(k: Word, v: Word) -> Word {
             }
             8 + v * 64
         } else {
-            0
+            if ps.pdepth == 1 andalso ps.pname == 1 { literal_param(v) } else { 0 }
         }
         }
     } else {
@@ -8786,6 +8868,10 @@ fn header_sig(k: Word, v: Word) -> Word {
         if ps.pdepth == 0 {
             ps.pdone = 1;
             ps.rtype = 1;
+            // A literal is admitted only as the sole parameter. The reference tests every
+            // pattern before it binds any variable, so a literal beside a variable, or two
+            // literals, would need tests the one guard cannot order.
+            if ps.plit > 0 andalso ps.pcount != 1 { perr(pe_pattern_syntax(), toks.at); }
         }
         0
         }
@@ -8897,7 +8983,7 @@ fn step() -> Word {
     } else {
         ps.emit_arg = 0 - 1;
         let in_body = ps.in_body;
-        let w = step_body();
+        let w = if ps.hq_i < ps.hq_n { hq_take() } else { step_body() };
         if in_body == 1 andalso ps.perr_code == 0 { value_record(w); }
         // A guard fired somewhere below. Report it INSTEAD of the record just computed:
         // that record was produced from clamped state and is meaningless, and the host

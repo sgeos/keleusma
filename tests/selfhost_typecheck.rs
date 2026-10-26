@@ -4532,13 +4532,12 @@ fn the_documented_expression_and_statement_forms_are_censused() {
 
     let mut got = failing.clone();
     got.sort_unstable();
-    // The pipeline joined the failing set in Order 6 slice 1, and it is a refusal closing a
-    // silent misparse rather than a regression. The self-hosted lexer read the pipe bar as
-    // the arrow, which the body walk skips, so `1 |> g()` was parsed as `1 > g()` and
-    // counted as handled.
+    // The pipeline joined the failing set in Order 6 slice 1, a refusal closing a silent
+    // misparse, since the self-hosted lexer read the pipe bar as the arrow. It left the set
+    // in slice 3b, when the pipe was lowered as the reference lowers it.
     assert_eq!(
         got,
-        vec!["assert", "pipeline"],
+        vec!["assert"],
         "the set of documented expression and statement forms the self-hosted parser \
          cannot handle changed. A form leaving it is a gap closing to record; one \
          joining it is a regression every other test here would miss"

@@ -192,6 +192,10 @@ pub struct ParsedFn {
     /// because a count was all anything needed. Parameters are half the bindings a
     /// type check has to resolve, so the name is kept now rather than recovered.
     param_names: Vec<i64>,
+    /// Whether this head's sole parameter is a literal pattern, `fn f(0)`. The stage emits
+    /// the literal's test as this head's guard, and codegen lowers such a head without a
+    /// parameter copy, as the reference does.
+    literal_head: bool,
     /// Each `let` binding's `(frame slot, interned name id)`, in fold order.
     ///
     /// **Kept OUT of `body`.** The record stream `body` holds is what
@@ -304,7 +308,10 @@ impl ParsedFn {
 /// productivity to it — so this predicate never has to route one.
 fn is_multihead_group(group: &[&ParsedFn]) -> bool {
     debug_assert!(!group.is_empty(), "a head group is never empty");
-    group.len() > 1 || group.first().is_some_and(|h| !h.guard.is_empty())
+    group.len() > 1
+        || group
+            .first()
+            .is_some_and(|h| !h.guard.is_empty() || h.literal_head)
 }
 
 const KINDS: usize = 1;
@@ -2279,6 +2286,7 @@ fn try_parse_functions_impl(
                             guard: Vec::new(),
                             body: Vec::new(),
                             param_names: Vec::new(),
+                            literal_head: false,
                             let_names: Vec::new(),
                             let_annotations: Vec::new(),
                             annotation_records: alloc::collections::BTreeMap::new(),
@@ -2294,6 +2302,17 @@ fn try_parse_functions_impl(
                             text_boundary: 0,
                             data_bases: alloc::sync::Arc::new(Vec::new()),
                         })
+                    }
+                    // A literal parameter: a parameter with no name, its value carried for
+                    // the guard the stage emits beside it.
+                    130 => {
+                        let f = open_decl(&mut cur, code, val);
+                        f.params += 1;
+                        f.param_names.push(-1);
+                        f.literal_head = true;
+                        f.param_types.push(-1);
+                        f.param_type_records.push(Vec::new());
+                        f.param_layouts.push(None);
                     }
                     4 => {
                         let f = open_decl(&mut cur, code, val);
@@ -4549,6 +4568,15 @@ pub fn seed_reconstruct_multihead_shared(
     heads: &[&ParsedFn],
     pc: usize,
 ) -> Vec<u8> {
+    // `reconstruct.kel` holds sixteen heads per function. A group past that used to write
+    // past the head arrays and surface as a shared-slot index fault, which read as a
+    // stage defect rather than a capacity.
+    assert!(
+        heads.len() <= 16,
+        "a multiheaded function with {} heads is outside the self-hosted subset: \
+         reconstruct.kel holds 16 heads per function",
+        heads.len()
+    );
     // Concatenate every head's guard then body records, tracking the per-head offsets.
     let mut recs: Vec<(i64, i64)> = Vec::new();
     let mut gs = Vec::new();
@@ -4636,13 +4664,22 @@ fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize, chunk: &str) ->
     let read_side = |vm: &Vm<'_, '_>, shared: &[u8], base: usize| -> Vec<i64> {
         (0..64).map(|k| rd(vm, shared, base + k)).collect()
     };
+    let mut head_parts = read_side(&vm, &shared, RC_AST_HEAD_PARTS);
+    // A literal head's guard is its pattern test. Mode 2 tells codegen to test before any
+    // parameter copy and to copy nothing, which is the reference's order: patterns are
+    // tested before variables are bound, and a literal binds no variable.
+    for (h, head) in heads.iter().enumerate() {
+        if head.literal_head && h * 4 + 1 < head_parts.len() {
+            head_parts[h * 4 + 1] = 2;
+        }
+    }
     Body {
         nodes,
         call_args: read_side(&vm, &shared, RC_AST_CALL_ARGS),
         for_parts: read_side(&vm, &shared, RC_AST_FOR_PARTS),
         match_parts: read_side(&vm, &shared, RC_AST_MATCH_PARTS),
         limit_parts: read_side(&vm, &shared, RC_AST_LIMIT_PARTS),
-        head_parts: read_side(&vm, &shared, RC_AST_HEAD_PARTS),
+        head_parts,
         category: rd(&vm, &shared, RC_AST_CATEGORY),
         root,
     }

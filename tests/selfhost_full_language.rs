@@ -61,8 +61,8 @@ const CORPUS: &[(&str, Class)] = &[
     ("examples/scripts/02_struct_field.kel", Identical),
     ("examples/scripts/03_enum_match.kel", Identical),
     ("examples/scripts/04_for_in.kel", Unsupported),
-    ("examples/scripts/05_pipeline.kel", Unsupported),
-    ("examples/scripts/06_multiheaded.kel", Unsupported),
+    ("examples/scripts/05_pipeline.kel", Identical),
+    ("examples/scripts/06_multiheaded.kel", Identical),
     ("examples/scripts/07_refinement.kel", Unsupported),
     ("examples/scripts/08_method_dispatch.kel", Unsupported),
     ("examples/scripts/09_big_numbers.kel", Identical),
@@ -295,8 +295,9 @@ fn skipped_tokens_are_refused_or_lowered_rather_than_dropped() {
     let cases: &[(&str, Class)] = &[
         // Parameter patterns are refused. The controls keep plain parameters identical.
         (
+            // A literal head was refused here in slice 1 and is lowered since slice 3b.
             "fn c(0) -> Word { 0 } fn c(n: Word) -> Word { n } fn main() -> Word { c(3) }",
-            Unsupported,
+            Identical,
         ),
         (
             "fn c(true) -> Word { 0 } fn c(b: bool) -> Word { 1 } fn main() -> Word { c(true) }",
@@ -321,8 +322,10 @@ fn skipped_tokens_are_refused_or_lowered_rather_than_dropped() {
         ("fn c() -> Word { 1 } fn main() -> Word { c() }", Identical),
         // An unrecognized byte is refused rather than read as an arrow.
         (
+            // The pipe was refused here in slice 1 and is lowered since slice 3b. The point
+            // of the slice 1 case stands: it no longer reads as a comparison.
             "fn d(x: Word) -> Word { x } fn main() -> Word { 6 |> d() }",
-            Unsupported,
+            Identical,
         ),
         ("fn main() -> Word { if 6 > 1 { 1 } else { 0 } }", Identical),
         // A trailing comma closes a struct literal, in any field order and nested.
@@ -528,6 +531,79 @@ fn destructuring_and_wildcard_lets_compile_and_stale_equality_flags_are_cleared(
         (
             "fn main(c: bool) -> (Word, Word) { if c { (1, 2) } else { let x = 3; if x == 0 { (0, 0) } else { (x, x) } } }",
             Identical,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Slice 3b of Order 6, the pipe operator and literal parameter heads. `x |> f(a)` is the
+/// reference's `f(x, a)`, and a single literal parameter `fn f(0)` is lowered as the
+/// reference's pattern test, before any copy and with no copy of its own. A literal beside
+/// another parameter, a literal with a `when` guard, and the pipe's `_` placeholder are
+/// refused.
+#[test]
+fn the_pipe_and_literal_heads_compile_or_are_refused() {
+    let cases: &[(&str, Class)] = &[
+        (
+            "fn d(x: Word) -> Word { x + x }\nfn a(x: Word, y: Word) -> Word { x + y }\nfn main() -> Word { 6 |> d() |> a(1) }",
+            Identical,
+        ),
+        (
+            "fn d(x: Word) -> Word { x + x }\nfn main() -> Word { 6 + 1 |> d() }",
+            Identical,
+        ),
+        (
+            "fn d(x: Word) -> Word { x + x }\nfn main() -> Word { let v = 3 |> d(); v }",
+            Identical,
+        ),
+        (
+            "fn d(x: Word) -> Word { x + x }\nfn a(x: Word, y: Word) -> Word { x + y }\nfn main() -> Word { a(2 |> d(), 5 |> d()) }",
+            Identical,
+        ),
+        (
+            "use host::f\nfn main() -> Word { 2 |> host::f() }",
+            Identical,
+        ),
+        (
+            "fn d(x: Word) -> Word { x + x }\nfn a(x: Word, y: Word) -> Word { x + y }\nfn main() -> Word { 6 |> a(_, 1) }",
+            Unsupported,
+        ),
+        (
+            "fn c(0) -> Word { 0 }\nfn c(1) -> Word { 1 }\nfn c(n: Word) -> Word { n + 10 }\nfn main() -> Word { c(3) }",
+            Identical,
+        ),
+        (
+            "fn w(0) -> Word { 2 }\nfn w(1) -> Word { 4 }\nfn main() -> Word { w(1) }",
+            Identical,
+        ),
+        (
+            "fn c(0) -> Word { let x = 5; x + 1 }\nfn c(n: Word) -> Word { let y = n; y }\nfn main() -> Word { c(3) }",
+            Identical,
+        ),
+        (
+            "fn f(0) -> Word { 1 }\nfn main() -> Word { f(0) }",
+            Identical,
+        ),
+        (
+            "yield g(0) -> Word { yield 1 }\nyield g(n: Word) -> Word { yield n }\nloop main(r: Word) -> Word { g(r) }",
+            Identical,
+        ),
+        (
+            "fn c(0, b: Word) -> Word { b }\nfn c(a: Word, b: Word) -> Word { a + b }\nfn main() -> Word { c(1, 2) }",
+            Unsupported,
+        ),
+        (
+            "fn c(0) -> Word when true { 0 }\nfn c(n: Word) -> Word { n }\nfn main() -> Word { c(3) }",
+            Unsupported,
         ),
     ];
     let mut mismatches = Vec::new();

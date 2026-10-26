@@ -153,7 +153,7 @@ fn peek_at(pos: Word) -> Word {
 // two-byte operator"; the caller subtracts one to recover the code. Factored out
 // of the loop so the per-iteration body stays shallow (the parser stage learned
 // that deep loop nesting overflows the host compiler's recursion-depth limit).
-// Codes: 0 `==`, 1 `!=`, 2 `<=`, 3 `>=`, 4 `::`, 5 `..`, 6 `=>`, 7 `->`.
+// Codes: 0 `==`, 1 `!=`, 2 `<=`, 3 `>=`, 4 `::`, 5 `..`, 6 `=>`, 7 `->`, 8 `|>`.
 fn compound_code(b: Word, next: Word) -> Word {
     if b == 61 {
         // `=` begins `==` (code 0) or `=>` (code 6); otherwise a lone `=`.
@@ -165,7 +165,8 @@ fn compound_code(b: Word, next: Word) -> Word {
     if b == 58 { if next == 58 { 5 } else { 0 } } else {   // `::`
     if b == 46 { if next == 46 { 6 } else { 0 } } else {   // `..`
     if b == 45 { if next == 62 { 8 } else { 0 } } else {   // `->`
-    0 } } } } } } }
+    if b == 124 { if next == 62 { 9 } else { 0 } } else {  // `|>`
+    0 } } } } } } } }
 }
 
 // Keyword recognition (increment 3). An identifier run whose bytes spell one of
@@ -319,7 +320,8 @@ fn op2_tok(code: Word) -> Word {
     if code == 4 { 51 } else {   // ::  ColCol
     if code == 5 { 47 } else {   // ..  DotDot
     if code == 6 { 49 } else {   // =>  FatArrow
-    4 } } } } } } }              // ->  Arrow (catch-all)
+    if code == 8 { 68 } else {   // |>  Pipe, Tok 68
+    4 } } } } } } } }            // ->  Arrow (catch-all)
 }
 
 // Map a single punctuation byte to its parser `Tok` code, split into a delimiter
