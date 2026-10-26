@@ -1297,6 +1297,9 @@ private data mat {
     // The payload field position in the variant pattern being read, Order 6. A wildcard `_`
     // advances it without a bind, so it can run ahead of `mpat_pcount`, the bind count.
     mpat_fpos: Word,
+    // Per match depth, the frame slot plus one of a variable arm `v => ...` being read, zero
+    // when the arm is not one, Order 6. The arm's end wraps its result in `LetIn(slot)`.
+    match_varslot: [Word; 8],
 }
 
 // The data-field layout table, accumulated by the header as each `data` block is parsed
@@ -5441,10 +5444,15 @@ fn step_match(k: Word, v: Word) -> Word {
             if ps.found_flag == 1 {
                 mat.enum_name = v;
                 mat.mpat_phase = 1;
+                0
             } else {
-                perr(pe_pattern_syntax(), v);
-            }
-            0
+            // `true` and `false` arrive as identifiers, and as patterns they are literals, not
+            // bindings, so they keep the refusal a literal boolean pattern has here.
+            if mat.match_isenum[sp] == 0 andalso v != toks.true_id andalso v != toks.false_id {
+                variable_arm(sp, v)
+            } else {
+                perr(pe_pattern_syntax(), v)
+            } }
         } else {
             if k == Tok::RBrace() as Word { mat.match_build = 1; }
             else { perr(pe_pattern_syntax(), v); }
@@ -5456,6 +5464,8 @@ fn step_match(k: Word, v: Word) -> Word {
             mat.match_phase[sp] = 4;
             ops.expect_operand = 1;
         } else {
+            // A guard on a variable arm is not lowered here.
+            if mat.match_varslot[sp] > 0 { perr(pe_unresolved_syntax(), toks.at); }
             if k == Tok::When() as Word {
                 mat.match_phase[sp] = 5;
                 mat.match_guarded[sp] = 1;
@@ -5482,9 +5492,37 @@ fn step_match(k: Word, v: Word) -> Word {
 }
 
 // Close the arm's lexical scope and wrap its guard/result pair when present.
+// A variable arm `v => ...` on a scalar match. The reference binds the scrutinee to a fresh
+// slot and runs the result, with no test, which is `let v = <scrutinee temp>; result` on a
+// wildcard arm. Emit the wildcard record, queue the scrutinee's Local as the bound value, and
+// scope the name to the arm. The arm's end emits the `LetIn`.
+fn variable_arm(sp: Word, v: Word) -> Word {
+    let slot = ps.pcount + stmt.slot_count;
+    stmt.slot_count = stmt.slot_count + 1;
+    clear_let_shape(stmt.let_count);
+    stmt.let_names[stmt.let_count] = v;
+    stmt.scope_slot[stmt.let_count] = slot;
+    stmt.let_scalar[stmt.let_count] = 0;
+    stmt.let_count = let_push(stmt.let_count);
+    mat.match_varslot[sp] = slot + 1;
+    mat.match_phase[sp] = 3;
+    mat.match_variant[sp] = 0 - 1;
+    mat.match_argcount[sp] = mat.match_argcount[sp] + 1;
+    hq_push(Node::Local() as Word, mat.match_temp[sp]);
+    ps.emit_arg = 0;
+    72
+}
+
 fn finish_match_arm() -> Word {
     let sp = mat.match_sp - 1;
     stmt.let_count = mat.match_let_base[sp];
+    if mat.match_varslot[sp] > 0 {
+        let slot = mat.match_varslot[sp] - 1;
+        mat.match_varslot[sp] = 0;
+        mat.match_catchall[sp] = 1;
+        ps.emit_arg = slot;
+        Node::LetIn() as Word
+    } else {
     if mat.match_guarded[sp] == 0 {
         let variant = mat.match_variant[sp];
         if variant == 0 - 1 { mat.match_catchall[sp] = 1; }
@@ -5496,7 +5534,7 @@ fn finish_match_arm() -> Word {
         mat.match_guarded[sp] = 0;
         ps.emit_arg = 0;
         71
-    } else { 0 }
+    } else { 0 } }
 }
 
 // Emit the match build record (kind 34): its arg packs the scrutinee temp slot and the

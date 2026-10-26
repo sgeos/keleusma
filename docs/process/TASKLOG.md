@@ -6,6 +6,11 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-26 Variable match arms
+
+A variable arm on a scalar match compiles byte-identically. The census reads 57 Identical
+of 72 rows. PR 549 merged.
+
 ## 2026-10-26 Wildcard and unused payloads
 
 Wildcard payload patterns compile byte-identically, and an unused named payload no longer

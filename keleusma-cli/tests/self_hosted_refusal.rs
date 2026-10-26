@@ -64,10 +64,12 @@ fn compile_self_hosted(src: &str, out: &str) -> (bool, String) {
 fn a_refusal_names_the_construct_on_the_terminal() {
     // (tag, source, the phrase a user must see)
     const CASES: &[(&str, &str, &str)] = &[
+        // A variable arm on a scalar match compiles since Order 6. On an enum scrutinee it
+        // is still refused, and named.
         (
             "varpat",
-            "fn main(a: Word) -> Word { match a { v => v } }\n",
-            "a variable pattern `v`",
+            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, x => 2 } }\n",
+            "a variable pattern `x`",
         ),
         (
             "assert",
