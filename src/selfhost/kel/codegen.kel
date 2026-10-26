@@ -416,6 +416,9 @@ private data st {
     cs_cur: Word,
     cs_sp: Word,
     cs_rem: [Word; 8],
+    // Per open bare loop, the break-list watermark at its `Loop`, Order 6, so its `EndLoop`
+    // patches the user `break`s recorded inside it, as a `mendloop` does for its own.
+    cf_lbstart: [Word; 32],
 }
 
 // Wire. The stage buffers ops, then streams each as `tag + operand*64`, 0 is
@@ -521,6 +524,7 @@ fn emit_raw(word: Word) -> Word {
     // back-edge to the op after the `Loop` (its condition).
     if tag == wire.loopop {
         st.cf_loop[st.cf_lsp] = pos;
+        st.cf_lbstart[st.cf_lsp] = st.cf_mbc;
         st.cf_lsp = st.cf_lsp + 1;
     }
     if tag == wire.breakif {
@@ -532,6 +536,13 @@ fn emit_raw(word: Word) -> Word {
         st.ops[lp] = wire.loopop + (pos + 1) * wire.radix;
         st.ops[bp] = wire.breakif + (pos + 1) * wire.radix;
         st.ops[pos] = wire.endloop + (lp + 1) * wire.radix;
+        // A user `break` inside this bare loop is an `mbreak` on the shared break list, and
+        // exits past this `EndLoop` like the header's `BreakIf`.
+        let lbstart = st.cf_lbstart[st.cf_lsp - 1];
+        for i in lbstart..st.cf_mbc limit 64 {
+            st.ops[st.cf_mbreak[i]] = wire.mbreak + (pos + 1) * wire.radix;
+        }
+        st.cf_mbc = lbstart;
         st.cf_lsp = st.cf_lsp - 1;
     }
     // Match backpatching. A `match` lowers to a virtual loop whose arms each test
@@ -1625,8 +1636,11 @@ fn push_const_value(value: Word) -> Word {
 fn push_break(p: Word) -> Word {
     push_visit(ast.lhs[p]);
     push_emit(wire.mbreak);
-    push_emit(wire.setlocal + ast.args[p] * wire.radix);
-    push_const_value(2)
+    // A bare loop's `break`, marked 2^20 by the parser, records no outcome.
+    if ast.args[p] >= 1048576 { 0 } else {
+        push_emit(wire.setlocal + ast.args[p] * wire.radix);
+        push_const_value(2)
+    }
 }
 
 // Andalso (kind 8): left, Dup, If, PopN(1), right, Else, EndIf. The If/Else markers

@@ -871,6 +871,103 @@ fn float_arithmetic_on_typed_operands_compiles() {
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
 
+/// Wildcard payloads in a variant pattern, `E::V(_)`, which the reference reads nothing for,
+/// so only the field position advances and a later named payload still reads its own offset.
+/// Also a named payload the arm never reads, which used to panic type-input extraction because
+/// its slot had no identity.
+#[test]
+fn wildcard_and_unused_payloads_compile() {
+    const E: &str =
+        "enum S { Ok, Err(Word), P(Word, Word) }\nfn g(a: Word) -> S { S::P(a, a + 1) }\n";
+    let cases: &[(String, Class)] = &[
+        (
+            format!(
+                "{E}fn main() -> Word {{ match g(2) {{ S::Ok => 1, S::Err(_) => 0, S::P(a, b) => a }} }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{E}fn main() -> Word {{ match g(2) {{ S::Ok => 1, S::Err(c) => 0, S::P(a, b) => b }} }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{E}fn main() -> Word {{ match g(2) {{ S::Ok => 1, S::Err(c) => c, S::P(_, b) => b }} }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{E}fn main() -> Word {{ match g(2) {{ S::Ok => 1, S::Err(c) => c, S::P(a, _) => a }} }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{E}fn main() -> Word {{ match g(2) {{ S::Ok => 1, S::Err(_) => 0, S::P(_, _) => 2 }} }}"
+            ),
+            Identical,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// A `break` in a bare `for`, one without `limit`. The parser took it for a `limit` loop's
+/// break, so it stored an outcome code into slot 0, which held the first parameter, and its
+/// `Break` was never patched and kept target 0. The shipping cross-check refused every such
+/// program. A bare loop's `break` is now the `Break` alone, patched by the loop's `EndLoop`.
+/// The nested cases pin that each break exits its own loop.
+#[test]
+fn a_break_in_a_bare_for_compiles() {
+    let cases: &[(&str, Class)] = &[
+        (
+            "fn main(r: Word) -> Word { for i in 0..3 { if i == r { break; } } r }",
+            Identical,
+        ),
+        (
+            "fn main(r: Word) -> Word { for i in 0..3 { if i == r { break; } else { let y = i; } } r }",
+            Identical,
+        ),
+        (
+            "fn main(r: Word) -> Word { for i in 0..3 { for j in 0..2 { if j == r { break; } } if i == r { break; } } r }",
+            Identical,
+        ),
+        (
+            "fn main(r: Word) -> Word { for i in 0..3 limit 3 { for j in 0..2 { if j == r { break; } } if i == r { break; } } r }",
+            Identical,
+        ),
+        (
+            "fn main(r: Word) -> Word { for i in 0..3 { for j in 0..2 limit 2 { if j == r { break; } } if i == r { break; } } r }",
+            Identical,
+        ),
+        (
+            "loop main(r: Word) -> (Word, Word) { for i in 0..5 { if i == r { break; } } let _ = yield (0, 1); (0, 0) }",
+            Identical,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
 /// An enum `match` in a stream chunk lowers to a loop whose every arm breaks and whose
 /// no-match path traps. The reference charges such a single-pass loop the larger of that pass
 /// and its costliest break, and `analyze.kel` charged the break alone, an execution bound 21
@@ -1164,6 +1261,11 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
         Identical,
     ),
     (
+        "Stmt::Break::BareLoop",
+        "fn main(r: Word) -> Word { for i in 0..3 { if i == r { break; } } r }",
+        Identical,
+    ),
+    (
         "Stmt::DataFieldAssign",
         "private data d { n: Word }\nfn main() -> Word { d.n = 3; d.n }",
         Identical,
@@ -1357,7 +1459,7 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
     (
         "Pattern::Enum::WildcardPayload",
         "enum S { Ok, Err(Word) }\nfn g(a: Word) -> S { S::Err(a) }\nfn main() -> Word { match g(2) { S::Ok => 1, S::Err(_) => 0 } }",
-        Unsupported,
+        Identical,
     ),
     (
         "Pattern::Struct",
