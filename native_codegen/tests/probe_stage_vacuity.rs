@@ -1069,15 +1069,20 @@ fn verify_stage_verdict(m: &Module, seed: &[u8]) -> Result<i64, String> {
 /// The top-level example scripts, as candidate reconstruct subjects.
 ///
 /// Deliberately NOT recursive: the `rogue` and `piano_roll` subdirectories carry
-/// multi-file programs whose parts do not stand alone.
+/// multi-file programs whose parts do not stand alone. The `native_witnesses`
+/// subdirectory is read as well, because its programs do stand alone and sat at
+/// the top level until absorption 95 moved them.
 fn stage_sources_examples() -> Vec<std::path::PathBuf> {
-    let dir = std::path::Path::new("../examples/scripts");
-    let mut out: Vec<_> = std::fs::read_dir(dir)
-        .expect("read examples/scripts")
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "kel"))
-        .collect();
+    let mut out: Vec<_> = [
+        "../examples/scripts",
+        "../examples/scripts/native_witnesses",
+    ]
+    .iter()
+    .flat_map(|dir| std::fs::read_dir(dir).expect("read an example script directory"))
+    .filter_map(|e| e.ok())
+    .map(|e| e.path())
+    .filter(|p| p.extension().is_some_and(|x| x == "kel"))
+    .collect();
     out.sort();
     out
 }

@@ -34,7 +34,7 @@ use keleusma_native::{LowerOptions, NATIVE_SYMBOL_PREFIX, host_native_declaratio
 fn witness_source() -> String {
     std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples/scripts/external_native_witness.kel"),
+            .join("../examples/scripts/native_witnesses/external_native_witness.kel"),
     )
     .expect("the external-native witness module")
 }

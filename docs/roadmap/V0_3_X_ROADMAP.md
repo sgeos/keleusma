@@ -73,7 +73,7 @@ rather than about the corpus. The constructs are not all obvious: `Word` divisio
 `CheckedDiv`, and a runtime array index emits `GetIndex`, not `Len`/`BoundsCheck` -- the checked
 and length forms come from the fixed-point and dynamic-length surfaces.
 
-**DONE, IN PART, AND IT FOUND REAL SCOPE.** `examples/scripts/opcode_witness.kel` witnesses ten of
+**DONE, IN PART, AND IT FOUND REAL SCOPE.** `examples/scripts/native_witnesses/opcode_witness.kel` witnesses ten of
 the sixteen and takes the census to **60 of 66**. **The native backend REFUSES it**, on
 `UnsupportedOp` for `Add`, `WordToFixed(16)` and `IntToFloat` -- the first concrete, demonstrated
 items of remaining Workstream A scope. The corpus's previous zero backend refusals was a fact about

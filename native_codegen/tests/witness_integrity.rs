@@ -34,7 +34,10 @@ use keleusma::bytecode::Module;
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use std::collections::BTreeSet;
 
-const SCRIPTS: &str = "../examples/scripts";
+/// The witness programs moved here from the flat `examples/scripts/` in
+/// absorption 95, out of reach of the V0.2.X line's flat scans of that
+/// directory. Every file that declares a claim is in this directory.
+const SCRIPTS: &str = "../examples/scripts/native_witnesses";
 
 fn build(src: &str) -> Option<Module> {
     tokenize(src)

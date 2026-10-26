@@ -66,6 +66,36 @@ function, and the stream chunk is now a thin wrapper. The population stays at
 29 chunks and 406 pairs. The lexer's work has left this stream-only
 measurement, which the pin in `spike_bounds_transfer.rs` records.
 
+## The hosted run found a third shared-directory collision
+
+The first hosted run on pull request 542 failed in upstream's new
+`tests/selfhost_full_language.rs`, which pins the self-hosted outcome of
+every source in the directories it scans flat. The merged tree differed
+from upstream's in two ways, and both were this line's content.
+
+1. **Six witness programs sat directly in `examples/scripts/`.** They are
+   this line's, and upstream's table does not name them. They now live in
+   `examples/scripts/native_witnesses/` with their own README, and the shared
+   README is upstream's text again. Every native corpus loader walks
+   recursively and still reaches them. The two flat native scans,
+   `witness_integrity.rs` and the reconstruct candidates in
+   `probe_stage_vacuity.rs`, read the subdirectory explicitly. This is the
+   third collision of this kind, after a size pin and
+   `tests/confinement_analysis.rs`.
+2. **`examples/scripts/rogue/rogue_dungen.kel` declares
+   `use host::rng_range(Word, Word) -> Word`** on this line, which gives the
+   native result a width. Upstream's file has the untyped form, and on the
+   merged tree the self-hosted parser refuses the typed declaration where the
+   table pins NoVerdict. This line keeps root `tests/` read-only, so it asked
+   the V0.2.X line in `v030-20261026-full-language-table` whether to adopt
+   the typed form upstream. Their reply,
+   `v023-20261026-full-language-table-reply`, adopts it in the Order 6 pull
+   request after 543, together with slice 2b, which reads `use` signatures with
+   a scalar return. On their tree the file stays NoVerdict, so their pinned
+   class does not change. This absorption merges once that pull request is on
+   `v0.2.3` and has been merged into this branch. The ruling is the V0.2.X
+   line's, relayed by interline, and not an operator ruling.
+
 ## Verification
 
 Recorded below, run locally with `RUSTC_WRAPPER=` and
@@ -87,3 +117,18 @@ The re-pin changed one assertion and its comment in one test file, and only
 that file was rerun after it. The root guards were rerun after this table was
 written. These checks do not run the root workspace suite or the self-host
 tier. The hosted run on the pull request is the integration check.
+
+After the witness move the whole run was repeated on the moved tree, which did
+not change during it. Logs are under ignored `tmp/abs-95b/`.
+
+| Check | Result |
+|---|---|
+| fmt, both clippy configurations, doc and shellcheck | status zero |
+| Native suites, default and `narrow-float-32` | 841 passed each, 0 failed, so no pinned figure moved |
+| The four root guards | 17 passed |
+| Root `confinement_analysis` and `rogue_scripts` | 62 passed |
+| Root `selfhost_full_language` `the_corpus_table_names_every_source_once` with `self-host` | 1 passed |
+
+The table's per-source outcome test was not run locally. It takes about
+twenty minutes on the hosted runner and still expects the untyped
+`rogue_dungen.kel` until the V0.2.X change above is absorbed.

@@ -1,6 +1,6 @@
 //! **WHICH OPCODES CAN THE BACKEND ACTUALLY LOWER?**
 //!
-//! `examples/scripts/opcode_witness.kel` produced three `UnsupportedOp`
+//! `examples/scripts/native_witnesses/opcode_witness.kel` produced three `UnsupportedOp`
 //! refusals, and **three is a floor rather than a count**: `module_refusals`
 //! reports the FIRST failure per chunk, so anything after `Add` inside
 //! `byte_mix` is invisible. Workstream A's milestone is that the whole language

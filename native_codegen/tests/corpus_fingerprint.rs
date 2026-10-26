@@ -292,13 +292,25 @@ const PINNED: &[(&str, u64)] = &[
     ("examples/scripts/14_frame_log.kel", 0x295b974b908054b5),
     ("examples/scripts/15_pixel_blend.kel", 0xdc03ec3362c45a3f),
     (
-        "examples/scripts/external_native_witness.kel",
+        "examples/scripts/native_witnesses/external_native_witness.kel",
         0x082cb18d1090211b,
     ),
-    ("examples/scripts/fixed_arithmetic.kel", 0x81978de44e2a4fd6),
-    ("examples/scripts/fixed_conversions.kel", 0x628add26f68053a8),
-    ("examples/scripts/float_witness.kel", 0x492f9b0110f02245),
-    ("examples/scripts/opcode_witness.kel", 0xeda34a70e0546930),
+    (
+        "examples/scripts/native_witnesses/fixed_arithmetic.kel",
+        0x81978de44e2a4fd6,
+    ),
+    (
+        "examples/scripts/native_witnesses/fixed_conversions.kel",
+        0x628add26f68053a8,
+    ),
+    (
+        "examples/scripts/native_witnesses/float_witness.kel",
+        0x492f9b0110f02245,
+    ),
+    (
+        "examples/scripts/native_witnesses/opcode_witness.kel",
+        0xeda34a70e0546930,
+    ),
     (
         "examples/scripts/piano_roll/piano_roll_0.kel",
         0x0165242923cee8dd,
@@ -339,7 +351,10 @@ const PINNED: &[(&str, u64)] = &[
         "examples/scripts/piano_roll/piano_roll_9.kel",
         0x6f0eda1f8db18364,
     ),
-    ("examples/scripts/refused_witness.kel", 0xbe747a6ae1c8ea22),
+    (
+        "examples/scripts/native_witnesses/refused_witness.kel",
+        0xbe747a6ae1c8ea22,
+    ),
     (
         "examples/scripts/rogue/rogue_ai_boss.kel",
         0x51c63edcd748eebf,
