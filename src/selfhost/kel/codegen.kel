@@ -274,25 +274,25 @@ const data wire {
 // under it).
 shared data ast {
     root: Word,
-    kinds: [Word; 1024],
-    args: [Word; 1024],
-    lhs: [Word; 1024],
-    rhs: [Word; 1024],
+    kinds: [Word; 4096],
+    args: [Word; 4096],
+    lhs: [Word; 4096],
+    rhs: [Word; 4096],
     // The per-function side arrays, sized 256 (was 64): each accumulates across a whole
     // function -- `limit_parts` twelve words per `for .. limit` loop, `call_args` one per
     // call argument -- and the stage's own largest dispatch functions (with five to seven
     // scan loops) exceed a 64-word `limit_parts`. The consuming loops bound per-entity counts
     // (one call's args, one match's arms), so those stay `limit 64`.
-    call_args: [Word; 256],
-    for_parts: [Word; 256],
-    match_parts: [Word; 256],
-    limit_parts: [Word; 256],
-    head_parts: [Word; 256],
+    call_args: [Word; 1024],
+    for_parts: [Word; 1024],
+    match_parts: [Word; 1024],
+    limit_parts: [Word; 1024],
+    head_parts: [Word; 1024],
     param_count: Word,
     category: Word,
     // A separate command translates data operands through parser-produced field ranges.
     relocate_mode: Word, relocate_count: Word, relocate_kind: Word, relocate_arg: Word,
-    relocate_source: [Word; 640], relocate_length: [Word; 640], relocate_target: [Word; 640],
+    relocate_source: [Word; 1024], relocate_length: [Word; 1024], relocate_target: [Word; 1024],
 }
 
 // The work-stack (R3.1), the op buffer the stage backpatches, and the constant
@@ -305,7 +305,7 @@ shared data ast {
 // position stack (depth `cf_sp`) recording where the open `If`/`Else` markers
 // sit in `ops`. All persist across the loop's per-iteration RESET.
 private data st {
-    stack: [Word; 2048],
+    stack: [Word; 8192],
     sp: Word,
     started: Word,
     ret_done: Word,
@@ -314,7 +314,7 @@ private data st {
     // -- exceed 1024 emitted ops for their own self-compilation. `st` is private data, so this size
     // is internal to the program and does not touch the wire format, the shared-data layout, or
     // `BYTECODE_VERSION`. The V2 16 MB shared ceiling admits the larger private frame.
-    ops: [Word; 2048],
+    ops: [Word; 8192],
     op_count: Word,
     emit_cursor: Word,
     cf_if: [Word; 32],
@@ -330,11 +330,13 @@ private data st {
     cf_mlsp: Word,
     cf_mbreak: [Word; 64],
     cf_mbc: Word,
-    pool: [Word; 64],
+    // Constants per chunk, raised from 64 to 1,024 under the operator's ruling of 2026-10-26
+    // that limits may be raised, since a piano roll's `main` holds more than 64.
+    pool: [Word; 1024],
     // Per pool entry, the constant kind: 0 an Int (the payload is the value), 1 a StaticStr (the
     // payload is the lexer intern id the host resolves to string bytes). Streamed after the pool
     // values so the host builds the right ConstValue per entry.
-    pool_tag: [Word; 64],
+    pool_tag: [Word; 1024],
     pool_count: Word,
     count_done: Word,
     pool_cursor: Word,
@@ -612,7 +614,7 @@ fn push_literal(p: Word) -> Word {
 // when an Int value equals a StaticStr's intern id.
 fn intern_int(value: Word) -> Word {
     st.dup_idx = st.pool_count;
-    for i in 0..st.pool_count limit 64 {
+    for i in 0..st.pool_count limit 1024 {
         if st.pool[i] == value andalso st.pool_tag[i] == 0 {
             st.dup_idx = i;
         }
@@ -631,7 +633,7 @@ fn intern_int(value: Word) -> Word {
 // and the `IsEnum` enum-name/variant-name operands.
 fn intern_str(id: Word) -> Word {
     st.dup_idx = st.pool_count;
-    for i in 0..st.pool_count limit 64 {
+    for i in 0..st.pool_count limit 1024 {
         if st.pool[i] == id andalso st.pool_tag[i] == 1 {
             st.dup_idx = i;
         }
@@ -650,7 +652,7 @@ fn intern_str(id: Word) -> Word {
 // false/true results (the reference bakes them as `ConstValue::Bool`, not Int).
 fn intern_bool(value: Word) -> Word {
     st.dup_idx = st.pool_count;
-    for i in 0..st.pool_count limit 64 {
+    for i in 0..st.pool_count limit 1024 {
         if st.pool[i] == value andalso st.pool_tag[i] == 2 {
             st.dup_idx = i;
         }
@@ -675,7 +677,7 @@ fn push_strlit(p: Word) -> Word {
 fn push_floatlit(p: Word) -> Word {
     let id = ast.args[p];
     st.dup_idx = st.pool_count;
-    for i in 0..st.pool_count limit 64 {
+    for i in 0..st.pool_count limit 1024 {
         if st.pool[i] == id andalso st.pool_tag[i] == 3 { st.dup_idx = i; }
     }
     let idx = st.dup_idx;
@@ -3123,7 +3125,9 @@ fn push_multihead(p: Word) -> Word {
     let base = ast.args[p]; let n = ast.rhs[p];
     st.head_next = ast.param_count;
     push_emit(wire.trap + wire.nomatchhead * wire.radix);
-    for hj in 0..n limit 64 {
+    // The head capacity, raised from 16 with reconstruct.kel's head arrays. This loop held
+    // 64 until a 65-head function tripped it.
+    for hj in 0..n limit 128 {
         push_work(wire.headbegin, base + (n - 1 - hj) * 4);
     }
     0
@@ -3373,7 +3377,7 @@ fn relocate_data_arg() -> Word {
         relocate.result = 0; relocate.hits = 0; relocate.bad = 0;
         if base >= 16777216 orelse width <= 0 orelse width >= 16777216
             orelse (scalar != 0 andalso scalar != 2 andalso scalar != 3) { relocate.bad = 1; }
-        for i in 0..ast.relocate_count limit 640 {
+        for i in 0..ast.relocate_count limit 1024 {
             let start = ast.relocate_source[i]; let length = ast.relocate_length[i]; let target = ast.relocate_target[i];
             if start < 0 orelse start >= 16777216 orelse target < 0 orelse target >= 16777216 orelse length <= 0 orelse length > 16777216 - start orelse length > 16777216 - target { relocate.bad = 1; } else {
                 if base >= start andalso base - start < length {

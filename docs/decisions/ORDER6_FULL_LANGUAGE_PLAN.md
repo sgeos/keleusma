@@ -427,3 +427,17 @@ rose from about 60 to about 167 seconds each, which the larger stage arrays acco
 the light tier from about 560 to 1,028 seconds, part of it from a concurrent run.
 `analyze.kel` keeps a quadratic scan over a chunk's native calls whose static bound grows
 sixteen-fold.
+
+**Reconstruct, codegen and constant-pool capacities, 2026-10-26, under the same ruling.**
+The forest a function compiles through rose from 1,024 to 4,096 nodes and input records,
+each per-function side array from 256 to 1,024 entries, the heads of a multiheaded function
+from 16 to 128, codegen's work stack and per-function op buffer from 2,048 to 8,192, a
+chunk's constant pool from 64 to 1,024 entries, and codegen's data-relocation table from
+640 to 1,024 to match the parser's field table. The host's slot offsets for both stages
+are now derived from `AST_NODE_CAP`, `AST_PART_CAP` and `RC_HEAD_CAP` rather than written
+as sums. Two limits were hidden on the host side and in codegen rather than in the stage
+arrays. The multihead readback read 64 entries of each side array, which truncated the
+heads past sixteen and made `rogue_gear.kel` diverge, and codegen's head loop bounded heads
+at 64. `rogue_bestiary.kel`, `rogue_gear.kel` and the piano rolls 0, 1, 4, 8 and 9 became
+Identical. A `match` with more than 64 arms, and an enum match with more than about 51,
+still overflows the break list and the arm loops, which no repository source reaches.
