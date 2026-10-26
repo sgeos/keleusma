@@ -42,6 +42,16 @@ Each question is independent and none blocks the next slice.
    and decodes wrongly, which pykeleusma infers is a route to the mistyped-decode crash.
    Should this line reproduce and repair it, or state that hosts must check?
 
+7. V0.3.X Workstream I, peer data with V0.3.X's own measurements, not verified here.
+   Native lowering surfaced language questions that are this line's to own. Should a
+   local be allowed to hold Unit after Reset on one path and a value on another? Should
+   a composite built inside a loop and yielded from it be admitted? And the host string
+   ABI and the opaque-handle ABI each await your decision.
+8. Two capacities surfaced by slice 3 refuse cleanly but are not guarded where they
+   bind. Type-input extraction faults with IndexOutOfBounds(262, 256) on three piano
+   rolls, and reconstruct.kel's 1,024-record input refuses two others. Should either
+   be raised, or should the fault become a named diagnostic first?
+
 ## Rulings received this session
 
 The operator ruled first-hand on 2026-10-25 to free the dead names in `parse.kel`,
@@ -55,7 +65,22 @@ runs in the heavy self-host tier. Order 6 is large, and its slices will land as 
 pull requests. HANDOFF.md is stale, and the interline checkpoint must be exported and
 reviewed before any handoff.
 
+## Slice 2
+
+Native imports and qualified native calls compile byte-identically, and the corpus
+reads 39 of 75 sources identical. The name cap is doubled and parse.kel holds 1,007
+names. The cap doubling also doubled the wire stage's deduplicated name pool, `bout`,
+from 16,384 to 32,768 bytes, because 1,023 names already filled most of it. That is my
+reading of "double the name cap", and it is flagged here so you can overrule it.
+
+## Slice 3a
+
+Tuple-destructuring and wildcard `let` compile byte-identically, through a token filter
+in lexer.kel, and the corpus reads 50 of 75 sources identical, including the Order 4
+interpreter. Stale equality flags in parse.kel, which the shipping cross-check had been
+refusing, are cleared.
+
 ## Next
 
-Slice 2, native imports and qualified native calls, which gate about twenty corpus
-sources.
+Literal parameter heads, `for` over a non-range iterable, `use` signatures, and the
+remaining binding patterns.

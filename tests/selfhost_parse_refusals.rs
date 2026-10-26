@@ -18,8 +18,8 @@ const REFUSED: &[(&str, i64)] = &[
     ("06_multiheaded.kel", 20),
     ("07_refinement.kel", 21),
     ("08_method_dispatch.kel", 19),
-    ("09_big_numbers.kel", 20),
-    ("10_multbyte.kel", 20),
+    // `09_big_numbers.kel` and `10_multbyte.kel` left this table in Order 6 slice 3, when
+    // tuple-destructuring `let` began to parse. Both now compile byte-identically.
     ("11_signed.kel", 21),
 ];
 
@@ -124,7 +124,9 @@ fn a_refusal_is_returned_rather_than_ending_the_process() {
     // source that panics the original API comes back as a value here. If this
     // test runs to completion at all, the process was not aborted.
     let src = std::fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/scripts/09_big_numbers.kel"),
+        // `04_for_in.kel` rather than `09_big_numbers.kel`, which parses since Order 6
+        // slice 3.
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/scripts/04_for_in.kel"),
     )
     .expect("readable");
 
@@ -173,7 +175,8 @@ fn unsupported_syntax_is_not_an_undefined_binding_verdict() {
             "newtype Count = Word; fn main() -> Word { Count(7) as Word }",
             21,
         ),
-        ("fn main() -> Word { let (x, y) = (3, 4); x + y }", 20),
+        // A tuple-destructuring `let` left this list in Order 6 slice 3 and is now a
+        // supported control below.
     ] {
         assert_unavailable(source, code);
     }
@@ -186,6 +189,7 @@ fn supported_loop_and_branch_controls_keep_complete_artifacts() {
         "fn main() -> Word { for i in 0..4 limit 4 { let x = i + 1; } 7 }",
         "fn main() -> Word { if true { if false { 2 } else { 7 } } else { 3 } }",
         "struct P { x: Word } fn main() -> Word { let p = P { x: 7 }; p.x }",
+        "fn main() -> Word { let (x, y) = (3, 4); x + y }",
     ] {
         let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(source).unwrap()).unwrap();
         let reference = keleusma::compiler::compile(&ast).unwrap();

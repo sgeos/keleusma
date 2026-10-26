@@ -936,7 +936,11 @@ fn step_record(k: Word, a: Word) -> Word {
         let index = pop();
         emit(15, a, value, index)
     } else {
-    if k == 7 {
+    if k == 7 orelse k == 80 {
+        // Call, or a native call (record 80) whose `chunk` is the native's import row and
+        // which becomes a kind-81 node. Node kind 80 is already the checked binding, so the
+        // record tag and the node kind differ here. Shared rather than a second branch, because this
+        // chain's nesting depth is bounded by the reference compiler's recursion limit.
         // Call: arg packs `chunk + count * rc_call_chunk_radix()`. Pop the `count` node indices
         // (last-pushed is the last argument) and store them in source order into the
         // `call_args` side array. The Call node's lhs is that slice's start and its
@@ -949,7 +953,7 @@ fn step_record(k: Word, a: Word) -> Word {
             io.call_args[args_start + count - 1 - j] = node;
         }
         rs.ca = args_start + count;
-        emit(7, chunk, args_start, count)
+        emit(if k == 80 { 81 } else { 7 }, chunk, args_start, count)
     } else {
     if k == 35 {
         // FieldPos: the declaration slot of the field value that immediately follows. Push it

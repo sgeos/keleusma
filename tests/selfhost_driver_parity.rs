@@ -401,11 +401,12 @@ fn covered_codes(patterns: &BTreeSet<String>) -> BTreeSet<String> {
 fn both_drivers_handle_the_same_declaration_records() {
     // Anchored on the `use`-declaration arm rather than on a struct arm: the struct arm's
     // SPELLING is exactly what changed, so anchoring there made this test's own extraction
-    // depend on the thing under test.
+    // depend on the thing under test. The arm became a block in Order 6 slice 2, when it
+    // began to open a native import row, so the anchor is its first statement.
     let lib = arm_patterns(&match_body(
         &read(LIBRARY),
         "match code {",
-        "10 => in_use = true",
+        "in_use = true;",
     ));
     let cop_src = read(COPY);
     // The comparator is the dispatch that handles the parameter-TYPE and return-TYPE records

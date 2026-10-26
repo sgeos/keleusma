@@ -895,6 +895,7 @@ fn decode_op(w: i64) -> Op {
         64 => Op::CheckedDiv(operand as u8),
         65 => Op::CheckedMod,
         66 => Op::BoundsCheck(operand as u16),
+        67 => Op::CallVerifiedNative((operand % 65536) as u16, (operand / 65536) as u8),
         // A flat struct construction: the operand packs count + byte_size*65536.
         46 => Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Struct,
@@ -2081,7 +2082,8 @@ fn self_compile_codegen_atomic_functions() {
     // Checked arithmetic adds five helpers.
     // The index-first and handled indexed writes of 2026-10-21 add `push_write_probe`,
     // `store_binds` and `push_checked_store` and remove the dead `push_index_store` (100 -> 102).
-    const EXPECTED_SELF_COMPILE: usize = 102;
+    // Order 6 slice 2 adds `push_native_call`, the native-call lowering (102 -> 103).
+    const EXPECTED_SELF_COMPILE: usize = 103;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -9227,10 +9229,13 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             // Measured 2026-10-15 after bounded full-width integer transport.
             // Total records grew from 1598 to 1650, while extracting integer
             // helpers reduced peak residency from 423 to 403. The ratio exceeds four.
+            // Re-measured 2026-10-25 after Order 6 slice 3 moved the main loop into
+            // `lex_raw` and added the destructuring filter: 1650 and 403 became 1953
+            // and 377, since the old loop body no longer sits in `main`'s group.
             "lexer",
             include_str!("../src/selfhost/kel/lexer.kel"),
-            1650,
-            403,
+            1953,
+            377,
         ),
         (
             // Order 2 adds text bounds and module resource protocols. Measured
@@ -9782,10 +9787,12 @@ fn the_boundary_table_reaches_byte_arithmetic_gaps_and_checked_negation() {
 fn the_residue_named_here_matches_the_census_file() {
     const CENSUS: &str = include_str!("op_tag_tables.rs");
 
-    let line = CENSUS
-        .lines()
-        .find(|l| l.contains("const SHIPPED_EXAMPLES_ALSO_MISS"))
+    // The whole declaration, through its closing `];`, since rustfmt wraps it once it
+    // grows past one line, as it did when `callnative` joined in Order 6 slice 2.
+    let start = CENSUS
+        .find("const SHIPPED_EXAMPLES_ALSO_MISS")
         .expect("the census file declares the residue it measured");
+    let line = &CENSUS[start..start + CENSUS[start..].find("];").expect("the declaration closes")];
 
     for tag in ["addop", "divop", "modop", "subop", "mulop"] {
         assert!(
@@ -9794,11 +9801,15 @@ fn the_residue_named_here_matches_the_census_file() {
              The residue has changed, so the operation list in the test above is stale."
         );
     }
+    // The sixth tag is `callnative`, which no census program reaches because none imports
+    // a native. It is not an arithmetic witness, so it is named here rather than above.
+    assert!(line.contains("callnative"), "{line}");
     assert_eq!(
         line.matches('"').count(),
-        10,
-        "the census residue is no longer exactly five tags: {line}. Byte arithmetic is \
-         exercised by the boundary corpus; legacy division has direct instruction fixtures."
+        12,
+        "the census residue is no longer exactly the five arithmetic tags and `callnative`: \
+         {line}. Byte arithmetic is exercised by the boundary corpus; legacy division has \
+         direct instruction fixtures."
     );
 }
 

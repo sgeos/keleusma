@@ -129,3 +129,55 @@ also a reference rejection.
 the pipe and data-field projections remain outside the subset, and slices 3 and 4 own
 them. The parser may skip tokens in states this slice did not reach. The repairs were
 found by the corpus, not by a census of every parser state.
+
+Slices 0 and 1 merged as pull request 532 at `cf9870b7`, CI run 40234368533.
+
+**Slice 2, 2026-10-25, native imports and qualified native calls.** Under the operator's
+ruling above, twenty names that nothing read left `parse.kel`, and the wire stage's name
+cap doubled to 2,048. Then the pipeline learned the native call.
+
+- `parse.kel` keeps a table of `use` declarations in declaration order, which is the order
+  the reference numbers natives in. A two-segment call `host::f(...)` resolves against it
+  and reuses the call machinery, closing as record 80.
+- `reconstruct.kel` folds record 80 as it folds a call, into node kind 81. Kind 80 was
+  already the checked binding, and the first attempt reused it, which broke every checked
+  arm. The library's checked-outcome tests caught that, not the native tests.
+- `codegen.kel` lowers node 81 to `CallVerifiedNative(index, count | 0x80)` followed by
+  the reference's default handling, a flag of one trapping with `HostError`.
+- The driver joins each import's segments into `native_names` and gives each a `Top`
+  return shape, as the reference does for an import without a signature.
+
+Refused rather than skipped: a wildcard import, which the record stream cannot tell from
+a single-segment one and which takes no index, a `use` carrying a signature, a
+single-segment import called unqualified, and an `external` import, which the stage's
+lexer has no keyword for. After slice 2 the corpus reads 39 Identical, 29 Unsupported,
+2 NoVerdict, 1 PipelineRejects and 4 RefRejects. Three rogue scripts became Identical. The
+two NoVerdict sources passed the native barrier and now stop at explicit parser
+diagnostics rather than faults, an unavailable expression layout in `rogue_dungen.kel`
+and the sixty-four-local cap in `piano_roll_3.kel`. Most of the remaining Unsupported
+sources now stop at a binding pattern, which is slice 3.
+
+**Slice 3a, 2026-10-25, destructuring and wildcard `let`.** The reference lowers
+`let (a, _, b) = e;` by storing `e` in a fresh local and reading each element with
+`GetTupleField`, binding it or popping it, which is exactly the plain statements
+`let T = e; let a = T.0; T.1; let b = T.2;`. A filter in `lexer.kel` now rewrites the
+pattern into those tokens, and the parser handles them as it always has. The hidden
+binding `T` is interned from the bytes of the `let` keyword, so its name is `let`, which
+no identifier can be. A wildcard `let _ = e;` is the expression statement `e;` operation
+for operation, and the filter drops its three leading tokens. A nested or annotated
+pattern, a `let` inside the destructured value, and more than eight elements are refused.
+
+Slice 3a exposed a defect in `parse.kel`. The whole-value flags that make `==` fold as an
+array, tuple or struct equality were cleared only when an identifier resolved, so a flag
+left by `let a = [1, 2];` or by a tuple literal ending an `if` branch survived into a later
+scalar comparison, which then folded as an equality loop. The shipping cross-check
+refused every such program, so nothing miscompiled in shipping. The flags are now cleared
+whenever a statement, block, condition or branch tail finishes folding, and indexing an
+array clears its own flag.
+
+After slice 3a the corpus reads 50 Identical, 13 Unsupported, 7 NoVerdict, 1
+PipelineRejects and 4 RefRejects, with no Diverges or StagePanic. Eleven sources became
+Identical, among them the Order 4 meta-circular interpreter `src/hosted/interp.kel`,
+`09_big_numbers.kel`, `10_multbyte.kel`, four rogue scripts and four piano rolls. Five piano rolls now stop at clean capacity refusals, three
+at an unguarded 256-entry table in type-input extraction and two at reconstruct's
+1,024-record input.
