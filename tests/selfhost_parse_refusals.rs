@@ -164,16 +164,12 @@ fn assert_unavailable(source: &str, expected_code: i64) {
 
 #[test]
 fn unsupported_syntax_is_not_an_undefined_binding_verdict() {
-    for (source, code) in [
-        (
-            "newtype Count = Word; fn main() -> Word { Count(7) as Word }",
-            21,
-        ),
-        // A tuple-destructuring `let`, `signed`, and `for` over an array left this list in
-        // Order 6 slices 3a, 3e and 3d, and are now supported controls below.
-    ] {
-        assert_unavailable(source, code);
-    }
+    // One construct remains here. A tuple-destructuring `let`, `signed`, and `for` over an
+    // array left in Order 6 slices 3a, 3e and 3d and are now supported controls below.
+    assert_unavailable(
+        "newtype Count = Word; fn main() -> Word { Count(7) as Word }",
+        21,
+    );
 }
 
 #[test]

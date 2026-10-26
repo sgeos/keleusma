@@ -873,6 +873,10 @@ struct FirstPass {
 /// forward reference it cannot settle on first sight, and it is cheap: the lexer
 /// is the fastest stage and the source is the smallest representation in the
 /// pipeline.
+/// A chunk-table entry in the first pass: its name, its interned id or -1 for a method,
+/// and for a method its `(head, method)` name ids.
+type ChunkEntry = (String, i64, Option<(i64, i64)>);
+
 fn first_pass(src: &str) -> FirstPass {
     let m = lex_module();
     let need = required_persistent_capacity_for(&m);
@@ -932,7 +936,7 @@ fn first_pass(src: &str) -> FirstPass {
     // one chunk, and the reference keys its chunk map by name, so the table is the
     // deduplicated lexicographically sorted set.
     // Methods are chunks named `Trait::Head::method` and sort among the plain names.
-    let mut all: Vec<(String, i64, Option<(i64, i64)>)> = ids
+    let mut all: Vec<ChunkEntry> = ids
         .iter()
         .map(|&id| (names[id as usize].clone(), id, None))
         .chain(methods_raw.iter().map(|&(t, h, m)| {
@@ -4439,7 +4443,7 @@ pub fn self_host_compile_fused(src: &str) -> Module {
         relocation
             .relocate(&mut f)
             .expect("relocate streamed data records");
-        let name = chunk_name(&f, &names);
+        let name = chunk_name(&f, names);
         if !group.is_empty() && name != group_name {
             flush(&mut group, &group_name, &mut module, names);
         }
@@ -4462,7 +4466,7 @@ pub fn fused_compile_residency(src: &str) -> (usize, usize) {
     let mut group_name = String::new();
     let (mut peak, mut total) = (0usize, 0usize);
     parse_functions_impl_named(src, &mut |names, f| {
-        let name = chunk_name(&f, &names);
+        let name = chunk_name(&f, names);
         if !group.is_empty() && name != group_name {
             group.clear();
         }
@@ -6521,11 +6525,11 @@ fn assemble_signatures(
     let mut chunks: Vec<(String, ChunkSignature)> = Vec::new();
     let mut i = 0;
     while i < fns.len() {
-        let name = chunk_name(&fns[i], &names);
+        let name = chunk_name(&fns[i], names);
         let first = &fns[i];
         // Skip the rest of this head group.
         let mut j = i + 1;
-        while j < fns.len() && chunk_name(&fns[j], &names) == name {
+        while j < fns.len() && chunk_name(&fns[j], names) == name {
             j += 1;
         }
         i = j;
@@ -6607,10 +6611,10 @@ fn assemble_chunk_metadata(
     let mut chunks = Vec::new();
     let mut i = 0;
     while i < fns.len() {
-        let name = chunk_name(&fns[i], &names);
+        let name = chunk_name(&fns[i], names);
         let first = &fns[i];
         let mut j = i + 1;
-        while j < fns.len() && chunk_name(&fns[j], &names) == name {
+        while j < fns.len() && chunk_name(&fns[j], names) == name {
             j += 1;
         }
         i = j;
@@ -6710,7 +6714,7 @@ fn self_host_module_bookkeeping(module: &mut Module, fns: &[ParsedFn], names: &[
     module.persistent_composite_bytes = 0;
     let text_flags = fns
         .iter()
-        .find(|f| chunk_name(f, &names) == "main")
+        .find(|f| chunk_name(f, names) == "main")
         .map_or(0, |f| f.text_boundary);
     module.flags = if module.private_data_bytes != 0 {
         0
@@ -6724,7 +6728,7 @@ fn self_host_module_bookkeeping(module: &mut Module, fns: &[ParsedFn], names: &[
     for f in fns {
         if f.signed {
             assert!(
-                chunk_name(f, &names) == "main",
+                chunk_name(f, names) == "main",
                 "`signed` on a function other than `main` is outside the self-hosted subset"
             );
             module.flags |= crate::wire_format::FLAG_REQUIRES_SIGNATURE;
