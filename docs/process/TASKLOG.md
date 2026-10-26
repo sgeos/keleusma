@@ -6,6 +6,11 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-26 The pipe placeholder
+
+`x |> f(a, _)` compiles byte-identically. The census reads 61 Identical of 72. PR 564
+merged.
+
 ## 2026-10-26 `assert`
 
 `assert` compiles out as the reference compiles it out of a release build. The census reads

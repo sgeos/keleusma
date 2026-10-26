@@ -833,9 +833,10 @@ fn the_pipe_and_literal_heads_compile_or_are_refused() {
             "use host::f\nfn main() -> Word { 2 |> host::f() }",
             Identical,
         ),
+        // Identical since the pipe placeholder places the operand, 2026-10-26.
         (
             "fn d(x: Word) -> Word { x + x }\nfn a(x: Word, y: Word) -> Word { x + y }\nfn main() -> Word { 6 |> a(_, 1) }",
-            Unsupported,
+            Identical,
         ),
         (
             "fn c(0) -> Word { 0 }\nfn c(1) -> Word { 1 }\nfn c(n: Word) -> Word { n + 10 }\nfn main() -> Word { c(3) }",
@@ -1437,6 +1438,63 @@ fn rtos_scripts_joined_with_the_prelude_have_their_pinned_outcomes() {
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
 
+/// The pipe placeholder, `x |> f(a, _)`. The reference evaluates the piped operand in the
+/// placeholder's position, and the self-hosted pipeline now does, by a placeholder record
+/// that reconstruct replaces with the operand when it builds the call. A placeholder outside
+/// a pipe is a reference rejection, and a second placeholder in one call stays refused.
+#[test]
+fn pipe_placeholders_take_the_piped_operand() {
+    const G: &str = "fn g(x: Word, y: Word, z: Word) -> Word { x - y * z }\n";
+    let cases: &[(String, Class)] = &[
+        (
+            format!("{G}fn main(a: Word) -> Word {{ a |> g(_, 2, 3) }}"),
+            Identical,
+        ),
+        (
+            format!("{G}fn main(a: Word) -> Word {{ a |> g(2, _, 3) }}"),
+            Identical,
+        ),
+        (
+            format!("{G}fn main(a: Word) -> Word {{ a |> g(2, 3, _) }}"),
+            Identical,
+        ),
+        (
+            format!("{G}fn main(a: Word) -> Word {{ a + 1 |> g(2, _, a) }}"),
+            Identical,
+        ),
+        (
+            format!(
+                "{G}fn h(x: Word) -> Word {{ x * 2 }}\nfn main(a: Word) -> Word {{ a |> h() |> g(1, _, 2) }}"
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "use host::f(Word, Word) -> Word\nfn main(a: Word) -> Word { a |> host::f(9, _) }",
+            ),
+            Identical,
+        ),
+        (
+            format!("{G}fn main(a: Word) -> Word {{ g(_, 2, 3) }}"),
+            RefRejects,
+        ),
+        (
+            format!("{G}fn main(a: Word) -> Word {{ a |> g(_, _, 3) }}"),
+            RefRejects,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
 /// `assert`, which the reference compiles out of a release build. The self-hosted parser
 /// commits the statement as kind 83, which codegen lowers to its continuation alone, while the
 /// condition's nodes still reach the type stage, so a condition naming an undefined binding is
@@ -1875,7 +1933,7 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
     (
         "Expr::Placeholder",
         "fn g(x: Word, y: Word) -> Word { x }\nfn main() -> Word { 1 |> g(_, 2) }",
-        Unsupported,
+        Identical,
     ),
     (
         "Expr::Closure",
