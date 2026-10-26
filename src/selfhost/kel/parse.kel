@@ -429,6 +429,12 @@ private data ps {
     epf_esize: Word,
     arr: Word,
     arr_ret: Word,
+    // A generic argument list after a signature type name, `Option<T>` or `Multiword<N>`.
+    // `gen_ready` is set by the type name and cleared by any other token, so only an
+    // immediately following `<` opens the list. `gen` is 1 awaiting the one argument and 2
+    // awaiting the closing `>`.
+    gen: Word,
+    gen_ready: Word,
     array_tuple_layout: Word,
     dvis: Word,
     init: Word,
@@ -8791,6 +8797,7 @@ fn header_field(k: Word, v: Word) -> Word {
 // reconstructed node count (its four struct/enum scan loops inlined) stays under the per-function
 // reconstruct cap; parse.kel's own `header_sig` grew past it as the array-type surface expanded.
 fn header_type_ident(v: Word, mode: Word) -> Word {
+    ps.gen_ready = 1;
     signature_text_name(v, mode);
     if scalar_kind_of(v) >= 4 { queue_named_layout(v, mode); }
     if mode == 0 {
@@ -9246,7 +9253,29 @@ fn queue_array_header_layout(length: Word) -> Word {
     ht.pending_arg = ps.arr_ret + layout;
     0
 }
+// One generic argument of a signature type, Order 6. A type name is recorded under tag
+// 113 and a positive length under tag 114, after the head's own type record, so the host
+// computes the builtin layout. A nested, composite or second argument is refused here,
+// because the host has no layout for it and a silent drop would misstate the signature.
+fn header_generic(k: Word, v: Word) -> Word {
+    if ps.gen == 1 {
+        ps.gen = 2;
+        if k == Tok::Ident() as Word { type_tuple_record(113, v) } else {
+        if k == Tok::IntLit() as Word andalso v > 0 { type_tuple_record(114, v) } else {
+            perr(pe_annotation_syntax(), toks.at)
+        }}
+    } else {
+        ps.gen = 0;
+        if k == Tok::Gt() as Word { 0 } else { perr(pe_annotation_syntax(), toks.at) }
+    }
+}
 fn header_sig(k: Word, v: Word) -> Word {
+    let ready = ps.gen_ready;
+    ps.gen_ready = 0;
+    if ps.gen > 0 { header_generic(k, v) } else {
+    if ready == 1 andalso k == Tok::Lt() as Word { ps.gen = 1; 0 } else { header_sig_body(k, v) } }
+}
+fn header_sig_body(k: Word, v: Word) -> Word {
     nominal_refresh();
     data_rebase();
     // A parameter position holds a plain name or closes the list. Anything else is a

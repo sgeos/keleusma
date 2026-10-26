@@ -481,3 +481,20 @@ chain overran the reference parser's nesting depth of 24, which is why the token
 rewritten before dispatch rather than handled where it is read. A `_` outside a pipe is a
 reference rejection and a second placeholder stays refused. The census reads 61 Identical
 of 72.
+
+**Builtin generic signatures, 2026-10-26.** The reference gives `Option<T>` the flat layout
+of an enum, an eight-byte discriminant followed by the flat size of `T`, and `Multiword<N>`
+the flat layout of an array of `N` words. The parser had recorded only the head name of
+either, so the self-hosted signature table carried no layout and diverged. A type name in a
+signature now arms one generic argument list, which only an immediately following `<` opens,
+so a guard such as `when x < 3` is unaffected. The parser records the argument under tag 113
+for a type name or tag 114 for a positive length, and the host computes the reference layout
+from the head and that argument. A nested, tuple or array argument, and a generic inside a
+tuple type, are refused by the parser. Three residuals remain and are pinned by
+`builtin_generic_signatures_have_their_pinned_outcomes`. A struct argument has no host flat
+size, so its signature diverges and is refused. The self-hosted type stage keeps the head as
+the nominal type and does not compare generic arguments, so a mismatch such as returning a
+`Multiword<1>` as a `Multiword<4>` is rejected only by the reference cross-check. Option
+values, `Option::Some` and `Option::None` construction and their match, are not yet lowered
+and have Unsupported census rows. The census reads 63 Identical, 8 Unsupported and 3
+RefRejects of 74 rows.
