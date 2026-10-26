@@ -38,9 +38,11 @@ const STAGE: &str = include_str!("../src/selfhost/kel/reconstruct.kel");
 
 /// The appended diagnostic slots. Derived from the block layout rather than restated, so
 /// a slot inserted above them moves these too.
-const RC_AST_BASE: usize = 3 + 1024 * 2;
-const RC_HEAD_COUNT: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 5 + 2;
-const RC_ERR_CODE: usize = RC_HEAD_COUNT + 1 + 16 * 4;
+const RC_AST_BASE: usize = 3 + 4096 * 2;
+const RC_HEAD_COUNT: usize = RC_AST_BASE + 1 + 4096 * 4 + 1024 * 5 + 2;
+/// Heads per function, raised from 16 to 128 on 2026-10-26.
+const RC_HEAD_CAP: usize = 128;
+const RC_ERR_CODE: usize = RC_HEAD_COUNT + 1 + RC_HEAD_CAP * 4;
 const RC_ERR_DETAIL: usize = RC_ERR_CODE + 1;
 
 /// Drive the stage over a crafted record stream and return `(yielded, code, detail)`.
@@ -370,15 +372,19 @@ fn a_range_longer_than_the_record_arrays_names_itself() {
 /// read the same records. That is what this drives.
 #[test]
 fn exhausting_the_node_arrays_names_itself() {
-    // A range that folds to exactly one node: one literal, then 256 (literal, binop)
-    // pairs. 513 records, 513 nodes, depth one at the end. Any other arity would trip the
-    // range-arity cause first and this test would pass for the wrong reason.
+    // A range that folds to exactly one node: one literal, then (literal, binop) pairs, a
+    // quarter of the node capacity of them. That is half the capacity plus one records and
+    // as many nodes, depth one at the end. Any other arity would trip the range-arity cause
+    // first and this test would pass for the wrong reason. Sized from the capacity, which
+    // rose from 1,024 to 4,096 on 2026-10-26.
+    let pairs = RECONSTRUCT_NODE_CAP / 4;
     let mut records = vec![(LITERAL, 0)];
-    for i in 0..256 {
-        records.push((LITERAL, i));
+    for i in 0..pairs {
+        records.push((LITERAL, i as i64));
         records.push((BINOP, 1));
     }
-    assert_eq!(records.len(), 513);
+    let per_head = records.len();
+    assert_eq!(per_head, RECONSTRUCT_NODE_CAP / 2 + 1);
 
     let m = reconstruct_kel_module();
     let need = required_persistent_capacity_for(&m);
@@ -387,16 +393,21 @@ fn exhausting_the_node_arrays_names_itself() {
     let mut vm = Vm::new(m, &arena).expect("verify reconstruct.kel");
     let mut shared = seed_reconstruct_shared(&vm, &records, 0, 0);
 
-    // Two heads over the SAME record range: 2 x 513 = 1026 nodes from 513 records.
+    // Two heads over the SAME record range, two more nodes than the capacity.
     let put = |vm: &Vm<'_, '_>, sh: &mut [u8], slot: usize, v: i64| {
         vm.set_shared(sh, slot, Value::Int(v)).unwrap();
     };
     put(&vm, &mut shared, RC_HEAD_COUNT, 2);
     for h in 0..2 {
         put(&vm, &mut shared, RC_HEAD_COUNT + 1 + h, 0); // guard_start
-        put(&vm, &mut shared, RC_HEAD_COUNT + 1 + 16 + h, 0); // guard_len: unguarded
-        put(&vm, &mut shared, RC_HEAD_COUNT + 1 + 32 + h, 0); // body_start
-        put(&vm, &mut shared, RC_HEAD_COUNT + 1 + 48 + h, 513); // body_len
+        put(&vm, &mut shared, RC_HEAD_COUNT + 1 + RC_HEAD_CAP + h, 0); // guard_len: unguarded
+        put(&vm, &mut shared, RC_HEAD_COUNT + 1 + RC_HEAD_CAP * 2 + h, 0); // body_start
+        put(
+            &vm,
+            &mut shared,
+            RC_HEAD_COUNT + 1 + RC_HEAD_CAP * 3 + h,
+            per_head as i64,
+        ); // body_len
     }
 
     match vm

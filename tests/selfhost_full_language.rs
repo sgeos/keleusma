@@ -83,30 +83,37 @@ const CORPUS: &[(&str, Class)] = &[
     ("examples/scripts/rogue/rogue_ai_smart.kel", Identical),
     ("examples/scripts/rogue/rogue_ai_tracker.kel", Identical),
     ("examples/scripts/rogue/rogue_ai_wander.kel", Identical),
-    ("examples/scripts/rogue/rogue_bestiary.kel", Unsupported),
+    // Identical since the reconstruct, codegen and constant-pool capacities rose, 2026-10-26.
+    ("examples/scripts/rogue/rogue_bestiary.kel", Identical),
     ("examples/scripts/rogue/rogue_book_keeping.kel", Identical),
     ("examples/scripts/rogue/rogue_combat.kel", Identical),
     ("examples/scripts/rogue/rogue_consume.kel", Identical),
     ("examples/scripts/rogue/rogue_descend.kel", Identical),
     ("examples/scripts/rogue/rogue_dungen.kel", NoVerdict),
     ("examples/scripts/rogue/rogue_game.kel", Identical),
-    ("examples/scripts/rogue/rogue_gear.kel", Unsupported),
+    // Identical since the reconstruct, codegen and constant-pool capacities rose, 2026-10-26.
+    ("examples/scripts/rogue/rogue_gear.kel", Identical),
     ("examples/scripts/rogue/rogue_item_potion.kel", Identical),
     ("examples/scripts/rogue/rogue_item_scroll.kel", Identical),
     ("examples/scripts/rogue/rogue_move_resolve.kel", Identical),
     ("examples/scripts/rogue/rogue_pickup.kel", Identical),
     ("examples/scripts/rogue/rogue_player_ai.kel", Identical),
     ("examples/scripts/rogue/rogue_scroll_apply.kel", Identical),
-    ("examples/scripts/piano_roll/piano_roll_0.kel", NoVerdict),
-    ("examples/scripts/piano_roll/piano_roll_1.kel", NoVerdict),
+    // Identical since the reconstruct, codegen and constant-pool capacities rose, 2026-10-26.
+    ("examples/scripts/piano_roll/piano_roll_0.kel", Identical),
+    // Identical since the reconstruct, codegen and constant-pool capacities rose, 2026-10-26.
+    ("examples/scripts/piano_roll/piano_roll_1.kel", Identical),
     ("examples/scripts/piano_roll/piano_roll_2.kel", Identical),
     ("examples/scripts/piano_roll/piano_roll_3.kel", NoVerdict),
-    ("examples/scripts/piano_roll/piano_roll_4.kel", NoVerdict),
+    // Identical since the reconstruct, codegen and constant-pool capacities rose, 2026-10-26.
+    ("examples/scripts/piano_roll/piano_roll_4.kel", Identical),
     ("examples/scripts/piano_roll/piano_roll_5.kel", Identical),
     ("examples/scripts/piano_roll/piano_roll_6.kel", Identical),
     ("examples/scripts/piano_roll/piano_roll_7.kel", Identical),
-    ("examples/scripts/piano_roll/piano_roll_8.kel", NoVerdict),
-    ("examples/scripts/piano_roll/piano_roll_9.kel", NoVerdict),
+    // Identical since the reconstruct, codegen and constant-pool capacities rose, 2026-10-26.
+    ("examples/scripts/piano_roll/piano_roll_8.kel", Identical),
+    // Identical since the reconstruct, codegen and constant-pool capacities rose, 2026-10-26.
+    ("examples/scripts/piano_roll/piano_roll_9.kel", Identical),
     ("examples/rtos/scripts/event_listener.kel", RefRejects),
     ("examples/rtos/scripts/faulty.kel", RefRejects),
     // Rejected by the pipeline until slice 5d, which stopped reading `saturate_max` as an

@@ -275,7 +275,9 @@ pub const RECONSTRUCT_DIAG_TAG_BASE: i64 = -900;
 /// The node, work-stack and record capacity of `reconstruct.kel`, restated from
 /// `rc_cap_node()`. `the_reconstruct_guard_caps_match_their_arrays` checks it against the
 /// array declarations it guards.
-pub const RECONSTRUCT_NODE_CAP: usize = 1024;
+/// Raised from 1,024 to 4,096 under the operator's ruling of 2026-10-26 that limits may be
+/// raised. It equals `crate::selfhost::AST_NODE_CAP`, the forest the stage hands to codegen.
+pub const RECONSTRUCT_NODE_CAP: usize = 4096;
 
 /// Render a diagnostic yielded by `reconstruct.kel` as a message that names its cause.
 ///

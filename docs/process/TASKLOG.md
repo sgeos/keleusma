@@ -6,6 +6,11 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-26 Reconstruct, codegen and constant-pool capacities raised
+
+Two rogue scripts and five piano rolls compile byte-identically after the forest, head,
+op-buffer and constant-pool capacities rose. PR 556 merged, with kaizen PR 554.
+
 ## 2026-10-26 Parser field table and opcode capacity raised
 
 Under the operator's ruling, the parser's field table is 1,024 and the analyses' per-chunk
