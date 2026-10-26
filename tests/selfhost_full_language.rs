@@ -871,6 +871,81 @@ fn float_arithmetic_on_typed_operands_compiles() {
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
 
+/// Irrefutable destructuring arms, `(a, b) => ...` and `P { x, y } => ...`, which the reference
+/// lowers as a wildcard arm that reads each bound field into a fresh slot in source order. A
+/// literal sub-pattern, a nested composite field and a field rename stay refused, and the
+/// match still needs its own wildcard arm, as the reference requires.
+#[test]
+fn destructuring_arms_compile() {
+    const P: &str = "struct P { x: Word, y: Word, b: Byte }\n";
+    let cases: &[(String, Class)] = &[
+        (
+            String::from(
+                "fn main(t: (Word, Word)) -> Word { match t { (a, b) => a + b, _ => 0 } }",
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "fn main(t: (Word, Word, Word)) -> Word { match t { (_, b, c) => b * c, _ => 0 } }",
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "fn main(t: (Word, Byte)) -> Byte { match t { (_, b) => b + b, _ => 0 as Byte } }",
+            ),
+            Identical,
+        ),
+        (
+            format!("{P}fn main(p: P) -> Word {{ match p {{ P {{ x, y }} => x + y, _ => 0 }} }}"),
+            Identical,
+        ),
+        (
+            format!("{P}fn main(p: P) -> Word {{ match p {{ P {{ y }} => y, _ => 0 }} }}"),
+            Identical,
+        ),
+        (
+            format!(
+                "{P}fn main(p: P) -> Byte {{ match p {{ P {{ b }} => b + b, _ => 0 as Byte }} }}"
+            ),
+            Identical,
+        ),
+        (
+            String::from("fn main(t: (Word, Word)) -> Word { match t { (1, b) => b, _ => 0 } }"),
+            Unsupported,
+        ),
+        (
+            format!("{P}fn main(p: P) -> Word {{ match p {{ P {{ x: 1 }} => 1, _ => 0 }} }}"),
+            Unsupported,
+        ),
+        (
+            format!("{P}fn main(p: P) -> Word {{ match p {{ P {{ x: a }} => a, _ => 0 }} }}"),
+            Unsupported,
+        ),
+        (
+            // Both reject a tuple match without a wildcard arm, and the pipeline's own coverage
+            // check speaks first.
+            String::from("fn main(t: (Word, Word)) -> Word { match t { (a, b) => a } }"),
+            PipelineRejects,
+        ),
+        (
+            String::from("fn main(a: Byte) -> Byte { match a { v => v + v } }"),
+            Identical,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
 /// A variable arm on a scalar match, `v => ...`, which the reference lowers as a wildcard arm
 /// that first copies the scrutinee into a fresh slot. A guarded variable arm and a variable
 /// pattern on an enum scrutinee stay refused.
@@ -1511,12 +1586,12 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
     (
         "Pattern::Struct",
         "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x } => x, _ => 0 } }",
-        Unsupported,
+        Identical,
     ),
     (
         "Pattern::Tuple",
         "fn main(t: (Word, Word)) -> Word { match t { (a, b) => a, _ => 0 } }",
-        Unsupported,
+        Identical,
     ),
     // --- TypeExpr ---
     (
