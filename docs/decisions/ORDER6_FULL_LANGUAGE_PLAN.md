@@ -201,3 +201,5 @@ the shared-slot fault the baseline recorded for two rogue scripts.
 After slice 3b the corpus reads 52 Identical, 11 Unsupported, 7 NoVerdict, 1
 PipelineRejects and 4 RefRejects. `05_pipeline.kel` and `06_multiheaded.kel` became
 Identical. `parse.kel` interns 1,016 names.
+
+Slices 2 and 3a merged as pull request 538 at `84cbea1d`, CI run 40246546955.
