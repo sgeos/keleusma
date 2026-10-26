@@ -6,6 +6,11 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-26 `assert`
+
+`assert` compiles out as the reference compiles it out of a release build. The census reads
+60 Identical of 72. PR 563 merged, so gate 1 on the corpus is on the version branch.
+
 ## 2026-10-26 Untyped native destructuring, gate 1 on the corpus
 
 `check-md-links.kel` compiles byte-identically, so every repository source in the corpus

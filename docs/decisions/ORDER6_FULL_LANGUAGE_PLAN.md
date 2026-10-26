@@ -461,3 +461,13 @@ added. `scripts/check-md-links.kel` became Identical, and with it every reposito
 the full-language corpus compiles byte-identically through the shipping self-hosted
 compiler, which is gate 1 on this line's reading. Both trap analyses still refuse that one
 source for the boxed read, in agreement.
+
+**`assert`, 2026-10-26.** The reference compiles an assertion out of a release build, so
+`assert c;` emits nothing. The parser now commits the statement as kind 83, a binary node
+of condition and continuation that codegen lowers to its continuation alone, while the
+condition's nodes still reach the type stage, so a condition naming an undefined binding is
+still rejected. The message form, `assert c, "m";`, is refused cleanly at its comma, where it
+had faulted the parser. The census reads 60 Identical of 72 rows, and every documented
+expression and statement form is now handled, which retired the census assertion that one
+still failed. A `match` of more than 64 arms, and an enum match of more than about 51, are
+known capacity limits that no repository source reaches.
