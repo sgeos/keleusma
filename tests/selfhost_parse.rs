@@ -344,6 +344,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
     let mut in_trait = false;
     let mut cur_trait: Option<Vec<i64>> = None;
     let mut in_impl = false;
+    let (mut impl_method, mut impl_skip) = (false, false);
     let mut cur_impl: Option<Vec<i64>> = None;
     let state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
@@ -460,18 +461,34 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     _ => {} // signature params/return, skipped this increment
                 }
             } else if in_impl {
-                match code {
-                    21 => cur_impl
-                        .as_mut()
-                        .expect("method name before IMPLSTART")
-                        .push(val), // MNAME: an impl method's name
-                    5 => {
-                        parsed
-                            .impls
-                            .push(cur_impl.take().expect("impl END without IMPLSTART"));
-                        in_impl = false;
+                // Since Order 6 slice 4 an impl's methods arrive as functions: record 132
+                // carries the head, each method is a START through its END, and the impl's
+                // own END follows the last. A body or guard range is skipped to its DONE,
+                // because its records reuse the small codes a START uses.
+                if impl_skip {
+                    if code == 15 {
+                        impl_skip = false;
                     }
-                    _ => {} // method params/return/body, skipped this increment
+                } else {
+                    match code {
+                        132 => {}
+                        16 | 17 => impl_skip = true,
+                        1..=3 if !impl_method => {
+                            cur_impl
+                                .as_mut()
+                                .expect("method before IMPLSTART")
+                                .push(val);
+                            impl_method = true;
+                        }
+                        5 if impl_method => impl_method = false,
+                        5 => {
+                            parsed
+                                .impls
+                                .push(cur_impl.take().expect("impl END without IMPLSTART"));
+                            in_impl = false;
+                        }
+                        _ => {} // method params and return types
+                    }
                 }
             } else if in_use {
                 match code {
@@ -3413,7 +3430,10 @@ fn a_struct_trait_or_impl_declaration_is_skipped_rather_than_faulting() {
     for src in [
         "struct S { a: Word }\nfn f() -> Word { 1 }\n",
         "trait T { fn g(self) -> Word; }\nfn f() -> Word { 1 }\n",
-        "struct S { a: Word }\nimpl S { fn g(self) -> Word { self.a } }\nfn f() -> Word { 1 }\n",
+        // An inherent impl, `impl S { .. }`, is a reference parse error, since the
+        // reference requires `impl Trait for Type`, and the stage refuses it with it. The
+        // trait form is what parses now, its methods compiled as functions.
+        "struct S { a: Word }\ntrait T { fn g(s: S) -> Word; }\nimpl T for S { fn g(s: S) -> Word { s.a } }\nfn f() -> Word { 1 }\n",
         "struct S<const N: Word> { a: Word }\nfn f() -> Word { 1 }\n",
     ] {
         assert!(

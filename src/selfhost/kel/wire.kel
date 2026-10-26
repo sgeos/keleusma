@@ -1407,8 +1407,10 @@ fn fin_capacity() -> Word { 1024 }
 
 // `nout`'s capacity in WORDS, which at two words per name record admits exactly
 // `nm_max_names()` names. Stated as its own function so the emitter reading
-// `nout` can be guarded by `nout`'s size rather than by another buffer's.
-fn nout_capacity() -> Word { 2048 }
+// `nout` can be guarded by `nout`'s size rather than by another buffer's. 4096 since
+// the name cap doubled on 2026-10-25. It stayed at 2048 for a time after `nout` grew,
+// which refused any module past 1,024 names with -256 once `parse.kel` crossed it.
+fn nout_capacity() -> Word { 4096 }
 
 // One chunk record at byte address `at`, reading fourteen fields from `wire.fin`
 // starting at `k`.

@@ -12984,9 +12984,14 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // blob cap was not raised, and 18,936 bytes of it remain. Slice 3b's pipe and
     // literal heads added nine, `pipe_args`, `plit`, the four `hq` queue names,
     // `hq_push`, `hq_take` and `literal_param`, and the blob reached 30,514 bytes.
-    // The `use` path separator flag `nat_cc` made it 1017 and 30,527 bytes.
-    assert_eq!(worst_names, 1017, "the worst-case name count moved");
-    assert_eq!(worst_blob, 30527, "the worst-case blob size moved");
+    // The `use` path separator flag `nat_cc` made it 1017 and 30,527 bytes, and the
+    // array `for`, `for_arr` and `for_array_open`, 1019 and 30,648, and the external
+    // import flag `nat_ext` 1020 and 30,722. Slice 4's impls and methods added nine,
+    // `impl_trait`, `impl_head`, `in_impl`, the four `mt` table names, `header_impl` and
+    // `method_call`, for 1029 and 31,007. Slice 2b's `use` signatures added `nat_sig`,
+    // `nat_sdepth` and `use_signature`, for 1032 and 31,153.
+    assert_eq!(worst_names, 1032, "the worst-case name count moved");
+    assert_eq!(worst_blob, 31153, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

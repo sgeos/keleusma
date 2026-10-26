@@ -10,15 +10,16 @@ use std::path::PathBuf;
 
 /// Unsupported examples paired with their structured diagnostic code.
 const REFUSED: &[(&str, i64)] = &[
-    ("04_for_in.kel", 31),
+    // `04_for_in.kel` left this table in Order 6 slice 3d, which lowered `for` over an array.
     // `05_pipeline.kel` and `06_multiheaded.kel` used to "parse" only because the parser
     // skipped a token, were refused in Order 6 slice 1, and parse and compile
     // byte-identically since slice 3b, which lowered the pipe and literal heads.
     ("07_refinement.kel", 21),
-    ("08_method_dispatch.kel", 19),
+    // `08_method_dispatch.kel` left this table in Order 6 slice 4, when trait impls and
+    // method calls began to compile byte-identically.
     // `09_big_numbers.kel` and `10_multbyte.kel` left this table in Order 6 slice 3, when
     // tuple-destructuring `let` began to parse. Both now compile byte-identically.
-    ("11_signed.kel", 21),
+    // `11_signed.kel` left in slice 3e, which lowered the `signed` modifier.
 ];
 
 /// The eleven named scripts in the original survey. Other development lines may
@@ -122,9 +123,9 @@ fn a_refusal_is_returned_rather_than_ending_the_process() {
     // source that panics the original API comes back as a value here. If this
     // test runs to completion at all, the process was not aborted.
     let src = std::fs::read_to_string(
-        // `04_for_in.kel` rather than `09_big_numbers.kel`, which parses since Order 6
-        // slice 3.
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/scripts/04_for_in.kel"),
+        // `07_refinement.kel`, the one example still refused, since `09_big_numbers.kel` and
+        // then `04_for_in.kel` came to parse in Order 6 slices 3a and 3d.
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/scripts/07_refinement.kel"),
     )
     .expect("readable");
 
@@ -163,21 +164,12 @@ fn assert_unavailable(source: &str, expected_code: i64) {
 
 #[test]
 fn unsupported_syntax_is_not_an_undefined_binding_verdict() {
-    for (source, code) in [
-        ("signed fn main() -> Word { 7 }", 21),
-        (
-            "fn main() -> Word { let xs = [1, 2]; for x in xs { let y = x + 1; } 7 }",
-            31,
-        ),
-        (
-            "newtype Count = Word; fn main() -> Word { Count(7) as Word }",
-            21,
-        ),
-        // A tuple-destructuring `let` left this list in Order 6 slice 3 and is now a
-        // supported control below.
-    ] {
-        assert_unavailable(source, code);
-    }
+    // One construct remains here. A tuple-destructuring `let`, `signed`, and `for` over an
+    // array left in Order 6 slices 3a, 3e and 3d and are now supported controls below.
+    assert_unavailable(
+        "newtype Count = Word; fn main() -> Word { Count(7) as Word }",
+        21,
+    );
 }
 
 #[test]
@@ -188,6 +180,8 @@ fn supported_loop_and_branch_controls_keep_complete_artifacts() {
         "fn main() -> Word { if true { if false { 2 } else { 7 } } else { 3 } }",
         "struct P { x: Word } fn main() -> Word { let p = P { x: 7 }; p.x }",
         "fn main() -> Word { let (x, y) = (3, 4); x + y }",
+        "signed fn main() -> Word { 7 }",
+        "fn main() -> Word { let xs = [1, 2]; for x in xs { let y = x + 1; } 7 }",
     ] {
         let ast = keleusma::parser::parse(&keleusma::lexer::tokenize(source).unwrap()).unwrap();
         let reference = keleusma::compiler::compile(&ast).unwrap();

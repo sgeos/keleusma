@@ -196,6 +196,11 @@ pub struct ParsedFn {
     /// the literal's test as this head's guard, and codegen lowers such a head without a
     /// parameter copy, as the reference does.
     literal_head: bool,
+    /// Whether the `signed` modifier preceded this head.
+    signed: bool,
+    /// The `(trait, head)` name ids of the impl this head is a method of, if any. Its
+    /// chunk is `Trait::Head::name`.
+    method_of: Option<(i64, i64)>,
     /// Each `let` binding's `(frame slot, interned name id)`, in fold order.
     ///
     /// **Kept OUT of `body`.** The record stream `body` holds is what
@@ -306,6 +311,18 @@ impl ParsedFn {
 /// emits the trap for that path. A lone guarded `yield` head is inadmissible — it is
 /// not always-yielding, so structural verification rejects any `loop` that delegates
 /// productivity to it — so this predicate never has to route one.
+/// A head's chunk name: `Trait::Head::name` for an impl method, as the reference mangles
+/// it, and the interned name otherwise.
+fn chunk_name(f: &ParsedFn, names: &[String]) -> String {
+    match f.method_of {
+        Some((t, h)) => format!(
+            "{}::{}::{}",
+            names[t as usize], names[h as usize], names[f.name as usize]
+        ),
+        None => names[f.name as usize].clone(),
+    }
+}
+
 fn is_multihead_group(group: &[&ParsedFn]) -> bool {
     debug_assert!(!group.is_empty(), "a head group is never empty");
     group.len() > 1
@@ -488,6 +505,8 @@ fn decode_op(w: i64) -> Op {
         66 => Op::BoundsCheck(operand as u16),
         // A native call with the error-reify flag already set in the count.
         67 => Op::CallVerifiedNative((operand % 65536) as u16, (operand / 65536) as u8),
+        // The same transport for a `use external` native.
+        68 => Op::CallExternalNative((operand % 65536) as u16, (operand / 65536) as u8),
         // A flat struct construction: the operand packs count + byte_size*65536.
         46 => Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Struct,
@@ -825,8 +844,16 @@ struct FirstPass {
     /// The intern table. Complete only at end of input, which is why it is a
     /// whole-input fact rather than something a token can carry.
     names: Vec<String>,
-    /// The call-resolution chunk table, in the module's chunk order.
+    /// The call-resolution chunk table, in the module's chunk order. A method chunk holds
+    /// -1, because its name `Trait::Head::method` is not an interned identifier and no
+    /// plain call names it.
     chunks: Vec<i64>,
+    /// Every chunk's name in the module's chunk order, methods included.
+    chunk_names: Vec<String>,
+    /// `(head id, method id, chunk index)`, one row per head and method, naming the first
+    /// chunk in order whose name ends `::Head::method`, which is how the reference resolves
+    /// a method call.
+    methods: Vec<(i64, i64, i64)>,
     /// How many tokens the source lexes to. `parse.kel` compares its cursor
     /// against this to find end of input, so a windowed feed must know it up
     /// front -- which is the one thing a single forward pass cannot supply.
@@ -846,6 +873,10 @@ struct FirstPass {
 /// forward reference it cannot settle on first sight, and it is cheap: the lexer
 /// is the fastest stage and the source is the smallest representation in the
 /// pipeline.
+/// A chunk-table entry in the first pass: its name, its interned id or -1 for a method,
+/// and for a method its `(head, method)` name ids.
+type ChunkEntry = (String, i64, Option<(i64, i64)>);
+
 fn first_pass(src: &str) -> FirstPass {
     let m = lex_module();
     let need = required_persistent_capacity_for(&m);
@@ -857,6 +888,13 @@ fn first_pass(src: &str) -> FirstPass {
     let mut prev: Option<(i64, i64)> = None;
     let mut token_count = 0usize;
     let mut has_imports = false;
+    // `impl Trait for Head { fn method .. }`: 0 outside, 1 after `impl`, 2 after the trait,
+    // 3 after `for`, 4 after the head awaiting `{`, 5 inside the body. A method is a `fn` at
+    // depth one in state 5. Any other shape leaves the state machine, so a generic or
+    // inherent impl contributes no method here and the stage refuses it.
+    let mut impl_state = 0;
+    let (mut impl_trait, mut impl_head) = (-1i64, -1i64);
+    let mut methods_raw: Vec<(i64, i64, i64)> = Vec::new();
     while let Some(w) = lex_next(&mut vm, &mut shared) {
         let cur = (w.rem_euclid(256), w.div_euclid(256));
         token_count += 1;
@@ -865,12 +903,31 @@ fn first_pass(src: &str) -> FirstPass {
             if depth == 0 && (kw == 0 || kw == 5 || kw == 6) && cur.0 == 1 {
                 ids.push(cur.1);
             }
+            if impl_state == 5 && depth == 1 && kw == 0 && cur.0 == 1 {
+                methods_raw.push((impl_trait, impl_head, cur.1));
+            }
             match kw {
                 2 => depth += 1,
                 3 => depth -= 1,
                 _ => {}
             }
         }
+        impl_state = match (impl_state, cur.0) {
+            (0, 56) if depth == 0 => 1,
+            (1, 1) => {
+                impl_trait = cur.1;
+                2
+            }
+            (2, 45) => 3,
+            (3, 1) => {
+                impl_head = cur.1;
+                4
+            }
+            (4, 2) => 5,
+            (5, 3) if depth == 1 => 0,
+            (5, _) => 5,
+            _ => 0,
+        };
         prev = Some(cur);
     }
     let names = lex_names(&vm, &shared, src);
@@ -878,12 +935,37 @@ fn first_pass(src: &str) -> FirstPass {
     // Ordering needs the names, which exist only now. A multiheaded function is
     // one chunk, and the reference keys its chunk map by name, so the table is the
     // deduplicated lexicographically sorted set.
-    ids.sort_by(|&a, &b| names[a as usize].cmp(&names[b as usize]));
-    ids.dedup_by(|&mut a, &mut b| names[a as usize] == names[b as usize]);
+    // Methods are chunks named `Trait::Head::method` and sort among the plain names.
+    let mut all: Vec<ChunkEntry> = ids
+        .iter()
+        .map(|&id| (names[id as usize].clone(), id, None))
+        .chain(methods_raw.iter().map(|&(t, h, m)| {
+            (
+                format!(
+                    "{}::{}::{}",
+                    names[t as usize], names[h as usize], names[m as usize]
+                ),
+                -1,
+                Some((h, m)),
+            )
+        }))
+        .collect();
+    all.sort_by(|a, b| a.0.cmp(&b.0));
+    all.dedup_by(|a, b| a.0 == b.0);
+    let mut methods: Vec<(i64, i64, i64)> = Vec::new();
+    for (idx, (_, _, method)) in all.iter().enumerate() {
+        if let Some((h, m)) = *method
+            && !methods.iter().any(|&(mh, mm, _)| mh == h && mm == m)
+        {
+            methods.push((h, m, idx as i64));
+        }
+    }
     FirstPass {
         values,
         names,
-        chunks: ids,
+        chunks: all.iter().map(|(_, id, _)| *id).collect(),
+        chunk_names: all.into_iter().map(|(n, _, _)| n).collect(),
+        methods,
         token_count,
         has_imports,
     }
@@ -1722,6 +1804,27 @@ fn try_parse_functions_impl(
         Value::Int(1),
     )
     .unwrap();
+    // The method table, `(head, method) -> chunk`, which a method call resolves against.
+    assert!(
+        first.methods.len() <= 64,
+        "this program has {} distinct methods and parse.kel's method table holds 64",
+        first.methods.len()
+    );
+    use crate::selfhost_host::{BR_P_MT_CHUNK, BR_P_MT_COUNT, BR_P_MT_HEAD, BR_P_MT_NAME};
+    vm.set_shared(
+        &mut shared,
+        BR_P_MT_COUNT,
+        Value::Int(first.methods.len() as i64),
+    )
+    .unwrap();
+    for (i, &(h, m, c)) in first.methods.iter().enumerate() {
+        vm.set_shared(&mut shared, BR_P_MT_HEAD + i, Value::Int(h))
+            .unwrap();
+        vm.set_shared(&mut shared, BR_P_MT_NAME + i, Value::Int(m))
+            .unwrap();
+        vm.set_shared(&mut shared, BR_P_MT_CHUNK + i, Value::Int(c))
+            .unwrap();
+    }
     // THE TOKEN ARRAY HAS A CAP AND OVERFLOWING IT REPORTS ONE OF TWO WRONG THINGS.
     //
     // `toks.packed` holds `PARSE_TOKEN_CAP` tokens. Measured on a program that is one long
@@ -1912,6 +2015,10 @@ fn try_parse_functions_impl(
     // One row per `use`, its path segments as name ids from the UPATH records, in
     // declaration order. The stage refuses a wildcard, so every row names one native.
     let mut native_paths: Vec<Vec<i64>> = Vec::new();
+    // Set by a `signed` record and taken by the next head.
+    let mut signed_next = false;
+    // The impl whose methods are being parsed, `(trait, head)` name ids.
+    let mut impl_of: Option<(i64, i64)> = None;
     let mut data_bases = alloc::sync::Arc::new(Vec::new());
     // Every enum's header records (ENUMSTART, then EVARIANT/EDISC per variant, then END),
     // for the driver's own enum-layout assembly.
@@ -2262,11 +2369,17 @@ fn try_parse_functions_impl(
                     struct_records.push((code, val));
                 }
             } else if in_use {
-                if code == 11 {
-                    native_paths
-                        .last_mut()
-                        .expect("a path record outside a `use`")
-                        .push(val);
+                // Path segments are name ids, so never negative. A signature's return type
+                // rides after them as one negative entry: -2 for `()`, `-(id + 3)` for a
+                // named type. Record 133 carries a named return and 134 a `()` return.
+                let row = native_paths
+                    .last_mut()
+                    .expect("a path record outside a `use`");
+                match code {
+                    11 => row.push(val),
+                    133 => row.push(-(val + 3)),
+                    134 => row.push(-2),
+                    _ => {}
                 }
                 in_use = code != 5;
             } else if in_skip_decl {
@@ -2287,6 +2400,8 @@ fn try_parse_functions_impl(
                             body: Vec::new(),
                             param_names: Vec::new(),
                             literal_head: false,
+                            signed: core::mem::take(&mut signed_next),
+                            method_of: impl_of,
                             let_names: Vec::new(),
                             let_annotations: Vec::new(),
                             annotation_records: alloc::collections::BTreeMap::new(),
@@ -2391,6 +2506,8 @@ fn try_parse_functions_impl(
                         in_use = true;
                         native_paths.push(Vec::new());
                     }
+                    // `signed` precedes the next head.
+                    131 => signed_next = true,
                     12 => {
                         in_enum = true;
                         enum_records.push((12, val));
@@ -2406,11 +2523,24 @@ fn try_parse_functions_impl(
                         in_struct = true;
                         struct_records.push((18, val));
                     }
-                    19..=20 => in_skip_decl = true, // trait/impl declaration
+                    19 => in_skip_decl = true, // trait declaration
+                    // An impl: the trait now, the head in record 132. Its methods follow as
+                    // functions, and the impl's own END closes it.
+                    20 => impl_of = Some((val, -1)),
+                    132 => {
+                        if let Some((_, head)) = impl_of.as_mut() {
+                            *head = val;
+                        }
+                    }
                     5 => {
-                        open_decl(&mut cur, code, val).data_bases =
-                            alloc::sync::Arc::clone(&data_bases);
-                        on_function(&names, cur.take().unwrap())
+                        // With no function open, an END closes the impl being parsed.
+                        if cur.is_none() && impl_of.is_some() {
+                            impl_of = None;
+                        } else {
+                            open_decl(&mut cur, code, val).data_bases =
+                                alloc::sync::Arc::clone(&data_bases);
+                            on_function(&names, cur.take().unwrap())
+                        }
                     }
                     15 => return ControlFlow::Break(()),
                     _ => {}
@@ -2622,11 +2752,11 @@ pub fn self_host_compile(src: &str) -> Module {
     let mut module = compile_src(src);
     let mut i = 0;
     while i < fns.len() {
-        let name = names[fns[i].name as usize].clone();
+        let name = chunk_name(&fns[i], &names);
         // Group consecutive same-named heads (a multiheaded function is one chunk).
         let mut group: Vec<&ParsedFn> = vec![&fns[i]];
         let mut j = i + 1;
-        while j < fns.len() && names[fns[j].name as usize] == name {
+        while j < fns.len() && chunk_name(&fns[j], &names) == name {
             group.push(&fns[j]);
             j += 1;
         }
@@ -2700,12 +2830,7 @@ pub fn self_host_compile(src: &str) -> Module {
 /// guard. Delegation is a reason to expect agreement, not evidence of it.
 #[must_use]
 pub fn chunk_names_from_pipeline(src: &str) -> Vec<String> {
-    let first = first_pass(src);
-    first
-        .chunks
-        .iter()
-        .map(|&id| first.names.get(id as usize).cloned().unwrap_or_default())
-        .collect()
+    first_pass(src).chunk_names
 }
 
 /// One function's declaration, as the type channel needs it: name, declared arity, and each
@@ -2895,7 +3020,6 @@ pub fn try_call_type_inputs_from_pipeline(
                 .map(|(_, name)| (*name, 8)),
         )
         .collect();
-    let name_of = |id: i64| -> Option<String> { names.get(id as usize).cloned() };
     let tag_of = |id: i64| {
         if let Some(kind) = nominal_names.get(&id) {
             (id + 1) * 16 + kind
@@ -2954,7 +3078,7 @@ pub fn try_call_type_inputs_from_pipeline(
     }
     let mut declarations = Vec::new();
     for f in &fns {
-        let Some(name) = name_of(f.name) else {
+        let Some(name) = Some(chunk_name(f, &names)) else {
             continue;
         };
         let tags = f
@@ -2976,7 +3100,7 @@ pub fn try_call_type_inputs_from_pipeline(
     }
     let parameters: alloc::collections::BTreeMap<_, _> = fns
         .iter()
-        .filter_map(|f| name_of(f.name).map(|name| (name, &f.param_type_records)))
+        .filter_map(|f| Some(chunk_name(f, &names)).map(|name| (name, &f.param_type_records)))
         .collect();
     let chunk_names = chunk_names_from_pipeline(src);
     let return_names: Vec<_> = chunk_names
@@ -2985,13 +3109,13 @@ pub fn try_call_type_inputs_from_pipeline(
         .collect();
     let mut returns = alloc::collections::BTreeMap::new();
     for f in &fns {
-        if let Some(name) = name_of(f.name) {
+        if let Some(name) = Some(chunk_name(f, &names)) {
             returns.insert(format!("#function:{name}"), &f.return_type_records);
         }
     }
     let mut batches = Vec::new();
     for (head, f) in fns.iter().enumerate() {
-        let Some(name) = name_of(f.name) else {
+        let Some(name) = Some(chunk_name(f, &names)) else {
             continue;
         };
         let source_slots = source_head_slot_names(f, &names);
@@ -3747,7 +3871,7 @@ pub fn expression_rows_from_pipeline(src: &str) -> (Vec<ExprRow>, Vec<(String, u
     // code generation combines them into dispatch, which remaps parameter slots and
     // replaces the source tails with a synthetic root.
     for f in &fns {
-        let Some(function_name) = name_of(f.name) else {
+        let Some(function_name) = Some(chunk_name(f, &names)) else {
             continue;
         };
         for &(declared, given) in &f.struct_counts {
@@ -4145,7 +4269,7 @@ pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<BindingRow>) {
     for f in &fns {
         // The function's own name carries its declared return type, which is what a
         // `let a = g()` alias hop resolves through.
-        if let Some(n) = name_of(f.name) {
+        if let Some(n) = Some(chunk_name(f, &names)) {
             let t = tag_of(f.return_type);
             if t != 0 {
                 rows.push((n, t, 0, String::new()));
@@ -4179,7 +4303,7 @@ pub fn binding_rows_from_pipeline(src: &str) -> (Vec<String>, Vec<BindingRow>) {
             &f.body,
             f.cat,
             f.params,
-            name_of(f.name).as_deref().unwrap_or("?"),
+            Some(chunk_name(f, &names)).as_deref().unwrap_or("?"),
         );
         for node in &body.nodes {
             if node.kind != NODE_LET_IN {
@@ -4319,7 +4443,7 @@ pub fn self_host_compile_fused(src: &str) -> Module {
         relocation
             .relocate(&mut f)
             .expect("relocate streamed data records");
-        let name = names[f.name as usize].clone();
+        let name = chunk_name(&f, names);
         if !group.is_empty() && name != group_name {
             flush(&mut group, &group_name, &mut module, names);
         }
@@ -4342,7 +4466,7 @@ pub fn fused_compile_residency(src: &str) -> (usize, usize) {
     let mut group_name = String::new();
     let (mut peak, mut total) = (0usize, 0usize);
     parse_functions_impl_named(src, &mut |names, f| {
-        let name = names[f.name as usize].clone();
+        let name = chunk_name(&f, names);
         if !group.is_empty() && name != group_name {
             group.clear();
         }
@@ -6401,11 +6525,11 @@ fn assemble_signatures(
     let mut chunks: Vec<(String, ChunkSignature)> = Vec::new();
     let mut i = 0;
     while i < fns.len() {
-        let name = names[fns[i].name as usize].clone();
+        let name = chunk_name(&fns[i], names);
         let first = &fns[i];
         // Skip the rest of this head group.
         let mut j = i + 1;
-        while j < fns.len() && names[fns[j].name as usize] == name {
+        while j < fns.len() && chunk_name(&fns[j], names) == name {
             j += 1;
         }
         i = j;
@@ -6487,10 +6611,10 @@ fn assemble_chunk_metadata(
     let mut chunks = Vec::new();
     let mut i = 0;
     while i < fns.len() {
-        let name = names[fns[i].name as usize].clone();
+        let name = chunk_name(&fns[i], names);
         let first = &fns[i];
         let mut j = i + 1;
-        while j < fns.len() && names[fns[j].name as usize] == name {
+        while j < fns.len() && chunk_name(&fns[j], names) == name {
             j += 1;
         }
         i = j;
@@ -6590,7 +6714,7 @@ fn self_host_module_bookkeeping(module: &mut Module, fns: &[ParsedFn], names: &[
     module.persistent_composite_bytes = 0;
     let text_flags = fns
         .iter()
-        .find(|f| names[f.name as usize] == "main")
+        .find(|f| chunk_name(f, names) == "main")
         .map_or(0, |f| f.text_boundary);
     module.flags = if module.private_data_bytes != 0 {
         0
@@ -6599,6 +6723,17 @@ fn self_host_module_bookkeeping(module: &mut Module, fns: &[ParsedFn], names: &[
     } else {
         text_flow::ephemeral_flag(module, text_flags).expect("Keleusma text-boundary analysis")
     };
+    // `signed` on the entry sets the requires-signature flag, as the reference sets it. On
+    // any other head the reference rejects the program, and this path refuses it.
+    for f in fns {
+        if f.signed {
+            assert!(
+                chunk_name(f, names) == "main",
+                "`signed` on a function other than `main` is outside the self-hosted subset"
+            );
+            module.flags |= crate::wire_format::FLAG_REQUIRES_SIGNATURE;
+        }
+    }
 }
 
 /// The shared segment's flat byte total, derived from the assembled shared-slot layout the
@@ -6655,10 +6790,10 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
     let mut chunks: Vec<Chunk> = Vec::new();
     let mut i = 0;
     while i < fns.len() {
-        let name = names[fns[i].name as usize].clone();
+        let name = chunk_name(&fns[i], &names);
         let mut group: Vec<&ParsedFn> = vec![&fns[i]];
         let mut j = i + 1;
-        while j < fns.len() && names[fns[j].name as usize] == name {
+        while j < fns.len() && chunk_name(&fns[j], &names) == name {
             group.push(&fns[j]);
             j += 1;
         }
@@ -6697,27 +6832,39 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
     let entry_point = chunks.iter().position(|c| c.name == "main");
 
     // The native names come from the `use` declarations, in declaration order, each its
-    // segments joined by `::` as the reference joins them. The stage refuses a wildcard and
-    // a signature, so every native's declared return is absent, which the reference records
-    // as `Top`. An `external` import is outside this path: the stage's lexer has no
-    // `external` keyword, so the word would arrive as a path segment and name a different
-    // native.
+    // segments joined by `::` as the reference joins them. The `external` modifier is a
+    // keyword, not a segment, so it is absent here. A native without a signature returns
+    // `Top`, as in the reference. A signature's return, the row's negative last entry,
+    // maps to the reference's shape for a scalar or `()`; any other named return is outside
+    // this path.
     let native_names: Vec<String> = native_paths
         .iter()
         .map(|path| {
-            assert!(
-                path.first()
-                    .is_none_or(|&first| names[first as usize] != "external"),
-                "an `external` native import is outside the self-hosted subset"
-            );
             path.iter()
+                .filter(|&&id| id >= 0)
                 .map(|&id| names[id as usize].as_str())
                 .collect::<Vec<_>>()
                 .join("::")
         })
         .collect();
-    let native_return_shapes: Vec<crate::bytecode::WireShape> =
-        vec![crate::bytecode::WireShape::Top; native_names.len()];
+    let native_return_shapes: Vec<crate::bytecode::WireShape> = native_paths
+        .iter()
+        .map(|path| {
+            use crate::bytecode::WireShape;
+            match path.last().copied() {
+                Some(-2) => WireShape::Scalar { kind: 0 },
+                Some(code) if code < -2 => match names[(-code - 3) as usize].as_str() {
+                    "bool" => WireShape::Scalar { kind: 1 },
+                    "Byte" => WireShape::Scalar { kind: 2 },
+                    "Word" => WireShape::Scalar { kind: 3 },
+                    other => {
+                        panic!("a native returning `{other}` is outside the self-hosted subset")
+                    }
+                },
+                _ => WireShape::Top,
+            }
+        })
+        .collect();
 
     // The data layout, assembled from parse.kel's data-block records, drives both the shared
     // and private byte totals the reference derives from the same layout.
@@ -9458,7 +9605,7 @@ mod decoder_drift_guard {
     /// defect could hide from the byte-identity oracle.
     #[test]
     fn all_wire_op_tags_decode() {
-        for tag in 1..=67i64 {
+        for tag in 1..=68i64 {
             // operand 0 is the minimal representative word for each tag; decode must not panic.
             let _ = decode_op(tag);
         }
