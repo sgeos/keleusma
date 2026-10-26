@@ -4199,6 +4199,8 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
                 130 => panic!("a literal parameter head is lowered only by the shipping driver"),
                 // `signed` sets a module flag only the shipping driver assembles.
                 131 => panic!("a `signed` head is lowered only by the shipping driver"),
+                // An impl's head record, which only the shipping driver composes names from.
+                132 => panic!("an impl method is lowered only by the shipping driver"),
                 6 => cur.as_mut().unwrap().param_types.push(val),
                 7 => cur.as_mut().unwrap().return_type = val,
                 // This historical scaffold keeps only scalar signature names.

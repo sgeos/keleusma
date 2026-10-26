@@ -64,7 +64,7 @@ const CORPUS: &[(&str, Class)] = &[
     ("examples/scripts/05_pipeline.kel", Identical),
     ("examples/scripts/06_multiheaded.kel", Identical),
     ("examples/scripts/07_refinement.kel", Unsupported),
-    ("examples/scripts/08_method_dispatch.kel", Unsupported),
+    ("examples/scripts/08_method_dispatch.kel", Identical),
     ("examples/scripts/09_big_numbers.kel", Identical),
     ("examples/scripts/10_multbyte.kel", Identical),
     ("examples/scripts/11_signed.kel", Identical),
@@ -730,6 +730,43 @@ fn modifiers_compile_or_are_left_to_the_reference() {
         ),
         (
             "use host::g\nuse external host::f\nfn main() -> Word { host::f(1) + host::g(2) }",
+            Identical,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Slice 4 of Order 6, trait impls and method calls. `impl Trait for Head { fn m .. }`
+/// compiles each method as the chunk `Trait::Head::m`, sorted among the plain names, and
+/// `recv.m(args)` calls the first such chunk for the receiver's type head with the receiver
+/// as its first argument, as the reference resolves it. An impl whose methods are never
+/// called compiles too, since the reference emits their chunks regardless.
+#[test]
+fn trait_impls_and_method_calls_compile() {
+    let cases: &[(&str, Class)] = &[
+        (
+            "trait D { fn d(x: Word) -> Word; }\nimpl D for Word { fn d(x: Word) -> Word { x + 1 } }\nfn main(a: Word) -> Word { a.d() }",
+            Identical,
+        ),
+        (
+            "struct P { x: Word }\ntrait Get { fn get(p: P) -> Word; }\nimpl Get for P { fn get(p: P) -> Word { p.x } }\nfn main() -> Word { let p = P { x: 7 }; p.get() }",
+            Identical,
+        ),
+        (
+            "trait A { fn f(x: Word, y: Word) -> Word; }\nimpl A for Word { fn f(x: Word, y: Word) -> Word { x + y } }\nfn main() -> Word { let n: Word = 1; n.f(2) }",
+            Identical,
+        ),
+        (
+            "trait A { fn f(x: Word) -> Word; }\nimpl A for Word { fn f(x: Word) -> Word { x } }\nfn main() -> Word { 3 }",
             Identical,
         ),
     ];

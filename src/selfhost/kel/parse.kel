@@ -111,6 +111,12 @@ shared data toks {
     // Full-width literal values, indexed by lexer token 65.
     values: [Word; 1280],
     invalid_index_id: Word,
+    // The method table, Order 6, APPENDED. Row i resolves `recv.m(..)` for a receiver whose
+    // type head is `mt_head[i]` and a method named `mt_name[i]` to chunk `mt_chunk[i]`.
+    mt_count: Word,
+    mt_head: [Word; 64],
+    mt_name: [Word; 64],
+    mt_chunk: [Word; 64],
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -583,6 +589,10 @@ private data ps {
     // records emitted ahead of the next token. A literal head `fn f(0)` emits its test as
     // the guard `p0 == 0`, five records for one token, through `hq`.
     plit: Word,
+    // The impl being parsed, Order 6: its trait and head name ids, and 1 inside its body.
+    impl_trait: Word,
+    impl_head: Word,
+    in_impl: Word,
     hq_tag: [Word; 8],
     hq_arg: [Word; 8],
     hq_i: Word,
@@ -5940,10 +5950,11 @@ fn field_value_record() -> Word {
 
 fn step_fieldaccess(k: Word, v: Word) -> Word {
     if ps.fa_phase == 4 {
+        // A name that is no field of the struct, followed by `(`, is a method on it.
+        ps.fa_phase = 0;
         if k == Tok::LParen() as Word {
-            perr(pe_method_syntax(), toks.at);
-        } else { perr(pe_unknown_field(), ps.unresolved_name); }
-        0
+            method_call(structdefs.sd_name[ps.fa_struct], ps.unresolved_name, toks.at)
+        } else { perr(pe_unknown_field(), ps.unresolved_name) }
     } else {
     if ps.fa_phase == 1 {
         if k == Tok::Dot() as Word {
@@ -6297,7 +6308,26 @@ fn record_let_annotation(k: Word, v: Word) -> Word {
 
 // A declared scalar cannot have a field or element. Push any ordinary operator
 // back for the existing dispatch. Unknown and composite types never enter this path.
-fn step_scalar_postfix(k: Word) -> Word {
+// `recv.m(args)`: the receiver is already emitted, so resolve `m` on its type head through
+// the method table and open the call with the receiver counted as its first argument,
+// exactly as the pipe does. The `(` is pushed back for the call path to open.
+fn method_call(head: Word, name: Word, at: Word) -> Word {
+    ps.found_flag = 0;
+    for i in 0..toks.mt_count limit 64 {
+        if toks.mt_head[i] == head andalso toks.mt_name[i] == name {
+            call.call_pending = toks.mt_chunk[i];
+            ps.found_flag = 1;
+        }
+    }
+    if ps.found_flag == 0 { perr(pe_method_syntax(), at) } else {
+        call.pipe_args = 1;
+        call.call_phase = 1;
+        ps.cursor = ps.cursor - 1;
+        0
+    }
+}
+
+fn step_scalar_postfix(k: Word, v: Word) -> Word {
     if ps.scalar_postfix == 1 {
         ps.scalar_postfix = 0;
         if k == Tok::Dot() as Word {
@@ -6312,11 +6342,14 @@ fn step_scalar_postfix(k: Word) -> Word {
     } else {
         if ps.scalar_postfix == 2 andalso k == Tok::Ident() as Word {
             ps.scalar_postfix = 3;
+            ps.unresolved_name = v;
             0
         } else {
             ps.scalar_postfix = 0;
             if k == Tok::LParen() as Word {
-                perr(pe_method_syntax(), ps.scalar_field_at)
+                // A method on a scalar receiver, whose head is its scalar type's name.
+                let head = if vl.scalar == 3 { toks.word_id } else { if vl.scalar == 2 { toks.byte_id } else { if vl.scalar == 1 { toks.bool_id } else { 0 - 1 } } };
+                method_call(head, ps.unresolved_name, ps.scalar_field_at)
             } else {
                 perr(pe_scalar_field(), ps.scalar_field_at)
             }
@@ -7411,7 +7444,7 @@ fn body_next() -> Word {
                 step_unresolved_name(k)
             } else {
             if ps.scalar_postfix >= 1 {
-                step_scalar_postfix(k)
+                step_scalar_postfix(k, v)
             } else {
             if ps.fa_phase >= 1 {
                 step_fieldaccess(k, v)
@@ -7559,10 +7592,15 @@ fn header_step(k: Word, v: Word) -> Word {
     if ps.mode == 0 {
         // A `shared`/`private`/`const` modifier or a bare `data` keyword opens a data
         // block; otherwise a function category keyword (`yield`, `loop`, or `fn`).
-        if k == 14 {
+        if k == 14 orelse (ps.in_impl == 1 andalso k == 3) {
+            if k == 3 {
+                // The `}` closing an impl body. END closes the impl's record group.
+                ps.in_impl = 0;
+                5
+            } else {
             ps.dvis = 0;
             ps.mode = 4;
-            0
+            0 }
         } else {
         if k == 15 {
             ps.dvis = 1;
@@ -7601,11 +7639,10 @@ fn header_step(k: Word, v: Word) -> Word {
             19
         } else {
         if k == 56 {
-            // `impl`: an impl block. Emit IMPLSTART and enter the skip machine over its
-            // header (`Type` or `Trait for Type`) and brace-matched body; each method name
-            // is captured as an MNAME, exactly as for a trait.
-            ps.mode = 21;
-            20
+            // `impl Trait for Head { fn .. }`: read the header in modes 23 to 26, then parse
+            // each method as a function. A method is the chunk `Trait::Head::name`.
+            ps.mode = 23;
+            0
         } else {
         if k == 19 orelse k == 69 orelse k == 70 orelse k == 71 {
             // `pure`, Tok 70, and `ephemeral`, Tok 71, change nothing the reference emits for
@@ -7670,6 +7707,13 @@ fn header_step(k: Word, v: Word) -> Word {
                     ps.cur_chunk = i;
                 }
             }
+            // A method's chunk is found by its head and name, since its chunk-table entry
+            // names no interned identifier.
+            if ps.in_impl == 1 {
+                for i in 0..toks.mt_count limit 64 {
+                    if toks.mt_head[i] == ps.impl_head andalso toks.mt_name[i] == v { ps.cur_chunk = toks.mt_chunk[i]; }
+                }
+            }
             ps.mode = 2;
             ps.dkind + v * 64
         } else {
@@ -7692,8 +7736,8 @@ fn header_step(k: Word, v: Word) -> Word {
         }
         0
     } else {
-    if ps.mode == 21 orelse ps.mode == 22 {
-        header_skip_block(k, v)
+    if ps.mode >= 21 andalso ps.mode <= 26 {
+        if ps.mode >= 23 { header_impl(k, v) } else { header_skip_block(k, v) }
     } else {
         header_enum(k, v)
     } } } } } } }
@@ -7716,6 +7760,10 @@ fn header_skip_block(k: Word, v: Word) -> Word {
         0
     } else {
         if k == 2 {
+            // Only a trait reaches this machine now. A `{` at its body's depth opens a
+            // default method body, whose chunk the reference emits and this skip would
+            // drop, so it is refused.
+            if ps.idepth == 1 { perr(pe_method_syntax(), toks.at); }
             ps.idepth = ps.idepth + 1;
             0
         } else {
@@ -7740,6 +7788,29 @@ fn header_skip_block(k: Word, v: Word) -> Word {
             0
         } } } }
     }
+}
+
+// The header of `impl Trait for Head {`: 23 the trait, 24 `for`, 25 the head, 26 the `{`.
+// The `{` emits IMPLSTART carrying the trait and queues record 132 carrying the head, and
+// the body is then parsed in mode 0 with `in_impl` set, so each `fn` is a method. Anything
+// else, such as an inherent or a generic impl, is refused.
+fn header_impl(k: Word, v: Word) -> Word {
+    if ps.mode == 23 {
+        if k == Tok::Ident() as Word { ps.impl_trait = v; ps.mode = 24; 0 } else { perr(pe_method_syntax(), toks.at) }
+    } else {
+    if ps.mode == 24 {
+        if k == Tok::For() as Word { ps.mode = 25; 0 } else { perr(pe_method_syntax(), toks.at) }
+    } else {
+    if ps.mode == 25 {
+        if k == Tok::Ident() as Word { ps.impl_head = v; ps.mode = 26; 0 } else { perr(pe_method_syntax(), toks.at) }
+    } else {
+        if k == Tok::LBrace() as Word {
+            ps.mode = 0;
+            ps.in_impl = 1;
+            hq_push(132, ps.impl_head);
+            20 + ps.impl_trait * 64
+        } else { perr(pe_method_syntax(), toks.at) }
+    } } }
 }
 
 // The `use path::name` native import: emit a UPATH per `::`-separated segment; a non-`::`

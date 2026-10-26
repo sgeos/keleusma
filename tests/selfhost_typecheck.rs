@@ -7377,7 +7377,6 @@ fn pipeline_unsupported_syntax_is_not_source_rejection() {
         "fn main(a: Word) -> Word { assert a > 0; a }",
         "fn main() -> Word { assert not false; 1 }",
         "fn main() -> Word { assert 1 == 1; 1 }",
-        "trait Doubler { fn double(x: Word) -> Word; } impl Doubler for Word { fn double(x: Word) -> Word { x + x } } fn main() -> Word { let n: Word = 42; n.double() }",
         "use host::number() -> Word fn main() -> Word { host::number() }",
     ] {
         assert!(reference_accepts(source), "positive control {source}");
