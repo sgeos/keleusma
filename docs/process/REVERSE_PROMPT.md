@@ -57,6 +57,14 @@ Each question is independent and none blocks the next slice.
    `rogue_bestiary.kel` 101, so both stay refused. May the head cap be raised, to 128 for
    example, with its per-head arrays and loop bounds? Its cost is linear in the cap.
 
+10. Information-flow labels. The reference type checker enforces label flow through
+   `classify`, `declassify` and labelled types, and compiles both operators to their inner
+   expression unchanged. The self-hosted pipeline refuses them today. Dropping the labels in
+   a token filter would make every such program byte-identical, but the standalone
+   self-hosted verdict would then accept programs the reference rejects for a label
+   violation. Should Order 6 port label checking into the type stage, or is admission under
+   the shipping cross-check enough? I am leaving them refused until you rule.
+
 ## Rulings received this session
 
 The operator ruled first-hand on 2026-10-25 to free the dead names in `parse.kel`,
@@ -94,6 +102,15 @@ corpus reads 52 of 75 identical.
 
 The array `for`, the `signed`, `pure`, `ephemeral` and `external` modifiers, and trait
 impls with method calls compile byte-identically. The corpus reads 57 of 75 identical.
+
+## Slice 5d and the AST census
+
+The census holds one program or more for every reference AST variant and reads 54
+Identical of 70 rows. The saturation words, which the parser rejected as undefined names,
+compile byte-identically. The whole isolated self-host population found ten tests that
+slices 5 to 5c had made stale, and they now pin the new float boundary. Two tooling defects
+went to the kaizen line, the `cargo tns` alias, whose quoted filterset nextest cannot parse,
+and `scripts/gate_summary.py`, which is not executable here.
 
 ## Next
 

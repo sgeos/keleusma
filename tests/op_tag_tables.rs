@@ -46,12 +46,13 @@ const DRIVER: &str = include_str!("../src/selfhost/mod.rs");
 const ORACLE: &str = include_str!("selfhost_codegen.rs");
 
 /// The number of op tags the stage assigns. Not a free parameter: the driver's own
-/// `all_wire_op_tags_decode` sweeps `1..=68`. Tags 64 and 65 transport existing
+/// `all_wire_op_tags_decode` sweeps `1..=69`. Tags 64 and 65 transport existing
 /// CheckedDiv and CheckedMod instructions, 66 the existing BoundsCheck that
 /// probes an indexed write, 67 the existing CallVerifiedNative, added in Order 6
-/// slice 2 for `use`-imported natives, and 68 the existing CallExternalNative for a
-/// `use external` native. A change here must move that sweep too.
-const ASSIGNED_TAGS: i64 = 68;
+/// slice 2 for `use`-imported natives, 68 the existing CallExternalNative for a
+/// `use external` native, and 69 the existing Neg for a Float negation, slice 5c.
+/// A change here must move that sweep too.
+const ASSIGNED_TAGS: i64 = 69;
 
 // ---------------------------------------------------------------------------
 // Extraction. Brace depth throughout; see the module header for why.
@@ -275,6 +276,7 @@ const NAME_CORRESPONDENCE: &[(&str, &str)] = &[
     ("boundscheck", "BoundsCheck"),
     ("callnative", "CallVerifiedNative"),
     ("callext", "CallExternalNative"),
+    ("negop", "Neg"),
     ("cmpeq", "CmpEq"),
     ("cmpne", "CmpNe"),
     ("cmplt", "CmpLt"),
@@ -366,7 +368,7 @@ fn the_stage_tag_table_assigns_each_number_once_and_leaves_no_gap() {
         table.len() as i64,
         ASSIGNED_TAGS,
         "the number of assigned op tags moved. The driver's `all_wire_op_tags_decode` sweeps \
-         1..=68 and its own documentation says to extend that bound when codegen first assigns \
+         1..=69 and its own documentation says to extend that bound when codegen first assigns \
          a tag at or above 64; move both together."
     );
 }
@@ -681,6 +683,8 @@ const EXPECTED_UNEXERCISED: &[&str] = &[
     // `tests/selfhost_full_language.rs` rather than by the stage corpus.
     "callnative",
     "callext",
+    // Slice 5c. No stage source negates a Float.
+    "negop",
 ];
 
 /// **A SECOND POPULATION, BECAUSE THE FIRST CENSUS NAMED A LIMIT IT DID NOT MEASURE.**
@@ -878,6 +882,7 @@ const SHIPPED_EXAMPLES_ALSO_MISS: &[&str] = &[
     "divop",
     "modop",
     "mulop",
+    "negop",
     "subop",
 ];
 
@@ -949,18 +954,20 @@ fn the_unchecked_negation_is_outside_the_self_hosted_subset() {
          account of why `checkedneg` is the residue may be wrong: {body}"
     );
 
-    // THREE: no decoder arm produces `Neg`, so nothing the stage emits can decode to it.
+    // THREE: exactly one decoder arm produces `Neg`, tag 69, since Order 6 slice 5c lowered a
+    // Float negation to it. THIS WAS THE SUBSET WIDENING the earlier assertion asked to be
+    // recorded: the stage now reaches `Neg` for a Float operand. Byte negation still lowers
+    // to the checked form, so the claim in TWO stands for every other operand.
     let arms = decoder_arms(DRIVER);
     let producing_neg: Vec<i64> = arms
         .iter()
         .filter(|(_, arm)| arm_variant(arm) == "Neg")
         .map(|(tag, _)| *tag)
         .collect();
-    assert!(
-        producing_neg.is_empty(),
-        "a decoder arm now produces Op::Neg (tags {producing_neg:?}). THIS IS THE SUBSET WIDENING: \
-         the self-hosted compiler can reach an operation it could not before, which is a gain and \
-         should be recorded rather than absorbed silently"
+    assert_eq!(
+        producing_neg,
+        vec![69],
+        "the decoder arms producing Op::Neg moved from the one Float-negation tag"
     );
 
     // NON-VACUITY on the extraction, since an empty arm table would satisfy the check above.

@@ -276,13 +276,15 @@ fn positive_controls() -> &'static [(&'static str, Outcome, &'static str)] {
             Outcome::SelfHostRefuses,
             "fn id<T>(x: T) -> T { x }\nfn f() -> Word { id(1) }",
         ),
-        // Float arithmetic compiles on both sides and produces DIFFERENT bytes. This is the
-        // control that matters most: it proves the census can see a silent miscompile, which is
-        // the whole thing it exists to detect.
+        // Equality on a struct whose field is an array of tuples of structs compiles on both
+        // sides and produces DIFFERENT bytes, boundary row `eq/struct_field_array_of_tuple__GAP`.
+        // This is the control that matters most: it proves the census can see a silent
+        // miscompile, which is the whole thing it exists to detect. It replaced float
+        // arithmetic, which compiles byte-identically since Order 6 slice 5.
         (
-            "control/float_arith",
+            "control/struct_field_array_of_tuple_eq",
             Outcome::Diverges,
-            "fn f(a: Float, b: Float) -> Float { a + b }",
+            "struct P { x: Word }\nstruct S { g: [(P, Word); 2] }\nfn f(a: S, b: S) -> bool { a == b }",
         ),
     ]
 }

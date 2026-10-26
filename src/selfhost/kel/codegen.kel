@@ -223,6 +223,8 @@ const data wire {
     callnative: Word = 67,
     // CallExternalNative(index, count), the same transport for a `use external` native.
     callext: Word = 68,
+    // Neg, the unchecked negation the reference emits for a Float operand.
+    negop: Word = 69,
     // P11 Option E: the op-word radix is 8 bits (256), not 6 (64), so the wire-op TAG space is
     // 1..255 rather than 1..63. Safe as a radix widening (not two-word): the largest operand is
     // ~2^48 (GetDataIndexed's two 24-bit fields), so `tag + operand*256` stays ~2^56, well within
@@ -657,6 +659,23 @@ fn push_strlit(p: Word) -> Word {
     push_emit(wire.konst + intern_str(ast.args[p]) * wire.radix)
 }
 
+// FloatLit (kind 82): a Float pool entry, tag 3, whose value is the literal's interned
+// text, deduplicated by that text. The host converts the text to the `f64`.
+fn push_floatlit(p: Word) -> Word {
+    let id = ast.args[p];
+    st.dup_idx = st.pool_count;
+    for i in 0..st.pool_count limit 64 {
+        if st.pool[i] == id andalso st.pool_tag[i] == 3 { st.dup_idx = i; }
+    }
+    let idx = st.dup_idx;
+    if idx == st.pool_count {
+        st.pool[st.pool_count] = id;
+        st.pool_tag[st.pool_count] = 3;
+        st.pool_count = st.pool_count + 1;
+    }
+    push_emit(wire.konst + idx * wire.radix)
+}
+
 // Local (kind 2): schedule GetLocal(slot).
 fn push_local(p: Word) -> Word {
     push_emit(wire.getlocal + ast.args[p] * wire.radix)
@@ -960,13 +979,20 @@ fn push_byte_binop(p: Word) -> Word {
 // OpCode (add 1 / mul 2 / sub 3); lhs/rhs the operands. A LITERAL operand is coerced to a Byte
 // (WordToByte); a Byte variable is left as-is (arithmetic keeps operands narrow, no widen).
 fn push_byte_arith(p: Word) -> Word {
-    let opc = ast.args[p];
+    // 1024 above the operator marks a Float operation, which the reference lowers to the
+    // same unchecked ops and, for `/`, to Div.
+    let opc = ast.args[p] % 1024;
     let opw = match opc {
         1 => wire.addop,
         2 => wire.mulop,
         3 => wire.subop,
+        4 => wire.divop,
+        5 => wire.modop,
         _ => wire.addop,
     };
+    // A Float `/` and `%` leave the outcome words of the legacy polymorphic ops, which the
+    // reference discards with `PopN(2)`.
+    if opc == 4 orelse opc == 5 { push_emit(wire.popn + 2 * wire.radix); }
     push_emit(opw);
     if ast.kinds[ast.rhs[p]] == 1 {
         push_emit(wire.wordtobyte);
@@ -1144,8 +1170,11 @@ fn push_cast(p: Word) -> Word {
 // UnaryNeg (kind 10): emit the operand ops then CheckedNeg and the PopN(2) fixup.
 // lhs = operand.
 fn push_neg(p: Word) -> Word {
+    // An arg of 1 marks a Float operand, which the reference negates with the unchecked
+    // Neg and no outcome words. Any other negation is the checked form.
+    if ast.args[p] == 1 { push_emit(wire.negop); } else {
     push_emit(wire.popn + 2 * wire.radix);
-    push_emit(wire.checkedneg);
+    push_emit(wire.checkedneg); }
     push_visit(ast.lhs[p])
 }
 
@@ -3197,6 +3226,7 @@ fn walk_step() -> Word {
             19 => push_tuple_init(payload),
             37 => push_tuple_field(payload),
             38 => push_strlit(payload),
+            82 => push_floatlit(payload),
             39 => push_enum_match(payload),
             48 => push_struct_eq(payload),
             51 => push_enum_eq(payload),
