@@ -112,6 +112,24 @@ slices 5 to 5c had made stale, and they now pin the new float boundary. Two tool
 went to the kaizen line, the `cargo tns` alias, whose quoted filterset nextest cannot parse,
 and `scripts/gate_summary.py`, which is not executable here.
 
+## Slices 6 and 7
+
+Struct-typed private data fields compile byte-identically, with the private composite pool
+the host used to assume empty, and so do natives that return an enum. `14_frame_log.kel`
+is Identical. The RTOS task scripts are now also measured as the RTOS crate compiles them,
+prelude first, and all five are refused, four only because the prelude declares
+tuple-returning natives they never call. That is the next slice.
+
+## Slice 8 and a time-bound defect
+
+The RTOS prelude and its five task scripts compile byte-identically once the prelude's
+tuple-returning signatures are accepted. The last of them exposed a defect in the
+self-hosted time analysis, which gave every stream matching an enum directly a bound below
+the reference's. The shipping cross-check had refused each such program, so nothing was
+admitted with the lower bound. The analysis now agrees with the reference on those
+programs. A separate overestimate on a counted loop with a conditional break remains, in
+the safe direction, and is next.
+
 ## Next
 
 `use` signatures, newtypes and refinement, struct-typed data fields, and then the

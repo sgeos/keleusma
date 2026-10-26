@@ -1513,6 +1513,14 @@ private data call {
     nat_cc: Word,
     // 1 for a `use external` row, whose calls lower to CallExternalNative.
     nat_ext: [Word; 65],
+    // Each import row's declared return type name id plus one, zero when it declares none or
+    // returns a tuple, Order 6. A call resolves it to an enum at the call, since the enum may
+    // be declared after the `use`.
+    nat_rtype: [Word; 65],
+    // The element count of a tuple return being read, and whether an element type was read
+    // since the last separator.
+    nat_tcount: Word,
+    nat_tsep: Word,
     // A `use` signature, `use path(T, ..) -> R`: 1 inside the parameter list, whose
     // bracket depth is `nat_sdepth`, 2 awaiting `->`, 3 awaiting the return type, 4 inside
     // a `()` return.
@@ -2614,15 +2622,25 @@ fn step_daindex(k: Word) -> Word {
         ops.expect_operand = 1;
         0
     } else {
-    if k == Tok::Dot() as Word {
-        // A projection of a data field, `log.latest.len`. The field is read as a scalar
-        // here, so the `.` and the name after it used to be parsed as a fresh operand and
-        // the program rejected as naming an undefined identifier.
+    if k == Tok::Dot() as Word andalso da.da_kind < 1024 {
+        // A projection of a scalar or unmodelled data field, `log.latest.len`. Without this
+        // the `.` and the name after it would be parsed as a fresh operand and the program
+        // rejected as naming an undefined identifier.
         perr(pe_unresolved_syntax(), toks.at)
     } else {
         ps.cursor = ps.cursor - 1;
         da.da_phase = 0;
         ops.expect_operand = 0;
+        // A data read is a fresh operand, so the Byte flag a previous operand left, a cast
+        // to `Byte` for example, must not make the next operator lower as a Byte one.
+        ps.last_byte = if da.da_kind == 2 { 1 } else { 0 };
+        if da.da_kind >= 1024 {
+            // A struct-typed field is one data slot holding the whole composite, which the
+            // reference reads with `GetData` and projects exactly as a struct local, so the
+            // re-read token enters the struct field-access path.
+            let sid = da.da_kind - 1024;
+            ps.fa_struct = sid; ps.fa_phase = 1; stmt.pending_cstruct = sid + 1;
+        }
         Node::DataRead() as Word + da.da_base * 64
     } } }
 }
@@ -4795,7 +4813,13 @@ fn value_record(word: Word) -> Word {
     if kind == 20 { value_scalar(if arg == 1 orelse arg == 2 { 1 } else { 0 }); }
     if kind == 38 { value_scalar(6); }
     if kind == 80 { value_scalar(0 - 1); }
-    if kind == 11 { value_scalar(da.da_kind); }
+    if kind == 11 {
+        if da.da_kind >= 1024 {
+            value_scalar(0 - 1);
+            vl.form = 3; vl.decl = da.da_kind - 1023;
+            vl.bytes = structdefs.sd_bytesize[da.da_kind - 1024];
+        } else { value_scalar(da.da_kind); }
+    }
     if kind == 13 { value_scalar(da.pidx_kind); }
     if kind == 17 {
         if arg % 1024 == 0 { value_scalar(0 - 1); }
@@ -4898,12 +4922,15 @@ fn step_closing() -> Word {
             ops.expect_operand = 0;
             if call.call_chunk[call.call_sp] >= 1024 {
                 // A native call, record tag 80, carrying the import row and the argument
-                // count as `row + count * 1024`. Its result has no declared type here, so
-                // no composite type is pending after it.
+                // count as `row + count * 1024`. A declared enum return makes the result that
+                // enum, so a `match` on it or a `let` bound to it resolves its variants. No
+                // other composite type is pending after it.
                 stmt.pending_ctuple = 0; stmt.pending_cstruct = 0; stmt.pending_carray = 0;
-                stmt.pending_carray_struct = 0; stmt.pending_carray_size = 0; stmt.pending_cenum = 0;
-                ps.last_enum = 0;
+                stmt.pending_carray_struct = 0; stmt.pending_carray_size = 0;
                 let row = call.call_chunk[call.call_sp] - 1024;
+                if call.nat_rtype[row] < 0 { perr(pe_unresolved_syntax(), toks.at); }
+                stmt.pending_cenum = native_return_enum(row);
+                ps.last_enum = stmt.pending_cenum;
                 ps.emit_arg = row + call.call_count[call.call_sp] * call_chunk_radix()
                     + call.nat_ext[row] * 1048576;
                 80
@@ -7917,6 +7944,7 @@ fn use_signature(k: Word, v: Word) -> Word {
     if call.nat_sig == 3 {
         if k == Tok::Ident() as Word {
             call.nat_sig = 0;
+            call.nat_rtype[call.nat_count] = v + 1;
             native_import_end();
             ps.mode = 0;
             hq_push(5, 0 - 1);
@@ -7926,14 +7954,47 @@ fn use_signature(k: Word, v: Word) -> Word {
         if k == Tok::LParen() as Word { call.nat_sig = 4; 0 } else { perr(pe_unresolved_syntax(), toks.at) } }
     } else {
         if k == Tok::RParen() as Word {
+            // `()` is the unit return, record 134. A tuple return closes with record 136,
+            // after one record 135 per element type, and a call to it stays refused until
+            // tuple results are lowered, which `nat_rtype` of -1 marks.
+            let elements = call.nat_tcount;
+            call.nat_tcount = 0;
+            call.nat_tsep = 0;
             call.nat_sig = 0;
+            if elements > 0 { call.nat_rtype[call.nat_count] = 0 - 1; }
             native_import_end();
             ps.mode = 0;
             hq_push(5, 0 - 1);
-            ps.emit_arg = 0;
-            134
-        } else { perr(pe_unresolved_syntax(), toks.at) }
+            ps.emit_arg = elements;
+            if elements > 0 { 136 } else { 134 }
+        } else {
+        if k == Tok::Ident() as Word andalso call.nat_tsep == 0 {
+            // One element type of a tuple return, `(Status, Word)`. A nested tuple, an
+            // array and a generic are refused by the separator and token checks.
+            call.nat_tcount = call.nat_tcount + 1;
+            call.nat_tsep = 1;
+            ps.emit_arg = v;
+            135
+        } else {
+        if k == Tok::Comma() as Word andalso call.nat_tsep == 1 {
+            call.nat_tsep = 0;
+            0
+        } else { perr(pe_unresolved_syntax(), toks.at) } } }
     } } }
+}
+
+// The enum a native import row returns, as its name id plus one, else zero.
+fn native_return_enum(row: Word) -> Word {
+    let named = call.nat_rtype[row];
+    ps.found_flag = 0;
+    if named > 0 {
+        for i in 0..enums.enum_count limit 256 {
+            if enums.edata[i] == named - 1 { ps.found_flag = named; }
+        }
+    }
+    let found = ps.found_flag;
+    ps.found_flag = 0;
+    found
 }
 
 // Close one native import row. Sixty-four rows fill the table, and a sixty-fifth `use` is
@@ -7944,6 +8005,7 @@ fn native_import_end() -> Word {
         if call.nat_seg != 2 { call.nat_path[call.nat_count * 2] = 0 - 1; }
         call.nat_count = call.nat_count + 1;
         call.nat_ext[call.nat_count] = 0;
+        call.nat_rtype[call.nat_count] = 0;
         call.nat_seg = 0;
         0
     }
@@ -8137,6 +8199,25 @@ fn header_field_skip(k: Word, v: Word) -> Word {
 }
 }
 
+// A field type's kind for the data-field table. A scalar is its ScalarKind. A struct declared
+// earlier in the source, in a `private` block, is 1024 plus its struct index, so a read of the
+// field can continue into the struct field-access path, Order 6, and the field's flat size is
+// queued as record 112 for the host's private composite pool. A struct declared later, a
+// shared struct field, and every other type stay kind 0, which a projection still refuses.
+// A shared struct field takes a composite shared-layout entry the host does not assemble.
+fn data_field_kind(v: Word) -> Word {
+    let kind = scalar_kind_of(v);
+    if kind != 0 orelse ps.dvis != 1 { kind } else {
+        ps.found_flag = 0;
+        for i in 0..structdefs.sd_count limit 64 {
+            if structdefs.sd_name[i] == v { ps.found_flag = 1024 + i; }
+        }
+        let found = ps.found_flag;
+        ps.found_flag = 0;
+        found
+    }
+}
+
 // Record the pending field's layout in the accumulated table, unless there is no pending
 // field or it belongs to a const block (whose fields inline to their value and carry no
 // runtime slot). The element-0 slot is the running counter; the counter then advances by
@@ -8314,7 +8395,8 @@ fn header_field(k: Word, v: Word) -> Word {
             4 + v * 64
         } else {
         if ps.ptype == 1 {
-            di.kind = scalar_kind_of(v);
+            di.kind = data_field_kind(v);
+            if di.kind >= 1024 { hq_push(112, structdefs.sd_bytesize[di.kind - 1024]); }
             ps.ptype = 0;
             if ps.dvis == 3 {
                 // A scalar field: add its size (the offset was set at the field name), with
