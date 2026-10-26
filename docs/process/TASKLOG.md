@@ -6,6 +6,11 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-26 Untyped native destructuring, gate 1 on the corpus
+
+`check-md-links.kel` compiles byte-identically, so every repository source in the corpus
+does. PR 562 merged.
+
 ## 2026-10-26 Local bindings and typed native results
 
 `rogue_dungen.kel` and `piano_roll_3.kel` compile byte-identically. Every repository source

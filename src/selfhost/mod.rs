@@ -578,6 +578,11 @@ fn decode_op(w: i64) -> Op {
         //
         // The sibling arms for `GetField` (47/48) and `GetIndex` (49/56) use distinct op tags
         // for the two forms, so only the tuple read needs the magnitude guard.
+        // Variant tag 5, Order 6: an element of an untyped tuple, read boxed by its index, as
+        // the reference reads a destructured untyped native result.
+        53 if operand / 4294967296 == 5 => Op::GetTupleField(TupleField::Boxed {
+            index: (operand % 256) as u8,
+        }),
         53 if operand >= 4294967296 => Op::GetTupleField(TupleField::FlatNested {
             offset: (operand % 65536) as u16,
             size: ((operand / 65536) % 65536) as u16,
@@ -1477,6 +1482,7 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
         (crate::selfhost_host::BR_P_ZERO_DIVISOR_ID, "zero_divisor"),
         (crate::selfhost_host::BR_P_SATMAX_ID, "saturate_max"),
         (crate::selfhost_host::BR_P_SATMIN_ID, "saturate_min"),
+        (crate::selfhost_host::BR_P_HIDDEN_ID, "let"),
     ] {
         vm.set_shared(&mut shared, slot, Value::Int(id_of(name) + 1))
             .unwrap();
@@ -1900,6 +1906,7 @@ fn try_parse_functions_impl(
         (crate::selfhost_host::BR_P_ZERO_DIVISOR_ID, "zero_divisor"),
         (crate::selfhost_host::BR_P_SATMAX_ID, "saturate_max"),
         (crate::selfhost_host::BR_P_SATMIN_ID, "saturate_min"),
+        (crate::selfhost_host::BR_P_HIDDEN_ID, "let"),
     ] {
         vm.set_shared(&mut shared, slot, Value::Int(id_of(name) + 1))
             .unwrap();
