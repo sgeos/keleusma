@@ -6,6 +6,11 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-26 Local bindings and typed native results
+
+`rogue_dungen.kel` and `piano_roll_3.kel` compile byte-identically. Every repository source
+does except `check-md-links.kel`. PR 559 merged.
+
 ## 2026-10-26 Reconstruct, codegen and constant-pool capacities raised
 
 Two rogue scripts and five piano rolls compile byte-identically after the forest, head,

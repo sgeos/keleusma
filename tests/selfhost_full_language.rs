@@ -89,7 +89,9 @@ const CORPUS: &[(&str, Class)] = &[
     ("examples/scripts/rogue/rogue_combat.kel", Identical),
     ("examples/scripts/rogue/rogue_consume.kel", Identical),
     ("examples/scripts/rogue/rogue_descend.kel", Identical),
-    ("examples/scripts/rogue/rogue_dungen.kel", NoVerdict),
+    // Identical since the parser's local capacity rose and native results are typed from
+    // their declared scalar return, 2026-10-26.
+    ("examples/scripts/rogue/rogue_dungen.kel", Identical),
     ("examples/scripts/rogue/rogue_game.kel", Identical),
     // Identical since the reconstruct, codegen and constant-pool capacities rose, 2026-10-26.
     ("examples/scripts/rogue/rogue_gear.kel", Identical),
@@ -104,7 +106,9 @@ const CORPUS: &[(&str, Class)] = &[
     // Identical since the reconstruct, codegen and constant-pool capacities rose, 2026-10-26.
     ("examples/scripts/piano_roll/piano_roll_1.kel", Identical),
     ("examples/scripts/piano_roll/piano_roll_2.kel", Identical),
-    ("examples/scripts/piano_roll/piano_roll_3.kel", NoVerdict),
+    // Identical since the parser's local capacity rose and native results are typed from
+    // their declared scalar return, 2026-10-26.
+    ("examples/scripts/piano_roll/piano_roll_3.kel", Identical),
     // Identical since the reconstruct, codegen and constant-pool capacities rose, 2026-10-26.
     ("examples/scripts/piano_roll/piano_roll_4.kel", Identical),
     ("examples/scripts/piano_roll/piano_roll_5.kel", Identical),
@@ -1425,6 +1429,42 @@ fn rtos_scripts_joined_with_the_prelude_have_their_pinned_outcomes() {
         if actual != *expected {
             mismatches.push(format!(
                 "{name}: expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// A native call's value takes its declared scalar return, `Word`, `Byte` or `bool`, as the
+/// reference types it from the `use` signature. Untyped, a tuple of native results had no
+/// layout, which refused `rogue_dungen.kel`, and a Byte result could not select the Byte
+/// operators.
+#[test]
+fn native_results_take_their_declared_scalar_type() {
+    let cases: &[(&str, Class)] = &[
+        (
+            "use host::w() -> Word\nfn main() -> Word { let a = host::w(); let b = host::w(); let t = (a, b); t.1 }",
+            Identical,
+        ),
+        (
+            "use host::b() -> Byte\nfn main() -> Byte { host::b() + host::b() }",
+            Identical,
+        ),
+        (
+            "use host::b() -> Byte\nfn main() -> Byte { let x = host::b(); x band x }",
+            Identical,
+        ),
+        (
+            "use host::f() -> bool\nfn main() -> Word { if host::f() { 1 } else { 0 } }",
+            Identical,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
             ));
         }
     }

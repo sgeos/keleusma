@@ -441,3 +441,11 @@ heads past sixteen and made `rogue_gear.kel` diverge, and codegen's head loop bo
 at 64. `rogue_bestiary.kel`, `rogue_gear.kel` and the piano rolls 0, 1, 4, 8 and 9 became
 Identical. A `match` with more than 64 arms, and an enum match with more than about 51,
 still overflows the break list and the arm loops, which no repository source reaches.
+
+**Local bindings and typed native results, 2026-10-26.** The parser's local bindings per
+function rose from 64 to 256, with `PARSE_LOCALS_CAP`, which `piano_roll_3.kel`'s `main`
+needed at 65. A native call's value now takes its declared scalar return, `Word`, `Byte` or
+`bool`, as the reference types it from the `use` signature. A tuple built from native
+results had no layout, which refused `rogue_dungen.kel`, and a `Byte` result could not select
+the Byte operators. Every repository source now compiles byte-identically except
+`scripts/check-md-links.kel`, which destructures an untyped library native.

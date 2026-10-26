@@ -459,7 +459,7 @@ pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
 /// checks all three against the array declarations they guard.
 pub const PARSE_OPSTACK_CAP: usize = 64;
 /// See [`PARSE_OPSTACK_CAP`].
-pub const PARSE_LOCALS_CAP: usize = 64;
+pub const PARSE_LOCALS_CAP: usize = 256;
 /// See [`PARSE_OPSTACK_CAP`].
 pub const PARSE_STMTS_CAP: usize = 256;
 /// Parameters on one function. See [`PARSE_OPSTACK_CAP`].
