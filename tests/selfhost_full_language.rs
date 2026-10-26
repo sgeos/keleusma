@@ -865,3 +865,28 @@ fn float_arithmetic_on_typed_operands_compiles() {
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
+
+/// Slice 5c of Order 6, Float negation, the unchecked `Neg` in the reference, through a new
+/// transport tag, 69, for that existing instruction. A Word negation keeps the checked form.
+#[test]
+fn float_negation_compiles() {
+    let cases: &[(&str, Class)] = &[
+        ("fn main(a: Float) -> Float { -a }", Identical),
+        ("fn main(a: Float) -> Float { -a + 1.0 }", Identical),
+        (
+            "fn main(a: Float, b: Float) -> Float { -(a * b) + 1.0 }",
+            Identical,
+        ),
+        ("fn main(a: Word) -> Word { -a }", Identical),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}

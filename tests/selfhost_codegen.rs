@@ -897,6 +897,7 @@ fn decode_op(w: i64) -> Op {
         66 => Op::BoundsCheck(operand as u16),
         67 => Op::CallVerifiedNative((operand % 65536) as u16, (operand / 65536) as u8),
         68 => Op::CallExternalNative((operand % 65536) as u16, (operand / 65536) as u8),
+        69 => Op::Neg,
         // A flat struct construction: the operand packs count + byte_size*65536.
         46 => Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Struct,
@@ -2083,8 +2084,9 @@ fn self_compile_codegen_atomic_functions() {
     // Checked arithmetic adds five helpers.
     // The index-first and handled indexed writes of 2026-10-21 add `push_write_probe`,
     // `store_binds` and `push_checked_store` and remove the dead `push_index_store` (100 -> 102).
-    // Order 6 slice 2 adds `push_native_call`, the native-call lowering (102 -> 103).
-    const EXPECTED_SELF_COMPILE: usize = 103;
+    // Order 6 slice 2 adds `push_native_call`, the native-call lowering (102 -> 103), and
+    // slice 5b `push_floatlit` (103 -> 104).
+    const EXPECTED_SELF_COMPILE: usize = 104;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -9074,13 +9076,14 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
             "fn f(a: Float, b: Float) -> Float { a + b }",
         ),
         ("scalar/float_literal", SOk, "fn f() -> Float { 1.5 }"),
+        // Float negation, `Neg` in the reference, a divergence until slice 5c.
+        ("scalar/float_neg", SOk, "fn f(a: Float) -> Float { -a }"),
         // --- out of scope for the self-hosted subset -----------------------------
-        // Float negation lowers to `CheckedNeg` here and to `Neg` in the reference, and the
-        // decoder has no arm producing `Neg` at all.
+        // A float literal with a type suffix, which the self-hosted lexer refuses.
         (
-            "scope/float_neg__GAP",
-            Diverges,
-            "fn f(a: Float) -> Float { -a }",
+            "scope/float_suffix__GAP",
+            Refuses,
+            "fn f() -> Float { 1.5Float }",
         ),
         (
             "scope/generic_fn__GAP",
@@ -9827,15 +9830,15 @@ fn the_residue_named_here_matches_the_census_file() {
         );
     }
     // The sixth and seventh tags are `callnative` and `callext`, which no census program
-    // reaches because none imports a native. They are not arithmetic witnesses, so they
-    // are named here rather than above.
+    // reaches because none imports a native, and the eighth `negop`, since none negates a
+    // Float. They are not arithmetic witnesses, so they are named here rather than above.
     assert!(
-        line.contains("callnative") && line.contains("callext"),
+        line.contains("callnative") && line.contains("callext") && line.contains("negop"),
         "{line}"
     );
     assert_eq!(
         line.matches('"').count(),
-        14,
+        16,
         "the census residue is no longer exactly the five arithmetic tags and `callnative`: \
          {line}. Byte arithmetic is exercised by the boundary corpus; legacy division has \
          direct instruction fixtures."

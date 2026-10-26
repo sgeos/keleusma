@@ -4491,7 +4491,8 @@ fn emit_op(op: Word) -> Word {
     } else {
         ps.last_byte = 0;
         match op {
-            OpCode::Neg() => Node::Neg() as Word,
+            // A Float operand negates with the unchecked Neg, flagged 1 on the record.
+            OpCode::Neg() => if vl.form == 0 andalso vl.scalar == 5 { Node::Neg() as Word + 64 } else { Node::Neg() as Word },
             OpCode::Not() => Node::Not() as Word,
             // P11 Option E: `bnot` now yields its NATIVE record kind 65 (== its node kind) via the
             // two-word transport (emit_arg = 0, a full-word tag), retiring the split-tag workaround
@@ -4819,7 +4820,8 @@ fn value_record(word: Word) -> Word {
     if kind == 3 { value_scalar(if arg >= 64 { arg / 64 } else { if (arg >= 6 andalso arg <= 11) orelse arg == 33 { 1 } else { 3 } }); }
     if kind == 6 orelse kind == 8 orelse kind == 9 orelse kind == 68 { value_scalar(1); }
     if kind == 47 orelse kind == 50 orelse kind == 53 orelse kind == 58 orelse kind == 61 orelse kind == 63 { value_scalar(1); }
-    if kind == 10 orelse kind == 65 { value_scalar(3); }
+    // A negation is a Word unless it is the Float negation, record 10 with arg 1.
+    if kind == 10 orelse kind == 65 { value_scalar(if kind == 10 andalso arg == 1 { 5 } else { 3 }); }
     if kind == 45 { value_scalar(if arg >= 1024 { 5 } else { 2 }); }
     if kind == 82 { value_scalar(5); }
     if kind == 44 orelse kind == 51 orelse kind == 60 { value_scalar(2); }

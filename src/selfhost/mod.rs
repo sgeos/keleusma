@@ -507,6 +507,8 @@ fn decode_op(w: i64) -> Op {
         67 => Op::CallVerifiedNative((operand % 65536) as u16, (operand / 65536) as u8),
         // The same transport for a `use external` native.
         68 => Op::CallExternalNative((operand % 65536) as u16, (operand / 65536) as u8),
+        // The unchecked negation of a Float.
+        69 => Op::Neg,
         // A flat struct construction: the operand packs count + byte_size*65536.
         46 => Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Struct,
@@ -9615,7 +9617,7 @@ mod decoder_drift_guard {
     /// defect could hide from the byte-identity oracle.
     #[test]
     fn all_wire_op_tags_decode() {
-        for tag in 1..=68i64 {
+        for tag in 1..=69i64 {
             // operand 0 is the minimal representative word for each tag; decode must not panic.
             let _ = decode_op(tag);
         }

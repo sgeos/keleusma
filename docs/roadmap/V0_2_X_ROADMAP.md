@@ -508,10 +508,10 @@ execution returning seven. These results do not complete Keleusma wire serializa
 
 ## Current construct-support boundary, 2026-10-25
 
-The executable table in `tests/selfhost_codegen.rs` contains 116 cases with
-111 SOk / 1 Refuses / 3 Diverges / 1 RefRejects. Order 6 slice 5 moved the float
-arithmetic case from Diverges to SOk, added a float literal case, SOk since slice 5b, and
-added a float negation case, which Diverges. The 2026-10-21 increments added
+The executable table in `tests/selfhost_codegen.rs` contains 117 cases with
+112 SOk / 2 Refuses / 2 Diverges / 1 RefRejects. Order 6 slice 5 moved the float
+arithmetic case from Diverges to SOk and added float literal and negation cases, SOk since
+slices 5b and 5c, and a suffixed float literal case, which Refuses. The 2026-10-21 increments added
 the three indexed-write cases and the nine cast cases, each byte-identical.
 SOk denotes byte identity with the reference, Refuses denotes pipeline refusal,
 Diverges denotes different artifacts, and RefRejects denotes reference rejection.

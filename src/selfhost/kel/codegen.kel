@@ -223,6 +223,8 @@ const data wire {
     callnative: Word = 67,
     // CallExternalNative(index, count), the same transport for a `use external` native.
     callext: Word = 68,
+    // Neg, the unchecked negation the reference emits for a Float operand.
+    negop: Word = 69,
     // P11 Option E: the op-word radix is 8 bits (256), not 6 (64), so the wire-op TAG space is
     // 1..255 rather than 1..63. Safe as a radix widening (not two-word): the largest operand is
     // ~2^48 (GetDataIndexed's two 24-bit fields), so `tag + operand*256` stays ~2^56, well within
@@ -1168,8 +1170,11 @@ fn push_cast(p: Word) -> Word {
 // UnaryNeg (kind 10): emit the operand ops then CheckedNeg and the PopN(2) fixup.
 // lhs = operand.
 fn push_neg(p: Word) -> Word {
+    // An arg of 1 marks a Float operand, which the reference negates with the unchecked
+    // Neg and no outcome words. Any other negation is the checked form.
+    if ast.args[p] == 1 { push_emit(wire.negop); } else {
     push_emit(wire.popn + 2 * wire.radix);
-    push_emit(wire.checkedneg);
+    push_emit(wire.checkedneg); }
     push_visit(ast.lhs[p])
 }
 
