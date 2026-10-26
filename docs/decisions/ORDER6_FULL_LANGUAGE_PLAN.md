@@ -471,3 +471,13 @@ had faulted the parser. The census reads 60 Identical of 72 rows, and every docu
 expression and statement form is now handled, which retired the census assertion that one
 still failed. A `match` of more than 64 arms, and an enum match of more than about 51, are
 known capacity limits that no repository source reaches.
+
+**The pipe placeholder, 2026-10-26.** The reference evaluates `x |> f(a, _)` with the piped
+operand in the placeholder's position. In a call a pipe opened, the parser turns `_` into
+an internal token that `step_normal` emits as record 84, and reconstruct, building the
+call, replaces that sentinel with the piped operand and shifts the arguments after it, so
+codegen emits them in the substituted order. Folding the case into the existing dispatch
+chain overran the reference parser's nesting depth of 24, which is why the token is
+rewritten before dispatch rather than handled where it is read. A `_` outside a pipe is a
+reference rejection and a second placeholder stays refused. The census reads 61 Identical
+of 72.

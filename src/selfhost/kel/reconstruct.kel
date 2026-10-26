@@ -65,6 +65,8 @@ shared data io {
 // `limit_parts`, and `match_parts` slots. `pending` collects a `for` loop's five
 // SlotRecords until its ForBuild. All reset at the start of each run.
 private data rs {
+    // The pipe placeholder's argument position in the call being built, or -1, Order 6.
+    ph_at: Word,
     node_count: Word,
     sp: Word,
     stack: [Word; 4096],
@@ -907,8 +909,9 @@ fn step_record(k: Word, a: Word) -> Word {
         if k == 122 { rerr(6, k) } else { step_checked(k, a) }
     } else {
     if k >= 112 andalso k <= 117 { step_outcome(k, a) } else {
-    if is_leaf(k) == 1 orelse k == 72 {
-        if k == 72 { push(0 - 1) } else { emit(k, a, 0, 0) }
+    if is_leaf(k) == 1 orelse k == 72 orelse k == 84 {
+        // 72 pushes a wildcard arm's sentinel, and 84 a pipe placeholder's, Order 6.
+        if k == 72 { push(0 - 1) } else { if k == 84 { push(0 - 2) } else { emit(k, a, 0, 0) } }
     } else {
     if is_binary(k) == 1 {
         let r = pop();
@@ -955,8 +958,22 @@ fn step_record(k: Word, a: Word) -> Word {
             let node = pop();
             io.call_args[args_start + count - 1 - j] = node;
         }
-        rs.ca = args_start + count;
-        emit(if k == 80 { 81 } else { 7 }, chunk, args_start, count)
+        // A pipe placeholder, the sentinel -2 record 84 pushed, takes the piped operand,
+        // which is the first argument, and the arguments after the operand shift down by
+        // one, Order 6. The reference evaluates the operand in the placeholder's position.
+        rs.ph_at = 0 - 1;
+        for j in 0..count limit 64 {
+            if io.call_args[args_start + j] == 0 - 2 { rs.ph_at = j; }
+        }
+        let final_count = if rs.ph_at > 0 {
+            io.call_args[args_start + rs.ph_at] = io.call_args[args_start];
+            for j in 0..(count - 1) limit 64 {
+                io.call_args[args_start + j] = io.call_args[args_start + j + 1];
+            }
+            count - 1
+        } else { count };
+        rs.ca = args_start + final_count;
+        emit(if k == 80 { 81 } else { 7 }, chunk, args_start, final_count)
     } else {
     if k == 35 {
         // FieldPos: the declaration slot of the field value that immediately follows. Push it

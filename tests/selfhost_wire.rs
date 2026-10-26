@@ -13006,8 +13006,9 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // The untyped hidden binding's `hidden_id` and `let_untyped` made it 1050 and 32,429.
     // The `assert` statement's `assert_pending`, `assert_base` and
     // `assert_message_comma` made it 1053 and 32,620.
-    assert_eq!(worst_names, 1053, "the worst-case name count moved");
-    assert_eq!(worst_blob, 32620, "the worst-case blob size moved");
+    // The pipe placeholder's `call_piped` made it 1054 and 32,667.
+    assert_eq!(worst_names, 1054, "the worst-case name count moved");
+    assert_eq!(worst_blob, 32667, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
