@@ -1248,7 +1248,10 @@ fn push_exprstmt(p: Word) -> Word {
 fn push_forin(p: Word) -> Word {
     let fp = ast.args[p];
     let i_slot = ast.for_parts[fp];
-    let lim_slot = ast.for_parts[fp + 1];
+    // A negative end slot marks `for x in xs` over an array, whose reference lowering
+    // stores the end before the counter.
+    let swapped = if ast.for_parts[fp + 1] < 0 { 1 } else { 0 };
+    let lim_slot = if swapped == 1 { 0 - ast.for_parts[fp + 1] - 1 } else { ast.for_parts[fp + 1] };
     let start = ast.for_parts[fp + 2];
     let limit = ast.for_parts[fp + 3];
     let cond = ast.for_parts[fp + 4];
@@ -1264,10 +1267,17 @@ fn push_forin(p: Word) -> Word {
     push_emit(wire.breakif);                    // BreakIf(exit)
     push_visit(cond);                 // i >= limit
     push_emit(wire.loopop);                    // Loop(exit)
+    if swapped == 1 {
+        push_emit(wire.setlocal + i_slot * wire.radix);   // SetLocal(i)
+        push_visit(start);                                // start value
+        push_emit(wire.setlocal + lim_slot * wire.radix); // SetLocal(limit)
+        push_visit(limit)                                 // limit value, first
+    } else {
     push_emit(wire.setlocal + lim_slot * wire.radix);     // SetLocal(limit)
     push_visit(limit);                // limit value
     push_emit(wire.setlocal + i_slot * wire.radix);       // SetLocal(i)
     push_visit(start)                 // start value
+    }
 }
 
 // ForLimit (kind 23): `for i in start..end limit CAP { body } <cont>` in the bare

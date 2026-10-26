@@ -1199,6 +1199,9 @@ private data forst {
     // the analogue of `forlimit_count`. APPENDED, per this file's rule about slot-addressed
     // blocks.
     for_bare: [Word; 9],
+    // 1 for `for x in xs` over a static scalar array, Order 6. The bare emission ladder
+    // marks its build record so codegen initialises the end before the counter.
+    for_arr: [Word; 9],
     forin_count: Word,
     for_emit: Word,
     for_emit_i: Word,
@@ -5475,7 +5478,10 @@ fn step_forheader(k: Word, v: Word) -> Word {
             0
         } else {
         if k == Tok::LBrace() as Word {
-            perr(pe_for_iterable(), toks.at);
+            // `for x in xs {`, an iterable rather than a range. Drain the iterable, and the
+            // completion (reason 21) lowers it if it is a static scalar array.
+            ops.drain_reason = 21;
+            ops.draining = 1;
             0
         } else {
             step_normal(k, v)
@@ -5711,6 +5717,67 @@ fn outcome_emit() -> Word {
 // Kinds 69 and 70 are above the six-bit legacy tag, so both go out on the MIGRATED
 // transport -- `ps.emit_arg` carries a full-word payload and the yielded tag is raw. A
 // `kind + payload * 64` packing would silently truncate them.
+// The iterable of `for x in xs { body }` is drained. The reference copies a static array
+// into a fresh local, stores its length, then a zero counter, and on each iteration binds
+// `x` to the element at the counter before the body runs. That is this rewrite, slot for
+// slot: a hidden `let` of the iterable, then a bare range loop over the counter whose end
+// and start are the length and zero, initialised end first, whose body opens with
+// `let x = tmp[ctr]`. Only an array of known length and scalar element is lowered.
+fn for_array_open() -> Word {
+    let fp = forst.for_sp - 1;
+    if vl.form != 2 orelse vl.arity <= 0 orelse ht.nform[vl.child] != 0 { perr(pe_for_iterable(), toks.at) } else {
+        let len = vl.arity;
+        let kind = ht.scalar[vl.child];
+        // The hidden binding of the iterable, a statement of the enclosing block. Its name
+        // id names nothing, so no source name resolves to it.
+        let tmp = ps.pcount + stmt.slot_count;
+        stmt.slot_count = stmt.slot_count + 1;
+        stmt.stmt_kind[stmt.stmt_count] = Node::LetIn() as Word;
+        stmt.stmt_arg[stmt.stmt_count] = tmp;
+        stmt.stmt_name[stmt.stmt_count] = 1099511627776;
+        stmt.stmt_type[stmt.stmt_count] = 0;
+        stmt.stmt_count = stmt_push(stmt.stmt_count);
+        // The end, then the counter, then the element, in the reference's order.
+        forst.for_end_slot[fp] = ps.pcount + stmt.slot_count;
+        stmt.slot_count = stmt.slot_count + 1;
+        forst.for_vslot[fp] = ps.pcount + stmt.slot_count;
+        stmt.slot_count = stmt.slot_count + 1;
+        let x = ps.pcount + stmt.slot_count;
+        stmt.slot_count = stmt.slot_count + 1;
+        forst.for_bare[fp] = 1;
+        forst.for_arr[fp] = 1;
+        // Open the body frame, as the bare range form's `{` does.
+        forst.for_phase[fp] = 7;
+        forst.for_stmt_start[fp] = stmt.stmt_count;
+        forst.for_seq[fp] = stmt.open_seq;
+        stmt.open_seq = stmt.open_seq + 1;
+        stmt.pbase[stmt.pbase_sp] = stmt.stmt_base;
+        stmt.pbase_sp = stmt.pbase_sp + 1;
+        stmt.stmt_base = stmt.pstmt_sp;
+        // The start and end literals the build pops, then the element read.
+        hq_push(Node::Literal() as Word, 0);
+        hq_push(Node::Literal() as Word, len);
+        hq_push(Node::Local() as Word + tmp * 64, 0 - 1);
+        hq_push(Node::Local() as Word + forst.for_vslot[fp] * 64, 0 - 1);
+        hq_push(Node::ArrIndex() as Word + kind * 64, 0 - 1);
+        // `let x = tmp[ctr];` as the body's first statement, with `x` in scope.
+        stmt.stmt_kind[stmt.stmt_count] = Node::LetIn() as Word;
+        stmt.stmt_arg[stmt.stmt_count] = x;
+        stmt.stmt_name[stmt.stmt_count] = forst.for_var[fp];
+        stmt.stmt_type[stmt.stmt_count] = 0;
+        stmt.stmt_count = stmt_push(stmt.stmt_count);
+        clear_let_shape(stmt.let_count);
+        stmt.let_names[stmt.let_count] = forst.for_var[fp];
+        stmt.scope_slot[stmt.let_count] = x;
+        stmt.let_scalar[stmt.let_count] = 1;
+        vl.locals[stmt.let_count] = kind + 1;
+        vl.local_desc[stmt.let_count] = 0;
+        stmt.let_count = let_push(stmt.let_count);
+        ops.expect_operand = 1;
+        0
+    }
+}
+
 fn step_forin_emit(fp: Word) -> Word {
     if forst.for_emit_i == 0 {
         forst.for_emit_i = 1;
@@ -5726,7 +5793,8 @@ fn step_forin_emit(fp: Word) -> Word {
     } else {
     if forst.for_emit_i == 3 {
         forst.for_emit_i = 4;
-        ps.emit_arg = 0;
+        ps.emit_arg = forst.for_arr[fp];
+        forst.for_arr[fp] = 0;
         69
     } else {
         // The loop's parts are emitted; record its ForIn statement, pop the loop context,
@@ -6884,10 +6952,11 @@ fn step_draining() -> Word {
         if ops.drain_reason == 18 {
             ops.draining = 0; ops.expect_operand = 1;
             checked.phase[checked.depth - 1] = 7; 0
-        } else { if ops.drain_reason == 19 orelse ops.drain_reason == 20 {
+        } else { if ops.drain_reason == 19 orelse ops.drain_reason == 20 orelse ops.drain_reason == 21 {
             ops.draining = 0;
+            if ops.drain_reason == 21 { for_array_open() } else {
             if ops.drain_reason == 20 { call.pipe_args = 1; ops.expect_operand = 1; } else { checked.emit = 1; }
-            0
+            0 }
         } else {
         if ops.drain_reason <= 4 {
             // A statement, block, condition or branch tail has fully folded, so the

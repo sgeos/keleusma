@@ -60,7 +60,7 @@ const CORPUS: &[(&str, Class)] = &[
     ("examples/scripts/01_arithmetic.kel", Identical),
     ("examples/scripts/02_struct_field.kel", Identical),
     ("examples/scripts/03_enum_match.kel", Identical),
-    ("examples/scripts/04_for_in.kel", Unsupported),
+    ("examples/scripts/04_for_in.kel", Identical),
     ("examples/scripts/05_pipeline.kel", Identical),
     ("examples/scripts/06_multiheaded.kel", Identical),
     ("examples/scripts/07_refinement.kel", Unsupported),
@@ -69,7 +69,7 @@ const CORPUS: &[(&str, Class)] = &[
     ("examples/scripts/10_multbyte.kel", Identical),
     ("examples/scripts/11_signed.kel", Unsupported),
     ("examples/scripts/12_sensor_window.kel", Identical),
-    ("examples/scripts/13_telemetry_stream.kel", Unsupported),
+    ("examples/scripts/13_telemetry_stream.kel", Identical),
     ("examples/scripts/14_frame_log.kel", Unsupported),
     ("examples/scripts/15_pixel_blend.kel", Identical),
     ("examples/scripts/rogue/rogue_ai_boss.kel", Identical),
@@ -641,6 +641,46 @@ fn use_paths_need_separators_shebangs_are_skipped_and_unclaimed_tokens_are_refus
         (
             "use host::f\nfn main() -> Word { let t = host::f(); t.0 }",
             RefRejects,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Slice 3d of Order 6, `for x in xs` over a static scalar array. The reference copies the
+/// array into a fresh local, stores its length and then a zero counter, and binds `x` to
+/// the element at the counter before the body. The stage writes that as a hidden `let`,
+/// a bare range loop initialised end first, and a body opening with `let x = tmp[ctr]`.
+#[test]
+fn for_over_a_static_array_compiles() {
+    let cases: &[(&str, Class)] = &[
+        (
+            "fn main() -> Word { let xs = [1, 2, 3]; for x in xs { let y = x; } 7 }",
+            Identical,
+        ),
+        (
+            "fn main() -> Word { let xs = [10, 20, 30, 40]; for x in xs { let _d = x * 2; } xs[3] }",
+            Identical,
+        ),
+        (
+            "fn f(a: [Word; 3]) -> Word { for x in a { let y = x; } 1 }\nfn main() -> Word { f([1, 2, 3]) }",
+            Identical,
+        ),
+        (
+            "fn main() -> Word { let xs = [1, 2]; for x in xs { for y in xs { let z = x + y; } } 0 }",
+            Identical,
+        ),
+        (
+            "fn main() -> Word { let xs: [Byte; 2] = [1 as Byte, 2 as Byte]; for x in xs { let y = x; } 0 }",
+            Identical,
         ),
     ];
     let mut mismatches = Vec::new();
