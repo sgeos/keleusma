@@ -6,6 +6,17 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-25 Order 6 slice 5d and the AST census
+
+The gate 2 census covers every AST variant, reads 54 Identical of 70 rows, and fails when a
+variant lacks a row. The saturation words compile byte-identically, closing a false source
+rejection. Ten tests that slices 5 to 5c had made stale now pin the new float boundary.
+
+## 2026-10-25 Order 6 slices 2b, 5, 5b and 5c
+
+`use` signatures with scalar returns, and Float arithmetic, literals and negation, compile
+byte-identically. The construct boundary reads 112 of 117 SOk.
+
 ## 2026-10-25 Order 6 slices 3d, 3e and 4
 
 The array `for`, the function and import modifiers, and trait impls with method calls

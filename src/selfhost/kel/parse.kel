@@ -117,6 +117,10 @@ shared data toks {
     mt_head: [Word; 64],
     mt_name: [Word; 64],
     mt_chunk: [Word; 64],
+    // The checked-arm words `saturate_max` and `saturate_min`, interned id plus one, Order 6,
+    // APPENDED. Zero means unset, so an unseeded block never matches.
+    satmax_id: Word,
+    satmin_id: Word,
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -2882,6 +2886,9 @@ fn prec_of(op: Word) -> Word {
 // is computed in), 0 = none (a plain Word/other op). Held out of `emit_op` so that function's
 // reconstructed node count stays under the per-function caps.
 fn byte_op_kind(op: Word) -> Word {
+    // 3 for arithmetic on two Float operands, scalar kind 5. The reference lowers it to the
+    // unchecked Add, Sub, Mul or Div, which is the Byte path's lowering without the narrowing.
+    if ops.op_lscalar[ops.opsp] == 5 andalso vl.form == 0 andalso vl.scalar == 5 andalso (op == OpCode::Add() as Word orelse op == OpCode::Sub() as Word orelse op == OpCode::Mul() as Word orelse op == OpCode::Div() as Word orelse op == OpCode::Mod() as Word) { 3 } else {
     if ops.op_lbyte[ops.opsp] == 1 andalso ps.last_byte == 1 {
         if op == OpCode::Band() as Word orelse op == OpCode::Bor() as Word orelse op == OpCode::Bxor() as Word {
             1
@@ -2893,7 +2900,7 @@ fn byte_op_kind(op: Word) -> Word {
         } }
     } else {
         0
-    }
+    } }
 }
 
 // Begin a `struct == struct` lowering (both operands are whole structs): allocate the two
@@ -4480,13 +4487,16 @@ fn emit_op(op: Word) -> Word {
         ps.last_byte = 1;
         Node::ByteBinOp() as Word + op * 64
     } else {
-    if bk == 2 {
-        ps.last_byte = 1;
-        Node::ByteArith() as Word + op * 64
+    if bk >= 2 {
+        // A Float operation carries 1024 above its operator, so the record keeps its Float
+        // result type and codegen skips the Byte narrowing.
+        ps.last_byte = if bk == 2 { 1 } else { 0 };
+        Node::ByteArith() as Word + (op + (if bk == 3 { 1024 } else { 0 })) * 64
     } else {
         ps.last_byte = 0;
         match op {
-            OpCode::Neg() => Node::Neg() as Word,
+            // A Float operand negates with the unchecked Neg, flagged 1 on the record.
+            OpCode::Neg() => if vl.form == 0 andalso vl.scalar == 5 { Node::Neg() as Word + 64 } else { Node::Neg() as Word },
             OpCode::Not() => Node::Not() as Word,
             // P11 Option E: `bnot` now yields its NATIVE record kind 65 (== its node kind) via the
             // two-word transport (emit_arg = 0, a full-word tag), retiring the split-tag workaround
@@ -4814,8 +4824,10 @@ fn value_record(word: Word) -> Word {
     if kind == 3 { value_scalar(if arg >= 64 { arg / 64 } else { if (arg >= 6 andalso arg <= 11) orelse arg == 33 { 1 } else { 3 } }); }
     if kind == 6 orelse kind == 8 orelse kind == 9 orelse kind == 68 { value_scalar(1); }
     if kind == 47 orelse kind == 50 orelse kind == 53 orelse kind == 58 orelse kind == 61 orelse kind == 63 { value_scalar(1); }
-    if kind == 10 orelse kind == 65 { value_scalar(3); }
-    if kind == 45 { value_scalar(2); }
+    // A negation is a Word unless it is the Float negation, record 10 with arg 1.
+    if kind == 10 orelse kind == 65 { value_scalar(if kind == 10 andalso arg == 1 { 5 } else { 3 }); }
+    if kind == 45 { value_scalar(if arg >= 1024 { 5 } else { 2 }); }
+    if kind == 82 { value_scalar(5); }
     if kind == 44 orelse kind == 51 orelse kind == 60 { value_scalar(2); }
     if kind == 26 { value_scalar(if arg == 1 { 2 } else { 3 }); }
     if kind == 28 { value_scalar(arg / 65536); }
@@ -5830,22 +5842,43 @@ fn step_forin_emit(fp: Word) -> Word {
     } } } }
 }
 
+// One for `saturate_max` and two for `saturate_min` in operand position inside a checked arm,
+// where the reference admits them as arm words, else zero. The reference lexes both as
+// keywords, so outside an arm it rejects them, and here they stay unresolved names.
+fn saturation_word(k: Word, v: Word) -> Word {
+    if k != Tok::Ident() as Word orelse ops.expect_operand != 1 orelse checked.depth == 0 { 0 } else {
+    if toks.satmax_id > 0 andalso v + 1 == toks.satmax_id { 1 } else {
+    if toks.satmin_id > 0 andalso v + 1 == toks.satmin_id { 2 } else { 0 } } }
+}
+
 // The expression-position token dispatch: the conditional tokens route to step_if.
 fn step_normal(k: Word, v: Word) -> Word {
     if k == Tok::LBrace() as Word orelse k == Tok::RBrace() as Word orelse k == Tok::If() as Word orelse k == Tok::Else() as Word {
         step_if(k)
     } else {
-    if k == Tok::IntLit() as Word {
+    let sat = saturation_word(k, v);
+    if k == Tok::IntLit() as Word orelse sat != 0 {
         ops.expect_operand = 0;
         ps.last_enum = 0;
         stmt.pending_cenum = 0;
-        type_tuple_record(1, v)
+        // The reference lowers the arm words to a constant of the Word bound whatever the
+        // checked operation's type, so they are integer literals of those values here.
+        if sat == 1 { type_tuple_record(1, 9223372036854775807) } else {
+        if sat == 2 { type_tuple_record(1, -9223372036854775807 - 1) } else {
+        type_tuple_record(1, v) } }
     } else {
-    if k == Tok::Str() as Word {
+    if k == Tok::Str() as Word orelse k == 73 {
+        if k == 73 {
+            // A float literal, Tok 73: record 82 carries the interned text, which codegen
+            // interns as a Float pool entry and the host converts.
+            ops.expect_operand = 0;
+            ps.emit_arg = v;
+            82
+        } else {
         // A string literal: emit a StrLit carrying the intern id (v), which codegen interns as a
         // StaticStr pool entry.
         ops.expect_operand = 0;
-        Node::StrLit() as Word + v * 64
+        Node::StrLit() as Word + v * 64 }
     } else {
     if k == Tok::Ident() as Word {
         // In OPERATOR position (`expect_operand == 0`), an identifier whose id matches the eager
@@ -6374,7 +6407,10 @@ fn step_unresolved_name(k: Word) -> Word {
     if ps.found_flag == 1 { call.call_phase = 2; 0 } else {
     // A qualified name, forward composite/data use, statement keyword or native
     // import may be valid syntax outside this stage's implemented name resolution.
-    if (toks.assert_id > 0 andalso ps.unresolved_name == toks.assert_id andalso k != Tok::LParen() as Word) orelse ps.has_imports == 1 orelse toks.has_imports == 1 orelse k == Tok::ColCol() as Word orelse k == Tok::Dot() as Word orelse k == Tok::LBrace() as Word orelse k == Tok::Ident() as Word {
+    // `checked.depth > 0`: inside a checked arm, where a name this stage cannot resolve may
+    // still be one the reference admits there, so it is refused as unsupported rather than
+    // reported as undefined, which would be a false source rejection.
+    if (toks.assert_id > 0 andalso ps.unresolved_name == toks.assert_id andalso k != Tok::LParen() as Word) orelse ps.has_imports == 1 orelse toks.has_imports == 1 orelse checked.depth > 0 orelse k == Tok::ColCol() as Word orelse k == Tok::Dot() as Word orelse k == Tok::LBrace() as Word orelse k == Tok::Ident() as Word {
         perr(pe_unresolved_syntax(), ps.unresolved_name)
     } else {
         perr(pe_unknown_name(), ps.unresolved_name)

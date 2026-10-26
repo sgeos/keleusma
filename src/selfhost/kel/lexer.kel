@@ -404,6 +404,17 @@ fn integer_digit(digit: Word, radix: Word) -> Word {
     }
     0
 }
+// A float literal, `digits.digits`, Tok 73 carrying the interned text of the literal. The
+// host converts that text to an `f64` with the parser the reference lexer uses, since a
+// correctly rounded decimal conversion is not something to reimplement here. A suffix,
+// `Float` or `Fixed<N>`, is refused as Tok 67 for now.
+fn float_token() -> Word {
+    st.kind = 0;
+    if is_alpha(peek_at(st.cursor)) == 1 { 67 } else {
+        73 + intern_id(st.start, st.cursor - st.start) * 256
+    }
+}
+
 fn integer_token() -> Word {
     let valid = st.kind == 3 orelse st.ndig > 0;
     st.kind = 0;
@@ -431,12 +442,13 @@ fn lex_raw() -> Word {
             st.kind = 0;
             ident_token(st.start, st.val)
         } else {
+        if st.kind == 10 { float_token() } else {
         if st.kind == 3 orelse st.kind == 6 orelse st.kind == 7 {
             integer_token()
         } else {
             // A `//` comment ran to end of source with no trailing newline: no token.
             62
-        } } }
+        } } } }
     } else {
         let b = src.bytes[st.cursor] as Word;
         if st.kind == 2 {
@@ -452,16 +464,23 @@ fn lex_raw() -> Word {
                 ident_token(st.start, st.val)
             }
         } else {
-        if st.kind == 3 {
-            // Extending an integer, or ending it at a non-digit byte.
+        if st.kind == 3 orelse st.kind == 10 {
+            // Extending an integer, or ending it at a non-digit byte. A `.` followed by a
+            // digit continues it as a float literal (kind 10), as the reference lexes one.
             if is_digit(b) == 1 {
                 st.cursor = st.cursor + 1;
-                integer_digit(b - 48, 10);
+                if st.kind == 3 { integer_digit(b - 48, 10); }
                 63
             } else {
+            if st.kind == 3 andalso b == 46 andalso is_digit(peek_at(st.cursor + 1)) == 1 {
+                st.kind = 10;
+                st.cursor = st.cursor + 1;
+                63
+            } else {
+            if st.kind == 10 { float_token() } else {
                 // IntLit (Tok 12), the parsed value as the payload.
                 integer_token()
-            }
+            } } }
         } else {
         if st.kind == 6 {
             // Extending a hexadecimal integer, or ending it at a non-hex-digit byte.

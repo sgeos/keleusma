@@ -74,11 +74,8 @@ fn a_refusal_names_the_construct_on_the_terminal() {
             "fn main(a: Word) -> Word { assert a > 0; a }\n",
             "an `assert` statement",
         ),
-        (
-            "floatlit",
-            "fn main() -> Float { 1.5 + 2.5 }\n",
-            "a floating-point literal",
-        ),
+        // `floatlit` left this corpus in Order 6 slice 5b, when float literals came to
+        // compile byte-identically through the self-hosted command.
     ];
 
     let dir = TmpDir::new("named");
