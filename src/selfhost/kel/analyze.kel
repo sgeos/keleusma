@@ -65,18 +65,18 @@ shared data wa {
     arena_capacity: Word,
     region_start: Word,
     region_end: Word,
-    cost: [Word; 2048],
-    class: [Word; 2048],
-    arg: [Word; 2048],
-    growth: [Word; 2048],
-    shrink: [Word; 2048],
-    heap: [Word; 2048],
-    opk: [Word; 2048],
-    slot: [Word; 2048],
-    cval: [Word; 2048],
-    cint: [Word; 2048],
-    callee_slots: [Word; 2048],
-    callee_heap: [Word; 2048],
+    cost: [Word; 8192],
+    class: [Word; 8192],
+    arg: [Word; 8192],
+    growth: [Word; 8192],
+    shrink: [Word; 8192],
+    heap: [Word; 8192],
+    opk: [Word; 8192],
+    slot: [Word; 8192],
+    cval: [Word; 8192],
+    cint: [Word; 8192],
+    callee_slots: [Word; 8192],
+    callee_heap: [Word; 8192],
     out_wcet: Word,
     out_stack_bytes: Word,
     out_heap: Word,
@@ -96,7 +96,7 @@ shared data wa {
     tb_heap_hi: Word, tb_heap_lo: Word,
     rs_index: Word, rs_kind: Word, rs_text: Word, rs_known: Word,
     out_cause: Word,
-    native_kind: [Word; 2048], native_heap: [Word; 2048], native_limit: [Word; 2048],
+    native_kind: [Word; 8192], native_heap: [Word; 8192], native_limit: [Word; 8192],
 }
 
 // The region-frame work stack. Each frame is one invocation of the reference's recursion
@@ -238,7 +238,7 @@ fn record_break(i: Word) -> Word {
 fn trace_const(before_ip: Word, target_slot: Word) -> Word {
     an.trace_ok = 0; an.trace_val = 0; an.trace_done = 0;
     an.trace_mode = 0; an.trace_target = target_slot;
-    for k in 0..before_ip limit 2048 {
+    for k in 0..before_ip limit 8192 {
         if an.trace_done == 0 {
             let ip = before_ip - 1 - k;
             if wa.opk[ip] == 2 andalso wa.slot[ip] == an.trace_target {
@@ -282,7 +282,7 @@ fn advances_induction(loop_ip: Word, var_slot: Word, end_slot: Word) -> Word {
             } else {
                 an.vsets = 0;
                 an.bad = 0;
-                for k in 0..(endloop - body) limit 2048 {
+                for k in 0..(endloop - body) limit 8192 {
                     let ip = body + k;
                     if wa.opk[ip] == 2 {
                         if wa.slot[ip] == end_slot {
@@ -702,10 +702,10 @@ fn analyze_step() -> Word {
 // External attestations apply once per unique native in the entire chunk.
 fn external_heap() -> Word {
     an.external_total = 0;
-    for i in 0..wa.op_count limit 2048 {
+    for i in 0..wa.op_count limit 8192 {
         if wa.native_kind[i] == 2 andalso wa.native_limit[i] >= 0 {
             an.external_seen = 0;
-            for j in 0..i limit 2048 {
+            for j in 0..i limit 8192 {
                 if wa.native_kind[j] == 2 andalso wa.slot[j] == wa.slot[i] { an.external_seen = 1; }
             }
             if an.external_seen == 0 {
@@ -738,7 +738,7 @@ fn run() -> Word {
     // The loop runs to its static cap; a step is a no-op once the frame stack empties. (An
     // early `break` would be cleaner but is not yet in the self-hosted codegen subset, so
     // analyze.kel avoids it to remain self-compiling.)
-    for step in 0..16384 limit 16384 {
+    for step in 0..65536 limit 65536 {
         if an.sp > 0 {
             analyze_step();
         }

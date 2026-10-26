@@ -331,27 +331,37 @@ fn is_multihead_group(group: &[&ParsedFn]) -> bool {
             .is_some_and(|h| !h.guard.is_empty() || h.literal_head)
 }
 
+/// The node capacity of one function's forest, shared by `reconstruct.kel`'s output and
+/// `codegen.kel`'s input. Raised from 1,024 to 4,096 under the operator's ruling of
+/// 2026-10-26 that limits may be raised, for functions such as the piano rolls' `main`.
+pub const AST_NODE_CAP: usize = 4096;
+/// The capacity of each per-function side array, `call_args`, `for_parts`, `match_parts`,
+/// `limit_parts` and `head_parts`, raised from 256 to 1,024 with the node capacity.
+pub const AST_PART_CAP: usize = 1024;
+/// Heads per multiheaded function, raised from 16 to 128 with the node capacity.
+pub const RC_HEAD_CAP: usize = 128;
+
 const KINDS: usize = 1;
 
-const ARGS: usize = 1 + 1024;
+const ARGS: usize = 1 + AST_NODE_CAP;
 
-const LHS: usize = 1 + 1024 * 2;
+const LHS: usize = 1 + AST_NODE_CAP * 2;
 
-const RHS: usize = 1 + 1024 * 3;
+const RHS: usize = 1 + AST_NODE_CAP * 3;
 
-const CALL_ARGS: usize = 1 + 1024 * 4;
+const CALL_ARGS: usize = 1 + AST_NODE_CAP * 4;
 
-const FOR_PARTS: usize = 1 + 1024 * 4 + 256;
+const FOR_PARTS: usize = 1 + AST_NODE_CAP * 4 + AST_PART_CAP;
 
-const MATCH_PARTS: usize = 1 + 1024 * 4 + 256 * 2;
+const MATCH_PARTS: usize = 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 2;
 
-const LIMIT_PARTS: usize = 1 + 1024 * 4 + 256 * 3;
+const LIMIT_PARTS: usize = 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 3;
 
-const HEAD_PARTS: usize = 1 + 1024 * 4 + 256 * 4;
+const HEAD_PARTS: usize = 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 4;
 
-const PARAM_COUNT: usize = 1 + 1024 * 4 + 256 * 5;
+const PARAM_COUNT: usize = 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 5;
 
-const CATEGORY: usize = 1 + 1024 * 4 + 256 * 5 + 1;
+const CATEGORY: usize = 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 5 + 1;
 
 // The shared-slot layout for `parse.kel` lives in `crate::selfhost_host`, which is
 // gated on `compile + verify` like the harnesses that need it, rather than on the
@@ -4515,35 +4525,35 @@ const RC_REC_COUNT: usize = 0;
 const RC_IN_CATEGORY: usize = 1;
 const RC_IN_PARAM: usize = 2;
 const RC_REC_KIND: usize = 3;
-const RC_REC_ARG: usize = 3 + 1024;
-const RC_AST_BASE: usize = 3 + 1024 * 2;
+const RC_REC_ARG: usize = 3 + AST_NODE_CAP;
+const RC_AST_BASE: usize = 3 + AST_NODE_CAP * 2;
 const RC_AST_ROOT: usize = RC_AST_BASE;
 const RC_AST_KINDS: usize = RC_AST_BASE + 1;
-const RC_AST_ARGS: usize = RC_AST_BASE + 1 + 1024;
-const RC_AST_LHS: usize = RC_AST_BASE + 1 + 1024 * 2;
-const RC_AST_RHS: usize = RC_AST_BASE + 1 + 1024 * 3;
-const RC_AST_CALL_ARGS: usize = RC_AST_BASE + 1 + 1024 * 4;
-/// `for_parts`, the BARE loop form's seven-word entries. One 256-slot stride after
+const RC_AST_ARGS: usize = RC_AST_BASE + 1 + AST_NODE_CAP;
+const RC_AST_LHS: usize = RC_AST_BASE + 1 + AST_NODE_CAP * 2;
+const RC_AST_RHS: usize = RC_AST_BASE + 1 + AST_NODE_CAP * 3;
+const RC_AST_CALL_ARGS: usize = RC_AST_BASE + 1 + AST_NODE_CAP * 4;
+/// `for_parts`, the BARE loop form's seven-word entries. One part-capacity stride after
 /// `call_args`, matching the output block's declaration order.
 ///
 /// **This constant did not exist until 2026-08-25**, and `for_parts` was read back as an
 /// empty vector while the driver dutifully copied that emptiness into `codegen.kel`. The
 /// symptom was a structurally correct loop whose every operand was slot 0 and node 0,
 /// because `push_forin` read seven zeros.
-const RC_AST_FOR_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 256;
-const RC_AST_MATCH_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 2;
-const RC_AST_LIMIT_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 3;
-const RC_AST_HEAD_PARTS: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 4;
-const RC_AST_CATEGORY: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 5 + 1;
-const RC_HEAD_COUNT: usize = RC_AST_BASE + 1 + 1024 * 4 + 256 * 5 + 2;
+const RC_AST_FOR_PARTS: usize = RC_AST_BASE + 1 + AST_NODE_CAP * 4 + AST_PART_CAP;
+const RC_AST_MATCH_PARTS: usize = RC_AST_BASE + 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 2;
+const RC_AST_LIMIT_PARTS: usize = RC_AST_BASE + 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 3;
+const RC_AST_HEAD_PARTS: usize = RC_AST_BASE + 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 4;
+const RC_AST_CATEGORY: usize = RC_AST_BASE + 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 5 + 1;
+const RC_HEAD_COUNT: usize = RC_AST_BASE + 1 + AST_NODE_CAP * 4 + AST_PART_CAP * 5 + 2;
 const RC_HEAD_GUARD_START: usize = RC_HEAD_COUNT + 1;
-const RC_HEAD_GUARD_LEN: usize = RC_HEAD_COUNT + 1 + 16;
-const RC_HEAD_BODY_START: usize = RC_HEAD_COUNT + 1 + 16 * 2;
-const RC_HEAD_BODY_LEN: usize = RC_HEAD_COUNT + 1 + 16 * 3;
+const RC_HEAD_GUARD_LEN: usize = RC_HEAD_COUNT + 1 + RC_HEAD_CAP;
+const RC_HEAD_BODY_START: usize = RC_HEAD_COUNT + 1 + RC_HEAD_CAP * 2;
+const RC_HEAD_BODY_LEN: usize = RC_HEAD_COUNT + 1 + RC_HEAD_CAP * 3;
 
 /// The diagnostic pair `reconstruct.kel` appends after its multihead input.
-const RC_ERR_CODE: usize = RC_HEAD_COUNT + 1 + 16 * 4;
-const RC_ERR_DETAIL: usize = RC_HEAD_COUNT + 1 + 16 * 4 + 1;
+const RC_ERR_CODE: usize = RC_HEAD_COUNT + 1 + RC_HEAD_CAP * 4;
+const RC_ERR_DETAIL: usize = RC_HEAD_COUNT + 1 + RC_HEAD_CAP * 4 + 1;
 
 /// Decode `reconstruct.kel`'s yielded word into a node count, or panic naming the cause.
 ///
@@ -4673,10 +4683,12 @@ fn reconstruct_via_kel(
             rhs: rd(&vm, &shared, RC_AST_RHS + i),
         });
     }
-    // Read each 256-entry side array in full; the caller compares only the prefix the
+    // Read each `AST_PART_CAP`-entry side array in full; the caller compares only the prefix the
     // Rust reconstruction populated.
     let read_side = |vm: &Vm<'_, '_>, shared: &[u8], base: usize| -> Vec<i64> {
-        (0..256).map(|k| rd(vm, shared, base + k)).collect()
+        (0..AST_PART_CAP)
+            .map(|k| rd(vm, shared, base + k))
+            .collect()
     };
     let call_args = read_side(&vm, &shared, RC_AST_CALL_ARGS);
     let match_parts = read_side(&vm, &shared, RC_AST_MATCH_PARTS);
@@ -4715,13 +4727,13 @@ pub fn seed_reconstruct_multihead_shared(
     heads: &[&ParsedFn],
     pc: usize,
 ) -> Vec<u8> {
-    // `reconstruct.kel` holds sixteen heads per function. A group past that used to write
-    // past the head arrays and surface as a shared-slot index fault, which read as a
+    // `reconstruct.kel` holds `RC_HEAD_CAP` heads per function. A group past that used to
+    // write past the head arrays and surface as a shared-slot index fault, which read as a
     // stage defect rather than a capacity.
     assert!(
-        heads.len() <= 16,
+        heads.len() <= RC_HEAD_CAP,
         "a multiheaded function with {} heads is outside the self-hosted subset: \
-         reconstruct.kel holds 16 heads per function",
+         reconstruct.kel holds {RC_HEAD_CAP} heads per function",
         heads.len()
     );
     // Concatenate every head's guard then body records, tracking the per-head offsets.
@@ -4808,8 +4820,13 @@ fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize, chunk: &str) ->
             rhs: rd(&vm, &shared, RC_AST_RHS + i),
         });
     }
+    // Every side array in full. This read 64 entries until the head cap rose past 16, which
+    // truncated `head_parts`, four words a head, and every other side array of a multiheaded
+    // function, a host-side limit the stage did not share.
     let read_side = |vm: &Vm<'_, '_>, shared: &[u8], base: usize| -> Vec<i64> {
-        (0..64).map(|k| rd(vm, shared, base + k)).collect()
+        (0..AST_PART_CAP)
+            .map(|k| rd(vm, shared, base + k))
+            .collect()
     };
     let mut head_parts = read_side(&vm, &shared, RC_AST_HEAD_PARTS);
     // A literal head's guard is its pattern test. Mode 2 tells codegen to test before any
