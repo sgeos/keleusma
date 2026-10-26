@@ -4078,9 +4078,11 @@ fn the_rules_the_census_added_do_not_reject_valid_programs() {
 #[test]
 fn every_known_gap_is_refused_by_the_self_hosted_compiler() {
     const GAPS: &[(&str, &str)] = &[
+        // A variable arm on a scalar match compiles since Order 6. On an enum scrutinee it
+        // is still refused.
         (
             "variable pattern",
-            "fn main(a: Word) -> Word { match a { v => v } }",
+            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, x => 2 } }",
         ),
         (
             "struct destructuring",
@@ -4714,7 +4716,9 @@ fn the_documented_pattern_forms_are_censused_against_the_self_hosted_parser() {
         // The two that remain are FEATURE WORK by the same trace, not missing
         // branches: `step_match` phase 2 reads an identifier that is not an enum
         // name as the END OF THE ARMS, so supporting them means new arm semantics.
-        vec!["struct destructuring", "variable"],
+        // **THE VARIABLE PATTERN LEFT THIS SET in Order 6**, when a scalar match's
+        // variable arm began to lower as a wildcard arm that binds the scrutinee.
+        vec!["struct destructuring"],
         "the set of documented pattern forms `parse.kel` cannot handle changed. A \
          form leaving it means the self-hosted parser gained a construct: record \
          what changed and widen the documented subset. A form joining it is a \
@@ -6417,7 +6421,9 @@ fn match_admission_distinguishes_source_errors_from_subset_limits() {
     use keleusma::selfhost_host::{PARSE_DIAG_TAG_BASE, ParseRecordError};
     for source in [
         "fn main(c: bool) -> Word { match c { true => 1, false => 0 } }",
-        "fn main(n: Word) -> Word { match n { x => x } }",
+        // A variable arm on a scalar match compiles since Order 6. The enum form is still
+        // refused with the pattern diagnostic.
+        "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, x => 2 } }",
     ] {
         assert!(reference_accepts(source));
         let error = try_call_type_inputs_from_pipeline(source).expect_err(source);
@@ -7372,7 +7378,9 @@ fn pipeline_unsupported_syntax_is_not_source_rejection() {
     use keleusma::selfhost_host::ParseRecordError;
     for source in [
         "fn plus<const n: Word>() -> Word { n + 10 } fn main() -> Word { plus::<7>() }",
-        "fn main(a: Word) -> Word { match a { v => v } }",
+        // A variable arm on a scalar match compiles since Order 6, so the witness is the
+        // enum-scrutinee form, which is still refused.
+        "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, x => 2 } }",
         "struct P { x: Word } fn main(p: P) -> Word { match p { P { x } => x, _ => 0 } }",
         "fn main(a: Word) -> Word { assert a > 0; a }",
         "fn main() -> Word { assert not false; 1 }",
@@ -10477,10 +10485,12 @@ fn a_body_without_a_tail_expression_contributes_no_declared_versus_actual_row() 
 fn every_gap_refusal_names_the_construct() {
     // (label, source, the phrase a user needs to see)
     const GAPS: &[(&str, &str, &str)] = &[
+        // A variable arm on a scalar match compiles since Order 6. On an enum scrutinee it
+        // is still refused, and named.
         (
             "variable pattern",
-            "fn main(a: Word) -> Word { match a { v => v } }",
-            "variable pattern `v`",
+            "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, x => 2 } }",
+            "variable pattern `x`",
         ),
         (
             "struct destructuring",
