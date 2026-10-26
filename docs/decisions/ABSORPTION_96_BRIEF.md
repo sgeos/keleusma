@@ -2,9 +2,13 @@
 
 > **Navigation** [Decisions](./README.md) | [Absorption 95](./ABSORPTION_95_BRIEF.md) | [V0.3.X roadmap](../roadmap/V0_3_X_ROADMAP.md)
 
-Computed on 2026-10-26 on `feat/v3-absorption-95`, after absorption 95 and the
-witness move, against upstream `22cb258d`. It brings 19 upstream commits past
-`84cbea1d`, the V0.2.X pull requests 540, 541 and 543. They carry Order 6
+Computed against native `b98524b4`, which is absorption 95 with the witness
+move on `feat/v3-absorption-95`, and upstream `22cb258d` on 2026-10-26, with
+19 unabsorbed commits measured after fetching. The merge base is `84cbea1d`.
+The separate conflict command `git merge-tree --write-tree b98524b4 22cb258d`
+exited one and produced tree `7e467469f668335fcf7a4b2571ba9db3c92595c7` with
+one conflicting file. The commits are the V0.2.X pull requests 540, 541 and
+543. They carry Order 6
 slices 3b to 3e, 4 and 2b, among them the pipe operator, literal parameter
 heads, `use` path separators, `for` over static scalar arrays, the function
 modifiers, trait implementations with method calls, and `use` signatures with a
@@ -57,3 +61,10 @@ was not an input to that step. The step is reported with that qualification
 rather than rerun. The re-pinned test itself was rerun after the edit. The root
 workspace suite was not run locally. The hosted run on the pull request is the
 integration check.
+
+The first hosted run of this absorption failed in both native gates on one
+test, `prediction_stamp.rs`, because this receipt did not yet state the tree
+and unabsorbed count its figures were computed against. The local run had
+finished before the receipt was written, and the guards rerun afterwards did
+not include that test. The opening now states them, and `prediction_stamp`,
+`handoff_figures` and the native `comment_citations` were rerun and passed.
