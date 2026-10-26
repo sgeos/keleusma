@@ -261,6 +261,9 @@ pub const PARSE_PRIVATE_INIT_NEGATIVE_TAG: i64 = 109;
 pub const PARSE_DATA_FIELD_BASE_TAG: i64 = 110;
 /// Parser token reposition request, carrying an absolute token index.
 pub const PARSE_TOKEN_SEEK_TAG: i64 = 111;
+/// The flat byte size of a private struct-typed data field, following its type record,
+/// Order 6. The host places each such field in the private composite pool.
+pub const PARSE_PRIVATE_COMPOSITE_TAG: i64 = 112;
 
 /// The tag at or below which a word yielded by `reconstruct.kel` is a diagnostic rather
 /// than a node count. Node counts are non-negative, so no legitimate count can collide.

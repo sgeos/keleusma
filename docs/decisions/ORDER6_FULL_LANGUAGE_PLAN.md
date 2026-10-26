@@ -296,3 +296,25 @@ compile. Two used a float program as their out-of-subset witness, and now use a 
 and a struct equality the boundary still records as divergent. The construct scan's
 float-literal arm is gone, since it would blame a supported construct. The wire pins moved
 to 1,035 names and 31,302 bytes.
+
+**Slice 6, 2026-10-26, struct-typed private data fields.** The reference holds such a field
+in one data slot as the whole composite, reads it with `GetData`, and projects it exactly
+as a struct local. The parser now marks a private field whose type is an earlier struct
+with kind 1024 plus the struct's index, so a read of it continues into the struct
+field-access path, and queues the struct's flat size as record 112. From those records the
+host places each composite in the private composite pool by slot, as the reference does,
+and totals the pool, which it used to assume was empty. A data read also clears the Byte
+flag a previous operand left, which had made a Word addition after a cast to `Byte` lower
+to the unchecked Byte `Add`. A shared struct field, an array of structs and a struct
+declared after its data block stay refused. `14_frame_log.kel` became Identical.
+
+**Slice 7, 2026-10-26, natives that return an enum.** The reference requires every `use`
+before the type definitions, so a returned enum is always declared later. The parser now
+records each import's declared return type name and types a call's result as the enum
+that name resolves to at the call, so a `match` on it binds the variant payload. The host
+builds the native shape table after the enum table and gives such a native the enum's flat
+shape. A tuple or struct return stays refused. The RTOS task scripts are now also measured
+joined with their prelude, as the RTOS crate compiles them, and all five are Unsupported,
+four of them only because the prelude declares tuple-returning natives they never call.
+A wildcard in a variant's payload position, `Status::Err(_)`, is a separate gap with its
+own census row.

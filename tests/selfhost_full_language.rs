@@ -70,7 +70,8 @@ const CORPUS: &[(&str, Class)] = &[
     ("examples/scripts/11_signed.kel", Identical),
     ("examples/scripts/12_sensor_window.kel", Identical),
     ("examples/scripts/13_telemetry_stream.kel", Identical),
-    ("examples/scripts/14_frame_log.kel", Unsupported),
+    // Unsupported until slice 6 lowered the projection of a struct-typed data field.
+    ("examples/scripts/14_frame_log.kel", Identical),
     ("examples/scripts/15_pixel_blend.kel", Identical),
     ("examples/scripts/rogue/rogue_ai_boss.kel", Identical),
     ("examples/scripts/rogue/rogue_ai_chaser.kel", Identical),
@@ -371,12 +372,12 @@ fn skipped_tokens_are_refused_or_lowered_rather_than_dropped() {
             "enum P { A(Word), B } fn main() -> Word { let x = P::A; 1 }",
             PipelineRejects,
         ),
-        // A data-field projection is refused rather than misread.
+        // A data-field projection was refused rather than misread until slice 6 lowered it.
         (
             "struct F { id: Word, len: Word } private data log { latest: F, count: Word } \
           loop main(tick: Word) -> Word { log.latest = F { id: 1, len: 2 }; log.count = log.count + 1; \
           let _a = yield log.latest.len + log.count; 0 }",
-            Unsupported,
+            Identical,
         ),
         (
             "private data log { count: Word } loop main(tick: Word) -> Word { log.count = log.count + 1; \
@@ -869,6 +870,192 @@ fn float_arithmetic_on_typed_operands_compiles() {
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
 
+/// The RTOS task scripts as the RTOS crate compiles them, the prelude, a newline, then the
+/// script, which is `build_module` in `examples/rtos/src/setup.rs`. Alone, a task script
+/// names host functions only the prelude declares, so the corpus table above measures the
+/// reference rejecting it. Joined, they are the sources gate 1 is about.
+#[test]
+fn rtos_scripts_joined_with_the_prelude_have_their_pinned_outcomes() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/rtos/scripts/");
+    let prelude = std::fs::read_to_string(format!("{dir}prelude.kel")).expect("the prelude");
+    let pinned: &[(&str, Class)] = &[
+        ("event_listener.kel", Unsupported),
+        ("faulty.kel", Unsupported),
+        ("heartbeat.kel", Unsupported),
+        ("led.kel", Unsupported),
+        ("sensor.kel", Unsupported),
+    ];
+    let mut tasks: Vec<String> = std::fs::read_dir(dir)
+        .expect("the RTOS script directory")
+        .map(|e| {
+            e.expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .filter(|n| n.ends_with(".kel") && n != "prelude.kel")
+        .collect();
+    tasks.sort();
+    let named: Vec<&str> = pinned.iter().map(|(n, _)| *n).collect();
+    assert_eq!(
+        tasks, named,
+        "the RTOS task scripts changed, so update this table"
+    );
+    let mut mismatches = Vec::new();
+    for (name, expected) in pinned {
+        let task = std::fs::read_to_string(format!("{dir}{name}")).expect("a task script");
+        let (actual, detail) = classify(&format!("{prelude}\n{task}"));
+        println!("rtos {name} {actual:?} {detail}");
+        if actual != *expected {
+            mismatches.push(format!(
+                "{name}: expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Slice 7 of Order 6, natives that return an enum. The host gives such a native the
+/// reference's flat return shape, and the parser types the call's result as the enum, so a
+/// `match` on it binds the variant payload. The reference requires every `use` before the
+/// type definitions, so the enum is always declared after the `use`, as the RTOS prelude
+/// declares `Status`. A tuple or struct return stays refused.
+#[test]
+fn natives_returning_an_enum_compile() {
+    const ENUM: &str = "enum Status { Ok = 0, Err(Word) = 1 }\n";
+    const USE: &str = "use host::gpio_set(Word, Word) -> Status\n";
+    let cases: &[(String, Class)] = &[
+        (
+            format!(
+                "{USE}{ENUM}fn main() -> Word {{ match host::gpio_set(1, 2) {{ Status::Ok => 0, Status::Err(c) => c }} }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{USE}{ENUM}fn main() -> Word {{ let s = host::gpio_set(1, 2); match s {{ Status::Ok => 0, Status::Err(c) => c }} }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{USE}use host::clock_now() -> Word\n{ENUM}fn main() -> Word {{ let t = host::clock_now(); match host::gpio_set(t, 2) {{ Status::Ok => t, Status::Err(c) => c }} }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "use host::adc_read(Word) -> (Status, Word)\n{ENUM}fn main() -> Word {{ let (s, v) = host::adc_read(1); v }}"
+            ),
+            Unsupported,
+        ),
+        (
+            String::from(
+                "use host::point() -> P\nstruct P { x: Word }\nfn main() -> Word { let p = host::point(); p.x }",
+            ),
+            Unsupported,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Slice 6 of Order 6, struct-typed data fields. Such a field is one data slot holding the
+/// whole composite, which the reference reads with `GetData` and projects exactly as a struct
+/// local. A struct declared after the data block is not yet known when the field is read, so
+/// its projection stays refused.
+#[test]
+fn struct_typed_data_fields_compile() {
+    const DECLS: &str = "struct G { x: Word }\nstruct F { a: Word, g: G, b: Byte }\n\
+                         private data d { n: Word, f: F, c: Byte, e: Byte }\n";
+    let cases: &[(String, Class)] = &[
+        (
+            format!("{DECLS}fn main() -> Word {{ d.n = 3; d.f.a + d.n }}"),
+            Identical,
+        ),
+        (
+            format!("{DECLS}fn main() -> Word {{ d.n = 3; d.f.g.x }}"),
+            Identical,
+        ),
+        (
+            format!("{DECLS}fn main() -> Byte {{ d.n = 3; d.f.b }}"),
+            Identical,
+        ),
+        (
+            format!("{DECLS}fn main() -> Word {{ d.n = 3; let s = d.f; s.a + s.g.x }}"),
+            Identical,
+        ),
+        // A cast to Byte before a data read used to leave the Byte flag set, so the next
+        // Word addition lowered to the unchecked Byte Add.
+        (
+            format!(
+                "{DECLS}fn main() -> Word {{ d.c = 4 as Byte; d.f = F {{ a: 1, g: G {{ x: 5 }}, b: 2 as Byte }}; d.f.a + d.n }}"
+            ),
+            Identical,
+        ),
+        (
+            format!("{DECLS}fn main() -> Byte {{ d.c = 4 as Byte; d.e = 5 as Byte; d.c + d.e }}"),
+            Identical,
+        ),
+        (
+            String::from(
+                "private data d { n: Word, f: F }\nstruct F { a: Word }\nfn main() -> Word { d.n = 3; d.f.a }",
+            ),
+            Unsupported,
+        ),
+        // Two private blocks, so the pool places three composites at running offsets.
+        (
+            String::from(
+                "struct F { a: Word, b: Word }\nprivate data d { n: Word, f: F, h: F }\n\
+                 private data e { k: F }\nfn main() -> Word { d.n = 3; d.h.b + e.k.a }",
+            ),
+            Identical,
+        ),
+        // Shared slots precede the private ones, so a private composite's slot counts them,
+        // a shared array taking one slot per element.
+        (
+            String::from(
+                "struct F { a: Word }\nshared data s { m: Word, xs: [Word; 3] }\n\
+                 private data d { n: Word, f: F }\nfn main() -> Word { d.n = s.m; d.f.a + s.xs[1] }",
+            ),
+            Identical,
+        ),
+        // A shared struct field takes a composite shared-layout entry, which the host does not
+        // assemble, so its projection stays refused.
+        (
+            String::from(
+                "struct F { a: Word, b: Word }\nshared data s { n: Word, f: F }\nfn main() -> Word { s.f.a }",
+            ),
+            Unsupported,
+        ),
+        // An array of structs carries no pool size record, so the cross-check refuses it.
+        (
+            String::from(
+                "struct F { a: Word }\nprivate data d { n: Word, fs: [F; 2] }\nfn main() -> Word { d.n = 3; d.n }",
+            ),
+            Unsupported,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
 /// Slice 5c of Order 6, Float negation, the unchecked `Neg` in the reference, through a new
 /// transport tag, 69, for that existing instruction. A Word negation keeps the checked form.
 #[test]
@@ -1109,6 +1296,13 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
         "Pattern::Enum",
         "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, E::B => 2 } }",
         Identical,
+    ),
+    // A wildcard in a variant's payload position. Found while lowering enum-returning natives,
+    // where the RTOS scripts write `Status::Err(_)`.
+    (
+        "Pattern::Enum::WildcardPayload",
+        "enum S { Ok, Err(Word) }\nfn g(a: Word) -> S { S::Err(a) }\nfn main() -> Word { match g(2) { S::Ok => 1, S::Err(_) => 0 } }",
+        Unsupported,
     ),
     (
         "Pattern::Struct",

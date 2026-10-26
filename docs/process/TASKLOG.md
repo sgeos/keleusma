@@ -6,6 +6,12 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-26 Order 6 slices 6 and 7
+
+Struct-typed private data fields and enum-returning natives compile byte-identically, and
+`14_frame_log.kel` is Identical. The RTOS task scripts are measured joined with their
+prelude. PR 544 merged.
+
 ## 2026-10-25 Order 6 slice 5d and the AST census
 
 The gate 2 census covers every AST variant, reads 54 Identical of 70 rows, and fails when a

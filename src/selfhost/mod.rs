@@ -6390,8 +6390,7 @@ fn assemble_private_init(data_records: &[(i64, i64)], _names: &[String]) -> Vec<
     values
 }
 
-/// Assemble a whole `DataLayout` from parse.kel's data-block records. The stages have
-/// no private composite fields, so `private_composite_layout` is empty.
+/// Assemble a whole `DataLayout` from parse.kel's data-block records.
 fn assemble_data_layout(
     data_records: &[(i64, i64)],
     names: &[String],
@@ -6399,9 +6398,69 @@ fn assemble_data_layout(
     crate::bytecode::DataLayout {
         slots: assemble_data_slots(data_records, names),
         shared_layout: assemble_shared_layout(data_records, names),
-        private_composite_layout: Vec::new(),
+        private_composite_layout: private_composite_pool(data_records).0,
         private_init: assemble_private_init(data_records, names),
     }
+}
+
+/// The private composite pool, as the reference places it. Every private field whose type
+/// is a struct, which parse.kel marks with a size record after its type record, takes the
+/// next pool offset, keyed by its slot, and the pool total is the sum of those sizes.
+/// Private slots follow every shared slot, in declaration order, an array field taking one
+/// slot per element. An array of structs carries no size record, so the cross-check still
+/// refuses it.
+fn private_composite_pool(
+    data_records: &[(i64, i64)],
+) -> (Vec<crate::bytecode::PrivateCompositeSlot>, u32) {
+    use crate::selfhost_host::PARSE_PRIVATE_COMPOSITE_TAG;
+    let mut shared_slots: i64 = 0;
+    let mut visibility = 0;
+    let mut last_count: i64 = 0;
+    for &(code, value) in data_records {
+        match code {
+            9 => visibility = value % 4,
+            4 if visibility == 0 => {
+                shared_slots += 1;
+                last_count = 1;
+            }
+            8 if visibility == 0 => {
+                shared_slots += value - last_count;
+                last_count = value;
+            }
+            _ => {}
+        }
+    }
+    let mut table = Vec::new();
+    let mut total: u32 = 0;
+    let mut slot = shared_slots;
+    let mut field_slot = -1;
+    for &(code, value) in data_records {
+        match code {
+            9 => visibility = value % 4,
+            4 if visibility == 1 => {
+                field_slot = slot;
+                slot += 1;
+                last_count = 1;
+            }
+            8 if visibility == 1 => {
+                slot += value - last_count;
+                last_count = value;
+            }
+            PARSE_PRIVATE_COMPOSITE_TAG if visibility == 1 => {
+                let slot_u16 = u16::try_from(field_slot).expect("private composite slot");
+                let bytes = u32::try_from(value).expect("private composite size");
+                table.push(crate::bytecode::PrivateCompositeSlot {
+                    slot: slot_u16,
+                    offset: total,
+                });
+                total = total
+                    .checked_add(bytes)
+                    .expect("private composite pool size");
+            }
+            _ => {}
+        }
+    }
+    (table, total)
 }
 
 /// Assemble the enum-layout table from parse.kel's enum record stream.
@@ -6690,6 +6749,7 @@ pub fn self_host_compile_full(src: &str) -> Module {
     let (fns, names, data_records, enum_records) = parse_functions_fused(src);
     let dl = assemble_data_layout(&data_records, &names);
     module.data_layout = (!dl.slots.is_empty()).then_some(dl);
+    module.persistent_composite_bytes = private_composite_pool(&data_records).1;
     module.schema_hash = crate::bytecode::compute_schema_hash(module.data_layout.as_ref());
     module.enum_layouts = assemble_enum_layouts(&enum_records, &names);
     module.signatures = assemble_signatures(&fns, &names, &module.enum_layouts);
@@ -6720,14 +6780,6 @@ pub fn self_host_compile_full(src: &str) -> Module {
 /// Opaque allocation, private composites and signed entries remain outside this assembly path.
 fn self_host_module_bookkeeping(module: &mut Module, fns: &[ParsedFn], names: &[String]) {
     module.aux_arena_bytes = 0;
-    debug_assert!(
-        module
-            .data_layout
-            .as_ref()
-            .is_none_or(|dl| dl.private_composite_layout.is_empty()),
-        "self-hosted persistent_composite_bytes = 0 assumes no private composite data (subset)"
-    );
-    module.persistent_composite_bytes = 0;
     let text_flags = fns
         .iter()
         .find(|f| chunk_name(f, names) == "main")
@@ -6863,24 +6915,6 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
                 .join("::")
         })
         .collect();
-    let native_return_shapes: Vec<crate::bytecode::WireShape> = native_paths
-        .iter()
-        .map(|path| {
-            use crate::bytecode::WireShape;
-            match path.last().copied() {
-                Some(-2) => WireShape::Scalar { kind: 0 },
-                Some(code) if code < -2 => match names[(-code - 3) as usize].as_str() {
-                    "bool" => WireShape::Scalar { kind: 1 },
-                    "Byte" => WireShape::Scalar { kind: 2 },
-                    "Word" => WireShape::Scalar { kind: 3 },
-                    other => {
-                        panic!("a native returning `{other}` is outside the self-hosted subset")
-                    }
-                },
-                _ => WireShape::Top,
-            }
-        })
-        .collect();
 
     // The data layout, assembled from parse.kel's data-block records, drives both the shared
     // and private byte totals the reference derives from the same layout.
@@ -6900,6 +6934,30 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
 
     let enum_layouts = assemble_enum_layouts(&enum_records, &names);
     let signatures = assemble_signatures(&fns, &names, &enum_layouts);
+    // After the enum table, since a native may return an enum declared after its `use`.
+    let native_return_shapes: Vec<crate::bytecode::WireShape> = native_paths
+        .iter()
+        .map(|path| {
+            use crate::bytecode::WireShape;
+            match path.last().copied() {
+                Some(-2) => WireShape::Scalar { kind: 0 },
+                Some(code) if code < -2 => match names[(-code - 3) as usize].as_str() {
+                    "bool" => WireShape::Scalar { kind: 1 },
+                    "Byte" => WireShape::Scalar { kind: 2 },
+                    "Word" => WireShape::Scalar { kind: 3 },
+                    // A declared enum takes its flat shape, as the reference resolves a
+                    // named return type. Any other named type stays outside the subset.
+                    other => match wire_shape_of(-code - 3, &names, &enum_layouts) {
+                        shape @ WireShape::Flat { .. } => shape,
+                        _ => {
+                            panic!("a native returning `{other}` is outside the self-hosted subset")
+                        }
+                    },
+                },
+                _ => WireShape::Top,
+            }
+        })
+        .collect();
 
     // The scalar bit widths are the host target's, matching the reference `compile`, which
     // compiles with `Target::host()`.
@@ -6918,7 +6976,7 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
         wcmu_bytes: 0,
         // Assembled from the program-analysis bookkeeping below.
         aux_arena_bytes: 0,
-        persistent_composite_bytes: 0,
+        persistent_composite_bytes: private_composite_pool(&data_records).1,
         flags: 0,
         shared_data_bytes,
         private_data_bytes,
