@@ -108,14 +108,14 @@ const FSZ_CAPACITY: usize = 1024;
 /// The interner's (length, mode) input, split off `fin` in slice 13b so the
 /// flattener can own `fin` for its six-word-per-node preorder.
 const NIN_SLOT: usize = BIN_SLOT + BIN_CAPACITY + FQ_CAPACITY + FSZ_CAPACITY;
-const NIN_CAPACITY: usize = 2048;
+const NIN_CAPACITY: usize = 4096;
 /// The interner's per-call name cap, mirrored from `wire.kel`'s `nm_max_names`.
 ///
 /// Named rather than spelled as a literal at each guard test, because the two
 /// oversize cases below are the only things that would notice a raise in
 /// `wire.kel` that was not matched here — and they would notice it by passing
 /// for the wrong reason, not by failing.
-const NAME_CAP: usize = 1024;
+const NAME_CAP: usize = 2048;
 
 /// Build a `Vm` over `src` with a persistent region sized for its private data.
 ///
@@ -8372,13 +8372,15 @@ fn run_fx(vm: &mut Vm<'static, 'static>, cmd: i64, i: &FxInput) -> i64 {
 fn constant_walk_propagates_an_interner_pool_refusal() {
     // The prefix exactly fills the name pool. A constant contributes one more
     // distinct name, so failure occurs during the walk rather than seeding.
+    // 128 names of 256 bytes fill the 32,768-byte pool `bout`, doubled with the name cap
+    // on 2026-10-25 from 16,384, which 64 such names used to fill.
     let mut input = FxInput {
-        fin: vec![7, 0, 0, 64, 0, 0],
+        fin: vec![7, 0, 0, 128, 0, 0],
         nin: Vec::new(),
         bin: Vec::new(),
-        args: [65, 64, 1, 1, 0],
+        args: [129, 128, 1, 1, 0],
     };
-    for i in 0..64 {
+    for i in 0..128 {
         input.nin.extend_from_slice(&[256, 0]);
         input
             .bin
@@ -12915,7 +12917,7 @@ fn the_derived_name_bound_is_exact_on_every_stage_and_sound_elsewhere() {
 #[cfg(feature = "self-host")]
 #[test]
 fn every_stage_fits_the_driver_caps_with_margin() {
-    const NAME_CAP: usize = 1024;
+    const NAME_CAP: usize = 2048;
     const BLOB_CAP: usize = 49152;
 
     let mut worst_names = 0usize;
@@ -12972,8 +12974,24 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // Their parsing was folded into existing functions so that the name count
     // held at 1023. The blob grew by 160 bytes, leaving 18,793. Neither capacity
     // is raised here.
-    assert_eq!(worst_names, 1023, "the worst-case name count moved");
-    assert_eq!(worst_blob, 30359, "the worst-case blob size moved");
+    // Remeasured 2026-10-25 after Order 6 slice 1, whose refusals reuse the existing
+    // scratch flag `ps.found_flag` so that the name count held at 1023, with the blob
+    // 30 bytes larger. Then, by operator ruling the same day, twenty dead names left
+    // `parse.kel`, two unreferenced functions, fifteen enum variants matched only as
+    // numbers and three fields never read, and the name cap doubled to 2048. Parse then
+    // held 1003 names and a 30,042-byte blob. Slice 2's native imports added four names,
+    // `nat_path`, `nat_count`, `nat_seg` and `native_import_end`, and 174 blob bytes. The
+    // blob cap was not raised, and 18,936 bytes of it remain. Slice 3b's pipe and
+    // literal heads added nine, `pipe_args`, `plit`, the four `hq` queue names,
+    // `hq_push`, `hq_take` and `literal_param`, and the blob reached 30,514 bytes.
+    // The `use` path separator flag `nat_cc` made it 1017 and 30,527 bytes, and the
+    // array `for`, `for_arr` and `for_array_open`, 1019 and 30,648, and the external
+    // import flag `nat_ext` 1020 and 30,722. Slice 4's impls and methods added nine,
+    // `impl_trait`, `impl_head`, `in_impl`, the four `mt` table names, `header_impl` and
+    // `method_call`, for 1029 and 31,007. Slice 2b's `use` signatures added `nat_sig`,
+    // `nat_sdepth` and `use_signature`, for 1032 and 31,153.
+    assert_eq!(worst_names, 1032, "the worst-case name count moved");
+    assert_eq!(worst_blob, 31153, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
@@ -13126,7 +13144,11 @@ fn the_node_bound_and_the_name_bound_are_not_the_same_number() {
         "the node bound is {nodes} against a {BYTES}-byte table at {NODE_BYTES} bytes a node"
     );
 
-    // And the stage this separation admitted really is past the old bound.
+    // And the stage this separation admitted really is past the name bound the defect
+    // compared against. That was 1024. The name cap has since doubled to 2048 and now
+    // exceeds the node bound, so the witness is stated against the historical figure.
+    const NAME_BOUND_AT_THE_DEFECT: usize = 1024;
+    let names = NAME_BOUND_AT_THE_DEFECT;
     let src = std::fs::read_to_string("src/selfhost/kel/wire.kel").expect("read wire.kel");
     let module = compile(&parse(&tokenize(&src).expect("lex")).expect("parse")).expect("compile");
     let chunk_consts: usize = module.chunks.iter().map(|c| c.constants.len()).sum();

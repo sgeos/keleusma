@@ -521,7 +521,17 @@ fn q2_is_the_bytecode_bound_monotone_in_native_size() {
         // natives. Upstream now reifies every native call, adding a flag test
         // and a `Trap(HostError)` to the bytecode and the matching lowering.
         // Every stage chunk is unchanged, and the population is too.
-        (29, 406, 17),
+        //
+        // **ABSORPTION 95 moved the inversions from 17 to 12**, measured the same
+        // way, by running this probe at `560ae327` and diffing the per-chunk
+        // figures. Exactly one chunk moved, `lexer.kel::main`, from WCET 252 and
+        // 1558 native instructions to WCET 14 and 9. Upstream's Order 6 slice 3
+        // moved the body of the lexer's `loop main` into a function so that a
+        // destructuring filter could sit between the lexer and the parser, and
+        // the stream chunk is now a thin wrapper. The lexer's work is still
+        // lowered, but this population measures stream chunks only, so that work
+        // has left the measurement. The population is unchanged.
+        (29, 406, 12),
         "the bounds-transfer population or its inversion count changed. Establish \
          the cause before editing. BOTH figures depend on this line: a chunk enters \
          the population only if the module LOWERS, so a refusal removes it and an \

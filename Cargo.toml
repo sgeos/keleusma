@@ -39,9 +39,11 @@ rust-version = "1.88"
 #     file-type detection (vim, future vscode/sublime/emacs).
 #   - tools/ holds project-side development tooling such as the
 #     cloc language definition.
-#   - tmp/ and secret/ each carry only a `.gitkeep` marker so the
-#     directories remain present in fresh clones; the marker has
-#     no value to a consumer downloading the tarball.
+#   - tmp/ carries only a `.gitkeep` marker so the directory remains
+#     present in fresh clones; the marker has no value to a consumer
+#     downloading the tarball. secret/ is ignored whole and tracks
+#     nothing. It stays listed as a second guard in case a file under
+#     it is ever tracked by mistake.
 exclude = [
     "editors/",
     # Host-side developer tooling crates. They depend on the core crate but ship

@@ -46,10 +46,12 @@ const DRIVER: &str = include_str!("../src/selfhost/mod.rs");
 const ORACLE: &str = include_str!("selfhost_codegen.rs");
 
 /// The number of op tags the stage assigns. Not a free parameter: the driver's own
-/// `all_wire_op_tags_decode` sweeps `1..=66`. Tags 64 and 65 transport existing
-/// CheckedDiv and CheckedMod instructions, and 66 the existing BoundsCheck that
-/// probes an indexed write. A change here must move that sweep too.
-const ASSIGNED_TAGS: i64 = 66;
+/// `all_wire_op_tags_decode` sweeps `1..=68`. Tags 64 and 65 transport existing
+/// CheckedDiv and CheckedMod instructions, 66 the existing BoundsCheck that
+/// probes an indexed write, 67 the existing CallVerifiedNative, added in Order 6
+/// slice 2 for `use`-imported natives, and 68 the existing CallExternalNative for a
+/// `use external` native. A change here must move that sweep too.
+const ASSIGNED_TAGS: i64 = 68;
 
 // ---------------------------------------------------------------------------
 // Extraction. Brace depth throughout; see the module header for why.
@@ -271,6 +273,8 @@ const NAME_CORRESPONDENCE: &[(&str, &str)] = &[
     ("checkeddiv", "CheckedDiv"),
     ("checkedmod", "CheckedMod"),
     ("boundscheck", "BoundsCheck"),
+    ("callnative", "CallVerifiedNative"),
+    ("callext", "CallExternalNative"),
     ("cmpeq", "CmpEq"),
     ("cmpne", "CmpNe"),
     ("cmplt", "CmpLt"),
@@ -362,7 +366,7 @@ fn the_stage_tag_table_assigns_each_number_once_and_leaves_no_gap() {
         table.len() as i64,
         ASSIGNED_TAGS,
         "the number of assigned op tags moved. The driver's `all_wire_op_tags_decode` sweeps \
-         1..=66 and its own documentation says to extend that bound when codegen first assigns \
+         1..=68 and its own documentation says to extend that bound when codegen first assigns \
          a tag at or above 64; move both together."
     );
 }
@@ -672,6 +676,11 @@ const EXPECTED_UNEXERCISED: &[&str] = &[
     "newcompositeenum",
     "newcompositetuple",
     "subop",
+    // Order 6 slice 2. No stage source calls a native, so the native call is checked by
+    // `native_imports_and_qualified_calls_compile_or_are_refused` and the corpus test in
+    // `tests/selfhost_full_language.rs` rather than by the stage corpus.
+    "callnative",
+    "callext",
 ];
 
 /// **A SECOND POPULATION, BECAUSE THE FIRST CENSUS NAMED A LIMIT IT DID NOT MEASURE.**
@@ -859,7 +868,18 @@ const CENSUS_EXAMPLES: &[&str] = &[
 /// from the named examples. Measured 2026-10-13. These are unchecked Byte
 /// arithmetic and legacy division/modulo. The boundary corpus covers the
 /// Byte arithmetic, and spec_trap_claims executes legacy division directly.
-const SHIPPED_EXAMPLES_ALSO_MISS: &[&str] = &["addop", "divop", "modop", "mulop", "subop"];
+// `callnative` joined in Order 6 slice 2. None of the fifteen census programs imports a
+// native, so the census cannot reach it, and its coverage is the native cases and the corpus
+// table in `tests/selfhost_full_language.rs`.
+const SHIPPED_EXAMPLES_ALSO_MISS: &[&str] = &[
+    "addop",
+    "callext",
+    "callnative",
+    "divop",
+    "modop",
+    "mulop",
+    "subop",
+];
 
 /// **`Op::Neg` IS OUTSIDE THE SELF-HOSTED SUBSET, WHICH IS STRONGER THAN BEING UNTAGGED.**
 ///

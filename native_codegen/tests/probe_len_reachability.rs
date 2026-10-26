@@ -115,7 +115,7 @@ fn the_former_witness_is_now_an_ordinary_bounded_program() {
 /// planned around it never arose.
 #[test]
 fn the_corpus_witness_module_now_runs() {
-    let src = std::fs::read_to_string("../examples/scripts/refused_witness.kel")
+    let src = std::fs::read_to_string("../examples/scripts/native_witnesses/refused_witness.kel")
         .expect("read the former refusing-witness module");
     let m = build(&src);
     assert!(

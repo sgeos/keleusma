@@ -227,15 +227,20 @@ scripts/gate_summary.py -- cargo tnq
 # Documentation gate (broken/private intra-doc links fail here, not in test/clippy)
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
-# Pre-release gate — a SUBSET of CI (12 steps, 13 with --miri; CI runs 28 jobs).
+# Pre-release gate — a SUBSET of CI (12 steps, 13 with --miri; a full CI run is 21 jobs).
 # Run whole before publishing or merging into main (add --miri for a release).
 # Version-branch merges rely on remote continuous integration.
 scripts/release-gate.sh
 ```
 
 The everyday verification omits the heavy self-host tier, which runs in the `test-self-host` CI
-job on every pull request, and the documentation build, which only the CI `Doc` job runs. A broken
-intra-doc link is invisible to `test` and `clippy`. Before any publication, run the full
+job on every full run, and the documentation build, which only the CI `Doc` job runs. A broken
+intra-doc link is invisible to `test` and `clippy`. A pull request that changes only
+documentation, the book or `scripts/` gets a light run of the documentation guards, the link
+check and the script checks, and the branch run after its merge is full. A branch run whose tree
+a full pull-request run already tested is not repeated. `main` requires the `CI result` job,
+which fails when any job failed. The rules are at the top of `.github/workflows/ci.yml`.
+Before any publication, run the full
 `scripts/release-gate.sh` and follow
 [`docs/process/RELEASE_PROCESS.md`](docs/process/RELEASE_PROCESS.md).
 
@@ -275,7 +280,7 @@ quoting a result.** Their two correctives are these.
 - Measured 2026-10-23 at `b1dbfe4f258a3b9f8145c571da188999b3ad7526`. Remote continuous integration
   passed 3458 workspace tests and 3199 isolated self-host tests, including 1439 and 1389 keleusma
   library tests, and each population ignored two. Workspace documentation tests passed twelve and
-  ignored three. The source inventory contains 1822 integration `#[test]` functions across 186 files (`ls tests/*.rs | wc -l`).
+  ignored three. The source inventory, re-measured on 2026-10-25 at `7590ac20`, contains 1899 integration `#[test]` functions across 197 files (`ls tests/*.rs | wc -l`).
   Workspace execution includes 57 tests in keleusma-arena (51 lib plus 6 integration) and six
   keleusma-bench tests. The isolated library population can be reproduced with
   `cargo test --lib --features self-host`. The

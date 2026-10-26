@@ -1059,7 +1059,7 @@ const WIRE_SUBJECTS: &[&str] = &[
     "../examples/scripts/03_enum_match.kel",
     "../examples/scripts/12_sensor_window.kel",
     "../examples/scripts/14_frame_log.kel",
-    "../examples/scripts/external_native_witness.kel",
+    "../examples/scripts/native_witnesses/external_native_witness.kel",
 ];
 
 /// The auxiliary body of `m`, as `tests/selfhost_wire.rs` builds it for its own
@@ -1579,7 +1579,7 @@ fn verify_datalayout_agrees_with_the_vm_across_its_batched_phases() {
     // Real layouts, from one slot to the lexer's buffer of many batches.
     let mut subjects: Vec<(String, DlInput, i64)> = [
         "../examples/scripts/14_frame_log.kel",
-        "../examples/scripts/opcode_witness.kel",
+        "../examples/scripts/native_witnesses/opcode_witness.kel",
         "../src/selfhost/kel/wire_debug.kel",
         "../src/selfhost/kel/lexer.kel",
     ]

@@ -248,6 +248,14 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // `analyze.kel` to mirror the verifier's new charging of structural markers in
 // its time bound. Nothing was added or removed. Every other test in the same
 // default-feature run passed, including the five censuses this file names.
+//
+// **RE-PINNED 2026-10-26, absorptions 95 and 96.** Upstream's Order 6 slices
+// changed `codegen.kel`, `lexer.kel`, `parse.kel`, `reconstruct.kel` and
+// `wire.kel` in both. Nothing was added or removed, and the six witness programs
+// moved to `examples/scripts/native_witnesses/` with their contents unchanged.
+// Every other test in the same default-feature run passed, including the five
+// censuses this file names, except in absorption 95 the bounds-transfer
+// inversion count, whose cause is recorded where it is pinned.
 const PINNED: &[(&str, u64)] = &[
     // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
     // added or removed. Every census this instrument names to re-derive was run on
@@ -292,13 +300,25 @@ const PINNED: &[(&str, u64)] = &[
     ("examples/scripts/14_frame_log.kel", 0x295b974b908054b5),
     ("examples/scripts/15_pixel_blend.kel", 0xdc03ec3362c45a3f),
     (
-        "examples/scripts/external_native_witness.kel",
+        "examples/scripts/native_witnesses/external_native_witness.kel",
         0x082cb18d1090211b,
     ),
-    ("examples/scripts/fixed_arithmetic.kel", 0x81978de44e2a4fd6),
-    ("examples/scripts/fixed_conversions.kel", 0x628add26f68053a8),
-    ("examples/scripts/float_witness.kel", 0x492f9b0110f02245),
-    ("examples/scripts/opcode_witness.kel", 0xeda34a70e0546930),
+    (
+        "examples/scripts/native_witnesses/fixed_arithmetic.kel",
+        0x81978de44e2a4fd6,
+    ),
+    (
+        "examples/scripts/native_witnesses/fixed_conversions.kel",
+        0x628add26f68053a8,
+    ),
+    (
+        "examples/scripts/native_witnesses/float_witness.kel",
+        0x492f9b0110f02245,
+    ),
+    (
+        "examples/scripts/native_witnesses/opcode_witness.kel",
+        0xeda34a70e0546930,
+    ),
     (
         "examples/scripts/piano_roll/piano_roll_0.kel",
         0x0165242923cee8dd,
@@ -339,7 +359,10 @@ const PINNED: &[(&str, u64)] = &[
         "examples/scripts/piano_roll/piano_roll_9.kel",
         0x6f0eda1f8db18364,
     ),
-    ("examples/scripts/refused_witness.kel", 0xbe747a6ae1c8ea22),
+    (
+        "examples/scripts/native_witnesses/refused_witness.kel",
+        0xbe747a6ae1c8ea22,
+    ),
     (
         "examples/scripts/rogue/rogue_ai_boss.kel",
         0x51c63edcd748eebf,
@@ -431,19 +454,19 @@ const PINNED: &[(&str, u64)] = &[
         0xf93a5bd822bfe99c,
     ),
     ("src/selfhost/kel/analyze.kel", 0xcdae9770d199e166),
-    ("src/selfhost/kel/codegen.kel", 0x63cf566271018484),
-    ("src/selfhost/kel/lexer.kel", 0x2b631ed8f8770698),
+    ("src/selfhost/kel/codegen.kel", 0x4dd209d39f8a051c),
+    ("src/selfhost/kel/lexer.kel", 0x5b82bd90d71e8850),
     // Absorption 83 changes cast Byte tracking and FixedDiv classification.
     // The non-corpus run re-derived coverage and refusal figures unchanged.
-    ("src/selfhost/kel/parse.kel", 0xfec69dd808bd3dca),
-    ("src/selfhost/kel/reconstruct.kel", 0x9d64215418877ab7),
+    ("src/selfhost/kel/parse.kel", 0xbde358ffb7263fb9),
+    ("src/selfhost/kel/reconstruct.kel", 0x6af56e6d036b58b3),
     ("src/selfhost/kel/verify_datalayout.kel", 0xe625b5656d576b86),
     ("src/selfhost/kel/verify_depth.kel", 0x0e54e2467d0b499f),
     ("src/selfhost/kel/verify_structural.kel", 0x950e834358c3f8f1),
     ("src/selfhost/kel/verify_typed.kel", 0x133db0bfdbb75dfd),
     ("src/selfhost/kel/verify_types.kel", 0xf1a3565245726860),
     ("src/selfhost/kel/verify_yield.kel", 0x0372c27e883c97dd),
-    ("src/selfhost/kel/wire.kel", 0x77db15f253c63e7b),
+    ("src/selfhost/kel/wire.kel", 0x7e021df3e15f1793),
     ("src/selfhost/kel/wire_debug.kel", 0xa98ddf75d7e9f7e8),
     ("src/selfhost/kel/wire_schema.kel", 0x6f32806acb4b4763),
 ];

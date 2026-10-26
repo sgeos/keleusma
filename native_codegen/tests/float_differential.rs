@@ -13,7 +13,7 @@
 //! # What is covered, and what is not
 //!
 //! Covered: a float CONSTANT, `IntToFloat`, `FloatToInt`, and `Op::Add` on two
-//! float operands — which is exactly what `examples/scripts/float_witness.kel`
+//! float operands — which is exactly what `examples/scripts/native_witnesses/float_witness.kel`
 //! needs. **Not covered**: the entry ABI (no corpus module has a float in a
 //! signature, so it has no witness here), float shared slots, division,
 //! comparisons, and `f32`.

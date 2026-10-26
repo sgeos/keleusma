@@ -6,6 +6,45 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-25 Order 6 slices 3d, 3e and 4
+
+The array `for`, the function and import modifiers, and trait impls with method calls
+compile byte-identically. The corpus reads 57 of 75 identical. A stale wire capacity
+from the name-cap doubling is fixed.
+
+## 2026-10-25 Order 6 slice 3c, use paths, shebangs and the operator sink
+
+Three more dropped tokens are refused or handled. The Order 5 framing program now
+compiles byte-identically, and the corpus reads 53 of 75 identical. PR 540 merged.
+
+## 2026-10-25 Order 6 slice 3b, the pipe and literal heads
+
+The pipe operator and single literal parameter heads compile byte-identically, and the
+corpus reads 52 of 75 identical. The sixteen-head reconstruct cap is now refused by name.
+
+## 2026-10-25 Order 6 slice 3a, destructuring and wildcard let
+
+A destructuring filter in lexer.kel rewrites flat tuple patterns and wildcard lets into
+the plain statements the reference lowers them to. It exposed stale equality flags in
+parse.kel, now cleared at every drain boundary. The corpus reads 50 of 75 identical,
+including the Order 4 interpreter.
+
+## 2026-10-25 Order 6 slice 2, native calls
+
+By operator ruling, twenty dead names left parse.kel and the wire stage's name cap
+doubled to 2,048. The pipeline now lowers `use`-imported two-segment native calls
+byte-identically, and the corpus moved to 39 identical sources. Slices 0 and 1 merged
+as PR 532.
+
+## 2026-10-25 Order 6 slices 0 and 1
+
+Order 6, full-language support, began on feat/v02-order6-full-language with the plan in
+ORDER6_FULL_LANGUAGE_PLAN.md. tests/selfhost_full_language.rs pins the shipping
+self-hosted outcome for all 75 repository sources. Slice 1 repaired six parser states
+that skipped a token, and the corpus moved from 34 to 36 identical sources with no
+divergence, panic, missing verdict or false rejection left. The gate awaits the
+operator.
+
 ## 2026-10-25 Order 5 complete for the first-pass scope
 
 The cryptographic framing landed on feat/v02-order5-crypto-framing as

@@ -57,7 +57,9 @@ class SelectionTests(unittest.TestCase):
         self.local = tempfile.TemporaryDirectory(dir=self.root)
         self.store = Path(self.local.name) / 'store' / 'selection'
         self.cfg = selection.config()
+        # Both settings are explicit, so the tests do not depend on the tracked flag.
         self.live = dict(self.cfg, live_evaluation=True)
+        self.closed = dict(self.cfg, live_evaluation=False)
         self.db = base.connect(self.store, selection.pinned(self.cfg))
         self.env = mock.patch.dict(os.environ, {'TYPESAFE_API_KEY': 'synthetic-unit-test-key'})
         self.env.start()
@@ -146,7 +148,7 @@ class SelectionTests(unittest.TestCase):
         row = base.sample(self.db, 'sel-one', 'kaizen')
         client = mock.Mock()
         with self.assertRaisesRegex(ValueError, 'operator authorization'):
-            selection.evaluate(self.db, 'sel-one', 'kaizen', row['request_hash'], self.cfg, client=client)
+            selection.evaluate(self.db, 'sel-one', 'kaizen', row['request_hash'], self.closed, client=client)
         client.assert_not_called()
         self.assertIsNone(base.sample(self.db, 'sel-one', 'kaizen')['started'])
 

@@ -263,7 +263,7 @@ const NO_WITNESS_HERE: &[(&str, &str)] = &[
 ///
 /// They were the last two entries in `NO_WITNESS_HERE`, recorded as *"needs a
 /// registered native; driven by the corpus differential"* — and for the external
-/// form, `examples/scripts/external_native_witness.kel` went further and said the
+/// form, `examples/scripts/native_witnesses/external_native_witness.kel` went further and said the
 /// reference *"cannot EXECUTE such a module at all"*, because that harness
 /// registers every native as VERIFIED and the runtime rejects a verified
 /// registration invoked as external.

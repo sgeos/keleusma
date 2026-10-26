@@ -344,6 +344,7 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
     let mut in_trait = false;
     let mut cur_trait: Option<Vec<i64>> = None;
     let mut in_impl = false;
+    let (mut impl_method, mut impl_skip) = (false, false);
     let mut cur_impl: Option<Vec<i64>> = None;
     let state = vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
@@ -460,18 +461,34 @@ fn run_parse(src: &str, names: &mut Vec<String>) -> Parsed {
                     _ => {} // signature params/return, skipped this increment
                 }
             } else if in_impl {
-                match code {
-                    21 => cur_impl
-                        .as_mut()
-                        .expect("method name before IMPLSTART")
-                        .push(val), // MNAME: an impl method's name
-                    5 => {
-                        parsed
-                            .impls
-                            .push(cur_impl.take().expect("impl END without IMPLSTART"));
-                        in_impl = false;
+                // Since Order 6 slice 4 an impl's methods arrive as functions: record 132
+                // carries the head, each method is a START through its END, and the impl's
+                // own END follows the last. A body or guard range is skipped to its DONE,
+                // because its records reuse the small codes a START uses.
+                if impl_skip {
+                    if code == 15 {
+                        impl_skip = false;
                     }
-                    _ => {} // method params/return/body, skipped this increment
+                } else {
+                    match code {
+                        132 => {}
+                        16 | 17 => impl_skip = true,
+                        1..=3 if !impl_method => {
+                            cur_impl
+                                .as_mut()
+                                .expect("method before IMPLSTART")
+                                .push(val);
+                            impl_method = true;
+                        }
+                        5 if impl_method => impl_method = false,
+                        5 => {
+                            parsed
+                                .impls
+                                .push(cur_impl.take().expect("impl END without IMPLSTART"));
+                            in_impl = false;
+                        }
+                        _ => {} // method params and return types
+                    }
                 }
             } else if in_use {
                 match code {
@@ -3413,7 +3430,10 @@ fn a_struct_trait_or_impl_declaration_is_skipped_rather_than_faulting() {
     for src in [
         "struct S { a: Word }\nfn f() -> Word { 1 }\n",
         "trait T { fn g(self) -> Word; }\nfn f() -> Word { 1 }\n",
-        "struct S { a: Word }\nimpl S { fn g(self) -> Word { self.a } }\nfn f() -> Word { 1 }\n",
+        // An inherent impl, `impl S { .. }`, is a reference parse error, since the
+        // reference requires `impl Trait for Type`, and the stage refuses it with it. The
+        // trait form is what parses now, its methods compiled as functions.
+        "struct S { a: Word }\ntrait T { fn g(s: S) -> Word; }\nimpl T for S { fn g(s: S) -> Word { s.a } }\nfn f() -> Word { 1 }\n",
         "struct S<const N: Word> { a: Word }\nfn f() -> Word { 1 }\n",
     ] {
         assert!(
@@ -3809,87 +3829,8 @@ fn an_empty_else_is_distinguished_from_an_implicit_one() {
     );
 }
 
-/// **THE EXPRESSION SIDE OF THE BARE-VERSUS-PARENTHESISED ASYMMETRY IS STILL OPEN.**
-///
-/// `a_bare_unit_variant_pattern_parses_as_the_parenthesised_one` above pins the PATTERN
-/// side, which was a missing branch and is fixed. The EXPRESSION side has the same shape
-/// and is not.
-///
-/// Measured 2026-09-12: `E::N()` compiles through the self-hosted backend and bare `E::N`
-/// does not, while the reference accepts both. Tested as a return value, in a `let`, and as
-/// a call argument, with the same outcome each time.
-///
-/// # Why the refusal does not name the construct
-///
-/// The driver's construct scan names what a user wrote, and it cannot name this one. The
-/// syntax tree records `E::N` and `E::N()` identically, as `EnumVariant` with empty `args`,
-/// so an arm matching that shape flags the WORKING form too. Such an arm was written and
-/// `the_scan_names_no_construct_in_any_stage_source` rejected it, naming `Node::Local()` in
-/// `parse.kel`. Until the two spellings are distinguishable, a user meets the stage's own
-/// diagnostic for this gap.
-///
-/// # Where the fix would go, located but NOT made
-///
-/// `step_enum` in `parse.kel` drives the expression side in phases: phase 1 awaits `::`,
-/// phase 2 resolves the variant's discriminant from the enum table, **phase 3 awaits `(`**,
-/// phase 4 takes `)` or a payload, and phases 5 and 6 take `as` and the target type.
-///
-/// **Phase 3 requires the open parenthesis.** On bare `E::N` the next token is not `(`, so
-/// phase 3 does nothing and the construction never completes — which is precisely the
-/// "0 remained on the work stack" the refusal reports.
-///
-/// The shape is an alternative phase-3 branch that completes the variant as a unit
-/// construction and re-dispatches the token, directly analogous to the PATTERN-side fix made
-/// earlier in this session in `step_mpat` — the function immediately below `step_enum` —
-/// which completed a bare unit-variant pattern on `=>`.
-///
-/// **The size is NOT established and is not claimed.** The pattern-side fix was one branch,
-/// but the expression path additionally carries the `as` phases and the payload
-/// re-dispatch, so an early completion has to interact with both. An unverified cost
-/// estimate went into a merged pull request body earlier in this session and was retracted
-/// twice; this one is stated as a shape only.
-///
-/// # Why this is pinned rather than fixed
-///
-/// The fix is in `parse.kel`, which bears on the operator's capacity decision for the input
-/// path, exactly as the four other known gaps do.
-/// **GATED ON `self-host`, WHICH THE FILE AS A WHOLE IS NOT.** This test calls the driver
-/// in `keleusma::selfhost`, a module that does not exist without the feature. The first
-/// version omitted the attribute and turned three continuous-integration jobs red: the
-/// signatures suite, the broad-features suite, and the minimum-supported-Rust check, which
-/// runs `cargo check --tests` under default features. One cause, three jobs, and the same
-/// shape the tree already records for a test file that drove the stage without declaring
-/// the feature it needs.
-#[cfg(feature = "self-host")]
-#[test]
-fn a_bare_unit_variant_expression_is_refused_where_the_parenthesised_one_compiles() {
-    const BARE: &str = "enum E { M, N }\nfn main() -> Word { E::N as Word }";
-    const PAREN: &str = "enum E { M, N }\nfn main() -> Word { E::N() as Word }";
-
-    // CONTROL: the reference accepts BOTH, so a refusal below is the subset declining a
-    // valid program rather than the program being wrong.
-    for (label, src) in [("bare", BARE), ("parenthesised", PAREN)] {
-        let ast =
-            keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex")).expect("parse");
-        assert!(
-            keleusma::compiler::compile(&ast).is_ok(),
-            "the reference rejects the {label} form, so this comparison is not about a \
-             self-hosted gap"
-        );
-    }
-
-    let target = keleusma::target::Target::host();
-
-    assert!(
-        keleusma::selfhost::self_hosted_compile(PAREN, &target).is_ok(),
-        "the parenthesised unit-variant expression no longer compiles. The asymmetry this \
-         test names is bare-versus-parenthesised; if BOTH now fail, the gap widened and the \
-         description above is stale"
-    );
-    assert!(
-        keleusma::selfhost::self_hosted_compile(BARE, &target).is_err(),
-        "the bare unit-variant expression now compiles. If `parse.kel` gained the branch, \
-         this is a FIX: remove this test and drop the gap from the known list rather than \
-         relaxing the assertion"
-    );
-}
+// The expression side of the bare-versus-parenthesised asymmetry was closed in Order 6
+// slice 1. `step_enum` now completes a bare `E::V` exactly as `E::V()`, so the refusal that
+// was pinned here is gone and both spellings are pinned byte-identical by
+// `skipped_tokens_are_refused_or_lowered_rather_than_dropped` in
+// `tests/selfhost_full_language.rs`.

@@ -8,11 +8,41 @@ name: Book
 # builds, the playground build, and the catalogue drift check all live here, so
 # none of them saw the release line's work. Deploy stays gated to `main` in its
 # own job.
+#
+# FILTERED TO ITS INPUTS, ERRING BROAD. The examples run the CLI, so every source the
+# CLI compiles is an input, and `keleusma-*/**` includes the playground crate. The book
+# has no `{{#include}}` of files outside `book/`. A change outside the list that still
+# altered example output would be caught by `ci.yml`'s `docs-links` job, which runs the
+# same example verification on every full run. The mdbook build and the catalogue check
+# would be caught at the next matching run, at the latest by the deploy from `main`.
 on:
   push:
     branches: [main, 'v*']
+    paths:
+      - 'book/**'
+      - 'src/**'
+      - 'keleusma-*/**'
+      - 'compiler/**'
+      - 'examples/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'rust-toolchain*'
+      - '.github/workflows/book.yml'
   pull_request:
     branches: [main, 'v*']
+    paths:
+      - 'book/**'
+      - 'src/**'
+      - 'keleusma-*/**'
+      - 'compiler/**'
+      - 'examples/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - 'rust-toolchain*'
+      - '.github/workflows/book.yml'
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -43,8 +73,8 @@ jobs:
     name: Verify examples
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - run: cargo build --release -p keleusma-cli
       - run: python3 book/ci/verify_examples.py target/release/keleusma book/src
 
@@ -52,11 +82,11 @@ jobs:
     name: Build (EN + JA)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: mdbook,wasm-pack
       - name: Install mdbook-i18n-helpers
@@ -94,7 +124,7 @@ jobs:
         run: |
           mkdir -p "$GITHUB_WORKSPACE/site/playground"
           cp -r keleusma-wasm/www/. "$GITHUB_WORKSPACE/site/playground/"
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: site
 
@@ -112,4 +142,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5

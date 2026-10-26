@@ -1580,14 +1580,12 @@ fn stage_seed_for(m: &Module, name: &str, subject_file: &str) -> Result<Vec<u8>,
         // single-head form does not, so this is a correction to the REASON, not a
         // reason to change the subject.
         "reconstruct.kel" => {
-            let path = sources()
-                .into_iter()
-                .find(|p| {
-                    p.file_name().unwrap_or_default().to_string_lossy() == "06_multiheaded.kel"
-                })
-                .ok_or("06_multiheaded.kel is not in the corpus")?;
-            let src = std::fs::read_to_string(&path).map_err(|e| format!("read subject: {e}"))?;
-            let (fns, _names, _, _) = keleusma::selfhost::parse_functions(&src);
+            // The guarded subject, since `parse.kel` refuses the literal heads
+            // of `06_multiheaded.kel`. See `common::MULTIHEAD_SUBJECT`.
+            let src = common::MULTIHEAD_SUBJECT.to_string();
+            let fns = keleusma::selfhost::try_parse_functions(&src)
+                .map_err(|e| format!("the multi-headed subject is outside parse.kel: {e}"))?
+                .functions;
             // The subject declares its three `classify` heads FIRST and then
             // `main`, so the group is the leading run. Asserted, not trusted: if
             // the file gains a function the seed would silently describe a
@@ -1595,7 +1593,7 @@ fn stage_seed_for(m: &Module, name: &str, subject_file: &str) -> Result<Vec<u8>,
             if fns.len() != 4 {
                 return Err(format!(
                     "subject shape changed: expected 4 parsed heads in \
-                     06_multiheaded.kel, got {}",
+                     the multi-headed subject, got {}",
                     fns.len()
                 ));
             }

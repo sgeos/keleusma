@@ -2744,7 +2744,7 @@ fn byte_negation_agrees_with_the_vm() {
 ///
 /// **Four tests lived here and one of them passed falsely** before that
 /// precondition existed, comparing `add_fx` natively against `main` in the
-/// virtual machine. See `examples/scripts/fixed_arithmetic.kel`, which the
+/// virtual machine. See `examples/scripts/native_witnesses/fixed_arithmetic.kel`, which the
 /// corpus differential drives as a whole module.
 #[test]
 fn fixed_arithmetic_is_covered_by_the_corpus_and_not_by_this_harness() {

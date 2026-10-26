@@ -861,6 +861,14 @@ pub const BR_P_ZERO_DIVISOR_ID: usize = BR_P_UNDERFLOW_ID + 1;
 pub const BR_P_VALUES: usize = BR_P_ZERO_DIVISOR_ID + 1;
 /// Contextual indexed-read outcome label, interned identifier plus one.
 pub const BR_P_INVALID_INDEX_ID: usize = BR_P_VALUES + LEX_INTERN_CAP;
+/// `toks.mt_count`, the number of method-table rows, Order 6.
+pub const BR_P_MT_COUNT: usize = BR_P_INVALID_INDEX_ID + 1;
+/// `toks.mt_head`, each row's receiver head name id.
+pub const BR_P_MT_HEAD: usize = BR_P_MT_COUNT + 1;
+/// `toks.mt_name`, each row's method name id.
+pub const BR_P_MT_NAME: usize = BR_P_MT_HEAD + 64;
+/// `toks.mt_chunk`, each row's chunk index.
+pub const BR_P_MT_CHUNK: usize = BR_P_MT_NAME + 64;
 
 #[cfg(test)]
 mod shared_layout_tests {
@@ -976,6 +984,10 @@ mod shared_layout_tests {
                 "BR_P_ZERO_DIVISOR_ID",
                 BR_P_ZERO_DIVISOR_ID,
             ),
+            ("mt_count", "BR_P_MT_COUNT", BR_P_MT_COUNT),
+            ("mt_head", "BR_P_MT_HEAD", BR_P_MT_HEAD),
+            ("mt_name", "BR_P_MT_NAME", BR_P_MT_NAME),
+            ("mt_chunk", "BR_P_MT_CHUNK", BR_P_MT_CHUNK),
         ];
         for &(field, konst, value) in cases {
             assert_eq!(
