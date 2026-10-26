@@ -121,6 +121,9 @@ shared data toks {
     // APPENDED. Zero means unset, so an unseeded block never matches.
     satmax_id: Word,
     satmin_id: Word,
+    // The name id plus one of the hidden binding the destructuring filter introduces, whose
+    // string is `let`, Order 6. Zero means no destructuring occurs.
+    hidden_id: Word,
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -726,7 +729,9 @@ fn pe_value_layout() -> Word { 38 }
 // longer mentions it, and prose about a name is the same characters as a use of it.
 
 fn pe_cap_op() -> Word { 64 }
-fn pe_cap_let() -> Word { 64 }
+// Local bindings per function, raised from 64 to 256 under the operator's ruling of
+// 2026-10-26 that limits may be raised, for a piano roll's `main` with 65.
+fn pe_cap_let() -> Word { 256 }
 fn pe_cap_stmt() -> Word { 256 }
 fn pe_cap_param() -> Word { 32 }
 fn pe_cap_if() -> Word { 32 }
@@ -880,9 +885,9 @@ private data stmt {
     pending_let_scalar: Word,
     pending_let_type: Word,
     let_annotation_phase: Word,
-    let_scalar: [Word; 65],
-    let_names: [Word; 65],
-    scope_slot: [Word; 65],
+    let_scalar: [Word; 257],
+    let_names: [Word; 257],
+    scope_slot: [Word; 257],
     let_count: Word,
     slot_count: Word,
     // Per `let` binding, the composite type inferred from a DIRECT composite construction on its
@@ -893,18 +898,18 @@ private data stmt {
     // operator (`emit_op`) or a call clears both, so only a bare construction root survives to the
     // `let` commit. The construction node emits last (postorder root), so the surviving value is
     // the root's type.
-    let_tuple: [Word; 65],
-    let_struct: [Word; 65],
+    let_tuple: [Word; 257],
+    let_struct: [Word; 257],
     // Per `let` binding, 0 or the element ScalarKind plus one when the binding's value root was an
     // array literal, so a later `a[i]` access emits GetIndex(Flat{kind}).
-    let_array: [Word; 65],
+    let_array: [Word; 257],
     // Per `let` binding, 0 or the element struct's declaration index plus one when the binding's
     // value root was an array-of-struct literal; `let_array_size` the element struct's byte size, so
     // a later `a[i].field` access emits GetIndex(FlatNested{size, Struct}) + a field read (the
     // let-binding analogue of an array-of-struct parameter).
-    let_array_struct: [Word; 65],
-    let_array_size: [Word; 65],
-    let_array_tuple: [Word; 65],
+    let_array_struct: [Word; 257],
+    let_array_size: [Word; 257],
+    let_array_tuple: [Word; 257],
     // A let-bound array whose ELEMENT IS ITSELF AN ARRAY. `let_array_arr` holds the inner
     // element's scalar kind plus one (0 = this binding is not an array of arrays) and
     // `let_array_arrbytes` the inner array's byte size, which together are what
@@ -913,11 +918,14 @@ private data stmt {
     // Without these, `let a = [[1, 2], [3, 4]]; a[0][1]` recorded the binding as an array of
     // WORDS, so the first `[0]` emitted a scalar index and nothing armed a second one -- the
     // `[1]` then fell through to the array-LITERAL branch and the program silently miscompiled.
-    let_array_arr: [Word; 65],
-    let_array_arrbytes: [Word; 65],
+    let_array_arr: [Word; 257],
+    let_array_arrbytes: [Word; 257],
     // Per `let` binding, 0 or the enum's name id plus one when the binding's value root returned an
     // enum (a call of an enum-returning function), so a `match` over the binding lowers to IsEnum.
-    let_enum: [Word; 65],
+    let_enum: [Word; 257],
+    // 1 for a hidden destructuring binding whose value has no known layout, such as an
+    // untyped native's result, Order 6. The reference reads its elements boxed.
+    let_untyped: [Word; 257],
     // A `struct == struct` fold arms this drain: it emits one StructEqField record per field (from
     // the struct's declaration layout) then a StructEqBuild, over successive body-step calls (the
     // operator fold itself returns only the first record). `sq_struct` the struct index, `sq_field`
@@ -1766,7 +1774,7 @@ private data rq {
 
 private data vl {
     scalar: Word, form: Word, layout: Word, bytes: Word, decl: Word, child: Word, arity: Word,
-    params: [Word; 33], locals: [Word; 65], returns: [Word; 1024], local_desc: [Word; 65],
+    params: [Word; 33], locals: [Word; 257], returns: [Word; 1024], local_desc: [Word; 257],
     first: [Word; 8], last: [Word; 8], sizes: [Word; 8],
     scope_active: Word, base_nodes: Word, base_layouts: Word, base_members: Word,
 }
@@ -1782,6 +1790,7 @@ fn clear_let_shape(at: Word) -> Word {
     stmt.let_array_arr[at] = 0;
     stmt.let_array_arrbytes[at] = 0;
     stmt.let_enum[at] = 0;
+    stmt.let_untyped[at] = 0;
     0
 }
 
@@ -1811,7 +1820,7 @@ fn step_local(v: Word) -> Word {
     // This operand is a whole enum value only if it resolves to an enum-typed parameter (set below).
     ps.last_enum = 0;
     stmt.pending_cenum = 0;
-    for i in 0..stmt.let_count limit 64 {
+    for i in 0..stmt.let_count limit 256 {
         if stmt.let_names[i] == v {
             ps.found = stmt.scope_slot[i];
             ps.scalar_postfix = stmt.let_scalar[i];
@@ -1854,7 +1863,7 @@ fn step_local(v: Word) -> Word {
 fn resolve_plain_ident_legacy(v: Word) -> Word {
     ps.found_flag = 0;
     ps.let_hit = 0;
-    for i in 0..stmt.let_count limit 64 {
+    for i in 0..stmt.let_count limit 256 {
         if stmt.let_names[i] == v {
             ps.found_flag = 1;
             ps.let_hit = i;
@@ -1864,8 +1873,9 @@ fn resolve_plain_ident_legacy(v: Word) -> Word {
         // A `let` binding: if its value's root was a composite construction, arm the field-access
         // postfix (a tuple binding arms `t.N`, a struct binding arms `x.field`); otherwise read it
         // as an ordinary Local.
-        if stmt.let_tuple[ps.let_hit] > 0 {
-            ps.ta_tuple = stmt.let_tuple[ps.let_hit] - 1;
+        if stmt.let_tuple[ps.let_hit] > 0 orelse stmt.let_untyped[ps.let_hit] == 1 {
+            // An untyped hidden binding arms the tuple postfix with no layout, `ta_tuple` -1.
+            ps.ta_tuple = if stmt.let_untyped[ps.let_hit] == 1 { 0 - 1 } else { stmt.let_tuple[ps.let_hit] - 1 };
             ps.ta_phase = 1;
             ops.expect_operand = 0;
             Node::Local() as Word + stmt.scope_slot[ps.let_hit] * 64
@@ -2044,7 +2054,7 @@ fn resolve_plain_ident_legacy(v: Word) -> Word {
 // global lookup chain so its bounded conditional depth does not increase.
 fn step_ident(v: Word) -> Word {
     ps.found_flag = 0;
-    for i in 0..stmt.let_count limit 64 {
+    for i in 0..stmt.let_count limit 256 {
         if stmt.let_names[i] == v { ps.found_flag = 1; }
     }
     for i in 0..ps.pcount limit 32 {
@@ -4791,10 +4801,11 @@ fn value_array(length: Word) -> Word {
 fn value_local(slot: Word) -> Word {
     value_scalar(0 - 1);
     if slot < ps.pcount { value_scalar(vl.params[slot] - 1); }
-    for i in 0..stmt.let_count limit 64 {
+    for i in 0..stmt.let_count limit 256 {
         if stmt.scope_slot[i] == slot { value_scalar(vl.locals[i] - 1); }
     }
-    if ps.ta_phase == 1 {
+    // An untyped hidden binding arms the postfix with no layout, so its value stays unknown.
+    if ps.ta_phase == 1 andalso ps.ta_tuple >= 0 {
         vl.form = 1; vl.layout = ps.ta_tuple; vl.bytes = tupledefs.tup_bytes[ps.ta_tuple];
     } else { if ps.fa_phase == 1 {
         vl.form = 3; vl.decl = ps.fa_struct + 1; vl.bytes = structdefs.sd_bytesize[ps.fa_struct];
@@ -4812,7 +4823,7 @@ fn value_local(slot: Word) -> Word {
         if vl.form != 0 orelse vl.scalar >= 0 { value_array(ps.sa_len); }
     }}}}}
     if slot < ps.pcount andalso ps.pdescriptor[slot] > 0 { value_load(ps.pdescriptor[slot] - 1); }
-    for i in 0..stmt.let_count limit 64 {
+    for i in 0..stmt.let_count limit 256 {
         if stmt.scope_slot[i] == slot andalso vl.local_desc[i] > 0 { value_load(vl.local_desc[i] - 1); }
     }
     0
@@ -4839,7 +4850,14 @@ fn value_record(word: Word) -> Word {
     if kind == 1 orelse kind == 116 orelse kind == 128 { value_scalar(3); }
     if kind == 20 { value_scalar(if arg == 1 orelse arg == 2 { 1 } else { 0 }); }
     if kind == 38 { value_scalar(6); }
-    if kind == 80 { value_scalar(0 - 1); }
+    if kind == 80 {
+        // A native call's value is its declared scalar return, `Word`, `Byte` or `bool`, as
+        // the reference types it from the `use` signature, so a tuple or a Byte operator built
+        // from it has a known layout. An enum, a tuple or an undeclared return stays unknown.
+        let declared = call.nat_rtype[arg % call_chunk_radix()];
+        let scalar = if declared > 0 { scalar_kind_of(declared - 1) } else { 0 };
+        value_scalar(if scalar >= 1 andalso scalar <= 3 { scalar } else { 0 - 1 });
+    }
     if kind == 11 {
         if da.da_kind >= 1024 {
             value_scalar(0 - 1);
@@ -4958,6 +4976,9 @@ fn step_closing() -> Word {
                 if call.nat_rtype[row] < 0 { perr(pe_unresolved_syntax(), toks.at); }
                 stmt.pending_cenum = native_return_enum(row);
                 ps.last_enum = stmt.pending_cenum;
+                // A declared `Byte` return makes the result a Byte operand, which selects the
+                // Byte operators as the reference does.
+                ps.last_byte = if call.nat_rtype[row] > 0 andalso scalar_kind_of(call.nat_rtype[row] - 1) == 2 { 1 } else { 0 };
                 ps.emit_arg = row + call.call_count[call.call_sp] * call_chunk_radix()
                     + call.nat_ext[row] * 1048576;
                 80
@@ -6347,6 +6368,17 @@ fn step_tupleaccess(k: Word, v: Word) -> Word {
         }
         0
     } else {
+        if k == Tok::IntLit() as Word andalso ps.ta_tuple < 0 {
+            // An element of an untyped hidden binding: the reference reads it boxed, by index,
+            // variant tag 5 on the tuple-field record. Its value has no known layout.
+            if v < 0 orelse v > 255 { perr(pe_tuple_index(), v) } else {
+                ps.ta_phase = 0;
+                ops.expect_operand = 0;
+                ps.field_record = Node::TupleField() as Word + (v + 5 * 4294967296) * 64;
+                ps.emit_arg = v;
+                104
+            }
+        } else {
         if k == Tok::IntLit() as Word {
             if v < 0 orelse v >= tupledefs.tup_ecount[ps.ta_tuple] { perr(pe_tuple_index(), v) } else {
                 let at = tupledefs.tup_estart[ps.ta_tuple] + v;
@@ -6377,7 +6409,7 @@ fn step_tupleaccess(k: Word, v: Word) -> Word {
         } else {
             ps.ta_phase = 0;
             0
-        }
+        } }
     }
 }
 
@@ -7307,6 +7339,9 @@ fn step_draining() -> Word {
                     stmt.scope_slot[stmt.let_count] = slot;
                     stmt.let_scalar[stmt.let_count] = stmt.pstmt_scalar[stmt.pstmt_sp];
                     value_bind_root();
+                    // A hidden destructuring binding over a value of unknown layout reads its
+                    // elements boxed, as the reference does for an untyped native's tuple.
+                    stmt.let_untyped[stmt.let_count] = if toks.hidden_id > 0 andalso stmt.let_names[stmt.let_count] + 1 == toks.hidden_id andalso vl.form == 0 andalso vl.scalar < 0 { 1 } else { 0 };
                     vl.locals[stmt.let_count] = if vl.form == 0 { vl.scalar + 1 } else { 0 };
                     vl.local_desc[stmt.let_count] = if vl.form > 0 { value_descriptor() + 1 } else { 0 };
                     // Record the binding's composite type from its value's root construction, so a
@@ -9130,10 +9165,10 @@ fn resolve_plain_ident(v: Word) -> Word {
         }
     }
     ps.found_flag = 0;
-    for i in 0..stmt.let_count limit 64 { if stmt.let_names[i] == v { ps.found_flag = 1; } }
+    for i in 0..stmt.let_count limit 256 { if stmt.let_names[i] == v { ps.found_flag = 1; } }
     if ps.found_flag == 1 {
         ps.found = 0 - 1;
-        for i in 0..stmt.let_count limit 64 { if stmt.let_names[i] == v { ps.found = i; } }
+        for i in 0..stmt.let_count limit 256 { if stmt.let_names[i] == v { ps.found = i; } }
         if ps.found >= 0 andalso vl.local_desc[ps.found] > 0 {
             header_arm(vl.local_desc[ps.found] - 1); ops.expect_operand = 0;
             Node::Local() as Word + stmt.scope_slot[ps.found] * 64

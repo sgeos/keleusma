@@ -13001,9 +13001,11 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // and 31,685. Destructuring arms packed their state, with the variable slot, into
     // `match_ext` and `cb`, because `parse.kel`'s own data fields stand at 638 of the 640 its
     // field table holds, and added four functions, for 1048 and
-    // 32,355. Raising the field table to 1,024 measured 32,345, a cause not traced.
-    assert_eq!(worst_names, 1048, "the worst-case name count moved");
-    assert_eq!(worst_blob, 32345, "the worst-case blob size moved");
+    // 32,355. Raising the field table to 1,024 measured 32,345, a cause not traced. Typing native
+    // results and raising the local-binding cap took it to 32,375.
+    // The untyped hidden binding's `hidden_id` and `let_untyped` made it 1050 and 32,429.
+    assert_eq!(worst_names, 1050, "the worst-case name count moved");
+    assert_eq!(worst_blob, 32429, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
