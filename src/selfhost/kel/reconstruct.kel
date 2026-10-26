@@ -945,8 +945,10 @@ fn step_record(k: Word, a: Word) -> Word {
         // (last-pushed is the last argument) and store them in source order into the
         // `call_args` side array. The Call node's lhs is that slice's start and its
         // rhs the argument count.
-        let chunk = a % rc_call_chunk_radix();
-        let count = a / rc_call_chunk_radix();
+        // A native call's external flag rides above the count, at 2^20, and moves into the
+        // node's arg at 2^16, beside the native index. A chunk call never sets it.
+        let chunk = a % rc_call_chunk_radix() + (a / 1048576) * 65536;
+        let count = (a / rc_call_chunk_radix()) % rc_call_chunk_radix();
         let args_start = rs.ca;
         for j in 0..count limit 64 {
             let node = pop();

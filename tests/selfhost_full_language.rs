@@ -67,7 +67,7 @@ const CORPUS: &[(&str, Class)] = &[
     ("examples/scripts/08_method_dispatch.kel", Unsupported),
     ("examples/scripts/09_big_numbers.kel", Identical),
     ("examples/scripts/10_multbyte.kel", Identical),
-    ("examples/scripts/11_signed.kel", Unsupported),
+    ("examples/scripts/11_signed.kel", Identical),
     ("examples/scripts/12_sensor_window.kel", Identical),
     ("examples/scripts/13_telemetry_stream.kel", Identical),
     ("examples/scripts/14_frame_log.kel", Unsupported),
@@ -448,10 +448,10 @@ fn native_imports_and_qualified_calls_compile_or_are_refused() {
             "use host::f(Word) -> Word\nfn main() -> Word { host::f(1) }",
             Unsupported,
         ),
-        // `external` has no keyword in the self-hosted lexer.
+        // `use external`, refused in slice 2, is lowered since slice 3e.
         (
             "use external host::f\nfn main() -> Word { host::f(1) }",
-            Unsupported,
+            Identical,
         ),
         // A call of an undeclared native is the reference's to reject.
         (
@@ -680,6 +680,56 @@ fn for_over_a_static_array_compiles() {
         ),
         (
             "fn main() -> Word { let xs: [Byte; 2] = [1 as Byte, 2 as Byte]; for x in xs { let y = x; } 0 }",
+            Identical,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Slice 3e of Order 6, the function and import modifiers. `signed` on the entry sets the
+/// module's requires-signature flag, `pure` and `ephemeral` change nothing the reference
+/// emits for a program it accepts, and `use external` lowers its calls to
+/// CallExternalNative. The reference keeps every rejection these modifiers carry.
+#[test]
+fn modifiers_compile_or_are_left_to_the_reference() {
+    let cases: &[(&str, Class)] = &[
+        ("signed fn main() -> Word { 21 + 21 }", Identical),
+        (
+            "fn helper() -> Word { 1 }\nsigned fn main() -> Word { helper() }",
+            Identical,
+        ),
+        (
+            "signed loop main(r: Word) -> Word { let _ = yield 1; 0 }",
+            Identical,
+        ),
+        (
+            "signed fn helper() -> Word { 1 }\nfn main() -> Word { helper() }",
+            RefRejects,
+        ),
+        (
+            "pure fn sq(x: Word) -> Word { x * x }\nfn main() -> Word { sq(3) }",
+            Identical,
+        ),
+        ("ephemeral fn main() -> Word { 7 }", Identical),
+        (
+            "private data d { n: Word }\nephemeral fn main() -> Word { d.n = d.n + 1; d.n }",
+            RefRejects,
+        ),
+        (
+            "fn helper() -> Word { 1 }\nephemeral signed fn main() -> Word { helper() }",
+            Identical,
+        ),
+        (
+            "use host::g\nuse external host::f\nfn main() -> Word { host::f(1) + host::g(2) }",
             Identical,
         ),
     ];

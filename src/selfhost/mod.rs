@@ -196,6 +196,8 @@ pub struct ParsedFn {
     /// the literal's test as this head's guard, and codegen lowers such a head without a
     /// parameter copy, as the reference does.
     literal_head: bool,
+    /// Whether the `signed` modifier preceded this head.
+    signed: bool,
     /// Each `let` binding's `(frame slot, interned name id)`, in fold order.
     ///
     /// **Kept OUT of `body`.** The record stream `body` holds is what
@@ -488,6 +490,8 @@ fn decode_op(w: i64) -> Op {
         66 => Op::BoundsCheck(operand as u16),
         // A native call with the error-reify flag already set in the count.
         67 => Op::CallVerifiedNative((operand % 65536) as u16, (operand / 65536) as u8),
+        // The same transport for a `use external` native.
+        68 => Op::CallExternalNative((operand % 65536) as u16, (operand / 65536) as u8),
         // A flat struct construction: the operand packs count + byte_size*65536.
         46 => Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Struct,
@@ -1912,6 +1916,8 @@ fn try_parse_functions_impl(
     // One row per `use`, its path segments as name ids from the UPATH records, in
     // declaration order. The stage refuses a wildcard, so every row names one native.
     let mut native_paths: Vec<Vec<i64>> = Vec::new();
+    // Set by a `signed` record and taken by the next head.
+    let mut signed_next = false;
     let mut data_bases = alloc::sync::Arc::new(Vec::new());
     // Every enum's header records (ENUMSTART, then EVARIANT/EDISC per variant, then END),
     // for the driver's own enum-layout assembly.
@@ -2287,6 +2293,7 @@ fn try_parse_functions_impl(
                             body: Vec::new(),
                             param_names: Vec::new(),
                             literal_head: false,
+                            signed: core::mem::take(&mut signed_next),
                             let_names: Vec::new(),
                             let_annotations: Vec::new(),
                             annotation_records: alloc::collections::BTreeMap::new(),
@@ -2391,6 +2398,8 @@ fn try_parse_functions_impl(
                         in_use = true;
                         native_paths.push(Vec::new());
                     }
+                    // `signed` precedes the next head.
+                    131 => signed_next = true,
                     12 => {
                         in_enum = true;
                         enum_records.push((12, val));
@@ -6599,6 +6608,17 @@ fn self_host_module_bookkeeping(module: &mut Module, fns: &[ParsedFn], names: &[
     } else {
         text_flow::ephemeral_flag(module, text_flags).expect("Keleusma text-boundary analysis")
     };
+    // `signed` on the entry sets the requires-signature flag, as the reference sets it. On
+    // any other head the reference rejects the program, and this path refuses it.
+    for f in fns {
+        if f.signed {
+            assert!(
+                names[f.name as usize] == "main",
+                "`signed` on a function other than `main` is outside the self-hosted subset"
+            );
+            module.flags |= crate::wire_format::FLAG_REQUIRES_SIGNATURE;
+        }
+    }
 }
 
 /// The shared segment's flat byte total, derived from the assembled shared-slot layout the
@@ -6699,17 +6719,10 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
     // The native names come from the `use` declarations, in declaration order, each its
     // segments joined by `::` as the reference joins them. The stage refuses a wildcard and
     // a signature, so every native's declared return is absent, which the reference records
-    // as `Top`. An `external` import is outside this path: the stage's lexer has no
-    // `external` keyword, so the word would arrive as a path segment and name a different
-    // native.
+    // as `Top`. The `external` modifier is a keyword, not a segment, so it is absent here.
     let native_names: Vec<String> = native_paths
         .iter()
         .map(|path| {
-            assert!(
-                path.first()
-                    .is_none_or(|&first| names[first as usize] != "external"),
-                "an `external` native import is outside the self-hosted subset"
-            );
             path.iter()
                 .map(|&id| names[id as usize].as_str())
                 .collect::<Vec<_>>()
@@ -9458,7 +9471,7 @@ mod decoder_drift_guard {
     /// defect could hide from the byte-identity oracle.
     #[test]
     fn all_wire_op_tags_decode() {
-        for tag in 1..=67i64 {
+        for tag in 1..=68i64 {
             // operand 0 is the minimal representative word for each tag; decode must not panic.
             let _ = decode_op(tag);
         }

@@ -896,6 +896,7 @@ fn decode_op(w: i64) -> Op {
         65 => Op::CheckedMod,
         66 => Op::BoundsCheck(operand as u16),
         67 => Op::CallVerifiedNative((operand % 65536) as u16, (operand / 65536) as u8),
+        68 => Op::CallExternalNative((operand % 65536) as u16, (operand / 65536) as u8),
         // A flat struct construction: the operand packs count + byte_size*65536.
         46 => Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Struct,
@@ -4196,6 +4197,8 @@ fn parse_functions(src: &str) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, V
                 // This scaffold refuses it rather than compile the head without its test,
                 // which is the miscompile Order 6 slice 1 closed in the driver.
                 130 => panic!("a literal parameter head is lowered only by the shipping driver"),
+                // `signed` sets a module flag only the shipping driver assembles.
+                131 => panic!("a `signed` head is lowered only by the shipping driver"),
                 6 => cur.as_mut().unwrap().param_types.push(val),
                 7 => cur.as_mut().unwrap().return_type = val,
                 // This historical scaffold keeps only scalar signature names.
@@ -9236,10 +9239,11 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             // Re-measured 2026-10-25 after Order 6 slice 3 moved the main loop into
             // `lex_raw` and added the destructuring filter: 1650 and 403 became 1953
             // and 377, since the old loop body no longer sits in `main`'s group. The
-            // pipe token's compound code took it to 1968, and the shebang skip to 1991.
+            // pipe token's compound code took it to 1968, the shebang skip to 1991, and
+            // the `signed`, `pure`, `ephemeral` and `external` keywords to 2168.
             "lexer",
             include_str!("../src/selfhost/kel/lexer.kel"),
-            1991,
+            2168,
             377,
         ),
         (
@@ -9806,12 +9810,16 @@ fn the_residue_named_here_matches_the_census_file() {
              The residue has changed, so the operation list in the test above is stale."
         );
     }
-    // The sixth tag is `callnative`, which no census program reaches because none imports
-    // a native. It is not an arithmetic witness, so it is named here rather than above.
-    assert!(line.contains("callnative"), "{line}");
+    // The sixth and seventh tags are `callnative` and `callext`, which no census program
+    // reaches because none imports a native. They are not arithmetic witnesses, so they
+    // are named here rather than above.
+    assert!(
+        line.contains("callnative") && line.contains("callext"),
+        "{line}"
+    );
     assert_eq!(
         line.matches('"').count(),
-        12,
+        14,
         "the census residue is no longer exactly the five arithmetic tags and `callnative`: \
          {line}. Byte arithmetic is exercised by the boundary corpus; legacy division has \
          direct instruction fixtures."

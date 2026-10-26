@@ -1497,6 +1497,8 @@ private data call {
     nat_seg: Word,
     // Set by a `::` inside a `use`, so only a segment that follows one continues the path.
     nat_cc: Word,
+    // 1 for a `use external` row, whose calls lower to CallExternalNative.
+    nat_ext: [Word; 65],
     // The array-literal context stack, parallel to the call stack: `al_count` the running
     // element count per open `[...]` literal, `al_sp` the nesting depth. Its `,` drains through
     // the same `step_cdraining` (generalised to the ArrayMark), its `]` emits the ArrayLit.
@@ -4874,7 +4876,9 @@ fn step_closing() -> Word {
                 stmt.pending_ctuple = 0; stmt.pending_cstruct = 0; stmt.pending_carray = 0;
                 stmt.pending_carray_struct = 0; stmt.pending_carray_size = 0; stmt.pending_cenum = 0;
                 ps.last_enum = 0;
-                ps.emit_arg = call.call_chunk[call.call_sp] - 1024 + call.call_count[call.call_sp] * call_chunk_radix();
+                let row = call.call_chunk[call.call_sp] - 1024;
+                ps.emit_arg = row + call.call_count[call.call_sp] * call_chunk_radix()
+                    + call.nat_ext[row] * 1048576;
                 80
             } else {
             // A call is the value's root: set the pending composite type to the callee's struct,
@@ -7603,11 +7607,23 @@ fn header_step(k: Word, v: Word) -> Word {
             ps.mode = 21;
             20
         } else {
-        if k == 19 {
+        if k == 19 orelse k == 69 orelse k == 70 orelse k == 71 {
+            // `pure`, Tok 70, and `ephemeral`, Tok 71, change nothing the reference emits for
+            // a program it accepts: it discards `pure` while parsing, and `ephemeral` only
+            // makes it reject an entry it cannot prove ephemeral. Both are consumed here,
+            // and the reference keeps the rejection.
+            if k == 70 orelse k == 71 { 0 } else {
+            if k == 69 {
+                // `signed`, Tok 69, a reserved word that modifies the head after it. The
+                // reference admits it only on `main` and then sets the module's
+                // requires-signature flag. Record 131 tells the host which head it marks.
+                ps.emit_arg = 0;
+                131
+            } else {
             // `use`: a native import declaration. Emit USTART and scan the path.
             ps.mode = 8;
             ps.has_imports = 1;
-            10
+            10 } }
         } else {
         if k == 1 andalso v == toks.require_id {
             // A `require` machine-property directive (`require word >= N;`), a lowercase
@@ -7733,6 +7749,9 @@ fn header_skip_block(k: Word, v: Word) -> Word {
 // tell `use host::*` from `use host`, and a skipped signature would take its tokens into
 // the next declaration.
 fn header_use(k: Word, v: Word) -> Word {
+    // `use external path`, Tok 72 before the first segment, marks the row external.
+    if k == 72 andalso call.nat_seg == 0 andalso call.nat_count < 64 { call.nat_ext[call.nat_count] = 1; }
+    if k == 72 andalso call.nat_seg == 0 { 0 } else {
     // A segment continues the path only as the first segment or after a `::`. Any other
     // identifier begins the next declaration. Two consecutive identifiers used to join,
     // so `use host::open` followed by `require word >= 64;` read as the path
@@ -7756,7 +7775,7 @@ fn header_use(k: Word, v: Word) -> Word {
         ps.cursor = ps.cursor - 1;
         ps.mode = 0;
         5
-    } } }
+    } } } }
 }
 
 // Close one native import row. Sixty-four rows fill the table, and a sixty-fifth `use` is
@@ -7766,6 +7785,7 @@ fn native_import_end() -> Word {
     if call.nat_count >= 64 { perr(pe_unresolved_syntax(), call.nat_count) } else {
         if call.nat_seg != 2 { call.nat_path[call.nat_count * 2] = 0 - 1; }
         call.nat_count = call.nat_count + 1;
+        call.nat_ext[call.nat_count] = 0;
         call.nat_seg = 0;
         0
     }
