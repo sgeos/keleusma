@@ -90,7 +90,13 @@ refusing, are cleared.
 The pipe operator and single literal parameter heads compile byte-identically, and the
 corpus reads 52 of 75 identical.
 
+## Slices 3d, 3e and 4
+
+The array `for`, the `signed`, `pure`, `ephemeral` and `external` modifiers, and trait
+impls with method calls compile byte-identically. The corpus reads 57 of 75 identical.
+
 ## Next
 
-`for` over a non-range iterable, `use` signatures, refinement and newtypes, methods and
-`signed`, then the construct corpus for the types the repository's sources do not use.
+`use` signatures, newtypes and refinement, struct-typed data fields, and then the
+construct corpus for the types the repository's sources do not use: floats, fixed-point,
+text operations, generics and the remaining patterns.

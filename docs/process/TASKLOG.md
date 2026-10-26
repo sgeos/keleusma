@@ -6,6 +6,12 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-25 Order 6 slices 3d, 3e and 4
+
+The array `for`, the function and import modifiers, and trait impls with method calls
+compile byte-identically. The corpus reads 57 of 75 identical. A stale wire capacity
+from the name-cap doubling is fixed.
+
 ## 2026-10-25 Order 6 slice 3c, use paths, shebangs and the operator sink
 
 Three more dropped tokens are refused or handled. The Order 5 framing program now

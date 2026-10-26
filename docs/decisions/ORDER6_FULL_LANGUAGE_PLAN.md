@@ -226,3 +226,27 @@ bounds, and `let x = tmp[ctr]` as the body's first statement, queued through the
 queue. The build record marks the array form, and codegen then initialises the end before
 the counter. `04_for_in.kel` and `13_telemetry_stream.kel` became Identical, and the
 corpus reads 55 of 75.
+
+**Slice 3e, 2026-10-25, the function and import modifiers.** The self-hosted lexer reads
+the reserved words `signed`, `pure`, `ephemeral` and `external` as keywords. `signed`
+before the entry sets the module's requires-signature flag, as the reference does, and on
+any other head the reference's rejection stands. `pure` and `ephemeral` change nothing the
+reference emits for a program it accepts, so the parser consumes them and the reference
+keeps their rejections. `use external` marks its import row, and its calls lower to
+CallExternalNative through a new transport tag, 68, for that existing instruction.
+`11_signed.kel` became Identical.
+
+**Slice 4, 2026-10-25, trait impls and method calls.** The reference compiles each method
+of `impl Trait for Head` as the chunk `Trait::Head::m`, sorted among the plain chunks, and
+resolves `recv.m(args)` to the first such chunk for the receiver's type head, passing the
+receiver first. The host's first pass now composes those names and seeds a method table
+into the parser's token block, the parser reads the impl header and parses each method as
+a function, and a method call on a scalar or struct receiver resolves through the table
+and opens like a pipe. A default trait method body, which the skip machine used to drop,
+and an inherent or generic impl are refused. The host names every head by its chunk name,
+so the type stage declares and calls methods consistently. `08_method_dispatch.kel`
+became Identical, and the corpus reads 57 of 75.
+
+**A defect in the name-cap doubling.** `nout_capacity` stayed at 2048 when `nout` doubled,
+so `wire.kel` refused any module past 1,024 names. No module reached that until slice 4
+took `parse.kel` to 1,029 names, and it is now 4096.
