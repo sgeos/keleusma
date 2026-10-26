@@ -99,7 +99,11 @@ fn out_of_subset_program_is_rejected_loudly() {
 /// hardening: the message points at the offending function.
 #[test]
 fn divergence_detail_names_the_diverging_chunk() {
-    let src = "fn main() -> Float { 1.0 + 2.0 }";
+    // Float arithmetic on parameters, which diverges. The float LITERAL this test used
+    // until Order 6 slice 3c lexed as `1`, `.`, `0`, and the parser dropped the `.`, so
+    // it diverged only by accident. It is now refused before the compare, naming the
+    // literal, and so no longer witnesses a divergence.
+    let src = "fn main(a: Float, b: Float) -> Float { a + b }";
     match self_hosted_compile(src, &Target::host()) {
         Err(SelfHostError::Unsupported { detail }) => {
             assert!(

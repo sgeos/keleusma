@@ -116,7 +116,7 @@ const CORPUS: &[(&str, Class)] = &[
     ("compiler/kel/prelude.kel", Identical),
     ("keleusma-cli/examples/hello.kel", Identical),
     ("scripts/check-md-links.kel", Unsupported),
-    ("src/crypto_frame/frame.kel", Unsupported),
+    ("src/crypto_frame/frame.kel", Identical),
     ("src/hosted/interp.kel", Identical),
     ("src/selfhost/kel/analyze.kel", Identical),
     ("src/selfhost/kel/codegen.kel", Identical),
@@ -604,6 +604,43 @@ fn the_pipe_and_literal_heads_compile_or_are_refused() {
         (
             "fn c(0) -> Word when true { 0 }\nfn c(n: Word) -> Word { n }\nfn main() -> Word { c(3) }",
             Unsupported,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Three more skipped tokens, found while widening toward the Order 5 framing program. A
+/// `use` path joined any two consecutive identifiers, so `use host::open` followed by
+/// `require word >= 64;` became one path. A leading shebang line was lexed as source. And
+/// the operator dispatch's last arm returned without a record for any token it did not
+/// recognise, which dropped a `.` after an untyped value.
+#[test]
+fn use_paths_need_separators_shebangs_are_skipped_and_unclaimed_tokens_are_refused() {
+    let cases: &[(&str, Class)] = &[
+        (
+            "use host::f\nrequire word >= 64;\nfn main() -> Word { host::f(1) }",
+            Identical,
+        ),
+        (
+            "#!/usr/bin/env keleusma\nfn main() -> Word { 7 }",
+            Identical,
+        ),
+        (
+            "use host::f\nfn main() -> Word { let (a, b) = host::f(); a }",
+            Unsupported,
+        ),
+        (
+            "use host::f\nfn main() -> Word { let t = host::f(); t.0 }",
+            RefRejects,
         ),
     ];
     let mut mismatches = Vec::new();

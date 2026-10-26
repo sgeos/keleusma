@@ -675,7 +675,14 @@ fn dq_filter(t: Word) -> Word {
 }
 
 fn next_token() -> Word {
-    if dq.len > 0 { dq_take() } else { dq_filter(lex_raw()) }
+    if dq.len > 0 { dq_take() } else {
+    // A shebang line at the very start of the source is skipped, as the reference lexer
+    // skips it, by entering the line-comment state past the `#!`.
+    if st.cursor == 0 andalso st.kind == 0 andalso peek_at(0) == 35 andalso peek_at(1) == 33 {
+        st.kind = 5;
+        st.cursor = 2;
+        63
+    } else { dq_filter(lex_raw()) } }
 }
 
 loop main(resume: Word) -> Word {

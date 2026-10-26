@@ -9236,10 +9236,10 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             // Re-measured 2026-10-25 after Order 6 slice 3 moved the main loop into
             // `lex_raw` and added the destructuring filter: 1650 and 403 became 1953
             // and 377, since the old loop body no longer sits in `main`'s group. The
-            // pipe token's compound code took it to 1968.
+            // pipe token's compound code took it to 1968, and the shebang skip to 1991.
             "lexer",
             include_str!("../src/selfhost/kel/lexer.kel"),
-            1968,
+            1991,
             377,
         ),
         (
