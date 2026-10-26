@@ -1509,6 +1509,11 @@ private data call {
     nat_cc: Word,
     // 1 for a `use external` row, whose calls lower to CallExternalNative.
     nat_ext: [Word; 65],
+    // A `use` signature, `use path(T, ..) -> R`: 1 inside the parameter list, whose
+    // bracket depth is `nat_sdepth`, 2 awaiting `->`, 3 awaiting the return type, 4 inside
+    // a `()` return.
+    nat_sig: Word,
+    nat_sdepth: Word,
     // The array-literal context stack, parallel to the call stack: `al_count` the running
     // element count per open `[...]` literal, `al_sp` the nesting depth. Its `,` drains through
     // the same `step_cdraining` (generalised to the ArrayMark), its `]` emits the ArrayLit.
@@ -7820,6 +7825,7 @@ fn header_impl(k: Word, v: Word) -> Word {
 // tell `use host::*` from `use host`, and a skipped signature would take its tokens into
 // the next declaration.
 fn header_use(k: Word, v: Word) -> Word {
+    if call.nat_sig > 0 { use_signature(k, v) } else {
     // `use external path`, Tok 72 before the first segment, marks the row external.
     if k == 72 andalso call.nat_seg == 0 andalso call.nat_count < 64 { call.nat_ext[call.nat_count] = 1; }
     if k == 72 andalso call.nat_seg == 0 { 0 } else {
@@ -7839,14 +7845,59 @@ fn header_use(k: Word, v: Word) -> Word {
         call.nat_cc = 1;
         0
     } else {
-    if k == Tok::Star() as Word orelse k == Tok::LParen() as Word {
+    if k == Tok::Star() as Word {
         perr(pe_unresolved_syntax(), toks.at)
+    } else {
+    if k == Tok::LParen() as Word {
+        // A signature. Its parameter types change nothing the call lowers to, and the
+        // reference checks them, so they are skipped. Its return type fixes the native's
+        // return shape.
+        call.nat_sig = 1;
+        call.nat_sdepth = 1;
+        0
     } else {
         native_import_end();
         ps.cursor = ps.cursor - 1;
         ps.mode = 0;
         5
-    } } } }
+    } } } } } }
+}
+
+// A `use` signature after its `(`. Record 133 carries a named return type's name id and
+// record 134 a `()` return. Either queues the END that closes the import, since the
+// signature's last token ends it. A tuple or other composite return is refused.
+fn use_signature(k: Word, v: Word) -> Word {
+    if call.nat_sig == 1 {
+        if k == Tok::LParen() as Word { call.nat_sdepth = call.nat_sdepth + 1; }
+        if k == Tok::RParen() as Word {
+            call.nat_sdepth = call.nat_sdepth - 1;
+            if call.nat_sdepth == 0 { call.nat_sig = 2; }
+        }
+        0
+    } else {
+    if call.nat_sig == 2 {
+        if k == 4 { call.nat_sig = 3; 0 } else { perr(pe_unresolved_syntax(), toks.at) }
+    } else {
+    if call.nat_sig == 3 {
+        if k == Tok::Ident() as Word {
+            call.nat_sig = 0;
+            native_import_end();
+            ps.mode = 0;
+            hq_push(5, 0 - 1);
+            ps.emit_arg = v;
+            133
+        } else {
+        if k == Tok::LParen() as Word { call.nat_sig = 4; 0 } else { perr(pe_unresolved_syntax(), toks.at) } }
+    } else {
+        if k == Tok::RParen() as Word {
+            call.nat_sig = 0;
+            native_import_end();
+            ps.mode = 0;
+            hq_push(5, 0 - 1);
+            ps.emit_arg = 0;
+            134
+        } else { perr(pe_unresolved_syntax(), toks.at) }
+    } } }
 }
 
 // Close one native import row. Sixty-four rows fill the table, and a sixty-fifth `use` is

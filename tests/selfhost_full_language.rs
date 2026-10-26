@@ -443,10 +443,10 @@ fn native_imports_and_qualified_calls_compile_or_are_refused() {
         ),
         // A single-segment import is called unqualified, which this path does not resolve.
         ("use f\nfn main() -> Word { f(1) }", Unsupported),
-        // A signature is slice 2b.
+        // A signature, refused in slice 2, is read since slice 2b.
         (
             "use host::f(Word) -> Word\nfn main() -> Word { host::f(1) }",
-            Unsupported,
+            Identical,
         ),
         // `use external`, refused in slice 2, is lowered since slice 3e.
         (
@@ -768,6 +768,50 @@ fn trait_impls_and_method_calls_compile() {
         (
             "trait A { fn f(x: Word) -> Word; }\nimpl A for Word { fn f(x: Word) -> Word { x } }\nfn main() -> Word { 3 }",
             Identical,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Slice 2b of Order 6, `use` signatures. A signature's parameter types change nothing the
+/// call lowers to, and the reference checks them. Its return type fixes the native's return
+/// shape, `Scalar` for `Word`, `Byte`, `bool` and `()`, as the reference records it. A
+/// tuple or other composite return is refused.
+#[test]
+fn use_signatures_set_scalar_return_shapes() {
+    let cases: &[(&str, Class)] = &[
+        (
+            "use host::f(Word) -> Word\nfn main() -> Word { host::f(1) }",
+            Identical,
+        ),
+        (
+            "use host::g() -> ()\nfn main() -> Word { host::g(); 1 }",
+            Identical,
+        ),
+        (
+            "use host::b(Word) -> bool\nfn main() -> bool { host::b(1) }",
+            Identical,
+        ),
+        (
+            "use host::y(Byte) -> Byte\nfn main() -> Byte { host::y(1 as Byte) }",
+            Identical,
+        ),
+        (
+            "use host::f(Word, Word) -> Word\nuse host::g\nfn main() -> Word { host::f(1, 2) + host::g(3) }",
+            Identical,
+        ),
+        (
+            "use host::t(Word) -> (Word, Word)\nfn main() -> Word { let (a, b) = host::t(1); a }",
+            Unsupported,
         ),
     ];
     let mut mismatches = Vec::new();

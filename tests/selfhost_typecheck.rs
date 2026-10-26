@@ -7377,7 +7377,8 @@ fn pipeline_unsupported_syntax_is_not_source_rejection() {
         "fn main(a: Word) -> Word { assert a > 0; a }",
         "fn main() -> Word { assert not false; 1 }",
         "fn main() -> Word { assert 1 == 1; 1 }",
-        "use host::number() -> Word fn main() -> Word { host::number() }",
+        // `use host::number() -> Word` left this list in Order 6 slice 2b, when use
+        // signatures with a scalar return began to compile.
     ] {
         assert!(reference_accepts(source), "positive control {source}");
         let error = try_call_type_inputs_from_pipeline(source).expect_err(source);

@@ -12988,9 +12988,10 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // array `for`, `for_arr` and `for_array_open`, 1019 and 30,648, and the external
     // import flag `nat_ext` 1020 and 30,722. Slice 4's impls and methods added nine,
     // `impl_trait`, `impl_head`, `in_impl`, the four `mt` table names, `header_impl` and
-    // `method_call`, for 1029 and 31,007.
-    assert_eq!(worst_names, 1029, "the worst-case name count moved");
-    assert_eq!(worst_blob, 31007, "the worst-case blob size moved");
+    // `method_call`, for 1029 and 31,007. Slice 2b's `use` signatures added `nat_sig`,
+    // `nat_sdepth` and `use_signature`, for 1032 and 31,153.
+    assert_eq!(worst_names, 1032, "the worst-case name count moved");
+    assert_eq!(worst_blob, 31153, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

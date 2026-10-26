@@ -2365,11 +2365,17 @@ fn try_parse_functions_impl(
                     struct_records.push((code, val));
                 }
             } else if in_use {
-                if code == 11 {
-                    native_paths
-                        .last_mut()
-                        .expect("a path record outside a `use`")
-                        .push(val);
+                // Path segments are name ids, so never negative. A signature's return type
+                // rides after them as one negative entry: -2 for `()`, `-(id + 3)` for a
+                // named type. Record 133 carries a named return and 134 a `()` return.
+                let row = native_paths
+                    .last_mut()
+                    .expect("a path record outside a `use`");
+                match code {
+                    11 => row.push(val),
+                    133 => row.push(-(val + 3)),
+                    134 => row.push(-2),
+                    _ => {}
                 }
                 in_use = code != 5;
             } else if in_skip_decl {
@@ -6822,20 +6828,39 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
     let entry_point = chunks.iter().position(|c| c.name == "main");
 
     // The native names come from the `use` declarations, in declaration order, each its
-    // segments joined by `::` as the reference joins them. The stage refuses a wildcard and
-    // a signature, so every native's declared return is absent, which the reference records
-    // as `Top`. The `external` modifier is a keyword, not a segment, so it is absent here.
+    // segments joined by `::` as the reference joins them. The `external` modifier is a
+    // keyword, not a segment, so it is absent here. A native without a signature returns
+    // `Top`, as in the reference. A signature's return, the row's negative last entry,
+    // maps to the reference's shape for a scalar or `()`; any other named return is outside
+    // this path.
     let native_names: Vec<String> = native_paths
         .iter()
         .map(|path| {
             path.iter()
+                .filter(|&&id| id >= 0)
                 .map(|&id| names[id as usize].as_str())
                 .collect::<Vec<_>>()
                 .join("::")
         })
         .collect();
-    let native_return_shapes: Vec<crate::bytecode::WireShape> =
-        vec![crate::bytecode::WireShape::Top; native_names.len()];
+    let native_return_shapes: Vec<crate::bytecode::WireShape> = native_paths
+        .iter()
+        .map(|path| {
+            use crate::bytecode::WireShape;
+            match path.last().copied() {
+                Some(-2) => WireShape::Scalar { kind: 0 },
+                Some(code) if code < -2 => match names[(-code - 3) as usize].as_str() {
+                    "bool" => WireShape::Scalar { kind: 1 },
+                    "Byte" => WireShape::Scalar { kind: 2 },
+                    "Word" => WireShape::Scalar { kind: 3 },
+                    other => {
+                        panic!("a native returning `{other}` is outside the self-hosted subset")
+                    }
+                },
+                _ => WireShape::Top,
+            }
+        })
+        .collect();
 
     // The data layout, assembled from parse.kel's data-block records, drives both the shared
     // and private byte totals the reference derives from the same layout.
