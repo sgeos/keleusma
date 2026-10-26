@@ -1,5 +1,10 @@
 //! What the self-hosted codegen's TYPELESS opcode mapping diverges on.
 //!
+//! **Updated in Order 6 slices 5 and 5c.** `Float` operands now carry scalar kind five from
+//! the parser, and codegen selects the plain `Add`, `Sub`, `Mul` and `Neg` for them, so the
+//! `Float` row agrees throughout. The matrix and the account below are the measurement from
+//! before that change, kept for the `Fixed` and `Byte` rows, which are unchanged.
+//!
 //! `codegen.kel` selects the op word from the operator code ALONE. Its comment
 //! above `push_binop` states the rule: `Add` to `CheckedAdd`, `Sub` to
 //! `CheckedSub`, `Mul` to `CheckedMul`, while `Div` and `Mod` map to their plain
@@ -22,7 +27,7 @@
 //! |---|---|---|---|---|---|---|---|---|---|
 //! | `Word`  | ok | ok | ok | ok | ok | ok | ok | ok | ok |
 //! | `Byte`  | ok | ok | ok | ok | ok | **chk** | ok | ok | ok |
-//! | `Float` | **chk** | **chk** | **chk** | ok | ok | **chk** | ok | n/a | n/a |
+//! | `Float` | ok | ok | ok | ok | ok | ok | ok | n/a | n/a |
 //! | `Fixed<16>` | **chk** | **chk** | **`FixedMul`** | **`FixedDiv`** | ok | **chk** | ok | n/a | n/a |
 //!
 //! `chk` is the checked-versus-plain difference; the named ops are the
@@ -102,58 +107,29 @@ fn binop(op: &str, ty: &str, ret: &str) -> String {
     )
 }
 
-/// **THE FLOAT OPERATOR BOUNDARY, MEASURED PER OPERATOR.**
+/// **FLOAT ARITHMETIC AGREES ON EVERY OPERATOR SINCE ORDER 6 SLICE 5.**
 ///
-/// Three arithmetic operators diverge and division does not. Asserting the
-/// accepted half matters as much as the refused half: a change that pushed all
-/// float use out of the subset would leave a refusal-only test passing while
-/// every sentence written from it became wrong.
+/// The parser now types two Float operands as scalar kind five and codegen selects the
+/// plain `Add`, `Sub` and `Mul` the reference emits, so the three operators that diverged
+/// before agree, beside division, remainder, comparison and a float-typed signature, which
+/// always did. A return to the checked forms would fail here, by name.
 #[test]
-fn float_add_sub_mul_diverge_and_divide_does_not() {
-    // Diverging, with the checked-versus-plain opcode named in the message.
-    for (op, checked) in [
-        ("+", "CheckedAdd"),
-        ("-", "CheckedSub"),
-        ("*", "CheckedMul"),
-    ] {
-        let err = attempt(&binop(op, "Float", "Float")).expect_err(&format!(
-            "float `{op}` now compiles through the self-hosted backend. If the codegen was \
-             brought into line with the reference, this is a FIX and the operator belongs \
-             in the accepted list below"
-        ));
+fn float_arithmetic_agrees_on_every_operator() {
+    for op in ["+", "-", "*", "/", "%"] {
+        let outcome = attempt(&binop(op, "Float", "Float"));
         assert!(
-            err.contains("diverges"),
-            "float `{op}` no longer fails as a divergence, so it is being refused somewhere \
-             earlier and this test no longer measures the codegen. Message was: {err}"
-        );
-        assert!(
-            err.contains(checked),
-            "float `{op}` diverges without naming `{checked}`. The characterisation in this \
-             file rests on the self-hosted side emitting the CHECKED opcode; if the opcode \
-             changed, the file's account of the cause is stale. Message was: {err}"
+            outcome.is_ok(),
+            "float `{op}` no longer compiles byte-identically, so the slice 5 lowering \
+             regressed: {outcome:?}"
         );
     }
-
-    // Accepted: division, comparison, and a float-typed signature doing neither.
-    assert!(
-        attempt(&binop("/", "Float", "Float")).is_ok(),
-        "float division now fails too, so the divergence is broader than the three \
-         operators this file names"
-    );
-    assert!(
-        attempt(&binop("%", "Float", "Float")).is_ok(),
-        "float `%` now fails. The first matrix left this cell blank without running it; it \
-         is admitted and agreed, and a change here widens the divergence"
-    );
     assert!(
         attempt(&binop("<", "Float", "bool")).is_ok(),
         "float comparison now fails, so the divergence is not confined to arithmetic"
     );
     assert!(
         attempt("fn f(a: Float) -> Float { a }\nfn main(x: Float) -> Float { f(x) }").is_ok(),
-        "a float-typed signature that performs no arithmetic no longer compiles, so floats \
-         are now wholly outside the subset and every sentence describing the boundary as \
-         operator-specific needs rewriting"
+        "a float-typed signature that performs no arithmetic no longer compiles"
     );
 }
 
@@ -174,23 +150,15 @@ fn the_same_operators_on_word_do_not_diverge() {
     }
 }
 
-/// A float LITERAL fails earlier than the cross-check, and is named.
-///
-/// This is the half the construct scan covers. It is here so the three float
-/// outcomes — named refusal, divergence, and acceptance — sit in one file.
+/// A float LITERAL compiles byte-identically since Order 6 slice 5b, which lexes it and
+/// interns it as a Float pool constant. It used to be refused in a stage and named by the
+/// construct scan, whose float arm left with this change.
 #[test]
-fn a_float_literal_is_refused_before_the_cross_check_and_is_named() {
-    let err = attempt("fn main() -> Float { 1.5 + 2.5 }")
-        .expect_err("a float literal now compiles through the self-hosted backend");
+fn a_float_literal_compiles_since_order6_slice5b() {
+    let outcome = attempt("fn main() -> Float { 1.5 + 2.5 }");
     assert!(
-        err.contains("a floating-point literal"),
-        "the refusal no longer names the literal. Message was: {err}"
-    );
-    assert!(
-        !err.contains("diverges"),
-        "a float literal now reaches the cross-check. It used to fail earlier, in a stage, \
-         which is why the construct scan names it rather than the divergence message. \
-         Message was: {err}"
+        outcome.is_ok(),
+        "a float literal no longer compiles byte-identically: {outcome:?}"
     );
 }
 
@@ -251,7 +219,7 @@ fn fixed_point_diverges_on_both_the_checked_and_the_scale_aware_ops() {
 /// type the reference treats unchecked would diverge — which is why the claim is
 /// not simply "every non-`Word` type". But its unary negation DOES diverge, so the
 /// claim is not "`Byte` agrees" either. That second half is asserted in
-/// `unary_negation_diverges_on_every_non_word_operand`; this test covers the
+/// `unary_negation_diverges_on_fixed_and_byte_operands`; this test covers the
 /// binary operators and `%` and comparison, all of which the first matrix left
 /// blank without running them.
 #[test]
@@ -274,9 +242,10 @@ fn byte_agrees_on_every_binary_operator() {
     );
 }
 
-/// **UNARY NEGATION DIVERGES FOR EVERY NON-`Word` OPERAND, `Byte` INCLUDED.**
+/// **UNARY NEGATION DIVERGES ON `Fixed` AND `Byte`, AND AGREES ON `Word` AND `Float`.**
 ///
-/// `CheckedNeg` against the reference's plain `Neg`. `Byte` is in this list and
+/// `CheckedNeg` against the reference's plain `Neg`. `Float` left the diverging list in
+/// Order 6 slice 5c, which emits `Neg` for a Float operand. `Byte` is in this list and
 /// was missing from the first version, where the matrix left its unary cell blank
 /// on the assumption that the language did not admit it. It does, and it diverges.
 ///
@@ -289,8 +258,8 @@ fn byte_agrees_on_every_binary_operator() {
 /// it agree on every row it did run**, which is why the gap survived three
 /// readings of the matrix.
 #[test]
-fn unary_negation_diverges_on_every_non_word_operand() {
-    for ty in ["Float", "Fixed<16>", "Byte"] {
+fn unary_negation_diverges_on_fixed_and_byte_operands() {
+    for ty in ["Fixed<16>", "Byte"] {
         let src = format!("fn f(a: {ty}) -> {ty} {{ -a }}\nfn main(x: {ty}) -> {ty} {{ f(x) }}");
         let err = attempt(&src).expect_err(&format!(
             "unary negation on {ty} now compiles; if the codegen gained operand types this \
@@ -307,6 +276,10 @@ fn unary_negation_diverges_on_every_non_word_operand() {
     assert!(
         attempt("fn f(a: Word) -> Word { -a }\nfn main(x: Word) -> Word { f(x) }").is_ok(),
         "negation on Word now diverges too, so the cause is broader than the header claims"
+    );
+    assert!(
+        attempt("fn f(a: Float) -> Float { -a }\nfn main(x: Float) -> Float { f(x) }").is_ok(),
+        "negation on Float no longer compiles byte-identically, so slice 5c regressed"
     );
 }
 

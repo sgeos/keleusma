@@ -507,6 +507,8 @@ fn decode_op(w: i64) -> Op {
         67 => Op::CallVerifiedNative((operand % 65536) as u16, (operand / 65536) as u8),
         // The same transport for a `use external` native.
         68 => Op::CallExternalNative((operand % 65536) as u16, (operand / 65536) as u8),
+        // The unchecked negation of a Float.
+        69 => Op::Neg,
         // A flat struct construction: the operand packs count + byte_size*65536.
         46 => Op::NewComposite(NewCompositeOperand::Flat {
             kind: CompositeKind::Struct,
@@ -1463,6 +1465,8 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
         (crate::selfhost_host::BR_P_OVERFLOW_ID, "overflow"),
         (crate::selfhost_host::BR_P_UNDERFLOW_ID, "underflow"),
         (crate::selfhost_host::BR_P_ZERO_DIVISOR_ID, "zero_divisor"),
+        (crate::selfhost_host::BR_P_SATMAX_ID, "saturate_max"),
+        (crate::selfhost_host::BR_P_SATMIN_ID, "saturate_min"),
     ] {
         vm.set_shared(&mut shared, slot, Value::Int(id_of(name) + 1))
             .unwrap();
@@ -1884,6 +1888,8 @@ fn try_parse_functions_impl(
         (crate::selfhost_host::BR_P_OVERFLOW_ID, "overflow"),
         (crate::selfhost_host::BR_P_UNDERFLOW_ID, "underflow"),
         (crate::selfhost_host::BR_P_ZERO_DIVISOR_ID, "zero_divisor"),
+        (crate::selfhost_host::BR_P_SATMAX_ID, "saturate_max"),
+        (crate::selfhost_host::BR_P_SATMIN_ID, "saturate_min"),
     ] {
         vm.set_shared(&mut shared, slot, Value::Int(id_of(name) + 1))
             .unwrap();
@@ -2598,6 +2604,16 @@ fn pool_to_constants(pool: &[(i64, i64)], names: &[String]) -> Vec<ConstValue> {
                 ConstValue::StaticStr(unescape_string(raw))
             }
             2 => ConstValue::Bool(v != 0),
+            // A Float literal's interned text, converted as the reference lexer converts it.
+            3 => {
+                let text = names.get(v as usize).unwrap_or_else(|| {
+                    panic!("codegen.kel interned Float id {v}, outside the lexer name table")
+                });
+                ConstValue::Float(
+                    text.parse::<f64>()
+                        .unwrap_or_else(|_| panic!("float literal `{text}` is not an f64")),
+                )
+            }
             other => panic!(
                 "codegen.kel emitted constant-pool tag {other}, which this host does not \
                  know. A new tag needs a `ConstValue` mapping here, not a default"
@@ -9329,7 +9345,7 @@ pub fn wire_windowed_via_kel(
 /// Returns the description and the 1-based source line, choosing the earliest occurrence so
 /// the message is deterministic when a program contains several.
 fn name_unsupported_construct(src: &str) -> Option<(String, u32)> {
-    use crate::ast::{Expr, Literal, Pattern, Stmt};
+    use crate::ast::{Expr, Pattern, Stmt};
     use crate::visitor::Visitor;
 
     // The reference has already accepted this source by the time a refusal is built, so a
@@ -9367,21 +9383,8 @@ fn name_unsupported_construct(src: &str) -> Option<(String, u32)> {
                     self.found
                         .push((span.line, span.start, format!("a qualified call `{name}`")));
                 }
-                // **THE LITERAL, NOT THE TYPE.** Measured 2026-09-12: a float-typed identity
-                // function compiles and matches the reference byte for byte, so `Float` in a
-                // signature is INSIDE the subset. A float literal is not. Naming the type
-                // here would have blamed a supported construct, and the stage-source guard
-                // would not have caught it, since no stage source uses a float type.
-                Expr::Literal {
-                    value: Literal::Float(_),
-                    span,
-                } => {
-                    self.found.push((
-                        span.line,
-                        span.start,
-                        "a floating-point literal".to_string(),
-                    ));
-                }
+                // The float-literal arm left in Order 6 slice 5b, when float literals came to
+                // compile byte-identically, so naming one would blame a supported construct.
                 _ => {}
             }
             self.walk_expr(e);
@@ -9605,7 +9608,7 @@ mod decoder_drift_guard {
     /// defect could hide from the byte-identity oracle.
     #[test]
     fn all_wire_op_tags_decode() {
-        for tag in 1..=68i64 {
+        for tag in 1..=69i64 {
             // operand 0 is the minimal representative word for each tag; decode must not panic.
             let _ = decode_op(tag);
         }
@@ -10016,15 +10019,11 @@ mod construct_naming_guard {
                 "a qualified call",
                 "use audio::tone::midi_to_freq\nfn main() -> Float { audio::tone::midi_to_freq(69) }",
             ),
-            (
-                "a floating-point literal",
-                "fn main() -> Float { 1.5 + 2.5 }",
-            ),
         ];
 
         // Catches a row added or removed without thought. It does NOT see the scan's arms:
         // an arm with no row here passes. See the note above.
-        const EXPECTED_ROWS: usize = 5;
+        const EXPECTED_ROWS: usize = 4;
         assert_eq!(
             NAMED.len(),
             EXPECTED_ROWS,

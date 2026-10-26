@@ -256,6 +256,12 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // Every other test in the same default-feature run passed, including the five
 // censuses this file names, except in absorption 95 the bounds-transfer
 // inversion count, whose cause is recorded where it is pinned.
+//
+// **RE-PINNED 2026-10-26, absorption 97.** Upstream pull request 544, Order 6
+// slices 5 to 5d, changed `codegen.kel`, `lexer.kel`, `parse.kel` and
+// `reconstruct.kel`. Nothing was added or removed. Upstream also adopted this
+// line's typed `use` declaration in `rogue_dungen.kel`, whose digest is
+// unchanged because the two files are now identical.
 const PINNED: &[(&str, u64)] = &[
     // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
     // added or removed. Every census this instrument names to re-derive was run on
@@ -454,12 +460,12 @@ const PINNED: &[(&str, u64)] = &[
         0xf93a5bd822bfe99c,
     ),
     ("src/selfhost/kel/analyze.kel", 0xcdae9770d199e166),
-    ("src/selfhost/kel/codegen.kel", 0x4dd209d39f8a051c),
-    ("src/selfhost/kel/lexer.kel", 0x5b82bd90d71e8850),
+    ("src/selfhost/kel/codegen.kel", 0x8d2644bcc4b74a80),
+    ("src/selfhost/kel/lexer.kel", 0xb42fe447663faa7d),
     // Absorption 83 changes cast Byte tracking and FixedDiv classification.
     // The non-corpus run re-derived coverage and refusal figures unchanged.
-    ("src/selfhost/kel/parse.kel", 0xbde358ffb7263fb9),
-    ("src/selfhost/kel/reconstruct.kel", 0x6af56e6d036b58b3),
+    ("src/selfhost/kel/parse.kel", 0x0536e89772f5b0e3),
+    ("src/selfhost/kel/reconstruct.kel", 0xa3a0cf5106e41e74),
     ("src/selfhost/kel/verify_datalayout.kel", 0xe625b5656d576b86),
     ("src/selfhost/kel/verify_depth.kel", 0x0e54e2467d0b499f),
     ("src/selfhost/kel/verify_structural.kel", 0x950e834358c3f8f1),

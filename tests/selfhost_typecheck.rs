@@ -10536,55 +10536,22 @@ fn alloc_string(e: &keleusma::selfhost::SelfHostError) -> String {
     format!("{e}")
 }
 
-/// **THE FLOAT BOUNDARY IS THE LITERAL, NOT THE TYPE, AND BOTH HALVES ARE PINNED.**
+/// **FLOAT LITERALS AND FLOAT TYPES BOTH COMPILE SINCE ORDER 6 SLICE 5B.**
 ///
-/// "Floats are outside the self-hosted subset" is the loose summary, and acting on it
-/// without measuring would have been a mistake. Measured 2026-09-12: a function taking and
-/// returning `Float` COMPILES, and its output matches the reference byte for byte. A float
-/// LITERAL does not.
-///
-/// # Why both halves are here
-///
-/// The refusal half alone would let the supported half silently regress, and the supported
-/// half alone would let the refusal lose its name. They are also the two directions a future
-/// change could move: widening the subset to admit float literals should fail the first
-/// assertion, and narrowing it to reject the float type should fail the second. **Either
-/// would be a real change in what the compiler accepts, and neither should pass quietly.**
-///
-/// # Why this mattered beyond the message
-///
-/// The construct scan names what it finds on the failure path. Listing the float TYPE there
-/// would have attached a confident and wrong noun to any float-typed program that failed for
-/// an unrelated reason, and the stage-source guard would NOT have caught it, because no
-/// stage source uses a float type. The guard covers constructs the stages happen to use; it
-/// is not a general check that the list is right.
+/// Measured 2026-09-12, a float-typed function compiled and a float literal was refused by
+/// name. Slice 5b lexed float literals and interned them as Float pool constants, so the
+/// refusal half was dropped, as this test's own instruction said, rather than relaxed. Both
+/// halves now assert acceptance, so narrowing either back out of the subset fails here.
 #[cfg(feature = "self-host")]
 #[test]
-fn the_float_boundary_is_the_literal_and_not_the_type() {
+fn the_float_literal_and_the_float_type_both_compile() {
     let target = keleusma::target::Target::host();
-
-    // REFUSED, and the refusal names the literal.
     const WITH_LITERAL: &str = "fn main() -> Float { 1.5 + 2.5 }";
-    let err = keleusma::selfhost::self_hosted_compile(WITH_LITERAL, &target).expect_err(
-        "a float literal now compiles through the self-hosted pipeline. If the subset \
-         genuinely gained float literals, say so and drop this half rather than relaxing it",
-    );
-    let text = format!("{err}");
-    assert!(
-        text.contains("a floating-point literal"),
-        "the refusal does not name the float literal, so a user sees only the stage's \
-         internal diagnostic. Message was: {text}"
-    );
-
-    // ACCEPTED. The type alone is inside the subset, which is the half that is easy to
-    // assume away.
     const TYPE_ONLY: &str = "fn f(a: Float) -> Float { a }\nfn main(x: Float) -> Float { f(x) }";
-    assert!(
-        keleusma::selfhost::self_hosted_compile(TYPE_ONLY, &target).is_ok(),
-        "a float-typed function without any float literal no longer compiles. The construct \
-         scan names the LITERAL on the strength of this: if the type is now outside the \
-         subset too, the scan should say so, and this test should say which changed"
-    );
+    for src in [WITH_LITERAL, TYPE_ONLY] {
+        let outcome = keleusma::selfhost::self_hosted_compile(src, &target);
+        assert!(outcome.is_ok(), "{src} no longer compiles: {outcome:?}");
+    }
 }
 
 /// **A DIVERGENCE REFUSAL LOCALISES THE DISAGREEMENT, AND SAYS NOTHING ABOUT FAULT.**
