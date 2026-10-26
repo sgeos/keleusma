@@ -34,10 +34,10 @@ shared data yv {
     op_count: Word,
     region_start: Word,
     region_end: Word,
-    class: [Word; 2048],
-    arg: [Word; 2048],
-    mark: [Word; 2048],
-    cay: [Word; 2048],
+    class: [Word; 8192],
+    arg: [Word; 8192],
+    mark: [Word; 8192],
+    cay: [Word; 8192],
     out_fell: Word,
     out_hy: Word,
     // 1 frame capacity, 2 unfinished work budget.
@@ -285,7 +285,7 @@ fn run() -> Word {
     yf.child_hb = 0;
     yf.child_bmin = 1;
     push_frame(yv.region_start, yv.region_end, 0);
-    for step in 0..8192 limit 8192 {
+    for step in 0..32768 limit 32768 {
         if yf.sp > 0 {
             ayc_step();
         }

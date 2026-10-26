@@ -27,11 +27,11 @@ require word >= 32;
 // target lookups (the reference's clamps).
 shared data dv {
     op_count: Word,
-    class: [Word; 2048],
-    arg: [Word; 2048],
-    dreq: [Word; 2048],
-    dnet: [Word; 2048],
-    is_term: [Word; 2048],
+    class: [Word; 8192],
+    arg: [Word; 8192],
+    dreq: [Word; 8192],
+    dnet: [Word; 8192],
+    is_term: [Word; 8192],
     out_reject: Word,
     // WHY THE VERDICT IS NOT ENOUGH ON ITS OWN.
     //
@@ -342,7 +342,7 @@ fn run() -> Word {
     df.child_hb = 0;
     df.child_bmax = 0;
     push_frame(0, dv.op_count, 0);
-    for step in 0..8192 limit 8192 {
+    for step in 0..32768 limit 32768 {
         if df.sp > 0 {
             depth_step();
         }

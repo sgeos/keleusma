@@ -737,7 +737,7 @@ fn pe_cap_anest() -> Word { 8 }
 // naming an array size could convey that, which is the argument for naming it here.
 fn pe_cap_variant() -> Word { 256 }
 fn pe_cap_calldepth() -> Word { 8 }
-fn pe_cap_field() -> Word { 640 }
+fn pe_cap_field() -> Word { 1024 }
 
 // The radix separating a Call record's two packed fields, `chunk + count * RADIX`.
 // NOT a `pe_cap_*` capacity guard, and named apart from that family deliberately: it is a
@@ -1302,7 +1302,7 @@ private data mat {
     // it drains; then the frame slot plus one of a variable arm `v => ...` being read, whose
     // end wraps its result in `LetIn(slot)`; then the bind count of a destructuring arm being
     // read, whose end emits its `LetIn`s. One array, because `parse.kel`'s own runtime data
-    // fields stand near the 640 its field table holds.
+    // fields stood near the 640 its field table held before the raise to 1,024.
     match_ext: [Word; 40],
     // A destructuring arm being read, `(a, b)` or `P { x, y }`, Order 6. Per bind `b`, at
     // `4b` its slot, `4b + 1` the field offset, `4b + 2` its kind and `4b + 3` its projection
@@ -1323,14 +1323,16 @@ private data mat {
 private data fields {
     // The accumulated data-field layout table across ALL data blocks (one entry per field), used
     // to resolve a body `block.field` to its slot. Sized 512 (was 256): parse.kel itself now
-    // grew beyond 512 fields during initializer support. The usable table is now 640 fields.
-    fdata: [Word; 641],
-    ffield: [Word; 641],
-    fbase: [Word; 641],
-    fvis: [Word; 641],
-    fkind: [Word; 641],
+    // grew beyond 512 fields during initializer support. Raised from 640 to 1,024 fields under
+    // the operator's ruling of 2026-10-26 that limits may be raised, when parse.kel's own
+    // fields reached 638 of 640.
+    fdata: [Word; 1025],
+    ffield: [Word; 1025],
+    fbase: [Word; 1025],
+    fvis: [Word; 1025],
+    fkind: [Word; 1025],
     dirty: Word, shared_at: Word, private_at: Word, emit_at: Word,
-    flen: [Word; 641],
+    flen: [Word; 1025],
     field_count: Word,
     base_ctr: Word,
     cur_block: Word,
@@ -1428,10 +1430,10 @@ fn data_initializer(k: Word, v: Word) -> Word {
 fn data_rebase() -> Word {
     if fields.dirty == 1 {
         fields.shared_at = 0; fields.private_at = 0;
-        for i in 0..fields.field_count limit 640 {
+        for i in 0..fields.field_count limit 1024 {
             if fields.fvis[i] == 0 { fields.private_at = fields.private_at + fields.flen[i]; }
         }
-        for i in 0..fields.field_count limit 640 {
+        for i in 0..fields.field_count limit 1024 {
             if fields.fvis[i] == 0 {
                 fields.fbase[i] = fields.shared_at; fields.shared_at = fields.shared_at + fields.flen[i];
             } else {
@@ -2065,7 +2067,7 @@ fn step_global_ident(v: Word) -> Word {
         0
     } else {
     ps.found_flag = 0;
-    for i in 0..fields.field_count limit 640 {
+    for i in 0..fields.field_count limit 1024 {
         if fields.fdata[i] == v {
             ps.found_flag = 1;
         }
@@ -2607,7 +2609,7 @@ fn step_dafield(k: Word, v: Word) -> Word {
         da.da_base = 0;
         da.da_len = 1;
         ps.found_flag = 0;
-        for i in 0..fields.field_count limit 640 {
+        for i in 0..fields.field_count limit 1024 {
             if fields.fdata[i] == da.da_data andalso fields.ffield[i] == v {
                 da.da_base = fields.fbase[i];
                 da.da_len = fields.flen[i];

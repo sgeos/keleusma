@@ -216,7 +216,7 @@ mod tests {
         .unwrap();
         for (count, tag, form, scalar, expected) in [
             (-1, 31, 0, 0, 4),
-            (2049, 31, 0, 0, 4),
+            (8193, 31, 0, 0, 4),
             (1, -1, 0, 0, 4),
             (1, 34, 0, 0, 4),
             (1, 37, 0, 0, 4),
@@ -230,7 +230,7 @@ mod tests {
             (1, 67, 2, 0, 4),
             (1, 68, 0, 1, 4),
             (1, 60, 20, 0, 3),
-            (2048, 31, 0, 0, 0),
+            (8192, 31, 0, 0, 0),
         ] {
             machine.set(1, count).unwrap();
             machine.set_element(2, 0, tag).unwrap();

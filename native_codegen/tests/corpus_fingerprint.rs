@@ -282,6 +282,12 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // **RE-PINNED 2026-10-26, absorption 103.** Upstream pull request 556, the
 // gate 3 and 4 instruments and a validator fall-through fix, changed
 // `verify_depth.kel`. Nothing was added or removed.
+//
+// **RE-PINNED 2026-10-26, absorption 104.** Upstream pull requests 559 and 560 raised
+// the self-hosted stages' capacities and changed eight stage sources,
+// `analyze.kel`, `codegen.kel`, `parse.kel`, `reconstruct.kel`,
+// `verify_depth.kel`, `verify_structural.kel`, `verify_typed.kel` and
+// `verify_yield.kel`. Nothing was added or removed.
 const PINNED: &[(&str, u64)] = &[
     // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
     // added or removed. Every census this instrument names to re-derive was run on
@@ -479,19 +485,19 @@ const PINNED: &[(&str, u64)] = &[
         "examples/scripts/rogue/rogue_scroll_apply.kel",
         0xf93a5bd822bfe99c,
     ),
-    ("src/selfhost/kel/analyze.kel", 0xdb016d0e69c96ebf),
-    ("src/selfhost/kel/codegen.kel", 0xf205891a7b59f2fc),
+    ("src/selfhost/kel/analyze.kel", 0xe45a770e222b1931),
+    ("src/selfhost/kel/codegen.kel", 0x50cfec49d14a932a),
     ("src/selfhost/kel/lexer.kel", 0xb42fe447663faa7d),
     // Absorption 83 changes cast Byte tracking and FixedDiv classification.
     // The non-corpus run re-derived coverage and refusal figures unchanged.
-    ("src/selfhost/kel/parse.kel", 0x4524e59721537102),
-    ("src/selfhost/kel/reconstruct.kel", 0xa3a0cf5106e41e74),
+    ("src/selfhost/kel/parse.kel", 0xd47be71b1e34e987),
+    ("src/selfhost/kel/reconstruct.kel", 0x51a938decfc7e036),
     ("src/selfhost/kel/verify_datalayout.kel", 0xe625b5656d576b86),
-    ("src/selfhost/kel/verify_depth.kel", 0xd1bfafbdfde204f9),
-    ("src/selfhost/kel/verify_structural.kel", 0x950e834358c3f8f1),
-    ("src/selfhost/kel/verify_typed.kel", 0x133db0bfdbb75dfd),
+    ("src/selfhost/kel/verify_depth.kel", 0xd65a1422ab29b135),
+    ("src/selfhost/kel/verify_structural.kel", 0xe47e628d4f3d9641),
+    ("src/selfhost/kel/verify_typed.kel", 0xdf6274221b46406b),
     ("src/selfhost/kel/verify_types.kel", 0xf1a3565245726860),
-    ("src/selfhost/kel/verify_yield.kel", 0x0372c27e883c97dd),
+    ("src/selfhost/kel/verify_yield.kel", 0x12e9047be52a0423),
     ("src/selfhost/kel/wire.kel", 0x7e021df3e15f1793),
     ("src/selfhost/kel/wire_debug.kel", 0xa98ddf75d7e9f7e8),
     ("src/selfhost/kel/wire_schema.kel", 0x6f32806acb4b4763),
