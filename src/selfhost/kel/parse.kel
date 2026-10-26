@@ -4821,6 +4821,7 @@ fn value_record(word: Word) -> Word {
     if kind == 47 orelse kind == 50 orelse kind == 53 orelse kind == 58 orelse kind == 61 orelse kind == 63 { value_scalar(1); }
     if kind == 10 orelse kind == 65 { value_scalar(3); }
     if kind == 45 { value_scalar(if arg >= 1024 { 5 } else { 2 }); }
+    if kind == 82 { value_scalar(5); }
     if kind == 44 orelse kind == 51 orelse kind == 60 { value_scalar(2); }
     if kind == 26 { value_scalar(if arg == 1 { 2 } else { 3 }); }
     if kind == 28 { value_scalar(arg / 65536); }
@@ -5846,11 +5847,18 @@ fn step_normal(k: Word, v: Word) -> Word {
         stmt.pending_cenum = 0;
         type_tuple_record(1, v)
     } else {
-    if k == Tok::Str() as Word {
+    if k == Tok::Str() as Word orelse k == 73 {
+        if k == 73 {
+            // A float literal, Tok 73: record 82 carries the interned text, which codegen
+            // interns as a Float pool entry and the host converts.
+            ops.expect_operand = 0;
+            ps.emit_arg = v;
+            82
+        } else {
         // A string literal: emit a StrLit carrying the intern id (v), which codegen interns as a
         // StaticStr pool entry.
         ops.expect_operand = 0;
-        Node::StrLit() as Word + v * 64
+        Node::StrLit() as Word + v * 64 }
     } else {
     if k == Tok::Ident() as Word {
         // In OPERATOR position (`expect_operand == 0`), an identifier whose id matches the eager

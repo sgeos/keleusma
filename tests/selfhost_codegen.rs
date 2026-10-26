@@ -4489,6 +4489,9 @@ fn self_host_compile(src: &str) -> Module {
                     ConstValue::StaticStr(unescape_string(&names[v as usize]))
                 } else if t == 2 {
                     ConstValue::Bool(v != 0)
+                } else if t == 3 {
+                    // A Float literal's interned text, as the shipping driver converts it.
+                    ConstValue::Float(names[v as usize].parse().expect("float literal text"))
                 } else {
                     ConstValue::Int(v)
                 }
@@ -9064,19 +9067,20 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
             "struct P { x: Word }\nstruct Q { ps: [P;2] }\nfn f(a: Q, b: Q) -> bool { a == b }",
         ),
         // Float arithmetic on typed operands, a divergence until Order 6 slice 5 lowered it
-        // to the reference's unchecked ops.
+        // to the reference's unchecked ops, and a float literal, refused until slice 5b.
         (
             "scalar/float_arith",
             SOk,
             "fn f(a: Float, b: Float) -> Float { a + b }",
         ),
+        ("scalar/float_literal", SOk, "fn f() -> Float { 1.5 }"),
         // --- out of scope for the self-hosted subset -----------------------------
-        // A float LITERAL has no token in the self-hosted lexer, which reads `1.5` as `1`,
-        // `.`, `5`, and the parser refuses the `.` since Order 6 slice 3c.
+        // Float negation lowers to `CheckedNeg` here and to `Neg` in the reference, and the
+        // decoder has no arm producing `Neg` at all.
         (
-            "scope/float_literal__GAP",
-            Refuses,
-            "fn f() -> Float { 1.5 }",
+            "scope/float_neg__GAP",
+            Diverges,
+            "fn f(a: Float) -> Float { -a }",
         ),
         (
             "scope/generic_fn__GAP",
@@ -9251,11 +9255,12 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             // `lex_raw` and added the destructuring filter: 1650 and 403 became 1953
             // and 377, since the old loop body no longer sits in `main`'s group. The
             // pipe token's compound code took it to 1968, the shebang skip to 1991, and
-            // the `signed`, `pure`, `ephemeral` and `external` keywords to 2168.
+            // the `signed`, `pure`, `ephemeral` and `external` keywords to 2168. The float
+            // literal state took it to 2230 and the peak to 421.
             "lexer",
             include_str!("../src/selfhost/kel/lexer.kel"),
-            2168,
-            377,
+            2230,
+            421,
         ),
         (
             // Order 2 adds text bounds and module resource protocols. Measured

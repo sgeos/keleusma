@@ -2598,6 +2598,16 @@ fn pool_to_constants(pool: &[(i64, i64)], names: &[String]) -> Vec<ConstValue> {
                 ConstValue::StaticStr(unescape_string(raw))
             }
             2 => ConstValue::Bool(v != 0),
+            // A Float literal's interned text, converted as the reference lexer converts it.
+            3 => {
+                let text = names.get(v as usize).unwrap_or_else(|| {
+                    panic!("codegen.kel interned Float id {v}, outside the lexer name table")
+                });
+                ConstValue::Float(
+                    text.parse::<f64>()
+                        .unwrap_or_else(|_| panic!("float literal `{text}` is not an f64")),
+                )
+            }
             other => panic!(
                 "codegen.kel emitted constant-pool tag {other}, which this host does not \
                  know. A new tag needs a `ConstValue` mapping here, not a default"

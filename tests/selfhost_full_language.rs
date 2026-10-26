@@ -829,7 +829,8 @@ fn use_signatures_set_scalar_return_shapes() {
 /// Slice 5 of Order 6, arithmetic on Float operands. The reference lowers `+`, `-` and `*`
 /// on two Floats to the unchecked Add, Sub and Mul, and `/` and `%` to Div and Mod followed
 /// by `PopN(2)`. The parser marks such an operation on the Byte arithmetic record, flagged
-/// so its result stays a Float. A float literal is still refused.
+/// so its result stays a Float. A float literal, slice 5b, is lexed as its interned text,
+/// which the host converts with the reference lexer's own conversion.
 #[test]
 fn float_arithmetic_on_typed_operands_compiles() {
     let cases: &[(&str, Class)] = &[
@@ -848,7 +849,10 @@ fn float_arithmetic_on_typed_operands_compiles() {
             Identical,
         ),
         ("fn main(a: Byte, b: Byte) -> Byte { a + b }", Identical),
-        ("fn main() -> Float { 1.5 }", Unsupported),
+        ("fn main() -> Float { 1.5 }", Identical),
+        ("fn main(a: Float) -> Float { a + 2.25 }", Identical),
+        ("fn main() -> Float { 1.5 + 1.5 * 2.0 }", Identical),
+        ("fn main(a: Float) -> bool { a < 0.5 }", Identical),
     ];
     let mut mismatches = Vec::new();
     for (src, expected) in cases {
