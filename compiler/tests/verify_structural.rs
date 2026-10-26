@@ -283,8 +283,11 @@ fn break_target_not_loop_exit_is_rejected() {
 // Well-nested fragments that satisfy every target-equality invariant must not be rejected,
 // guarding against a slice-2 false positive on structurally valid control flow. They are also
 // operand-stack-balanced (the condition an If/BreakIf pops is pushed first, both arms neutral),
-// so the depth-balance pass accepts them too; they are chunk fragments, not whole programs the
-// reference `verify()` accepts end to end.
+// so the depth-balance pass accepts them too. Each ends in a result and a `Return`, because a
+// chunk that runs off its end is rejected, by the reference since it was found to leave residue
+// the memory bound does not cover and by the self-hosted depth pass since Order 6 found it
+// discarding that check. The fragments here used to omit the terminator and passed only
+// because of that defect.
 
 fn assert_chunk_well_formed(label: &str, ops: Vec<Op>) {
     let m = mutated_module(ops);
@@ -300,7 +303,14 @@ fn well_formed_if_else_is_accepted() {
     // the EndIf at 3. Both arms are empty (operand-neutral).
     assert_chunk_well_formed(
         "if-else",
-        vec![Op::PushImmediate(1), Op::If(3), Op::Else(3), Op::EndIf],
+        vec![
+            Op::PushImmediate(1),
+            Op::If(3),
+            Op::Else(3),
+            Op::EndIf,
+            Op::PushImmediate(0),
+            Op::Return,
+        ],
     );
 }
 
@@ -315,6 +325,8 @@ fn well_formed_loop_with_breakif_is_accepted() {
             Op::PushImmediate(1),
             Op::BreakIf(4),
             Op::EndLoop(1),
+            Op::PushImmediate(0),
+            Op::Return,
         ],
     );
 }
