@@ -6,6 +6,17 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-26 Gate 3 rejection corpus and a validator defect
+
+A mutation corpus of 323 corrupted modules found the self-hosted validator accepting
+chunks that run off their end. It now rejects them, and every family agrees with the
+reference.
+
+## 2026-10-26 Gate 4 instrument
+
+The Keleusma trap analysis agrees with the reference on all 70 compiled sources, with five
+refusals in agreement pinned. Four wait on operator question 12.
+
 ## 2026-10-26 Destructuring arms
 
 Irrefutable tuple and struct destructuring arms compile byte-identically. `parse.kel`'s own

@@ -98,6 +98,12 @@ exit. That cost is the reason earlier increments folded new parsing into existin
 rather than raising the cap.
 
 
+**Operator ruling, 2026-10-26, received first-hand in this line's session.** "Limits may be
+raised." It answered the accumulated capacity questions, the type-extraction table, the
+reconstruct record input and head cap, the parser's field table and the per-chunk opcode
+capacity of the validator and trap analysis. Each raise states its cost, since a stage
+array's size feeds that stage's static bounds.
+
 `BYTECODE_VERSION` stays 2 and the instruction set stays at 66 opcodes, unless the
 operator authorizes otherwise. The self-hosted pipeline never supplies a field from the
 reference, and the reference stays the differential oracle. A divergence establishes that
@@ -379,3 +385,28 @@ The slice exposed a capacity limit inside `parse.kel` itself. It counts every ru
 field of the program it parses against a table of 640, and its own fields reached 645, so
 its self-compile failed. The new state was packed into two arrays, which leaves 638.
 Raising the table is question 11 for the operator.
+
+**Gate 4 instrument, 2026-10-26.** `the_trap_analysis_agrees_with_the_reference_on_every_compiled_source`
+runs the Keleusma trap analysis and its Rust reference over every source the reference
+compiles. Of the 70, both report 23 trap-free and 42 possibly trapping at the same first
+instruction, and both refuse the same five, four at the 2,048-opcode chunk capacity the
+validator also stops at and `check-md-links.kel` for a boxed field read outside the
+first-pass proof. No source disagrees and none is unavailable. The refusals are pinned.
+Closing the four needs the capacity raise in operator question 12, and the fifth needs the
+proof profile widened to boxed field reads.
+
+**Gate 3 rejection corpus and a validator defect, 2026-10-26.**
+`the_self_hosted_validator_agrees_with_the_reference_on_a_mutated_corpus` corrupts every
+module the reference compiles from the corpus with seven families, an out-of-range local,
+constant, branch target, callee, native or data slot and a removed final `Return`, at the
+first applicable instruction, and requires the self-hosted validator to give the
+reference verdict on each of the 323 results. Its first run found a soundness defect in
+the self-hosted validator. It accepted all 59 modules whose final `Return` was removed,
+which the reference rejects, because a chunk that runs off its end leaves residue the
+memory bound does not account for. `verify_depth.kel` computed the root region's
+fall-through result and discarded it. It now rejects a falling-through root, and the host
+counts `Reset` as a path exit as the reference does, so a stream chunk ending in `Reset`
+stays admitted. Every family now agrees. The reference admits a native index past the
+native table, as does `Vm::new`, so that family measures agreement only, and whether
+admission should check it is operator question 13. The shipping path re-verifies with the
+reference, so no module was admitted wrongly through it.

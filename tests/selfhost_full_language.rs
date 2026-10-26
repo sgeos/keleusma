@@ -289,6 +289,257 @@ fn the_self_hosted_validator_agrees_with_the_reference_on_every_compiled_source(
     assert!(checked >= 60, "only {checked} sources reached a verdict");
 }
 
+/// THE GATE 3 REJECTION CORPUS. Every module the reference compiles from the corpus, each
+/// corrupted by every family below at its first applicable instruction. The self-hosted
+/// validator must give the reference's verdict on every corrupted module, and the capacity
+/// refusals already pinned in `VALIDATOR_CAPACITY` are the only exception. Each family must
+/// reach many modules and the reference must reject most of them, or the corpus would
+/// measure nothing.
+#[test]
+fn the_self_hosted_validator_agrees_with_the_reference_on_a_mutated_corpus() {
+    use keleusma::bytecode::{Module, Op};
+    type Mutation = fn(&mut Module) -> bool;
+    fn first(m: &mut Module, f: impl Fn(&mut Op, usize, usize, usize, usize) -> bool) -> bool {
+        let chunks = m.chunks.len();
+        let natives = m.native_names.len();
+        for chunk in &mut m.chunks {
+            let locals = chunk.local_count as usize + chunk.param_count as usize;
+            let consts = chunk.constants.len();
+            let len = chunk.ops.len();
+            for op in &mut chunk.ops {
+                if f(op, locals, consts, len, chunks.max(natives)) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    let families: &[(&str, Mutation)] = &[
+        ("local out of range", |m| {
+            first(m, |op, locals, _, _, _| match op {
+                Op::GetLocal(i) => {
+                    *i = (locals + 9) as u16;
+                    true
+                }
+                _ => false,
+            })
+        }),
+        ("constant out of range", |m| {
+            first(m, |op, _, consts, _, _| match op {
+                Op::Const(i) => {
+                    *i = (consts + 9) as u16;
+                    true
+                }
+                _ => false,
+            })
+        }),
+        ("branch target out of range", |m| {
+            first(m, |op, _, _, len, _| match op {
+                Op::If(t) => {
+                    *t = (len + 9) as u16;
+                    true
+                }
+                _ => false,
+            })
+        }),
+        ("callee out of range", |m| {
+            let n = m.chunks.len();
+            first(m, |op, _, _, _, _| match op {
+                Op::Call(c, _) => {
+                    *c = (n + 9) as u16;
+                    true
+                }
+                _ => false,
+            })
+        }),
+        ("native out of range", |m| {
+            let n = m.native_names.len();
+            first(m, |op, _, _, _, _| match op {
+                Op::CallVerifiedNative(c, _) => {
+                    *c = (n + 9) as u16;
+                    true
+                }
+                _ => false,
+            })
+        }),
+        ("data slot out of range", |m| {
+            let n = m.data_layout.as_ref().map_or(0, |d| d.slots.len());
+            first(m, |op, _, _, _, _| match op {
+                Op::GetData(i) | Op::SetData(i) => {
+                    *i = (n + 9) as u32;
+                    true
+                }
+                _ => false,
+            })
+        }),
+        ("final return removed", |m| {
+            for chunk in &mut m.chunks {
+                if matches!(chunk.ops.last(), Some(Op::Return)) {
+                    chunk.ops.pop();
+                    return true;
+                }
+            }
+            false
+        }),
+    ];
+    let root = root();
+    let mut reached: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    let mut disagreements = Vec::new();
+    for (file, _) in CORPUS {
+        if VALIDATOR_CAPACITY.contains(file) {
+            continue;
+        }
+        let src = std::fs::read_to_string(root.join(file)).expect("readable source");
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let module = std::panic::catch_unwind(|| compile_src(&src));
+        std::panic::set_hook(prev);
+        let Ok(module) = module else { continue };
+        for (family, mutate) in families {
+            let mut m = module.clone();
+            if !mutate(&mut m) {
+                continue;
+            }
+            let prev = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            let reference = std::panic::catch_unwind(|| keleusma::verify::verify(&m).is_ok());
+            let staged = std::panic::catch_unwind(|| verify_module_via_kel(&m));
+            std::panic::set_hook(prev);
+            let Ok(reference) = reference else {
+                disagreements.push(format!("{file} {family}: the reference verifier panicked"));
+                continue;
+            };
+            let entry = reached.entry(family).or_default();
+            entry.0 += 1;
+            if !reference {
+                entry.1 += 1;
+            }
+            match staged {
+                Ok(Ok(verdict)) => {
+                    let accepted = verdict == VerificationVerdict::Accepted;
+                    if accepted != reference {
+                        disagreements.push(format!(
+                            "{file} {family}: reference {reference}, self-hosted {verdict:?}"
+                        ));
+                    }
+                }
+                Ok(Err(error)) => disagreements.push(format!(
+                    "{file} {family}: self-hosted analysis unavailable: {error}"
+                )),
+                Err(_) => {
+                    disagreements.push(format!("{file} {family}: self-hosted validator panicked"))
+                }
+            }
+        }
+    }
+    println!("mutated corpus, per family (modules, reference rejections): {reached:?}");
+    assert!(disagreements.is_empty(), "{}", disagreements.join("\n"));
+    for (family, _) in families {
+        let (modules, rejected) = reached.get(family).copied().unwrap_or((0, 0));
+        assert!(modules >= 10, "{family}: reached only {modules} modules");
+        // The reference admits a native index past the native table, and so does `Vm::new`,
+        // measured 2026-10-26, so that family measures agreement and not rejection. Whether
+        // admission should check it is operator question 13.
+        if *family == "native out of range" {
+            assert_eq!(
+                rejected, 0,
+                "the reference began rejecting an out-of-range native"
+            );
+        } else {
+            assert!(
+                rejected * 2 >= modules,
+                "{family}: the reference rejected only {rejected} of {modules}"
+            );
+        }
+    }
+}
+
+/// THE GATE 4 INSTRUMENT. The trap analysis in Keleusma and its Rust reference over every
+/// source the reference compiles. Agreement is on the verdict, `TrapFree` against `MayTrap`
+/// with the same first location, and on the class of a refusal, `InvalidModule`,
+/// `Unsupported` at the same instruction, or `Capacity`. `Unavailable` on the Keleusma side
+/// is pinned by name, since it is evidence about the analysis rather than the subject.
+#[test]
+fn the_trap_analysis_agrees_with_the_reference_on_every_compiled_source() {
+    use keleusma::trap_analysis::{TrapAnalysisError, TrapVerdict, classify_traps};
+    fn class(r: &Result<TrapVerdict, TrapAnalysisError>) -> String {
+        match r {
+            Ok(TrapVerdict::TrapFree) => "TrapFree".into(),
+            Ok(TrapVerdict::MayTrap { first }) => format!("MayTrap {first:?}"),
+            Err(TrapAnalysisError::InvalidModule { .. }) => "InvalidModule".into(),
+            Err(TrapAnalysisError::Unsupported { location, .. }) => {
+                format!("Unsupported {location:?}")
+            }
+            Err(TrapAnalysisError::Capacity { chunk, .. }) => format!("Capacity {chunk}"),
+            Err(TrapAnalysisError::Unavailable { .. }) => "Unavailable".into(),
+        }
+    }
+    let root = root();
+    let mut compared = 0usize;
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut unavailable = Vec::new();
+    let mut refused = Vec::new();
+    let mut disagreements = Vec::new();
+    for (file, _) in CORPUS {
+        let src = std::fs::read_to_string(root.join(file)).expect("readable source");
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let module = std::panic::catch_unwind(|| compile_src(&src));
+        std::panic::set_hook(prev);
+        let Ok(module) = module else { continue };
+        let reference = class(&classify_traps(&module));
+        let staged = class(&keleusma::selfhost::classify_traps_via_kel(&module));
+        let kind = reference.split(' ').next().unwrap_or("").to_string();
+        if kind == "Capacity" || kind == "Unsupported" {
+            refused.push(format!("{file} {kind}"));
+        }
+        *counts.entry(kind).or_default() += 1;
+        if staged == "Unavailable" {
+            unavailable.push((*file).to_string());
+        } else if staged != reference {
+            disagreements.push(format!("{file}: reference {reference}, Keleusma {staged}"));
+        } else {
+            compared += 1;
+        }
+    }
+    println!("trap census {counts:?}, compared {compared}, unavailable {unavailable:?}");
+    println!("trap refusals {refused:?}");
+    let pinned_refusals: Vec<String> = TRAP_REFUSALS
+        .iter()
+        .map(|(file, kind)| format!("{file} {kind}"))
+        .collect();
+    assert_eq!(
+        refused, pinned_refusals,
+        "the sources both trap analyses refuse moved"
+    );
+    assert!(disagreements.is_empty(), "{}", disagreements.join("\n"));
+    let pinned: Vec<String> = TRAP_UNAVAILABLE.iter().map(|f| (*f).to_string()).collect();
+    unavailable.sort();
+    assert_eq!(
+        unavailable, pinned,
+        "the trap analysis's unavailable sources moved"
+    );
+    assert!(
+        compared >= 60,
+        "only {compared} sources reached a compared verdict"
+    );
+}
+
+/// Sources the Keleusma trap analysis cannot finish on, measured, so a change in either
+/// direction is announced.
+const TRAP_UNAVAILABLE: &[&str] = &[];
+
+/// Sources both trap analyses refuse in agreement, measured 2026-10-26. The four capacity
+/// refusals are the per-chunk opcode capacity the validator also stops at, and the
+/// unsupported one is outside the first-pass proof profile. Gate 4 asks for these to close.
+const TRAP_REFUSALS: &[(&str, &str)] = &[
+    ("examples/scripts/rogue/rogue_bestiary.kel", "Capacity"),
+    ("examples/scripts/piano_roll/piano_roll_3.kel", "Capacity"),
+    ("examples/scripts/piano_roll/piano_roll_8.kel", "Capacity"),
+    ("examples/scripts/piano_roll/piano_roll_9.kel", "Capacity"),
+    ("scripts/check-md-links.kel", "Unsupported"),
+];
+
 /// Slice 1 of Order 6. Each source here was a defect rather than a language gap, a token
 /// that the pipeline skipped, and each now has a pinned outcome. The expected classes were
 /// measured before the repair. A literal head became a head with no parameter (Diverges),
