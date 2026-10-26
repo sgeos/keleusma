@@ -880,6 +880,9 @@ pub const BR_P_MT_CHUNK: usize = BR_P_MT_NAME + 64;
 pub const BR_P_SATMAX_ID: usize = BR_P_MT_CHUNK + 64;
 /// The checked-arm word `saturate_min`, interned identifier plus one, Order 6.
 pub const BR_P_SATMIN_ID: usize = BR_P_SATMAX_ID + 1;
+/// The destructuring filter's hidden binding, whose string is `let`, interned identifier plus
+/// one, Order 6.
+pub const BR_P_HIDDEN_ID: usize = BR_P_SATMIN_ID + 1;
 
 #[cfg(test)]
 mod shared_layout_tests {
@@ -1001,6 +1004,7 @@ mod shared_layout_tests {
             ("mt_chunk", "BR_P_MT_CHUNK", BR_P_MT_CHUNK),
             ("satmax_id", "BR_P_SATMAX_ID", BR_P_SATMAX_ID),
             ("satmin_id", "BR_P_SATMIN_ID", BR_P_SATMIN_ID),
+            ("hidden_id", "BR_P_HIDDEN_ID", BR_P_HIDDEN_ID),
         ];
         for &(field, konst, value) in cases {
             assert_eq!(

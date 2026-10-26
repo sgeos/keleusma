@@ -121,6 +121,9 @@ shared data toks {
     // APPENDED. Zero means unset, so an unseeded block never matches.
     satmax_id: Word,
     satmin_id: Word,
+    // The name id plus one of the hidden binding the destructuring filter introduces, whose
+    // string is `let`, Order 6. Zero means no destructuring occurs.
+    hidden_id: Word,
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -920,6 +923,9 @@ private data stmt {
     // Per `let` binding, 0 or the enum's name id plus one when the binding's value root returned an
     // enum (a call of an enum-returning function), so a `match` over the binding lowers to IsEnum.
     let_enum: [Word; 257],
+    // 1 for a hidden destructuring binding whose value has no known layout, such as an
+    // untyped native's result, Order 6. The reference reads its elements boxed.
+    let_untyped: [Word; 257],
     // A `struct == struct` fold arms this drain: it emits one StructEqField record per field (from
     // the struct's declaration layout) then a StructEqBuild, over successive body-step calls (the
     // operator fold itself returns only the first record). `sq_struct` the struct index, `sq_field`
@@ -1784,6 +1790,7 @@ fn clear_let_shape(at: Word) -> Word {
     stmt.let_array_arr[at] = 0;
     stmt.let_array_arrbytes[at] = 0;
     stmt.let_enum[at] = 0;
+    stmt.let_untyped[at] = 0;
     0
 }
 
@@ -1866,8 +1873,9 @@ fn resolve_plain_ident_legacy(v: Word) -> Word {
         // A `let` binding: if its value's root was a composite construction, arm the field-access
         // postfix (a tuple binding arms `t.N`, a struct binding arms `x.field`); otherwise read it
         // as an ordinary Local.
-        if stmt.let_tuple[ps.let_hit] > 0 {
-            ps.ta_tuple = stmt.let_tuple[ps.let_hit] - 1;
+        if stmt.let_tuple[ps.let_hit] > 0 orelse stmt.let_untyped[ps.let_hit] == 1 {
+            // An untyped hidden binding arms the tuple postfix with no layout, `ta_tuple` -1.
+            ps.ta_tuple = if stmt.let_untyped[ps.let_hit] == 1 { 0 - 1 } else { stmt.let_tuple[ps.let_hit] - 1 };
             ps.ta_phase = 1;
             ops.expect_operand = 0;
             Node::Local() as Word + stmt.scope_slot[ps.let_hit] * 64
@@ -4796,7 +4804,8 @@ fn value_local(slot: Word) -> Word {
     for i in 0..stmt.let_count limit 256 {
         if stmt.scope_slot[i] == slot { value_scalar(vl.locals[i] - 1); }
     }
-    if ps.ta_phase == 1 {
+    // An untyped hidden binding arms the postfix with no layout, so its value stays unknown.
+    if ps.ta_phase == 1 andalso ps.ta_tuple >= 0 {
         vl.form = 1; vl.layout = ps.ta_tuple; vl.bytes = tupledefs.tup_bytes[ps.ta_tuple];
     } else { if ps.fa_phase == 1 {
         vl.form = 3; vl.decl = ps.fa_struct + 1; vl.bytes = structdefs.sd_bytesize[ps.fa_struct];
@@ -6359,6 +6368,17 @@ fn step_tupleaccess(k: Word, v: Word) -> Word {
         }
         0
     } else {
+        if k == Tok::IntLit() as Word andalso ps.ta_tuple < 0 {
+            // An element of an untyped hidden binding: the reference reads it boxed, by index,
+            // variant tag 5 on the tuple-field record. Its value has no known layout.
+            if v < 0 orelse v > 255 { perr(pe_tuple_index(), v) } else {
+                ps.ta_phase = 0;
+                ops.expect_operand = 0;
+                ps.field_record = Node::TupleField() as Word + (v + 5 * 4294967296) * 64;
+                ps.emit_arg = v;
+                104
+            }
+        } else {
         if k == Tok::IntLit() as Word {
             if v < 0 orelse v >= tupledefs.tup_ecount[ps.ta_tuple] { perr(pe_tuple_index(), v) } else {
                 let at = tupledefs.tup_estart[ps.ta_tuple] + v;
@@ -6389,7 +6409,7 @@ fn step_tupleaccess(k: Word, v: Word) -> Word {
         } else {
             ps.ta_phase = 0;
             0
-        }
+        } }
     }
 }
 
@@ -7319,6 +7339,9 @@ fn step_draining() -> Word {
                     stmt.scope_slot[stmt.let_count] = slot;
                     stmt.let_scalar[stmt.let_count] = stmt.pstmt_scalar[stmt.pstmt_sp];
                     value_bind_root();
+                    // A hidden destructuring binding over a value of unknown layout reads its
+                    // elements boxed, as the reference does for an untyped native's tuple.
+                    stmt.let_untyped[stmt.let_count] = if toks.hidden_id > 0 andalso stmt.let_names[stmt.let_count] + 1 == toks.hidden_id andalso vl.form == 0 andalso vl.scalar < 0 { 1 } else { 0 };
                     vl.locals[stmt.let_count] = if vl.form == 0 { vl.scalar + 1 } else { 0 };
                     vl.local_desc[stmt.let_count] = if vl.form > 0 { value_descriptor() + 1 } else { 0 };
                     // Record the binding's composite type from its value's root construction, so a

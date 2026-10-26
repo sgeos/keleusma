@@ -131,7 +131,8 @@ const CORPUS: &[(&str, Class)] = &[
     ("examples/zero_copy_demo.kel", Identical),
     ("compiler/kel/prelude.kel", Identical),
     ("keleusma-cli/examples/hello.kel", Identical),
-    ("scripts/check-md-links.kel", Unsupported),
+    // Identical since an untyped native's destructured elements read boxed, 2026-10-26.
+    ("scripts/check-md-links.kel", Identical),
     ("src/crypto_frame/frame.kel", Identical),
     ("src/hosted/interp.kel", Identical),
     ("src/selfhost/kel/analyze.kel", Identical),
@@ -893,9 +894,10 @@ fn use_paths_need_separators_shebangs_are_skipped_and_unclaimed_tokens_are_refus
             "#!/usr/bin/env keleusma\nfn main() -> Word { 7 }",
             Identical,
         ),
+        // Identical since an untyped native's destructured elements read boxed, 2026-10-26.
         (
             "use host::f\nfn main() -> Word { let (a, b) = host::f(); a }",
-            Unsupported,
+            Identical,
         ),
         (
             "use host::f\nfn main() -> Word { let t = host::f(); t.0 }",
@@ -1429,6 +1431,39 @@ fn rtos_scripts_joined_with_the_prelude_have_their_pinned_outcomes() {
         if actual != *expected {
             mismatches.push(format!(
                 "{name}: expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Destructuring an untyped library native's result. The reference reads each element
+/// boxed, `GetTupleField(Boxed { index })`, because the value has no known layout, and the
+/// self-hosted parser now does so for the destructuring filter's hidden binding. A hand-written
+/// `t.0` on an untyped value is a reference rejection, the control that the boxed read is
+/// confined to the form the reference admits.
+#[test]
+fn untyped_native_destructuring_reads_boxed() {
+    let cases: &[(&str, Class)] = &[
+        (
+            "use shell::run\nfn main() -> Word { let (code, details) = shell::run(\"x\"); code }",
+            Identical,
+        ),
+        (
+            "use shell::run\nfn main() -> Word { let (code, _) = shell::run(\"x\"); code + 1 }",
+            Identical,
+        ),
+        (
+            "use shell::run\nfn main() -> Word { let t = shell::run(\"x\"); t.0 }",
+            RefRejects,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
             ));
         }
     }
