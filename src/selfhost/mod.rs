@@ -10096,7 +10096,8 @@ mod construct_naming_guard {
             ),
             (
                 "a struct destructuring pattern",
-                "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x } => x, _ => 0 } }",
+                // Shorthand destructuring compiles since Order 6. A literal field is refused.
+                "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x: 1 } => 1, _ => 0 } }",
             ),
             (
                 "an `assert` statement",

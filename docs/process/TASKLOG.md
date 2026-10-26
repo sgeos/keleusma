@@ -6,6 +6,11 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-26 Destructuring arms
+
+Irrefutable tuple and struct destructuring arms compile byte-identically. `parse.kel`'s own
+data fields stand at 638 of the 640 its field table holds. PR 551 merged.
+
 ## 2026-10-26 Variable match arms
 
 A variable arm on a scalar match compiles byte-identically. The census reads 57 Identical
