@@ -10088,9 +10088,11 @@ mod construct_naming_guard {
     fn every_named_construct_is_really_outside_the_subset() {
         // (the phrase the scan emits, a minimal program containing that construct)
         const NAMED: &[(&str, &str)] = &[
+            // A variable arm on a scalar match compiles since Order 6. On an enum scrutinee
+            // it is still refused, so the scan's arm stays and names it.
             (
                 "a variable pattern",
-                "fn main(a: Word) -> Word { match a { v => v } }",
+                "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, x => 2 } }",
             ),
             (
                 "a struct destructuring pattern",
