@@ -9272,9 +9272,11 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             // Trap kind in both text walks: 3215 and 367 became 3229 and 374.
             // Re-measured 2026-10-25 after the time walk began charging Else,
             // EndIf, EndLoop and a counted loop's final header: 3229 became 3272.
+            // Re-measured 2026-10-26 after a single-pass loop began charging the larger of
+            // its pass and its costliest break, as the reference does: 3272 became 3279.
             "analyze",
             include_str!("../src/selfhost/kel/analyze.kel"),
-            3272,
+            3279,
             374,
         ),
         (

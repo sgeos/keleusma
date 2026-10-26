@@ -12992,9 +12992,12 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // `nat_sdepth` and `use_signature`, for 1032 and 31,153. Slice 5's float arithmetic
     // added no name and took the blob to 31,183, and the float literal record to 31,213.
     // Slice 5d's saturation words added `satmax_id`, `satmin_id` and `saturation_word`, for
-    // 1035 and 31,302.
-    assert_eq!(worst_names, 1035, "the worst-case name count moved");
-    assert_eq!(worst_blob, 31302, "the worst-case blob size moved");
+    // 1035 and 31,302. Slice 6's struct-typed data fields added `data_field_kind`, for 1036
+    // and 31,419. Slice 7's enum-returning natives added `nat_rtype` and
+    // `native_return_enum`, for 1038 and 31,495. Slice 8's tuple
+    // returns added `nat_tcount` and `nat_tsep`, for 1040 and 31,557.
+    assert_eq!(worst_names, 1040, "the worst-case name count moved");
+    assert_eq!(worst_blob, 31557, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
