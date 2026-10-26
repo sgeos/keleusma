@@ -9063,11 +9063,20 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
             SOk,
             "struct P { x: Word }\nstruct Q { ps: [P;2] }\nfn f(a: Q, b: Q) -> bool { a == b }",
         ),
-        // --- out of scope for the self-hosted subset -----------------------------
+        // Float arithmetic on typed operands, a divergence until Order 6 slice 5 lowered it
+        // to the reference's unchecked ops.
         (
-            "scope/float_arith__GAP",
-            Diverges,
+            "scalar/float_arith",
+            SOk,
             "fn f(a: Float, b: Float) -> Float { a + b }",
+        ),
+        // --- out of scope for the self-hosted subset -----------------------------
+        // A float LITERAL has no token in the self-hosted lexer, which reads `1.5` as `1`,
+        // `.`, `5`, and the parser refuses the `.` since Order 6 slice 3c.
+        (
+            "scope/float_literal__GAP",
+            Refuses,
+            "fn f() -> Float { 1.5 }",
         ),
         (
             "scope/generic_fn__GAP",

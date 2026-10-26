@@ -825,3 +825,39 @@ fn use_signatures_set_scalar_return_shapes() {
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
+
+/// Slice 5 of Order 6, arithmetic on Float operands. The reference lowers `+`, `-` and `*`
+/// on two Floats to the unchecked Add, Sub and Mul, and `/` and `%` to Div and Mod followed
+/// by `PopN(2)`. The parser marks such an operation on the Byte arithmetic record, flagged
+/// so its result stays a Float. A float literal is still refused.
+#[test]
+fn float_arithmetic_on_typed_operands_compiles() {
+    let cases: &[(&str, Class)] = &[
+        ("fn main(a: Float, b: Float) -> Float { a + b }", Identical),
+        (
+            "fn main(a: Float, b: Float) -> Float { a * b - a / b }",
+            Identical,
+        ),
+        ("fn main(a: Float, b: Float) -> Float { a % b }", Identical),
+        (
+            "fn f(a: Float) -> Float { a + a }\nfn main(x: Float) -> Float { let y = f(x); y * x }",
+            Identical,
+        ),
+        (
+            "fn main(a: Float, b: Float) -> bool { a + b < b }",
+            Identical,
+        ),
+        ("fn main(a: Byte, b: Byte) -> Byte { a + b }", Identical),
+        ("fn main() -> Float { 1.5 }", Unsupported),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}

@@ -2882,6 +2882,9 @@ fn prec_of(op: Word) -> Word {
 // is computed in), 0 = none (a plain Word/other op). Held out of `emit_op` so that function's
 // reconstructed node count stays under the per-function caps.
 fn byte_op_kind(op: Word) -> Word {
+    // 3 for arithmetic on two Float operands, scalar kind 5. The reference lowers it to the
+    // unchecked Add, Sub, Mul or Div, which is the Byte path's lowering without the narrowing.
+    if ops.op_lscalar[ops.opsp] == 5 andalso vl.form == 0 andalso vl.scalar == 5 andalso (op == OpCode::Add() as Word orelse op == OpCode::Sub() as Word orelse op == OpCode::Mul() as Word orelse op == OpCode::Div() as Word orelse op == OpCode::Mod() as Word) { 3 } else {
     if ops.op_lbyte[ops.opsp] == 1 andalso ps.last_byte == 1 {
         if op == OpCode::Band() as Word orelse op == OpCode::Bor() as Word orelse op == OpCode::Bxor() as Word {
             1
@@ -2893,7 +2896,7 @@ fn byte_op_kind(op: Word) -> Word {
         } }
     } else {
         0
-    }
+    } }
 }
 
 // Begin a `struct == struct` lowering (both operands are whole structs): allocate the two
@@ -4480,9 +4483,11 @@ fn emit_op(op: Word) -> Word {
         ps.last_byte = 1;
         Node::ByteBinOp() as Word + op * 64
     } else {
-    if bk == 2 {
-        ps.last_byte = 1;
-        Node::ByteArith() as Word + op * 64
+    if bk >= 2 {
+        // A Float operation carries 1024 above its operator, so the record keeps its Float
+        // result type and codegen skips the Byte narrowing.
+        ps.last_byte = if bk == 2 { 1 } else { 0 };
+        Node::ByteArith() as Word + (op + (if bk == 3 { 1024 } else { 0 })) * 64
     } else {
         ps.last_byte = 0;
         match op {
@@ -4815,7 +4820,7 @@ fn value_record(word: Word) -> Word {
     if kind == 6 orelse kind == 8 orelse kind == 9 orelse kind == 68 { value_scalar(1); }
     if kind == 47 orelse kind == 50 orelse kind == 53 orelse kind == 58 orelse kind == 61 orelse kind == 63 { value_scalar(1); }
     if kind == 10 orelse kind == 65 { value_scalar(3); }
-    if kind == 45 { value_scalar(2); }
+    if kind == 45 { value_scalar(if arg >= 1024 { 5 } else { 2 }); }
     if kind == 44 orelse kind == 51 orelse kind == 60 { value_scalar(2); }
     if kind == 26 { value_scalar(if arg == 1 { 2 } else { 3 }); }
     if kind == 28 { value_scalar(arg / 65536); }

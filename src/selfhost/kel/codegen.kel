@@ -960,13 +960,20 @@ fn push_byte_binop(p: Word) -> Word {
 // OpCode (add 1 / mul 2 / sub 3); lhs/rhs the operands. A LITERAL operand is coerced to a Byte
 // (WordToByte); a Byte variable is left as-is (arithmetic keeps operands narrow, no widen).
 fn push_byte_arith(p: Word) -> Word {
-    let opc = ast.args[p];
+    // 1024 above the operator marks a Float operation, which the reference lowers to the
+    // same unchecked ops and, for `/`, to Div.
+    let opc = ast.args[p] % 1024;
     let opw = match opc {
         1 => wire.addop,
         2 => wire.mulop,
         3 => wire.subop,
+        4 => wire.divop,
+        5 => wire.modop,
         _ => wire.addop,
     };
+    // A Float `/` and `%` leave the outcome words of the legacy polymorphic ops, which the
+    // reference discards with `PopN(2)`.
+    if opc == 4 orelse opc == 5 { push_emit(wire.popn + 2 * wire.radix); }
     push_emit(opw);
     if ast.kinds[ast.rhs[p]] == 1 {
         push_emit(wire.wordtobyte);
