@@ -12998,9 +12998,12 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // returns added `nat_tcount` and `nat_tsep`, for 1040 and 31,557. The bare-loop `break` took the blob to
     // 31,567. The wildcard payload's `mpat_fpos` made it 1041 and
     // 31,592. Variable match arms added `match_varslot` and `variable_arm`, for 1043
-    // and 31,685.
-    assert_eq!(worst_names, 1043, "the worst-case name count moved");
-    assert_eq!(worst_blob, 31685, "the worst-case blob size moved");
+    // and 31,685. Destructuring arms packed their state, with the variable slot, into
+    // `match_ext` and `cb`, because `parse.kel`'s own data fields stand at 638 of the 640 its
+    // field table holds, and added four functions, for 1048 and
+    // 32,355.
+    assert_eq!(worst_names, 1048, "the worst-case name count moved");
+    assert_eq!(worst_blob, 32355, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

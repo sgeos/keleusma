@@ -1297,9 +1297,20 @@ private data mat {
     // The payload field position in the variant pattern being read, Order 6. A wildcard `_`
     // advances it without a bind, so it can run ahead of `mpat_pcount`, the bind count.
     mpat_fpos: Word,
-    // Per match depth, the frame slot plus one of a variable arm `v => ...` being read, zero
-    // when the arm is not one, Order 6. The arm's end wraps its result in `LetIn(slot)`.
-    match_varslot: [Word; 8],
+    // Per match depth `d`, Order 6, five words at `5d`: the scrutinee's value form (1 a tuple,
+    // 3 a struct, else 0), its tuple layout or struct index, and its scalar kind, captured when
+    // it drains; then the frame slot plus one of a variable arm `v => ...` being read, whose
+    // end wraps its result in `LetIn(slot)`; then the bind count of a destructuring arm being
+    // read, whose end emits its `LetIn`s. One array, because `parse.kel`'s own runtime data
+    // fields stand near the 640 its field table holds.
+    match_ext: [Word; 40],
+    // A destructuring arm being read, `(a, b)` or `P { x, y }`, Order 6. Per bind `b`, at
+    // `4b` its slot, `4b + 1` the field offset, `4b + 2` its kind and `4b + 3` its projection
+    // metadata argument. Then, at 32, the pattern phase (0 none, 1 a tuple element expected,
+    // 2 a tuple separator or close, 3 the struct's `{`, 4 a struct field or close, 5 a struct
+    // separator or close); at 33 the tuple element position; at 34 the bind count; at 35 the
+    // emitter's next value record, three per bind; at 36 the `LetIn`s left to emit.
+    cb: [Word; 40],
 }
 
 // The data-field layout table, accumulated by the header as each `data` block is parsed
@@ -5446,26 +5457,37 @@ fn step_match(k: Word, v: Word) -> Word {
                 mat.mpat_phase = 1;
                 0
             } else {
+            if mat.match_ext[(sp) * 5] == 3 andalso structdefs.sd_name[mat.match_ext[(sp) * 5 + 1]] == v {
+                mat.cb[32] = 3; mat.cb[34] = 0;
+                mat.match_phase[sp] = 6;
+                0
+            } else {
             // `true` and `false` arrive as identifiers, and as patterns they are literals, not
             // bindings, so they keep the refusal a literal boolean pattern has here.
             if mat.match_isenum[sp] == 0 andalso v != toks.true_id andalso v != toks.false_id {
                 variable_arm(sp, v)
             } else {
                 perr(pe_pattern_syntax(), v)
-            } }
+            } } }
+        } else {
+        if k == Tok::LParen() as Word andalso mat.match_ext[(sp) * 5] == 1 {
+            mat.cb[32] = 1; mat.cb[33] = 0; mat.cb[34] = 0;
+            mat.match_phase[sp] = 6;
+            0
         } else {
             if k == Tok::RBrace() as Word { mat.match_build = 1; }
             else { perr(pe_pattern_syntax(), v); }
             0
-        } } }
+        } } } }
     } else {
+    if mp == 6 { destructure_step(sp, k, v) } else {
     if mp == 3 {
         if k == Tok::FatArrow() as Word {
             mat.match_phase[sp] = 4;
             ops.expect_operand = 1;
         } else {
             // A guard on a variable arm is not lowered here.
-            if mat.match_varslot[sp] > 0 { perr(pe_unresolved_syntax(), toks.at); }
+            if mat.match_ext[(sp) * 5 + 3] > 0 { perr(pe_unresolved_syntax(), toks.at); }
             if k == Tok::When() as Word {
                 mat.match_phase[sp] = 5;
                 mat.match_guarded[sp] = 1;
@@ -5488,7 +5510,7 @@ fn step_match(k: Word, v: Word) -> Word {
             ops.draining = 1;
             0
         }
-    } } } }
+    } } } } }
 }
 
 // Close the arm's lexical scope and wrap its guard/result pair when present.
@@ -5503,8 +5525,10 @@ fn variable_arm(sp: Word, v: Word) -> Word {
     stmt.let_names[stmt.let_count] = v;
     stmt.scope_slot[stmt.let_count] = slot;
     stmt.let_scalar[stmt.let_count] = 0;
+    // The binding has the scrutinee's scalar kind, so a Byte scrutinee binds a Byte.
+    if mat.match_ext[(sp) * 5 + 2] >= 0 { vl.locals[stmt.let_count] = mat.match_ext[(sp) * 5 + 2] + 1; }
     stmt.let_count = let_push(stmt.let_count);
-    mat.match_varslot[sp] = slot + 1;
+    mat.match_ext[(sp) * 5 + 3] = slot + 1;
     mat.match_phase[sp] = 3;
     mat.match_variant[sp] = 0 - 1;
     mat.match_argcount[sp] = mat.match_argcount[sp] + 1;
@@ -5516,9 +5540,17 @@ fn variable_arm(sp: Word, v: Word) -> Word {
 fn finish_match_arm() -> Word {
     let sp = mat.match_sp - 1;
     stmt.let_count = mat.match_let_base[sp];
-    if mat.match_varslot[sp] > 0 {
-        let slot = mat.match_varslot[sp] - 1;
-        mat.match_varslot[sp] = 0;
+    if mat.match_ext[(sp) * 5 + 4] > 0 {
+        // A destructuring arm closes with one `LetIn` per bind, last bind first. The emitter
+        // sends the rest before the next token.
+        mat.cb[36] = mat.match_ext[(sp) * 5 + 4] - 1;
+        mat.match_ext[(sp) * 5 + 4] = 0;
+        ps.emit_arg = mat.cb[(mat.cb[36]) * 4];
+        Node::LetIn() as Word
+    } else {
+    if mat.match_ext[(sp) * 5 + 3] > 0 {
+        let slot = mat.match_ext[(sp) * 5 + 3] - 1;
+        mat.match_ext[(sp) * 5 + 3] = 0;
         mat.match_catchall[sp] = 1;
         ps.emit_arg = slot;
         Node::LetIn() as Word
@@ -5534,7 +5566,132 @@ fn finish_match_arm() -> Word {
         mat.match_guarded[sp] = 0;
         ps.emit_arg = 0;
         71
-    } else { 0 } }
+    } else { 0 } } }
+}
+
+// One token of a destructuring arm. A bind allocates its slot in source order, as the
+// reference does, and records the field's offset, kind and projection metadata. A wildcard
+// binds nothing. A literal sub-pattern, a nested composite and a non-scalar field are
+// refused. The close emits the wildcard arm record and starts the bind emitter.
+fn destructure_step(sp: Word, k: Word, v: Word) -> Word {
+    if mat.cb[32] == 1 {
+        let layout = mat.match_ext[(sp) * 5 + 1];
+        if mat.cb[33] >= tupledefs.tup_ecount[layout] { perr(pe_pattern_syntax(), toks.at) } else {
+        mat.cb[32] = 2;
+        if k == Tok::Underscore() as Word { mat.cb[33] = mat.cb[33] + 1; 0 } else {
+        if k == Tok::Ident() as Word {
+            let at = tupledefs.tup_estart[layout] + mat.cb[33];
+            // A descriptor, when present, gives the element's form, as for `t.N`. Only a
+            // scalar element binds here.
+            let desc = tupledefs.tup_edesc[at];
+            let scalar = if desc > 0 {
+                if ht.nform[desc - 1] == 0 { ht.scalar[desc - 1] } else { 0 - 1 }
+            } else { if tupledefs.tup_estruct[at] > 0 { 0 - 1 } else { tupledefs.tup_ekind[at] } };
+            if scalar < 0 { perr(pe_unresolved_syntax(), toks.at) } else {
+                destructure_bind(v, tupledefs.tup_eoffset[at], scalar, mat.cb[33]);
+                mat.cb[33] = mat.cb[33] + 1;
+                0
+            }
+        } else { perr(pe_unresolved_syntax(), toks.at) } } }
+    } else {
+    if mat.cb[32] == 2 {
+        if k == Tok::Comma() as Word { mat.cb[32] = 1; 0 } else {
+        if k == Tok::RParen() as Word {
+            if mat.cb[33] != tupledefs.tup_ecount[mat.match_ext[(sp) * 5 + 1]] { perr(pe_pattern_syntax(), toks.at) } else { destructure_close(sp) }
+        } else { perr(pe_pattern_syntax(), toks.at) } }
+    } else {
+    if mat.cb[32] == 3 {
+        if k == Tok::LBrace() as Word { mat.cb[32] = 4; 0 } else { perr(pe_pattern_syntax(), toks.at) }
+    } else {
+    if mat.cb[32] == 4 {
+        if k == Tok::RBrace() as Word { destructure_close(sp) } else {
+        if k == Tok::Ident() as Word {
+            // Shorthand `x`: the field named `x` binds a local `x`.
+            let sid = mat.match_ext[sp * 5 + 1];
+            ps.found_flag = 0;
+            for i in 0..structdefs.sd_fcount[sid] limit 64 {
+                if structdefs.sd_fname[structdefs.sd_fstart[sid] + i] == v { ps.found_flag = i + 1; }
+            }
+            let pos = ps.found_flag - 1;
+            ps.found_flag = 0;
+            if pos < 0 { perr(pe_pattern_syntax(), v) } else {
+                let f = structdefs.sd_fstart[sid] + pos;
+                if structdefs.sd_fstruct[f] > 0 orelse structdefs.sd_ftuple[f] > 0 orelse structdefs.sd_farraylen[f] > 0 orelse structdefs.sd_fenum[f] > 0 { perr(pe_unresolved_syntax(), toks.at) } else {
+                    destructure_bind(v, structdefs.sd_foffset[f], structdefs.sd_fkind[f], structdefs.sd_name[sid] * 1024 + pos);
+                    mat.cb[32] = 5;
+                    0
+                }
+            }
+        } else { perr(pe_unresolved_syntax(), toks.at) } }
+    } else {
+        if k == Tok::Comma() as Word { mat.cb[32] = 4; 0 } else {
+        if k == Tok::RBrace() as Word { destructure_close(sp) } else {
+        // `x: pattern` and `..` are not lowered here.
+        perr(pe_unresolved_syntax(), toks.at) } }
+    } } } }
+}
+
+fn destructure_bind(v: Word, offset: Word, kind: Word, meta: Word) -> Word {
+    if mat.cb[34] >= 8 { perr(pe_unresolved_syntax(), toks.at) } else {
+        let slot = ps.pcount + stmt.slot_count;
+        stmt.slot_count = stmt.slot_count + 1;
+        clear_let_shape(stmt.let_count);
+        stmt.let_names[stmt.let_count] = v;
+        stmt.scope_slot[stmt.let_count] = slot;
+        stmt.let_scalar[stmt.let_count] = 0;
+        vl.locals[stmt.let_count] = kind + 1;
+        stmt.let_count = let_push(stmt.let_count);
+        mat.cb[(mat.cb[34]) * 4] = slot;
+        mat.cb[(mat.cb[34]) * 4 + 1] = offset;
+        mat.cb[(mat.cb[34]) * 4 + 2] = kind;
+        mat.cb[(mat.cb[34]) * 4 + 3] = meta;
+        mat.cb[34] = mat.cb[34] + 1;
+        0
+    }
+}
+
+// The pattern is complete. It is a wildcard arm in coverage only when the reference treats it
+// so, which is never for a destructuring arm, so the match still needs its own wildcard.
+fn destructure_close(sp: Word) -> Word {
+    let tuple = if mat.cb[32] <= 2 { 1 } else { 0 };
+    mat.cb[32] = 0;
+    mat.match_phase[sp] = 3;
+    mat.match_variant[sp] = 0 - 2;
+    mat.match_argcount[sp] = mat.match_argcount[sp] + 1;
+    mat.match_ext[(sp) * 5 + 4] = mat.cb[34];
+    // The value sequence: per bind the scrutinee temp, the projection metadata, the field read.
+    mat.cb[35] = if mat.cb[34] > 0 { 1 + tuple * 1048576 } else { 0 };
+    if mat.cb[34] == 0 { mat.match_ext[(sp) * 5 + 4] = 0; }
+    ps.emit_arg = 0;
+    72
+}
+
+// One record of a destructuring arm's bind sequence or of its closing `LetIn`s.
+fn composite_bind_step() -> Word {
+    if mat.cb[36] > 0 {
+        mat.cb[36] = mat.cb[36] - 1;
+        ps.emit_arg = mat.cb[(mat.cb[36]) * 4];
+        Node::LetIn() as Word
+    } else {
+        let tuple = mat.cb[35] / 1048576;
+        let step = mat.cb[35] % 1048576 - 1;
+        let bind = step / 3;
+        let part = step % 3;
+        let sp = mat.match_sp - 1;
+        mat.cb[35] = if step + 1 >= mat.cb[34] * 3 { 0 } else { mat.cb[35] + 1 };
+        if part == 0 {
+            ps.emit_arg = mat.match_temp[sp];
+            Node::Local() as Word
+        } else {
+        if part == 1 {
+            ps.emit_arg = mat.cb[(bind) * 4 + 3];
+            if tuple == 1 { 104 } else { 98 }
+        } else {
+            let operand = mat.cb[(bind) * 4 + 1] + mat.cb[(bind) * 4 + 2] * 65536;
+            ps.emit_arg = 0 - 1;
+            if tuple == 1 { Node::TupleField() as Word + operand * 64 } else { Node::FieldAccess() as Word + operand * 64 }
+        } }
+    }
 }
 
 // Emit the match build record (kind 34): its arg packs the scrutinee temp slot and the
@@ -6721,7 +6878,8 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
 fn match_boundary(k: Word) -> Word {
     let sp = mat.match_sp - 1;
     let mp = mat.match_phase[sp];
-    if mp == 2 orelse mp == 3 { 1 } else {
+    // Phase 6 is a destructuring pattern, whose every token is the match's.
+    if mp == 2 orelse mp == 3 orelse mp == 6 { 1 } else {
         let blocks = branch.if_sp == mat.match_if_base[sp]
             andalso forst.for_sp == mat.match_for_base[sp]
             andalso structdefs.sc_sp == mat.match_struct_base[sp]
@@ -7316,6 +7474,9 @@ fn step_draining() -> Word {
             }
             mat.match_temp[mat.match_sp - 1] = ps.pcount + stmt.slot_count;
             stmt.slot_count = stmt.slot_count + 1;
+            mat.match_ext[(mat.match_sp - 1) * 5] = vl.form;
+            mat.match_ext[(mat.match_sp - 1) * 5 + 1] = if vl.form == 1 { vl.layout } else { vl.decl - 1 };
+            mat.match_ext[(mat.match_sp - 1) * 5 + 2] = if vl.form == 0 { vl.scalar } else { 0 - 1 };
             mat.match_phase[mat.match_sp - 1] = 2;
             ops.draining = 0;
             0
@@ -9319,6 +9480,7 @@ fn step_body() -> Word {
         mat.pending_bind = 0;
         record
     } else {
+    if mat.cb[35] > 0 orelse mat.cb[36] > 0 { composite_bind_step() } else {
     if ps.pend_end > 0 {
         if ps.pend_end == 1 andalso (ps.text_used > 0 orelse ps.text_return > 0) {
             ps.pend_end = 2; ps.emit_arg = ps.text_used + ps.text_return * 2; 106
@@ -9354,7 +9516,7 @@ fn step_body() -> Word {
             if k == 67 { perr(pe_unresolved_syntax(), toks.at); }
             header_step(k, v)
         }
-    } } } } } } } }
+    } } } } } } } } }
 }
 
 } } }

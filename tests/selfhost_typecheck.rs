@@ -4086,7 +4086,7 @@ fn every_known_gap_is_refused_by_the_self_hosted_compiler() {
         ),
         (
             "struct destructuring",
-            "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x } => x, _ => 0 } }",
+            "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x: 1 } => 1, _ => 0 } }",
         ),
         ("assert", "fn main(a: Word) -> Word { assert a > 0; a }"),
         // The qualified call `audio::midi_to_freq(69)` compiles since Order 6 slice 2,
@@ -4716,9 +4716,10 @@ fn the_documented_pattern_forms_are_censused_against_the_self_hosted_parser() {
         // The two that remain are FEATURE WORK by the same trace, not missing
         // branches: `step_match` phase 2 reads an identifier that is not an enum
         // name as the END OF THE ARMS, so supporting them means new arm semantics.
-        // **THE VARIABLE PATTERN LEFT THIS SET in Order 6**, when a scalar match's
-        // variable arm began to lower as a wildcard arm that binds the scrutinee.
-        vec!["struct destructuring"],
+        // **THE VARIABLE PATTERN AND STRUCT DESTRUCTURING LEFT THIS SET in Order 6**, when
+        // a scalar match's variable arm and an irrefutable destructuring arm began to lower
+        // as wildcard arms that bind the scrutinee or its fields.
+        Vec::<&str>::new(),
         "the set of documented pattern forms `parse.kel` cannot handle changed. A \
          form leaving it means the self-hosted parser gained a construct: record \
          what changed and widen the documented subset. A form joining it is a \
@@ -7381,7 +7382,8 @@ fn pipeline_unsupported_syntax_is_not_source_rejection() {
         // A variable arm on a scalar match compiles since Order 6, so the witness is the
         // enum-scrutinee form, which is still refused.
         "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, x => 2 } }",
-        "struct P { x: Word } fn main(p: P) -> Word { match p { P { x } => x, _ => 0 } }",
+        // Shorthand struct destructuring compiles since Order 6, so the witness has a literal field.
+        "struct P { x: Word } fn main(p: P) -> Word { match p { P { x: 1 } => 1, _ => 0 } }",
         "fn main(a: Word) -> Word { assert a > 0; a }",
         "fn main() -> Word { assert not false; 1 }",
         "fn main() -> Word { assert 1 == 1; 1 }",
@@ -10494,7 +10496,7 @@ fn every_gap_refusal_names_the_construct() {
         ),
         (
             "struct destructuring",
-            "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x } => x, _ => 0 } }",
+            "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x: 1 } => 1, _ => 0 } }",
             "struct destructuring pattern `P { .. }`",
         ),
         (
