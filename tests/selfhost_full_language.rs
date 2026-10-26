@@ -114,7 +114,8 @@ const CORPUS: &[(&str, Class)] = &[
     // `host::log_event` without the RTOS prelude that declares it.
     ("examples/rtos/scripts/heartbeat.kel", RefRejects),
     ("examples/rtos/scripts/led.kel", RefRejects),
-    ("examples/rtos/scripts/prelude.kel", Unsupported),
+    // Identical since slice 8 accepted its tuple-returning signatures.
+    ("examples/rtos/scripts/prelude.kel", Identical),
     ("examples/rtos/scripts/sensor.kel", RefRejects),
     ("examples/zero_copy_demo.kel", Identical),
     ("compiler/kel/prelude.kel", Identical),
@@ -870,6 +871,49 @@ fn float_arithmetic_on_typed_operands_compiles() {
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
 
+/// An enum `match` in a stream chunk lowers to a loop whose every arm breaks and whose
+/// no-match path traps. The reference charges such a single-pass loop the larger of that pass
+/// and its costliest break, and `analyze.kel` charged the break alone, an execution bound 21
+/// cycles below the reference's for these programs. The whole-module comparison includes the
+/// bound, so Identical here pins the two analyses' agreement. A scalar `match`, which lowers
+/// to `if` chains, is the control that always agreed.
+#[test]
+fn an_enum_match_in_a_stream_has_the_reference_execution_bound() {
+    const TAIL: &str = "let _ = yield (0, 1); (0, 0) }";
+    let cases: &[(String, Class)] = &[
+        (
+            format!(
+                "enum S {{ A, B }}\nfn g(r: Word) -> S {{ if r == 0 {{ S::A }} else {{ S::B }} }}\n\
+                 loop main(r: Word) -> (Word, Word) {{ let x = match g(r) {{ S::A => 1, S::B => 2 }}; {TAIL}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "enum S {{ A, B(Word) }}\nfn g(r: Word) -> S {{ if r == 0 {{ S::A }} else {{ S::B(r) }} }}\n\
+                 loop main(r: Word) -> (Word, Word) {{ let x = match g(r) {{ S::A => 1, S::B(c) => c }}; {TAIL}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "loop main(r: Word) -> (Word, Word) {{ let x = match r {{ 0 => 1, _ => 2 }}; {TAIL}"
+            ),
+            Identical,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
 /// The RTOS task scripts as the RTOS crate compiles them, the prelude, a newline, then the
 /// script, which is `build_module` in `examples/rtos/src/setup.rs`. Alone, a task script
 /// names host functions only the prelude declares, so the corpus table above measures the
@@ -879,11 +923,14 @@ fn rtos_scripts_joined_with_the_prelude_have_their_pinned_outcomes() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/rtos/scripts/");
     let prelude = std::fs::read_to_string(format!("{dir}prelude.kel")).expect("the prelude");
     let pinned: &[(&str, Class)] = &[
-        ("event_listener.kel", Unsupported),
-        ("faulty.kel", Unsupported),
-        ("heartbeat.kel", Unsupported),
-        ("led.kel", Unsupported),
-        ("sensor.kel", Unsupported),
+        // Identical since slice 8 accepted the prelude's tuple-returning signatures.
+        ("event_listener.kel", Identical),
+        ("faulty.kel", Identical),
+        ("heartbeat.kel", Identical),
+        // Identical since `analyze.kel` charges the trap path of a single-pass loop, which an
+        // enum `match` lowers to. Its execution bound was 93 against the reference's 114.
+        ("led.kel", Identical),
+        ("sensor.kel", Identical),
     ];
     let mut tasks: Vec<String> = std::fs::read_dir(dir)
         .expect("the RTOS script directory")
@@ -948,6 +995,14 @@ fn natives_returning_an_enum_compile() {
                 "use host::adc_read(Word) -> (Status, Word)\n{ENUM}fn main() -> Word {{ let (s, v) = host::adc_read(1); v }}"
             ),
             Unsupported,
+        ),
+        // Slice 8. A tuple-returning native that is declared and not called no longer blocks
+        // the program, which is the RTOS prelude's situation.
+        (
+            format!(
+                "use host::adc_read(Word) -> (Status, Word)\nuse host::spi_read(Word) -> (Status, Word)\n{USE}{ENUM}fn main() -> Word {{ match host::gpio_set(1, 2) {{ Status::Ok => 0, Status::Err(c) => c }} }}"
+            ),
+            Identical,
         ),
         (
             String::from(

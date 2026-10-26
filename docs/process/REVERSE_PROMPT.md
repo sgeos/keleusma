@@ -120,6 +120,16 @@ is Identical. The RTOS task scripts are now also measured as the RTOS crate comp
 prelude first, and all five are refused, four only because the prelude declares
 tuple-returning natives they never call. That is the next slice.
 
+## Slice 8 and a time-bound defect
+
+The RTOS prelude and its five task scripts compile byte-identically once the prelude's
+tuple-returning signatures are accepted. The last of them exposed a defect in the
+self-hosted time analysis, which gave every stream matching an enum directly a bound below
+the reference's. The shipping cross-check had refused each such program, so nothing was
+admitted with the lower bound. The analysis now agrees with the reference on those
+programs. A separate overestimate on a counted loop with a conditional break remains, in
+the safe direction, and is next.
+
 ## Next
 
 `use` signatures, newtypes and refinement, struct-typed data fields, and then the
