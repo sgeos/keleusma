@@ -6,6 +6,22 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-25 Order 6 slices 3d, 3e and 4
+
+The array `for`, the function and import modifiers, and trait impls with method calls
+compile byte-identically. The corpus reads 57 of 75 identical. A stale wire capacity
+from the name-cap doubling is fixed.
+
+## 2026-10-25 Order 6 slice 3c, use paths, shebangs and the operator sink
+
+Three more dropped tokens are refused or handled. The Order 5 framing program now
+compiles byte-identically, and the corpus reads 53 of 75 identical. PR 540 merged.
+
+## 2026-10-25 Order 6 slice 3b, the pipe and literal heads
+
+The pipe operator and single literal parameter heads compile byte-identically, and the
+corpus reads 52 of 75 identical. The sixteen-head reconstruct cap is now refused by name.
+
 ## 2026-10-25 Order 6 slice 3a, destructuring and wildcard let
 
 A destructuring filter in lexer.kel rewrites flat tuple patterns and wildcard lets into

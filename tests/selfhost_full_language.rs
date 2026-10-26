@@ -60,16 +60,16 @@ const CORPUS: &[(&str, Class)] = &[
     ("examples/scripts/01_arithmetic.kel", Identical),
     ("examples/scripts/02_struct_field.kel", Identical),
     ("examples/scripts/03_enum_match.kel", Identical),
-    ("examples/scripts/04_for_in.kel", Unsupported),
-    ("examples/scripts/05_pipeline.kel", Unsupported),
-    ("examples/scripts/06_multiheaded.kel", Unsupported),
+    ("examples/scripts/04_for_in.kel", Identical),
+    ("examples/scripts/05_pipeline.kel", Identical),
+    ("examples/scripts/06_multiheaded.kel", Identical),
     ("examples/scripts/07_refinement.kel", Unsupported),
-    ("examples/scripts/08_method_dispatch.kel", Unsupported),
+    ("examples/scripts/08_method_dispatch.kel", Identical),
     ("examples/scripts/09_big_numbers.kel", Identical),
     ("examples/scripts/10_multbyte.kel", Identical),
-    ("examples/scripts/11_signed.kel", Unsupported),
+    ("examples/scripts/11_signed.kel", Identical),
     ("examples/scripts/12_sensor_window.kel", Identical),
-    ("examples/scripts/13_telemetry_stream.kel", Unsupported),
+    ("examples/scripts/13_telemetry_stream.kel", Identical),
     ("examples/scripts/14_frame_log.kel", Unsupported),
     ("examples/scripts/15_pixel_blend.kel", Identical),
     ("examples/scripts/rogue/rogue_ai_boss.kel", Identical),
@@ -116,7 +116,7 @@ const CORPUS: &[(&str, Class)] = &[
     ("compiler/kel/prelude.kel", Identical),
     ("keleusma-cli/examples/hello.kel", Identical),
     ("scripts/check-md-links.kel", Unsupported),
-    ("src/crypto_frame/frame.kel", Unsupported),
+    ("src/crypto_frame/frame.kel", Identical),
     ("src/hosted/interp.kel", Identical),
     ("src/selfhost/kel/analyze.kel", Identical),
     ("src/selfhost/kel/codegen.kel", Identical),
@@ -295,8 +295,9 @@ fn skipped_tokens_are_refused_or_lowered_rather_than_dropped() {
     let cases: &[(&str, Class)] = &[
         // Parameter patterns are refused. The controls keep plain parameters identical.
         (
+            // A literal head was refused here in slice 1 and is lowered since slice 3b.
             "fn c(0) -> Word { 0 } fn c(n: Word) -> Word { n } fn main() -> Word { c(3) }",
-            Unsupported,
+            Identical,
         ),
         (
             "fn c(true) -> Word { 0 } fn c(b: bool) -> Word { 1 } fn main() -> Word { c(true) }",
@@ -321,8 +322,10 @@ fn skipped_tokens_are_refused_or_lowered_rather_than_dropped() {
         ("fn c() -> Word { 1 } fn main() -> Word { c() }", Identical),
         // An unrecognized byte is refused rather than read as an arrow.
         (
+            // The pipe was refused here in slice 1 and is lowered since slice 3b. The point
+            // of the slice 1 case stands: it no longer reads as a comparison.
             "fn d(x: Word) -> Word { x } fn main() -> Word { 6 |> d() }",
-            Unsupported,
+            Identical,
         ),
         ("fn main() -> Word { if 6 > 1 { 1 } else { 0 } }", Identical),
         // A trailing comma closes a struct literal, in any field order and nested.
@@ -440,15 +443,15 @@ fn native_imports_and_qualified_calls_compile_or_are_refused() {
         ),
         // A single-segment import is called unqualified, which this path does not resolve.
         ("use f\nfn main() -> Word { f(1) }", Unsupported),
-        // A signature is slice 2b.
+        // A signature, refused in slice 2, is read since slice 2b.
         (
             "use host::f(Word) -> Word\nfn main() -> Word { host::f(1) }",
-            Unsupported,
+            Identical,
         ),
-        // `external` has no keyword in the self-hosted lexer.
+        // `use external`, refused in slice 2, is lowered since slice 3e.
         (
             "use external host::f\nfn main() -> Word { host::f(1) }",
-            Unsupported,
+            Identical,
         ),
         // A call of an undeclared native is the reference's to reject.
         (
@@ -528,6 +531,287 @@ fn destructuring_and_wildcard_lets_compile_and_stale_equality_flags_are_cleared(
         (
             "fn main(c: bool) -> (Word, Word) { if c { (1, 2) } else { let x = 3; if x == 0 { (0, 0) } else { (x, x) } } }",
             Identical,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Slice 3b of Order 6, the pipe operator and literal parameter heads. `x |> f(a)` is the
+/// reference's `f(x, a)`, and a single literal parameter `fn f(0)` is lowered as the
+/// reference's pattern test, before any copy and with no copy of its own. A literal beside
+/// another parameter, a literal with a `when` guard, and the pipe's `_` placeholder are
+/// refused.
+#[test]
+fn the_pipe_and_literal_heads_compile_or_are_refused() {
+    let cases: &[(&str, Class)] = &[
+        (
+            "fn d(x: Word) -> Word { x + x }\nfn a(x: Word, y: Word) -> Word { x + y }\nfn main() -> Word { 6 |> d() |> a(1) }",
+            Identical,
+        ),
+        (
+            "fn d(x: Word) -> Word { x + x }\nfn main() -> Word { 6 + 1 |> d() }",
+            Identical,
+        ),
+        (
+            "fn d(x: Word) -> Word { x + x }\nfn main() -> Word { let v = 3 |> d(); v }",
+            Identical,
+        ),
+        (
+            "fn d(x: Word) -> Word { x + x }\nfn a(x: Word, y: Word) -> Word { x + y }\nfn main() -> Word { a(2 |> d(), 5 |> d()) }",
+            Identical,
+        ),
+        (
+            "use host::f\nfn main() -> Word { 2 |> host::f() }",
+            Identical,
+        ),
+        (
+            "fn d(x: Word) -> Word { x + x }\nfn a(x: Word, y: Word) -> Word { x + y }\nfn main() -> Word { 6 |> a(_, 1) }",
+            Unsupported,
+        ),
+        (
+            "fn c(0) -> Word { 0 }\nfn c(1) -> Word { 1 }\nfn c(n: Word) -> Word { n + 10 }\nfn main() -> Word { c(3) }",
+            Identical,
+        ),
+        (
+            "fn w(0) -> Word { 2 }\nfn w(1) -> Word { 4 }\nfn main() -> Word { w(1) }",
+            Identical,
+        ),
+        (
+            "fn c(0) -> Word { let x = 5; x + 1 }\nfn c(n: Word) -> Word { let y = n; y }\nfn main() -> Word { c(3) }",
+            Identical,
+        ),
+        (
+            "fn f(0) -> Word { 1 }\nfn main() -> Word { f(0) }",
+            Identical,
+        ),
+        (
+            "yield g(0) -> Word { yield 1 }\nyield g(n: Word) -> Word { yield n }\nloop main(r: Word) -> Word { g(r) }",
+            Identical,
+        ),
+        (
+            "fn c(0, b: Word) -> Word { b }\nfn c(a: Word, b: Word) -> Word { a + b }\nfn main() -> Word { c(1, 2) }",
+            Unsupported,
+        ),
+        (
+            "fn c(0) -> Word when true { 0 }\nfn c(n: Word) -> Word { n }\nfn main() -> Word { c(3) }",
+            Unsupported,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Three more skipped tokens, found while widening toward the Order 5 framing program. A
+/// `use` path joined any two consecutive identifiers, so `use host::open` followed by
+/// `require word >= 64;` became one path. A leading shebang line was lexed as source. And
+/// the operator dispatch's last arm returned without a record for any token it did not
+/// recognise, which dropped a `.` after an untyped value.
+#[test]
+fn use_paths_need_separators_shebangs_are_skipped_and_unclaimed_tokens_are_refused() {
+    let cases: &[(&str, Class)] = &[
+        (
+            "use host::f\nrequire word >= 64;\nfn main() -> Word { host::f(1) }",
+            Identical,
+        ),
+        (
+            "#!/usr/bin/env keleusma\nfn main() -> Word { 7 }",
+            Identical,
+        ),
+        (
+            "use host::f\nfn main() -> Word { let (a, b) = host::f(); a }",
+            Unsupported,
+        ),
+        (
+            "use host::f\nfn main() -> Word { let t = host::f(); t.0 }",
+            RefRejects,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Slice 3d of Order 6, `for x in xs` over a static scalar array. The reference copies the
+/// array into a fresh local, stores its length and then a zero counter, and binds `x` to
+/// the element at the counter before the body. The stage writes that as a hidden `let`,
+/// a bare range loop initialised end first, and a body opening with `let x = tmp[ctr]`.
+#[test]
+fn for_over_a_static_array_compiles() {
+    let cases: &[(&str, Class)] = &[
+        (
+            "fn main() -> Word { let xs = [1, 2, 3]; for x in xs { let y = x; } 7 }",
+            Identical,
+        ),
+        (
+            "fn main() -> Word { let xs = [10, 20, 30, 40]; for x in xs { let _d = x * 2; } xs[3] }",
+            Identical,
+        ),
+        (
+            "fn f(a: [Word; 3]) -> Word { for x in a { let y = x; } 1 }\nfn main() -> Word { f([1, 2, 3]) }",
+            Identical,
+        ),
+        (
+            "fn main() -> Word { let xs = [1, 2]; for x in xs { for y in xs { let z = x + y; } } 0 }",
+            Identical,
+        ),
+        (
+            "fn main() -> Word { let xs: [Byte; 2] = [1 as Byte, 2 as Byte]; for x in xs { let y = x; } 0 }",
+            Identical,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Slice 3e of Order 6, the function and import modifiers. `signed` on the entry sets the
+/// module's requires-signature flag, `pure` and `ephemeral` change nothing the reference
+/// emits for a program it accepts, and `use external` lowers its calls to
+/// CallExternalNative. The reference keeps every rejection these modifiers carry.
+#[test]
+fn modifiers_compile_or_are_left_to_the_reference() {
+    let cases: &[(&str, Class)] = &[
+        ("signed fn main() -> Word { 21 + 21 }", Identical),
+        (
+            "fn helper() -> Word { 1 }\nsigned fn main() -> Word { helper() }",
+            Identical,
+        ),
+        (
+            "signed loop main(r: Word) -> Word { let _ = yield 1; 0 }",
+            Identical,
+        ),
+        (
+            "signed fn helper() -> Word { 1 }\nfn main() -> Word { helper() }",
+            RefRejects,
+        ),
+        (
+            "pure fn sq(x: Word) -> Word { x * x }\nfn main() -> Word { sq(3) }",
+            Identical,
+        ),
+        ("ephemeral fn main() -> Word { 7 }", Identical),
+        (
+            "private data d { n: Word }\nephemeral fn main() -> Word { d.n = d.n + 1; d.n }",
+            RefRejects,
+        ),
+        (
+            "fn helper() -> Word { 1 }\nephemeral signed fn main() -> Word { helper() }",
+            Identical,
+        ),
+        (
+            "use host::g\nuse external host::f\nfn main() -> Word { host::f(1) + host::g(2) }",
+            Identical,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Slice 4 of Order 6, trait impls and method calls. `impl Trait for Head { fn m .. }`
+/// compiles each method as the chunk `Trait::Head::m`, sorted among the plain names, and
+/// `recv.m(args)` calls the first such chunk for the receiver's type head with the receiver
+/// as its first argument, as the reference resolves it. An impl whose methods are never
+/// called compiles too, since the reference emits their chunks regardless.
+#[test]
+fn trait_impls_and_method_calls_compile() {
+    let cases: &[(&str, Class)] = &[
+        (
+            "trait D { fn d(x: Word) -> Word; }\nimpl D for Word { fn d(x: Word) -> Word { x + 1 } }\nfn main(a: Word) -> Word { a.d() }",
+            Identical,
+        ),
+        (
+            "struct P { x: Word }\ntrait Get { fn get(p: P) -> Word; }\nimpl Get for P { fn get(p: P) -> Word { p.x } }\nfn main() -> Word { let p = P { x: 7 }; p.get() }",
+            Identical,
+        ),
+        (
+            "trait A { fn f(x: Word, y: Word) -> Word; }\nimpl A for Word { fn f(x: Word, y: Word) -> Word { x + y } }\nfn main() -> Word { let n: Word = 1; n.f(2) }",
+            Identical,
+        ),
+        (
+            "trait A { fn f(x: Word) -> Word; }\nimpl A for Word { fn f(x: Word) -> Word { x } }\nfn main() -> Word { 3 }",
+            Identical,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Slice 2b of Order 6, `use` signatures. A signature's parameter types change nothing the
+/// call lowers to, and the reference checks them. Its return type fixes the native's return
+/// shape, `Scalar` for `Word`, `Byte`, `bool` and `()`, as the reference records it. A
+/// tuple or other composite return is refused.
+#[test]
+fn use_signatures_set_scalar_return_shapes() {
+    let cases: &[(&str, Class)] = &[
+        (
+            "use host::f(Word) -> Word\nfn main() -> Word { host::f(1) }",
+            Identical,
+        ),
+        (
+            "use host::g() -> ()\nfn main() -> Word { host::g(); 1 }",
+            Identical,
+        ),
+        (
+            "use host::b(Word) -> bool\nfn main() -> bool { host::b(1) }",
+            Identical,
+        ),
+        (
+            "use host::y(Byte) -> Byte\nfn main() -> Byte { host::y(1 as Byte) }",
+            Identical,
+        ),
+        (
+            "use host::f(Word, Word) -> Word\nuse host::g\nfn main() -> Word { host::f(1, 2) + host::g(3) }",
+            Identical,
+        ),
+        (
+            "use host::t(Word) -> (Word, Word)\nfn main() -> Word { let (a, b) = host::t(1); a }",
+            Unsupported,
         ),
     ];
     let mut mismatches = Vec::new();

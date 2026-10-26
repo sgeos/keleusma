@@ -111,6 +111,12 @@ shared data toks {
     // Full-width literal values, indexed by lexer token 65.
     values: [Word; 1280],
     invalid_index_id: Word,
+    // The method table, Order 6, APPENDED. Row i resolves `recv.m(..)` for a receiver whose
+    // type head is `mt_head[i]` and a method named `mt_name[i]` to chunk `mt_chunk[i]`.
+    mt_count: Word,
+    mt_head: [Word; 64],
+    mt_name: [Word; 64],
+    mt_chunk: [Word; 64],
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -579,6 +585,18 @@ private data ps {
     // how far over it is. APPENDED, per this file's rule about slot-addressed blocks.
     perr_code: Word,
     perr_detail: Word,
+    // Order 6: the literal parameters of the head being scanned, and a short queue of
+    // records emitted ahead of the next token. A literal head `fn f(0)` emits its test as
+    // the guard `p0 == 0`, five records for one token, through `hq`.
+    plit: Word,
+    // The impl being parsed, Order 6: its trait and head name ids, and 1 inside its body.
+    impl_trait: Word,
+    impl_head: Word,
+    in_impl: Word,
+    hq_tag: [Word; 8],
+    hq_arg: [Word; 8],
+    hq_i: Word,
+    hq_n: Word,
 }
 
 // The shunting-yard operator stack. `drain_reason` selects the empty-stack drain: 0 commit
@@ -1191,6 +1209,9 @@ private data forst {
     // the analogue of `forlimit_count`. APPENDED, per this file's rule about slot-addressed
     // blocks.
     for_bare: [Word; 9],
+    // 1 for `for x in xs` over a static scalar array, Order 6. The bare emission ladder
+    // marks its build record so codegen initialises the end before the counter.
+    for_arr: [Word; 9],
     forin_count: Word,
     for_emit: Word,
     for_emit_i: Word,
@@ -1472,6 +1493,10 @@ private data call {
     call_pending: Word,
     call_phase: Word,
     cdraining: Word,
+    // Set to one by a `|>` once its left operand has drained. The next call then opens
+    // with one argument already counted, because that operand's records precede the
+    // call's own arguments in postorder, which is how the reference evaluates it.
+    pipe_args: Word,
     // The native imports, one row per `use` that names a function, in declaration order,
     // which is the order the reference numbers natives in. `nat_path` holds a row's two
     // path segments at `2i` and `2i + 1`. A row whose path is not exactly two segments
@@ -1480,6 +1505,15 @@ private data call {
     nat_path: [Word; 128],
     nat_count: Word,
     nat_seg: Word,
+    // Set by a `::` inside a `use`, so only a segment that follows one continues the path.
+    nat_cc: Word,
+    // 1 for a `use external` row, whose calls lower to CallExternalNative.
+    nat_ext: [Word; 65],
+    // A `use` signature, `use path(T, ..) -> R`: 1 inside the parameter list, whose
+    // bracket depth is `nat_sdepth`, 2 awaiting `->`, 3 awaiting the return type, 4 inside
+    // a `()` return.
+    nat_sig: Word,
+    nat_sdepth: Word,
     // The array-literal context stack, parallel to the call stack: `al_count` the running
     // element count per open `[...]` literal, `al_sp` the nesting depth. Its `,` drains through
     // the same `step_cdraining` (generalised to the ArrayMark), its `]` emits the ArrayLit.
@@ -4857,7 +4891,9 @@ fn step_closing() -> Word {
                 stmt.pending_ctuple = 0; stmt.pending_cstruct = 0; stmt.pending_carray = 0;
                 stmt.pending_carray_struct = 0; stmt.pending_carray_size = 0; stmt.pending_cenum = 0;
                 ps.last_enum = 0;
-                ps.emit_arg = call.call_chunk[call.call_sp] - 1024 + call.call_count[call.call_sp] * call_chunk_radix();
+                let row = call.call_chunk[call.call_sp] - 1024;
+                ps.emit_arg = row + call.call_count[call.call_sp] * call_chunk_radix()
+                    + call.nat_ext[row] * 1048576;
                 80
             } else {
             // A call is the value's root: set the pending composite type to the callee's struct,
@@ -5125,7 +5161,14 @@ fn step_op(k: Word) -> Word {
         ops.expect_operand = 1;
         0
     } else {
-    if k == Tok::Semi() as Word {
+    if k == Tok::Semi() as Word orelse k == 68 {
+        if k == 68 {
+            // The pipe `x |> f(args)`, the reference's `f(x, args)`. Drain the left
+            // operand down to the nearest mark as the loosest operator would, and the
+            // drain's completion (reason 20) arms the call that must follow.
+            ops.drain_reason = 20;
+            ops.draining = 1;
+        } else {
         if stmt.break_pending == 1 {
             // The `;` after a `break` was already recorded; consume it without draining.
             stmt.break_pending = 0;
@@ -5138,7 +5181,7 @@ fn step_op(k: Word) -> Word {
         } else {
             ops.drain_reason = 0;
             ops.draining = 1;
-        } }
+        } } }
         0
     } else {
     if k == Tok::Yield() as Word {
@@ -5179,7 +5222,11 @@ fn step_op(k: Word) -> Word {
             ops.expect_operand = 1;
             0
         } else {
-            0
+            // A token no branch above claimed, where an operator was expected. This arm
+            // used to return 0 and so skip the token, which is how a `.` after an
+            // untyped value vanished and left reconstruct three nodes it could not fold.
+            // Refused instead, so whatever reaches here is named rather than dropped.
+            perr(pe_unresolved_syntax(), toks.at)
         }
     } } } } } } } } }
 }
@@ -5450,7 +5497,10 @@ fn step_forheader(k: Word, v: Word) -> Word {
             0
         } else {
         if k == Tok::LBrace() as Word {
-            perr(pe_for_iterable(), toks.at);
+            // `for x in xs {`, an iterable rather than a range. Drain the iterable, and the
+            // completion (reason 21) lowers it if it is a static scalar array.
+            ops.drain_reason = 21;
+            ops.draining = 1;
             0
         } else {
             step_normal(k, v)
@@ -5686,6 +5736,67 @@ fn outcome_emit() -> Word {
 // Kinds 69 and 70 are above the six-bit legacy tag, so both go out on the MIGRATED
 // transport -- `ps.emit_arg` carries a full-word payload and the yielded tag is raw. A
 // `kind + payload * 64` packing would silently truncate them.
+// The iterable of `for x in xs { body }` is drained. The reference copies a static array
+// into a fresh local, stores its length, then a zero counter, and on each iteration binds
+// `x` to the element at the counter before the body runs. That is this rewrite, slot for
+// slot: a hidden `let` of the iterable, then a bare range loop over the counter whose end
+// and start are the length and zero, initialised end first, whose body opens with
+// `let x = tmp[ctr]`. Only an array of known length and scalar element is lowered.
+fn for_array_open() -> Word {
+    let fp = forst.for_sp - 1;
+    if vl.form != 2 orelse vl.arity <= 0 orelse ht.nform[vl.child] != 0 { perr(pe_for_iterable(), toks.at) } else {
+        let len = vl.arity;
+        let kind = ht.scalar[vl.child];
+        // The hidden binding of the iterable, a statement of the enclosing block. Its name
+        // id names nothing, so no source name resolves to it.
+        let tmp = ps.pcount + stmt.slot_count;
+        stmt.slot_count = stmt.slot_count + 1;
+        stmt.stmt_kind[stmt.stmt_count] = Node::LetIn() as Word;
+        stmt.stmt_arg[stmt.stmt_count] = tmp;
+        stmt.stmt_name[stmt.stmt_count] = 1099511627776;
+        stmt.stmt_type[stmt.stmt_count] = 0;
+        stmt.stmt_count = stmt_push(stmt.stmt_count);
+        // The end, then the counter, then the element, in the reference's order.
+        forst.for_end_slot[fp] = ps.pcount + stmt.slot_count;
+        stmt.slot_count = stmt.slot_count + 1;
+        forst.for_vslot[fp] = ps.pcount + stmt.slot_count;
+        stmt.slot_count = stmt.slot_count + 1;
+        let x = ps.pcount + stmt.slot_count;
+        stmt.slot_count = stmt.slot_count + 1;
+        forst.for_bare[fp] = 1;
+        forst.for_arr[fp] = 1;
+        // Open the body frame, as the bare range form's `{` does.
+        forst.for_phase[fp] = 7;
+        forst.for_stmt_start[fp] = stmt.stmt_count;
+        forst.for_seq[fp] = stmt.open_seq;
+        stmt.open_seq = stmt.open_seq + 1;
+        stmt.pbase[stmt.pbase_sp] = stmt.stmt_base;
+        stmt.pbase_sp = stmt.pbase_sp + 1;
+        stmt.stmt_base = stmt.pstmt_sp;
+        // The start and end literals the build pops, then the element read.
+        hq_push(Node::Literal() as Word, 0);
+        hq_push(Node::Literal() as Word, len);
+        hq_push(Node::Local() as Word + tmp * 64, 0 - 1);
+        hq_push(Node::Local() as Word + forst.for_vslot[fp] * 64, 0 - 1);
+        hq_push(Node::ArrIndex() as Word + kind * 64, 0 - 1);
+        // `let x = tmp[ctr];` as the body's first statement, with `x` in scope.
+        stmt.stmt_kind[stmt.stmt_count] = Node::LetIn() as Word;
+        stmt.stmt_arg[stmt.stmt_count] = x;
+        stmt.stmt_name[stmt.stmt_count] = forst.for_var[fp];
+        stmt.stmt_type[stmt.stmt_count] = 0;
+        stmt.stmt_count = stmt_push(stmt.stmt_count);
+        clear_let_shape(stmt.let_count);
+        stmt.let_names[stmt.let_count] = forst.for_var[fp];
+        stmt.scope_slot[stmt.let_count] = x;
+        stmt.let_scalar[stmt.let_count] = 1;
+        vl.locals[stmt.let_count] = kind + 1;
+        vl.local_desc[stmt.let_count] = 0;
+        stmt.let_count = let_push(stmt.let_count);
+        ops.expect_operand = 1;
+        0
+    }
+}
+
 fn step_forin_emit(fp: Word) -> Word {
     if forst.for_emit_i == 0 {
         forst.for_emit_i = 1;
@@ -5701,7 +5812,8 @@ fn step_forin_emit(fp: Word) -> Word {
     } else {
     if forst.for_emit_i == 3 {
         forst.for_emit_i = 4;
-        ps.emit_arg = 0;
+        ps.emit_arg = forst.for_arr[fp];
+        forst.for_arr[fp] = 0;
         69
     } else {
         // The loop's parts are emitted; record its ForIn statement, pop the loop context,
@@ -5843,10 +5955,11 @@ fn field_value_record() -> Word {
 
 fn step_fieldaccess(k: Word, v: Word) -> Word {
     if ps.fa_phase == 4 {
+        // A name that is no field of the struct, followed by `(`, is a method on it.
+        ps.fa_phase = 0;
         if k == Tok::LParen() as Word {
-            perr(pe_method_syntax(), toks.at);
-        } else { perr(pe_unknown_field(), ps.unresolved_name); }
-        0
+            method_call(structdefs.sd_name[ps.fa_struct], ps.unresolved_name, toks.at)
+        } else { perr(pe_unknown_field(), ps.unresolved_name) }
     } else {
     if ps.fa_phase == 1 {
         if k == Tok::Dot() as Word {
@@ -6200,7 +6313,26 @@ fn record_let_annotation(k: Word, v: Word) -> Word {
 
 // A declared scalar cannot have a field or element. Push any ordinary operator
 // back for the existing dispatch. Unknown and composite types never enter this path.
-fn step_scalar_postfix(k: Word) -> Word {
+// `recv.m(args)`: the receiver is already emitted, so resolve `m` on its type head through
+// the method table and open the call with the receiver counted as its first argument,
+// exactly as the pipe does. The `(` is pushed back for the call path to open.
+fn method_call(head: Word, name: Word, at: Word) -> Word {
+    ps.found_flag = 0;
+    for i in 0..toks.mt_count limit 64 {
+        if toks.mt_head[i] == head andalso toks.mt_name[i] == name {
+            call.call_pending = toks.mt_chunk[i];
+            ps.found_flag = 1;
+        }
+    }
+    if ps.found_flag == 0 { perr(pe_method_syntax(), at) } else {
+        call.pipe_args = 1;
+        call.call_phase = 1;
+        ps.cursor = ps.cursor - 1;
+        0
+    }
+}
+
+fn step_scalar_postfix(k: Word, v: Word) -> Word {
     if ps.scalar_postfix == 1 {
         ps.scalar_postfix = 0;
         if k == Tok::Dot() as Word {
@@ -6215,11 +6347,14 @@ fn step_scalar_postfix(k: Word) -> Word {
     } else {
         if ps.scalar_postfix == 2 andalso k == Tok::Ident() as Word {
             ps.scalar_postfix = 3;
+            ps.unresolved_name = v;
             0
         } else {
             ps.scalar_postfix = 0;
             if k == Tok::LParen() as Word {
-                perr(pe_method_syntax(), ps.scalar_field_at)
+                // A method on a scalar receiver, whose head is its scalar type's name.
+                let head = if vl.scalar == 3 { toks.word_id } else { if vl.scalar == 2 { toks.byte_id } else { if vl.scalar == 1 { toks.bool_id } else { 0 - 1 } } };
+                method_call(head, ps.unresolved_name, ps.scalar_field_at)
             } else {
                 perr(pe_scalar_field(), ps.scalar_field_at)
             }
@@ -6385,7 +6520,8 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         // A call name was read; the `(` opens the argument list.
         if k == Tok::LParen() as Word {
             call.call_chunk[call.call_sp] = call.call_pending;
-            call.call_count[call.call_sp] = 0;
+            call.call_count[call.call_sp] = call.pipe_args;
+            call.pipe_args = 0;
             call.call_sp = call_push(call.call_sp);
             ops.opstack[ops.opsp] = OpCode::CallMark() as Word;
             ops.opsp = op_push(ops.opsp);
@@ -6858,8 +6994,11 @@ fn step_draining() -> Word {
         if ops.drain_reason == 18 {
             ops.draining = 0; ops.expect_operand = 1;
             checked.phase[checked.depth - 1] = 7; 0
-        } else { if ops.drain_reason == 19 {
-            ops.draining = 0; checked.emit = 1; 0
+        } else { if ops.drain_reason == 19 orelse ops.drain_reason == 20 orelse ops.drain_reason == 21 {
+            ops.draining = 0;
+            if ops.drain_reason == 21 { for_array_open() } else {
+            if ops.drain_reason == 20 { call.pipe_args = 1; ops.expect_operand = 1; } else { checked.emit = 1; }
+            0 }
         } else {
         if ops.drain_reason <= 4 {
             // A statement, block, condition or branch tail has fully folded, so the
@@ -6872,6 +7011,7 @@ fn step_draining() -> Word {
             ps.last_struct = 0; ps.last_tuple = 0;
             ps.last_array = 0; ps.last_array_struct = 0; ps.last_array_enum = 0;
             ps.last_array_tuple = 0; ps.last_array_arr = 0;
+            call.pipe_args = 0;
         }
         if ops.drain_reason == 0 {
             if stmt.pstmt_sp > stmt.stmt_base {
@@ -7297,13 +7437,19 @@ fn body_next() -> Word {
             // Tok 67 is a byte the lexer does not recognize, among them the pipe and closure
             // bars. Refuse it rather than let a branch below skip it.
             if k == 67 { perr(pe_unresolved_syntax(), toks.at); }
+            // A `_` where a call argument is expected is the pipe's placeholder, `x |> f(a, _)`,
+            // which this stage does not place. Refused here, before reconstruct meets a call
+            // whose operand count disagrees with its records.
+            if k == 50 andalso ops.expect_operand == 1 andalso ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] == OpCode::CallMark() as Word {
+                perr(pe_unresolved_syntax(), toks.at);
+            }
             // A pending struct-field-access postfix intercepts the next token here, before the
             // normal dispatch, so the deep `step_dispatch_normal` chain is not deepened.
             if ps.unresolved_pending == 1 {
                 step_unresolved_name(k)
             } else {
             if ps.scalar_postfix >= 1 {
-                step_scalar_postfix(k)
+                step_scalar_postfix(k, v)
             } else {
             if ps.fa_phase >= 1 {
                 step_fieldaccess(k, v)
@@ -7390,19 +7536,76 @@ fn arm_body() -> Word {
 // it (drain reason 11), emits the guard's Done, and arms the real body. The guard
 // and body share the parameter frame, so no slot is consumed here.
 fn arm_guard() -> Word {
+    // A literal head already carries its test as the guard, and the reference tests the
+    // pattern and the guard with two separate branches, which one guard cannot express.
+    if ps.plit > 0 { perr(pe_pattern_syntax(), toks.at); }
     arm_body();
     ps.in_guard = 1;
     17
+}
+
+// Queue one record for emission ahead of the next token. `arg` is the full-word payload,
+// or -1 for a packed record whose payload is already in `tag`.
+fn hq_push(tag: Word, arg: Word) -> Word {
+    if ps.hq_n < 8 { ps.hq_tag[ps.hq_n] = tag; ps.hq_arg[ps.hq_n] = arg; ps.hq_n = ps.hq_n + 1; }
+    0
+}
+
+fn hq_take() -> Word {
+    let t = ps.hq_tag[ps.hq_i];
+    ps.emit_arg = ps.hq_arg[ps.hq_i];
+    ps.hq_i = ps.hq_i + 1;
+    if ps.hq_i >= ps.hq_n { ps.hq_i = 0; ps.hq_n = 0; }
+    t
+}
+
+// A literal parameter, `fn f(0)`. It occupies the parameter slot under no name, emits the
+// literal-parameter record (tag 130, the literal as payload), and queues the guard
+// `p0 == lit` in the records a written `when p0 == lit` produces: GUARDSTART, the Local,
+// the Literal, the `==` BinOp and DONE. The reference lowers the pattern test to
+// `GetLocal(0) Const(lit) CmpEq If`, which is what that guard lowers to. Only a single,
+// non-negative literal small enough to pack is admitted.
+fn literal_param(v: Word) -> Word {
+    ps.pname = 0;
+    if ps.pcount != 0 orelse v < 0 orelse v >= 1099511627776 { perr(pe_pattern_syntax(), toks.at); }
+    ps.pnames[ps.pcount] = 0 - 1;
+    ps.pstruct[ps.pcount] = 0;
+    ps.pdescriptor[ps.pcount] = 0;
+    ps.ptext[ps.pcount] = 0;
+    ps.ptuple[ps.pcount] = 0;
+    ps.penum[ps.pcount] = 0;
+    ps.parray[ps.pcount] = 0;
+    ps.parray_struct[ps.pcount] = 0;
+    ps.parray_tuple[ps.pcount] = 0;
+    ps.parray_arr[ps.pcount] = 0;
+    ps.parray_enum[ps.pcount] = 0;
+    ps.pbyte[ps.pcount] = 0;
+    ps.pscalar[ps.pcount] = 0;
+    vl.params[ps.pcount] = 0;
+    ps.pcount = param_push(ps.pcount);
+    ps.plit = ps.plit + 1;
+    hq_push(17, 0 - 1);
+    hq_push(Node::Local() as Word, 0 - 1);
+    hq_push(Node::Literal() as Word + v * 64, 0 - 1);
+    hq_push(Node::BinOp() as Word + OpCode::Eq() as Word * 64, 0 - 1);
+    hq_push(15, 0 - 1);
+    ps.emit_arg = v;
+    130
 }
 
 fn header_step(k: Word, v: Word) -> Word {
     if ps.mode == 0 {
         // A `shared`/`private`/`const` modifier or a bare `data` keyword opens a data
         // block; otherwise a function category keyword (`yield`, `loop`, or `fn`).
-        if k == 14 {
+        if k == 14 orelse (ps.in_impl == 1 andalso k == 3) {
+            if k == 3 {
+                // The `}` closing an impl body. END closes the impl's record group.
+                ps.in_impl = 0;
+                5
+            } else {
             ps.dvis = 0;
             ps.mode = 4;
-            0
+            0 }
         } else {
         if k == 15 {
             ps.dvis = 1;
@@ -7441,17 +7644,28 @@ fn header_step(k: Word, v: Word) -> Word {
             19
         } else {
         if k == 56 {
-            // `impl`: an impl block. Emit IMPLSTART and enter the skip machine over its
-            // header (`Type` or `Trait for Type`) and brace-matched body; each method name
-            // is captured as an MNAME, exactly as for a trait.
-            ps.mode = 21;
-            20
+            // `impl Trait for Head { fn .. }`: read the header in modes 23 to 26, then parse
+            // each method as a function. A method is the chunk `Trait::Head::name`.
+            ps.mode = 23;
+            0
         } else {
-        if k == 19 {
+        if k == 19 orelse k == 69 orelse k == 70 orelse k == 71 {
+            // `pure`, Tok 70, and `ephemeral`, Tok 71, change nothing the reference emits for
+            // a program it accepts: it discards `pure` while parsing, and `ephemeral` only
+            // makes it reject an entry it cannot prove ephemeral. Both are consumed here,
+            // and the reference keeps the rejection.
+            if k == 70 orelse k == 71 { 0 } else {
+            if k == 69 {
+                // `signed`, Tok 69, a reserved word that modifies the head after it. The
+                // reference admits it only on `main` and then sets the module's
+                // requires-signature flag. Record 131 tells the host which head it marks.
+                ps.emit_arg = 0;
+                131
+            } else {
             // `use`: a native import declaration. Emit USTART and scan the path.
             ps.mode = 8;
             ps.has_imports = 1;
-            10
+            10 } }
         } else {
         if k == 1 andalso v == toks.require_id {
             // A `require` machine-property directive (`require word >= N;`), a lowercase
@@ -7488,6 +7702,7 @@ fn header_step(k: Word, v: Word) -> Word {
             ps.arr = 0;
             ps.arr_ret = 0;
             ps.pcount = 0;
+            ps.plit = 0;
             ps.text_params = 0; ps.text_used = 0; ps.text_return = 0;
             // Capture this function's chunk index (its name's position in `toks.chunks`) so its
             // return type is recorded against it.
@@ -7495,6 +7710,13 @@ fn header_step(k: Word, v: Word) -> Word {
             for i in 0..toks.chunk_count limit 1024 {
                 if toks.chunks[i] == v {
                     ps.cur_chunk = i;
+                }
+            }
+            // A method's chunk is found by its head and name, since its chunk-table entry
+            // names no interned identifier.
+            if ps.in_impl == 1 {
+                for i in 0..toks.mt_count limit 64 {
+                    if toks.mt_head[i] == ps.impl_head andalso toks.mt_name[i] == v { ps.cur_chunk = toks.mt_chunk[i]; }
                 }
             }
             ps.mode = 2;
@@ -7519,8 +7741,8 @@ fn header_step(k: Word, v: Word) -> Word {
         }
         0
     } else {
-    if ps.mode == 21 orelse ps.mode == 22 {
-        header_skip_block(k, v)
+    if ps.mode >= 21 andalso ps.mode <= 26 {
+        if ps.mode >= 23 { header_impl(k, v) } else { header_skip_block(k, v) }
     } else {
         header_enum(k, v)
     } } } } } } }
@@ -7543,6 +7765,10 @@ fn header_skip_block(k: Word, v: Word) -> Word {
         0
     } else {
         if k == 2 {
+            // Only a trait reaches this machine now. A `{` at its body's depth opens a
+            // default method body, whose chunk the reference emits and this skip would
+            // drop, so it is refused.
+            if ps.idepth == 1 { perr(pe_method_syntax(), toks.at); }
             ps.idepth = ps.idepth + 1;
             0
         } else {
@@ -7569,6 +7795,29 @@ fn header_skip_block(k: Word, v: Word) -> Word {
     }
 }
 
+// The header of `impl Trait for Head {`: 23 the trait, 24 `for`, 25 the head, 26 the `{`.
+// The `{` emits IMPLSTART carrying the trait and queues record 132 carrying the head, and
+// the body is then parsed in mode 0 with `in_impl` set, so each `fn` is a method. Anything
+// else, such as an inherent or a generic impl, is refused.
+fn header_impl(k: Word, v: Word) -> Word {
+    if ps.mode == 23 {
+        if k == Tok::Ident() as Word { ps.impl_trait = v; ps.mode = 24; 0 } else { perr(pe_method_syntax(), toks.at) }
+    } else {
+    if ps.mode == 24 {
+        if k == Tok::For() as Word { ps.mode = 25; 0 } else { perr(pe_method_syntax(), toks.at) }
+    } else {
+    if ps.mode == 25 {
+        if k == Tok::Ident() as Word { ps.impl_head = v; ps.mode = 26; 0 } else { perr(pe_method_syntax(), toks.at) }
+    } else {
+        if k == Tok::LBrace() as Word {
+            ps.mode = 0;
+            ps.in_impl = 1;
+            hq_push(132, ps.impl_head);
+            20 + ps.impl_trait * 64
+        } else { perr(pe_method_syntax(), toks.at) }
+    } } }
+}
+
 // The `use path::name` native import: emit a UPATH per `::`-separated segment; a non-`::`
 // token ends the declaration (emit END) and is pushed back to open the next declaration.
 // Each segment is also recorded in the native table, so a qualified call can resolve it.
@@ -7576,7 +7825,16 @@ fn header_skip_block(k: Word, v: Word) -> Word {
 // tell `use host::*` from `use host`, and a skipped signature would take its tokens into
 // the next declaration.
 fn header_use(k: Word, v: Word) -> Word {
-    if k == 1 {
+    if call.nat_sig > 0 { use_signature(k, v) } else {
+    // `use external path`, Tok 72 before the first segment, marks the row external.
+    if k == 72 andalso call.nat_seg == 0 andalso call.nat_count < 64 { call.nat_ext[call.nat_count] = 1; }
+    if k == 72 andalso call.nat_seg == 0 { 0 } else {
+    // A segment continues the path only as the first segment or after a `::`. Any other
+    // identifier begins the next declaration. Two consecutive identifiers used to join,
+    // so `use host::open` followed by `require word >= 64;` read as the path
+    // `host::open::require::word`, which swallowed the directive.
+    if k == 1 andalso (call.nat_seg == 0 orelse call.nat_cc == 1) {
+        call.nat_cc = 0;
         if call.nat_seg < 2 andalso call.nat_count < 64 {
             call.nat_path[call.nat_count * 2 + call.nat_seg] = v;
         }
@@ -7584,24 +7842,72 @@ fn header_use(k: Word, v: Word) -> Word {
         11 + v * 64
     } else {
     if k == 51 {
+        call.nat_cc = 1;
         0
     } else {
-    if k == Tok::Star() as Word orelse k == Tok::LParen() as Word {
+    if k == Tok::Star() as Word {
         perr(pe_unresolved_syntax(), toks.at)
+    } else {
+    if k == Tok::LParen() as Word {
+        // A signature. Its parameter types change nothing the call lowers to, and the
+        // reference checks them, so they are skipped. Its return type fixes the native's
+        // return shape.
+        call.nat_sig = 1;
+        call.nat_sdepth = 1;
+        0
     } else {
         native_import_end();
         ps.cursor = ps.cursor - 1;
         ps.mode = 0;
         5
+    } } } } } }
+}
+
+// A `use` signature after its `(`. Record 133 carries a named return type's name id and
+// record 134 a `()` return. Either queues the END that closes the import, since the
+// signature's last token ends it. A tuple or other composite return is refused.
+fn use_signature(k: Word, v: Word) -> Word {
+    if call.nat_sig == 1 {
+        if k == Tok::LParen() as Word { call.nat_sdepth = call.nat_sdepth + 1; }
+        if k == Tok::RParen() as Word {
+            call.nat_sdepth = call.nat_sdepth - 1;
+            if call.nat_sdepth == 0 { call.nat_sig = 2; }
+        }
+        0
+    } else {
+    if call.nat_sig == 2 {
+        if k == 4 { call.nat_sig = 3; 0 } else { perr(pe_unresolved_syntax(), toks.at) }
+    } else {
+    if call.nat_sig == 3 {
+        if k == Tok::Ident() as Word {
+            call.nat_sig = 0;
+            native_import_end();
+            ps.mode = 0;
+            hq_push(5, 0 - 1);
+            ps.emit_arg = v;
+            133
+        } else {
+        if k == Tok::LParen() as Word { call.nat_sig = 4; 0 } else { perr(pe_unresolved_syntax(), toks.at) } }
+    } else {
+        if k == Tok::RParen() as Word {
+            call.nat_sig = 0;
+            native_import_end();
+            ps.mode = 0;
+            hq_push(5, 0 - 1);
+            ps.emit_arg = 0;
+            134
+        } else { perr(pe_unresolved_syntax(), toks.at) }
     } } }
 }
 
 // Close one native import row. Sixty-four rows fill the table, and a sixty-fifth `use` is
 // refused rather than given an index the table cannot hold.
 fn native_import_end() -> Word {
+    call.nat_cc = 0;
     if call.nat_count >= 64 { perr(pe_unresolved_syntax(), call.nat_count) } else {
         if call.nat_seg != 2 { call.nat_path[call.nat_count * 2] = 0 - 1; }
         call.nat_count = call.nat_count + 1;
+        call.nat_ext[call.nat_count] = 0;
         call.nat_seg = 0;
         0
     }
@@ -8531,7 +8837,7 @@ fn header_sig(k: Word, v: Word) -> Word {
     // this stage does not lower. It used to fall through the scan unrecorded, so
     // `fn f(0)` became a head with no parameter and no test, a silent miscompile that only
     // the shipping cross-check refused.
-    if ps.pdepth == 1 andalso ps.pname == 1 andalso k != Tok::Ident() as Word andalso k != Tok::RParen() as Word {
+    if ps.pdepth == 1 andalso ps.pname == 1 andalso k != Tok::Ident() as Word andalso k != Tok::RParen() as Word andalso k != Tok::IntLit() as Word {
         perr(pe_pattern_syntax(), toks.at);
     }
     if ps.pdepth == 1 andalso ps.pname == 1 andalso k == Tok::Ident() as Word andalso (v == toks.true_id orelse v == toks.false_id) {
@@ -8739,7 +9045,7 @@ fn header_sig(k: Word, v: Word) -> Word {
             }
             8 + v * 64
         } else {
-            0
+            if ps.pdepth == 1 andalso ps.pname == 1 { literal_param(v) } else { 0 }
         }
         }
     } else {
@@ -8786,6 +9092,10 @@ fn header_sig(k: Word, v: Word) -> Word {
         if ps.pdepth == 0 {
             ps.pdone = 1;
             ps.rtype = 1;
+            // A literal is admitted only as the sole parameter. The reference tests every
+            // pattern before it binds any variable, so a literal beside a variable, or two
+            // literals, would need tests the one guard cannot order.
+            if ps.plit > 0 andalso ps.pcount != 1 { perr(pe_pattern_syntax(), toks.at); }
         }
         0
         }
@@ -8897,7 +9207,7 @@ fn step() -> Word {
     } else {
         ps.emit_arg = 0 - 1;
         let in_body = ps.in_body;
-        let w = step_body();
+        let w = if ps.hq_i < ps.hq_n { hq_take() } else { step_body() };
         if in_body == 1 andalso ps.perr_code == 0 { value_record(w); }
         // A guard fired somewhere below. Report it INSTEAD of the record just computed:
         // that record was produced from clamped state and is meaningless, and the host
