@@ -203,3 +203,15 @@ PipelineRejects and 4 RefRejects. `05_pipeline.kel` and `06_multiheaded.kel` bec
 Identical. `parse.kel` interns 1,016 names.
 
 Slices 2 and 3a merged as pull request 538 at `84cbea1d`, CI run 40246546955.
+
+Slice 3b merged as pull request 540 at `83aabf16`, CI run 40252531803.
+
+**Slice 3c, 2026-10-25, three more dropped tokens.** A `use` path joined any two
+consecutive identifiers, so `use host::open` followed by `require word >= 64;` read as
+one path, which swallowed the directive and left the Order 5 framing program's data block
+misparsed. A segment now continues the path only after `::`, and `src/crypto_frame/frame.kel`
+compiles byte-identically. A leading shebang line is skipped as the reference lexer skips
+it. And the operator dispatch's last arm returned without a record for any token it did
+not claim, which dropped a `.` after an untyped value and had made a float literal diverge
+by accident; it now refuses, and the full suite shows no stage source reaching it. The
+corpus reads 53 Identical.

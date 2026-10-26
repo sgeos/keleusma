@@ -12984,8 +12984,9 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // blob cap was not raised, and 18,936 bytes of it remain. Slice 3b's pipe and
     // literal heads added nine, `pipe_args`, `plit`, the four `hq` queue names,
     // `hq_push`, `hq_take` and `literal_param`, and the blob reached 30,514 bytes.
-    assert_eq!(worst_names, 1016, "the worst-case name count moved");
-    assert_eq!(worst_blob, 30514, "the worst-case blob size moved");
+    // The `use` path separator flag `nat_cc` made it 1017 and 30,527 bytes.
+    assert_eq!(worst_names, 1017, "the worst-case name count moved");
+    assert_eq!(worst_blob, 30527, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

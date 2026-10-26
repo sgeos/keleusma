@@ -6,6 +6,11 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-25 Order 6 slice 3c, use paths, shebangs and the operator sink
+
+Three more dropped tokens are refused or handled. The Order 5 framing program now
+compiles byte-identically, and the corpus reads 53 of 75 identical. PR 540 merged.
+
 ## 2026-10-25 Order 6 slice 3b, the pipe and literal heads
 
 The pipe operator and single literal parameter heads compile byte-identically, and the

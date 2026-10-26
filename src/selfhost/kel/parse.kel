@@ -1492,6 +1492,8 @@ private data call {
     nat_path: [Word; 128],
     nat_count: Word,
     nat_seg: Word,
+    // Set by a `::` inside a `use`, so only a segment that follows one continues the path.
+    nat_cc: Word,
     // The array-literal context stack, parallel to the call stack: `al_count` the running
     // element count per open `[...]` literal, `al_sp` the nesting depth. Its `,` drains through
     // the same `step_cdraining` (generalised to the ArrayMark), its `]` emits the ArrayLit.
@@ -5198,7 +5200,11 @@ fn step_op(k: Word) -> Word {
             ops.expect_operand = 1;
             0
         } else {
-            0
+            // A token no branch above claimed, where an operator was expected. This arm
+            // used to return 0 and so skip the token, which is how a `.` after an
+            // untyped value vanished and left reconstruct three nodes it could not fold.
+            // Refused instead, so whatever reaches here is named rather than dropped.
+            perr(pe_unresolved_syntax(), toks.at)
         }
     } } } } } } } } }
 }
@@ -7658,7 +7664,12 @@ fn header_skip_block(k: Word, v: Word) -> Word {
 // tell `use host::*` from `use host`, and a skipped signature would take its tokens into
 // the next declaration.
 fn header_use(k: Word, v: Word) -> Word {
-    if k == 1 {
+    // A segment continues the path only as the first segment or after a `::`. Any other
+    // identifier begins the next declaration. Two consecutive identifiers used to join,
+    // so `use host::open` followed by `require word >= 64;` read as the path
+    // `host::open::require::word`, which swallowed the directive.
+    if k == 1 andalso (call.nat_seg == 0 orelse call.nat_cc == 1) {
+        call.nat_cc = 0;
         if call.nat_seg < 2 andalso call.nat_count < 64 {
             call.nat_path[call.nat_count * 2 + call.nat_seg] = v;
         }
@@ -7666,6 +7677,7 @@ fn header_use(k: Word, v: Word) -> Word {
         11 + v * 64
     } else {
     if k == 51 {
+        call.nat_cc = 1;
         0
     } else {
     if k == Tok::Star() as Word orelse k == Tok::LParen() as Word {
@@ -7681,6 +7693,7 @@ fn header_use(k: Word, v: Word) -> Word {
 // Close one native import row. Sixty-four rows fill the table, and a sixty-fifth `use` is
 // refused rather than given an index the table cannot hold.
 fn native_import_end() -> Word {
+    call.nat_cc = 0;
     if call.nat_count >= 64 { perr(pe_unresolved_syntax(), call.nat_count) } else {
         if call.nat_seg != 2 { call.nat_path[call.nat_count * 2] = 0 - 1; }
         call.nat_count = call.nat_count + 1;
