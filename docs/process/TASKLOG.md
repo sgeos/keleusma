@@ -6,6 +6,17 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-26 Wildcard and unused payloads
+
+Wildcard payload patterns compile byte-identically, and an unused named payload no longer
+panics type-input extraction. PR 548 merged.
+
+## 2026-10-26 A `break` in a bare `for`
+
+A `break` in a `for` without `limit` was miscompiled into an outcome store over the first
+parameter and an unpatched `Break`, which the cross-check refused. It now compiles
+byte-identically. PR 546 merged.
+
 ## 2026-10-26 Order 6 slice 8 and a time-bound defect
 
 Tuple returns in `use` signatures are accepted, and the RTOS prelude and all five task

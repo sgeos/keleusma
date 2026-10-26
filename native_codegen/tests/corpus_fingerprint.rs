@@ -267,6 +267,10 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // Order 6 slices 6 to 8, changed `analyze.kel` and `parse.kel`. The
 // `analyze.kel` change makes the stage charge an enum match as the reference
 // verifier does, and the reference is unchanged. Nothing was added or removed.
+//
+// **RE-PINNED 2026-10-26, absorption 99.** Upstream pull requests 548 and 549
+// changed `codegen.kel` and `parse.kel`, to lower a break in a bare `for` loop
+// and wildcard payload patterns. Nothing was added or removed.
 const PINNED: &[(&str, u64)] = &[
     // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
     // added or removed. Every census this instrument names to re-derive was run on
@@ -465,11 +469,11 @@ const PINNED: &[(&str, u64)] = &[
         0xf93a5bd822bfe99c,
     ),
     ("src/selfhost/kel/analyze.kel", 0xdb016d0e69c96ebf),
-    ("src/selfhost/kel/codegen.kel", 0x8d2644bcc4b74a80),
+    ("src/selfhost/kel/codegen.kel", 0xf205891a7b59f2fc),
     ("src/selfhost/kel/lexer.kel", 0xb42fe447663faa7d),
     // Absorption 83 changes cast Byte tracking and FixedDiv classification.
     // The non-corpus run re-derived coverage and refusal figures unchanged.
-    ("src/selfhost/kel/parse.kel", 0x62d673c97721f4e7),
+    ("src/selfhost/kel/parse.kel", 0x80a7e149f5565ffd),
     ("src/selfhost/kel/reconstruct.kel", 0xa3a0cf5106e41e74),
     ("src/selfhost/kel/verify_datalayout.kel", 0xe625b5656d576b86),
     ("src/selfhost/kel/verify_depth.kel", 0x0e54e2467d0b499f),
