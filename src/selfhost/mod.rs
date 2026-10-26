@@ -5431,7 +5431,9 @@ pub fn seed_verify_depth_shared(vm: &Vm<'_, '_>, chunk: &crate::bytecode::Chunk)
             vm,
             &mut shared,
             DV_IS_TERM + i,
-            i64::from(matches!(op, Op::Trap(_) | Op::Return)),
+            // `Reset` ends a path as `Trap` and `Return` do, as the reference walk treats it,
+            // so a stream chunk ending in `Reset` does not fall through.
+            i64::from(matches!(op, Op::Trap(_) | Op::Return | Op::Reset)),
         );
     }
     shared
