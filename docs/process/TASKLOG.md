@@ -6,6 +6,11 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-26 Order 6 slices 2b, 5, 5b and 5c
+
+`use` signatures with scalar returns, and Float arithmetic, literals and negation, compile
+byte-identically. The construct boundary reads 112 of 117 SOk.
+
 ## 2026-10-25 Order 6 slices 3d, 3e and 4
 
 The array `for`, the function and import modifiers, and trait impls with method calls

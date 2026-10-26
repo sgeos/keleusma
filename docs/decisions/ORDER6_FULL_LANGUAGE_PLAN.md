@@ -250,3 +250,22 @@ became Identical, and the corpus reads 57 of 75.
 **A defect in the name-cap doubling.** `nout_capacity` stayed at 2048 when `nout` doubled,
 so `wire.kel` refused any module past 1,024 names. No module reached that until slice 4
 took `parse.kel` to 1,029 names, and it is now 4096.
+
+**Slice 2b, 2026-10-25, `use` signatures.** A signature's parameter types change nothing
+the call lowers to, and the reference checks them, so the parser skips them. Its return
+type fixes the native's return shape, Scalar kind 3, 2, 1 and 0 for `Word`, `Byte`,
+`bool` and `()`. A tuple or other composite return is refused. On the V0.3.X line's
+request, the shared `rogue_dungen.kel` now declares `rng_range`'s signature as that line
+has since 2026-08-14. Its outcome stays NoVerdict, at the parser's expression-layout
+capacity.
+
+**Slices 5, 5b and 5c, 2026-10-25, Float arithmetic, literals and negation.** The
+reference lowers `+`, `-` and `*` on two Floats to the unchecked Add, Sub and Mul, `/` and
+`%` to Div and Mod followed by `PopN(2)`, and a Float negation to the unchecked Neg. The
+parser marks two Float operands, scalar kind 5, on the Byte arithmetic record flagged so
+the result stays a Float, and flags a Float negation. A float literal is lexed as
+`digits.digits`, Tok 73, carrying its interned text, which the host converts with the
+`f64` parser the reference lexer uses rather than reimplementing a correctly rounded
+conversion in a stage. Codegen interns it with pool tag 3 and emits Neg through a new
+transport tag, 69. A suffixed float literal is refused. The boundary table reads 117
+cases, 112 SOk, 2 Refuses, 2 Diverges and 1 RefRejects.
