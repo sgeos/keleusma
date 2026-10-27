@@ -10589,12 +10589,16 @@ fn the_float_literal_and_the_float_type_both_compile() {
 #[cfg(feature = "self-host")]
 #[test]
 fn a_divergence_refusal_localises_and_does_not_assign_fault() {
-    const GENERIC: &str = "fn id<T>(x: T) -> T { x }\nfn main() -> Word { id(1) }";
+    // Struct equality over an array of tuples of structs, boundary row
+    // `eq/struct_field_array_of_tuple__GAP`. It replaced a generic call, which compiles
+    // byte-identically since Order 6 slice 7.
+    const DIVERGENT: &str =
+        "struct P { x: Word }\nstruct S { g: [(P, Word); 2] }\nfn f(a: S, b: S) -> bool { a == b }";
     let target = keleusma::target::Target::host();
 
-    let err = keleusma::selfhost::self_hosted_compile(GENERIC, &target).expect_err(
-        "this program no longer diverges. If the self-hosted pipeline gained generics, this \
-         corpus needs a different divergence rather than a relaxed assertion",
+    let err = keleusma::selfhost::self_hosted_compile(DIVERGENT, &target).expect_err(
+        "this program no longer diverges. If struct equality over this shape now compiles, \
+         this corpus needs a different divergence rather than a relaxed assertion",
     );
     let text = format!("{err}");
 
@@ -10604,7 +10608,7 @@ fn a_divergence_refusal_localises_and_does_not_assign_fault() {
          and this test is not measuring the cross-check. Message was: {text}"
     );
     assert!(
-        text.contains("id"),
+        text.contains("chunk `f`"),
         "the refusal no longer names the offending chunk, so whoever investigates gets a \
          bare statement that the two disagree with no pointer to where. Message was: {text}"
     );

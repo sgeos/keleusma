@@ -129,6 +129,45 @@ shared data toks {
     option_id: Word,
     some_id: Word,
     none_id: Word,
+    // Generic function templates, Order 6, APPENDED, seeded from the host's syntactic scan.
+    // Per template, its name id and the token positions of its `fn`, its `<`, its `(` and its
+    // closing brace, its type parameter count and name ids, four per template, and per value
+    // parameter, eight per template, the type parameter it is written as, plus one, else
+    // zero. `gen_rmap` is the same for the return type.
+    gen_count: Word,
+    gen_name: [Word; 16],
+    gen_fn: [Word; 16],
+    gen_lt: [Word; 16],
+    gen_paren: [Word; 16],
+    gen_end: [Word; 16],
+    gen_ntp: [Word; 16],
+    gen_tp: [Word; 64],
+    gen_pmap: [Word; 128],
+    gen_rmap: [Word; 16],
+    // The seeded instantiations. Per row, its template, its key, the type parameters' scalar
+    // kinds in base four with the first parameter lowest, its chunk index and its name id.
+    spec_count: Word,
+    spec_gen: [Word; 64],
+    spec_key: [Word; 64],
+    spec_chunk: [Word; 64],
+    spec_name: [Word; 64],
+}
+
+// The instantiation state, Order 6. `active` is the row plus one being parsed, `next` the
+// next row to parse at end of input, and the requests are instantiations a call needed that
+// the host did not seed, emitted at end of input so the host can seed them and parse again.
+private data gn {
+    active: Word,
+    next: Word,
+    req_n: Word,
+    req_i: Word,
+    req_gen: [Word; 64],
+    req_key: [Word; 64],
+    // Scratch for the helpers below, so they disturb no shared lookup state.
+    tmp: Word,
+    pw: Word,
+    key: Word,
+    kind: Word,
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -1554,6 +1593,9 @@ private data call {
     call_count: [Word; 9],
     // Per open call, 1 when a `|>` opened it, 2 once its placeholder `_` was placed, Order 6.
     call_piped: [Word; 9],
+    // Per open call, each argument's scalar kind in base four, the first argument lowest,
+    // for a call to a generic template, Order 6.
+    call_akind: [Word; 9],
     call_sp: Word,
     call_pending: Word,
     call_phase: Word,
@@ -2112,6 +2154,11 @@ fn step_global_ident(v: Word) -> Word {
             call.call_pending = i;
             ps.found_flag = 1;
         }
+    }
+    // A generic template is not a chunk. Its call resolves at the close, Order 6.
+    if ps.found_flag == 0 andalso gen_template_of(v) >= 0 {
+        call.call_pending = 4096 + gn.tmp;
+        ps.found_flag = 1;
     }
     if ps.found_flag == 1 {
         call.call_phase = 1;
@@ -5081,10 +5128,12 @@ fn step_closing() -> Word {
             ops.opsp = op_pop(ops.opsp);
             ops.closing = 0;
             if ops.expect_operand == 0 {
+                gen_note_arg(call.call_sp - 1);
                 call.call_count[call.call_sp - 1] = call.call_count[call.call_sp - 1] + 1;
             }
             call.call_sp = call.call_sp - 1;
             ops.expect_operand = 0;
+            if call.call_chunk[call.call_sp] >= 4096 { gen_call_close(call.call_sp); }
             if call.call_chunk[call.call_sp] >= 1024 {
                 // A native call, record tag 80, carrying the import row and the argument
                 // count as `row + count * 1024`. A declared enum return makes the result that
@@ -5215,6 +5264,7 @@ fn step_cdraining() -> Word {
             ops.expect_operand = 1;
             0
         } else {
+            gen_note_arg(call.call_sp - 1);
             call.call_count[call.call_sp - 1] = call.call_count[call.call_sp - 1] + 1;
             ops.expect_operand = 1;
             0
@@ -6993,6 +7043,9 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         // A call name was read; the `(` opens the argument list.
         if k == Tok::LParen() as Word {
             call.call_chunk[call.call_sp] = call.call_pending;
+            // A piped argument's kind is left unknown, so a pipe into a template is refused. The
+            // reference keeps such a call generic rather than instantiating it.
+            call.call_akind[call.call_sp] = 0;
             call.call_count[call.call_sp] = call.pipe_args;
             call.call_piped[call.call_sp] = call.pipe_args;
             call.pipe_args = 0;
@@ -7916,9 +7969,10 @@ fn body_next() -> Word {
             let token = toks.packed[ps.cursor - toks.base];
             let kind = token % 256;
             let k0 = if kind == 65 { 12 } else { kind };
-            let v = if kind == 65 { toks.values[token / 256] } else { token / 256 };
+            let v0 = if kind == 65 { toks.values[token / 256] } else { token / 256 };
             toks.at = ps.cursor;
             ps.cursor = ps.cursor + 1;
+            let v = gen_subst(k0, v0);
             // A `_` where a call argument is expected is the pipe's placeholder, `x |> f(a, _)`.
             // In a call a pipe opened, it becomes the internal code 200, which `step_normal`
             // turns into record 84, and reconstruct then puts the piped operand in the
@@ -9760,7 +9814,7 @@ fn step_body() -> Word {
     if ps.in_body == 1 {
         body_step()
     } else {
-        if ps.cursor >= toks.len {
+        if ps.cursor >= toks.len orelse gen_instance_done() == 1 {
             // A `use` running to end-of-input has no closing delimiter, so it is closed
             // here (END) before DONE; otherwise the stream is exhausted.
             if ps.mode == 8 {
@@ -9768,17 +9822,18 @@ fn step_body() -> Word {
                 ps.mode = 0;
                 5
             } else {
-                if fields.dirty == 1 { data_rebase(); 0 } else { 15 }
+                if fields.dirty == 1 { data_rebase(); 0 } else { gen_end_of_input() }
             }
         } else {
             let token = toks.packed[ps.cursor - toks.base];
             let kind = token % 256;
             let k = if kind == 65 { 12 } else { kind };
-            let v = if kind == 65 { toks.values[token / 256] } else { token / 256 };
+            let v0 = if kind == 65 { toks.values[token / 256] } else { token / 256 };
             toks.at = ps.cursor;
             ps.cursor = ps.cursor + 1;
             if k == 67 { perr(pe_unresolved_syntax(), toks.at); }
-            header_step(k, v)
+            let seek = gen_header_seek();
+            if seek >= 0 { gen_seek(seek) } else { header_step(k, gen_subst(k, v0)) }
         }
     } } } } } } } } }
 }
@@ -9795,6 +9850,137 @@ fn step_body() -> Word {
 // Option E second word, so it is a FULL word rather than a packed field: it carries the
 // count that exceeded the cap, or the token position of an unmatched bracket.
 fn pe_tag_base() -> Word { 0 - 900 }
+
+// --- Generic functions, Order 6 ---
+//
+// A template is skipped where it occurs and parsed once per seeded instantiation at end of
+// input, by seeking to it. The host only scans headers and keeps the chunk table. Deciding
+// which instantiations exist, from the arguments at each call, happens here.
+
+// Reposition to `at`, announcing the seek so the host reloads its token window.
+fn gen_seek(at: Word) -> Word {
+    ps.cursor = at; toks.at = at; ps.emit_arg = at; 111
+}
+// The token a header read must seek to instead of reading `toks.at`, else -1. Outside an
+// instantiation a template's `fn` skips past its closing brace. Inside one, its `<` skips
+// to its `(`, so the type parameter list is never read.
+fn gen_header_seek() -> Word {
+    gn.tmp = 0 - 1;
+    if gn.active == 0 {
+        for g in 0..toks.gen_count limit 16 { if toks.gen_fn[g] == toks.at { gn.tmp = toks.gen_end[g] + 1; } }
+    } else {
+        let g = toks.spec_gen[gn.active - 1];
+        if toks.at == toks.gen_lt[g] { gn.tmp = toks.gen_paren[g]; }
+    }
+    gn.tmp
+}
+// Whether the instantiation being parsed has reached the token after its closing brace.
+fn gen_instance_done() -> Word {
+    if gn.active > 0 andalso ps.cursor > toks.gen_end[toks.spec_gen[gn.active - 1]] { 1 } else { 0 }
+}
+// End of input, or of an instantiation. Emit each request first, tag 140 carrying the
+// template plus sixteen times the key, then parse each seeded instantiation, then finish.
+// The tag is one no other record uses, body records included, so the host can read a
+// request without knowing the context it arrived in.
+fn gen_end_of_input() -> Word {
+    gn.active = 0;
+    if gn.req_i < gn.req_n {
+        ps.emit_arg = gn.req_gen[gn.req_i] + gn.req_key[gn.req_i] * 16;
+        gn.req_i = gn.req_i + 1;
+        140
+    } else {
+    if gn.next < toks.spec_count {
+        gn.active = gn.next + 1;
+        gn.next = gn.next + 1;
+        gen_seek(toks.gen_fn[toks.spec_gen[gn.active - 1]])
+    } else { 15 } }
+}
+// A read token with an instantiation's substitutions applied. The template's name becomes
+// the instantiation's, and each type parameter's name becomes its argument's type name.
+fn gen_subst(k: Word, v: Word) -> Word {
+    if gn.active == 0 orelse k != Tok::Ident() as Word { v } else {
+        let s = gn.active - 1;
+        let g = toks.spec_gen[s];
+        gn.tmp = v;
+        if toks.at == toks.gen_fn[g] + 1 { gn.tmp = toks.spec_name[s]; } else {
+            for t in 0..toks.gen_ntp[g] limit 4 {
+                if toks.gen_tp[g * 4 + t] == v { gn.tmp = gen_kind_name(gen_digit(toks.spec_key[s], t)); }
+            }
+        }
+        gn.tmp
+    }
+}
+// Digit `i` of a base-sixteen packing, used for both keys and argument kinds.
+fn gen_digit(packed: Word, i: Word) -> Word {
+    gn.pw = packed;
+    for j in 0..i limit 8 { gn.pw = gn.pw / 16; }
+    gn.pw % 16
+}
+fn gen_place(i: Word) -> Word {
+    gn.pw = 1;
+    for j in 0..i limit 8 { gn.pw = gn.pw * 16; }
+    gn.pw
+}
+// The type name id of a modelled scalar kind, 1 `bool`, 2 `Byte` or 3 `Word`.
+fn gen_kind_name(kind: Word) -> Word {
+    if kind == 1 { toks.bool_id } else { if kind == 2 { toks.byte_id } else { toks.word_id } }
+}
+// The template a call name opens, else -1.
+fn gen_template_of(v: Word) -> Word {
+    gn.tmp = 0 - 1;
+    for g in 0..toks.gen_count limit 16 { if toks.gen_name[g] == v { gn.tmp = g; } }
+    gn.tmp
+}
+// Record a counted argument's scalar kind for a call to a template.
+fn gen_note_arg(sp: Word) -> Word {
+    let i = call.call_count[sp];
+    if call.call_chunk[sp] >= 4096 andalso i < 8 {
+        call.call_akind[sp] = call.call_akind[sp] + option_kind(vl.scalar) * gen_place(i);
+    }
+    0
+}
+// Resolve a closed call to a template into its instantiation's chunk. The type arguments
+// come from the arguments written as a bare type parameter. An argument whose kind is not
+// modelled, a type parameter no argument determines, or two arguments that disagree are
+// refused. A key the host did not seed becomes a request, and the call is resolved to chunk
+// zero for this round, which the host discards.
+fn gen_call_close(sp: Word) -> Word {
+    let g = call.call_chunk[sp] - 4096;
+    gn.key = 0;
+    for t in 0..toks.gen_ntp[g] limit 4 {
+        gn.kind = 0;
+        for p in 0..call.call_count[sp] limit 8 {
+            if toks.gen_pmap[g * 8 + p] == t + 1 {
+                let kind = gen_digit(call.call_akind[sp], p);
+                if kind < 1 orelse kind > 3 orelse (gn.kind != 0 andalso gn.kind != kind) { perr(pe_unresolved_syntax(), toks.at); }
+                gn.kind = kind;
+            }
+        }
+        if gn.kind == 0 { perr(pe_unresolved_syntax(), toks.at); }
+        gn.key = gn.key + gn.kind * gen_place(t);
+    }
+    call.call_chunk[sp] = 0 - 1;
+    for r in 0..toks.spec_count limit 64 {
+        if toks.spec_gen[r] == g andalso toks.spec_key[r] == gn.key { call.call_chunk[sp] = toks.spec_chunk[r]; }
+    }
+    if call.call_chunk[sp] < 0 { call.call_chunk[sp] = 0; gen_request(g); } else {
+        if toks.gen_rmap[g] > 0 {
+            vl.returns[call.call_chunk[sp]] = gen_digit(gn.key, toks.gen_rmap[g] - 1) + 1;
+        }
+    }
+    0
+}
+// Queue a request for an instantiation the host did not seed, once per distinct key.
+fn gen_request(g: Word) -> Word {
+    gn.kind = 0;
+    for r in 0..gn.req_n limit 64 { if gn.req_gen[r] == g andalso gn.req_key[r] == gn.key { gn.kind = 1; } }
+    if gn.kind == 0 {
+        if gn.req_n >= 64 { perr(pe_unresolved_syntax(), toks.at); } else {
+            gn.req_gen[gn.req_n] = g; gn.req_key[gn.req_n] = gn.key; gn.req_n = gn.req_n + 1;
+        }
+    }
+    0
+}
 
 fn step() -> Word {
     if ps.emit_phase == 1 {
