@@ -1483,6 +1483,9 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
         (crate::selfhost_host::BR_P_SATMAX_ID, "saturate_max"),
         (crate::selfhost_host::BR_P_SATMIN_ID, "saturate_min"),
         (crate::selfhost_host::BR_P_HIDDEN_ID, "let"),
+        (crate::selfhost_host::BR_P_OPTION_ID, "Option"),
+        (crate::selfhost_host::BR_P_SOME_ID, "Some"),
+        (crate::selfhost_host::BR_P_NONE_ID, "None"),
     ] {
         vm.set_shared(&mut shared, slot, Value::Int(id_of(name) + 1))
             .unwrap();
@@ -1907,6 +1910,9 @@ fn try_parse_functions_impl(
         (crate::selfhost_host::BR_P_SATMAX_ID, "saturate_max"),
         (crate::selfhost_host::BR_P_SATMIN_ID, "saturate_min"),
         (crate::selfhost_host::BR_P_HIDDEN_ID, "let"),
+        (crate::selfhost_host::BR_P_OPTION_ID, "Option"),
+        (crate::selfhost_host::BR_P_SOME_ID, "Some"),
+        (crate::selfhost_host::BR_P_NONE_ID, "None"),
     ] {
         vm.set_shared(&mut shared, slot, Value::Int(id_of(name) + 1))
             .unwrap();
@@ -3214,10 +3220,22 @@ pub fn try_call_type_inputs_from_pipeline(
                 "payload metadata count"
             );
             for &&(_, slot, coordinates) in &payload_bindings {
-                let variant = usize::try_from(coordinates / 1024).expect("negative variant index");
-                let position =
-                    usize::try_from(coordinates % 1024).expect("negative payload position");
-                let source_type = &enum_variants[variant].1[position];
+                // An `Option<T>` payload carries `T`'s name id, not a declared row.
+                let option_payload;
+                let source_type = if coordinates >= crate::selfhost_host::PARSE_OPTION_PAYLOAD_BASE
+                {
+                    option_payload = vec![(
+                        6,
+                        coordinates - crate::selfhost_host::PARSE_OPTION_PAYLOAD_BASE,
+                    )];
+                    &option_payload
+                } else {
+                    let variant =
+                        usize::try_from(coordinates / 1024).expect("negative variant index");
+                    let position =
+                        usize::try_from(coordinates % 1024).expect("negative payload position");
+                    &enum_variants[variant].1[position]
+                };
                 let identity = slot_names
                     .get(&slot)
                     .expect("payload binding without frame slot");

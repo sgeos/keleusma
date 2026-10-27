@@ -498,3 +498,23 @@ the nominal type and does not compare generic arguments, so a mismatch such as r
 values, `Option::Some` and `Option::None` construction and their match, are not yet lowered
 and have Unsupported census rows. The census reads 63 Identical, 8 Unsupported and 3
 RefRejects of 74 rows.
+
+**A match over an `Option<T>` parameter, 2026-10-26.** The reference lowers a match over an
+Option as it lowers one over a declared enum, an `IsEnum` test per arm against the names
+`Option` and `Some` or `None` with discriminant 1 or 0, and a `Some` payload read after the
+eight-byte discriminant. The host now seeds the name ids of `Option`, `Some` and `None` into
+the parser's token block. A parameter declared `Option<T>` is marked enum-typed and keeps
+`T`, and a match over it resolves the two variants through rows 257 and 258 of the enum
+table, with `Some`'s one payload field at field 512 and `T`'s scalar kind. The rows sit past
+the declared-variant cap of 256 and its spare slot, a tail the stage declares as
+`pe_option_rows`, which the guard-cap test admits for the variant counter alone. No scan
+over declared variants reaches them, and both
+must be covered for the match to be exhaustive. A `Some` payload binding carries `T`'s name
+id above the base 2^40 in place of a declared row, from which the host types the binding.
+The six enum row arrays and the coverage array were widened from 257 to 259, and the five
+payload field arrays from 512 to 513, under the operator's ruling of 2026-10-26 that limits
+may be raised, which costs nineteen words of parser data. The new `popt` and `match_optarg`
+arrays and the three seeded ids add forty-four more. A struct `T`, and an Option scrutinee that is not a parameter, are
+refused. Construction of `Option::Some` and `Option::None` is not yet lowered. `None` needs
+a per-chunk struct template, which the self-hosted driver does not yet produce. The census
+reads 64 Identical, 7 Unsupported and 3 RefRejects of 74 rows.
