@@ -429,6 +429,12 @@ private data ps {
     epf_esize: Word,
     arr: Word,
     arr_ret: Word,
+    // A generic argument list after a signature type name, `Option<T>` or `Multiword<N>`.
+    // `gen_ready` is set by the type name and cleared by any other token, so only an
+    // immediately following `<` opens the list. `gen` is 1 awaiting the one argument and 2
+    // awaiting the closing `>`.
+    gen: Word,
+    gen_ready: Word,
     array_tuple_layout: Word,
     dvis: Word,
     init: Word,
@@ -1527,6 +1533,8 @@ private data da {
 private data call {
     call_chunk: [Word; 9],
     call_count: [Word; 9],
+    // Per open call, 1 when a `|>` opened it, 2 once its placeholder `_` was placed, Order 6.
+    call_piped: [Word; 9],
     call_sp: Word,
     call_pending: Word,
     call_phase: Word,
@@ -6137,6 +6145,13 @@ fn assert_message_comma(k: Word) -> Word {
 }
 
 fn step_normal(k: Word, v: Word) -> Word {
+    if k == 200 {
+        // A pipe placeholder: record 84, an operand, and the call's placeholder is spent.
+        call.call_piped[call.call_sp - 1] = 2;
+        ops.expect_operand = 0;
+        ps.emit_arg = 0;
+        84
+    } else {
     if assert_message_comma(k) == 1 { perr(pe_unresolved_syntax(), toks.at) } else {
     if k == Tok::LBrace() as Word orelse k == Tok::RBrace() as Word orelse k == Tok::If() as Word orelse k == Tok::Else() as Word {
         step_if(k)
@@ -6235,7 +6250,7 @@ fn step_normal(k: Word, v: Word) -> Word {
         0
     } else {
         step_op(k)
-    } } } } } } } } } }
+    } } } } } } } } } } }
 }
 
 // The struct-field-access postfix (ps.fa_phase 1/2), after a struct-typed parameter Local was
@@ -6861,6 +6876,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         if k == Tok::LParen() as Word {
             call.call_chunk[call.call_sp] = call.call_pending;
             call.call_count[call.call_sp] = call.pipe_args;
+            call.call_piped[call.call_sp] = call.pipe_args;
             call.pipe_args = 0;
             call.call_sp = call_push(call.call_sp);
             ops.opstack[ops.opsp] = OpCode::CallMark() as Word;
@@ -7779,19 +7795,22 @@ fn body_next() -> Word {
         } else {
             let token = toks.packed[ps.cursor - toks.base];
             let kind = token % 256;
-            let k = if kind == 65 { 12 } else { kind };
+            let k0 = if kind == 65 { 12 } else { kind };
             let v = if kind == 65 { toks.values[token / 256] } else { token / 256 };
             toks.at = ps.cursor;
             ps.cursor = ps.cursor + 1;
+            // A `_` where a call argument is expected is the pipe's placeholder, `x |> f(a, _)`.
+            // In a call a pipe opened, it becomes the internal code 200, which `step_normal`
+            // turns into record 84, and reconstruct then puts the piped operand in the
+            // placeholder's position, as the reference evaluates it. Anywhere else, or a
+            // second placeholder, is refused below, before reconstruct meets a call whose
+            // operand count disagrees with its records.
+            let placeholder = k0 == 50 andalso ops.expect_operand == 1 andalso ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] == OpCode::CallMark() as Word;
+            let k = if placeholder andalso call.call_sp > 0 andalso call.call_piped[call.call_sp - 1] == 1 { 200 } else { k0 };
             // Tok 67 is a byte the lexer does not recognize, among them the pipe and closure
             // bars. Refuse it rather than let a branch below skip it.
             if k == 67 { perr(pe_unresolved_syntax(), toks.at); }
-            // A `_` where a call argument is expected is the pipe's placeholder, `x |> f(a, _)`,
-            // which this stage does not place. Refused here, before reconstruct meets a call
-            // whose operand count disagrees with its records.
-            if k == 50 andalso ops.expect_operand == 1 andalso ops.opsp > 0 andalso ops.opstack[ops.opsp - 1] == OpCode::CallMark() as Word {
-                perr(pe_unresolved_syntax(), toks.at);
-            }
+            if placeholder andalso k == 50 { perr(pe_unresolved_syntax(), toks.at); }
             // A pending struct-field-access postfix intercepts the next token here, before the
             // normal dispatch, so the deep `step_dispatch_normal` chain is not deepened.
             if ps.unresolved_pending == 1 {
@@ -8778,6 +8797,7 @@ fn header_field(k: Word, v: Word) -> Word {
 // reconstructed node count (its four struct/enum scan loops inlined) stays under the per-function
 // reconstruct cap; parse.kel's own `header_sig` grew past it as the array-type surface expanded.
 fn header_type_ident(v: Word, mode: Word) -> Word {
+    ps.gen_ready = 1;
     signature_text_name(v, mode);
     if scalar_kind_of(v) >= 4 { queue_named_layout(v, mode); }
     if mode == 0 {
@@ -9233,7 +9253,29 @@ fn queue_array_header_layout(length: Word) -> Word {
     ht.pending_arg = ps.arr_ret + layout;
     0
 }
+// One generic argument of a signature type, Order 6. A type name is recorded under tag
+// 113 and a positive length under tag 114, after the head's own type record, so the host
+// computes the builtin layout. A nested, composite or second argument is refused here,
+// because the host has no layout for it and a silent drop would misstate the signature.
+fn header_generic(k: Word, v: Word) -> Word {
+    if ps.gen == 1 {
+        ps.gen = 2;
+        if k == Tok::Ident() as Word { type_tuple_record(113, v) } else {
+        if k == Tok::IntLit() as Word andalso v > 0 { type_tuple_record(114, v) } else {
+            perr(pe_annotation_syntax(), toks.at)
+        }}
+    } else {
+        ps.gen = 0;
+        if k == Tok::Gt() as Word { 0 } else { perr(pe_annotation_syntax(), toks.at) }
+    }
+}
 fn header_sig(k: Word, v: Word) -> Word {
+    let ready = ps.gen_ready;
+    ps.gen_ready = 0;
+    if ps.gen > 0 { header_generic(k, v) } else {
+    if ready == 1 andalso k == Tok::Lt() as Word { ps.gen = 1; 0 } else { header_sig_body(k, v) } }
+}
+fn header_sig_body(k: Word, v: Word) -> Word {
     nominal_refresh();
     data_rebase();
     // A parameter position holds a plain name or closes the list. Anything else is a
