@@ -2090,11 +2090,11 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
         Identical,
     ),
     // The signature layout of a builtin generic is computed, Order 6, and a match over an
-    // `Option<T>` parameter with a scalar `T` is lowered. Construction stays refused.
+    // `Option<T>` parameter and construction of an Option with a scalar payload are lowered.
     (
         "TypeExpr::Option::Construct",
         "fn main() -> Option<Word> { Option::Some(1) }",
-        Unsupported,
+        Identical,
     ),
     (
         "TypeExpr::Option::Match",
@@ -2372,6 +2372,75 @@ fn option_parameter_matches_have_their_pinned_outcomes() {
         .collect();
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     // A self-hosted rejection is only agreement if the reference rejects the source too.
+    for (src, expected) in cases {
+        if *expected == PipelineRejects {
+            let src = src.to_string();
+            assert!(
+                std::panic::catch_unwind(move || compile_src(&src)).is_err(),
+                "the reference accepts a source the self-hosted type stage rejects"
+            );
+        }
+    }
+}
+
+/// Option construction, Order 6. `Option::Some(x)` is sized from the payload's scalar type,
+/// and `Option::None` is lowered to the reference's boxed composite with one template per
+/// construction. A composite payload is refused by the parser. The self-hosted type stage
+/// leaves the payload unconstrained, so a payload that mismatches the declared `T` reaches the
+/// reference, which rejects it.
+#[test]
+fn option_constructions_have_their_pinned_outcomes() {
+    let cases: &[(&str, Class)] = &[
+        (
+            "fn mk(a: Word) -> Option<Word> { Option::Some(a) }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "fn mk(a: Byte) -> Option<Byte> { Option::Some(a) }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "fn mk() -> Option<bool> { Option::Some(true) }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "fn mk(a: Word) -> Option<Word> { Option::Some(a + 1) }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "fn none() -> Option<Byte> { Option::None }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "fn pick(a: Word) -> Option<Word> { if a > 0 { Option::Some(a) } else { Option::None } }\nfn get(o: Option<Word>) -> Word { match o { Option::Some(x) => x, Option::None => 0 } }\nfn main() -> Word { get(pick(3)) + get(Option::None) + get(Option::None()) }",
+            Identical,
+        ),
+        (
+            "fn get(o: Option<Word>) -> Word { match o { Option::Some(x) => x, Option::None => 0 } }\nloop main(x: Word) -> Word { let x = yield get(Option::None) + get(Option::Some(x)); x }",
+            Identical,
+        ),
+        (
+            "fn mk(a: Word) -> Option<Word> { Option::Some() }\nfn main() -> Word { 0 }",
+            PipelineRejects,
+        ),
+        (
+            "fn mk(a: Word) -> Option<Byte> { Option::Some(a) }\nfn main() -> Word { 0 }",
+            RefRejects,
+        ),
+        (
+            "fn f() -> Word { Option::None as Word }\nfn main() -> Word { 0 }",
+            RefRejects,
+        ),
+    ];
+    let mismatches: Vec<String> = cases
+        .iter()
+        .filter_map(|(src, expected)| {
+            let (actual, detail) = classify(src);
+            (actual != *expected)
+                .then(|| format!("{src:?}: expected {expected:?}, got {actual:?} {detail}"))
+        })
+        .collect();
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
     for (src, expected) in cases {
         if *expected == PipelineRejects {
             let src = src.to_string();
