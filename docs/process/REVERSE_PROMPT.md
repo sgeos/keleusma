@@ -218,10 +218,22 @@ remain all await question 10. Question 14 asks whether the design's division
 between stage and host is acceptable. Residuals are pinned, among them an uninstantiated
 template, which the reference compiles with its type parameter unresolved.
 
+## Gate 5 and the Order 6 audit, 2026-10-27
+
+A command-line test now runs the shipping `keleusma compile --compiler self-hosted` on every
+Identical census row, read from the census table, and each artifact equals the reference
+serialization. The Order 6 completion audit is
+[ORDER6_COMPLETION_AUDIT.md](../decisions/ORDER6_COMPLETION_AUDIT.md). Its disposition is
+that Order 6 is not complete. Every gate condition is met except the information-flow and
+newtype forms, which wait on question 10, and one repository source, `07_refinement.kel`,
+is among them. I also corrected an earlier record of mine that claimed gate 1 on the whole
+corpus. Question 1, the Order 6 gate acceptance, now has the audit as its evidence.
+
 ## Next
 
-The generic residuals, an Option struct payload, and the gate 5 check that the shipping
-command line uses the widened toolchain. Then the Order 6 completion audit. The newtype and IFC rows await question 10.
+Question 10 decides the last Order 6 forms. Without a ruling, the next work is the pinned
+residuals in the audit, starting with Option struct payloads and generic arguments in the
+self-hosted type stage, then the handoff and the interline checkpoint. The newtype and IFC rows await question 10.
 
 ---
 

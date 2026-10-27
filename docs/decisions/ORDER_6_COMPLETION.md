@@ -21,6 +21,11 @@ below. V0.4.0 is not released, since publication is held.
   refused. Both need a host ABI decision. The Linux targets are built and not
   executed. The full-language corpus that only a complete self-hosted compiler
   produces is the V0.2.X line's Order 6, in progress.
+- **V0.2.X's Order 6, 2026-10-27.** Its
+  [audit](./ORDER6_COMPLETION_AUDIT.md) records it as not complete, with five
+  forms waiting on V0.2.X's operator question 10. Whether this line still
+  waits on it is question 18 in
+  [the operator question list](../process/handoffs/v0.3.0-QUESTIONS.md).
 
 ## Requirements
 

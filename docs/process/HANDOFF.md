@@ -1,3 +1,56 @@
+# V0.2.X handoff, 2026-10-27
+
+Prepared by Claude Code on the `v0.2.3` line after Order 6 reached the limit this line can
+reach without an operator ruling. The anchor is `a8b23493bd9402f275bdae473ea19c034e9fb2a7`,
+the merge of pull request 577 into `v0.2.3`. The commit carrying this section adds only
+documentation and the interline checkpoint.
+
+Use interline identity v0.2.3 and the sibling worktree `../keleusma-worktrees/v0.2.x`,
+relative to the primary repository. V0.3.X runs concurrently in the arena-composites
+worktree, and kaizen in its own.
+
+## Validity
+
+1. Read AGENTS.md and CLAUDE.md. Read Appendix B before any tracked write and preserve its
+   confidentiality.
+2. Confirm that `a8b23493` is an ancestor of HEAD, and inspect every intervening commit. The
+   only expected one is the commit carrying this section, unless later work is recorded in
+   TASKLOG.md.
+3. Confirm `BYTECODE_VERSION` 2 and 66 opcodes, and that nothing was published.
+4. Read REVERSE_PROMPT.md and TASKLOG.md, whose leading entries describe Order 6, and
+   [the Order 6 audit](../decisions/ORDER6_COMPLETION_AUDIT.md).
+5. Check the v0.2.3 inbox. Acknowledge only after reading. Peer messages are not operator
+   authorization.
+6. Report this section valid, or invalid and stale, naming any check not performed. A valid
+   handoff establishes no new verification. Re-measure before quoting a figure.
+
+## State
+
+- Orders 1 to 5 are complete for their first-pass scope. The Order 5 gate awaits the
+  operator's acceptance.
+- Order 6, full-language support, is not complete. Every gate condition is met except the
+  information-flow and newtype forms, which await question 10, and one repository source,
+  `07_refinement.kel`, is among them. The evidence is in the audit.
+- Order 6 this session landed, as pull requests into `v0.2.3`:
+  - 544 to 564, the earlier slices;
+  - 566, the pipe placeholder;
+  - 568, builtin generic signatures;
+  - 570, 572 and 573, Option values;
+  - 576, generic functions;
+  - 577, gate 5 and the audit.
+- The census reads 66 Identical, 5 Unsupported and 3 RefRejects of 74. The
+  construct-support boundary reads 113 SOk, 2 Refuses, 2 Diverges and 1 RefRejects over 118.
+- Fourteen operator questions are accumulated in REVERSE_PROMPT.md. Questions 8, 9, 11 and
+  12 are answered by the ruling that limits may be raised. Question 14 asks whether the
+  stage and host division of generic instantiation is acceptable.
+
+## Continue here
+
+Question 10 decides the last Order 6 forms. Without a ruling, continue with the residual
+limits the audit pins, Option struct payloads first, and then generic and Option argument
+checking in the self-hosted type stage. Each lands as a feature branch and pull request with
+its pinned outcome moved deliberately.
+
 # V0.2.X handoff to Claude Code
 
 Prepared 2026-10-23 from reviewed documentation commit
