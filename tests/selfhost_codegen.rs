@@ -2505,7 +2505,7 @@ fn reconstruct_into(
                 });
                 (nodes.len() - 1) as i64
             }
-            3 | 5 | 8 | 9 | 12 | 14 | 21 | 31 | 71 => {
+            3 | 5 | 8 | 9 | 12 | 14 | 21 | 31 | 71 | 83 => {
                 let r = stack.pop().expect("binary rhs");
                 let l = stack.pop().expect("binary lhs");
                 nodes.push(Node {
