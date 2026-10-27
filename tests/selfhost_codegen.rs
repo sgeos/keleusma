@@ -2089,7 +2089,8 @@ fn self_compile_codegen_atomic_functions() {
     // `store_binds` and `push_checked_store` and remove the dead `push_index_store` (100 -> 102).
     // Order 6 slice 2 adds `push_native_call`, the native-call lowering (102 -> 103), and
     // slice 5b `push_floatlit` (103 -> 104).
-    const EXPECTED_SELF_COMPILE: usize = 104;
+    // 105 since `push_refinement`, the refinement check, 2026-10-27.
+    const EXPECTED_SELF_COMPILE: usize = 105;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -9270,10 +9271,11 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             // and 377, since the old loop body no longer sits in `main`'s group. The
             // pipe token's compound code took it to 1968, the shebang skip to 1991, and
             // the `signed`, `pure`, `ephemeral` and `external` keywords to 2168. The float
-            // literal state took it to 2230 and the peak to 421.
+            // literal state took it to 2230 and the peak to 421. The label punctuation,
+            // `punct_label`, took it to 2242 on 2026-10-27.
             "lexer",
             include_str!("../src/selfhost/kel/lexer.kel"),
-            2230,
+            2242,
             421,
         ),
         (

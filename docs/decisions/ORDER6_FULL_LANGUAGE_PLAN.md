@@ -628,3 +628,35 @@ artifact with the reference serialization of the same source. All 66 rows agree 
 The test fails when it reads fewer than 74 rows or fewer than 66 Identical ones, so a broken
 reader cannot pass it. Signed, encrypted, stripped, debug and cross-target outputs remain
 outside it, as they are outside the stage-corpus command test.
+
+**Information-flow labels and newtypes, 2026-10-27.** The reference erases all of these from
+the code it emits. A label is checked by its type checker and leaves no operation,
+`classify x @L` and `declassify x @L` compile as `x`, a newtype compiles as its base type
+with its constructor as its argument, and a cast of a newtype value emits nothing where the
+same cast of a plain `Word` emits `FloatToInt`. The parser now erases them the same way at
+the token read. The lexer reads `@` as token 74 and a lone `!` as token 75, a label in any of
+its three forms is dropped, and the two operators are dropped where an operand is expected
+and no `(` follows. The host recognises `newtype Name = Base;` and its `where predicate`
+form syntactically and seeds them, the parser skips the declaration, reads the name as its
+base in a function's parameter or return type, and refuses it in any other header position.
+The reference tags a labelled or newtype parameter `Composite` and gives a newtype the shape
+`Top`, which the parser reports under tag 141 after the type's own record. A newtype value is
+tracked from the record that produces it, so a cast of one emits nothing. A refined
+constructor over a literal emits nothing, as the reference checks it while compiling, and
+over any other argument emits a new node, kind 85, which codegen lowers to `Dup`,
+`Call(predicate, 1)`, `If`, `Else`, `Trap(0)` and `EndIf` in the reference's order.
+`examples/scripts/07_refinement.kel` and the five census rows that had waited are now
+Identical. **This does not decide operator question 10.** Both possible answers need this
+code generation, and the question is only whether the self-hosted type stage should also
+check label flow and newtype identity. Until it is answered, a violation is rejected by the
+reference cross-check alone, the same standing the generic and Option arguments have. A
+struct field of newtype type, which the reference boxes, is refused.
+A finding about an instrument, not the shipping pipeline, surfaced while landing this. The
+stage-source measurement in `tests/selfhost_typecheck.rs`,
+`the_stage_is_measured_against_the_real_stage_sources`, builds the type stage's inputs from
+the reference parser's AST, and that channel conflates two `let` bindings of the same name in
+different functions. A `bool` binding named `check` in one `parse.kel` function and a `Word`
+binding of the same name in another made it report a false rejection of `parse.kel`. The
+shipping pipeline types the same pattern correctly in user programs, measured on three, so
+the binding was renamed rather than the instrument changed, and the instrument's limit is
+recorded here for whoever next relies on it.

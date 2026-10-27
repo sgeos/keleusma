@@ -327,7 +327,8 @@ fn is_binary(k: Word) -> Word {
 }
 
 fn is_unary(k: Word) -> Word {
-    if k == 6 orelse k == 10 orelse k == 13 orelse k == 24 orelse k == 26 orelse k == 28 orelse k == 29 orelse k == 30 orelse k == 37 { 1 } else { 0 }
+    // 85 is a refinement check over a newtype constructor's argument, Order 6.
+    if k == 6 orelse k == 10 orelse k == 13 orelse k == 24 orelse k == 26 orelse k == 28 orelse k == 29 orelse k == 30 orelse k == 37 orelse k == 85 { 1 } else { 0 }
 }
 
 // EnumMatchBuild carries the temp, total arm count and enum name. A final wildcard
