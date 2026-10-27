@@ -186,10 +186,14 @@ has no struct flat size. The self-hosted type stage does not compare generic arg
 only the reference cross-check rejects a mismatch. Option values, their construction and
 their match, are not yet lowered and have Unsupported census rows.
 
+A match over an `Option<T>` parameter with a scalar `T` now compiles byte-identically
+too, through two reserved rows of the parser's enum table. The census reads 64 Identical of
+74. The enum row arrays were widened under your ruling that limits may be raised.
+
 ## Next
 
-Option values, `Option::Some` and `Option::None` construction and their match, then
-generic functions and the monomorphizer. The newtype and IFC rows await question 10.
+Option construction, where `Option::None` needs a per-chunk struct template that the
+self-hosted driver does not yet produce, then generic functions and the monomorphizer. The newtype and IFC rows await question 10.
 
 ---
 
