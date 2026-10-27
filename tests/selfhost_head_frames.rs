@@ -106,18 +106,18 @@ fn head_frames_execute_after_keleusma_serialization() {
     }
 }
 
+/// A generic call's result, Order 6 slice 7. Before generic functions were instantiated in
+/// the parser stage, a plain generic call diverged and one placed in a tuple had no layout,
+/// so no type verdict. Both now compile byte-identically, the tuple element taking the
+/// instantiation's scalar return.
 #[test]
-fn unknown_generic_layout_is_deferred_only_when_no_layout_is_needed() {
-    use keleusma::selfhost::SelfHostError;
-    let plain = "fn id<T>(x: T) -> T { x } fn main() -> Word { id(1) }";
-    let error = keleusma::selfhost::self_hosted_compile(plain, &keleusma::target::Target::host())
-        .unwrap_err();
-    assert!(matches!(error, SelfHostError::Unsupported { .. }));
-    assert!(error.to_string().contains("diverges"));
-    let tuple = "fn id<T>(x: T) -> T { x } fn main() -> Word { let t = (id(true), 7); t.1 }";
-    keleusma::selfhost::compile_src(tuple);
-    assert!(matches!(
-        keleusma::selfhost::self_hosted_compile(tuple, &keleusma::target::Target::host()),
-        Err(SelfHostError::TypeCheckUnavailable { .. })
-    ));
+fn generic_call_results_compile_with_and_without_a_layout() {
+    for source in [
+        "fn id<T>(x: T) -> T { x } fn main() -> Word { id(1) }",
+        "fn id<T>(x: T) -> T { x } fn main() -> Word { let t = (id(true), 7); t.1 }",
+    ] {
+        keleusma::selfhost::compile_src(source);
+        keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host())
+            .unwrap_or_else(|error| panic!("{source}: {error}"));
+    }
 }

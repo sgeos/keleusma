@@ -270,11 +270,13 @@ fn probes() -> Vec<(String, String)> {
 /// the axis under test would fail the moment the census found a real defect there.
 fn positive_controls() -> &'static [(&'static str, Outcome, &'static str)] {
     &[
-        // The self-hosted subset has no generics; the driver refuses rather than miscompiling.
+        // A pipe into a generic template, which the reference keeps generic and the parser
+        // refuses rather than miscompiling, boundary row `scope/generic_pipe__GAP`. It replaced
+        // a plain generic call, which compiles byte-identically since Order 6 slice 7.
         (
-            "control/generic_fn",
+            "control/generic_pipe",
             Outcome::SelfHostRefuses,
-            "fn id<T>(x: T) -> T { x }\nfn f() -> Word { id(1) }",
+            "fn id<T>(x: T) -> T { x }\nfn f() -> Word { 1 |> id() }",
         ),
         // Equality on a struct whose field is an array of tuples of structs compiles on both
         // sides and produces DIFFERENT bytes, boundary row `eq/struct_field_array_of_tuple__GAP`.

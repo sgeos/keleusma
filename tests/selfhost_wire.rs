@@ -13013,8 +13013,10 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // construction's `option_construct`, `option_none_unit`, `option_some_close` and
     // `constructor_variant` made it 1076 and 33,401. Option scrutinees' `pending_copt`,
     // `let_opt`, `ret_opt`, `pending_option_arg` and `option_kind` made it 1081 and 33,545.
-    assert_eq!(worst_names, 1081, "the worst-case name count moved");
-    assert_eq!(worst_blob, 33545, "the worst-case blob size moved");
+    // Generic functions, the fifteen seeded template and instantiation tables, the `gn`
+    // block, `call_akind` and the `gen_*` helpers, made it 1119 and 34,554.
+    assert_eq!(worst_names, 1119, "the worst-case name count moved");
+    assert_eq!(worst_blob, 34554, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
