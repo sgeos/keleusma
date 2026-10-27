@@ -441,3 +441,23 @@ heads past sixteen and made `rogue_gear.kel` diverge, and codegen's head loop bo
 at 64. `rogue_bestiary.kel`, `rogue_gear.kel` and the piano rolls 0, 1, 4, 8 and 9 became
 Identical. A `match` with more than 64 arms, and an enum match with more than about 51,
 still overflows the break list and the arm loops, which no repository source reaches.
+
+**Local bindings and typed native results, 2026-10-26.** The parser's local bindings per
+function rose from 64 to 256, with `PARSE_LOCALS_CAP`, which `piano_roll_3.kel`'s `main`
+needed at 65. A native call's value now takes its declared scalar return, `Word`, `Byte` or
+`bool`, as the reference types it from the `use` signature. A tuple built from native
+results had no layout, which refused `rogue_dungen.kel`, and a `Byte` result could not select
+the Byte operators. Every repository source now compiles byte-identically except
+`scripts/check-md-links.kel`, which destructures an untyped library native.
+
+**Untyped native destructuring, and gate 1 on the corpus, 2026-10-26.** The reference
+reads the elements of a destructured untyped native's result boxed,
+`GetTupleField(Boxed { index })`, because the value has no known layout, and rejects a
+hand-written `t.0` on such a value. The host now seeds the destructuring filter's hidden
+binding, whose string is `let`, into the parser's token block. A hidden binding over a value
+of unknown layout is marked untyped, and its element reads emit the tuple-field record with
+a new transport variant, tag 5, which the host decodes as the boxed form, so no opcode is
+added. `scripts/check-md-links.kel` became Identical, and with it every repository source in
+the full-language corpus compiles byte-identically through the shipping self-hosted
+compiler, which is gate 1 on this line's reading. Both trap analyses still refuse that one
+source for the boxed read, in agreement.

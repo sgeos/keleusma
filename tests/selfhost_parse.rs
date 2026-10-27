@@ -2822,11 +2822,13 @@ fn the_parse_diagnostic_tag_base_matches() {
 /// `ops.opstack` and `stmt.let_names` are both 64 entries, so 65 local bindings and 65
 /// nested parentheses both produced `IndexOutOfBounds(64, 64)` — byte-identical, naming an
 /// array size and neither the construct at fault nor a cap the reader controls. This test
-/// fails if they ever converge again.
+/// fails if they ever converge again. The local-binding cap rose to 256 on 2026-10-26, so
+/// the locals case now overflows that cap rather than 64.
 #[cfg(feature = "self-host")]
 #[test]
 fn the_two_sixty_four_caps_no_longer_give_the_same_message() {
-    let locals = refusal(&src_lets(65)).expect("65 local bindings must be refused");
+    let over = keleusma::selfhost_host::PARSE_LOCALS_CAP + 1;
+    let locals = refusal(&src_lets(over)).expect("one binding past the cap must be refused");
     let nesting = refusal(&src_parens(65)).expect("65 nested parentheses must be refused");
     assert_ne!(
         locals, nesting,

@@ -978,6 +978,9 @@ fn decode_op(w: i64) -> Op {
         // re-wrapped) packs offset + size*65536 + variant*2^32, so its operand is >= 2^33 (variant
         // Struct = 2); the flat form packs offset + kind_tag*65536 (< 2^20) and is disambiguated by
         // the operand magnitude.
+        53 if operand / 4294967296 == 5 => Op::GetTupleField(TupleField::Boxed {
+            index: (operand % 256) as u8,
+        }),
         53 if operand >= 4294967296 => Op::GetTupleField(TupleField::FlatNested {
             offset: (operand % 65536) as u16,
             size: ((operand / 65536) % 65536) as u16,

@@ -459,7 +459,7 @@ pub fn describe_parse_diagnostic(code: i64, detail: i64) -> String {
 /// checks all three against the array declarations they guard.
 pub const PARSE_OPSTACK_CAP: usize = 64;
 /// See [`PARSE_OPSTACK_CAP`].
-pub const PARSE_LOCALS_CAP: usize = 64;
+pub const PARSE_LOCALS_CAP: usize = 256;
 /// See [`PARSE_OPSTACK_CAP`].
 pub const PARSE_STMTS_CAP: usize = 256;
 /// Parameters on one function. See [`PARSE_OPSTACK_CAP`].
@@ -880,6 +880,9 @@ pub const BR_P_MT_CHUNK: usize = BR_P_MT_NAME + 64;
 pub const BR_P_SATMAX_ID: usize = BR_P_MT_CHUNK + 64;
 /// The checked-arm word `saturate_min`, interned identifier plus one, Order 6.
 pub const BR_P_SATMIN_ID: usize = BR_P_SATMAX_ID + 1;
+/// The destructuring filter's hidden binding, whose string is `let`, interned identifier plus
+/// one, Order 6.
+pub const BR_P_HIDDEN_ID: usize = BR_P_SATMIN_ID + 1;
 
 #[cfg(test)]
 mod shared_layout_tests {
@@ -1001,6 +1004,7 @@ mod shared_layout_tests {
             ("mt_chunk", "BR_P_MT_CHUNK", BR_P_MT_CHUNK),
             ("satmax_id", "BR_P_SATMAX_ID", BR_P_SATMAX_ID),
             ("satmin_id", "BR_P_SATMIN_ID", BR_P_SATMIN_ID),
+            ("hidden_id", "BR_P_HIDDEN_ID", BR_P_HIDDEN_ID),
         ];
         for &(field, konst, value) in cases {
             assert_eq!(
