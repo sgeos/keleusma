@@ -462,6 +462,15 @@ the full-language corpus compiles byte-identically through the shipping self-hos
 compiler, which is gate 1 on this line's reading. Both trap analyses still refuse that one
 source for the boxed read, in agreement.
 
+**Correction, 2026-10-27.** The record above overstates gate 1. The corpus table pins 75
+sources, 69 Identical, 5 RefRejects and 1 Unsupported. The five rejected sources are RTOS
+scripts the reference rejects standalone, because they call natives the RTOS prelude
+declares, and their prelude-joined forms are pinned Identical in
+`rtos_scripts_joined_with_the_prelude_have_their_pinned_outcomes`. The Unsupported source is
+`examples/scripts/07_refinement.kel`, a newtype with a refinement predicate, which stays
+refused until operator question 10 is answered. Gate 1 is therefore met on every repository
+source except that one, and not on the whole corpus.
+
 **`assert`, 2026-10-26.** The reference compiles an assertion out of a release build, so
 `assert c;` emits nothing. The parser now commits the statement as kind 83, a binary node
 of condition and continuation that codegen lowers to its continuation alone, while the
@@ -609,3 +618,13 @@ because the host routes them in its declaration dispatch alone, which is recorde
 fragility rather than left implicit. Four tests had used a generic call as their known
 refusal or divergence, and each now uses a construct that still refuses or diverges rather
 than a relaxed assertion.
+
+**Gate 5, the shipping command line, 2026-10-27.** Every census pin had been measured in
+process through the library entry, and nothing ran the built binary over the widened
+forms. `keleusma-cli/tests/self_hosted_full_language.rs` now runs
+`keleusma compile --compiler self-hosted` once per census row the census records as
+Identical, reading the rows from the census table itself, and compares each written
+artifact with the reference serialization of the same source. All 66 rows agree and load.
+The test fails when it reads fewer than 74 rows or fewer than 66 Identical ones, so a broken
+reader cannot pass it. Signed, encrypted, stripped, debug and cross-target outputs remain
+outside it, as they are outside the stage-corpus command test.
