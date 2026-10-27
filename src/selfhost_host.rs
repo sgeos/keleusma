@@ -269,6 +269,9 @@ pub const PARSE_PRIVATE_COMPOSITE_TAG: i64 = 112;
 pub const PARSE_GENERIC_TYPE_ARG_TAG: i64 = 113;
 /// The positive length argument of a builtin generic in a signature, `Multiword<N>`.
 pub const PARSE_GENERIC_CONST_ARG_TAG: i64 = 114;
+/// The base above which a payload binding's coordinates carry the name id of an
+/// `Option<T>` payload's `T` rather than a declared variant row and field position.
+pub const PARSE_OPTION_PAYLOAD_BASE: i64 = 1 << 40;
 
 /// The tag at or below which a word yielded by `reconstruct.kel` is a diagnostic rather
 /// than a node count. Node counts are non-negative, so no legitimate count can collide.
@@ -888,6 +891,12 @@ pub const BR_P_SATMIN_ID: usize = BR_P_SATMAX_ID + 1;
 /// The destructuring filter's hidden binding, whose string is `let`, interned identifier plus
 /// one, Order 6.
 pub const BR_P_HIDDEN_ID: usize = BR_P_SATMIN_ID + 1;
+/// The builtin generic enum name `Option`, interned identifier plus one, Order 6.
+pub const BR_P_OPTION_ID: usize = BR_P_HIDDEN_ID + 1;
+/// The `Option` variant name `Some`, interned identifier plus one.
+pub const BR_P_SOME_ID: usize = BR_P_OPTION_ID + 1;
+/// The `Option` variant name `None`, interned identifier plus one.
+pub const BR_P_NONE_ID: usize = BR_P_SOME_ID + 1;
 
 #[cfg(test)]
 mod shared_layout_tests {
@@ -1010,6 +1019,9 @@ mod shared_layout_tests {
             ("satmax_id", "BR_P_SATMAX_ID", BR_P_SATMAX_ID),
             ("satmin_id", "BR_P_SATMIN_ID", BR_P_SATMIN_ID),
             ("hidden_id", "BR_P_HIDDEN_ID", BR_P_HIDDEN_ID),
+            ("option_id", "BR_P_OPTION_ID", BR_P_OPTION_ID),
+            ("some_id", "BR_P_SOME_ID", BR_P_SOME_ID),
+            ("none_id", "BR_P_NONE_ID", BR_P_NONE_ID),
         ];
         for &(field, konst, value) in cases {
             assert_eq!(

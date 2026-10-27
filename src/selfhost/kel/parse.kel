@@ -124,6 +124,11 @@ shared data toks {
     // The name id plus one of the hidden binding the destructuring filter introduces, whose
     // string is `let`, Order 6. Zero means no destructuring occurs.
     hidden_id: Word,
+    // The builtin generic enum `Option` and its variants `Some` and `None`, interned id plus
+    // one, Order 6, APPENDED. Zero means the name does not occur.
+    option_id: Word,
+    some_id: Word,
+    none_id: Word,
 }
 
 // The unified token vocabulary (body.kel's `enum Tok` extended with the header keywords).
@@ -430,11 +435,13 @@ private data ps {
     arr: Word,
     arr_ret: Word,
     // A generic argument list after a signature type name, `Option<T>` or `Multiword<N>`.
-    // `gen_ready` is set by the type name and cleared by any other token, so only an
-    // immediately following `<` opens the list. `gen` is 1 awaiting the one argument and 2
-    // awaiting the closing `>`.
+    // `gen_ready` is set by the type name, 1 for a parameter and 2 for a return type, and
+    // cleared by any other token, so only an immediately following `<` opens the list. `gen`
+    // holds that value while awaiting the one argument and is 3 awaiting the closing `>`.
     gen: Word,
     gen_ready: Word,
+    // Per parameter, the name id plus one of an `Option<T>` parameter's `T`, else zero.
+    popt: [Word; 33],
     array_tuple_layout: Word,
     dvis: Word,
     init: Word,
@@ -747,6 +754,9 @@ fn pe_cap_anest() -> Word { 8 }
 // variants reach it at exactly the same point as one enum of 257 variants. No message
 // naming an array size could convey that, which is the argument for naming it here.
 fn pe_cap_variant() -> Word { 256 }
+// The rows reserved past the variant cap and its spare slot for the builtin `Option`, so
+// every array indexed by a variant row is declared this much longer, Order 6.
+fn pe_option_rows() -> Word { 2 }
 fn pe_cap_calldepth() -> Word { 8 }
 fn pe_cap_field() -> Word { 1024 }
 
@@ -1291,6 +1301,8 @@ private data mat {
     // operand). `mpat_vname` the variant name id captured while reading the current arm pattern.
     match_isenum: [Word; 8],
     match_ename: [Word; 8],
+    // Per open match over an `Option<T>` parameter, the name id plus one of `T`, else zero.
+    match_optarg: [Word; 8],
     mpat_vname: Word,
     // The current arm pattern's variant row index (into `enums`) for its payload field layout, and
     // the running payload bind count (also the field cursor while reading `E::V(x, y)` binds).
@@ -1314,7 +1326,7 @@ private data mat {
     // -2 is a literal pattern, -1 a wildcard, otherwise the declaration's variant row.
     match_variant: [Word; 8],
     // One bit per active match depth. Nested matches cannot overwrite outer coverage.
-    covered: [Word; 257],
+    covered: [Word; 259],
     // The payload field position in the variant pattern being read, Order 6. A wildcard `_`
     // advances it without a bind, so it can run ahead of `mpat_pcount`, the bind count.
     mpat_fpos: Word,
@@ -1618,29 +1630,29 @@ private data call {
 // previous plus one otherwise) unless an explicit `= N` overrides it and reseeds the
 // running `next_disc`. `cur_enum` is the enum under construction.
 private data enums {
-    edata: [Word; 257],
-    evar: [Word; 257],
-    edisc: [Word; 257],
+    edata: [Word; 259],
+    evar: [Word; 259],
+    edisc: [Word; 259],
     // Per variant row, the sum of that variant's payload field byte sizes (zero for a unit
     // variant). A construction reads the enum's flat body size as eight (the discriminant) plus
     // the largest `epayload` across the enum's variants; see `enum_bytesize`.
-    epayload: [Word; 257],
+    epayload: [Word; 259],
     // Per variant row, the flat per-payload-field layout for a payload match `E::V(x, y)`:
     // `evfstart`/`evfcount` bound the variant's field run in `evfoff`/`evfkind` (per-field flat
     // byte offset -- eight for the discriminant plus preceding field sizes -- and ScalarKind).
     // `evfcursor` is the running append cursor.
-    evfstart: [Word; 257],
-    evfcount: [Word; 257],
-    evfoff: [Word; 512],
-    evfkind: [Word; 512],
+    evfstart: [Word; 259],
+    evfcount: [Word; 259],
+    evfoff: [Word; 513],
+    evfkind: [Word; 513],
     // Per payload field, the struct declaration index (plus one) when the field is a struct, else 0,
     // so a `match E::A(p)` binding of a struct payload records `p`'s type and `p.field` resolves.
-    evfstruct: [Word; 512],
+    evfstruct: [Word; 513],
     // Per payload field, the tuple layout index (plus one) for a TUPLE payload, and the element
     // ScalarKind (plus one) for an ARRAY payload, so a `match E::A(t)`/`E::A(a)` binding records the
     // bound variable's type and `t.N`/`a[j]` resolves.
-    evftuple: [Word; 512],
-    evfarrkind: [Word; 512],
+    evftuple: [Word; 513],
+    evfarrkind: [Word; 513],
     evfcursor: Word,
     enum_count: Word,
     cur_enum: Word,
@@ -2055,6 +2067,7 @@ fn resolve_plain_ident_legacy(v: Word) -> Word {
                         if ps.pnames[i] == v andalso ps.penum[i] > 0 andalso mat.match_sp > 0 andalso mat.match_phase[mat.match_sp - 1] == 1 {
                             mat.match_isenum[mat.match_sp - 1] = 1;
                             mat.match_ename[mat.match_sp - 1] = ps.penum[i] - 1;
+                            mat.match_optarg[mat.match_sp - 1] = ps.popt[i];
                         }
                     }
                     step_local(v)
@@ -2435,6 +2448,14 @@ fn step_enum(k: Word, v: Word) -> Word {
 // Metadata outside the node vocabulary. Its payload indexes variants in declaration order.
 fn tag_enum_variant() -> Word { 93 }
 fn tag_enum_payload_bind() -> Word { 97 }
+// A payload binding's source coordinates, the variant row times 1024 plus the field
+// position. `Option::Some`'s payload has no declared row, so it carries `T`'s name id
+// above the base 2^40 instead, from which the host types the binding.
+fn payload_coordinates() -> Word {
+    if mat.mpat_vrow == option_some_row() {
+        1099511627776 + mat.match_optarg[mat.match_sp - 1] - 1
+    } else { mat.mpat_vrow * 1024 + mat.mpat_fpos }
+}
 
 // Unit values emit metadata and then EnumInit. Payload constructors reuse phase two to emit
 // their saved EnumInit immediately after the metadata, without consuming another source token.
@@ -2493,6 +2514,32 @@ fn step_enum_cast() -> Word {
     }
 }
 
+// The rows of the builtin `Option`, which no declaration supplies, Order 6. They sit past
+// the declared-variant cap, so no scan over `enum_count` reaches them, and `Some`'s one
+// payload field sits past the declared field run.
+fn option_none_row() -> Word { pe_cap_variant() + 1 }
+fn option_some_row() -> Word { pe_cap_variant() + 2 }
+fn option_some_field() -> Word { 512 }
+
+// `Option::Some` or `Option::None` in a match over an `Option<T>` parameter. The payload
+// is read at the reference's offset after the eight-byte discriminant, with `T`'s scalar
+// kind. A scrutinee whose `T` is not a scalar, or whose argument is unknown, is refused,
+// because its payload layout is not modelled here.
+fn option_pattern(v: Word) -> Word {
+    let arg = mat.match_optarg[mat.match_sp - 1];
+    let kind = if arg > 0 { scalar_kind_of(arg - 1) } else { 0 };
+    if kind < 1 orelse kind > 3 { perr(pe_unresolved_syntax(), toks.at); }
+    let none = if toks.none_id > 0 andalso v + 1 == toks.none_id { 1 } else { 0 };
+    let some = if toks.some_id > 0 andalso v + 1 == toks.some_id { 1 } else { 0 };
+    let f = option_some_field();
+    enums.evfstart[option_some_row()] = f; enums.evfcount[option_some_row()] = 1;
+    enums.evfoff[f] = 8; enums.evfkind[f] = kind;
+    enums.evfstruct[f] = 0; enums.evftuple[f] = 0; enums.evfarrkind[f] = 0;
+    if none == 1 { mat.enum_disc = 0; mat.mpat_vrow = option_none_row(); ps.found_flag = 1; }
+    if some == 1 { mat.enum_disc = 1; mat.mpat_vrow = option_some_row(); ps.found_flag = 1; }
+    0
+}
+
 // The `::Variant()` of a unit enum-variant match pattern, folded to the variant's
 // discriminant literal. Phase 1 awaits `::`, phase 2 the variant, phase 3 the `(`, phase 4
 // the `)`, after which the discriminant Literal is emitted as the arm's pattern and the arm
@@ -2517,6 +2564,7 @@ fn step_mpat(k: Word, v: Word) -> Word {
                     ps.found_flag = 1;
                 }
             }
+            if ps.found_flag == 0 andalso is_option(mat.enum_name) == 1 { option_pattern(v); }
             if ps.found_flag == 0 { perr(pe_match_variant(), v); }
             let sp = mat.match_sp - 1;
             mat.match_variant[sp] = mat.mpat_vrow;
@@ -2595,7 +2643,7 @@ fn step_mpat(k: Word, v: Word) -> Word {
             stmt.let_enum[stmt.let_count] = 0;
             stmt.let_count = let_push(stmt.let_count);
             // The record retains source coordinates independently of flat byte offsets.
-            ps.emit_arg = mat.mpat_vrow * 1024 + mat.mpat_fpos;
+            ps.emit_arg = payload_coordinates();
             mat.mpat_pcount = mat.mpat_pcount + 1;
             mat.mpat_fpos = mat.mpat_fpos + 1;
             mat.pending_bind = Node::EnumBind() as Word + (enums.evfoff[fi] + enums.evfkind[fi] * 65536 + slot * 4294967296) * 64;
@@ -5195,6 +5243,7 @@ fn start_match() -> Word {
         mat.match_phase[mat.match_sp] = 1;
         mat.match_argcount[mat.match_sp] = 0;
         mat.match_isenum[mat.match_sp] = 0;
+        mat.match_optarg[mat.match_sp] = 0;
         mat.match_haswc[mat.match_sp] = 0;
         mat.match_guarded[mat.match_sp] = 0;
         mat.match_catchall[mat.match_sp] = 0;
@@ -5204,6 +5253,8 @@ fn start_match() -> Word {
         for i in 0..enums.enum_count limit 256 {
             mat.covered[i] = mat.covered[i] band (bnot bit);
         }
+        mat.covered[option_none_row()] = mat.covered[option_none_row()] band (bnot bit);
+        mat.covered[option_some_row()] = mat.covered[option_some_row()] band (bnot bit);
         mat.match_let_base[mat.match_sp] = stmt.let_count;
         mat.match_if_base[mat.match_sp] = branch.if_sp;
         mat.match_for_base[mat.match_sp] = forst.for_sp;
@@ -5219,6 +5270,13 @@ fn start_match() -> Word {
 
 // Only unguarded arms establish coverage. Variant rows, not discriminants or
 // arm counts, keep repeated patterns from hiding a missing variant.
+// Both `Option` variants must be covered, as the reference requires.
+fn option_coverage(bit: Word) -> Word {
+    if (mat.covered[option_none_row()] band bit) == 0 orelse (mat.covered[option_some_row()] band bit) == 0 {
+        perr(pe_match_coverage(), toks.at);
+    }
+    0
+}
 fn check_match_coverage(sp: Word) -> Word {
     if mat.match_catchall[sp] == 0 {
         if mat.match_isenum[sp] == 1 {
@@ -5228,6 +5286,7 @@ fn check_match_coverage(sp: Word) -> Word {
                     perr(pe_match_coverage(), enums.evar[i]);
                 }
             }
+            if is_option(mat.match_ename[sp]) == 1 { option_coverage(bit); }
         } else { perr(pe_match_coverage(), toks.at); }
     }
     0
@@ -5484,7 +5543,7 @@ fn step_match(k: Word, v: Word) -> Word {
             // A unit enum-variant pattern `Name::Variant()` folds to the variant's
             // discriminant literal, the same arm an integer literal forms. Recognise the
             // enum name, then read the `::Variant()` in step_mpat.
-            ps.found_flag = 0;
+            ps.found_flag = is_option(v);
             for i in 0..enums.enum_count limit 256 {
                 if enums.edata[i] == v {
                     ps.found_flag = 1;
@@ -7942,6 +8001,7 @@ fn literal_param(v: Word) -> Word {
     ps.ptext[ps.pcount] = 0;
     ps.ptuple[ps.pcount] = 0;
     ps.penum[ps.pcount] = 0;
+    ps.popt[ps.pcount] = 0;
     ps.parray[ps.pcount] = 0;
     ps.parray_struct[ps.pcount] = 0;
     ps.parray_tuple[ps.pcount] = 0;
@@ -8797,7 +8857,8 @@ fn header_field(k: Word, v: Word) -> Word {
 // reconstructed node count (its four struct/enum scan loops inlined) stays under the per-function
 // reconstruct cap; parse.kel's own `header_sig` grew past it as the array-type surface expanded.
 fn header_type_ident(v: Word, mode: Word) -> Word {
-    ps.gen_ready = 1;
+    ps.gen_ready = 1 + mode;
+    if mode == 0 andalso is_option(v) == 1 { ps.penum[ps.pcount - 1] = v + 1; }
     signature_text_name(v, mode);
     if scalar_kind_of(v) >= 4 { queue_named_layout(v, mode); }
     if mode == 0 {
@@ -9258,8 +9319,9 @@ fn queue_array_header_layout(length: Word) -> Word {
 // computes the builtin layout. A nested, composite or second argument is refused here,
 // because the host has no layout for it and a silent drop would misstate the signature.
 fn header_generic(k: Word, v: Word) -> Word {
-    if ps.gen == 1 {
-        ps.gen = 2;
+    if ps.gen < 3 {
+        if k == Tok::Ident() as Word { option_param_arg(v); }
+        ps.gen = 3;
         if k == Tok::Ident() as Word { type_tuple_record(113, v) } else {
         if k == Tok::IntLit() as Word andalso v > 0 { type_tuple_record(114, v) } else {
             perr(pe_annotation_syntax(), toks.at)
@@ -9273,7 +9335,18 @@ fn header_sig(k: Word, v: Word) -> Word {
     let ready = ps.gen_ready;
     ps.gen_ready = 0;
     if ps.gen > 0 { header_generic(k, v) } else {
-    if ready == 1 andalso k == Tok::Lt() as Word { ps.gen = 1; 0 } else { header_sig_body(k, v) } }
+    if ready > 0 andalso k == Tok::Lt() as Word { ps.gen = ready; 0 } else { header_sig_body(k, v) } }
+}
+// The argument of an `Option<T>` parameter, kept so a match on the parameter knows the
+// payload type. `gen` is 1 for a parameter and 2 for a return type at this point.
+fn option_param_arg(v: Word) -> Word {
+    if ps.gen == 1 andalso ps.penum[ps.pcount - 1] > 0 andalso is_option(ps.penum[ps.pcount - 1] - 1) == 1 {
+        ps.popt[ps.pcount - 1] = v + 1;
+    }
+    0
+}
+fn is_option(v: Word) -> Word {
+    if toks.option_id > 0 andalso v + 1 == toks.option_id { 1 } else { 0 }
 }
 fn header_sig_body(k: Word, v: Word) -> Word {
     nominal_refresh();
@@ -9405,6 +9478,7 @@ fn header_sig_body(k: Word, v: Word) -> Word {
                 ps.ptext[ps.pcount] = 0;
                 ps.ptuple[ps.pcount] = 0;
                 ps.penum[ps.pcount] = 0;
+                ps.popt[ps.pcount] = 0;
                 ps.parray[ps.pcount] = 0;
                 ps.parray_struct[ps.pcount] = 0;
                 ps.parray_tuple[ps.pcount] = 0;

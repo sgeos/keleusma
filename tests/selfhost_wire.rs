@@ -13008,8 +13008,10 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // `assert_message_comma` made it 1053 and 32,620.
     // The pipe placeholder's `call_piped` made it 1054 and 32,667. The builtin generic
     // argument scan, `gen`, `gen_ready`, `header_generic` and `header_sig_body`, made it 1058 and 32,822.
-    assert_eq!(worst_names, 1058, "the worst-case name count moved");
-    assert_eq!(worst_blob, 32822, "the worst-case blob size moved");
+    // The Option match, its seeded ids, reserved rows, `popt`, `match_optarg` and helpers,
+    // with `pe_option_rows` declaring the reserved tail, made it 1072 and 33,205.
+    assert_eq!(worst_names, 1072, "the worst-case name count moved");
+    assert_eq!(worst_blob, 33205, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

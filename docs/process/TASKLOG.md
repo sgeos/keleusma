@@ -6,6 +6,11 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-26 Option parameter matches
+
+A match over an `Option<T>` parameter with a scalar `T` compiles byte-identically. The census
+reads 64 Identical of 74. Option construction remains Unsupported.
+
 ## 2026-10-26 Builtin generic signatures
 
 `Option<T>` and `Multiword<N>` signatures take the reference layouts. The census reads 63
