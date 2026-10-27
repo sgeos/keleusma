@@ -151,6 +151,21 @@ shared data toks {
     spec_key: [Word; 64],
     spec_chunk: [Word; 64],
     spec_name: [Word; 64],
+    // The information-flow operators `classify` and `declassify`, interned id plus one,
+    // Order 6, APPENDED. Zero means the name does not occur.
+    classify_id: Word,
+    declassify_id: Word,
+    // Newtypes, seeded from the host's syntactic scan. Per newtype, its name id, its base
+    // type's name id, whether it carries a refinement predicate, and the token positions of
+    // its declaration's first and last tokens.
+    nt_count: Word,
+    nt_name: [Word; 16],
+    nt_base: [Word; 16],
+    nt_refined: [Word; 16],
+    nt_begin: [Word; 16],
+    nt_end: [Word; 16],
+    // Per newtype, the chunk index of its refinement predicate, else -1.
+    nt_pred: [Word; 16],
 }
 
 // The instantiation state, Order 6. `active` is the row plus one being parsed, `next` the
@@ -163,6 +178,20 @@ private data gn {
     req_i: Word,
     req_gen: [Word; 64],
     req_key: [Word; 64],
+    // The label erasure state: 0 idle, 1 after `@`, 2 inside a `@{...}` label set.
+    lbl: Word,
+    // 1 when a header token was a newtype name read as its base type.
+    hdr_nt: Word,
+    // Newtype values. `nt_value` is 1 when the most recent value is newtype-typed.
+    // `ctor_at` holds the operator stack position of each open constructor's parenthesis,
+    // and `as_nt` whether a pending cast's operand was newtype-typed.
+    nt_value: Word,
+    as_nt: Word,
+    ctor_n: Word,
+    ctor_at: [Word; 8],
+    // Per open constructor, its predicate's chunk index plus one when its argument needs a
+    // run-time refinement check, else zero.
+    ctor_chk: [Word; 8],
     // Scratch for the helpers below, so they disturb no shared lookup state.
     tmp: Word,
     pw: Word,
@@ -481,6 +510,8 @@ private data ps {
     gen_ready: Word,
     // Per `Option<T>` parameter, `T`'s scalar kind as `match_optarg` holds it, else zero.
     popt: [Word; 33],
+    // Per parameter, 1 when its type is a newtype, Order 6.
+    pnt: [Word; 33],
     array_tuple_layout: Word,
     dvis: Word,
     init: Word,
@@ -987,6 +1018,8 @@ private data stmt {
     let_enum: [Word; 257],
     // Per `let` binding of an `Option`, its payload's scalar kind, else 0.
     let_opt: [Word; 257],
+    // Per `let` binding, 1 when its value is newtype-typed, Order 6.
+    let_nt: [Word; 257],
     // 1 for a hidden destructuring binding whose value has no known layout, such as an
     // untyped native's result, Order 6. The reference reads its elements boxed.
     let_untyped: [Word; 257],
@@ -1726,6 +1759,8 @@ private data chunkret {
     ret_enum: [Word; 1024],
     // Per chunk returning `Option<T>`, `T`'s scalar kind, else 0.
     ret_opt: [Word; 1024],
+    // Per chunk, 1 when it returns a newtype, Order 6.
+    ret_nt: [Word; 1024],
     // Per chunk, the element ScalarKind (plus one) of a scalar array return `-> [T; N]`, else 0, so
     // a `let a = f(); a[i]` bound to the call arms `a[i]` access (scalar elements only, matching the
     // scalar array-parameter and let-bound-array cases).
@@ -1870,6 +1905,7 @@ fn clear_let_shape(at: Word) -> Word {
     stmt.let_enum[at] = 0;
     stmt.let_untyped[at] = 0;
     stmt.let_opt[at] = 0;
+    stmt.let_nt[at] = 0;
     0
 }
 
@@ -1921,6 +1957,7 @@ fn step_local(v: Word) -> Word {
                     stmt.pending_copt = 0; stmt.pending_cenum = ps.penum[i];
                     stmt.pending_copt = ps.popt[i];
                 }
+
             }
         }
     }
@@ -4996,6 +5033,9 @@ fn value_local(slot: Word) -> Word {
     0
 }
 fn value_record(word: Word) -> Word {
+    // Any emitted record is a new value unless it reads a newtype local or calls a newtype
+    // function, which the record kinds below decide. A step that emits nothing keeps it.
+    if word != 0 { gn.nt_value = 0; }
     let kind = if ps.emit_arg == 0 - 1 { word % 64 } else { word };
     let arg = if ps.emit_arg == 0 - 1 { word / 64 } else { ps.emit_arg };
     if kind != 0 {
@@ -5056,7 +5096,9 @@ fn value_record(word: Word) -> Word {
         // The field scanner may already have consumed a following dot. Preserve its phase.
         vl.form = 3; vl.decl = ps.fa_fstruct; vl.bytes = (arg / 65536) % 65536;
     }
-    if kind == 2 { value_local(arg); }
+    if kind == 2 { value_local(arg); gn.nt_value = local_is_newtype(arg); }
+    if kind == 7 { gn.nt_value = chunkret.ret_nt[arg % call_chunk_radix()]; }
+    if kind == 85 { gn.nt_value = 1; }
     if kind == 3 { value_scalar(if arg >= 64 { arg / 64 } else { if (arg >= 6 andalso arg <= 11) orelse arg == 33 { 1 } else { 3 } }); }
     if kind == 6 orelse kind == 8 orelse kind == 9 orelse kind == 68 { value_scalar(1); }
     if kind == 47 orelse kind == 50 orelse kind == 53 orelse kind == 58 orelse kind == 61 orelse kind == 63 { value_scalar(1); }
@@ -5120,9 +5162,13 @@ fn step_closing() -> Word {
         if top == OpCode::Paren() as Word {
             let empty = ops.expect_operand;
             ops.opsp = op_pop(ops.opsp);
+            let check = ctor_paren_close();
             ops.closing = 0;
             ops.expect_operand = 0;
-            if empty == 1 { Node::Unit() as Word + 3 * 64 } else { 0 }
+            if empty == 1 { Node::Unit() as Word + 3 * 64 } else {
+                // Tag 85 is past the packed range of 64, so it rides the two-word form.
+                if check > 0 { type_tuple_record(85, check - 1) } else { 0 }
+            }
         } else {
         if top == OpCode::CallMark() as Word {
             ops.opsp = op_pop(ops.opsp);
@@ -7092,6 +7138,8 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         // it. `ps.last_byte` was left as the operand had set it, so `(o as Word) + (n as Word)`
         // over two Byte locals lowered to the unchecked Byte `Add` where the reference emits
         // `CheckedAdd` (found 2026-10-21).
+        // A newtype operand unwraps to its base with no operation, as the reference casts it.
+        if gn.as_nt == 1 { gn.as_nt = 0; ps.last_byte = 0; 0 } else {
         if toks.byte_id > 0 andalso v == toks.byte_id {
             ps.last_enum = 0;
             stmt.pending_copt = 0; stmt.pending_cenum = 0;
@@ -7110,13 +7158,14 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
                 stmt.pending_copt = 0; stmt.pending_cenum = 0;
                 0
             } else { Node::Cast() as Word }
-        }
+        } }
     } else {
     if k == Tok::As() as Word {
         // A plain `<expr> as Type` cast (not an enum cast, which step_enum consumes).
         // The operand is on the host stack; arm the skip so the TARGET TYPE NAME
         // emits the Cast node, because that is the token that knows the direction.
         da.as_skip = 1;
+        gn.as_nt = gn.nt_value;
         ops.expect_operand = 0;
         0
     } else {
@@ -7397,6 +7446,9 @@ fn checked_emit() -> Word {
 }
 
 fn step_body_dispatch(k: Word, v: Word) -> Word {
+    if erased_token(k, v, 1) == 1 { 0 } else { step_body_dispatch_kept(k, v) }
+}
+fn step_body_dispatch_kept(k: Word, v: Word) -> Word {
     if checked.probe == 3 andalso k != Tok::Semi() as Word andalso k != Tok::RBrace() as Word {
         // The reference accepts a handled write only as a statement or a block's tail.
         perr(40, toks.at)
@@ -7556,6 +7608,7 @@ fn step_draining() -> Word {
                     stmt.stmt_name[stmt.stmt_count] = stmt.pstmt_name[stmt.pstmt_sp];
                     stmt.stmt_type[stmt.stmt_count] = stmt.pstmt_type[stmt.pstmt_sp];
                     clear_let_shape(stmt.let_count);
+                    stmt.let_nt[stmt.let_count] = gn.nt_value;
                     stmt.let_names[stmt.let_count] = stmt.pstmt_name[stmt.pstmt_sp];
                     stmt.scope_slot[stmt.let_count] = slot;
                     stmt.let_scalar[stmt.let_count] = stmt.pstmt_scalar[stmt.pstmt_sp];
@@ -7972,7 +8025,8 @@ fn body_next() -> Word {
             let v0 = if kind == 65 { toks.values[token / 256] } else { token / 256 };
             toks.at = ps.cursor;
             ps.cursor = ps.cursor + 1;
-            let v = gen_subst(k0, v0);
+            let v1 = gen_subst(k0, v0);
+            let v = newtype_subst(k0, v1, 1);
             // A `_` where a call argument is expected is the pipe's placeholder, `x |> f(a, _)`.
             // In a call a pipe opened, it becomes the internal code 200, which `step_normal`
             // turns into record 84, and reconstruct then puts the piped operand in the
@@ -8117,6 +8171,7 @@ fn literal_param(v: Word) -> Word {
     ps.ptuple[ps.pcount] = 0;
     ps.penum[ps.pcount] = 0;
     ps.popt[ps.pcount] = 0;
+    ps.pnt[ps.pcount] = 0;
     ps.parray[ps.pcount] = 0;
     ps.parray_struct[ps.pcount] = 0;
     ps.parray_tuple[ps.pcount] = 0;
@@ -9608,6 +9663,7 @@ fn header_sig_body(k: Word, v: Word) -> Word {
                 ps.ptuple[ps.pcount] = 0;
                 ps.penum[ps.pcount] = 0;
                 ps.popt[ps.pcount] = 0;
+                ps.pnt[ps.pcount] = 0;
                 ps.parray[ps.pcount] = 0;
                 ps.parray_struct[ps.pcount] = 0;
                 ps.parray_tuple[ps.pcount] = 0;
@@ -9833,7 +9889,13 @@ fn step_body() -> Word {
             ps.cursor = ps.cursor + 1;
             if k == 67 { perr(pe_unresolved_syntax(), toks.at); }
             let seek = gen_header_seek();
-            if seek >= 0 { gen_seek(seek) } else { header_step(k, gen_subst(k, v0)) }
+            let v = newtype_subst(k, gen_subst(k, v0), 0);
+            if seek >= 0 { gen_seek(seek) } else {
+            if erased_token(k, v, 0) == 1 { label_header_mark(k) } else {
+                let r = header_step(k, v);
+                newtype_header_mark();
+                r
+            } }
         }
     } } } } } } } } }
 }
@@ -9857,6 +9919,127 @@ fn pe_tag_base() -> Word { 0 - 900 }
 // input, by seeking to it. The host only scans headers and keeps the chunk table. Deciding
 // which instantiations exist, from the arguments at each call, happens here.
 
+// --- Information-flow labels and newtypes, Order 6 ---
+//
+// The reference erases all of these from the code it emits. A label is checked by its type
+// checker and leaves no operation, `classify x @L` and `declassify x @L` compile as `x`, and a
+// newtype compiles as its base type, with its constructor `N(x)` as `x`. This stage erases
+// them the same way, at the token read. Whether the self-hosted type stage should also check
+// label flow and newtype identity is operator question 10. Until it is answered, the
+// reference cross-check is what rejects a violation, which this erasure does not decide.
+
+// The kind of the token after the one just read, or -1 past the resident window.
+fn next_kind() -> Word {
+    if ps.cursor >= toks.len { 0 - 1 } else { toks.packed[ps.cursor - toks.base] % 256 }
+}
+// Whether to drop the token just read. A label is `@Name`, `@!Name` or `@{A, !B}`. The
+// operators are dropped where an operand is expected and no `(` follows, since a `(` makes
+// the same name an ordinary call, as the reference reads it.
+fn erased_token(k: Word, v: Word, in_body: Word) -> Word {
+    if gn.lbl == 2 {
+        if k == Tok::RBrace() as Word { gn.lbl = 0; }
+        1
+    } else {
+    if gn.lbl == 1 {
+        if k == 75 { 1 } else {
+        if k == Tok::LBrace() as Word { gn.lbl = 2; 1 } else {
+        if k == Tok::Ident() as Word { gn.lbl = 0; 1 } else { gn.lbl = 0; perr(pe_unresolved_syntax(), toks.at); 1 } } }
+    } else {
+    if k == 74 { gn.lbl = 1; 1 } else {
+    if k == 75 { perr(pe_unresolved_syntax(), toks.at); 1 } else {
+    if in_body == 1 andalso k == Tok::Ident() as Word andalso ops.expect_operand == 1 andalso is_ifc_operator(v) == 1 andalso next_kind() != Tok::LParen() as Word { 1 } else {
+    if in_body == 1 andalso k == Tok::Ident() as Word andalso newtype_ctor(v) == 1 { 1 } else { 0 } } } } } }
+}
+fn is_ifc_operator(v: Word) -> Word {
+    if (toks.classify_id > 0 andalso v + 1 == toks.classify_id) orelse (toks.declassify_id > 0 andalso v + 1 == toks.declassify_id) { 1 } else { 0 }
+}
+// The newtype row named `v`, else -1.
+fn newtype_of(v: Word) -> Word {
+    gn.tmp = 0 - 1;
+    for n in 0..toks.nt_count limit 16 { if toks.nt_name[n] == v { gn.tmp = n; } }
+    gn.tmp
+}
+// A newtype name read where it is not a constructor becomes its base type's name. A
+// constructor is left for `erased_token`, which drops it so its argument stands alone.
+fn newtype_subst(k: Word, v: Word, in_body: Word) -> Word {
+    if k != Tok::Ident() as Word orelse toks.nt_count == 0 { v } else {
+        let n = newtype_of(v);
+        if n < 0 { v } else {
+            if in_body == 1 andalso ops.expect_operand == 1 andalso next_kind() == Tok::LParen() as Word { v } else {
+                // In a header only a function's parameter or return type, read in mode 2, is
+                // modelled. A newtype as a struct field, data field, payload or native
+                // signature type is refused,
+                // since the reference lays some of those out differently, a struct boxed.
+                if in_body == 0 {
+                    if ps.mode != 2 orelse (ps.ptype != 1 andalso ps.rtype != 1) { perr(pe_unresolved_syntax(), toks.at); }
+                    gn.hdr_nt = 1;
+                }
+                toks.nt_base[n]
+            }
+        }
+    }
+}
+// Whether `v` is a newtype constructor, a newtype name before `(` where an operand is
+// expected. A refined newtype's constructor checks its predicate at run time unless its
+// argument is a literal, which the reference checks while compiling and so emits nothing
+// for. A refined constructor whose predicate the host did not resolve is refused.
+fn newtype_ctor(v: Word) -> Word {
+    let n = newtype_of(v);
+    if n < 0 orelse ops.expect_operand != 1 orelse next_kind() != Tok::LParen() as Word { 0 } else {
+        let needs_check = toks.nt_refined[n] == 1 andalso newtype_literal_arg() == 0;
+        if needs_check andalso toks.nt_pred[n] < 0 { perr(pe_unresolved_syntax(), toks.at); }
+        if gn.ctor_n >= 8 { perr(pe_unresolved_syntax(), toks.at); } else {
+            gn.ctor_at[gn.ctor_n] = ops.opsp;
+            gn.ctor_chk[gn.ctor_n] = if needs_check { toks.nt_pred[n] + 1 } else { 0 };
+            gn.ctor_n = gn.ctor_n + 1;
+        }
+        1
+    }
+}
+// A label written in a signature, `x: Word@Secret`, follows the type it qualifies. The
+// reference types such a parameter `Composite` for its tag and keeps its shape, so the
+// host is told under tag 141 with payload one.
+fn label_header_mark(k: Word) -> Word {
+    if k == 74 andalso ps.gen_ready > 0 { hq_push(141, 1); }
+    0
+}
+// A newtype written in a signature reads as its base type. The reference types a newtype
+// parameter `Composite` with shape `Top`, and a newtype return `Top`, so the host is told
+// under tag 141 with payload two, and the body knows the parameter or result is a newtype.
+fn newtype_header_mark() -> Word {
+    if gn.hdr_nt == 1 {
+        gn.hdr_nt = 0;
+        if ps.gen_ready == 1 { ps.pnt[ps.pcount - 1] = 1; hq_push(141, 2); }
+        if ps.gen_ready == 2 { chunkret.ret_nt[ps.cur_chunk] = 1; hq_push(141, 2); }
+    }
+    0
+}
+// Whether frame slot `slot` holds a newtype-typed parameter or binding.
+fn local_is_newtype(slot: Word) -> Word {
+    gn.tmp = if slot < ps.pcount { ps.pnt[slot] } else { 0 };
+    for i in 0..stmt.let_count limit 256 { if stmt.scope_slot[i] == slot { gn.tmp = stmt.let_nt[i]; } }
+    gn.tmp
+}
+// A constructor's parenthesis closed, so the value it holds is newtype-typed. A refined
+// constructor needing a run-time check returns its predicate's chunk plus one, and the
+// closing step emits the check as record 85, which `value_record` marks newtype-typed.
+fn ctor_paren_close() -> Word {
+    if gn.ctor_n > 0 andalso gn.ctor_at[gn.ctor_n - 1] == ops.opsp {
+        gn.ctor_n = gn.ctor_n - 1;
+        gn.nt_value = 1;
+        gn.ctor_chk[gn.ctor_n]
+    } else { 0 }
+}
+
+// Whether the constructor's argument is a single integer literal, `N(5)`.
+fn newtype_literal_arg() -> Word {
+    if ps.cursor + 2 >= toks.base + 8 orelse ps.cursor + 2 >= toks.len { 0 } else {
+        let a = toks.packed[ps.cursor + 1 - toks.base] % 256;
+        let b = toks.packed[ps.cursor + 2 - toks.base] % 256;
+        if (a == 12 orelse a == 65) andalso b == Tok::RParen() as Word { 1 } else { 0 }
+    }
+}
+
 // Reposition to `at`, announcing the seek so the host reloads its token window.
 fn gen_seek(at: Word) -> Word {
     ps.cursor = at; toks.at = at; ps.emit_arg = at; 111
@@ -9866,6 +10049,8 @@ fn gen_seek(at: Word) -> Word {
 // to its `(`, so the type parameter list is never read.
 fn gen_header_seek() -> Word {
     gn.tmp = 0 - 1;
+    // A newtype declaration is skipped whole. Its uses read as its base type.
+    for n in 0..toks.nt_count limit 16 { if toks.nt_begin[n] == toks.at { gn.tmp = toks.nt_end[n] + 1; } }
     if gn.active == 0 {
         for g in 0..toks.gen_count limit 16 { if toks.gen_fn[g] == toks.at { gn.tmp = toks.gen_end[g] + 1; } }
     } else {

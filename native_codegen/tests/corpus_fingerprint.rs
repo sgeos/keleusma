@@ -313,6 +313,11 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // **RE-PINNED 2026-10-27, absorption 110.** Upstream pull request 576, generic
 // functions instantiated in the parser stage, changed `parse.kel`. Nothing was
 // added or removed.
+//
+// **RE-PINNED 2026-10-27, absorption 112.** Upstream pull request 581, which
+// erases information-flow labels and newtypes as the reference does, changed
+// `codegen.kel`, `lexer.kel`, `parse.kel` and `reconstruct.kel`. Nothing was
+// added or removed.
 const PINNED: &[(&str, u64)] = &[
     // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
     // added or removed. Every census this instrument names to re-derive was run on
@@ -511,12 +516,12 @@ const PINNED: &[(&str, u64)] = &[
         0xf93a5bd822bfe99c,
     ),
     ("src/selfhost/kel/analyze.kel", 0xe45a770e222b1931),
-    ("src/selfhost/kel/codegen.kel", 0x8d61feb949182bd7),
-    ("src/selfhost/kel/lexer.kel", 0xb42fe447663faa7d),
+    ("src/selfhost/kel/codegen.kel", 0xecd27ec27b225862),
+    ("src/selfhost/kel/lexer.kel", 0x897a561eef4f18d1),
     // Absorption 83 changes cast Byte tracking and FixedDiv classification.
     // The non-corpus run re-derived coverage and refusal figures unchanged.
-    ("src/selfhost/kel/parse.kel", 0x5e5b3881f840e705),
-    ("src/selfhost/kel/reconstruct.kel", 0x7f5681b85034f7e7),
+    ("src/selfhost/kel/parse.kel", 0xb9638e3dd3491b1e),
+    ("src/selfhost/kel/reconstruct.kel", 0x5a5314dbf0987c1c),
     ("src/selfhost/kel/verify_datalayout.kel", 0xe625b5656d576b86),
     ("src/selfhost/kel/verify_depth.kel", 0xd65a1422ab29b135),
     ("src/selfhost/kel/verify_structural.kel", 0xe47e628d4f3d9641),

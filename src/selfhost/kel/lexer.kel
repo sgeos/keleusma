@@ -380,7 +380,14 @@ fn punct_op(b: Word) -> Word {
     if b == 60 { 28 } else {    // <  Lt
     if b == 62 { 29 } else {    // >  Gt
     if b == 46 { 40 } else {    // .  Dot
-    67 } } } } } } } } }
+    punct_label(b) } } } } } } } } }
+}
+
+// The information-flow label punctuation, Order 6. `@` introduces a label, Tok 74, and a
+// lone `!` negates one, Tok 75, since `!=` is matched as a compound before this. Any other
+// byte stays Tok 67, which the parser refuses.
+fn punct_label(b: Word) -> Word {
+    if b == 64 { 74 } else { if b == 33 { 75 } else { 67 } }
 }
 
 // The token word for a completed identifier run at `start` of `len` bytes, in the

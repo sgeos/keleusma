@@ -182,6 +182,10 @@ pub struct ParsedFn {
     // Source type records preserve tuple members and every array dimension in postfix order.
     param_type_records: Vec<Vec<(i64, i64)>>,
     return_type_records: Vec<(i64, i64)>,
+    /// Per parameter, and for the return, the opaque marker the header carried: 0 none, 1 an
+    /// information-flow label, 2 a newtype, Order 6.
+    param_opaque: Vec<i64>,
+    return_opaque: i64,
     tuple_header_is_return: bool,
     guard: Vec<(i64, i64)>,
     body: Vec<(i64, i64)>,
@@ -881,6 +885,67 @@ struct FirstPass {
     templates: Vec<Template>,
     /// The instantiations this table was built for, each with its chunk index and name id.
     instances: Vec<(Instantiation, i64, i64)>,
+    /// The newtypes the syntactic scan recognised, Order 6.
+    newtypes: Vec<Newtype>,
+}
+
+/// A newtype declaration, recognised syntactically, Order 6.
+///
+/// Only `newtype Name = Base;` and `newtype Name = Base where predicate;` over a base written
+/// as one identifier are recognised. A composite base or a `with` contract is left
+/// unrecognised, so the parser refuses the declaration as before.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Newtype {
+    name: i64,
+    base: i64,
+    refined: bool,
+    /// The refinement predicate's name id, when there is one.
+    predicate: Option<i64>,
+    begin: i64,
+    end: i64,
+}
+
+/// Recognise newtype declarations among the top-level runs a lexing pass collected. Each
+/// run is the tokens from an identifier at the top level to the next semicolon, at most
+/// eight, with the position of its first token.
+fn newtypes_from_runs(runs: &[(i64, Vec<(i64, i64)>)], names: &[String]) -> Vec<Newtype> {
+    let name_is = |id: i64, text: &str| names.get(id as usize).is_some_and(|n| n == text);
+    let mut found = Vec::new();
+    for (at, run) in runs {
+        let ident = |i: usize| run.get(i).filter(|t| t.0 == 1).map(|t| t.1);
+        let (Some(keyword), Some(name), Some(base)) = (ident(0), ident(1), ident(3)) else {
+            continue;
+        };
+        if !name_is(keyword, "newtype") || run.get(2).map(|t| t.0) != Some(17) {
+            continue;
+        }
+        let refined = ident(4).is_some_and(|w| name_is(w, "where")) && ident(5).is_some();
+        let mut last = if refined { 5 } else { 3 };
+        match run.get(last + 1).map(|t| t.0) {
+            Some(39) => last += 1,
+            // Anything else before the next declaration, a `with` contract for one, is not
+            // a form this recognises.
+            Some(1)
+                if !refined
+                    && ident(4).is_some_and(|w| name_is(w, "where") || name_is(w, "with")) =>
+            {
+                continue;
+            }
+            Some(1) if refined && ident(6).is_some_and(|w| name_is(w, "with")) => continue,
+            _ => {}
+        }
+        if found.len() < crate::selfhost_host::NEWTYPE_CAP {
+            found.push(Newtype {
+                name,
+                base,
+                refined,
+                predicate: if refined { ident(5) } else { None },
+                begin: *at,
+                end: at + last as i64,
+            });
+        }
+    }
+    found
 }
 
 /// A generic function template, recognised syntactically, Order 6.
@@ -923,6 +988,19 @@ fn seed_generics(vm: &mut Vm<'_, '_>, shared: &mut [u8], first: &FirstPass) {
             set(h::BR_P_GEN_PMAP + g * h::GEN_VALUE_PARAM_CAP + i, m);
         }
         set(h::BR_P_GEN_RMAP + g, t.return_map);
+    }
+    set(h::BR_P_NT_COUNT, first.newtypes.len() as i64);
+    for (n, t) in first.newtypes.iter().enumerate() {
+        set(h::BR_P_NT_NAME + n, t.name);
+        set(h::BR_P_NT_BASE + n, t.base);
+        set(h::BR_P_NT_REFINED + n, i64::from(t.refined));
+        set(h::BR_P_NT_BEGIN + n, t.begin);
+        set(h::BR_P_NT_END + n, t.end);
+        let predicate = t
+            .predicate
+            .and_then(|p| first.chunks.iter().position(|&c| c == p))
+            .map_or(-1, |c| c as i64);
+        set(h::BR_P_NT_PRED + n, predicate);
     }
     set(h::BR_P_SPEC_COUNT, first.instances.len() as i64);
     for (r, ((template, kinds), chunk, name)) in first.instances.iter().enumerate() {
@@ -1124,6 +1202,8 @@ fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
     let (mut impl_trait, mut impl_head) = (-1i64, -1i64);
     let mut methods_raw: Vec<(i64, i64, i64)> = Vec::new();
     let mut scan = TemplateScan::default();
+    let mut runs: Vec<(i64, Vec<(i64, i64)>)> = Vec::new();
+    let mut run_open = false;
     while let Some(w) = lex_next(&mut vm, &mut shared) {
         let cur = (w.rem_euclid(256), w.div_euclid(256));
         // The brace depth before this token. `depth` lags by one token below.
@@ -1134,6 +1214,17 @@ fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
                 _ => 0,
             };
         scan.step(token_count as i64, depth_before, cur);
+        // Top-level runs for the newtype scan, bounded at eight tokens each.
+        if run_open {
+            let run = &mut runs.last_mut().expect("open run").1;
+            run.push(cur);
+            if cur.0 == 39 || run.len() >= 8 {
+                run_open = false;
+            }
+        } else if depth_before == 0 && cur.0 == 1 && runs.len() < 4096 {
+            runs.push((token_count as i64, vec![cur]));
+            run_open = true;
+        }
         token_count += 1;
         has_imports |= cur.0 == 19;
         if let Some((kw, _)) = prev {
@@ -1169,6 +1260,7 @@ fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
     }
     let mut names = lex_names(&vm, &shared, src);
     let values = lex_values(&vm, &shared, names.len());
+    let newtypes = newtypes_from_runs(&runs, &names);
     // A template is not a chunk. Only a name every head of which is a template is dropped, so
     // a template sharing its name with a plain head stays a chunk and the parser refuses it.
     let templates: Vec<Template> = scan
@@ -1243,6 +1335,7 @@ fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
         names,
         templates,
         instances,
+        newtypes,
         chunks: all.iter().map(|(_, id, _)| *id).collect(),
         chunk_names: all.into_iter().map(|(n, _, _)| n).collect(),
         methods,
@@ -1749,6 +1842,8 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
         (crate::selfhost_host::BR_P_OPTION_ID, "Option"),
         (crate::selfhost_host::BR_P_SOME_ID, "Some"),
         (crate::selfhost_host::BR_P_NONE_ID, "None"),
+        (crate::selfhost_host::BR_P_CLASSIFY_ID, "classify"),
+        (crate::selfhost_host::BR_P_DECLASSIFY_ID, "declassify"),
     ] {
         vm.set_shared(&mut shared, slot, Value::Int(id_of(name) + 1))
             .unwrap();
@@ -2278,6 +2373,8 @@ fn try_parse_functions_impl_with(
         (crate::selfhost_host::BR_P_OPTION_ID, "Option"),
         (crate::selfhost_host::BR_P_SOME_ID, "Some"),
         (crate::selfhost_host::BR_P_NONE_ID, "None"),
+        (crate::selfhost_host::BR_P_CLASSIFY_ID, "classify"),
+        (crate::selfhost_host::BR_P_DECLASSIFY_ID, "declassify"),
     ] {
         vm.set_shared(&mut shared, slot, Value::Int(id_of(name) + 1))
             .unwrap();
@@ -2796,6 +2893,8 @@ fn try_parse_functions_impl_with(
                             return_type: -1,
                             param_type_records: Vec::new(),
                             return_type_records: Vec::new(),
+                            param_opaque: Vec::new(),
+                            return_opaque: 0,
                             tuple_header_is_return: false,
                             guard: Vec::new(),
                             body: Vec::new(),
@@ -2857,6 +2956,24 @@ fn try_parse_functions_impl_with(
                             f.return_type_records.push((8, val));
                         } else {
                             f.param_type_records.last_mut().unwrap().push((8, val));
+                        }
+                    }
+                    // An opaque header type follows its head's record and is routed the same way.
+                    crate::selfhost_host::PARSE_OPAQUE_TYPE_TAG => {
+                        assert!(matches!(val, 1 | 2), "invalid opaque type marker");
+                        let f = open_decl(&mut cur, code, val);
+                        if !f.return_type_records.is_empty() {
+                            f.return_opaque = f.return_opaque.max(val);
+                        } else {
+                            let at = f
+                                .param_type_records
+                                .len()
+                                .checked_sub(1)
+                                .expect("opaque type without parameter");
+                            if f.param_opaque.len() <= at {
+                                f.param_opaque.resize(at + 1, 0);
+                            }
+                            f.param_opaque[at] = f.param_opaque[at].max(val);
                         }
                     }
                     // A builtin generic's argument follows its head and is routed the same way.
@@ -7123,12 +7240,20 @@ fn assemble_signatures(
             .iter()
             .enumerate()
             .map(|(i, records)| {
+                // A newtype parameter has no shape the reference states.
+                if first.param_opaque.get(i) == Some(&2) {
+                    return WireShape::Top;
+                }
                 first.param_layouts[i].unwrap_or_else(|| declared_wire_shape(records, names, enums))
             })
             .collect();
-        let ret = first
-            .return_layout
-            .unwrap_or_else(|| declared_wire_shape(&first.return_type_records, names, enums));
+        let ret = if first.return_opaque == 2 {
+            WireShape::Top
+        } else {
+            first
+                .return_layout
+                .unwrap_or_else(|| declared_wire_shape(&first.return_type_records, names, enums))
+        };
         // Only a `loop` (category 3, a Stream chunk) resumes with its first parameter.
         let resume = if first.cat == 3 {
             params.first().copied().unwrap_or(WireShape::Top)
@@ -7246,6 +7371,11 @@ fn assemble_chunk_metadata(
             .iter()
             .enumerate()
             .map(|(i, &t)| {
+                // A labelled or newtype parameter is tagged `Composite`, as the reference tags
+                // it, whatever its underlying type.
+                if first.param_opaque.get(i).is_some_and(|&o| o > 0) {
+                    return TypeTag::Composite;
+                }
                 if let Some(shape) = first.param_layouts[i] {
                     return match shape {
                         crate::bytecode::WireShape::Scalar { kind: 0 } => TypeTag::Unit,
