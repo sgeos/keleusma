@@ -63,7 +63,9 @@ const CORPUS: &[(&str, Class)] = &[
     ("examples/scripts/04_for_in.kel", Identical),
     ("examples/scripts/05_pipeline.kel", Identical),
     ("examples/scripts/06_multiheaded.kel", Identical),
-    ("examples/scripts/07_refinement.kel", Unsupported),
+    // Identical since information-flow labels and newtypes are erased as the reference
+    // erases them, Order 6.
+    ("examples/scripts/07_refinement.kel", Identical),
     ("examples/scripts/08_method_dispatch.kel", Identical),
     ("examples/scripts/09_big_numbers.kel", Identical),
     ("examples/scripts/10_multbyte.kel", Identical),
@@ -1960,12 +1962,12 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
     (
         "Expr::Classify",
         "fn main(a: Word) -> Word { let b = classify a @Secret; declassify b @Secret }",
-        Unsupported,
+        Identical,
     ),
     (
         "Expr::Declassify",
         "fn main(a: Word) -> Word { let b = classify a @Secret; declassify b @Secret }",
-        Unsupported,
+        Identical,
     ),
     (
         "Expr::SaturateMin",
@@ -2061,12 +2063,12 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
     (
         "TypeExpr::Labelled",
         "fn main(a: Word@Secret) -> Word@Secret { a }",
-        Unsupported,
+        Identical,
     ),
     (
         "TypeExpr::NegativeLabelled",
         "fn main(a: Word@!Secret) -> Word { a }",
-        Unsupported,
+        Identical,
     ),
     (
         "TypeExpr::Named",
@@ -2120,7 +2122,7 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
     (
         "Decl::Newtype",
         "newtype C = Word;\nfn main() -> Word { let c = C(5); c as Word }",
-        Unsupported,
+        Identical,
     ),
     (
         "Decl::Trait",
@@ -2510,6 +2512,84 @@ fn generic_functions_have_their_pinned_outcomes() {
         ("fn wrap<T>(x: T) -> Option<T> { Option::Some(x) }\nfn main() -> Word { match wrap(1) { Option::Some(v) => v, Option::None => 0 } }".to_string(), Unsupported),
         ("fn first<A>(a: A, b: A) -> A { a }\nfn main() -> Word { first(1, 2 as Byte) }".to_string(), RefRejects),
         ("fn f<T: Ord>(x: T) -> T { x }\nfn main() -> Word { f(1) }".to_string(), RefRejects),
+    ];
+    let mismatches: Vec<String> = cases
+        .iter()
+        .filter_map(|(src, expected)| {
+            let (actual, detail) = classify(src);
+            (actual != *expected)
+                .then(|| format!("{src:?}: expected {expected:?}, got {actual:?} {detail}"))
+        })
+        .collect();
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Information-flow labels and newtypes, Order 6. The reference erases them from the code
+/// it emits, and so does the parser, at the token read: a label leaves no operation,
+/// `classify x @L` and `declassify x @L` compile as `x`, and a newtype compiles as its base,
+/// with a cast of a newtype value emitting nothing. A refined constructor checks its
+/// predicate at run time unless its argument is a literal. Whether the self-hosted type
+/// stage should also check label flow and newtype identity is operator question 10, so a
+/// violation is rejected here by the reference cross-check alone.
+#[test]
+fn labels_and_newtypes_have_their_pinned_outcomes() {
+    let cases: &[(&str, Class)] = &[
+        (
+            "fn main(a: Word) -> Word { let b = classify a @Secret; declassify b @Secret }",
+            Identical,
+        ),
+        (
+            "fn main(a: Word) -> Word { let b: Word@{Secret, Pii} = classify a @{Secret, Pii}; declassify b @{Secret, Pii} }",
+            Identical,
+        ),
+        (
+            "fn main(a: Word) -> Word { let b = classify a @Secret; let c = b + 1; declassify c @Secret }",
+            Identical,
+        ),
+        ("fn main(a: Word@Secret) -> Word@Secret { a }", Identical),
+        ("fn main(a: Word@!Secret) -> Word { a }", Identical),
+        (
+            "fn classify(x: Word) -> Word { x + 1 }\nfn main() -> Word { classify(2) }",
+            Identical,
+        ),
+        (
+            "newtype C = Word;\nfn main() -> Word { let c = C(5); c as Word }",
+            Identical,
+        ),
+        (
+            "newtype C = Word;\nfn f(c: C) -> C { c }\nfn main() -> Word { f(C(3)) as Word }",
+            Identical,
+        ),
+        (
+            "newtype C = Word;\nfn main(a: Word) -> C { C(a) }",
+            Identical,
+        ),
+        (
+            "newtype C = Word;\nfn main() -> Word { let c = C(5); let d = c; d as Word }",
+            Identical,
+        ),
+        (
+            "newtype C = Word;\nfn main() -> Word { (C(5) as Word) + 1 }",
+            Identical,
+        ),
+        (
+            "fn pos(x: Word) -> bool { x > 0 }\nnewtype P = Word where pos;\nfn main() -> Word { let p = P(4); p as Word }",
+            Identical,
+        ),
+        (
+            "fn pos(x: Word) -> bool { x > 0 }\nnewtype P = Word where pos;\nfn main(a: Word) -> Word { let p = P(a); p as Word }",
+            Identical,
+        ),
+        // A struct field of newtype type, which the reference boxes.
+        (
+            "newtype C = Word;\nstruct P { c: C, d: Word }\nfn main() -> Word { let p = P { c: C(1), d: 2 }; p.c as Word + p.d }",
+            Unsupported,
+        ),
+        // A negative label away from a boundary, which the reference rejects.
+        (
+            "fn main(a: Word@!Secret) -> Word@!Secret { let b: Word@!Secret = a; b }",
+            RefRejects,
+        ),
     ];
     let mismatches: Vec<String> = cases
         .iter()

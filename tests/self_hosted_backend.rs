@@ -81,7 +81,9 @@ fn non_host_target_is_refused() {
 /// retry hint.
 #[test]
 fn out_of_subset_program_is_rejected_loudly() {
-    let src = "newtype Count = Word; fn main() -> Word { Count(7) as Word }";
+    // A pipe into a generic template, which the reference keeps generic and the parser
+    // refuses. It replaced a newtype, which compiles since Order 6 erased newtypes.
+    let src = "fn id<T>(x: T) -> T { x } fn main() -> Word { 1 |> id() }";
     match self_hosted_compile(src, &Target::host()) {
         Err(e @ SelfHostError::Unsupported { .. }) => {
             // An out-of-subset limitation: retrying with the Rust backend helps.
@@ -91,7 +93,7 @@ fn out_of_subset_program_is_rejected_loudly() {
             );
         }
         other => {
-            panic!("expected Unsupported for an out-of-subset (newtype) program, got {other:?}")
+            panic!("expected Unsupported for an out-of-subset program, got {other:?}")
         }
     }
 }

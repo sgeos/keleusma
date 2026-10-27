@@ -928,6 +928,26 @@ pub const BR_P_SPEC_KEY: usize = BR_P_SPEC_GEN + GEN_INSTANCE_CAP;
 pub const BR_P_SPEC_CHUNK: usize = BR_P_SPEC_KEY + GEN_INSTANCE_CAP;
 /// Per instantiation, its name id.
 pub const BR_P_SPEC_NAME: usize = BR_P_SPEC_CHUNK + GEN_INSTANCE_CAP;
+/// The information-flow operator `classify`, interned identifier plus one, Order 6.
+pub const BR_P_CLASSIFY_ID: usize = BR_P_SPEC_NAME + GEN_INSTANCE_CAP;
+/// The information-flow operator `declassify`, interned identifier plus one.
+pub const BR_P_DECLASSIFY_ID: usize = BR_P_CLASSIFY_ID + 1;
+/// The number of newtypes the host's syntactic scan found.
+pub const BR_P_NT_COUNT: usize = BR_P_DECLASSIFY_ID + 1;
+/// Per newtype, its name id.
+pub const BR_P_NT_NAME: usize = BR_P_NT_COUNT + 1;
+/// Per newtype, its base type's name id.
+pub const BR_P_NT_BASE: usize = BR_P_NT_NAME + NEWTYPE_CAP;
+/// Per newtype, one when it carries a refinement predicate.
+pub const BR_P_NT_REFINED: usize = BR_P_NT_BASE + NEWTYPE_CAP;
+/// Per newtype, the token position of its declaration's first token.
+pub const BR_P_NT_BEGIN: usize = BR_P_NT_REFINED + NEWTYPE_CAP;
+/// Per newtype, the token position of its declaration's last token.
+pub const BR_P_NT_END: usize = BR_P_NT_BEGIN + NEWTYPE_CAP;
+/// Per newtype, its refinement predicate's chunk index, else -1.
+pub const BR_P_NT_PRED: usize = BR_P_NT_END + NEWTYPE_CAP;
+/// Newtypes `parse.kel` holds, restated from `toks.nt_name`.
+pub const NEWTYPE_CAP: usize = 16;
 /// Generic templates `parse.kel` holds, restated from `toks.gen_name`.
 pub const GEN_TEMPLATE_CAP: usize = 16;
 /// Type parameters per template, restated from `toks.gen_tp`.
@@ -936,6 +956,10 @@ pub const GEN_TYPE_PARAM_CAP: usize = 4;
 pub const GEN_VALUE_PARAM_CAP: usize = 8;
 /// Seeded instantiations, restated from `toks.spec_gen`.
 pub const GEN_INSTANCE_CAP: usize = 64;
+/// A header type the reference tags as opaque, following that type's own record. Payload
+/// one is an information-flow label, which keeps the type's shape, and payload two a
+/// newtype, whose shape is `Top`. Either makes a parameter's tag `Composite`.
+pub const PARSE_OPAQUE_TYPE_TAG: i64 = 141;
 /// The tag `parse.kel` requests an unseeded instantiation under, carrying the template plus
 /// sixteen times the key.
 /// No other record, body records included, uses this tag.
@@ -1080,6 +1104,15 @@ mod shared_layout_tests {
             ("spec_key", "BR_P_SPEC_KEY", BR_P_SPEC_KEY),
             ("spec_chunk", "BR_P_SPEC_CHUNK", BR_P_SPEC_CHUNK),
             ("spec_name", "BR_P_SPEC_NAME", BR_P_SPEC_NAME),
+            ("classify_id", "BR_P_CLASSIFY_ID", BR_P_CLASSIFY_ID),
+            ("declassify_id", "BR_P_DECLASSIFY_ID", BR_P_DECLASSIFY_ID),
+            ("nt_count", "BR_P_NT_COUNT", BR_P_NT_COUNT),
+            ("nt_name", "BR_P_NT_NAME", BR_P_NT_NAME),
+            ("nt_base", "BR_P_NT_BASE", BR_P_NT_BASE),
+            ("nt_refined", "BR_P_NT_REFINED", BR_P_NT_REFINED),
+            ("nt_begin", "BR_P_NT_BEGIN", BR_P_NT_BEGIN),
+            ("nt_end", "BR_P_NT_END", BR_P_NT_END),
+            ("nt_pred", "BR_P_NT_PRED", BR_P_NT_PRED),
         ];
         for &(field, konst, value) in cases {
             assert_eq!(

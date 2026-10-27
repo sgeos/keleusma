@@ -22,10 +22,13 @@ below. V0.4.0 is not released, since publication is held.
   executed. The full-language corpus that only a complete self-hosted compiler
   produces is the V0.2.X line's Order 6, in progress.
 - **V0.2.X's Order 6, 2026-10-27.** Its
-  [audit](./ORDER6_COMPLETION_AUDIT.md) records it as not complete, with five
-  forms waiting on V0.2.X's operator question 10. Whether this line still
-  waits on it is question 18 in
-  [the operator question list](../process/handoffs/v0.3.0-QUESTIONS.md).
+  [audit](./ORDER6_COMPLETION_AUDIT.md) first recorded it as not complete,
+  and its revision of the same day records it as complete for its first-pass
+  scope on V0.2.X's reading, pending the operator's acceptance. Whether this
+  line's dependency is met by that acceptance, or was met already through the
+  reference bytecode, is question 18 in
+  [the operator question list](../process/handoffs/v0.3.0-QUESTIONS.md). Until
+  it is answered, this record treats the dependency as unmet.
 
 ## Requirements
 

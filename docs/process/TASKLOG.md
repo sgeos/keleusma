@@ -6,6 +6,12 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-27 Labels and newtypes
+
+Information-flow labels, `classify`, `declassify` and newtypes, refinement included, compile
+byte-identically by erasure, as the reference compiles them. The census reads 71 Identical
+of 74 and the corpus 70 of 75. Question 10 stays open for the type stage.
+
 ## 2026-10-26 Generic functions
 
 Generic functions over scalar type arguments compile byte-identically. The census reads 66

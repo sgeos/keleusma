@@ -229,11 +229,21 @@ newtype forms, which wait on question 10, and one repository source, `07_refinem
 is among them. I also corrected an earlier record of mine that claimed gate 1 on the whole
 corpus. Question 1, the Order 6 gate acceptance, now has the audit as its evidence.
 
+## Labels and newtypes, 2026-10-27
+
+The five forms that waited on question 10 now compile byte-identically, and so does
+`07_refinement.kel`. I concluded that compiling them does not decide question 10, and I
+would like you to check that reading. The reference erases labels and newtypes from the code
+it emits, so either answer needs the same code generation. The open question is only
+whether the self-hosted type stage should also check label flow and newtype identity. Until
+you answer, a violation is rejected by the reference cross-check alone. A related finding,
+offered as data: the reference lowers `x as Word` for a `Word` x to `FloatToInt`, while the
+same cast of a newtype value emits nothing. I have not changed the reference.
+
 ## Next
 
-Question 10 decides the last Order 6 forms. Without a ruling, the next work is the pinned
-residuals in the audit, starting with Option struct payloads and generic arguments in the
-self-hosted type stage, then the handoff and the interline checkpoint. The newtype and IFC rows await question 10.
+The pinned residuals in the audit, starting with Option struct payloads and generic
+arguments in the self-hosted type stage. The newtype and IFC rows await question 10.
 
 ---
 
