@@ -2089,8 +2089,8 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
         "fn main(a: Option<Word>) -> Word { 1 }",
         Identical,
     ),
-    // The signature layout of a builtin generic is computed, Order 6. Its values are not
-    // yet lowered, so construction and match stay refused.
+    // The signature layout of a builtin generic is computed, Order 6, and a match over an
+    // `Option<T>` parameter with a scalar `T` is lowered. Construction stays refused.
     (
         "TypeExpr::Option::Construct",
         "fn main() -> Option<Word> { Option::Some(1) }",
@@ -2099,7 +2099,7 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
     (
         "TypeExpr::Option::Match",
         "fn main(a: Option<Word>) -> Word { match a { Option::Some(x) => x, Option::None => 0 } }",
-        Unsupported,
+        Identical,
     ),
     // --- Declarations ---
     (
@@ -2316,4 +2316,69 @@ fn builtin_generic_signatures_have_their_pinned_outcomes() {
         })
         .collect();
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// A match over an `Option<T>` parameter, Order 6. The parser resolves `Option::Some` and
+/// `Option::None` through two reserved enum rows and reads the payload with `T`'s scalar
+/// kind. A struct `T`, an Option scrutinee that is not a parameter, and a non-exhaustive
+/// match are refused or rejected as pinned here.
+#[test]
+fn option_parameter_matches_have_their_pinned_outcomes() {
+    let cases: &[(&str, Class)] = &[
+        (
+            "fn get(o: Option<Word>) -> Word { match o { Option::Some(x) => x, Option::None => 0 } }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "fn get(o: Option<bool>) -> bool { match o { Option::None => false, Option::Some(b) => b } }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "fn get(o: Option<Word>) -> Word { match o { Option::Some(x) when x > 3 => x, Option::Some(_) => 1, Option::None => 0 } }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "fn get(o: Option<Word>) -> Word { match o { Option::None => 0, _ => 1 } }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "fn get(o: Option<Word>, p: Option<Byte>) -> Word { match o { Option::Some(x) => match p { Option::Some(y) => x + y as Word, Option::None => x }, Option::None => 0 } }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "enum E { A, B(Word) }\nfn get(o: Option<Word>, e: E) -> Word { match e { E::B(v) => match o { Option::Some(x) => x + v, Option::None => v }, E::A => 0 } }\nfn main() -> Word { 0 }",
+            Identical,
+        ),
+        (
+            "struct P { a: Word }\nfn get(o: Option<P>) -> Word { match o { Option::Some(p) => p.a, Option::None => 0 } }\nfn main() -> Word { 0 }",
+            Unsupported,
+        ),
+        (
+            "fn get(o: Option<Word>) -> Word { match o { Option::Some(x) => x } }\nfn main() -> Word { 0 }",
+            PipelineRejects,
+        ),
+        (
+            "fn get(o: Option<Byte>) -> Byte { match o { Option::Some(x) => x, Option::None => 0 } }\nfn main() -> Word { 0 }",
+            PipelineRejects,
+        ),
+    ];
+    let mismatches: Vec<String> = cases
+        .iter()
+        .filter_map(|(src, expected)| {
+            let (actual, detail) = classify(src);
+            (actual != *expected)
+                .then(|| format!("{src:?}: expected {expected:?}, got {actual:?} {detail}"))
+        })
+        .collect();
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    // A self-hosted rejection is only agreement if the reference rejects the source too.
+    for (src, expected) in cases {
+        if *expected == PipelineRejects {
+            let src = src.to_string();
+            assert!(
+                std::panic::catch_unwind(move || compile_src(&src)).is_err(),
+                "the reference accepts a source the self-hosted type stage rejects"
+            );
+        }
+    }
 }

@@ -2781,6 +2781,14 @@ fn the_parse_guard_caps_match_their_arrays() {
              cannot act on."
         );
 
+        // Variant rows past the spare slot are reserved for the builtin `Option`, and the stage
+        // declares how many. No other counter reserves a tail.
+        let reserved = if counter == "enums.enum_count" {
+            stage_const("pe_option_rows").expect("parse.kel declares no `fn pe_option_rows`")
+                as usize
+        } else {
+            0
+        };
         let arrays = arrays_indexed_by(counter);
         assert!(
             !arrays.is_empty(),
@@ -2791,12 +2799,13 @@ fn the_parse_guard_caps_match_their_arrays() {
             let Some(len) = declared_len(a) else { continue };
             assert_eq!(
                 len,
-                cap as usize + 1,
+                cap as usize + 1 + reserved,
                 "`{a}` is indexed by `{counter}`, whose guard holds the pointer at {cap}, \
                  but `{a}` is declared [Word; {len}]. It must be {} — the usable capacity \
-                 plus the spare slot the overflowing write lands in. Widening the counter's \
-                 other arrays and not this one leaves the original trap in place.",
-                cap + 1
+                 plus the spare slot the overflowing write lands in, plus {reserved} \
+                 reserved rows. Widening the counter's other arrays and not this one leaves \
+                 the original trap in place.",
+                cap as usize + 1 + reserved
             );
         }
     }
