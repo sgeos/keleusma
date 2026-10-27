@@ -190,10 +190,22 @@ A match over an `Option<T>` parameter with a scalar `T` now compiles byte-identi
 too, through two reserved rows of the parser's enum table. The census reads 64 Identical of
 74. The enum row arrays were widened under your ruling that limits may be raised.
 
+Option construction compiles byte-identically too. `Option::Some` is sized from its
+payload's scalar type, and `Option::None` becomes the reference's boxed composite with a
+per-chunk template, the first template the self-hosted driver produces. The census reads 65
+Identical of 74. The six Unsupported rows are the five awaiting question 10 and generic
+functions.
+
+A match over an Option call result or binding compiles byte-identically as well. While
+widening it I found and fixed a defect of my own making before it merged. A payload kind
+carried stale from a later binding made the self-hosted type stage reject sources the
+reference accepts. The regressions are pinned.
+
 ## Next
 
-Option construction, where `Option::None` needs a per-chunk struct template that the
-self-hosted driver does not yet produce, then generic functions and the monomorphizer. The newtype and IFC rows await question 10.
+Generic functions and the monomorphizer, the last Unsupported row this line can take
+without a ruling. The roadmap places the specialization table in the compiler stage, and
+the work is several slices, starting with single-parameter functions over scalar types. The newtype and IFC rows await question 10.
 
 ---
 

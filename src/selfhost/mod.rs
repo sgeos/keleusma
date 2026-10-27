@@ -3220,25 +3220,29 @@ pub fn try_call_type_inputs_from_pipeline(
                 "payload metadata count"
             );
             for &&(_, slot, coordinates) in &payload_bindings {
-                // An `Option<T>` payload carries `T`'s name id, not a declared row.
-                let option_payload;
-                let source_type = if coordinates >= crate::selfhost_host::PARSE_OPTION_PAYLOAD_BASE
-                {
-                    option_payload = vec![(
-                        6,
-                        coordinates - crate::selfhost_host::PARSE_OPTION_PAYLOAD_BASE,
-                    )];
-                    &option_payload
-                } else {
-                    let variant =
-                        usize::try_from(coordinates / 1024).expect("negative variant index");
-                    let position =
-                        usize::try_from(coordinates % 1024).expect("negative payload position");
-                    &enum_variants[variant].1[position]
-                };
                 let identity = slot_names
                     .get(&slot)
                     .expect("payload binding without frame slot");
+                // An `Option<T>` payload carries `T`'s scalar kind, not a declared row.
+                if coordinates >= crate::selfhost_host::PARSE_OPTION_PAYLOAD_BASE {
+                    let name = match coordinates - crate::selfhost_host::PARSE_OPTION_PAYLOAD_BASE {
+                        1 => "bool",
+                        2 => "Byte",
+                        3 => "Word",
+                        kind => panic!("unmodelled Option payload kind {kind}"),
+                    };
+                    bindings.push((
+                        identity.clone(),
+                        scalar_tag_of_type_name(Some(name)),
+                        0,
+                        String::new(),
+                    ));
+                    continue;
+                }
+                let variant = usize::try_from(coordinates / 1024).expect("negative variant index");
+                let position =
+                    usize::try_from(coordinates % 1024).expect("negative payload position");
+                let source_type = &enum_variants[variant].1[position];
                 let (value, form, target) =
                     declared_type_operand(source_type, tag_of, &mut expressions, &mut bindings);
                 bindings.push((identity.clone(), value, form, target));
@@ -3299,6 +3303,7 @@ pub fn try_call_type_inputs_from_pipeline(
                     .count(),
                 "constructor identity count"
             );
+            let option_payload_types: MemberTypes = vec![Vec::new()];
             let enum_nodes: alloc::collections::BTreeMap<_, _> = body
                 .nodes
                 .iter()
@@ -3310,8 +3315,15 @@ pub fn try_call_type_inputs_from_pipeline(
                         .filter(|(guard, _)| *guard == (range == 0)),
                 )
                 .map(|((index, _), (_, variant))| {
+                    // An `Option::Some` constructor carries the `Option` name id above the
+                    // base, with one payload field and no declared type for it.
+                    if *variant >= crate::selfhost_host::PARSE_OPTION_PAYLOAD_BASE {
+                        let name = *variant - crate::selfhost_host::PARSE_OPTION_PAYLOAD_BASE;
+                        return (index as i64, (name, &option_payload_types));
+                    }
                     let variant = usize::try_from(*variant).expect("negative enum variant");
-                    (index as i64, &enum_variants[variant])
+                    let (name, types) = &enum_variants[variant];
+                    (index as i64, (*name, types))
                 })
                 .collect();
             assert_eq!(
@@ -3330,8 +3342,8 @@ pub fn try_call_type_inputs_from_pipeline(
             let operand = |index| {
                 if let Some(name) = struct_nodes.get(&index) {
                     (tag_of(*name), 0, String::new())
-                } else if let Some((name, _)) = enum_nodes.get(&index) {
-                    (tag_of(*name), 0, String::new())
+                } else if let Some(&(name, _)) = enum_nodes.get(&index) {
+                    (tag_of(name), 0, String::new())
                 } else if let Some(identity) = computed_names.get(&index) {
                     (0, 1, identity.clone())
                 } else if let Some(node) = body.nodes.get(index as usize)
@@ -3397,6 +3409,10 @@ pub fn try_call_type_inputs_from_pipeline(
                 let node = &body.nodes[index as usize];
                 let first = usize::try_from(node.lhs).expect("negative enum child offset");
                 let count = usize::try_from(node.rhs).expect("negative enum child count");
+                // `Option::None` alone has no discriminant child and no payload to type.
+                if count == 0 && core::ptr::eq(*types, &option_payload_types) {
+                    continue;
+                }
                 assert!(count > 0, "enum constructor without discriminant");
                 expressions.push((
                     7,
@@ -3405,6 +3421,11 @@ pub fn try_call_type_inputs_from_pipeline(
                 ));
                 for (records, &child) in types.iter().zip(&body.call_args[first + 1..first + count])
                 {
+                    // An `Option::Some` payload has no declared type, so the self-hosted type
+                    // stage leaves it unconstrained and the reference cross-check governs.
+                    if records.is_empty() {
+                        continue;
+                    }
                     let required =
                         declared_type_operand(records, tag_of, &mut expressions, &mut bindings);
                     expressions.push((8, operand(child), required));
@@ -6758,6 +6779,39 @@ fn assemble_signatures(
     chunks.into_iter().map(|(_, s)| s).collect()
 }
 
+/// Lower each `Option::None` construction to the reference's boxed composite, Order 6.
+///
+/// The parser emits `None` as an enum construction with no children, which codegen encodes
+/// as a flat enum of count zero. No declared enum produces that, because every declared
+/// construction carries its discriminant. The reference builds `None` as a boxed enum whose
+/// metadata indexes a per-chunk template naming `Option` and `None`, appending one template
+/// per construction in emission order, so the templates are produced in the same order here.
+/// The self-hosted pipeline emits no other template, so the indices start at zero.
+fn option_none_templates(ops: &mut [Op]) -> Vec<crate::bytecode::StructTemplate> {
+    let mut templates = Vec::new();
+    for op in ops.iter_mut() {
+        if let Op::NewComposite(NewCompositeOperand::Flat {
+            kind: CompositeKind::Enum,
+            count: 0,
+            byte_size: 0,
+        }) = op
+        {
+            let meta =
+                u16::try_from(templates.len()).expect("too many None templates in one chunk");
+            *op = Op::NewComposite(NewCompositeOperand::Boxed {
+                kind: CompositeKind::Enum,
+                count: 0,
+                meta,
+            });
+            templates.push(crate::bytecode::StructTemplate {
+                type_name: String::from("Option"),
+                field_names: vec![String::from("None")],
+            });
+        }
+    }
+    templates
+}
+
 /// Set a module's declared WCET/WCMU header from the self-hosted analyze.kel stage: the
 /// per-iteration maximum across the module's Stream chunks, mirroring the reference
 /// compiler's fold (`compiler.rs` sets `wcet_cycles`/`wcmu_bytes` to that maximum).
@@ -6993,7 +7047,8 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
             let category = reconstruct_category(group[0].cat);
             reconstruct_via_kel(&group[0].body, category, pc, &name)
         };
-        let (ops, pool, lc) = run_codegen(&body, pc);
+        let (mut ops, pool, lc) = run_codegen(&body, pc);
+        let struct_templates = option_none_templates(&mut ops);
         // The metadata table (already name-sorted) supplies param_count, block_type, and
         // param_types; look this chunk's entry up by name.
         let (_, param_count, block_type, param_types) = meta
@@ -7004,7 +7059,7 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
             name,
             ops,
             constants: pool_to_constants(&pool, &names),
-            struct_templates: Vec::new(),
+            struct_templates,
             local_count: lc as u16,
             param_count: *param_count,
             block_type: *block_type,
