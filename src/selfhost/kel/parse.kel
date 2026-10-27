@@ -2127,7 +2127,7 @@ fn step_global_ident(v: Word) -> Word {
         da.cda_phase = 1;
         0
     } else {
-    ps.found_flag = 0;
+    ps.found_flag = is_option(v);
     for i in 0..enums.enum_count limit 256 {
         if enums.edata[i] == v {
             ps.found_flag = 1;
@@ -2376,6 +2376,7 @@ fn step_enum(k: Word, v: Word) -> Word {
                     ps.found_flag = 1;
                 }
             }
+            if ps.found_flag == 0 andalso is_option(mat.enum_name) == 1 { option_construct(v); }
             if ps.found_flag == 0 { perr(pe_match_variant(), v); }
             mat.enum_phase = 3;
         }
@@ -2424,11 +2425,14 @@ fn step_enum(k: Word, v: Word) -> Word {
     } else {
     if mat.enum_phase == 5 {
         if k == Tok::As() as Word {
+            // An Option is not a cast operand, which the reference rejects.
+            if is_option(mat.enum_name) == 1 { perr(pe_unresolved_syntax(), toks.at); }
             mat.enum_phase = 6;
             0
         } else {
             // Not `as`: `E::V()` is a unit enum construction as a VALUE. Emit the discriminant
             // literal (element 0), arm the count-1 EnumInit finalize, and push this token back.
+            // `Option::None` emits no discriminant and finalizes with no children.
             mat.enum_phase = 0;
             call.en_unit = 1;
             call.en_unit_bs = enum_bytesize(mat.enum_name);
@@ -2436,7 +2440,7 @@ fn step_enum(k: Word, v: Word) -> Word {
             call.en_unit_variant = mat.enum_row;
             ps.cursor = ps.cursor - 1;
             ops.expect_operand = 0;
-            type_tuple_record(1, mat.enum_disc)
+            if option_none_unit() == 1 { call.en_unit_bs = 0; 0 } else { type_tuple_record(1, mat.enum_disc) }
         }
     } else {
         mat.enum_phase = 0;
@@ -2479,8 +2483,9 @@ fn step_enum_unit_finalize() -> Word {
     // (`E::V() == e`). A bare `E::V()` value reaches here; `E::V() as Word` folds to a Literal
     // earlier (phase 6) and never does, so a cast result stays scalar.
     ps.last_enum = call.en_unit_ename + 1;
-    call.en_record = Node::EnumInit() as Word + (call.en_unit_bs * 1024 + 1) * 64;
-    ps.emit_arg = call.en_unit_variant;
+    let children = if call.en_unit_variant == option_none_row() { 0 } else { 1 };
+    call.en_record = Node::EnumInit() as Word + (call.en_unit_bs * 1024 + children) * 64;
+    ps.emit_arg = if call.en_unit_variant == option_none_row() { 1099511627776 + call.en_unit_ename } else { call.en_unit_variant };
     tag_enum_variant()
     }
 }
@@ -2520,6 +2525,43 @@ fn step_enum_cast() -> Word {
 fn option_none_row() -> Word { pe_cap_variant() + 1 }
 fn option_some_row() -> Word { pe_cap_variant() + 2 }
 fn option_some_field() -> Word { 512 }
+
+// `Option::Some(x)` or `Option::None` as a value, Order 6. `Some`'s one payload field is
+// sized at the close from the payload's own type, as the reference infers it. `None` is an
+// EnumInit with no children, which no declared enum produces because every declared
+// construction carries its discriminant, and the host lowers it to the reference's boxed
+// composite with a per-chunk template.
+fn option_construct(v: Word) -> Word {
+    enums.evfcount[option_some_row()] = 1; enums.evfcount[option_none_row()] = 0;
+    ps.found_flag = 1;
+    if toks.some_id > 0 andalso v + 1 == toks.some_id {
+        mat.enum_disc = 1; mat.enum_row = option_some_row();
+    } else {
+    if toks.none_id > 0 andalso v + 1 == toks.none_id {
+        mat.enum_disc = 0; mat.enum_row = option_none_row();
+    } else { perr(pe_unresolved_syntax(), toks.at); }}
+    0
+}
+// Whether a unit construction is `Option::None`, which emits no discriminant child.
+fn option_none_unit() -> Word {
+    if mat.enum_row == option_none_row() { 1 } else { 0 }
+}
+// The flat size of an `Option::Some` construction, eight bytes of discriminant and the
+// payload's scalar size. A payload whose type is not a known scalar is refused.
+fn option_some_close(sp: Word) -> Word {
+    if call.en_variant[sp] == option_some_row() {
+        if vl.form != 0 orelse vl.scalar < 1 orelse vl.scalar > 3 orelse call.en_count[sp] != 2 {
+            perr(pe_unresolved_syntax(), toks.at);
+        }
+        call.en_bytesize[sp] = 8 + vl.bytes;
+    }
+    0
+}
+// A constructor's variant record. `Option::Some` has no declared row, so it carries the
+// `Option` name id above the base 2^40, as a payload binding carries its `T`.
+fn constructor_variant(sp: Word) -> Word {
+    if call.en_variant[sp] == option_some_row() { 1099511627776 + call.en_ename[sp] } else { call.en_variant[sp] }
+}
 
 // `Option::Some` or `Option::None` in a match over an `Option<T>` parameter. The payload
 // is read at the reference's offset after the eight-byte discriminant, with `T`'s scalar
@@ -5089,9 +5131,10 @@ fn step_closing() -> Word {
             // operand's enum type (`op_lenum`), enabling `E::V(x) == e` with the payload
             // construction on the left.
             ps.last_enum = call.en_ename[call.en_sp] + 1;
+            option_some_close(call.en_sp);
             call.en_record = Node::EnumInit() as Word + (call.en_bytesize[call.en_sp] * 1024 + call.en_count[call.en_sp]) * 64;
             call.en_unit = 2;
-            ps.emit_arg = call.en_variant[call.en_sp];
+            ps.emit_arg = constructor_variant(call.en_sp);
             tag_enum_variant()
         } else {
         if top == OpCode::TupleMark() as Word {

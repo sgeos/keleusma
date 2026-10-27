@@ -6,6 +6,11 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-26 Option construction
+
+`Option::Some(x)` with a scalar payload and `Option::None` compile byte-identically. The
+census reads 65 Identical of 74.
+
 ## 2026-10-26 Option parameter matches
 
 A match over an `Option<T>` parameter with a scalar `T` compiles byte-identically. The census
