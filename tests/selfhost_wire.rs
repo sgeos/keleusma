@@ -13011,9 +13011,10 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // The Option match, its seeded ids, reserved rows, `popt`, `match_optarg` and helpers,
     // with `pe_option_rows` declaring the reserved tail, made it 1072 and 33,205. Option
     // construction's `option_construct`, `option_none_unit`, `option_some_close` and
-    // `constructor_variant` made it 1076 and 33,401.
-    assert_eq!(worst_names, 1076, "the worst-case name count moved");
-    assert_eq!(worst_blob, 33401, "the worst-case blob size moved");
+    // `constructor_variant` made it 1076 and 33,401. Option scrutinees' `pending_copt`,
+    // `let_opt`, `ret_opt`, `pending_option_arg` and `option_kind` made it 1081 and 33,545.
+    assert_eq!(worst_names, 1081, "the worst-case name count moved");
+    assert_eq!(worst_blob, 33545, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

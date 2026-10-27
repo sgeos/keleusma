@@ -3220,25 +3220,29 @@ pub fn try_call_type_inputs_from_pipeline(
                 "payload metadata count"
             );
             for &&(_, slot, coordinates) in &payload_bindings {
-                // An `Option<T>` payload carries `T`'s name id, not a declared row.
-                let option_payload;
-                let source_type = if coordinates >= crate::selfhost_host::PARSE_OPTION_PAYLOAD_BASE
-                {
-                    option_payload = vec![(
-                        6,
-                        coordinates - crate::selfhost_host::PARSE_OPTION_PAYLOAD_BASE,
-                    )];
-                    &option_payload
-                } else {
-                    let variant =
-                        usize::try_from(coordinates / 1024).expect("negative variant index");
-                    let position =
-                        usize::try_from(coordinates % 1024).expect("negative payload position");
-                    &enum_variants[variant].1[position]
-                };
                 let identity = slot_names
                     .get(&slot)
                     .expect("payload binding without frame slot");
+                // An `Option<T>` payload carries `T`'s scalar kind, not a declared row.
+                if coordinates >= crate::selfhost_host::PARSE_OPTION_PAYLOAD_BASE {
+                    let name = match coordinates - crate::selfhost_host::PARSE_OPTION_PAYLOAD_BASE {
+                        1 => "bool",
+                        2 => "Byte",
+                        3 => "Word",
+                        kind => panic!("unmodelled Option payload kind {kind}"),
+                    };
+                    bindings.push((
+                        identity.clone(),
+                        scalar_tag_of_type_name(Some(name)),
+                        0,
+                        String::new(),
+                    ));
+                    continue;
+                }
+                let variant = usize::try_from(coordinates / 1024).expect("negative variant index");
+                let position =
+                    usize::try_from(coordinates % 1024).expect("negative payload position");
+                let source_type = &enum_variants[variant].1[position];
                 let (value, form, target) =
                     declared_type_operand(source_type, tag_of, &mut expressions, &mut bindings);
                 bindings.push((identity.clone(), value, form, target));

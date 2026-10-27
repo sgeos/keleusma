@@ -535,3 +535,20 @@ Option payload unconstrained, so a payload that mismatches the declared `T` is r
 only by the reference cross-check, which `option_constructions_have_their_pinned_outcomes`
 pins. The census reads 65 Identical, 6 Unsupported and 3 RefRejects of 74 rows. The six
 Unsupported rows are the five awaiting question 10 and generic functions.
+
+**Option scrutinees beyond parameters, 2026-10-26.** A match over a call result, over a
+binding of one, and over a binding of a construction now compiles byte-identically. The
+parser carries the payload's scalar kind beside the enum type it already tracks, in a
+register `pending_copt` set where an Option with a known payload is produced or read, in a
+per-binding `let_opt` and in a per-chunk `ret_opt` for an `Option<T>` return. The kind is
+carried rather than the type's name id, because the name need not occur in the source, and
+`bool` in `Option::Some(true)` did not. A defect found while widening is recorded here. The
+first form of the register was cleared only where it was set, so a later binding of an
+`Option<Byte>` left its kind behind for a match over an earlier `Option<Word>` binding read
+through its layout descriptor. The type stage then typed the payload binding as Byte and
+rejected a source the reference accepts, which is a false rejection rather than a refusal.
+The register is now cleared at every assignment of the enum type it qualifies, except the
+two re-derivations of the value just produced, and the regressions are pinned in
+`option_scrutinees_have_their_pinned_outcomes`. A binding of `Option::None`, whose payload
+type the reference infers from context, an annotated Option binding and an Option-returning
+native remain refused.
