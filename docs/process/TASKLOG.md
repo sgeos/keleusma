@@ -6,6 +6,11 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-26 Builtin generic signatures
+
+`Option<T>` and `Multiword<N>` signatures take the reference layouts. The census reads 63
+Identical of 74. PR 566 merged. Option values remain Unsupported.
+
 ## 2026-10-26 The pipe placeholder
 
 `x |> f(a, _)` compiles byte-identically. The census reads 61 Identical of 72. PR 564
