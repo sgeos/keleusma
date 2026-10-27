@@ -43,8 +43,9 @@ merged.
 
 ## 2026-10-26 Untyped native destructuring, gate 1 on the corpus
 
-`check-md-links.kel` compiles byte-identically, so every repository source in the corpus
-does. PR 562 merged.
+`check-md-links.kel` compiles byte-identically. PR 562 merged. Corrected 2026-10-27, the
+claim that every corpus source then compiled was wrong, because `07_refinement.kel` stays
+refused pending question 10.
 
 ## 2026-10-26 Local bindings and typed native results
 
