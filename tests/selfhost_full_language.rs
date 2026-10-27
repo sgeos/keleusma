@@ -2451,3 +2451,37 @@ fn option_constructions_have_their_pinned_outcomes() {
         }
     }
 }
+
+/// A match over an Option that is not a parameter, Order 6. A call result, a binding of one,
+/// and a binding of a construction carry the payload's scalar kind to the match. The middle
+/// rows are regressions for a payload kind carried stale from a later binding, which made the
+/// type stage reject sources the reference accepts. A binding of `Option::None`, an annotated
+/// Option binding and an Option-returning native are refused.
+#[test]
+fn option_scrutinees_have_their_pinned_outcomes() {
+    let mk = "fn mk(a: Word) -> Option<Word> { Option::Some(a) }\nfn mb(a: Byte) -> Option<Byte> { Option::Some(a) }\n";
+    let cases: Vec<(String, Class)> = vec![
+        (format!("{mk}fn main() -> Word {{ match mk(3) {{ Option::Some(x) => x, Option::None => 0 }} }}"), Identical),
+        (format!("{mk}fn main() -> Word {{ let o = mk(3); match o {{ Option::Some(x) => x, Option::None => 0 }} }}"), Identical),
+        ("fn main() -> Word { let o = Option::Some(3); match o { Option::Some(x) => x, Option::None => 0 } }".to_string(), Identical),
+        (format!("{mk}fn main() -> Word {{ match mb(3 as Byte) {{ Option::Some(x) => x as Word, Option::None => 0 }} }}"), Identical),
+        (format!("{mk}fn main() -> Word {{ let o = mk(3); let p = mb(1 as Byte); match o {{ Option::Some(y) => y, Option::None => 1 }} }}"), Identical),
+        ("fn main() -> Word { let o = Option::Some(3); let p = Option::Some(1 as Byte); match o { Option::Some(y) => y, Option::None => 1 } }".to_string(), Identical),
+        (format!("{mk}fn main() -> Word {{ let o = mk(3); let p = mb(1 as Byte); match p {{ Option::Some(x) => x as Word, Option::None => 0 }} + match o {{ Option::Some(y) => y, Option::None => 1 }} }}"), Identical),
+        ("fn main() -> Word { match Option::Some(true) { Option::Some(b) => if b { 1 } else { 2 }, Option::None => 0 } }".to_string(), Identical),
+        ("fn main() -> Word { let o = Option::Some(true); match o { Option::Some(b) => if b { 1 } else { 2 }, Option::None => 0 } }".to_string(), Identical),
+        ("fn get(o: Option<Word>) -> Option<Word> { o }\nfn main() -> Word { match get(Option::Some(2)) { Option::Some(x) => x, Option::None => 0 } }".to_string(), Identical),
+        ("fn main() -> Word { let o = Option::None; match o { Option::Some(x) => x, Option::None => 0 } }".to_string(), Unsupported),
+        ("fn main() -> Word { let o: Option<Word> = Option::None; match o { Option::Some(x) => x, Option::None => 0 } }".to_string(), NoVerdict),
+        ("use maybe(Word) -> Option<Word>\nfn main() -> Word { match maybe(1) { Option::Some(x) => x, Option::None => 0 } }".to_string(), Unsupported),
+    ];
+    let mismatches: Vec<String> = cases
+        .iter()
+        .filter_map(|(src, expected)| {
+            let (actual, detail) = classify(src);
+            (actual != *expected)
+                .then(|| format!("{src:?}: expected {expected:?}, got {actual:?} {detail}"))
+        })
+        .collect();
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}

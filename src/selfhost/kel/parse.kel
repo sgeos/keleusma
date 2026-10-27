@@ -440,7 +440,7 @@ private data ps {
     // holds that value while awaiting the one argument and is 3 awaiting the closing `>`.
     gen: Word,
     gen_ready: Word,
-    // Per parameter, the name id plus one of an `Option<T>` parameter's `T`, else zero.
+    // Per `Option<T>` parameter, `T`'s scalar kind as `match_optarg` holds it, else zero.
     popt: [Word; 33],
     array_tuple_layout: Word,
     dvis: Word,
@@ -946,6 +946,8 @@ private data stmt {
     // Per `let` binding, 0 or the enum's name id plus one when the binding's value root returned an
     // enum (a call of an enum-returning function), so a `match` over the binding lowers to IsEnum.
     let_enum: [Word; 257],
+    // Per `let` binding of an `Option`, its payload's scalar kind, else 0.
+    let_opt: [Word; 257],
     // 1 for a hidden destructuring binding whose value has no known layout, such as an
     // untyped native's result, Order 6. The reference reads its elements boxed.
     let_untyped: [Word; 257],
@@ -1149,6 +1151,10 @@ private data stmt {
     pending_carray_arr: Word,
     pending_carray_arrbytes: Word,
     pending_cenum: Word,
+    // The payload scalar kind of the Option value `pending_cenum` names, else 0. It
+    // is set where an Option with a known payload is produced or read and consulted only when
+    // `pending_cenum` names `Option`, Order 6.
+    pending_copt: Word,
     // A block's folded-statement table. Sized to the largest stage function body: a
     // codegen.kel emitter such as `push_forlimit` is a single flat block of about 78
     // statements, so 64 is too small; 256 covers the stage files with headroom. These
@@ -1301,7 +1307,8 @@ private data mat {
     // operand). `mpat_vname` the variant name id captured while reading the current arm pattern.
     match_isenum: [Word; 8],
     match_ename: [Word; 8],
-    // Per open match over an `Option<T>` parameter, the name id plus one of `T`, else zero.
+    // Per open match over an Option, the scalar kind of its payload, 1 `bool`, 2 `Byte` or
+    // 3 `Word`, else zero for an unknown or composite payload, which is refused.
     match_optarg: [Word; 8],
     mpat_vname: Word,
     // The current arm pattern's variant row index (into `enums`) for its payload field layout, and
@@ -1675,6 +1682,8 @@ private data chunkret {
     // Per chunk, the enum name id (plus one) it returns, else 0, so a `let e = f(); match e` over
     // an enum-returning call lowers to the IsEnum virtual loop.
     ret_enum: [Word; 1024],
+    // Per chunk returning `Option<T>`, `T`'s scalar kind, else 0.
+    ret_opt: [Word; 1024],
     // Per chunk, the element ScalarKind (plus one) of a scalar array return `-> [T; N]`, else 0, so
     // a `let a = f(); a[i]` bound to the call arms `a[i]` access (scalar elements only, matching the
     // scalar array-parameter and let-bound-array cases).
@@ -1818,6 +1827,7 @@ fn clear_let_shape(at: Word) -> Word {
     stmt.let_array_arrbytes[at] = 0;
     stmt.let_enum[at] = 0;
     stmt.let_untyped[at] = 0;
+    stmt.let_opt[at] = 0;
     0
 }
 
@@ -1846,7 +1856,7 @@ fn step_local(v: Word) -> Word {
     ps.last_array_arr = 0;
     // This operand is a whole enum value only if it resolves to an enum-typed parameter (set below).
     ps.last_enum = 0;
-    stmt.pending_cenum = 0;
+    stmt.pending_copt = 0; stmt.pending_cenum = 0;
     for i in 0..stmt.let_count limit 256 {
         if stmt.let_names[i] == v {
             ps.found = stmt.scope_slot[i];
@@ -1866,7 +1876,8 @@ fn step_local(v: Word) -> Word {
                 }
                 if ps.penum[i] > 0 {
                     ps.last_enum = ps.penum[i];
-                    stmt.pending_cenum = ps.penum[i];
+                    stmt.pending_copt = 0; stmt.pending_cenum = ps.penum[i];
+                    stmt.pending_copt = ps.popt[i];
                 }
             }
         }
@@ -1960,6 +1971,7 @@ fn resolve_plain_ident_legacy(v: Word) -> Word {
             if stmt.let_enum[ps.let_hit] > 0 andalso mat.match_sp > 0 andalso mat.match_phase[mat.match_sp - 1] == 1 {
                 mat.match_isenum[mat.match_sp - 1] = 1;
                 mat.match_ename[mat.match_sp - 1] = stmt.let_enum[ps.let_hit] - 1;
+                mat.match_optarg[mat.match_sp - 1] = stmt.let_opt[ps.let_hit];
             }
             let ln = step_local(v);
             // A let-bound enum value: `step_local` cleared `last_enum`; restore it from the binding's
@@ -1968,7 +1980,8 @@ fn resolve_plain_ident_legacy(v: Word) -> Word {
             // (`let x = E::A(); x == e`), the let-binding analogue of an enum parameter.
             if stmt.let_enum[ps.let_hit] > 0 {
                 ps.last_enum = stmt.let_enum[ps.let_hit];
-                stmt.pending_cenum = stmt.let_enum[ps.let_hit];
+                stmt.pending_copt = 0; stmt.pending_cenum = stmt.let_enum[ps.let_hit];
+                stmt.pending_copt = stmt.let_opt[ps.let_hit];
             }
             ln
         } } } } } }
@@ -2453,11 +2466,12 @@ fn step_enum(k: Word, v: Word) -> Word {
 fn tag_enum_variant() -> Word { 93 }
 fn tag_enum_payload_bind() -> Word { 97 }
 // A payload binding's source coordinates, the variant row times 1024 plus the field
-// position. `Option::Some`'s payload has no declared row, so it carries `T`'s name id
-// above the base 2^40 instead, from which the host types the binding.
+// position. `Option::Some`'s payload has no declared row, so it carries `T`'s scalar kind
+// above the base 2^40 instead, from which the host types the binding. A kind is used rather
+// than a name id because the type's name need not occur in the source.
 fn payload_coordinates() -> Word {
     if mat.mpat_vrow == option_some_row() {
-        1099511627776 + mat.match_optarg[mat.match_sp - 1] - 1
+        1099511627776 + mat.match_optarg[mat.match_sp - 1]
     } else { mat.mpat_vrow * 1024 + mat.mpat_fpos }
 }
 
@@ -2477,13 +2491,14 @@ fn step_enum_unit_finalize() -> Word {
     stmt.pending_carray_arr = 0;
     stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
-    stmt.pending_cenum = call.en_unit_ename + 1;
+    stmt.pending_copt = 0; stmt.pending_cenum = call.en_unit_ename + 1;
     // Mark this whole value as an enum so a following `==`/`!=` captures it as the LEFT operand's
     // enum type (`op_lenum`), enabling enum equality with a literal construction on the left
     // (`E::V() == e`). A bare `E::V()` value reaches here; `E::V() as Word` folds to a Literal
     // earlier (phase 6) and never does, so a cast result stays scalar.
     ps.last_enum = call.en_unit_ename + 1;
     let children = if call.en_unit_variant == option_none_row() { 0 } else { 1 };
+    stmt.pending_copt = 0;
     call.en_record = Node::EnumInit() as Word + (call.en_unit_bs * 1024 + children) * 64;
     ps.emit_arg = if call.en_unit_variant == option_none_row() { 1099511627776 + call.en_unit_ename } else { call.en_unit_variant };
     tag_enum_variant()
@@ -2554,6 +2569,7 @@ fn option_some_close(sp: Word) -> Word {
             perr(pe_unresolved_syntax(), toks.at);
         }
         call.en_bytesize[sp] = 8 + vl.bytes;
+        stmt.pending_copt = option_kind(vl.scalar);
     }
     0
 }
@@ -2568,8 +2584,7 @@ fn constructor_variant(sp: Word) -> Word {
 // kind. A scrutinee whose `T` is not a scalar, or whose argument is unknown, is refused,
 // because its payload layout is not modelled here.
 fn option_pattern(v: Word) -> Word {
-    let arg = mat.match_optarg[mat.match_sp - 1];
-    let kind = if arg > 0 { scalar_kind_of(arg - 1) } else { 0 };
+    let kind = mat.match_optarg[mat.match_sp - 1];
     if kind < 1 orelse kind > 3 { perr(pe_unresolved_syntax(), toks.at); }
     let none = if toks.none_id > 0 andalso v + 1 == toks.none_id { 1 } else { 0 };
     let some = if toks.some_id > 0 andalso v + 1 == toks.some_id { 1 } else { 0 };
@@ -2841,7 +2856,7 @@ fn step_iclosing() -> Word {
     stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
             stmt.pending_carray_size = 0;
-            stmt.pending_cenum = 0;
+            stmt.pending_copt = 0; stmt.pending_cenum = 0;
             // Prefer the source-derived expression layout, retaining the legacy fallback
             // only when the expression observer has no known scalar layout.
             let my_elem = if vl.form != 0 orelse vl.scalar >= 0 { vl.bytes } else { if elem_struct > 0 {
@@ -3083,7 +3098,7 @@ fn struct_eq_start(op: Word) -> Word {
     stmt.pending_carray_arr = 0;
     stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
-    stmt.pending_cenum = 0;
+    stmt.pending_copt = 0; stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
     stmt.sq_ta = ps.pcount + stmt.slot_count;
@@ -3115,7 +3130,7 @@ fn tuple_eq_start(op: Word) -> Word {
     stmt.pending_carray_arr = 0;
     stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
-    stmt.pending_cenum = 0;
+    stmt.pending_copt = 0; stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
     stmt.sq_ta = ps.pcount + stmt.slot_count;
@@ -3147,7 +3162,7 @@ fn array_eq_start(op: Word) -> Word {
     stmt.pending_carray_arr = 0;
     stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
-    stmt.pending_cenum = 0;
+    stmt.pending_copt = 0; stmt.pending_cenum = 0;
     let tb = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
     let ta = ps.pcount + stmt.slot_count;
@@ -3184,7 +3199,7 @@ fn array_of_struct_eq_start(op: Word) -> Word {
     stmt.pending_carray_arr = 0;
     stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
-    stmt.pending_cenum = 0;
+    stmt.pending_copt = 0; stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
     stmt.sq_ta = ps.pcount + stmt.slot_count;
@@ -3233,7 +3248,7 @@ fn array_of_tuple_eq_start(op: Word) -> Word {
     stmt.pending_carray_arr = 0;
     stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
-    stmt.pending_cenum = 0;
+    stmt.pending_copt = 0; stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
     stmt.sq_ta = ps.pcount + stmt.slot_count;
@@ -3297,7 +3312,7 @@ fn array_of_array_eq_start(op: Word) -> Word {
     stmt.pending_carray_arr = 0;
     stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
-    stmt.pending_cenum = 0;
+    stmt.pending_copt = 0; stmt.pending_cenum = 0;
     let tb = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
     let ta = ps.pcount + stmt.slot_count;
@@ -3987,7 +4002,7 @@ fn struct_eq_nested_start_kind(op: Word, is_tuple: Word) -> Word {
     stmt.pending_carray_arr = 0;
     stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
-    stmt.pending_cenum = 0;
+    stmt.pending_copt = 0; stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
     stmt.sq_ta = ps.pcount + stmt.slot_count;
@@ -4383,7 +4398,7 @@ fn enum_eq_start(op: Word) -> Word {
     stmt.pending_carray_arr = 0;
     stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
-    stmt.pending_cenum = 0;
+    stmt.pending_copt = 0; stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
     stmt.sq_ta = ps.pcount + stmt.slot_count;
@@ -4434,7 +4449,7 @@ fn array_of_enum_eq_start(op: Word) -> Word {
     stmt.pending_carray_arr = 0;
     stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
-    stmt.pending_cenum = 0;
+    stmt.pending_copt = 0; stmt.pending_cenum = 0;
     stmt.sq_tb = ps.pcount + stmt.slot_count;
     stmt.slot_count = stmt.slot_count + 1;
     stmt.sq_ta = ps.pcount + stmt.slot_count;
@@ -4584,7 +4599,7 @@ fn emit_op(op: Word) -> Word {
     stmt.pending_carray_arr = 0;
     stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
-    stmt.pending_cenum = 0;
+    stmt.pending_copt = 0; stmt.pending_cenum = 0;
     // A bitwise op (band/bor/bxor) on two BYTE operands lowers promote-operate-truncate (a Byte
     // result); any other operator yields a Word/bool. `byte_bitwise_op` does the detection so this
     // function's node footprint stays small (parse.kel self-compiles under the per-function caps).
@@ -5046,7 +5061,7 @@ fn literal_tuple_close() -> Word {
     vl.form = 1; vl.layout = ht.layout[desc]; vl.bytes = ht.nsize[desc];
     stmt.pending_ctuple = 0 - vl.layout - 1;
     stmt.pending_cstruct = 0; stmt.pending_carray = 0; stmt.pending_carray_struct = 0;
-    stmt.pending_carray_arr = 0; stmt.pending_carray_tuple = 0; stmt.pending_carray_arrbytes = 0; stmt.pending_cenum = 0;
+    stmt.pending_carray_arr = 0; stmt.pending_carray_tuple = 0; stmt.pending_carray_arrbytes = 0; stmt.pending_copt = 0; stmt.pending_cenum = 0;
     ops.expect_operand = 0;
     ps.ta_tuple = vl.layout; ps.ta_phase = 1;
     Node::TupleInit() as Word + (vl.bytes * 1024 + call.tp_count[frame]) * 64
@@ -5079,7 +5094,7 @@ fn step_closing() -> Word {
                 stmt.pending_carray_struct = 0; stmt.pending_carray_size = 0;
                 let row = call.call_chunk[call.call_sp] - 1024;
                 if call.nat_rtype[row] < 0 { perr(pe_unresolved_syntax(), toks.at); }
-                stmt.pending_cenum = native_return_enum(row);
+                stmt.pending_copt = 0; stmt.pending_cenum = native_return_enum(row);
                 ps.last_enum = stmt.pending_cenum;
                 // A declared `Byte` return makes the result a Byte operand, which selects the
                 // Byte operators as the reference does.
@@ -5096,7 +5111,8 @@ fn step_closing() -> Word {
             stmt.pending_carray = chunkret.ret_array[call.call_chunk[call.call_sp]];
             stmt.pending_carray_struct = chunkret.ret_array_struct[call.call_chunk[call.call_sp]];
             stmt.pending_carray_size = chunkret.ret_array_size[call.call_chunk[call.call_sp]];
-            stmt.pending_cenum = chunkret.ret_enum[call.call_chunk[call.call_sp]];
+            stmt.pending_copt = 0; stmt.pending_cenum = chunkret.ret_enum[call.call_chunk[call.call_sp]];
+            stmt.pending_copt = chunkret.ret_opt[call.call_chunk[call.call_sp]];
             ps.last_enum = stmt.pending_cenum;
             if stmt.pending_cstruct > 0 {
                 ps.fa_struct = stmt.pending_cstruct - 1;
@@ -5126,7 +5142,7 @@ fn step_closing() -> Word {
     stmt.pending_carray_arr = 0;
     stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
-            stmt.pending_cenum = call.en_ename[call.en_sp] + 1;
+            stmt.pending_copt = 0; stmt.pending_cenum = call.en_ename[call.en_sp] + 1;
             // Mark this whole value as an enum so a following `==`/`!=` captures it as the LEFT
             // operand's enum type (`op_lenum`), enabling `E::V(x) == e` with the payload
             // construction on the left.
@@ -5243,7 +5259,7 @@ fn step_sc_closing() -> Word {
     stmt.pending_carray_arr = 0;
     stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
-        stmt.pending_cenum = 0;
+        stmt.pending_copt = 0; stmt.pending_cenum = 0;
         structdefs.sc_record = Node::StructInit() as Word + (structdefs.sd_bytesize[structdefs.sc_name[structdefs.sc_sp]] * 1024 + structdefs.sc_count[structdefs.sc_sp]) * 64;
         structdefs.sc_closing = 2;
         ps.emit_arg = structdefs.sd_fcount[structdefs.sc_name[structdefs.sc_sp]] + structdefs.sd_name[structdefs.sc_name[structdefs.sc_sp]] * 1024;
@@ -5291,7 +5307,7 @@ fn start_match() -> Word {
         mat.match_guarded[mat.match_sp] = 0;
         mat.match_catchall[mat.match_sp] = 0;
         mat.match_variant[mat.match_sp] = 0 - 2;
-        stmt.pending_cenum = 0;
+        stmt.pending_copt = 0; stmt.pending_cenum = 0;
         let bit = 1 lsl mat.match_sp;
         for i in 0..enums.enum_count limit 256 {
             mat.covered[i] = mat.covered[i] band (bnot bit);
@@ -6262,7 +6278,7 @@ fn step_normal(k: Word, v: Word) -> Word {
     if k == Tok::IntLit() as Word orelse sat != 0 {
         ops.expect_operand = 0;
         ps.last_enum = 0;
-        stmt.pending_cenum = 0;
+        stmt.pending_copt = 0; stmt.pending_cenum = 0;
         // The reference lowers the arm words to a constant of the Word bound whatever the
         // checked operation's type, so they are integer literals of those values here.
         if sat == 1 { type_tuple_record(1, 9223372036854775807) } else {
@@ -6920,7 +6936,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
     stmt.pending_carray_arr = 0;
     stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
-            stmt.pending_cenum = 0;
+            stmt.pending_copt = 0; stmt.pending_cenum = 0;
         }
         annotation
     } else {
@@ -7025,7 +7041,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
         // `CheckedAdd` (found 2026-10-21).
         if toks.byte_id > 0 andalso v == toks.byte_id {
             ps.last_enum = 0;
-            stmt.pending_cenum = 0;
+            stmt.pending_copt = 0; stmt.pending_cenum = 0;
             ps.last_byte = 1;
             Node::Cast() as Word + 1 * 64
         } else {
@@ -7038,7 +7054,7 @@ fn step_dispatch_normal(k: Word, v: Word) -> Word {
                 mat.ec_temp = ps.pcount + stmt.slot_count;
                 stmt.slot_count = stmt.slot_count + 1;
                 ps.last_enum = 0;
-                stmt.pending_cenum = 0;
+                stmt.pending_copt = 0; stmt.pending_cenum = 0;
                 0
             } else { Node::Cast() as Word }
         }
@@ -7535,6 +7551,7 @@ fn step_draining() -> Word {
                             } else {
                                 if stmt.pending_cenum > 0 {
                                     stmt.let_enum[stmt.let_count] = stmt.pending_cenum;
+                                    stmt.let_opt[stmt.let_count] = pending_option_arg();
                                 }
                             }
                         }
@@ -7550,7 +7567,7 @@ fn step_draining() -> Word {
     stmt.pending_carray_tuple = 0;
     stmt.pending_carray_arrbytes = 0;
                     stmt.pending_carray_size = 0;
-                    stmt.pending_cenum = 0;
+                    stmt.pending_copt = 0; stmt.pending_cenum = 0;
                     stmt.let_count = let_push(stmt.let_count);
                     stmt.stmt_count = stmt_push(stmt.stmt_count);
                     ops.draining = 0;
@@ -7662,6 +7679,7 @@ fn step_draining() -> Word {
             if stmt.pending_cenum > 0 {
                 mat.match_isenum[mat.match_sp - 1] = 1;
                 mat.match_ename[mat.match_sp - 1] = stmt.pending_cenum - 1;
+                mat.match_optarg[mat.match_sp - 1] = pending_option_arg();
             }
             mat.match_temp[mat.match_sp - 1] = ps.pcount + stmt.slot_count;
             stmt.slot_count = stmt.slot_count + 1;
@@ -8902,6 +8920,7 @@ fn header_field(k: Word, v: Word) -> Word {
 fn header_type_ident(v: Word, mode: Word) -> Word {
     ps.gen_ready = 1 + mode;
     if mode == 0 andalso is_option(v) == 1 { ps.penum[ps.pcount - 1] = v + 1; }
+    if mode == 1 andalso is_option(v) == 1 { chunkret.ret_enum[ps.cur_chunk] = v + 1; chunkret.ret_opt[ps.cur_chunk] = 0; }
     signature_text_name(v, mode);
     if scalar_kind_of(v) >= 4 { queue_named_layout(v, mode); }
     if mode == 0 {
@@ -9289,7 +9308,7 @@ fn header_member(k: Word, v: Word) -> Word {
 fn header_arm(at: Word) -> Word {
     value_load(at);
     stmt.pending_ctuple = 0; stmt.pending_cstruct = 0; stmt.pending_carray = 0;
-    stmt.pending_carray_struct = 0; stmt.pending_carray_tuple = 0; stmt.pending_carray_arr = 0; stmt.pending_cenum = 0;
+    stmt.pending_carray_struct = 0; stmt.pending_carray_tuple = 0; stmt.pending_carray_arr = 0; stmt.pending_copt = 0; stmt.pending_cenum = 0;
     if ht.nform[at] == 0 {
         ps.scalar_postfix = 1; ps.last_byte = if ht.scalar[at] == 2 { 1 } else { 0 };
     } else { if ht.nform[at] == 1 {
@@ -9297,7 +9316,7 @@ fn header_arm(at: Word) -> Word {
     } else { if ht.nform[at] == 3 {
         ps.fa_struct = ht.decl[at] - 1; ps.fa_phase = 1; stmt.pending_cstruct = ht.decl[at];
     } else { if ht.nform[at] == 4 {
-        ps.last_enum = ht.decl[at]; stmt.pending_cenum = ht.decl[at];
+        ps.last_enum = ht.decl[at]; stmt.pending_copt = 0; stmt.pending_cenum = ht.decl[at];
     } else {
         let element = ht.child[at];
         if ht.nform[element] == 0 {
@@ -9331,6 +9350,8 @@ fn resolve_plain_ident(v: Word) -> Word {
         for i in 0..stmt.let_count limit 256 { if stmt.let_names[i] == v { ps.found = i; } }
         if ps.found >= 0 andalso vl.local_desc[ps.found] > 0 {
             header_arm(vl.local_desc[ps.found] - 1); ops.expect_operand = 0;
+            // A described Option binding restores its payload type with its descriptor.
+            stmt.pending_copt = stmt.let_opt[ps.found];
             Node::Local() as Word + stmt.scope_slot[ps.found] * 64
         } else { resolve_plain_ident_legacy(v) }
     } else {
@@ -9384,9 +9405,20 @@ fn header_sig(k: Word, v: Word) -> Word {
 // payload type. `gen` is 1 for a parameter and 2 for a return type at this point.
 fn option_param_arg(v: Word) -> Word {
     if ps.gen == 1 andalso ps.penum[ps.pcount - 1] > 0 andalso is_option(ps.penum[ps.pcount - 1] - 1) == 1 {
-        ps.popt[ps.pcount - 1] = v + 1;
+        ps.popt[ps.pcount - 1] = option_kind(scalar_kind_of(v));
+    }
+    if ps.gen == 2 andalso chunkret.ret_enum[ps.cur_chunk] > 0 andalso is_option(chunkret.ret_enum[ps.cur_chunk] - 1) == 1 {
+        chunkret.ret_opt[ps.cur_chunk] = option_kind(scalar_kind_of(v));
     }
     0
+}
+// The Option payload type a scrutinee or binding carries, when `pending_cenum` names Option.
+fn pending_option_arg() -> Word {
+    if stmt.pending_cenum > 0 andalso is_option(stmt.pending_cenum - 1) == 1 { stmt.pending_copt } else { 0 }
+}
+// A payload scalar kind the Option lowering models, `bool`, `Byte` or `Word`, else zero.
+fn option_kind(kind: Word) -> Word {
+    if kind >= 1 andalso kind <= 3 { kind } else { 0 }
 }
 fn is_option(v: Word) -> Word {
     if toks.option_id > 0 andalso v + 1 == toks.option_id { 1 } else { 0 }

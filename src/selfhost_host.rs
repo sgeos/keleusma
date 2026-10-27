@@ -269,8 +269,9 @@ pub const PARSE_PRIVATE_COMPOSITE_TAG: i64 = 112;
 pub const PARSE_GENERIC_TYPE_ARG_TAG: i64 = 113;
 /// The positive length argument of a builtin generic in a signature, `Multiword<N>`.
 pub const PARSE_GENERIC_CONST_ARG_TAG: i64 = 114;
-/// The base above which a payload binding's coordinates carry the name id of an
-/// `Option<T>` payload's `T` rather than a declared variant row and field position.
+/// The base above which a payload binding's coordinates carry the scalar kind of an
+/// `Option<T>` payload's `T`, 1 `bool`, 2 `Byte` or 3 `Word`, and a constructor's variant
+/// record carries the `Option` name id, rather than a declared variant row.
 pub const PARSE_OPTION_PAYLOAD_BASE: i64 = 1 << 40;
 
 /// The tag at or below which a word yielded by `reconstruct.kel` is a diagnostic rather
