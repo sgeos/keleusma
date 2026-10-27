@@ -1342,7 +1342,7 @@ fn scalar_tag_of_layout_kind(kind: i64) -> i64 {
 ///
 /// `MatchIn` 22 and `EnumMatch` 39 are deliberately absent: their `rhs` is an ARM COUNT.
 fn is_statement_continuation(kind: i64) -> bool {
-    matches!(kind, 5 | 12 | 14 | 16 | 21 | 23 | 74)
+    matches!(kind, 5 | 12 | 14 | 16 | 21 | 23 | 74 | 83)
 }
 
 /// The node a function body finally YIELDS, or `None` when it yields nothing.
@@ -9503,7 +9503,14 @@ fn name_unsupported_construct(src: &str) -> Option<(String, u32)> {
             self.walk_expr(e);
         }
         fn visit_stmt(&mut self, s: &Stmt) {
-            if let Stmt::Assert { span, .. } = s {
+            // A plain `assert` compiles since Order 6, which compiles it out as the reference
+            // does. The message form is not lowered, so only it is named.
+            if let Stmt::Assert {
+                span,
+                message: Some(_),
+                ..
+            } = s
+            {
                 self.found
                     .push((span.line, span.start, "an `assert` statement".to_string()));
             }
@@ -10127,7 +10134,7 @@ mod construct_naming_guard {
             ),
             (
                 "an `assert` statement",
-                "fn main(a: Word) -> Word { assert a > 0; a }",
+                "fn main(a: Word) -> Word { assert a > 0, \"positive\"; a }",
             ),
             (
                 // Three segments, because a two-segment native call compiles since
@@ -10178,7 +10185,7 @@ mod construct_naming_guard {
     /// The guard above is only evidence if the scan can find anything at all.
     #[test]
     fn the_scan_finds_a_construct_when_one_is_present() {
-        const WITH_ASSERT: &str = "fn main(a: Word) -> Word { assert a > 0; a }";
+        const WITH_ASSERT: &str = "fn main(a: Word) -> Word { assert a > 0, \"positive\"; a }";
         let found = name_unsupported_construct(WITH_ASSERT);
         assert!(
             found.is_some(),

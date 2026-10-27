@@ -4088,7 +4088,11 @@ fn every_known_gap_is_refused_by_the_self_hosted_compiler() {
             "struct destructuring",
             "struct P { x: Word }\nfn main(p: P) -> Word { match p { P { x: 1 } => 1, _ => 0 } }",
         ),
-        ("assert", "fn main(a: Word) -> Word { assert a > 0; a }"),
+        // A plain `assert` compiles since Order 6. The message form is still refused.
+        (
+            "assert",
+            "fn main(a: Word) -> Word { assert a > 0, \"positive\"; a }",
+        ),
         // The qualified call `audio::midi_to_freq(69)` compiles since Order 6 slice 2,
         // which lowered `use`-imported native calls, so it left this list.
         // A fifth gap, the bare unit enum variant expression `E::N as Word`, was closed
@@ -4526,12 +4530,10 @@ fn the_documented_expression_and_statement_forms_are_censused() {
         !handled.is_empty(),
         "no documented form is handled, so this is measuring the harness"
     );
-    assert!(
-        !failing.is_empty(),
-        "every documented expression and statement form is now handled. That is the \
-         good outcome: record it, retire this assertion, and say what closed the gap"
-    );
-
+    // ALL-HANDLED, RECORDED. `assert`, the last form in the failing set, closed in Order 6
+    // on 2026-10-26, when the statement began to compile out as the reference compiles it
+    // out of a release build. The all-handled check above is retired with that record, and
+    // the pin below now holds the set empty, so a form joining it is a regression.
     let mut got = failing.clone();
     got.sort_unstable();
     // The pipeline joined the failing set in Order 6 slice 1, a refusal closing a silent
@@ -4539,7 +4541,7 @@ fn the_documented_expression_and_statement_forms_are_censused() {
     // in slice 3b, when the pipe was lowered as the reference lowers it.
     assert_eq!(
         got,
-        vec!["assert"],
+        Vec::<&str>::new(),
         "the set of documented expression and statement forms the self-hosted parser \
          cannot handle changed. A form leaving it is a gap closing to record; one \
          joining it is a regression every other test here would miss"
@@ -7384,9 +7386,8 @@ fn pipeline_unsupported_syntax_is_not_source_rejection() {
         "enum E { A, B }\nfn main(e: E) -> Word { match e { E::A => 1, x => 2 } }",
         // Shorthand struct destructuring compiles since Order 6, so the witness has a literal field.
         "struct P { x: Word } fn main(p: P) -> Word { match p { P { x: 1 } => 1, _ => 0 } }",
-        "fn main(a: Word) -> Word { assert a > 0; a }",
-        "fn main() -> Word { assert not false; 1 }",
-        "fn main() -> Word { assert 1 == 1; 1 }",
+        // A plain `assert` compiles since Order 6, so the witness is the message form.
+        "fn main(a: Word) -> Word { assert a > 0, \"positive\"; a }",
         // `use host::number() -> Word` left this list in Order 6 slice 2b, when use
         // signatures with a scalar return began to compile.
     ] {
@@ -10501,7 +10502,7 @@ fn every_gap_refusal_names_the_construct() {
         ),
         (
             "assert",
-            "fn main(a: Word) -> Word { assert a > 0; a }",
+            "fn main(a: Word) -> Word { assert a > 0, \"positive\"; a }",
             "`assert` statement",
         ),
         // The qualified call left this corpus in Order 6 slice 2, when it began to compile.
