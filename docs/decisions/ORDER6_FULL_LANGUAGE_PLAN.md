@@ -518,3 +518,37 @@ arrays and the three seeded ids add forty-four more. A struct `T`, and an Option
 refused. Construction of `Option::Some` and `Option::None` is not yet lowered. `None` needs
 a per-chunk struct template, which the self-hosted driver does not yet produce. The census
 reads 64 Identical, 7 Unsupported and 3 RefRejects of 74 rows.
+
+**Option construction, 2026-10-26.** The reference builds `Option::Some(x)` as a flat enum
+of the discriminant 1 and the payload, sized from the payload's inferred type, and builds
+`Option::None` as a boxed enum whose metadata indexes a per-chunk struct template naming
+`Option` and `None`, one template per construction with no deduplication. The parser now
+recognises `Option` as a constructor head. `Some` takes its size at the closing parenthesis
+from the parser's value tracker, eight bytes and the payload's scalar size, and a payload
+whose type is not a known `Word`, `Byte` or `bool` is refused. `None` is emitted as an enum
+construction with no children, which no declared enum produces because every declared
+construction carries its discriminant. The host rewrites each such operation, in emission
+order, into the reference's boxed composite and appends the matching template, which is the
+first struct template the self-hosted driver produces. A constructor's variant record
+carries the `Option` name id above the base 2^40. The self-hosted type stage leaves an
+Option payload unconstrained, so a payload that mismatches the declared `T` is rejected
+only by the reference cross-check, which `option_constructions_have_their_pinned_outcomes`
+pins. The census reads 65 Identical, 6 Unsupported and 3 RefRejects of 74 rows. The six
+Unsupported rows are the five awaiting question 10 and generic functions.
+
+**Option scrutinees beyond parameters, 2026-10-26.** A match over a call result, over a
+binding of one, and over a binding of a construction now compiles byte-identically. The
+parser carries the payload's scalar kind beside the enum type it already tracks, in a
+register `pending_copt` set where an Option with a known payload is produced or read, in a
+per-binding `let_opt` and in a per-chunk `ret_opt` for an `Option<T>` return. The kind is
+carried rather than the type's name id, because the name need not occur in the source, and
+`bool` in `Option::Some(true)` did not. A defect found while widening is recorded here. The
+first form of the register was cleared only where it was set, so a later binding of an
+`Option<Byte>` left its kind behind for a match over an earlier `Option<Word>` binding read
+through its layout descriptor. The type stage then typed the payload binding as Byte and
+rejected a source the reference accepts, which is a false rejection rather than a refusal.
+The register is now cleared at every assignment of the enum type it qualifies, except the
+two re-derivations of the value just produced, and the regressions are pinned in
+`option_scrutinees_have_their_pinned_outcomes`. A binding of `Option::None`, whose payload
+type the reference infers from context, an annotated Option binding and an Option-returning
+native remain refused.
