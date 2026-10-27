@@ -26,8 +26,10 @@ runtime, is complete for its first-pass scope on 2026-10-25, with its bound comp
 residual limits in [the hosted-runtime audit](docs/decisions/ORDER4_COMPLETION_AUDIT.md). Order 5, the
 cryptographic framing with host-native primitives, is complete for its first-pass scope on
 2026-10-25 on this line's reading of the gate, with evidence in
-[the framing audit](docs/decisions/ORDER5_COMPLETION_AUDIT.md). Full-language support is
-Order 6 and defines the V0.3.0 milestone. What each
+[the framing audit](docs/decisions/ORDER5_COMPLETION_AUDIT.md). Order 6, full-language
+support, which defines the V0.3.0 milestone, is complete for its first-pass scope on
+2026-10-27 on this line's reading of the gate, pending operator acceptance, with evidence in
+[the full-language audit](docs/decisions/ORDER6_COMPLETION_AUDIT.md). What each
 release shipped is in [`CHANGELOG.md`](CHANGELOG.md).
 
 **Self-hosted compiler.** Its reusable core lives in the shipping crate at `src/selfhost/`. The

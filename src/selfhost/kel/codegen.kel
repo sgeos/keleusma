@@ -1167,6 +1167,20 @@ fn push_andor(p: Word) -> Word {
 // language: `7 as Byte` lowered to a widening, which is a SILENT MISCOMPILE rather
 // than a refusal. The direction was not available here because `parse.kel`
 // discarded the target type name; it now carries it in the payload.
+// A refinement check (kind 85), Order 6. A refined newtype's constructor over a value the
+// compiler cannot evaluate tests the predicate, chunk `args`, at run time, keeping the value
+// and trapping when the predicate fails, in the reference's order: the value, `Dup`,
+// `Call(predicate, 1)`, `If`, `Else`, `Trap(0)`, `EndIf`.
+fn push_refinement(p: Word) -> Word {
+    push_emit(wire.endif);
+    push_emit(wire.trap);
+    push_emit(wire.els);
+    push_emit(wire.iff);
+    push_emit(wire.call + (ast.args[p] + 65536) * wire.radix);
+    push_emit(wire.dup);
+    push_visit(ast.lhs[p])
+}
+
 fn push_cast(p: Word) -> Word {
     if ast.args[p] >= 2 {
         push_enum_dispatch(p, ast.args[p] - 2, 4)
@@ -3237,6 +3251,7 @@ fn walk_step() -> Word {
             24 => push_yield(payload),
             25 => push_multihead(payload),
             26 => push_cast(payload),
+            85 => push_refinement(payload),
             27 => push_struct_init(payload),
             28 => push_field_access(payload),
             29 => push_break(payload),
