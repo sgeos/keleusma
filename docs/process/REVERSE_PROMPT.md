@@ -176,11 +176,20 @@ first parameter's slot and leaving its branch unpatched. The cross-check refused
 such program. It now compiles byte-identically, and the earlier wording is corrected in
 the plan.
 
+## Builtin generic signatures, 2026-10-26
+
+PR 566, the pipe placeholder, merged as e48b3a62. `Option<T>` and `Multiword<N>` in a
+function signature now take the reference layouts, and their census rows are Identical. The
+census reads 63 Identical, 8 Unsupported and 3 RefRejects of 74 rows. Three residuals are
+pinned by a test rather than hidden. An `Option` over a struct is refused, because the host
+has no struct flat size. The self-hosted type stage does not compare generic arguments, so
+only the reference cross-check rejects a mismatch. Option values, their construction and
+their match, are not yet lowered and have Unsupported census rows.
+
 ## Next
 
-`use` signatures, newtypes and refinement, struct-typed data fields, and then the
-construct corpus for the types the repository's sources do not use: floats, fixed-point,
-text operations, generics and the remaining patterns.
+Option values, `Option::Some` and `Option::None` construction and their match, then
+generic functions and the monomorphizer. The newtype and IFC rows await question 10.
 
 ---
 

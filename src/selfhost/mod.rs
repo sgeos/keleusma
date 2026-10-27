@@ -2484,6 +2484,16 @@ fn try_parse_functions_impl(
                             f.param_type_records.last_mut().unwrap().push((8, val));
                         }
                     }
+                    // A builtin generic's argument follows its head and is routed the same way.
+                    crate::selfhost_host::PARSE_GENERIC_TYPE_ARG_TAG
+                    | crate::selfhost_host::PARSE_GENERIC_CONST_ARG_TAG => {
+                        let f = open_decl(&mut cur, code, val);
+                        if !f.return_type_records.is_empty() {
+                            f.return_type_records.push((code, val));
+                        } else {
+                            f.param_type_records.last_mut().unwrap().push((code, val));
+                        }
+                    }
                     crate::selfhost_host::PARSE_TEXT_BOUNDARY_TAG => {
                         assert!((0..=3).contains(&val), "invalid text-boundary facts");
                         open_decl(&mut cur, code, val).text_boundary = val;
@@ -2970,6 +2980,11 @@ fn declared_type_operand(
                 };
                 stack.push(Some(array));
             }
+            // A builtin generic keeps its head as the nominal type operand. The stage does
+            // not compare generic arguments, so the reference cross-check is what refuses
+            // an argument mismatch. This is recorded as a residual in the Order 6 plan.
+            crate::selfhost_host::PARSE_GENERIC_TYPE_ARG_TAG
+            | crate::selfhost_host::PARSE_GENERIC_CONST_ARG_TAG => {}
             _ => panic!("unknown source type record {kind}"),
         }
     }
@@ -6563,6 +6578,41 @@ fn wire_shape_of(
     }
 }
 
+/// The reference layout of a builtin generic named in a signature, Order 6.
+///
+/// `Option<T>` is a flat enum of an eight-byte discriminant and `T`'s flat size, and
+/// `Multiword<N>` a flat array of `N` words. Both match `crate::compiler`'s signature
+/// shapes. Any other head, or an argument whose flat size is unknown, stays `Top`, which
+/// the shipping cross-check then refuses rather than accepts.
+fn builtin_generic_shape(
+    head: Option<&str>,
+    kind: i64,
+    value: i64,
+    names: &[String],
+    enums: &[crate::bytecode::EnumLayout],
+) -> crate::bytecode::WireShape {
+    use crate::bytecode::WireShape;
+    match (head, kind) {
+        (Some("Option"), crate::selfhost_host::PARSE_GENERIC_TYPE_ARG_TAG) => {
+            let size = match wire_shape_of(value, names, enums) {
+                WireShape::Scalar { kind: 1 | 2 } => Some(1u32),
+                WireShape::Scalar { kind: 3 } => Some(8),
+                WireShape::Flat { size, .. } => Some(size),
+                _ => None,
+            };
+            size.and_then(|s| s.checked_add(8))
+                .map_or(WireShape::Top, |size| WireShape::Flat { kind: 3, size })
+        }
+        (Some("Multiword"), crate::selfhost_host::PARSE_GENERIC_CONST_ARG_TAG) => {
+            u32::try_from(value)
+                .ok()
+                .and_then(|n| n.checked_mul(8))
+                .map_or(WireShape::Top, |size| WireShape::Flat { kind: 1, size })
+        }
+        _ => WireShape::Top,
+    }
+}
+
 /// Preserve the outer shape and checked flat size of written structural types.
 fn declared_wire_shape(
     records: &[(i64, i64)],
@@ -6577,9 +6627,14 @@ fn declared_wire_shape(
         _ => None,
     };
     let mut stack: Vec<Option<WireShape>> = Vec::new();
+    // The most recent named type, the head a following generic argument applies to.
+    let mut head = None;
     for &(kind, value) in records {
         match kind {
-            6 | 95 => stack.push(Some(wire_shape_of(value, names, enums))),
+            6 | 95 => {
+                head = Some(value);
+                stack.push(Some(wire_shape_of(value, names, enums)))
+            }
             94 => stack.push(None),
             96 => {
                 let mut size = Some(0u32);
@@ -6601,6 +6656,20 @@ fn declared_wire_shape(
                 stack.push(Some(
                     size.map_or(WireShape::Top, |size| WireShape::Flat { kind: 1, size }),
                 ));
+            }
+            crate::selfhost_host::PARSE_GENERIC_TYPE_ARG_TAG
+            | crate::selfhost_host::PARSE_GENERIC_CONST_ARG_TAG => {
+                stack
+                    .pop()
+                    .flatten()
+                    .expect("generic argument without head");
+                stack.push(Some(builtin_generic_shape(
+                    head.and_then(|h| names.get(h as usize)).map(String::as_str),
+                    kind,
+                    value,
+                    names,
+                    enums,
+                )));
             }
             crate::selfhost_host::PARSE_ANNOTATION_GROUP_TAG => {
                 let inner = if value == 1 {

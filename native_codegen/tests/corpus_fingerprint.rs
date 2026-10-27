@@ -297,6 +297,10 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // compiles `assert` statements out as the reference does, changed
 // `codegen.kel`, `parse.kel` and `reconstruct.kel`. Nothing was added or
 // removed.
+//
+// **RE-PINNED 2026-10-26, absorption 107.** Upstream pull requests 566 and 568,
+// the pipe placeholder and builtin generic signature layouts, changed
+// `parse.kel` and `reconstruct.kel`. Nothing was added or removed.
 const PINNED: &[(&str, u64)] = &[
     // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
     // added or removed. Every census this instrument names to re-derive was run on
@@ -499,8 +503,8 @@ const PINNED: &[(&str, u64)] = &[
     ("src/selfhost/kel/lexer.kel", 0xb42fe447663faa7d),
     // Absorption 83 changes cast Byte tracking and FixedDiv classification.
     // The non-corpus run re-derived coverage and refusal figures unchanged.
-    ("src/selfhost/kel/parse.kel", 0x7360d1f0dd87a83d),
-    ("src/selfhost/kel/reconstruct.kel", 0x9cc43e6bdd4542b6),
+    ("src/selfhost/kel/parse.kel", 0xdf92046e4b718efe),
+    ("src/selfhost/kel/reconstruct.kel", 0x7f5681b85034f7e7),
     ("src/selfhost/kel/verify_datalayout.kel", 0xe625b5656d576b86),
     ("src/selfhost/kel/verify_depth.kel", 0xd65a1422ab29b135),
     ("src/selfhost/kel/verify_structural.kel", 0xe47e628d4f3d9641),
