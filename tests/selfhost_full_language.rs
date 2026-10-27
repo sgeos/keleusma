@@ -2155,7 +2155,7 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
     (
         "Decl::Generic",
         "fn id<T>(x: T) -> T { x }\nfn main() -> Word { id(1) }",
-        Unsupported,
+        Identical,
     ),
     (
         "Decl::Multihead",
@@ -2474,6 +2474,42 @@ fn option_scrutinees_have_their_pinned_outcomes() {
         ("fn main() -> Word { let o = Option::None; match o { Option::Some(x) => x, Option::None => 0 } }".to_string(), Unsupported),
         ("fn main() -> Word { let o: Option<Word> = Option::None; match o { Option::Some(x) => x, Option::None => 0 } }".to_string(), NoVerdict),
         ("use maybe(Word) -> Option<Word>\nfn main() -> Word { match maybe(1) { Option::Some(x) => x, Option::None => 0 } }".to_string(), Unsupported),
+    ];
+    let mismatches: Vec<String> = cases
+        .iter()
+        .filter_map(|(src, expected)| {
+            let (actual, detail) = classify(src);
+            (actual != *expected)
+                .then(|| format!("{src:?}: expected {expected:?}, got {actual:?} {detail}"))
+        })
+        .collect();
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// Generic functions, Order 6. The host recognises a template's header syntactically, and
+/// `parse.kel` derives each call's type arguments from its scalar arguments, requests the
+/// instantiation, and parses the template once per instantiation by seeking to it. The
+/// refused rows are residuals: the reference compiles an uninstantiated template as a chunk
+/// with its type parameter unresolved, keeps a piped call generic, and an instantiation's
+/// return type is read only after the calls that need it.
+#[test]
+fn generic_functions_have_their_pinned_outcomes() {
+    let id = "fn id<T>(x: T) -> T { x }\n";
+    let cases: Vec<(String, Class)> = vec![
+        (format!("{id}fn main() -> Word {{ id(1) }}"), Identical),
+        ("fn main() -> Word { id(1) }\nfn id<T>(x: T) -> T { x }".to_string(), Identical),
+        (format!("{id}fn main() -> Word {{ let b: Byte = id(2 as Byte); id(1) + b as Word }}"), Identical),
+        ("fn first<A, B>(a: A, b: B) -> A { a }\nfn main() -> Word { first(1, true) }".to_string(), Identical),
+        ("fn pick<T>(c: bool, a: T, b: T) -> T { if c { a } else { b } }\nfn main() -> Word { pick(true, 1, 2) + pick(false, 3 as Byte, 4 as Byte) as Word }".to_string(), Identical),
+        ("fn addb<T>(a: T, b: T) -> T { a + b }\nfn main() -> Word { addb(1, 2) + addb(3 as Byte, 4 as Byte) as Word }".to_string(), Identical),
+        (format!("{id}fn main() -> Word {{ id(1) + id(2) + id(3) }}"), Identical),
+        ("fn k<T>(x: T, n: Word) -> Word { n }\nfn main() -> Word { k(true, 5) }".to_string(), Identical),
+        (format!("{id}loop main(x: Word) -> Word {{ let x = yield id(x); x }}"), Identical),
+        (format!("{id}fn main() -> Word {{ 7 }}"), Unsupported),
+        (format!("{id}fn main() -> Word {{ 1 |> id() }}"), Unsupported),
+        ("fn wrap<T>(x: T) -> Option<T> { Option::Some(x) }\nfn main() -> Word { match wrap(1) { Option::Some(v) => v, Option::None => 0 } }".to_string(), Unsupported),
+        ("fn first<A>(a: A, b: A) -> A { a }\nfn main() -> Word { first(1, 2 as Byte) }".to_string(), RefRejects),
+        ("fn f<T: Ord>(x: T) -> T { x }\nfn main() -> Word { f(1) }".to_string(), RefRejects),
     ];
     let mismatches: Vec<String> = cases
         .iter()

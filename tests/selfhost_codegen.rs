@@ -9088,10 +9088,18 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
             Refuses,
             "fn f() -> Float { 1.5Float }",
         ),
+        // A generic function over a scalar type argument, instantiated in the parser stage
+        // since Order 6 slice 7.
         (
-            "scope/generic_fn__GAP",
-            Refuses,
+            "scope/generic_fn",
+            SOk,
             "fn id<T>(x: T) -> T { x }\nfn f() -> Word { id(1) }",
+        ),
+        // A pipe into a template, which the reference keeps generic rather than instantiating.
+        (
+            "scope/generic_pipe__GAP",
+            Refuses,
+            "fn id<T>(x: T) -> T { x }\nfn f() -> Word { 1 |> id() }",
         ),
         // --- removed V0.1.x surface (reference rejects) --------------------------
         (

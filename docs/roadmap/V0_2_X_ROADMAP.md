@@ -506,10 +506,11 @@ library entry. Capacity and protocol failures remain distinct from invalid-sourc
 The command-line tests assert independent rejection without an output artifact and valid artifact
 execution returning seven. These results do not complete Keleusma wire serialization or final gates.
 
-## Current construct-support boundary, 2026-10-25
+## Current construct-support boundary, 2026-10-26
 
-The executable table in `tests/selfhost_codegen.rs` contains 117 cases with
-112 SOk / 2 Refuses / 2 Diverges / 1 RefRejects. Order 6 slice 5 moved the float
+The executable table in `tests/selfhost_codegen.rs` contains 118 cases with
+113 SOk / 2 Refuses / 2 Diverges / 1 RefRejects. Order 6 slice 7 moved the generic function
+case from Refuses to SOk and added a pipe into a template, which Refuses. Order 6 slice 5 moved the float
 arithmetic case from Diverges to SOk and added float literal and negation cases, SOk since
 slices 5b and 5c, and a suffixed float literal case, which Refuses. The 2026-10-21 increments added
 the three indexed-write cases and the nine cast cases, each byte-identical.

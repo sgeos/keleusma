@@ -552,3 +552,60 @@ two re-derivations of the value just produced, and the regressions are pinned in
 `option_scrutinees_have_their_pinned_outcomes`. A binding of `Option::None`, whose payload
 type the reference infers from context, an annotated Option binding and an Option-returning
 native remain refused.
+
+**Slice 7 design, generic functions, 2026-10-26.** The reference monomorphizes a generic
+function into one chunk per distinct instantiation, named by the function and its type
+arguments, such as `id__Word` or `first__Word__bool`, and emits no chunk for the template.
+The roadmap places the specialization table in the compiler's persistent state, emitted
+lazily as call sites are discovered. This line's design keeps both decisions in the parser
+stage and gives the host only syntactic and bookkeeping work, in the same category as the
+chunk table it already derives from the tokens.
+
+1. The host scans the tokens for templates, a top-level `fn` whose name is followed by
+   `<` and a list of type parameter names. For each it records the token positions of the
+   `fn`, the `<`, the `(` and the closing brace, the parameter names, which value
+   parameters are written as a bare type parameter, and whether the return is one. A bound,
+   a const parameter or any other form is left unrecognised, so the parser refuses it as
+   it does now.
+2. The chunk table omits templates and includes the current round's instantiation names,
+   in name order, so a call resolves to the reference's chunk index.
+3. The parser skips a template where it occurs, by seeking past its closing brace. At a
+   call to a template it reads each argument's scalar kind from the value tracker, derives
+   the type arguments from the parameters written as a type parameter, and looks the
+   instantiation up in the seeded table. A missing one is emitted as a request record.
+4. At end of input the parser seeks to each seeded instantiation's template and parses it
+   once, with the name token replaced by the instantiation's name, the type parameter list
+   skipped, and each type parameter name replaced by its argument's type name.
+5. The host repeats the parse while a round requests an instantiation it has not seeded,
+   up to a fixed bound, and keeps the last round's output.
+
+The type arguments modelled first are the scalar kinds `Word`, `Byte` and `bool`. A type
+argument that cannot be derived from a scalar argument is refused. The design's
+substitution replaces a type parameter's name wherever it occurs in the template, which is
+sound while the name is not also used as a value, an assumption this line states rather
+than verifies.
+
+**Generic functions, 2026-10-26.** The slice 7 design above is implemented. The host's
+`TemplateScan` recognises template headers in the existing lexing pass and leaves templates
+out of the chunk table. `parse.kel` captures each argument's scalar kind at the comma or
+parenthesis that ends it, resolves a call to a template at its close, requests a missing
+instantiation under tag 140, a tag no other record uses, and at end of input parses each seeded instantiation by seeking
+to its template, with the name and type parameters substituted at the token read. The host
+runs at most eight probe rounds and caches the result per source, and a request that
+survives into the final parse is reported as the stage's unresolved-syntax diagnostic, so
+the source is refused rather than compiled against a placeholder. Every repository source is
+unaffected, because none declares a template. The census reads 66 Identical, 5 Unsupported
+and 3 RefRejects of 74 rows, and `generic_functions_have_their_pinned_outcomes` pins the
+outcomes. Three residuals are refused. The reference compiles an uninstantiated template as
+a chunk with its type parameter unresolved, keeps a piped call to a template generic, and
+an instantiation's own composite return type is read only after the calls that need it, so
+a template returning `Option<T>` is refused at its call.
+A defect of this slice's own making was caught by the full tier before it merged. The
+request record first used tag 116, which is already a body record, so the host's skip of it
+dropped those records and every loop-outcome program was refused. The request now uses tag
+140, which no record uses. The header records 113 and 114 of the builtin generic signature
+slice share their numbers with body records that reconstruct reads, and stay correct only
+because the host routes them in its declaration dispatch alone, which is recorded here as a
+fragility rather than left implicit. Four tests had used a generic call as their known
+refusal or divergence, and each now uses a construct that still refuses or diverges rather
+than a relaxed assertion.

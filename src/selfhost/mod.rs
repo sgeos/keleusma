@@ -877,6 +877,205 @@ struct FirstPass {
     token_count: usize,
     has_imports: bool,
     values: Vec<i64>,
+    /// The generic templates the syntactic scan recognised, Order 6.
+    templates: Vec<Template>,
+    /// The instantiations this table was built for, each with its chunk index and name id.
+    instances: Vec<(Instantiation, i64, i64)>,
+}
+
+/// A generic function template, recognised syntactically, Order 6.
+///
+/// The host records only where the template is and how its header is written. Which
+/// instantiations exist is decided by `parse.kel` from the arguments at each call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Template {
+    name: i64,
+    fn_at: i64,
+    lt_at: i64,
+    paren_at: i64,
+    end_at: i64,
+    type_params: Vec<i64>,
+    /// Per value parameter, the type parameter it is written as plus one, else zero.
+    param_map: Vec<i64>,
+    /// The return type's type parameter plus one, else zero.
+    return_map: i64,
+}
+
+/// A template index and its type arguments' scalar kinds, 1 `bool`, 2 `Byte` or 3 `Word`.
+type Instantiation = (usize, Vec<i64>);
+
+/// Seed `parse.kel`'s template and instantiation tables from a first pass, Order 6.
+fn seed_generics(vm: &mut Vm<'_, '_>, shared: &mut [u8], first: &FirstPass) {
+    use crate::selfhost_host as h;
+    let mut set = |slot: usize, value: i64| vm.set_shared(shared, slot, Value::Int(value)).unwrap();
+    set(h::BR_P_GEN_COUNT, first.templates.len() as i64);
+    for (g, t) in first.templates.iter().enumerate() {
+        set(h::BR_P_GEN_NAME + g, t.name);
+        set(h::BR_P_GEN_FN + g, t.fn_at);
+        set(h::BR_P_GEN_LT + g, t.lt_at);
+        set(h::BR_P_GEN_PAREN + g, t.paren_at);
+        set(h::BR_P_GEN_END + g, t.end_at);
+        set(h::BR_P_GEN_NTP + g, t.type_params.len() as i64);
+        for (i, &p) in t.type_params.iter().enumerate() {
+            set(h::BR_P_GEN_TP + g * h::GEN_TYPE_PARAM_CAP + i, p);
+        }
+        for (i, &m) in t.param_map.iter().enumerate() {
+            set(h::BR_P_GEN_PMAP + g * h::GEN_VALUE_PARAM_CAP + i, m);
+        }
+        set(h::BR_P_GEN_RMAP + g, t.return_map);
+    }
+    set(h::BR_P_SPEC_COUNT, first.instances.len() as i64);
+    for (r, ((template, kinds), chunk, name)) in first.instances.iter().enumerate() {
+        let key = kinds.iter().rev().fold(0, |key, &kind| key * 16 + kind);
+        set(h::BR_P_SPEC_GEN + r, *template as i64);
+        set(h::BR_P_SPEC_KEY + r, key);
+        set(h::BR_P_SPEC_CHUNK + r, *chunk);
+        set(h::BR_P_SPEC_NAME + r, *name);
+    }
+}
+
+/// The type name of a modelled scalar kind.
+fn generic_kind_name(kind: i64) -> &'static str {
+    match kind {
+        1 => "bool",
+        2 => "Byte",
+        3 => "Word",
+        other => panic!("unmodelled generic type argument kind {other}"),
+    }
+}
+
+/// A streaming recogniser for generic function headers, fed one token at a time.
+///
+/// It accepts `fn name<A, B>(x: A, y: Word) -> A { .. }` at the top level, a list of plain
+/// type parameter names and nothing else. A bound, a const parameter, or a template past
+/// the stage's capacities is left unrecognised, so the parser refuses it as before.
+#[derive(Default)]
+struct TemplateScan {
+    state: u8,
+    current: Option<Template>,
+    param_type: Option<i64>,
+    nesting: i64,
+    body_depth: i64,
+    found: Vec<Template>,
+}
+
+impl TemplateScan {
+    fn abandon(&mut self) {
+        self.state = 0;
+        self.current = None;
+    }
+
+    fn step(&mut self, at: i64, depth: i64, (tok, val): (i64, i64)) {
+        use crate::selfhost_host::{GEN_TEMPLATE_CAP, GEN_TYPE_PARAM_CAP, GEN_VALUE_PARAM_CAP};
+        match self.state {
+            0 if depth == 0 && tok == 0 => {
+                self.current = Some(Template {
+                    name: -1,
+                    fn_at: at,
+                    lt_at: -1,
+                    paren_at: -1,
+                    end_at: -1,
+                    type_params: Vec::new(),
+                    param_map: Vec::new(),
+                    return_map: 0,
+                });
+                self.state = 1;
+            }
+            0 => {}
+            1 if tok == 1 => {
+                self.current.as_mut().expect("template").name = val;
+                self.state = 2;
+            }
+            2 if tok == 28 => {
+                self.current.as_mut().expect("template").lt_at = at;
+                self.state = 3;
+            }
+            3 if tok == 1 => {
+                let t = self.current.as_mut().expect("template");
+                t.type_params.push(val);
+                self.state = 4;
+                if t.type_params.len() > GEN_TYPE_PARAM_CAP {
+                    self.abandon();
+                }
+            }
+            4 if tok == 10 => self.state = 3,
+            4 if tok == 29 => self.state = 5,
+            5 if tok == 7 => {
+                self.current.as_mut().expect("template").paren_at = at;
+                self.state = 6;
+                self.param_type = None;
+                self.nesting = 0;
+            }
+            // Parameters: a name, a colon, then a type that is either one identifier or a
+            // composite, read to the comma or parenthesis that ends it.
+            6 if tok == 1 => self.state = 7,
+            6 if tok == 8 => self.state = 10,
+            7 if tok == 9 => self.state = 8,
+            8 => {
+                if self.nesting == 0 && (tok == 10 || tok == 8) {
+                    let t = self.current.as_mut().expect("template");
+                    let mapped = self
+                        .param_type
+                        .and_then(|v| t.type_params.iter().position(|&p| p == v))
+                        .map_or(0, |i| i as i64 + 1);
+                    t.param_map.push(mapped);
+                    let full = t.param_map.len() > GEN_VALUE_PARAM_CAP;
+                    self.param_type = None;
+                    self.state = if tok == 10 { 6 } else { 10 };
+                    if full {
+                        self.abandon();
+                    }
+                } else {
+                    // Only a type written as one identifier maps to a type parameter.
+                    let first = self.param_type.is_none() && self.nesting == 0 && tok == 1;
+                    self.param_type = if first { Some(val) } else { Some(-1) };
+                    match tok {
+                        7 | 41 | 28 => self.nesting += 1,
+                        8 | 42 | 29 => self.nesting -= 1,
+                        _ => {}
+                    }
+                }
+            }
+            // After the parameters: an arrow and a return type, then the body.
+            10 if tok == 4 => self.state = 11,
+            10 | 12 if tok == 2 => {
+                self.state = 13;
+                self.body_depth = 1;
+            }
+            10 | 12 => {}
+            11 => {
+                let t = self.current.as_mut().expect("template");
+                if tok == 1 {
+                    t.return_map = t
+                        .type_params
+                        .iter()
+                        .position(|&p| p == val)
+                        .map_or(0, |i| i as i64 + 1);
+                }
+                self.state = 12;
+                if tok == 2 {
+                    self.state = 13;
+                    self.body_depth = 1;
+                }
+            }
+            13 => {
+                match tok {
+                    2 => self.body_depth += 1,
+                    3 => self.body_depth -= 1,
+                    _ => {}
+                }
+                if self.body_depth == 0 {
+                    let mut t = self.current.take().expect("template");
+                    t.end_at = at;
+                    if self.found.len() < GEN_TEMPLATE_CAP {
+                        self.found.push(t);
+                    }
+                    self.state = 0;
+                }
+            }
+            _ => self.abandon(),
+        }
+    }
 }
 
 /// Stream the lexer once, keeping only what the second pass needs.
@@ -894,7 +1093,19 @@ struct FirstPass {
 /// and for a method its `(head, method)` name ids.
 type ChunkEntry = (String, i64, Option<(i64, i64)>);
 
+/// The first pass with the source's own instantiations, which the parser decides in probe
+/// rounds when the source holds a generic template. A source without one costs one lexing
+/// pass, as before.
 fn first_pass(src: &str) -> FirstPass {
+    let plain = first_pass_with(src, &[]);
+    if plain.templates.is_empty() {
+        plain
+    } else {
+        first_pass_with(src, &generic_instantiations(src))
+    }
+}
+
+fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
     let m = lex_module();
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
@@ -912,8 +1123,17 @@ fn first_pass(src: &str) -> FirstPass {
     let mut impl_state = 0;
     let (mut impl_trait, mut impl_head) = (-1i64, -1i64);
     let mut methods_raw: Vec<(i64, i64, i64)> = Vec::new();
+    let mut scan = TemplateScan::default();
     while let Some(w) = lex_next(&mut vm, &mut shared) {
         let cur = (w.rem_euclid(256), w.div_euclid(256));
+        // The brace depth before this token. `depth` lags by one token below.
+        let depth_before = depth
+            + match prev {
+                Some((2, _)) => 1,
+                Some((3, _)) => -1,
+                _ => 0,
+            };
+        scan.step(token_count as i64, depth_before, cur);
         token_count += 1;
         has_imports |= cur.0 == 19;
         if let Some((kw, _)) = prev {
@@ -947,14 +1167,44 @@ fn first_pass(src: &str) -> FirstPass {
         };
         prev = Some(cur);
     }
-    let names = lex_names(&vm, &shared, src);
+    let mut names = lex_names(&vm, &shared, src);
     let values = lex_values(&vm, &shared, names.len());
+    // A template is not a chunk. Only a name every head of which is a template is dropped, so
+    // a template sharing its name with a plain head stays a chunk and the parser refuses it.
+    let templates: Vec<Template> = scan
+        .found
+        .into_iter()
+        .filter(|t| ids.iter().filter(|&&id| id == t.name).count() == 1)
+        .collect();
+    ids.retain(|id| !templates.iter().any(|t| t.name == *id));
+    // Each instantiation is a chunk named as the reference names it, `name__Word__bool`. Its
+    // name and the type names it substitutes are interned past the lexer's table.
+    let intern = |names: &mut Vec<String>, name: String| -> i64 {
+        names.iter().position(|n| *n == name).unwrap_or_else(|| {
+            names.push(name);
+            names.len() - 1
+        }) as i64
+    };
+    let mut instance_ids = Vec::new();
+    for (template, kinds) in instances {
+        for &kind in kinds {
+            intern(&mut names, generic_kind_name(kind).into());
+        }
+        let parts: Vec<&str> = kinds.iter().map(|&k| generic_kind_name(k)).collect();
+        let name = format!(
+            "{}__{}",
+            names[templates[*template].name as usize],
+            parts.join("__")
+        );
+        instance_ids.push(intern(&mut names, name));
+    }
     // Ordering needs the names, which exist only now. A multiheaded function is
     // one chunk, and the reference keys its chunk map by name, so the table is the
     // deduplicated lexicographically sorted set.
     // Methods are chunks named `Trait::Head::method` and sort among the plain names.
     let mut all: Vec<ChunkEntry> = ids
         .iter()
+        .chain(instance_ids.iter())
         .map(|&id| (names[id as usize].clone(), id, None))
         .chain(methods_raw.iter().map(|&(t, h, m)| {
             (
@@ -977,9 +1227,22 @@ fn first_pass(src: &str) -> FirstPass {
             methods.push((h, m, idx as i64));
         }
     }
+    let instances = instances
+        .iter()
+        .zip(&instance_ids)
+        .map(|(instance, &id)| {
+            let chunk = all
+                .iter()
+                .position(|(_, cid, _)| *cid == id)
+                .expect("instance chunk");
+            (instance.clone(), chunk as i64, id)
+        })
+        .collect();
     FirstPass {
         values,
         names,
+        templates,
+        instances,
         chunks: all.iter().map(|(_, id, _)| *id).collect(),
         chunk_names: all.into_iter().map(|(n, _, _)| n).collect(),
         methods,
@@ -1774,11 +2037,112 @@ fn try_parse_functions_impl(
     on_function: &mut dyn FnMut(&[String], ParsedFn),
     on_record: &mut dyn FnMut(i64, i64, i64),
 ) -> Result<ParseSideTables, crate::selfhost_host::ParseRecordError> {
+    // A request in the final parse is a call the rounds could not resolve, which this round
+    // compiled against a placeholder chunk. It is reported as the stage's unresolved-syntax
+    // diagnostic, so the source is refused rather than miscompiled.
+    let mut unresolved = None;
+    let parsed = try_parse_functions_impl_with(
+        src,
+        fused,
+        first_pass(src),
+        on_function,
+        &mut |code, val, at| {
+            if code == crate::selfhost_host::PARSE_GENERIC_REQUEST_TAG && unresolved.is_none() {
+                unresolved = Some(val % 16);
+            }
+            on_record(code, val, at);
+        },
+    )?;
+    match unresolved {
+        Some(template) => Err(crate::selfhost_host::ParseRecordError::Diagnostic {
+            code: crate::selfhost_host::PARSE_DIAG_TAG_BASE - 21,
+            detail: template,
+        }),
+        None => Ok(parsed),
+    }
+}
+
+/// The instantiations a source's generic calls need, decided by `parse.kel` over probe
+/// rounds, Order 6.
+///
+/// Each round parses with the instantiations found so far and collects the requests the
+/// parser emits for calls it could not resolve, including calls inside an instantiation. The
+/// rounds stop when a round requests nothing new, or after a fixed bound, after which the
+/// final parse reports the unresolved call. A probe round that fails to parse stops the
+/// rounds too, and the final parse reports the failure. The result is cached per source,
+/// because several entry points derive the chunk table independently.
+fn generic_instantiations(src: &str) -> Vec<Instantiation> {
+    use std::sync::Mutex;
+    static CACHE: Mutex<Vec<(String, Vec<Instantiation>)>> = Mutex::new(Vec::new());
+    if let Some((_, found)) = CACHE
+        .lock()
+        .expect("instantiation cache")
+        .iter()
+        .find(|(s, _)| s == src)
+    {
+        return found.clone();
+    }
+    const ROUNDS: usize = 8;
+    let mut instances: Vec<Instantiation> = Vec::new();
+    for _ in 0..ROUNDS {
+        let first = first_pass_with(src, &instances);
+        let ntp: Vec<usize> = first
+            .templates
+            .iter()
+            .map(|t| t.type_params.len())
+            .collect();
+        let mut requested: Vec<Instantiation> = Vec::new();
+        let probe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            try_parse_functions_impl_with(src, true, first, &mut |_, _| {}, &mut |code, val, _| {
+                if code == crate::selfhost_host::PARSE_GENERIC_REQUEST_TAG {
+                    let template = (val % 16) as usize;
+                    let mut key = val / 16;
+                    let kinds = (0..ntp[template])
+                        .map(|_| {
+                            let kind = key % 16;
+                            key /= 16;
+                            kind
+                        })
+                        .collect();
+                    requested.push((template, kinds));
+                }
+            })
+        }));
+        let fresh: Vec<Instantiation> = requested
+            .into_iter()
+            .filter(|r| !instances.contains(r))
+            .collect();
+        if !matches!(probe, Ok(Ok(_))) && fresh.is_empty() {
+            break;
+        }
+        if fresh.is_empty() {
+            break;
+        }
+        for r in fresh {
+            if !instances.contains(&r) && instances.len() < crate::selfhost_host::GEN_INSTANCE_CAP {
+                instances.push(r);
+            }
+        }
+    }
+    let mut cache = CACHE.lock().expect("instantiation cache");
+    if cache.len() >= 16 {
+        cache.remove(0);
+    }
+    cache.push((src.to_string(), instances.clone()));
+    instances
+}
+
+fn try_parse_functions_impl_with(
+    src: &str,
+    fused: bool,
+    first: FirstPass,
+    on_function: &mut dyn FnMut(&[String], ParsedFn),
+    on_record: &mut dyn FnMut(i64, i64, i64),
+) -> Result<ParseSideTables, crate::selfhost_host::ParseRecordError> {
     // ONE IMPLEMENTATION, TWO FEEDS. The record handling below is long and
     // stateful, and a second copy of it in a fused driver is precisely the drift
     // `selfhost_host` already records paying for once. Only the token FEED
     // differs: collected and seeded whole, or windowed and slid.
-    let first = first_pass(src);
     let names = first.names.clone();
     let token_count = first.token_count;
     // The collecting feed still needs the tokens themselves.
@@ -1848,6 +2212,7 @@ fn try_parse_functions_impl(
         vm.set_shared(&mut shared, BR_P_MT_CHUNK + i, Value::Int(c))
             .unwrap();
     }
+    seed_generics(&mut vm, &mut shared, &first);
     // THE TOKEN ARRAY HAS A CAP AND OVERFLOWING IT REPORTS ONE OF TWO WRONG THINGS.
     //
     // `toks.packed` holds `PARSE_TOKEN_CAP` tokens. Measured on a program that is one long
@@ -2178,6 +2543,10 @@ fn try_parse_functions_impl(
                     val >= 0 && val <= token_count as i64,
                     "invalid parser token seek"
                 );
+                return ControlFlow::Continue(());
+            }
+            // A request for an instantiation, consumed by the probe rounds alone.
+            if code == crate::selfhost_host::PARSE_GENERIC_REQUEST_TAG {
                 return ControlFlow::Continue(());
             }
             if code == crate::selfhost_host::PARSE_DATA_FIELD_BASE_TAG {
