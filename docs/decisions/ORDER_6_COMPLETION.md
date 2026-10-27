@@ -29,6 +29,10 @@ below. V0.4.0 is not released, since publication is held.
   reference bytecode, is question 18 in
   [the operator question list](../process/handoffs/v0.3.0-QUESTIONS.md). Until
   it is answered, this record treats the dependency as unmet.
+- **The three open decisions, 2026-10-27.** Questions 12, 13 and 14 have
+  options and recommendations in
+  [`ORDER_6_DECISION_OPTIONS.md`](./ORDER_6_DECISION_OPTIONS.md). Nothing in
+  it is decided.
 
 ## Requirements
 
