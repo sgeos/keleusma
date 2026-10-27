@@ -6,6 +6,11 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-26 Generic functions
+
+Generic functions over scalar type arguments compile byte-identically. The census reads 66
+Identical of 74. Question 14 records the design boundary for a ruling.
+
 ## 2026-10-26 Option scrutinees
 
 A match over an Option call result or binding compiles byte-identically. A stale payload

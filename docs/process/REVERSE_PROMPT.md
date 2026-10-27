@@ -92,6 +92,14 @@ Each question is independent and none blocks the next slice.
    fourteen corrupted corpus modules. The self-hosted validator agrees, so this is not a
    self-hosted defect. Should admission reject it, or is the call-time failure the intended
    contract? I have not changed either side.
+14. The boundary of self-hosted monomorphization. Generic functions are now instantiated
+   with the decision in `parse.kel`, which derives each call's type arguments and parses
+   the template once per instantiation by seeking to it. The host recognises template
+   headers syntactically, keeps the chunk table, and repeats the parse in bounded probe
+   rounds until no new instantiation is requested, as it already derives the chunk table
+   from the tokens. Is this an acceptable reading of the roadmap's specialization table in
+   the compiler's persistent state, or should the rounds and the header scan move into a
+   stage as well? The design is in the Order 6 plan under slice 7.
 
 Questions 11 and 12 are answered by the ruling below, and both raises have landed, the
 field table at 1,024 and the opcode capacity at 8,192. Questions 8 and 9 are next.
@@ -201,8 +209,16 @@ widening it I found and fixed a defect of my own making before it merged. A payl
 carried stale from a later binding made the self-hosted type stage reject sources the
 reference accepts. The regressions are pinned.
 
+## Generic functions, 2026-10-26
+
+Generic functions over the scalar types `Word`, `Byte` and `bool` compile byte-identically,
+including templates declared after their use, several type parameters and several
+instantiations. The census reads 66 Identical of 74, and the five Unsupported rows that
+remain all await question 10. Question 14 asks whether the design's division
+between stage and host is acceptable. Residuals are pinned, among them an uninstantiated
+template, which the reference compiles with its type parameter unresolved.
+
 ## Next
 
-Generic functions and the monomorphizer, the last Unsupported row this line can take
-without a ruling. The roadmap places the specialization table in the compiler stage, and
-the work is several slices, starting with single-parameter functions over scalar types. The newtype and IFC rows await question 10.
+The generic residuals, an Option struct payload, and the gate 5 check that the shipping
+command line uses the widened toolchain. Then the Order 6 completion audit. The newtype and IFC rows await question 10.

@@ -898,6 +898,48 @@ pub const BR_P_OPTION_ID: usize = BR_P_HIDDEN_ID + 1;
 pub const BR_P_SOME_ID: usize = BR_P_OPTION_ID + 1;
 /// The `Option` variant name `None`, interned identifier plus one.
 pub const BR_P_NONE_ID: usize = BR_P_SOME_ID + 1;
+/// The number of generic templates the host's syntactic scan found, Order 6.
+pub const BR_P_GEN_COUNT: usize = BR_P_NONE_ID + 1;
+/// Per template, its name id.
+pub const BR_P_GEN_NAME: usize = BR_P_GEN_COUNT + 1;
+/// Per template, the token position of its `fn`.
+pub const BR_P_GEN_FN: usize = BR_P_GEN_NAME + GEN_TEMPLATE_CAP;
+/// Per template, the token position of its `<`.
+pub const BR_P_GEN_LT: usize = BR_P_GEN_FN + GEN_TEMPLATE_CAP;
+/// Per template, the token position of its parameter list's `(`.
+pub const BR_P_GEN_PAREN: usize = BR_P_GEN_LT + GEN_TEMPLATE_CAP;
+/// Per template, the token position of its body's closing brace.
+pub const BR_P_GEN_END: usize = BR_P_GEN_PAREN + GEN_TEMPLATE_CAP;
+/// Per template, its type parameter count.
+pub const BR_P_GEN_NTP: usize = BR_P_GEN_END + GEN_TEMPLATE_CAP;
+/// Per template, four type parameter name ids.
+pub const BR_P_GEN_TP: usize = BR_P_GEN_NTP + GEN_TEMPLATE_CAP;
+/// Per template, eight value parameters' type parameter plus one, else zero.
+pub const BR_P_GEN_PMAP: usize = BR_P_GEN_TP + GEN_TEMPLATE_CAP * GEN_TYPE_PARAM_CAP;
+/// Per template, the return type's type parameter plus one, else zero.
+pub const BR_P_GEN_RMAP: usize = BR_P_GEN_PMAP + GEN_TEMPLATE_CAP * GEN_VALUE_PARAM_CAP;
+/// The number of seeded instantiations.
+pub const BR_P_SPEC_COUNT: usize = BR_P_GEN_RMAP + GEN_TEMPLATE_CAP;
+/// Per instantiation, its template.
+pub const BR_P_SPEC_GEN: usize = BR_P_SPEC_COUNT + 1;
+/// Per instantiation, its key, the type arguments' scalar kinds in base sixteen.
+pub const BR_P_SPEC_KEY: usize = BR_P_SPEC_GEN + GEN_INSTANCE_CAP;
+/// Per instantiation, its chunk index.
+pub const BR_P_SPEC_CHUNK: usize = BR_P_SPEC_KEY + GEN_INSTANCE_CAP;
+/// Per instantiation, its name id.
+pub const BR_P_SPEC_NAME: usize = BR_P_SPEC_CHUNK + GEN_INSTANCE_CAP;
+/// Generic templates `parse.kel` holds, restated from `toks.gen_name`.
+pub const GEN_TEMPLATE_CAP: usize = 16;
+/// Type parameters per template, restated from `toks.gen_tp`.
+pub const GEN_TYPE_PARAM_CAP: usize = 4;
+/// Value parameters per template the parameter map covers, restated from `toks.gen_pmap`.
+pub const GEN_VALUE_PARAM_CAP: usize = 8;
+/// Seeded instantiations, restated from `toks.spec_gen`.
+pub const GEN_INSTANCE_CAP: usize = 64;
+/// The tag `parse.kel` requests an unseeded instantiation under, carrying the template plus
+/// sixteen times the key.
+/// No other record, body records included, uses this tag.
+pub const PARSE_GENERIC_REQUEST_TAG: i64 = 140;
 
 #[cfg(test)]
 mod shared_layout_tests {
@@ -1023,6 +1065,21 @@ mod shared_layout_tests {
             ("option_id", "BR_P_OPTION_ID", BR_P_OPTION_ID),
             ("some_id", "BR_P_SOME_ID", BR_P_SOME_ID),
             ("none_id", "BR_P_NONE_ID", BR_P_NONE_ID),
+            ("gen_count", "BR_P_GEN_COUNT", BR_P_GEN_COUNT),
+            ("gen_name", "BR_P_GEN_NAME", BR_P_GEN_NAME),
+            ("gen_fn", "BR_P_GEN_FN", BR_P_GEN_FN),
+            ("gen_lt", "BR_P_GEN_LT", BR_P_GEN_LT),
+            ("gen_paren", "BR_P_GEN_PAREN", BR_P_GEN_PAREN),
+            ("gen_end", "BR_P_GEN_END", BR_P_GEN_END),
+            ("gen_ntp", "BR_P_GEN_NTP", BR_P_GEN_NTP),
+            ("gen_tp", "BR_P_GEN_TP", BR_P_GEN_TP),
+            ("gen_pmap", "BR_P_GEN_PMAP", BR_P_GEN_PMAP),
+            ("gen_rmap", "BR_P_GEN_RMAP", BR_P_GEN_RMAP),
+            ("spec_count", "BR_P_SPEC_COUNT", BR_P_SPEC_COUNT),
+            ("spec_gen", "BR_P_SPEC_GEN", BR_P_SPEC_GEN),
+            ("spec_key", "BR_P_SPEC_KEY", BR_P_SPEC_KEY),
+            ("spec_chunk", "BR_P_SPEC_CHUNK", BR_P_SPEC_CHUNK),
+            ("spec_name", "BR_P_SPEC_NAME", BR_P_SPEC_NAME),
         ];
         for &(field, konst, value) in cases {
             assert_eq!(
