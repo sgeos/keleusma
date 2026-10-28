@@ -86,6 +86,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          # The Rust host is also built for x86_64 and run under Rosetta,
+          # operator question 15.
+          targets: x86_64-apple-darwin
       - uses: taiki-e/install-action@v2
         with:
           tool: nextest
