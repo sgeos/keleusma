@@ -1,0 +1,63 @@
+# Proposes dependency updates as pull requests that CI checks and a line or the
+# operator reviews. Adopted from sgeos/project-template on the operator's decision of
+# 2026-10-28.
+#
+# Dependabot reads this file from the default branch, `main`, and by default opens its
+# pull requests against `main` too. Keleusma integrates on a version branch, so every
+# entry names it with `target-branch`. When a new version branch is cut, change every
+# `target-branch` below in the same commit, on `main` and on the new branch, or the
+# updates go to a branch nobody merges.
+#
+# The cooldown keeps a release out until it has had a week to be noticed if it is bad.
+# Grouping puts each ecosystem's updates of one week into one pull request, which keeps
+# review and CI load to one run per ecosystem per week. Security updates, the separate
+# feature that opens a pull request per advisory, stay off by the operator's choice of
+# 2026-10-25.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: v0.2.3
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # The root workspace. Its Cargo.lock is tracked so the binaries build reproducibly.
+  - package-ecosystem: cargo
+    directory: /
+    target-branch: v0.2.3
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      cargo:
+        patterns: ["*"]
+
+  # The detached packages with their own tracked lockfiles. Root CI does not build
+  # them, so an update here needs the package's own checks before merging.
+  - package-ecosystem: cargo
+    directories: ["/keleusma-lsp", "/keleusma-wasm"]
+    target-branch: v0.2.3
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      detached-cargo:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /editors/vscode
+    target-branch: v0.2.3
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      vscode:
+        patterns: ["*"]
