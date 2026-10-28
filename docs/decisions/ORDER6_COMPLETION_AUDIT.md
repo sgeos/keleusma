@@ -9,6 +9,10 @@ toolchain, on 2026-10-27. Its scope is the gate of
 [the full-language plan](./ORDER6_FULL_LANGUAGE_PLAN.md). **That gate is this line's reading
 of the roadmap gate and has not been ruled on by the operator.**
 
+**Accepted by the operator first-hand on 2026-10-28.** The operator accepted this gate and
+ruled on question 10, "Cross-check is enough", so the self-hosted type stage does not port
+label-flow or newtype checking.
+
 **Disposition, revised 2026-10-27.** Order 6 is complete for its first-pass scope on this
 line's reading of the gate, pending the operator's acceptance. Every gate condition is met.
 The information-flow labels, `classify` and `declassify`, and the newtype with its

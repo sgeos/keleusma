@@ -22,6 +22,9 @@ rejection classes are now empty.
 
 Each question is independent and none blocks the next slice.
 
+Answered 2026-10-28, see the rulings below. Questions 1, 2, 3, 5, 6, 10, 13, 14 and 15 are
+answered, and parts of 4 and 7 await an explanation this line owes.
+
 1. Order 6 gate. Do you accept the gate in the plan, byte identity over every repository
    source the reference compiles and over a construct corpus covering every reference AST
    variant, reference verdicts from the validator including a rejection corpus, the
@@ -105,6 +108,32 @@ Questions 11 and 12 are answered by the ruling below, and both raises have lande
 field table at 1,024 and the opcode capacity at 8,192. Questions 8 and 9 are next.
 
 ## Rulings received this session
+
+The operator ruled first-hand on 2026-10-28, in reply to the list of pending questions with
+their obvious choices. The operator numbered the non-blocking questions afresh, and this
+line reads the reply's items 8, 9 and 10 as questions 13, 14 and 15. Quoted where short,
+and otherwise recorded as this line reads them.
+
+- Question 1, the Order 6 gate: accepted.
+- Question 2, the Order 5 gate: accepted.
+- Question 10: "Cross-check is enough." The self-hosted type stage does not port label-flow
+  or newtype checking, and a violation is rejected by the reference cross-check.
+- Question 3: decrypt up to the declared total length.
+- Question 4: explain the trust in flat Text, which awaits a decision after the
+  explanation. No 0.2.2 patch release. Every pykeleusma finding is to be addressed in
+  priority order, with the ordering left to this line.
+- Question 5: fix both, the `RUNTIME_FAULTS.md` specification and the time bound's refusal
+  of `intern_id`.
+- Question 6: if the gap is on the Keleusma side of the boundary, this line reproduces and
+  repairs it. If it is on an external host's side, it is a contract violation, to be fixed
+  if appropriate.
+- Question 7: the representation of a local after `Reset` is an implementation detail. A
+  composite built in a loop may be yielded from it. The host string ABI and the
+  opaque-handle ABI are to be explained.
+- Question 13: reject a native index past the native table at admission.
+- Question 14: "If this can clearly be a stand alone stage, then it should be."
+- Question 15: treat `Word as Word` lowering to `FloatToInt` as a reference defect and fix
+  it.
 
 The operator ruled first-hand on 2026-10-26, in reply to the status summary that listed the
 capacity questions, "Limits may be raised." I read it as answering questions 8, 9, 11 and
