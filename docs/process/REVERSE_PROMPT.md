@@ -135,6 +135,30 @@ and otherwise recorded as this line reads them.
 - Question 15: treat `Word as Word` lowering to `FloatToInt` as a reference defect and fix
   it.
 
+Later the same day, first-hand, after the explanations this line owed.
+
+- The reading of the reply's items 8 to 10 as questions 13 to 15 is confirmed. "If my
+  answers map to your numbering, then they are indeed answering your questions, despite the
+  misnumbering."
+- Orders 1, 3 and 4: the operator accepts their first-pass gates as recorded in their
+  audits. With Order 2's acceptance of 2026-10-24 and Orders 5 and 6 above, every order of
+  the V0.2.X roadmap is accepted for its first pass.
+- Flat Text trust: "(a) The verifier proves every flat Text slot is written only from a Text
+  value, and rejects the module otherwise."
+- Confirmed first-hand from V0.3.X's relayed answers. The hot-swap schema hash is to cover
+  slot types: "(a) Yes." A definite-initialization rule is to be added to the verifier, so
+  no read can observe the empty-slot `Unit`: "(a) Add the rule." `Text<N>` is to be built
+  now: "(a) Yes, now." The `keleusma` command is to delegate native output to the detached
+  `kel-native` binary, done by this line: "(a) Delegation, done by this line." The operator
+  added, "We will probably pull everything into one line when native codegen and selfhosting
+  are in the same executable. It should be possible to compile with the reference compiler,
+  the self hosted interpreted compiler, and the self hosted native compiler."
+
+A defect report from another session, `volaw-daw-b2`, peer data and not yet reproduced
+here: a struct the host passes to the entry function is not checked against the script's
+declared layout, so a field-order mismatch silently reinterprets the bytes, measured on
+keleusma 0.2.2. It is queued for reproduction on `v0.2.3`.
+
 The operator ruled first-hand on 2026-10-26, in reply to the status summary that listed the
 capacity questions, "Limits may be raised." I read it as answering questions 8, 9, 11 and
 12, the type-extraction table, reconstruct's record input, the reconstruct head cap, the

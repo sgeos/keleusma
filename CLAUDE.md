@@ -28,9 +28,10 @@ cryptographic framing with host-native primitives, is complete for its first-pas
 2026-10-25, with evidence in
 [the framing audit](docs/decisions/ORDER5_COMPLETION_AUDIT.md). Order 6, full-language
 support, which defines the V0.3.0 milestone, is complete for its first-pass scope on
-2026-10-27, and the operator accepted its gate, and Order 5's, on 2026-10-28, with evidence in
-[the full-language audit](docs/decisions/ORDER6_COMPLETION_AUDIT.md). What each
-release shipped is in [`CHANGELOG.md`](CHANGELOG.md).
+2026-10-27, with evidence in
+[the full-language audit](docs/decisions/ORDER6_COMPLETION_AUDIT.md). The operator accepted
+the first-pass gates of all six orders, Order 2 on 2026-10-24 and the others on 2026-10-28.
+What each release shipped is in [`CHANGELOG.md`](CHANGELOG.md).
 
 **Self-hosted compiler.** Its reusable core lives in the shipping crate at `src/selfhost/`. The
 driver `src/selfhost/mod.rs` sits behind the off-by-default `self-host` feature.
