@@ -31,7 +31,7 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor 23a38251 HEAD     # the merge of PR 554 into v0.2.3
+git merge-base --is-ancestor 3214700e HEAD     # the merge of PR 589 into v0.2.3
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
 
@@ -40,45 +40,40 @@ run.
 
 ## State on 2026-10-28
 
-- **Merged into `v0.2.3`.** PRs 525 to 537 on 2026-10-25, ending with the always-running
-  `CI result` job as `1babc66c`. PR 554, the `cargo tns` alias and the executable bits
-  of shebang scripts, on 2026-10-26 as `23a38251`. V0.3.X absorbed 554 as PR 558.
-- **This increment.** It syncs Keleusma with `sgeos/project-template` at `42027c3`. It
-  adds `CODE_OF_CONDUCT.md` verbatim, which fits because both are 0BSD, and links it
-  from `README.md` and `CONTRIBUTING.md`. It adds `CODEOWNERS`, `release.yml` and the
-  issue-template `config.yml`, three checklist rows to the pull request template, and
-  the template's ignore rules for environment files, `.codex/` and editor droppings.
-  It leaves out the template's gate, hook, decision template, ruleset file and
-  Dependabot configuration, for the reasons in its pull request.
-- **The code of conduct reaches GitHub only through `main`.** GitHub reads community
-  files from the default branch, and `main` is the July release. A small pull request
-  into `main` cannot pass the required `CI result`, because `main`'s own `ci.yml` has no
-  such job, so it needs the operator's admin merge or waits for the release.
-- **`main` protection conflicts with the release process.** It requires linear history,
-  and `GIT_STRATEGY.md` brings a release into `main` by a no-fast-forward merge commit.
-  This line kept that rule when it added the required check on 2026-10-25. Removing it,
-  allowing only merge commits, and creating the `breaking` and `ignore-for-release`
-  labels were refused to this line by the session's permission classifier and are with
-  the operator.
-- **Disclosure scan.** The template's scan of tracked files against the private terms
-  list, run here for the first time, matched 1,147 lines. 15 of the 28 terms match, one
-  of them on 996 lines in 78 files. This line could not see the terms, because the
-  classifier refused it, so whether any match is a disclosure or a common word is with
-  the operator.
-- **`feat/native-stream-refusals`.** The operator ruled on 2026-10-28, relayed by V0.3.X,
-  that its records be restored and the branch deleted. Kaizen released its hold, and
-  V0.3.X deletes it after its restoring pull request merges.
-- **Pydromon.** Its project file is `.dromon/dromon.toml` in the primary checkout. On the
-  operator's ruling of 2026-10-27, lines in pydromon message each other with its
-  `send_message`, which wakes them. Two reviews went to pydromon through the operator.
-  The second found that every line can still write every worktree and that the cache
-  directory would dirty every worktree. Keleusma's process documents still name the
-  interline mailbox and must change before the changeover, which the operator times.
-- **Jev selection cohort.** Live evaluation is on, by operator authorization. The three
-  cases were evaluated and labelled blind. The comparison opens when each task is
-  finished.
-- **Dependabot.** Five alerts against `brace-expansion` 2.1.2 stay open until the release,
-  because Dependabot scans `main`.
+- **Merged.** PRs 525 to 537 on 2026-10-25, ending with the `CI result` job as
+  `1babc66c`. PR 554, the `cargo tns` alias, on 2026-10-26 as `23a38251`. PR 589, the
+  sync with `sgeos/project-template` including `CODE_OF_CONDUCT.md`, into `v0.2.3` as
+  `3214700e`. PR 590, the code of conduct, `dependabot.yml` and a `CI result` job, into
+  `main` as `71d5a4e1` on the operator's decision, after `main`'s release gate passed on
+  its tree with 5,209 tests passed and none failed. The community profile reads 100.
+- **This increment.** It merges `main` forward, which brings `dependabot.yml` to
+  `v0.2.3`. It resolves the disclosures the operator asked to be resolved on 2026-10-28.
+  One comment in `src/wire_schema.rs`, added on 2026-08-19, stated private context and
+  now states the engineering property alone. The Jev pilot checkpoint named the
+  operator's home directory on 86 lines, now written as `~`, with each request digest
+  recomputed. The redacted checkpoint restores all 250 samples into a fresh store and
+  re-exports byte for byte. Both texts remain in public history, because the operator
+  keeps history. The other scan matches are generic words or public properties.
+- **Repository settings, 2026-10-28, on the operator's instruction.** `main` no longer
+  requires linear history, which refused the release merge, and still requires
+  `CI result` and refuses force pushes and deletion. Only merge commits are allowed. A
+  ruleset refuses force pushes and deletion on every `v*` branch, with no bypass,
+  because the lines push with the operator's token. The `breaking` and
+  `ignore-for-release` labels exist.
+- **Template audit.** Sent to the admin session on the operator's instruction. It
+  reported every item resolved in `sgeos/project-template` v1.0.6 at `5838ce3`, and the
+  linear-history point pending in its pull request 14, to be v1.0.7.
+- **Pydromon.** The operator ruled on 2026-10-28 that the changeover waits. The team and
+  configuration proposal is
+  [`2026-10-28-pydromon-team-setup.md`](../kaizen/2026-10-28-pydromon-team-setup.md).
+  Its project file was validated against the real worktrees in a scratch project.
+- **`feat/native-stream-refusals`.** Kaizen released its hold. V0.3.X deletes the branch
+  after its restoring pull request merges, by the operator's ruling relayed on
+  2026-10-28.
+- **Jev selection cohort.** Live evaluation is on. The three cases were evaluated and
+  labelled blind. The comparison opens when each task is finished.
+- **Dependabot.** Five alerts against `brace-expansion` 2.1.2 stay open until the
+  release, because Dependabot scans `main`.
 
 ## Operator positions, stated first-hand in this line's session on 2026-10-25
 
@@ -99,7 +94,7 @@ authority, so the startup-file positions reach them first-hand.
    comparing error rates and cache writes after long gaps with the idle compactions
    already measured.
 2. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
-   times the changeover.
+   times the changeover, as step 3 of the team proposal lists.
 3. Run the self-host documentation tests in their own job, in parallel with the archive
    build, to shorten shard 1.
 4. Finish the three selection tasks, record their outcomes, and read the comparison.
@@ -107,9 +102,11 @@ authority, so the startup-file positions reach them first-hand.
 
 ## Open with the operator
 
-- The disclosure-scan matches, the `main` protection conflict, the merge-method and
-  label settings, and whether the code of conduct goes to `main` before the release.
-- Whether to add `.github/dependabot.yml`, whose pull requests would target `main`.
+- Pruning the generic terms from the disclosure list before the pydromon changeover,
+  by term number as given in session on 2026-10-28.
+- Switching `origin` to HTTPS with the `gh` credential helper, which the lines need in
+  pydromon.
+- Whether to re-run the template's hygiene checks against Keleusma at v1.0.6 or v1.0.7.
 
 ## Concerns
 
@@ -131,7 +128,7 @@ Pilot judgments never change gates.
 |---|---|
 | [Interline](../interline/checkpoint.json) | `bae190eb7e927f5aaeb0ea185d539fe29c9729970c3aa128a857b515b5b41386`, 124 messages, 1 unacknowledged at export |
 | [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `6fb4783b8f0bf96d003311f0a84581f38bb9ff0cbfe232f0f85e014064d6cea6`, 3 samples evaluated and labelled, restored cleanly into a fresh store |
-| [Jev pilot](../jev-shadow/checkpoint.json) | `16d65875954a7f7f33416135dd8f475dcb7a982c020adafbbd337aff12ae4bf6`, 250 samples and 66 tasks |
+| [Jev pilot](../jev-shadow/checkpoint.json) | `417a126a7647b7099dcf1b8b4f4c67c64a5f9a06180cac492daefbbd427ca2fd`, 250 samples and 66 tasks, home directory written as `~` on 2026-10-28 with request digests recomputed, restored cleanly into a fresh store |
 
 ## Environment
 
