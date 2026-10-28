@@ -339,3 +339,25 @@ jobs:
         run: |
           python3 scripts/gen-book-instruction-set.py
           git diff --exit-code book/src/INSTRUCTION_SET.md
+
+  # The one check `main`'s branch protection requires, added on 2026-10-28 so that a
+  # pull request into `main` can satisfy it before the next release brings the
+  # version branch's workflow, which has the same job. It always runs and fails when
+  # any job it needs failed or was cancelled. GitHub counts a skipped job as passing,
+  # so no single job above is safe to require.
+  ci-result:
+    name: CI result
+    if: always()
+    needs: [check, test, test-no-default-features, test-signatures, test-broad-features, test-bench, examples-sdl3, doc, clippy, fmt, msrv-arena, msrv-keleusma, no-std, rtos-n6-build, lsp, selfhost-compiler, vscode-extension, wasm, miri, docs-links]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail when any needed job failed or was cancelled
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "needed job results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              failure|cancelled) exit 1 ;;
+            esac
+          done
