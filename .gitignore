@@ -64,3 +64,19 @@ secret/
 
 # Python bytecode from the scripts/ tooling
 __pycache__/
+
+# Environment files, which usually hold credentials. Commit an example with
+# placeholder values instead. From sgeos/project-template.
+.env
+.env.*
+!.env.example
+
+# Codex's directory holds host-specific settings and is ignored whole.
+.codex/
+
+# Operating system and editor droppings.
+.DS_Store
+Thumbs.db
+*.swp
+*~
+nvim.log
