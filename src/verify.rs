@@ -3438,6 +3438,25 @@ fn verify_chunk(
                     }
                     record(ip, P1, "call-target-and-arity-in-range");
                 }
+                // A native call must name an entry of the module's native table. An index past
+                // it used to be admitted and failed only when the call ran, which the operator
+                // ruled on 2026-10-28 should be a rejection at admission instead.
+                Op::CallVerifiedNative(native, _) | Op::CallExternalNative(native, _) => {
+                    let nnatives = module.native_names.len();
+                    if *native as usize >= nnatives {
+                        return Err(VerifyError {
+                            chunk_name: name.clone(),
+                            message: alloc::format!(
+                                "{:?} at {} names native {} but the module declares {} native(s)",
+                                op,
+                                ip,
+                                native,
+                                nnatives
+                            ),
+                        });
+                    }
+                    record(ip, P1, "native-index-in-range");
+                }
                 // A Q-format fraction-bit count must be less than the
                 // declared word width: the fraction cannot meet or exceed
                 // the word, and a count at or beyond the wide width would
