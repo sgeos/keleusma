@@ -18,21 +18,16 @@ below. V0.4.0 is not released, since publication is held.
   Native code has a command of its own.
 - **Not met.** A `Text` from a call, a parameter, a native or a field cannot be
   compared, a `Text` cannot be stored in a composite, and opaque handles are
-  refused. Both need a host ABI decision. The Linux targets are built and not
-  executed. The full-language corpus that only a complete self-hosted compiler
-  produces is the V0.2.X line's Order 6, in progress.
-- **V0.2.X's Order 6, 2026-10-27.** Its
-  [audit](./ORDER6_COMPLETION_AUDIT.md) first recorded it as not complete,
-  and its revision of the same day records it as complete for its first-pass
-  scope on V0.2.X's reading, pending the operator's acceptance. Whether this
-  line's dependency is met by that acceptance, or was met already through the
-  reference bytecode, is question 18 in
-  [the operator question list](../process/handoffs/v0.3.0-QUESTIONS.md). Until
-  it is answered, this record treats the dependency as unmet.
-- **The three open decisions, 2026-10-27.** Questions 12, 13 and 14 have
-  options and recommendations in
-  [`ORDER_6_DECISION_OPTIONS.md`](./ORDER_6_DECISION_OPTIONS.md). Nothing in
-  it is decided.
+  refused. Both now have rulings and are being built. The Linux targets are built and not
+  executed. The native self-hosted compiler of question 19 does not exist
+  yet.
+- **The operator's rulings, 2026-10-28.** Every open question was answered.
+  The V0.2.X dependency is met, because native code consumes the reference
+  compiler's bytecode, which is question 18. The `Text`, opaque and Linux
+  items now have rulings and are being built. A new V0.4.0 requirement was
+  added, a self-hosted compiler compiled to native code and used as the
+  compiler, which is question 19. Each item and its status is in
+  [`ORDER_6_RULINGS_PLAN.md`](./ORDER_6_RULINGS_PLAN.md).
 
 ## Requirements
 
