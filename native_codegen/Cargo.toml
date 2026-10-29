@@ -56,8 +56,17 @@ license = "0BSD"
 # **The timing effect is NOT claimed**: the first build after a profile change is cold and
 # therefore slower, and a fair comparison needs a warm run against the recorded phase
 # times. Gate time is this line's bottleneck, which is the motive, not the evidence.
+#
+# `opt-level = 1` follows the root as well, by the operator's ruling of 2026-10-28,
+# question 4 of `docs/process/handoffs/v0.3.0-QUESTIONS.md`. The root measured its gain
+# on virtual machine stage runs, which the differential tests here also perform. Only
+# `opt-level` changes, so debug assertions and overflow checks stay on. The emitted
+# LLVM IR is not expected to depend on this profile, and the full native suites
+# passed after the change with no pinned figure moved. The test hosts are built by
+# invoking `rustc` directly with fixed flags, so this profile does not reach them.
 [profile.dev]
 debug = "line-tables-only"
+opt-level = 1
 
 [dependencies]
 # **`floats` IS LISTED BECAUSE THIS PACKAGE USES IT, NOT BECAUSE IT NEEDS TURNING ON.**

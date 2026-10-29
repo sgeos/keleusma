@@ -16,12 +16,12 @@ land one pull request at a time.
 | 1 | Best effort, in bytecode cost units | Keep the current claim. No change | This line | Done, no work |
 | 2 | Defer the bytecode half of the flat machine | None | None | Deferred |
 | 3 | Report the root `scripts/` pipe pattern | Sent 2026-10-28, sequence 122. V0.2.X accepted it as a defect report | V0.2.X | Reported, repair is V0.2.X's |
-| 4 | Apply `opt-level = 1` | Set it in `native_codegen` | This line | Open |
+| 4 | Apply `opt-level = 1` | Set in `native_codegen/Cargo.toml` with its rationale. No pinned figure moved | This line | Done, in its pull request |
 | 5 | Wait for the verifier fix | V0.2.X gave notice on 2026-10-28, sequence 126, that its pull request 598 adds a callee-aware time bound that admits `intern_id`. Once it is absorbed, `native_codegen/src/cost.rs` may call that form | V0.2.X, then this line | Waiting on V0.2.X's merge |
 | 6 | Add `interp.kel` and `frame.kel` to the native corpus | Add the roots and re-pin the censuses they enter | This line | Open |
 | 7 | Revise `RUNTIME_FAULTS.md` to the 2026-10-20 ruling | Relayed. V0.2.X reports the rewrite in its pull request 598 | V0.2.X | In review there |
 | 8 | Compare slot types on hot swap | V0.2.X confirmed with the operator and will change `compute_schema_hash`, then this line adopts it natively | V0.2.X, then this line | Waiting on V0.2.X |
-| 9 | Remove run-time kind tags | V0.2.X confirmed with the operator and will send the rule's form before it lands, then this line removes the tags | V0.2.X, then this line | Waiting on V0.2.X |
+| 9 | Remove run-time kind tags | V0.2.X sent the rule's form on 2026-10-28, sequence 127, and this line replied. A measurement below shows the rule alone removes little | V0.2.X, then this line | Waiting on V0.2.X |
 | 10 | Restore two Kaizen records, then delete the branch | Restore them, then coordinate the deletion | This line and Kaizen | Open |
 | 11 | Narrow `native.yml` paths | Audit which documents native tests read | This line | Open |
 | 12 | A hosted Linux job on two Ubuntu runners | Add the job and the host-triple route in `tier_one_targets.rs` | This line | Open |
@@ -48,6 +48,29 @@ land one pull request at a time.
   embedding, whose host struct layouts come from headers generated from the
   script's own declaration, is affected is open and will be checked when the
   repair lands.
+
+## Question 9, what the empty-slot marker accounts for
+
+Measured on 2026-10-28 with `static_kind_lowering.rs` at `97f34b1e` and an
+uncommitted probe, since reverted, that started the coroutine type analysis
+with every local and every private `Unit` slot at the empty kind instead of
+`Unit`. That is what a definite-initialization rule would license.
+
+| Start | Needing a run-time kind | Static, dynamic and refused coroutines | Ambiguous unread locals |
+|---|---|---|---|
+| `Unit`, the current analysis | 5995 of 182565 | 18, 11 and 1 | 40962 |
+| Locals empty | 5995 | 18, 11 and 1 | 5811 |
+| Private `Unit` slots empty | 5994 | 19, 10 and 1 | 40962 |
+| Both empty | 5994 | 19, 10 and 1 | 5811 |
+
+The private rule makes one coroutine static, the one that needed a kind
+guard. The ten that stay dynamic are `piano_roll_0.kel` to `piano_roll_9.kel`,
+each first at instruction 7 of `main`, which compares the result of a verified
+native call. Their ambiguity is the native's return kind, which the analysis
+does not know. Removing the tags therefore also needs native return kinds,
+either from the bytecode or from a host contract. This was reported to V0.2.X
+in the reply to sequence 127. The probe models only the analysis. It does not
+show that every corpus program passes the rule.
 
 ## This line's readings, stated as its own
 
