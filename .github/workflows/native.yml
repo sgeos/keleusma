@@ -126,3 +126,52 @@ jobs:
       - name: Gate record written by this run
         if: always()
         run: cat GATE_RECORD.md
+
+  # The operator ruled on question 12, 2026-10-28, that the two Linux targets
+  # execute on hosted Ubuntu runners, limited to the two tests that build, link
+  # and run a library. On its own triple `tier_one_targets.rs` links with the
+  # system `cc` and fails if that triple did not execute.
+  linux:
+    name: Native Linux targets (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86-64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    defaults:
+      run:
+        working-directory: native_codegen
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+      KEL_REQUIRE_LLVM_TOOLS: '1'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install and verify LLVM 22
+        run: |
+          curl -fsSL https://apt.llvm.org/llvm.sh -o "$RUNNER_TEMP/llvm.sh"
+          sudo bash "$RUNNER_TEMP/llvm.sh" 22
+          sudo apt-get install -y llvm-22-dev libpolly-22-dev libzstd-dev zlib1g-dev
+          native_llvm_prefix=/usr/lib/llvm-22
+          case "$("$native_llvm_prefix/bin/llvm-config" --version)" in
+            22.1.*) ;;
+            *) echo 'Expected LLVM 22.1' >&2; exit 1 ;;
+          esac
+          "$native_llvm_prefix/bin/llc" --version
+          "$native_llvm_prefix/bin/llvm-readobj" --version
+          cc --version
+          {
+            echo "LLVM_SYS_221_PREFIX=$native_llvm_prefix"
+            echo "KEL_LLVM_BIN=$native_llvm_prefix/bin"
+            echo "RUSTFLAGS=-L native=$native_llvm_prefix/lib"
+          } >> "$GITHUB_ENV"
+      - name: Build, link and run on this triple
+        run: cargo test --locked --test tier_one_targets --test kel_native_cli -- --nocapture

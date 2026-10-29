@@ -55,12 +55,15 @@ const SKIPPABLE: &[&str] = &[
     "the_measured_machine_stack_stays_within_the_exported_bound",
     // Operator question 15, 2026-10-28. Skips loudly off an `arm64` Mac and
     // where Rosetta does not run, which this repository cannot provide. A
-    // missing `x86_64-apple-darwin` Rust standard library fails instead where the tools are
-    // required, and the native gate installs that target.
+    // missing `x86_64-apple-darwin` Rust standard library fails instead where
+    // the tools are required, and the native gate installs that target.
     "the_rust_host_runs_on_x86_64_and_stays_within_its_stack_bound",
     // Order 6: skip, loudly, where `cc` or `nm` is absent.
-    "the_lexer_builds_for_every_tier_one_target_and_runs_on_both_macos_architectures",
-    "a_fallible_native_returns_correctly_on_each_executable_macos_architecture",
+    // Renamed for operator question 12, when a Linux host began running its own
+    // triple, from `..._runs_on_both_macos_architectures` and
+    // `..._on_each_executable_macos_architecture`.
+    "the_lexer_builds_for_every_tier_one_target_and_runs_where_it_can",
+    "a_fallible_native_returns_correctly_on_each_executable_target",
     "two_libraries_link_into_one_rust_host_only_after_export",
     "a_linked_native_object_agrees_with_the_vm",
     "a_linked_object_with_natives_and_a_data_segment_agrees_with_the_vm",
