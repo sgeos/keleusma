@@ -12,21 +12,25 @@
 //!
 //! # What this does not establish
 //!
-//! The driver itself is not run natively, since it calls `Vm` directly. Stages
-//! that call host natives are refused by the executor, which leaves
-//! `frame.kel` for the rest of step 2. Only the lexer and the parser are driven
-//! here. The other stages are built, which shows they lower and compile, and
-//! are driven by `stage_differential.rs` through its own harness.
+//! The driver itself is not run natively, since it calls `Vm` directly. A host
+//! native is bound as a C function, and a stage-shaped program calling one is
+//! driven against the virtual machine's closure. The ten natives of
+//! `frame.kel` are private closures in root `src/crypto_frame/mod.rs`, so that
+//! stage is built only to show it is refused unbound. Only the lexer and the
+//! parser are driven as real stages. The other stages are built, which shows
+//! they lower and compile, and are driven by `stage_differential.rs` through
+//! its own harness.
 //!
 //! Neither the lexer nor the parser reads its reply, which is a tick, so a
-//! reply delivered wrongly passes here, and that was checked by mutation. What
-//! this file does check is the turn rule, one native call per turn against a
-//! virtual machine resumed again after a `Reset`. Two native calls per turn
-//! fail it, also checked by mutation.
+//! reply delivered wrongly passes their test, and that was checked by
+//! mutation. The native-binding test reads its reply and fails on the same
+//! mutation. The lexer and parser test checks the turn rule, one native call
+//! per turn against a virtual machine resumed again after a `Reset`, and two
+//! native calls per turn fail it, also checked by mutation.
 use keleusma::bytecode::{Module, SlotVisibility, Value};
 use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
-use keleusma_native::stage::NativeStage;
+use keleusma_native::stage::{HostNative, NativeStage};
 
 /// Real source spanning several token classes, as in `stage_differential.rs`.
 const SOURCE: &str = "\
@@ -261,12 +265,12 @@ fn the_lexer_and_parser_agree_through_the_native_executor() {
     );
 }
 
-/// Each stage source builds as a native stage, except `frame.kel`'s kind, a
-/// stage that calls host natives, which is refused by name. The build time is
+/// Each stage source builds as a native stage, and `frame.kel`, whose host
+/// natives are not bound here, is refused by name. The build time is
 /// reported, since the plan defers an ahead-of-time archive until the
 /// in-process cost is measured.
 #[test]
-fn every_stage_builds_and_a_stage_with_host_natives_is_refused() {
+fn every_stage_builds_and_an_unbound_host_native_is_refused() {
     let dir = std::path::Path::new("../src/selfhost/kel");
     let mut paths: Vec<_> = std::fs::read_dir(dir)
         .expect("stage directory")
@@ -291,5 +295,90 @@ fn every_stage_builds_and_a_stage_with_host_natives_is_refused() {
     let refusal = NativeStage::new(&frame)
         .err()
         .expect("frame.kel is refused");
-    assert!(refusal.to_string().contains("host native"), "{refusal}");
+    assert!(refusal.to_string().contains("is not bound"), "{refusal}");
+}
+
+/// A stage-shaped program that calls one two-argument host native and keeps
+/// a running total in its shared segment, so a native result that is lost,
+/// misrouted or bound to the wrong function changes both the yields and the
+/// segment.
+const WITH_A_NATIVE: &str = "use host::scale(Word, Word) -> Word
+shared data io { total: Word }
+loop main(a: Word) -> Word {
+    let r = host::scale(a, 3);
+    io.total = io.total + r;
+    yield io.total
+}";
+
+/// The native both sides bind, chosen to be neither the identity nor
+/// symmetric in its arguments.
+fn scale(a: i64, b: i64) -> i64 {
+    a.wrapping_mul(b).wrapping_add(7)
+}
+
+unsafe extern "C" fn scale_stub(a: i64, b: i64) -> i64 {
+    scale(a, b)
+}
+
+unsafe extern "C" fn one_word_stub(a: i64) -> i64 {
+    a
+}
+
+#[test]
+fn a_bound_host_native_agrees_with_the_vm_closure() {
+    let m = keleusma_native_test_module(WITH_A_NATIVE);
+    let arena = arena_for(&m);
+    let mut vm = VmStage::new(&m, &arena);
+    vm.vm
+        .register_native_closure("host::scale", |args: &[Value]| {
+            let (Value::Int(a), Value::Int(b)) = (&args[0], &args[1]) else {
+                panic!("scale takes two words");
+            };
+            Ok(Value::Int(scale(*a, *b)))
+        });
+    let mut native =
+        NativeStage::with_natives(&m, &[("host::scale", HostNative::Arity2(scale_stub))])
+            .expect("a stage with one bound native");
+    let replies: Vec<i64> = (0..40).map(|i| (i * 13) % 17 - 5).collect();
+    let on_vm: Vec<i64> = replies.iter().map(|r| vm.turn(*r)).collect();
+    let on_native: Vec<i64> = replies
+        .iter()
+        .map(|r| Executor::turn(&mut native, *r))
+        .collect();
+    let mut distinct = on_vm.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert!(distinct.len() > 20, "the total barely moved: {distinct:?}");
+    assert_eq!(on_vm, on_native, "yields");
+    assert!(vm.shared == Executor::shared(&native), "shared segments");
+}
+
+#[test]
+fn a_host_native_binding_must_match_what_the_stage_calls() {
+    let m = keleusma_native_test_module(WITH_A_NATIVE);
+    let refusal = |natives: &[(&str, HostNative)]| {
+        NativeStage::with_natives(&m, natives)
+            .err()
+            .expect("refused")
+            .to_string()
+    };
+    let unbound = refusal(&[]);
+    assert!(unbound.contains("is not bound"), "{unbound}");
+    let arity = refusal(&[("host::scale", HostNative::Arity1(one_word_stub))]);
+    assert!(
+        arity.contains("called with 2 arguments and bound with 1"),
+        "{arity}"
+    );
+    let extra = refusal(&[
+        ("host::scale", HostNative::Arity2(scale_stub)),
+        ("host::scael", HostNative::Arity2(scale_stub)),
+    ]);
+    assert!(
+        extra.contains("`host::scael`, which the stage does not call"),
+        "{extra}"
+    );
+}
+
+fn keleusma_native_test_module(src: &str) -> Module {
+    compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile")
 }

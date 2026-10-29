@@ -130,6 +130,12 @@ first line of evidence, and this check is the end-to-end one.
   for `verify_datalayout.kel` to 1764 ms for `parse.kel`, about 5.1 s for all
   fourteen on this machine. Binding the host natives of `frame.kel` remains,
   and wiring into the driver waits on step 1.
+- **2026-10-29, host natives bound.** `NativeStage::with_natives` binds C
+  functions by arity and refuses a mismatch when the stage is built. A program
+  calling one two-argument native agrees with the virtual machine's closure.
+  The natives of `frame.kel` are private closures over the driver's signing
+  state, so that binding waits on V0.2.X exposing them, requested in sequence
+  137 together with step 1.
 
 ## Risks and open points
 
