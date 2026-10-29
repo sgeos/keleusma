@@ -20,7 +20,7 @@ below. V0.4.0 is not released, since publication is held.
   compared, and a `Text` cannot be stored in a composite. Opaque handles lower
   as typed host pointers under question 14 on four routes, and a struct field
   or shared slot holding one is still refused. Both now have rulings and are being built. The Linux targets are built, and a
-  hosted job added under question 12 executes each on its own runner, pending its first run. The native self-hosted compiler of question 19 does not exist
+  hosted job added under question 12 executed each on its own runner in run 40823596424, which PR 607 merged. The native self-hosted compiler of question 19 does not exist
   yet.
 - **The operator's rulings, 2026-10-28.** Every open question was answered.
   The V0.2.X dependency is met, because native code consumes the reference
@@ -38,7 +38,7 @@ below. V0.4.0 is not released, since publication is held.
 | A2 | Every construct of the grammar lowers or is accounted for | [`language_construct_census.rs`](../../native_codegen/tests/language_construct_census.rs) walks `GRAMMAR.md`. 32 constructs agree with the VM on several inputs, optimised and not, and 6 are covered by named files. None is refused and none is rejected | Met |
 | A3 | `Text` is carried as the VM carries it | [`text_comparison.rs`](../../native_codegen/tests/text_comparison.rs). String literals compare by content and agree with the VM, including a match on literals. A comparison of any other `Text` is refused by a provenance analysis in `text.rs` | Met for literals. Other `Text` waits on a host string ABI |
 | A4 | Each refusal the census finds is closed or dispositioned | The census found one refusal, an enum whose variants carry payloads of different sizes, now lowered with its slack zeroed. It found one miscompile, `Text` comparison, now repaired | Met |
-| W1 | Tier 1 targets build and those this machine runs are executed | [`tier_one_targets.rs`](../../native_codegen/tests/tier_one_targets.rs) builds the lexer library for all four Tier 1 triples, with exactly the exported symbols and no imports. Both macOS architectures run it against the VM, `x86_64` under Rosetta, and run a fallible native through the System V two-register return | Met for macOS. Linux executes in the hosted job of question 12, pending its first run |
+| W1 | Tier 1 targets build and those this machine runs are executed | [`tier_one_targets.rs`](../../native_codegen/tests/tier_one_targets.rs) builds the lexer library for all four Tier 1 triples, with exactly the exported symbols and no imports. Both macOS architectures run it against the VM, `x86_64` under Rosetta, and run a fallible native through the System V two-register return | Met. Linux executed on both hosted Ubuntu runners in run 40823596424 under question 12 |
 | W2 | Native is a deployment shape of its own | `kel-native` builds a library with its header, bindings, archive and shared object, and inspects a contract. [`kel_native_cli.rs`](../../native_codegen/tests/kel_native_cli.rs) links what it builds and agrees with the VM, and reaches every documented exit status | Met |
 | I1 | Constraints native lowering surfaced are recorded and sent | [`WORKSTREAM_I_NATIVE_CONSTRAINTS.md`](./WORKSTREAM_I_NATIVE_CONSTRAINTS.md) lists nine, each with its evidence and owner, and they were sent to the V0.2.X line | Met |
 
