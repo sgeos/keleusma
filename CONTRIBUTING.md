@@ -127,7 +127,7 @@ Soundness is the load-bearing property of the language. Any change to `verify::w
 
 ## Code of conduct
 
-Interactions on issues, pull requests, and other project communication channels are expected to be civil and focused on the technical substance. There is no formal code-of-conduct document at V0.2.0; the project will adopt one if and when external contributor activity grows to a point where a written policy is useful.
+Participation in the project's spaces is governed by [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md). It applies to automated contributors, such as agent lines, as it does to people.
 
 ## License
 

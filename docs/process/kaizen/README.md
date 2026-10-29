@@ -7,6 +7,7 @@ rests on. The line's mailbox and resume prompt is [`../handoffs/kaizen.md`](../h
 
 | report | state |
 |---|---|
+| [`2026-10-28-pydromon-team-setup.md`](./2026-10-28-pydromon-team-setup.md) | proposal for running every Keleusma line in pydromon, six lines with a fresh-context reviewer and a blind Jev labeller, one full-gate lease, a validated project file and team rules, two phases, nothing installed, changeover timed by the operator |
 | [`2026-10-24-context-engineering-spike.md`](./2026-10-24-context-engineering-spike.md) | follow-up to the token spike at the operator's response, state of the art and harness waiting surveyed, mid-task compaction measured as a likely cost to correctness, every Opus 5.5 compaction found to be idle, the lower auto-compact window withdrawn, gate summary and Python CI job built, reminder changes not activated |
 | [`2026-10-25-ci-load-proposal.md`](./2026-10-25-ci-load-proposal.md) | reply to the admin session's CI load review, compilation found to dominate runner time, documentation found to be read by at least 17 test binaries, a light path for pull requests, a book filter, tree-identity deduplication, a build-once shard layout and job consolidation proposed and applied in pull request 533, its first run measured at 173 runner-minutes against about 200 |
 | [`2026-10-24-token-economy-spike.md`](./2026-10-24-token-economy-spike.md) | token use measured from local transcripts and git history, state of the art surveyed, seven measured proposals, none adopted, evidence under `evidence/token-economy/` |
