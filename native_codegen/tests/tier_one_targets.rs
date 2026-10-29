@@ -9,7 +9,7 @@
 //! contract and import nothing. On both macOS architectures the archive is then
 //! linked into a C host and run, `x86_64-apple-darwin` under Rosetta when the
 //! machine is Apple silicon, and every yield must equal the virtual machine's.
-//! The `x86_64` run also calls a fallible native, so the System V return of a
+//! The x86-64 run also calls a fallible native, so the System V return of a
 //! two-word structure is executed and not only argued.
 //!
 //! # What this does not establish

@@ -82,14 +82,21 @@ const REPO_ROOTS: [&str; 11] = [
 /// Paths the census sees but which are deliberately outside reach, each with a reason.
 /// A bare list would rot; a reason makes an entry arguable.
 ///
-/// **Empty, and that is a result rather than an oversight.** The one candidate,
+/// `../docs/decisions` is listed by `prediction_stamp.rs`, which reads only the newest
+/// absorption receipt from it. The reach set names those receipts by a pattern since
+/// 2026-10-28, question 11, so the directory itself is excused.
+///
+/// **It was empty before that, and that was a result rather than an oversight.** The one candidate,
 /// `../.frozen_run_guard_probe` -- a scratch path `frozen-run.sh` creates and removes
 /// to prove its own tree check fires -- needs no excuse, because classification already
 /// rejects a single-component path. It WAS excused here first, and
 /// [`no_excuse_outlives_its_subject`] then failed on it: the excuse had outlived its
 /// subject within one increment of being written, which is the sixth time this line has
 /// caught a record describing nothing.
-const EXCUSED: [(&str, &str); 0] = [];
+const EXCUSED: [(&str, &str); 1] = [(
+    "../docs/decisions",
+    "listed only to select ABSORPTION_*_BRIEF.md, which the reach set names",
+)];
 
 /// Minimum external paths the scan must find. A scan that matched nothing would pass
 /// every check below, which is the failure shape this package refuses.
@@ -152,11 +159,20 @@ fn classify(lit: &str) -> Option<String> {
 }
 
 /// Is `path` inside some reach entry? `.` covers the package and never an external path.
+/// An entry with one `*` in its last component is a pattern, as git reads it.
 fn covered(path: &str, reach: &[String]) -> bool {
     reach
         .iter()
         .filter(|r| *r != ".")
-        .any(|r| path == r.as_str() || path.starts_with(&format!("{r}/")))
+        .any(|r| match r.split_once('*') {
+            Some((prefix, suffix)) => {
+                path.starts_with(prefix)
+                    && path.ends_with(suffix)
+                    && path.len() >= prefix.len() + suffix.len()
+                    && !path[prefix.len()..path.len() - suffix.len()].contains('/')
+            }
+            None => path == r.as_str() || path.starts_with(&format!("{r}/")),
+        })
 }
 
 /// Double-quoted literals on one line. Crude by design: see the module note.
@@ -233,8 +249,21 @@ fn the_census_is_not_vacuous() {
 fn every_reach_entry_exists_on_disk() {
     for r in reach_set() {
         let p = manifest().join(&r);
+        // A pattern exists when it matches at least one file in its directory.
+        let exists = match Path::new(&r).parent().filter(|_| r.contains('*')) {
+            Some(dir) => std::fs::read_dir(manifest().join(dir))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .any(|e| {
+                    let name = e.file_name();
+                    let path = format!("{}/{}", dir.display(), name.to_string_lossy());
+                    covered(&path, std::slice::from_ref(&r))
+                }),
+            None => p.exists(),
+        };
         assert!(
-            p.exists(),
+            exists,
             "reach entry `{r}` does not exist. A misspelled entry silently covers \
              nothing, so the reporter would under-report exactly where it claims to \
              watch."
@@ -278,6 +307,23 @@ fn no_excuse_outlives_its_subject() {
 // ---------------------------------------------------------------------------
 // The checker's reach, on input built to defeat it.
 // ---------------------------------------------------------------------------
+
+/// MUST-FIRE: a pattern entry covers the files it names and nothing beside them.
+#[test]
+fn a_pattern_entry_covers_only_what_it_names() {
+    let reach = vec!["../docs/decisions/ABSORPTION_*_BRIEF.md".to_string()];
+    assert!(covered("../docs/decisions/ABSORPTION_114_BRIEF.md", &reach));
+    assert!(!covered(
+        "../docs/decisions/ORDER_6_RULINGS_PLAN.md",
+        &reach
+    ));
+    assert!(!covered("../docs/decisions/ABSORPTION_114_PLAN.md", &reach));
+    assert!(!covered(
+        "../docs/decisions/old/ABSORPTION_1_BRIEF.md",
+        &reach
+    ));
+    assert!(!covered("../docs/decisions", &reach));
+}
 
 #[test]
 fn guard_rejects_an_uncovered_path() {

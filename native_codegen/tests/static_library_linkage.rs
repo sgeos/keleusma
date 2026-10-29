@@ -360,17 +360,17 @@ fn the_measured_machine_stack_stays_within_the_exported_bound() {
     );
 }
 
-/// **Operator question 15: the Rust host on `x86_64`, under Rosetta.**
+/// **Operator question 15: the Rust host on x86-64, under Rosetta.**
 ///
 /// The two tests above run the Rust host on the build machine's own
 /// architecture. This one builds the lexer library and the Rust host for
 /// `x86_64-apple-darwin` and runs them under Rosetta on an `arm64` Mac, so the
-/// host's `x86_64` stack probe and the `x86_64` stack bound are exercised. The
+/// host's x86-64 stack probe and the x86-64 stack bound are exercised. The
 /// yields and shared bytes must agree with the virtual machine, and the
 /// measured stack must be real and within the exported bound.
 ///
 /// It applies only on an `arm64` Mac. It skips loudly where Rosetta does not
-/// run, since that is outside this repository. A missing `x86_64` Rust
+/// run, since that is outside this repository. A missing `x86_64-apple-darwin` Rust
 /// standard library skips loudly too, and fails where the tools are required,
 /// because continuous integration installs that target.
 #[test]

@@ -81,6 +81,11 @@ record="GATE_RECORD.md"
 # commits can change a stage source, a corpus script or a decision document, and the
 # record should then report itself unverified, because it is.
 #
+# The decisions entry narrowed on 2026-10-28, by the operator's ruling on question 11,
+# from the whole directory to the absorption receipts. `prediction_stamp.rs` is the only
+# test that reads the directory, and it reads only the newest receipt. The entry is
+# quoted so that the shell passes it to git as a pathspec rather than expanding it.
+#
 # `.github/workflows/native.yml` joined on 2026-10-22, when `tests/native_workflow.rs`
 # began reading it to check that its path filter covers this very set. Keep comments
 # out of the array: that test splits it on whitespace.
@@ -88,7 +93,7 @@ REACH=(
     .
     ../docs/process/handoffs/v0.3.0.md
     ../docs/process/REVERSE_PROMPT.md
-    ../docs/decisions
+    "../docs/decisions/ABSORPTION_*_BRIEF.md"
     ../src
     ../examples
     ../compiler/kel
