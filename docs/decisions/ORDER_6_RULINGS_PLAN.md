@@ -21,7 +21,7 @@ land one pull request at a time.
 | 6 | Add `interp.kel` and `frame.kel` to the native corpus | `src/hosted` and `src/crypto_frame` are corpus roots in every full root list, and the seven pins that moved were re-derived. `frame.kel` executes in the corpus differential and agrees. `interp.kel` is exempt there, because the virtual machine refuses it with empty `io` tables. A seeded `interp.kel` differential follows as its own pull request | This line | Roots done, pull request 602 at `4a41f53a`. The seeded differential waits on a public seeding function requested from V0.2.X |
 | 7 | Revise `RUNTIME_FAULTS.md` to the 2026-10-20 ruling | Relayed. V0.2.X reports the rewrite in its pull request 598 | V0.2.X | In review there |
 | 8 | Compare slot types on hot swap | V0.2.X confirmed with the operator and will change `compute_schema_hash`, then this line adopts it natively | V0.2.X, then this line | Waiting on V0.2.X |
-| 9 | Remove run-time kind tags | V0.2.X sent the rule's form on 2026-10-28, sequence 127, and this line replied. A measurement below shows the rule alone removes little. V0.2.X holds the rule, sequence 131, because it rejects programs in use, and the choice is open question 20 | Operator, then V0.2.X, then this line | Held for question 20 |
+| 9 | Remove run-time kind tags | V0.2.X sent the rule's form on 2026-10-28, sequence 127, and this line replied. A measurement below shows the rule alone removes little. V0.2.X holds the rule, sequence 131, because it rejects programs in use, and the choice is open question 20 | Operator, then V0.2.X, then this line | Held for question 20. The census was narrowed on 2026-10-29, leaving two dynamic coroutines |
 | 10 | Restore two Kaizen records, then delete the branch | Restored verbatim into `NATIVE_LOWERING_INVENTORY.md` under a provenance note, from `af8b61ac` and `e4964490`. The branch is deleted after the merge and Kaizen is told | This line and Kaizen | Done. Pull request 604 at `3d79be0b`, the branch deleted and Kaizen told |
 | 11 | Narrow `native.yml` paths | Audited. Of `docs/decisions`, the suite reads only the newest absorption receipt, so the filter and the reach set name `ABSORPTION_*_BRIEF.md`. The audit also found the citation guard reading sources the workflow does not watch, now limited to the watched paths | This line | Done, pull request 606 |
 | 12 | A hosted Linux job on two Ubuntu runners | `tier_one_targets.rs` runs a Linux triple on its own machine with the system `cc` and fails if it did not. `native.yml` gains a job on `ubuntu-24.04` and `ubuntu-24.04-arm` that runs that file and `kel_native_cli.rs`, with LLVM 22 from `apt.llvm.org` | This line | Done in PR 607, both runners green in run 40823596424 |
@@ -80,6 +80,29 @@ instructions from 7 only test the soft-failure flag. The census flags any
 ambiguous operand on the stack, including one no instruction reads, so the
 piano roll figure may be this line's over-approximation rather than a missing
 kind. That is to be measured on this line before anything is asked of V0.2.X.
+
+Measured on 2026-10-29, it was the over-approximation. No instruction in the
+ten coroutines reads the native result's kind. Only `PopN` and the
+soft-failure `Trap(HostError)` pop it, and the native code of a trap stores
+only its code. The census now counts only the operands an instruction reads,
+with `Return` counted as reading its value, and the corpus grew since the
+table above, so the four starts were measured again.
+
+| Start | Needing a run-time kind | Static, dynamic and refused coroutines | Ambiguous unread locals |
+|---|---|---|---|
+| `Unit`, the current analysis | 21 of 188131 | 28, 2 and 2 | 44241 |
+| Locals empty | 21 | 28, 2 and 2 | 65 |
+| Private `Unit` slots empty | 20 | 29, 1 and 2 | 44241 |
+| Both empty | 20 | 29, 1 and 2 | 65 |
+
+Native return kinds are therefore not needed for the piano roll, and the
+claim in this line's reply to sequence 127 that they are is withdrawn. The
+private rule frees `14_frame_log.kel`. What remains is `interp.kel`, which
+moves an operand of more than one kind into a local at chunk 2 instruction 51,
+and its cause is not yet identified. The newly static piano roll coroutines
+call host natives, so `static_kind_lowering.rs` admits them on the coroutine
+route without driving them, and their agreement with the virtual machine is
+checked through `lower_module` by `module_differential.rs`.
 
 ## This line's readings, stated as its own
 

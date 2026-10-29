@@ -312,7 +312,16 @@ pub fn lower_with_options<'ctx>(
 pub struct KindCensus {
     /// Reachable instructions the analysis reached.
     pub instructions: usize,
-    /// Instructions with an operand whose kind is not unique.
+    /// Instructions that read an operand whose kind is not unique.
+    ///
+    /// An instruction reads the operands it pops, except `PopN`, which
+    /// discards them, and `Trap`, whose native code stores only the trap code.
+    /// `Return` pops nothing by its depth effect but reads the value on top.
+    /// An ambiguous entry deeper in the stack is not counted here, because
+    /// whichever instruction later pops it is counted at its own facts. Until
+    /// 2026-10-29 every stack entry counted, which called the ten `piano_roll`
+    /// coroutines dynamic for a native result that only `PopN` and the
+    /// soft-failure trap ever pop.
     pub dynamic_operands: usize,
     /// Instructions with a local whose kind is not unique, among those whose
     /// operands are all unique. **Counted, not refused.** A local joins `Unit`
@@ -333,18 +342,36 @@ impl KindCensus {
     }
 }
 
-fn census_of(analysis: &types::Analysis) -> KindCensus {
+/// How many operands `op` pops and reads the kind of, as [`KindCensus`]
+/// defines a read.
+fn kind_reads(op: &Op, chunk: &keleusma::bytecode::Chunk) -> usize {
+    match op {
+        Op::PopN(_) | Op::Trap(_) => 0,
+        Op::Return => 1,
+        _ => keleusma::verify::op_depth_effect(op, chunk).0 as usize,
+    }
+}
+
+fn census_of(program: &Module, analysis: &types::Analysis) -> KindCensus {
     let unique = |mask: &u16| *mask == 0 || types::kind(*mask).count_ones() == 1;
     let mut census = KindCensus::default();
     for (chunk, facts) in analysis.facts.iter().enumerate() {
+        let code = &program.chunks[chunk];
         for (ip, f) in facts {
             census.instructions += 1;
+            let reads = kind_reads(&code.ops[*ip], code);
+            let start = f
+                .stack
+                .len()
+                .checked_sub(reads)
+                .expect("verified stack depth");
+            let read = &f.stack[start..];
             let reason = if !f.guards.is_empty() {
                 census.guarded += 1;
                 Some("it guards an operand's kind")
-            } else if !f.stack.iter().all(unique) {
+            } else if !read.iter().all(unique) {
                 census.dynamic_operands += 1;
-                Some("an operand may hold more than one kind")
+                Some("it reads an operand that may hold more than one kind")
             } else {
                 if !f.locals.iter().all(unique) {
                     census.dynamic_locals += 1;
@@ -378,7 +405,7 @@ pub fn kind_census(program: &Module, contracts: &HostContracts) -> Result<KindCe
         &contracts.native_body_returns,
         &contracts.fallible_natives,
     )?;
-    Ok(census_of(&types::check(program, entry, plan)?))
+    Ok(census_of(program, &types::check(program, entry, plan)?))
 }
 
 /// Whether `{i64, i64}` returns in the same two registers as the C structure
@@ -517,7 +544,7 @@ fn lower_impl<'ctx>(
     let owns_host_values = plan.owns_bodies;
     let analysis = types::check(program, entry, plan)?;
     if options.static_kinds {
-        let census = census_of(&analysis);
+        let census = census_of(program, &analysis);
         if let Some(why) = census.first_dynamic {
             return Err(error(format!(
                 "static kinds requested, but {why}, so the code would dispatch on a run-time kind"
@@ -950,4 +977,27 @@ resume:
     b.build_return(Some(&bits)).unwrap();
     mark_delegate(ctx, function);
     Ok(function)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
+
+    /// The census's read rule, op by op. `Return` is the case the depth
+    /// effect alone gets wrong, and no corpus coroutine returns a value of
+    /// more than one kind, so only this test fails if its rule is dropped.
+    #[test]
+    fn kind_reads_counts_what_the_native_code_inspects() {
+        let src = "loop main(r: Word) -> Word { yield r }";
+        let m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+        let chunk = &m.chunks[0];
+        assert_eq!(kind_reads(&Op::Return, chunk), 1);
+        assert_eq!(kind_reads(&Op::PopN(3), chunk), 0);
+        assert_eq!(kind_reads(&Op::Trap(9), chunk), 0);
+        assert_eq!(kind_reads(&Op::Add, chunk), 2);
+        assert_eq!(kind_reads(&Op::SetLocal(0), chunk), 1);
+        assert_eq!(kind_reads(&Op::Yield, chunk), 1);
+        assert_eq!(kind_reads(&Op::IsStruct(0), chunk), 1);
+    }
 }
