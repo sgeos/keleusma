@@ -12,11 +12,17 @@
 //! The x86-64 run also calls a fallible native, so the System V return of a
 //! two-word structure is executed and not only argued.
 //!
+//! On a Linux machine whose own triple is one of the two Linux targets, that
+//! target is linked with the system `cc` and run as well. The operator ruled on
+//! question 12, 2026-10-28, that hosted runners on x86-64 and ARM Ubuntu run
+//! this file and `kel_native_cli.rs`, so each Linux target executes in
+//! continuous integration and every other target is still built and read.
+//!
 //! # What this does not establish
 //!
-//! The two Linux objects are emitted and read but not linked or run, because
-//! this machine has no Linux toolchain and native continuous integration runs
-//! on macOS. Their execution is an open question for the operator.
+//! A Linux target is executed only on a machine of that triple. A run on macOS
+//! emits and reads the Linux objects without linking them, and a run on Linux
+//! does the same for the macOS objects.
 mod common;
 
 use inkwell::OptimizationLevel;
@@ -89,6 +95,34 @@ fn tool(name: &str) -> Option<String> {
     );
     eprintln!("\nSKIPPED: `{name}` was not found, so the target-set check did not run.\n");
     None
+}
+
+/// The MacPorts LLVM, consulted only when `KEL_LLVM_BIN` does not name one.
+const LLVM_BIN: &str = "/opt/local/libexec/llvm-22/bin";
+
+/// A symbol reader for objects of EVERY Tier 1 format.
+///
+/// The first run on Linux, 2026-10-28, failed here: GNU `nm` cannot read the
+/// Mach-O objects of the two macOS targets. `llvm-nm` reads both formats, so it
+/// is preferred, from `KEL_LLVM_BIN` and then the MacPorts path. The system
+/// `nm` is accepted only on macOS, where it is LLVM's and reads ELF as well.
+fn object_reader() -> Option<String> {
+    let llvm = std::env::var("KEL_LLVM_BIN")
+        .ok()
+        .into_iter()
+        .chain([LLVM_BIN.to_string()])
+        .map(|dir| format!("{dir}/llvm-nm"))
+        .find(|p| {
+            Command::new(p)
+                .arg("--version")
+                .output()
+                .is_ok_and(|o| o.status.success())
+        });
+    match llvm {
+        Some(p) => Some(p),
+        None if cfg!(target_os = "macos") => tool("nm"),
+        None => tool("llvm-nm"),
+    }
 }
 
 /// Defined external and undefined symbols of an object, undecorated.
@@ -206,13 +240,36 @@ fn darwin_arch(triple: &str) -> Option<&'static str> {
     }
 }
 
-/// Whether this machine runs `arch` binaries, natively or through Rosetta.
-fn runs(arch: &str, dir: &Path) -> bool {
+/// This machine's own triple when it is one of the Linux targets.
+fn linux_host_triple() -> Option<&'static str> {
+    match (std::env::consts::ARCH, std::env::consts::OS) {
+        ("x86_64", "linux") => Some("x86_64-unknown-linux-gnu"),
+        ("aarch64", "linux") => Some("aarch64-unknown-linux-gnu"),
+        _ => None,
+    }
+}
+
+/// The `cc` arguments that build for `triple` on this machine, or `None` when
+/// this machine has no route to it. On macOS a Darwin triple is selected with
+/// `-arch`. A Linux triple has a route only when it is this machine's own,
+/// through the system `cc` with no target flag.
+fn cc_route(triple: &str) -> Option<Vec<&'static str>> {
+    match darwin_arch(triple) {
+        Some(arch) if cfg!(target_os = "macos") => Some(vec!["-arch", arch]),
+        Some(_) => None,
+        None if linux_host_triple() == Some(triple) => Some(Vec::new()),
+        None => None,
+    }
+}
+
+/// Whether this machine runs code built with `route`, natively or through
+/// Rosetta.
+fn runs(route: &[&str], dir: &Path) -> bool {
     let src = dir.join("probe.c");
     std::fs::write(&src, "int main(void) { return 0; }\n").unwrap();
-    let exe = dir.join(format!("probe-{arch}"));
+    let exe = dir.join(format!("probe-{}", route.join("-")));
     Command::new("cc")
-        .args(["-arch", arch])
+        .args(route)
         .arg(&src)
         .arg("-o")
         .arg(&exe)
@@ -222,8 +279,8 @@ fn runs(arch: &str, dir: &Path) -> bool {
 }
 
 #[test]
-fn the_lexer_builds_for_every_tier_one_target_and_runs_on_both_macos_architectures() {
-    let (Some(nm), Some(ar)) = (tool("nm"), tool("ar")) else {
+fn the_lexer_builds_for_every_tier_one_target_and_runs_where_it_can() {
+    let (Some(nm), Some(ar)) = (object_reader(), tool("ar")) else {
         return;
     };
     let program = lexer();
@@ -248,11 +305,11 @@ fn the_lexer_builds_for_every_tier_one_target_and_runs_on_both_macos_architectur
             lib.stack_bytes,
             defined.len()
         );
-        let Some(arch) = darwin_arch(triple) else {
+        let Some(route) = cc_route(triple) else {
             continue;
         };
-        if !runs(arch, &dir) {
-            eprintln!("  {triple}: this machine cannot run {arch} code, so it was not executed");
+        if !runs(&route, &dir) {
+            eprintln!("  {triple}: this machine cannot run that code, so it was not executed");
             continue;
         }
         let archive = dir.join("libkel_lexer.a");
@@ -262,7 +319,8 @@ fn the_lexer_builds_for_every_tier_one_target_and_runs_on_both_macos_architectur
         std::fs::write(&host, LEXER_HOST).unwrap();
         let exe = dir.join("host");
         run(Command::new("cc")
-            .args(["-arch", arch, "-std=c11", "-Wall", "-Werror", "-I"])
+            .args(&route)
+            .args(["-std=c11", "-Wall", "-Werror", "-I"])
             .arg(&dir)
             .arg("-o")
             .arg(&exe)
@@ -281,17 +339,23 @@ fn the_lexer_builds_for_every_tier_one_target_and_runs_on_both_macos_architectur
         let _ = std::fs::remove_dir_all(&dir);
     }
     println!("  executed and agreeing with the VM: {executed:?}");
-    assert!(
-        executed.contains(&"aarch64-apple-darwin") || executed.contains(&"x86_64-apple-darwin"),
-        "no tier one target was executed"
-    );
+    assert!(!executed.is_empty(), "no tier one target was executed");
+    // A machine always runs its own code, so a Linux host that skipped its own
+    // triple has a broken route, not a missing capability.
+    if let Some(own) = linux_host_triple() {
+        assert!(
+            executed.contains(&own),
+            "this machine is {own} and did not execute it"
+        );
+    }
 }
 
 /// The fallible-native return is a two-word structure. AAPCS64 and System V
-/// x86-64 both return it in two registers, and this runs it on whichever of
-/// the two macOS architectures this machine can execute, against the VM.
+/// x86-64 both return it in two registers, and this runs it on each macOS
+/// architecture this machine can execute, and on its own Linux triple, against
+/// the VM.
 #[test]
-fn a_fallible_native_returns_correctly_on_each_executable_macos_architecture() {
+fn a_fallible_native_returns_correctly_on_each_executable_target() {
     let src = "use host::risky(Word) -> Word\n\
                yield main(x: Word) -> Word { let a = yield x; host::risky(a) + 1 }";
     let program = common::build(src);
@@ -301,10 +365,16 @@ fn a_fallible_native_returns_correctly_on_each_executable_macos_architecture() {
     };
     let symbol = keleusma_native::native_symbol("host::risky");
     let mut executed = 0;
-    for triple in ["aarch64-apple-darwin", "x86_64-apple-darwin"] {
-        let arch = darwin_arch(triple).unwrap();
-        let dir = scratch(&format!("risky-{arch}"));
-        if !runs(arch, &dir) {
+    let triples = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+        .into_iter()
+        .chain(linux_host_triple());
+    for triple in triples {
+        let Some(route) = cc_route(triple) else {
+            eprintln!("  {triple}: this machine has no route to it");
+            continue;
+        };
+        let dir = scratch(&format!("risky-{triple}"));
+        if !runs(&route, &dir) {
             eprintln!("  {triple}: not executable here");
             continue;
         }
@@ -343,7 +413,8 @@ int main(int argc, char **argv) {{
         std::fs::write(dir.join("host.c"), host).unwrap();
         let exe = dir.join("host");
         run(Command::new("cc")
-            .args(["-arch", arch, "-std=c11", "-Wall", "-Werror", "-I"])
+            .args(&route)
+            .args(["-std=c11", "-Wall", "-Werror", "-I"])
             .arg(&dir)
             .arg(dir.join("host.c"))
             .arg(dir.join("kel_risky.o"))
@@ -365,5 +436,5 @@ int main(int argc, char **argv) {{
         executed += 1;
         let _ = std::fs::remove_dir_all(&dir);
     }
-    assert!(executed > 0, "neither macOS architecture could be executed");
+    assert!(executed > 0, "no target could be executed");
 }
