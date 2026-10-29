@@ -80,11 +80,13 @@ mod common;
 use std::collections::BTreeSet;
 
 /// The corpus directories, matching `isa_coverage_census` and the differential.
-const CORPUS_DIRS: [&str; 4] = [
+const CORPUS_DIRS: [&str; 6] = [
     "examples/scripts",
     "src/selfhost/kel",
     "examples/rtos/scripts",
     "compiler/kel",
+    "src/hosted",
+    "src/crypto_frame",
 ];
 
 fn source_for(p: &std::path::Path) -> Option<String> {

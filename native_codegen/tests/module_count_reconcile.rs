@@ -18,11 +18,13 @@ use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
 use std::collections::BTreeSet;
 
-const CORPUS_DIRS: [&str; 4] = [
+const CORPUS_DIRS: [&str; 6] = [
     "../examples/scripts",
     "../src/selfhost/kel",
     "../examples/rtos/scripts",
     "../compiler/kel",
+    "../src/hosted",
+    "../src/crypto_frame",
 ];
 
 fn kel_files() -> Vec<std::path::PathBuf> {

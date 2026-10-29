@@ -91,11 +91,13 @@ use keleusma::verify::module_runtime_footprint;
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
 use keleusma_native::region;
 
-const CORPUS_DIRS: [&str; 4] = [
+const CORPUS_DIRS: [&str; 6] = [
     "examples/scripts",
     "src/selfhost/kel",
     "examples/rtos/scripts",
     "compiler/kel",
+    "src/hosted",
+    "src/crypto_frame",
 ];
 
 fn all_compiling_modules() -> Vec<(String, Module)> {

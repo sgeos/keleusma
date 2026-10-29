@@ -71,6 +71,10 @@ const NOT_EXECUTED: &[(&str, &str)] = &[
     ("11_signed.kel", "the VM would not load it"),
     ("13_telemetry_stream.kel", "the backend refuses it"),
     ("faulty.kel", "faults; compared by the FAULT observable"),
+    (
+        "interp.kel",
+        "the VM refuses to run it with empty io tables",
+    ),
     ("prelude.kel", "no runnable entry point"),
     (
         "rogue_ai_boss.kel",
@@ -96,8 +100,11 @@ const NOT_EXECUTED: &[(&str, &str)] = &[
 // 63 -> 66 and 11 -> 10 in absorption 82, from the differential's own report:
 // upstream added the stage sources `wire_debug.kel` and `wire_schema.kel`, which
 // both execute, and `verify_datalayout.kel` left the vacuous set.
-const EXECUTED_MODULES: usize = 66;
-const NOT_EXECUTED_MODULES: usize = 10;
+// 66 -> 67 and 10 -> 11 on 2026-10-28, question 6, from the same report: the
+// new roots add `frame.kel`, which executes, and `interp.kel`, which the VM
+// refuses with `IndexOutOfBounds(-1, 64)` when its io tables are not seeded.
+const EXECUTED_MODULES: usize = 67;
+const NOT_EXECUTED_MODULES: usize = 11;
 
 /// `(opcode, witness source, file that drives it)` for every opcode the corpus
 /// gives no executed witness.

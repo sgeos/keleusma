@@ -14,6 +14,8 @@ fn sources() -> Vec<std::path::PathBuf> {
         "src/selfhost/kel",
         "examples/rtos/scripts",
         "compiler/kel",
+        "src/hosted",
+        "src/crypto_frame",
     ]
     .iter()
     .map(|d| root.join(d))

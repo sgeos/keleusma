@@ -396,10 +396,12 @@ hosts would consume the figure.
 **The figure.** My backend publishes `host_arena_supplement_bytes`, the arena bytes a host must ADD
 beyond `auto_arena_capacity_for` to run a module natively. Measured two ways:
 
-- **Statically, across the corpus** by native_codegen/tests/region_composition.rs: **30 modules have
+- **Statically, across the corpus** by native_codegen/tests/region_composition.rs: **32 modules have
   a stream chunk on the entry path, and every one reserves the same flat block** of `MAX_STACK * 8` =
-  512 bytes. That reservation is **at least half the published figure for 27 of the 30**, running from
-  27% up to **98% for the self-hosted compiler stages**, which plan almost nothing else. Re-measured in
+  512 bytes. That reservation is **at least half the published figure for 28 of the 32**, running from
+  12% up to **98% for the self-hosted compiler stages**, which plan almost nothing else. On
+  2026-10-28 the operator's question 6 added `interp.kel`, at 12% of a 4032-byte figure, and
+  `frame.kel`, at 96%. Before it the figures were 30 modules, 27 of 30 and a minimum of 27%. Re-measured in
   absorption 82: the two added stages `wire_debug.kel` and `wire_schema.kel` are the whole change,
   each at 98%. Before it the figures were 28 modules and 25 of 28. The
   decomposition is checked against the published total rather than assumed, so the reading of the
@@ -409,16 +411,17 @@ beyond `auto_arena_capacity_for` to run a module natively. Measured two ways:
   520-552 byte plans, and **the twelve stages touch ZERO** of 520-600. Instrument reach was proven
   before the numbers were believed — poking one byte into the region moves the measurement.
 - **Dynamically across the CORPUS** by native_codegen/tests/streaming_arena_touch.rs, added
-  2026-09-23: **15 of the 30 streaming modules are driven** since absorption 82, which added two
-  stages that both drive and touch zero bytes; it was 13 of 28 before. The stages confirm ZERO by a
+  2026-09-23: **16 of the 32 streaming modules are driven** since question 6 on 2026-10-28, which
+  added `interp.kel`, driven at zero bytes, and `frame.kel`, which needs a host native. It was 15 of
+  30 after absorption 82 and 13 of 28 before it. The stages confirm ZERO by a
   second route, and `14_frame_log.kel` is **the first corpus module outside the stages ever measured
   this way — 48 bytes of a 600-byte plan, 8%.** The figure was checked stable across two independent
   runs before being published here.
-  **The other 15 are NOT measured, and they are named rather than dropped**: eleven need host natives
-  registered (`host::song_name`, `host::run_player_turn`), three take a **`Composite`** first argument, and
+  **The other 16 are NOT measured, and they are named rather than dropped**: twelve need host natives
+  registered (`host::song_name`, `host::run_player_turn`, `host::blen`), three take a **`Composite`** first argument, and
   one my backend refuses to lower — the yield-escape hazard already dispositioned. Reaching them
   needs the stub machinery in my corpus differential, which I declined to extract rather than
-  disturb a tuned instrument. **So read this as 15 of 30, not as the corpus.**
+  disturb a tuned instrument. **So read this as 16 of 32, not as the corpus.**
 
 **Why it may matter to you.** A host sizing an arena from that figure provisions roughly twenty times
 what these streams use, and for the compiler stages provisions a region nothing writes. Whether that

@@ -78,11 +78,18 @@ pub fn force_optimize(lm: &inkwell::module::Module<'_>) {
 /// Kept beside [`corpus_sources`] so the roots and the walk cannot drift apart.
 /// `corpus_fingerprint.rs` pins the CONTENT of these directories; this pins the
 /// POPULATION read out of them.
-pub const CORPUS_ROOTS: [&str; 4] = [
+///
+/// `src/hosted` and `src/crypto_frame` were added on 2026-10-28 by the operator's
+/// ruling on question 6, which put `interp.kel` and `frame.kel` in the native
+/// corpus. Every test that carried its own copy of the four roots received the
+/// same two. Tests whose lists were deliberately narrower were left as they were.
+pub const CORPUS_ROOTS: [&str; 6] = [
     "../examples/scripts",
     "../src/selfhost/kel",
     "../examples/rtos/scripts",
     "../compiler/kel",
+    "../src/hosted",
+    "../src/crypto_frame",
 ];
 
 /// **THE canonical corpus enumeration. One copy, so sweeps cannot disagree.**
@@ -426,11 +433,13 @@ pub fn emits(m: &keleusma::bytecode::Module, name: &str) -> bool {
 /// `examples/scripts/piano_roll`; listing a subdirectory as well is what made
 /// three other tests count one directory twice.
 #[allow(dead_code)]
-pub const CORPUS_DIRS: [&str; 4] = [
+pub const CORPUS_DIRS: [&str; 6] = [
     "examples/scripts",
     "src/selfhost/kel",
     "examples/rtos/scripts",
     "compiler/kel",
+    "src/hosted",
+    "src/crypto_frame",
 ];
 
 /// Every `.kel` file under the corpus roots that COMPILES, as `(file name, module)`.

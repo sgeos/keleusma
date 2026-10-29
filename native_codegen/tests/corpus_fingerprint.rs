@@ -54,11 +54,13 @@ use std::collections::BTreeMap;
 /// `examples/scripts/rogue` is deliberately absent: it is reached by recursion
 /// from its parent, and listing it as well is what made three other tests count
 /// that directory twice.
-const CORPUS_DIRS: [&str; 4] = [
+const CORPUS_DIRS: [&str; 6] = [
     "../examples/scripts",
     "../src/selfhost/kel",
     "../examples/rtos/scripts",
     "../compiler/kel",
+    "../src/hosted",
+    "../src/crypto_frame",
 ];
 
 /// FNV-1a, 64-bit.
@@ -330,6 +332,11 @@ const PINNED: &[(&str, u64)] = &[
     // modules with 1 refused, and the denominator records 61 of 66 lowered with
     // corpus evidence. `Div` and `Mod` still lower but lost their corpus feeder,
     // because Word and Byte division now compile to the checked forms.
+    // **Widened on 2026-10-28, question 6.** The operator ruled that
+    // `src/hosted/interp.kel` and `src/crypto_frame/frame.kel` join the native
+    // corpus, so `src/hosted` and `src/crypto_frame` became roots and nothing else
+    // moved. The corpus builds 78 modules. Each pin that moved was re-derived in
+    // the same change and names this ruling.
     ("compiler/kel/prelude.kel", 0x07c8e691e07a309e),
     (
         "examples/rtos/scripts/event_listener.kel",
@@ -515,6 +522,8 @@ const PINNED: &[(&str, u64)] = &[
         "examples/scripts/rogue/rogue_scroll_apply.kel",
         0xf93a5bd822bfe99c,
     ),
+    ("src/crypto_frame/frame.kel", 0x93ac54a86007619f),
+    ("src/hosted/interp.kel", 0x0b6e4007b12016f5),
     ("src/selfhost/kel/analyze.kel", 0xe45a770e222b1931),
     ("src/selfhost/kel/codegen.kel", 0xecd27ec27b225862),
     ("src/selfhost/kel/lexer.kel", 0x897a561eef4f18d1),
