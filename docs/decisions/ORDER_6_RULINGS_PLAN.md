@@ -98,8 +98,21 @@ table above, so the four starts were measured again.
 Native return kinds are therefore not needed for the piano roll, and the
 claim in this line's reply to sequence 127 that they are is withdrawn. The
 private rule frees `14_frame_log.kel`. What remains is `interp.kel`, which
-moves an operand of more than one kind into a local at chunk 2 instruction 51,
-and its cause is not yet identified. The newly static piano roll coroutines
+moves an operand of more than one kind into a local at chunk 2 instruction 51.
+
+Its cause was identified on 2026-10-29. Chunk 2 is `checked_add_word`, whose
+checked addition matches `ok`, `overflow` and `underflow` with unguarded arms
+that each build a three-word tuple. `compile_checked` in root `src/compiler.rs`
+still ends the match with its wrapping default, `GetLocal` of the low word and
+`Break`, so the join at the loop's end holds a tuple or a word. The default
+cannot execute, because the outcome's flag is one of the three covered
+classes, but the analysis does not track the flag's value. The compiler
+already omits the zero-divisor fallback when an unguarded arm covers that
+class, and the same omission for a fully covered match would remove the
+ambiguity. Chunk 2 is only the first such site. The sibling checked
+functions share its source shape and are expected to account for the other
+instructions, which was not measured. The compiler is V0.2.X's, and the
+request was sent in sequence 136. The newly static piano roll coroutines
 call host natives, so `static_kind_lowering.rs` admits them on the coroutine
 route without driving them, and their agreement with the virtual machine is
 checked through `lower_module` by `module_differential.rs`.
