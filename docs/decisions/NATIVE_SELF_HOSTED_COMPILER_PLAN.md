@@ -120,6 +120,17 @@ first line of evidence, and this check is the end-to-end one.
    before step 1 lands. It is wired into the driver once step 1 lands.
 4. Steps 3 and 4 follow.
 
+## Progress
+
+- **2026-10-29, step 2 begun.** `native_codegen/src/stage.rs` holds
+  `NativeStage`, and `native_codegen/tests/native_stage_executor.rs` drives
+  the lexer into the parser through it and through a virtual machine adapter
+  with one host function, and the two agree. All fourteen stages build. The
+  measured build times, lowering and JIT compilation together, run from 12 ms
+  for `verify_datalayout.kel` to 1764 ms for `parse.kel`, about 5.1 s for all
+  fourteen on this machine. Binding the host natives of `frame.kel` remains,
+  and wiring into the driver waits on step 1.
+
 ## Risks and open points
 
 - **Cost.** A native stage is lowered and compiled in process. If that cost

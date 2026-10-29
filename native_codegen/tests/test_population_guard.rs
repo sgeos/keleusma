@@ -90,7 +90,9 @@
 // the count.
 // 821 -> 822: `an_operand_no_instruction_reads_needs_no_run_time_kind` in
 // `static_kind_lowering.rs`, for the question 9 census. No name disappeared.
-const RECORDED_TEST_FUNCTIONS: usize = 822;
+// 822 -> 824: two in `native_stage_executor.rs`, for operator question 19. No
+// name disappeared.
+const RECORDED_TEST_FUNCTIONS: usize = 824;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise
@@ -302,7 +304,8 @@ const RECORDED_TEST_FUNCTIONS: usize = 822;
 // 166 -> 170: `language_construct_census.rs`, `tier_one_targets.rs`,
 // `kel_native_cli.rs` and `text_comparison.rs` for Order 6, none removed.
 // 170 -> 171: `native_opaque.rs` for operator question 14, none removed.
-const RECORDED_TEST_FILES: usize = 171;
+// 171 -> 172: `native_stage_executor.rs` for operator question 19, none removed.
+const RECORDED_TEST_FILES: usize = 172;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")
