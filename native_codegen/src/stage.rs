@@ -14,9 +14,13 @@
 //!
 //! # What this does not do yet
 //!
-//! - A stage that calls a host native is refused. `frame.kel` calls ten, and
-//!   binding them to the driver's Rust closures through the JIT's symbol
-//!   mapping is the remainder of step 2.
+//! - Host natives are bound as C function pointers, [`HostNative`], through
+//!   the JIT's symbol mapping. The ten natives `frame.kel` calls are closures
+//!   over the driver's signing state in root `src/crypto_frame/mod.rs`, which
+//!   are private there, so binding them needs V0.2.X to expose them.
+//! - A native is bound infallible, as `lower_module` lowers every native call
+//!   outside a coroutine. A native that reports a soft failure on the virtual
+//!   machine has no way to report it here.
 //! - Nothing in the driver calls this. The driver is written against the
 //!   concrete `Vm` type, and the executor boundary that would let it call this
 //!   is step 1, which V0.2.X was asked for.
@@ -29,15 +33,52 @@
 //! fourteen stage programs. A caller that builds stages repeatedly leaks one
 //! context per build.
 
-use crate::{LowerError, LowerOptions, lower_module};
+use crate::{LowerError, LowerOptions, host_native_declarations, lower_module, native_symbol};
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
 use inkwell::execution_engine::{ExecutionEngine, JitFunction};
-use keleusma::bytecode::{Module, Op};
+use keleusma::bytecode::Module;
 
 const CANARY: u64 = 0xDEAD_BEEF_FEED_FACE;
 
 type Entry = unsafe extern "C" fn(i64, *mut u8, *mut u8, *mut u8) -> i64;
+
+/// A host native for a native stage, a C function over words, by arity.
+///
+/// The arity is part of the type so that a binding whose parameter count
+/// differs from the native's call sites is refused when the stage is built
+/// rather than called through a mismatched signature.
+#[derive(Clone, Copy, Debug)]
+pub enum HostNative {
+    /// No argument.
+    Arity0(unsafe extern "C" fn() -> i64),
+    /// One argument.
+    Arity1(unsafe extern "C" fn(i64) -> i64),
+    /// Two arguments.
+    Arity2(unsafe extern "C" fn(i64, i64) -> i64),
+    /// Three arguments.
+    Arity3(unsafe extern "C" fn(i64, i64, i64) -> i64),
+}
+
+impl HostNative {
+    fn arity(self) -> u32 {
+        match self {
+            HostNative::Arity0(_) => 0,
+            HostNative::Arity1(_) => 1,
+            HostNative::Arity2(_) => 2,
+            HostNative::Arity3(_) => 3,
+        }
+    }
+
+    fn address(self) -> usize {
+        match self {
+            HostNative::Arity0(f) => f as usize,
+            HostNative::Arity1(f) => f as usize,
+            HostNative::Arity2(f) => f as usize,
+            HostNative::Arity3(f) => f as usize,
+        }
+    }
+}
 
 /// A failure while running a native stage.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,29 +117,28 @@ pub struct NativeStage {
 }
 
 impl NativeStage {
-    /// Lower `module`, compile it, and prepare a zeroed shared segment with the
-    /// private initializers installed.
+    /// A stage that calls no host native. See [`Self::with_natives`].
+    pub fn new(module: &Module) -> Result<Self, LowerError> {
+        Self::with_natives(module, &[])
+    }
+
+    /// Lower `module`, bind each host native it calls to the function of the
+    /// same name in `natives`, compile it, and prepare a zeroed shared segment
+    /// with the private initializers installed.
     ///
     /// Refuses a module with no entry point, one whose entry is not the
-    /// four-parameter stream entry the stage differential drives, one that
-    /// calls a host native, and one whose private initializer this backend
-    /// cannot place.
-    pub fn new(module: &Module) -> Result<Self, LowerError> {
+    /// four-parameter stream entry the stage differential drives, and one whose
+    /// private initializer this backend cannot place. Refuses a native the
+    /// module calls with no binding, a binding whose arity differs from the
+    /// call sites, a native returning a float, and a binding for a native the
+    /// module does not call, which is most often a misspelt name.
+    pub fn with_natives(
+        module: &Module,
+        natives: &[(&str, HostNative)],
+    ) -> Result<Self, LowerError> {
         let entry_index = module
             .entry_point
             .ok_or_else(|| LowerError::UnsupportedShape("a stage needs an entry point".into()))?;
-        let calls_native = module
-            .chunks
-            .iter()
-            .flat_map(|c| &c.ops)
-            .any(|op| matches!(op, Op::CallVerifiedNative(..) | Op::CallExternalNative(..)));
-        if calls_native {
-            return Err(LowerError::UnsupportedShape(
-                "the stage calls a host native, and binding host natives to a native stage \
-                 is not implemented yet"
-                    .into(),
-            ));
-        }
         let image = match (
             &module.data_layout,
             crate::region::private_init_image(module),
@@ -138,9 +178,16 @@ impl NativeStage {
                 function.count_params()
             )));
         }
+        let bindings = bind(&llvm, natives)?;
         let engine = llvm
             .create_jit_execution_engine(OptimizationLevel::Default)
             .map_err(|e| LowerError::Internal(format!("JIT engine: {e}")))?;
+        for (symbol, native) in &bindings {
+            let declaration = llvm
+                .get_function(symbol)
+                .ok_or_else(|| LowerError::Internal(format!("no declaration `{symbol}`")))?;
+            engine.add_global_mapping(&declaration, native.address());
+        }
         // SAFETY: the signature was checked above against the four-parameter
         // entry `lower_module` emits for a stream stage.
         let entry = unsafe { engine.get_function::<Entry>(&symbol) }
@@ -214,4 +261,46 @@ impl NativeStage {
         }
         Ok(word)
     }
+}
+
+/// Match each native `llvm` declares with its binding in `natives`, by the
+/// backend's own symbol spelling, and check the arity and return kind.
+fn bind(
+    llvm: &inkwell::module::Module<'_>,
+    natives: &[(&str, HostNative)],
+) -> Result<Vec<(String, HostNative)>, LowerError> {
+    let mut supplied: Vec<(String, &str, HostNative)> = natives
+        .iter()
+        .map(|(name, native)| (native_symbol(name), *name, *native))
+        .collect();
+    let mut bound = Vec::new();
+    for (symbol, arity, returns_float) in host_native_declarations(llvm) {
+        let at = supplied
+            .iter()
+            .position(|(s, _, _)| *s == symbol)
+            .ok_or_else(|| {
+                LowerError::UnsupportedShape(format!(
+                    "the stage calls the host native `{symbol}`, which is not bound"
+                ))
+            })?;
+        let (_, name, native) = supplied.swap_remove(at);
+        if returns_float {
+            return Err(LowerError::UnsupportedShape(format!(
+                "the host native `{name}` returns a float, which a word binding cannot"
+            )));
+        }
+        if native.arity() != arity {
+            return Err(LowerError::UnsupportedShape(format!(
+                "the host native `{name}` is called with {arity} arguments and bound with {}",
+                native.arity()
+            )));
+        }
+        bound.push((symbol, native));
+    }
+    if let Some((_, name, _)) = supplied.first() {
+        return Err(LowerError::UnsupportedShape(format!(
+            "a binding was supplied for `{name}`, which the stage does not call"
+        )));
+    }
+    Ok(bound)
 }

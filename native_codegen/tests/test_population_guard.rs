@@ -92,7 +92,10 @@
 // `static_kind_lowering.rs`, for the question 9 census. No name disappeared.
 // 822 -> 824: two in `native_stage_executor.rs`, for operator question 19. No
 // name disappeared.
-const RECORDED_TEST_FUNCTIONS: usize = 824;
+// 824 -> 826: two host-native binding tests in `native_stage_executor.rs`, for
+// operator question 19. The build test there was renamed
+// `every_stage_builds_and_an_unbound_host_native_is_refused`, for what it refuses.
+const RECORDED_TEST_FUNCTIONS: usize = 826;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise
