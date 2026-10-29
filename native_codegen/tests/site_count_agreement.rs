@@ -32,11 +32,13 @@ use keleusma::parser::parse;
 use keleusma_native::region;
 
 /// The four roots the censuses on this line read.
-const CORPUS_DIRS: [&str; 4] = [
+const CORPUS_DIRS: [&str; 6] = [
     "../examples/scripts",
     "../src/selfhost/kel",
     "../examples/rtos/scripts",
     "../compiler/kel",
+    "../src/hosted",
+    "../src/crypto_frame",
 ];
 
 fn corpus() -> Vec<(String, Module)> {
@@ -223,7 +225,8 @@ fn the_documented_body_figures_are_measured() {
     );
     assert_eq!(
         (sizes.len(), chunks, min, max, median, total),
-        (256, 35, 8, 40, 24, 4936),
+        // 256, 35 and 4936 until 2026-10-28, when question 6 added two roots.
+        (270, 40, 8, 40, 24, 5272),
         "the composite body figures moved to sites={}, chunks={chunks}, {min}..{max}, \
          median {median}, total {total}. `region.rs` publishes these; update that \
          comment in the SAME change, or the next reader quotes a figure nothing \

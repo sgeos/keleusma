@@ -22,10 +22,12 @@
 //! number was carried rather than measured, and the handoff simultaneously quoted
 //! **256 in 35 chunks** without either saying which population it meant.
 //!
-//! **Current, with its population named: 256 sites across 35 chunks of the
-//! FOUR-ROOT corpus's 69 compiling modules**, agreed independently by the planner
-//! and by a raw scan of the instruction stream (`site_count_agreement.rs`). A
-//! three-root walk reports a different number about a different set.
+//! **Current, with its population named: 270 sites across 40 chunks of the
+//! SIX-ROOT corpus**, agreed independently by the planner and by a raw scan of the
+//! instruction stream (`site_count_agreement.rs`). It was 256 across 35 chunks of
+//! the four-root corpus's 69 compiling modules until 2026-10-28, when question 6
+//! added `src/hosted` and `src/crypto_frame` as roots. A narrower walk reports a
+//! different number about a different set.
 //!
 //! # The "0 slot-homed" half, now measured — and it was FALSE
 //!
@@ -38,7 +40,7 @@
 //! **THE MODEL BELOW SURVIVES, AND THE REASON IS SPECIFIC.** The planner DOES
 //! place op 24 in the chunk region, so the construction is a **temporary whose
 //! value is subsequently copied** into the slot. No body lives only in a slot, so
-//! a chunk-relative placement remains the right model for every one of the 256
+//! a chunk-relative placement remains the right model for every one of the 270
 //! sites. **"Constructed as a temporary" and "copied into persistent storage
 //! afterwards" are compatible; the old sentence conflated them.**
 //!
@@ -52,8 +54,8 @@
 //! chunk with two constructions in mutually exclusive branches reserves both. That
 //! is sound and loose, and tightening it needs a liveness analysis this pass
 //! deliberately omits. The looseness is bounded and small in practice: **bodies run
-//! 8 to 40 bytes with a median of 24, and the corpus-wide total over all 256 sites
-//! is 4,936 bytes.**
+//! 8 to 40 bytes with a median of 24, and the corpus-wide total over all 270 sites
+//! is 5,272 bytes.** It was 4,936 over 256 sites before the two roots of question 6.
 //!
 //! ⚠ **THREE OF THOSE FOUR FIGURES WERE WRONG UNTIL 2026-09-24, AND ALL THREE CAME
 //! FROM THE WALK THIS FILE ALREADY RETRACTED TWO PARAGRAPHS ABOVE.** The sentence

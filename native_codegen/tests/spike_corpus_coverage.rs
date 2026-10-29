@@ -195,6 +195,8 @@ fn spike_report_corpus_coverage() {
         "src/selfhost/kel",
         "examples/rtos/scripts",
         "compiler/kel",
+        "src/hosted",
+        "src/crypto_frame",
     ] {
         let d = root.join(dir);
         if let Ok(rd) = std::fs::read_dir(&d) {

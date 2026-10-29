@@ -249,9 +249,9 @@ fn report_six_still_reproduces_from_the_tree() {
     let composition = std::fs::read_to_string("tests/region_composition.rs")
         .expect("the static census is readable");
     for (quantity, needle) in [
-        ("the streaming population", "PINNED_STREAMING: usize = 30"),
-        ("the majority count", "PINNED_MAJORITY: usize = 27"),
-        ("the minimum share", "PINNED_MIN_SHARE: u32 = 27"),
+        ("the streaming population", "PINNED_STREAMING: usize = 32"),
+        ("the majority count", "PINNED_MAJORITY: usize = 28"),
+        ("the minimum share", "PINNED_MIN_SHARE: u32 = 12"),
     ] {
         assert!(
             composition.contains(needle),
@@ -268,7 +268,7 @@ fn report_six_still_reproduces_from_the_tree() {
     let touch = std::fs::read_to_string("tests/streaming_arena_touch.rs")
         .expect("the streaming arena census is readable");
     for (quantity, needle) in [
-        ("the driven count", "const DRIVEN: usize = 15;"),
+        ("the driven count", "const DRIVEN: usize = 16;"),
         (
             "the measured extent",
             "const FRAME_LOG_TOUCHED: usize = 48;",

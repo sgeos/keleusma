@@ -65,11 +65,13 @@ fn source_for(p: &std::path::Path) -> Option<String> {
 /// trusting either figure.
 ///
 /// Both numbers were always right and neither said what it counted.
-const CORPUS_DIRS: [&str; 4] = [
+const CORPUS_DIRS: [&str; 6] = [
     "examples/scripts",
     "src/selfhost/kel",
     "examples/rtos/scripts",
     "compiler/kel",
+    "src/hosted",
+    "src/crypto_frame",
 ];
 
 fn sources() -> Vec<std::path::PathBuf> {

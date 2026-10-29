@@ -16,9 +16,9 @@ land one pull request at a time.
 | 1 | Best effort, in bytecode cost units | Keep the current claim. No change | This line | Done, no work |
 | 2 | Defer the bytecode half of the flat machine | None | None | Deferred |
 | 3 | Report the root `scripts/` pipe pattern | Sent 2026-10-28, sequence 122. V0.2.X accepted it as a defect report | V0.2.X | Reported, repair is V0.2.X's |
-| 4 | Apply `opt-level = 1` | Set in `native_codegen/Cargo.toml` with its rationale. No pinned figure moved | This line | Done, in its pull request |
+| 4 | Apply `opt-level = 1` | Set in `native_codegen/Cargo.toml` with its rationale. No pinned figure moved | This line | Done, pull request 600 at `a0dd6f7b` |
 | 5 | Wait for the verifier fix | V0.2.X gave notice on 2026-10-28, sequence 126, that its pull request 598 adds a callee-aware time bound that admits `intern_id`. Once it is absorbed, `native_codegen/src/cost.rs` may call that form | V0.2.X, then this line | Waiting on V0.2.X's merge |
-| 6 | Add `interp.kel` and `frame.kel` to the native corpus | Add the roots and re-pin the censuses they enter | This line | Open |
+| 6 | Add `interp.kel` and `frame.kel` to the native corpus | `src/hosted` and `src/crypto_frame` are corpus roots in every full root list, and the seven pins that moved were re-derived. `frame.kel` executes in the corpus differential and agrees. `interp.kel` is exempt there, because the virtual machine refuses it with empty `io` tables. A seeded `interp.kel` differential follows as its own pull request | This line | Roots done in their pull request. The seeded differential is open |
 | 7 | Revise `RUNTIME_FAULTS.md` to the 2026-10-20 ruling | Relayed. V0.2.X reports the rewrite in its pull request 598 | V0.2.X | In review there |
 | 8 | Compare slot types on hot swap | V0.2.X confirmed with the operator and will change `compute_schema_hash`, then this line adopts it natively | V0.2.X, then this line | Waiting on V0.2.X |
 | 9 | Remove run-time kind tags | V0.2.X sent the rule's form on 2026-10-28, sequence 127, and this line replied. A measurement below shows the rule alone removes little | V0.2.X, then this line | Waiting on V0.2.X |
@@ -71,6 +71,15 @@ does not know. Removing the tags therefore also needs native return kinds,
 either from the bytecode or from a host contract. This was reported to V0.2.X
 in the reply to sequence 127. The probe models only the analysis. It does not
 show that every corpus program passes the rule.
+
+V0.2.X answered in sequence 129 that the module records each native's return
+shape. This line checked the site. The native is `host::song_name`, declared
+with a bare `use` and no signature, so its recorded shape is `Top`, which is
+correct. Its result is discarded by `PopN(1)` at instruction 12, and the
+instructions from 7 only test the soft-failure flag. The census flags any
+ambiguous operand on the stack, including one no instruction reads, so the
+piano roll figure may be this line's over-approximation rather than a missing
+kind. That is to be measured on this line before anything is asked of V0.2.X.
 
 ## This line's readings, stated as its own
 

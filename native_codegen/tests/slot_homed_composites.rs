@@ -37,11 +37,13 @@ use keleusma::parser::parse;
 use keleusma::verify::op_depth_effect;
 use keleusma_native::region;
 
-const CORPUS_DIRS: [&str; 4] = [
+const CORPUS_DIRS: [&str; 6] = [
     "../examples/scripts",
     "../src/selfhost/kel",
     "../examples/rtos/scripts",
     "../compiler/kel",
+    "../src/hosted",
+    "../src/crypto_frame",
 ];
 
 /// A program that DOES bake a composite into a private slot.

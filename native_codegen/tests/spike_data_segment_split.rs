@@ -30,6 +30,8 @@ fn spike_report_data_segment_split() {
         "src/selfhost/kel",
         "examples/rtos/scripts",
         "compiler/kel",
+        "src/hosted",
+        "src/crypto_frame",
     ] {
         let mut stack = vec![root.join(d)];
         while let Some(p) = stack.pop() {
