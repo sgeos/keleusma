@@ -55,7 +55,7 @@ const SKIPPABLE: &[&str] = &[
     "the_measured_machine_stack_stays_within_the_exported_bound",
     // Operator question 15, 2026-10-28. Skips loudly off an `arm64` Mac and
     // where Rosetta does not run, which this repository cannot provide. A
-    // missing `x86_64` Rust standard library fails instead where the tools are
+    // missing `x86_64-apple-darwin` Rust standard library fails instead where the tools are
     // required, and the native gate installs that target.
     "the_rust_host_runs_on_x86_64_and_stays_within_its_stack_bound",
     // Order 6: skip, loudly, where `cc` or `nm` is absent.

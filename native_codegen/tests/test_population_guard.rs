@@ -81,9 +81,11 @@
 // 799 -> 804: `native_hot_swap.rs` 2 and `static_kind_lowering.rs` 3 for Order 5.
 // 804 -> 813: the construct census 1, tier one targets 2, the `kel-native`
 // command 3 and Text comparison 3, for Order 6.
-// 813 -> 814: the `x86_64` Rust host in `static_library_linkage.rs`, for operator
+// 813 -> 814: the x86-64 Rust host in `static_library_linkage.rs`, for operator
 // question 15. No name disappeared.
-const RECORDED_TEST_FUNCTIONS: usize = 814;
+// 814 -> 815: `a_pattern_entry_covers_only_what_it_names` in `reach_census.rs`,
+// for operator question 11. No name disappeared.
+const RECORDED_TEST_FUNCTIONS: usize = 815;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

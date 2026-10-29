@@ -32,7 +32,11 @@ fn reach() -> Vec<String> {
     let start = script.find("REACH=(").expect("a REACH array");
     let body = &script[start + "REACH=(".len()..];
     let end = body.find(')').expect("the REACH array closes");
-    body[..end].split_whitespace().map(str::to_string).collect()
+    // A pattern entry is quoted so the shell passes it to git unexpanded.
+    body[..end]
+        .split_whitespace()
+        .map(|e| e.trim_matches('"').to_string())
+        .collect()
 }
 
 /// The quoted entries under each `paths:` key, in order of appearance.
@@ -114,10 +118,10 @@ fn the_path_filter_covers_every_input_the_suite_reads() {
 /// MUST-FIRE: a filter missing one entry is reported.
 #[test]
 fn a_filter_missing_an_input_is_detected() {
-    let text = workflow().replace("      - 'docs/decisions/**'\n", "");
+    let text = workflow().replace("      - 'docs/decisions/ABSORPTION_*_BRIEF.md'\n", "");
     let lists = path_lists(&text);
     assert!(
-        !lists[0].contains(&pattern_for("../docs/decisions")),
+        !lists[0].contains(&pattern_for("../docs/decisions/ABSORPTION_*_BRIEF.md")),
         "the control did not remove the entry, so it proves nothing"
     );
 }

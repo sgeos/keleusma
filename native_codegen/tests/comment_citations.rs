@@ -562,7 +562,17 @@ fn citations(block: &str) -> Vec<String> {
 /// spent.
 fn resolvable_universe() -> BTreeSet<String> {
     let mut universe = BTreeSet::new();
+    let watched = watched_prefixes();
     for p in rust_and_kel_sources(&repo_root()) {
+        // **ONLY FILES WHOSE CHANGE RUNS THE NATIVE GATE.** Until 2026-10-28 the
+        // universe read every source in the repository, so a citation could
+        // resolve through root `tests/` or `keleusma-bench/`, which the native
+        // workflow does not watch, and an edit there could break this guard with
+        // no native run to show it. The question 11 audit found one such name.
+        let rel = p.strip_prefix(repo_root()).unwrap_or(&p).to_string_lossy();
+        if !watched.iter().any(|w| rel.starts_with(w.as_str())) {
+            continue;
+        }
         if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
             universe.insert(stem.to_string());
         }
@@ -608,6 +618,34 @@ fn resolvable_universe() -> BTreeSet<String> {
         }
     }
     universe
+}
+
+/// The directory prefixes under the native workflow's pull request path filter.
+///
+/// Read from `native.yml` itself, so the universe and the trigger cannot drift
+/// apart. Only `dir/**` entries become prefixes. A single-file entry holds no Rust
+/// or Keleusma source.
+fn watched_prefixes() -> Vec<String> {
+    let text = std::fs::read_to_string(repo_root().join(".github/workflows/native.yml"))
+        .expect("the native workflow is readable");
+    let paths = text
+        .split("pull_request:")
+        .nth(1)
+        .and_then(|t| t.split("paths:").nth(1))
+        .expect("the native workflow filters pull requests by path");
+    let prefixes: Vec<String> = paths
+        .lines()
+        .map(str::trim)
+        .skip_while(|l| l.is_empty())
+        .map_while(|l| l.strip_prefix("- "))
+        .filter_map(|l| l.trim_matches('\'').strip_suffix("**").map(str::to_string))
+        .collect();
+    assert!(
+        prefixes.iter().any(|p| p == "native_codegen/") && prefixes.iter().any(|p| p == "src/"),
+        "the native workflow's path filter parsed as {prefixes:?}, which omits this \
+         package or root `src/`. The parse is broken, not the filter."
+    );
+    prefixes
 }
 
 /// Every citation in this package, paired with the file that makes it.

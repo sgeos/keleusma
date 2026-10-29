@@ -47,7 +47,7 @@ use std::ffi::{CStr, c_void};
 /// in a register and includes the frame record in the frame. Sixteen bytes
 /// per level covers both conventions. `static_library_linkage.rs` measures
 /// the stack a Rust host actually uses on `arm64` and, under Rosetta, on
-/// `x86_64`. The `x86_64` measurement of 2026-10-28 exceeded the bound by 32
+/// x86-64. The x86-64 measurement of 2026-10-28 exceeded the bound by 32
 /// bytes until [`forbid_red_zone`] was applied, because a leaf's red-zone use
 /// was missing from its reported frame. No allowance covers that, since a red
 /// zone may be up to 128 bytes.
