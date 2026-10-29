@@ -22,7 +22,7 @@ land one pull request at a time.
 | 7 | Revise `RUNTIME_FAULTS.md` to the 2026-10-20 ruling | Relayed. V0.2.X reports the rewrite in its pull request 598 | V0.2.X | In review there |
 | 8 | Compare slot types on hot swap | V0.2.X confirmed with the operator and will change `compute_schema_hash`, then this line adopts it natively | V0.2.X, then this line | Waiting on V0.2.X |
 | 9 | Remove run-time kind tags | V0.2.X sent the rule's form on 2026-10-28, sequence 127, and this line replied. A measurement below shows the rule alone removes little | V0.2.X, then this line | Waiting on V0.2.X |
-| 10 | Restore two Kaizen records, then delete the branch | Restore them, then coordinate the deletion | This line and Kaizen | Open |
+| 10 | Restore two Kaizen records, then delete the branch | Restored verbatim into `NATIVE_LOWERING_INVENTORY.md` under a provenance note, from `af8b61ac` and `e4964490`. The branch is deleted after the merge and Kaizen is told | This line and Kaizen | Restored in its pull request. Deletion follows the merge |
 | 11 | Narrow `native.yml` paths | Audit which documents native tests read | This line | Open |
 | 12 | A hosted Linux job on two Ubuntu runners | Add the job and the host-triple route in `tier_one_targets.rs` | This line | Open |
 | 13 | Literal-only bare `Text`, `Text<N>` for dynamic text, a two-word literal | V0.2.X confirmed with the operator and schedules `Text<N>` with the passing form of a pointer, a capacity and a length. The operator called this a development no-op for this line. A native differential follows `Text<N>` | V0.2.X, then this line | Waiting on V0.2.X |
