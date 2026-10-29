@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A registered trust matrix governs the in-memory hot swap too.** With the
+  `signatures` feature and a verifying key registered, `Vm::replace_module`
+  and `Vm::replace_module_unchecked` accepted an unsigned in-memory module,
+  although `Vm::replace_module_from_bytes` refused unsigned bytes in the same
+  state. Both now return `LoadError::InvalidSignature` and keep the running
+  module. A host that means to swap an in-memory module clears the matrix
+  first with `Vm::clear_verifying_keys`. Reported by the pykeleusma line.
+
 - **A signed header over a short declared total is refused rather than
   panicking.** `verify_module_signature` read the signature metadata, the
   signature and the trailer at offsets fixed by the declared header without

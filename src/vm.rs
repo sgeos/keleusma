@@ -4144,7 +4144,38 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// Dialogue type compatibility between the old and new modules is
     /// the host's responsibility. The VM does not check it because
     /// dialogue types are erased at the bytecode level.
+    ///
+    /// # Trust matrix
+    ///
+    /// With the `signatures` feature, a VM with any registered verifying
+    /// key refuses this in-memory swap with
+    /// [`crate::bytecode::LoadError::InvalidSignature`]. An in-memory
+    /// [`Module`] carries no signature, so admitting it would let any
+    /// caller install unsigned code around the matrix that
+    /// [`Self::replace_module_from_bytes`] enforces. A host that means to
+    /// swap an in-memory module calls [`Self::clear_verifying_keys`]
+    /// first, which states that intent.
     pub fn replace_module(
+        &mut self,
+        new_module: Module,
+        initial_data: Vec<crate::bytecode::GenericValue<W, F>>,
+    ) -> Result<(), VmError> {
+        self.refuse_unsigned_swap_under_trust()?;
+        self.replace_module_schema_checked(new_module, initial_data)
+    }
+
+    /// Refuse an in-memory hot swap while a trust matrix is registered.
+    fn refuse_unsigned_swap_under_trust(&self) -> Result<(), VmError> {
+        #[cfg(feature = "signatures")]
+        if !self.verifying_keys.is_empty() {
+            return Err(VmError::from(crate::bytecode::LoadError::InvalidSignature));
+        }
+        Ok(())
+    }
+
+    /// The schema-checked swap shared by [`Self::replace_module`] and the
+    /// authenticated [`Self::replace_module_from_bytes`].
+    fn replace_module_schema_checked(
         &mut self,
         new_module: Module,
         initial_data: Vec<crate::bytecode::GenericValue<W, F>>,
@@ -4182,12 +4213,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     ///
     /// `unchecked` names the safety opt-out, not memory safety. The
     /// VM continues to enforce structural verification and resource
-    /// bounds; only the schema-hash sanity check is bypassed.
+    /// bounds; only the schema-hash sanity check is bypassed. It does
+    /// not bypass the trust matrix, which refuses it as it refuses
+    /// [`Self::replace_module`].
     pub fn replace_module_unchecked(
         &mut self,
         new_module: Module,
         initial_data: Vec<crate::bytecode::GenericValue<W, F>>,
     ) -> Result<(), VmError> {
+        self.refuse_unsigned_swap_under_trust()?;
         self.replace_module_inner(new_module, initial_data)
     }
 
@@ -4237,7 +4271,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // This mirrors initial signed construction and avoids serializing a
         // signature-required flag without its authenticated envelope.
         new_module.flags &= !crate::wire_format::FLAG_REQUIRES_SIGNATURE;
-        self.replace_module(new_module, initial_data)
+        self.replace_module_schema_checked(new_module, initial_data)
     }
 
     /// Register a verifying key with the VM's trust matrix.
