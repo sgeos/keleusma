@@ -81,6 +81,7 @@ pub mod linkage;
 pub mod opaque;
 pub mod region;
 pub mod stack;
+pub mod stage;
 mod text;
 
 /// The PACKED width of an operand-stack value, for placing it inside a flat
