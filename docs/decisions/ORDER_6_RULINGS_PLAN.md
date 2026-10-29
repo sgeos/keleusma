@@ -15,23 +15,39 @@ land one pull request at a time.
 |---|---|---|---|---|
 | 1 | Best effort, in bytecode cost units | Keep the current claim. No change | This line | Done, no work |
 | 2 | Defer the bytecode half of the flat machine | None | None | Deferred |
-| 3 | Report the root `scripts/` pipe pattern | Send the finding | This line reports, V0.2.X owns | Open |
+| 3 | Report the root `scripts/` pipe pattern | Sent 2026-10-28, sequence 122. V0.2.X accepted it as a defect report | V0.2.X | Reported, repair is V0.2.X's |
 | 4 | Apply `opt-level = 1` | Set it in `native_codegen` | This line | Open |
 | 5 | Wait for the verifier fix | None on this line | V0.2.X | Waiting |
 | 6 | Add `interp.kel` and `frame.kel` to the native corpus | Add the roots and re-pin the censuses they enter | This line | Open |
-| 7 | Revise `RUNTIME_FAULTS.md` to the 2026-10-20 ruling | Relay the ruling | V0.2.X | Open |
-| 8 | Compare slot types on hot swap | Relay the ruling, then adopt the new hash natively | V0.2.X, then this line | Open |
-| 9 | Remove run-time kind tags | Request a definite-initialization rule, then remove the tags | V0.2.X, then this line | Open |
+| 7 | Revise `RUNTIME_FAULTS.md` to the 2026-10-20 ruling | Relayed. V0.2.X reports it in progress | V0.2.X | In progress there |
+| 8 | Compare slot types on hot swap | V0.2.X confirmed with the operator and will change `compute_schema_hash`, then this line adopts it natively | V0.2.X, then this line | Waiting on V0.2.X |
+| 9 | Remove run-time kind tags | V0.2.X confirmed with the operator and will send the rule's form before it lands, then this line removes the tags | V0.2.X, then this line | Waiting on V0.2.X |
 | 10 | Restore two Kaizen records, then delete the branch | Restore them, then coordinate the deletion | This line and Kaizen | Open |
 | 11 | Narrow `native.yml` paths | Audit which documents native tests read | This line | Open |
 | 12 | A hosted Linux job on two Ubuntu runners | Add the job and the host-triple route in `tier_one_targets.rs` | This line | Open |
-| 13 | Literal-only bare `Text`, `Text<N>` for dynamic text, a two-word literal | A literal passes as a pointer and a capacity. `Text<N>` is requested | This line, and V0.2.X for `Text<N>` | Open |
+| 13 | Literal-only bare `Text`, `Text<N>` for dynamic text, a two-word literal | V0.2.X confirmed with the operator and schedules `Text<N>` with the passing form of a pointer, a capacity and a length. The operator called this a development no-op for this line. A native differential follows `Text<N>` | V0.2.X, then this line | Waiting on V0.2.X |
 | 14 | A typed host pointer for `Opaque` | Lower it with a distinct C type per declared opaque type | This line | Open |
-| 15 | Install the `x86_64` Rust target | Install it and run the Rust host on both architectures | This line | Open |
-| 16 | Native output from the `keleusma` command | Propose the shape to V0.2.X, which maintains `keleusma-cli` | This line and V0.2.X | Open |
-| 17 | Release when the operator says so | None until told | Operator | Held |
+| 15 | Install the `x86_64` Rust target | Installed. The Rust host runs on `x86_64` under Rosetta, and its first run found the exported stack bound 32 bytes short, repaired by `noredzone` | This line | Done, in its pull request |
+| 16 | Native output from the `keleusma` command | V0.2.X confirmed with the operator that `keleusma-cli` delegates to `kel-native` when installed, done by V0.2.X | V0.2.X | Waiting on V0.2.X |
+| 17 | Release when the operator says so, and V0.4.0 only in the abstract for now | None until told | Operator | Held |
 | 18 | The V0.2.X dependency is met | Mark it met in the Order 6 record | This line | Done in this record |
 | 19 | A self-hosted compiler compiled to native code and used as the compiler, a V0.4.0 requirement | Plan and build the native pipeline | This line | Open, planned below |
+
+## Watch items
+
+- **A struct marshalling defect reported against 0.2.2, 2026-10-28.** A
+  session working on another repository, `sgeos/volaw-daw`, reported to the
+  V0.2.X line, and pointed this line at, a defect observed on keleusma 0.2.2.
+  A struct the host builds with `Value::struct_value` is packed in the host's
+  field order without names and read through the script's declared offsets,
+  so a declaration with another field order or other scalar types reads
+  reinterpreted bits with no error. It is a peer report and is not verified
+  here. The marshalling is in root `src/`, which V0.2.X owns and which this
+  line carries unchanged, so the virtual machine embedding here is expected to
+  behave alike and to receive V0.2.X's repair by absorption. Whether the native
+  embedding, whose host struct layouts come from headers generated from the
+  script's own declaration, is affected is open and will be checked when the
+  repair lands.
 
 ## This line's readings, stated as its own
 
@@ -56,6 +72,14 @@ V0.4.0 requirement.
 **What already exists.** All fourteen stage sources under `src/selfhost/kel/`
 are native corpus subjects, lowered natively and compared with the virtual
 machine one stage at a time with seeded inputs.
+
+**The three compilers.** V0.2.X relayed on 2026-10-28, from its own session
+with the operator, that it should be possible to compile with the reference
+compiler, the self-hosted interpreted compiler and the self-hosted native
+compiler, and that the two lines will probably merge when native code
+generation and self-hosting share one executable. This record treats the
+three as the targets of question 19. It is a relayed remark, recorded here
+with that provenance.
 
 **What is missing, at the design level.** The stages are not yet run as a
 pipeline natively. The self-hosted driver threads each stage's output into the

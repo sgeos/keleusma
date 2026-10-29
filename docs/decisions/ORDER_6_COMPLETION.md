@@ -63,8 +63,13 @@ below. V0.4.0 is not released, since publication is held.
   field. Ordering comparisons of `Text` are refused.
 - Opaque handles are refused on every route.
 - The Linux objects are built and read, not linked or run.
-- The Rust lexer host, which measures the stack, runs on `arm64` only, because
-  the `x86_64` Rust standard library is not installed.
+- The Rust lexer host, which measures the stack, ran on `arm64` only until
+  2026-10-28. With the `x86_64` Rust target installed under question 15, it
+  runs under Rosetta too. Its first `x86_64` run measured 1,288 bytes against
+  an exported bound of 1,256, because LLVM's reported frame sizes left out a
+  leaf's System V red zone. Emitted functions are now marked `noredzone`, and
+  the bound is 1,304 against the same measurement. The `arm64` figures, 1,344
+  measured against 1,376, were unchanged by the attribute.
 - The construct census drives scalar functions. Streams, reentrant entries,
   natives, shared data and `Text` are covered by the files its rows name.
 

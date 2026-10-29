@@ -25,7 +25,7 @@ mod common;
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
 use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
 };
 use keleusma::bytecode::{Module, SlotVisibility, Value};
 use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
@@ -44,11 +44,16 @@ const TURNS: i64 = 300;
 
 fn machine() -> TargetMachine {
     Target::initialize_native(&InitializationConfig::default()).unwrap();
-    let triple = TargetMachine::get_default_triple();
-    Target::from_triple(&triple)
+    machine_for(&TargetMachine::get_default_triple())
+}
+
+/// A machine for `triple`, which must be one of the targets LLVM was built for.
+fn machine_for(triple: &TargetTriple) -> TargetMachine {
+    Target::initialize_all(&InitializationConfig::default());
+    Target::from_triple(triple)
         .unwrap()
         .create_target_machine(
-            &triple,
+            triple,
             "generic",
             "",
             OptimizationLevel::Default,
@@ -107,11 +112,15 @@ fn archive(ar: &str, dir: &Path, prefix: &str) -> PathBuf {
 
 /// Write `prefix.o`, `prefix.h` and `prefix.rs` for `program` into `dir`.
 fn emit(program: &Module, prefix: &str, dir: &Path) -> Emitted {
-    let tm = machine();
+    emit_for(&machine(), program, prefix, dir)
+}
+
+/// [`emit`] for the target `tm` describes.
+fn emit_for(tm: &TargetMachine, program: &Module, prefix: &str, dir: &Path) -> Emitted {
     let ctx = Context::create();
-    let lib = linkage::build(&ctx, program, &tm, prefix, &HostContracts::default())
+    let lib = linkage::build(&ctx, program, tm, prefix, &HostContracts::default())
         .unwrap_or_else(|e| panic!("{prefix}: {e:?}"));
-    lib.write_object(&tm, &dir.join(format!("{prefix}.o")))
+    lib.write_object(tm, &dir.join(format!("{prefix}.o")))
         .unwrap();
     std::fs::write(dir.join(format!("{prefix}.h")), lib.c_header()).unwrap();
     std::fs::write(dir.join(format!("{prefix}.rs")), lib.rust_bindings()).unwrap();
@@ -204,16 +213,26 @@ fn vm_lex(program: &Module, text: &[u8], turns: i64) -> (Vec<i64>, Vec<u8>) {
 }
 
 fn build_lexer_host(rustc: &str, dir: &Path, bindings: &Path, out: &Path) -> Output {
+    build_lexer_host_for(rustc, None, dir, bindings, out)
+}
+
+/// [`build_lexer_host`] for `target`, or for the host when it is `None`.
+fn build_lexer_host_for(
+    rustc: &str,
+    target: Option<&str>,
+    dir: &Path,
+    bindings: &Path,
+    out: &Path,
+) -> Output {
     let host = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/lexer_host/host.rs");
-    Command::new(rustc)
-        .env("KEL_LIBRARY_BINDINGS", bindings)
+    let mut cmd = Command::new(rustc);
+    cmd.env("KEL_LIBRARY_BINDINGS", bindings)
         .args(["--edition", "2024", "-D", "warnings", "-L"])
-        .arg(format!("native={}", dir.display()))
-        .arg("-o")
-        .arg(out)
-        .arg(host)
-        .output()
-        .unwrap()
+        .arg(format!("native={}", dir.display()));
+    if let Some(target) = target {
+        cmd.args(["--target", target]);
+    }
+    cmd.arg("-o").arg(out).arg(host).output().unwrap()
 }
 
 /// **The gate.** Three lexer instances in one host-reserved pool lex three
@@ -339,6 +358,139 @@ fn the_measured_machine_stack_stays_within_the_exported_bound() {
         "the lexer used {deepest} stack bytes, above its exported bound of {}",
         emitted.stack_bytes
     );
+}
+
+/// **Operator question 15: the Rust host on `x86_64`, under Rosetta.**
+///
+/// The two tests above run the Rust host on the build machine's own
+/// architecture. This one builds the lexer library and the Rust host for
+/// `x86_64-apple-darwin` and runs them under Rosetta on an `arm64` Mac, so the
+/// host's `x86_64` stack probe and the `x86_64` stack bound are exercised. The
+/// yields and shared bytes must agree with the virtual machine, and the
+/// measured stack must be real and within the exported bound.
+///
+/// It applies only on an `arm64` Mac. It skips loudly where Rosetta does not
+/// run, since that is outside this repository. A missing `x86_64` Rust
+/// standard library skips loudly too, and fails where the tools are required,
+/// because continuous integration installs that target.
+#[test]
+fn the_rust_host_runs_on_x86_64_and_stays_within_its_stack_bound() {
+    const TARGET: &str = "x86_64-apple-darwin";
+    if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        eprintln!("SKIPPED: the x86_64 Rust host runs only on an arm64 Mac, under Rosetta");
+        return;
+    }
+    let (Some(rustc), Some(ar)) = (tool("rustc", "RUSTC"), tool("ar", "AR")) else {
+        return;
+    };
+    let rosetta = Command::new("arch")
+        .args(["-x86_64", "/usr/bin/true"])
+        .status()
+        .is_ok_and(|s| s.success());
+    if !rosetta {
+        eprintln!("SKIPPED: Rosetta does not run here, so x86_64 code cannot be executed");
+        return;
+    }
+    let libdir = Command::new(&rustc)
+        .args(["--print", "target-libdir", "--target", TARGET])
+        .output()
+        .ok()
+        .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()));
+    if !libdir.is_some_and(|d| has_std(&d)) {
+        let required = std::env::var_os("CI").is_some()
+            || std::env::var_os("KEL_REQUIRE_LLVM_TOOLS").is_some();
+        assert!(
+            !required,
+            "the {TARGET} Rust standard library is required here. Install it with \
+             `rustup target add {TARGET}`."
+        );
+        eprintln!("SKIPPED: the {TARGET} Rust standard library is not installed");
+        return;
+    }
+
+    let dir = scratch("lexer-x86_64");
+    let emitted = emit_for(
+        &machine_for(&TargetTriple::create(TARGET)),
+        &lexer(),
+        "kel_lexer",
+        &dir,
+    );
+    archive(&ar, &dir, "kel_lexer");
+    let exe = dir.join("lexer_host_x86_64");
+    let built = build_lexer_host_for(&rustc, Some(TARGET), &dir, &dir.join("kel_lexer.rs"), &exe);
+    assert!(
+        built.status.success(),
+        "the x86_64 Rust host did not build\n{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let out_dir = scratch("lexer-x86_64-run");
+    let sources: Vec<PathBuf> = TEXTS
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let p = out_dir.join(format!("source_{i}.kel"));
+            std::fs::write(&p, t).unwrap();
+            p
+        })
+        .collect();
+    let program = lexer();
+    let mut measured = Vec::new();
+    for paint in ["90", "165"] {
+        let ran = run(Command::new("arch")
+            .arg("-x86_64")
+            .arg(&exe)
+            .env("KEL_STACK_PAINT", paint)
+            .arg(&out_dir)
+            .arg(TURNS.to_string())
+            .args(&sources));
+        let mut seen = vec![Vec::new(); TEXTS.len()];
+        let mut stack = None;
+        for line in String::from_utf8(ran.stdout).unwrap().lines() {
+            if let Some(s) = line.strip_prefix("S ") {
+                stack = Some(s.to_string());
+                continue;
+            }
+            let f: Vec<&str> = line.split(' ').collect();
+            assert_eq!((f.len(), f[0]), (4, "Y"), "unexpected host line `{line}`");
+            let i: usize = f[1].parse().unwrap();
+            seen[i].push(f[3].parse::<i64>().unwrap());
+        }
+        for (i, text) in TEXTS.iter().enumerate() {
+            let (ys, shared) = vm_lex(&program, text, TURNS);
+            assert_eq!(seen[i], ys, "x86_64 instance {i}: token yields");
+            let written = std::fs::read(out_dir.join(format!("shared_{i}.bin"))).unwrap();
+            assert!(
+                written == shared,
+                "x86_64 instance {i}: shared writes differ"
+            );
+        }
+        let stack = stack.expect("the host reports its stack measurement");
+        assert_ne!(stack, "unmeasured", "the x86_64 host has a stack probe");
+        measured.push(stack.parse::<u64>().unwrap());
+    }
+    let deepest = *measured.iter().max().unwrap();
+    println!(
+        "x86_64 Rust host under Rosetta: agrees with the VM, stack measured {measured:?} \
+         bytes, exported bound {} bytes",
+        emitted.stack_bytes
+    );
+    assert!(deepest > 0, "the x86_64 probe measured no stack use at all");
+    assert!(
+        deepest <= emitted.stack_bytes,
+        "the x86_64 lexer used {deepest} stack bytes, above its exported bound of {}",
+        emitted.stack_bytes
+    );
+}
+
+/// Whether `libdir` holds a standard library, whose file name carries a hash.
+fn has_std(libdir: &Path) -> bool {
+    std::fs::read_dir(libdir).is_ok_and(|entries| {
+        entries.flatten().any(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("libstd-") && name.ends_with(".rlib")
+        })
+    })
 }
 
 /// The generated layout names the fields the reference reads, at the offsets

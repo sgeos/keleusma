@@ -662,6 +662,7 @@ pub fn build<'ctx>(
     // **THE MACHINE STACK BOUND IS READ FROM ONE CODE GENERATION OF THIS
     // MODULE.** The constant is added afterwards, which changes no function,
     // and `write_object` generates again and refuses if any frame moved.
+    crate::stack::forbid_red_zone(&module);
     let roots = handle_names(prefix, yield_site.is_some());
     let stack_bytes = stack_bound(&module, machine, &roots)?;
     add_constant(

@@ -45,14 +45,34 @@ use std::ffi::{CStr, c_void};
 /// stores. On x86-64 that is the eight-byte return address, and stack
 /// realignment at a call can add eight more. AAPCS64 keeps the return address
 /// in a register and includes the frame record in the frame. Sixteen bytes
-/// per level covers both conventions, which is an assumption about them and
-/// not a measurement. `static_library_linkage.rs` measures the stack a host
-/// actually uses on the executed target.
+/// per level covers both conventions. `static_library_linkage.rs` measures
+/// the stack a Rust host actually uses on `arm64` and, under Rosetta, on
+/// `x86_64`. The `x86_64` measurement of 2026-10-28 exceeded the bound by 32
+/// bytes until [`forbid_red_zone`] was applied, because a leaf's red-zone use
+/// was missing from its reported frame. No allowance covers that, since a red
+/// zone may be up to 128 bytes.
 pub const FRAME_ALLOWANCE: u64 = 16;
 
 const ATTRIBUTE: &str = "warn-stack-size";
 const REPORT: &str = "stack frame size (";
 const FUNCTION: &str = " in function '";
+
+/// Mark every function `module` defines `noredzone`.
+///
+/// A red zone lets a leaf function use memory below its stack pointer without
+/// allocating it, and the frame size LLVM reports then leaves those bytes out.
+/// The x86-64 System V convention allows a 128-byte red zone. Forbidding it
+/// makes every byte a function touches part of its reported frame, so the
+/// bound counts it.
+pub fn forbid_red_zone(module: &LlvmModule<'_>) {
+    let ctx = module.get_context();
+    let kind = inkwell::attributes::Attribute::get_named_enum_kind_id("noredzone");
+    for f in module.get_functions() {
+        if f.count_basic_blocks() > 0 {
+            f.add_attribute(AttributeLoc::Function, ctx.create_enum_attribute(kind, 0));
+        }
+    }
+}
 
 /// Clears the handler however the guarded code generation ends, before the
 /// buffer the handler writes into is dropped.
