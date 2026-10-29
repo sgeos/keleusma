@@ -62,6 +62,12 @@ that code unchanged.
 - Twelve corpus coroutines need a run-time kind. Ten first need it for an
   operand that may hold more than one kind and one for a kind guard. One
   further module is refused by the coroutine route.
+- **Amended 2026-10-29.** The census counted every stack entry, including
+  entries no instruction reads. Counting only the operands an instruction
+  reads, the ten `piano_roll` coroutines are static, because their ambiguous
+  value is a native result that only `PopN` and the soft-failure trap pop.
+  Two coroutines and 21 instructions now need a run-time kind. The figures
+  above are kept as they were recorded.
 - `schema_hash` covers slot names and visibility, not slot types, so two
   layouts that differ only in a slot's type pass the acceptance rule in both
   shapes. `shared_bytes` catches a change of size and not one of type alone.

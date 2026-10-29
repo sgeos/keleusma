@@ -88,7 +88,9 @@
 // 815 -> 821: six in `native_opaque.rs`, for operator question 14. No name
 // disappeared. The two renamed in `tier_one_targets.rs` for question 12 kept
 // the count.
-const RECORDED_TEST_FUNCTIONS: usize = 821;
+// 821 -> 822: `an_operand_no_instruction_reads_needs_no_run_time_kind` in
+// `static_kind_lowering.rs`, for the question 9 census. No name disappeared.
+const RECORDED_TEST_FUNCTIONS: usize = 822;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise
