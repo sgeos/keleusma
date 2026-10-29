@@ -85,7 +85,10 @@
 // question 15. No name disappeared.
 // 814 -> 815: `a_pattern_entry_covers_only_what_it_names` in `reach_census.rs`,
 // for operator question 11. No name disappeared.
-const RECORDED_TEST_FUNCTIONS: usize = 815;
+// 815 -> 821: six in `native_opaque.rs`, for operator question 14. No name
+// disappeared. The two renamed in `tier_one_targets.rs` for question 12 kept
+// the count.
+const RECORDED_TEST_FUNCTIONS: usize = 821;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise
@@ -296,7 +299,8 @@ const RECORDED_TEST_FUNCTIONS: usize = 815;
 // 164 -> 166: `native_hot_swap.rs` and `static_kind_lowering.rs`, none removed.
 // 166 -> 170: `language_construct_census.rs`, `tier_one_targets.rs`,
 // `kel_native_cli.rs` and `text_comparison.rs` for Order 6, none removed.
-const RECORDED_TEST_FILES: usize = 170;
+// 170 -> 171: `native_opaque.rs` for operator question 14, none removed.
+const RECORDED_TEST_FILES: usize = 171;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")

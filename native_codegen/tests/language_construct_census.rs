@@ -269,7 +269,7 @@ const CONSTRUCTS: &[Construct] = &[
         section: "3 opaque types",
         what: "opaque host handles",
         src: "",
-        drive: Drive::Elsewhere("none; see the Order 6 completion record"),
+        drive: Drive::Elsewhere("native_opaque.rs"),
     },
 ];
 

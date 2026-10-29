@@ -135,15 +135,23 @@ fn machine(target: Option<&str>) -> Outcome<TargetMachine> {
         .ok_or_else(|| Failure(70, String::from("the target machine could not be created")))
 }
 
-fn compile(path: &Path) -> Outcome<keleusma::bytecode::Module> {
+/// The module and the program it was compiled from, which supplies the opaque
+/// type names the module does not record.
+fn compile(path: &Path) -> Outcome<(keleusma::bytecode::Module, keleusma::ast::Program)> {
     let src = std::fs::read_to_string(path)
         .map_err(|e| Failure(66, format!("{}: {e}", path.display())))?;
     let tokens = keleusma::lexer::tokenize(&src).map_err(|e| Failure(65, format!("lex: {e:?}")))?;
     let ast = keleusma::parser::parse(&tokens).map_err(|e| Failure(65, format!("parse: {e:?}")))?;
-    keleusma::compiler::compile(&ast).map_err(|e| Failure(65, format!("compile: {e:?}")))
+    let module =
+        keleusma::compiler::compile(&ast).map_err(|e| Failure(65, format!("compile: {e:?}")))?;
+    Ok((module, ast))
 }
 
-fn contracts(module: &keleusma::bytecode::Module, fallible: &[String]) -> Outcome<HostContracts> {
+fn contracts(
+    module: &keleusma::bytecode::Module,
+    program: &keleusma::ast::Program,
+    fallible: &[String],
+) -> Outcome<HostContracts> {
     let mut set = BTreeSet::new();
     for name in fallible {
         let index = module
@@ -155,6 +163,7 @@ fn contracts(module: &keleusma::bytecode::Module, fallible: &[String]) -> Outcom
     }
     Ok(HostContracts {
         fallible_natives: set,
+        opaque_natives: keleusma_native::opaque::opaque_natives(program, module),
         ..HostContracts::default()
     })
 }
@@ -177,9 +186,9 @@ fn tool(name: &str, args: &mut Command) -> Outcome<()> {
 }
 
 fn build(args: &Args) -> Outcome<()> {
-    let module = compile(&args.source)?;
+    let (module, program) = compile(&args.source)?;
     let tm = machine(args.target.as_deref())?;
-    let host = contracts(&module, &args.fallible)?;
+    let host = contracts(&module, &program, &args.fallible)?;
     let prefix = args.prefix.as_deref().expect("checked by parse_args");
     let out = args.out.as_deref().expect("checked by parse_args");
     let ctx = Context::create();
@@ -230,9 +239,9 @@ fn build(args: &Args) -> Outcome<()> {
 }
 
 fn inspect(args: &Args) -> Outcome<()> {
-    let module = compile(&args.source)?;
+    let (module, program) = compile(&args.source)?;
     let tm = machine(args.target.as_deref())?;
-    let host = contracts(&module, &args.fallible)?;
+    let host = contracts(&module, &program, &args.fallible)?;
     let ctx = Context::create();
     let lib = linkage::build(&ctx, &module, &tm, "kel_inspect", &host)
         .map_err(|e| Failure(70, format!("the native route refused it: {e:?}")))?;
