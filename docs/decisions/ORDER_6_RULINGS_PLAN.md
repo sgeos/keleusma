@@ -17,9 +17,9 @@ land one pull request at a time.
 | 2 | Defer the bytecode half of the flat machine | None | None | Deferred |
 | 3 | Report the root `scripts/` pipe pattern | Sent 2026-10-28, sequence 122. V0.2.X accepted it as a defect report | V0.2.X | Reported, repair is V0.2.X's |
 | 4 | Apply `opt-level = 1` | Set it in `native_codegen` | This line | Open |
-| 5 | Wait for the verifier fix | None on this line | V0.2.X | Waiting |
+| 5 | Wait for the verifier fix | V0.2.X gave notice on 2026-10-28, sequence 126, that its pull request 598 adds a callee-aware time bound that admits `intern_id`. Once it is absorbed, `native_codegen/src/cost.rs` may call that form | V0.2.X, then this line | Waiting on V0.2.X's merge |
 | 6 | Add `interp.kel` and `frame.kel` to the native corpus | Add the roots and re-pin the censuses they enter | This line | Open |
-| 7 | Revise `RUNTIME_FAULTS.md` to the 2026-10-20 ruling | Relayed. V0.2.X reports it in progress | V0.2.X | In progress there |
+| 7 | Revise `RUNTIME_FAULTS.md` to the 2026-10-20 ruling | Relayed. V0.2.X reports the rewrite in its pull request 598 | V0.2.X | In review there |
 | 8 | Compare slot types on hot swap | V0.2.X confirmed with the operator and will change `compute_schema_hash`, then this line adopts it natively | V0.2.X, then this line | Waiting on V0.2.X |
 | 9 | Remove run-time kind tags | V0.2.X confirmed with the operator and will send the rule's form before it lands, then this line removes the tags | V0.2.X, then this line | Waiting on V0.2.X |
 | 10 | Restore two Kaizen records, then delete the branch | Restore them, then coordinate the deletion | This line and Kaizen | Open |
@@ -27,7 +27,7 @@ land one pull request at a time.
 | 12 | A hosted Linux job on two Ubuntu runners | Add the job and the host-triple route in `tier_one_targets.rs` | This line | Open |
 | 13 | Literal-only bare `Text`, `Text<N>` for dynamic text, a two-word literal | V0.2.X confirmed with the operator and schedules `Text<N>` with the passing form of a pointer, a capacity and a length. The operator called this a development no-op for this line. A native differential follows `Text<N>` | V0.2.X, then this line | Waiting on V0.2.X |
 | 14 | A typed host pointer for `Opaque` | Lower it with a distinct C type per declared opaque type | This line | Open |
-| 15 | Install the `x86_64` Rust target | Installed. The Rust host runs on `x86_64` under Rosetta, and its first run found the exported stack bound 32 bytes short, repaired by `noredzone` | This line | Done, in its pull request |
+| 15 | Install the `x86_64` Rust target | Installed. The Rust host runs on `x86_64` under Rosetta, and its first run found the exported stack bound 32 bytes short, repaired by `noredzone` | This line | Done, pull request 597 at `97f34b1e` |
 | 16 | Native output from the `keleusma` command | V0.2.X confirmed with the operator that `keleusma-cli` delegates to `kel-native` when installed, done by V0.2.X | V0.2.X | Waiting on V0.2.X |
 | 17 | Release when the operator says so, and V0.4.0 only in the abstract for now | None until told | Operator | Held |
 | 18 | The V0.2.X dependency is met | Mark it met in the Order 6 record | This line | Done in this record |

@@ -319,6 +319,8 @@ See [docs/README.md](docs/README.md) for the full documentation knowledge graph.
 - [Related Work](docs/reference/RELATED_WORK.md). Academic and industrial context with citations.
 - [Decisions](docs/decisions/). Resolved, priority, and backlog decisions.
 
+Contributions follow [CONTRIBUTING.md](CONTRIBUTING.md), and participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## License
 
 0BSD. See LICENSE file.

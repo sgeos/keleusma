@@ -145,8 +145,8 @@ pub mod kind {
     /// known root can be checked LOCALLY, without contacting an external
     /// authority.
     ///
-    /// The locality is the requirement, not an optimisation: the format targets
-    /// carriers with no authority to consult and no retransmission.
+    /// The locality is the requirement, not an optimisation. The check must work
+    /// where no authority can be reached.
     pub const PROVENANCE: u16 = 0x0025;
 
     /// **Reserved, unemitted.** The assurance level an artifact declares it

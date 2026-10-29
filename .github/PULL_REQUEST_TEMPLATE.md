@@ -26,6 +26,9 @@ change does and why. Reference any related issue (`Fixes #N` or
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` clean
 - [ ] `RUSTDOCFLAGS="-D warnings -A rustdoc::redundant-explicit-links" cargo doc -p keleusma --no-deps --features signatures,shell` clean
 - [ ] `CHANGELOG.md` updated under `[Unreleased]` if the change is user-visible
+- [ ] Any figure quoted in the change was measured on this tree, or the same sentence says it was not
+- [ ] No check was weakened to make this pass. If a check is wrong, the change says so and fixes it deliberately
+- [ ] Nothing from `secret/` or `tmp/` is included
 - [ ] If the change touches the surface language, `docs/spec/GRAMMAR.md` and the editor syntax files under `editors/` are updated
 - [ ] If the change touches verifier soundness, the rationale is recorded in the PR description and the CHANGELOG entry names the soundness invariant preserved or relaxed
 
