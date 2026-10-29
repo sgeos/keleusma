@@ -97,6 +97,34 @@ fn tool(name: &str) -> Option<String> {
     None
 }
 
+/// The MacPorts LLVM, consulted only when `KEL_LLVM_BIN` does not name one.
+const LLVM_BIN: &str = "/opt/local/libexec/llvm-22/bin";
+
+/// A symbol reader for objects of EVERY Tier 1 format.
+///
+/// The first run on Linux, 2026-10-28, failed here: GNU `nm` cannot read the
+/// Mach-O objects of the two macOS targets. `llvm-nm` reads both formats, so it
+/// is preferred, from `KEL_LLVM_BIN` and then the MacPorts path. The system
+/// `nm` is accepted only on macOS, where it is LLVM's and reads ELF as well.
+fn object_reader() -> Option<String> {
+    let llvm = std::env::var("KEL_LLVM_BIN")
+        .ok()
+        .into_iter()
+        .chain([LLVM_BIN.to_string()])
+        .map(|dir| format!("{dir}/llvm-nm"))
+        .find(|p| {
+            Command::new(p)
+                .arg("--version")
+                .output()
+                .is_ok_and(|o| o.status.success())
+        });
+    match llvm {
+        Some(p) => Some(p),
+        None if cfg!(target_os = "macos") => tool("nm"),
+        None => tool("llvm-nm"),
+    }
+}
+
 /// Defined external and undefined symbols of an object, undecorated.
 fn symbols(nm: &str, path: &Path, mach_o: bool) -> (BTreeSet<String>, BTreeSet<String>) {
     let out = run(Command::new(nm).arg("-g").arg(path));
@@ -222,12 +250,13 @@ fn linux_host_triple() -> Option<&'static str> {
 }
 
 /// The `cc` arguments that build for `triple` on this machine, or `None` when
-/// this machine has no route to it. A Darwin triple is selected with `-arch`.
-/// A Linux triple has a route only when it is this machine's own, through the
-/// system `cc` with no target flag.
+/// this machine has no route to it. On macOS a Darwin triple is selected with
+/// `-arch`. A Linux triple has a route only when it is this machine's own,
+/// through the system `cc` with no target flag.
 fn cc_route(triple: &str) -> Option<Vec<&'static str>> {
     match darwin_arch(triple) {
-        Some(arch) => Some(vec!["-arch", arch]),
+        Some(arch) if cfg!(target_os = "macos") => Some(vec!["-arch", arch]),
+        Some(_) => None,
         None if linux_host_triple() == Some(triple) => Some(Vec::new()),
         None => None,
     }
@@ -251,7 +280,7 @@ fn runs(route: &[&str], dir: &Path) -> bool {
 
 #[test]
 fn the_lexer_builds_for_every_tier_one_target_and_runs_where_it_can() {
-    let (Some(nm), Some(ar)) = (tool("nm"), tool("ar")) else {
+    let (Some(nm), Some(ar)) = (object_reader(), tool("ar")) else {
         return;
     };
     let program = lexer();
@@ -340,7 +369,10 @@ fn a_fallible_native_returns_correctly_on_each_executable_target() {
         .into_iter()
         .chain(linux_host_triple());
     for triple in triples {
-        let route = cc_route(triple).expect("each of these triples has a route");
+        let Some(route) = cc_route(triple) else {
+            eprintln!("  {triple}: this machine has no route to it");
+            continue;
+        };
         let dir = scratch(&format!("risky-{triple}"));
         if !runs(&route, &dir) {
             eprintln!("  {triple}: not executable here");
