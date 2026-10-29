@@ -884,22 +884,43 @@ fn copy_slot(
     dst[d..d + n].copy_from_slice(&src[s..s + n]);
 }
 
-/// The ten AST tables plus the two scalars, with their widths and their names on
-/// each side. Widths read from both `shared data` blocks and verified equal.
-const AST_BRIDGE: &[(&str, &str, usize)] = &[
-    ("root", "root", 1),
-    ("kinds", "kinds", 1024),
-    ("args", "args", 1024),
-    ("lhs", "lhs", 1024),
-    ("rhs", "rhs", 1024),
-    ("call_args", "call_args", 256),
-    ("for_parts", "for_parts", 256),
-    ("match_parts", "match_parts", 256),
-    ("limit_parts", "limit_parts", 256),
-    ("head_parts", "head_parts", 256),
-    ("out_param_count", "param_count", 1),
-    ("out_category", "category", 1),
+/// The ten AST tables plus the two scalars, by their names on each side.
+///
+/// **The widths are read from both `shared data` blocks, not written here.**
+/// Until 2026-10-28 this table carried them as constants, 1,024 nodes and 256
+/// parts, and its comment said they were verified equal. The capacity raise of
+/// 2026-10-26 took both stages to 4,096 and 1,024, so the bridge copied a prefix
+/// while still claiming equal widths. The subject is small enough to fit the
+/// prefix, so nothing failed. [`slot_words`] now measures each side, and the
+/// copy asserts the two agree.
+const AST_BRIDGE: &[(&str, &str)] = &[
+    ("root", "root"),
+    ("kinds", "kinds"),
+    ("args", "args"),
+    ("lhs", "lhs"),
+    ("rhs", "rhs"),
+    ("call_args", "call_args"),
+    ("for_parts", "for_parts"),
+    ("match_parts", "match_parts"),
+    ("limit_parts", "limit_parts"),
+    ("head_parts", "head_parts"),
+    ("out_param_count", "param_count"),
+    ("out_category", "category"),
 ];
+
+/// The number of word elements in the shared slot named `suffix`: one for a
+/// scalar, the element count for an array, which the layout expands to one
+/// slot per element.
+fn slot_words(m: &Module, suffix: &str) -> usize {
+    let dl = m.data_layout.as_ref().expect("a data layout");
+    let scalar = format!(".{suffix}");
+    let element = format!(".{suffix}[");
+    dl.slots
+        .iter()
+        .filter(|s| s.visibility == SlotVisibility::Shared)
+        .filter(|s| s.name == suffix || s.name.ends_with(&scalar) || s.name.contains(&element))
+        .count()
+}
 
 #[test]
 fn codegen_agrees_with_the_vm_on_reconstructs_own_output() {
@@ -953,8 +974,21 @@ fn codegen_agrees_with_the_vm_on_reconstructs_own_output() {
         "codegen.kel must lower for this differential to mean anything"
     );
     let mut cg_seed = vec![0u8; shared_data_bytes_for(&cg)];
-    for (from, to, words) in AST_BRIDGE {
-        copy_slot(&rec, &rec_out.shared, from, &cg, &mut cg_seed, to, *words);
+    // REACH: the measurement sees the whole table, the driver's own capacity.
+    assert_eq!(
+        slot_words(&rec, "kinds"),
+        keleusma::selfhost::AST_NODE_CAP,
+        "the node table's measured width is not the driver's node capacity"
+    );
+    for (from, to) in AST_BRIDGE {
+        let words = slot_words(&rec, from);
+        assert!(words > 0, "reconstruct.kel has no shared slot `{from}`");
+        assert_eq!(
+            words,
+            slot_words(&cg, to),
+            "`{from}` and `{to}` have different widths, so the bridge would truncate"
+        );
+        copy_slot(&rec, &rec_out.shared, from, &cg, &mut cg_seed, to, words);
     }
 
     // **THE BRIDGE MUST HAVE CARRIED SOMETHING.** An all-zero AST is an empty

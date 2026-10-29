@@ -31,7 +31,7 @@ land one pull request at a time.
 | 16 | Native output from the `keleusma` command | V0.2.X confirmed with the operator that `keleusma-cli` delegates to `kel-native` when installed, done by V0.2.X | V0.2.X | Waiting on V0.2.X |
 | 17 | Release when the operator says so, and V0.4.0 only in the abstract for now | None until told | Operator | Held |
 | 18 | The V0.2.X dependency is met | Mark it met in the Order 6 record | This line | Done in this record |
-| 19 | A self-hosted compiler compiled to native code and used as the compiler, a V0.4.0 requirement | Plan and build the native pipeline | This line | Open, planned below |
+| 19 | A self-hosted compiler compiled to native code and used as the compiler, a V0.4.0 requirement | Planned in [its own record](./NATIVE_SELF_HOSTED_COMPILER_PLAN.md). The first step, an executor boundary in the driver, is requested from V0.2.X | V0.2.X, then this line | Planned. Step 1 requested |
 
 ## Watch items
 
@@ -160,6 +160,10 @@ compiler, and that the two lines will probably merge when native code
 generation and self-hosting share one executable. This record treats the
 three as the targets of question 19. It is a relayed remark, recorded here
 with that provenance.
+
+**The plan is now [its own record](./NATIVE_SELF_HOSTED_COMPILER_PLAN.md)**,
+written on 2026-10-28 from a reading of the driver. The paragraph below is
+the earlier summary it replaces.
 
 **What is missing, at the design level.** The stages are not yet run as a
 pipeline natively. The self-hosted driver threads each stage's output into the
