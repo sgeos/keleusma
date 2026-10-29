@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A cast to the operand's own primitive type is identity.** The reference
+  compiler lowered `Word as Word` to `FloatToInt`, `Float as Float` to
+  `IntToFloat`, `Byte as Byte` to `WordToByte` and `Fixed as Fixed` to
+  `WordToFixed`. Each program compiled and verified and then failed at run time
+  with a `TypeError`. These casts now emit nothing, as a newtype cast already
+  did, and the self-hosted compiler matches for the `Word` and `Byte` forms. A
+  source whose type the compiler cannot infer keeps the validated conversion.
+
 - **A signed header over a short declared total is refused rather than
   panicking.** `verify_module_signature` read the signature metadata, the
   signature and the trailer at offsets fixed by the declared header without
