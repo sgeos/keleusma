@@ -2573,6 +2573,9 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
         verify_chunk(chunk, module, &always, None)?;
         verify_stack_depth(chunk)?;
     }
+    // Definite initialization, after the structural checks above have
+    // validated every control-flow target and slot index it reads.
+    crate::verify_init::verify_definite_initialization(module)?;
     // Typed operand-stack pass (A.2.1): reconstructs per-slot flat shapes and
     // validates baked flat offsets, branch/loop stack balance, and the
     // wire-carried layout tables. It runs in defer-on-`Top` mode — a value

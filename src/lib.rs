@@ -255,6 +255,10 @@ pub mod text_size;
 pub mod verify;
 #[cfg(feature = "verify")]
 mod verify_execution;
+/// Definite initialization: the verifier rule that no read observes an empty
+/// local or private data slot.
+#[cfg(feature = "verify")]
+pub mod verify_init;
 
 /// First-pass language-trap classification with explicit availability boundaries.
 #[cfg(feature = "verify")]
