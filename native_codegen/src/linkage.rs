@@ -74,8 +74,9 @@ use keleusma::bytecode::{Module, SHARED_SLOT_COMPOSITE_FLAG, SlotVisibility};
 use keleusma::trap_analysis::{TrapVerdict, classify_traps};
 use keleusma::value_layout::ScalarKind;
 
-use crate::coroutine::{self, FRAME_ALIGN, HostContracts};
+use crate::coroutine::{self, FRAME_ALIGN, HostContracts, NativeOpaque};
 use crate::{LowerError, NATIVE_SYMBOL_PREFIX, region};
+use std::collections::BTreeSet;
 
 /// Version of the exported contract. A change to any exported name, type or
 /// meaning increments it.
@@ -292,6 +293,107 @@ pub struct NativeImport {
     /// Whether the native returns `kel_native_result`, a value word and a
     /// failure word, as `HostContracts::fallible_natives` declares.
     pub fallible: bool,
+    /// The opaque positions, as `HostContracts::opaque_natives` declares. Each
+    /// is a word in `params` or `ret` that the header types as a pointer.
+    pub opaque: NativeOpaque,
+}
+
+impl NativeImport {
+    /// The C spelling of parameter `i`.
+    fn c_param(&self, i: usize) -> String {
+        match self.opaque.params.get(i).cloned().flatten() {
+            Some(name) => format!("struct {OPAQUE_C_PREFIX}{name} *"),
+            None => String::from(self.params[i].c()),
+        }
+    }
+
+    /// The Rust spelling of parameter `i`.
+    fn rust_param(&self, i: usize) -> String {
+        match self.opaque.params.get(i).cloned().flatten() {
+            Some(name) => format!("*mut {OPAQUE_C_PREFIX}{name}"),
+            None => String::from(self.params[i].rust()),
+        }
+    }
+
+    /// Every opaque type name this native mentions.
+    fn opaque_names(&self) -> impl Iterator<Item = &String> {
+        self.opaque.params.iter().flatten().chain(&self.opaque.ret)
+    }
+}
+
+/// The tag prefix of each opaque type's incomplete C structure. Shared by
+/// every library, so that two headers naming one opaque type declare one C
+/// type, which C permits to be declared more than once.
+pub const OPAQUE_C_PREFIX: &str = "kel_opaque_";
+
+/// Refuse an opaque contract the word cannot carry or the header cannot spell.
+///
+/// The word holds the whole pointer only when the module's address width and
+/// the target's pointer width are both 64 bits, which the address-width slot
+/// ruling sized it for. Each name must be a C identifier. Each contract must
+/// match the parameter count native code declares, and every opaque position
+/// must be a word. A fallible native's result word is not typed.
+fn check_opaque(
+    program: &Module,
+    machine: &TargetMachine,
+    contracts: &HostContracts,
+    natives: &mut [NativeImport],
+) -> Result<(), LinkageError> {
+    if contracts.opaque_natives.is_empty() {
+        return Ok(());
+    }
+    let pointer_bytes = machine.get_target_data().get_pointer_byte_size(None);
+    if program.addr_bits_log2 != 6 || pointer_bytes != 8 {
+        return Err(LinkageError::Signature(format!(
+            "an opaque handle needs 64-bit addresses and pointers, and this module has \
+             {}-bit addresses on a target with {}-byte pointers",
+            1u32 << program.addr_bits_log2,
+            pointer_bytes
+        )));
+    }
+    for (&index, opaque) in &contracts.opaque_natives {
+        let name = program
+            .native_names
+            .get(usize::from(index))
+            .ok_or_else(|| {
+                LinkageError::Signature(format!(
+                    "opaque contract names native {index}, which does not exist"
+                ))
+            })?;
+        let bad = |what: &str| LinkageError::Signature(format!("native `{name}`: {what}"));
+        for t in opaque.params.iter().flatten().chain(&opaque.ret) {
+            let ident = !t.is_empty()
+                && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && !t.starts_with(|c: char| c.is_ascii_digit());
+            if !ident {
+                return Err(bad(&format!("opaque type `{t}` is not a C identifier")));
+            }
+        }
+        let symbol = crate::native_symbol(name);
+        let Some(import) = natives.iter_mut().find(|n| n.symbol == symbol) else {
+            continue;
+        };
+        if opaque.params.len() != import.params.len() {
+            return Err(bad(&format!(
+                "the opaque contract lists {} parameters and native code passes {}",
+                opaque.params.len(),
+                import.params.len()
+            )));
+        }
+        let word_params = opaque
+            .params
+            .iter()
+            .zip(&import.params)
+            .all(|(o, t)| o.is_none() || *t == CType::I64);
+        if !word_params || (opaque.ret.is_some() && import.ret != Some(CType::I64)) {
+            return Err(bad("an opaque position is not a word"));
+        }
+        if opaque.ret.is_some() && import.fallible {
+            return Err(bad("a fallible native's opaque result is not typed"));
+        }
+        import.opaque = opaque.clone();
+    }
+    Ok(())
 }
 
 /// The C spelling of a fallible native's result, shared by every library so
@@ -703,8 +805,10 @@ pub fn build<'ctx>(
             params,
             ret,
             fallible: two_words,
+            opaque: NativeOpaque::default(),
         });
     }
+    check_opaque(program, machine, contracts, &mut natives)?;
     if let Some(g) = module
         .get_globals()
         .find(|g| g.is_declaration() && g.as_pointer_value().get_first_use().is_some())
@@ -927,6 +1031,21 @@ impl<'ctx> Library<'ctx> {
             h.push_str("\n// This library calls no host natives.\n");
         } else {
             h.push_str("\n// The host must define each of these natives.\n");
+            let opaque: BTreeSet<&String> = self
+                .natives
+                .iter()
+                .flat_map(NativeImport::opaque_names)
+                .collect();
+            if !opaque.is_empty() {
+                h.push_str(
+                    "// An opaque handle is the host's pointer. Native code carries it and never\n\
+                     // reads through it. The host keeps it valid for as long as an instance can\n\
+                     // hold it, because native code cannot detect a stale or wrong pointer.\n",
+                );
+                for name in opaque {
+                    h.push_str(&format!("struct {OPAQUE_C_PREFIX}{name};\n"));
+                }
+            }
             if self.natives.iter().any(|n| n.fallible) {
                 h.push_str(&format!(
                     "// A fallible native reports a soft failure with a nonzero `failed`,\n\
@@ -936,17 +1055,16 @@ impl<'ctx> Library<'ctx> {
                 ));
             }
             for n in &self.natives {
-                let ret = if n.fallible {
-                    NATIVE_RESULT_C
-                } else {
-                    n.ret.map_or("void", CType::c)
+                let ret = match (&n.opaque.ret, n.fallible) {
+                    (_, true) => String::from(NATIVE_RESULT_C),
+                    (Some(name), false) => format!("struct {OPAQUE_C_PREFIX}{name} *"),
+                    (None, false) => String::from(n.ret.map_or("void", CType::c)),
                 };
                 let args = if n.params.is_empty() {
                     String::from("void")
                 } else {
-                    n.params
-                        .iter()
-                        .map(|t| t.c())
+                    (0..n.params.len())
+                        .map(|i| n.c_param(i))
                         .collect::<Vec<_>>()
                         .join(", ")
                 };
@@ -993,12 +1111,22 @@ impl<'ctx> Library<'ctx> {
                 "        /// A fallible native's result. A nonzero `failed` is a soft failure\n        /// whose error code is `value`.\n        #[repr(C)]\n        #[derive(Clone, Copy, Debug, PartialEq, Eq)]\n        pub struct NativeResult {\n            pub value: i64,\n            pub failed: i64,\n        }\n",
             );
         }
+        let opaque: BTreeSet<&String> = self
+            .natives
+            .iter()
+            .flat_map(NativeImport::opaque_names)
+            .collect();
+        for name in opaque {
+            r.push_str(&format!(
+                "        /// An opaque handle the host owns. Native code never reads through it.\n        #[repr(C)]\n        pub struct {OPAQUE_C_PREFIX}{name} {{\n            _private: [u8; 0],\n        }}\n"
+            ));
+        }
         for n in &self.natives {
-            let args: Vec<&str> = n.params.iter().map(|t| t.rust()).collect();
-            let ret = if n.fallible {
-                String::from(" -> NativeResult")
-            } else {
-                n.ret.map_or(String::new(), |t| format!(" -> {}", t.rust()))
+            let args: Vec<String> = (0..n.params.len()).map(|i| n.rust_param(i)).collect();
+            let ret = match (&n.opaque.ret, n.fallible) {
+                (_, true) => String::from(" -> NativeResult"),
+                (Some(name), false) => format!(" -> *mut {OPAQUE_C_PREFIX}{name}"),
+                (None, false) => n.ret.map_or(String::new(), |t| format!(" -> {}", t.rust())),
             };
             r.push_str(&format!(
                 "        pub type {} = extern \"C\" fn({}){ret};\n",

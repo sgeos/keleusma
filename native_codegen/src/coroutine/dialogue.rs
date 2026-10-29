@@ -63,6 +63,36 @@ pub struct HostContracts {
     /// `VmError::NativeErrorCode` contract. A native without an entry cannot
     /// fail, as before. A fallible native returning a flat body is refused.
     pub fallible_natives: BTreeSet<u16>,
+    /// Keys index Module::native_names. The opaque type names of a native's
+    /// parameters and result, which the module does not record.
+    ///
+    /// They change no code. The generated header and Rust bindings declare a
+    /// distinct incomplete type per name and type those positions as a pointer
+    /// to it, by the operator's ruling on question 14 of 2026-10-28. A native
+    /// without an entry keeps `int64_t` throughout. [`crate::opaque`] derives
+    /// the entries from the source program.
+    pub opaque_natives: BTreeMap<u16, NativeOpaque>,
+}
+
+/// The opaque type names in one native's signature, in declaration order.
+///
+/// `None` marks a position that is not opaque. An opaque value is the host's
+/// pointer, carried as a word and never dereferenced by native code. The host
+/// keeps it valid for as long as the instance can hold it, because native code
+/// cannot detect a stale or wrong pointer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NativeOpaque {
+    /// One entry per declared parameter.
+    pub params: Vec<Option<String>>,
+    /// The result's opaque type, if it has one.
+    pub ret: Option<String>,
+}
+
+impl NativeOpaque {
+    /// Whether any position is opaque.
+    pub fn any(&self) -> bool {
+        self.ret.is_some() || self.params.iter().any(Option::is_some)
+    }
 }
 
 pub(crate) struct Plan {

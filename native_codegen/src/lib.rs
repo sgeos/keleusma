@@ -78,6 +78,7 @@
 pub mod coroutine;
 pub mod cost;
 pub mod linkage;
+pub mod opaque;
 pub mod region;
 pub mod stack;
 mod text;

@@ -26,7 +26,7 @@ land one pull request at a time.
 | 11 | Narrow `native.yml` paths | Audited. Of `docs/decisions`, the suite reads only the newest absorption receipt, so the filter and the reach set name `ABSORPTION_*_BRIEF.md`. The audit also found the citation guard reading sources the workflow does not watch, now limited to the watched paths | This line | Done, pull request 606 |
 | 12 | A hosted Linux job on two Ubuntu runners | `tier_one_targets.rs` runs a Linux triple on its own machine with the system `cc` and fails if it did not. `native.yml` gains a job on `ubuntu-24.04` and `ubuntu-24.04-arm` that runs that file and `kel_native_cli.rs`, with LLVM 22 from `apt.llvm.org` | This line | Built in its pull request, pending the job's first run |
 | 13 | Literal-only bare `Text`, `Text<N>` for dynamic text, a two-word literal | V0.2.X confirmed with the operator and schedules `Text<N>` with the passing form of a pointer, a capacity and a length. The operator called this a development no-op for this line. A native differential follows `Text<N>` | V0.2.X, then this line | Waiting on V0.2.X |
-| 14 | A typed host pointer for `Opaque` | Lower it with a distinct C type per declared opaque type | This line | Open |
+| 14 | A typed host pointer for `Opaque` | Built as planned below. `kel-native` reads the names from the source, the header and bindings type each position, a contract the word cannot carry is refused, and a C host differential agrees with the virtual machine. The struct field and shared slot routes stay refused | This line | Done, in its pull request |
 | 15 | Install the `x86_64` Rust target | Installed. The Rust host runs on `x86_64` under Rosetta, and its first run found the exported stack bound 32 bytes short, repaired by `noredzone` | This line | Done, pull request 597 at `97f34b1e` |
 | 16 | Native output from the `keleusma` command | V0.2.X confirmed with the operator that `keleusma-cli` delegates to `kel-native` when installed, done by V0.2.X | V0.2.X | Waiting on V0.2.X |
 | 17 | Release when the operator says so, and V0.4.0 only in the abstract for now | None until told | Operator | Held |
@@ -93,6 +93,54 @@ kind. That is to be measured on this line before anything is asked of V0.2.X.
   bytes. The ambiguity the tags resolve comes from the virtual machine using
   its `Unit` value variant to mark an empty slot. This was stated to the
   operator in session.
+
+## Question 14, a typed host pointer for `Opaque`
+
+**The starting point, measured on 2026-10-28.** A probe built six small
+programs with an opaque type `Device` and lowered each as a library. Four
+lowered already: a native's opaque result discarded, passed to another native,
+held across a yield, and an opaque parameter. A struct with an opaque field
+was refused, its construction having no packed extent, and the shared-slot
+probe did not compile. The module records a native's opaque result as scalar
+kind 7 and records no opaque type names and no native parameter types. The
+header declares every native word as `int64_t`. So the Order 6 record's claim
+that opaque handles are refused on every route was wrong, and it is corrected
+there.
+
+**The design, this line's own under the ruling.**
+
+1. The names come from the source. `kel-native` already parses the program,
+   so it reads each `use` declaration and records which parameter and which
+   result names a type the program does not declare, which is what makes a
+   type opaque. They reach the library through `HostContracts`, beside the
+   fallible natives. A caller with only a module supplies none, and the
+   header then keeps `int64_t`, as today.
+2. The header declares one incomplete `struct kel_opaque_<Name>` per opaque
+   type and uses `struct kel_opaque_<Name> *` in each native prototype. The
+   Rust bindings declare a matching zero-sized `#[repr(C)]` type and use a
+   raw pointer.
+3. Native code carries the pointer as a word and never dereferences it. A
+   module whose address width differs from the target's pointer width is
+   refused, so the word always holds the whole pointer.
+4. A differential executes a library whose C host defines the natives over
+   real structures, against the virtual machine holding `Value::Opaque`, on
+   the four lowered routes. Yields must agree.
+5. The struct field and shared slot routes stay refused, each with its
+   reason recorded, unless the probe shows the virtual machine stores an
+   opaque value there in a form a pointer can match.
+
+**Built on 2026-10-28.** Steps 1 to 4 are in `native_codegen/src/opaque.rs`,
+`HostContracts::opaque_natives`, `linkage.rs` and `kel-native`, with
+`native_opaque.rs` holding six tests. The differential was checked to run and
+to fail when the host's result moved by one. Step 5 stands as written. The
+virtual machine keeps an opaque struct field as a registry index, which a host
+pointer does not match, and the shared-slot probe did not compile, so neither
+route was opened.
+
+**The trust boundary.** Native code cannot check an opaque pointer. The host
+must keep each pointer valid for as long as the instance can hold it, and a
+stale or wrong pointer is the host's error, which native code cannot detect.
+The header says so beside the declarations.
 
 ## Question 19, the native self-hosted compiler
 

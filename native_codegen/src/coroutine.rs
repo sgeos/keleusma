@@ -100,7 +100,7 @@ use crate::{LowerError, LowerOptions};
 
 pub(crate) mod arithmetic;
 pub(crate) mod dialogue;
-pub use dialogue::{Dialogue, HostContracts, NativeBodyReturn, YieldSite};
+pub use dialogue::{Dialogue, HostContracts, NativeBodyReturn, NativeOpaque, YieldSite};
 mod host;
 pub(crate) mod kinds;
 pub(crate) mod ownership;

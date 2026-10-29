@@ -17,8 +17,9 @@ below. V0.4.0 is not released, since publication is held.
   named file. Tier 1 targets build, and both macOS architectures execute.
   Native code has a command of its own.
 - **Not met.** A `Text` from a call, a parameter, a native or a field cannot be
-  compared, a `Text` cannot be stored in a composite, and opaque handles are
-  refused. Both now have rulings and are being built. The Linux targets are built, and a
+  compared, and a `Text` cannot be stored in a composite. Opaque handles lower
+  as typed host pointers under question 14 on four routes, and a struct field
+  or shared slot holding one is still refused. Both now have rulings and are being built. The Linux targets are built, and a
   hosted job added under question 12 executes each on its own runner, pending its first run. The native self-hosted compiler of question 19 does not exist
   yet.
 - **The operator's rulings, 2026-10-28.** Every open question was answered.
@@ -61,7 +62,16 @@ below. V0.4.0 is not released, since publication is held.
 - A `Text` result of a function, a `Text` parameter, a native's `Text` and a
   `Text` field cannot be compared natively, and a `Text` cannot be a composite
   field. Ordering comparisons of `Text` are refused.
-- Opaque handles are refused on every route.
+- **Corrected 2026-10-28.** This record said opaque handles are refused on every
+  route. That was not measured, and a probe refuted it. An opaque value a native
+  returns, passes to another native, holds across a yield or receives as a
+  parameter already lowers, carried as an untyped word, with the native declared
+  as `int64_t` in the header. A struct holding one is refused, because its
+  construction has no packed extent. No route is executed against the virtual
+  machine yet. Question 14 types and executes the lowered routes.
+  [`native_opaque.rs`](../../native_codegen/tests/native_opaque.rs) now builds
+  the library with a typed header and runs it through a C host against the
+  virtual machine, with the handle crossing a yield, a call and a parameter.
 - The Linux objects are linked and run only by the hosted job of question 12, each on
   its own triple. A run on macOS still only builds and reads them.
 - The Rust lexer host, which measures the stack, ran on `arm64` only until
