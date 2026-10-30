@@ -5084,8 +5084,10 @@ fn schema_type_token(t: &TypeExpr, types: &[TypeDef]) -> String {
                 PrimType::Float => String::from("Float"),
                 PrimType::Bool => String::from("bool"),
                 PrimType::Text => String::from("Text"),
-                PrimType::Fixed(Some(n)) => format!("Fixed<{n}>"),
-                PrimType::Fixed(None) => String::from("Fixed"),
+                // The fraction-bit count is left out. Every `Fixed` has the word's width, so the
+                // count does not change the layout, and parse.kel's data records do not carry it,
+                // so the self-hosted driver could not include it to match.
+                PrimType::Fixed(_) => String::from("Fixed"),
             }),
             TypeExpr::Array(inner, len, _) => {
                 out.push('[');

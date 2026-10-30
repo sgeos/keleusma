@@ -81,14 +81,14 @@ fn the_self_hosted_command_compiles_every_stage_to_the_reference_artifact() {
     let stages = stage_sources();
     // A collapsed inventory would pass vacuously. Fourteen is the current corpus; a
     // stage joining or leaving the directory should update this count deliberately.
-    assert_eq!(stages.len(), 14, "stage inventory: {stages:?}");
+    assert_eq!(stages.len(), 15, "stage inventory: {stages:?}");
 
     let out_dir = std::env::temp_dir().join(format!("kel_stage_corpus_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&out_dir);
     std::fs::create_dir_all(&out_dir).expect("create output directory");
 
     // Each process bootstraps the stages independently, so bound concurrency rather
-    // than run fourteen compilers at once.
+    // than run fifteen compilers at once.
     let workers = std::thread::available_parallelism()
         .map_or(1, |n| n.get())
         .clamp(1, 4);

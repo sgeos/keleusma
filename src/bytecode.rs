@@ -4041,7 +4041,8 @@ pub fn compute_schema_hash(layout: Option<&DataLayout>) -> u32 {
 ///
 /// The type token is the slot's element type after every outer array level is removed, since an
 /// array field takes one slot per element. A scalar renders as its name, such as `Word`, `Byte`,
-/// `bool`, `Text`, `Float` or `Fixed<n>`. A struct renders as `Name{field:token,...}` in
+/// `bool`, `Text`, `Float` or `Fixed`, the last without its fraction-bit count, which does not
+/// change the layout. A struct renders as `Name{field:token,...}` in
 /// declaration order, an array inside one as `[token;N]`, a tuple as `(token,...)` and any other
 /// named type as its name. The reference compiler and the self-hosted driver both build these
 /// tokens, from the declared types and from the parser's records, and must agree byte for byte.

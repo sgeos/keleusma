@@ -180,7 +180,7 @@ fn every_current_stage_completes_the_fallible_verifier() {
         .filter(|path| path.extension().is_some_and(|s| s == "kel"))
         .collect();
     paths.sort();
-    assert_eq!(paths.len(), 14);
+    assert_eq!(paths.len(), 15);
     for path in paths {
         let module = compile_src(&std::fs::read_to_string(&path).unwrap());
         assert!(keleusma::verify::verify(&module).is_ok());

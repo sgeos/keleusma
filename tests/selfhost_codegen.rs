@@ -6196,7 +6196,8 @@ fn self_assembled_scaffold_serializes_byte_identically() {
         // driver-assembled components.
         let mut module = self_host_compile(&src);
         let dl = assemble_data_layout(&data_records, &names);
-        module.schema_hash = keleusma::bytecode::compute_schema_hash(Some(&dl));
+        // The driver's own hash, slot types included.
+        module.schema_hash = keleusma::selfhost::schema_hash_from_pipeline(&src);
         module.data_layout = Some(dl);
         module.enum_layouts = assemble_enum_layouts(&enum_records, &names);
         module.signatures = assemble_signatures(&fns, &names);

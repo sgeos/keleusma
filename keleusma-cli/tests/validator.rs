@@ -126,7 +126,7 @@ fn shipping_validator_reaches_every_current_stage() {
             (name, std::fs::read_to_string(path).unwrap())
         })
         .collect();
-    assert_eq!(sources.len(), 14, "review the stage census when it changes");
+    assert_eq!(sources.len(), 15, "review the stage census when it changes");
     for (name, source) in sources {
         let module = keleusma::selfhost::compile_src(&source);
         let bounds = keleusma::verify::module_wcmu(&module, &[]).unwrap();

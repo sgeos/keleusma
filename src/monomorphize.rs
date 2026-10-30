@@ -477,6 +477,7 @@ fn specialize_enums(
         LetAnnotationRewriter {
             specs: &enum_specs,
             structs: false,
+            renamed_locals: BTreeMap::new(),
         }
         .visit_block(&mut func.body);
     }
@@ -905,9 +906,19 @@ fn specialize_structs(
     // `Buf<8>` in a signature resolves to `Buf__c8`, matching the
     // specialized construction (B40).
     for func in &mut program.functions {
+        let mut renamed_locals: BTreeMap<String, (String, String)> = BTreeMap::new();
         for param in &mut func.params {
             if let Some(t) = &param.type_expr {
                 let spec = resolve_generic_type_to_spec(t, &struct_specs);
+                if let (
+                    TypeExpr::Named(original, ..),
+                    TypeExpr::Named(spec_name, ..),
+                    Pattern::Variable(local, _),
+                ) = (t, &spec, &param.pattern)
+                    && original != spec_name
+                {
+                    renamed_locals.insert(local.clone(), (original.clone(), spec_name.clone()));
+                }
                 // **THE PATTERN MUST FOLLOW THE TYPE.** Rewriting `P<Word>` to `P__Word` here
                 // while leaving a `P { a, b }` pattern beside it naming `P` leaves the two
                 // disagreeing, and nothing downstream objects: a parameter pattern is bound but
@@ -927,6 +938,7 @@ fn specialize_structs(
         LetAnnotationRewriter {
             specs: &struct_specs,
             structs: true,
+            renamed_locals,
         }
         .visit_block(&mut func.body);
     }
@@ -941,9 +953,16 @@ fn specialize_structs(
 /// returns. Without it the re-check after monomorphization compares the two names and refuses
 /// the binding. For a struct the binding's destructuring pattern follows the type, for the reason
 /// the parameter pass gives.
+///
+/// In the struct pass it also rewrites the struct patterns of a `match` on a local whose type was
+/// renamed, a parameter or an annotated `let`. A parameter typed `P<Word>` takes `P__Word` once
+/// the signature pass seeds that specialization, and an arm pattern `P { .. }` left naming the
+/// template is refused by the re-check.
 struct LetAnnotationRewriter<'a> {
     specs: &'a BTreeMap<(String, String), String>,
     structs: bool,
+    /// Each local whose struct type was renamed, as (template name, specialization name).
+    renamed_locals: BTreeMap<String, (String, String)>,
 }
 
 impl crate::visitor::MutVisitor for LetAnnotationRewriter<'_> {
@@ -958,10 +977,29 @@ impl crate::visitor::MutVisitor for LetAnnotationRewriter<'_> {
             {
                 let (original, spec_name) = (original.clone(), spec_name.clone());
                 rewrite_pattern_struct_name(&mut l.pattern, &original, &spec_name);
+                if let Pattern::Variable(local, _) = &l.pattern {
+                    self.renamed_locals
+                        .insert(local.clone(), (original.clone(), spec_name.clone()));
+                }
             }
             l.type_expr = Some(spec);
         }
         self.walk_stmt(stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &mut Expr) {
+        if self.structs
+            && let Expr::Match {
+                scrutinee, arms, ..
+            } = expr
+            && let Expr::Ident { name, .. } = scrutinee.as_ref()
+            && let Some((original, spec_name)) = self.renamed_locals.get(name).cloned()
+        {
+            for arm in arms.iter_mut() {
+                rewrite_pattern_struct_name(&mut arm.pattern, &original, &spec_name);
+            }
+        }
+        self.walk_expr(expr);
     }
 }
 
