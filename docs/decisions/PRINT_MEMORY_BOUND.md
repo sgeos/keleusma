@@ -2,9 +2,9 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: defect found and repaired 2026-09-27, session 67. One related question is
-**measured and left open** for the operator. No language, instruction-set, or wire-format
-change.
+**Status**: defect found and repaired 2026-09-27, session 67. The related question below was
+answered by the operator on 2026-10-30, and `compile` now refuses a module whose bound cannot be
+computed. No language, instruction-set, or wire-format change.
 
 ---
 
@@ -61,7 +61,7 @@ while leaving the control passing, so the tests discriminate rather than merely 
 stale byte-count claims from the guide; an arena figure moves with the compiler, and pinning
 one would manufacture the next stale claim.
 
-## Measured and left open: `compile` emits an artifact no host can load
+## Answered 2026-10-30: `compile` emitted an artifact no host can load
 
 `keleusma compile rec.kel -o rec.bin` **succeeds** and writes the file. `keleusma run
 rec.bin` then refuses it for the same unbounded-memory reason. So the compiler emits a
@@ -82,3 +82,10 @@ refusing at compile time is implementable and cheap.
 should refuse a module no host can load, or continue to emit it and leave the refusal to
 load time, is a decision about that subcommand's purpose rather than a consequence of this
 measurement. Recorded for the operator with the distinguishing test already available.
+
+**The ruling, first-hand on 2026-10-30.** "A, refuse at compile time if the bound cannot be
+computed." `compile` now runs the same sizing `run` uses and refuses the module, naming the
+verifier's reason, when no bound can be computed. A module whose bound is computable but larger
+than the default arena is still emitted. Natives the host has not attested count zero, as on the
+load path, so a native call does not make a bound uncomputable. Pinned by
+`compile_refuses_a_program_with_no_memory_bound` in `keleusma-cli/tests/print_memory_bound.rs`.

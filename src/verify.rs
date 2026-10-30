@@ -229,6 +229,36 @@ fn analyze_yield_coverage_at(
 /// shares a failure mode with its subject reports the sum of the two.
 const MAX_REGION_DEPTH: u32 = 256;
 
+/// Refuse a float opcode on a build without the `floats` feature.
+///
+/// A module compiled on a floats build may carry `IntToFloat` or
+/// `FloatToInt`, and a build without the feature cannot execute either. Before
+/// this check such a module verified and loaded, then failed at the call with
+/// `InvalidBytecode`, which is the class `verify` exists to exclude. The
+/// operator ruled on 2026-10-30 that the refusal belongs here, at load.
+///
+/// These two are the only float-specific opcodes. Every other float operation
+/// acts on a `Float` value, and without the feature no `Float` constant, field
+/// kind or value exists to reach one, because the wire decoder refuses the
+/// float tags. Pinned by `tests/float_opcode_without_floats.rs`.
+#[cfg(not(feature = "floats"))]
+fn check_no_float_opcodes(chunk: &Chunk) -> Result<(), VerifyError> {
+    for (ip, op) in chunk.ops.iter().enumerate() {
+        let name = match op {
+            Op::IntToFloat => "IntToFloat",
+            Op::FloatToInt => "FloatToInt",
+            _ => continue,
+        };
+        return Err(VerifyError {
+            chunk_name: chunk.name.clone(),
+            message: alloc::format!(
+                "Op::{name} at {ip} requires the `floats` feature, which this build lacks"
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Reject a chunk whose structured-control-flow operands do not point
 /// **forward**, before any region walk reads them (audit H1).
 ///
@@ -2628,6 +2658,8 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
     // A backward target does not merely give a wrong answer: it makes the walk
     // non-terminating, or overflows the stack and aborts the process.
     for chunk in &module.chunks {
+        #[cfg(not(feature = "floats"))]
+        check_no_float_opcodes(chunk)?;
         check_forward_control_flow_targets(chunk)?;
     }
     // Inter-procedural productivity classification, computed once for the module:
