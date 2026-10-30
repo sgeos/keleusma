@@ -4446,6 +4446,27 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // `private_slot_count` stale and made `Drop` double-drop the slots
         // (V0.2.1 security audit, finding 5: hot-swap double-drop /
         // use-after-free).
+        // The working set `Vm::new` would reserve for the new module must fit the arena. The swap
+        // re-reserves it after its reset and degrades to on-demand growth when it cannot, so
+        // without this check a swap the constructor would refuse was admitted and then failed on
+        // the first push past the arena. The reservations are made in order from the reset
+        // bottom, and each element size is a multiple of eight, so their byte sum is what
+        // construction needs. Checked before any state changes, so a refusal keeps the running
+        // module.
+        let (reserve_slots, reserve_frames, reserve_opaque) =
+            module_bottom_reservations(&new_module);
+        let working_set = reserve_slots
+            .saturating_mul(core::mem::size_of::<crate::bytecode::GenericValue<W, F>>())
+            .saturating_add(reserve_frames.saturating_mul(core::mem::size_of::<CallFrame>()))
+            .saturating_add(reserve_opaque.saturating_mul(core::mem::size_of::<
+                alloc::sync::Arc<dyn crate::opaque::HostOpaque>,
+            >()));
+        if working_set > self.arena.dual_headed_capacity() {
+            return Err(VmError::OutOfArena(format!(
+                "the new module's working set ({working_set} bytes for {reserve_slots} operand slots, {reserve_frames} frames and {reserve_opaque} opaque entries) does not fit the arena's {} dual-headed bytes; Vm::new would refuse it, so the swap is refused and the running module kept",
+                self.arena.dual_headed_capacity()
+            )));
+        }
         let bytes = new_module.to_bytes()?;
         let mut aligned = rkyv::util::AlignedVec::<8>::with_capacity(bytes.len());
         aligned.extend_from_slice(&bytes);
@@ -4493,8 +4514,6 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // `full_reset_arena_internal` below re-reserves the operand stack,
         // frames, and registry to the swapped-in module's exact worst case
         // rather than the retired module's (B28 P3 item 5, priority 1).
-        let (reserve_slots, reserve_frames, reserve_opaque) =
-            module_bottom_reservations(&new_module);
         self.reserved_operand_slots = reserve_slots;
         self.reserved_frame_depth = reserve_frames;
         self.reserved_opaque_capacity = reserve_opaque;
@@ -4777,6 +4796,37 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                     func(args)
                 },
             ),
+            classification: NativeClassification::External,
+            max_invocations_per_iteration: Some(max_invocations_per_iteration),
+        });
+    }
+
+    /// Register an external native as a closure that receives the native context, the form
+    /// [`Self::register_native_with_ctx_closure`] gives a verified native.
+    ///
+    /// A host whose natives are values of its own language, a Python callable for example,
+    /// cannot express them as the `fn` pointer [`Self::register_external_native`] takes, and an
+    /// external native that marshals a composite argument needs the context. The attestation
+    /// and the classification are those of [`Self::register_external_native`].
+    pub fn register_external_native_with_ctx_closure<Func>(
+        &mut self,
+        name: &str,
+        func: Func,
+        max_invocations_per_iteration: u32,
+    ) where
+        Func: for<'b> Fn(
+                &NativeCtx<'b>,
+                &[crate::bytecode::GenericValue<W, F>],
+            ) -> Result<crate::bytecode::GenericValue<W, F>, VmError>
+            + 'static,
+    {
+        self.native_classifications_verified = false;
+        self.natives.retain(|e| e.name != name);
+        self.natives.push(NativeEntry {
+            wcet: DEFAULT_NATIVE_WCET,
+            wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
+            name: String::from(name),
+            func: Box::new(func),
             classification: NativeClassification::External,
             max_invocations_per_iteration: Some(max_invocations_per_iteration),
         });

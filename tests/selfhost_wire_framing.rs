@@ -44,6 +44,7 @@ fn framing_matches_every_current_stage_artifact() {
             "lexer",
             "parse",
             "reconstruct",
+            "template_scan",
             "verify_datalayout",
             "verify_depth",
             "verify_structural",

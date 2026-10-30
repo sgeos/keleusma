@@ -275,7 +275,7 @@ fn every_stage_matches_complete_resource_admission() {
         .filter(|p| p.extension().is_some_and(|s| s == "kel"))
         .collect();
     paths.sort();
-    assert_eq!(paths.len(), 14);
+    assert_eq!(paths.len(), 15);
     for path in paths {
         let module = compile_src(&std::fs::read_to_string(&path).unwrap());
         assert_admission_boundary(&module);

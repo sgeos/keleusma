@@ -535,11 +535,14 @@ const PINNED: &[(&str, u64)] = &[
     // Absorption 116 lowers a cast to the operand's own type as identity.
     ("src/selfhost/kel/parse.kel", 0x6a830e5dcfe5753b),
     ("src/selfhost/kel/reconstruct.kel", 0x5a5314dbf0987c1c),
+    // Absorption 119 adds the template header scan as the fifteenth stage.
+    ("src/selfhost/kel/template_scan.kel", 0x2389d34aaba8c2c7),
     ("src/selfhost/kel/verify_datalayout.kel", 0xe625b5656d576b86),
     ("src/selfhost/kel/verify_depth.kel", 0xd65a1422ab29b135),
     // Absorption 116 rejects a native index past the native table.
     ("src/selfhost/kel/verify_structural.kel", 0x3c716a472f94e1c3),
-    ("src/selfhost/kel/verify_typed.kel", 0xdf6274221b46406b),
+    // Absorption 119 adds the flat Text layout proof to the typed stage.
+    ("src/selfhost/kel/verify_typed.kel", 0x486783acf626b02d),
     ("src/selfhost/kel/verify_types.kel", 0xf1a3565245726860),
     ("src/selfhost/kel/verify_yield.kel", 0x12e9047be52a0423),
     ("src/selfhost/kel/wire.kel", 0x7e021df3e15f1793),

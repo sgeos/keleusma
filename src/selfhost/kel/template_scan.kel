@@ -1,0 +1,211 @@
+// src/selfhost/kel/template_scan.kel -- the generic template header scan, Order 6 slice 7, moved
+// out of the host on the operator's ruling of 2026-10-28 that it should be a stand-alone stage.
+//
+// It recognises a generic function header at the top level, `fn name<A, B>(x: A, y: Word) -> A
+// { .. }`, with a list of plain type parameter names and nothing else. A bound, a const parameter
+// or a template past the capacities below is left unrecognised, so the parser refuses it as
+// before. For each template it records the token positions of the `fn`, the `<`, the `(` and the
+// closing brace, the type parameter names, which value parameters are written as a bare type
+// parameter, and whether the return type is one.
+//
+// The host streams the lexer once and does not keep the token stream, so the scan is fed in
+// batches of at most `batch_cap()` tokens, each with its position and the brace depth before it.
+// The recogniser's state lives in private data and carries across batches. The host reads the
+// recognised templates after the last batch. The token numbers are the lexer's, 0 `fn`, 1 an
+// identifier, 2 `{`, 3 `}`, 4 `->`, 7 `(`, 8 `)`, 9 `:`, 10 `,`, 28 `<`, 29 `>`, 41 `[` and
+// 42 `]`.
+require word >= 32;
+
+shared data ts {
+    // 1 on the first batch of a source, which clears the recogniser and the results first.
+    init: Word,
+    // The number of tokens in this batch.
+    count: Word,
+    tok: [Word; 256],
+    val: [Word; 256],
+    at: [Word; 256],
+    depth: [Word; 256],
+    // The recognised templates, at most `template_cap()`, in source order.
+    found: Word,
+    t_name: [Word; 16],
+    t_fn: [Word; 16],
+    t_lt: [Word; 16],
+    t_paren: [Word; 16],
+    t_end: [Word; 16],
+    t_ntp: [Word; 16],
+    // Four type parameter names per template, at `template * 4 + i`.
+    t_tp: [Word; 64],
+    t_np: [Word; 16],
+    // Eight value parameter maps per template, at `template * 8 + i`. Each is the type parameter
+    // the parameter is written as, plus one, else zero.
+    t_pmap: [Word; 128],
+    // The return type's type parameter plus one, else zero.
+    t_rmap: [Word; 16],
+}
+
+fn batch_cap() -> Word { 256 }
+fn template_cap() -> Word { 16 }
+fn type_param_cap() -> Word { 4 }
+fn value_param_cap() -> Word { 8 }
+
+// The template under recognition. `state` follows the host recogniser it replaces, 0 outside a
+// header. `pt_set` and `pt_val` are the current parameter's type, unset, one identifier, or -1
+// for any longer type.
+private data st {
+    state: Word,
+    name: Word,
+    fn_at: Word,
+    lt_at: Word,
+    paren_at: Word,
+    ntp: Word,
+    tp: [Word; 5],
+    np: Word,
+    pmap: [Word; 9],
+    rmap: Word,
+    pt_set: Word,
+    pt_val: Word,
+    nesting: Word,
+    body_depth: Word,
+    // Scratch for `type_param_of`.
+    hit: Word,
+}
+
+fn abandon() -> Word {
+    st.state = 0;
+    0
+}
+
+// The type parameter `v` names, plus one, else zero.
+fn type_param_of(v: Word) -> Word {
+    st.hit = 0;
+    for i in 0..4 limit 4 {
+        if st.hit == 0 andalso i < st.ntp andalso st.tp[i] == v { st.hit = i + 1; }
+    }
+    st.hit
+}
+
+fn begin(at: Word) -> Word {
+    st.name = -1;
+    st.fn_at = at;
+    st.lt_at = -1;
+    st.paren_at = -1;
+    st.ntp = 0;
+    st.np = 0;
+    st.rmap = 0;
+    st.state = 1;
+    0
+}
+
+fn finish(at: Word) -> Word {
+    let n = ts.found;
+    if n < template_cap() {
+        ts.t_name[n] = st.name;
+        ts.t_fn[n] = st.fn_at;
+        ts.t_lt[n] = st.lt_at;
+        ts.t_paren[n] = st.paren_at;
+        ts.t_end[n] = at;
+        ts.t_ntp[n] = st.ntp;
+        for i in 0..4 limit 4 {
+            ts.t_tp[n * 4 + i] = if i < st.ntp { st.tp[i] } else { 0 };
+        }
+        ts.t_np[n] = st.np;
+        for i in 0..8 limit 8 {
+            ts.t_pmap[n * 8 + i] = if i < st.np { st.pmap[i] } else { 0 };
+        }
+        ts.t_rmap[n] = st.rmap;
+        ts.found = n + 1;
+    }
+    st.state = 0;
+    0
+}
+
+// A parameter's type, read to the comma or parenthesis that ends it.
+fn param_type_token(tok: Word, val: Word) -> Word {
+    if st.nesting == 0 andalso (tok == 10 orelse tok == 8) {
+        let mapped = if st.pt_set == 1 andalso st.pt_val >= 0 { type_param_of(st.pt_val) } else { 0 };
+        st.pmap[st.np] = mapped;
+        st.np = st.np + 1;
+        st.pt_set = 0;
+        st.state = if tok == 10 { 6 } else { 10 };
+        if st.np > value_param_cap() { abandon() } else { 0 }
+    } else {
+        // Only a type written as one identifier maps to a type parameter.
+        let first = st.pt_set == 0 andalso st.nesting == 0 andalso tok == 1;
+        st.pt_set = 1;
+        st.pt_val = if first { val } else { -1 };
+        if tok == 7 orelse tok == 41 orelse tok == 28 { st.nesting = st.nesting + 1; }
+        if tok == 8 orelse tok == 42 orelse tok == 29 { st.nesting = st.nesting - 1; }
+        0
+    }
+}
+
+fn header_token(tok: Word, val: Word, at: Word) -> Word {
+    let s = st.state;
+    if s == 1 {
+        if tok == 1 { st.name = val; st.state = 2; 0 } else { abandon() }
+    } else { if s == 2 {
+        if tok == 28 { st.lt_at = at; st.state = 3; 0 } else { abandon() }
+    } else { if s == 3 {
+        if tok == 1 {
+            if st.ntp < type_param_cap() { st.tp[st.ntp] = val; }
+            st.ntp = st.ntp + 1;
+            st.state = 4;
+            if st.ntp > type_param_cap() { abandon() } else { 0 }
+        } else { abandon() }
+    } else { if s == 4 {
+        if tok == 10 { st.state = 3; 0 } else {
+        if tok == 29 { st.state = 5; 0 } else { abandon() } }
+    } else { if s == 5 {
+        if tok == 7 {
+            st.paren_at = at; st.state = 6; st.pt_set = 0; st.nesting = 0; 0
+        } else { abandon() }
+    } else { if s == 6 {
+        if tok == 1 { st.state = 7; 0 } else {
+        if tok == 8 { st.state = 10; 0 } else { abandon() } }
+    } else { if s == 7 {
+        if tok == 9 { st.state = 8; 0 } else { abandon() }
+    } else { if s == 8 {
+        param_type_token(tok, val)
+    } else { body_token(tok, val, at) } } } } } } } }
+}
+
+// After the parameters, an optional arrow and return type, then the body to its closing brace.
+fn body_token(tok: Word, val: Word, at: Word) -> Word {
+    let s = st.state;
+    if s == 10 andalso tok == 4 { st.state = 11; 0 } else {
+    if (s == 10 orelse s == 12) andalso tok == 2 { st.state = 13; st.body_depth = 1; 0 } else {
+    if s == 10 orelse s == 12 { 0 } else {
+    if s == 11 {
+        if tok == 1 { st.rmap = type_param_of(val); }
+        st.state = 12;
+        if tok == 2 { st.state = 13; st.body_depth = 1; }
+        0
+    } else { if s == 13 {
+        if tok == 2 { st.body_depth = st.body_depth + 1; }
+        if tok == 3 { st.body_depth = st.body_depth - 1; }
+        if st.body_depth == 0 { finish(at) } else { 0 }
+    } else { abandon() } } } } }
+}
+
+fn step(tok: Word, val: Word, at: Word, depth: Word) -> Word {
+    if st.state == 0 {
+        if depth == 0 andalso tok == 0 { begin(at) } else { 0 }
+    } else { header_token(tok, val, at) }
+}
+
+// Scan one batch of `ts.count` tokens and yield the number of templates recognised so far.
+loop main(resume: Word) -> Word {
+    // Private data starts empty, so the first batch of a source initialises every field the
+    // recogniser reads before it writes it.
+    if ts.init == 1 {
+        st.state = 0; st.name = -1; st.fn_at = 0; st.lt_at = -1; st.paren_at = -1;
+        st.ntp = 0; st.np = 0; st.rmap = 0; st.pt_set = 0; st.pt_val = 0;
+        st.nesting = 0; st.body_depth = 0; st.hit = 0;
+        ts.found = 0;
+    }
+    let n = if ts.count > batch_cap() { batch_cap() } else { ts.count };
+    for i in 0..256 limit 256 {
+        if i < n { step(ts.tok[i], ts.val[i], ts.at[i], ts.depth[i]); }
+    }
+    yield ts.found
+}

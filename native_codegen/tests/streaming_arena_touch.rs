@@ -69,8 +69,9 @@ const TICKS: usize = 4;
 /// itself**; `region_composition.rs` pins the same figure independently.
 // 28 -> 30 in absorption 82: the added stages `wire_debug.kel` and
 // `wire_schema.kel`. 30 -> 32 on 2026-10-28, question 6: the new roots add
-// `interp.kel` and `frame.kel`.
-const PINNED_STREAMING: usize = 32;
+// `interp.kel` and `frame.kel`. 32 -> 33 in absorption 119: the added stage
+// `template_scan.kel`.
+const PINNED_STREAMING: usize = 33;
 
 /// How many of those this census can currently drive. **The rest are accounted
 /// for by name and reason**, not dropped: twelve need host natives registered,
@@ -78,7 +79,8 @@ const PINNED_STREAMING: usize = 32;
 // 13 -> 15 in absorption 82: both added stages drive, and touch zero bytes.
 // 15 -> 16 on 2026-10-28, question 6: `interp.kel` drives and touches zero
 // bytes, and `frame.kel` needs the host native `host::blen` registered.
-const DRIVEN: usize = 16;
+// 16 -> 17 in absorption 119: the added stage `template_scan.kel` drives.
+const DRIVEN: usize = 17;
 /// `14_frame_log.kel` — the first corpus module outside the self-hosted stages
 /// ever measured dynamically. **Report six publishes these two figures.**
 const FRAME_LOG_TOUCHED: usize = 48;

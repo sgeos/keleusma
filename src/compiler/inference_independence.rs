@@ -12,6 +12,10 @@ const STAGES: &[(&str, &str)] = &[
     ("lexer", include_str!("../selfhost/kel/lexer.kel")),
     ("parse", include_str!("../selfhost/kel/parse.kel")),
     (
+        "template_scan",
+        include_str!("../selfhost/kel/template_scan.kel"),
+    ),
+    (
         "reconstruct",
         include_str!("../selfhost/kel/reconstruct.kel"),
     ),

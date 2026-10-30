@@ -2412,6 +2412,12 @@ const KNOWN_VACUOUS: &[&str] = &[
     // stage, and its unseeded run now changes the segment. That agreement is
     // still one sixty-tick run with no input, which the gate prints as its
     // weakest residual; leaving this list does not make it strong evidence.
+    //
+    // **`template_scan.kel` JOINED in absorption 119, as the added fifteenth
+    // stage.** The host feeds it batches of tokens through `AnalysisMachine`, and
+    // this harness gives it no batch, so its run agrees while changing nothing.
+    // No seed for it exists on this line yet.
+    "template_scan.kel",
 ];
 
 /// Modules KNOWN to disagree, tracked rather than ignored.

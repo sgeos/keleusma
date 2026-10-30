@@ -34,22 +34,37 @@ others conflict in `CHANGELOG.md`, and GitHub marked all five merged.
   migrated and `ctutils` taken to 0.4.7 for RUSTSEC-2026-0385. It also refreshed the root
   `Cargo.lock`, whose `syn` entries did not match the manifests.
 
-### In the second batch
+### Merged in pull request 628, 2026-10-30
 
-The branch `integrate/v02-batch-20261030b` merges seven branches, and its changelog entries
-are fragments under `changelog.d/`, as the kaizen line's pull request 625 proposes on your
-ruling of 2026-10-29.
+The stage executor boundary for every self-hosted stage and the framing stage, V0.3.X
+sequences 134 and 137. Items 11c, 11e, 11d's script part and 10. The stream resume after
+`Reset`, which had put each later iteration one slot above the verified operand-stack bound.
+The composite seed of a hot swap. Item 9, `keleusma native`, which delegates to `kel-native`.
 
-- The stage executor boundary for every self-hosted stage and the framing stage, V0.3.X
-  sequences 134 and 137.
-- Item 11c. A whole-array store into a data field is refused, as a whole-array read is.
-- Item 11e. `Vm::ref_context_for` and `Vm::bytecode_image`, which also answer pykeleusma's
-  request for the opaque registry.
-- Item 11d, its script part. A `let` annotated with a generic instance type compiles.
-- Item 10. A native's declarations must agree, with each other and with a bundled library.
-- A stream resume after `Reset` no longer pushes its input, which had put every later
-  iteration one slot above the verified operand-stack bound.
-- A hot swap seeds a composite private value.
+### In the third batch
+
+The branch `integrate/v02-batch-20261030c`.
+
+- Item 12. The generic template header scan is `template_scan.kel`, the fifteenth stage
+  source, on your ruling that it be a stand-alone stage. It compiles byte-identically through
+  the self-hosted compiler. The probe rounds stay in the driver as orchestration, which is my
+  reading and is recorded in the Order 6 plan.
+- Item 6. The schema hash covers each data slot's declared type, with a struct expanded to its
+  fields, so a swap to a reordered struct is refused. A `Fixed` field's token omits its
+  fraction-bit count, which does not change the layout and which the self-hosted driver
+  cannot see.
+- Item 11d's host part. A host-built value of a generic struct instance is read by its
+  instance layout.
+- A hot swap refuses a module whose working set the arena cannot hold, as `Vm::new` does.
+- `Vm::register_external_native_with_ctx_closure`.
+- The book's chapter 18 says only scalar data fields start at zero, in English and Japanese.
+
+### In progress
+
+Item 5. The design is `docs/decisions/FLAT_TEXT_LAYOUT_PROOF.md`. The reference pass now
+tracks a flat body's `Text` field offsets where the program built it and refuses a `Text` read
+elsewhere, on branch `feat/v02-flat-text-proof`. The self-hosted twin in `verify_typed.kel` is
+next.
 
 ## Accumulated questions for the operator
 
@@ -68,13 +83,11 @@ Each has lettered options with my recommendation first. None blocks the next ite
    `#[derive(KeleusmaType)]`, and (c) later.
    (a) The contract and the size check alone.
    (c) Field layouts on the wire, which needs your authorization.
-3. The five Dependabot vulnerabilities GitHub reports on `main`, four high and one
-   moderate, which I have not examined. Pull request 623 updated the cryptographic crates on
-   `v0.2.3` only.
-   (a) I examine them and report which reach a shipped crate.
-   (b) They wait for the next release from `v0.2.3`.
-4. Withdrawn. The kaizen line's pull request 624 adds `--locked` to CI for the lockfile
-   drift I reported, and needs only your merge.
+3. Withdrawn. The five Dependabot alerts on `main` were all `brace-expansion` in the VS Code
+   extension's `editors/vscode/package-lock.json`, none in a shipped crate, and all five are
+   fixed, at 02:33 UTC on 2026-10-30, by the kaizen line's pull request 630.
+4. Withdrawn. The kaizen line's pull request 624, merged, adds `--locked` to CI for the
+   lockfile drift I reported.
 
 5. Composite host inputs and the auto-sized arena, from pykeleusma. The VM copies a
    composite entry argument and each composite resume value into the arena's top region, and
@@ -84,11 +97,35 @@ Each has lettered options with my recommendation first. None blocks the next ite
    by the verifier.
    (b) Leave it to the host, as the documentation now states.
 6. Private slot values across a hot swap, from pykeleusma. A host cannot read a private
-   slot, so a swap cannot carry private state forward, and `replace_module`'s `initial_data`
-   cannot seed a composite private value because the composite pool is cleared after the
-   slots are written. Private data is private to the script by design.
-   (a) Keep it private, and fix only the seeding defect for composite private values.
+   slot, so a swap cannot carry private state forward. Private data is private to the script
+   by design. Seeding a composite private value at a swap, the defect beside this request, is
+   fixed in pull request 628.
+   (a) Keep it private.
    (b) Add a host accessor for private slots, which weakens that privacy.
+
+7. `Text<N>`, the bundled operations. V0.2.0 removed the bundled text library because its
+   operations could not be bounded, and `Text<N>`'s can be. The design proposes giving them
+   back with `Text<N>` signatures, a reversal the record leaves to you.
+   (a) Restore them with `Text<N>` signatures.
+   (b) Provide only language-level operations.
+8. `Text<N>`, the surface form, which blocks emission. A literal is static text and the grammar
+   forbids an implicit conversion, so a value needs an explicit way in.
+   (a) An `as` cast for a literal, `"abc" as Text<8>`, refused at compile time when the literal
+   is longer than `N`, and free functions for the operations.
+   (b) Methods on `Text<N>` through a built-in impl.
+   (c) A constructor function only.
+9. Item 5's boundary. The proof covers bodies the program builds. A body from an entry
+   argument, a resume value, a native result, a shared slot or a swap seed carries no layout on
+   the wire, so its `Text` reads cannot be proven.
+   (a) A constant-cost range check at the VM-internal `Text` read, the decode check without
+   its UTF-8 pass, for those five sources.
+   (b) Refuse such reads, which refuses every read of a struct parameter's `Text` field.
+   (c) Record a trust assumption.
+10. A halting error for hosts, from pykeleusma. A host exception the native-error construct
+   must not catch has no variant of its own, because every soft host error is caught.
+   (a) Add `VmError::HostHalt`, which breaks a host's exhaustive match on `VmError`.
+   (b) Make `VmError` non-exhaustive first, then add it.
+   (c) Leave it, and document `InvalidBytecode` as the way to halt.
 
 You ruled on 2026-10-29 for changelog fragments and for keeping every version-branch push
 run, as the kaizen line records in pull request 625.
@@ -106,10 +143,8 @@ run, as the kaizen line records in pull request 625.
 
 ## Next
 
-Merge the second batch. Then the host-built layout part of item 11d, item 12, the generic
-header scan as its own stage, 9, delegation of native output to `kel-native`, 8, `Text<N>`,
-5, the flat Text proof, and 6, the schema hash over slot types. Items 5, 6 and the host
-struct question share one limit, that a flat shape on the wire records only kind and size.
+Merge the third batch, then finish item 5 with its self-hosted twin. Item 8 waits on
+questions 7 and 8, item 7 on question 1, and the host struct contract on question 2.
 
 ---
 
@@ -262,10 +297,11 @@ hosts would consume the figure.
 **The figure.** My backend publishes `host_arena_supplement_bytes`, the arena bytes a host must ADD
 beyond `auto_arena_capacity_for` to run a module natively. Measured two ways:
 
-- **Statically, across the corpus** by native_codegen/tests/region_composition.rs: **32 modules have
+- **Statically, across the corpus** by native_codegen/tests/region_composition.rs: **33 modules have
   a stream chunk on the entry path, and every one reserves the same flat block** of `MAX_STACK * 8` =
-  512 bytes. That reservation is **at least half the published figure for 28 of the 32**, running from
-  12% up to **98% for the self-hosted compiler stages**, which plan almost nothing else. On
+  512 bytes. That reservation is **at least half the published figure for 29 of the 33**, running from
+  12% up to **98% for the self-hosted compiler stages**, which plan almost nothing else. Absorption
+  119 on 2026-10-30 added the fifteenth stage, `template_scan.kel`, at 90% of a 568-byte figure. On
   2026-10-28 the operator's question 6 added `interp.kel`, at 12% of a 4032-byte figure, and
   `frame.kel`, at 96%. Before it the figures were 30 modules, 27 of 30 and a minimum of 27%. Re-measured in
   absorption 82: the two added stages `wire_debug.kel` and `wire_schema.kel` are the whole change,
@@ -277,9 +313,10 @@ beyond `auto_arena_capacity_for` to run a module natively. Measured two ways:
   520-552 byte plans, and **the twelve stages touch ZERO** of 520-600. Instrument reach was proven
   before the numbers were believed — poking one byte into the region moves the measurement.
 - **Dynamically across the CORPUS** by native_codegen/tests/streaming_arena_touch.rs, added
-  2026-09-23: **16 of the 32 streaming modules are driven** since question 6 on 2026-10-28, which
-  added `interp.kel`, driven at zero bytes, and `frame.kel`, which needs a host native. It was 15 of
-  30 after absorption 82 and 13 of 28 before it. The stages confirm ZERO by a
+  2026-09-23: **17 of the 33 streaming modules are driven** since absorption 119 on 2026-10-30,
+  which added `template_scan.kel`, driven at zero bytes. It was 16 of 32 after question 6 on
+  2026-10-28, which added `interp.kel`, driven at zero bytes, and `frame.kel`, which needs a host
+  native, 15 of 30 after absorption 82 and 13 of 28 before it. The stages confirm ZERO by a
   second route, and `14_frame_log.kel` is **the first corpus module outside the stages ever measured
   this way — 48 bytes of a 600-byte plan, 8%.** The figure was checked stable across two independent
   runs before being published here.

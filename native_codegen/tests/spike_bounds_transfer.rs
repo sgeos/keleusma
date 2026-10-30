@@ -531,7 +531,13 @@ fn q2_is_the_bytecode_bound_monotone_in_native_size() {
         // the stream chunk is now a thin wrapper. The lexer's work is still
         // lowered, but this population measures stream chunks only, so that work
         // has left the measurement. The population is unchanged.
-        (29, 406, 12),
+        //
+        // **ABSORPTION 119 moved all three, and the cause was measured.** The
+        // population gained exactly `template_scan.kel::main`, the added
+        // fifteenth stage, at WCET 34683 and 455 native instructions. Without it
+        // the population is the previous 29 chunks with 12 inversions, so every
+        // one of the 12 new inversions pairs the added chunk with an existing one.
+        (30, 435, 24),
         "the bounds-transfer population or its inversion count changed. Establish \
          the cause before editing. BOTH figures depend on this line: a chunk enters \
          the population only if the module LOWERS, so a refusal removes it and an \
