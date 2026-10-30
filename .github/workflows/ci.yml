@@ -184,9 +184,12 @@ jobs:
           tool: cargo-audit
       - name: Format
         run: cargo fmt --check
+      # `--locked` fails when Cargo.lock no longer matches the manifests. On 2026-10-28
+      # a Dependabot update raised `syn` in two member manifests without the root
+      # lockfile, and the unlocked build re-resolved it silently and stayed green.
       - name: Check
         if: ${{ !cancelled() }}
-        run: cargo check --workspace --all-targets
+        run: cargo check --locked --workspace --all-targets
       - name: Clippy
         if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets -- -D warnings
@@ -603,7 +606,7 @@ jobs:
         run: |
           cd keleusma-lsp
           cargo fmt --check
-          cargo clippy --all-targets -- -D warnings
+          cargo clippy --locked --all-targets -- -D warnings
           cargo test
       # Lint and unit-test the playground natively, then confirm it still compiles to
       # wasm32, the actual playground target. The full wasm-pack bundle and the Pages
@@ -613,7 +616,7 @@ jobs:
         run: |
           cd keleusma-wasm
           cargo fmt --check
-          cargo clippy --all-targets -- -D warnings
+          cargo clippy --locked --all-targets -- -D warnings
           cargo test
           cargo build --target wasm32-unknown-unknown
 
