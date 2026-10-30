@@ -84,13 +84,14 @@ The lettered options the rulings select, as the list stated them.
   module whose memory bound cannot be computed. `verify()` refuses a float opcode without
   `floats`. A private composite slot beyond 65,535, whose placement record the compiler had
   dropped without a diagnostic, is refused at compile time.
-- **In pull request 658.** B2's composite input check and the host contract. B5's arena
+- **Merged in pull request 658,** as `5ed0bdfd`. B2's composite input check and the host contract. B5's arena
   sizing for composite inputs, with a new `unsafe` compaction that Miri passes under Tree
   Borrows. B1's narrowed rule and its self-hosted twin. The first `Text<N>` increment, values
   and the literal cast refused at compile time when too long. The kaizen K7 fuzz targets,
   which found a loader panic on a header width exponent of 32 or more, repaired there.
 - **Kaizen K3 and K4a.** The slow tests are split per stage and per word type, on branch
-  `test/v02-split-slow-tests`, to follow pull request 658.
+  `test/v02-split-slow-tests`, in pull request 662 with `v0.2.3` merged in. Whether the split
+  shortens the slowest shard is to be read from that run's job durations and is not yet measured.
 - **C3 and C7.** `docs/decisions/ARRAY_WIRE_SLOT_DESIGN.md` and
   `docs/decisions/RING_BUFFER_DESIGN.md`. The array design measured that the August work
   already removed most of the 16 MB growth, `lexer.kel` now giving a 28,212-byte artifact.

@@ -17,6 +17,11 @@ definite-initialization rule with its self-hosted twin, B5's arena sizing for co
 inputs, and the first `Text<N>` increment, the literal cast. The C3 and C7 designs are written
 and carry their own operator decisions. B9 and B10 information is in the reverse prompt.
 
+Later on 2026-10-30, pull request 652 merged C2, C1 and the slot refusal, and pull request 658
+merged B2, B5, B1's narrowed rule with its twin, the `Text<N>` literal and kaizen K7's fuzz
+targets as `5ed0bdfd`. Kaizen K3 and K4a, the slow-test split, are in pull request 662. The
+B1 widening is in progress on `feat/v02-definite-init-widen`.
+
 ## 2026-10-30 Third batch
 
 Pull request 628 merged. The third batch carries item 12, the template scan as the fifteenth
