@@ -8868,6 +8868,25 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
     }
 }
 
+/// Whether `source as target` casts a primitive to its own type.
+///
+/// Such a cast is identity and must emit nothing, since each
+/// conversion opcode traps on a value already of its result type.
+/// `Fixed` compares by resolved fraction bits, so `Fixed` and
+/// `Fixed<DEFAULT_FIXED_FRAC_BITS>` are the same type. An unknown
+/// source is not identity, and keeps the conversion the type
+/// checker validated.
+fn is_identity_prim_cast(source: Option<&TypeExpr>, target: &TypeExpr) -> bool {
+    let frac = |n: &Option<u8>| n.unwrap_or(crate::typecheck::DEFAULT_FIXED_FRAC_BITS);
+    match (source, target) {
+        (Some(TypeExpr::Prim(PrimType::Fixed(a), _)), TypeExpr::Prim(PrimType::Fixed(b), _)) => {
+            frac(a) == frac(b)
+        }
+        (Some(TypeExpr::Prim(s, _)), TypeExpr::Prim(t, _)) => s == t,
+        _ => false,
+    }
+}
+
 /// Compile an `enum_value as Word` cast into a chain of
 /// variant tests. Each variant produces an `IsEnum` check
 /// guarded by an `If`; on a match the corresponding
@@ -10684,9 +10703,14 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 TypeExpr::Named(name, _, _, _) => fc.type_info.newtype_names.contains(name),
                 _ => false,
             };
-            if source_is_newtype || target_is_newtype {
+            if source_is_newtype
+                || target_is_newtype
+                || is_identity_prim_cast(source.as_ref(), target)
+            {
                 // No opcode emitted; the value flows through
-                // unchanged.
+                // unchanged. A cast to the source's own primitive type
+                // is identity, and every conversion opcode traps on a
+                // value already of its result type.
             } else {
                 match (source.as_ref(), target) {
                     (_, TypeExpr::Prim(PrimType::Float, _)) => {
