@@ -1,299 +1,112 @@
 # Reverse prompt
 
-## Order 6 in progress, 2026-10-25
+## V0.2.X state, 2026-10-30
 
-The goal is to absorb kaizen work as it arrives, complete Order 6, and accumulate open
-questions for the operator. Order 5 merged as PR 526. Kaizen PR 525 merged into v0.2.3
-just before it and was absorbed. Kaizen and V0.3.X were told that Order 6 has begun.
+Every order of the V0.2.X roadmap is accepted for its first pass, per the rulings of
+2026-10-28 recorded below. The work since then addresses the rulings' follow-ups, the
+pykeleusma findings and the V0.3.X requests. No kaizen work has arrived for absorption since
+pull request 595. The kaizen line is taking the changelog conflicts described under Concerns.
 
-Order 6 is full-language support, Workstream F with the A, B and C widening, and it
-defines V0.3.0. The plan is docs/decisions/ORDER6_FULL_LANGUAGE_PLAN.md. Its gate is my
-reading of the roadmap gate and you have not ruled on it.
+### Merged since the rulings
 
-Slice 0 adds tests/selfhost_full_language.rs, which pins the shipping self-hosted outcome
-for all 75 Keleusma sources in the repository and checks the self-hosted validator
-against the reference on every compiled one. Slice 1 repairs six parser states that
-skipped a token instead of refusing it. Two of them produced a divergence and a panic,
-one produced a false rejection, and three hung or faulted the parser. The corpus moved
-from 34 to 36 identical sources, and the divergence, panic, no-verdict and false
-rejection classes are now empty.
+Pull requests 587, 588, 596, 598, 601, 603 and 615. In order, those are the rulings record,
+decryption to the declared total, rejection of a native index past the native table at
+admission, the Trap-only fault specification with the callee-aware time bound, the identity
+cast, the shell-script SIGPIPE race, and the termination of the module and whole-chunk
+verifier entries on an unverified module.
+
+### Merged in pull request 623, 2026-10-30
+
+Pull request 623 merged five branches at once, in place of five merges that each made the
+others conflict in `CHANGELOG.md`, and GitHub marked all five merged.
+
+- 618. The wrapping default of checked arithmetic is typed. A construct whose default can
+  run must produce the operand's type, which closes a measured case of a `bool` function
+  returning a `Word`. A fully covered construct drops its last class test and its default,
+  so it adds no trap. An `underflow` arm is admissible on `Fixed` division. V0.3.X sequence
+  136.
+- 605. An in-memory hot swap is refused while a verifying key is registered.
+- 621. `hosted::seeded_shared` and `hosted::protocol`, for the V0.3.X seeded interpreter
+  differential.
+- 592. GitHub action updates, with the 1.85, 1.88 and nightly toolchain pins restored.
+  Dependabot had collapsed all three to the stable branch, which removed Miri.
+- 593. ed25519-dalek 3, aes-gcm 0.11, toml 1 and other cargo updates, with the code
+  migrated and `ctutils` taken to 0.4.7 for RUSTSEC-2026-0385. It also refreshed the root
+  `Cargo.lock`, whose `syn` entries did not match the manifests.
+
+### In the second batch
+
+The branch `integrate/v02-batch-20261030b` merges seven branches, and its changelog entries
+are fragments under `changelog.d/`, as the kaizen line's pull request 625 proposes on your
+ruling of 2026-10-29.
+
+- The stage executor boundary for every self-hosted stage and the framing stage, V0.3.X
+  sequences 134 and 137.
+- Item 11c. A whole-array store into a data field is refused, as a whole-array read is.
+- Item 11e. `Vm::ref_context_for` and `Vm::bytecode_image`, which also answer pykeleusma's
+  request for the opaque registry.
+- Item 11d, its script part. A `let` annotated with a generic instance type compiles.
+- Item 10. A native's declarations must agree, with each other and with a bundled library.
+- A stream resume after `Reset` no longer pushes its input, which had put every later
+  iteration one slot above the verified operand-stack bound.
+- A hot swap seeds a composite private value.
 
 ## Accumulated questions for the operator
 
-Each question is independent and none blocks the next slice.
+Each has lettered options with my recommendation first. None blocks the next item.
 
-Answered 2026-10-28, see the rulings below. Questions 1, 2, 3, 5, 6, 10, 13, 14 and 15 are
-answered, and parts of 4 and 7 await an explanation this line owes.
+1. Definite initialization, held since 2026-10-28. The rule as implemented on
+   `feat/v02-definite-init` refuses 62 light-tier tests, from the private-data persistence
+   idiom, the handled indexed-write lowering, and two verifier unit tests.
+   (a) and (b) together. Change the compiler so every path writes, and give composite
+   private fields initializers so no private slot starts empty.
+   (c) Narrow the rule to what the current compiler already guarantees.
+2. The host struct layout defect from `volaw-daw-b2`, reproduced on `v0.2.3`. A struct the
+   host passes to the entry function is checked only by kind and size, so a field reorder
+   or a wrong type name is accepted and reinterprets the bytes.
+   (b) now, a documented host contract with a size check, recommending
+   `#[derive(KeleusmaType)]`, and (c) later.
+   (a) The contract and the size check alone.
+   (c) Field layouts on the wire, which needs your authorization.
+3. The five Dependabot vulnerabilities GitHub reports on `main`, four high and one
+   moderate, which I have not examined. Pull request 623 updated the cryptographic crates on
+   `v0.2.3` only.
+   (a) I examine them and report which reach a shipped crate.
+   (b) They wait for the next release from `v0.2.3`.
+4. Withdrawn. The kaizen line's pull request 624 adds `--locked` to CI for the lockfile
+   drift I reported, and needs only your merge.
 
-1. Order 6 gate. Do you accept the gate in the plan, byte identity over every repository
-   source the reference compiles and over a construct corpus covering every reference AST
-   variant, reference verdicts from the validator including a rejection corpus, the
-   trap-free analysis on the widened corpus, and shipping integration?
-2. Order 5 gate. Do you accept the Order 5 gate as stated in its plan?
-3. Order 5 decryption. The decrypt path takes ciphertext to the end of the buffer rather
-   than the declared total, so an encrypted artifact with trailing bytes cannot be
-   decrypted while a signed one loads. Should it use the declared total?
-4. Order 4 leftovers. The flat Text read trust question, a 0.2.2 patch release, which
-   needs your authorization, and which pykeleusma finding to take first.
-5. V0.3.X findings on this line's files, peer data I have not verified.
-   docs/spec/RUNTIME_FAULTS.md still specifies native default values for an unhandled
-   partial operation while the compiler emits an explicit Trap, and the whole-chunk time
-   bound refuses intern_id in the self-hosted lexer as a text operation on two Word
-   results. Should either be taken before Order 6 finishes?
-6. pykeleusma finding, unverified here. A script's `use` declaration of a library native
-   is not compared with the library's own signature, so a mismatched result type compiles
-   and decodes wrongly, which pykeleusma infers is a route to the mistyped-decode crash.
-   Should this line reproduce and repair it, or state that hosts must check?
+5. Composite host inputs and the auto-sized arena, from pykeleusma. The VM copies a
+   composite entry argument and each composite resume value into the arena's top region, and
+   `auto_arena_capacity_for` counts neither. Its documentation now says so.
+   (a) A second entry point that takes the entry argument's flat size and a per-iteration
+   resume allowance and adds them, with the per-iteration count of composite resumes bounded
+   by the verifier.
+   (b) Leave it to the host, as the documentation now states.
+6. Private slot values across a hot swap, from pykeleusma. A host cannot read a private
+   slot, so a swap cannot carry private state forward, and `replace_module`'s `initial_data`
+   cannot seed a composite private value because the composite pool is cleared after the
+   slots are written. Private data is private to the script by design.
+   (a) Keep it private, and fix only the seeding defect for composite private values.
+   (b) Add a host accessor for private slots, which weakens that privacy.
 
-7. V0.3.X Workstream I, peer data with V0.3.X's own measurements, not verified here.
-   Native lowering surfaced language questions that are this line's to own. Should a
-   local be allowed to hold Unit after Reset on one path and a value on another? Should
-   a composite built inside a loop and yielded from it be admitted? And the host string
-   ABI and the opaque-handle ABI each await your decision.
-8. Two capacities surfaced by slice 3 refuse cleanly but are not guarded where they
-   bind. Type-input extraction faults with IndexOutOfBounds(262, 256) on three piano
-   rolls, and reconstruct.kel's 1,024-record input refuses two others. Should either
-   be raised, or should the fault become a named diagnostic first?
-
-9. reconstruct.kel holds sixteen heads per multiheaded function, and the host now refuses
-   more by name instead of faulting. `rogue_gear.kel` has 21 heads per function and
-   `rogue_bestiary.kel` 101, so both stay refused. May the head cap be raised, to 128 for
-   example, with its per-head arrays and loop bounds? Its cost is linear in the cap.
-
-10. Information-flow labels. The reference type checker enforces label flow through
-   `classify`, `declassify` and labelled types, and compiles both operators to their inner
-   expression unchanged. The self-hosted pipeline refuses them today. Dropping the labels in
-   a token filter would make every such program byte-identical, but the standalone
-   self-hosted verdict would then accept programs the reference rejects for a label
-   violation. Should Order 6 port label checking into the type stage, or is admission under
-   the shipping cross-check enough? I am leaving them refused until you rule. The same
-   question now covers newtypes. The reference types a newtype nominally, rejecting
-   `let w: Word = C(5)`, a `Word` passed for a `C`, and `C + Word`, measured 2026-10-26.
-   A transparent lowering would compile `07_refinement.kel` byte-identically but would let
-   the self-hosted type stage accept those programs, which gate 3's verdict agreement would
-   expose. A refined newtype also needs the reference's interval-based elision of the
-   predicate check. I am leaving newtypes refused until you rule.
-
-11. The parser's field table. `parse.kel` counts every runtime data field of the program it
-   parses against a table of 640, and `parse.kel` itself now uses 638, measured 2026-10-26.
-   Its self-compile failed at 641 during the destructuring slice until the new state was
-   packed into two arrays. Each further slice that needs parser state must pack again or
-   wait. May the table, `fields.ffield` and its siblings, be raised, to 1,024 for example? Its
-   cost is linear in the cap, like the name table you doubled on 2026-10-25.
-
-12. The per-chunk opcode capacity of the self-hosted validator and trap analysis, 2,048
-   (`TRAP_OPCODE_CAP`). Order 6's gate 3 asks for no capacity refusal on the repository
-   corpus, and four sources exceed it in one chunk, measured 2026-10-26.
-   `rogue_bestiary.kel` reaches 3,905 ops, `piano_roll_3.kel` 4,702, `piano_roll_8.kel`
-   2,056 and `piano_roll_9.kel` 2,454. Both analyses refuse those four in agreement, and
-   agree with the reference on every other compiled source. May the capacity be raised,
-   to 8,192 for example? The stage arrays and the analyses' own bounds grow linearly with
-   it.
-
-13. A native index past the native table. `verify` and `Vm::new` both admit a module whose
-   `CallVerifiedNative` names an index beyond `native_names`, measured 2026-10-26 on
-   fourteen corrupted corpus modules. The self-hosted validator agrees, so this is not a
-   self-hosted defect. Should admission reject it, or is the call-time failure the intended
-   contract? I have not changed either side.
-14. The boundary of self-hosted monomorphization. Generic functions are now instantiated
-   with the decision in `parse.kel`, which derives each call's type arguments and parses
-   the template once per instantiation by seeking to it. The host recognises template
-   headers syntactically, keeps the chunk table, and repeats the parse in bounded probe
-   rounds until no new instantiation is requested, as it already derives the chunk table
-   from the tokens. Is this an acceptable reading of the roadmap's specialization table in
-   the compiler's persistent state, or should the rounds and the header scan move into a
-   stage as well? The design is in the Order 6 plan under slice 7.
-
-Questions 11 and 12 are answered by the ruling below, and both raises have landed, the
-field table at 1,024 and the opcode capacity at 8,192. Questions 8 and 9 are next.
-
-## Rulings received this session
-
-The operator ruled first-hand on 2026-10-28, in reply to the list of pending questions with
-their obvious choices. The operator numbered the non-blocking questions afresh, and this
-line reads the reply's items 8, 9 and 10 as questions 13, 14 and 15. Quoted where short,
-and otherwise recorded as this line reads them.
-
-- Question 1, the Order 6 gate: accepted.
-- Question 2, the Order 5 gate: accepted.
-- Question 10: "Cross-check is enough." The self-hosted type stage does not port label-flow
-  or newtype checking, and a violation is rejected by the reference cross-check.
-- Question 3: decrypt up to the declared total length.
-- Question 4: explain the trust in flat Text, which awaits a decision after the
-  explanation. No 0.2.2 patch release. Every pykeleusma finding is to be addressed in
-  priority order, with the ordering left to this line.
-- Question 5: fix both, the `RUNTIME_FAULTS.md` specification and the time bound's refusal
-  of `intern_id`.
-- Question 6: if the gap is on the Keleusma side of the boundary, this line reproduces and
-  repairs it. If it is on an external host's side, it is a contract violation, to be fixed
-  if appropriate.
-- Question 7: the representation of a local after `Reset` is an implementation detail. A
-  composite built in a loop may be yielded from it. The host string ABI and the
-  opaque-handle ABI are to be explained.
-- Question 13: reject a native index past the native table at admission.
-- Question 14: "If this can clearly be a stand alone stage, then it should be."
-- Question 15: treat `Word as Word` lowering to `FloatToInt` as a reference defect and fix
-  it.
-
-Later the same day, first-hand, after the explanations this line owed.
-
-- The reading of the reply's items 8 to 10 as questions 13 to 15 is confirmed. "If my
-  answers map to your numbering, then they are indeed answering your questions, despite the
-  misnumbering."
-- Orders 1, 3 and 4: the operator accepts their first-pass gates as recorded in their
-  audits. With Order 2's acceptance of 2026-10-24 and Orders 5 and 6 above, every order of
-  the V0.2.X roadmap is accepted for its first pass.
-- Flat Text trust: "(a) The verifier proves every flat Text slot is written only from a Text
-  value, and rejects the module otherwise."
-- Confirmed first-hand from V0.3.X's relayed answers. The hot-swap schema hash is to cover
-  slot types: "(a) Yes." A definite-initialization rule is to be added to the verifier, so
-  no read can observe the empty-slot `Unit`: "(a) Add the rule." `Text<N>` is to be built
-  now: "(a) Yes, now." The `keleusma` command is to delegate native output to the detached
-  `kel-native` binary, done by this line: "(a) Delegation, done by this line." The operator
-  added, "We will probably pull everything into one line when native codegen and selfhosting
-  are in the same executable. It should be possible to compile with the reference compiler,
-  the self hosted interpreted compiler, and the self hosted native compiler."
-
-A defect report from another session, `volaw-daw-b2`, peer data and not yet reproduced
-here: a struct the host passes to the entry function is not checked against the script's
-declared layout, so a field-order mismatch silently reinterprets the bytes, measured on
-keleusma 0.2.2. It is queued for reproduction on `v0.2.3`.
-
-The operator ruled first-hand on 2026-10-26, in reply to the status summary that listed the
-capacity questions, "Limits may be raised." I read it as answering questions 8, 9, 11 and
-12, the type-extraction table, reconstruct's record input, the reconstruct head cap, the
-parser's field table and the per-chunk opcode capacity. It does not cover a
-`BYTECODE_VERSION` change, a new opcode or a publication. Each raise will land as its own
-slice with its cost measured and recorded.
-
-The operator ruled first-hand on 2026-10-25 to free the dead names in `parse.kel`,
-continue with slice 2, and double the wire stage's name cap. The parser stood at 1,023
-of 1,024 names. The ruling is recorded in the Order 6 plan.
+You ruled on 2026-10-29 for changelog fragments and for keeping every version-branch push
+run, as the kaizen line records in pull request 625.
 
 ## Concerns
 
-The full-language boundary test takes about seven minutes in the release profile and
-runs in the heavy self-host tier. Order 6 is large, and its slices will land as several
-pull requests. HANDOFF.md is stale, and the interline checkpoint must be exported and
-reviewed before any handoff.
-
-## Slice 2
-
-Native imports and qualified native calls compile byte-identically, and the corpus
-reads 39 of 75 sources identical. The name cap is doubled and parse.kel holds 1,007
-names. The cap doubling also doubled the wire stage's deduplicated name pool, `bout`,
-from 16,384 to 32,768 bytes, because 1,023 names already filled most of it. That is my
-reading of "double the name cap", and it is flagged here so you can overrule it.
-
-## Slice 3a
-
-Tuple-destructuring and wildcard `let` compile byte-identically, through a token filter
-in lexer.kel, and the corpus reads 50 of 75 sources identical, including the Order 4
-interpreter. Stale equality flags in parse.kel, which the shipping cross-check had been
-refusing, are cleared.
-
-## Slice 3b
-
-The pipe operator and single literal parameter heads compile byte-identically, and the
-corpus reads 52 of 75 identical.
-
-## Slices 3d, 3e and 4
-
-The array `for`, the `signed`, `pure`, `ephemeral` and `external` modifiers, and trait
-impls with method calls compile byte-identically. The corpus reads 57 of 75 identical.
-
-## Slice 5d and the AST census
-
-The census holds one program or more for every reference AST variant and reads 54
-Identical of 70 rows. The saturation words, which the parser rejected as undefined names,
-compile byte-identically. The whole isolated self-host population found ten tests that
-slices 5 to 5c had made stale, and they now pin the new float boundary. Two tooling defects
-went to the kaizen line, the `cargo tns` alias, whose quoted filterset nextest cannot parse,
-and `scripts/gate_summary.py`, which is not executable here.
-
-## Slices 6 and 7
-
-Struct-typed private data fields compile byte-identically, with the private composite pool
-the host used to assume empty, and so do natives that return an enum. `14_frame_log.kel`
-is Identical. The RTOS task scripts are now also measured as the RTOS crate compiles them,
-prelude first, and all five are refused, four only because the prelude declares
-tuple-returning natives they never call. That is the next slice.
-
-## Slice 8 and a time-bound defect
-
-The RTOS prelude and its five task scripts compile byte-identically once the prelude's
-tuple-returning signatures are accepted. The last of them exposed a defect in the
-self-hosted time analysis, which gave every stream matching an enum directly a bound below
-the reference's. The shipping cross-check had refused each such program, so nothing was
-admitted with the lower bound. The analysis now agrees with the reference on those
-programs. A separate overestimate on a counted loop with a conditional break remains, in
-the safe direction, and is next.
-
-## A `break` in a bare `for`
-
-The overestimate I reported after slice 8 was a codegen defect, not an analysis one. A
-`break` in a `for` without `limit` was lowered as if the loop had one, writing into the
-first parameter's slot and leaving its branch unpatched. The cross-check refused every
-such program. It now compiles byte-identically, and the earlier wording is corrected in
-the plan.
-
-## Builtin generic signatures, 2026-10-26
-
-PR 566, the pipe placeholder, merged as e48b3a62. `Option<T>` and `Multiword<N>` in a
-function signature now take the reference layouts, and their census rows are Identical. The
-census reads 63 Identical, 8 Unsupported and 3 RefRejects of 74 rows. Three residuals are
-pinned by a test rather than hidden. An `Option` over a struct is refused, because the host
-has no struct flat size. The self-hosted type stage does not compare generic arguments, so
-only the reference cross-check rejects a mismatch. Option values, their construction and
-their match, are not yet lowered and have Unsupported census rows.
-
-A match over an `Option<T>` parameter with a scalar `T` now compiles byte-identically
-too, through two reserved rows of the parser's enum table. The census reads 64 Identical of
-74. The enum row arrays were widened under your ruling that limits may be raised.
-
-Option construction compiles byte-identically too. `Option::Some` is sized from its
-payload's scalar type, and `Option::None` becomes the reference's boxed composite with a
-per-chunk template, the first template the self-hosted driver produces. The census reads 65
-Identical of 74. The six Unsupported rows are the five awaiting question 10 and generic
-functions.
-
-A match over an Option call result or binding compiles byte-identically as well. While
-widening it I found and fixed a defect of my own making before it merged. A payload kind
-carried stale from a later binding made the self-hosted type stage reject sources the
-reference accepts. The regressions are pinned.
-
-## Generic functions, 2026-10-26
-
-Generic functions over the scalar types `Word`, `Byte` and `bool` compile byte-identically,
-including templates declared after their use, several type parameters and several
-instantiations. The census reads 66 Identical of 74, and the five Unsupported rows that
-remain all await question 10. Question 14 asks whether the design's division
-between stage and host is acceptable. Residuals are pinned, among them an uninstantiated
-template, which the reference compiles with its type parameter unresolved.
-
-## Gate 5 and the Order 6 audit, 2026-10-27
-
-A command-line test now runs the shipping `keleusma compile --compiler self-hosted` on every
-Identical census row, read from the census table, and each artifact equals the reference
-serialization. The Order 6 completion audit is
-[ORDER6_COMPLETION_AUDIT.md](../decisions/ORDER6_COMPLETION_AUDIT.md). Its disposition is
-that Order 6 is not complete. Every gate condition is met except the information-flow and
-newtype forms, which wait on question 10, and one repository source, `07_refinement.kel`,
-is among them. I also corrected an earlier record of mine that claimed gate 1 on the whole
-corpus. Question 1, the Order 6 gate acceptance, now has the audit as its evidence.
-
-## Labels and newtypes, 2026-10-27
-
-The five forms that waited on question 10 now compile byte-identically, and so does
-`07_refinement.kel`. I concluded that compiling them does not decide question 10, and I
-would like you to check that reading. The reference erases labels and newtypes from the code
-it emits, so either answer needs the same code generation. The open question is only
-whether the self-hosted type stage should also check label flow and newtype identity. Until
-you answer, a violation is rejected by the reference cross-check alone. A related finding,
-offered as data: the reference lowers `x as Word` for a `Word` x to `FloatToInt`, while the
-same cast of a newtype value emits nothing. I have not changed the reference.
+- I cancelled 16 superseded CI runs on 2026-10-30, under your discretion to resolve the pull
+  request backlog. Eight were intermediate `v0.2.3` push runs. Those merge commits were not
+  verified one by one, and the tip run covers their combined tree.
+- An unexplained over-rejection. The test-side resolving driver in
+  `tests/selfhost_typecheck.rs` refused some combination of Bool `let` bindings in a draft of
+  `codegen.kel`, although each form type-checks alone. I rewrote the draft and did not
+  isolate the combination.
+- The definite-initialization branch and its self-hosted twin draft wait on question 1.
 
 ## Next
 
-The pinned residuals in the audit, starting with Option struct payloads and generic
-arguments in the self-hosted type stage. The newtype and IFC rows await question 10.
+Merge the second batch. Then the host-built layout part of item 11d, item 12, the generic
+header scan as its own stage, 9, delegation of native output to `kel-native`, 8, `Text<N>`,
+5, the flat Text proof, and 6, the schema hash over slot types. Items 5, 6 and the host
+struct question share one limit, that a flat shape on the wire records only kind and size.
