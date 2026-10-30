@@ -9,8 +9,9 @@
 //!
 //! # What is established
 //!
-//! A local that no path writes is refused at its read, including a stream local
-//! written only before `Stream`. Each rejected case is a mutated compiled
+//! A local that some path leaves unwritten is refused at its read, including a
+//! local written on one arm of an if only and a stream local written only before
+//! `Stream`. Each rejected case is a mutated compiled
 //! module the structural checks otherwise accept, so the rejection is the new
 //! rule's. Each accepted case is its control.
 //!
@@ -125,31 +126,6 @@ fn a_local_read_before_any_write_is_rejected() {
     assert_rule_rejects(verdict(&module), "local 1 never written");
 }
 
-/// A local that one path writes and another does not is admitted, since the
-/// narrowed rule refuses only a local that no path writes. The source writes on
-/// every path, and the mutation removes the write before the branch.
-#[test]
-fn a_local_written_on_one_branch_only_is_admitted() {
-    let src = "fn main(n: Word) -> Word { let a = if n > 0 { 1 } else { 2 }; a }";
-    let mut module = compiled(src).unwrap();
-    assert_eq!(verdict(&module), Ok(()), "control");
-    // Remove the write on one branch only. The join then holds a path that
-    // writes local 1, so the read is admitted.
-    let main = module.chunks.iter_mut().find(|c| c.name == "main").unwrap();
-    let writes: Vec<usize> = main
-        .ops
-        .iter()
-        .enumerate()
-        .filter(|(_, op)| **op == Op::SetLocal(1))
-        .map(|(ip, _)| ip)
-        .collect();
-    assert!(!writes.is_empty(), "no write of local 1");
-    if writes.len() >= 2 {
-        main.ops[writes[0]] = Op::PopN(1);
-    }
-    assert_eq!(verdict(&module), Ok(()), "local 1 written on one path");
-}
-
 /// Reset clears every local, parameters included, so a stream may not read a
 /// local after `Stream` that it wrote only before it. Slot 0, the parameter, is
 /// the exception, since each resume writes it.
@@ -205,11 +181,9 @@ fn a_stream_may_not_read_a_local_written_only_before_stream() {
 
 /// The verdict does not depend on which arm of an if the worklist reaches the
 /// join from first. A local written on the longer arm only, and on the shorter
-/// arm only, are both admitted. The rule once checked each read as the worklist
-/// popped it, and so refused the first, since the shorter arm reached the join
-/// before the arm that writes.
+/// arm only, are both refused at the same read.
 #[test]
-fn a_write_on_either_arm_is_admitted_whichever_arm_is_longer() {
+fn a_write_on_either_arm_is_refused_whichever_arm_is_longer() {
     for src in [
         "fn main(n: Word) -> Word { let a = 7; let r = if n > 0 { let b = n * 2 + 3 * n - 1; b } else { 5 }; r + a }",
         "fn main(n: Word) -> Word { let a = 7; let r = if n > 0 { 5 } else { let b = n * 2 + 3 * n - 1; b }; r + a }",
@@ -228,6 +202,59 @@ fn a_write_on_either_arm_is_admitted_whichever_arm_is_longer() {
                 _ => {}
             }
         }
+        assert_rule_rejects(verdict(&module), src);
+    }
+}
+
+/// The handled indexed write reads its `old` and `new` slots in the arm
+/// dispatch under the flag test that guards the success branch. The compiler
+/// writes each bound slot with the element's zero before that test, which is
+/// what makes the lowering pass the rule. Each control is accepted, and
+/// removing the pre-write is refused, so the pre-write is load-bearing.
+#[test]
+fn the_handled_write_pre_writes_are_what_admits_it() {
+    for (src, zero) in [
+        (
+            "private data d { x: [Word; 2] } fn main(i: Word) -> Word { d.x[i] = 7 { ok(o, n) => o * 100 + n, invalid_index(j) => j } }",
+            vec![Op::PushImmediate(4)],
+        ),
+        (
+            "private data d { x: [Byte; 2] } fn main(i: Word) -> Byte { d.x[i] = 7 as Byte { ok(o, _) => o, invalid_index(_) => 0 as Byte } }",
+            vec![Op::PushImmediate(4), Op::WordToByte],
+        ),
+        (
+            "private data d { x: [Word; 2] } fn main(i: Word) -> Word { d.x[i] = 7 { ok(_, n) => n, invalid_index(j) => j } }",
+            vec![Op::PushImmediate(4)],
+        ),
+    ] {
+        let module = compiled(src).unwrap_or_else(|e| panic!("{src}\n{e}"));
+        assert_eq!(verdict(&module), Ok(()), "control: {src}");
+        let ops = &module.chunks.iter().find(|c| c.name == "main").unwrap().ops;
+        // Every pre-write, the zero followed by its `SetLocal`.
+        let n = zero.len();
+        let sites: Vec<usize> = (0..ops.len().saturating_sub(n))
+            .filter(|&ip| ops[ip..ip + n] == zero[..] && matches!(ops[ip + n], Op::SetLocal(_)))
+            .collect();
+        assert!(!sites.is_empty(), "no pre-write in {src}");
+        for ip in sites {
+            let mut m = module.clone();
+            let main = m.chunks.iter_mut().find(|c| c.name == "main").unwrap();
+            main.ops[ip + n] = Op::PopN(1);
+            assert_rule_rejects(verdict(&m), &format!("{src} without the pre-write at {ip}"));
+        }
+    }
+}
+
+/// A handled write on an element that is neither `Word` nor `Byte` pre-writes
+/// its bound slots with the element's zero, an immediate for `bool` and a pool
+/// constant for a struct, and is accepted.
+#[test]
+fn a_handled_write_on_any_element_type_is_accepted() {
+    for src in [
+        "private data d { x: [bool; 2] } fn main(i: Word) -> bool { d.x[i] = true { ok(o, _) => o, invalid_index(_) => false } }",
+        "struct P { x: Word, y: Word }\nprivate data d { x: [P; 2] } fn main(i: Word) -> Word { d.x[i] = P { x: 1, y: 2 } { ok(o, n) => o.x + n.y, invalid_index(j) => j } }",
+    ] {
+        let module = compiled(src).unwrap_or_else(|e| panic!("{src}\n{e}"));
         assert_eq!(verdict(&module), Ok(()), "{src}");
     }
 }

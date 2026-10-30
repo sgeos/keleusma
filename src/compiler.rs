@@ -70,6 +70,10 @@ struct TypeInfo {
     /// without emitting `Op::Call`. The newtype wrapper exists only
     /// at the type-checker level.
     newtype_names: alloc::collections::BTreeSet<String>,
+    /// Newtype definitions, keyed by name, so that the canonical zero value
+    /// of a type, `crate::zero_value::zero_value`, can be computed for a
+    /// local the compiler writes before the program does.
+    newtype_defs: BTreeMap<String, NewtypeDef>,
     /// Newtypes with refinement predicates. Maps the newtype name
     /// to the predicate function name. The compiler emits a call
     /// to the predicate at every newtype construction site and
@@ -116,6 +120,16 @@ struct TypeInfo {
 }
 
 impl TypeInfo {
+    /// The declarations [`crate::zero_value::zero_value`] consults.
+    fn zero_registry(&self) -> crate::zero_value::TypeRegistry<'_> {
+        crate::zero_value::TypeRegistry {
+            structs: &self.struct_defs,
+            enums: &self.enum_defs,
+            newtypes: &self.newtype_defs,
+            refinement_bodies: &self.refinement_bodies,
+        }
+    }
+
     /// Build a [`LayoutContext`] over this module's struct and enum
     /// definitions at the module widths (B28 P2). The flat layout
     /// arithmetic the access baking needs is computed through this context
@@ -3796,6 +3810,7 @@ fn compile_with_recorded_type_hook(
             }
             TypeDef::Newtype(n) => {
                 type_info.newtype_names.insert(n.name.clone());
+                type_info.newtype_defs.insert(n.name.clone(), n.clone());
                 if let Some(pred) = &n.refinement {
                     type_info
                         .newtype_refinements
@@ -5774,6 +5789,41 @@ fn data_write_target(
     Ok((base, field_type))
 }
 
+/// Push the canonical zero value of `ty`, the value a local holds when the
+/// compiler writes it before the program does.
+///
+/// `Word`, `Byte` and `Bool` use immediates, which need no constant. Any other
+/// type pushes its `crate::zero_value::zero_value` from the constant pool, so
+/// that the slot holds a value of its static type and never the empty `Unit`.
+fn emit_type_zero(fc: &mut FuncCompiler, ty: &TypeExpr, span: Span) -> Result<(), CompileError> {
+    match ty {
+        TypeExpr::Prim(PrimType::Word, _) => {
+            fc.emit(Op::PushImmediate(4));
+        }
+        TypeExpr::Prim(PrimType::Byte, _) => {
+            fc.emit(Op::PushImmediate(4));
+            fc.emit(Op::WordToByte);
+        }
+        TypeExpr::Prim(PrimType::Bool, _) => {
+            fc.emit(Op::PushImmediate(2));
+        }
+        _ => {
+            let zero =
+                crate::zero_value::zero_value(ty, &fc.type_info.zero_registry()).map_err(|e| {
+                    CompileError {
+                        message: format!(
+                            "internal error: no zero value for an element type: {e:?}"
+                        ),
+                        span,
+                    }
+                })?;
+            let idx = fc.add_const_value(zero);
+            fc.emit(Op::Const(idx));
+        }
+    }
+    Ok(())
+}
+
 /// Emit a bare `state.field[i][j]... = value;` write.
 ///
 /// Index, probe, the default `Trap(8)` on an invalid index, the offset held
@@ -5892,6 +5942,22 @@ fn compile_data_index_store(
     const OLD: u16 = STORE_OLD;
     const LIMB0: u16 = STORE_LIMB0;
     const NEW: u16 = STORE_NEW;
+
+    // Definite initialization. The arms read `old` and `new` under the same
+    // flag test that guards the success branch, which only a path-sensitive
+    // analysis could pair with the writes below. Each bound slot that the
+    // success branch alone would write is therefore first written with the
+    // element type's zero, so that it is written on every path before any
+    // read. The arm never observes that zero, since the success branch
+    // overwrites it and the invalid-index arm does not bind it.
+    if binds_old && !probe.read_old {
+        emit_type_zero(fc, &probe.element, span)?;
+        pending.push((fc.emit(Op::SetLocal(0)), OLD));
+    }
+    if binds_new {
+        emit_type_zero(fc, &probe.element, span)?;
+        pending.push((fc.emit(Op::SetLocal(0)), NEW));
+    }
 
     // Success branch: read the old element when needed, then evaluate and
     // write the value. The value is never evaluated on an invalid index.

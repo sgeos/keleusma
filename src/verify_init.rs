@@ -1,47 +1,45 @@
-//! Definite initialization, narrowed. No read may observe a local that no path
-//! writes.
+//! Definite initialization. No read may observe a local that some path to it
+//! leaves unwritten.
 //!
 //! The virtual machine marks an unwritten local with its `Unit` value. The
 //! operator ruled on 2026-10-28 that the verifier should keep a read from
 //! observing that marker, and on 2026-10-30, "Adopt C. Then attempt to maintain
-//! guarantees and widen to A and B together." Option (c) narrows the rule to
-//! what the current compiler already guarantees. This module is that narrowed
-//! rule. The widening, in which the compiler writes every path and composite
-//! private fields receive initializers, is separate work.
+//! guarantees and widen to A and B together." Option (c) narrowed the rule to a
+//! local that no path writes. The widening makes the compiler write every local
+//! on every path before any read, which is option (a), and this module then
+//! proves the stronger property.
 //!
 //! # The rule
 //!
-//! A forward may-analysis over each chunk's control-flow edges computes the
-//! locals that some path writes before every instruction. The parameters are
-//! written on entry. A `GetLocal` of a slot outside that set reads a local that
-//! no path to it writes, and is rejected. `Reset` clears every local, the
-//! parameters included, and resumes after `Stream`, and the next resume writes a
-//! stream's input into slot 0, so at `Stream` the set becomes slot 0 alone, or
-//! empty for a stream without a parameter. A local written only before `Stream`
-//! and read after it is therefore rejected, since every pass after the first
-//! reads the marker.
+//! A forward must-analysis over each chunk's control-flow edges computes the
+//! locals that every path writes before each instruction. The parameters are
+//! written on entry. A `GetLocal` of a slot outside that set may read a local
+//! that some path leaves unwritten, and is rejected. `Reset` clears every local,
+//! the parameters included, and resumes after `Stream`, and the next resume
+//! writes a stream's input into slot 0, so at `Stream` the set becomes slot 0
+//! alone, or empty for a stream without a parameter. A local written only before
+//! `Stream` and read after it is therefore rejected, since every pass after the
+//! first reads the marker.
 //!
-//! # What the narrowed rule admits, deliberately
+//! The narrowed guarantee is kept, since a local that no path writes is outside
+//! every path's set. The rule is strictly stronger, so that a native backend may
+//! treat every local it reads as holding a value of its static type.
 //!
-//! A read that some path writes and another path does not is admitted. The
-//! compiler's handled indexed-write lowering writes a scratch local and reads
-//! it under the same comparison, which only a path-sensitive analysis could
-//! prove, and the operator's ruling keeps that program valid. A native backend
-//! must therefore keep a run-time kind for such a local.
+//! # What the compiler does to meet it
 //!
-//! Private data is not checked. A composite or `Text` private slot has no
-//! load-time initializer, and the persistence idiom writes it on the first pass
-//! only, as in `if seed == 0 { d.p = ... }`. A hot swap also seeds every slot of
-//! the incoming module from the host's `initial_data`, so even a slot the module
-//! never writes may hold a value when it is read. Nothing short of initializers
-//! for composite private fields, the widening's option (b), proves such a read
-//! safe.
+//! The handled indexed-write lowering, `compile_data_index_store`, reads its
+//! `old` and `new` slots in the arm dispatch under the same flag test that
+//! guards the success branch that writes them. A path-insensitive analysis
+//! cannot pair the two, so the lowering writes each such bound slot with the
+//! element type's zero before the flag test. This is the only lowering the
+//! light tier found to read a local that some path leaves unwritten.
 //!
 //! # Soundness and termination
 //!
-//! An unreached instruction holds no set and is not checked, since it never
-//! runs. A join is union, and every set only grows, at most once per local, so
-//! the worklist terminates. Control-flow targets are validated before this pass
+//! An unreached instruction is the lattice top and is not checked, since it
+//! never runs. A join is intersection, and every set only shrinks, at most once
+//! per local, so the worklist terminates. Reads are checked against the final
+//! sets after the fixpoint. Control-flow targets are validated before this pass
 //! runs, and a target outside the chunk contributes no edge here.
 
 use crate::bytecode::{Chunk, Module, Op};
@@ -67,11 +65,11 @@ impl Bits {
             *w |= 1 << (i % 64);
         }
     }
-    /// Union in place, returning whether the set changed.
-    fn join(&mut self, other: &Bits) -> bool {
+    /// Intersect in place, returning whether the set changed.
+    fn meet(&mut self, other: &Bits) -> bool {
         let mut changed = false;
         for (a, b) in self.0.iter_mut().zip(&other.0) {
-            let next = *a | *b;
+            let next = *a & *b;
             changed |= next != *a;
             *a = next;
         }
@@ -92,16 +90,14 @@ fn successors(ops: &[Op], ip: usize) -> (Option<usize>, Option<usize>) {
     }
 }
 
-/// A forward may-analysis over one chunk's locals. `transfer` applies an
+/// A forward must-analysis over one chunk's locals. `transfer` applies an
 /// instruction's writes and, when its flag is set, checks its reads against the
 /// set before them.
 ///
-/// Reads are checked only after the fixpoint. A set grows as the worklist
-/// visits more paths, so a read checked on an early visit would see a subset of
-/// its final set and refuse a local that a later path writes. The handled
-/// indexed-write lowering is such a case, since the jump that skips its write
-/// reaches the join first.
-fn may_analysis(
+/// Reads are checked only after the fixpoint, against each instruction's final
+/// set, so the verdict and the instruction reported do not depend on the order
+/// in which the worklist visits the paths.
+fn must_analysis(
     chunk: &Chunk,
     width: usize,
     entry: Bits,
@@ -117,16 +113,20 @@ fn may_analysis(
     state[0] = Some(entry);
     work.push_back(0usize);
     queued[0] = true;
-    // The worklist only revisits an instruction whose set grew, and each set
-    // can grow at most `width` times, so this is bounded.
+    // The worklist only revisits an instruction whose set shrank, and each set
+    // can shrink at most `width` times after its first arrival, so this is
+    // bounded.
     while let Some(ip) = work.pop_front() {
         queued[ip] = false;
-        let mut set = state[ip].clone().unwrap_or_else(|| Bits::empty(width));
+        // Every queued instruction holds a set, since it was queued on arrival.
+        let Some(mut set) = state[ip].clone() else {
+            continue;
+        };
         transfer(ip, &ops[ip], &mut set, false)?;
         let (fall, jump) = successors(ops, ip);
         for to in [fall, jump].into_iter().flatten() {
             let changed = match &mut state[to] {
-                Some(old) => old.join(&set),
+                Some(old) => old.meet(&set),
                 slot @ None => {
                     *slot = Some(set.clone());
                     true
@@ -151,8 +151,8 @@ fn local_error(chunk: &Chunk, ip: usize, slot: u16) -> VerifyError {
     VerifyError {
         chunk_name: chunk.name.clone(),
         message: format!(
-            "GetLocal({slot}) at {ip} reads local {slot}, which no path to it writes; a read \
-             may not observe an empty slot (definite-initialization rule)"
+            "GetLocal({slot}) at {ip} may read local {slot} before any write on some path; a \
+             read may not observe an empty slot (definite-initialization rule)"
         ),
     }
 }
@@ -164,7 +164,7 @@ fn check_locals(chunk: &Chunk) -> Result<(), VerifyError> {
     for p in 0..usize::from(chunk.param_count).min(width) {
         entry.set(p);
     }
-    may_analysis(chunk, width, entry, |ip, op, set, check| {
+    must_analysis(chunk, width, entry, |ip, op, set, check| {
         match op {
             Op::GetLocal(i) if check && (*i as usize) < width && !set.has(*i as usize) => {
                 return Err(local_error(chunk, ip, *i));
@@ -186,7 +186,8 @@ fn check_locals(chunk: &Chunk) -> Result<(), VerifyError> {
     })
 }
 
-/// Reject a module in which some read observes a local that no path writes.
+/// Reject a module in which some read may observe a local that some path to it
+/// leaves unwritten.
 ///
 /// # Errors
 ///
