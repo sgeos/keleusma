@@ -63,3 +63,19 @@ fn a_text_read_retargeted_to_a_word_field_is_refused() {
     let err = verify(&m).expect_err("a Text read of the Word field");
     assert!(err.message.contains("TextFieldMismatch"), "{}", err.message);
 }
+
+/// The self-hosted typed stage reaches the same verdicts on both modules.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_self_hosted_typed_stage_agrees() {
+    use keleusma::selfhost::typed_reject_module_via_kel;
+    let m = compiled(SRC);
+    assert!(!typed_reject_module_via_kel(&m), "the compiled module");
+    let mut bad = m.clone();
+    let (ci, i, _) = text_read(&bad);
+    bad.chunks[ci].ops[i] = Op::GetField(StructField::Flat {
+        offset: 0,
+        kind: ScalarKind::Text,
+    });
+    assert!(typed_reject_module_via_kel(&bad), "the retargeted read");
+}

@@ -11,11 +11,10 @@ VM-internal field reads.
 > (a) The verifier proves every flat Text slot is written only from a Text value, and rejects
 > the module otherwise.
 
-This document is the design that ruling asked for before implementation. Increments 1 and 2
-below are implemented in the reference typed pass, `src/verify_typed.rs`, and pinned by
-`tests/flat_text_layout_proof.rs`. Increment 3, the self-hosted twin, is not yet built, so until
-it lands the self-hosted validator admits a hand-built module whose mistyped `Text` read the
-reference refuses. Increment 4 waits on the operator.
+This document is the design that ruling asked for before implementation. Increments 1 to 3
+below are implemented, the reference pass in `src/verify_typed.rs` and its self-hosted twin in
+`src/selfhost/kel/verify_typed.kel`, and pinned by `tests/flat_text_layout_proof.rs`. Increment
+4 waits on the operator.
 
 ## The defect the proof closes
 
@@ -83,11 +82,14 @@ the UTF-8 pass, would close the five without making a time bound depend on a str
    with no new rejection. The pinned verdicts must not move.
 2. The read and write checks for bodies of known layout, with hand-built modules that the
    current pass admits and the new one refuses, and the corpus unchanged.
-3. The self-hosted twin in `verify_typed.kel`, whose byte-identical verdicts the validator's
-   agreement tests compare. That stage records a scalar entry by its size alone, so the twin
-   needs the host to marshal each pushed scalar's kind as well, and the stage to carry each
-   flat entry's `Text` offsets, which a bounded table of four per entry would hold, with a body
-   holding more left unknown and deferred.
+3. The self-hosted twin in `verify_typed.kel`. A scalar entry's kind slot now carries 1 for
+   `Text`, which the host marshals for a static string constant, a `Text` field or element read
+   and a seed from the wire, and each entry and local carries up to four `Text` offsets. The
+   twin is less precise than the reference in three places, each of which defers rather than
+   refuses. It resets every shape at a control-flow join, as it already did. A body with more
+   than four `Text` fields has an unknown layout. The element of an array of nested bodies has
+   an unknown layout. A hostile module whose mistyped `Text` read relies on any of the three is
+   refused by the reference and admitted by the twin.
 4. For the five boundary sources, whatever the operator rules.
 
 ## What this does not change

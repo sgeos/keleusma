@@ -4,5 +4,5 @@
   now tracks the `Text` field offsets of every body the program builds and refuses such a read
   with `TextFieldMismatch`. This preserves the soundness invariant that a VM-internal `Text` read
   of a program-built body reads a pointer the program wrote as text. Bodies from outside the
-  program are not yet covered, and the self-hosted twin is not yet built. On the operator's
+  program are not yet covered. The self-hosted validator mirrors the check. On the operator's
   ruling of 2026-10-28. Pinned by `tests/flat_text_layout_proof.rs`.

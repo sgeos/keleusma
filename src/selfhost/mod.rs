@@ -6262,8 +6262,18 @@ fn typed_desc(
         Op::Call(_, _) | Op::CallVerifiedNative(_, _) | Op::CallExternalNative(_, _) => {
             (12, 0, 0, 0)
         }
+        // `tc` 1 marks a static string, which the reference types as a `Text` scalar, so the
+        // stage can record where a body holds text.
         Op::Const(idx) => match const_scalar_size(chunk.constants.get(*idx as usize), wb, fb, ab) {
-            Some(sz) => (2, sz, 0, 0),
+            Some(sz) => (
+                2,
+                sz,
+                0,
+                i64::from(matches!(
+                    chunk.constants.get(*idx as usize),
+                    Some(crate::bytecode::ConstValue::StaticStr(_))
+                )),
+            ),
             None => (0, 0, 0, 0),
         },
         Op::NewComposite(NewCompositeOperand::Flat {
@@ -6281,9 +6291,12 @@ fn typed_desc(
         }) => (6, 0, *byte_size as i64, i64::from(kind.to_tag())),
         Op::GetField(StructField::Flat { offset, kind })
         | Op::GetTupleField(TupleField::Flat { offset, kind })
-        | Op::GetEnumField(EnumField::Flat { offset, kind }) => {
-            (7, *offset as i64, kind.size_in_bytes(wb, fb, ab) as i64, 0)
-        }
+        | Op::GetEnumField(EnumField::Flat { offset, kind }) => (
+            7,
+            *offset as i64,
+            kind.size_in_bytes(wb, fb, ab) as i64,
+            i64::from(*kind == crate::value_layout::ScalarKind::Text),
+        ),
         Op::GetField(StructField::FlatNested {
             offset,
             size,
@@ -6299,10 +6312,18 @@ fn typed_desc(
             size,
             variant,
         }) => (8, *offset as i64, *size as i64, i64::from(variant.to_tag())),
-        Op::GetIndex(elem @ ArrayElem::Flat { kind }) if elem.has_bounds_outcome() => {
-            (17, kind.size_in_bytes(wb, fb, ab) as i64, wb as i64, 0)
-        }
-        Op::GetIndex(ArrayElem::Flat { kind }) => (9, kind.size_in_bytes(wb, fb, ab) as i64, 0, 0),
+        Op::GetIndex(elem @ ArrayElem::Flat { kind }) if elem.has_bounds_outcome() => (
+            17,
+            kind.size_in_bytes(wb, fb, ab) as i64,
+            wb as i64,
+            i64::from(*kind == crate::value_layout::ScalarKind::Text),
+        ),
+        Op::GetIndex(ArrayElem::Flat { kind }) => (
+            9,
+            kind.size_in_bytes(wb, fb, ab) as i64,
+            0,
+            i64::from(*kind == crate::value_layout::ScalarKind::Text),
+        ),
         Op::GetIndex(ArrayElem::FlatNested { size, variant }) => {
             (10, *size as i64, wb as i64, i64::from(variant.to_tag()))
         }
@@ -6327,8 +6348,13 @@ fn abs_from_wire(
     use crate::value_layout::{CompositeKind, ScalarKind};
     match shape {
         WireShape::Top => (0, 0, 0),
+        // A scalar's kind slot carries 1 for `Text`, which the stage reads only for scalars.
         WireShape::Scalar { kind } => match ScalarKind::from_tag(*kind) {
-            Some(k) => (1, k.size_in_bytes(wb, fb, ab) as i64, 0),
+            Some(k) => (
+                1,
+                k.size_in_bytes(wb, fb, ab) as i64,
+                i64::from(k == ScalarKind::Text),
+            ),
             None => (0, 0, 0),
         },
         WireShape::Flat { kind, size } => match CompositeKind::from_tag(*kind) {
