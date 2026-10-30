@@ -1,11 +1,12 @@
 //! Production transport for scoped source facts and the Keleusma rejection stage.
 //! The host interns identities and copies rows. Type resolution remains in the stage.
 
+use super::executor::{StageExecutor, stage_vm};
 use super::{CallTypeBatch, CallTypeInputs, ExprOperand};
 use crate::Arena;
 use crate::bytecode::{Module, SlotVisibility, Value};
 use crate::selfhost_host::ParseRecordError;
-use crate::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmError, VmState, required_persistent_capacity_for};
+use crate::vm::{DEFAULT_ARENA_CAPACITY, VmError, VmState, required_persistent_capacity_for};
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::{String, ToString};
@@ -159,7 +160,7 @@ impl Layout {
 
     fn write(
         &self,
-        vm: &Vm<'_, '_>,
+        vm: &dyn StageExecutor,
         shared: &mut [u8],
         field: &str,
         values: &[i64],
@@ -264,7 +265,11 @@ fn encode(
     })
 }
 
-fn constant(vm: &mut Vm<'_, '_>, module: &Module, name: &str) -> Result<i64, TypeCheckError> {
+fn constant(
+    vm: &mut dyn StageExecutor,
+    module: &Module,
+    name: &str,
+) -> Result<i64, TypeCheckError> {
     let index = module
         .chunks
         .iter()
@@ -293,7 +298,7 @@ fn run_batch(
     arena
         .resize_persistent(persistent)
         .map_err(|e| TypeCheckError::Protocol(format!("arena allocation failed ({e:?})")))?;
-    let mut vm = Vm::new(module.clone(), &arena).map_err(TypeCheckError::Execution)?;
+    let mut vm = stage_vm(module.clone(), &arena).map_err(TypeCheckError::Execution)?;
     let mut shared = vec![0; vm.shared_data_bytes()];
     let budget = usize::try_from(constant(&mut vm, module, "ty_max_steps")?)
         .ok()

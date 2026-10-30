@@ -17,13 +17,16 @@ fn error(detail: &str) -> SelfHostError {
         detail: format!("wire auxiliary decode: {detail}"),
     }
 }
-fn accept(vm: &mut Vm<'_, '_>, shared: &mut [u8], cmd: i64) -> Result<(), SelfHostError> {
+fn accept(vm: &mut dyn StageExecutor, shared: &mut [u8], cmd: i64) -> Result<(), SelfHostError> {
     if command(vm, shared, cmd)? != 0 {
         return Err(error("unexpected metadata response"));
     }
     Ok(())
 }
-fn outputs<const N: usize>(vm: &Vm<'_, '_>, shared: &[u8]) -> Result<[usize; N], SelfHostError> {
+fn outputs<const N: usize>(
+    vm: &dyn StageExecutor,
+    shared: &[u8],
+) -> Result<[usize; N], SelfHostError> {
     let mut values = [0; N];
     for (i, value) in values.iter_mut().enumerate() {
         *value = get_word(vm, shared, FIN + i)?;

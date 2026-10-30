@@ -19,7 +19,7 @@ fn error(detail: &str) -> SelfHostError {
 }
 
 fn append(
-    vm: &Vm<'_, '_>,
+    vm: &dyn StageExecutor,
     shared: &[u8],
     count: usize,
     output: &mut Vec<u8>,
@@ -52,7 +52,7 @@ pub fn wire_signature_sections_via_kel(
 }
 
 fn emit_shape(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     shape: &WireShape,
     parameter: bool,
@@ -174,7 +174,7 @@ mod tests {
         .unwrap();
     }
 
-    fn fields(vm: &mut Vm<'_, '_>, shared: &mut [u8], values: [i64; 3]) {
+    fn fields(vm: &mut dyn StageExecutor, shared: &mut [u8], values: [i64; 3]) {
         for (i, value) in values.into_iter().enumerate() {
             set_word(vm, shared, wire_slots::FIN + i, value).unwrap();
         }

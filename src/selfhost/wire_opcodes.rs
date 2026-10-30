@@ -379,13 +379,13 @@ mod tests {
     fn pool_boundaries_and_refusals_preserve_the_stream() {
         let stage = compile_src(&read_stage("kel/wire.kel"));
         with_compiled_wire(stage, |vm, shared| {
-            fn raw(vm: &mut Vm<'_, '_>, shared: &mut [u8], row: [i64; 5]) -> i64 {
+            fn raw(vm: &mut dyn StageExecutor, shared: &mut [u8], row: [i64; 5]) -> i64 {
                 for (i, value) in row.into_iter().enumerate() {
                     set_word(vm, shared, wire_slots::FIN + i, value).unwrap();
                 }
                 enter_wire(vm, shared, 194).unwrap()
             }
-            fn begin(vm: &mut Vm<'_, '_>, shared: &mut [u8], count: i64) -> i64 {
+            fn begin(vm: &mut dyn StageExecutor, shared: &mut [u8], count: i64) -> i64 {
                 set_word(vm, shared, wire_slots::WARG, count).unwrap();
                 enter_wire(vm, shared, 193).unwrap()
             }

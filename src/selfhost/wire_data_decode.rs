@@ -27,7 +27,7 @@ fn required(bytes: Option<&[u8]>) -> Result<&[u8], SelfHostError> {
     bytes.ok_or_else(|| error("required data region absent after validation"))
 }
 fn send_slot(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     record: &WireSchemaRecord,
 ) -> Result<(), SelfHostError> {
@@ -47,7 +47,7 @@ fn send_slot(
     )
 }
 fn expect(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     cmd: i64,
     expected: usize,
@@ -57,7 +57,7 @@ fn expect(
     }
     Ok(())
 }
-fn word(vm: &Vm<'_, '_>, shared: &[u8], slot: usize) -> Result<u32, SelfHostError> {
+fn word(vm: &dyn StageExecutor, shared: &[u8], slot: usize) -> Result<u32, SelfHostError> {
     u32::try_from(get_word(vm, shared, slot)?).map_err(|_| error("word response exceeds u32"))
 }
 

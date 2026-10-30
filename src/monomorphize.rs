@@ -474,6 +474,11 @@ fn specialize_enums(
             }
         }
         func.return_type = resolve_generic_type_to_spec(&func.return_type, &enum_specs);
+        LetAnnotationRewriter {
+            specs: &enum_specs,
+            structs: false,
+        }
+        .visit_block(&mut func.body);
     }
     program
         .types
@@ -894,11 +899,45 @@ fn specialize_structs(
             }
         }
         func.return_type = resolve_generic_type_to_spec(&func.return_type, &struct_specs);
+        LetAnnotationRewriter {
+            specs: &struct_specs,
+            structs: true,
+        }
+        .visit_block(&mut func.body);
     }
     program
         .types
         .extend(new_structs.into_iter().map(TypeDef::Struct));
     (program, spec_meta)
+}
+
+/// Rewrites a `let` annotation naming a generic instance, `Maybe<Word>` say, to the specialized
+/// name its value now carries, `Maybe__Word`, as the signature passes do for parameters and
+/// returns. Without it the re-check after monomorphization compares the two names and refuses
+/// the binding. For a struct the binding's destructuring pattern follows the type, for the reason
+/// the parameter pass gives.
+struct LetAnnotationRewriter<'a> {
+    specs: &'a BTreeMap<(String, String), String>,
+    structs: bool,
+}
+
+impl crate::visitor::MutVisitor for LetAnnotationRewriter<'_> {
+    fn visit_stmt(&mut self, stmt: &mut Stmt) {
+        if let Stmt::Let(l) = stmt
+            && let Some(t) = &l.type_expr
+        {
+            let spec = resolve_generic_type_to_spec(t, self.specs);
+            if self.structs
+                && let (TypeExpr::Named(original, ..), TypeExpr::Named(spec_name, ..)) = (t, &spec)
+                && original != spec_name
+            {
+                let (original, spec_name) = (original.clone(), spec_name.clone());
+                rewrite_pattern_struct_name(&mut l.pattern, &original, &spec_name);
+            }
+            l.type_expr = Some(spec);
+        }
+        self.walk_stmt(stmt);
+    }
 }
 
 /// AST visitor that rewrites generic `Expr::StructInit` constructions

@@ -266,7 +266,7 @@ fn materialize(kind: u16, fields: &[i64]) -> Result<WireSchemaRecord, SelfHostEr
 }
 
 pub(super) fn decode_records(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     kind: u16,
     bytes: &[u8],

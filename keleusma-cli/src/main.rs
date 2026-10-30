@@ -21,6 +21,7 @@
 //! by non-enrolled keys. See `strict_mode` for the policy mechanics.
 
 mod duration;
+mod native;
 mod runtasks;
 mod strict_mode;
 mod validate;
@@ -63,6 +64,7 @@ fn main() -> ExitCode {
         "strip" => strip_subcommand(&args[2..]),
         "keygen" => keygen_subcommand(&args[2..]),
         "repl" => repl_subcommand(&args[2..]),
+        "native" => native::run(&args[2..]),
         "--help" | "-h" | "help" => {
             print_help();
             ExitCode::SUCCESS
@@ -149,6 +151,11 @@ fn print_help() {
     println!("                                    configured interval. --print-memory reports the");
     println!("                                    program's worst-case arena footprint and exits");
     println!("                                    without running, for provisioning a host.");
+    println!("  native <kel-native arguments>   Native output, delegated to the `kel-native`");
+    println!("                                    command with every argument unchanged, for");
+    println!("                                    example `keleusma native build <file> --prefix");
+    println!("                                    <name> --out <dir>`. It is found through");
+    println!("                                    KELEUSMA_NATIVE, beside `keleusma`, or on PATH.");
     println!("  validate <bytecode> [--validator <rust|self-hosted>]");
     println!("                      [--arena-capacity <bytes>] [--require-trap-free]");
     println!("                                    Check structure, types and resource bounds.");

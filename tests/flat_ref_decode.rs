@@ -149,3 +149,29 @@ fn native_receives_struct_with_text_field() {
         other => panic!("expected Int(7), got {:?}", other),
     }
 }
+
+/// A host that decodes through `from_value_ctx` takes the context from the
+/// VM. A pykeleusma finding: after the image field was added, a host-built
+/// context could not name the bytecode image, so a constant string in a
+/// returned struct could only be refused.
+#[test]
+fn a_host_decode_takes_the_vm_context_with_its_bytecode_image() {
+    let src = "struct Greeting { msg: Text, n: Word }\n\
+               fn main() -> Greeting { Greeting { msg: \"hi\", n: 5 } }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
+    let mut vm = Vm::new(module, &arena).expect("verify");
+    let val = match vm.call(&[]).expect("call") {
+        VmState::Finished(v) => v,
+        other => panic!("expected finished, got {:?}", other),
+    };
+    assert!(!vm.bytecode_image().is_empty());
+    let g = Greeting::from_value_ctx(&val, &vm.ref_context_for(&val)).expect("decode");
+    assert_eq!((g.msg.as_str(), g.n), ("hi", 5));
+
+    // The negative control. The same context with an empty image refuses the
+    // constant string, which is the only outcome a host had before.
+    let mut ctx = vm.ref_context_for(&val);
+    ctx.rodata = &[];
+    assert!(Greeting::from_value_ctx(&val, &ctx).is_err());
+}

@@ -14,7 +14,7 @@ fn error(detail: &str) -> SelfHostError {
     }
 }
 pub(super) fn copy_window(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     bytes: &[u8],
 ) -> Result<(), SelfHostError> {
@@ -27,10 +27,10 @@ pub(super) fn copy_window(
     }
     set_word(vm, shared, ARG, bytes.len() as i64)
 }
-fn word(vm: &Vm<'_, '_>, shared: &[u8], slot: usize) -> Result<u32, SelfHostError> {
+fn word(vm: &dyn StageExecutor, shared: &[u8], slot: usize) -> Result<u32, SelfHostError> {
     u32::try_from(get_word(vm, shared, slot)?).map_err(|_| error("word response exceeds u32"))
 }
-fn short(vm: &Vm<'_, '_>, shared: &[u8], slot: usize) -> Result<u16, SelfHostError> {
+fn short(vm: &dyn StageExecutor, shared: &[u8], slot: usize) -> Result<u16, SelfHostError> {
     u16::try_from(get_word(vm, shared, slot)?).map_err(|_| error("short response exceeds u16"))
 }
 fn record_kind(form: usize) -> Result<DebugRecordKind, SelfHostError> {
@@ -69,7 +69,7 @@ pub fn wire_decode_parameter_tags_via_kel(
 }
 
 pub(super) fn decode_parameters(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     pool: Option<&[u8]>,
     range: (u32, u32),
@@ -121,7 +121,7 @@ pub(super) fn decode_parameters(
 }
 
 pub(super) fn decode_debug(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     bytes: &[u8],
 ) -> Result<DebugPool, SelfHostError> {

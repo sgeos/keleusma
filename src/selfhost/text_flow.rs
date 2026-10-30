@@ -1,8 +1,10 @@
 //! Text boundary decisions run in analyze.kel. Rust stores the abstract values and
 //! supplies opcode facts, stack effects, and callee results in dependency order.
+use super::executor::{StageExecutor, stage_vm};
 use super::{SelfHostError, analyze_kel_module};
 use crate::bytecode::{Chunk, ConstValue, Module, Op, Value};
-use crate::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
+use crate::vm::{DEFAULT_ARENA_CAPACITY, VmState, required_persistent_capacity_for};
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -32,7 +34,7 @@ fn error(detail: impl core::fmt::Debug) -> SelfHostError {
     }
 }
 struct Machine<'a> {
-    vm: Vm<'static, 'a>,
+    vm: Box<dyn StageExecutor + 'a>,
     shared: Vec<u8>,
     slots: [usize; 17],
     started: bool,
@@ -51,7 +53,7 @@ impl<'a> Machine<'a> {
                 .position(|s| s.name == *field)
                 .ok_or_else(|| error(field))?;
         }
-        let vm = Vm::new(module, arena).map_err(error)?;
+        let vm = stage_vm(module, arena).map_err(error)?;
         let shared = vec![0; vm.shared_data_bytes()];
         Ok(Self {
             vm,
