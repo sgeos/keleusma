@@ -218,7 +218,7 @@ rkyv = { version = "0.8", default-features = false, features = ["alloc", "bytech
 # memory on drop. `rand_core` is intentionally absent because the
 # crate consumes pre-existing signing keys rather than generating
 # them; key generation is host-side responsibility.
-ed25519-dalek = { version = "2", default-features = false, features = ["alloc", "zeroize"], optional = true }
+ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "zeroize"], optional = true }
 # X25519 elliptic-curve Diffie-Hellman for the optional `encryption`
 # feature. Companion to `ed25519-dalek` in the same dalek crate
 # family. `static_secrets` exposes the static-private-key constructor
@@ -228,15 +228,15 @@ x25519-dalek = { version = "2", default-features = false, features = ["alloc", "
 # AES-256-GCM authenticated encryption for the body cipher. `no_std`
 # compatible with the `alloc` feature; pure-Rust implementation
 # acceptable for the targets V0.2.x supports.
-aes-gcm = { version = "0.10", default-features = false, features = ["alloc", "aes"], optional = true }
+aes-gcm = { version = "0.11", default-features = false, features = ["alloc", "aes"], optional = true }
 # HKDF-SHA-256 derivation of the AES key and nonce from the X25519
 # shared secret. The `hkdf` crate is no_std-compatible and pulls in
 # `sha2` transitively.
-hkdf = { version = "0.12", default-features = false, optional = true }
+hkdf = { version = "0.13", default-features = false, optional = true }
 # SHA-256 for the recipient-key fingerprint and for HKDF. Pure-Rust
 # implementation suitable for no_std + alloc.
-sha2 = { version = "0.10", default-features = false, optional = true }
-sdl3 = { version = "0.18", features = ["build-from-source-static"], optional = true }
+sha2 = { version = "0.11", default-features = false, optional = true }
+sdl3 = { version = "0.20", features = ["build-from-source-static"], optional = true }
 
 [dev-dependencies]
 # Installs the version-controlled git hooks under `.cargo-husky/hooks/`

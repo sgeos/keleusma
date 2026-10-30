@@ -8868,6 +8868,25 @@ fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
     }
 }
 
+/// Whether `source as target` casts a primitive to its own type.
+///
+/// Such a cast is identity and must emit nothing, since each
+/// conversion opcode traps on a value already of its result type.
+/// `Fixed` compares by resolved fraction bits, so `Fixed` and
+/// `Fixed<DEFAULT_FIXED_FRAC_BITS>` are the same type. An unknown
+/// source is not identity, and keeps the conversion the type
+/// checker validated.
+fn is_identity_prim_cast(source: Option<&TypeExpr>, target: &TypeExpr) -> bool {
+    let frac = |n: &Option<u8>| n.unwrap_or(crate::typecheck::DEFAULT_FIXED_FRAC_BITS);
+    match (source, target) {
+        (Some(TypeExpr::Prim(PrimType::Fixed(a), _)), TypeExpr::Prim(PrimType::Fixed(b), _)) => {
+            frac(a) == frac(b)
+        }
+        (Some(TypeExpr::Prim(s, _)), TypeExpr::Prim(t, _)) => s == t,
+        _ => false,
+    }
+}
+
 /// Compile an `enum_value as Word` cast into a chain of
 /// variant tests. Each variant produces an `IsEnum` check
 /// guarded by an `If`; on a match the corresponding
@@ -10684,9 +10703,14 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                 TypeExpr::Named(name, _, _, _) => fc.type_info.newtype_names.contains(name),
                 _ => false,
             };
-            if source_is_newtype || target_is_newtype {
+            if source_is_newtype
+                || target_is_newtype
+                || is_identity_prim_cast(source.as_ref(), target)
+            {
                 // No opcode emitted; the value flows through
-                // unchanged.
+                // unchanged. A cast to the source's own primitive type
+                // is identity, and every conversion opcode traps on a
+                // value already of its result type.
             } else {
                 match (source.as_ref(), target) {
                     (_, TypeExpr::Prim(PrimType::Float, _)) => {
@@ -11029,12 +11053,57 @@ fn compile_checked(
     fc.emit(Op::SetLocal(high_slot));
     fc.emit(Op::SetLocal(low_slot));
 
+    // When unguarded catch-all arms cover every outcome that can arise and no
+    // zero-divisor trap is pending, the wrapping default cannot run, and the
+    // type checker did not require the construct to have the operand's type.
+    // Its unreachable-arm rule then makes the last arm an unguarded catch-all,
+    // and every path that reaches that arm is in its class, so the arm omits
+    // its class test and breaks unconditionally. No default follows, so the
+    // join after the virtual loop holds only the arms' values, and no trap is
+    // added, so a fully handled construct stays trap-free. An operand whose
+    // family cannot be inferred keeps every test and the default, which is the
+    // conservative direction.
+    let operand_class = match operand.and_then(|e| infer_expr_type(fc, e)) {
+        Some(TypeExpr::Prim(PrimType::Byte, _)) => Some(crate::typecheck::CheckedOperand::Byte),
+        Some(TypeExpr::Prim(PrimType::Float, _)) => Some(crate::typecheck::CheckedOperand::Float),
+        Some(TypeExpr::Prim(PrimType::Fixed(_), _)) => {
+            Some(crate::typecheck::CheckedOperand::Fixed)
+        }
+        Some(TypeExpr::Prim(PrimType::Word, _)) => Some(crate::typecheck::CheckedOperand::Word),
+        _ => None,
+    };
+    let default_unreachable = match (crate::typecheck::CheckedOp::of(op_expr), operand_class) {
+        (Some(op), Some(class)) => {
+            !crate::typecheck::checked_wrap_default_reachable(op, class, arms)
+        }
+        _ => false,
+    };
+    let may_divide_by_zero = matches!(
+        op_expr,
+        Expr::BinOp {
+            op: BinOp::Div | BinOp::Mod,
+            ..
+        }
+    );
+    let zero_divisor_covered = arms.iter().any(|arm| {
+        arm.guard.is_none()
+            && matches!(
+                &arm.kind,
+                CheckedArmKind::ZeroDivisor(Pattern::Variable(..) | Pattern::Wildcard(_))
+            )
+    });
+    let unconditional_last = default_unreachable
+        && (!may_divide_by_zero || zero_divisor_covered)
+        && arms.last().is_some_and(|a| {
+            a.guard.is_none() && crate::typecheck::checked_arm_is_catchall(&a.kind)
+        });
+
     // Wrap the arm dispatch in a virtual loop so the first
     // matching arm can break out with its body's result.
     let loop_addr = fc.emit(Op::Loop(0));
     fc.enter_loop();
 
-    for arm in arms {
+    for (arm_index, arm) in arms.iter().enumerate() {
         fc.begin_scope();
         let mut fail_addrs: Vec<usize> = Vec::new();
 
@@ -11074,12 +11143,14 @@ fn compile_checked(
                 });
             }
         };
-        fc.emit(Op::GetLocal(flag_slot));
-        let class_idx = fc.add_constant(Value::Int(class_flag));
-        fc.emit(Op::Const(class_idx));
-        fc.emit(Op::CmpEq);
-        let class_fail = fc.emit_jump(Op::If(0));
-        fail_addrs.push(class_fail);
+        if !(unconditional_last && arm_index + 1 == arms.len()) {
+            fc.emit(Op::GetLocal(flag_slot));
+            let class_idx = fc.add_constant(Value::Int(class_flag));
+            fc.emit(Op::Const(class_idx));
+            fc.emit(Op::CmpEq);
+            let class_fail = fc.emit_jump(Op::If(0));
+            fail_addrs.push(class_fail);
+        }
 
         // Literal pattern tests against the high/low slots.
         let test_literal =
@@ -11163,20 +11234,6 @@ fn compile_checked(
     // Only division and modulo can produce flag 3. An unguarded
     // variable or wildcard covers that class for every numerator.
     // Guards and literal patterns leave the zero-divisor fallback live.
-    let may_divide_by_zero = matches!(
-        op_expr,
-        Expr::BinOp {
-            op: BinOp::Div | BinOp::Mod,
-            ..
-        }
-    );
-    let zero_divisor_covered = arms.iter().any(|arm| {
-        arm.guard.is_none()
-            && matches!(
-                &arm.kind,
-                CheckedArmKind::ZeroDivisor(Pattern::Variable(..) | Pattern::Wildcard(_))
-            )
-    });
     if may_divide_by_zero && !zero_divisor_covered {
         fc.emit(Op::GetLocal(flag_slot));
         let three_idx = fc.add_constant(Value::Int(3));
@@ -11189,10 +11246,14 @@ fn compile_checked(
         fc.emit(Op::EndIf);
     }
 
-    fc.emit(Op::GetLocal(low_slot));
-    let default_break = fc.emit(Op::Break(0));
-    if let Some(breaks) = fc.loop_breaks.last_mut() {
-        breaks.push(default_break);
+    // An unconditional last arm ends every path through the virtual loop, so the
+    // wrapping default after it would be dead and is not emitted.
+    if !unconditional_last {
+        fc.emit(Op::GetLocal(low_slot));
+        let default_break = fc.emit(Op::Break(0));
+        if let Some(breaks) = fc.loop_breaks.last_mut() {
+            breaks.push(default_break);
+        }
     }
 
     let endloop_addr = fc.emit(Op::EndLoop(0));

@@ -67,7 +67,8 @@ that code unchanged.
   reads, the ten `piano_roll` coroutines are static, because their ambiguous
   value is a native result that only `PopN` and the soft-failure trap pop.
   Two coroutines and 21 instructions now need a run-time kind. The figures
-  above are kept as they were recorded.
+  above are kept as they were recorded. After absorption 116 on 2026-10-30,
+  one coroutine and one instruction need it.
 - `schema_hash` covers slot names and visibility, not slot types, so two
   layouts that differ only in a slot's type pass the acceptance rule in both
   shapes. `shared_bytes` catches a change of size and not one of type alone.

@@ -17,13 +17,15 @@ LOG="${SCCACHE_METRICS_LOG:-tmp/sccache-metrics.log}"
 label="${1:-}"
 
 stats="$(sccache --show-stats 2>/dev/null)" || exit 0
-field() { printf '%s\n' "$stats" | grep -iE "^$1" | head -1 | awk '{print $NF}'; }
+# `awk 'NR==1'` reads its whole input, where `head -1` would exit early and, under
+# pipefail, could fail the pipeline with SIGPIPE.
+field() { printf '%s\n' "$stats" | grep -iE "^$1" | awk 'NR==1 {print $NF}'; }
 req="$(field 'Compile requests +[0-9]')"
 exe="$(field 'Compile requests executed')"
 hit="$(field 'Cache hits +[0-9]')"
 mis="$(field 'Cache misses +[0-9]')"
 nc="$(field 'Non-cacheable calls')"
-rate="$(printf '%s\n' "$stats" | grep -iE '^Cache hits rate +[0-9]' | head -1 | awk '{print $(NF-1)}')"
+rate="$(printf '%s\n' "$stats" | grep -iE '^Cache hits rate +[0-9]' | awk 'NR==1 {print $(NF-1)}')"
 ts="$(date '+%Y-%m-%dT%H:%M')"
 
 mkdir -p "$(dirname "$LOG")"

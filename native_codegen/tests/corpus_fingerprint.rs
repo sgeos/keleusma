@@ -527,15 +527,18 @@ const PINNED: &[(&str, u64)] = &[
     ("src/crypto_frame/frame.kel", 0x94e3eec49e2f8451),
     ("src/hosted/interp.kel", 0x0b6e4007b12016f5),
     ("src/selfhost/kel/analyze.kel", 0xe45a770e222b1931),
-    ("src/selfhost/kel/codegen.kel", 0xecd27ec27b225862),
+    // Absorption 116 omits the unreachable default of checked arithmetic.
+    ("src/selfhost/kel/codegen.kel", 0x758eb571e8ccf235),
     ("src/selfhost/kel/lexer.kel", 0x897a561eef4f18d1),
     // Absorption 83 changes cast Byte tracking and FixedDiv classification.
     // The non-corpus run re-derived coverage and refusal figures unchanged.
-    ("src/selfhost/kel/parse.kel", 0xb9638e3dd3491b1e),
+    // Absorption 116 lowers a cast to the operand's own type as identity.
+    ("src/selfhost/kel/parse.kel", 0x6a830e5dcfe5753b),
     ("src/selfhost/kel/reconstruct.kel", 0x5a5314dbf0987c1c),
     ("src/selfhost/kel/verify_datalayout.kel", 0xe625b5656d576b86),
     ("src/selfhost/kel/verify_depth.kel", 0xd65a1422ab29b135),
-    ("src/selfhost/kel/verify_structural.kel", 0xe47e628d4f3d9641),
+    // Absorption 116 rejects a native index past the native table.
+    ("src/selfhost/kel/verify_structural.kel", 0x3c716a472f94e1c3),
     ("src/selfhost/kel/verify_typed.kel", 0xdf6274221b46406b),
     ("src/selfhost/kel/verify_types.kel", 0xf1a3565245726860),
     ("src/selfhost/kel/verify_yield.kel", 0x12e9047be52a0423),

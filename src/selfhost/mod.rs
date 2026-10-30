@@ -4660,10 +4660,37 @@ fn expression_rows_from_body<F: Fn(i64) -> ExprOperand>(
             assert_eq!(link, 0, "checked arm count does not consume its list");
             if scalar_results {
                 if rows.len() == first_row {
-                    let single = first.expect("checked expression has an ok arm");
+                    let single = first.clone().expect("checked expression has an ok arm");
                     rows.push((4, single.clone(), single));
                 }
                 row_of_node.insert(at as i64, first_row);
+            }
+            // An arithmetic outcome left without an unguarded catch-all reaches the
+            // wrapping default, which yields the operation's own type, so the result is
+            // compared with the operation as `typecheck::checked_wrap_default_reachable`
+            // requires. The handled index forms trap instead and are not compared.
+            if let Some(head) = &first
+                && let Ok(root_at) = usize::try_from(node.lhs)
+                && let Some(root) = body.nodes.get(root_at)
+                && !matches!(root.kind, 13 | 15 | 31)
+            {
+                let scalar = body.match_parts[base] / 65536;
+                let op = root.arg % 64;
+                // Bit 1 overflow and bit 2 underflow, for the Word and Byte subset.
+                let arises = if root.kind == 10 {
+                    2
+                } else {
+                    match (op, scalar) {
+                        (5, _) | (4, 2) => 0,
+                        (4, _) => 2,
+                        (_, 3) => 6,
+                        (3, _) => 4,
+                        _ => 2,
+                    }
+                };
+                if arises & !body.match_parts[base + 3] != 0 {
+                    rows.push((4, head.clone(), operand(node.lhs)));
+                }
             }
         } else if node.kind == NODE_ARRAY_LIT {
             // --- THE ARRAY-ELEMENT CLAIM, KIND 2 ---------------------------------------
@@ -5695,6 +5722,11 @@ fn structural_opbounds(op: &crate::bytecode::Op, module: &Module) -> (i64, i64, 
             meta,
             ..
         }) => (8, *meta as i64, 0, 0),
+        // A native call carries its index and the module's native count, which the stage
+        // compares, so the shared block needs no new count.
+        Op::CallVerifiedNative(native, _) | Op::CallExternalNative(native, _) => {
+            (9, *native as i64, module.native_names.len() as i64, 0)
+        }
         _ => (0, 0, 0, 0),
     }
 }

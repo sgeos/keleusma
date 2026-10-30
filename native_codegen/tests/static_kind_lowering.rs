@@ -305,8 +305,11 @@ fn a_dynamic_coroutine_is_refused_only_when_static_kinds_are_requested() {
 /// The census counts only operands an instruction reads. Each `piano_roll`
 /// coroutine holds a native result of unknown kind that only `PopN` and the
 /// soft-failure `Trap` pop, so all ten are static and the option admits them on
-/// the coroutine route. `interp.kel` moves an operand of more than one kind
-/// into a local at chunk 2 instruction 51, a read, and stays dynamic.
+/// the coroutine route. `interp.kel` used to move an operand of more than one
+/// kind into a local at chunk 2 instruction 51, where the wrapping default of a
+/// covered checked addition joined its arms. Since absorption 116 both
+/// compilers omit that unreachable default, so `interp.kel` is static too and
+/// the option admits it.
 ///
 /// The piano roll calls host natives, so this file cannot drive it. Its native
 /// agreement with the virtual machine is checked whole by
@@ -333,13 +336,16 @@ fn an_operand_no_instruction_reads_needs_no_run_time_kind() {
             .unwrap_or_else(|e| panic!("{name}: {e}"));
             piano += 1;
         } else if name == "interp.kel" {
-            let why = c
-                .first_dynamic
-                .expect("interp.kel reads an ambiguous operand");
-            assert!(
-                why.contains("chunk 2 instruction 51 it reads an operand"),
-                "{why}"
-            );
+            assert!(c.is_static(), "{name}: {:?}", c.first_dynamic);
+            coroutine::lower_with_options(
+                &Context::create(),
+                &m,
+                &tm,
+                FRAME,
+                &HostContracts::default(),
+                static_kinds(),
+            )
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
             interp = true;
         }
     }

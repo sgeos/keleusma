@@ -7,6 +7,9 @@ good team and config setup" for running every Keleusma line in the pydromon harn
 operator ruled the same day that the changeover does not happen yet. Nothing here is
 installed. The project file was validated with `dromon config` from pydromon `main` at
 `36e156a`, in a scratch project, with real worktree paths and stand-in instruction files.
+It was revised on 2026-10-29 for pydromon's change to instruction paths and validated
+again the same way at `559f7b2`, with each existing worktree's real `CLAUDE.md` and a
+stand-in for the `review` worktree, which does not exist yet.
 
 ## What is decided and what is proposed
 
@@ -39,6 +42,22 @@ reads the diff unanchored. It reads through `gh`, never a peer's worktree mid-ch
 Jev's answer. pydromon has not established whether a subagent inherits its parent's
 sandbox, so the template withholds the `Agent` tool. A line with no tools at all, which
 receives only the blind view by message, satisfies the protocol without that question.
+pydromon reviewed this design on 2026-10-29 and saw no blocking problem, without running
+such a line. Its reply, from a peer session, gives four constraints. Every line keeps
+Dromon's own tools, and `check_disclosure` and `propose_change` take paths in the
+workdir, so the labeller's workdir is an empty directory outside the project and the Jev
+store. Dromon does not restrict who may mail a line, so blindness rests on each sender
+sending only the blind view. A kept or resumed session carries earlier cases in its
+context, so pydromon infers that labels after the first are independent only if the
+session is cleared between cases. pydromon's `clear_session` client request, which its
+curses client sends as `/clear`, starts the next turn in a new session. It carries
+operator authority and has no `dromon` subcommand, so today the operator sends it once
+per case. The labeller sets `context_handoff` false, because by default a new session
+opens with the line's recent mail, which for a labeller is the earlier cases and its
+own labels. It also sets `keep_session` false. pydromon has recorded a fresh session on
+every turn as an open request. The labeller
+gets only its brief as instructions and is never a seat of a role, so no handoff package
+reaches it.
 
 **Models.** All six run Claude Opus 5.5 on Claude Code. pydromon's Codex profile has no
 network, so a Codex line could neither fetch crates nor use `gh`, and its Grok support is
@@ -70,7 +89,11 @@ operator switches the remote outside any sandbox, because sandboxes protect
 ## Instructions
 
 Every writing line receives Keleusma's `CLAUDE.md` from its own worktree, the operator's
-global rules, and a team rules file kept in `.dromon/TEAM.md`. The team rules cover the
+global rules, and a team rules file kept in `.dromon/TEAM.md`. Each line names its own
+`CLAUDE.md` by absolute path. Since pydromon `559f7b2`, a relative instruction path
+resolves against the project root, so a bare `CLAUDE.md` would give every line the
+primary checkout's copy, which is on `v0.2.3`, whatever branch the line works on. A
+line's key replaces its profile's key whole, so each line carries its full list. The team rules cover the
 roster above, the messaging conventions, the lease, Git authority, and four lessons that
 today live only in the lines' auto-memory, which pydromon does not load. The full text is
 in the appendix.
@@ -80,10 +103,11 @@ in the appendix.
 The daemon refuses any message that holds a term from `secret/disclosure-terms.txt`.
 That list was written for pydromon's guard, and on 2026-10-28 it was also run, for the
 first time, against Keleusma's tracked files. Several of its terms are ordinary
-engineering words in this project, so ordinary team messages would be refused. Before
-the changeover, the operator should
-remove the generic terms and keep the context-specific ones. The Kaizen line has given
-the operator the list by term number, and the terms themselves appear nowhere here.
+engineering words in this project, so ordinary team messages would be refused. On
+2026-10-29 the operator had the Kaizen line remove the seven generic terms and keep the
+context-specific ones, which took the list from 28 terms to 21. The template's
+disclosure scan then found the kept terms on three lines of older design records, which
+were reworded. The terms themselves appear nowhere here.
 
 ## Two phases
 
@@ -94,23 +118,24 @@ Kaizen worktree is there today.
 **Phase 2, later.** Move the three other worktrees under `.worktrees/` with
 `git worktree move`, then declare each writing line as a role with a hibernated failover
 seat on another provider, `may_own` false until that provider is probed live with
-Keleusma's toolchain. Two pydromon conditions gate it. Its read-only seats must merge,
-so that a non-owning seat can read while the owner writes, and a Codex seat would need
-network access to build and push.
+Keleusma's toolchain. pydromon's read-only seats, which let a non-owning seat read while
+the owner writes, merged as its pull request 61. One condition remains, that a Codex seat
+would need network access to build and push.
 
 ## Before the changeover
 
-1. The operator prunes the disclosure list.
-2. The operator switches `origin` to HTTPS with the `gh` credential helper.
+1. Done on 2026-10-29. The operator pruned the disclosure list.
+2. A push path for the lines. The operator is working out SSH support with pydromon, in
+   place of switching `origin` to HTTPS, as of 2026-10-29.
 3. The Kaizen line rewrites Keleusma's process documents for messaging in pydromon.
    `CLAUDE.md`, `AGENTS.md`, the interline protocol and the handoff rules still tell every
    line to check and checkpoint the retired mailbox. A line following them would fail at
    its first startup. The mailbox checkpoint in each state file becomes a list of mail in
    flight.
 4. The operator relays mail still pending in the retired mailbox with `dromon send`.
-5. The operator creates the cache directories and the `review` worktree, installs the
-   project file, `TEAM.md` and `LABELLER.md` in `.dromon/`, and runs `dromon config`
-   against the real tree.
+5. The operator creates the cache directories, the labeller's empty workdir and the
+   `review` worktree, installs the project file, `TEAM.md` and `LABELLER.md` in
+   `.dromon/`, and runs `dromon config` against the real tree.
 6. The live sessions stop, and each line starts fresh from its state file rather than
    adopting a long session.
 7. The live checks on pydromon's dogfood page run, including the proofs line's build of
@@ -118,17 +143,21 @@ network access to build and push.
 
 ## Found while preparing this
 
-- **Instruction paths are checked and read against different directories.** pydromon's
-  `dromon config` and the daemon's start check resolve a relative instruction path
-  against the project root, while the engine reads it from the line's worktree. For
-  Keleusma both hold a `CLAUDE.md`, so the check passes and each line reads its own. In a
-  project where only one of the two exists, a start that passes could refuse every turn.
-  It was reported to the operator for pydromon.
+- **Instruction paths were checked and read against different directories.** At
+  `36e156a`, pydromon's `dromon config` and the daemon's start check resolved a relative
+  instruction path against the project root, while the engine read it from the line's
+  worktree. pydromon has since made the engine read it from the project root too, with
+  `rooted_instructions` in `src/dromon/lineconfig.py`. That removes the mismatch but
+  gives a worktree line the root's file, so this proposal now uses absolute paths. On the
+  operator's instruction, the Kaizen line sent pydromon a review on 2026-10-29. It asks
+  pydromon to use absolute paths in its own Keleusma template, and points out that the
+  module's docstring still says a relative path resolves against the workdir.
 
 ## Appendix: the project file
 
 Paths are placeholders. `HOME` stands for the operator's home directory, `KELEUSMA` for
-the primary checkout and `WORKTREES` for the sibling worktree directory.
+the primary checkout, `WORKTREES` for the sibling worktree directory and `CACHE` for the
+per-line cache directory outside the worktrees.
 
 ```toml
 version = 1
@@ -149,7 +178,9 @@ max_cost_usd = 60.0
 model = "claude-opus-5-5"
 builtin_tools = ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "Skill"]
 claude_code_prompt = true
-instructions = ["CLAUDE.md", "~/.claude/CLAUDE.md", "KELEUSMA/.dromon/TEAM.md"]
+# Instructions are set per line below. pydromon resolves a relative instruction path
+# against the project root, so a bare CLAUDE.md would give every line the primary
+# checkout's copy, which is on v0.2.3, and a line's key replaces this one whole.
 plugins = ["HOME/.claude/plugins/cache/typesafe-ai/typesafe/VERSION"]
 
 [profiles.keleusma.sandbox]
@@ -174,7 +205,9 @@ deny = ["Read(~/.ssh/**)", "Read(~/.aws/**)", "Read(~/.codex/auth.json)", "Read(
 model = "claude-opus-5-5"
 builtin_tools = ["Read", "Grep", "Glob", "Bash"]
 claude_code_prompt = true
-instructions = ["CLAUDE.md", "~/.claude/CLAUDE.md", "KELEUSMA/.dromon/TEAM.md"]
+# Instructions are set per line below. pydromon resolves a relative instruction path
+# against the project root, so a bare CLAUDE.md would give every line the primary
+# checkout's copy, which is on v0.2.3, and a line's key replaces this one whole.
 
 [profiles.reader.sandbox]
 enabled = true
@@ -193,6 +226,7 @@ deny = ["Read(~/.ssh/**)", "Read(~/.aws/**)", "Read(~/.codex/auth.json)", "Read(
 [lines."v0.2.3"]
 profile = "keleusma"
 workdir = "WORKTREES/v0.2.x"
+instructions = ["WORKTREES/v0.2.x/CLAUDE.md", "~/.claude/CLAUDE.md", "KELEUSMA/.dromon/TEAM.md"]
 
 [lines."v0.2.3".settings.env]
 CARGO_TARGET_DIR = "WORKTREES/v0.2.x/target"
@@ -207,6 +241,7 @@ allowedDomains = ["api.typesafe.ai"]
 [lines."v0.3.0"]
 profile = "keleusma"
 workdir = "WORKTREES/arena-composites"
+instructions = ["WORKTREES/arena-composites/CLAUDE.md", "~/.claude/CLAUDE.md", "KELEUSMA/.dromon/TEAM.md"]
 
 [lines."v0.3.0".settings.env]
 CARGO_TARGET_DIR = "WORKTREES/arena-composites/target"
@@ -221,6 +256,7 @@ allowedDomains = ["api.typesafe.ai"]
 [lines."proofs"]
 profile = "keleusma"
 workdir = "WORKTREES/proofs"
+instructions = ["WORKTREES/proofs/CLAUDE.md", "~/.claude/CLAUDE.md", "KELEUSMA/.dromon/TEAM.md"]
 
 [lines."proofs".settings.env]
 CARGO_TARGET_DIR = "WORKTREES/proofs/target"
@@ -235,6 +271,7 @@ every_ticks = 10
 [lines."kaizen"]
 profile = "keleusma"
 workdir = "KELEUSMA/.worktrees/kaizen"
+instructions = ["KELEUSMA/.worktrees/kaizen/CLAUDE.md", "~/.claude/CLAUDE.md", "KELEUSMA/.dromon/TEAM.md"]
 
 [lines."kaizen".settings.env]
 CARGO_TARGET_DIR = "KELEUSMA/.worktrees/kaizen/target"
@@ -249,6 +286,7 @@ allowedDomains = ["api.typesafe.ai", "pypi.org", "files.pythonhosted.org"]
 [lines."review"]
 profile = "reader"
 workdir = "KELEUSMA/.worktrees/review"
+instructions = ["KELEUSMA/.worktrees/review/CLAUDE.md", "~/.claude/CLAUDE.md", "KELEUSMA/.dromon/TEAM.md"]
 
 [lines."review".settings.env]
 XDG_CACHE_HOME = "CACHE/review"
@@ -259,8 +297,14 @@ allowWrite = ["CACHE/review"]
 [lines."jev-labeller"]
 model = "claude-opus-5-5"
 builtin_tools = []
+inherit_account_mcp = false
 claude_code_prompt = false
-workdir = "KELEUSMA/.worktrees/review"
+# A cleared session would otherwise open with the earlier cases and their labels.
+context_handoff = false
+keep_session = false
+# An empty directory outside the project and the Jev store, because Dromon's own tools
+# still take paths in the workdir.
+workdir = "CACHE/jev-labeller-workdir"
 instructions = ["KELEUSMA/.dromon/LABELLER.md"]
 
 [lines."jev-labeller".sandbox]

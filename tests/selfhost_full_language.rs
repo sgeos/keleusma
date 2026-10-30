@@ -448,20 +448,12 @@ fn the_self_hosted_validator_agrees_with_the_reference_on_a_mutated_corpus() {
     for (family, _) in families {
         let (modules, rejected) = reached.get(family).copied().unwrap_or((0, 0));
         assert!(modules >= 10, "{family}: reached only {modules} modules");
-        // The reference admits a native index past the native table, and so does `Vm::new`,
-        // measured 2026-10-26, so that family measures agreement and not rejection. Whether
-        // admission should check it is operator question 13.
-        if *family == "native out of range" {
-            assert_eq!(
-                rejected, 0,
-                "the reference began rejecting an out-of-range native"
-            );
-        } else {
-            assert!(
-                rejected * 2 >= modules,
-                "{family}: the reference rejected only {rejected} of {modules}"
-            );
-        }
+        // A native index past the native table is rejected at admission since the operator's
+        // ruling of 2026-10-28. It had been admitted by the reference and by `Vm::new`.
+        assert!(
+            rejected * 2 >= modules,
+            "{family}: the reference rejected only {rejected} of {modules}"
+        );
     }
 }
 
