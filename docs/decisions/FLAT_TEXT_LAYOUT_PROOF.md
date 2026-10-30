@@ -11,8 +11,11 @@ VM-internal field reads.
 > (a) The verifier proves every flat Text slot is written only from a Text value, and rejects
 > the module otherwise.
 
-This document is the design that ruling asked for before implementation. It is a design, and
-nothing in it is implemented yet.
+This document is the design that ruling asked for before implementation. Increments 1 and 2
+below are implemented in the reference typed pass, `src/verify_typed.rs`, and pinned by
+`tests/flat_text_layout_proof.rs`. Increment 3, the self-hosted twin, is not yet built, so until
+it lands the self-hosted validator admits a hand-built module whose mistyped `Text` read the
+reference refuses. Increment 4 waits on the operator.
 
 ## The defect the proof closes
 
@@ -81,7 +84,10 @@ the UTF-8 pass, would close the five without making a time bound depend on a str
 2. The read and write checks for bodies of known layout, with hand-built modules that the
    current pass admits and the new one refuses, and the corpus unchanged.
 3. The self-hosted twin in `verify_typed.kel`, whose byte-identical verdicts the validator's
-   agreement tests compare.
+   agreement tests compare. That stage records a scalar entry by its size alone, so the twin
+   needs the host to marshal each pushed scalar's kind as well, and the stage to carry each
+   flat entry's `Text` offsets, which a bounded table of four per entry would hold, with a body
+   holding more left unknown and deferred.
 4. For the five boundary sources, whatever the operator rules.
 
 ## What this does not change
