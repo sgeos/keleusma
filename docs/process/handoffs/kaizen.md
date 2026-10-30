@@ -53,16 +53,16 @@ run.
   `changelog.d/`, assembled at release, and branch runs stay uncancelled. See
   [the report](../kaizen/2026-10-29-changelog-fragments.md). V0.2.X follows the rule.
   V0.3.X adopts it at absorption 117.
-- **This increment.** R1 of the CI spike is complete, on the operator's instruction of
-  2026-10-30. [The timing pass](../kaizen/2026-10-30-r1-timing-pass.md) measured ten
-  full runs and one `--timings` probe, pull request 645, closed unmerged. Compiling is
-  63 and test running 166 of a median 243 runner-minutes. Dependencies are 2 to 5
-  percent of a build, so no cache was added. One 32-instance grid in
-  `tests/target_descriptor_axis.rs` sets every test build's length, and 2,446 tests run
-  in both the Test job and the shards. On the same instruction,
-  [the open decisions](../kaizen/2026-10-30-open-decisions.md) list every decision open
-  with the operator, numbered K1 to K14, with V0.2.X's and V0.3.X's by pointer.
-  Notice 155 told V0.2.X that its question 3 cites pull request 630 for a fix made by 619.
+- **Operator rulings of 2026-10-30.** First-hand in this session, on
+  [the open decisions](../kaizen/2026-10-30-open-decisions.md), which records each
+  ruling verbatim. K1 to K13 are ruled and K14 is held. R1 closed with no build cache,
+  by [the timing pass](../kaizen/2026-10-30-r1-timing-pass.md). R2 is declined.
+- **This increment.** It applies K2, K5 and K8 in `ci.yml`. The Test job keeps only the
+  `keleusma` tests no other job runs, about 60 test-minutes fewer per run, guarded by
+  `tests/ci_shard_coverage.rs`. A draft pull request defers the self-host tier, and
+  `CI result` fails a ready one whose shards did not run, as `GIT_STRATEGY.md` and
+  `CLAUDE.md` now say. Each test job lists the tests nextest retried. K3, K4a and K7
+  go to V0.2.X as requests. K6, K9, K10 and K11 are the operator's to do.
 - **Dependabot security updates.** Enabled on the operator's instruction of 2026-10-30,
   with 0 alerts open. GitHub's options reference says they always use the default
   branch. Each one is therefore a merge into `main` needing the operator's
@@ -117,22 +117,25 @@ authority, so the startup-file positions reach them first-hand.
 4. Finish the three selection tasks, record their outcomes, and read the comparison.
 5. A state-file budget guard, once the owning lines have converted their files.
 6. Measure branch-run cost again once changelog fragments are in use.
-7. R5, the flaky-test record, which needs no ruling, unless the operator objects.
+7. A nightly fuzzing workflow, once V0.2.X lands the fuzz targets of K7.
+8. Read the first runs of a draft and of a ready pull request after this increment, and
+   the Test job's new length.
 
 ## Open with the operator
 
-All of them are in [the open decisions](../kaizen/2026-10-30-open-decisions.md), K1 to
-K14, with lettered options and the obvious choices marked. That list replaces the one
-kept here. It covers the CI recommendations, the account plan, the blog fixes, the SSH
-route, the stale `origin/proofs` texts and the pydromon changeover.
+[The open decisions](../kaizen/2026-10-30-open-decisions.md) hold the record. Still
+open are the operator's own checks, a merge queue in the settings for K6, the account
+plan for K9 and the billing page for K10, the blog fixes of K11, the proofs branch's
+release for K13 and the pydromon changeover, held as K14. V0.2.X's question 1 may be
+answered through V0.3.X's question 20, which only the operator can confirm.
 
 ## Concerns
 
 - The self-host archive storage cost is unverified, item K10.
 - Branch `test/kaizen-split-stage-artifact` at `e7a59d20` keeps a per-stage split of
   the slowest test, now a median of 35 minutes in a shard, item K3.
-- The comment above the Test job in `ci.yml` says its filter leaves 20 test-minutes.
-  The timing pass measured 101.
+- Lines open pull requests as non-draft today, 40 of the last 40 merged. They gain
+  nothing from K5 until they iterate as drafts, which the notices ask.
 
 ## Mailbox and pilot
 
@@ -150,8 +153,12 @@ Pilot judgments never change gates.
 
 ## Environment
 
-- Run `git fetch`, `git push` and `git ls-remote` outside the sandbox, which cannot
-  read the known hosts file. A compound git command stays sandboxed and fails.
+- Fetch, push and `ls-remote` over HTTPS inside the sandbox, the K12 route adopted on
+  2026-10-30, with `-c 'credential.https://github.com.helper=!gh auth git-credential'`
+  before the subcommand, the URL `https://github.com/sgeos/keleusma.git` and the hosts
+  `github.com` and `api.github.com` allowed. It worked first on 2026-10-30 and changes
+  no configuration. The SSH remote still needs the sandbox off, because the sandbox
+  cannot read the known hosts file.
 - The pre-push hook can pass the full gate and then exit 141 without the push landing.
   Confirm with `git ls-remote` and re-push the identical tree with `--no-verify`.
 - `sccache` fails inside the sandbox. Build with an empty `RUSTC_WRAPPER` and an
