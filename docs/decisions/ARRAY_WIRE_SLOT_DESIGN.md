@@ -521,6 +521,11 @@ Each question lists lettered options with the recommendation first.
      change, once the stage 0 test has settled the consequence.
    - B. Wait for the encoding change to remove the cap.
 
+   Stage 0 landed on 2026-10-30 in pull request 652, as option A, as an obvious defect repair
+   under the operator's instruction to address open items. `[P; 65536]` compiles with one record
+   per element, and `[P; 65537]` is refused naming the field, pinned by
+   `tests/private_composite_slot_cap.rs`.
+
 ## What was not verified
 
 - The runtime consequence of the placement truncation above slot 65,535.
