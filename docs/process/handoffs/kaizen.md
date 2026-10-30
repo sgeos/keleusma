@@ -31,7 +31,7 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor 8f1b9c06 HEAD     # the merge of PR 633 into v0.2.3
+git merge-base --is-ancestor 68188e3f HEAD     # the merge of PR 644 into v0.2.3
 git merge-base --is-ancestor 7d5a5e82 HEAD     # the merge of PR 631 into main
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
@@ -45,15 +45,24 @@ run.
   changelog fragments, as `c55620ed`. PR 626, the labeller's fresh session, as
   `7301e739`. PR 624, `--locked` checks of the three tracked lockfiles, as `751fa668`.
   PR 630, the security-updates comment and this file, as `4e0c2304`. PR 633, the CI
-  practices spike, as `8f1b9c06`. Into `main`, PR 619, the `brace-expansion` fix that
+  practices spike, as `8f1b9c06`. PR 644, `main` merged back after PR 631, as
+  `68188e3f`. Into `main`, PR 619, the `brace-expansion` fix that
   closed Dependabot alerts 1 to 5, and PR 631, the same security-updates comment,
   merged by the operator as `7d5a5e82`.
 - **Operator rulings of 2026-10-29.** Changelog entries are fragments under
   `changelog.d/`, assembled at release, and branch runs stay uncancelled. See
   [the report](../kaizen/2026-10-29-changelog-fragments.md). V0.2.X follows the rule.
   V0.3.X adopts it at absorption 117.
-- **This increment.** It merges `main` into `v0.2.3` after PR 631, which leaves the
-  tree unchanged because both carry the same comment, and it records the work below.
+- **This increment.** R1 of the CI spike is complete, on the operator's instruction of
+  2026-10-30. [The timing pass](../kaizen/2026-10-30-r1-timing-pass.md) measured ten
+  full runs and one `--timings` probe, pull request 645, closed unmerged. Compiling is
+  63 and test running 166 of a median 243 runner-minutes. Dependencies are 2 to 5
+  percent of a build, so no cache was added. One 32-instance grid in
+  `tests/target_descriptor_axis.rs` sets every test build's length, and 2,446 tests run
+  in both the Test job and the shards. On the same instruction,
+  [the open decisions](../kaizen/2026-10-30-open-decisions.md) list every decision open
+  with the operator, numbered K1 to K14, with V0.2.X's and V0.3.X's by pointer.
+  Notice 155 told V0.2.X that its question 3 cites pull request 630 for a fix made by 619.
 - **Dependabot security updates.** Enabled on the operator's instruction of 2026-10-30,
   with 0 alerts open. GitHub's options reference says they always use the default
   branch. Each one is therefore a merge into `main` needing the operator's
@@ -108,29 +117,22 @@ authority, so the startup-file positions reach them first-hand.
 4. Finish the three selection tasks, record their outcomes, and read the comparison.
 5. A state-file budget guard, once the owning lines have converted their files.
 6. Measure branch-run cost again once changelog fragments are in use.
-7. The spike's R1 timing pass, which needs no ruling, before any build cache.
+7. R5, the flaky-test record, which needs no ruling, unless the operator objects.
 
 ## Open with the operator
 
-- Rulings on the spike's R2, merging test binaries, R3, running the self-host tier once
-  per ready pull request, R4, a merge queue, and R6, fuzzing.
-- The account plan, and whether its Settings offer a merge queue, neither verified.
-- Who applies the blog audit's fixes, before the blog's next large push if possible.
-- The stale `origin/proofs` texts listed above.
-- The route for SSH under the sandbox. A pinned `known_hosts` outside `~/.ssh` with an
-  ssh-agent socket keeps `~/.ssh` closed. HTTPS with the `gh` credential helper is the
-  alternative.
-- Setting `fresh_session_each_turn` on the labeller line at the changeover, which only
-  the operator may do, and confirming on its first live run that the second case sees
-  nothing of the first.
+All of them are in [the open decisions](../kaizen/2026-10-30-open-decisions.md), K1 to
+K14, with lettered options and the obvious choices marked. That list replaces the one
+kept here. It covers the CI recommendations, the account plan, the blog fixes, the SSH
+route, the stale `origin/proofs` texts and the pydromon changeover.
 
 ## Concerns
 
-- The self-host archive is about 1.1 GB per full run, retained for one day. Whether
-  artifact storage is free for this public repository was not verified.
-- Branch `test/kaizen-split-stage-artifact` at `e7a59d20` keeps the per-stage split of
-  the slowest test from the closed PR 495. Revisit it if that test exceeds about 45
-  minutes in continuous integration.
+- The self-host archive storage cost is unverified, item K10.
+- Branch `test/kaizen-split-stage-artifact` at `e7a59d20` keeps a per-stage split of
+  the slowest test, now a median of 35 minutes in a shard, item K3.
+- The comment above the Test job in `ci.yml` says its filter leaves 20 test-minutes.
+  The timing pass measured 101.
 
 ## Mailbox and pilot
 
@@ -142,7 +144,7 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `5ab72f018462ad79953372fdf9d537602250a2ef3259050135158339c9d10c24`, 150 messages, 0 unacknowledged at export |
+| [Interline](../interline/checkpoint.json) | `2b42b45aa70bc6ec79b9cb736008e344319559b65b97a96cdfd2ac414a064840`, 155 messages, 3 unacknowledged at export, none addressed to `kaizen` |
 | [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `6fb4783b8f0bf96d003311f0a84581f38bb9ff0cbfe232f0f85e014064d6cea6`, 3 samples evaluated and labelled, restored cleanly into a fresh store |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `417a126a7647b7099dcf1b8b4f4c67c64a5f9a06180cac492daefbbd427ca2fd`, 250 samples and 66 tasks, home directory written as `~` on 2026-10-28 with request digests recomputed, restored cleanly into a fresh store |
 

@@ -1,0 +1,41 @@
+
+timings-test-workspace/cargo-timing.html: 358 units, wall 12.6 min, unit-seconds summed 26.6 min
+    21.9 min  82.6%   214 units, done by  12.6 min  keleusma test binaries
+     1.5 min   5.5%    16 units, done by   5.1 min  keleusma library and binaries
+     1.3 min   5.0%    89 units, done by   0.4 min  dependencies
+     1.2 min   4.7%     1 units, done by   1.6 min  keleusma unit-test or other test targets
+     0.3 min   1.0%    17 units, done by   5.4 min  keleusma-cli unit-test or other test targets
+     0.1 min   0.5%     1 units, done by   5.4 min  keleusma-cli library and binaries
+     0.1 min   0.2%     4 units, done by   0.4 min  keleusma-wire unit-test or other test targets
+     0.0 min   0.1%     2 units, done by   4.5 min  keleusma-bench unit-test or other test targets
+     0.0 min   0.1%     1 units, done by   0.3 min  keleusma-macros library and binaries
+     0.0 min   0.1%     6 units, done by   0.4 min  keleusma-arena library and binaries
+     0.0 min   0.1%     2 units, done by   0.4 min  keleusma-arena unit-test or other test targets
+     0.0 min   0.1%     1 units, done by   0.6 min  keleusma-bench library and binaries
+     0.0 min   0.0%     1 units, done by   0.4 min  keleusma-macros unit-test or other test targets
+     0.0 min   0.0%     1 units, done by   0.3 min  keleusma-wire library and binaries
+     0.0 min   0.0%     1 units, done by   0.2 min  keleusma-wire-derive library and binaries
+     0.0 min   0.0%     1 units, done by   0.4 min  keleusma-wire-derive unit-test or other test targets
+  keleusma test targets: 215, median 0.7s, slowest target_descriptor_axis "test" (test) 638s, narrow_vm "test" (test) 130s, keleusma "lib" (test) 74s, composite_width_skew "test" (test) 67s
+
+timings-selfhost-archive/cargo-timing.html: 263 units, wall 12.1 min, unit-seconds summed 24.0 min
+    20.6 min  85.9%   214 units, done by  12.1 min  keleusma test binaries
+     1.5 min   6.3%    16 units, done by   4.5 min  keleusma library and binaries
+     1.2 min   5.0%     1 units, done by   1.5 min  keleusma unit-test or other test targets
+     0.6 min   2.6%    28 units, done by   0.3 min  dependencies
+     0.0 min   0.1%     1 units, done by   0.2 min  keleusma-macros library and binaries
+     0.0 min   0.0%     1 units, done by   0.2 min  keleusma-wire library and binaries
+     0.0 min   0.0%     1 units, done by   0.2 min  keleusma-wire-derive library and binaries
+     0.0 min   0.0%     1 units, done by   0.1 min  keleusma-arena library and binaries
+  keleusma test targets: 215, median 0.7s, slowest target_descriptor_axis "test" (test) 594s, narrow_vm "test" (test) 106s, keleusma "lib" (test) 72s, composite_width_skew "test" (test) 67s
+
+timings-signatures/cargo-timing.html: 282 units, wall 12.1 min, unit-seconds summed 22.8 min
+    20.1 min  88.4%   214 units, done by  12.1 min  keleusma test binaries
+     1.2 min   5.3%    16 units, done by   3.7 min  keleusma library and binaries
+     0.9 min   4.0%     1 units, done by   1.1 min  keleusma unit-test or other test targets
+     0.5 min   2.2%    47 units, done by   0.2 min  dependencies
+     0.0 min   0.1%     1 units, done by   0.1 min  keleusma-macros library and binaries
+     0.0 min   0.0%     1 units, done by   0.1 min  keleusma-wire library and binaries
+     0.0 min   0.0%     1 units, done by   0.1 min  keleusma-wire-derive library and binaries
+     0.0 min   0.0%     1 units, done by   0.1 min  keleusma-arena library and binaries
+  keleusma test targets: 215, median 0.4s, slowest target_descriptor_axis "test" (test) 659s, narrow_vm "test" (test) 121s, composite_width_skew "test" (test) 59s, keleusma "lib" (test) 55s
