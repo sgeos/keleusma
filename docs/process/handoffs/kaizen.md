@@ -107,8 +107,9 @@ authority, so the startup-file positions reach them first-hand.
 ## Open with the operator
 
 - The stale `origin/proofs` texts listed above.
-- How a labeller line's session is cleared between cases, which pydromon infers
-  independent labels need.
+- Clearing the labeller's session once per case, which today only the operator can do,
+  through pydromon's `clear_session`. pydromon records a per-turn fresh session as a
+  request.
 
 ## Concerns
 

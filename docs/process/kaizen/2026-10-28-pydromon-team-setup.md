@@ -49,7 +49,13 @@ workdir, so the labeller's workdir is an empty directory outside the project and
 store. Dromon does not restrict who may mail a line, so blindness rests on each sender
 sending only the blind view. A kept or resumed session carries earlier cases in its
 context, so pydromon infers that labels after the first are independent only if the
-session is cleared between cases. How to clear it is not yet established. The labeller
+session is cleared between cases. pydromon's `clear_session` client request, which its
+curses client sends as `/clear`, starts the next turn in a new session. It carries
+operator authority and has no `dromon` subcommand, so today the operator sends it once
+per case. The labeller sets `context_handoff` false, because by default a new session
+opens with the line's recent mail, which for a labeller is the earlier cases and its
+own labels. It also sets `keep_session` false. pydromon has recorded a fresh session on
+every turn as an open request. The labeller
 gets only its brief as instructions and is never a seat of a role, so no handoff package
 reaches it.
 
@@ -293,6 +299,9 @@ model = "claude-opus-5-5"
 builtin_tools = []
 inherit_account_mcp = false
 claude_code_prompt = false
+# A cleared session would otherwise open with the earlier cases and their labels.
+context_handoff = false
+keep_session = false
 # An empty directory outside the project and the Jev store, because Dromon's own tools
 # still take paths in the workdir.
 workdir = "CACHE/jev-labeller-workdir"
