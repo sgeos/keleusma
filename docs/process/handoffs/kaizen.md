@@ -31,7 +31,7 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor 442de88b HEAD     # the merge of PR 620 into v0.2.3
+git merge-base --is-ancestor c55620ed HEAD     # the merge of PR 625 into v0.2.3
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
 
@@ -47,26 +47,28 @@ run.
 - **Disclosure list.** On the operator's instruction of 2026-10-29, seven generic terms
   were removed from `secret/disclosure-terms.txt`, leaving 21. Term numbers count the
   pruned list. A backup is outside the repository.
-- **This increment.** Changelog fragments, on the operator's ruling of 2026-10-29 after
-  V0.2.X's request 143. Entries go under `changelog.d/`, and
-  `scripts/changelog_fragments.py` checks them in CI and assembles them at release. The
-  operator also ruled to keep branch runs uncancelled, which needs no change. See
-  [the report](../kaizen/2026-10-29-changelog-fragments.md). Response 144 told V0.2.X
-  to keep resolving conflicts as before until this merges.
-- **Dependabot.** PR 624, open into `v0.2.3`, fixes the root `Cargo.lock`. Dependabot's
-  detached-cargo update `c90fe3e8` raised `syn` to 3 in two member manifests without
-  it. PR 624 also makes CI check the three tracked lockfiles with `--locked`, on the
-  operator's instruction of 2026-10-29 to address the problem. Routine update PRs 592
-  and 593 are open and were not reviewed.
+- **Merged on 2026-10-30.** PR 625, changelog fragments, into `v0.2.3` as `c55620ed`,
+  on the operator's ruling of 2026-10-29 after V0.2.X's request 143. Entries go under
+  `changelog.d/`, checked in CI and assembled at release. The operator also ruled to
+  keep branch runs uncancelled. See
+  [the report](../kaizen/2026-10-29-changelog-fragments.md). V0.2.X adopted the rule
+  before the merge, and V0.3.X was sent notice 148 to adopt it at its next absorption.
+- **This increment.** The pydromon proposal's labeller uses pydromon's new
+  `fresh_session_each_turn` key, validated with `dromon config` at `5ef0fd7`.
+- **Dependabot.** Dependabot's detached-cargo update `c90fe3e8` raised `syn` to 3 in two
+  member manifests without the root `Cargo.lock`. PR 623, V0.2.X's batch, fixed the
+  lockfile through the root cargo update. PR 624, open into `v0.2.3` on the operator's
+  instruction of 2026-10-29, makes CI check the three tracked lockfiles with `--locked`
+  and records the cause in `dependabot.yml`.
 - **Propagation.** V0.3.X was sent notice 141 to carry the rewording at its next
   absorption. It receives the fragments rule the same way. `origin/proofs`, unchanged
   since 2026-08-29, still holds the old `wire_schema.rs` comment and four kept-term
   lines, which is for the operator. `main` holds four kept-term lines that the next
   release merge replaces.
 - **Pydromon.** The operator holds the changeover, to be timed tactically, and is
-  working out SSH support with pydromon. Pydromon agreed with the third review, and its
-  fix `29d781b` was not yet pushed when last checked. Its labeller constraints are in
-  the proposal.
+  working out SSH support with pydromon. Pydromon's `main` at `5ef0fd7` has the third
+  review's fixes, in its pull request 78, and a per-turn fresh session, in pull request
+  80. The proposal's labeller now uses that key, which `dromon config` accepts.
 - **Jev selection cohort.** The three cases were evaluated and labelled blind. The
   comparison opens when each task is finished.
 
@@ -99,9 +101,9 @@ authority, so the startup-file positions reach them first-hand.
 ## Open with the operator
 
 - The stale `origin/proofs` texts listed above.
-- Clearing the labeller's session once per case, which today only the operator can do,
-  through pydromon's `clear_session`. pydromon records a per-turn fresh session as a
-  request.
+- Setting `fresh_session_each_turn` on the labeller line at the changeover, which only
+  the operator may do, and confirming on its first live run that the second case sees
+  nothing of the first.
 
 ## Concerns
 
@@ -121,7 +123,7 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `7b2bb1cffbf957bfe7bcdab7cdd4deee787b8891f080d87f399fcf2a87f0c50a`, 144 messages, 0 unacknowledged at export |
+| [Interline](../interline/checkpoint.json) | `4c0fcbdf0ca27b6153e7f0efe19e88d00ae303dbb1387ccce959a6a78c81a949`, 148 messages, 2 unacknowledged at export |
 | [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `6fb4783b8f0bf96d003311f0a84581f38bb9ff0cbfe232f0f85e014064d6cea6`, 3 samples evaluated and labelled, restored cleanly into a fresh store |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `417a126a7647b7099dcf1b8b4f4c67c64a5f9a06180cac492daefbbd427ca2fd`, 250 samples and 66 tasks, home directory written as `~` on 2026-10-28 with request digests recomputed, restored cleanly into a fresh store |
 
