@@ -13016,9 +13016,9 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // Generic functions, the fifteen seeded template and instantiation tables, the `gn`
     // block, `call_akind` and the `gen_*` helpers, made it 1119 and 34,554. Erasing
     // information-flow labels and newtypes, with the refinement check, made it 1150 and
-    // 35,525.
-    assert_eq!(worst_names, 1150, "the worst-case name count moved");
-    assert_eq!(worst_blob, 35525, "the worst-case blob size moved");
+    // 35,525. The identity cast's `cast_is_identity` made it 1151 and 35,583.
+    assert_eq!(worst_names, 1151, "the worst-case name count moved");
+    assert_eq!(worst_blob, 35583, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**
