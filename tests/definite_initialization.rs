@@ -23,6 +23,8 @@
 //! compiler writes every path and composite private fields gain initializers,
 //! is what would move these to a refusal, and these pins will fail when it does.
 
+#![cfg(all(feature = "compile", feature = "verify"))]
+
 use keleusma::bytecode::{Module, Op};
 use keleusma::compiler::compile;
 use keleusma::lexer::tokenize;
