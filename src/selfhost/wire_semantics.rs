@@ -31,7 +31,7 @@ fn error(detail: impl core::fmt::Display) -> SelfHostError {
 }
 
 pub(super) fn command(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     cmd: i64,
 ) -> Result<usize, SelfHostError> {
@@ -40,7 +40,7 @@ pub(super) fn command(
 }
 
 pub(super) fn fields(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     values: &[i64],
 ) -> Result<(), SelfHostError> {
@@ -61,7 +61,7 @@ fn signature(record: &WireSchemaRecord) -> Result<&SignatureRecord, SelfHostErro
 }
 
 fn send_signature(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     record: &SignatureRecord,
 ) -> Result<(), SelfHostError> {
@@ -78,7 +78,7 @@ fn send_signature(
 }
 
 fn materialize_shape(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     record: &ShapeRecord,
 ) -> Result<WireShape, SelfHostError> {
@@ -106,7 +106,7 @@ fn materialize_shape(
 }
 
 fn requested_shape(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     shapes: &[WireSchemaRecord],
 ) -> Result<WireShape, SelfHostError> {
@@ -118,7 +118,7 @@ fn requested_shape(
 }
 
 fn decode_signature(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     record: &SignatureRecord,
     shapes: &[WireSchemaRecord],
@@ -312,7 +312,7 @@ pub fn wire_decode_signature_metadata_via_kel(
 // Both returned spans are supplied by the schema stage. The host only checks
 // them against the borrowed buffer before transport or typed construction.
 pub(super) fn requested_bytes<'a>(
-    vm: &Vm<'_, '_>,
+    vm: &dyn StageExecutor,
     shared: &[u8],
     bytes: &'a [u8],
 ) -> Result<&'a [u8], SelfHostError> {
@@ -346,7 +346,11 @@ impl NameReadError {
         }
     }
 }
-fn name_command(vm: &mut Vm<'_, '_>, shared: &mut [u8], cmd: i64) -> Result<usize, NameReadError> {
+fn name_command(
+    vm: &mut dyn StageExecutor,
+    shared: &mut [u8],
+    cmd: i64,
+) -> Result<usize, NameReadError> {
     let result = enter_wire(vm, shared, cmd)?;
     if result == -297 || result == -298 {
         return Err(NameReadError::Data(result));
@@ -356,7 +360,7 @@ fn name_command(vm: &mut Vm<'_, '_>, shared: &mut [u8], cmd: i64) -> Result<usiz
 }
 
 fn validate_name_bytes_decision(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     bytes: &[u8],
 ) -> Result<(), NameReadError> {
@@ -377,7 +381,7 @@ fn validate_name_bytes_decision(
 }
 
 pub(super) fn validate_name_bytes(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     bytes: &[u8],
 ) -> Result<(), SelfHostError> {
@@ -391,9 +395,9 @@ pub(super) struct NameTables<'a> {
 }
 
 pub(super) fn name_lookup_decision<'a>(
-    codec: &mut Vm<'_, '_>,
+    codec: &mut dyn StageExecutor,
     codec_shared: &mut [u8],
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     tables: NameTables<'a>,
     index: u32,
@@ -448,9 +452,9 @@ pub(super) fn name_lookup_decision<'a>(
 }
 
 pub(super) fn name_lookup<'a>(
-    codec: &mut Vm<'_, '_>,
+    codec: &mut dyn StageExecutor,
     codec_shared: &mut [u8],
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     tables: NameTables<'a>,
     index: u32,
@@ -496,7 +500,7 @@ pub fn wire_name_via_kel(bytes: &[u8], index: u32) -> Result<&str, SelfHostError
 mod tests {
     use super::*;
 
-    fn pending_return(vm: &mut Vm<'_, '_>, shared: &mut [u8]) -> Result<(), SelfHostError> {
+    fn pending_return(vm: &mut dyn StageExecutor, shared: &mut [u8]) -> Result<(), SelfHostError> {
         for (i, value) in [8, 16, -1, 1].into_iter().enumerate() {
             set_word(vm, shared, ARG + i, value)?;
         }
@@ -659,7 +663,7 @@ mod tests {
         .unwrap();
     }
     fn utf8_only(
-        vm: &mut Vm<'_, '_>,
+        vm: &mut dyn StageExecutor,
         shared: &mut [u8],
         bytes: &[u8],
     ) -> Result<bool, SelfHostError> {

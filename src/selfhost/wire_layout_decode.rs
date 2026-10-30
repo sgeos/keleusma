@@ -54,14 +54,18 @@ fn row_fields(record: &WireSchemaRecord) -> Result<[i64; 4], SelfHostError> {
         _ => return Err(error("unexpected layout record")),
     })
 }
-fn accepted(vm: &mut Vm<'_, '_>, shared: &mut [u8], cmd: i64) -> Result<bool, SelfHostError> {
+fn accepted(
+    vm: &mut dyn StageExecutor,
+    shared: &mut [u8],
+    cmd: i64,
+) -> Result<bool, SelfHostError> {
     match command(vm, shared, cmd)? {
         0 => Ok(true),
         8 => Ok(false),
         _ => Err(error("unexpected layout response")),
     }
 }
-fn signed(vm: &Vm<'_, '_>, shared: &[u8], slot: usize) -> Result<i64, SelfHostError> {
+fn signed(vm: &dyn StageExecutor, shared: &[u8], slot: usize) -> Result<i64, SelfHostError> {
     match vm
         .get_shared(shared, slot)
         .map_err(|_| error("discriminant transport failed"))?
@@ -72,7 +76,7 @@ fn signed(vm: &Vm<'_, '_>, shared: &[u8], slot: usize) -> Result<i64, SelfHostEr
 }
 
 fn name_decision<'a>(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     value: Result<&'a str, NameReadError>,
 ) -> Result<Option<&'a str>, SelfHostError> {

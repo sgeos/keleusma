@@ -24,15 +24,15 @@ fn append(out: &mut Vec<u8>, values: &[u8]) -> Result<(), SelfHostError> {
     out.extend_from_slice(values);
     Ok(())
 }
-pub(super) struct Machine<'a, 'm, 'v> {
-    vm: &'a mut Vm<'m, 'v>,
+pub(super) struct Machine<'a> {
+    vm: &'a mut dyn StageExecutor,
     shared: &'a mut [u8],
     arg: usize,
     fin: usize,
     bytes: usize,
     window: usize,
 }
-impl Machine<'_, '_, '_> {
+impl Machine<'_> {
     pub(super) fn args(&mut self, values: &[i64]) -> Result<(), SelfHostError> {
         if values.len() > 8 {
             return Err(error("argument window exceeded"));
@@ -157,8 +157,8 @@ struct Names<'a> {
 impl<'a> Names<'a> {
     fn prefix(
         &mut self,
-        schema: &mut Machine<'_, '_, '_>,
-        codec: &mut Machine<'_, '_, '_>,
+        schema: &mut Machine<'_>,
+        codec: &mut Machine<'_>,
         text: &'a str,
         expected: (i64, usize, usize),
         variants: usize,
@@ -178,8 +178,8 @@ impl<'a> Names<'a> {
 
     fn intern(
         &mut self,
-        schema: &mut Machine<'_, '_, '_>,
-        codec: &mut Machine<'_, '_, '_>,
+        schema: &mut Machine<'_>,
+        codec: &mut Machine<'_>,
         text: &'a str,
         role: i64,
     ) -> Result<NameIndex, SelfHostError> {
@@ -306,8 +306,8 @@ struct Forest {
     enums: Vec<u8>,
 }
 fn forest<'a>(
-    schema: &mut Machine<'_, '_, '_>,
-    codec: &mut Machine<'_, '_, '_>,
+    schema: &mut Machine<'_>,
+    codec: &mut Machine<'_>,
     names: &mut Names<'a>,
     module: &'a Module,
     include_initializers: bool,
@@ -391,7 +391,7 @@ struct Initializer {
     record: Vec<u8>,
 }
 fn initializer(
-    codec: &mut Machine<'_, '_, '_>,
+    codec: &mut Machine<'_>,
     module: &Module,
 ) -> Result<Option<Initializer>, SelfHostError> {
     let Some(layout) = &module.data_layout else {

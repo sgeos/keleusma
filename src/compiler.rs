@@ -6361,6 +6361,24 @@ fn compile_data_field_assign(
             message: format!("unknown data field: {}.{}", data_name, field),
             span,
         })?;
+    // An array field occupies one data slot per element, so a single `SetData` would put the
+    // whole array value in the first slot and leave the others unwritten. A whole-array read is
+    // refused for the same layout, and the write is refused to match, until an element-wise
+    // lowering exists.
+    let field_type = fc
+        .type_info
+        .data_field_types
+        .get(data_name)
+        .and_then(|fields| fields.get(field));
+    if let Some(TypeExpr::Array(_, _, _)) = field_type {
+        return Err(CompileError {
+            message: format!(
+                "data field `{}.{}` is an array; assign its elements through `{}.{}[i] = ...`",
+                data_name, field, data_name, field
+            ),
+            span,
+        });
+    }
     compile_expr(fc, value)?;
     // `SetData` handles both a scalar slot and a private composite slot. The VM
     // dispatches on the value at run time: a flat composite is copied into the

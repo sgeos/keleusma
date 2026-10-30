@@ -160,7 +160,7 @@ fn materialize([id, form, a, b, c]: [i64; 5]) -> Result<Op, SelfHostError> {
 }
 
 pub(super) fn transport(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     offset: usize,
     bytes: &[u8],
@@ -176,7 +176,7 @@ pub(super) fn transport(
 }
 
 pub(super) fn decode_one(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     record: &[u8; 4],
     operands: &[u8],
