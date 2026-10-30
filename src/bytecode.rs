@@ -1054,7 +1054,126 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     /// exactly as [`crate::marshall::KeleusmaType::from_value_ctx`] does (B36);
     /// the cast cannot widen because the loader requires module width at most
     /// runtime width.
+    ///
+    /// # Arena cost
+    ///
+    /// The canonicalisation runs in two passes so that its arena cost is
+    /// bounded by the value's declared flat size, which the worst-case memory
+    /// bound in [`crate::vm::auto_arena_capacity_for`] relies on.
+    ///
+    /// 1. Every owned `StaticStr` composite field, at any depth, is promoted to
+    ///    an arena `KStr` first. These are the only allocations that are not
+    ///    flat bodies, and they stay live.
+    /// 2. The composite is then packed bottom-up. A nested child is packed into
+    ///    its own arena body before its parent copies it, so after a node packs
+    ///    flat every body allocated beneath it is dead. The node's body is then
+    ///    moved up over that dead space and the top head is rewound
+    ///    ([`crate::flat_value::FlatComposite::compact_after`]), so a flat value
+    ///    holds exactly its own body length, whatever its nesting depth.
+    ///
+    /// The arena top region uses one-byte alignment and no per-allocation
+    /// header, so a body of `n` bytes consumes exactly `n` bytes. While a node
+    /// is being packed its children and its own body coexist, so the transient
+    /// peak of one value is at most twice its flat size before the compaction
+    /// returns it to its flat size. Without the compaction, the dead child
+    /// bodies stayed until the next `Reset`, and their total grew with the
+    /// nesting depth, which the module does not record.
     pub fn into_arena_canonical(
+        mut self,
+        word_bytes: usize,
+        float_bytes: usize,
+        addr_bytes: usize,
+        arena: &keleusma_arena::Arena,
+    ) -> Result<Self, allocator_api2::alloc::AllocError> {
+        if !matches!(
+            self,
+            Self::Tuple(TupleBody::Boxed(_))
+                | Self::Array(ArrayBody::Boxed(_))
+                | Self::Struct(StructBody::Boxed(_))
+                | Self::Enum(EnumBody::Boxed(_))
+        ) {
+            return Ok(self);
+        }
+        self.promote_composite_text(word_bytes, arena)?;
+        self.pack_canonical_node(word_bytes, float_bytes, addr_bytes, arena)
+    }
+
+    /// Pack one node of an already text-promoted value, then reclaim the dead
+    /// child bodies beneath it when it packed flat. See
+    /// [`Self::into_arena_canonical`].
+    ///
+    /// The precondition, established by [`Self::promote_composite_text`], is
+    /// that no field reachable by [`Self::pack_canonical_uncompacted`] is an
+    /// owned `StaticStr` that the packer would promote, so the only arena
+    /// allocations made beneath `mark` are flat bodies. A field that breaks the
+    /// precondition is not promoted here, so its parent stays boxed rather than
+    /// having a live string reclaimed.
+    fn pack_canonical_node(
+        self,
+        word_bytes: usize,
+        float_bytes: usize,
+        addr_bytes: usize,
+        arena: &keleusma_arena::Arena,
+    ) -> Result<Self, allocator_api2::alloc::AllocError> {
+        let mark = arena.top_mark();
+        let used_at_mark = arena.top_used();
+        let packed = self.pack_canonical_uncompacted(word_bytes, float_bytes, addr_bytes, arena)?;
+        // SAFETY: every allocation made since `mark` was made by the packing
+        // above. The text pass ran first, and the packer allocates nothing but
+        // flat bodies, so those allocations are this node's body and the bodies
+        // of its descendants. A node that packed flat copied each descendant's
+        // bytes into its own body, and the descendants' handles were consumed
+        // by the packer, so the node's body is the only live reference into
+        // that range. A node that stayed boxed is returned unchanged, because
+        // its flat children are still referenced from its boxed body.
+        Ok(match packed {
+            Self::Tuple(TupleBody::Flat(b)) => Self::Tuple(TupleBody::Flat(unsafe {
+                b.compact_after(mark, used_at_mark, arena)
+            }?)),
+            Self::Array(ArrayBody::Flat(b)) => Self::Array(ArrayBody::Flat(unsafe {
+                b.compact_after(mark, used_at_mark, arena)
+            }?)),
+            Self::Struct(StructBody::Flat(b)) => Self::Struct(StructBody::Flat(unsafe {
+                b.compact_after(mark, used_at_mark, arena)
+            }?)),
+            Self::Enum(EnumBody::Flat(b)) => Self::Enum(EnumBody::Flat(unsafe {
+                b.compact_after(mark, used_at_mark, arena)
+            }?)),
+            other => other,
+        })
+    }
+
+    /// Promote, in place, every owned `StaticStr` field of a boxed composite,
+    /// at any depth, through [`Self::promote_field_text`]. A value that is not
+    /// a boxed composite is left unchanged. The recursion follows exactly the
+    /// variants [`Self::pack_canonical_uncompacted`] recurses into.
+    fn promote_composite_text(
+        &mut self,
+        word_bytes: usize,
+        arena: &keleusma_arena::Arena,
+    ) -> Result<(), allocator_api2::alloc::AllocError> {
+        match self {
+            Self::Tuple(TupleBody::Boxed(elems)) | Self::Array(ArrayBody::Boxed(elems)) => {
+                for v in elems.iter_mut() {
+                    v.promote_field_text(word_bytes, arena)?;
+                }
+            }
+            Self::Struct(StructBody::Boxed(b)) => {
+                for (_, v) in b.fields.iter_mut() {
+                    v.promote_field_text(word_bytes, arena)?;
+                }
+            }
+            Self::Enum(EnumBody::Boxed(b)) => {
+                for v in b.fields.iter_mut() {
+                    v.promote_field_text(word_bytes, arena)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn pack_canonical_uncompacted(
         self,
         word_bytes: usize,
         float_bytes: usize,
@@ -1065,18 +1184,14 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
             Self::Tuple(TupleBody::Boxed(elems)) => {
                 let elems = (*elems)
                     .into_iter()
-                    .map(|v| {
-                        v.into_arena_canonical_field(word_bytes, float_bytes, addr_bytes, arena)
-                    })
+                    .map(|v| v.pack_canonical_node(word_bytes, float_bytes, addr_bytes, arena))
                     .collect::<Result<alloc::vec::Vec<_>, _>>()?;
                 Self::tuple_in_arena(elems, word_bytes, float_bytes, addr_bytes, arena)
             }
             Self::Array(ArrayBody::Boxed(elems)) => {
                 let elems = (*elems)
                     .into_iter()
-                    .map(|v| {
-                        v.into_arena_canonical_field(word_bytes, float_bytes, addr_bytes, arena)
-                    })
+                    .map(|v| v.pack_canonical_node(word_bytes, float_bytes, addr_bytes, arena))
                     .collect::<Result<alloc::vec::Vec<_>, _>>()?;
                 Self::array_in_arena(elems, word_bytes, float_bytes, addr_bytes, arena)
             }
@@ -1087,12 +1202,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                     .map(|(k, v)| {
                         Ok::<_, allocator_api2::alloc::AllocError>((
                             k,
-                            v.into_arena_canonical_field(
-                                word_bytes,
-                                float_bytes,
-                                addr_bytes,
-                                arena,
-                            )?,
+                            v.pack_canonical_node(word_bytes, float_bytes, addr_bytes, arena)?,
                         ))
                     })
                     .collect::<Result<alloc::vec::Vec<_>, _>>()?;
@@ -1131,9 +1241,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                 if type_name == "Option" {
                     let fields = fields
                         .into_iter()
-                        .map(|v| {
-                            v.into_arena_canonical_field(word_bytes, float_bytes, addr_bytes, arena)
-                        })
+                        .map(|v| v.pack_canonical_node(word_bytes, float_bytes, addr_bytes, arena))
                         .collect::<Result<alloc::vec::Vec<_>, _>>()?;
                     return Self::enum_in_arena(
                         type_name,
@@ -1149,9 +1257,7 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
                 }
                 let fields = fields
                     .into_iter()
-                    .map(|v| {
-                        v.into_arena_canonical_field(word_bytes, float_bytes, addr_bytes, arena)
-                    })
+                    .map(|v| v.pack_canonical_node(word_bytes, float_bytes, addr_bytes, arena))
                     .collect::<Result<alloc::vec::Vec<_>, _>>()?;
                 Self::enum_in_arena(
                     type_name,
@@ -1169,11 +1275,11 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
         }
     }
 
-    /// Canonicalise a composite *field* for flat packing (B28, B37).
+    /// Prepare a composite *field* for flat packing (B28, B37).
     ///
-    /// First canonicalises the field through [`Self::into_arena_canonical`]
-    /// (flattening a nested composite), then promotes an owned `StaticStr`
-    /// to an arena `KStr`. The promotion is what lets a text-bearing
+    /// First promotes the text fields of a nested boxed composite, then
+    /// promotes the field itself when it is an owned `StaticStr`, replacing it
+    /// with an arena `KStr`. The promotion is what lets a text-bearing
     /// composite pack flat: the compiler classifies a `Text` field as a flat
     /// `(ptr, len)` when the module word slot holds a host pointer
     /// (`classify_flat_field`), and the value-side packer
@@ -1197,20 +1303,25 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     /// matching that access. Without the gate the field would promote to a
     /// `KStr` and the composite would pack flat against a boxed access,
     /// reintroducing the very mismatch this repair removes, on narrow targets.
-    fn into_arena_canonical_field(
-        self,
+    ///
+    /// The promotion runs as the first pass of [`Self::into_arena_canonical`],
+    /// before any body is packed, so the string bytes are allocated below no
+    /// packed body and survive the compaction of the second pass. Its arena
+    /// cost is the string's byte length, which depends on the host's string
+    /// and cannot be bounded from the module.
+    fn promote_field_text(
+        &mut self,
         word_bytes: usize,
-        float_bytes: usize,
-        addr_bytes: usize,
         arena: &keleusma_arena::Arena,
-    ) -> Result<Self, allocator_api2::alloc::AllocError> {
-        match self.into_arena_canonical(word_bytes, float_bytes, addr_bytes, arena)? {
-            Self::StaticStr(s) if word_bytes >= core::mem::size_of::<usize>() => {
-                let ks = crate::kstring::KString::alloc(arena, &s)?;
-                Ok(Self::KStr(ks))
-            }
-            other => Ok(other),
+    ) -> Result<(), allocator_api2::alloc::AllocError> {
+        self.promote_composite_text(word_bytes, arena)?;
+        if word_bytes >= core::mem::size_of::<usize>()
+            && let Self::StaticStr(s) = self
+        {
+            let ks = crate::kstring::KString::alloc(arena, s)?;
+            *self = Self::KStr(ks);
         }
+        Ok(())
     }
 
     /// Write this fixed-size scalar's little-endian bytes into `dst` at
@@ -4167,6 +4278,24 @@ pub enum LoadError {
     SignaturesUnsupported,
 }
 
+/// A width written from its base-2 exponent, as `LoadError`'s messages print
+/// it.
+///
+/// The exponent comes from an untrusted header byte, so `1 << e` overflows for
+/// an exponent of 32 or more. Formatting the refusal of such a header panicked
+/// under overflow checks, and a fuzz run found it in about 1,400 executions. An
+/// exponent too large for the shift is written as a power of two instead.
+struct WidthBits(u8);
+
+impl core::fmt::Display for WidthBits {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match 1u32.checked_shl(u32::from(self.0)) {
+            Some(bits) => write!(f, "{bits}"),
+            None => write!(f, "2^{}", self.0),
+        }
+    }
+}
+
 impl core::fmt::Display for LoadError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -4185,24 +4314,24 @@ impl core::fmt::Display for LoadError {
                 write!(
                     f,
                     "bytecode requires {}-bit words, runtime supports up to {}-bit",
-                    1u32 << got,
-                    1u32 << max_supported
+                    WidthBits(*got),
+                    WidthBits(*max_supported)
                 )
             }
             LoadError::AddressSizeMismatch { got, max_supported } => {
                 write!(
                     f,
                     "bytecode requires {}-bit addresses, runtime supports up to {}-bit",
-                    1u32 << got,
-                    1u32 << max_supported
+                    WidthBits(*got),
+                    WidthBits(*max_supported)
                 )
             }
             LoadError::FloatSizeMismatch { got, max_supported } => {
                 write!(
                     f,
                     "bytecode requires {}-bit floats, runtime supports up to {}-bit",
-                    1u32 << got,
-                    1u32 << max_supported
+                    WidthBits(*got),
+                    WidthBits(*max_supported)
                 )
             }
             LoadError::BadChecksum => f.write_str("bytecode CRC-32 residue check failed"),

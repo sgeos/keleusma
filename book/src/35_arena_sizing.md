@@ -38,8 +38,15 @@ let vm    = Vm::new(module, &arena)?;
 
 The second argument is a slice of per-native heap attestations; pass an
 empty slice when the script's natives do not allocate into the arena, and
-attested values otherwise. This option sizes the arena to exactly what
-the program needs, no more.
+attested values otherwise. This option sizes the arena from the module's
+own bounds.
+
+The figure includes the composite values the host passes to the entry
+and resumes it with, because each is copied into the arena and kept
+until the next `Reset`. When such a value carries `Text`, use
+`auto_arena_capacity_with_input_text` and pass a bound on the text bytes
+in any one value, since the module cannot know the length of a host
+string.
 
 ## Option C: a static buffer
 

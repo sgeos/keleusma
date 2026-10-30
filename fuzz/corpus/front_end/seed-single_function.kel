@@ -1,0 +1,1 @@
+fn main() -> Word { let a = 7; if a > 3 { a * 2 } else { a + 1 } }

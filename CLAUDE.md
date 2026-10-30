@@ -279,7 +279,7 @@ quoting a result.** Their two correctives are these.
 - Measured 2026-10-23 at `b1dbfe4f258a3b9f8145c571da188999b3ad7526`. Remote continuous integration
   passed 3458 workspace tests and 3199 isolated self-host tests, including 1439 and 1389 keleusma
   library tests, and each population ignored two. Workspace documentation tests passed twelve and
-  ignored three. The source inventory, re-measured on 2026-10-30 at `ce6dea93`, contains 1964 integration `#[test]` functions across 208 files (`ls tests/*.rs | wc -l`).
+  ignored three. The source inventory, re-measured on 2026-10-30 at `7cc956ee`, contains 2034 integration `#[test]` functions across 220 files (`ls tests/*.rs | wc -l`).
   Workspace execution includes 57 tests in keleusma-arena (51 lib plus 6 integration) and six
   keleusma-bench tests. The isolated library population can be reproduced with
   `cargo test --lib --features self-host`. The

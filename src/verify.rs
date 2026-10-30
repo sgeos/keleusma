@@ -2123,6 +2123,214 @@ pub fn module_call_depth(module: &Module) -> Result<u32, VerifyError> {
     Ok(depth.into_iter().max().unwrap_or(0))
 }
 
+/// The cost of one instruction under the yield-counting walk: one for a
+/// `Yield`, zero for anything else.
+fn yield_count_cycles(op: &Op) -> u32 {
+    u32::from(matches!(op, Op::Yield))
+}
+
+/// A cost model whose worst-case "cycle" count is the number of `Yield`
+/// instructions executed. The region walk then reports the largest number of
+/// yields any path through the region executes, with each bounded loop's body
+/// multiplied by its iteration bound. Text operations cost nothing here.
+const YIELD_COUNT_MODEL: crate::bytecode::CostModel = crate::bytecode::CostModel {
+    value_slot_bytes: 0,
+    op_cycles: yield_count_cycles,
+    text_byte_cycles: 0,
+};
+
+/// The largest number of `Yield` instructions one run of the region
+/// `[start, end)` of `chunk` executes, with each `Call` charged the callee's
+/// whole-body count from `callee_counts`.
+fn region_yield_count(
+    chunk: &Chunk,
+    start: usize,
+    end: usize,
+    callee_counts: &[u32],
+) -> Result<u32, VerifyError> {
+    // The walk follows control-flow operands, which this standalone entry has
+    // not had validated, and a backward target would not terminate (audit H1).
+    check_forward_control_flow_targets(chunk)?;
+    let mut extra: Vec<u32> = alloc::vec![0; chunk.ops.len()];
+    for (ip, op) in chunk.ops.iter().enumerate() {
+        if let Op::Call(callee, _) = op {
+            let n = callee_counts
+                .get(*callee as usize)
+                .copied()
+                .ok_or_else(|| VerifyError {
+                    chunk_name: chunk.name.clone(),
+                    message: alloc::format!(
+                        "call at instruction {ip} names chunk {callee}, which does not exist"
+                    ),
+                })?;
+            // `u32::MAX` is the walk's reserved "unboundable text" marker, so a
+            // saturated count stays one below it. The bound only grows.
+            extra[ip] = n.min(u32::MAX - 1);
+        }
+    }
+    let mut breaks: Vec<u32> = Vec::new();
+    let outcome = wcet_region(
+        chunk,
+        start,
+        end,
+        &mut breaks,
+        &YIELD_COUNT_MODEL,
+        false,
+        &extra,
+    )?;
+    Ok(outcome.cost)
+}
+
+/// An upper bound on the number of resume values the host delivers to the
+/// chunk at `chunk_idx` between one arena reset and the next, not counting the
+/// value that starts the run.
+///
+/// For a `Stream` chunk this is the largest number of `Yield` instructions one
+/// iteration executes, from the chunk's first instruction to its `Reset`. For
+/// any other chunk it is the largest number executed by one whole call. Each
+/// `Yield` suspends the virtual machine once and is completed by exactly one
+/// `resume`, so the count of executed yields is the count of resume values.
+///
+/// # How the bound is computed
+///
+/// The worst-case-execution-time region walk is reused under a cost model in
+/// which a `Yield` costs one and every other instruction costs zero. The walk
+/// takes the larger branch at every `If` and multiplies each loop body by the
+/// loop's statically extracted iteration bound, so a yield inside a bounded
+/// loop is counted once per iteration. The walk is shallow with respect to
+/// `Call`, so each chunk's whole-body count is computed first, bottom-up over
+/// the acyclic call graph, and charged as a per-instruction extra at every
+/// call site of that chunk. A yield inside a `yield fn` callee is therefore
+/// counted at its caller.
+///
+/// # Where it is conservative
+///
+/// - Both arms of a branch are not summed, but the larger arm is taken even
+///   when the program never takes it.
+/// - A loop is charged its full iteration bound plus the partial pass that
+///   takes the exit, which is the same over-approximation the time bound makes.
+/// - A `Stream` chunk is counted from instruction zero, so instructions before
+///   its `Stream` marker, which run only on the first call, are charged to
+///   every iteration.
+/// - A callee is charged its whole-body count at every call site, even when a
+///   run reaches only part of it.
+///
+/// # Failure modes
+///
+/// A chunk that cannot yield, directly or through a callee, is never walked
+/// and contributes zero. A chunk that can yield is walked with the strict loop
+/// rule, so a loop with a yield, a fall-through body, and no extractable
+/// iteration bound is refused, since it admits an unbounded number of resumes
+/// before the next reset. A call cycle, which the verifier rejects elsewhere,
+/// is refused here as well.
+pub fn max_resumes_before_reset(module: &Module, chunk_idx: usize) -> Result<u32, VerifyError> {
+    let n = module.chunks.len();
+    let chunk = module.chunks.get(chunk_idx).ok_or_else(|| VerifyError {
+        chunk_name: String::from("<module>"),
+        message: alloc::format!("chunk index {chunk_idx} is out of range for {n} chunks"),
+    })?;
+    // Which chunks can yield at all, directly or transitively. A fixpoint
+    // over the call graph, terminating within `n + 1` passes because each
+    // productive pass flips at least one entry from false to true.
+    let mut may_yield: Vec<bool> = module
+        .chunks
+        .iter()
+        .map(|c| c.ops.iter().any(|op| matches!(op, Op::Yield)))
+        .collect();
+    for _ in 0..=n {
+        let mut changed = false;
+        for (i, c) in module.chunks.iter().enumerate() {
+            if may_yield[i] {
+                continue;
+            }
+            let reaches = c.ops.iter().any(|op| {
+                matches!(op, Op::Call(callee, _) if may_yield.get(*callee as usize).copied().unwrap_or(false))
+            });
+            if reaches {
+                may_yield[i] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    if !may_yield[chunk_idx] {
+        return Ok(0);
+    }
+    // Only chunks reachable from `chunk_idx` are walked, so a yielding chunk
+    // the entry never calls cannot make this query fail. A worklist over the
+    // call graph; each chunk is pushed at most once, so it ends within `n`
+    // pops.
+    let mut reachable: Vec<bool> = alloc::vec![false; n];
+    let mut work: Vec<usize> = alloc::vec![chunk_idx];
+    reachable[chunk_idx] = true;
+    while let Some(i) = work.pop() {
+        for op in &module.chunks[i].ops {
+            if let Op::Call(callee, _) = op
+                && let Some(seen) = reachable.get_mut(*callee as usize)
+                && !*seen
+            {
+                *seen = true;
+                work.push(*callee as usize);
+            }
+        }
+    }
+    // Whole-body counts, bottom-up. A chunk is computed once every callee it
+    // calls is computed. Each productive pass computes at least one chunk, so
+    // `n + 1` passes suffice for an acyclic call graph; a chunk left over
+    // afterwards lies on a cycle.
+    let mut counts: Vec<Option<u32>> = may_yield
+        .iter()
+        .zip(&reachable)
+        .map(|(&y, &r)| if y && r { None } else { Some(0) })
+        .collect();
+    for _ in 0..=n {
+        let mut progressed = false;
+        for i in 0..n {
+            if counts[i].is_some() {
+                continue;
+            }
+            let c = &module.chunks[i];
+            let ready = c.ops.iter().all(|op| match op {
+                Op::Call(callee, _) => counts.get(*callee as usize).is_none_or(|x| x.is_some()),
+                _ => true,
+            });
+            if !ready {
+                continue;
+            }
+            let known: Vec<u32> = counts.iter().map(|x| x.unwrap_or(0)).collect();
+            counts[i] = Some(region_yield_count(c, 0, c.ops.len(), &known)?);
+            progressed = true;
+        }
+        if !progressed {
+            break;
+        }
+    }
+    if counts.iter().any(Option::is_none) {
+        return Err(VerifyError {
+            chunk_name: chunk.name.clone(),
+            message: String::from(
+                "the call graph has a cycle, so the number of resumes cannot be bounded",
+            ),
+        });
+    }
+    let known: Vec<u32> = counts.iter().map(|x| x.unwrap_or(0)).collect();
+    if chunk.block_type == BlockType::Stream {
+        let reset_pos = chunk
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::Reset))
+            .ok_or_else(|| VerifyError {
+                chunk_name: chunk.name.clone(),
+                message: String::from("Stream block missing Reset instruction"),
+            })?;
+        region_yield_count(chunk, 0, reset_pos, &known)
+    } else {
+        Ok(known[chunk_idx])
+    }
+}
+
 /// Compute the module's [`RuntimeFootprint`] for arena pre-sizing.
 ///
 /// Runs the per-chunk WCMU analysis with a unit slot size so the stack
@@ -2671,6 +2879,9 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
         verify_chunk(chunk, module, &always, None)?;
         verify_stack_depth(chunk)?;
     }
+    // Definite initialization, after the structural checks above have
+    // validated every control-flow target and slot index it reads.
+    crate::verify_init::verify_definite_initialization(module)?;
     // Typed operand-stack pass (A.2.1): reconstructs per-slot flat shapes and
     // validates baked flat offsets, branch/loop stack balance, and the
     // wire-carried layout tables. It runs in defer-on-`Top` mode — a value
@@ -3860,7 +4071,13 @@ pub(crate) mod tests {
             constants: alloc::vec![crate::bytecode::ConstValue::Int(0)],
             struct_templates: Vec::new(),
             local_count,
-            param_count: 0,
+            // A stream or reentrant fixture reads slot 0 as its entry
+            // parameter, as the comment above says, so it declares one. The
+            // definite-initialization rule refuses a read of a local that no
+            // path writes, and a parameter is written on entry.
+            param_count: u8::from(
+                local_count > 0 && matches!(block_type, BlockType::Stream | BlockType::Reentrant),
+            ),
             block_type,
             param_types: Vec::new(),
             debug_pool: None,
