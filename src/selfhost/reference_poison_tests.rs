@@ -33,6 +33,7 @@ const STAGES: &[(&str, &str)] = &[
         include_str!("kel/verify_structural.kel"),
     ),
     ("verify_yield", include_str!("kel/verify_yield.kel")),
+    ("template_scan", include_str!("kel/template_scan.kel")),
     ("verify_depth", include_str!("kel/verify_depth.kel")),
     ("verify_typed", include_str!("kel/verify_typed.kel")),
     (

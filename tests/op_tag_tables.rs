@@ -522,6 +522,10 @@ const STAGE_SOURCES: &[(&str, &str)] = &[
         "verify_yield",
         include_str!("../src/selfhost/kel/verify_yield.kel"),
     ),
+    (
+        "template_scan",
+        include_str!("../src/selfhost/kel/template_scan.kel"),
+    ),
     ("wire", include_str!("../src/selfhost/kel/wire.kel")),
     (
         "wire_debug",

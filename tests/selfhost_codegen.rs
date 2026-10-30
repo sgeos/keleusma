@@ -4878,6 +4878,14 @@ fn self_host_compiles_verify_types_kel_byte_identically() {
 }
 
 #[test]
+fn self_host_compiles_template_scan_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_template_scan_kel_byte_identically",
+        "template_scan.kel",
+    );
+}
+
+#[test]
 fn self_host_compiles_verify_yield_kel_byte_identically() {
     assert_stage_byte_identical(
         "self_host_compiles_verify_yield_kel_byte_identically",

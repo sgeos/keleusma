@@ -35,7 +35,7 @@ What each release shipped is in [`CHANGELOG.md`](CHANGELOG.md).
 
 **Self-hosted compiler.** Its reusable core lives in the shipping crate at `src/selfhost/`. The
 driver `src/selfhost/mod.rs` sits behind the off-by-default `self-host` feature.
-The fourteen stage sources under `src/selfhost/kel/` are all fourteen embedded in the driver via `include_str!`. The command
+The fifteen stage sources under `src/selfhost/kel/` are all fifteen embedded in the driver via `include_str!`. The command
 `keleusma compile --compiler self-hosted` runs the user source through that pipeline, accepts only
 the self-hosted subset at the host target, and cross-checks its output against the Rust reference
 compiler. A divergence fails with a `retry with --compiler rust` hint. **A divergence establishes
