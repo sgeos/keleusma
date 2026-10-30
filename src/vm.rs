@@ -649,6 +649,67 @@ fn rewrap_flat_body<W: crate::word::Word, F: crate::float::Float>(
     }
 }
 
+/// Check a canonicalised host input against the flat shape its chunk
+/// signature declares.
+///
+/// The host builds a composite input as a value tree, and the VM packs it in
+/// the host's field order. The script reads it at offsets baked for the
+/// declared order. A body of another size or kind is therefore read by the
+/// wrong layout, which for a `Text` field would rebuild a string from a word
+/// that is not a pointer. This check refuses a tuple, struct or array input
+/// whose packed body differs in kind or byte length from the declaration, and
+/// a scalar where such a body is declared.
+///
+/// It does not establish that the layout matches. Two fields of equal width in
+/// the opposite order pack to the same size and pass, because the wire carries
+/// each body's kind and size and not its field layout. The host contract is
+/// that a composite input has the script's field order and field types, which
+/// `#[derive(KeleusmaType)]` upholds when the Rust declaration matches the
+/// script's. Enum inputs are not checked, because an unhandled variant may be
+/// represented as a scalar and its body length varies with the variant.
+fn check_host_composite_shape<W: crate::word::Word, F: crate::float::Float>(
+    value: &crate::bytecode::GenericValue<W, F>,
+    shape: &crate::bytecode::WireShape,
+    what: impl FnOnce() -> String,
+) -> Result<(), VmError> {
+    use crate::bytecode::{ArrayBody, GenericValue, StructBody, TupleBody, WireShape};
+    use crate::value_layout::CompositeKind;
+    let WireShape::Flat { kind, size } = *shape else {
+        return Ok(());
+    };
+    let declared = [
+        CompositeKind::Tuple,
+        CompositeKind::Array,
+        CompositeKind::Struct,
+    ]
+    .into_iter()
+    .find(|k| k.to_tag() == kind);
+    let Some(declared) = declared else {
+        return Ok(());
+    };
+    let got = match value {
+        GenericValue::Tuple(TupleBody::Flat(fc)) => Some((CompositeKind::Tuple, fc.byte_len())),
+        GenericValue::Array(ArrayBody::Flat(fc)) => Some((CompositeKind::Array, fc.byte_len())),
+        GenericValue::Struct(StructBody::Flat(fc)) => Some((CompositeKind::Struct, fc.byte_len())),
+        _ => None,
+    };
+    match got {
+        Some((k, len)) if k == declared && len == size as usize => Ok(()),
+        Some((k, len)) => Err(VmError::TypeError(format!(
+            "{} is declared as a {declared:?} body of {size} bytes, and the host value packed \
+             to a {k:?} body of {len} bytes; a host composite must have the script's field \
+             order and field types",
+            what()
+        ))),
+        None => Err(VmError::TypeError(format!(
+            "{} is declared as a {declared:?} body of {size} bytes, and the host value is {}; \
+             a host composite must have the script's field order and field types",
+            what(),
+            value.type_name()
+        ))),
+    }
+}
+
 fn out_of_arena_push(region: &str, capacity: usize) -> VmError {
     use alloc::format;
     VmError::OutOfArena(format!(
@@ -1065,6 +1126,12 @@ struct AuxResolved {
     op_record_counts: Vec<u32>,
     /// Per-chunk local-slot counts, indexed by chunk index.
     local_counts: Vec<u16>,
+    /// Per-chunk signatures, indexed by chunk index, which give the flat kind
+    /// and size of each parameter and of a resume value. Used to check a host
+    /// composite input against the declared shape. Empty when the image carries
+    /// no table or the table does not decode, in which case nothing is checked
+    /// here and the typed verifier, which decodes the same table, decides.
+    signatures: Vec<crate::bytecode::ChunkSignature>,
 }
 
 impl AuxResolved {
@@ -1104,6 +1171,7 @@ impl AuxResolved {
             shared_data_bytes: view.shared_data_bytes().unwrap_or(0),
             op_record_counts,
             local_counts,
+            signatures: crate::wire_schema::decode_signatures(aux).unwrap_or_default(),
             offsets,
         })
     }
@@ -5278,11 +5346,28 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         let wb = self.module_word_bytes();
         let ab = self.module_addr_bytes();
         let fb = self.module_float_bytes();
-        for arg in args {
+        for (i, arg) in args.iter().enumerate() {
             let arg = self
                 .correct_native_enum_hints(arg.clone())
                 .into_arena_canonical(wb, fb, ab, arena)
                 .map_err(|_| out_of_arena_push("composite argument", arena.capacity()))?;
+            if let Some(shape) = self
+                .aux_resolved
+                .signatures
+                .get(chunk_idx)
+                .and_then(|sig| sig.params.get(i))
+            {
+                check_host_composite_shape(&arg, shape, || {
+                    let name = self
+                        .aux()
+                        .module()
+                        .chunk_name(chunk_idx)
+                        .and_then(|b| core::str::from_utf8(b).ok())
+                        .map(String::from)
+                        .unwrap_or_else(|| String::from("<chunk>"));
+                    format!("function `{name}` parameter {i}")
+                })?;
+            }
             // Intern a host-supplied opaque argument to the POD index form
             // before it reaches the operand stack (B33).
             let arg = self.intern_opaque_arcs(arg);
@@ -5398,6 +5483,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             .correct_native_enum_hints(input)
             .into_arena_canonical(wb, fb, ab, arena)
             .map_err(|_| out_of_arena_push("composite resume value", arena.capacity()))?;
+        if let Some(base_frame) = self.frames.first().copied()
+            && let Some(sig) = self.aux_resolved.signatures.get(base_frame.chunk_idx)
+        {
+            check_host_composite_shape(&input, &sig.resume, || {
+                format!("the resume value of chunk {}", base_frame.chunk_idx)
+            })?;
+        }
         // Intern a host-supplied opaque resume value to the POD index form (B33).
         let input = self.intern_opaque_arcs(input);
         // For stream functions, update the parameter slot with the new input.
