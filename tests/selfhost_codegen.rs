@@ -6135,9 +6135,8 @@ fn assembled_schema_hash_matches_the_reference() {
         "compiler/kel/parse.kel",
     ] {
         let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
-        let (_fns, names, data_records, _enums) = parse_functions(&src);
-        let dl = assemble_data_layout(&data_records, &names);
-        let hash = keleusma::bytecode::compute_schema_hash(Some(&dl));
+        // The driver's own computation, slot types included, against the reference's.
+        let hash = keleusma::selfhost::schema_hash_from_pipeline(&src);
         let reference = compile_src(&src);
         assert_eq!(hash, reference.schema_hash, "schema hash for {path}");
     }
