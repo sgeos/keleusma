@@ -92,13 +92,20 @@ fn successors(ops: &[Op], ip: usize) -> (Option<usize>, Option<usize>) {
     }
 }
 
-/// A forward may-analysis over one chunk's locals. `transfer` checks an
-/// instruction's reads against the set before its writes, then applies them.
+/// A forward may-analysis over one chunk's locals. `transfer` applies an
+/// instruction's writes and, when its flag is set, checks its reads against the
+/// set before them.
+///
+/// Reads are checked only after the fixpoint. A set grows as the worklist
+/// visits more paths, so a read checked on an early visit would see a subset of
+/// its final set and refuse a local that a later path writes. The handled
+/// indexed-write lowering is such a case, since the jump that skips its write
+/// reaches the join first.
 fn may_analysis(
     chunk: &Chunk,
     width: usize,
     entry: Bits,
-    mut transfer: impl FnMut(usize, &Op, &mut Bits) -> Result<(), VerifyError>,
+    mut transfer: impl FnMut(usize, &Op, &mut Bits, bool) -> Result<(), VerifyError>,
 ) -> Result<(), VerifyError> {
     let ops = &chunk.ops;
     if ops.is_empty() {
@@ -115,7 +122,7 @@ fn may_analysis(
     while let Some(ip) = work.pop_front() {
         queued[ip] = false;
         let mut set = state[ip].clone().unwrap_or_else(|| Bits::empty(width));
-        transfer(ip, &ops[ip], &mut set)?;
+        transfer(ip, &ops[ip], &mut set, false)?;
         let (fall, jump) = successors(ops, ip);
         for to in [fall, jump].into_iter().flatten() {
             let changed = match &mut state[to] {
@@ -129,6 +136,12 @@ fn may_analysis(
                 queued[to] = true;
                 work.push_back(to);
             }
+        }
+    }
+    // The check, over every reached instruction with its final set.
+    for (ip, set) in state.iter().enumerate() {
+        if let Some(set) = set {
+            transfer(ip, &ops[ip], &mut set.clone(), true)?;
         }
     }
     Ok(())
@@ -151,9 +164,9 @@ fn check_locals(chunk: &Chunk) -> Result<(), VerifyError> {
     for p in 0..usize::from(chunk.param_count).min(width) {
         entry.set(p);
     }
-    may_analysis(chunk, width, entry, |ip, op, set| {
+    may_analysis(chunk, width, entry, |ip, op, set, check| {
         match op {
-            Op::GetLocal(i) if (*i as usize) < width && !set.has(*i as usize) => {
+            Op::GetLocal(i) if check && (*i as usize) < width && !set.has(*i as usize) => {
                 return Err(local_error(chunk, ip, *i));
             }
             Op::SetLocal(i) => set.set(*i as usize),

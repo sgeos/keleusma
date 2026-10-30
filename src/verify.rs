@@ -3831,7 +3831,13 @@ pub(crate) mod tests {
             constants: alloc::vec![crate::bytecode::ConstValue::Int(0)],
             struct_templates: Vec::new(),
             local_count,
-            param_count: 0,
+            // A stream or reentrant fixture reads slot 0 as its entry
+            // parameter, as the comment above says, so it declares one. The
+            // definite-initialization rule refuses a read of a local that no
+            // path writes, and a parameter is written on entry.
+            param_count: u8::from(
+                local_count > 0 && matches!(block_type, BlockType::Stream | BlockType::Reentrant),
+            ),
             block_type,
             param_types: Vec::new(),
             debug_pool: None,
