@@ -936,6 +936,115 @@ fn check_multiword_dim_range(
     Ok(())
 }
 
+/// Admit `"..." as Text<N>` and nothing else that targets `Text<N>`.
+///
+/// The operand must be a string literal written at the cast site. That is the
+/// one source of static text whose content the compiler holds, and holding the
+/// content is what makes the refusal below a decision made with full
+/// information. A constant data field of type `Text` is also static, but
+/// admitting it would route the cast through the const-data machinery for no
+/// gain in this increment, so it is refused with the same message as any other
+/// operand.
+///
+/// **REFUSE WHAT IS STATIC.** The operator ruled on 2026-08-31 that a
+/// statically too narrow assignment is a compile error rather than a
+/// truncation, and the ruling of 2026-10-30 applies it to the literal cast. The
+/// length is counted in UTF-8 bytes, because `N` counts content bytes and a
+/// multibyte character occupies several of them.
+///
+/// A symbolic capacity is admitted here and checked again after
+/// monomorphization, when the re-typecheck sees the literal it became. The
+/// compiler repeats the comparison at emission as a backstop, so a skipped
+/// re-typecheck still cannot emit a body longer than its capacity.
+fn check_text_literal_cast(
+    operand: &Expr,
+    cap: &ConstDim,
+    from_ty: &Type,
+    span: Span,
+) -> Result<(), TypeError> {
+    let Expr::Literal {
+        value: Literal::String(text),
+        ..
+    } = operand
+    else {
+        return Err(TypeError::new(
+            format!(
+                "cannot cast {} to Text<{cap}>: only a string literal may be cast to a \
+                 capacity-bounded text, because its length must be known at compile time",
+                from_ty.display()
+            ),
+            span,
+        ));
+    };
+    if let Some(n) = cap.known() {
+        let bytes = text.len();
+        // A capacity that does not fit `usize` exceeds every literal, so the
+        // comparison is made in `i64` and cannot truncate.
+        if i64::try_from(bytes).map_or(true, |b| b > n) {
+            return Err(TypeError::new(
+                format!(
+                    "string literal of {bytes} bytes does not fit in Text<{n}>: a literal \
+                     longer than the capacity is refused rather than truncated"
+                ),
+                span,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Whether a value of type `t` carries a `Text<N>` anywhere in its body.
+///
+/// Used to refuse the operations this increment does not build, which today is
+/// comparison. Named types are expanded through the struct, enum and newtype
+/// tables. The walk is an explicit worklist with a visited set of type names,
+/// so it terminates on a recursive type definition and visits each named type
+/// once. A type variable answers `false`, because the comparison it guards is
+/// decided again on the post-monomorphization re-typecheck, where the variable
+/// has become concrete.
+fn type_contains_text_capacity(ctx: &Ctx, t: &Type) -> bool {
+    let mut pending: Vec<&Type> = alloc::vec![t];
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    while let Some(next) = pending.pop() {
+        match next {
+            Type::TextN(_) => return true,
+            Type::Tuple(items) => pending.extend(items.iter()),
+            Type::Array(inner, _) | Type::Option(inner) | Type::Labelled(inner, _) => {
+                pending.push(inner)
+            }
+            Type::Struct(name, args) | Type::Enum(name, args) => {
+                pending.extend(args.iter());
+                if seen.insert(name.as_str()) {
+                    if let Some(fields) = ctx.structs.get(name) {
+                        pending.extend(fields.values());
+                    }
+                    if let Some(variants) = ctx.enums.get(name) {
+                        pending.extend(variants.values().flatten());
+                    }
+                }
+            }
+            Type::Newtype(name) => {
+                if seen.insert(name.as_str())
+                    && let Some(underlying) = ctx.newtypes.get(name)
+                {
+                    pending.push(underlying);
+                }
+            }
+            Type::Byte
+            | Type::Word
+            | Type::Fixed(_)
+            | Type::Float
+            | Type::Bool
+            | Type::Unit
+            | Type::Str
+            | Type::Multiword(_, _)
+            | Type::Opaque(_)
+            | Type::Var(_) => {}
+        }
+    }
+    false
+}
+
 /// Reject a fixed-size array whose length resolves to a non-positive literal
 /// (audit C11). A zero-length array can never be indexed without trapping and
 /// occupies no storage, so it is a degenerate type with no legitimate use; a
@@ -969,35 +1078,27 @@ fn check_array_len_positive(ce: &crate::ast::ConstExpr) -> Result<(), TypeError>
 /// that the signature, parameter, and data-field positions already enforced.
 fn check_composite_dimensions(t: &TypeExpr) -> Result<(), TypeError> {
     match t {
-        // Text<N> IS REFUSED HERE, and this is the refusal that binds. The
-        // type surface parses and resolves, so a program naming it gets a
-        // message about the feature rather than about an unknown type -- but
-        // no program compiles, because nothing generates code for it.
+        // A `Text<N>` capacity follows the array rule, because the capacity IS
+        // the length of the content array in the flat layout. A literal below
+        // one is refused here with a message naming the type. A symbolic
+        // capacity is skipped and re-checked on the post-monomorphization
+        // re-typecheck, where it has become a literal. A symbolic capacity that
+        // survives monomorphization is refused by the compiler, which is the
+        // stage that would otherwise have to guess a size.
         //
         // **THE REASON A REFUSAL GIVES DECAYS FASTER THAN THE REFUSAL DOES.**
-        // This one said "the layout is not built" and stayed there after the
-        // layout landed; the zero-value pass carried the same sentence two
-        // commits past the same event. The refusals were still correct and
-        // their justifications were not, which is the dangerous combination: a
-        // refusal carrying a REASON reads as a considered decision, so the next
-        // reader honours it instead of checking whether it still holds, while a
-        // bare rejection would have invited the check.
-        //
-        // **So when an increment lands a capability, grep the refusals for the
-        // name of what you just built.** State what is MISSING rather than
-        // enumerating what is absent-so-far: a list of missing things shrinks
-        // by one per increment and is wrong immediately, whereas naming the
-        // remaining gap stays true until that gap closes.
-        //
-        // Each later increment removes one refusal. The compiler enumerates
-        // what remains; no comment has to claim it.
-        TypeExpr::TextN(_, span) => Err(TypeError::new(
-            alloc::string::String::from(
-                "Text<N> is not implemented beyond the type surface: no code is generated \
-                 for it and its operations are not built yet",
-            ),
-            *span,
-        )),
+        // The blanket refusal that stood here said the type was not built, and
+        // it was retired by the increment that built the value representation
+        // and the literal cast. When an increment lands a capability, grep the
+        // refusals for the name of what was built, and state what remains
+        // MISSING rather than what is absent so far.
+        TypeExpr::TextN(cap, span) => match cap {
+            crate::ast::ConstExpr::Lit(n, _) if *n < 1 => Err(TypeError::new(
+                alloc::format!("Text<{n}> is not a legal type: a text capacity must be positive"),
+                *span,
+            )),
+            _ => Ok(()),
+        },
         TypeExpr::Array(elem, len, _) => {
             check_array_len_positive(len)?;
             check_composite_dimensions(elem)
@@ -4303,6 +4404,18 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
                 }
                 None => value_ty,
             };
+            // A `let` pattern is bound without being checked against the value's
+            // type, so `let (a, b) = t` over a `Text<N>` would bind two fresh
+            // variables and then fault at runtime on the flat body. The pattern
+            // is checked here when the value carries a capacity-bounded text,
+            // which refuses destructuring of the text itself while admitting a
+            // tuple pattern that binds a `Text<N>` element whole. The check is
+            // confined to such values so that no program accepted before this
+            // increment changes behaviour.
+            let applied = bound_ty.apply(&ctx.subst);
+            if type_contains_text_capacity(ctx, &applied) {
+                check_pattern_against_type(ctx, &let_stmt.pattern, &strip_labels(applied))?;
+            }
             bind_pattern(ctx, &let_stmt.pattern, bound_ty);
             Ok(())
         }
@@ -4662,6 +4775,28 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 .collect();
             let lt = strip_labels(lt_raw);
             let rt = strip_labels(rt_raw);
+            // Comparison of a capacity-bounded text is an operation of the
+            // operations increment and is refused until it lands. Without this
+            // refusal the general composite rule admits `t == t` and `t < t`,
+            // and both then fault at runtime, which is a program that verifies
+            // and cannot run. A composite that merely contains a `Text<N>` is
+            // refused for the same reason.
+            if matches!(
+                op,
+                BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq
+            ) && (type_contains_text_capacity(ctx, &lt.apply(&ctx.subst))
+                || type_contains_text_capacity(ctx, &rt.apply(&ctx.subst)))
+            {
+                return Err(TypeError::new(
+                    format!(
+                        "cannot compare {} and {}: comparison of a capacity-bounded text is not \
+                         available yet",
+                        lt.display(),
+                        rt.display()
+                    ),
+                    *span,
+                ));
+            }
             // Shift operators. The value being shifted is a Word, Byte, or
             // Multiword<N, F>, and the shift amount is a Word, so the two
             // operands are asymmetric and the shift is handled before the
@@ -5749,6 +5884,26 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             let from_labels = labels_of(&from_ty_raw);
             let from_ty = strip_labels(from_ty_raw);
             let to_ty = strip_labels(to_ty_raw);
+            // `Text<N>` admits exactly one cast in this increment, the literal
+            // cast, and it is decided before the general dispatch so that no
+            // later arm can admit another. The identity arm and the type
+            // variable arm below would otherwise accept `t as Text<8>` for a
+            // `t` that is not a literal.
+            if let Type::TextN(cap) = &to_ty {
+                check_text_literal_cast(expr, cap, &from_ty, *span)?;
+                return Ok(apply_labels(to_ty.clone(), &from_labels));
+            }
+            if let Type::TextN(_) = &from_ty {
+                return Err(TypeError::new(
+                    format!(
+                        "cannot cast {} to {}: the only cast involving a capacity-bounded text \
+                         is from a string literal to `Text<N>`",
+                        from_ty.display(),
+                        to_ty.display()
+                    ),
+                    *span,
+                ));
+            }
             // Newtype <-> underlying extraction. A newtype value
             // can be cast to its underlying type (extraction); a
             // value of the underlying type can be cast to the
@@ -7925,15 +8080,14 @@ mod tests {
     /// is a flat length-plus-bytes composite. A value of one is not a value of the
     /// other, so unifying them would admit a read of the wrong shape.
     ///
-    /// # Why this is tested HERE and not through a source program
+    /// # Why this is tested HERE as well as through a source program
     ///
-    /// It cannot be reached from source. The compiler refuses `Text<N>` in every
-    /// declaration position, and that refusal runs BEFORE the type checker, so no
-    /// program can drive these arms. **A rule with no reachable test is a rule that
-    /// will be broken silently**, and the alternative -- waiting until the refusal
-    /// is lifted to write the test -- leaves the interval where it is unguarded
-    /// exactly as long as the interval where it is unverified. Calling `unify`
-    /// directly closes that gap now.
+    /// It was written while the compiler refused `Text<N>` in every declaration
+    /// position, so no program could drive these arms, and calling `unify`
+    /// directly was the only reachable test. The literal-cast increment made the
+    /// arms reachable from source, and `tests/textn_literal.rs` now drives the
+    /// mismatch through a `let` annotation. This direct test is kept because it
+    /// pins the rule at the unifier, independently of any surface that reaches it.
     #[test]
     fn a_capacity_unifies_only_with_the_same_capacity() {
         let mut s = Subst::new();

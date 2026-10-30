@@ -10364,6 +10364,115 @@ fn name_unsupported_construct(src: &str) -> Option<(String, u32)> {
         .map(|(line, _, what)| (what, line))
 }
 
+/// The line of the first `Text<N>` the source names in any type position, or `None`.
+///
+/// The stages under `kel/` do not lower `Text<N>`. Left to them, a program naming it
+/// reached four different outcomes depending on where the type appeared. A parameter
+/// diverged on the module signature, a cast was rejected by the parser stage, a `let`
+/// annotation left the type evidence unavailable, and a struct field that no code used
+/// compiled. Only the first and last of these were even arguably correct. Refusing at
+/// the shipping entry, before any stage runs, makes the outcome one clean refusal that
+/// names the construct, and it stays correct when the reference later accepts more of
+/// the type, because the refusal does not depend on what the reference decides.
+///
+/// A source the reference parser rejects answers `None`, so the existing rejection
+/// paths classify it exactly as before.
+fn first_text_capacity_line(src: &str) -> Option<u32> {
+    use crate::ast::{Expr, Stmt, TypeDef, TypeExpr};
+    use crate::visitor::Visitor;
+
+    fn type_line(te: &TypeExpr) -> Option<u32> {
+        match te {
+            TypeExpr::TextN(_, span) => Some(span.line),
+            TypeExpr::Array(inner, _, _)
+            | TypeExpr::Option(inner, _)
+            | TypeExpr::Labelled(inner, _, _)
+            | TypeExpr::NegativeLabelled(inner, _, _) => type_line(inner),
+            TypeExpr::Tuple(items, _) | TypeExpr::Named(_, items, _, _) => {
+                items.iter().filter_map(type_line).min()
+            }
+            TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => None,
+        }
+    }
+
+    struct Scan {
+        lines: Vec<u32>,
+    }
+    impl Scan {
+        fn note(&mut self, te: &TypeExpr) {
+            if let Some(line) = type_line(te) {
+                self.lines.push(line);
+            }
+        }
+    }
+    impl Visitor for Scan {
+        fn visit_expr(&mut self, e: &Expr) {
+            if let Expr::Cast { target, .. } = e {
+                self.note(target);
+            }
+            self.walk_expr(e);
+        }
+        fn visit_stmt(&mut self, s: &Stmt) {
+            if let Stmt::Let(l) = s
+                && let Some(te) = &l.type_expr
+            {
+                self.note(te);
+            }
+            self.walk_stmt(s);
+        }
+    }
+
+    let program = parse(&tokenize(src).ok()?).ok()?;
+    let mut scan = Scan { lines: Vec::new() };
+    let note_fn = |scan: &mut Scan, f: &crate::ast::FunctionDef| {
+        scan.note(&f.return_type);
+        for p in &f.params {
+            if let Some(te) = &p.type_expr {
+                scan.note(te);
+            }
+        }
+        scan.visit_block(&f.body);
+    };
+    for f in &program.functions {
+        note_fn(&mut scan, f);
+    }
+    for b in &program.impls {
+        for m in &b.methods {
+            note_fn(&mut scan, m);
+        }
+    }
+    for t in &program.traits {
+        for m in &t.methods {
+            scan.note(&m.return_type);
+            for p in &m.params {
+                if let Some(te) = &p.type_expr {
+                    scan.note(te);
+                }
+            }
+        }
+    }
+    for td in &program.types {
+        match td {
+            TypeDef::Struct(s) => s.fields.iter().for_each(|f| scan.note(&f.type_expr)),
+            TypeDef::Enum(e) => e
+                .variants
+                .iter()
+                .for_each(|v| v.fields.iter().for_each(|t| scan.note(t))),
+            TypeDef::Newtype(n) => scan.note(&n.underlying),
+        }
+    }
+    for d in &program.data_decls {
+        d.fields.iter().for_each(|f| scan.note(&f.type_expr));
+    }
+    for u in &program.uses {
+        if let Some(sig) = &u.signature {
+            scan.note(&sig.return_type);
+            sig.params.iter().for_each(|t| scan.note(t));
+        }
+    }
+    scan.lines.into_iter().min()
+}
+
 /// Compile a whole program with the self-hosted pipeline, returning a self-hosted-built
 /// [`Module`] for an in-subset program at the host target.
 ///
@@ -10387,6 +10496,18 @@ pub fn self_hosted_compile(
         || target.float_bits_log2 != host.float_bits_log2
     {
         return Err(SelfHostError::NonHostTarget);
+    }
+    // A `Text<N>` program is refused before any stage runs. The reference is consulted
+    // first so that a program it rejects, such as a literal longer than its capacity,
+    // reports that rejection rather than a subset limit that would send the user to a
+    // backend which rejects it too.
+    if let Some(line) = first_text_capacity_line(src) {
+        compile_reference(src)?;
+        return Err(SelfHostError::Unsupported {
+            detail: format!(
+                "a capacity-bounded `Text<N>` at line {line} is outside the self-hosted subset"
+            ),
+        });
     }
     // Obtain an independent verdict before the reference sees the source. Unknown facts
     // still require the reference gate, but cannot mask rejection-stage coverage tests.

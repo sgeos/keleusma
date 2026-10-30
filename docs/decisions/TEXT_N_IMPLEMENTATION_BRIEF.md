@@ -91,9 +91,15 @@ Four increments are merged. **Do not re-plan them; read what they settled.**
 | 2 | The flat layout | `Tuple([Scalar(Int), Array{Byte, N}])`, sized exactly `word_bytes + N`, no new descriptor variant, no opcode |
 | 3 | A distinct nominal type in the checker | `Type::TextN(ConstDim)`; **five** match sites, all in `typecheck.rs`, measured by the compiler |
 | 4 | The zero value | A zero length word followed by `N` zero bytes, cross-checked against the layout |
+| 5 | Emission and the literal cast, 2026-10-30 | One pooled constant per cast. Recorded in [`TEXT_CAPACITY_TYPE.md`](./TEXT_CAPACITY_TYPE.md#the-literal-cast-increment-landed-2026-10-30) |
 
 **Three refusals remain, and all three are correct.** One in `check_composite_dimensions`, one in the
 whole-program guard, one in data-field validation. They stay until code is generated.
+
+**Increment 5 retired the blanket form of all three on 2026-10-30.** What each now refuses is
+narrower and is recorded in the design record. The `ScalarKind::Text` collapse described above did
+NOT ride with emission. It is a wire format change, and that increment was instructed to make none,
+so the collapse still needs the operator's decision before publication.
 
 ## The next increment is EMISSION, and it is the gate for everything else
 

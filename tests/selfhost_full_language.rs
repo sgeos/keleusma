@@ -2048,10 +2048,17 @@ const AST_CENSUS: &[(&str, &str, Class)] = &[
         "fn main(a: Multiword<2>) -> Multiword<2> { a }",
         Identical,
     ),
+    // The reference admits `Text<N>` since the literal-cast increment, and the stages do
+    // not lower it, so the shipping entry refuses it as unsupported before any stage runs.
     (
         "TypeExpr::TextN",
         "fn main(a: Text<8>) -> Word { 1 }",
-        RefRejects,
+        Unsupported,
+    ),
+    (
+        "TypeExpr::TextN::LiteralCast",
+        "fn main() -> Text<8> { \"abc\" as Text<8> }",
+        Unsupported,
     ),
     (
         "TypeExpr::Labelled",
