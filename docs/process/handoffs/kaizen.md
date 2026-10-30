@@ -153,8 +153,12 @@ Pilot judgments never change gates.
 
 ## Environment
 
-- Run `git fetch`, `git push` and `git ls-remote` outside the sandbox, which cannot
-  read the known hosts file. A compound git command stays sandboxed and fails.
+- Fetch, push and `ls-remote` over HTTPS inside the sandbox, the K12 route adopted on
+  2026-10-30, with `-c 'credential.https://github.com.helper=!gh auth git-credential'`
+  before the subcommand, the URL `https://github.com/sgeos/keleusma.git` and the hosts
+  `github.com` and `api.github.com` allowed. It worked first on 2026-10-30 and changes
+  no configuration. The SSH remote still needs the sandbox off, because the sandbox
+  cannot read the known hosts file.
 - The pre-push hook can pass the full gate and then exit 141 without the push landing.
   Confirm with `git ls-remote` and re-push the identical tree with `--no-verify`.
 - `sccache` fails inside the sandbox. Build with an empty `RUSTC_WRAPPER` and an
