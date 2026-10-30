@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The wrapping default of a checked arithmetic construct is typed.** An
+  outcome class with no unguarded catch-all arm falls to the wrapping default,
+  which yields the operation's own value, but the type checker never compared
+  the construct's type with the operand's. `fn main(x: Word) -> bool { x + 1 {
+  ok(v) => v > 0 } }` was admitted and returned a `Word` from a `bool`
+  function on overflow. Such a construct is now refused unless it produces
+  the operand's type. When unguarded catch-all arms cover every class that can
+  arise and no zero-divisor trap is pending, the default cannot run. Both
+  compilers then omit the last arm's class test and the default, so the
+  construct's value has only the arms' kind and no trap is added. This
+  changes bytecode for covered constructs and adds no opcode. An `underflow` arm is now admissible on `Fixed` division, where the
+  virtual machine already set that flag. Pinned by
+  `tests/checked_wrap_default.rs`.
+
+- **A registered trust matrix governs the in-memory hot swap too.** With the
+  `signatures` feature and a verifying key registered, `Vm::replace_module`
+  and `Vm::replace_module_unchecked` accepted an unsigned in-memory module,
+  although `Vm::replace_module_from_bytes` refused unsigned bytes in the same
+  state. Both now return `LoadError::InvalidSignature` and keep the running
+  module. A host that means to swap an in-memory module clears the matrix
+  first with `Vm::clear_verifying_keys`. Reported by the pykeleusma line.
+
 - **A cast to the operand's own primitive type is identity.** The reference
   compiler lowered `Word as Word` to `FloatToInt`, `Float as Float` to
   `IntToFloat`, `Byte as Byte` to `WordToByte` and `Fixed as Fixed` to
@@ -60,6 +82,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   empty slice is safe and rejects constant strings rather than trusting them.
 
 ### Added
+
+- **`hosted::seeded_shared` and `hosted::protocol`.** The shared buffer of
+  `interp.kel` seeded for an admitted program, exactly as `Interpreter::run`
+  seeds it, and the command and status constants of the interpreter's
+  protocol. Another executor of `interp.kel`, such as a native build of it,
+  can now drive a program with the same encoder. `Interpreter` uses the
+  constants itself. Pinned by `tests/hosted_seed.rs`. Requested by the V0.3.X
+  line for its seeded `interp.kel` differential.
 
 - **The cryptographic framing in Keleusma, Order 5.** `src/crypto_frame/frame.kel` decides the
   signed and encrypted header layouts, the metadata blocks, the bytes a signature covers, every

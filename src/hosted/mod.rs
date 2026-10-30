@@ -24,7 +24,7 @@ use crate::bytecode::{
     TupleField, TypeTag, Value,
 };
 use crate::value_layout::{CompositeKind, ScalarKind};
-use crate::vm::{Vm, VmError, VmState, required_persistent_capacity_for};
+use crate::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmError, VmState, required_persistent_capacity_for};
 
 /// The interpreter's source, embedded so the driver needs no filesystem access.
 pub const INTERP_SOURCE: &str = include_str!("interp.kel");
@@ -50,6 +50,33 @@ pub mod caps {
     pub const BODY: usize = 256;
     /// Data slots.
     pub const DATA: usize = 256;
+}
+
+/// The commands `interp.kel` reads from its stream input, and the statuses it yields.
+///
+/// These are the protocol [`Interpreter`] speaks. They are public so that another executor of
+/// `interp.kel`, such as a native build of it, can drive a seeded program with the same
+/// encoder. See [`seeded_shared`].
+pub mod protocol {
+    /// Begin the loaded program at its entry chunk.
+    pub const START: i64 = 1;
+    /// Run one more tick of the program.
+    pub const CONTINUE: i64 = 2;
+    /// Resume a yielded or reset program with the input in `io.res_t` and `io.res_w`.
+    pub const RESUME: i64 = 3;
+
+    /// The tick ended with the program still running.
+    pub const RUNNING: i64 = 0;
+    /// The program returned. The value is in the output slots.
+    pub const FINISHED: i64 = 1;
+    /// The program yielded. The value is in the output slots.
+    pub const YIELDED: i64 = 2;
+    /// The program trapped. The kind is in `io.out_kind`.
+    pub const TRAPPED: i64 = 3;
+    /// The interpreter refused an operation of the program. The code is in `io.out_fault`.
+    pub const FAULT: i64 = 4;
+    /// A stream iteration ended with a reset.
+    pub const RESET: i64 = 5;
 }
 
 /// The interpreter's instruction tags. Kept in lockstep with the `match` in `step` in
@@ -945,7 +972,7 @@ impl<'arena> Interpreter<'arena> {
         max_ticks: u64,
     ) -> Result<Run, VmError> {
         self.load(adm, args)?;
-        let status = self.send(1)?;
+        let status = self.send(protocol::START)?;
         self.drive(status, max_ticks)
     }
 
@@ -958,7 +985,7 @@ impl<'arena> Interpreter<'arena> {
         })?;
         self.set(self.slots.res_t, t)?;
         self.set(self.slots.res_w, w)?;
-        let status = self.send(3)?;
+        let status = self.send(protocol::RESUME)?;
         self.drive_from(status, max_ticks, 1)
     }
 
@@ -972,18 +999,18 @@ impl<'arena> Interpreter<'arena> {
         max_ticks: u64,
         mut ticks: u64,
     ) -> Result<Run, VmError> {
-        while status == 0 && ticks < max_ticks {
-            status = self.send(2)?;
+        while status == protocol::RUNNING && ticks < max_ticks {
+            status = self.send(protocol::CONTINUE)?;
             ticks += 1;
         }
         let steps = self.get(self.slots.steps)? as u64;
         let max_iteration_steps = self.get(self.slots.max_iter)? as u64;
         let outcome = match status {
-            0 => Outcome::OutOfTicks,
-            1 => Outcome::Finished(self.output()?),
-            2 => Outcome::Yielded(self.output()?),
-            5 => Outcome::Reset,
-            3 => {
+            protocol::RUNNING => Outcome::OutOfTicks,
+            protocol::FINISHED => Outcome::Finished(self.output()?),
+            protocol::YIELDED => Outcome::Yielded(self.output()?),
+            protocol::RESET => Outcome::Reset,
+            protocol::TRAPPED => {
                 let kind = self.get(self.slots.out_kind)?;
                 let (index, bound) = if kind == 8 {
                     (
@@ -995,7 +1022,7 @@ impl<'arena> Interpreter<'arena> {
                 };
                 Outcome::Trapped { kind, index, bound }
             }
-            4 => Outcome::Fault(self.get(self.slots.out_fault)?),
+            protocol::FAULT => Outcome::Fault(self.get(self.slots.out_fault)?),
             other => {
                 return Err(VmError::TypeError(format!("interp.kel status {other}")));
             }
@@ -1028,6 +1055,33 @@ impl<'arena> Interpreter<'arena> {
         };
         value.ok_or_else(|| VmError::TypeError(format!("interp.kel output tag {t} word {w}")))
     }
+}
+
+/// The shared buffer of `interp.kel` seeded for `adm` with `args`, exactly as
+/// [`Interpreter::run`] seeds it before its first command.
+///
+/// The buffer is laid out for `interp`, which must be the module [`interpreter_module`]
+/// returns, and every other slot holds its zero default. Sending [`protocol::START`] to an
+/// executor of `interp` over this buffer begins the program.
+///
+/// # Errors
+///
+/// The same as [`Interpreter::run`]'s seeding: more arguments than the interpreter holds, a
+/// composite argument larger than its heap, or a module that is not `interp.kel`.
+pub fn seeded_shared(
+    interp: &Module,
+    adm: &Admitted,
+    args: &[HostedValue],
+) -> Result<Vec<u8>, VmError> {
+    let persistent = interpreter_persistent_bytes(interp);
+    let mut arena = Arena::try_with_capacity(DEFAULT_ARENA_CAPACITY + persistent)
+        .map_err(|e| VmError::InvalidBytecode(format!("seeding arena: {e:?}")))?;
+    arena
+        .resize_persistent(persistent)
+        .map_err(|e| VmError::InvalidBytecode(format!("seeding arena: {e:?}")))?;
+    let mut interpreter = Interpreter::new(interp.clone(), &arena)?;
+    interpreter.load(adm, args)?;
+    Ok(core::mem::take(&mut interpreter.shared))
 }
 
 /// The Rust virtual machine's outcome for a run, in the interpreter's terms, so the two can be
