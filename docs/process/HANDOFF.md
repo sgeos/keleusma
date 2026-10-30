@@ -1222,7 +1222,7 @@ next number. Both are corrected.
     they hold the runtime defect this session found: a width below the narrowest implemented one is
     refused at COMPILE time, naming the field, rather than surfacing later as a composite fault. If
     the document is missing, this file predates the sixteenth increment.
-17. `tests/target_descriptor_axis.rs` passes. It sweeps every target descriptor the compiler accepts
+17. The four files `tests/target_descriptor_axis_i8.rs`, `_i16.rs`, `_i32.rs` and `_i64.rs` pass. They replaced `tests/target_descriptor_axis.rs` on 2026-10-30, one per runtime word type, and share `tests/target_descriptor_axis/harness.rs`. Together they sweep every target descriptor the compiler accepts
     against fourteen shapes, on sixteen word-address runtime pairs and both float runtimes, and
     checks the cells that LOAD against the loader's documented rule evaluated independently. A
     failure is more likely a changed descriptor space than a defect, and its message says which.
