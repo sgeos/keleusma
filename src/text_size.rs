@@ -334,6 +334,20 @@ pub fn analyze_chunk_text(chunk: &Chunk, callee_returns_text: &[bool]) -> ChunkT
 /// flow, so an accumulation `s = s + x` or a comparison of two such values is
 /// rejected.
 pub fn chunk_text_wcet_cycles(chunk: &Chunk, text_byte_cycles: u32) -> alloc::vec::Vec<u32> {
+    chunk_text_wcet_cycles_with_callees(chunk, text_byte_cycles, &[])
+}
+
+/// [`chunk_text_wcet_cycles`] with each callee's text-ness known, indexed by chunk.
+///
+/// A call to a chunk recorded as returning no text pushes a non-text value, so a comparison of
+/// two such results bears no length term. Without it every call result is conservatively
+/// unbounded text, and `a() != b()` over two `Word` results is reported unboundable, which the
+/// self-hosted lexer's `intern_id` hit. An index past the slice keeps the conservative default.
+pub fn chunk_text_wcet_cycles_with_callees(
+    chunk: &Chunk,
+    text_byte_cycles: u32,
+    callee_returns_text: &[bool],
+) -> alloc::vec::Vec<u32> {
     let mut state = TextAnalysis::new(chunk.local_count as usize);
     let mut out: alloc::vec::Vec<u32> = alloc::vec::Vec::with_capacity(chunk.ops.len());
     let mut loop_depth: u32 = 0;
@@ -345,7 +359,13 @@ pub fn chunk_text_wcet_cycles(chunk: &Chunk, text_byte_cycles: u32) -> alloc::ve
             _ => {}
         }
         let conservative = loop_depth > 0 || branch_depth > 0;
-        out.push(state.apply_op_wcet(op, chunk, conservative, text_byte_cycles));
+        out.push(state.apply_op_wcet(
+            op,
+            chunk,
+            conservative,
+            text_byte_cycles,
+            callee_returns_text,
+        ));
         match op {
             Op::EndLoop(_) => loop_depth = loop_depth.saturating_sub(1),
             Op::EndIf => branch_depth = branch_depth.saturating_sub(1),
@@ -649,6 +669,7 @@ impl TextAnalysis {
         chunk: &Chunk,
         conservative: bool,
         text_byte_cycles: u32,
+        callee_returns_text: &[bool],
     ) -> u32 {
         let sat = |size: TextSize| -> TextSize {
             if conservative {
@@ -716,11 +737,11 @@ impl TextAnalysis {
             }
             // Every other op carries no text length; reuse the shared stack
             // discipline (which saturates loop-carried values as today) and
-            // contribute zero cycles. `callee_returns_text` is empty here, so a
-            // Call result is conservatively `Unbounded`, which a downstream text
-            // op then rejects.
+            // contribute zero cycles. A Call result is conservatively `Unbounded`
+            // unless `callee_returns_text` records the callee as returning no text,
+            // and an unbounded result is then rejected by a downstream text op.
             _ => {
-                let _ = self.apply_op(op, chunk, conservative, &[]);
+                let _ = self.apply_op(op, chunk, conservative, callee_returns_text);
                 0
             }
         }

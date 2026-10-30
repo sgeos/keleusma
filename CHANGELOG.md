@@ -23,6 +23,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   virtual machine already set that flag. Pinned by
   `tests/checked_wrap_default.rs`.
 
+- **A cast to the operand's own primitive type is identity.** The reference
+  compiler lowered `Word as Word` to `FloatToInt`, `Float as Float` to
+  `IntToFloat`, `Byte as Byte` to `WordToByte` and `Fixed as Fixed` to
+  `WordToFixed`. Each program compiled and verified and then failed at run time
+  with a `TypeError`. These casts now emit nothing, as a newtype cast already
+  did, and the self-hosted compiler matches for the `Word` and `Byte` forms. A
+  source whose type the compiler cannot infer keeps the validated conversion.
+
+- **The module and whole-chunk verifier entries terminate on an unverified
+  module.** `module_runtime_footprint`, `module_wcmu`, `module_wcet_with_bounds`,
+  `wcmu_whole_chunk`, `wcet_whole_chunk` and `verify_resource_bounds` reached a
+  region walk without validating control-flow targets, and each hung on a
+  backward `If` operand. They now apply the forward-target check that the
+  stream entries and `verify` already apply, and refuse such a module. This is
+  a pykeleusma finding. The reported stack overflow was not reproduced, only
+  the hang. Pinned by `tests/verify_hostile_termination.rs`.
+
 - **A signed header over a short declared total is refused rather than
   panicking.** `verify_module_signature` read the signature metadata, the
   signature and the trailer at offsets fixed by the declared header without
