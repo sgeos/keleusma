@@ -259,6 +259,73 @@ impl FlatComposite {
         Ok(Some(Self::Arena(handle)))
     }
 
+    /// Move this body up to the top-region position `mark` and release every
+    /// top-region byte allocated since `mark` that the body does not occupy.
+    ///
+    /// Used by [`crate::bytecode::GenericValue::into_arena_canonical`] after a
+    /// nested host composite packs flat, when the bodies of its children,
+    /// already copied into this body, are dead. `used_at_mark` is
+    /// [`Arena::top_used`] read when `mark` was taken. When nothing but this
+    /// body was allocated since `mark`, or the body is empty, the body is
+    /// returned unchanged and nothing moves.
+    ///
+    /// The arena top head allocates downward with the one-byte alignment that
+    /// [`Arena::alloc_top_bytes`] requests and no per-allocation header, so
+    /// after the rewind a request of the body's length is placed at exactly
+    /// `mark` minus that length. The body was the most recent allocation, so
+    /// it lies at or below that position, and the move is a possibly
+    /// overlapping copy toward higher addresses, done with
+    /// [`core::ptr::copy`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AllocError`] if the body does not resolve under the current
+    /// epoch, which a body built since `mark` always does, or if the
+    /// reallocation fails, which cannot happen because it requests no more
+    /// than the bytes just released.
+    ///
+    /// # Safety
+    ///
+    /// No live reference may point into the top-region range allocated since
+    /// `mark`, other than this body itself. Every other allocation in that
+    /// range is released, and its storage is overwritten by the move.
+    pub unsafe fn compact_after(
+        self,
+        mark: keleusma_arena::TopMark,
+        used_at_mark: usize,
+        arena: &Arena,
+    ) -> Result<Self, AllocError> {
+        let len = self.byte_len();
+        let allocated = arena.top_used().saturating_sub(used_at_mark);
+        if len == 0 || allocated <= len {
+            return Ok(self);
+        }
+        // Check liveness under the current epoch, then take the handle's own
+        // raw pointer, which carries the allocation's provenance rather than
+        // that of a shared borrow the move below would outlive.
+        self.resolve(arena).map_err(|_| AllocError)?;
+        let Self::Arena(handle) = &self;
+        let src = handle.as_non_null().as_ptr() as *const u8;
+        // SAFETY: the caller guarantees that nothing allocated since `mark`
+        // is referenced except this body, whose bytes are read through `src`
+        // below before anything else can write to the released range.
+        unsafe { arena.rewind_top(mark) };
+        let dst = arena.alloc_top_bytes(len)?;
+        let dst_ptr = dst.as_ptr() as *mut u8;
+        // SAFETY: `src` and `dst_ptr` each address `len` bytes inside the
+        // arena buffer. The ranges may overlap, which `copy` permits. No
+        // other reference to either range is live.
+        unsafe { core::ptr::copy(src, dst_ptr, len) };
+        let raw: *mut [u8] = core::ptr::slice_from_raw_parts_mut(dst_ptr, len);
+        // SAFETY: `raw` is non-null because `dst_ptr` came from a successful
+        // arena allocation.
+        let nn = unsafe { NonNull::new_unchecked(raw) };
+        // SAFETY: `nn` references top-region storage allocated under the
+        // current epoch, now initialised with the body's bytes.
+        let handle = unsafe { ArenaHandle::from_raw_parts(nn, arena.epoch()) };
+        Ok(Self::Arena(handle))
+    }
+
     /// View a nested child composite occupying `[offset, offset + len)` of
     /// this body, without copying (B28 P3 item 5 C-residual 3b, B28 item 2 step
     /// 6B). A nested field access extracts the child body; for an `Arena`
