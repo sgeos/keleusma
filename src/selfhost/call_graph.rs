@@ -1,7 +1,8 @@
 //! Keleusma owns call-graph traversal and cycle detection. Rust transports opcode facts.
+use super::executor::{StageExecutor, stage_vm};
 use super::{SelfHostError, analyze_kel_module};
 use crate::bytecode::{Module, Op, Value};
-use crate::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
+use crate::vm::{DEFAULT_ARENA_CAPACITY, VmState, required_persistent_capacity_for};
 use alloc::{format, vec, vec::Vec};
 
 const FIELDS: [&str; 7] = [
@@ -45,14 +46,14 @@ fn call_order_with_stage(
     let persistent = required_persistent_capacity_for(&stage);
     let mut arena = crate::Arena::with_capacity(DEFAULT_ARENA_CAPACITY + persistent);
     arena.resize_persistent(persistent).map_err(unavailable)?;
-    let mut vm = Vm::new(stage, &arena).map_err(unavailable)?;
+    let mut vm = stage_vm(stage, &arena).map_err(unavailable)?;
     let mut shared = vec![0; vm.shared_data_bytes()];
-    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], field: usize, value: usize| {
+    let set = |vm: &dyn StageExecutor, shared: &mut [u8], field: usize, value: usize| {
         let value = i64::try_from(value).map_err(unavailable)?;
         vm.set_shared(shared, slots[field], Value::Int(value))
             .map_err(unavailable)
     };
-    let read = |vm: &Vm<'_, '_>, shared: &[u8], field: usize| match vm
+    let read = |vm: &dyn StageExecutor, shared: &[u8], field: usize| match vm
         .get_shared(shared, slots[field])
         .map_err(unavailable)?
     {

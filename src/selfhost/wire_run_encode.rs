@@ -37,7 +37,7 @@ pub(super) struct SlotRun {
 }
 
 pub(super) fn slot_runs(
-    schema: &mut Machine<'_, '_, '_>,
+    schema: &mut Machine<'_>,
     slots: &[DataSlot],
 ) -> Result<Vec<SlotRun>, SelfHostError> {
     // Every comparison window can be charged to an input name. The multiplier
@@ -156,7 +156,7 @@ pub(super) fn slot_runs(
 }
 
 pub(super) fn shared_runs(
-    schema: &mut Machine<'_, '_, '_>,
+    schema: &mut Machine<'_>,
     slots: &[SharedSlotLayout],
 ) -> Result<Vec<[i64; 7]>, SelfHostError> {
     let budget = slots

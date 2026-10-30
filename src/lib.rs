@@ -272,10 +272,13 @@ pub mod confine;
 #[cfg(feature = "verify")]
 pub mod verify_typed;
 
-/// Shared host-side driver for the self-hosted `.kel` stages, so the parse-record
-/// transport lives in one place instead of being copied into every consumer.
 #[cfg(all(feature = "compile", feature = "verify"))]
 pub mod selfhost_host;
+/// Shared host-side driver for the self-hosted `.kel` stages, so the parse-record
+/// transport lives in one place instead of being copied into every consumer.
+/// The operations a host performs on a running stage program, with the virtual machine as the
+/// reference implementation.
+pub mod stage_executor;
 
 pub use keleusma_arena::{
     Arena, ArenaHandle, BottomHandle, Budget, EpochSaturated, Stale, TopHandle,

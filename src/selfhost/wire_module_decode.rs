@@ -28,7 +28,7 @@ fn span(bytes: &[u8], start: usize, length: usize) -> Result<&[u8], SelfHostErro
         .get(start..end)
         .ok_or_else(|| error("stage selected an invalid input span"))
 }
-fn accept(vm: &mut Vm<'_, '_>, shared: &mut [u8], cmd: i64) -> Result<(), SelfHostError> {
+fn accept(vm: &mut dyn StageExecutor, shared: &mut [u8], cmd: i64) -> Result<(), SelfHostError> {
     if command(vm, shared, cmd)? != 0 {
         return Err(error("unexpected framing response"));
     }
@@ -44,7 +44,7 @@ struct Frame<'a> {
     persistent: u32,
 }
 fn frame<'a>(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     bytes: &'a [u8],
 ) -> Result<Frame<'a>, SelfHostError> {
@@ -90,7 +90,7 @@ fn frame<'a>(
 }
 
 fn checksum(
-    codec: &mut Vm<'_, '_>,
+    codec: &mut dyn StageExecutor,
     shared: &mut [u8],
     bytes: &[u8],
 ) -> Result<usize, SelfHostError> {
@@ -110,7 +110,7 @@ fn checksum(
     codec_command(codec, shared, 192)
 }
 fn pool_parity(
-    codec: &mut Vm<'_, '_>,
+    codec: &mut dyn StageExecutor,
     shared: &mut [u8],
     bytes: &[u8],
 ) -> Result<(), SelfHostError> {
