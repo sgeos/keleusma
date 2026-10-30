@@ -795,9 +795,10 @@ fn push_checked_arm_result(p: Word) -> Word {
         0
     }
 }
-fn push_checked_arm(arm: Word, flag: Word, scalar: Word) -> Word {
+// An unconditional arm, flagged 1, omits its class test and the If that test opens.
+fn push_checked_arm(arm: Word, flag: Word, scalar: Word, unconditional: Word) -> Word {
     let meta = ast.match_parts[arm]; let class = meta % 4;
-    push_emit(wire.mendif);
+    if unconditional == 0 { push_emit(wire.mendif); }
     if (meta / 8) % 2 == 1 { push_emit(wire.mendif); }
     if (meta / 16) % 2 == 1 { push_emit(wire.mendif); }
     push_work(13, ast.match_parts[arm + 3]);
@@ -809,7 +810,7 @@ fn push_checked_arm(arm: Word, flag: Word, scalar: Word) -> Word {
             orelse (scalar >= 8 andalso class == 1) { flag + 2 } else { flag + 1 } };
         push_checked_pattern(ast.match_parts[arm + 1], slot);
     }
-    push_checked_pattern(class, flag)
+    if unconditional == 1 { 0 } else { push_checked_pattern(class, flag) }
 }
 fn push_checked(p: Word) -> Word {
     if ast.kinds[ast.lhs[p]] == 15 { push_checked_store(p) } else {
@@ -862,7 +863,7 @@ fn push_checked_store(p: Word) -> Word {
     checked_emit.offset = slot;
     checked_emit.arm = ast.match_parts[base + 1];
     for i in 0..ast.rhs[p] limit 50 {
-        let at = checked_emit.arm - 1; push_checked_arm(at, flag, 16);
+        let at = checked_emit.arm - 1; push_checked_arm(at, flag, 16, 0);
         checked_emit.arm = ast.match_parts[at + 4];
     }
     push_emit(wire.mloop);
@@ -899,15 +900,33 @@ fn push_checked_arithmetic(p: Word) -> Word {
     let unary = ast.kinds[root] == 10;
     let shift = not unary andalso op == 37;
     let constant = if shift { intern_int(1 lsl ast.args[ast.rhs[root]]) } else { 0 };
-    push_emit(wire.mendloop); push_emit(wire.mbreak);
-    push_emit(wire.getlocal + (flag + 1) * wire.radix);
+    // The outcome classes that can arise, as the reference's admissibility table gives them
+    // for Word and Byte, bit 1 for overflow and bit 2 for underflow. When unguarded
+    // catch-all arms cover all of them and no zero-divisor trap is pending, the reference
+    // drops the last arm's class test and the wrapping default, as
+    // typecheck::checked_wrap_default_reachable decides. The last arm is the first in the
+    // list, which is built by prepending, and its meta is below 4 when it is unguarded and
+    // has no literal.
+    let arises = if unary { 2 } else { if op == 5 { 0 } else { if op == 4 {
+        if scalar == 3 { 2 } else { 0 }
+    } else { if scalar == 3 { 6 } else { if op == 3 { 4 } else { 2 } } } } };
+    let covered = ast.match_parts[base + 3];
+    let pending = if not unary andalso (op == 4 orelse op == 5) { 8 - (covered band 8) } else { 0 };
+    let last_meta = ast.match_parts[ast.match_parts[base + 1] - 1];
+    let unconditional = if arises - (arises band covered) + pending == 0 andalso last_meta < 4 { 1 } else { 0 };
+    push_emit(wire.mendloop);
+    if unconditional == 0 {
+        push_emit(wire.mbreak);
+        push_emit(wire.getlocal + (flag + 1) * wire.radix);
+    }
     if not unary andalso (op == 4 orelse op == 5) andalso ast.match_parts[base + 3] band 8 == 0 {
         push_emit(wire.mendif); push_emit(wire.trap + 5 * wire.radix);
         push_checked_pattern(3, flag);
     }
     checked_emit.arm = ast.match_parts[base + 1];
     for i in 0..ast.rhs[p] limit 50 {
-        let at = checked_emit.arm - 1; push_checked_arm(at, flag, scalar);
+        let at = checked_emit.arm - 1;
+        push_checked_arm(at, flag, scalar, if i == 0 { unconditional } else { 0 });
         checked_emit.arm = ast.match_parts[at + 4];
     }
     push_emit(wire.mloop);
@@ -937,7 +956,7 @@ fn push_checked_index(p: Word) -> Word {
     }
     checked_emit.arm = ast.match_parts[base + 1];
     for i in 0..ast.rhs[p] limit 50 {
-        let at = checked_emit.arm - 1; push_checked_arm(at, flag, scalar + 8);
+        let at = checked_emit.arm - 1; push_checked_arm(at, flag, scalar + 8, 0);
         checked_emit.arm = ast.match_parts[at + 4];
     }
     push_emit(wire.mloop);
