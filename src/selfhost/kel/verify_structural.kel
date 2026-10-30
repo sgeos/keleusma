@@ -40,6 +40,7 @@
 //   * constant pool: `Const`/`IsStruct`/`GetField(Boxed)` index `< const_count`, and all three
 //     of `IsEnum`'s indices `< const_count`;
 //   * call target and arity: `Call` callee `< nchunks` and argument count `<= callee locals`;
+//   * native index: a native call names an entry `< native count`, carried in its operand;
 //   * fixed-point fraction bits: a Q-format `fb < word_bits`;
 //   * boxed struct/enum template: `NewComposite(Boxed)` meta index `< template_count`.
 //
@@ -292,8 +293,16 @@ fn check_opbounds(ip: Word) -> Word {
         }
         0
     } else {
+    if k == 9 {
+        // CallVerifiedNative or CallExternalNative(native = a), with the module's native count
+        // in b: an entry of the native table, rejected at admission since 2026-10-28.
+        if a >= b {
+            sd.bad = 1;
+        }
         0
-    } } } } } } } }
+    } else {
+        0
+    } } } } } } } } }
 }
 
 // Process one op at instruction pointer `ip` by its control-flow class.
