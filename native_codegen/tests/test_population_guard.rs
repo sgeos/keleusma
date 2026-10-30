@@ -101,7 +101,9 @@
 // step 3, 2026-10-30. No name disappeared.
 // 831 -> 832: `the_framing_stage_runs_natively_with_its_natives_bridged` in
 // `native_stage_factory.rs`, operator question 19. No name disappeared.
-const RECORDED_TEST_FUNCTIONS: usize = 832;
+// 832 -> 833: `a_replacement_changing_only_a_slot_type_is_refused_by_both_shapes`
+// in `native_hot_swap.rs`, operator question 8, 2026-10-30. No name disappeared.
+const RECORDED_TEST_FUNCTIONS: usize = 833;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

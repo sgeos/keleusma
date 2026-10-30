@@ -60,6 +60,11 @@ const V2: &str = "shared data io { total: Word } private data st { n: Word } \
 /// A renamed shared slot, which changes the schema.
 const V3: &str = "shared data io { sum: Word } private data st { n: Word } \
                   loop main(t: Word) -> Word { st.n = st.n + 1; io.sum = io.sum + t; yield io.sum + st.n }";
+/// The layout of [`V1`] with one shared slot's type changed and its name
+/// kept. Since absorption 119 the schema hash covers each slot's declared
+/// type, under operator question 8, so this alone changes the schema.
+const V4: &str = "shared data io { total: Fixed } private data st { n: Word } \
+                  loop main(t: Word) -> Word { st.n = st.n + 1; yield st.n * 1000 + t }";
 
 const FIRST: i64 = 5;
 const BEFORE: &[i64] = &[3, 4, 6];
@@ -354,6 +359,56 @@ fn a_replacement_with_another_schema_is_refused_by_both_shapes() {
         .unwrap();
     let mut vm = Vm::new(m1, &arena).unwrap();
     let error = vm.replace_module(m3, vec![Value::Int(0)]).unwrap_err();
+    assert!(
+        format!("{error:?}").contains("schema mismatch"),
+        "{error:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Operator question 8, the native half. A slot's type alone changes the
+/// schema, so a replacement that keeps every name and size is refused by the
+/// native host and by the virtual machine alike. The shared sizes are equal, so
+/// only the hash can refuse it.
+#[test]
+fn a_replacement_changing_only_a_slot_type_is_refused_by_both_shapes() {
+    let (m1, m4) = (common::build(V1), common::build(V4));
+    assert_eq!(
+        keleusma::vm::shared_data_bytes_for(&m1),
+        keleusma::vm::shared_data_bytes_for(&m4),
+        "the layouts must differ in a type only, or the size would refuse it"
+    );
+    // CONTROL: the untyped hash, names and visibility only, cannot tell the
+    // two apart, so the refusals below depend on the typed hash alone.
+    assert_eq!(
+        keleusma::bytecode::compute_schema_hash(m1.data_layout.as_ref()),
+        keleusma::bytecode::compute_schema_hash(m4.data_layout.as_ref()),
+        "the two layouts differ in more than a slot's type"
+    );
+    assert_ne!(
+        m1.schema_hash, m4.schema_hash,
+        "the schema hash no longer covers a slot's declared type"
+    );
+    let dir = scratch("refuse-type");
+    let (v1, v4) = (shared_object(V1, &dir, "v1"), shared_object(V4, &dir, "v4"));
+    let exe = host(&dir);
+    let out = Command::new(&exe)
+        .arg(&v1)
+        .arg(&v4)
+        .arg("refuse")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("REFUSED"),
+        "the native host accepted a replacement whose slot type changed: {out:?}"
+    );
+    let mut arena = keleusma_arena::Arena::with_capacity(1 << 20);
+    arena
+        .resize_persistent(required_persistent_capacity_for(&m1))
+        .unwrap();
+    let mut vm = Vm::new(m1, &arena).unwrap();
+    let error = vm.replace_module(m4, vec![Value::Int(0)]).unwrap_err();
     assert!(
         format!("{error:?}").contains("schema mismatch"),
         "{error:?}"

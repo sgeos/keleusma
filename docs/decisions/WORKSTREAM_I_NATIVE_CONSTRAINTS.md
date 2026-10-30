@@ -39,4 +39,4 @@ one has since been answered. The table above records the constraints as Order
 | Native WCET | Question 1. Best effort, in bytecode cost units |
 | The bytecode flat-machine ISA | Question 2. Deferred |
 | `RUNTIME_FAULTS.md` native defaults | Resolved. V0.2.X rewrote the specification in its pull request 598 |
-| `schema_hash` and slot types | V0.2.X's half is done. Since absorption 119 the hash covers each slot's declared type, and native hot swap adopting it is this line's work |
+| `schema_hash` and slot types | Resolved. Since absorption 119 the hash covers each slot's declared type, and native hot swap refuses a slot type change, as `native_hot_swap.rs` shows |
