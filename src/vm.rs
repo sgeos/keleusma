@@ -654,7 +654,8 @@ fn out_of_arena_push(region: &str, capacity: usize) -> VmError {
     VmError::OutOfArena(format!(
         "arena exhausted while growing the {} (capacity {} bytes). \
          Increase the arena, or compute a sufficient size with \
-         `auto_arena_capacity_for` plus a host-side margin.",
+         `auto_arena_capacity_for`, or with `auto_arena_capacity_with_input_text` \
+         when a composite input carries text.",
         region, capacity
     ))
 }
@@ -666,7 +667,7 @@ fn out_of_arena_min(capacity: usize) -> VmError {
         "arena capacity of {} bytes is too small to pre-reserve the \
          operand-stack and call-frame minimums ({} slots and {} frames). \
          Increase the arena capacity, or compute a sufficient size with \
-         `auto_arena_capacity_for` plus a host-side margin.",
+         `auto_arena_capacity_for`.",
         capacity, MIN_STACK_RESERVE_SLOTS, MIN_FRAMES_RESERVE
     ))
 }
@@ -911,52 +912,108 @@ fn decode_all_ops(bytes: &[u8]) -> Result<Vec<Vec<Op>>, VmError> {
     Ok(all_ops)
 }
 
-/// Compute the exact arena capacity (excluding the persistent `data`
-/// region) that the bundled `i64`/`f64` runtime needs to construct and
-/// run the given module under the supplied native attestations.
+/// Compute the arena capacity (excluding the persistent `data` region) that
+/// the bundled `i64`/`f64` runtime needs to construct the given module, run it
+/// under the supplied native attestations, and receive its host inputs.
 ///
-/// Because the runtime now pre-allocates its entire bottom-region working
-/// set at construction (B28 P3 item 5, priority 1), the figure is the sum
-/// of every component, each sized to the real bundled-runtime footprint:
+/// Because the runtime pre-allocates its entire bottom-region working set at
+/// construction (B28 P3 item 5, priority 1), the figure is the sum of every
+/// component, each sized to the real bundled-runtime footprint.
 ///
-/// - the operand stack, `max_operand_slots * size_of::<Value>()`;
-/// - the call frames, `max_frame_depth * size_of::<CallFrame>()`;
-/// - the opaque registry, `aux_arena_bytes`;
-/// - the per-iteration arena heap, `max_heap_bytes`.
+/// - The operand stack, `max_operand_slots * size_of::<Value>()`.
+/// - The call frames, `max_frame_depth * size_of::<CallFrame>()`.
+/// - The opaque registry, `aux_arena_bytes`.
+/// - The per-iteration arena heap, `max_heap_bytes`.
+/// - The host inputs of the entry chunk, [`host_input_arena_bytes_for`] with
+///   no text allowance.
 ///
 /// The operand-slot and frame-depth components are floored at the same
 /// minimums the constructor applies (`MIN_STACK_RESERVE_SLOTS`,
-/// `MIN_FRAMES_RESERVE`) so the reported figure exactly matches the
-/// reservation the constructor makes, letting a host size its arena with
-/// zero margin for the program's own use.
+/// `MIN_FRAMES_RESERVE`), so the first four components exactly match the
+/// reservation the constructor makes and the program's own peak.
 ///
-/// **Host inputs are not included.** A composite argument to the entry
-/// chunk, or a composite resume value, is copied into the arena's top
-/// region when it enters the VM, and that copy is not part of this figure.
-/// A host passing composites adds their flat sizes, once for the entry
-/// argument and once for each composite resume value an iteration can
-/// receive before its `Reset`. A scalar input needs nothing. A host that needs headroom (for example to call a `Func`
-/// chunk whose stack exceeds the Stream worst case) is already covered:
-/// the footprint is the module-wide maximum over every chunk.
+/// **Host inputs are included.** A composite argument to the entry chunk, and
+/// a composite resume value, is copied into the arena's top region when it
+/// enters the virtual machine, and the copy stays until the next `Reset`. An
+/// arena of exactly the returned size therefore admits `call` and every
+/// `resume` up to each `Reset`, for inputs of the declared types whose
+/// composites contain no `Text`. A scalar input needs nothing, so a module
+/// whose entry takes and resumes with scalars gets the same figure as before
+/// the inputs were counted. [`host_input_arena_bytes_for`] documents how the
+/// input term is bounded and where it is conservative.
+///
+/// **Text inside a composite input.** An owned `Text` field inside a
+/// composite input is copied into the arena as well, and its length is the
+/// host's string, which the module cannot bound. A host that passes such
+/// inputs calls [`auto_arena_capacity_with_input_text`] with its own bound on
+/// the text bytes in any one input value.
+///
+/// **Why one function rather than a companion.** A host that constructs a
+/// virtual machine also calls its entry, and a composite input it passes
+/// needs the space whether or not the figure counts it. A figure that omits
+/// that space is not a size that works, and no realistic host wants the
+/// smaller figure. The host inputs are therefore part of this function. The
+/// one input the module cannot bound, text inside a composite, is the only
+/// reason for the companion, which takes the host's allowance for it.
+///
+/// **Not covered.** A direct call of a non-entry chunk through
+/// `Vm::call_function` copies its composite arguments too, and is not counted.
+/// An input whose declared shape is not flat, which the module records as
+/// `WireShape::Top`, is not counted. A host-built value that does not conform
+/// to its declared type can occupy more than the declared size. Repeated calls
+/// of a non-`Stream` entry with no intervening `Reset` accumulate their
+/// argument copies, since only `Reset` reclaims the top region.
 ///
 /// **Slot width.** This entry point uses the bundled runtime's
 /// `size_of::<GenericValue<i64, f64>>()`, the common case. A narrow
 /// `GenericVm<W, A, F>` has a different slot width; such hosts size their
 /// arena from [`verify::module_runtime_footprint`] multiplied by their own
-/// `size_of::<GenericValue<W, F>>()`. Note this is *not*
-/// `bytecode::VALUE_SLOT_SIZE_BYTES` (32), which under-states the real
-/// 64-bit-runtime slot; the binding admission check in [`GenericVm::new`]
-/// already uses the real `size_of`, so that constant governs only the
-/// compile-time advisory header.
+/// `size_of::<GenericValue<W, F>>()`, plus [`host_input_arena_bytes_for`].
+/// Note this is *not* `bytecode::VALUE_SLOT_SIZE_BYTES` (32), which
+/// under-states the real 64-bit-runtime slot; the binding admission check in
+/// [`GenericVm::new`] already uses the real `size_of`, so that constant
+/// governs only the compile-time advisory header.
 ///
 /// Available only when the `verify` feature is enabled because the
 /// computation routes through [`verify::module_runtime_footprint`]. Hosts
 /// that build without the verifier must size arenas through a build-time
 /// analysis instead.
+///
+/// # Errors
+///
+/// Returns `VmError::VerifyError` when the program's own footprint cannot be
+/// bounded, and when the entry resumes with a composite and the number of
+/// resumes before a `Reset` cannot be bounded, as
+/// [`verify::max_resumes_before_reset`] describes.
 #[cfg(feature = "verify")]
 pub fn auto_arena_capacity_for(
     module: &crate::bytecode::Module,
     native_wcmu: &[u32],
+) -> Result<usize, VmError> {
+    auto_arena_capacity_with_input_text(module, native_wcmu, 0)
+}
+
+/// [`auto_arena_capacity_for`] with a host allowance for `Text` inside
+/// composite inputs.
+///
+/// `text_bytes_per_input` is the host's bound on the total byte length of
+/// every owned `Text` field, at any depth, inside any one composite input
+/// value, whether an entry argument or a resume value. The allowance is added
+/// once for each composite input the arena can hold at once, as
+/// [`host_input_arena_bytes_for`] counts them. A bare `Text` argument or
+/// resume value that is not inside a composite is not copied and needs no
+/// allowance. A narrow-word module, whose word is narrower than a host
+/// pointer, keeps text-bearing composites boxed and does not copy their text,
+/// so the allowance only over-provisions there.
+///
+/// # Errors
+///
+/// As [`auto_arena_capacity_for`].
+#[cfg(feature = "verify")]
+pub fn auto_arena_capacity_with_input_text(
+    module: &crate::bytecode::Module,
+    native_wcmu: &[u32],
+    text_bytes_per_input: usize,
 ) -> Result<usize, VmError> {
     let footprint = verify::module_runtime_footprint(module, native_wcmu)
         .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
@@ -965,10 +1022,119 @@ pub fn auto_arena_capacity_for(
     let stack_bytes =
         slots.saturating_mul(core::mem::size_of::<crate::bytecode::GenericValue<i64, f64>>());
     let frame_bytes = frames.saturating_mul(core::mem::size_of::<CallFrame>());
+    let inputs = host_input_arena_bytes_for(module, text_bytes_per_input)?;
     Ok(stack_bytes
         .saturating_add(frame_bytes)
         .saturating_add(module.aux_arena_bytes as usize)
-        .saturating_add(footprint.max_heap_bytes as usize))
+        .saturating_add(footprint.max_heap_bytes as usize)
+        .saturating_add(inputs))
+}
+
+/// Arena bytes that the host inputs of the module's entry chunk occupy at
+/// their peak between two `Reset`s, the input term of
+/// [`auto_arena_capacity_for`].
+///
+/// # What is copied
+///
+/// `Vm::call` copies each composite entry argument into the arena top region,
+/// and `Vm::resume` copies each composite resume value there, both through
+/// `GenericValue::into_arena_canonical`. The copy is the value's flat body,
+/// whose length for a value of the declared type is at most the
+/// `WireShape::Flat` size the module records in its signature table. A
+/// top-level enum may be smaller, being sized to its current variant. The top
+/// region allocates with one-byte alignment and no per-allocation header, so a
+/// body of `n` bytes costs exactly `n` bytes. A nested composite field is
+/// packed into its own body before its parent copies it, and the
+/// canonicalisation then moves the parent's body over the dead child bodies,
+/// so a value holds exactly its own flat size whatever its nesting depth.
+/// While it packs, its children and its own body coexist, so its transient
+/// peak is at most twice its flat size. An owned `Text` field is copied as its
+/// string bytes, which `text_bytes_per_input` stands for.
+///
+/// # The count
+///
+/// With `S_i` the flat size of each composite entry parameter, `R` the flat
+/// size of the entry's resume value when it is a composite, `t` the text
+/// allowance, and `Y` the bound from [`verify::max_resumes_before_reset`], the
+/// figure is the following.
+///
+/// ```text
+/// max(sum(S_i + t), R + t) + Y * (R + t) + max(max(S_i), R)
+/// ```
+///
+/// The first term is the input that starts a run. The first iteration of a
+/// `Stream` holds every entry argument, and a later iteration holds the one
+/// resume value delivered after the `Reset`, which `resume` writes into
+/// parameter slot zero. The second term is one resume value for each `Yield`
+/// the run can execute before its `Reset`, counted through loops and through
+/// `yield fn` callees. The third term is the transient of the one input being
+/// packed at any moment. A `Stream` entry resumes with its parameter's type,
+/// which the module records. A non-`Stream` entry records no resume shape, so
+/// for it only the entry arguments are counted, and a host that resumes it
+/// with a composite adds those values itself.
+///
+/// # Where it is conservative
+///
+/// The transient term is charged even when no input has a nested composite,
+/// in which case no transient arises. The resume count is a worst case over
+/// paths, as [`verify::max_resumes_before_reset`] describes. The program's
+/// own heap peak, which [`auto_arena_capacity_for`] adds separately, is
+/// assumed to coincide with the input peak, although the two may never be
+/// reached together.
+///
+/// # Errors
+///
+/// Returns `VmError::VerifyError` when the entry resumes with a composite and
+/// [`verify::max_resumes_before_reset`] cannot bound the resumes. A module
+/// with no entry point, or with no signature for its entry, returns zero,
+/// because the module records nothing to count.
+#[cfg(feature = "verify")]
+pub fn host_input_arena_bytes_for(
+    module: &crate::bytecode::Module,
+    text_bytes_per_input: usize,
+) -> Result<usize, VmError> {
+    use crate::bytecode::WireShape;
+    let Some(entry) = module.entry_point else {
+        return Ok(0);
+    };
+    let Some(signature) = module.signatures.get(entry) else {
+        return Ok(0);
+    };
+    let flat_size = |shape: &WireShape| match shape {
+        WireShape::Flat { size, .. } => Some(*size as usize),
+        WireShape::Top | WireShape::Scalar { .. } => None,
+    };
+    let mut entry_bytes: usize = 0;
+    let mut largest_body: usize = 0;
+    for size in signature.params.iter().filter_map(flat_size) {
+        entry_bytes = entry_bytes.saturating_add(size.saturating_add(text_bytes_per_input));
+        largest_body = largest_body.max(size);
+    }
+    let is_stream = module
+        .chunks
+        .get(entry)
+        .is_some_and(|c| c.block_type == BlockType::Stream);
+    let resume_body = if is_stream {
+        flat_size(&signature.resume)
+    } else {
+        None
+    };
+    let (start_bytes, resumes_bytes) = match resume_body {
+        Some(size) => {
+            largest_body = largest_body.max(size);
+            let per_resume = size.saturating_add(text_bytes_per_input);
+            let resumes = verify::max_resumes_before_reset(module, entry)
+                .map_err(|e| VmError::VerifyError(format!("{}: {}", e.chunk_name, e.message)))?;
+            (
+                entry_bytes.max(per_resume),
+                (resumes as usize).saturating_mul(per_resume),
+            )
+        }
+        None => (entry_bytes, 0),
+    };
+    Ok(start_bytes
+        .saturating_add(resumes_bytes)
+        .saturating_add(largest_body))
 }
 
 /// Bytecode storage for the VM.
