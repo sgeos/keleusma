@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The wrapping default of a checked arithmetic construct is typed.** An
+  outcome class with no unguarded catch-all arm falls to the wrapping default,
+  which yields the operation's own value, but the type checker never compared
+  the construct's type with the operand's. `fn main(x: Word) -> bool { x + 1 {
+  ok(v) => v > 0 } }` was admitted and returned a `Word` from a `bool`
+  function on overflow. Such a construct is now refused unless it produces
+  the operand's type. When unguarded catch-all arms cover every class that can
+  arise and no zero-divisor trap is pending, the default cannot run. Both
+  compilers then omit the last arm's class test and the default, so the
+  construct's value has only the arms' kind and no trap is added. This
+  changes bytecode for covered constructs and adds no opcode. An `underflow` arm is now admissible on `Fixed` division, where the
+  virtual machine already set that flag. Pinned by
+  `tests/checked_wrap_default.rs`.
+
 - **A cast to the operand's own primitive type is identity.** The reference
   compiler lowered `Word as Word` to `FloatToInt`, `Float as Float` to
   `IntToFloat`, `Byte as Byte` to `WordToByte` and `Fixed as Fixed` to
