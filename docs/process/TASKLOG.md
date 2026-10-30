@@ -6,6 +6,13 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-30 Third batch
+
+Pull request 628 merged. The third batch carries item 12, the template scan as the fifteenth
+stage, item 6, the typed schema hash, item 11d's host part, a hot-swap working-set check, a
+closure form for external natives and a book correction. Item 5's design is written and its
+reference pass is implemented, with the self-hosted twin next. Item 8 waits on questions 7 and 8.
+
 ## 2026-10-30 Rulings follow-up, pykeleusma findings and V0.3.X requests
 
 Pull requests 587, 588, 596, 598, 601, 603 and 615 merged, and 623 merged 618, 605, 621,
