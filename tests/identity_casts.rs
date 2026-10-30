@@ -18,6 +18,10 @@
 //! A source whose type the reference cannot infer still takes the conversion the type
 //! checker validated, so `<unknown> as Word` keeps `FloatToInt`. No case here reaches it.
 
+// Every case set includes a `Float` cast, so the file needs `floats` as well as the
+// compiler and the verifier.
+#![cfg(all(feature = "compile", feature = "verify", feature = "floats"))]
+
 extern crate alloc;
 
 use keleusma::Arena;
