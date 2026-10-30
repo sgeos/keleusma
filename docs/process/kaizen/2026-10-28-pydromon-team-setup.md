@@ -42,6 +42,16 @@ reads the diff unanchored. It reads through `gh`, never a peer's worktree mid-ch
 Jev's answer. pydromon has not established whether a subagent inherits its parent's
 sandbox, so the template withholds the `Agent` tool. A line with no tools at all, which
 receives only the blind view by message, satisfies the protocol without that question.
+pydromon reviewed this design on 2026-10-29 and saw no blocking problem, without running
+such a line. Its reply, from a peer session, gives four constraints. Every line keeps
+Dromon's own tools, and `check_disclosure` and `propose_change` take paths in the
+workdir, so the labeller's workdir is an empty directory outside the project and the Jev
+store. Dromon does not restrict who may mail a line, so blindness rests on each sender
+sending only the blind view. A kept or resumed session carries earlier cases in its
+context, so pydromon infers that labels after the first are independent only if the
+session is cleared between cases. How to clear it is not yet established. The labeller
+gets only its brief as instructions and is never a seat of a role, so no handoff package
+reaches it.
 
 **Models.** All six run Claude Opus 5.5 on Claude Code. pydromon's Codex profile has no
 network, so a Codex line could neither fetch crates nor use `gh`, and its Grok support is
@@ -117,9 +127,9 @@ would need network access to build and push.
    its first startup. The mailbox checkpoint in each state file becomes a list of mail in
    flight.
 4. The operator relays mail still pending in the retired mailbox with `dromon send`.
-5. The operator creates the cache directories and the `review` worktree, installs the
-   project file, `TEAM.md` and `LABELLER.md` in `.dromon/`, and runs `dromon config`
-   against the real tree.
+5. The operator creates the cache directories, the labeller's empty workdir and the
+   `review` worktree, installs the project file, `TEAM.md` and `LABELLER.md` in
+   `.dromon/`, and runs `dromon config` against the real tree.
 6. The live sessions stop, and each line starts fresh from its state file rather than
    adopting a long session.
 7. The live checks on pydromon's dogfood page run, including the proofs line's build of
@@ -140,7 +150,8 @@ would need network access to build and push.
 ## Appendix: the project file
 
 Paths are placeholders. `HOME` stands for the operator's home directory, `KELEUSMA` for
-the primary checkout and `WORKTREES` for the sibling worktree directory.
+the primary checkout, `WORKTREES` for the sibling worktree directory and `CACHE` for the
+per-line cache directory outside the worktrees.
 
 ```toml
 version = 1
@@ -280,8 +291,11 @@ allowWrite = ["CACHE/review"]
 [lines."jev-labeller"]
 model = "claude-opus-5-5"
 builtin_tools = []
+inherit_account_mcp = false
 claude_code_prompt = false
-workdir = "KELEUSMA/.worktrees/review"
+# An empty directory outside the project and the Jev store, because Dromon's own tools
+# still take paths in the workdir.
+workdir = "CACHE/jev-labeller-workdir"
 instructions = ["KELEUSMA/.dromon/LABELLER.md"]
 
 [lines."jev-labeller".sandbox]

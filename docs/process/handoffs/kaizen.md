@@ -72,7 +72,10 @@ run.
   confirms the second review resolved, and asks two things. Pydromon's Keleusma template
   should name each line's `CLAUDE.md` absolutely, and its docstring about workdir paths
   contradicts `rooted_instructions`. It also asks whether a tool-less labeller line is
-  sound. No reply yet. The operator is working out SSH support with pydromon.
+  sound. Pydromon replied the same day, in a peer message. It agreed on both, and its
+  fix is commit `29d781b`, not yet merged or pushed. Its labeller constraints are now in
+  the proposal, which moves the labeller to an empty workdir outside the project. The
+  operator is working out SSH support with pydromon.
 - **Jev selection cohort.** Live evaluation is on. The three cases were evaluated and
   labelled blind. The comparison opens when each task is finished.
 
@@ -104,7 +107,8 @@ authority, so the startup-file positions reach them first-hand.
 ## Open with the operator
 
 - The stale `origin/proofs` texts listed above.
-- Whether pydromon's reply changes the proposal.
+- How a labeller line's session is cleared between cases, which pydromon infers
+  independent labels need.
 
 ## Concerns
 
