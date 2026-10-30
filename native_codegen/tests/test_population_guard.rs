@@ -95,7 +95,9 @@
 // 824 -> 826: two host-native binding tests in `native_stage_executor.rs`, for
 // operator question 19. The build test there was renamed
 // `every_stage_builds_and_an_unbound_host_native_is_refused`, for what it refuses.
-const RECORDED_TEST_FUNCTIONS: usize = 826;
+// 826 -> 829: three tests in `native_seeded_interp.rs`, the seeded `interp.kel`
+// differential of operator question 6, 2026-10-30. No name disappeared.
+const RECORDED_TEST_FUNCTIONS: usize = 829;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise
@@ -308,7 +310,8 @@ const RECORDED_TEST_FUNCTIONS: usize = 826;
 // `kel_native_cli.rs` and `text_comparison.rs` for Order 6, none removed.
 // 170 -> 171: `native_opaque.rs` for operator question 14, none removed.
 // 171 -> 172: `native_stage_executor.rs` for operator question 19, none removed.
-const RECORDED_TEST_FILES: usize = 172;
+// 172 -> 173: `native_seeded_interp.rs` for operator question 6, none removed.
+const RECORDED_TEST_FILES: usize = 173;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")
