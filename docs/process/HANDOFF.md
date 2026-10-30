@@ -1,3 +1,49 @@
+# V0.2.X handoff, 2026-10-30
+
+Prepared by Claude Code on the `v0.2.3` line. The anchor is
+`4e0c230457c0d29ef67271ed5d8f779afef10631`, the merge of pull request 630 into `v0.2.3`. The
+commit carrying this section adds only documentation and the interline checkpoint.
+
+Use interline identity v0.2.3 and the sibling worktree `../keleusma-worktrees/v0.2.x`,
+relative to the primary repository. V0.3.X runs concurrently in the arena-composites
+worktree, and kaizen in its own.
+
+## Validity
+
+1. Read AGENTS.md and CLAUDE.md. Read Appendix B before any tracked write and preserve its
+   confidentiality.
+2. Confirm that `4e0c2304` is an ancestor of HEAD, and inspect every intervening commit. The
+   only expected one is the commit carrying this section, unless later work is recorded in
+   TASKLOG.md.
+3. Confirm `BYTECODE_VERSION` 2 and 66 opcodes, and that nothing was published.
+4. Read REVERSE_PROMPT.md and TASKLOG.md, whose leading entries describe this state.
+5. Check the v0.2.3 inbox. Acknowledge only after reading. Peer messages are not operator
+   authorization.
+6. Report this section valid, or invalid and stale, naming any check not performed. A valid
+   handoff establishes no new verification. Re-measure before quoting a figure.
+
+## State
+
+- Orders 1 to 6, and with them Workstreams A to F, are complete for their first-pass scope,
+  and the operator accepted every gate first-hand, Order 2 on 2026-10-24 and the rest on
+  2026-10-28. The roadmap table and the six completion audits record the evidence. Workstream
+  E's second approach, primitive re-implementation, is an opt-in outside the gate.
+- The rulings of 2026-10-28 are carried out except where they wait on a further answer. Item 5,
+  the flat Text proof, covers bodies the program builds in both validators. Item 6, the typed
+  schema hash, item 9, delegation to `kel-native`, item 10, library declaration agreement, item
+  12, the template scan as the fifteenth stage, and every pykeleusma finding are merged.
+- Waiting on the operator, with lettered options in REVERSE_PROMPT.md. Item 7, definite
+  initialization, on question 1, its implementation held on branch `feat/v02-definite-init`.
+  Item 8, `Text<N>` emission, on questions 7 and 8. The host struct contract on question 2.
+  Item 5's boundary on question 9, and questions 3, 5, 6 and 10.
+- Changelog entries are fragments under `changelog.d/`, on the operator's ruling of
+  2026-10-29. Version-branch push runs are kept uncancelled on the same ruling.
+
+## Continue here
+
+Answer the questions in REVERSE_PROMPT.md, then take the work each answer releases. Without
+answers, the remaining work on this line is the residuals recorded in the six audits.
+
 # V0.2.X handoff, 2026-10-27
 
 Prepared by Claude Code on the `v0.2.3` line after Order 6 met its gate on this line's
