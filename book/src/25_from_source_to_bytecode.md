@@ -89,6 +89,12 @@ controls word, address, and float widths and validates the program
 against the configuration. A program that uses literals or constants
 outside the target's representable range is rejected at compile time.
 
+The compiler also refuses a program whose worst-case memory use cannot be
+computed, such as one that calls itself recursively. No machine could run
+such a program at any memory size, so the compiler says so at once rather
+than writing a file that every runtime would refuse. Chapter 19 explains
+why a program is rejected.
+
 ## What you now know
 
 - Source is the text you write; bytecode is the compact form the runtime

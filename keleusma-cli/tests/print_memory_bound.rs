@@ -130,31 +130,33 @@ fn a_bounded_program_still_reports_its_arena_figure() {
 #[test]
 fn the_bytecode_input_path_behaves_the_same_in_both_directions() {
     let dir = TmpDir::new("bytecode");
-    let unb = dir.write("rec.kel", UNBOUNDED);
     let bnd = dir.write("tune.kel", BOUNDED);
 
-    let mut artifacts = Vec::new();
-    for (src, out) in [(&unb, "rec.bin"), (&bnd, "tune.bin")] {
-        let outp = dir.0.join(out);
-        let st = Command::new(BIN)
-            .arg("compile")
-            .arg(src)
-            .arg("-o")
-            .arg(&outp)
-            .output()
-            .expect("compile the fixture");
-        // MEASURED, NOT ASSUMED: `compile` writes an artifact for the unbounded program as
-        // well. It does not run the resource-bound verification, so it emits a module that
-        // no host can load. That is a separate question from this file's subject and is
-        // recorded rather than changed here; the assertion is only that the fixture built,
-        // so a failure to build cannot masquerade as a passing refusal below.
-        assert!(
-            st.status.success(),
-            "the fixture {out} did not compile: {}",
-            String::from_utf8_lossy(&st.stderr)
-        );
-        artifacts.push(outp);
-    }
+    // `compile` refuses the unbounded program since the ruling of 2026-10-30, which
+    // `compile_refuses_a_program_with_no_memory_bound` pins below. Its artifact is
+    // therefore built through the library, the route a host with its own compiler
+    // takes, so the bytecode path of `run` is still reached with an unbounded module.
+    let rec_bin = dir.0.join("rec.bin");
+    let tokens = keleusma::lexer::tokenize(UNBOUNDED).expect("lex the fixture");
+    let program = keleusma::parser::parse(&tokens).expect("parse the fixture");
+    let module = keleusma::compiler::compile(&program).expect("compile the fixture");
+    std::fs::write(&rec_bin, module.to_bytes().expect("serialize the fixture"))
+        .expect("write the fixture");
+
+    let tune_bin = dir.0.join("tune.bin");
+    let st = Command::new(BIN)
+        .arg("compile")
+        .arg(&bnd)
+        .arg("-o")
+        .arg(&tune_bin)
+        .output()
+        .expect("compile the fixture");
+    assert!(
+        st.status.success(),
+        "the bounded fixture did not compile: {}",
+        String::from_utf8_lossy(&st.stderr)
+    );
+    let artifacts = [rec_bin, tune_bin];
 
     let (ok_unb, t_unb) = print_memory(&artifacts[0]);
     assert!(
@@ -174,5 +176,52 @@ fn the_bytecode_input_path_behaves_the_same_in_both_directions() {
     assert!(
         t_bnd.contains("arena:"),
         "no figure from the bytecode path: {t_bnd}"
+    );
+}
+
+/// **`compile` REFUSES A PROGRAM WHOSE MEMORY BOUND CANNOT BE COMPUTED.**
+///
+/// Such a module can be loaded by no host at any arena capacity, so emitting it only moves
+/// the refusal to a later machine. On the operator's ruling of 2026-10-30. The bounded
+/// control shows that the refusal is about the bound and not about `compile` failing.
+#[test]
+fn compile_refuses_a_program_with_no_memory_bound() {
+    let dir = TmpDir::new("compile-refusal");
+    let unb = dir.write("rec.kel", UNBOUNDED);
+    let out = dir.0.join("rec.bin");
+    let st = Command::new(BIN)
+        .arg("compile")
+        .arg(&unb)
+        .arg("-o")
+        .arg(&out)
+        .output()
+        .expect("run compile");
+    let err = String::from_utf8_lossy(&st.stderr);
+    assert!(
+        !st.status.success(),
+        "compile emitted an unloadable module: {err}"
+    );
+    assert!(
+        err.contains("cannot be computed") && err.contains("recursive call detected"),
+        "the refusal does not name the bound and its reason: {err}"
+    );
+    assert!(
+        !out.exists(),
+        "compile refused but still wrote {}",
+        out.display()
+    );
+
+    let bnd = dir.write("tune.kel", BOUNDED);
+    let st = Command::new(BIN)
+        .arg("compile")
+        .arg(&bnd)
+        .arg("-o")
+        .arg(dir.0.join("tune.bin"))
+        .output()
+        .expect("run compile");
+    assert!(
+        st.status.success(),
+        "the bounded control did not compile: {}",
+        String::from_utf8_lossy(&st.stderr)
     );
 }

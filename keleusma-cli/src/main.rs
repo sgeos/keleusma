@@ -683,6 +683,20 @@ fn compile_subcommand(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // A module whose worst-case memory usage cannot be computed is refused
+    // here, because no host can load it at any arena capacity. A module whose
+    // bound is computable but larger than this host's default arena is still
+    // emitted, since a host with a larger arena loads it, which is the
+    // cross-compilation case `--target` exists for. Natives the host has not
+    // attested count zero, as on the load path, so a native call never makes a
+    // bound uncomputable. On the operator's ruling of 2026-10-30.
+    if let Err(reason) = module_arena_sizing(&module) {
+        eprintln!(
+            "error: {input}: the worst-case memory bound cannot be computed, so no host can \
+             load this module: {reason}"
+        );
+        return ExitCode::FAILURE;
+    }
     let bytes = match (signing_key_path, encryption_key_path) {
         (Some(sign_path), Some(enc_path)) => {
             // Signed-and-encrypted path.
