@@ -109,3 +109,8 @@ narrow-float-32 = ["keleusma/narrow-float-32"]
 
 [dev-dependencies]
 keleusma-arena = { path = "../keleusma-arena" }
+# The framing driver, `keleusma::crypto_frame`, exists only under `signatures`.
+# `native_stage_factory.rs` runs `frame.kel` natively through it, so the tests
+# enable the feature and the library itself does not.
+keleusma = { path = "..", features = ["signatures"] }
+ed25519-dalek = "3"
