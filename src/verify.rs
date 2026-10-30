@@ -2879,6 +2879,9 @@ pub fn verify(module: &Module) -> Result<(), VerifyError> {
         verify_chunk(chunk, module, &always, None)?;
         verify_stack_depth(chunk)?;
     }
+    // Definite initialization, after the structural checks above have
+    // validated every control-flow target and slot index it reads.
+    crate::verify_init::verify_definite_initialization(module)?;
     // Typed operand-stack pass (A.2.1): reconstructs per-slot flat shapes and
     // validates baked flat offsets, branch/loop stack balance, and the
     // wire-carried layout tables. It runs in defer-on-`Top` mode — a value
@@ -4068,7 +4071,13 @@ pub(crate) mod tests {
             constants: alloc::vec![crate::bytecode::ConstValue::Int(0)],
             struct_templates: Vec::new(),
             local_count,
-            param_count: 0,
+            // A stream or reentrant fixture reads slot 0 as its entry
+            // parameter, as the comment above says, so it declares one. The
+            // definite-initialization rule refuses a read of a local that no
+            // path writes, and a parameter is written on entry.
+            param_count: u8::from(
+                local_count > 0 && matches!(block_type, BlockType::Stream | BlockType::Reentrant),
+            ),
             block_type,
             param_types: Vec::new(),
             debug_pool: None,

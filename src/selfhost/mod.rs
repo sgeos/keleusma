@@ -49,7 +49,9 @@ mod traps;
 mod validation;
 pub use traps::classify_traps_via_kel;
 mod yield_fixpoint;
-pub use validation::{VerificationError, VerificationVerdict, verify_module_via_kel};
+pub use validation::{
+    VerificationError, VerificationVerdict, initialization_rejects_via_kel, verify_module_via_kel,
+};
 mod call_graph;
 pub use call_graph::call_order_via_kel;
 mod artifact_compare;
@@ -5952,6 +5954,10 @@ fn productivity_reject_via_kel(
 // `op_count` (0); the arrays `class` (1..), `arg`, `dreq`, `dnet`, `is_term` (each crate::selfhost_host::VERIFY_OP_CAP wide);
 // and the verdict `out_reject`. `dreq`/`dnet` are the reference `op_depth_effect` (the actual
 // operand consumption, NOT the WCMU stack effect); `is_term` flags Trap/Return.
+//
+// The same run decides the definite-initialization rule of `crate::verify_init` from the same
+// table and the appended `lget` and `lset` columns, and publishes that verdict in fields of its
+// own after `out_cause`, so that a caller reading only the depth verdict sees no change.
 
 const DV_OP_COUNT: usize = 0;
 const DV_CLASS: usize = 1;
@@ -5968,6 +5974,22 @@ const DV_OUT_REJECT: usize = 1 + crate::selfhost_host::VERIFY_OP_CAP * 5;
 /// unanalysed program**, and only the cause says whether raising the cap would
 /// change the answer.
 const DV_OUT_CAUSE: usize = 2 + crate::selfhost_host::VERIFY_OP_CAP * 5;
+// The definite-initialization twin of `crate::verify_init`, which the same stage run decides
+// after the depth walk. Per op, `lget` is one more than the local read and `lset` one more than
+// the local written, or -1 for `Stream`, each 0 for none. The verdict fields follow.
+const DV_LGET: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP * 5;
+const DV_LSET: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP * 6;
+const DV_L_WIDTH: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+const DV_L_PARAMS: usize = 4 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+const DV_L_STREAM_BIT: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+pub(crate) const DV_OUT_INIT_REJECT: usize = 6 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+pub(crate) const DV_OUT_INIT_IP: usize = 7 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+/// Why the definite-initialization verdict of `verify_depth.kel` is what it is. 0 means the
+/// analysis completed, 1 that the chunk has more locals than the stage's sets hold, and 2 that
+/// the sweep budget ended before the fixpoint. A nonzero cause is not a verdict.
+pub(crate) const DV_OUT_INIT_CAUSE: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+/// The locals one set of the stage holds, its `init_locals()`.
+pub(crate) const DV_INIT_LOCALS: usize = 256;
 
 /// The compiled `verify_depth.kel` stage module, cached after the first build.
 ///
@@ -6017,7 +6039,32 @@ pub fn seed_verify_depth_shared(vm: &dyn StageExecutor, chunk: &crate::bytecode:
             // so a stream chunk ending in `Reset` does not fall through.
             i64::from(matches!(op, Op::Trap(_) | Op::Return | Op::Reset)),
         );
+        // A slot at or past the local count is neither checked nor recorded by the
+        // reference, so it is transported as no effect.
+        let width = usize::from(chunk.local_count);
+        let (get, put) = match op {
+            Op::GetLocal(s) if usize::from(*s) < width => (i64::from(*s) + 1, 0),
+            Op::SetLocal(s) if usize::from(*s) < width => (0, i64::from(*s) + 1),
+            Op::Stream => (0, -1),
+            _ => (0, 0),
+        };
+        set(vm, &mut shared, DV_LGET + i, get);
+        set(vm, &mut shared, DV_LSET + i, put);
     }
+    let width = i64::from(chunk.local_count);
+    set(vm, &mut shared, DV_L_WIDTH, width);
+    set(
+        vm,
+        &mut shared,
+        DV_L_PARAMS,
+        i64::from(chunk.param_count).min(width),
+    );
+    set(
+        vm,
+        &mut shared,
+        DV_L_STREAM_BIT,
+        i64::from(chunk.param_count > 0 && width > 0),
+    );
     shared
 }
 

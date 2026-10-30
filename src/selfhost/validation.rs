@@ -249,19 +249,78 @@ fn structure(
         |vm, shared, yielded| verdict(vm, shared, SV_OUT_REJECT, yielded, "structure"),
     )
 }
+#[cfg(test)]
 fn depth(chunk: &crate::bytecode::Chunk) -> Result<bool> {
     depth_with_stage(chunk, verify_depth_kel_module())
 }
+#[cfg(test)]
 fn depth_with_stage(chunk: &crate::bytecode::Chunk, stage: Module) -> Result<bool> {
+    depth_and_initialization(chunk, stage).map(|(depth, _)| depth)
+}
+/// The definite-initialization verdict the depth stage publishes beside its own.
+/// `Some` holds the lowest refused instruction. A nonzero cause is unavailable
+/// analysis, never a verdict.
+fn initialization(
+    vm: &dyn StageExecutor,
+    shared: &[u8],
+    chunk: &crate::bytecode::Chunk,
+) -> Result<Option<usize>> {
+    const STAGE: &str = "initialization";
+    match word(vm, shared, DV_OUT_INIT_CAUSE, STAGE)? {
+        0 => {
+            if !flag(word(vm, shared, DV_OUT_INIT_REJECT, STAGE)?, STAGE)? {
+                return Ok(None);
+            }
+            match usize::try_from(word(vm, shared, DV_OUT_INIT_IP, STAGE)?) {
+                Ok(ip) if ip < chunk.ops.len() => Ok(Some(ip)),
+                _ => Err(protocol(STAGE, "refused instruction outside the chunk")),
+            }
+        }
+        1 => Err(VerificationError::Capacity {
+            stage: STAGE,
+            resource: "locals",
+            limit: DV_INIT_LOCALS,
+            actual: usize::from(chunk.local_count),
+        }),
+        2 => Err(VerificationError::Incomplete {
+            stage: STAGE,
+            cause: 2,
+        }),
+        _ => Err(protocol(STAGE, "unknown completion cause")),
+    }
+}
+/// One run of the depth stage, which decides operand-stack depth and definite
+/// initialization together. A failed depth analysis fails the call. The
+/// initialization result is returned unresolved, so that the caller can order it
+/// as the reference does.
+fn depth_and_initialization(
+    chunk: &crate::bytecode::Chunk,
+    stage: Module,
+) -> Result<(bool, Result<Option<usize>>)> {
     run(
         "depth",
         stage,
         |vm| Ok(seed_verify_depth_shared(vm, chunk)),
         |vm, shared, yielded| {
             completed(vm, shared, DV_OUT_CAUSE, "depth")?;
-            verdict(vm, shared, DV_OUT_REJECT, yielded, "depth")
+            let depth = verdict(vm, shared, DV_OUT_REJECT, yielded, "depth")?;
+            Ok((depth, initialization(vm, shared, chunk)))
         },
     )
+}
+/// The chunk and instruction of the first read the self-hosted
+/// definite-initialization rule refuses, in the order
+/// `crate::verify_init::verify_definite_initialization` reports, without the
+/// other passes. Capacity or unfinished analysis is an error.
+pub fn initialization_rejects_via_kel(module: &Module) -> Result<Option<(usize, usize)>> {
+    for (index, chunk) in module.chunks.iter().enumerate() {
+        capacity("depth", "opcodes", chunk.ops.len(), OPS)?;
+        let (_, init) = depth_and_initialization(chunk, verify_depth_kel_module())?;
+        if let Some(ip) = init? {
+            return Ok(Some((index, ip)));
+        }
+    }
+    Ok(None)
 }
 #[cfg(test)]
 fn yield_region(
@@ -483,7 +542,8 @@ fn layout(module: &Module, widths: (usize, usize, usize)) -> Result<bool> {
 }
 
 /// Run the bounded Keleusma counterpart of `verify`, without executing subject code.
-/// This checks structure, depth, productivity, typed operands and data layout.
+/// This checks structure, depth, productivity, definite initialization, typed
+/// operands and data layout.
 /// Resource admission is provided by `admit_module_via_kel`. Capacity or incomplete
 /// analysis returns an error rather than an invalid-module verdict.
 /// Typed control-flow widening remains as documented by the stage.
@@ -499,12 +559,24 @@ pub fn verify_module_via_kel(module: &Module) -> Result<VerificationVerdict> {
             });
         }
     }
+    // The reference decides definite initialization after every chunk's
+    // structural, depth and productivity checks, so the first refusal or
+    // unavailable analysis is held until those have run.
+    let mut initialization: Option<Result<usize>> = None;
     for (index, chunk) in module.chunks.iter().enumerate() {
-        if depth(chunk)? {
+        let (rejected, init) = depth_and_initialization(chunk, verify_depth_kel_module())?;
+        if rejected {
             return Ok(VerificationVerdict::Rejected {
                 stage: "depth",
                 chunk: Some(index),
             });
+        }
+        if initialization.is_none() {
+            initialization = match init {
+                Ok(None) => None,
+                Ok(Some(_)) => Some(Ok(index)),
+                Err(error) => Some(Err(error)),
+            };
         }
     }
     let always = super::yield_fixpoint::always(module)?;
@@ -542,6 +614,12 @@ pub fn verify_module_via_kel(module: &Module) -> Result<VerificationVerdict> {
             }
         }
     }
+    if let Some(refusal) = initialization {
+        return Ok(VerificationVerdict::Rejected {
+            stage: "initialization",
+            chunk: Some(refusal?),
+        });
+    }
     if layout(module, widths)? {
         return Ok(VerificationVerdict::Rejected {
             stage: "data layout",
@@ -562,6 +640,66 @@ pub fn verify_module_via_kel(module: &Module) -> Result<VerificationVerdict> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The initialization verdict is the stage's, its capacity and budget
+    /// exhaustion are errors, and neither becomes a verdict.
+    #[test]
+    fn initialization_verdict_is_decided_by_the_stage() {
+        let module = compile_src("fn main(n: Word) -> Word { let a = n + 1; a }");
+        let mut bad = module.chunks[0].clone();
+        let write = bad
+            .ops
+            .iter()
+            .position(|op| *op == Op::SetLocal(1))
+            .unwrap();
+        bad.ops[write] = Op::PopN(1);
+        let stage = verify_depth_kel_module();
+        let (_, good) = depth_and_initialization(&module.chunks[0], stage.clone()).unwrap();
+        assert_eq!(good, Ok(None));
+        let (depth, refused) = depth_and_initialization(&bad, stage.clone()).unwrap();
+        assert!(!depth, "the depth verdict is unchanged");
+        assert!(matches!(refused, Ok(Some(_))));
+
+        // The same input through a stage whose refusal is disabled is admitted.
+        let source = read_stage("kel/verify_depth.kel");
+        let marker = "                dv.out_init_reject = 1;";
+        assert_eq!(source.matches(marker).count(), 1);
+        let silent =
+            compile_src(&source.replace(marker, "                dv.out_init_reject = 0;"));
+        assert_eq!(depth_and_initialization(&bad, silent).unwrap().1, Ok(None));
+
+        // A budget of one sweep cannot confirm a fixpoint, which is unfinished
+        // analysis and not a verdict.
+        let budget = "fn init_sweeps() -> Word { 72 }";
+        assert_eq!(source.matches(budget).count(), 1);
+        let short = compile_src(&source.replace(budget, "fn init_sweeps() -> Word { 1 }"));
+        assert_eq!(
+            depth_and_initialization(&bad, short).unwrap().1,
+            Err(VerificationError::Incomplete {
+                stage: "initialization",
+                cause: 2
+            })
+        );
+
+        // A chunk wider than the stage's sets is a capacity error.
+        let mut wide = module.clone();
+        wide.chunks[0].local_count = 257;
+        assert!(matches!(
+            verify_module_via_kel(&wide),
+            Err(VerificationError::Capacity {
+                stage: "initialization",
+                limit: 256,
+                actual: 257,
+                ..
+            })
+        ));
+        wide.chunks[0].local_count = 256;
+        assert_eq!(
+            initialization_rejects_via_kel(&wide).unwrap(),
+            None,
+            "the declared width is admitted"
+        );
+    }
 
     #[test]
     fn productivity_verdict_is_decided_by_the_stage() {
