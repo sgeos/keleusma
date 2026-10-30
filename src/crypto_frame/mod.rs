@@ -23,6 +23,7 @@
 //! Such an error is a defect of `frame.kel` or of this driver, never a property of the artifact,
 //! so it is [`FrameError::Stage`](crate::crypto_frame::FrameError::Stage) and never a [`Refusal`](crate::crypto_frame::Refusal).
 
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::rc::Rc;
 use alloc::string::String;
@@ -33,7 +34,8 @@ use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 
 use crate::Arena;
 use crate::bytecode::{Module, Value};
-use crate::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmError, VmState, required_persistent_capacity_for};
+use crate::stage_executor::StageExecutor;
+use crate::vm::{DEFAULT_ARENA_CAPACITY, VmError, VmState, required_persistent_capacity_for};
 use crate::wire_format::{SigningSections, signing_sections};
 
 /// The framing program's source, embedded so the driver needs no filesystem access.
@@ -226,93 +228,117 @@ fn ok(n: i64) -> Result<Value, VmError> {
     Ok(Value::Int(n))
 }
 
-/// Register the buffer natives and the primitive natives on `vm`.
-fn register(vm: &mut Vm<'_, '_>, host: &Shared) {
+/// Register the buffer natives and the primitive natives on `vm`. The executor receives these
+/// closures through [`StageExecutor::register_native`], so another executor binds the same code
+/// the virtual machine runs.
+fn register(vm: &mut dyn StageExecutor, host: &Shared) {
     let h = host.clone();
-    vm.register_native_closure("host::blen", move |args: &[Value]| {
-        let b = buffer_index(args, 0)?;
-        ok(h.borrow().bufs[b].len() as i64)
-    });
+    vm.register_native(
+        "host::blen",
+        Box::new(move |args: &[Value]| {
+            let b = buffer_index(args, 0)?;
+            ok(h.borrow().bufs[b].len() as i64)
+        }),
+    );
     let h = host.clone();
-    vm.register_native_closure("host::bget", move |args: &[Value]| {
-        let b = buffer_index(args, 0)?;
-        let host = h.borrow();
-        let at = position(args, 1, host.bufs[b].len())?;
-        ok(i64::from(host.bufs[b][at]))
-    });
+    vm.register_native(
+        "host::bget",
+        Box::new(move |args: &[Value]| {
+            let b = buffer_index(args, 0)?;
+            let host = h.borrow();
+            let at = position(args, 1, host.bufs[b].len())?;
+            ok(i64::from(host.bufs[b][at]))
+        }),
+    );
     let h = host.clone();
-    vm.register_native_closure("host::bput", move |args: &[Value]| {
-        let b = writable(buffer_index(args, 0)?)?;
-        let v = byte(word(args, 2)?)?;
-        let mut host = h.borrow_mut();
-        let at = position(args, 1, host.bufs[b].len())?;
-        host.bufs[b][at] = v;
-        ok(0)
-    });
+    vm.register_native(
+        "host::bput",
+        Box::new(move |args: &[Value]| {
+            let b = writable(buffer_index(args, 0)?)?;
+            let v = byte(word(args, 2)?)?;
+            let mut host = h.borrow_mut();
+            let at = position(args, 1, host.bufs[b].len())?;
+            host.bufs[b][at] = v;
+            ok(0)
+        }),
+    );
     let h = host.clone();
-    vm.register_native_closure("host::bpush", move |args: &[Value]| {
-        let b = writable(buffer_index(args, 0)?)?;
-        let v = byte(word(args, 1)?)?;
-        let mut host = h.borrow_mut();
-        if host.bufs[b].len() >= u32::MAX as usize {
-            return Err(native_error(format!("buffer {b} is full")));
-        }
-        host.bufs[b]
-            .try_reserve(1)
-            .map_err(|_| native_error(String::from("allocation failed")))?;
-        host.bufs[b].push(v);
-        ok(0)
-    });
+    vm.register_native(
+        "host::bpush",
+        Box::new(move |args: &[Value]| {
+            let b = writable(buffer_index(args, 0)?)?;
+            let v = byte(word(args, 1)?)?;
+            let mut host = h.borrow_mut();
+            if host.bufs[b].len() >= u32::MAX as usize {
+                return Err(native_error(format!("buffer {b} is full")));
+            }
+            host.bufs[b]
+                .try_reserve(1)
+                .map_err(|_| native_error(String::from("allocation failed")))?;
+            host.bufs[b].push(v);
+            ok(0)
+        }),
+    );
     let h = host.clone();
-    vm.register_native_closure("host::bclear", move |args: &[Value]| {
-        let b = writable(buffer_index(args, 0)?)?;
-        let n = word(args, 1)?;
-        let n = usize::try_from(n)
-            .ok()
-            .filter(|&n| n <= u32::MAX as usize)
-            .ok_or_else(|| native_error(format!("length {n}")))?;
-        let mut host = h.borrow_mut();
-        let target = &mut host.bufs[b];
-        target.clear();
-        target
-            .try_reserve_exact(n)
-            .map_err(|_| native_error(String::from("allocation failed")))?;
-        target.resize(n, 0);
-        ok(0)
-    });
+    vm.register_native(
+        "host::bclear",
+        Box::new(move |args: &[Value]| {
+            let b = writable(buffer_index(args, 0)?)?;
+            let n = word(args, 1)?;
+            let n = usize::try_from(n)
+                .ok()
+                .filter(|&n| n <= u32::MAX as usize)
+                .ok_or_else(|| native_error(format!("length {n}")))?;
+            let mut host = h.borrow_mut();
+            let target = &mut host.bufs[b];
+            target.clear();
+            target
+                .try_reserve_exact(n)
+                .map_err(|_| native_error(String::from("allocation failed")))?;
+            target.resize(n, 0);
+            ok(0)
+        }),
+    );
     let h = host.clone();
-    vm.register_native_closure("host::sign", move |_args: &[Value]| {
-        let mut host = h.borrow_mut();
-        let Some(key) = host.signing.clone() else {
-            return ok(0);
-        };
-        let signature = key.sign(&host.bufs[buf::MSG]).to_bytes();
-        host.bufs[buf::SIG] = signature.to_vec();
-        ok(1)
-    });
+    vm.register_native(
+        "host::sign",
+        Box::new(move |_args: &[Value]| {
+            let mut host = h.borrow_mut();
+            let Some(key) = host.signing.clone() else {
+                return ok(0);
+            };
+            let signature = key.sign(&host.bufs[buf::MSG]).to_bytes();
+            host.bufs[buf::SIG] = signature.to_vec();
+            ok(1)
+        }),
+    );
     let h = host.clone();
-    vm.register_native_closure("host::nkeys", move |_args: &[Value]| {
-        ok(h.borrow().verifying.len() as i64)
-    });
+    vm.register_native(
+        "host::nkeys",
+        Box::new(move |_args: &[Value]| ok(h.borrow().verifying.len() as i64)),
+    );
     let h = host.clone();
-    vm.register_native_closure("host::verify", move |args: &[Value]| {
-        let host = h.borrow();
-        let k = position(args, 0, host.verifying.len())?;
-        let bytes: [u8; 64] = host.bufs[buf::SIG]
-            .as_slice()
-            .try_into()
-            .map_err(|_| native_error(String::from("signature buffer is not 64 bytes")))?;
-        let signature = Signature::from_bytes(&bytes);
-        // `verify_strict`, as the reference uses, refuses the malleable forms.
-        let verified = host.verifying[k]
-            .verify_strict(&host.bufs[buf::MSG], &signature)
-            .is_ok();
-        ok(i64::from(verified))
-    });
+    vm.register_native(
+        "host::verify",
+        Box::new(move |args: &[Value]| {
+            let host = h.borrow();
+            let k = position(args, 0, host.verifying.len())?;
+            let bytes: [u8; 64] = host.bufs[buf::SIG]
+                .as_slice()
+                .try_into()
+                .map_err(|_| native_error(String::from("signature buffer is not 64 bytes")))?;
+            let signature = Signature::from_bytes(&bytes);
+            // `verify_strict`, as the reference uses, refuses the malleable forms.
+            let verified = host.verifying[k]
+                .verify_strict(&host.bufs[buf::MSG], &signature)
+                .is_ok();
+            ok(i64::from(verified))
+        }),
+    );
     let h = host.clone();
-    vm.register_native_closure("host::seal", move |_args: &[Value]| seal(&h));
+    vm.register_native("host::seal", Box::new(move |_args: &[Value]| seal(&h)));
     let h = host.clone();
-    vm.register_native_closure("host::open", move |_args: &[Value]| open(&h));
+    vm.register_native("host::open", Box::new(move |_args: &[Value]| open(&h)));
 }
 
 #[cfg(feature = "encryption")]
@@ -388,18 +414,36 @@ pub fn frame_module() -> Result<Module, FrameError> {
     crate::compiler::compile(&program).map_err(|e| stage(e.message))
 }
 
-/// One run of the framing program on a fresh virtual machine.
+/// The executor for the framing program. Under `self-host` the self-hosted driver's stage
+/// factory is offered the module first, so a host that installed one, a native build of
+/// `frame.kel` in particular, runs the framing there. Otherwise, and when the factory declines,
+/// the virtual machine runs it.
+fn frame_executor(
+    module: Module,
+    arena: &Arena,
+) -> Result<Box<dyn StageExecutor + '_>, FrameError> {
+    #[cfg(feature = "self-host")]
+    {
+        Ok(crate::selfhost::executor::stage_vm(module, arena)?)
+    }
+    #[cfg(not(feature = "self-host"))]
+    {
+        Ok(Box::new(crate::vm::Vm::new(module, arena)?))
+    }
+}
+
+/// One run of the framing program on a fresh executor.
 struct Machine<'arena> {
-    vm: Vm<'arena, 'arena>,
+    vm: Box<dyn StageExecutor + 'arena>,
     shared: Vec<u8>,
     host: Shared,
 }
 
 impl<'arena> Machine<'arena> {
     fn new(module: Module, arena: &'arena Arena, host: Host) -> Result<Self, FrameError> {
-        let mut vm = Vm::new(module, arena)?;
+        let mut vm = frame_executor(module, arena)?;
         let host = Rc::new(RefCell::new(host));
-        register(&mut vm, &host);
+        register(&mut *vm, &host);
         let shared = alloc::vec![0u8; vm.shared_data_bytes()];
         Ok(Machine { vm, shared, host })
     }

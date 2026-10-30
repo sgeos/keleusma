@@ -34,6 +34,7 @@ const SOURCE: &str = "fn f(n: Word) -> Word { if n > 2 { n * 3 } else { n + 1 } 
 struct Counting {
     vm: Vm<'static, 'static>,
     calls: Rc<Cell<usize>>,
+    natives: Rc<Cell<usize>>,
 }
 
 impl StageExecutor for Counting {
@@ -59,6 +60,7 @@ impl StageExecutor for Counting {
         self.vm.call_function(chunk, args)
     }
     fn register_native(&mut self, name: &str, native: StageNative) {
+        self.natives.set(self.natives.get() + 1);
         self.vm.register_native_closure(name, native);
     }
 }
@@ -71,6 +73,7 @@ struct Recorder {
     offered: Cell<usize>,
     wrap: bool,
     calls: Rc<Cell<usize>>,
+    natives: Rc<Cell<usize>>,
 }
 
 impl StageFactory for Recorder {
@@ -91,6 +94,7 @@ impl StageFactory for Recorder {
         Some(Box::new(Counting {
             vm,
             calls: Rc::clone(&self.calls),
+            natives: Rc::clone(&self.natives),
         }))
     }
 }
@@ -101,6 +105,7 @@ fn recorder(wrap: bool) -> Rc<Recorder> {
         offered: Cell::new(0),
         wrap,
         calls: Rc::new(Cell::new(0)),
+        natives: Rc::new(Cell::new(0)),
     })
 }
 
@@ -167,4 +172,42 @@ fn the_factory_is_removed_after_its_scope() {
     with_stage_factory(factory.clone(), || {});
     compile_self_hosted();
     assert_eq!(factory.offered.get(), 0);
+}
+
+/// The framing stage is built through the same boundary, and the executor a
+/// factory returns receives the ten frame natives, so a native build of
+/// `frame.kel` binds the code the virtual machine runs.
+#[cfg(feature = "signatures")]
+#[test]
+fn the_framing_stage_and_its_natives_reach_the_factory() {
+    let module = compile_src(SOURCE);
+    let key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+    let reference = keleusma::crypto_frame::signed_wire_bytes(&module, &key, false).unwrap();
+    let factory = recorder(true);
+    let signed = with_stage_factory(factory.clone(), || {
+        keleusma::crypto_frame::signed_wire_bytes(&module, &key, false)
+    })
+    .unwrap();
+    assert_eq!(signed, reference);
+    let frame = keleusma::crypto_frame::frame_module()
+        .unwrap()
+        .to_bytes()
+        .unwrap();
+    assert!(
+        factory.seen.borrow().contains(&frame),
+        "the frame stage did not reach the factory"
+    );
+    assert!(
+        factory.calls.get() > 0,
+        "the returned executor was not driven"
+    );
+    assert_eq!(
+        factory.natives.get() % 10,
+        0,
+        "a frame executor missed a native"
+    );
+    assert!(
+        factory.natives.get() >= 10,
+        "no frame natives were registered"
+    );
 }
