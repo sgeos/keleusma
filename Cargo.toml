@@ -54,6 +54,8 @@ exclude = [
     "tools/",
     "tmp/",
     "secret/",
+    # Changelog fragments are assembled into CHANGELOG.md before a release is cut.
+    "changelog.d/",
     # Internal audit narrative and process logs are kept out of the published
     # tarball (audit 8859acb publication review); user-facing docs/reference/,
     # docs/spec/, docs/architecture/, and docs/standard/ still ship.

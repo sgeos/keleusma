@@ -105,7 +105,7 @@ These checks also run automatically before every `git push` through a [cargo-hus
 
 The hook fails the push if any check fails. To push a work-in-progress branch without running it, bypass with `git push --no-verify`. If the CI feature set or the checklist above changes, update the hook script to match.
 
-If your change is user-visible, add an entry to [`CHANGELOG.md`](CHANGELOG.md) under `[Unreleased]`.
+If your change is user-visible, add a changelog fragment under [`changelog.d/`](changelog.d/README.md) rather than editing [`CHANGELOG.md`](CHANGELOG.md). The fragments are assembled into its `[Unreleased]` section at release.
 
 If your change touches the surface language (new keyword, new operator, new construct), update the relevant section of [`docs/spec/GRAMMAR.md`](docs/spec/GRAMMAR.md) and consider whether the syntax highlighters under [`editors/`](editors/README.md) need to learn the new construct.
 
@@ -122,7 +122,7 @@ If your program lexes and parses but `Vm::new` or `compile` rejects it, the reje
 Soundness is the load-bearing property of the language. Any change to `verify::wcet_stream_iteration`, `verify::wcmu_stream_iteration`, `verify::verify`, or the surrounding analysis machinery should:
 
 - Carry tests in the affected module that exercise the soundness boundary.
-- Be paired with a CHANGELOG entry that names the soundness invariant the change preserves or relaxes.
+- Be paired with a changelog fragment that names the soundness invariant the change preserves or relaxes.
 - Be reviewed against the rationale in [`docs/architecture/LANGUAGE_DESIGN.md`](docs/architecture/LANGUAGE_DESIGN.md#conservative-verification) for the conservative-verification stance.
 
 ## Code of conduct
