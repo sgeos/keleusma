@@ -2659,11 +2659,124 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
     Ok(())
 }
 
+/// The operator a checked arithmetic construct guards.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CheckedOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    AShl,
+    Neg,
+}
+
+impl CheckedOp {
+    /// The guarded operator of `op_expr`, or `None` when the expression is
+    /// not one of the seven a checked arithmetic construct admits.
+    pub(crate) fn of(op_expr: &Expr) -> Option<Self> {
+        match op_expr {
+            Expr::BinOp { op, .. } => match op {
+                BinOp::Add => Some(Self::Add),
+                BinOp::Sub => Some(Self::Sub),
+                BinOp::Mul => Some(Self::Mul),
+                BinOp::Div => Some(Self::Div),
+                BinOp::Mod => Some(Self::Mod),
+                BinOp::AShl => Some(Self::AShl),
+                _ => None,
+            },
+            Expr::UnaryOp {
+                op: UnaryOp::Neg, ..
+            } => Some(Self::Neg),
+            _ => None,
+        }
+    }
+
+    fn describe(self) -> &'static str {
+        match self {
+            Self::Add => "`+`",
+            Self::Sub => "`-`",
+            Self::Mul => "`*`",
+            Self::Div => "`/`",
+            Self::Mod => "`%`",
+            Self::AShl => "arithmetic left shift `<<<`",
+            Self::Neg => "unary `-`",
+        }
+    }
+}
+
+/// The operand family of a checked arithmetic construct.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CheckedOperand {
+    Word,
+    Byte,
+    Float,
+    Fixed,
+}
+
+/// Whether `overflow` can arise for `op` on `operand`. `Fixed` mirrors `Word`.
+pub(crate) fn checked_overflow_admissible(op: CheckedOp, operand: CheckedOperand) -> bool {
+    use CheckedOp::*;
+    match operand {
+        CheckedOperand::Byte => matches!(op, Add | Mul),
+        // Float `+`, `-`, `*`, `/` can yield +inf.
+        CheckedOperand::Float => matches!(op, Add | Sub | Mul | Div),
+        CheckedOperand::Word | CheckedOperand::Fixed => {
+            matches!(op, Add | Sub | Mul | AShl | Neg | Div)
+        }
+    }
+}
+
+/// Whether `underflow` can arise for `op` on `operand`. `Fixed` mirrors `Word`
+/// except in division, where a `Q`-format quotient can fall below the
+/// representable minimum and `Op::CheckedDiv` sets the underflow flag.
+pub(crate) fn checked_underflow_admissible(op: CheckedOp, operand: CheckedOperand) -> bool {
+    use CheckedOp::*;
+    match operand {
+        CheckedOperand::Byte => op == Sub,
+        // Float `+`, `-`, `*`, `/` can yield -inf.
+        CheckedOperand::Float => matches!(op, Add | Sub | Mul | Div),
+        CheckedOperand::Word => matches!(op, Add | Sub | Mul | AShl),
+        CheckedOperand::Fixed => matches!(op, Add | Sub | Mul | AShl | Div),
+    }
+}
+
+/// Whether some outcome of a checked arithmetic construct can reach the
+/// wrapping default, the operand's own value pushed after the last arm.
+///
+/// `ok` is always covered, because the type checker requires its unguarded
+/// catch-all. An uncovered `zero_divisor` traps before the default. Any other
+/// class that can arise for the operator and operand reaches the default
+/// unless an unguarded variable or wildcard arm covers it. A guarded or
+/// literal arm does not cover its class.
+///
+/// The type checker uses this to require the operand's type when the default
+/// is reachable, and the compiler uses it to omit an unreachable default, so
+/// the two cannot disagree on a program the type checker admitted.
+pub(crate) fn checked_wrap_default_reachable(
+    op: CheckedOp,
+    operand: CheckedOperand,
+    arms: &[crate::ast::CheckedArm],
+) -> bool {
+    use crate::ast::CheckedArmKind;
+    let covered = |class: fn(&CheckedArmKind) -> bool| {
+        arms.iter().any(|arm| {
+            arm.guard.is_none() && class(&arm.kind) && checked_arm_is_catchall(&arm.kind)
+        })
+    };
+    let overflow = covered(|k| matches!(k, CheckedArmKind::Overflow(..)));
+    let underflow = covered(|k| matches!(k, CheckedArmKind::Underflow(..)));
+    let nan = covered(|k| matches!(k, CheckedArmKind::Nan(_)));
+    (checked_overflow_admissible(op, operand) && !overflow)
+        || (checked_underflow_admissible(op, operand) && !underflow)
+        || (operand == CheckedOperand::Float && !nan)
+}
+
 /// Bind a pattern's variables into the current scope at the given type.
 /// Returns true if every pattern in a `CheckedArmKind` is a
 /// catch-all (wildcard or bare variable). A catch-all arm matches
 /// every runtime value for its outcome class.
-fn checked_arm_is_catchall(kind: &crate::ast::CheckedArmKind) -> bool {
+pub(crate) fn checked_arm_is_catchall(kind: &crate::ast::CheckedArmKind) -> bool {
     use crate::ast::CheckedArmKind;
     let is_catchall_pat = |p: &Pattern| matches!(p, Pattern::Wildcard(_) | Pattern::Variable(_, _));
     match kind {
@@ -5916,28 +6029,18 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             // literal case.
             use crate::ast::CheckedArmKind;
 
-            // The guarded operator, used for admissibility and arity.
-            #[derive(Clone, Copy, PartialEq)]
-            enum CheckedOp {
-                Add,
-                Sub,
-                Mul,
-                Div,
-                Mod,
-                AShl,
-                Neg,
-            }
-            let (cop, op_desc) = match op_expr.as_ref() {
-                Expr::BinOp { op: BinOp::Add, .. } => (CheckedOp::Add, "`+`"),
-                Expr::BinOp { op: BinOp::Sub, .. } => (CheckedOp::Sub, "`-`"),
-                Expr::BinOp { op: BinOp::Mul, .. } => (CheckedOp::Mul, "`*`"),
-                Expr::BinOp { op: BinOp::Div, .. } => (CheckedOp::Div, "`/`"),
-                Expr::BinOp { op: BinOp::Mod, .. } => (CheckedOp::Mod, "`%`"),
-                Expr::BinOp {
-                    op: BinOp::AShl, ..
-                } => (CheckedOp::AShl, "arithmetic left shift `<<<`"),
-                // The `supported` check above guarantees unary `-`.
-                _ => (CheckedOp::Neg, "unary `-`"),
+            // The guarded operator, used for admissibility and arity. The
+            // `supported` check above guarantees one of the seven.
+            let cop = CheckedOp::of(op_expr).unwrap_or(CheckedOp::Neg);
+            let op_desc = cop.describe();
+            let operand_class = if is_byte {
+                CheckedOperand::Byte
+            } else if is_float {
+                CheckedOperand::Float
+            } else if is_fixed {
+                CheckedOperand::Fixed
+            } else {
+                CheckedOperand::Word
             };
             // The arithmetic left shift is signed-only and Word-only, the
             // same as multiply-by-a-power-of-two, which is how it lowers.
@@ -5978,11 +6081,13 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             // `overflow`; `-` admits `underflow`; `/` and `%` admit
             // `zero_divisor`. The signed `Fixed` type mirrors `Word`
             // (it is signed and `Q`-format arithmetic can overflow or
-            // underflow in either direction), differing only in that
-            // its arms bind a single result; it therefore reuses the
-            // `Word` admissibility branch below. `ok` is admissible for
-            // every operator. An arm whose outcome cannot arise is a
-            // compile error.
+            // underflow in either direction), differing in that its
+            // arms bind a single result and that its `/` also admits
+            // `underflow`, because a `Q`-format quotient can fall below
+            // the minimum. `ok` is admissible for every operator. An arm
+            // whose outcome cannot arise is a compile error. The table
+            // is `checked_overflow_admissible` and
+            // `checked_underflow_admissible`.
             let type_name = if is_byte {
                 "Byte"
             } else if is_float {
@@ -5996,44 +6101,12 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 let (admissible, arm_name) = match &arm.kind {
                     CheckedArmKind::Ok(_) => (true, "ok"),
                     CheckedArmKind::Overflow(_, _) => {
-                        let ok = if is_byte {
-                            matches!(cop, CheckedOp::Add | CheckedOp::Mul)
-                        } else if is_float {
-                            // Float `+`, `-`, `*`, `/` can yield +inf.
-                            matches!(
-                                cop,
-                                CheckedOp::Add | CheckedOp::Sub | CheckedOp::Mul | CheckedOp::Div
-                            )
-                        } else {
-                            matches!(
-                                cop,
-                                CheckedOp::Add
-                                    | CheckedOp::Sub
-                                    | CheckedOp::Mul
-                                    | CheckedOp::AShl
-                                    | CheckedOp::Neg
-                                    | CheckedOp::Div
-                            )
-                        };
-                        (ok, "overflow")
+                        (checked_overflow_admissible(cop, operand_class), "overflow")
                     }
-                    CheckedArmKind::Underflow(_, _) => {
-                        let ok = if is_byte {
-                            cop == CheckedOp::Sub
-                        } else if is_float {
-                            // Float `+`, `-`, `*`, `/` can yield -inf.
-                            matches!(
-                                cop,
-                                CheckedOp::Add | CheckedOp::Sub | CheckedOp::Mul | CheckedOp::Div
-                            )
-                        } else {
-                            matches!(
-                                cop,
-                                CheckedOp::Add | CheckedOp::Sub | CheckedOp::Mul | CheckedOp::AShl
-                            )
-                        };
-                        (ok, "underflow")
-                    }
+                    CheckedArmKind::Underflow(_, _) => (
+                        checked_underflow_admissible(cop, operand_class),
+                        "underflow",
+                    ),
                     CheckedArmKind::ZeroDivisor(_) => (
                         // Integer-only: a float division by zero yields
                         // an infinity or NaN, not a trap.
@@ -6220,6 +6293,23 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                         arm.span,
                     ));
                 }
+            }
+            // An outcome class that can arise and has no unguarded catch-all
+            // falls to the wrapping default, which yields the operand's own
+            // value. The construct's type must then be the operand's, or a
+            // `Word` would stand where another type is declared.
+            if checked_wrap_default_reachable(cop, operand_class, arms)
+                && !types_compatible(ctx, &result_ty, &operand_ty)
+            {
+                return Err(TypeError::new(
+                    alloc::format!(
+                        "checked-overflow construct produces {} but leaves an outcome to the wrapping default, which yields {}; cover every admissible outcome with an unguarded catch-all arm, or produce {}",
+                        result_ty.apply(&ctx.subst).display(),
+                        operand_ty.display(),
+                        operand_ty.display()
+                    ),
+                    *span,
+                ));
             }
             Ok(result_ty.apply(&ctx.subst))
         }

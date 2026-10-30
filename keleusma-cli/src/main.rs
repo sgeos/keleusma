@@ -829,7 +829,13 @@ fn keygen_subcommand(args: &[String]) -> ExitCode {
     }
     let (seed_bytes, public_bytes, kind_label) = match kind {
         KeyKind::Signing => {
-            let signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core::OsRng);
+            // An Ed25519 secret key is any 32 bytes, so it is drawn from the OS RNG and
+            // expanded by `from_bytes`. This is what `SigningKey::generate` does, without
+            // tying the CLI's random source to the `rand_core` release `ed25519-dalek` uses.
+            use rand_core::RngCore;
+            let mut secret = [0u8; ed25519_dalek::SECRET_KEY_LENGTH];
+            rand_core::OsRng.fill_bytes(&mut secret);
+            let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret);
             let verifying_key = signing_key.verifying_key();
             (signing_key.to_bytes(), verifying_key.to_bytes(), "Ed25519")
         }
