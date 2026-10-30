@@ -22,6 +22,13 @@ below. V0.4.0 is not released, since publication is held.
   or shared slot holding one is still refused. Both now have rulings and are being built. The Linux targets are built, and a
   hosted job added under question 12 executed each on its own runner in run 40823596424, which PR 607 merged. The native self-hosted compiler of question 19 does not exist
   yet.
+- **Status on 2026-10-30.** Opaque handles pass as typed host pointers on four
+  routes under question 14, and a struct field or shared slot holding one is
+  still refused. Dynamic `Text` waits on V0.2.X's `Text<N>` under question 13.
+  For question 19 the self-hosted compiler runs with every stage native,
+  `frame.kel` among them, and compiles byte-identically to the virtual machine
+  and the reference. A cache of built stages, the compiler selector and a
+  corpus-wide end-to-end check remain. Acceptance is the operator's question 23.
 - **The operator's rulings, 2026-10-28.** Every open question was answered.
   The V0.2.X dependency is met, because native code consumes the reference
   compiler's bytecode, which is question 18. The `Text`, opaque and Linux

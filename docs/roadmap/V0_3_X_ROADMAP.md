@@ -2,7 +2,10 @@
 
 > **Navigation**: [Roadmap](./README.md) | [Documentation Root](../README.md)
 
-**Status**: Preliminary. Gated on the V0.3.0 full self-hosting solution landing. This document
+**Status**: In progress. Orders 1 to 5 of this line are recorded as met, Order 6
+is met in part, and its acceptance is the operator's question 23, as recorded in
+[`ORDER_6_COMPLETION.md`](../decisions/ORDER_6_COMPLETION.md). The paragraph below is the plan as
+first written and is kept as written. This document
 mirrors [`V0_2_X_ROADMAP.md`](./V0_2_X_ROADMAP.md): it sequences the V0.3.x release line toward
 its milestone. The milestone is **V0.4.0, full native code generation**, whose architecture
 stays authoritative in [`V0_4_0_NATIVE_CODEGEN.md`](./V0_4_0_NATIVE_CODEGEN.md). Because the
@@ -346,10 +349,12 @@ Carried from `V0_4_0_NATIVE_CODEGEN.md`'s open questions, resolved as V0.3.x app
 
 1. **WCET on native is hard or best-effort.** Whether native execution preserves a hard WCET
    bound or a best-effort one; the V0.5.0 host strategy already treats native WCET as
-   best-effort, which informs this.
+   best-effort, which informs this. **Answered 2026-10-28**, question 1: best effort, in
+   bytecode cost units.
 2. **JIT versus AOT scope.** Whether V0.3.x pursues ahead-of-time only or admits a JIT path.
+   **Open** as question 21, raised 2026-10-30.
 3. **Flat-machine ISA timing.** Whether the B28 flat-machine redesign lands within V0.3.x or is
-   staged into V0.4.x.
+   staged into V0.4.x. **Answered 2026-10-28**, question 2: deferred.
 
 ## Relationship to other roadmaps
 
