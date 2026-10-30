@@ -249,7 +249,7 @@ pub fn encrypt_to_recipient(
     let cipher = Aes256Gcm::new_from_slice(&key)
         .map_err(|e| EncryptionError::EncryptFailed(format!("{:?}", e)))?;
     let ciphertext = cipher
-        .encrypt(aes_gcm::Nonce::from_slice(&nonce), plaintext)
+        .encrypt(&aes_gcm::Nonce::from(nonce), plaintext)
         .map_err(|e| EncryptionError::EncryptFailed(format!("{:?}", e)))?;
 
     let metadata = EncryptionMetadata {
@@ -356,7 +356,7 @@ pub(crate) fn open_sealed(
     let cipher = Aes256Gcm::new_from_slice(&key)
         .map_err(|e| EncryptionError::DecryptFailed(format!("{:?}", e)))?;
     let plaintext = cipher
-        .decrypt(aes_gcm::Nonce::from_slice(aes_gcm_nonce), ciphertext)
+        .decrypt(&aes_gcm::Nonce::from(*aes_gcm_nonce), ciphertext)
         .map_err(|e| EncryptionError::DecryptFailed(format!("{:?}", e)))?;
 
     Ok(plaintext)

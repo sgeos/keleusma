@@ -17,11 +17,11 @@ land one pull request at a time.
 | 2 | Defer the bytecode half of the flat machine | None | None | Deferred |
 | 3 | Report the root `scripts/` pipe pattern | Sent 2026-10-28, sequence 122. V0.2.X accepted it as a defect report | V0.2.X | Reported, repair is V0.2.X's |
 | 4 | Apply `opt-level = 1` | Set in `native_codegen/Cargo.toml` with its rationale. No pinned figure moved | This line | Done, pull request 600 at `a0dd6f7b` |
-| 5 | Wait for the verifier fix | V0.2.X gave notice on 2026-10-28, sequence 126, that its pull request 598 adds a callee-aware time bound that admits `intern_id`. Once it is absorbed, `native_codegen/src/cost.rs` may call that form | V0.2.X, then this line | Waiting on V0.2.X's merge |
-| 6 | Add `interp.kel` and `frame.kel` to the native corpus | `src/hosted` and `src/crypto_frame` are corpus roots in every full root list, and the seven pins that moved were re-derived. `frame.kel` executes in the corpus differential and agrees. `interp.kel` is exempt there, because the virtual machine refuses it with empty `io` tables. A seeded `interp.kel` differential follows as its own pull request | This line | Roots done, pull request 602 at `4a41f53a`. The seeded differential waits on a public seeding function requested from V0.2.X |
-| 7 | Revise `RUNTIME_FAULTS.md` to the 2026-10-20 ruling | Relayed. V0.2.X reports the rewrite in its pull request 598 | V0.2.X | In review there |
+| 5 | Wait for the verifier fix | V0.2.X gave notice on 2026-10-28, sequence 126, that its pull request 598 adds a callee-aware time bound that admits `intern_id`. Once it is absorbed, `native_codegen/src/cost.rs` may call that form | V0.2.X, then this line | Pull request 598 absorbed in absorption 116. This line's use of the callee-aware bound is next |
+| 6 | Add `interp.kel` and `frame.kel` to the native corpus | `src/hosted` and `src/crypto_frame` are corpus roots in every full root list, and the seven pins that moved were re-derived. `frame.kel` executes in the corpus differential and agrees. `interp.kel` is exempt there, because the virtual machine refuses it with empty `io` tables. A seeded `interp.kel` differential follows as its own pull request | This line | Roots done, pull request 602 at `4a41f53a`. The seeding function arrived in absorption 116 as `hosted::seeded_shared` with the `hosted::protocol` constants, so the seeded differential is next |
+| 7 | Revise `RUNTIME_FAULTS.md` to the 2026-10-20 ruling | Relayed. V0.2.X rewrote it in its pull request 598 | V0.2.X | Done there, absorbed in absorption 116 |
 | 8 | Compare slot types on hot swap | V0.2.X confirmed with the operator and will change `compute_schema_hash`, then this line adopts it natively | V0.2.X, then this line | Waiting on V0.2.X |
-| 9 | Remove run-time kind tags | V0.2.X sent the rule's form on 2026-10-28, sequence 127, and this line replied. A measurement below shows the rule alone removes little. V0.2.X holds the rule, sequence 131, because it rejects programs in use, and the choice is open question 20 | Operator, then V0.2.X, then this line | Held for question 20. The census was narrowed on 2026-10-29, leaving two dynamic coroutines |
+| 9 | Remove run-time kind tags | V0.2.X sent the rule's form on 2026-10-28, sequence 127, and this line replied. A measurement below shows the rule alone removes little. V0.2.X holds the rule, sequence 131, because it rejects programs in use, and the choice is open question 20 | Operator, then V0.2.X, then this line | Held for question 20. The census was narrowed on 2026-10-29, leaving two dynamic coroutines. Absorption 116 frees `interp.kel`, leaving `14_frame_log.kel` |
 | 10 | Restore two Kaizen records, then delete the branch | Restored verbatim into `NATIVE_LOWERING_INVENTORY.md` under a provenance note, from `af8b61ac` and `e4964490`. The branch is deleted after the merge and Kaizen is told | This line and Kaizen | Done. Pull request 604 at `3d79be0b`, the branch deleted and Kaizen told |
 | 11 | Narrow `native.yml` paths | Audited. Of `docs/decisions`, the suite reads only the newest absorption receipt, so the filter and the reach set name `ABSORPTION_*_BRIEF.md`. The audit also found the citation guard reading sources the workflow does not watch, now limited to the watched paths | This line | Done, pull request 606 |
 | 12 | A hosted Linux job on two Ubuntu runners | `tier_one_targets.rs` runs a Linux triple on its own machine with the system `cc` and fails if it did not. `native.yml` gains a job on `ubuntu-24.04` and `ubuntu-24.04-arm` that runs that file and `kel_native_cli.rs`, with LLVM 22 from `apt.llvm.org` | This line | Done in PR 607, both runners green in run 40823596424 |
@@ -116,6 +116,19 @@ request was sent in sequence 136. The newly static piano roll coroutines
 call host natives, so `static_kind_lowering.rs` admits them on the coroutine
 route without driving them, and their agreement with the virtual machine is
 checked through `lower_module` by `module_differential.rs`.
+
+Measured again on 2026-10-30 after absorption 116, which brings V0.2.X's
+answer to sequence 136. Both compilers now omit the default and the last
+arm's class test when unguarded arms cover every class, so the join holds
+only the arms' kind. With the current analysis, 1 of 188375 instructions
+needs a run-time kind, and the static, dynamic and refused coroutines are 29,
+1 and 2. `interp.kel` is static and lowers with static kinds, as
+`an_operand_no_instruction_reads_needs_no_run_time_kind` now requires. The
+one dynamic coroutine is `14_frame_log.kel`, at a kind guard over a private
+slot that starts as `Unit`, which is the case the private rule of question 20
+frees. The three other start rules were not measured again. By the table
+above the private rule would leave no instruction needing a run-time kind,
+but that is this line's inference and not a measurement.
 
 ## This line's readings, stated as its own
 
