@@ -108,7 +108,7 @@ fn capacity(
         Ok(())
     }
 }
-fn word(vm: &Vm<'_, '_>, shared: &[u8], slot: usize, stage: &'static str) -> Result<i64> {
+fn word(vm: &dyn StageExecutor, shared: &[u8], slot: usize, stage: &'static str) -> Result<i64> {
     match vm
         .get_shared(shared, slot)
         .map_err(|e| execution(stage, e))?
@@ -118,7 +118,7 @@ fn word(vm: &Vm<'_, '_>, shared: &[u8], slot: usize, stage: &'static str) -> Res
     }
 }
 fn set(
-    vm: &Vm<'_, '_>,
+    vm: &dyn StageExecutor,
     shared: &mut [u8],
     slot: usize,
     value: i64,
@@ -137,7 +137,12 @@ fn flag(value: i64, stage: &'static str) -> Result<bool> {
         _ => Err(protocol(stage, "non-Boolean verdict")),
     }
 }
-fn completed(vm: &Vm<'_, '_>, shared: &[u8], slot: usize, stage: &'static str) -> Result<()> {
+fn completed(
+    vm: &dyn StageExecutor,
+    shared: &[u8],
+    slot: usize,
+    stage: &'static str,
+) -> Result<()> {
     match word(vm, shared, slot, stage)? {
         0 => Ok(()),
         cause if (1..=if stage == "types" { 3 } else { 2 }).contains(&cause) => {
@@ -147,7 +152,7 @@ fn completed(vm: &Vm<'_, '_>, shared: &[u8], slot: usize, stage: &'static str) -
     }
 }
 fn verdict(
-    vm: &Vm<'_, '_>,
+    vm: &dyn StageExecutor,
     shared: &[u8],
     slot: usize,
     yielded: i64,
@@ -171,7 +176,7 @@ fn arena(module: &Module, stage: &'static str) -> Result<Arena> {
     Ok(arena)
 }
 fn command(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     started: &mut bool,
     stage: &'static str,
@@ -199,11 +204,11 @@ fn command(
 fn run<T>(
     stage: &'static str,
     module: Module,
-    seed: impl FnOnce(&Vm<'_, '_>) -> Result<Vec<u8>>,
-    result: impl FnOnce(&Vm<'_, '_>, &[u8], i64) -> Result<T>,
+    seed: impl FnOnce(&dyn StageExecutor) -> Result<Vec<u8>>,
+    result: impl FnOnce(&dyn StageExecutor, &[u8], i64) -> Result<T>,
 ) -> Result<T> {
     let arena = arena(&module, stage)?;
-    let mut vm = Vm::new(module, &arena).map_err(|e| execution(stage, e))?;
+    let mut vm = stage_vm(module, &arena).map_err(|e| execution(stage, e))?;
     let mut shared = seed(&vm)?;
     let yielded = command(&mut vm, &mut shared, &mut false, stage)?;
     result(&vm, &shared, yielded)
@@ -400,7 +405,7 @@ fn layout(module: &Module, widths: (usize, usize, usize)) -> Result<bool> {
     };
     let m = verify_datalayout_kel_module();
     let arena = arena(&m, "data layout")?;
-    let mut vm = Vm::new(m, &arena).map_err(|e| execution("data layout", e))?;
+    let mut vm = stage_vm(m, &arena).map_err(|e| execution("data layout", e))?;
     let mut shared = vec![0; vm.shared_data_bytes()];
     let mut started = false;
     for (slot, value) in [

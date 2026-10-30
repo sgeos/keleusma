@@ -15,7 +15,7 @@ fn error(detail: &str) -> SelfHostError {
 fn required(bytes: Option<&[u8]>) -> Result<&[u8], SelfHostError> {
     bytes.ok_or_else(|| error("required region absent after stage validation"))
 }
-fn signed(vm: &Vm<'_, '_>, shared: &[u8], slot: usize) -> Result<i64, SelfHostError> {
+fn signed(vm: &dyn StageExecutor, shared: &[u8], slot: usize) -> Result<i64, SelfHostError> {
     match vm
         .get_shared(shared, slot)
         .map_err(|_| error("field read failed"))?
@@ -31,7 +31,7 @@ fn record(value: &WireSchemaRecord) -> Result<&ConstRecord, SelfHostError> {
     }
 }
 fn send_record(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     record: &ConstRecord,
 ) -> Result<(), SelfHostError> {
@@ -47,7 +47,7 @@ fn send_record(
     )
 }
 fn expect(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     cmd: i64,
     expected: usize,
@@ -136,9 +136,9 @@ struct Tables<'a> {
 }
 
 fn build_node(
-    codec: &mut Vm<'_, '_>,
+    codec: &mut dyn StageExecutor,
     codec_shared: &mut [u8],
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     tables: &Tables<'_>,
     built: &mut [Option<ConstValue>],

@@ -16,7 +16,7 @@ fn error(detail: &str) -> SelfHostError {
     }
 }
 
-fn word(vm: &Vm<'_, '_>, shared: &[u8], slot: usize) -> Result<usize, SelfHostError> {
+fn word(vm: &dyn StageExecutor, shared: &[u8], slot: usize) -> Result<usize, SelfHostError> {
     match vm
         .get_shared(shared, slot)
         .map_err(|_| error("response read failed"))?
@@ -26,7 +26,11 @@ fn word(vm: &Vm<'_, '_>, shared: &[u8], slot: usize) -> Result<usize, SelfHostEr
     }
 }
 
-fn fields(vm: &mut Vm<'_, '_>, shared: &mut [u8], values: &[i64]) -> Result<(), SelfHostError> {
+fn fields(
+    vm: &mut dyn StageExecutor,
+    shared: &mut [u8],
+    values: &[i64],
+) -> Result<(), SelfHostError> {
     if values.len() > WORD_WINDOW {
         return Err(error("field window overflow"));
     }
@@ -45,7 +49,7 @@ fn header(record: &DebugRecord) -> [i64; 3] {
 }
 
 fn append(
-    vm: &Vm<'_, '_>,
+    vm: &dyn StageExecutor,
     shared: &[u8],
     size: usize,
     output: &mut Vec<u8>,
@@ -69,7 +73,7 @@ fn append(
 // The stage supplies every merge cursor, comparison and copy decision. The host
 // retains the two index arrays and transports the selected semantic records.
 fn sorted_indices(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     records: &[DebugRecord],
 ) -> Result<Vec<usize>, SelfHostError> {

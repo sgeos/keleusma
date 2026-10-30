@@ -1,8 +1,10 @@
 //! Data operands are translated by codegen.kel using parser-produced address maps.
+use super::executor::{StageExecutor, stage_vm};
 use super::{ParsedFn, SelfHostError};
 use crate::bytecode::{Module, Value};
 use crate::selfhost_host::{PARSE_DATA_FIELD_BASE_TAG, PARSE_FIELDS_CAP};
-use crate::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
+use crate::vm::{DEFAULT_ARENA_CAPACITY, VmState, required_persistent_capacity_for};
+use alloc::boxed::Box;
 use alloc::format;
 use alloc::sync::Arc;
 use alloc::vec;
@@ -110,7 +112,7 @@ fn stage() -> Module {
 }
 
 struct Machine<'a> {
-    vm: Vm<'static, 'a>,
+    vm: Box<dyn StageExecutor + 'a>,
     shared: Vec<u8>,
     kind: usize,
     argument: usize,
@@ -150,7 +152,7 @@ impl<'a> Machine<'a> {
             find("ast.relocate_length")?,
             find("ast.relocate_target")?,
         ];
-        let vm = Vm::new(module, arena).map_err(error)?;
+        let vm = stage_vm(module, arena).map_err(error)?;
         let mut shared = vec![0; vm.shared_data_bytes()];
         vm.set_shared(&mut shared, slots[0], Value::Int(1))
             .map_err(error)?;

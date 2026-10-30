@@ -36,10 +36,13 @@ use crate::bytecode::{
     Value,
 };
 use crate::value_layout::{CompositeKind, ScalarKind};
-use crate::vm::{DEFAULT_ARENA_CAPACITY, Vm, VmState, required_persistent_capacity_for};
+use crate::vm::{DEFAULT_ARENA_CAPACITY, VmState, required_persistent_capacity_for};
 use crate::{Arena, compiler::compile, lexer::tokenize, parser::parse};
 
 mod analysis_machine;
+pub mod executor;
+use executor::stage_vm;
+pub use executor::{StageExecutor, StageFactory, StageNative, with_stage_factory};
 mod resources;
 mod text_bounds;
 mod traps;
@@ -377,7 +380,7 @@ use crate::selfhost_host::{
     PARSE_LET_NAME_TAG, PARSE_STRUCT_FIELDS_TAG, PARSE_TOKEN_CAP,
 };
 
-fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
+fn br_shared_word(vm: &dyn StageExecutor, buf: &[u8], slot: usize) -> i64 {
     match vm.get_shared(buf, slot).expect("get_shared") {
         Value::Int(n) => n,
         other => panic!("expected Int at slot {slot}, got {other:?}"),
@@ -386,7 +389,7 @@ fn br_shared_word(vm: &Vm<'_, '_>, buf: &[u8], slot: usize) -> i64 {
 
 /// Resume until the next yielded word, skipping the loop RESET. Used for the raw
 /// pool metadata, where a yielded 0 is a real value, not a PENDING marker.
-fn next_word(vm: &mut Vm<'_, '_>, shared: &mut [u8]) -> i64 {
+fn next_word(vm: &mut dyn StageExecutor, shared: &mut [u8]) -> i64 {
     loop {
         match vm
             .resume_with_shared(shared, Value::Int(0))
@@ -630,7 +633,7 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<(i64, i64)>, i6
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify codegen.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify codegen.kel");
 
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     vm.set_shared(&mut shared, 0, Value::Int(body.root))
@@ -771,7 +774,7 @@ fn chunk_table_from_tokens(tokens: &[(i64, i64)], names: &[String]) -> Vec<i64> 
 /// The lexer's protocol: 63 is PENDING (a step that consumed a byte without
 /// completing a token), 62 is end of input, anything else is a token packed as
 /// `kind + payload * 256`.
-fn lex_next(vm: &mut Vm<'_, '_>, shared: &mut [u8]) -> Option<i64> {
+fn lex_next(vm: &mut dyn StageExecutor, shared: &mut [u8]) -> Option<i64> {
     // Bounded rather than `loop`: a lexer that only ever reported PENDING would
     // otherwise hang the driver, and a total language should not need a host that
     // can. Four bytes of pending per token is far past any real run.
@@ -818,8 +821,8 @@ fn lex_module() -> Module {
     compile_src(&read_stage("kel/lexer.kel"))
 }
 
-fn lex_open<'a>(arena: &'a Arena, m: Module, src: &str) -> (Vm<'a, 'a>, Vec<u8>) {
-    let vm = Vm::new(m, arena).expect("verify lexer.kel");
+fn lex_open<'a>(arena: &'a Arena, m: Module, src: &str) -> (Box<dyn StageExecutor + 'a>, Vec<u8>) {
+    let vm = stage_vm(m, arena).expect("verify lexer.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     let bytes = src.as_bytes();
     assert!(
@@ -837,7 +840,7 @@ fn lex_open<'a>(arena: &'a Arena, m: Module, src: &str) -> (Vm<'a, 'a>, Vec<u8>)
 }
 
 /// The intern table, read out of a lexer that has reached end of input.
-fn lex_names(vm: &Vm<'_, '_>, shared: &[u8], src: &str) -> Vec<String> {
+fn lex_names(vm: &dyn StageExecutor, shared: &[u8], src: &str) -> Vec<String> {
     let bytes = src.as_bytes();
     let icount = br_shared_word(vm, shared, BR_LEX_ICOUNT) as usize;
     (0..icount)
@@ -850,7 +853,7 @@ fn lex_names(vm: &Vm<'_, '_>, shared: &[u8], src: &str) -> Vec<String> {
 }
 
 /// Transport values already computed by the lexer stage. No source parsing occurs here.
-fn lex_values(vm: &Vm<'_, '_>, shared: &[u8], count: usize) -> Vec<i64> {
+fn lex_values(vm: &dyn StageExecutor, shared: &[u8], count: usize) -> Vec<i64> {
     assert!(
         count <= crate::selfhost_host::LEX_INTERN_CAP,
         "lexer intern capacity exceeded"
@@ -970,7 +973,7 @@ struct Template {
 type Instantiation = (usize, Vec<i64>);
 
 /// Seed `parse.kel`'s template and instantiation tables from a first pass, Order 6.
-fn seed_generics(vm: &mut Vm<'_, '_>, shared: &mut [u8], first: &FirstPass) {
+fn seed_generics(vm: &mut dyn StageExecutor, shared: &mut [u8], first: &FirstPass) {
     use crate::selfhost_host as h;
     let mut set = |slot: usize, value: i64| vm.set_shared(shared, slot, Value::Int(value)).unwrap();
     set(h::BR_P_GEN_COUNT, first.templates.len() as i64);
@@ -1807,7 +1810,7 @@ pub fn parse_cursor_trace(src: &str) -> Vec<i64> {
     let need = required_persistent_capacity_for(&module);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(module, &arena).expect("verify parse.kel");
+    let mut vm = stage_vm(module, &arena).expect("verify parse.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     for (id, &value) in values.iter().enumerate() {
         vm.set_shared(
@@ -2270,7 +2273,7 @@ fn try_parse_functions_impl_with(
     let need = required_persistent_capacity_for(&module);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(module, &arena).expect("verify parse.kel");
+    let mut vm = stage_vm(module, &arena).expect("verify parse.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     for (id, &value) in first.values.iter().enumerate() {
         vm.set_shared(
@@ -2488,7 +2491,7 @@ fn try_parse_functions_impl_with(
     let lex_need = required_persistent_capacity_for(&lex_m);
     let mut lex_arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + lex_need);
     lex_arena.resize_persistent(lex_need).expect("resize");
-    let mut lex: Option<(Vm<'_, '_>, Vec<u8>)> = if fused {
+    let mut lex: Option<(Box<dyn StageExecutor + '_>, Vec<u8>)> = if fused {
         Some(lex_open(&lex_arena, lex_m, src))
     } else {
         None
@@ -2578,7 +2581,7 @@ fn try_parse_functions_impl_with(
     // looked like a fact about the parser.
     let cursor_at = alloc::rc::Rc::new(core::cell::Cell::new(0i64));
     let cursor_writer = alloc::rc::Rc::clone(&cursor_at);
-    let before_resume = |vm: &mut Vm<'_, '_>, shared: &mut [u8]| {
+    let before_resume = |vm: &mut (dyn StageExecutor + '_), shared: &mut [u8]| {
         let at = match vm.get_shared(shared, BR_P_AT).expect("at") {
             Value::Int(n) => n,
             other => panic!("expected Int at BR_P_AT, got {other:?}"),
@@ -2629,7 +2632,7 @@ fn try_parse_functions_impl_with(
     };
 
     crate::selfhost_host::try_drive_parse_records_with(
-        &mut vm,
+        &mut *vm,
         &mut shared,
         state,
         budget,
@@ -5135,7 +5138,7 @@ fn reconstruct_node_count(yielded: i64, slot_code: i64, detail: i64, chunk: &str
 // drives it for every function, so recompiling each time dominates the runtime.
 /// The compiled `reconstruct.kel` stage module, cached after the first build.
 ///
-/// Public so an external harness can construct its own [`Vm`] and drive the
+/// Public so an external harness can construct its own [`Vm`](crate::vm::Vm) and drive the
 /// stage on real input via [`seed_reconstruct_shared`] or
 /// [`seed_reconstruct_multihead_shared`].
 pub fn reconstruct_kel_module() -> Module {
@@ -5155,7 +5158,7 @@ pub fn reconstruct_kel_module() -> Module {
 /// predicate was wrong in both directions and no oracle caught it, because every
 /// corpus input agreed on keyword and head count.
 pub fn seed_reconstruct_shared(
-    vm: &Vm<'_, '_>,
+    vm: &dyn StageExecutor,
     records: &[(i64, i64)],
     category: i64,
     param_count: usize,
@@ -5186,7 +5189,7 @@ fn reconstruct_via_kel(
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify reconstruct.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify reconstruct.kel");
     let mut shared = seed_reconstruct_shared(&vm, records, category, param_count);
     let yielded = match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
@@ -5214,7 +5217,7 @@ fn reconstruct_via_kel(
     };
     let node_count =
         reconstruct_node_count(yielded, rd_diag(RC_ERR_CODE), rd_diag(RC_ERR_DETAIL), chunk);
-    let rd = |vm: &Vm<'_, '_>, shared: &[u8], slot: usize| -> i64 {
+    let rd = |vm: &dyn StageExecutor, shared: &[u8], slot: usize| -> i64 {
         match vm.get_shared(shared, slot).unwrap() {
             Value::Int(n) => n,
             o => panic!("expected Int at {slot}, got {o:?}"),
@@ -5232,7 +5235,7 @@ fn reconstruct_via_kel(
     }
     // Read each `AST_PART_CAP`-entry side array in full; the caller compares only the prefix the
     // Rust reconstruction populated.
-    let read_side = |vm: &Vm<'_, '_>, shared: &[u8], base: usize| -> Vec<i64> {
+    let read_side = |vm: &dyn StageExecutor, shared: &[u8], base: usize| -> Vec<i64> {
         (0..AST_PART_CAP)
             .map(|k| rd(vm, shared, base + k))
             .collect()
@@ -5270,7 +5273,7 @@ fn reconstruct_via_kel(
 /// because they are offsets into the concatenation this function performs and
 /// have no meaning outside it.
 pub fn seed_reconstruct_multihead_shared(
-    vm: &Vm<'_, '_>,
+    vm: &dyn StageExecutor,
     heads: &[&ParsedFn],
     pc: usize,
 ) -> Vec<u8> {
@@ -5298,7 +5301,7 @@ pub fn seed_reconstruct_multihead_shared(
         recs.extend_from_slice(&h.body);
     }
     let mut shared = vec![0u8; vm.shared_data_bytes()];
-    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+    let set = |vm: &dyn StageExecutor, shared: &mut [u8], slot: usize, v: i64| {
         vm.set_shared(shared, slot, Value::Int(v)).unwrap();
     };
     set(vm, &mut shared, RC_REC_COUNT, recs.len() as i64);
@@ -5323,7 +5326,7 @@ fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize, chunk: &str) ->
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify reconstruct.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify reconstruct.kel");
     let mut shared = seed_reconstruct_multihead_shared(&vm, heads, pc);
     let yielded = match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
@@ -5351,7 +5354,7 @@ fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize, chunk: &str) ->
     };
     let node_count =
         reconstruct_node_count(yielded, rd_diag(RC_ERR_CODE), rd_diag(RC_ERR_DETAIL), chunk);
-    let rd = |vm: &Vm<'_, '_>, shared: &[u8], slot: usize| -> i64 {
+    let rd = |vm: &dyn StageExecutor, shared: &[u8], slot: usize| -> i64 {
         match vm.get_shared(shared, slot).unwrap() {
             Value::Int(n) => n,
             o => panic!("expected Int at {slot}, got {o:?}"),
@@ -5370,7 +5373,7 @@ fn reconstruct_via_kel_multihead(heads: &[&ParsedFn], pc: usize, chunk: &str) ->
     // Every side array in full. This read 64 entries until the head cap rose past 16, which
     // truncated `head_parts`, four words a head, and every other side array of a multiheaded
     // function, a host-side limit the stage did not share.
-    let read_side = |vm: &Vm<'_, '_>, shared: &[u8], base: usize| -> Vec<i64> {
+    let read_side = |vm: &dyn StageExecutor, shared: &[u8], base: usize| -> Vec<i64> {
         (0..AST_PART_CAP)
             .map(|k| rd(vm, shared, base + k))
             .collect()
@@ -5537,9 +5540,9 @@ fn run_analyze_kel(
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify analyze.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify analyze.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
-    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+    let set = |vm: &dyn StageExecutor, shared: &mut [u8], slot: usize, v: i64| {
         vm.set_shared(shared, slot, Value::Int(v)).unwrap();
     };
     set(&vm, &mut shared, WA_OP_COUNT, chunk.ops.len() as i64);
@@ -5644,7 +5647,7 @@ const SV_OUT_REJECT: usize = 9 + crate::selfhost_host::VERIFY_OP_CAP * 7;
 /// The compiled `verify_structural.kel` stage module, cached after the first
 /// build.
 ///
-/// Public so an external harness can construct its own [`Vm`] and drive the
+/// Public so an external harness can construct its own [`Vm`](crate::vm::Vm) and drive the
 /// stage on real input via [`seed_verify_structural_shared`].
 pub fn verify_structural_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -5743,7 +5746,7 @@ pub fn structural_reject_chunk_via_kel(
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify verify_structural.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify verify_structural.kel");
     let mut shared = seed_verify_structural_shared(&vm, module, chunk, always);
     match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
@@ -5768,7 +5771,7 @@ pub fn structural_reject_chunk_via_kel(
 /// this rather than inline, so an external harness feeds the stage exactly what
 /// the driver does.
 pub fn seed_verify_structural_shared(
-    vm: &Vm<'_, '_>,
+    vm: &dyn StageExecutor,
     module: &Module,
     chunk: &crate::bytecode::Chunk,
     always: &std::collections::BTreeSet<usize>,
@@ -5778,7 +5781,7 @@ pub fn seed_verify_structural_shared(
         "verify_structural.kel op-table capacity"
     );
     let mut shared = vec![0u8; vm.shared_data_bytes()];
-    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+    let set = |vm: &dyn StageExecutor, shared: &mut [u8], slot: usize, v: i64| {
         vm.set_shared(shared, slot, Value::Int(v)).unwrap();
     };
     set(vm, &mut shared, SV_OP_COUNT, chunk.ops.len() as i64);
@@ -5867,9 +5870,9 @@ fn run_ayc(
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify verify_yield.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify verify_yield.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
-    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+    let set = |vm: &dyn StageExecutor, shared: &mut [u8], slot: usize, v: i64| {
         vm.set_shared(shared, slot, Value::Int(v)).unwrap();
     };
     set(&vm, &mut shared, YV_OP_COUNT, chunk.ops.len() as i64);
@@ -5958,7 +5961,7 @@ const DV_OUT_CAUSE: usize = 2 + crate::selfhost_host::VERIFY_OP_CAP * 5;
 
 /// The compiled `verify_depth.kel` stage module, cached after the first build.
 ///
-/// Public so an external harness can construct its own [`Vm`] and drive the
+/// Public so an external harness can construct its own [`Vm`](crate::vm::Vm) and drive the
 /// stage on real input via [`seed_verify_depth_shared`].
 pub fn verify_depth_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -5978,14 +5981,14 @@ pub fn verify_depth_kel_module() -> Module {
 ///
 /// The `vm` argument supplies the shared layout only. Build it from
 /// [`verify_depth_kel_module`].
-pub fn seed_verify_depth_shared(vm: &Vm<'_, '_>, chunk: &crate::bytecode::Chunk) -> Vec<u8> {
+pub fn seed_verify_depth_shared(vm: &dyn StageExecutor, chunk: &crate::bytecode::Chunk) -> Vec<u8> {
     use crate::bytecode::Op;
     assert!(
         chunk.ops.len() <= crate::selfhost_host::VERIFY_OP_CAP,
         "verify_depth.kel op-table capacity"
     );
     let mut shared = vec![0u8; vm.shared_data_bytes()];
-    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+    let set = |vm: &dyn StageExecutor, shared: &mut [u8], slot: usize, v: i64| {
         vm.set_shared(shared, slot, Value::Int(v)).unwrap();
     };
     set(vm, &mut shared, DV_OP_COUNT, chunk.ops.len() as i64);
@@ -6020,7 +6023,7 @@ pub fn depth_reject_chunk_via_kel(chunk: &crate::bytecode::Chunk) -> bool {
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify verify_depth.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify verify_depth.kel");
     let mut shared = seed_verify_depth_shared(&vm, chunk);
     match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
@@ -6054,7 +6057,7 @@ pub fn depth_verdict_chunk_via_kel(chunk: &crate::bytecode::Chunk) -> DepthVerdi
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify verify_depth.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify verify_depth.kel");
     let mut shared = seed_verify_depth_shared(&vm, chunk);
     match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
@@ -6165,7 +6168,7 @@ const TV_CP_CAPACITY: usize = 12288;
 
 /// The compiled `verify_typed.kel` stage module, cached after the first build.
 ///
-/// Public so an external harness can construct its own [`Vm`] and drive the
+/// Public so an external harness can construct its own [`Vm`](crate::vm::Vm) and drive the
 /// stage on real input via [`seed_verify_typed_shared`].
 pub fn verify_typed_kel_module() -> Module {
     static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
@@ -6328,7 +6331,7 @@ fn typed_run(
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify verify_typed.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify verify_typed.kel");
     let mut shared = seed_typed_shared(&vm, module, chunk, seeding, wb, fb, ab);
     match vm
         .call_with_shared(&mut shared, &[Value::Int(0)])
@@ -6354,7 +6357,7 @@ fn typed_run(
 /// `None` preserves this helper's isolation contract. Whole-module checking uses
 /// the same encoder with module context even when an individual signature is absent.
 pub fn seed_verify_typed_shared(
-    vm: &Vm<'_, '_>,
+    vm: &dyn StageExecutor,
     module: &Module,
     chunk: &crate::bytecode::Chunk,
     sig: Option<&crate::bytecode::ChunkSignature>,
@@ -6370,7 +6373,7 @@ pub fn seed_verify_typed_shared(
 }
 
 fn seed_typed_shared(
-    vm: &Vm<'_, '_>,
+    vm: &dyn StageExecutor,
     module: &Module,
     chunk: &crate::bytecode::Chunk,
     seeding: TypedSeeding<'_>,
@@ -6388,7 +6391,7 @@ fn seed_typed_shared(
         "verify_typed.kel op-table capacity"
     );
     let mut shared = vec![0u8; vm.shared_data_bytes()];
-    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+    let set = |vm: &dyn StageExecutor, shared: &mut [u8], slot: usize, v: i64| {
         vm.set_shared(shared, slot, Value::Int(v)).unwrap();
     };
     set(vm, &mut shared, TV_OP_COUNT, chunk.ops.len() as i64);
@@ -6580,9 +6583,9 @@ pub fn dl_reject_module_via_kel(module: &Module) -> bool {
     // over the 64 KB default. This is a host-side test-harness arena, not a WCMU claim.
     let mut arena = Arena::with_capacity(4 * 1024 * 1024 + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify verify_datalayout.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify verify_datalayout.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
-    let set = |vm: &Vm<'_, '_>, shared: &mut [u8], slot: usize, v: i64| {
+    let set = |vm: &dyn StageExecutor, shared: &mut [u8], slot: usize, v: i64| {
         vm.set_shared(shared, slot, Value::Int(v)).unwrap();
     };
     // Running state and the per-run scalars, initialised once (they persist across resumes).
@@ -6607,7 +6610,7 @@ pub fn dl_reject_module_via_kel(module: &Module) -> bool {
     // -- so the batch's `run()` always executes (a resume can land on the Stream/Reset cycle
     // boundary, which does not run the body). The running state `io_*` persists in the shared
     // buffer across calls because the buffer is retained, not re-zeroed.
-    let run_batch = |vm: &mut Vm<'_, '_>, shared: &mut [u8]| match vm
+    let run_batch = |vm: &mut dyn StageExecutor, shared: &mut [u8]| match vm
         .call_with_shared(shared, &[Value::Int(0)])
         .expect("call verify_datalayout.kel")
     {
@@ -8191,7 +8194,7 @@ pub fn wire_names_from_input(
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     // Slot layout mirrors `wire.kel`'s shared block: `len`, then `bytes`, then
     // the region inputs. The directory is seeded so `dir_find` can locate
@@ -8415,7 +8418,7 @@ pub fn wire_regions_from_input(
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     use wire_slots::{BIN as BIN_SLOT, FIN as FIN_SLOT, NREGIONS as NREGIONS_SLOT};
     /// `mi_join_header`. Mirrored from `wire.kel`'s dispatch, where
@@ -8592,7 +8595,7 @@ pub fn wire_chunks_from_input(
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     use wire_slots::{
         BIN as BIN_SLOT, FIN as FIN_SLOT, NREGIONS as NREGIONS_SLOT, WARG as WARG_SLOT,
@@ -8729,7 +8732,7 @@ fn window_emit(
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
     vm.set_shared(&mut shared, WARG_SLOT, Value::Int(chunk_count as i64))
         .expect("warg");
@@ -8830,7 +8833,11 @@ const HEADER_FIELD_BASE: usize = 990;
 ///
 /// [`SelfHostError::Unsupported`] when the stage faults, returns a non-integer
 /// state, or resets without ever yielding.
-fn enter_wire(vm: &mut Vm<'_, '_>, shared: &mut [u8], cmd: i64) -> Result<i64, SelfHostError> {
+fn enter_wire(
+    vm: &mut dyn StageExecutor,
+    shared: &mut [u8],
+    cmd: i64,
+) -> Result<i64, SelfHostError> {
     let mut st = match vm.resume_with_shared(shared, Value::Int(cmd)) {
         Err(crate::vm::VmError::NotSuspended) => vm
             .call_with_shared(shared, &[Value::Int(cmd)])
@@ -8895,7 +8902,7 @@ fn window_emit_chunks(
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
 
     let records = chunk_fields.len() / FIELDS;
@@ -9030,7 +9037,7 @@ fn window_emit_slots(
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
 
     for (i, &b) in blob.iter().enumerate() {
@@ -9110,7 +9117,7 @@ fn window_emit_variants(
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
 
     for (i, &b) in blob.iter().enumerate() {
@@ -9187,7 +9194,7 @@ fn window_emit_enum_layouts(
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
 
     for (i, &b) in blob.iter().enumerate() {
@@ -9273,7 +9280,7 @@ fn window_emit_pool(
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
 
     vm.set_shared(&mut shared, WARG_SLOT, Value::Int(i64::from(kind)))
@@ -9413,7 +9420,7 @@ fn window_emit_consts(stage: &Module, node_fields: &[i64]) -> Result<Vec<u8>, Se
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
 
     let began = enter_wire(&mut vm, &mut shared, CMD_BEGIN)?;
@@ -9728,7 +9735,7 @@ fn window_emit_kind(
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
 
     vm.set_shared(&mut shared, WARG_SLOT, Value::Int(i64::from(kind)))
@@ -9788,7 +9795,7 @@ fn window_emit_records(
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
-    let mut vm = Vm::new(m, &arena).expect("verify wire.kel");
+    let mut vm = stage_vm(m, &arena).expect("verify wire.kel");
     let mut shared = vec![0u8; vm.shared_data_bytes()];
 
     let mut out = Vec::new();

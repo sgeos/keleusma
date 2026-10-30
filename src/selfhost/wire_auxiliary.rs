@@ -263,7 +263,7 @@ struct Emitter {
 impl Emitter {
     fn run<T>(
         &self,
-        work: impl FnOnce(&mut Vm<'_, '_>, &mut [u8]) -> Result<T, SelfHostError>,
+        work: impl FnOnce(&mut dyn StageExecutor, &mut [u8]) -> Result<T, SelfHostError>,
     ) -> Result<T, SelfHostError> {
         with_compiled_wire(self.stage.clone(), |vm, shared| {
             for (i, &value) in self.header.iter().enumerate() {
@@ -293,7 +293,7 @@ impl Emitter {
     }
 
     fn append(
-        vm: &mut Vm<'_, '_>,
+        vm: &mut dyn StageExecutor,
         shared: &mut [u8],
         cmd: i64,
         output: &mut Vec<u8>,

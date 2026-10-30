@@ -1,9 +1,11 @@
 //! Shared transport for stateful analyzer protocols.
-use super::{Module, Value, VerificationError, Vm, VmState};
+use super::executor::{StageExecutor, stage_vm};
+use super::{Module, Value, VerificationError, VmState};
+use alloc::boxed::Box;
 use alloc::{format, vec, vec::Vec};
 
 pub(super) struct AnalysisMachine<'a, const N: usize> {
-    vm: Vm<'static, 'a>,
+    vm: Box<dyn StageExecutor + 'a>,
     shared: Vec<u8>,
     slots: [usize; N],
     started: bool,
@@ -32,7 +34,7 @@ impl<'a, const N: usize> AnalysisMachine<'a, N> {
                 .position(|s| s.name == *name)
                 .ok_or_else(|| error(name))?;
         }
-        let vm = Vm::new(module, arena).map_err(|e| VerificationError::Execution {
+        let vm = stage_vm(module, arena).map_err(|e| VerificationError::Execution {
             stage: "analysis",
             detail: format!("{e:?}"),
         })?;

@@ -14,7 +14,7 @@ fn error(detail: impl core::fmt::Display) -> SelfHostError {
 }
 
 fn with_wire<T>(
-    work: impl FnOnce(&mut Vm<'_, '_>, &mut [u8]) -> Result<T, SelfHostError>,
+    work: impl FnOnce(&mut dyn StageExecutor, &mut [u8]) -> Result<T, SelfHostError>,
 ) -> Result<T, SelfHostError> {
     let module = compile_src(&read_stage("kel/wire.kel"));
     with_compiled_wire(module, work)
@@ -22,7 +22,7 @@ fn with_wire<T>(
 
 pub(super) fn with_compiled_wire<T>(
     module: Module,
-    work: impl FnOnce(&mut Vm<'_, '_>, &mut [u8]) -> Result<T, SelfHostError>,
+    work: impl FnOnce(&mut dyn StageExecutor, &mut [u8]) -> Result<T, SelfHostError>,
 ) -> Result<T, SelfHostError> {
     let need = required_persistent_capacity_for(&module);
     let capacity = DEFAULT_ARENA_CAPACITY
@@ -33,13 +33,13 @@ pub(super) fn with_compiled_wire<T>(
         .resize_persistent(need)
         .map_err(|e| error(format!("arena: {e:?}")))?;
     let mut vm =
-        Vm::new(module, &arena).map_err(|e| error(format!("stage verification: {e:?}")))?;
+        stage_vm(module, &arena).map_err(|e| error(format!("stage verification: {e:?}")))?;
     let mut shared = vec![0; vm.shared_data_bytes()];
     work(&mut vm, &mut shared)
 }
 
 pub(super) fn set_word(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     slot: usize,
     value: i64,
@@ -49,7 +49,7 @@ pub(super) fn set_word(
 }
 
 pub(super) fn get_word(
-    vm: &Vm<'_, '_>,
+    vm: &dyn StageExecutor,
     shared: &[u8],
     slot: usize,
 ) -> Result<usize, SelfHostError> {
@@ -62,7 +62,11 @@ pub(super) fn get_word(
     }
 }
 
-fn write_window(vm: &mut Vm<'_, '_>, shared: &mut [u8], bytes: &[u8]) -> Result<(), SelfHostError> {
+fn write_window(
+    vm: &mut dyn StageExecutor,
+    shared: &mut [u8],
+    bytes: &[u8],
+) -> Result<(), SelfHostError> {
     if bytes.len() > WINDOW {
         return Err(error("input exceeds the transport window"));
     }
@@ -74,7 +78,7 @@ fn write_window(vm: &mut Vm<'_, '_>, shared: &mut [u8], bytes: &[u8]) -> Result<
 }
 
 pub(super) fn read_window(
-    vm: &Vm<'_, '_>,
+    vm: &dyn StageExecutor,
     shared: &[u8],
     bytes: &mut [u8],
 ) -> Result<(), SelfHostError> {
@@ -94,7 +98,7 @@ pub(super) fn read_window(
 }
 
 pub(super) fn command(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     cmd: i64,
 ) -> Result<usize, SelfHostError> {
@@ -102,7 +106,7 @@ pub(super) fn command(
     usize::try_from(result).map_err(|_| error(format!("command {cmd} refused with {result}")))
 }
 
-fn feed(vm: &mut Vm<'_, '_>, shared: &mut [u8], bytes: &[u8]) -> Result<(), SelfHostError> {
+fn feed(vm: &mut dyn StageExecutor, shared: &mut [u8], bytes: &[u8]) -> Result<(), SelfHostError> {
     let mut consumed = 0;
     for window in bytes.chunks(WINDOW) {
         write_window(vm, shared, window)?;
@@ -305,7 +309,7 @@ pub fn wire_framing_is_intact_via_kel(bytes: &[u8]) -> Result<bool, SelfHostErro
 mod tests {
     use super::*;
 
-    fn begin(vm: &mut Vm<'_, '_>, shared: &mut [u8], fields: [i64; 13]) -> i64 {
+    fn begin(vm: &mut dyn StageExecutor, shared: &mut [u8], fields: [i64; 13]) -> i64 {
         for (i, value) in fields.into_iter().enumerate() {
             set_word(vm, shared, wire_slots::FIN + i, value).unwrap();
         }

@@ -36,7 +36,7 @@ fn error(detail: &str) -> SelfHostError {
 }
 
 pub(super) fn decode_directory<'a>(
-    vm: &mut Vm<'_, '_>,
+    vm: &mut dyn StageExecutor,
     shared: &mut [u8],
     bytes: &'a [u8],
 ) -> Result<WireAuxiliaryDirectory<'a>, SelfHostError> {
@@ -138,7 +138,7 @@ mod tests {
         builder.finish().unwrap()
     }
 
-    fn compare(vm: &mut Vm<'_, '_>, shared: &mut [u8], bytes: &[u8]) -> bool {
+    fn compare(vm: &mut dyn StageExecutor, shared: &mut [u8], bytes: &[u8]) -> bool {
         let actual = decode_directory(vm, shared, bytes);
         let reference = WireView::parse(bytes);
         match (actual, reference) {
