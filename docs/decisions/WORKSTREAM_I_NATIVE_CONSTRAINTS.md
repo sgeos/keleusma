@@ -22,6 +22,21 @@ meanwhile.
 | `RUNTIME_FAULTS.md` native default values | Superseded by the 2026-10-20 ruling that only `Trap` traps | V0.2.X, the specification | Native code follows the bytecode `Trap` |
 | `schema_hash` covers slot names and visibility, not types | `native_hot_swap.rs` applies the same rule as `replace_module` | V0.2.X, `compute_schema_hash` | The same rule in both shapes |
 
-Each row is also an entry in this line's open question list,
-[`v0.3.0-QUESTIONS.md`](../process/handoffs/v0.3.0-QUESTIONS.md), where it
-needs an operator answer.
+Each row was also an entry in this line's open question list,
+[`v0.3.0-QUESTIONS.md`](../process/handoffs/v0.3.0-QUESTIONS.md), and every
+one has since been answered. The table above records the constraints as Order
+6 found them, and the status below supersedes its last two columns.
+
+## Status on 2026-10-30
+
+| Constraint | Status |
+|---|---|
+| `Unit` after `Reset` on one path | The operator answered question 20 with option a, a narrowed definite-initialization rule. V0.2.X's checked default change, absorbed in absorption 116, made `interp.kel` static. One coroutine, `14_frame_log.kel`, and one instruction still need a run-time kind, waiting on V0.2.X's narrowed rule |
+| A composite built in a loop and yielded | V0.2.X's records relay the operator's ruling that such a composite may be yielded. The native coroutine route still refuses `13_telemetry_stream.kel`, and a copy at the yield is this line's work |
+| Two `Word` call results compared | Resolved. V0.2.X's callee-aware bound arrived in absorption 116, and since question 5 the lexer has a composed claim |
+| `Text` across the host boundary | Question 13. Literals pass as two words, and dynamic text waits on V0.2.X's `Text<N>` |
+| Opaque host handles | Question 14. Handles pass as typed host pointers on four routes, and a struct field or shared slot holding one is still refused |
+| Native WCET | Question 1. Best effort, in bytecode cost units |
+| The bytecode flat-machine ISA | Question 2. Deferred |
+| `RUNTIME_FAULTS.md` native defaults | Resolved. V0.2.X rewrote the specification in its pull request 598 |
+| `schema_hash` and slot types | V0.2.X's half is done. Since absorption 119 the hash covers each slot's declared type, and native hot swap adopting it is this line's work |
