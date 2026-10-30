@@ -200,3 +200,32 @@ fn a_stream_may_not_read_a_local_written_only_before_stream() {
         "local {read}, {writes_after} later writes removed: {message}"
     );
 }
+
+/// The verdict does not depend on which arm of an if the worklist reaches the
+/// join from first. A local written on the longer arm only, and on the shorter
+/// arm only, are both admitted. The rule once checked each read as the worklist
+/// popped it, and so refused the first, since the shorter arm reached the join
+/// before the arm that writes.
+#[test]
+fn a_write_on_either_arm_is_admitted_whichever_arm_is_longer() {
+    for src in [
+        "fn main(n: Word) -> Word { let a = 7; let r = if n > 0 { let b = n * 2 + 3 * n - 1; b } else { 5 }; r + a }",
+        "fn main(n: Word) -> Word { let a = 7; let r = if n > 0 { 5 } else { let b = n * 2 + 3 * n - 1; b }; r + a }",
+        "fn main(n: Word) -> Word { let a = 7; let r = if n > 0 { let b = 5; b } else { n * 2 + 3 * n - 1 }; r + a }",
+    ] {
+        let mut module = compiled(src).unwrap();
+        assert_eq!(verdict(&module), Ok(()), "control: {src}");
+        assert!(drop_first_write(&mut module, 1), "no write of local 1");
+        // Move the arm's local onto local 1, so that local 1 is written on
+        // that arm only and read after the join.
+        let main = module.chunks.iter_mut().find(|c| c.name == "main").unwrap();
+        for op in &mut main.ops {
+            match op {
+                Op::SetLocal(2) => *op = Op::SetLocal(1),
+                Op::GetLocal(2) => *op = Op::GetLocal(1),
+                _ => {}
+            }
+        }
+        assert_eq!(verdict(&module), Ok(()), "{src}");
+    }
+}
