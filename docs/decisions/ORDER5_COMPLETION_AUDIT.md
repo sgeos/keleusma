@@ -9,6 +9,10 @@ Keleusma with host-native primitives, on 2026-10-25. Its scope is the gate of
 [the framing plan](./ORDER5_CRYPTO_FRAMING_PLAN.md). **That gate is this line's
 reading of the roadmap gate and has not been ruled on by the operator.**
 
+**Accepted by the operator first-hand on 2026-10-28.** The operator accepted this gate. The
+decryption question was answered at the same time, to decrypt up to the declared total
+length, which is a separate repair.
+
 **Disposition.** Approach 1 of Order 5 is complete for that first-pass scope on
 2026-10-25, on the evidence below, pending the operator's acceptance of the
 scope. Approach 2, the primitives in Keleusma, is not started and is not part of
