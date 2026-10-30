@@ -198,9 +198,11 @@ fn the_reservation_share_across_the_corpus_is_pinned() {
     // 30 -> 32, 27 -> 28 and a minimum of 27 -> 12 on 2026-10-28, question 6:
     // the new roots add `frame.kel`, at 96% of 528 bytes, and `interp.kel`, whose
     // figure is 4032 bytes, so the fixed 512-byte reservation is 12% of it.
-    const PINNED_STREAMING: usize = 32;
+    // 32 -> 33 and 28 -> 29 in absorption 119: the added stage
+    // `template_scan.kel` reserves 90% of a 568-byte figure.
+    const PINNED_STREAMING: usize = 33;
     /// Of those, how many where the reservation is at least half the figure.
-    const PINNED_MAJORITY: usize = 28;
+    const PINNED_MAJORITY: usize = 29;
     /// The lowest share any streaming module shows, as a percentage.
     const PINNED_MIN_SHARE: u32 = 12;
 

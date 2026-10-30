@@ -291,7 +291,7 @@ fn every_current_stage_has_a_completed_matching_classification() {
         .filter(|p| p.extension().is_some_and(|e| e == "kel"))
         .collect();
     paths.sort();
-    assert_eq!(paths.len(), 14, "inventory every actual stage");
+    assert_eq!(paths.len(), 15, "inventory every actual stage");
     for path in paths {
         let source = std::fs::read_to_string(&path).unwrap();
         let module = compile(&source);

@@ -103,7 +103,8 @@ const NOT_EXECUTED: &[(&str, &str)] = &[
 // 66 -> 67 and 10 -> 11 on 2026-10-28, question 6, from the same report: the
 // new roots add `frame.kel`, which executes, and `interp.kel`, which the VM
 // refuses with `IndexOutOfBounds(-1, 64)` when its io tables are not seeded.
-const EXECUTED_MODULES: usize = 67;
+// 67 -> 68 in absorption 119: the added stage `template_scan.kel` executes.
+const EXECUTED_MODULES: usize = 68;
 const NOT_EXECUTED_MODULES: usize = 11;
 
 /// `(opcode, witness source, file that drives it)` for every opcode the corpus

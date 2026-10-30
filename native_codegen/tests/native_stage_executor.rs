@@ -279,7 +279,8 @@ fn every_stage_builds_and_an_unbound_host_native_is_refused() {
         .filter(|p| p.extension().is_some_and(|x| x == "kel"))
         .collect();
     paths.sort();
-    assert_eq!(paths.len(), 14, "the driver embeds fourteen stages");
+    // Fifteen since absorption 119 added `template_scan.kel`.
+    assert_eq!(paths.len(), 15, "the driver embeds fifteen stages");
     for p in &paths {
         let m = module_of(p.to_str().unwrap());
         let start = std::time::Instant::now();

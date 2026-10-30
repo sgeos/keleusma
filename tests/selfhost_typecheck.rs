@@ -4940,6 +4940,10 @@ const REAL_STAGE_SOURCES: &[(&str, &str)] = &[
         "wire_schema",
         include_str!("../src/selfhost/kel/wire_schema.kel"),
     ),
+    (
+        "template_scan",
+        include_str!("../src/selfhost/kel/template_scan.kel"),
+    ),
 ];
 
 /// Every input channel's row count for one program, as `(channel, rows, capacity)`.
@@ -5778,7 +5782,7 @@ fn the_stage_is_measured_against_the_real_stage_sources() {
     fitting.sort_unstable();
     assert_eq!(
         fitting,
-        // All fourteen sources now fit after selecting 640 rows for the six channels
+        // All fifteen sources now fit after selecting 640 rows for the six channels
         // that exceeded their previous caps. Each fit source is also run through
         // the checker below to catch false rejection on real stage programs.
         vec![
@@ -5787,6 +5791,7 @@ fn the_stage_is_measured_against_the_real_stage_sources() {
             "lexer",
             "parse",
             "reconstruct",
+            "template_scan",
             "verify_datalayout",
             "verify_depth",
             "verify_structural",
