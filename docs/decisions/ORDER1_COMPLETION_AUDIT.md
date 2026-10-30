@@ -2,6 +2,9 @@
 
 > **Navigation** [Completion plan](./ORDER1_COMPLETION_PLAN.md) | [V0.2.X roadmap](../roadmap/V0_2_X_ROADMAP.md)
 
+
+**Accepted by the operator first-hand on 2026-10-28.** The operator accepted the Order 1
+first-pass gate as recorded in this audit.
 ## Scope and verdict
 
 Verified on 2026-10-13. Order 1 is complete for the first-pass compiler subset defined

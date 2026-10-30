@@ -110,8 +110,11 @@ in pull request 524. See [SIGNATURE_VERIFY_BOUNDS.md](./SIGNATURE_VERIFY_BOUNDS.
 The program mirrors two reference behaviours that are not obviously intended,
 so that the oracle stays exact. Each is recorded rather than changed.
 
-1. Decryption takes the ciphertext up to the end of the supplied buffer, not up
-   to the declared total, so bytes appended after the total reach the cipher
-   and fail authentication.
+1. Decryption took the ciphertext up to the end of the supplied buffer, not up
+   to the declared total, so bytes appended after the total reached the cipher
+   and failed authentication. **Repaired on 2026-10-28** by the operator's
+   first-hand ruling to decrypt up to the declared total. Both the reference and
+   the program now end the ciphertext there, and
+   `trailing_bytes_after_the_declared_total_do_not_reach_the_cipher` pins it.
 2. The encryption metadata parser checks the scheme and the length and does not
    check the reserved byte or the eight reserved bytes.

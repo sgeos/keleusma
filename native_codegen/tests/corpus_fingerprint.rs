@@ -522,7 +522,9 @@ const PINNED: &[(&str, u64)] = &[
         "examples/scripts/rogue/rogue_scroll_apply.kel",
         0xf93a5bd822bfe99c,
     ),
-    ("src/crypto_frame/frame.kel", 0x93ac54a86007619f),
+    // Absorption 115 ends decryption at the declared total. The full
+    // native run re-derived the corpus figures after this re-pin.
+    ("src/crypto_frame/frame.kel", 0x94e3eec49e2f8451),
     ("src/hosted/interp.kel", 0x0b6e4007b12016f5),
     ("src/selfhost/kel/analyze.kel", 0xe45a770e222b1931),
     ("src/selfhost/kel/codegen.kel", 0xecd27ec27b225862),
