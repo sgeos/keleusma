@@ -477,6 +477,7 @@ fn specialize_enums(
         LetAnnotationRewriter {
             specs: &enum_specs,
             structs: false,
+            renamed_locals: BTreeMap::new(),
         }
         .visit_block(&mut func.body);
     }
@@ -854,6 +855,31 @@ fn specialize_structs(
     let mut new_structs: Vec<StructDef> = Vec::new();
     let mut spec_meta: Vec<SpecInstance> = Vec::new();
     let mut local_types: BTreeMap<String, TypeExpr> = BTreeMap::new();
+    // A generic struct instance named in a signature needs its specialization even when the
+    // program never constructs one, as a host-built entry argument does not. Without it the
+    // signature keeps the template's name and a field read is baked from the template's field
+    // type, an unresolved type parameter. A generic function's own signature mentions its type
+    // parameters and is specialized by the function pass instead.
+    for func in &program.functions {
+        if !func.type_params.is_empty() || !func.const_params.is_empty() {
+            continue;
+        }
+        let types = func
+            .params
+            .iter()
+            .filter_map(|p| p.type_expr.as_ref())
+            .chain(core::iter::once(&func.return_type));
+        for t in types {
+            seed_struct_specs_from_type(
+                t,
+                &generic_structs,
+                &mut struct_specs,
+                &mut reverse_specs,
+                &mut new_structs,
+                &mut spec_meta,
+            );
+        }
+    }
     for func in &mut program.functions {
         local_types.clear();
         for param in &func.params {
@@ -880,9 +906,19 @@ fn specialize_structs(
     // `Buf<8>` in a signature resolves to `Buf__c8`, matching the
     // specialized construction (B40).
     for func in &mut program.functions {
+        let mut renamed_locals: BTreeMap<String, (String, String)> = BTreeMap::new();
         for param in &mut func.params {
             if let Some(t) = &param.type_expr {
                 let spec = resolve_generic_type_to_spec(t, &struct_specs);
+                if let (
+                    TypeExpr::Named(original, ..),
+                    TypeExpr::Named(spec_name, ..),
+                    Pattern::Variable(local, _),
+                ) = (t, &spec, &param.pattern)
+                    && original != spec_name
+                {
+                    renamed_locals.insert(local.clone(), (original.clone(), spec_name.clone()));
+                }
                 // **THE PATTERN MUST FOLLOW THE TYPE.** Rewriting `P<Word>` to `P__Word` here
                 // while leaving a `P { a, b }` pattern beside it naming `P` leaves the two
                 // disagreeing, and nothing downstream objects: a parameter pattern is bound but
@@ -902,6 +938,7 @@ fn specialize_structs(
         LetAnnotationRewriter {
             specs: &struct_specs,
             structs: true,
+            renamed_locals,
         }
         .visit_block(&mut func.body);
     }
@@ -916,9 +953,16 @@ fn specialize_structs(
 /// returns. Without it the re-check after monomorphization compares the two names and refuses
 /// the binding. For a struct the binding's destructuring pattern follows the type, for the reason
 /// the parameter pass gives.
+///
+/// In the struct pass it also rewrites the struct patterns of a `match` on a local whose type was
+/// renamed, a parameter or an annotated `let`. A parameter typed `P<Word>` takes `P__Word` once
+/// the signature pass seeds that specialization, and an arm pattern `P { .. }` left naming the
+/// template is refused by the re-check.
 struct LetAnnotationRewriter<'a> {
     specs: &'a BTreeMap<(String, String), String>,
     structs: bool,
+    /// Each local whose struct type was renamed, as (template name, specialization name).
+    renamed_locals: BTreeMap<String, (String, String)>,
 }
 
 impl crate::visitor::MutVisitor for LetAnnotationRewriter<'_> {
@@ -933,10 +977,126 @@ impl crate::visitor::MutVisitor for LetAnnotationRewriter<'_> {
             {
                 let (original, spec_name) = (original.clone(), spec_name.clone());
                 rewrite_pattern_struct_name(&mut l.pattern, &original, &spec_name);
+                if let Pattern::Variable(local, _) = &l.pattern {
+                    self.renamed_locals
+                        .insert(local.clone(), (original.clone(), spec_name.clone()));
+                }
             }
             l.type_expr = Some(spec);
         }
         self.walk_stmt(stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &mut Expr) {
+        if self.structs
+            && let Expr::Match {
+                scrutinee, arms, ..
+            } = expr
+            && let Expr::Ident { name, .. } = scrutinee.as_ref()
+            && let Some((original, spec_name)) = self.renamed_locals.get(name).cloned()
+        {
+            for arm in arms.iter_mut() {
+                rewrite_pattern_struct_name(&mut arm.pattern, &original, &spec_name);
+            }
+        }
+        self.walk_expr(expr);
+    }
+}
+
+/// Ensure the specialization of every concrete generic struct instance `t` names, inner ones
+/// first, as a construction of it would. An instance whose arguments are not all concrete, or
+/// whose const arguments are not literals, is left for the passes that already handle it.
+fn seed_struct_specs_from_type(
+    t: &TypeExpr,
+    generic_structs: &BTreeMap<String, StructDef>,
+    specs: &mut BTreeMap<(String, String), String>,
+    reverse_specs: &mut BTreeMap<String, (String, Vec<TypeExpr>)>,
+    new_structs: &mut Vec<StructDef>,
+    spec_meta: &mut Vec<SpecInstance>,
+) {
+    let recurse = |inner: &TypeExpr,
+                   specs: &mut BTreeMap<(String, String), String>,
+                   reverse_specs: &mut BTreeMap<String, (String, Vec<TypeExpr>)>,
+                   new_structs: &mut Vec<StructDef>,
+                   spec_meta: &mut Vec<SpecInstance>| {
+        seed_struct_specs_from_type(
+            inner,
+            generic_structs,
+            specs,
+            reverse_specs,
+            new_structs,
+            spec_meta,
+        )
+    };
+    match t {
+        TypeExpr::Named(name, args, const_args, _) => {
+            for a in args {
+                recurse(a, specs, reverse_specs, new_structs, spec_meta);
+            }
+            let Some(def) = generic_structs.get(name) else {
+                return;
+            };
+            if args.len() != def.type_params.len() || const_args.len() != def.const_params.len() {
+                return;
+            }
+            // Every argument must be concrete: not a type parameter of any generic struct being
+            // seeded, which is the only way a bare name could remain unresolved here.
+            if args.iter().any(|a| mentions_type_param(a, def)) {
+                return;
+            }
+            let Some(const_values) = const_args
+                .iter()
+                .map(|c| c.as_lit())
+                .collect::<Option<Vec<i64>>>()
+            else {
+                return;
+            };
+            let type_args: Vec<TypeExpr> = args
+                .iter()
+                .map(|a| resolve_generic_type_to_spec(a, specs))
+                .collect();
+            let key = (
+                name.clone(),
+                generic_cache_canonical(&type_args, &const_values),
+            );
+            if specs.contains_key(&key) || new_structs.len() >= TYPE_SPECIALIZATION_LIMIT {
+                return;
+            }
+            let spec_name = mangle_struct_with_consts(name, &type_args, &const_values);
+            let specialized =
+                specialize_struct(def, &type_args, &const_values, spec_name.clone(), specs);
+            specs.insert(key, spec_name.clone());
+            reverse_specs.insert(spec_name.clone(), (name.clone(), type_args.clone()));
+            spec_meta.push(SpecInstance {
+                orig: name.clone(),
+                spec_name,
+                type_args,
+                const_values,
+            });
+            new_structs.push(specialized);
+        }
+        TypeExpr::Tuple(items, _) => {
+            for i in items {
+                recurse(i, specs, reverse_specs, new_structs, spec_meta);
+            }
+        }
+        TypeExpr::Array(inner, _, _) => {
+            recurse(inner, specs, reverse_specs, new_structs, spec_meta)
+        }
+        _ => {}
+    }
+}
+
+/// Whether `t` names one of `def`'s own type parameters.
+fn mentions_type_param(t: &TypeExpr, def: &StructDef) -> bool {
+    match t {
+        TypeExpr::Named(n, args, _, _) => {
+            def.type_params.iter().any(|p| p.name == *n)
+                || args.iter().any(|a| mentions_type_param(a, def))
+        }
+        TypeExpr::Tuple(items, _) => items.iter().any(|i| mentions_type_param(i, def)),
+        TypeExpr::Array(inner, _, _) => mentions_type_param(inner, def),
+        _ => false,
     }
 }
 

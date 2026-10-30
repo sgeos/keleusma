@@ -286,6 +286,7 @@ fn the_stage_source_count_claim_matches_the_directory() {
         ("twelve", 12),
         ("thirteen", 13),
         ("fourteen", 14),
+        ("fifteen", 15),
     ];
 
     let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/selfhost/kel"));

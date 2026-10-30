@@ -619,6 +619,19 @@ fragility rather than left implicit. Four tests had used a generic call as their
 refusal or divergence, and each now uses a construct that still refuses or diverges rather
 than a relaxed assertion.
 
+**The header scan as a stage, 2026-10-30.** The operator answered question 14 on 2026-10-28,
+"If this can clearly be a stand alone stage, then it should be." The header recognition is one,
+and it is now `src/selfhost/kel/template_scan.kel`, the fifteenth stage source. The host batches
+the lexer's tokens, 256 at a time with each token's position and the brace depth before it, and
+reads back the recognised templates. The stage keeps its state in private data across batches,
+so the first pass still holds no token stream. This line reads the ruling as covering the
+recognition and not the probe rounds, which repeat the parse while it requests an instantiation
+not yet seeded and are orchestration of the parse stage, in the same category as the driver's
+other loops. The host recogniser is removed rather than kept beside the stage, so there is one
+implementation, and `generic_functions_have_their_pinned_outcomes` with the rest of the generic
+tests pin its behaviour unchanged. `template_scan.kel` compiles byte-identically through the
+self-hosted compiler, which `self_host_compiles_template_scan_kel_byte_identically` checks.
+
 **Gate 5, the shipping command line, 2026-10-27.** Every census pin had been measured in
 process through the library entry, and nothing ran the built binary over the widened
 forms. `keleusma-cli/tests/self_hosted_full_language.rs` now runs

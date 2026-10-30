@@ -4878,6 +4878,14 @@ fn self_host_compiles_verify_types_kel_byte_identically() {
 }
 
 #[test]
+fn self_host_compiles_template_scan_kel_byte_identically() {
+    assert_stage_byte_identical(
+        "self_host_compiles_template_scan_kel_byte_identically",
+        "template_scan.kel",
+    );
+}
+
+#[test]
 fn self_host_compiles_verify_yield_kel_byte_identically() {
     assert_stage_byte_identical(
         "self_host_compiles_verify_yield_kel_byte_identically",
@@ -6127,9 +6135,8 @@ fn assembled_schema_hash_matches_the_reference() {
         "compiler/kel/parse.kel",
     ] {
         let src = std::fs::read_to_string(common::stage_path(path)).expect("read stage");
-        let (_fns, names, data_records, _enums) = parse_functions(&src);
-        let dl = assemble_data_layout(&data_records, &names);
-        let hash = keleusma::bytecode::compute_schema_hash(Some(&dl));
+        // The driver's own computation, slot types included, against the reference's.
+        let hash = keleusma::selfhost::schema_hash_from_pipeline(&src);
         let reference = compile_src(&src);
         assert_eq!(hash, reference.schema_hash, "schema hash for {path}");
     }
@@ -6189,7 +6196,8 @@ fn self_assembled_scaffold_serializes_byte_identically() {
         // driver-assembled components.
         let mut module = self_host_compile(&src);
         let dl = assemble_data_layout(&data_records, &names);
-        module.schema_hash = keleusma::bytecode::compute_schema_hash(Some(&dl));
+        // The driver's own hash, slot types included.
+        module.schema_hash = keleusma::selfhost::schema_hash_from_pipeline(&src);
         module.data_layout = Some(dl);
         module.enum_layouts = assemble_enum_layouts(&enum_records, &names);
         module.signatures = assemble_signatures(&fns, &names);

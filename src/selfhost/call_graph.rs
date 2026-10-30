@@ -250,7 +250,7 @@ mod tests {
             .filter(|path| path.extension().is_some_and(|s| s == "kel"))
             .collect();
         paths.sort();
-        assert_eq!(paths.len(), 14);
+        assert_eq!(paths.len(), 15);
         for path in paths {
             let module = super::super::compile_src(&std::fs::read_to_string(&path).unwrap());
             let expected = crate::verify::topological_call_order(&module).unwrap();

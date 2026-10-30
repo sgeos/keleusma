@@ -3579,6 +3579,9 @@ fn compile_with_recorded_type_hook(
     // Two-pass loop. Pass 0 processes shared declarations; pass 1
     // processes private declarations. The slot index counter is
     // continuous across both passes.
+    // Each slot's type token, parallel to the slots, for the typed schema hash.
+    let mut shared_tokens: Vec<String> = Vec::new();
+    let mut private_tokens: Vec<String> = Vec::new();
     for pass_visibility in [DataVisibility::Shared, DataVisibility::Private] {
         for decl in &program.data_decls {
             if decl.visibility != pass_visibility {
@@ -3615,6 +3618,14 @@ fn compile_with_recorded_type_hook(
                     DataVisibility::Private => &mut private_slots,
                     DataVisibility::Const => unreachable!(),
                 };
+                let token = schema_type_token(peel_arrays(&field.type_expr), &program.types);
+                let tokens = match pass_visibility {
+                    DataVisibility::Shared => &mut shared_tokens,
+                    _ => &mut private_tokens,
+                };
+                for _ in 0..n_slots {
+                    tokens.push(token.clone());
+                }
                 if n_slots == 1 {
                     target.push(DataSlot {
                         name: format!("{}.{}", decl.name, field.name),
@@ -3673,6 +3684,8 @@ fn compile_with_recorded_type_hook(
     let private_count = private_slots.len() as u32;
     let mut data_layout_slots: Vec<DataSlot> = shared_slots;
     data_layout_slots.append(&mut private_slots);
+    let mut slot_type_tokens = shared_tokens;
+    slot_type_tokens.append(&mut private_tokens);
     // `shared_layout` is filled in below, once `type_info` is available to
     // compute per-shared-slot byte offsets and kinds (B28 item 2).
     let mut data_layout = if data_layout_slots.is_empty() {
@@ -4110,7 +4123,10 @@ fn compile_with_recorded_type_hook(
 
     #[cfg_attr(not(feature = "verify"), allow(unused_mut))]
     let mut module = Module {
-        schema_hash: crate::bytecode::compute_schema_hash(data_layout.as_ref()),
+        schema_hash: crate::bytecode::compute_typed_schema_hash(
+            data_layout.as_ref(),
+            &slot_type_tokens,
+        ),
         enum_layouts: build_enum_layouts(&type_info),
         signatures,
         native_return_shapes,
@@ -5046,6 +5062,96 @@ fn const_value_from_literal_for_field(
             span,
         }),
     }
+}
+
+/// `t` with every outer array level removed, the type one data slot holds.
+fn peel_arrays(t: &TypeExpr) -> &TypeExpr {
+    match t {
+        TypeExpr::Array(inner, _, _) => peel_arrays(inner),
+        other => other,
+    }
+}
+
+/// The canonical type token of a data slot for [`crate::bytecode::compute_typed_schema_hash`],
+/// which documents the form. A struct is expanded from its declaration, at most sixteen levels
+/// deep, which bounds a self-referential declaration the type checker would refuse anyway.
+fn schema_type_token(t: &TypeExpr, types: &[TypeDef]) -> String {
+    fn render(t: &TypeExpr, types: &[TypeDef], depth: usize, out: &mut String) {
+        match t {
+            TypeExpr::Prim(p, _) => out.push_str(&match p {
+                PrimType::Word => String::from("Word"),
+                PrimType::Byte => String::from("Byte"),
+                PrimType::Float => String::from("Float"),
+                PrimType::Bool => String::from("bool"),
+                PrimType::Text => String::from("Text"),
+                // The fraction-bit count is left out. Every `Fixed` has the word's width, so the
+                // count does not change the layout, and parse.kel's data records do not carry it,
+                // so the self-hosted driver could not include it to match.
+                PrimType::Fixed(_) => String::from("Fixed"),
+            }),
+            TypeExpr::Array(inner, len, _) => {
+                out.push('[');
+                render(inner, types, depth, out);
+                out.push(';');
+                out.push_str(&len.as_lit().map_or_else(String::new, |n| n.to_string()));
+                out.push(']');
+            }
+            TypeExpr::Tuple(items, _) => {
+                out.push('(');
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    render(item, types, depth, out);
+                }
+                out.push(')');
+            }
+            TypeExpr::Named(name, _, _, _) => {
+                out.push_str(name);
+                let def = types.iter().find_map(|td| match td {
+                    TypeDef::Struct(s) if s.name == *name => Some(s),
+                    _ => None,
+                });
+                if let Some(def) = def
+                    && depth < 16
+                {
+                    out.push('{');
+                    for (i, f) in def.fields.iter().enumerate() {
+                        if i > 0 {
+                            out.push(',');
+                        }
+                        out.push_str(&f.name);
+                        out.push(':');
+                        render(&f.type_expr, types, depth + 1, out);
+                    }
+                    out.push('}');
+                }
+            }
+            TypeExpr::Multiword(n, w, _) => {
+                let lit = |c: &ConstExpr| c.as_lit().map_or_else(String::new, |v| v.to_string());
+                out.push_str(&format!("Multiword<{},{}>", lit(n), lit(w)));
+            }
+            TypeExpr::TextN(n, _) => {
+                out.push_str(&format!(
+                    "Text<{}>",
+                    n.as_lit().map_or_else(String::new, |v| v.to_string())
+                ));
+            }
+            TypeExpr::Option(inner, _) => {
+                out.push_str("Option<");
+                render(inner, types, depth, out);
+                out.push('>');
+            }
+            TypeExpr::Unit(_) => out.push_str("()"),
+            // A label governs information flow, not layout, so it does not enter the token.
+            TypeExpr::Labelled(inner, _, _) | TypeExpr::NegativeLabelled(inner, _, _) => {
+                render(inner, types, depth, out)
+            }
+        }
+    }
+    let mut out = String::new();
+    render(t, types, 0, &mut out);
+    out
 }
 
 fn slots_for_data_type(type_expr: &TypeExpr) -> u32 {

@@ -21,7 +21,7 @@ fn every_current_stage_parses_and_compiles_on_a_two_mebibyte_stack() {
         .filter(|path| path.extension().is_some_and(|extension| extension == "kel"))
         .collect();
     paths.sort();
-    assert_eq!(paths.len(), 14, "stage inventory changed");
+    assert_eq!(paths.len(), 15, "stage inventory changed");
     for path in paths {
         on_small_stack(move || {
             eprintln!("stage {}", path.display());

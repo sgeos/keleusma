@@ -1225,7 +1225,7 @@ msgstr ""
 #: src/09_pipeline.md:60 src/10_structs.md:72 src/11_enums.md:83
 #: src/12_tuples_and_arrays.md:80 src/13_pattern_matching.md:90
 #: src/14_multiheaded_functions.md:72 src/15_three_function_categories.md:100
-#: src/16_yield.md:90 src/17_loop_function.md:88 src/18_data_segment.md:88
+#: src/16_yield.md:90 src/17_loop_function.md:88 src/18_data_segment.md:89
 #: src/19_why_rejected.md:118 src/20_time_and_memory_budgets.md:99
 #: src/21_generics_and_traits.md:132 src/22_newtypes_and_refinement.md:91
 #: src/23_big_numbers.md:297 src/24_information_flow_labels.md:93
@@ -3592,17 +3592,18 @@ msgstr ""
 
 #: src/18_data_segment.md:41
 msgid ""
-"The data segment begins with every field zeroed. The program above has four "
-"counters. On the first cycle each becomes 1. On the second cycle, having "
-"survived RESET, each becomes 2. The counters climb, cycle after cycle, "
-"because the data segment remembers."
+"The data segment begins with every scalar field zeroed. A `Text` field and a "
+"struct field begin empty, so a program writes them before it reads them. The "
+"program above has four counters. On the first cycle each becomes 1. On the "
+"second cycle, having survived RESET, each becomes 2. The counters climb, "
+"cycle after cycle, because the data segment remembers."
 msgstr ""
 
-#: src/18_data_segment.md:46
+#: src/18_data_segment.md:47
 msgid "This is where loops do real work"
 msgstr ""
 
-#: src/18_data_segment.md:48
+#: src/18_data_segment.md:49
 msgid ""
 "Look again at the `for` loop above, and recall Chapter 8. There, a `for` "
 "loop inside an atomic `fn` could not build a result, because bindings do not "
@@ -3611,84 +3612,84 @@ msgid ""
 "earns its keep, exactly as Chapter 8 promised."
 msgstr ""
 
-#: src/18_data_segment.md:54
+#: src/18_data_segment.md:55
 msgid "Three kinds of data block"
 msgstr ""
 
-#: src/18_data_segment.md:56
+#: src/18_data_segment.md:57
 msgid "A data block may be marked with its visibility."
 msgstr ""
 
-#: src/18_data_segment.md:58
+#: src/18_data_segment.md:59
 msgid ""
 "A bare `data` block, as above, is shared. The host may read and write it "
 "too. It is how the host and the program pass state between them."
 msgstr ""
 
-#: src/18_data_segment.md:60
+#: src/18_data_segment.md:61
 msgid ""
 "A `private data` block is the program's own memory. It persists across "
 "cycles, but the host does not see it."
 msgstr ""
 
-#: src/18_data_segment.md:62
+#: src/18_data_segment.md:63
 msgid ""
 "A `const data` block is read-only configuration, fixed for the life of the "
 "program and never assigned."
 msgstr ""
 
-#: src/18_data_segment.md:65
+#: src/18_data_segment.md:66
 msgid "Shared is the common case and the one to start with."
 msgstr ""
 
-#: src/18_data_segment.md:67
+#: src/18_data_segment.md:68
 msgid "Running the program"
 msgstr ""
 
-#: src/18_data_segment.md:69
+#: src/18_data_segment.md:70
 msgid "Save the program as `counters.kel` and run it:"
 msgstr ""
 
-#: src/18_data_segment.md:75
+#: src/18_data_segment.md:76
 msgid ""
 "The program yields once per second, and on each cycle the data segment "
 "preserves its state from the previous cycle. Press Control-C to stop."
 msgstr ""
 
-#: src/18_data_segment.md:78
+#: src/18_data_segment.md:79
 msgid "The program can also be compiled to a bytecode file:"
 msgstr ""
 
-#: src/18_data_segment.md:84
+#: src/18_data_segment.md:85
 msgid ""
 "The tool prints a line such as `wrote counters.bin (2716 bytes)`. Part VIII "
 "runs a more elaborate program that uses the data segment, a song, inside the "
 "piano roll."
 msgstr ""
 
-#: src/18_data_segment.md:90
+#: src/18_data_segment.md:91
 msgid ""
 "The data segment is the one region of memory that may change and that "
 "survives from one cycle to the next."
 msgstr ""
 
-#: src/18_data_segment.md:92
+#: src/18_data_segment.md:93
 msgid ""
 "`data name { field: Type, ... }` declares it; `name.field` reads a field; "
 "`name.field = value;` writes one."
 msgstr ""
 
-#: src/18_data_segment.md:94
+#: src/18_data_segment.md:95
 msgid ""
 "A `for` loop inside a `loop` function does real work by writing to the data "
 "segment."
 msgstr ""
 
-#: src/18_data_segment.md:96
+#: src/18_data_segment.md:97
 msgid "A data block is `shared` by default, or `private`, or `const`."
 msgstr ""
 
-#: src/18_data_segment.md:98
+#: src/18_data_segment.md:99
 msgid ""
 "That completes Part IV, the heart of the language. You have seen the three "
 "kinds of function, the `yield` exchange with the host, the `loop` function "

@@ -107,7 +107,7 @@ pub use typecheck::{TypeCheckError, type_check_inputs_via_kel, type_check_source
 
 /// Read an embedded stage source by basename without filesystem access.
 fn read_stage(rel: &str) -> String {
-    // All fourteen stage sources are embedded in the crate at `src/selfhost/kel/`
+    // All fifteen stage sources are embedded in the crate at `src/selfhost/kel/`
     // (beside this module) via `include_str!`, so the driver needs no filesystem access
     // and works in an installed binary. `rel` is a `kel/<name>.kel` path; only the
     // basename is significant.
@@ -117,6 +117,7 @@ fn read_stage(rel: &str) -> String {
         "parse.kel" => include_str!("kel/parse.kel"),
         "reconstruct.kel" => include_str!("kel/reconstruct.kel"),
         "codegen.kel" => include_str!("kel/codegen.kel"),
+        "template_scan.kel" => include_str!("kel/template_scan.kel"),
         "analyze.kel" => include_str!("kel/analyze.kel"),
         "verify_structural.kel" => include_str!("kel/verify_structural.kel"),
         "verify_yield.kel" => include_str!("kel/verify_yield.kel"),
@@ -1025,137 +1026,107 @@ fn generic_kind_name(kind: i64) -> &'static str {
     }
 }
 
-/// A streaming recogniser for generic function headers, fed one token at a time.
+/// The generic template header scan, `template_scan.kel`, Order 6 slice 7.
 ///
-/// It accepts `fn name<A, B>(x: A, y: Word) -> A { .. }` at the top level, a list of plain
-/// type parameter names and nothing else. A bound, a const parameter, or a template past
-/// the stage's capacities is left unrecognised, so the parser refuses it as before.
-#[derive(Default)]
-struct TemplateScan {
-    state: u8,
-    current: Option<Template>,
-    param_type: Option<i64>,
-    nesting: i64,
-    body_depth: i64,
-    found: Vec<Template>,
+/// The operator ruled on 2026-10-28 that the scan be a stand-alone stage if it clearly can be,
+/// and it is one. The host only batches the lexer's tokens, each with its position and the brace
+/// depth before it, and reads back the templates the stage recognised. The stage keeps its state
+/// across batches, so the first pass still holds no token stream.
+pub fn template_scan_kel_module() -> Module {
+    static CACHED: std::sync::OnceLock<Module> = std::sync::OnceLock::new();
+    CACHED
+        .get_or_init(|| compile_src(&read_stage("kel/template_scan.kel")))
+        .clone()
 }
 
-impl TemplateScan {
-    fn abandon(&mut self) {
-        self.state = 0;
-        self.current = None;
+/// The fields of `template_scan.kel` the host touches, `ts.init` first because
+/// [`analysis_machine::AnalysisMachine::command`] writes field 0 before every turn.
+const TS_FIELDS: [&str; 17] = [
+    "ts.init",
+    "ts.count",
+    "ts.tok",
+    "ts.val",
+    "ts.at",
+    "ts.depth",
+    "ts.found",
+    "ts.t_name",
+    "ts.t_fn",
+    "ts.t_lt",
+    "ts.t_paren",
+    "ts.t_end",
+    "ts.t_ntp",
+    "ts.t_tp",
+    "ts.t_np",
+    "ts.t_pmap",
+    "ts.t_rmap",
+];
+/// Tokens per batch, `batch_cap()` in the stage.
+const TS_BATCH: usize = 256;
+
+/// The template scan stage, fed in batches.
+struct TemplateScan<'a> {
+    machine: analysis_machine::AnalysisMachine<'a, 17>,
+    batch: Vec<(i64, i64, i64, i64)>,
+    started: bool,
+}
+
+impl<'a> TemplateScan<'a> {
+    fn new(arena: &'a Arena) -> Self {
+        let machine =
+            analysis_machine::AnalysisMachine::new(template_scan_kel_module(), arena, &TS_FIELDS)
+                .expect("template_scan.kel loads");
+        TemplateScan {
+            machine,
+            batch: Vec::with_capacity(TS_BATCH),
+            started: false,
+        }
     }
 
     fn step(&mut self, at: i64, depth: i64, (tok, val): (i64, i64)) {
-        use crate::selfhost_host::{GEN_TEMPLATE_CAP, GEN_TYPE_PARAM_CAP, GEN_VALUE_PARAM_CAP};
-        match self.state {
-            0 if depth == 0 && tok == 0 => {
-                self.current = Some(Template {
-                    name: -1,
-                    fn_at: at,
-                    lt_at: -1,
-                    paren_at: -1,
-                    end_at: -1,
-                    type_params: Vec::new(),
-                    param_map: Vec::new(),
-                    return_map: 0,
-                });
-                self.state = 1;
-            }
-            0 => {}
-            1 if tok == 1 => {
-                self.current.as_mut().expect("template").name = val;
-                self.state = 2;
-            }
-            2 if tok == 28 => {
-                self.current.as_mut().expect("template").lt_at = at;
-                self.state = 3;
-            }
-            3 if tok == 1 => {
-                let t = self.current.as_mut().expect("template");
-                t.type_params.push(val);
-                self.state = 4;
-                if t.type_params.len() > GEN_TYPE_PARAM_CAP {
-                    self.abandon();
-                }
-            }
-            4 if tok == 10 => self.state = 3,
-            4 if tok == 29 => self.state = 5,
-            5 if tok == 7 => {
-                self.current.as_mut().expect("template").paren_at = at;
-                self.state = 6;
-                self.param_type = None;
-                self.nesting = 0;
-            }
-            // Parameters: a name, a colon, then a type that is either one identifier or a
-            // composite, read to the comma or parenthesis that ends it.
-            6 if tok == 1 => self.state = 7,
-            6 if tok == 8 => self.state = 10,
-            7 if tok == 9 => self.state = 8,
-            8 => {
-                if self.nesting == 0 && (tok == 10 || tok == 8) {
-                    let t = self.current.as_mut().expect("template");
-                    let mapped = self
-                        .param_type
-                        .and_then(|v| t.type_params.iter().position(|&p| p == v))
-                        .map_or(0, |i| i as i64 + 1);
-                    t.param_map.push(mapped);
-                    let full = t.param_map.len() > GEN_VALUE_PARAM_CAP;
-                    self.param_type = None;
-                    self.state = if tok == 10 { 6 } else { 10 };
-                    if full {
-                        self.abandon();
-                    }
-                } else {
-                    // Only a type written as one identifier maps to a type parameter.
-                    let first = self.param_type.is_none() && self.nesting == 0 && tok == 1;
-                    self.param_type = if first { Some(val) } else { Some(-1) };
-                    match tok {
-                        7 | 41 | 28 => self.nesting += 1,
-                        8 | 42 | 29 => self.nesting -= 1,
-                        _ => {}
-                    }
-                }
-            }
-            // After the parameters: an arrow and a return type, then the body.
-            10 if tok == 4 => self.state = 11,
-            10 | 12 if tok == 2 => {
-                self.state = 13;
-                self.body_depth = 1;
-            }
-            10 | 12 => {}
-            11 => {
-                let t = self.current.as_mut().expect("template");
-                if tok == 1 {
-                    t.return_map = t
-                        .type_params
-                        .iter()
-                        .position(|&p| p == val)
-                        .map_or(0, |i| i as i64 + 1);
-                }
-                self.state = 12;
-                if tok == 2 {
-                    self.state = 13;
-                    self.body_depth = 1;
-                }
-            }
-            13 => {
-                match tok {
-                    2 => self.body_depth += 1,
-                    3 => self.body_depth -= 1,
-                    _ => {}
-                }
-                if self.body_depth == 0 {
-                    let mut t = self.current.take().expect("template");
-                    t.end_at = at;
-                    if self.found.len() < GEN_TEMPLATE_CAP {
-                        self.found.push(t);
-                    }
-                    self.state = 0;
-                }
-            }
-            _ => self.abandon(),
+        self.batch.push((tok, val, at, depth));
+        if self.batch.len() == TS_BATCH {
+            self.flush();
         }
+    }
+
+    fn flush(&mut self) {
+        let m = &mut self.machine;
+        m.set(1, self.batch.len() as i64).expect("ts.count");
+        for (i, &(tok, val, at, depth)) in self.batch.iter().enumerate() {
+            for (field, value) in [(2, tok), (3, val), (4, at), (5, depth)] {
+                m.set_element(field, i, value).expect("ts token");
+            }
+        }
+        let init = i64::from(!self.started);
+        self.started = true;
+        m.command(init).expect("template_scan.kel batch");
+        self.batch.clear();
+    }
+
+    /// Flush the last batch and read the recognised templates in source order.
+    fn finish(mut self) -> Vec<Template> {
+        if !self.batch.is_empty() || !self.started {
+            self.flush();
+        }
+        let m = &self.machine;
+        let get = |field: usize, i: usize| m.get_element(field, i).expect("ts result");
+        let found = usize::try_from(get(6, 0)).expect("ts.found");
+        (0..found)
+            .map(|t| Template {
+                name: get(7, t),
+                fn_at: get(8, t),
+                lt_at: get(9, t),
+                paren_at: get(10, t),
+                end_at: get(11, t),
+                type_params: (0..usize::try_from(get(12, t)).expect("ts.t_ntp"))
+                    .map(|i| get(13, t * crate::selfhost_host::GEN_TYPE_PARAM_CAP + i))
+                    .collect(),
+                param_map: (0..usize::try_from(get(14, t)).expect("ts.t_np"))
+                    .map(|i| get(15, t * crate::selfhost_host::GEN_VALUE_PARAM_CAP + i))
+                    .collect(),
+                return_map: get(16, t),
+            })
+            .collect()
     }
 }
 
@@ -1204,7 +1175,11 @@ fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
     let mut impl_state = 0;
     let (mut impl_trait, mut impl_head) = (-1i64, -1i64);
     let mut methods_raw: Vec<(i64, i64, i64)> = Vec::new();
-    let mut scan = TemplateScan::default();
+    let scan_module = template_scan_kel_module();
+    let scan_need = required_persistent_capacity_for(&scan_module);
+    let mut scan_arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + scan_need);
+    scan_arena.resize_persistent(scan_need).expect("resize");
+    let mut scan = TemplateScan::new(&scan_arena);
     let mut runs: Vec<(i64, Vec<(i64, i64)>)> = Vec::new();
     let mut run_open = false;
     while let Some(w) = lex_next(&mut vm, &mut shared) {
@@ -1267,7 +1242,7 @@ fn first_pass_with(src: &str, instances: &[Instantiation]) -> FirstPass {
     // A template is not a chunk. Only a name every head of which is a template is dropped, so
     // a template sharing its name with a plain head stays a chunk and the parser refuses it.
     let templates: Vec<Template> = scan
-        .found
+        .finish()
         .into_iter()
         .filter(|t| ids.iter().filter(|&&id| id == t.name).count() == 1)
         .collect();
@@ -1561,7 +1536,7 @@ fn panic_message(payload: &(dyn core::any::Any + Send)) -> String {
 pub fn parse_functions_fused(
     src: &str,
 ) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
-    let (fns, names, data_records, enum_records, _) = parse_functions_fused_with_natives(src);
+    let (fns, names, data_records, enum_records, _, _) = parse_functions_fused_with_natives(src);
     (fns, names, data_records, enum_records)
 }
 
@@ -1573,14 +1548,22 @@ type FusedParse = (
     Vec<(i64, i64)>,
     Vec<(i64, i64)>,
     Vec<Vec<i64>>,
+    Vec<(i64, i64)>,
 );
 
-/// [`parse_functions_fused`] with the native import paths as well.
+/// [`parse_functions_fused`] with the native import paths and the struct records as well.
 fn parse_functions_fused_with_natives(src: &str) -> FusedParse {
     let mut fns = Vec::new();
-    let (names, data_records, enum_records, _struct_records, native_paths) =
+    let (names, data_records, enum_records, struct_records, native_paths) =
         parse_functions_impl(src, true, &mut |_, f| fns.push(f), &mut |_, _, _| {});
-    (fns, names, data_records, enum_records, native_paths)
+    (
+        fns,
+        names,
+        data_records,
+        enum_records,
+        native_paths,
+        struct_records,
+    )
 }
 
 /// How many tokens `lexer.kel` produces for `src` — **the count `PARSE_TOKEN_CAP` is
@@ -6791,6 +6774,145 @@ pub fn validate_module_via_kel(module: &Module, arena_capacity: i64) -> bool {
 // assembly mirrors the corresponding Rust compiler pass, so the serialized module is
 // byte-identical to the reference for the loop-free stage sources.
 
+/// Each struct's fields, keyed by the struct's name id, as (field name id, type name id, the
+/// array count when the field is declared as an array).
+type StructFieldTable = alloc::collections::BTreeMap<i64, Vec<(i64, i64, Option<i64>)>>;
+
+/// The schema hash the self-hosted driver computes for `src`, from the pipeline's own records,
+/// for a check against the reference's.
+pub fn schema_hash_from_pipeline(src: &str) -> u32 {
+    let (_, names, data_records, _, _, struct_records) = parse_functions_fused_with_natives(src);
+    let dl = assemble_data_layout(&data_records, &names);
+    let layout = (!dl.slots.is_empty()).then_some(dl);
+    crate::bytecode::compute_typed_schema_hash(
+        layout.as_ref(),
+        &schema_slot_tokens(&data_records, &struct_records, &names),
+    )
+}
+
+/// Each data slot's type token for [`crate::bytecode::compute_typed_schema_hash`], parallel to
+/// [`assemble_data_slots`], from parse.kel's data records and its struct records.
+///
+/// A data record names each field's type, 6, and an array's element count, 8. A struct record
+/// opens a struct, 18, and gives each field's name, 4, its type, 6, and an array count, 8. The
+/// token is the reference's, built from the same declarations, which the byte-identical oracle
+/// checks for every source with data.
+fn schema_slot_tokens(
+    data_records: &[(i64, i64)],
+    struct_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<String> {
+    // Each struct's fields as (name id, type id, array count when declared).
+    let mut structs: StructFieldTable = alloc::collections::BTreeMap::new();
+    let mut current = None;
+    for &(code, val) in struct_records {
+        match code {
+            18 => {
+                current = Some(val);
+                structs.insert(val, Vec::new());
+            }
+            4 => {
+                if let Some(fields) = current.and_then(|c| structs.get_mut(&c)) {
+                    fields.push((val, -1, None));
+                }
+            }
+            6 => {
+                if let Some(f) = current
+                    .and_then(|c| structs.get_mut(&c))
+                    .and_then(|f| f.last_mut())
+                {
+                    f.1 = val;
+                }
+            }
+            8 => {
+                if let Some(f) = current
+                    .and_then(|c| structs.get_mut(&c))
+                    .and_then(|f| f.last_mut())
+                {
+                    f.2 = Some(val);
+                }
+            }
+            _ => {}
+        }
+    }
+    let name_of = |id: i64| {
+        usize::try_from(id)
+            .ok()
+            .and_then(|i| names.get(i))
+            .map_or("", String::as_str)
+    };
+    let struct_id = |type_id: i64| {
+        structs
+            .keys()
+            .copied()
+            .find(|&k| name_of(k) == name_of(type_id))
+    };
+    fn render<'n>(
+        type_id: i64,
+        depth: usize,
+        name_of: &dyn Fn(i64) -> &'n str,
+        struct_id: &dyn Fn(i64) -> Option<i64>,
+        structs: &StructFieldTable,
+        out: &mut String,
+    ) {
+        out.push_str(name_of(type_id));
+        if let Some(sid) = struct_id(type_id)
+            && depth < 16
+        {
+            out.push('{');
+            for (i, &(field, ty, count)) in structs[&sid].iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(name_of(field));
+                out.push(':');
+                match count {
+                    Some(n) => {
+                        out.push('[');
+                        render(ty, depth + 1, name_of, struct_id, structs, out);
+                        out.push(';');
+                        out.push_str(&n.to_string());
+                        out.push(']');
+                    }
+                    None => render(ty, depth + 1, name_of, struct_id, structs, out),
+                }
+            }
+            out.push('}');
+        }
+    }
+    // Data fields as (visibility, type id, slot count), in declaration order.
+    let mut fields: Vec<(i64, i64, i64)> = Vec::new();
+    let mut vis = 0;
+    for &(code, val) in data_records {
+        match code {
+            9 => vis = val % 4,
+            4 => fields.push((vis, -1, 1)),
+            6 => {
+                if let Some(f) = fields.last_mut() {
+                    f.1 = val;
+                }
+            }
+            8 => {
+                if let Some(f) = fields.last_mut() {
+                    f.2 = val;
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut tokens = Vec::new();
+    for pass in [0i64, 1i64] {
+        for &(_, ty, count) in fields.iter().filter(|f| f.0 == pass) {
+            let mut token = String::new();
+            render(ty, 0, &name_of, &struct_id, &structs, &mut token);
+            for _ in 0..count.max(1) {
+                tokens.push(token.clone());
+            }
+        }
+    }
+    tokens
+}
+
 /// Assemble the data-slot table from parse.kel's data-block record stream, mapping the
 /// interned block, field, and (unused here) type ids through the name table.
 fn assemble_data_slots(
@@ -7454,11 +7576,15 @@ fn assemble_chunk_metadata(
 /// modifiers) and self-hosting them is a distinct increment.
 pub fn self_host_compile_full(src: &str) -> Module {
     let mut module = self_host_compile(src);
-    let (fns, names, data_records, enum_records) = parse_functions_fused(src);
+    let (fns, names, data_records, enum_records, _, struct_records) =
+        parse_functions_fused_with_natives(src);
     let dl = assemble_data_layout(&data_records, &names);
     module.data_layout = (!dl.slots.is_empty()).then_some(dl);
     module.persistent_composite_bytes = private_composite_pool(&data_records).1;
-    module.schema_hash = crate::bytecode::compute_schema_hash(module.data_layout.as_ref());
+    module.schema_hash = crate::bytecode::compute_typed_schema_hash(
+        module.data_layout.as_ref(),
+        &schema_slot_tokens(&data_records, &struct_records, &names),
+    );
     module.enum_layouts = assemble_enum_layouts(&enum_records, &names);
     module.signatures = assemble_signatures(&fns, &names, &module.enum_layouts);
     // Self-assemble each source chunk's param_count, block_type, and param_types (the last
@@ -7550,7 +7676,7 @@ fn shared_data_bytes_of(shared_layout: &[crate::bytecode::SharedSlotLayout]) -> 
 /// `native_return_shapes` are empty.
 pub fn self_host_compile_scratch(src: &str) -> Module {
     use crate::bytecode::{Chunk, SlotVisibility};
-    let (mut fns, names, data_records, enum_records, native_paths) =
+    let (mut fns, names, data_records, enum_records, native_paths, struct_records) =
         parse_functions_fused_with_natives(src);
     let relocation = data_relocation::Plan::from_records(&data_records).expect("data address plan");
     for function in &mut fns {
@@ -7639,7 +7765,10 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
     // An absent data segment has no layout regions in the artifact. An empty
     // layout would encode extra regions and differ from the reference.
     let data_layout = (!dl.slots.is_empty()).then_some(dl);
-    let schema_hash = crate::bytecode::compute_schema_hash(data_layout.as_ref());
+    let schema_hash = crate::bytecode::compute_typed_schema_hash(
+        data_layout.as_ref(),
+        &schema_slot_tokens(&data_records, &struct_records, &names),
+    );
 
     let enum_layouts = assemble_enum_layouts(&enum_records, &names);
     let signatures = assemble_signatures(&fns, &names, &enum_layouts);
