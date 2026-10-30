@@ -31,7 +31,7 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor c6366172 HEAD     # the merge of PR 595 into v0.2.3
+git merge-base --is-ancestor c55620ed HEAD     # the merge of PR 625 into v0.2.3
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
 
@@ -40,44 +40,37 @@ run.
 
 ## State on 2026-10-29
 
-- **Merged.** PR 554, the `cargo tns` alias, as `23a38251`. PR 589, the template sync
-  with `CODE_OF_CONDUCT.md`, into `v0.2.3` as `3214700e`. PR 590, the code of conduct,
-  `dependabot.yml` and a `CI result` job, into `main` as `71d5a4e1`. PR 595, the
-  disclosure fixes and the pydromon proposal, into `v0.2.3` as `c6366172`.
-- **Disclosure list.** On the operator's instruction of 2026-10-29, the seven generic
-  terms were removed from `secret/disclosure-terms.txt`, leaving 21. A backup is outside
-  the repository, in the session's temporary directory. Term numbers now count the
-  pruned list, so old terms 6, 11, 12, 13 and 15 are now terms 2, 5, 6, 7 and 9.
-- **This increment.** The operator asked for the template's hygiene checks to be
-  re-run. `sgeos/project-template` v1.0.6's `check.sh --hygiene-only` failed on
-  trailing spaces in two captured gate-summary fixtures, which `.gitattributes` now
-  marks `-whitespace`. With the terms file linked in temporarily, its disclosure scan
-  then found kept terms 7 and 9 on three lines of older design records, which were
-  reworded. Every check passes on the branch. The pydromon proposal now gives each line
-  its own `CLAUDE.md` by absolute path, because pydromon resolves relative instruction
-  paths against the project root since `559f7b2`. It was validated again there.
-- **Dependabot.** The five `brace-expansion` alerts are on `main`, which still had
-  2.1.2. PR 619 into `main` applies the 2.1.7 hunk from `74962afc`, on the operator's
-  instruction of 2026-10-29. `main`'s release gate passed on its tree, with 5,209 tests
-  passed, 0 failed and 11 ignored. `npm ci` and `npm audit` on the lockfile were clean.
-  After it merges, `main` is merged into `v0.2.3`.
+- **Merged.** PR 595, the disclosure fixes and the pydromon proposal, into `v0.2.3` as
+  `c6366172`. PR 619, the `brace-expansion` fix that closed Dependabot alerts 1 to 5,
+  into `main` as `dafe8a25`. PR 620, the template hygiene re-run, `main` carried
+  forward and the revised pydromon proposal, into `v0.2.3` as `442de88b`.
+- **Disclosure list.** On the operator's instruction of 2026-10-29, seven generic terms
+  were removed from `secret/disclosure-terms.txt`, leaving 21. Term numbers count the
+  pruned list. A backup is outside the repository.
+- **Merged on 2026-10-30.** PR 625, changelog fragments, into `v0.2.3` as `c55620ed`,
+  on the operator's ruling of 2026-10-29 after V0.2.X's request 143. Entries go under
+  `changelog.d/`, checked in CI and assembled at release. The operator also ruled to
+  keep branch runs uncancelled. See
+  [the report](../kaizen/2026-10-29-changelog-fragments.md). V0.2.X adopted the rule
+  before the merge, and V0.3.X was sent notice 148 to adopt it at its next absorption.
+- **This increment.** The pydromon proposal's labeller uses pydromon's new
+  `fresh_session_each_turn` key, validated with `dromon config` at `5ef0fd7`.
+- **Dependabot.** Dependabot's detached-cargo update `c90fe3e8` raised `syn` to 3 in two
+  member manifests without the root `Cargo.lock`. PR 623, V0.2.X's batch, fixed the
+  lockfile through the root cargo update. PR 624, open into `v0.2.3` on the operator's
+  instruction of 2026-10-29, makes CI check the three tracked lockfiles with `--locked`
+  and records the cause in `dependabot.yml`.
 - **Propagation.** V0.3.X was sent notice 141 to carry the rewording at its next
-  absorption and to write the home directory in its own handoff file as `~`.
-  `origin/proofs`, unchanged since 2026-08-29, still holds the old `wire_schema.rs`
-  comment and four kept-term lines. The proofs line has no mailbox, and this is for the
-  operator. `main` holds four kept-term lines in `REVERSE_PROMPT.md`, `TASKLOG.md` and
-  `RESOLVED.md`, which the next release merge replaces.
-- **Pydromon.** The operator holds the changeover, to be timed tactically. On the
-  operator's instruction, a third review went to the pydromon session on 2026-10-29. It
-  confirms the second review resolved, and asks two things. Pydromon's Keleusma template
-  should name each line's `CLAUDE.md` absolutely, and its docstring about workdir paths
-  contradicts `rooted_instructions`. It also asks whether a tool-less labeller line is
-  sound. Pydromon replied the same day, in a peer message. It agreed on both, and its
-  fix is commit `29d781b`, not yet merged or pushed. Its labeller constraints are now in
-  the proposal, which moves the labeller to an empty workdir outside the project. The
-  operator is working out SSH support with pydromon.
-- **Jev selection cohort.** Live evaluation is on. The three cases were evaluated and
-  labelled blind. The comparison opens when each task is finished.
+  absorption. It receives the fragments rule the same way. `origin/proofs`, unchanged
+  since 2026-08-29, still holds the old `wire_schema.rs` comment and four kept-term
+  lines, which is for the operator. `main` holds four kept-term lines that the next
+  release merge replaces.
+- **Pydromon.** The operator holds the changeover, to be timed tactically, and is
+  working out SSH support with pydromon. Pydromon's `main` at `5ef0fd7` has the third
+  review's fixes, in its pull request 78, and a per-turn fresh session, in pull request
+  80. The proposal's labeller now uses that key, which `dromon config` accepts.
+- **Jev selection cohort.** The three cases were evaluated and labelled blind. The
+  comparison opens when each task is finished.
 
 ## Operator positions, stated first-hand in this line's session on 2026-10-25
 
@@ -103,13 +96,14 @@ authority, so the startup-file positions reach them first-hand.
    build, to shorten shard 1.
 4. Finish the three selection tasks, record their outcomes, and read the comparison.
 5. A state-file budget guard, once the owning lines have converted their files.
+6. Measure branch-run cost again once changelog fragments are in use.
 
 ## Open with the operator
 
 - The stale `origin/proofs` texts listed above.
-- Clearing the labeller's session once per case, which today only the operator can do,
-  through pydromon's `clear_session`. pydromon records a per-turn fresh session as a
-  request.
+- Setting `fresh_session_each_turn` on the labeller line at the changeover, which only
+  the operator may do, and confirming on its first live run that the second case sees
+  nothing of the first.
 
 ## Concerns
 
@@ -129,7 +123,7 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `bae190eb7e927f5aaeb0ea185d539fe29c9729970c3aa128a857b515b5b41386`, 124 messages, 1 unacknowledged at export |
+| [Interline](../interline/checkpoint.json) | `4c0fcbdf0ca27b6153e7f0efe19e88d00ae303dbb1387ccce959a6a78c81a949`, 148 messages, 2 unacknowledged at export |
 | [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `6fb4783b8f0bf96d003311f0a84581f38bb9ff0cbfe232f0f85e014064d6cea6`, 3 samples evaluated and labelled, restored cleanly into a fresh store |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `417a126a7647b7099dcf1b8b4f4c67c64a5f9a06180cac492daefbbd427ca2fd`, 250 samples and 66 tasks, home directory written as `~` on 2026-10-28 with request digests recomputed, restored cleanly into a fresh store |
 
