@@ -154,6 +154,10 @@ publish is not, and it waits for the maintainer's word.
   (`keleusma`, `keleusma-cli`, `keleusma-bench`) to `">= new"` so a downstream
   resolution cannot select the older, incompatible arena. (This is the V0.2.1 arena
   0.3.0 → 0.3.1 lesson; see step 3.)
+- Assemble the changelog fragments with `python3 scripts/changelog_fragments.py assemble`,
+  which moves every file in `changelog.d/` into the `[Unreleased]` section of the root
+  `CHANGELOG.md` and deletes it. Review the result, because the fragments were written
+  separately and may repeat or contradict one another.
 - Stamp each crate's `CHANGELOG.md`: rename the `[Unreleased]` section to
   `[X.Y.Z] - <YYYY-MM-DD>` and open a fresh empty `[Unreleased]` above it. The
   published tarball should carry a dated, stamped changelog, not `[Unreleased]`.

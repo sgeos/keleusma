@@ -9,7 +9,8 @@ installed. The project file was validated with `dromon config` from pydromon `ma
 `36e156a`, in a scratch project, with real worktree paths and stand-in instruction files.
 It was revised on 2026-10-29 for pydromon's change to instruction paths and validated
 again the same way at `559f7b2`, with each existing worktree's real `CLAUDE.md` and a
-stand-in for the `review` worktree, which does not exist yet.
+stand-in for the `review` worktree, which does not exist yet. It was revised on
+2026-10-30 for pydromon's per-turn fresh session and validated again at `5ef0fd7`.
 
 ## What is decided and what is proposed
 
@@ -51,11 +52,16 @@ sending only the blind view. A kept or resumed session carries earlier cases in 
 context, so pydromon infers that labels after the first are independent only if the
 session is cleared between cases. pydromon's `clear_session` client request, which its
 curses client sends as `/clear`, starts the next turn in a new session. It carries
-operator authority and has no `dromon` subcommand, so today the operator sends it once
-per case. The labeller sets `context_handoff` false, because by default a new session
-opens with the line's recent mail, which for a labeller is the earlier cases and its
-own labels. It also sets `keep_session` false. pydromon has recorded a fresh session on
-every turn as an open request. The labeller
+operator authority and has no `dromon` subcommand. By default a new session also opens
+with the line's recent mail, which for a labeller is the earlier cases and its own
+labels. pydromon pull request 80, on its `main` at `5ef0fd7`, removes both problems
+with the line key `fresh_session_each_turn`, which only the operator sets. Each turn
+then starts a new engine session with no context handoff and no standing brief, and
+still receives the mail that starts it. The key implies `context_handoff` false, and
+`dromon config` refuses it together with `keep_session` true. The labeller sets it, so
+the operator no longer clears the session per case. pydromon notes that it has not run
+live, so the first labeller run should confirm with `read_instructions` and
+`line_status` that the second case sees nothing of the first. The labeller
 gets only its brief as instructions and is never a seat of a role, so no handoff package
 reaches it.
 
@@ -151,7 +157,9 @@ would need network access to build and push.
   gives a worktree line the root's file, so this proposal now uses absolute paths. On the
   operator's instruction, the Kaizen line sent pydromon a review on 2026-10-29. It asks
   pydromon to use absolute paths in its own Keleusma template, and points out that the
-  module's docstring still says a relative path resolves against the workdir.
+  module's docstring still says a relative path resolves against the workdir. pydromon
+  pull request 78, on its `main` by `5ef0fd7`, made both changes and added the labeller
+  line to its dogfood page as the alternative to a subagent.
 
 ## Appendix: the project file
 
@@ -299,9 +307,9 @@ model = "claude-opus-5-5"
 builtin_tools = []
 inherit_account_mcp = false
 claude_code_prompt = false
-# A cleared session would otherwise open with the earlier cases and their labels.
-context_handoff = false
-keep_session = false
+# Each case starts a new session, without the earlier cases, their labels or a context
+# handoff. The operator sets this key. It implies context_handoff = false.
+fresh_session_each_turn = true
 # An empty directory outside the project and the Jev store, because Dromon's own tools
 # still take paths in the workdir.
 workdir = "CACHE/jev-labeller-workdir"
