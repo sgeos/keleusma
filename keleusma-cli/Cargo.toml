@@ -27,7 +27,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 # strings.
 keleusma = { path = "..", version = "0.2", features = ["shell", "signatures", "encryption", "self-host"] }
 keleusma-arena = { path = "../keleusma-arena", version = "0.3.1" }
-ed25519-dalek = { version = "3", default-features = false, features = ["alloc", "rand_core"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["alloc"] }
 # X25519 for the encryption gate at the CLI. The signing keypair
 # (Ed25519) and the encryption keypair (X25519) are distinct; the
 # CLI carries both so operators can generate either at the keygen
@@ -38,7 +38,7 @@ rand_core = { version = "0.6", default-features = false, features = ["getrandom"
 # TOML parsing for the run-tasks manifest. Serde is used only for
 # deserialisation of the structured manifest schema; no compile-time
 # code generation beyond what `serde_derive` already produces.
-toml = { version = "1.1", default-features = false, features = ["parse"] }
+toml = { version = "1.1", default-features = false, features = ["parse", "serde"] }
 serde = { version = "1", default-features = false, features = ["std", "derive"] }
 # Cross-platform signal handling for the run-tasks scheduler. The
 # crate is a thin layer over each platform's native facility:
