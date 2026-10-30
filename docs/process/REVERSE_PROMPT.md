@@ -83,11 +83,9 @@ Each has lettered options with my recommendation first. None blocks the next ite
    `#[derive(KeleusmaType)]`, and (c) later.
    (a) The contract and the size check alone.
    (c) Field layouts on the wire, which needs your authorization.
-3. The five Dependabot vulnerabilities GitHub reports on `main`, four high and one
-   moderate, which I have not examined. Pull request 623 updated the cryptographic crates on
-   `v0.2.3` only.
-   (a) I examine them and report which reach a shipped crate.
-   (b) They wait for the next release from `v0.2.3`.
+3. Withdrawn. The five Dependabot alerts on `main` were all `brace-expansion` in the VS Code
+   extension's `editors/vscode/package-lock.json`, none in a shipped crate, and all five are
+   fixed, at 02:33 UTC on 2026-10-30, by the kaizen line's pull request 630.
 4. Withdrawn. The kaizen line's pull request 624, merged, adds `--locked` to CI for the
    lockfile drift I reported.
 
