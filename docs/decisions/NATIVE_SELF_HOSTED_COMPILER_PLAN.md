@@ -145,6 +145,16 @@ first line of evidence, and this check is the end-to-end one.
   chunk the driver calls through `call_function`, a bridge from the boxed
   closures to the native code's calls, and the conversion of a yielded word
   to a `VmState`.
+- **2026-10-30, step 3, native stages in the driver.**
+  `native_codegen/src/stage_factory.rs` answers the factory. A stage's turns
+  run natively, copying the driver's shared buffer in and out so the canary
+  still holds, and its layout queries and `call_function` go to an inner
+  virtual machine of the same module. `native_stage_factory.rs` compiles four
+  programs byte-identical to the virtual machine and to the reference, and
+  validates them with the same verdicts. A stage calling a host native is
+  declined. Remaining are a bridge from the driver's closure natives to C
+  calls for `frame.kel`, a cache of built stages, a selector for the three
+  compilers, and the corpus-wide end-to-end check.
 
 ## Risks and open points
 
