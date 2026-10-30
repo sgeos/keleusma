@@ -3730,6 +3730,10 @@ fn stage_source_token_counts() {
             include_str!("../src/selfhost/kel/verify_yield.kel"),
         ),
         (
+            "template_scan.kel",
+            include_str!("../src/selfhost/kel/template_scan.kel"),
+        ),
+        (
             "verify_typed.kel",
             include_str!("../src/selfhost/kel/verify_typed.kel"),
         ),

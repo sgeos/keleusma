@@ -4940,6 +4940,10 @@ const REAL_STAGE_SOURCES: &[(&str, &str)] = &[
         "wire_schema",
         include_str!("../src/selfhost/kel/wire_schema.kel"),
     ),
+    (
+        "template_scan",
+        include_str!("../src/selfhost/kel/template_scan.kel"),
+    ),
 ];
 
 /// Every input channel's row count for one program, as `(channel, rows, capacity)`.

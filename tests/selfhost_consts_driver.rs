@@ -60,6 +60,10 @@ const STAGES: &[(&str, &str)] = &[
         include_str!("../src/selfhost/kel/verify_yield.kel"),
     ),
     (
+        "template_scan",
+        include_str!("../src/selfhost/kel/template_scan.kel"),
+    ),
+    (
         "verify_depth",
         include_str!("../src/selfhost/kel/verify_depth.kel"),
     ),

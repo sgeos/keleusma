@@ -142,6 +142,7 @@ const CORPUS: &[(&str, Class)] = &[
     ("src/selfhost/kel/lexer.kel", Identical),
     ("src/selfhost/kel/parse.kel", Identical),
     ("src/selfhost/kel/reconstruct.kel", Identical),
+    ("src/selfhost/kel/template_scan.kel", Identical),
     ("src/selfhost/kel/verify_datalayout.kel", Identical),
     ("src/selfhost/kel/verify_depth.kel", Identical),
     ("src/selfhost/kel/verify_structural.kel", Identical),
