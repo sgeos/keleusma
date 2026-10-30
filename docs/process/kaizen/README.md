@@ -7,6 +7,7 @@ rests on. The line's mailbox and resume prompt is [`../handoffs/kaizen.md`](../h
 
 | report | state |
 |---|---|
+| [`2026-10-30-ci-practices-spike.md`](./2026-10-30-ci-practices-spike.md) | research spike on how rustc, LLVM, Chromium, Go, Mozilla and Rust projects run CI, with 100 Keleusma runs measured, five gaps found, no build cache, 208 test binaries, an unfailing self-host tier at 46 percent of runner-minutes, hidden flaky retries and no fuzzing, and seven recommendations, none adopted |
 | [`2026-10-29-changelog-fragments.md`](./2026-10-29-changelog-fragments.md) | changelog entries moved to one fragment file per change, assembled at release, on the operator's ruling of 2026-10-29 after V0.2.X reported merge conflicts in `CHANGELOG.md`, and the operator's ruling the same day to keep branch runs uncancelled |
 | [`2026-10-28-pydromon-team-setup.md`](./2026-10-28-pydromon-team-setup.md) | proposal for running every Keleusma line in pydromon, six lines with a fresh-context reviewer and a blind Jev labeller, one full-gate lease, a validated project file and team rules, two phases, nothing installed, changeover timed by the operator |
 | [`2026-10-24-context-engineering-spike.md`](./2026-10-24-context-engineering-spike.md) | follow-up to the token spike at the operator's response, state of the art and harness waiting surveyed, mid-task compaction measured as a likely cost to correctness, every Opus 5.5 compaction found to be idle, the lower auto-compact window withdrawn, gate summary and Python CI job built, reminder changes not activated |
