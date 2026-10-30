@@ -1,0 +1,40 @@
+name: Timings probe
+
+# Throwaway probe for kaizen recommendation R1. Never merged. The branch deletes ci.yml
+# so that the probe pull request does not also start the full matrix. Each job repeats
+# one CI build exactly, on a fresh runner, with `--timings`, and uploads the report.
+on:
+  pull_request:
+    branches: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  timings:
+    name: Timings (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: test-workspace
+            cmd: cargo test --workspace --no-run --timings
+          - name: selfhost-archive
+            cmd: cargo test -p keleusma --features self-host --no-run --timings
+          - name: signatures
+            cmd: cargo test -p keleusma --features signatures --no-run --timings
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - run: nproc && free -g
+      - run: ${{ matrix.cmd }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: timings-${{ matrix.name }}
+          path: target/cargo-timings/cargo-timing.html
+          retention-days: 7
+          if-no-files-found: error
