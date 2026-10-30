@@ -31,44 +31,47 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor c55620ed HEAD     # the merge of PR 625 into v0.2.3
+git merge-base --is-ancestor 751fa668 HEAD     # the merge of PR 624 into v0.2.3
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
 
 Ancestry alone never establishes freshness. Report any foreign commit or any check not
 run.
 
-## State on 2026-10-29
+## State on 2026-10-30
 
-- **Merged.** PR 595, the disclosure fixes and the pydromon proposal, into `v0.2.3` as
-  `c6366172`. PR 619, the `brace-expansion` fix that closed Dependabot alerts 1 to 5,
-  into `main` as `dafe8a25`. PR 620, the template hygiene re-run, `main` carried
-  forward and the revised pydromon proposal, into `v0.2.3` as `442de88b`.
-- **Disclosure list.** On the operator's instruction of 2026-10-29, seven generic terms
-  were removed from `secret/disclosure-terms.txt`, leaving 21. Term numbers count the
-  pruned list. A backup is outside the repository.
-- **Merged on 2026-10-30.** PR 625, changelog fragments, into `v0.2.3` as `c55620ed`,
-  on the operator's ruling of 2026-10-29 after V0.2.X's request 143. Entries go under
-  `changelog.d/`, checked in CI and assembled at release. The operator also ruled to
-  keep branch runs uncancelled. See
-  [the report](../kaizen/2026-10-29-changelog-fragments.md). V0.2.X adopted the rule
-  before the merge, and V0.3.X was sent notice 148 to adopt it at its next absorption.
-- **This increment.** The pydromon proposal's labeller uses pydromon's new
-  `fresh_session_each_turn` key, validated with `dromon config` at `5ef0fd7`.
-- **Dependabot.** Dependabot's detached-cargo update `c90fe3e8` raised `syn` to 3 in two
-  member manifests without the root `Cargo.lock`. PR 623, V0.2.X's batch, fixed the
-  lockfile through the root cargo update. PR 624, open into `v0.2.3` on the operator's
-  instruction of 2026-10-29, makes CI check the three tracked lockfiles with `--locked`
-  and records the cause in `dependabot.yml`.
-- **Propagation.** V0.3.X was sent notice 141 to carry the rewording at its next
-  absorption. It receives the fragments rule the same way. `origin/proofs`, unchanged
-  since 2026-08-29, still holds the old `wire_schema.rs` comment and four kept-term
-  lines, which is for the operator. `main` holds four kept-term lines that the next
-  release merge replaces.
-- **Pydromon.** The operator holds the changeover, to be timed tactically, and is
-  working out SSH support with pydromon. Pydromon's `main` at `5ef0fd7` has the third
-  review's fixes, in its pull request 78, and a per-turn fresh session, in pull request
-  80. The proposal's labeller now uses that key, which `dromon config` accepts.
+- **Merged.** Into `v0.2.3`, PR 620, the template hygiene re-run, as `442de88b`. PR 625,
+  changelog fragments, as `c55620ed`. PR 626, the labeller's fresh session, as
+  `7301e739`. PR 624, `--locked` checks of the three tracked lockfiles, as `751fa668`.
+  Into `main`, PR 619, the `brace-expansion` fix that closed Dependabot alerts 1 to 5.
+- **Operator rulings of 2026-10-29.** Changelog entries are fragments under
+  `changelog.d/`, assembled at release, and branch runs stay uncancelled. See
+  [the report](../kaizen/2026-10-29-changelog-fragments.md). V0.2.X follows the rule.
+  V0.3.X adopts it at absorption 117.
+- **This increment.** On the operator's instruction of 2026-10-30, Dependabot security
+  updates are enabled in the repository settings, replacing the choice of 2026-10-25.
+  The `dependabot.yml` comment is corrected here and, through a separate pull request,
+  on `main`, where Dependabot reads it. GitHub's options reference says security updates
+  always use the default branch. Each one is therefore a merge into `main` needing the
+  operator's confirmation, and is then carried into `v0.2.3`. 0 alerts were open when
+  this was enabled.
+- **Runners.** On 2026-10-30 Keleusma CI jobs waited a median of 1.1 minutes for a
+  runner, 9.5 at the 90th percentile and 47.7 at most, over 377 jobs since 12:00Z the
+  day before. The blog's Pages build grew from about 5 to 60 to 90 minutes and holds one
+  shared runner for most of each busy day. The audit, with three fixes estimated to
+  return about 250 runner-minutes a day, is untracked in the blog's `tmp/`, as
+  `2026-10-30-ci-runner-audit.md`. On the operator's instruction, a ghost run on
+  `v0.3.0`, `34749385428`, queued since 2026-09-13 with no jobs, artifacts or checks,
+  was deleted after both cancel endpoints refused it.
+- **Disclosure list.** 21 terms since the operator's pruning of 2026-10-29. Term numbers
+  count the pruned list. A backup is outside the repository.
+- **Propagation.** `origin/proofs`, unchanged since 2026-08-29, still holds the old
+  `wire_schema.rs` comment and four kept-term lines, which is for the operator. `main`
+  holds four kept-term lines that the next release merge replaces. V0.3.X confirmed
+  that `v0.3.0` matches no term.
+- **Pydromon.** The operator holds the changeover and is working out SSH support, which
+  meets sandbox limits. The proposal's labeller uses `fresh_session_each_turn`, from
+  pydromon `5ef0fd7`.
 - **Jev selection cohort.** The three cases were evaluated and labelled blind. The
   comparison opens when each task is finished.
 
@@ -100,7 +103,11 @@ authority, so the startup-file positions reach them first-hand.
 
 ## Open with the operator
 
+- Who applies the blog audit's fixes, before the blog's next large push if possible.
 - The stale `origin/proofs` texts listed above.
+- The route for SSH under the sandbox. A pinned `known_hosts` outside `~/.ssh` with an
+  ssh-agent socket keeps `~/.ssh` closed. HTTPS with the `gh` credential helper is the
+  alternative.
 - Setting `fresh_session_each_turn` on the labeller line at the changeover, which only
   the operator may do, and confirming on its first live run that the second case sees
   nothing of the first.
@@ -123,7 +130,7 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `4c0fcbdf0ca27b6153e7f0efe19e88d00ae303dbb1387ccce959a6a78c81a949`, 148 messages, 2 unacknowledged at export |
+| [Interline](../interline/checkpoint.json) | `5ab72f018462ad79953372fdf9d537602250a2ef3259050135158339c9d10c24`, 150 messages, 0 unacknowledged at export |
 | [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `6fb4783b8f0bf96d003311f0a84581f38bb9ff0cbfe232f0f85e014064d6cea6`, 3 samples evaluated and labelled, restored cleanly into a fresh store |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `417a126a7647b7099dcf1b8b4f4c67c64a5f9a06180cac492daefbbd427ca2fd`, 250 samples and 66 tasks, home directory written as `~` on 2026-10-28 with request digests recomputed, restored cleanly into a fresh store |
 
