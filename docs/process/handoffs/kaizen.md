@@ -62,11 +62,11 @@ run.
   the ready run finished. The Test job selects 1,607 tests, 49 test-minutes against 101,
   and is now bounded by the `keleusma-cli` validator test, 20.6 minutes. Notice 163
   asks V0.2.X for K3, K4a and K7, and notice 164 tells V0.3.X of the draft rule.
-- **Relayed by V0.2.X in notice 156, not confirmed here.** The operator pre-authorized
-  merging green security-only pull requests into `main`. V0.2.X asks for a Dependabot
-  ignore entry for `dtolnay/rust-toolchain`, after PR 641 collapsed the 1.85, 1.88 and
-  nightly pins again, which needs a merge into `main`. `v0.2.3` now requires `CI result`
-  with admins exempt. Both items wait on the operator.
+- **Operator confirmations of 2026-10-30, first-hand in this session.** "Yes. I
+  pre-authorize merging green security-only pull requests into `main`." "Yes. Add a
+  Dependabot ignore entry for `dtolnay/rust-toolchain`." The entry is added on `main`
+  and on `v0.2.3`. V0.2.X had relayed both in notice 156. `v0.2.3` now requires
+  `CI result` with admins exempt, by V0.2.X's report.
 - **Dependabot security updates.** Enabled on the operator's instruction of 2026-10-30,
   with 0 alerts open. GitHub's options reference says they always use the default
   branch. Each one is therefore a merge into `main` needing the operator's
@@ -122,7 +122,6 @@ authority, so the startup-file positions reach them first-hand.
 5. A state-file budget guard, once the owning lines have converted their files.
 6. Measure branch-run cost again once changelog fragments are in use.
 7. A nightly fuzzing workflow, once V0.2.X lands the fuzz targets of K7.
-8. The Dependabot ignore entry for `dtolnay/rust-toolchain`, once the operator confirms.
 
 ## Open with the operator
 
