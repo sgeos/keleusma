@@ -51,6 +51,11 @@ pub enum AbsVal {
         kind: CompositeKind,
         /// The body's byte length.
         size: u32,
+        /// The byte offset of every `Text` field in the body, sorted, when the body's layout is
+        /// known, which is when the program built it. `None` when the body came from outside
+        /// the program, a parameter, a resume value, a native result or a data slot, or when two
+        /// paths disagree. See `docs/decisions/FLAT_TEXT_LAYOUT_PROOF.md`.
+        text: Option<Vec<u32>>,
     },
     /// A value whose shape is not statically known at this phase (a
     /// parameter, local, call result, resume value, reference handle, or
@@ -69,11 +74,29 @@ impl AbsVal {
     }
 
     /// Lattice join: equal values join to themselves, anything else to `Top`.
+    ///
+    /// Two flat bodies of one kind and size join to that kind and size, as before the layout was
+    /// tracked, and keep a layout only when both sides know the same one.
     fn join(&self, other: &AbsVal) -> AbsVal {
-        if self == other {
-            self.clone()
-        } else {
-            AbsVal::Top
+        match (self, other) {
+            (
+                AbsVal::Flat {
+                    kind: k1,
+                    size: s1,
+                    text: t1,
+                },
+                AbsVal::Flat {
+                    kind: k2,
+                    size: s2,
+                    text: t2,
+                },
+            ) if k1 == k2 && s1 == s2 => AbsVal::Flat {
+                kind: *k1,
+                size: *s1,
+                text: if t1 == t2 { t1.clone() } else { None },
+            },
+            _ if self == other => self.clone(),
+            _ => AbsVal::Top,
         }
     }
 
@@ -92,6 +115,7 @@ impl AbsVal {
                 Some(k) => AbsVal::Flat {
                     kind: k,
                     size: *size,
+                    text: None,
                 },
                 None => AbsVal::Top,
             },
@@ -133,6 +157,14 @@ pub enum TypedError {
         baked: u32,
         /// The size recomputed from the consumed values.
         computed: u32,
+    },
+    /// A read of kind `Text` from a flat body whose layout is known finds no `Text` field at
+    /// its offset, so it would rebuild a pointer from another kind's bytes.
+    TextFieldMismatch {
+        /// Instruction index of the read.
+        ip: usize,
+        /// The body offset read.
+        offset: u32,
     },
     /// The two arms of an `If`/`Else` leave the operand stack at different
     /// heights (a stack imbalance).
@@ -977,13 +1009,24 @@ fn apply_op(
         }) => {
             let mut computed: u32 = 0;
             let mut all_known = true;
+            let mut elements: Vec<AbsVal> = Vec::new();
             for _ in 0..*count {
                 let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
                 match v.packed_size(ctx.wb, ctx.fb, ctx.ab) {
                     Some(n) => computed = computed.saturating_add(n),
                     None => all_known = false,
                 }
+                elements.push(v);
             }
+            // The elements were popped last first, and a body packs them first to last.
+            elements.reverse();
+            let text = if matches!(kind, CompositeKind::Enum) {
+                // An enum body pads its payload to the largest variant, so its fields do not sit
+                // at their packed offsets. Its layout is left unknown.
+                None
+            } else {
+                built_text_layout(&elements, ctx.wb, ctx.fb, ctx.ab)
+            };
             if matches!(kind, CompositeKind::Enum) {
                 // An enum body pads its payload to the largest variant, so its
                 // size is not the sum of the packed elements; instead it must
@@ -1011,12 +1054,14 @@ fn apply_op(
             stack.push(AbsVal::Flat {
                 kind: *kind,
                 size: u32::from(*byte_size),
+                text,
             });
         }
 
         Op::GetField(StructField::Flat { offset, kind }) => {
             let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
             check_flat_scalar(&v, *offset, *kind, ctx.wb, ctx.fb, ctx.ab, ip)?;
+            check_text_field(&v, u32::from(*offset), *kind, ip)?;
             stack.push(AbsVal::Scalar(*kind));
         }
         Op::GetField(StructField::FlatNested {
@@ -1029,6 +1074,7 @@ fn apply_op(
             stack.push(AbsVal::Flat {
                 kind: *variant,
                 size: u32::from(*size),
+                text: nested_text_layout(&v, u32::from(*offset), u32::from(*size)),
             });
         }
 
@@ -1038,6 +1084,7 @@ fn apply_op(
         Op::GetTupleField(TupleField::Flat { offset, kind }) => {
             let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
             check_flat_scalar(&v, *offset, *kind, ctx.wb, ctx.fb, ctx.ab, ip)?;
+            check_text_field(&v, u32::from(*offset), *kind, ip)?;
             stack.push(AbsVal::Scalar(*kind));
         }
         Op::GetTupleField(TupleField::FlatNested {
@@ -1050,6 +1097,7 @@ fn apply_op(
             stack.push(AbsVal::Flat {
                 kind: *variant,
                 size: u32::from(*size),
+                text: nested_text_layout(&v, u32::from(*offset), u32::from(*size)),
             });
         }
 
@@ -1059,6 +1107,7 @@ fn apply_op(
         Op::GetEnumField(EnumField::Flat { offset, kind }) => {
             let v = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
             check_flat_scalar(&v, *offset, *kind, ctx.wb, ctx.fb, ctx.ab, ip)?;
+            check_text_field(&v, u32::from(*offset), *kind, ip)?;
             stack.push(AbsVal::Scalar(*kind));
         }
         Op::GetEnumField(EnumField::FlatNested {
@@ -1071,6 +1120,7 @@ fn apply_op(
             stack.push(AbsVal::Flat {
                 kind: *variant,
                 size: u32::from(*size),
+                text: nested_text_layout(&v, u32::from(*offset), u32::from(*size)),
             });
         }
 
@@ -1084,6 +1134,7 @@ fn apply_op(
             let arr = stack.pop().ok_or(TypedError::StackUnderflow { ip })?;
             let elem = kind.size_in_bytes(ctx.wb, ctx.fb, ctx.ab) as u32;
             check_flat_array_stride(&arr, elem, ip)?;
+            check_text_elements(&arr, elem, *kind, ip)?;
             stack.push(AbsVal::Scalar(*kind));
             if (ArrayElem::Flat { kind: *kind }).has_bounds_outcome() {
                 stack.extend(core::iter::repeat_n(AbsVal::Scalar(ScalarKind::Int), 6));
@@ -1096,6 +1147,7 @@ fn apply_op(
             stack.push(AbsVal::Flat {
                 kind: *variant,
                 size: u32::from(*size),
+                text: element_text_layout(&arr, u32::from(*size)),
             });
             // The total read's diagnostic suffix and flag, as for a flat
             // Word or Byte element.
@@ -1254,6 +1306,111 @@ fn check_flat_array_stride(arr: &AbsVal, element_size: u32, ip: usize) -> Result
     }
 }
 
+/// The `Text` field offsets of a body packed from `elements`, or `None` when an element's own
+/// layout is unknown.
+fn built_text_layout(elements: &[AbsVal], wb: usize, fb: usize, ab: usize) -> Option<Vec<u32>> {
+    let mut offsets = Vec::new();
+    let mut at: u32 = 0;
+    for e in elements {
+        match e {
+            AbsVal::Scalar(ScalarKind::Text) => offsets.push(at),
+            AbsVal::Scalar(_) => {}
+            AbsVal::Flat {
+                text: Some(inner), ..
+            } => offsets.extend(inner.iter().map(|o| at.saturating_add(*o))),
+            AbsVal::Flat { text: None, .. } | AbsVal::Top => return None,
+        }
+        at = at.saturating_add(e.packed_size(wb, fb, ab)?);
+    }
+    Some(offsets)
+}
+
+/// The layout of the nested body at `[offset, offset + size)` of `parent`, when the parent's is
+/// known.
+fn nested_text_layout(parent: &AbsVal, offset: u32, size: u32) -> Option<Vec<u32>> {
+    match parent {
+        AbsVal::Flat {
+            text: Some(offsets),
+            ..
+        } => Some(
+            offsets
+                .iter()
+                .filter(|o| **o >= offset && **o < offset.saturating_add(size))
+                .map(|o| o - offset)
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// The layout every element of an array of `size`-byte bodies shares, when the array's layout
+/// is known and every element's is the same.
+fn element_text_layout(array: &AbsVal, size: u32) -> Option<Vec<u32>> {
+    let AbsVal::Flat {
+        size: total,
+        text: Some(_),
+        ..
+    } = array
+    else {
+        return None;
+    };
+    if size == 0 || total % size != 0 {
+        return None;
+    }
+    let first = nested_text_layout(array, 0, size)?;
+    (1..total / size)
+        .all(|e| nested_text_layout(array, e * size, size).as_ref() == Some(&first))
+        .then_some(first)
+}
+
+/// Refuse a `Text` read at an offset of a body whose layout is known to hold no `Text` there.
+fn check_text_field(
+    v: &AbsVal,
+    offset: u32,
+    kind: ScalarKind,
+    ip: usize,
+) -> Result<(), TypedError> {
+    if kind == ScalarKind::Text
+        && let AbsVal::Flat {
+            text: Some(offsets),
+            ..
+        } = v
+        && !offsets.contains(&offset)
+    {
+        return Err(TypedError::TextFieldMismatch { ip, offset });
+    }
+    Ok(())
+}
+
+/// Refuse a `Text` element read from an array whose layout is known to hold anything but `Text`
+/// at some element's offset, since the index is known only at run time.
+fn check_text_elements(
+    array: &AbsVal,
+    elem: u32,
+    kind: ScalarKind,
+    ip: usize,
+) -> Result<(), TypedError> {
+    if kind != ScalarKind::Text || elem == 0 {
+        return Ok(());
+    }
+    if let AbsVal::Flat {
+        size,
+        text: Some(offsets),
+        ..
+    } = array
+    {
+        for e in 0..size / elem {
+            if !offsets.contains(&(e * elem)) {
+                return Err(TypedError::TextFieldMismatch {
+                    ip,
+                    offset: e * elem,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Whether a value's shape may be stored into a slot of the declared
 /// shape. `Top` on either side defers. Two scalars are compatible
 /// regardless of kind (they share the word/byte/float width the layout
@@ -1263,9 +1420,14 @@ fn shapes_compatible(value: &AbsVal, declared: &AbsVal) -> bool {
     match (value, declared) {
         (AbsVal::Top, _) | (_, AbsVal::Top) => true,
         (AbsVal::Scalar(_), AbsVal::Scalar(_)) => true,
-        (AbsVal::Flat { kind: k1, size: s1 }, AbsVal::Flat { kind: k2, size: s2 }) => {
-            k1 == k2 && s1 == s2
-        }
+        (
+            AbsVal::Flat {
+                kind: k1, size: s1, ..
+            },
+            AbsVal::Flat {
+                kind: k2, size: s2, ..
+            },
+        ) => k1 == k2 && s1 == s2,
         _ => false,
     }
 }
@@ -1482,6 +1644,7 @@ mod tests {
             locals: vec![AbsVal::Flat {
                 kind: CompositeKind::Array,
                 size: 12,
+                text: None,
             }],
             resume: None,
         };
@@ -1815,6 +1978,7 @@ mod tests {
             locals: vec![AbsVal::Flat {
                 kind: CompositeKind::Struct,
                 size: 16,
+                text: None,
             }],
             resume: None,
         };
@@ -1866,6 +2030,7 @@ mod tests {
             resume: Some(AbsVal::Flat {
                 kind: CompositeKind::Struct,
                 size: 16,
+                text: None,
             }),
         };
         let good = chunk(
@@ -1906,6 +2071,7 @@ mod tests {
             locals: vec![AbsVal::Flat {
                 kind: CompositeKind::Struct,
                 size: 16,
+                text: None,
             }],
             resume: None,
         };
@@ -1932,6 +2098,7 @@ mod tests {
             locals: vec![AbsVal::Flat {
                 kind: CompositeKind::Struct,
                 size: 16,
+                text: None,
             }],
             resume: None,
         };
@@ -2050,6 +2217,7 @@ mod tests {
             locals: vec![AbsVal::Flat {
                 kind: CompositeKind::Struct,
                 size: 16,
+                text: None,
             }],
             resume: None,
         };
