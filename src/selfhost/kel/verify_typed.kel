@@ -345,6 +345,72 @@ fn build_layout(r: Word) -> Word {
     0
 }
 
+// The top entry takes local `slot`'s layout, for a `GetLocal`.
+fn top_layout_from_local(slot: Word) -> Word {
+    if tf.dsp > 0 {
+        let d = tf.dsp - 1;
+        tf.st_tn[d] = tf.lc_tn[slot];
+        for q in 0..4 limit 4 { tf.st_t[d * 4 + q] = tf.lc_t[slot * 4 + q]; }
+    }
+    0
+}
+
+// Local `slot` takes the popped entry's layout, for a `SetLocal`.
+fn local_layout_from_pop(slot: Word) -> Word {
+    tf.lc_tn[slot] = tf.pop_tn;
+    for q in 0..4 limit 4 { tf.lc_t[slot * 4 + q] = tf.pop_t[q]; }
+    0
+}
+
+// The top entry takes the layout `build_layout` produced, when it is known.
+fn top_layout_from_built() -> Word {
+    if tf.lt_ok == 1 andalso tf.dsp > 0 {
+        let d = tf.dsp - 1;
+        tf.st_tn[d] = tf.lt_n;
+        for q in 0..4 limit 4 { tf.st_t[d * 4 + q] = tf.lt[q]; }
+    }
+    0
+}
+
+// The top entry, a nested body at `[offset, offset + size)` of the popped one, takes the
+// popped layout's offsets within it.
+fn top_layout_nested(offset: Word, size: Word) -> Word {
+    if tf.pop_tn >= 0 andalso tf.dsp > 0 {
+        let d = tf.dsp - 1;
+        tf.lt_n = 0;
+        for q in 0..4 limit 4 {
+            if q < tf.pop_tn andalso tf.pop_t[q] >= offset andalso tf.pop_t[q] < offset + size {
+                tf.st_t[d * 4 + tf.lt_n] = tf.pop_t[q] - offset;
+                tf.lt_n = tf.lt_n + 1;
+            }
+        }
+        tf.st_tn[d] = tf.lt_n;
+    }
+    0
+}
+
+// A `Text` field read of a body whose layout is known must find `Text` at its offset.
+fn check_text_field(ip: Word) -> Word {
+    if tv.tc[ip] == 1 andalso tf.pop_tag == 2 andalso tf.pop_tn >= 0 {
+        if pop_has_text_at(tv.ta[ip]) == 0 { tf.bad = 1; }
+    }
+    0
+}
+
+// A `Text` element read needs `Text` at every element's offset, since the index is known only
+// at run time.
+fn check_text_elements(ip: Word) -> Word {
+    if tv.tc[ip] == 1 andalso tf.pop_tag == 2 andalso tf.pop_tn >= 0 andalso tv.ta[ip] > 0 {
+        let count = tf.pop_size / tv.ta[ip];
+        if count > tf.pop_tn { tf.bad = 1; } else {
+            for q in 0..4 limit 4 {
+                if q < count andalso pop_has_text_at(q * tv.ta[ip]) == 0 { tf.bad = 1; }
+            }
+        }
+    }
+    0
+}
+
 // Whether the popped entry's known layout holds `Text` at `offset`, into `found`.
 fn pop_has_text_at(offset: Word) -> Word {
     tf.found = 0;
@@ -386,11 +452,7 @@ fn apply_typed(ip: Word) -> Word {
     } else {
     if k == 3 {
         st_push_k(tf.lc_tag[tv.ta[ip]], tf.lc_size[tv.ta[ip]], tf.lc_kind[tv.ta[ip]]);
-        if tf.dsp > 0 {
-            let d = tf.dsp - 1;
-            tf.st_tn[d] = tf.lc_tn[tv.ta[ip]];
-            for q in 0..4 limit 4 { tf.st_t[d * 4 + q] = tf.lc_t[tv.ta[ip] * 4 + q]; }
-        }
+        top_layout_from_local(tv.ta[ip]);
     } else {
     if k == 4 {
         // SetLocal: the stored value must be compatible with the slot's seed shape; the tracked
@@ -407,8 +469,7 @@ fn apply_typed(ip: Word) -> Word {
         tf.lc_tag[tv.ta[ip]] = tf.pop_tag;
         tf.lc_size[tv.ta[ip]] = tf.pop_size;
         tf.lc_kind[tv.ta[ip]] = tf.pop_kind;
-        tf.lc_tn[tv.ta[ip]] = tf.pop_tn;
-        for q in 0..4 limit 4 { tf.lc_t[tv.ta[ip] * 4 + q] = tf.pop_t[q]; }
+        local_layout_from_pop(tv.ta[ip]);
     } else {
     if k == 6 {
         // NewComposite non-enum flat: pop the packed elements; when every element size is known,
@@ -432,53 +493,26 @@ fn apply_typed(ip: Word) -> Word {
             }
         }
         st_push_k(2, tv.tb[ip], tv.tc[ip]);
-        if tf.lt_ok == 1 andalso tf.dsp > 0 {
-            let d = tf.dsp - 1;
-            tf.st_tn[d] = tf.lt_n;
-            for q in 0..4 limit 4 { tf.st_t[d * 4 + q] = tf.lt[q]; }
-        }
+        top_layout_from_built();
     } else {
     if k == 7 {
         st_pop();
         check_flat_extent(tf.pop_tag, tf.pop_size, tv.ta[ip] + tv.tb[ip]);
-        // A `Text` read of a body whose layout is known must find `Text` at its offset.
-        if tv.tc[ip] == 1 andalso tf.pop_tag == 2 andalso tf.pop_tn >= 0 {
-            if pop_has_text_at(tv.ta[ip]) == 0 { tf.bad = 1; }
-        }
+        check_text_field(ip);
         st_push_k(1, tv.tb[ip], tv.tc[ip]);
     } else {
     if k == 8 {
         st_pop();
         check_flat_extent(tf.pop_tag, tf.pop_size, tv.ta[ip] + tv.tb[ip]);
         st_push_k(2, tv.tb[ip], tv.tc[ip]);
-        // The nested body's layout is the parent's offsets within it.
-        if tf.pop_tn >= 0 andalso tf.dsp > 0 {
-            let d = tf.dsp - 1;
-            tf.lt_n = 0;
-            for q in 0..4 limit 4 {
-                if q < tf.pop_tn andalso tf.pop_t[q] >= tv.ta[ip] andalso tf.pop_t[q] < tv.ta[ip] + tv.tb[ip] {
-                    tf.st_t[d * 4 + tf.lt_n] = tf.pop_t[q] - tv.ta[ip];
-                    tf.lt_n = tf.lt_n + 1;
-                }
-            }
-            tf.st_tn[d] = tf.lt_n;
-        }
+        top_layout_nested(tv.ta[ip], tv.tb[ip]);
     } else {
     if k == 9 orelse k == 17 orelse k == 18 {
         st_pop();
         st_pop();
         if k == 18 { st_push(0, 0); } else {
             check_stride(tf.pop_tag, tf.pop_size, tv.ta[ip]);
-            // A `Text` element read needs `Text` at every element's offset, since the index is
-            // known only at run time.
-            if tv.tc[ip] == 1 andalso tf.pop_tag == 2 andalso tf.pop_tn >= 0 andalso tv.ta[ip] > 0 {
-                let count = tf.pop_size / tv.ta[ip];
-                if count > tf.pop_tn { tf.bad = 1; } else {
-                    for q in 0..4 limit 4 {
-                        if q < count andalso pop_has_text_at(q * tv.ta[ip]) == 0 { tf.bad = 1; }
-                    }
-                }
-            }
+            check_text_elements(ip);
             st_push_k(1, tv.ta[ip], tv.tc[ip]);
         }
         if k == 17 orelse k == 18 { for j in 0..6 limit 6 { st_push(1, tv.tb[ip]); } }

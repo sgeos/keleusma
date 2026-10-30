@@ -9295,10 +9295,13 @@ fn the_fused_compile_holds_one_group_not_the_program() {
         (
             // Re-measured 2026-10-24 after nested composite reads gained their
             // six-Word outcome suffix: 1532 and 486 became 1551 and 505.
+            // Re-measured 2026-10-30 after the flat Text layout proof, with its
+            // transfers moved into helpers so `apply_typed` stays the largest
+            // group: 1551 and 505 became 2142 and 557.
             "verify_typed",
             include_str!("../src/selfhost/kel/verify_typed.kel"),
-            1551,
-            505,
+            2142,
+            557,
         ),
     ];
     for &(name, src, total, peak) in EXPECT {
