@@ -1,0 +1,401 @@
+job_id	job	step	wall_s	compile_s	test_s	tests	deps	locals	last_dep_s
+124043310096	Test	cargo nextest run --profile ci --workspace -E 'not (package(keleusma) 	2058	637	1416	2734	69	7	15
+124043310096	Test	cargo test --workspace --doc	2	0	0	0	0	0	0
+124043310116	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma --no-default-features	44	36	1	341	20	5	16
+124043310116	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-wire --all-features	2	1	0	72	0	2	0
+124043310116	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-bench	16	15	0	6	0	2	0
+124043310116	Test (no default features, keleusma-wire, keleusma-bench)	cargo build -p keleusma-bench --no-default-features	1	0	0	0	0	1	0
+124043310137	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures	938	857	75	2546	37	5	12
+124043310137	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures,shell	823	745	75	2564	0	1	0
+124043310235	Build the self-host tests	cargo nextest archive -p keleusma --features self-host --archive-file 	865	851	0	0	20	5	9
+124043310255	Miri	cargo miri test -p keleusma-arena	26	1	0	0	1	1	20
+124043310255	Miri	cargo miri test -p keleusma-arena	7	0	0	0	0	0	0
+124043310255	Miri	cargo miri test -p keleusma \	13	12	0	0	19	4	6
+124043310284	Examples (SDL3 feature)	cargo build --workspace --examples --features sdl3-example	176	175	0	0	69	5	19
+124043310316	RTOS demonstrator (host test and N6 build)	cd examples/rtos	222	200	0	0	38	13	147
+124043310316	RTOS demonstrator (host test and N6 build)	cd examples/rtos	64	64	0	0	113	7	31
+124043310316	RTOS demonstrator (host test and N6 build)	cd examples/rtos	23	23	0	0	0	3	0
+124043310316	RTOS demonstrator (host test and N6 build)	cd examples/rtos	10	9	0	0	0	1	0
+124043310333	Format, check, clippy and advisories	cargo check --locked --workspace --all-targets	32	32	0	0	22	2	15
+124043310333	Format, check, clippy and advisories	cargo clippy --workspace --all-targets -- -D warnings	15	15	0	0	0	2	0
+124043310337	Detached crates (LSP and WASM playground)	cd keleusma-lsp	34	32	0	0	102	6	29
+124043310337	Detached crates (LSP and WASM playground)	cd keleusma-wasm	36	34	0	0	87	14	28
+124043310370	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	10	10	0	0	16	2	5
+124043310370	Doc	cargo doc -p keleusma --no-deps --features self-host	5	5	0	0	4	0	1
+124043310370	Doc	cargo doc -p keleusma-arena --no-deps --all-features	0	0	0	0	0	0	0
+124043310370	Doc	cargo doc -p keleusma-macros --no-deps	1	1	0	0	0	0	0
+124043310370	Doc	cargo doc -p keleusma-bench --no-deps	1	1	0	0	0	0	0
+124043310370	Doc	cargo doc -p keleusma-cli --no-deps	0	0	0	0	0	0	0
+124043310370	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	2	2	0	0	0	0	0
+124043310370	Doc	cargo doc -p keleusma --no-deps --features self-host	1	1	0	0	0	0	0
+124043310370	Doc	cargo doc -p keleusma-wire --no-deps --all-features	0	0	0	0	0	0	0
+124043310370	Doc	cargo doc -p keleusma-wire-derive --no-deps	0	0	0	0	0	0	0
+124043310407	MSRV and no_std builds	cargo +1.85.1 check -p keleusma-arena	1	1	0	0	0	0	0
+124043310407	MSRV and no_std builds	cargo +1.88.0 check -p keleusma	35	35	0	0	19	2	26
+124043310407	MSRV and no_std builds	cargo +stable build -p keleusma --target thumbv7em-none-eabihf	43	43	0	0	19	5	15
+124043310426	Self-hosted compiler subproject	cd compiler	1151	59	0	0	20	6	25
+124049553614	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	2016	0	1992	895	0	0	0
+124049553685	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1986	0	1960	825	0	0	0
+124049553685	Test (self-host feature, shard)	cargo test -p keleusma --features self-host --doc	57	53	0	0	20	5	16
+124049553691	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	2038	0	2025	800	0	0	0
+124049553898	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	938	0	918	821	0	0	0
+124024986336	Build the self-host tests	cargo nextest archive -p keleusma --features self-host --archive-file 	600	586	0	0	20	5	7
+124024986377	Examples (SDL3 feature)	cargo build --workspace --examples --features sdl3-example	173	171	0	0	69	5	17
+124024986399	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	21	20	0	0	16	2	12
+124024986399	Doc	cargo doc -p keleusma --no-deps --features self-host	8	8	0	0	4	0	2
+124024986399	Doc	cargo doc -p keleusma-arena --no-deps --all-features	0	0	0	0	0	0	0
+124024986399	Doc	cargo doc -p keleusma-macros --no-deps	2	2	0	0	0	0	0
+124024986399	Doc	cargo doc -p keleusma-bench --no-deps	2	2	0	0	0	0	0
+124024986399	Doc	cargo doc -p keleusma-cli --no-deps	0	0	0	0	0	0	0
+124024986399	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	2	2	0	0	0	0	0
+124024986399	Doc	cargo doc -p keleusma --no-deps --features self-host	2	2	0	0	0	0	0
+124024986399	Doc	cargo doc -p keleusma-wire --no-deps --all-features	0	0	0	0	0	0	0
+124024986399	Doc	cargo doc -p keleusma-wire-derive --no-deps	1	0	0	0	0	0	0
+124024986461	Miri	cargo miri test -p keleusma-arena	23	1	0	0	1	1	19
+124024986461	Miri	cargo miri test -p keleusma-arena	6	0	0	0	0	0	0
+124024986461	Miri	cargo miri test -p keleusma \	12	11	0	0	19	4	5
+124024986466	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures	703	652	46	2536	37	5	14
+124024986466	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures,shell	870	822	46	2554	0	1	0
+124024986484	Self-hosted compiler subproject	cd compiler	803	46	0	0	20	6	15
+124024986488	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma --no-default-features	51	44	1	341	20	5	18
+124024986488	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-wire --all-features	2	1	0	72	0	2	0
+124024986488	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-bench	18	18	0	6	0	2	0
+124024986488	Test (no default features, keleusma-wire, keleusma-bench)	cargo build -p keleusma-bench --no-default-features	1	1	0	0	0	1	0
+124024986513	MSRV and no_std builds	cargo +1.85.1 check -p keleusma-arena	1	1	0	0	0	0	0
+124024986513	MSRV and no_std builds	cargo +1.88.0 check -p keleusma	27	27	0	0	19	2	20
+124024986513	MSRV and no_std builds	cargo +stable build -p keleusma --target thumbv7em-none-eabihf	38	37	0	0	19	5	12
+124024986544	Format, check, clippy and advisories	cargo check --locked --workspace --all-targets	18	18	0	0	22	2	6
+124024986544	Format, check, clippy and advisories	cargo clippy --workspace --all-targets -- -D warnings	11	11	0	0	0	2	0
+124024986551	Test	cargo nextest run --profile ci --workspace -E 'not (package(keleusma) 	3189	780	2406	2722	69	7	16
+124024986551	Test	cargo test --workspace --doc	2	0	0	0	0	0	0
+124024986623	RTOS demonstrator (host test and N6 build)	cd examples/rtos	224	202	0	0	37	12	149
+124024986623	RTOS demonstrator (host test and N6 build)	cd examples/rtos	66	65	0	0	113	7	31
+124024986623	RTOS demonstrator (host test and N6 build)	cd examples/rtos	25	25	0	0	0	3	0
+124024986623	RTOS demonstrator (host test and N6 build)	cd examples/rtos	10	9	0	0	0	1	0
+124024987802	Detached crates (LSP and WASM playground)	cd keleusma-lsp	49	47	0	0	102	6	40
+124024987802	Detached crates (LSP and WASM playground)	cd keleusma-wasm	51	50	0	0	87	14	40
+124029283427	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	2196	0	2184	823	0	0	0
+124029283427	Test (self-host feature, shard)	cargo test -p keleusma --features self-host --doc	58	56	0	0	20	5	13
+124029283441	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1011	0	987	796	0	0	0
+124029283565	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	2481	0	2467	892	0	0	0
+124029283686	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1137	0	1123	817	0	0	0
+123925217825	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma --no-default-features	48	42	1	341	20	5	14
+123925217825	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-wire --all-features	2	1	0	72	0	2	0
+123925217825	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-bench	19	19	0	6	0	2	0
+123925217825	Test (no default features, keleusma-wire, keleusma-bench)	cargo build -p keleusma-bench --no-default-features	1	1	0	0	0	1	0
+123925217834	Test	cargo nextest run --profile ci --workspace -E 'not (package(keleusma) 	2014	607	1404	2722	69	7	13
+123925217834	Test	cargo test --workspace --doc	2	0	0	0	0	0	0
+123925217919	Format, check, clippy and advisories	cargo check --locked --workspace --all-targets	27	27	0	0	22	2	9
+123925217919	Format, check, clippy and advisories	cargo clippy --workspace --all-targets -- -D warnings	16	16	0	0	0	2	0
+123925217921	Build the self-host tests	cargo nextest archive -p keleusma --features self-host --archive-file 	708	692	0	0	20	5	13
+123925217938	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures	841	768	69	2536	37	5	10
+123925217938	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures,shell	855	784	69	2554	0	1	0
+123925217996	RTOS demonstrator (host test and N6 build)	cd examples/rtos	179	157	0	0	38	13	115
+123925217996	RTOS demonstrator (host test and N6 build)	cd examples/rtos	51	51	0	0	113	7	29
+123925217996	RTOS demonstrator (host test and N6 build)	cd examples/rtos	21	21	0	0	0	3	0
+123925217996	RTOS demonstrator (host test and N6 build)	cd examples/rtos	9	8	0	0	0	1	0
+123925218002	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	13	13	0	0	16	2	7
+123925218002	Doc	cargo doc -p keleusma --no-deps --features self-host	8	8	0	0	4	0	2
+123925218002	Doc	cargo doc -p keleusma-arena --no-deps --all-features	0	0	0	0	0	0	0
+123925218002	Doc	cargo doc -p keleusma-macros --no-deps	2	2	0	0	0	0	0
+123925218002	Doc	cargo doc -p keleusma-bench --no-deps	2	2	0	0	0	0	0
+123925218002	Doc	cargo doc -p keleusma-cli --no-deps	0	0	0	0	0	0	0
+123925218002	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	2	2	0	0	0	0	0
+123925218002	Doc	cargo doc -p keleusma --no-deps --features self-host	2	2	0	0	0	0	0
+123925218002	Doc	cargo doc -p keleusma-wire --no-deps --all-features	0	0	0	0	0	0	0
+123925218002	Doc	cargo doc -p keleusma-wire-derive --no-deps	1	0	0	0	0	0	0
+123925218013	Examples (SDL3 feature)	cargo build --workspace --examples --features sdl3-example	172	171	0	0	69	5	20
+123925218036	MSRV and no_std builds	cargo +1.85.1 check -p keleusma-arena	1	1	0	0	0	0	0
+123925218036	MSRV and no_std builds	cargo +1.88.0 check -p keleusma	34	34	0	0	19	2	25
+123925218036	MSRV and no_std builds	cargo +stable build -p keleusma --target thumbv7em-none-eabihf	42	41	0	0	19	5	14
+123925218044	Miri	cargo miri test -p keleusma-arena	24	1	0	0	1	1	19
+123925218044	Miri	cargo miri test -p keleusma-arena	6	0	0	0	0	0	0
+123925218044	Miri	cargo miri test -p keleusma \	13	11	0	0	19	4	5
+123925218051	Self-hosted compiler subproject	cd compiler	704	41	0	0	20	6	13
+123925218060	Detached crates (LSP and WASM playground)	cd keleusma-lsp	47	46	0	0	102	6	37
+123925218060	Detached crates (LSP and WASM playground)	cd keleusma-wasm	59	58	0	0	87	14	46
+123929898529	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1162	0	1149	817	0	0	0
+123929898540	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1343	0	1320	892	0	0	0
+123929898634	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1219	0	1196	823	0	0	0
+123929898634	Test (self-host feature, shard)	cargo test -p keleusma --features self-host --doc	40	39	0	0	20	5	12
+123929898638	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1905	0	1892	796	0	0	0
+123937583381	Format, check, clippy and advisories	cargo check --locked --workspace --all-targets	31	31	0	0	22	2	12
+123937583381	Format, check, clippy and advisories	cargo clippy --workspace --all-targets -- -D warnings	17	17	0	0	0	2	0
+123937583402	Build the self-host tests	cargo nextest archive -p keleusma --features self-host --archive-file 	702	687	0	0	20	5	8
+123937583464	Self-hosted compiler subproject	cd compiler	688	39	0	0	20	6	15
+123937583485	Examples (SDL3 feature)	cargo build --workspace --examples --features sdl3-example	130	129	0	0	69	5	12
+123937583496	RTOS demonstrator (host test and N6 build)	cd examples/rtos	165	145	0	0	37	12	104
+123937583496	RTOS demonstrator (host test and N6 build)	cd examples/rtos	52	51	0	0	113	7	25
+123937583496	RTOS demonstrator (host test and N6 build)	cd examples/rtos	21	20	0	0	0	3	0
+123937583496	RTOS demonstrator (host test and N6 build)	cd examples/rtos	9	8	0	0	0	1	0
+123937583508	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	14	14	0	0	16	2	7
+123937583508	Doc	cargo doc -p keleusma --no-deps --features self-host	8	8	0	0	4	0	2
+123937583508	Doc	cargo doc -p keleusma-arena --no-deps --all-features	0	0	0	0	0	0	0
+123937583508	Doc	cargo doc -p keleusma-macros --no-deps	2	2	0	0	0	0	0
+123937583508	Doc	cargo doc -p keleusma-bench --no-deps	2	2	0	0	0	0	0
+123937583508	Doc	cargo doc -p keleusma-cli --no-deps	0	0	0	0	0	0	0
+123937583508	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	2	2	0	0	0	0	0
+123937583508	Doc	cargo doc -p keleusma --no-deps --features self-host	2	2	0	0	0	0	0
+123937583508	Doc	cargo doc -p keleusma-wire --no-deps --all-features	0	0	0	0	0	0	0
+123937583508	Doc	cargo doc -p keleusma-wire-derive --no-deps	1	0	0	0	0	0	0
+123937583511	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures	628	580	43	2528	37	5	14
+123937583511	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures,shell	499	456	41	2545	0	1	0
+123937583514	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma --no-default-features	32	27	1	340	20	5	10
+123937583514	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-wire --all-features	2	1	0	72	0	2	0
+123937583514	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-bench	25	24	0	6	0	2	0
+123937583514	Test (no default features, keleusma-wire, keleusma-bench)	cargo build -p keleusma-bench --no-default-features	13	13	0	0	0	1	0
+123937583525	Test	cargo nextest run --profile ci --workspace -E 'not (package(keleusma) 	1878	560	1316	2705	69	7	10
+123937583525	Test	cargo test --workspace --doc	2	0	0	0	0	0	0
+123937583532	Miri	cargo miri test -p keleusma-arena	27	1	0	0	1	1	21
+123937583532	Miri	cargo miri test -p keleusma-arena	7	0	0	0	0	0	0
+123937583532	Miri	cargo miri test -p keleusma \	14	12	0	0	19	4	6
+123937583608	MSRV and no_std builds	cargo +1.85.1 check -p keleusma-arena	1	1	0	0	0	0	0
+123937583608	MSRV and no_std builds	cargo +1.88.0 check -p keleusma	25	25	0	0	19	2	19
+123937583608	MSRV and no_std builds	cargo +stable build -p keleusma --target thumbv7em-none-eabihf	24	23	0	0	19	5	11
+123937583641	Detached crates (LSP and WASM playground)	cd keleusma-lsp	42	42	0	0	102	6	34
+123937583641	Detached crates (LSP and WASM playground)	cd keleusma-wasm	58	57	0	0	87	14	45
+123941482008	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	2558	0	2545	891	0	0	0
+123941482028	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1919	0	1907	791	0	0	0
+123941482118	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	2206	0	2192	820	0	0	0
+123941482118	Test (self-host feature, shard)	cargo test -p keleusma --features self-host --doc	63	59	0	0	20	5	25
+123941482156	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1239	0	1227	814	0	0	0
+123989687779	Format, check, clippy and advisories	cargo check --locked --workspace --all-targets	23	23	0	0	22	2	10
+123989687779	Format, check, clippy and advisories	cargo clippy --workspace --all-targets -- -D warnings	12	12	0	0	0	2	0
+123989687804	Build the self-host tests	cargo nextest archive -p keleusma --features self-host --archive-file 	821	805	0	0	20	5	15
+123989687837	Test	cargo nextest run --profile ci --workspace -E 'not (package(keleusma) 	2586	757	1826	2721	69	7	13
+123989687837	Test	cargo test --workspace --doc	2	0	0	0	0	0	0
+123989687906	Detached crates (LSP and WASM playground)	cd keleusma-lsp	55	53	0	0	102	6	44
+123989687906	Detached crates (LSP and WASM playground)	cd keleusma-wasm	63	62	0	0	87	14	50
+123989687947	Examples (SDL3 feature)	cargo build --workspace --examples --features sdl3-example	121	120	0	0	69	5	11
+123989688004	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	10	10	0	0	16	2	5
+123989688004	Doc	cargo doc -p keleusma --no-deps --features self-host	5	5	0	0	4	0	1
+123989688004	Doc	cargo doc -p keleusma-arena --no-deps --all-features	0	0	0	0	0	0	0
+123989688004	Doc	cargo doc -p keleusma-macros --no-deps	1	1	0	0	0	0	0
+123989688004	Doc	cargo doc -p keleusma-bench --no-deps	1	1	0	0	0	0	0
+123989688004	Doc	cargo doc -p keleusma-cli --no-deps	0	0	0	0	0	0	0
+123989688004	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	1	1	0	0	0	0	0
+123989688004	Doc	cargo doc -p keleusma --no-deps --features self-host	1	1	0	0	0	0	0
+123989688004	Doc	cargo doc -p keleusma-wire --no-deps --all-features	0	0	0	0	0	0	0
+123989688004	Doc	cargo doc -p keleusma-wire-derive --no-deps	0	0	0	0	0	0	0
+123989688017	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma --no-default-features	44	37	1	340	20	5	9
+123989688017	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-wire --all-features	2	1	0	72	0	2	0
+123989688017	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-bench	19	18	0	6	0	2	0
+123989688017	Test (no default features, keleusma-wire, keleusma-bench)	cargo build -p keleusma-bench --no-default-features	1	1	0	0	0	1	0
+123989688024	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures	728	650	73	2535	37	5	12
+123989688024	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures,shell	753	677	73	2553	0	1	0
+123989688055	RTOS demonstrator (host test and N6 build)	cd examples/rtos	177	156	0	0	38	13	114
+123989688055	RTOS demonstrator (host test and N6 build)	cd examples/rtos	49	49	0	0	113	7	23
+123989688055	RTOS demonstrator (host test and N6 build)	cd examples/rtos	19	19	0	0	0	3	0
+123989688055	RTOS demonstrator (host test and N6 build)	cd examples/rtos	8	8	0	0	0	1	0
+123989688149	MSRV and no_std builds	cargo +1.85.1 check -p keleusma-arena	1	1	0	0	0	0	0
+123989688149	MSRV and no_std builds	cargo +1.88.0 check -p keleusma	24	24	0	0	19	2	18
+123989688149	MSRV and no_std builds	cargo +stable build -p keleusma --target thumbv7em-none-eabihf	37	37	0	0	19	5	14
+123989688190	Miri	cargo miri test -p keleusma-arena	27	1	0	0	1	1	21
+123989688190	Miri	cargo miri test -p keleusma-arena	7	0	0	0	0	0	0
+123989688190	Miri	cargo miri test -p keleusma \	14	13	0	0	19	4	6
+123989688658	Self-hosted compiler subproject	cd compiler	1219	57	0	0	20	6	19
+123995313629	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	2536	0	2523	892	0	0	0
+123995313637	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1808	0	1795	796	0	0	0
+123995313704	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	869	0	849	815	0	0	0
+123995314005	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	2192	0	2180	824	0	0	0
+123995314005	Test (self-host feature, shard)	cargo test -p keleusma --features self-host --doc	51	49	0	0	20	5	8
+123967721418	Format, check, clippy and advisories	cargo check --locked --workspace --all-targets	30	30	0	0	22	2	12
+123967721418	Format, check, clippy and advisories	cargo clippy --workspace --all-targets -- -D warnings	16	16	0	0	0	2	0
+123967721582	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures	850	771	73	2536	37	5	16
+123967721582	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures,shell	807	731	74	2554	0	1	0
+123967721585	Build the self-host tests	cargo nextest archive -p keleusma --features self-host --archive-file 	740	726	0	0	20	5	10
+123967721590	Test	cargo nextest run --profile ci --workspace -E 'not (package(keleusma) 	3139	795	2339	2722	69	7	19
+123967721590	Test	cargo test --workspace --doc	2	0	0	0	0	0	0
+123967721623	Examples (SDL3 feature)	cargo build --workspace --examples --features sdl3-example	165	164	0	0	69	5	19
+123967721678	Detached crates (LSP and WASM playground)	cd keleusma-lsp	39	37	0	0	102	6	32
+123967721678	Detached crates (LSP and WASM playground)	cd keleusma-wasm	47	46	0	0	87	14	37
+123967721694	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	17	16	0	0	16	2	9
+123967721694	Doc	cargo doc -p keleusma --no-deps --features self-host	8	8	0	0	4	0	2
+123967721694	Doc	cargo doc -p keleusma-arena --no-deps --all-features	0	0	0	0	0	0	0
+123967721694	Doc	cargo doc -p keleusma-macros --no-deps	2	2	0	0	0	0	0
+123967721694	Doc	cargo doc -p keleusma-bench --no-deps	2	2	0	0	0	0	0
+123967721694	Doc	cargo doc -p keleusma-cli --no-deps	0	0	0	0	0	0	0
+123967721694	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	2	2	0	0	0	0	0
+123967721694	Doc	cargo doc -p keleusma --no-deps --features self-host	2	2	0	0	0	0	0
+123967721694	Doc	cargo doc -p keleusma-wire --no-deps --all-features	0	0	0	0	0	0	0
+123967721694	Doc	cargo doc -p keleusma-wire-derive --no-deps	1	0	0	0	0	0	0
+123967721710	RTOS demonstrator (host test and N6 build)	cd examples/rtos	158	138	0	0	37	12	99
+123967721710	RTOS demonstrator (host test and N6 build)	cd examples/rtos	43	43	0	0	113	7	20
+123967721710	RTOS demonstrator (host test and N6 build)	cd examples/rtos	16	16	0	0	0	3	0
+123967721710	RTOS demonstrator (host test and N6 build)	cd examples/rtos	7	7	0	0	0	1	0
+123967721733	Self-hosted compiler subproject	cd compiler	1223	62	0	0	20	6	28
+123967721749	MSRV and no_std builds	cargo +1.85.1 check -p keleusma-arena	1	1	0	0	0	0	0
+123967721749	MSRV and no_std builds	cargo +1.88.0 check -p keleusma	29	29	0	0	19	2	21
+123967721749	MSRV and no_std builds	cargo +stable build -p keleusma --target thumbv7em-none-eabihf	41	40	0	0	19	5	14
+123967721770	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma --no-default-features	43	38	1	341	20	5	10
+123967721770	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-wire --all-features	2	1	0	72	0	2	0
+123967721770	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-bench	20	19	0	6	0	2	0
+123967721770	Test (no default features, keleusma-wire, keleusma-bench)	cargo build -p keleusma-bench --no-default-features	1	1	0	0	0	1	0
+123967721783	Miri	cargo miri test -p keleusma-arena	33	1	0	0	1	1	26
+123967721783	Miri	cargo miri test -p keleusma-arena	9	0	0	0	0	0	0
+123967721783	Miri	cargo miri test -p keleusma \	17	15	0	0	19	4	7
+123972442547	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	2508	0	2496	892	0	0	0
+123972442596	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1143	0	1130	817	0	0	0
+123972442663	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1408	0	1384	796	0	0	0
+123972442767	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	2175	0	2162	823	0	0	0
+123972442767	Test (self-host feature, shard)	cargo test -p keleusma --features self-host --doc	53	51	0	0	20	5	13
+124034895602	Examples (SDL3 feature)	cargo build --workspace --examples --features sdl3-example	160	159	0	0	69	5	16
+124034895644	Test	cargo nextest run --profile ci --workspace -E 'not (package(keleusma) 	3073	724	2347	2731	69	7	15
+124034895644	Test	cargo test --workspace --doc	2	0	0	0	0	0	0
+124034895738	Self-hosted compiler subproject	cd compiler	674	39	0	0	20	6	14
+124034895771	Build the self-host tests	cargo nextest archive -p keleusma --features self-host --archive-file 	723	708	0	0	20	5	12
+124034895777	Format, check, clippy and advisories	cargo check --locked --workspace --all-targets	28	28	0	0	22	2	9
+124034895777	Format, check, clippy and advisories	cargo clippy --workspace --all-targets -- -D warnings	18	18	0	0	0	2	0
+124034895778	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	10	10	0	0	16	2	5
+124034895778	Doc	cargo doc -p keleusma --no-deps --features self-host	6	6	0	0	4	0	2
+124034895778	Doc	cargo doc -p keleusma-arena --no-deps --all-features	0	0	0	0	0	0	0
+124034895778	Doc	cargo doc -p keleusma-macros --no-deps	1	1	0	0	0	0	0
+124034895778	Doc	cargo doc -p keleusma-bench --no-deps	2	2	0	0	0	0	0
+124034895778	Doc	cargo doc -p keleusma-cli --no-deps	0	0	0	0	0	0	0
+124034895778	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	2	2	0	0	0	0	0
+124034895778	Doc	cargo doc -p keleusma --no-deps --features self-host	2	2	0	0	0	0	0
+124034895778	Doc	cargo doc -p keleusma-wire --no-deps --all-features	0	0	0	0	0	0	0
+124034895778	Doc	cargo doc -p keleusma-wire-derive --no-deps	0	0	0	0	0	0	0
+124034895870	Miri	cargo miri test -p keleusma-arena	26	1	0	0	1	1	21
+124034895870	Miri	cargo miri test -p keleusma-arena	7	0	0	0	0	0	0
+124034895870	Miri	cargo miri test -p keleusma \	13	12	0	0	19	4	6
+124034895882	MSRV and no_std builds	cargo +1.85.1 check -p keleusma-arena	1	1	0	0	0	0	0
+124034895882	MSRV and no_std builds	cargo +1.88.0 check -p keleusma	36	36	0	0	19	2	27
+124034895882	MSRV and no_std builds	cargo +stable build -p keleusma --target thumbv7em-none-eabihf	38	38	0	0	19	5	9
+124034895902	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma --no-default-features	40	35	1	341	20	5	13
+124034895902	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-wire --all-features	2	1	0	72	0	2	0
+124034895902	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-bench	16	16	0	6	0	2	0
+124034895902	Test (no default features, keleusma-wire, keleusma-bench)	cargo build -p keleusma-bench --no-default-features	1	0	0	0	0	1	0
+124034895943	RTOS demonstrator (host test and N6 build)	cd examples/rtos	223	200	0	0	37	12	144
+124034895943	RTOS demonstrator (host test and N6 build)	cd examples/rtos	67	66	0	0	113	7	32
+124034895943	RTOS demonstrator (host test and N6 build)	cd examples/rtos	25	25	0	0	0	3	0
+124034895943	RTOS demonstrator (host test and N6 build)	cd examples/rtos	10	10	0	0	0	1	0
+124034896064	Detached crates (LSP and WASM playground)	cd keleusma-lsp	31	30	0	0	102	6	25
+124034896064	Detached crates (LSP and WASM playground)	cd keleusma-wasm	38	37	0	0	87	14	30
+124034896461	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures	1025	942	78	2544	37	5	15
+124034896461	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures,shell	929	849	78	2562	0	1	0
+124039933793	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	2033	0	2019	800	0	0	0
+124039933828	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1198	0	1185	818	0	0	0
+124039933886	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	2290	0	2277	825	0	0	0
+124039933886	Test (self-host feature, shard)	cargo test -p keleusma --features self-host --doc	55	53	0	0	20	5	13
+124039933964	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	2645	0	2631	895	0	0	0
+124041321974	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures	501	454	42	2546	37	5	12
+124041321974	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures,shell	548	502	45	2564	0	1	0
+124041322014	Test	cargo nextest run --profile ci --workspace -E 'not (package(keleusma) 	1847	486	1357	2734	69	7	13
+124041322014	Test	cargo test --workspace --doc	2	0	0	0	0	0	0
+124041322037	Format, check, clippy and advisories	cargo check --locked --workspace --all-targets	21	21	0	0	22	2	9
+124041322037	Format, check, clippy and advisories	cargo clippy --workspace --all-targets -- -D warnings	12	12	0	0	0	2	0
+124041322136	Build the self-host tests	cargo nextest archive -p keleusma --features self-host --archive-file 	753	737	0	0	20	5	16
+124041322150	RTOS demonstrator (host test and N6 build)	cd examples/rtos	145	125	0	0	37	12	92
+124041322150	RTOS demonstrator (host test and N6 build)	cd examples/rtos	41	41	0	0	113	7	19
+124041322150	RTOS demonstrator (host test and N6 build)	cd examples/rtos	16	16	0	0	0	3	0
+124041322150	RTOS demonstrator (host test and N6 build)	cd examples/rtos	6	6	0	0	0	1	0
+124041322159	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma --no-default-features	48	42	1	341	20	5	15
+124041322159	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-wire --all-features	2	1	0	72	0	2	0
+124041322159	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-bench	21	21	0	6	0	2	0
+124041322159	Test (no default features, keleusma-wire, keleusma-bench)	cargo build -p keleusma-bench --no-default-features	1	1	0	0	0	1	0
+124041322221	MSRV and no_std builds	cargo +1.85.1 check -p keleusma-arena	1	1	0	0	0	0	0
+124041322221	MSRV and no_std builds	cargo +1.88.0 check -p keleusma	33	33	0	0	19	2	25
+124041322221	MSRV and no_std builds	cargo +stable build -p keleusma --target thumbv7em-none-eabihf	35	35	0	0	19	5	8
+124041322320	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	12	12	0	0	16	2	6
+124041322320	Doc	cargo doc -p keleusma --no-deps --features self-host	7	7	0	0	4	0	2
+124041322320	Doc	cargo doc -p keleusma-arena --no-deps --all-features	0	0	0	0	0	0	0
+124041322320	Doc	cargo doc -p keleusma-macros --no-deps	2	2	0	0	0	0	0
+124041322320	Doc	cargo doc -p keleusma-bench --no-deps	2	2	0	0	0	0	0
+124041322320	Doc	cargo doc -p keleusma-cli --no-deps	0	0	0	0	0	0	0
+124041322320	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	2	2	0	0	0	0	0
+124041322320	Doc	cargo doc -p keleusma --no-deps --features self-host	2	2	0	0	0	0	0
+124041322320	Doc	cargo doc -p keleusma-wire --no-deps --all-features	0	0	0	0	0	0	0
+124041322320	Doc	cargo doc -p keleusma-wire-derive --no-deps	1	0	0	0	0	0	0
+124041322341	Self-hosted compiler subproject	cd compiler	1242	55	0	0	20	6	20
+124041322352	Examples (SDL3 feature)	cargo build --workspace --examples --features sdl3-example	140	139	0	0	69	5	16
+124041322417	Detached crates (LSP and WASM playground)	cd keleusma-lsp	43	41	0	0	102	6	35
+124041322417	Detached crates (LSP and WASM playground)	cd keleusma-wasm	47	46	0	0	87	14	37
+124041322481	Miri	cargo miri test -p keleusma-arena	32	1	0	0	1	1	25
+124041322481	Miri	cargo miri test -p keleusma-arena	8	0	0	0	0	0	0
+124041322481	Miri	cargo miri test -p keleusma \	16	15	0	0	19	4	7
+124046422882	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1285	0	1265	800	0	0	0
+124046422890	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	2689	0	2675	895	0	0	0
+124046422946	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1703	0	1683	825	0	0	0
+124046422946	Test (self-host feature, shard)	cargo test -p keleusma --features self-host --doc	50	47	0	0	20	5	14
+124046423196	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	938	0	917	821	0	0	0
+124010678410	Format, check, clippy and advisories	cargo check --locked --workspace --all-targets	28	28	0	0	22	2	12
+124010678410	Format, check, clippy and advisories	cargo clippy --workspace --all-targets -- -D warnings	15	15	0	0	0	2	0
+124010678441	MSRV and no_std builds	cargo +1.85.1 check -p keleusma-arena	1	1	0	0	0	0	0
+124010678441	MSRV and no_std builds	cargo +1.88.0 check -p keleusma	25	25	0	0	19	2	19
+124010678441	MSRV and no_std builds	cargo +stable build -p keleusma --target thumbv7em-none-eabihf	33	32	0	0	19	5	13
+124010678496	Self-hosted compiler subproject	cd compiler	1122	64	0	0	20	6	26
+124010678505	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures	842	765	73	2538	37	5	11
+124010678505	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures,shell	811	734	75	2556	0	1	0
+124010678513	Test	cargo nextest run --profile ci --workspace -E 'not (package(keleusma) 	3156	791	2362	2725	69	7	16
+124010678513	Test	cargo test --workspace --doc	2	0	0	0	0	0	0
+124010678520	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma --no-default-features	50	44	1	341	20	5	14
+124010678520	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-wire --all-features	2	1	0	72	0	2	0
+124010678520	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-bench	21	20	0	6	0	2	0
+124010678520	Test (no default features, keleusma-wire, keleusma-bench)	cargo build -p keleusma-bench --no-default-features	1	1	0	0	0	1	0
+124010678538	Build the self-host tests	cargo nextest archive -p keleusma --features self-host --archive-file 	767	753	0	0	20	5	10
+124010678552	Examples (SDL3 feature)	cargo build --workspace --examples --features sdl3-example	157	155	0	0	69	5	21
+124010678578	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	19	19	0	0	16	2	11
+124010678578	Doc	cargo doc -p keleusma --no-deps --features self-host	8	8	0	0	4	0	2
+124010678578	Doc	cargo doc -p keleusma-arena --no-deps --all-features	0	0	0	0	0	0	0
+124010678578	Doc	cargo doc -p keleusma-macros --no-deps	2	2	0	0	0	0	0
+124010678578	Doc	cargo doc -p keleusma-bench --no-deps	2	2	0	0	0	0	0
+124010678578	Doc	cargo doc -p keleusma-cli --no-deps	0	0	0	0	0	0	0
+124010678578	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	2	2	0	0	0	0	0
+124010678578	Doc	cargo doc -p keleusma --no-deps --features self-host	2	2	0	0	0	0	0
+124010678578	Doc	cargo doc -p keleusma-wire --no-deps --all-features	0	0	0	0	0	0	0
+124010678578	Doc	cargo doc -p keleusma-wire-derive --no-deps	1	0	0	0	0	0	0
+124010678592	RTOS demonstrator (host test and N6 build)	cd examples/rtos	173	152	0	0	37	12	109
+124010678592	RTOS demonstrator (host test and N6 build)	cd examples/rtos	49	49	0	0	113	7	22
+124010678592	RTOS demonstrator (host test and N6 build)	cd examples/rtos	20	20	0	0	0	3	0
+124010678592	RTOS demonstrator (host test and N6 build)	cd examples/rtos	8	8	0	0	0	1	0
+124010678685	Detached crates (LSP and WASM playground)	cd keleusma-lsp	33	32	0	0	102	6	25
+124010678685	Detached crates (LSP and WASM playground)	cd keleusma-wasm	43	42	0	0	87	14	34
+124010678727	Miri	cargo miri test -p keleusma-arena	32	1	0	0	1	1	25
+124010678727	Miri	cargo miri test -p keleusma-arena	8	0	0	0	0	0	0
+124010678727	Miri	cargo miri test -p keleusma \	16	15	0	0	19	4	7
+124016009378	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	2647	0	2633	892	0	0	0
+124016009385	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	2191	0	2178	823	0	0	0
+124016009385	Test (self-host feature, shard)	cargo test -p keleusma --features self-host --doc	55	52	0	0	20	5	13
+124016009471	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1436	0	1414	796	0	0	0
+124016009596	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1184	0	1171	820	0	0	0
+124009256558	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures	1078	994	78	2544	37	5	17
+124009256558	Test (signatures, and the broad signatures,shell set)	cargo nextest run --profile ci -p keleusma --features signatures,shell	1009	927	79	2562	0	1	0
+124009256573	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	14	14	0	0	16	2	7
+124009256573	Doc	cargo doc -p keleusma --no-deps --features self-host	8	8	0	0	4	0	2
+124009256573	Doc	cargo doc -p keleusma-arena --no-deps --all-features	0	0	0	0	0	0	0
+124009256573	Doc	cargo doc -p keleusma-macros --no-deps	2	2	0	0	0	0	0
+124009256573	Doc	cargo doc -p keleusma-bench --no-deps	2	2	0	0	0	0	0
+124009256573	Doc	cargo doc -p keleusma-cli --no-deps	0	0	0	0	0	0	0
+124009256573	Doc	cargo doc -p keleusma --no-deps --features signatures,encryption,shell	2	2	0	0	0	0	0
+124009256573	Doc	cargo doc -p keleusma --no-deps --features self-host	2	2	0	0	0	0	0
+124009256573	Doc	cargo doc -p keleusma-wire --no-deps --all-features	0	0	0	0	0	0	0
+124009256573	Doc	cargo doc -p keleusma-wire-derive --no-deps	1	0	0	0	0	0	0
+124009256594	Test	cargo nextest run --profile ci --workspace -E 'not (package(keleusma) 	3111	756	2350	2731	69	7	18
+124009256594	Test	cargo test --workspace --doc	3	0	0	0	0	0	0
+124009256605	Format, check, clippy and advisories	cargo check --locked --workspace --all-targets	32	32	0	0	22	2	12
+124009256605	Format, check, clippy and advisories	cargo clippy --workspace --all-targets -- -D warnings	17	17	0	0	0	2	0
+124009256650	Detached crates (LSP and WASM playground)	cd keleusma-lsp	45	44	0	0	102	6	36
+124009256650	Detached crates (LSP and WASM playground)	cd keleusma-wasm	56	55	0	0	87	14	45
+124009256658	Build the self-host tests	cargo nextest archive -p keleusma --features self-host --archive-file 	783	768	0	0	20	5	15
+124009256681	MSRV and no_std builds	cargo +1.85.1 check -p keleusma-arena	1	1	0	0	0	0	0
+124009256681	MSRV and no_std builds	cargo +1.88.0 check -p keleusma	34	34	0	0	19	2	25
+124009256681	MSRV and no_std builds	cargo +stable build -p keleusma --target thumbv7em-none-eabihf	41	40	0	0	19	5	13
+124009256686	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma --no-default-features	43	38	1	341	20	5	9
+124009256686	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-wire --all-features	2	1	0	72	0	2	0
+124009256686	Test (no default features, keleusma-wire, keleusma-bench)	cargo nextest run --profile ci -p keleusma-bench	20	20	0	6	0	2	0
+124009256686	Test (no default features, keleusma-wire, keleusma-bench)	cargo build -p keleusma-bench --no-default-features	1	1	0	0	0	1	0
+124009256711	Self-hosted compiler subproject	cd compiler	1244	63	0	0	20	6	26
+124009256732	RTOS demonstrator (host test and N6 build)	cd examples/rtos	179	158	0	0	37	12	116
+124009256732	RTOS demonstrator (host test and N6 build)	cd examples/rtos	50	50	0	0	113	7	24
+124009256732	RTOS demonstrator (host test and N6 build)	cd examples/rtos	19	19	0	0	0	3	0
+124009256732	RTOS demonstrator (host test and N6 build)	cd examples/rtos	8	8	0	0	0	1	0
+124009256766	Miri	cargo miri test -p keleusma-arena	20	1	0	0	1	1	17
+124009256766	Miri	cargo miri test -p keleusma-arena	5	0	0	0	0	0	0
+124009256766	Miri	cargo miri test -p keleusma \	10	9	0	0	19	4	5
+124009257842	Examples (SDL3 feature)	cargo build --workspace --examples --features sdl3-example	123	122	0	0	69	5	15
+124014707992	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1219	0	1206	818	0	0	0
+124014708102	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1420	0	1398	895	0	0	0
+124014708115	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1982	0	1969	800	0	0	0
+124014708211	Test (self-host feature, shard)	cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst -	1705	0	1685	825	0	0	0
+124014708211	Test (self-host feature, shard)	cargo test -p keleusma --features self-host --doc	47	44	0	0	20	5	11

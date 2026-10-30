@@ -31,7 +31,8 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor 751fa668 HEAD     # the merge of PR 624 into v0.2.3
+git merge-base --is-ancestor 68188e3f HEAD     # the merge of PR 644 into v0.2.3
+git merge-base --is-ancestor 7d5a5e82 HEAD     # the merge of PR 631 into main
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
 
@@ -43,18 +44,38 @@ run.
 - **Merged.** Into `v0.2.3`, PR 620, the template hygiene re-run, as `442de88b`. PR 625,
   changelog fragments, as `c55620ed`. PR 626, the labeller's fresh session, as
   `7301e739`. PR 624, `--locked` checks of the three tracked lockfiles, as `751fa668`.
-  Into `main`, PR 619, the `brace-expansion` fix that closed Dependabot alerts 1 to 5.
+  PR 630, the security-updates comment and this file, as `4e0c2304`. PR 633, the CI
+  practices spike, as `8f1b9c06`. PR 644, `main` merged back after PR 631, as
+  `68188e3f`. Into `main`, PR 619, the `brace-expansion` fix that
+  closed Dependabot alerts 1 to 5, and PR 631, the same security-updates comment,
+  merged by the operator as `7d5a5e82`.
 - **Operator rulings of 2026-10-29.** Changelog entries are fragments under
   `changelog.d/`, assembled at release, and branch runs stay uncancelled. See
   [the report](../kaizen/2026-10-29-changelog-fragments.md). V0.2.X follows the rule.
   V0.3.X adopts it at absorption 117.
-- **This increment.** On the operator's instruction of 2026-10-30, Dependabot security
-  updates are enabled in the repository settings, replacing the choice of 2026-10-25.
-  The `dependabot.yml` comment is corrected here and, through a separate pull request,
-  on `main`, where Dependabot reads it. GitHub's options reference says security updates
-  always use the default branch. Each one is therefore a merge into `main` needing the
-  operator's confirmation, and is then carried into `v0.2.3`. 0 alerts were open when
-  this was enabled.
+- **Operator rulings of 2026-10-30.** First-hand in this session, on
+  [the open decisions](../kaizen/2026-10-30-open-decisions.md), which records each
+  ruling verbatim. K1 to K13 are ruled and K14 is held. R1 closed with no build cache,
+  by [the timing pass](../kaizen/2026-10-30-r1-timing-pass.md). R2 is declined.
+- **Applied.** PR 649, merged as `43a14452`, applies K2, K5 and K8. Its draft run skipped
+  the self-host tier, its ready run ran it, and the merge state stayed `BLOCKED` until
+  the ready run finished. The Test job selects 1,607 tests, 49 test-minutes against 101,
+  and is now bounded by the `keleusma-cli` validator test, 20.6 minutes. Notice 163
+  asks V0.2.X for K3, K4a and K7, and notice 164 tells V0.3.X of the draft rule.
+- **Relayed by V0.2.X in notice 156, not confirmed here.** The operator pre-authorized
+  merging green security-only pull requests into `main`. V0.2.X asks for a Dependabot
+  ignore entry for `dtolnay/rust-toolchain`, after PR 641 collapsed the 1.85, 1.88 and
+  nightly pins again, which needs a merge into `main`. `v0.2.3` now requires `CI result`
+  with admins exempt. Both items wait on the operator.
+- **Dependabot security updates.** Enabled on the operator's instruction of 2026-10-30,
+  with 0 alerts open. GitHub's options reference says they always use the default
+  branch. Each one is therefore a merge into `main` needing the operator's
+  confirmation, and is then carried into `v0.2.3` as this increment does.
+- **CI practices spike.** [The report](../kaizen/2026-10-30-ci-practices-spike.md)
+  compares 100 Keleusma runs with how rustc, LLVM, Chromium, Go and Mozilla run CI. It
+  found no build cache, 208 test binaries, a self-host tier at 46 percent of
+  runner-minutes with no failure in 203 shard runs, retries with no flaky record and no
+  fuzzing. It makes recommendations R1 to R7, none adopted.
 - **Runners.** On 2026-10-30 Keleusma CI jobs waited a median of 1.1 minutes for a
   runner, 9.5 at the 90th percentile and 47.7 at most, over 377 jobs since 12:00Z the
   day before. The blog's Pages build grew from about 5 to 60 to 90 minutes and holds one
@@ -100,25 +121,24 @@ authority, so the startup-file positions reach them first-hand.
 4. Finish the three selection tasks, record their outcomes, and read the comparison.
 5. A state-file budget guard, once the owning lines have converted their files.
 6. Measure branch-run cost again once changelog fragments are in use.
+7. A nightly fuzzing workflow, once V0.2.X lands the fuzz targets of K7.
+8. The Dependabot ignore entry for `dtolnay/rust-toolchain`, once the operator confirms.
 
 ## Open with the operator
 
-- Who applies the blog audit's fixes, before the blog's next large push if possible.
-- The stale `origin/proofs` texts listed above.
-- The route for SSH under the sandbox. A pinned `known_hosts` outside `~/.ssh` with an
-  ssh-agent socket keeps `~/.ssh` closed. HTTPS with the `gh` credential helper is the
-  alternative.
-- Setting `fresh_session_each_turn` on the labeller line at the changeover, which only
-  the operator may do, and confirming on its first live run that the second case sees
-  nothing of the first.
+[The open decisions](../kaizen/2026-10-30-open-decisions.md) hold the record. Still
+open are the operator's own checks, a merge queue in the settings for K6, the account
+plan for K9 and the billing page for K10, the blog fixes of K11, the proofs branch's
+release for K13 and the pydromon changeover, held as K14. V0.2.X's question 1 may be
+answered through V0.3.X's question 20, which only the operator can confirm.
 
 ## Concerns
 
-- The self-host archive is about 1.1 GB per full run, retained for one day. Whether
-  artifact storage is free for this public repository was not verified.
-- Branch `test/kaizen-split-stage-artifact` at `e7a59d20` keeps the per-stage split of
-  the slowest test from the closed PR 495. Revisit it if that test exceeds about 45
-  minutes in continuous integration.
+- The self-host archive storage cost is unverified, item K10.
+- Branch `test/kaizen-split-stage-artifact` at `e7a59d20` keeps a per-stage split of
+  the slowest test, now a median of 35 minutes in a shard, item K3.
+- Lines open pull requests as non-draft today, 40 of the last 40 merged. They gain
+  nothing from K5 until they iterate as drafts, which the notices ask.
 
 ## Mailbox and pilot
 
@@ -130,14 +150,18 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `5ab72f018462ad79953372fdf9d537602250a2ef3259050135158339c9d10c24`, 150 messages, 0 unacknowledged at export |
+| [Interline](../interline/checkpoint.json) | `a63120d73dd868d0b683e92c5613f6b35b7e2a6170d7a31d8853393e07bfeb26`, 164 messages, 5 unacknowledged at export, none addressed to `kaizen` |
 | [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `6fb4783b8f0bf96d003311f0a84581f38bb9ff0cbfe232f0f85e014064d6cea6`, 3 samples evaluated and labelled, restored cleanly into a fresh store |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `417a126a7647b7099dcf1b8b4f4c67c64a5f9a06180cac492daefbbd427ca2fd`, 250 samples and 66 tasks, home directory written as `~` on 2026-10-28 with request digests recomputed, restored cleanly into a fresh store |
 
 ## Environment
 
-- Run `git fetch`, `git push` and `git ls-remote` outside the sandbox, which cannot
-  read the known hosts file. A compound git command stays sandboxed and fails.
+- Fetch, push and `ls-remote` over HTTPS inside the sandbox, the K12 route adopted on
+  2026-10-30, with `-c 'credential.https://github.com.helper=!gh auth git-credential'`
+  before the subcommand, the URL `https://github.com/sgeos/keleusma.git` and the hosts
+  `github.com` and `api.github.com` allowed. It worked first on 2026-10-30 and changes
+  no configuration. The SSH remote still needs the sandbox off, because the sandbox
+  cannot read the known hosts file.
 - The pre-push hook can pass the full gate and then exit 141 without the push landing.
   Confirm with `git ls-remote` and re-push the identical tree with `--no-verify`.
 - `sccache` fails inside the sandbox. Build with an empty `RUSTC_WRAPPER` and an

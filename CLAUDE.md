@@ -240,12 +240,14 @@ scripts/release-gate.sh
 ```
 
 The everyday verification omits the heavy self-host tier, which runs in the `test-self-host` CI
-job on every full run, and the documentation build, which only the CI `Doc` job runs. A broken
+job on every branch run and on a ready pull request's full run, and the documentation build, which only the CI `Doc` job runs. A broken
 intra-doc link is invisible to `test` and `clippy`. A pull request that changes only
 documentation, the book or `scripts/` gets a light run of the documentation guards, the link
 check and the script checks, and the branch run after its merge is full. A branch run whose tree
 a full pull-request run already tested is not repeated. `main` requires the `CI result` job,
-which fails when any job failed. The rules are at the top of `.github/workflows/ci.yml`.
+which fails when any job failed. A draft pull request defers the self-host tier, so iterate as a
+draft, mark it ready when done, and merge on the ready run's green. The rules are at the top of
+`.github/workflows/ci.yml`.
 Before any publication, run the full
 `scripts/release-gate.sh` and follow
 [`docs/process/RELEASE_PROCESS.md`](docs/process/RELEASE_PROCESS.md).

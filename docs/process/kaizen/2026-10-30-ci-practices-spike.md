@@ -230,6 +230,11 @@ and the self-host build, the cache may thrash, which the timing pass would also 
 **Ruling.** None for the timing pass, which is measurement. The cache is a workflow
 change within this line's remit, and it changes no check.
 
+**Outcome, 2026-10-30.** [The timing pass](./2026-10-30-r1-timing-pass.md) found
+dependencies at 2 to 5 percent of each build and one test binary setting each build's
+length, so no cache was added. The gap statement above, that compilation dominates a
+full run, is superseded. Compiling is 63 of a median 243 runner-minutes.
+
 ### R2. Merge the integration-test binaries
 
 **Gap.** 208 test binaries each link the library. matklad's post and the jj project's
