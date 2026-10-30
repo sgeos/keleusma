@@ -5695,6 +5695,11 @@ fn structural_opbounds(op: &crate::bytecode::Op, module: &Module) -> (i64, i64, 
             meta,
             ..
         }) => (8, *meta as i64, 0, 0),
+        // A native call carries its index and the module's native count, which the stage
+        // compares, so the shared block needs no new count.
+        Op::CallVerifiedNative(native, _) | Op::CallExternalNative(native, _) => {
+            (9, *native as i64, module.native_names.len() as i64, 0)
+        }
         _ => (0, 0, 0, 0),
     }
 }

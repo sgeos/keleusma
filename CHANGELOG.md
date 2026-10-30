@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   module. A host that means to swap an in-memory module clears the matrix
   first with `Vm::clear_verifying_keys`. Reported by the pykeleusma line.
 
+- **The module and whole-chunk verifier entries terminate on an unverified
+  module.** `module_runtime_footprint`, `module_wcmu`, `module_wcet_with_bounds`,
+  `wcmu_whole_chunk`, `wcet_whole_chunk` and `verify_resource_bounds` reached a
+  region walk without validating control-flow targets, and each hung on a
+  backward `If` operand. They now apply the forward-target check that the
+  stream entries and `verify` already apply, and refuse such a module. This is
+  a pykeleusma finding. The reported stack overflow was not reproduced, only
+  the hang. Pinned by `tests/verify_hostile_termination.rs`.
+
 - **A signed header over a short declared total is refused rather than
   panicking.** `verify_module_signature` read the signature metadata, the
   signature and the trailer at offsets fixed by the declared header without
