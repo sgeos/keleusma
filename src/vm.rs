@@ -3677,7 +3677,21 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     where
         T: crate::marshall::KeleusmaType<W, F>,
     {
-        let ctx = crate::marshall::RefContext {
+        T::from_value_ctx(value, &self.ref_context_for(value))
+    }
+
+    /// The resolution context [`Self::decode`] uses for `value`, for a host that decodes through
+    /// [`crate::marshall::KeleusmaType::from_value_ctx`] itself.
+    ///
+    /// It carries this VM's arena, opaque registry, packed widths and bytecode image, and the
+    /// originating epoch of `value`'s composite body, or the current epoch for any other value.
+    /// A context a host assembles field by field cannot otherwise name the bytecode image, and
+    /// one built with an empty image refuses a constant string.
+    pub fn ref_context_for(
+        &self,
+        value: &crate::bytecode::GenericValue<W, F>,
+    ) -> crate::marshall::RefContext<'_> {
+        crate::marshall::RefContext {
             arena: self.arena,
             opaques: &self.ephemeral_opaques,
             word_bytes: self.module_word_bytes(),
@@ -3689,9 +3703,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             // than dereferencing reclaimed memory; a non-composite value
             // carries its own epoch and ignores this (B28 P3 item 1).
             ref_epoch: value.flat_ref_epoch().unwrap_or_else(|| self.arena.epoch()),
-            rodata: self.bytecode.as_slice(),
-        };
-        T::from_value_ctx(value, &ctx)
+            rodata: self.bytecode_image(),
+        }
+    }
+
+    /// The loaded bytecode image, where a constant string packed into a flat body points. It is
+    /// the value of [`crate::marshall::RefContext::rodata`] for this VM.
+    pub fn bytecode_image(&self) -> &[u8] {
+        self.bytecode.as_slice()
     }
 
     /// Reset the arena's top region and advance the epoch, leaving
