@@ -102,7 +102,7 @@ The Keleusma runtime memory layout corresponds to the four conventional executab
 
 ## R25. Schema fixity within image and schema mutability across hot updates
 
-The data segment schema, namely the number, names, and types of declared fields, is fixed at compile time within a single code image. The schema may change arbitrarily across hot updates because hot updates occur only at RESET, where no script invariant spans the boundary on the script side. Cross-yield value preservation is not guaranteed because the host may write to the segment between yields. Cross-call value preservation within a single image is guaranteed because the script holds exclusive ownership during execution. The relaxation from a previously specified layout invariance across swaps is supported by the spacecraft control use case in which a new control script may have more or less mutable state than its predecessor.
+The data segment schema, namely the number, names, and types of declared fields, is fixed at compile time within a single code image. The schema may change arbitrarily across hot updates because hot updates occur only at RESET, where no script invariant spans the boundary on the script side. Cross-yield value preservation is not guaranteed because the host may write to the segment between yields. Cross-call value preservation within a single image is guaranteed because the script holds exclusive ownership during execution. The relaxation from a previously specified layout invariance across swaps is supported by a control use case in which a new control script may have more or less mutable state than its predecessor.
 
 ## R26. Replace semantics for cross-swap value handling
 
