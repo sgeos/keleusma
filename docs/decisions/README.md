@@ -37,6 +37,7 @@ increment, and a table that drifts is worse than no table.
 | [ORDER3_COMPLETION_AUDIT.md](./ORDER3_COMPLETION_AUDIT.md) | Trap-analysis completion evidence, residual limits and verification receipts |
 | [FLAT_TEXT_DECODE_SOUNDNESS.md](./FLAT_TEXT_DECODE_SOUNDNESS.md) | The yield type gap and unchecked flat Text decode, their repair and residual limits |
 | [FLAT_TEXT_LAYOUT_PROOF.md](./FLAT_TEXT_LAYOUT_PROOF.md) | The design of the typed pass that proves a flat Text field is written only from text, and where it cannot reach |
+| [ARRAY_WIRE_SLOT_DESIGN.md](./ARRAY_WIRE_SLOT_DESIGN.md) | Designed 2026-10-30, not authorized: an array as one wire record plus a length, the fresh measurement that most per-element wire cost is already gone, packed private storage, and the operator's open decisions |
 | [SIGNATURE_VERIFY_BOUNDS.md](./SIGNATURE_VERIFY_BOUNDS.md) | The signature verifier's panic on a short declared total, reachable from signed loading, and its repair |
 | [WCET_STRUCTURAL_MARKERS.md](./WCET_STRUCTURAL_MARKERS.md) | The time bound's uncharged Else, EndIf, EndLoop and final loop header, and their repair |
 | [ORDER5_COMPLETION_AUDIT.md](./ORDER5_COMPLETION_AUDIT.md) | Cryptographic-framing completion evidence, trust boundary, residual limits and receipts |
