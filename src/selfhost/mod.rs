@@ -49,7 +49,9 @@ mod traps;
 mod validation;
 pub use traps::classify_traps_via_kel;
 mod yield_fixpoint;
-pub use validation::{VerificationError, VerificationVerdict, verify_module_via_kel};
+pub use validation::{
+    VerificationError, VerificationVerdict, initialization_rejects_via_kel, verify_module_via_kel,
+};
 mod call_graph;
 pub use call_graph::call_order_via_kel;
 mod artifact_compare;
@@ -5952,6 +5954,10 @@ fn productivity_reject_via_kel(
 // `op_count` (0); the arrays `class` (1..), `arg`, `dreq`, `dnet`, `is_term` (each crate::selfhost_host::VERIFY_OP_CAP wide);
 // and the verdict `out_reject`. `dreq`/`dnet` are the reference `op_depth_effect` (the actual
 // operand consumption, NOT the WCMU stack effect); `is_term` flags Trap/Return.
+//
+// The same run decides the definite-initialization rule of `crate::verify_init` from the same
+// table and the appended `lget` and `lset` columns, and publishes that verdict in fields of its
+// own after `out_cause`, so that a caller reading only the depth verdict sees no change.
 
 const DV_OP_COUNT: usize = 0;
 const DV_CLASS: usize = 1;
@@ -5968,6 +5974,22 @@ const DV_OUT_REJECT: usize = 1 + crate::selfhost_host::VERIFY_OP_CAP * 5;
 /// unanalysed program**, and only the cause says whether raising the cap would
 /// change the answer.
 const DV_OUT_CAUSE: usize = 2 + crate::selfhost_host::VERIFY_OP_CAP * 5;
+// The definite-initialization twin of `crate::verify_init`, which the same stage run decides
+// after the depth walk. Per op, `lget` is one more than the local read and `lset` one more than
+// the local written, or -1 for `Stream`, each 0 for none. The verdict fields follow.
+const DV_LGET: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP * 5;
+const DV_LSET: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP * 6;
+const DV_L_WIDTH: usize = 3 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+const DV_L_PARAMS: usize = 4 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+const DV_L_STREAM_BIT: usize = 5 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+pub(crate) const DV_OUT_INIT_REJECT: usize = 6 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+pub(crate) const DV_OUT_INIT_IP: usize = 7 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+/// Why the definite-initialization verdict of `verify_depth.kel` is what it is. 0 means the
+/// analysis completed, 1 that the chunk has more locals than the stage's sets hold, and 2 that
+/// the sweep budget ended before the fixpoint. A nonzero cause is not a verdict.
+pub(crate) const DV_OUT_INIT_CAUSE: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+/// The locals one set of the stage holds, its `init_locals()`.
+pub(crate) const DV_INIT_LOCALS: usize = 256;
 
 /// The compiled `verify_depth.kel` stage module, cached after the first build.
 ///
@@ -6017,7 +6039,32 @@ pub fn seed_verify_depth_shared(vm: &dyn StageExecutor, chunk: &crate::bytecode:
             // so a stream chunk ending in `Reset` does not fall through.
             i64::from(matches!(op, Op::Trap(_) | Op::Return | Op::Reset)),
         );
+        // A slot at or past the local count is neither checked nor recorded by the
+        // reference, so it is transported as no effect.
+        let width = usize::from(chunk.local_count);
+        let (get, put) = match op {
+            Op::GetLocal(s) if usize::from(*s) < width => (i64::from(*s) + 1, 0),
+            Op::SetLocal(s) if usize::from(*s) < width => (0, i64::from(*s) + 1),
+            Op::Stream => (0, -1),
+            _ => (0, 0),
+        };
+        set(vm, &mut shared, DV_LGET + i, get);
+        set(vm, &mut shared, DV_LSET + i, put);
     }
+    let width = i64::from(chunk.local_count);
+    set(vm, &mut shared, DV_L_WIDTH, width);
+    set(
+        vm,
+        &mut shared,
+        DV_L_PARAMS,
+        i64::from(chunk.param_count).min(width),
+    );
+    set(
+        vm,
+        &mut shared,
+        DV_L_STREAM_BIT,
+        i64::from(chunk.param_count > 0 && width > 0),
+    );
     shared
 }
 
@@ -10364,6 +10411,115 @@ fn name_unsupported_construct(src: &str) -> Option<(String, u32)> {
         .map(|(line, _, what)| (what, line))
 }
 
+/// The line of the first `Text<N>` the source names in any type position, or `None`.
+///
+/// The stages under `kel/` do not lower `Text<N>`. Left to them, a program naming it
+/// reached four different outcomes depending on where the type appeared. A parameter
+/// diverged on the module signature, a cast was rejected by the parser stage, a `let`
+/// annotation left the type evidence unavailable, and a struct field that no code used
+/// compiled. Only the first and last of these were even arguably correct. Refusing at
+/// the shipping entry, before any stage runs, makes the outcome one clean refusal that
+/// names the construct, and it stays correct when the reference later accepts more of
+/// the type, because the refusal does not depend on what the reference decides.
+///
+/// A source the reference parser rejects answers `None`, so the existing rejection
+/// paths classify it exactly as before.
+fn first_text_capacity_line(src: &str) -> Option<u32> {
+    use crate::ast::{Expr, Stmt, TypeDef, TypeExpr};
+    use crate::visitor::Visitor;
+
+    fn type_line(te: &TypeExpr) -> Option<u32> {
+        match te {
+            TypeExpr::TextN(_, span) => Some(span.line),
+            TypeExpr::Array(inner, _, _)
+            | TypeExpr::Option(inner, _)
+            | TypeExpr::Labelled(inner, _, _)
+            | TypeExpr::NegativeLabelled(inner, _, _) => type_line(inner),
+            TypeExpr::Tuple(items, _) | TypeExpr::Named(_, items, _, _) => {
+                items.iter().filter_map(type_line).min()
+            }
+            TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => None,
+        }
+    }
+
+    struct Scan {
+        lines: Vec<u32>,
+    }
+    impl Scan {
+        fn note(&mut self, te: &TypeExpr) {
+            if let Some(line) = type_line(te) {
+                self.lines.push(line);
+            }
+        }
+    }
+    impl Visitor for Scan {
+        fn visit_expr(&mut self, e: &Expr) {
+            if let Expr::Cast { target, .. } = e {
+                self.note(target);
+            }
+            self.walk_expr(e);
+        }
+        fn visit_stmt(&mut self, s: &Stmt) {
+            if let Stmt::Let(l) = s
+                && let Some(te) = &l.type_expr
+            {
+                self.note(te);
+            }
+            self.walk_stmt(s);
+        }
+    }
+
+    let program = parse(&tokenize(src).ok()?).ok()?;
+    let mut scan = Scan { lines: Vec::new() };
+    let note_fn = |scan: &mut Scan, f: &crate::ast::FunctionDef| {
+        scan.note(&f.return_type);
+        for p in &f.params {
+            if let Some(te) = &p.type_expr {
+                scan.note(te);
+            }
+        }
+        scan.visit_block(&f.body);
+    };
+    for f in &program.functions {
+        note_fn(&mut scan, f);
+    }
+    for b in &program.impls {
+        for m in &b.methods {
+            note_fn(&mut scan, m);
+        }
+    }
+    for t in &program.traits {
+        for m in &t.methods {
+            scan.note(&m.return_type);
+            for p in &m.params {
+                if let Some(te) = &p.type_expr {
+                    scan.note(te);
+                }
+            }
+        }
+    }
+    for td in &program.types {
+        match td {
+            TypeDef::Struct(s) => s.fields.iter().for_each(|f| scan.note(&f.type_expr)),
+            TypeDef::Enum(e) => e
+                .variants
+                .iter()
+                .for_each(|v| v.fields.iter().for_each(|t| scan.note(t))),
+            TypeDef::Newtype(n) => scan.note(&n.underlying),
+        }
+    }
+    for d in &program.data_decls {
+        d.fields.iter().for_each(|f| scan.note(&f.type_expr));
+    }
+    for u in &program.uses {
+        if let Some(sig) = &u.signature {
+            scan.note(&sig.return_type);
+            sig.params.iter().for_each(|t| scan.note(t));
+        }
+    }
+    scan.lines.into_iter().min()
+}
+
 /// Compile a whole program with the self-hosted pipeline, returning a self-hosted-built
 /// [`Module`] for an in-subset program at the host target.
 ///
@@ -10387,6 +10543,18 @@ pub fn self_hosted_compile(
         || target.float_bits_log2 != host.float_bits_log2
     {
         return Err(SelfHostError::NonHostTarget);
+    }
+    // A `Text<N>` program is refused before any stage runs. The reference is consulted
+    // first so that a program it rejects, such as a literal longer than its capacity,
+    // reports that rejection rather than a subset limit that would send the user to a
+    // backend which rejects it too.
+    if let Some(line) = first_text_capacity_line(src) {
+        compile_reference(src)?;
+        return Err(SelfHostError::Unsupported {
+            detail: format!(
+                "a capacity-bounded `Text<N>` at line {line} is outside the self-hosted subset"
+            ),
+        });
     }
     // Obtain an independent verdict before the reference sees the source. Unknown facts
     // still require the reference gate, but cannot mask rejection-stage coverage tests.

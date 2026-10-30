@@ -324,6 +324,8 @@ let vm    = Vm::new(module, &arena)?;
 
 The empty slice argument represents per-native heap attestations. Pass attested values when the script calls heap-allocating natives. See [`examples/wcmu_basic.rs`](../../examples/wcmu_basic.rs) for the auto-sizing pattern.
 
+The bound includes the composite arguments and resume values that the host passes, which are copied into the arena and kept until the next `Reset`. A host whose composite inputs carry `Text` calls `auto_arena_capacity_with_input_text` with a bound on the text bytes in any one input.
+
 **Option C. Provide a static buffer.** The arena can run from a host-owned buffer in `.bss` for embedded targets without a heap.
 
 ```rust

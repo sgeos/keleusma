@@ -12,8 +12,9 @@
 //!
 //! # What these tests do NOT establish
 //!
-//! Composite host inputs are copied into the arena and are outside the auto
-//! size by its documented contract. That part of the finding is open.
+//! Composite host inputs are copied into the arena as well. Since 2026-10-30
+//! the auto size counts them, and `tests/auto_arena_host_inputs.rs` holds
+//! those tests.
 #![cfg(all(feature = "compile", feature = "verify"))]
 
 use keleusma::Arena;

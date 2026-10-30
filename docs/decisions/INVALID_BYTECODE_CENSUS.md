@@ -256,7 +256,9 @@ language that ships precompiled modules.
 memory unsafety. What is wrong is the LAYER. Exposure is to a host that builds without `floats` and
 runs a module produced by a build that had them.
 
-Pinned by `tests/float_opcode_without_floats.rs`. **Not repaired.**
+Pinned by `tests/float_opcode_without_floats.rs`. **Repaired 2026-10-30** on the operator's ruling of
+that day, which chose the repair recommended below. `verify()` refuses `IntToFloat` and `FloatToInt`
+on a build without the feature, so `Vm::new` refuses the module at load.
 
 ### The recommended repair, and the evidence for it
 

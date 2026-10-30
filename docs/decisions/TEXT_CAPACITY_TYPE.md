@@ -2,7 +2,7 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: authorized, design. Not implemented.
+**Status**: authorized. The value representation and the literal cast are implemented as of 2026-10-30. The operations are not. See [the literal-cast increment](#the-literal-cast-increment-landed-2026-10-30).
 
 ## The authorization, recorded with provenance
 
@@ -262,7 +262,81 @@ Two questions remain genuinely open.
 1. **The bundled-operation reversal**, above.
 2. **Surface syntax.** Method form (`s.push(t)`) reads well and matches the authorizing example, but
    the language's method surface is trait-impl based. Whether `Text<N>` gains methods or free
-   operations is a surface decision.
+   operations is a surface decision. **Partly ruled on 2026-10-30**, see below. Construction is the
+   literal cast with compile-time refusals and the operations are free functions. How a native
+   signature can be generic over a capacity is still open, and it blocks the operations.
+
+## The literal-cast increment, landed 2026-10-30
+
+### The ruling
+
+The operator ruled first-hand in session on 2026-10-30, choosing option (a) in these words.
+
+> *"A, the case for literals with compile time refusals."*
+
+Option (a) as it was put to the operator was an `as` cast for a literal, `"abc" as Text<8>`,
+refused at compile time when the literal is longer than `N`, with free functions for the
+operations. The operations themselves are not part of this increment, because how a native
+signature can be generic over a capacity is undecided.
+
+### What landed
+
+- **The type is admitted with a positive literal capacity** after monomorphization, as a `let`
+  local, a function parameter and return, a tuple element, a struct field, an array element, an
+  `Option` payload, an enum payload, and a `private` data field. A capacity may be a const
+  parameter, and monomorphization resolves it before the compiler sees it.
+- **`"..." as Text<N>` is the one construction.** The operand must be a string literal written at
+  the cast site. A literal longer than `N` bytes, counted in UTF-8 bytes, is a compile error that
+  names both lengths. The type checker refuses it, and the compiler repeats the comparison at
+  emission as a backstop. An interior NUL is content and counts toward the length.
+- **The emitted value is one pooled constant.** It is `ConstValue::Tuple(Int length, Array[Byte;
+  N])`, the shape `layout_pass` and `zero_value` already describe, with the bytes zero padded to
+  `N`. This is the path the compiler already takes for a compile-time composite constant, a const
+  data field. One `Op::Const` replaces the `N + 3` instructions a byte-by-byte construction would
+  emit, so the execution cost does not grow with `N`, and the load allocates nothing in the arena.
+  The padding is part of the value, because a later equality operation compares whole bodies.
+- **The bound follows the type.** Measured on 2026-10-30, a struct holding a `Word` and a
+  `Text<N>` is one flat allocation of `word_bytes + word_bytes + N`, and raising `N` from 8 to 40
+  raises the worst-case memory bound from `auto_arena_capacity_for` by exactly 32 bytes. The
+  pooled body of a bare literal is `word_bytes + N` bytes of const pool, outside the arena. The
+  verifier, `verify()`, accepts every module in the tests.
+- **A `Text<N>` value crosses a yield**, as the flat representation predicts, and is pinned by a
+  test that reads the yielded body.
+- **No opcode, no wire format change and no `BYTECODE_VERSION` change.** The instruction set stays
+  at 66 opcodes and the version stays at 2.
+
+### What stays refused, and why
+
+- **`Text<0>`** is not a legal type, for the reason a zero-length array is not. A capacity that is
+  still symbolic after monomorphization is refused rather than sized by a guess.
+- **Every other cast** to or from `Text<N>`, including the identity cast and a cast between two
+  capacities, is a type error. A static literal is not implicitly a `Text<N>`.
+- **Arithmetic, comparison, field reads, indexing, iteration and destructuring** are type errors.
+  Comparison is refused for any type that contains a `Text<N>`, because the general composite
+  rule would otherwise admit `t == t` and `t < t`, and both faulted at runtime when measured. A
+  `let` tuple pattern over a `Text<N>` is refused for the same reason.
+- **A `shared` data field** is refused. The host writes the shared buffer directly and nothing
+  checks that a host-written length is at most `N`, so admitting it would let a host produce the
+  one value this type exists to rule out. A `private` field is written only by script code.
+- **A native signature naming `Text<N>`** is refused. Nothing marshals a flat `Text<N>` body across
+  the host boundary, and admitting a concrete capacity there would answer the open question about
+  generic native signatures by accident.
+- **A length surface** is not built. The language has no `len` surface to extend, and adding one
+  belongs to the operations increment. The tests observe the length from the host by reading the
+  flat body.
+- **The self-hosted compiler** does not lower `Text<N>`. The shipping entry `self_hosted_compile`
+  refuses any program naming it as unsupported before a stage runs, after first consulting the
+  reference so that a program the reference rejects reports that rejection. Before this refusal
+  the four positions measured reached four different outcomes, a signature divergence, a parser
+  stage rejection, unavailable type evidence, and one silent success.
+
+### What remains
+
+The operations, restored as a bundled library of free functions, wait on the generic native
+signature question. With them come the length surface, equality over whole bodies, the runtime
+truncation default with its optional arm following `CheckedArmKind`, and the end of the
+`"ab" + "cd"` defect recorded above. A `shared` field needs a host-side type and a length check at
+the boundary. The self-hosted stages need the type before the shipping refusal can be lifted.
 
 ## A DEFECT THIS WORK UNCOVERED, AND WHICH IT WILL CLOSE
 

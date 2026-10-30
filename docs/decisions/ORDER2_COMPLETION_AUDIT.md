@@ -107,6 +107,21 @@ facts and from the stage-corpus tests named above. The acceptance does not
 repair the precision gap pinned by `reference_disagreement_prevents_successful_admission`,
 and it does not permit removing the reference gate.
 
+### Definite initialization, 2026-10-30
+
+The narrowed definite-initialization rule that `verify` gained on 2026-10-30,
+src/verify_init.rs, has its self-hosted twin in verify_depth.kel, which decides
+it in the run that checks operand-stack depth. The stage sweeps the op table
+until the sets of written locals stop growing and then checks each reached
+read, which computes the same least fixpoint as the reference worklist, and
+`verify_module_via_kel` reports a refusal as the initialization stage. More
+than 256 locals in a chunk, or a fixpoint not confirmed within the sweep budget,
+is unavailable analysis. The differential controls in
+tests/selfhost_definite_initialization.rs compare the verdict and the refused
+instruction with the reference on its own mutations and on every single-write
+and single-read mutation of a small corpus. They are evidence of agreement, not
+a proof of it for arbitrary bytecode. The shipping reference gate is unchanged.
+
 ## Host and trust boundary
 
 The host decodes bytecode and transports opcode classes, operands, primitive costs,

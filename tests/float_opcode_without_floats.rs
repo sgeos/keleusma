@@ -58,13 +58,13 @@
 //! is admitted and then refused mid-call. Exposure is to a host that builds
 //! without `floats` and runs a module produced by a build that had them.
 //!
-//! # Status: PINNED, NOT REPAIRED
+//! # Status: REPAIRED 2026-10-30
 //!
-//! The repair belongs in `verify()` -- refuse a module carrying a float opcode
-//! when the feature is absent, moving the refusal from run time to load time.
-//! It is deliberately not done here, because a repair validated by the same
-//! reading that found the defect is not validated, and because the feature set
-//! this lives in is not one continuous integration runs. Recorded in
+//! On the operator's ruling of 2026-10-30, `verify()` refuses a module carrying
+//! `IntToFloat` or `FloatToInt` when the feature is absent, which moves the
+//! refusal from run time to load time. `Vm::new` runs `verify()`, so it refuses
+//! the module too. The table above records the sequence before the repair. The
+//! test below pins the sequence after it. Recorded in
 //! `docs/decisions/INVALID_BYTECODE_CENSUS.md`.
 //!
 //! # The fixture, and how to regenerate it
@@ -80,49 +80,37 @@
 #![cfg(all(feature = "verify", not(feature = "floats")))]
 
 use keleusma::Arena;
-use keleusma::bytecode::{Module, Value};
+use keleusma::bytecode::Module;
 use keleusma::vm::{DEFAULT_ARENA_CAPACITY, Vm};
 
 /// A module whose only interesting op is `IntToFloat`.
 const FIXTURE: &[u8] = include_bytes!("fixtures/int_to_float.kbc");
 
-/// **The ratchet.** Every step up to the call succeeds, and the call traps.
+/// **The repair.** The module decodes, and `verify()` and `Vm::new` both
+/// refuse it, naming the opcode and the feature.
 ///
-/// If this test fails because the module is now refused EARLIER -- by
-/// `from_bytes`, by `verify()`, or by `Vm::new` -- the hole has been closed and
-/// this file should record the new sequence rather than be deleted. That is the
-/// outcome it exists to detect.
+/// If `from_bytes` starts refusing it instead, the refusal moved earlier
+/// still, which is acceptable, and this file should record the new sequence.
 #[test]
-fn a_float_module_verifies_and_loads_and_then_traps_at_the_call() {
+fn a_float_module_is_refused_at_verification_on_a_build_without_floats() {
     let module = Module::from_bytes(FIXTURE).expect(
         "the fixture no longer decodes. If the wire format moved, regenerate it from \
          `fn main(k: Word) -> Float { k as Float }` on a floats-enabled build; this is a \
          stale fixture rather than a finding.",
     );
 
-    keleusma::verify::verify(&module).expect(
-        "verify() now REJECTS a float-using module on a build without the feature. That is \
-         the repair this file recommends: record the new behaviour here instead of deleting \
-         the test.",
+    let err = keleusma::verify::verify(&module)
+        .expect_err("verify() admitted a float opcode on a build without the feature");
+    assert!(
+        err.message.contains("IntToFloat") && err.message.contains("`floats` feature"),
+        "verify() refused the module for another reason: {}",
+        err.message
     );
 
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
-    let mut vm = Vm::new(module, &arena).expect(
-        "Vm::new now rejects a float-using module on a build without the feature. That also \
-         closes the hole, at the load layer; record it here.",
-    );
-
-    let err = vm
-        .call(&[Value::Int(3)])
-        .expect_err("the call SUCCEEDED, so this build executes float opcodes after all");
-
-    let text = alloc::format!("{err:?}");
     assert!(
-        text.contains("InvalidBytecode"),
-        "the call now fails with something other than InvalidBytecode: {text}. If the runtime \
-         reports a plain unsupported-operation error instead, that is an improvement in \
-         classification and worth recording, because InvalidBytecode asserts the ARTEFACT is \
-         malformed and this artefact is not."
+        Vm::new(module, &arena).is_err(),
+        "Vm::new loaded a float module on a build without the feature"
     );
 }
 
@@ -139,6 +127,7 @@ extern crate alloc;
 #[test]
 #[cfg(feature = "compile")]
 fn a_module_without_float_opcodes_runs_on_this_build() {
+    use keleusma::bytecode::Value;
     use keleusma::compiler::compile;
     use keleusma::lexer::tokenize;
     use keleusma::parser::parse;

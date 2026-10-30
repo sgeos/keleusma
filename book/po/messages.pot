@@ -1229,12 +1229,12 @@ msgstr ""
 #: src/19_why_rejected.md:118 src/20_time_and_memory_budgets.md:99
 #: src/21_generics_and_traits.md:132 src/22_newtypes_and_refinement.md:91
 #: src/23_big_numbers.md:297 src/24_information_flow_labels.md:93
-#: src/25_from_source_to_bytecode.md:92
+#: src/25_from_source_to_bytecode.md:98
 #: src/26_signed_modules_and_hot_swap.md:140 src/27_piano_roll.md:91
 #: src/28_song_playground.md:66 src/29_writing_a_song.md:81
 #: src/30_song_roster.md:62 src/31_embedding_orientation.md:82
 #: src/32_constructing_a_vm.md:81 src/33_registering_natives.md:146
-#: src/34_coroutine_protocol.md:97 src/35_arena_sizing.md:71
+#: src/34_coroutine_protocol.md:97 src/35_arena_sizing.md:78
 #: src/36_loading_bytecode.md:71 src/37_hot_swap_host.md:74
 #: src/38_cost_models.md:71 src/39_full_host.md:66
 msgid "What you now know"
@@ -4899,31 +4899,40 @@ msgid ""
 "target's representable range is rejected at compile time."
 msgstr ""
 
-#: src/25_from_source_to_bytecode.md:94
+#: src/25_from_source_to_bytecode.md:92
+msgid ""
+"The compiler also refuses a program whose worst-case memory use cannot be "
+"computed, such as one that calls itself recursively. No machine could run "
+"such a program at any memory size, so the compiler says so at once rather "
+"than writing a file that every runtime would refuse. Chapter 19 explains why "
+"a program is rejected."
+msgstr ""
+
+#: src/25_from_source_to_bytecode.md:100
 msgid ""
 "Source is the text you write; bytecode is the compact form the runtime "
 "executes."
 msgstr ""
 
-#: src/25_from_source_to_bytecode.md:96
+#: src/25_from_source_to_bytecode.md:102
 msgid ""
 "`keleusma run` compiles and runs in one step; `keleusma compile` produces a "
 "bytecode file you can run later."
 msgstr ""
 
-#: src/25_from_source_to_bytecode.md:98
+#: src/25_from_source_to_bytecode.md:104
 msgid ""
 "A bytecode file is self-describing, version-checked, and protected by a "
 "checksum."
 msgstr ""
 
-#: src/25_from_source_to_bytecode.md:100
+#: src/25_from_source_to_bytecode.md:106
 msgid ""
 "Compiling ahead of time means the running machine needs only the runtime, "
 "and the program starts immediately."
 msgstr ""
 
-#: src/25_from_source_to_bytecode.md:103
+#: src/25_from_source_to_bytecode.md:109
 msgid ""
 "If you want to see the individual instructions the runtime executes, the "
 "[Instruction Set](INSTRUCTION_SET.md) reference lists every opcode with its "
@@ -4931,7 +4940,7 @@ msgid ""
 "shows the same disassembly for any program you write."
 msgstr ""
 
-#: src/25_from_source_to_bytecode.md:108
+#: src/25_from_source_to_bytecode.md:114
 msgid ""
 "The next chapter covers two more things that happen to a finished program: "
 "it can be signed, and it can be swapped."
@@ -5700,7 +5709,7 @@ msgid ""
 "repeats."
 msgstr ""
 
-#: src/30_song_roster.md:49 src/COOKBOOK.md:466
+#: src/30_song_roster.md:49 src/COOKBOOK.md:478
 msgid "Why this matters"
 msgstr ""
 
@@ -5829,22 +5838,22 @@ msgid "\"fn main() -> Word { 60 + 7 }\""
 msgstr ""
 
 #: src/31_embedding_orientation.md:56 src/GETTING_STARTED.md:118
-#: src/COOKBOOK.md:298
+#: src/COOKBOOK.md:310
 msgid "\"lex\""
 msgstr ""
 
 #: src/31_embedding_orientation.md:57 src/GETTING_STARTED.md:119
-#: src/COOKBOOK.md:299
+#: src/COOKBOOK.md:311
 msgid "\"parse\""
 msgstr ""
 
 #: src/31_embedding_orientation.md:58 src/GETTING_STARTED.md:120
-#: src/COOKBOOK.md:300
+#: src/COOKBOOK.md:312
 msgid "\"compile\""
 msgstr ""
 
 #: src/31_embedding_orientation.md:61 src/GETTING_STARTED.md:123
-#: src/COOKBOOK.md:304 src/COOKBOOK.md:324
+#: src/COOKBOOK.md:316 src/COOKBOOK.md:336
 msgid "\"verify\""
 msgstr ""
 
@@ -6381,7 +6390,7 @@ msgid ""
 "frames, and the arena, while preserving the data segment."
 msgstr ""
 
-#: src/34_coroutine_protocol.md:84 src/EMBEDDING.md:350
+#: src/34_coroutine_protocol.md:84 src/EMBEDDING.md:352
 msgid "\"script error: {}\""
 msgstr ""
 
@@ -6473,31 +6482,40 @@ msgstr ""
 msgid ""
 "The second argument is a slice of per-native heap attestations; pass an "
 "empty slice when the script's natives do not allocate into the arena, and "
-"attested values otherwise. This option sizes the arena to exactly what the "
-"program needs, no more."
+"attested values otherwise. This option sizes the arena from the module's own "
+"bounds."
 msgstr ""
 
 #: src/35_arena_sizing.md:44
+msgid ""
+"The figure includes the composite values the host passes to the entry and "
+"resumes it with, because each is copied into the arena and kept until the "
+"next `Reset`. When such a value carries `Text`, use "
+"`auto_arena_capacity_with_input_text` and pass a bound on the text bytes in "
+"any one value, since the module cannot know the length of a host string."
+msgstr ""
+
+#: src/35_arena_sizing.md:51
 msgid "Option C: a static buffer"
 msgstr ""
 
-#: src/35_arena_sizing.md:46
+#: src/35_arena_sizing.md:53
 msgid ""
 "On an embedded target without a heap, the arena can run from a host-owned "
 "buffer placed in static memory:"
 msgstr ""
 
-#: src/35_arena_sizing.md:56
+#: src/35_arena_sizing.md:63
 msgid ""
 "This is the pattern for a `no_std` deployment, where the arena is a fixed "
 "region of `.bss` rather than a heap allocation."
 msgstr ""
 
-#: src/35_arena_sizing.md:59
+#: src/35_arena_sizing.md:66
 msgid "When the arena is too small"
 msgstr ""
 
-#: src/35_arena_sizing.md:61
+#: src/35_arena_sizing.md:68
 msgid ""
 "If the chosen capacity is below the module's analyzed WCMU, `Vm::new` "
 "returns `VmError::VerifyError`. The error is surfaced at construction, "
@@ -6506,30 +6524,30 @@ msgid ""
 "the verifier produces."
 msgstr ""
 
-#: src/35_arena_sizing.md:67
+#: src/35_arena_sizing.md:74
 msgid ""
 "This is the memory budget of Chapter 20 seen from the host side. The "
 "verifier proved a WCMU bound; the host must provide an arena at least that "
 "large; and the check that the two agree happens at `Vm::new`."
 msgstr ""
 
-#: src/35_arena_sizing.md:73
+#: src/35_arena_sizing.md:80
 msgid "The arena is bounded working memory; its size is the host's choice."
 msgstr ""
 
-#: src/35_arena_sizing.md:74
+#: src/35_arena_sizing.md:81
 msgid ""
 "`DEFAULT_ARENA_CAPACITY` is the default; `auto_arena_capacity_for` computes "
 "an exact size; `Arena::from_static_buffer` runs from static memory."
 msgstr ""
 
-#: src/35_arena_sizing.md:77
+#: src/35_arena_sizing.md:84
 msgid ""
 "An arena smaller than the module's WCMU is rejected at `Vm::new`, before any "
 "code runs."
 msgstr ""
 
-#: src/35_arena_sizing.md:80
+#: src/35_arena_sizing.md:87
 msgid "The next chapter loads bytecode that was compiled ahead of time."
 msgstr ""
 
@@ -6554,7 +6572,7 @@ msgid ""
 "by a build pipeline, skips the lex, parse, and compile phases:"
 msgstr ""
 
-#: src/36_loading_bytecode.md:15 src/EMBEDDING.md:37 src/EMBEDDING.md:413
+#: src/36_loading_bytecode.md:15 src/EMBEDDING.md:37 src/EMBEDDING.md:415
 msgid "\"script.kel.bin\""
 msgstr ""
 
@@ -6580,7 +6598,7 @@ msgid ""
 "`Vm::load_signed_bytes`, which takes a slice of trusted public keys:"
 msgstr ""
 
-#: src/36_loading_bytecode.md:34 src/EMBEDDING.md:421
+#: src/36_loading_bytecode.md:34 src/EMBEDDING.md:423
 msgid "\"pub.bin\""
 msgstr ""
 
@@ -6678,7 +6696,7 @@ msgid ""
 "`Vm::replace_module`:"
 msgstr ""
 
-#: src/37_hot_swap_host.md:30 src/EMBEDDING.md:396
+#: src/37_hot_swap_host.md:30 src/EMBEDDING.md:398
 msgid "/* ... */"
 msgstr ""
 
@@ -6821,8 +6839,8 @@ msgid ""
 "to the `_with_cost_model` variant of the WCET API:"
 msgstr ""
 
-#: src/38_cost_models.md:32 src/EMBEDDING.md:297 src/COOKBOOK.md:435
-#: src/COOKBOOK.md:444 src/COOKBOOK.md:448
+#: src/38_cost_models.md:32 src/EMBEDDING.md:297 src/COOKBOOK.md:447
+#: src/COOKBOOK.md:456 src/COOKBOOK.md:460
 msgid "\"CARGO_MANIFEST_DIR\""
 msgstr ""
 
@@ -7814,7 +7832,7 @@ msgid ""
 "then a call to the `_with_cost_model` variant of the WCET API:"
 msgstr ""
 
-#: src/EMBEDDING.md:298 src/COOKBOOK.md:445
+#: src/EMBEDDING.md:298 src/COOKBOOK.md:457
 msgid "\"/keleusma-bench/measured_cost_models/aarch64_apple_darwin.rs\""
 msgstr ""
 
@@ -7864,162 +7882,171 @@ msgstr ""
 
 #: src/EMBEDDING.md:327
 msgid ""
+"The bound includes the composite arguments and resume values that the host "
+"passes, which are copied into the arena and kept until the next `Reset`. A "
+"host whose composite inputs carry `Text` calls "
+"`auto_arena_capacity_with_input_text` with a bound on the text bytes in any "
+"one input."
+msgstr ""
+
+#: src/EMBEDDING.md:329
+msgid ""
 "**Option C. Provide a static buffer.** The arena can run from a host-owned "
 "buffer in `.bss` for embedded targets without a heap."
 msgstr ""
 
-#: src/EMBEDDING.md:336
+#: src/EMBEDDING.md:338
 msgid ""
 "If the chosen capacity is below the analyzed WCMU, `Vm::new` returns "
 "`VmError::VerifyError`. The error is surfaceable before any code runs."
 msgstr ""
 
-#: src/EMBEDDING.md:338
+#: src/EMBEDDING.md:340
 msgid "Error Recovery"
 msgstr ""
 
-#: src/EMBEDDING.md:340
+#: src/EMBEDDING.md:342
 msgid ""
 "Errors during `call` or `resume` return `Err(VmError)`. The VM is not "
 "automatically reset; volatile state may remain on the operand stack and in "
 "the arena. Two paths exist."
 msgstr ""
 
-#: src/EMBEDDING.md:342
+#: src/EMBEDDING.md:344
 msgid ""
 "**Path 1. Discard the VM.** Drop and reconstruct. The arena resets when the "
 "new VM is constructed against it."
 msgstr ""
 
-#: src/EMBEDDING.md:344
+#: src/EMBEDDING.md:346
 msgid ""
 "**Path 2. Recover and continue.** Call `Vm::reset_after_error` to clear "
 "volatile state while preserving the data segment."
 msgstr ""
 
-#: src/EMBEDDING.md:357
+#: src/EMBEDDING.md:359
 msgid ""
 "The data segment, if declared, persists across error events. Long-running "
 "streams that accumulate state should rely on the data segment rather than "
 "local bindings for state that must survive errors."
 msgstr ""
 
-#: src/EMBEDDING.md:359
+#: src/EMBEDDING.md:361
 msgid "Error Variants"
 msgstr ""
 
-#: src/EMBEDDING.md:361
+#: src/EMBEDDING.md:363
 msgid "`VmError` enumerates the runtime error conditions."
 msgstr ""
 
-#: src/EMBEDDING.md:363
+#: src/EMBEDDING.md:365
 msgid "Variant"
 msgstr ""
 
-#: src/EMBEDDING.md:363
+#: src/EMBEDDING.md:365
 msgid "Condition"
 msgstr ""
 
-#: src/EMBEDDING.md:365
+#: src/EMBEDDING.md:367
 msgid "`StackUnderflow`"
 msgstr ""
 
-#: src/EMBEDDING.md:365
+#: src/EMBEDDING.md:367
 msgid "Empty operand stack on pop"
 msgstr ""
 
-#: src/EMBEDDING.md:366
+#: src/EMBEDDING.md:368
 msgid "`TypeError(msg)`"
 msgstr ""
 
-#: src/EMBEDDING.md:366
+#: src/EMBEDDING.md:368
 msgid "Operand type does not match the operation"
 msgstr ""
 
-#: src/EMBEDDING.md:367
+#: src/EMBEDDING.md:369
 msgid "`DivisionByZero`"
 msgstr ""
 
-#: src/EMBEDDING.md:367
+#: src/EMBEDDING.md:369
 msgid "Integer or modulo by zero"
 msgstr ""
 
-#: src/EMBEDDING.md:368
+#: src/EMBEDDING.md:370
 msgid "`IndexOutOfBounds(idx, len)`"
 msgstr ""
 
-#: src/EMBEDDING.md:368
+#: src/EMBEDDING.md:370
 msgid "Array or tuple index out of range"
 msgstr ""
 
-#: src/EMBEDDING.md:369
+#: src/EMBEDDING.md:371
 msgid "`FieldNotFound(struct, field)`"
 msgstr ""
 
-#: src/EMBEDDING.md:369
+#: src/EMBEDDING.md:371
 msgid "Field access on a struct that does not declare the field"
 msgstr ""
 
-#: src/EMBEDDING.md:370
+#: src/EMBEDDING.md:372
 msgid "`NoMatch(value)`"
 msgstr ""
 
-#: src/EMBEDDING.md:370
+#: src/EMBEDDING.md:372
 msgid "No match arm or multiheaded function head matched"
 msgstr ""
 
-#: src/EMBEDDING.md:371
+#: src/EMBEDDING.md:373
 msgid "`NativeError(msg)`"
 msgstr ""
 
-#: src/EMBEDDING.md:371
+#: src/EMBEDDING.md:373
 msgid "Native function returned `Err`"
 msgstr ""
 
-#: src/EMBEDDING.md:372
+#: src/EMBEDDING.md:374
 msgid "`InvalidBytecode(msg)`"
 msgstr ""
 
-#: src/EMBEDDING.md:372
+#: src/EMBEDDING.md:374
 msgid "Bytecode shape unexpected at runtime"
 msgstr ""
 
-#: src/EMBEDDING.md:373
+#: src/EMBEDDING.md:375
 msgid "`Trap(msg)`"
 msgstr ""
 
-#: src/EMBEDDING.md:373
+#: src/EMBEDDING.md:375
 msgid "Script halted by a `Trap` instruction"
 msgstr ""
 
-#: src/EMBEDDING.md:374
+#: src/EMBEDDING.md:376
 msgid "`VerifyError(msg)`"
 msgstr ""
 
-#: src/EMBEDDING.md:374
+#: src/EMBEDDING.md:376
 msgid "Structural or resource-bounds verification failed at construction"
 msgstr ""
 
-#: src/EMBEDDING.md:375
+#: src/EMBEDDING.md:377
 msgid "`LoadError(msg)`"
 msgstr ""
 
-#: src/EMBEDDING.md:375
+#: src/EMBEDDING.md:377
 msgid "Wire-format framing failed during `load_bytes`"
 msgstr ""
 
-#: src/EMBEDDING.md:377
+#: src/EMBEDDING.md:379
 msgid ""
 "`VerifyError` is the only variant that fires before any script code "
 "executes. The other variants fire during execution. See "
 "[WHY_REJECTED.md](./WHY_REJECTED.md) for `VerifyError` interpretation."
 msgstr ""
 
-#: src/EMBEDDING.md:379
+#: src/EMBEDDING.md:381
 msgid "Hot Code Swapping"
 msgstr ""
 
-#: src/EMBEDDING.md:381
+#: src/EMBEDDING.md:383
 msgid ""
 "The VM supports replacing the loaded module at the reset boundary of a "
 "`loop` script. The host calls `Vm::replace_module` after observing "
@@ -8028,20 +8055,20 @@ msgid ""
 "length must match the new module's declared schema."
 msgstr ""
 
-#: src/EMBEDDING.md:387
+#: src/EMBEDDING.md:389
 msgid ""
 "// Re-initialise the data segment. Length must match the\n"
 "        // new module's declared `data` block size; preserve or\n"
 "        // migrate values as appropriate.\n"
 msgstr ""
 
-#: src/EMBEDDING.md:392
+#: src/EMBEDDING.md:394
 msgid ""
 "// The swap clears coroutine state. Drive the new module\n"
 "        // from the entry point, not via `resume`.\n"
 msgstr ""
 
-#: src/EMBEDDING.md:400
+#: src/EMBEDDING.md:402
 msgid ""
 "The dialogue type, the yielded type and the resume type, must remain stable "
 "across swaps. The data segment may carry forward (pass current values), may "
@@ -8054,11 +8081,11 @@ msgid ""
 "end-to-end demonstration."
 msgstr ""
 
-#: src/EMBEDDING.md:402
+#: src/EMBEDDING.md:404
 msgid "Signed Modules"
 msgstr ""
 
-#: src/EMBEDDING.md:404
+#: src/EMBEDDING.md:406
 msgid ""
 "The optional `signatures` cargo feature enables Ed25519 signing of compiled "
 "bytecode. Source scripts declare the requirement with the `signed` modifier "
@@ -8068,11 +8095,11 @@ msgid ""
 "against a trust matrix the host populates before the load."
 msgstr ""
 
-#: src/EMBEDDING.md:406
+#: src/EMBEDDING.md:408
 msgid "Signing at build time"
 msgstr ""
 
-#: src/EMBEDDING.md:408
+#: src/EMBEDDING.md:410
 msgid ""
 "The host (or a build pipeline) takes a 32-byte Ed25519 seed and uses "
 "`wire_format::module_to_signed_wire_bytes` to produce signed bytes. The CLI "
@@ -8082,11 +8109,11 @@ msgid ""
 "permissions on Unix and existing files are not overwritten."
 msgstr ""
 
-#: src/EMBEDDING.md:416
+#: src/EMBEDDING.md:418
 msgid "Verifying and loading"
 msgstr ""
 
-#: src/EMBEDDING.md:418
+#: src/EMBEDDING.md:420
 msgid ""
 "The host loads a signed module through `Vm::load_signed_bytes(bytes, arena, "
 "&keys)`. The keys slice carries one or more public keys; the first matching "
@@ -8096,18 +8123,18 @@ msgid ""
 "the same keys."
 msgstr ""
 
-#: src/EMBEDDING.md:426
+#: src/EMBEDDING.md:428
 msgid ""
 "Hosts that bootstrap from an unsigned baseline and only accept signed "
 "bytecode at hot-swap construct the VM normally, register keys "
 "post-construction, and hot-swap signed updates:"
 msgstr ""
 
-#: src/EMBEDDING.md:430
+#: src/EMBEDDING.md:432
 msgid "// ... later, after receiving a signed update over the comm link ...\n"
 msgstr ""
 
-#: src/EMBEDDING.md:435
+#: src/EMBEDDING.md:437
 msgid ""
 "`Vm::load_bytes` refuses signed modules with a diagnostic redirecting the "
 "caller to `Vm::load_signed_bytes`. Without the `signatures` feature, the "
@@ -8115,7 +8142,7 @@ msgid ""
 "that the build cannot verify, not just that the path is wrong."
 msgstr ""
 
-#: src/EMBEDDING.md:437
+#: src/EMBEDDING.md:439
 msgid ""
 "The signing message convention is the full framed buffer with the signature "
 "payload bytes and the CRC trailer bytes zeroed. The verifier reconstructs "
@@ -8125,7 +8152,7 @@ msgid ""
 "signature mutation is caught by the cryptographic check after CRC repair."
 msgstr ""
 
-#: src/EMBEDDING.md:439
+#: src/EMBEDDING.md:441
 msgid ""
 "See `R42` in "
 "[`docs/decisions/RESOLVED.md`](../../docs/decisions/RESOLVED.md) for the "
@@ -8134,18 +8161,18 @@ msgid ""
 "layout."
 msgstr ""
 
-#: src/EMBEDDING.md:441
+#: src/EMBEDDING.md:443
 msgid "Trust-Skip Construction"
 msgstr ""
 
-#: src/EMBEDDING.md:443
+#: src/EMBEDDING.md:445
 msgid ""
 "Programs whose verification cost is paid at build time, not at every load, "
 "may use `Vm::new_unchecked` to skip the resource-bounds check. Structural "
 "verification still runs."
 msgstr ""
 
-#: src/EMBEDDING.md:449
+#: src/EMBEDDING.md:451
 msgid ""
 "This is intentional misuse if used to admit programs that would fail the "
 "safe verifier. The intended use is precompiled bytecode that the host "
@@ -8156,47 +8183,47 @@ msgid ""
 "build time."
 msgstr ""
 
-#: src/EMBEDDING.md:451 src/WHY_REJECTED.md:241
+#: src/EMBEDDING.md:453 src/WHY_REJECTED.md:241
 msgid "Cross-References"
 msgstr ""
 
-#: src/EMBEDDING.md:453
+#: src/EMBEDDING.md:455
 msgid ""
 "[`examples/wcmu_basic.rs`](../../examples/wcmu_basic.rs) shows the "
 "auto-sizing pattern end to end."
 msgstr ""
 
-#: src/EMBEDDING.md:454
+#: src/EMBEDDING.md:456
 msgid ""
 "[`examples/wcmu_attestation.rs`](../../examples/wcmu_attestation.rs) shows "
 "native bound declaration."
 msgstr ""
 
-#: src/EMBEDDING.md:455
+#: src/EMBEDDING.md:457
 msgid ""
 "[`examples/wcmu_rejection.rs`](../../examples/wcmu_rejection.rs) shows the "
 "verifier rejecting an undersized arena."
 msgstr ""
 
-#: src/EMBEDDING.md:456
+#: src/EMBEDDING.md:458
 msgid ""
 "[`examples/string_ops.rs`](../../examples/string_ops.rs) shows "
 "host-registered text concatenation and slicing natives."
 msgstr ""
 
-#: src/EMBEDDING.md:457
+#: src/EMBEDDING.md:459
 msgid ""
 "[`examples/yield_error.rs`](../../examples/yield_error.rs) shows error "
 "propagation through yield with a script-defined `Result`\\-shaped enum."
 msgstr ""
 
-#: src/EMBEDDING.md:458
+#: src/EMBEDDING.md:460
 msgid ""
 "[`examples/method_call.rs`](../../examples/method_call.rs) shows method "
 "dispatch through receiver-style syntax."
 msgstr ""
 
-#: src/EMBEDDING.md:459
+#: src/EMBEDDING.md:461
 msgid ""
 "[`examples/piano_roll.rs`](../../examples/piano_roll.rs) is a feature-gated "
 "end-to-end SDL3 audio host. It exercises bounded-step execution under a "
@@ -8213,19 +8240,19 @@ msgid ""
 "other control-loop domains."
 msgstr ""
 
-#: src/EMBEDDING.md:460
+#: src/EMBEDDING.md:462
 msgid ""
 "[LANGUAGE_DESIGN.md](../../docs/architecture/LANGUAGE_DESIGN.md) describes "
 "the language model."
 msgstr ""
 
-#: src/EMBEDDING.md:461
+#: src/EMBEDDING.md:463
 msgid ""
 "[EXECUTION_MODEL.md](../../docs/architecture/EXECUTION_MODEL.md) describes "
 "the runtime model."
 msgstr ""
 
-#: src/EMBEDDING.md:462
+#: src/EMBEDDING.md:464
 msgid ""
 "[WHY_REJECTED.md](./WHY_REJECTED.md) describes verifier rejection categories."
 msgstr ""
@@ -9780,7 +9807,7 @@ msgstr ""
 msgid "Recipe"
 msgstr ""
 
-#: src/COOKBOOK.md:9 src/COOKBOOK.md:101
+#: src/COOKBOOK.md:9 src/COOKBOOK.md:113
 msgid "Use it when"
 msgstr ""
 
@@ -9849,8 +9876,8 @@ msgstr ""
 msgid "Working with `Text`"
 msgstr ""
 
-#: src/COOKBOOK.md:22 src/COOKBOOK.md:70 src/COOKBOOK.md:122
-#: src/COOKBOOK.md:269 src/COOKBOOK.md:346 src/COOKBOOK.md:400
+#: src/COOKBOOK.md:22 src/COOKBOOK.md:70 src/COOKBOOK.md:134
+#: src/COOKBOOK.md:281 src/COOKBOOK.md:358 src/COOKBOOK.md:412
 msgid "Problem"
 msgstr ""
 
@@ -9862,8 +9889,8 @@ msgid ""
 "need some string work at the boundary."
 msgstr ""
 
-#: src/COOKBOOK.md:26 src/COOKBOOK.md:74 src/COOKBOOK.md:128
-#: src/COOKBOOK.md:273 src/COOKBOOK.md:350 src/COOKBOOK.md:406
+#: src/COOKBOOK.md:26 src/COOKBOOK.md:74 src/COOKBOOK.md:140
+#: src/COOKBOOK.md:285 src/COOKBOOK.md:362 src/COOKBOOK.md:418
 msgid "Solution"
 msgstr ""
 
@@ -9924,8 +9951,8 @@ msgid ""
 "allocation, or it never compiles."
 msgstr ""
 
-#: src/COOKBOOK.md:60 src/COOKBOOK.md:113 src/COOKBOOK.md:335
-#: src/COOKBOOK.md:389 src/COOKBOOK.md:476 src/SECURITY_POLICY.md:279
+#: src/COOKBOOK.md:60 src/COOKBOOK.md:125 src/COOKBOOK.md:347
+#: src/COOKBOOK.md:401 src/COOKBOOK.md:488 src/SECURITY_POLICY.md:279
 #: src/BIG_NUMBERS.md:88
 msgid "Cross-references"
 msgstr ""
@@ -9964,11 +9991,12 @@ msgstr ""
 #: src/COOKBOOK.md:76
 msgid ""
 "Use `keleusma::vm::auto_arena_capacity_for(&module, native_wcmu)` to compute "
-"the minimum-required capacity from the compiled module before constructing "
-"the VM. The function walks the module's Stream chunks, sums each chunk's "
-"stack and heap WCMU, and returns the largest total. The result is the "
-"smallest capacity that admits the module under the supplied native "
-"attestations."
+"the capacity from the compiled module before constructing the VM. The figure "
+"is the sum of the operand stack, the call frames, the opaque registry, the "
+"per-iteration heap, and the composite host inputs of the entry chunk. An "
+"arena of exactly that size constructs the VM under the supplied native "
+"attestations and admits the call and every resume up to each `Reset`, "
+"provided that no composite input contains `Text`."
 msgstr ""
 
 #: src/COOKBOOK.md:87
@@ -9987,48 +10015,81 @@ msgid ""
 msgstr ""
 
 #: src/COOKBOOK.md:97
-msgid "When to use which arena-sizing option"
+msgid ""
+"A composite entry argument or resume value is copied into the arena when it "
+"enters the VM, and the copy stays until the next `Reset`. The figure counts "
+"the entry arguments, one resume value for each `Yield` that an iteration can "
+"execute, and the scratch space that packing one nested value needs. Yields "
+"inside bounded loops and inside called `yield` functions are counted. A "
+"scalar input costs nothing, so a module whose entry takes only scalars gets "
+"the same figure as before."
 msgstr ""
 
 #: src/COOKBOOK.md:99
+msgid ""
+"A `Text` field inside a composite input is copied as well, and its length is "
+"that of the host's string, which the module cannot bound. A host that passes "
+"such inputs supplies its own bound on the total text bytes in any one input "
+"value."
+msgstr ""
+
+#: src/COOKBOOK.md:102
+msgid ""
+"// At most 256 bytes of Text inside any one composite argument or\n"
+"// resume value.\n"
+msgstr ""
+
+#: src/COOKBOOK.md:107
+msgid ""
+"The function `keleusma::vm::host_input_arena_bytes_for` returns the input "
+"term alone, for a host that sizes the rest of its arena another way. "
+"Composite arguments passed to a non-entry chunk through `Vm::call_function` "
+"are not counted."
+msgstr ""
+
+#: src/COOKBOOK.md:109
+msgid "When to use which arena-sizing option"
+msgstr ""
+
+#: src/COOKBOOK.md:111
 msgid "The library offers three patterns."
 msgstr ""
 
-#: src/COOKBOOK.md:101
+#: src/COOKBOOK.md:113
 msgid "Option"
 msgstr ""
 
-#: src/COOKBOOK.md:103
+#: src/COOKBOOK.md:115
 msgid "`Arena::with_capacity(DEFAULT_ARENA_CAPACITY)`"
 msgstr ""
 
-#: src/COOKBOOK.md:103
+#: src/COOKBOOK.md:115
 msgid ""
 "Hosted development and quick prototyping; a generous default capacity is "
 "acceptable."
 msgstr ""
 
-#: src/COOKBOOK.md:104
+#: src/COOKBOOK.md:116
 msgid "`auto_arena_capacity_for`"
 msgstr ""
 
-#: src/COOKBOOK.md:104
+#: src/COOKBOOK.md:116
 msgid ""
 "Production hosts that want the smallest correct capacity, especially when "
 "running many VMs or when host memory is tight."
 msgstr ""
 
-#: src/COOKBOOK.md:105
+#: src/COOKBOOK.md:117
 msgid "`Arena::from_static_buffer`"
 msgstr ""
 
-#: src/COOKBOOK.md:105
+#: src/COOKBOOK.md:117
 msgid ""
 "Bare-metal targets with no heap. The host owns a fixed-size buffer in `.bss` "
 "and hands its pointer to the arena."
 msgstr ""
 
-#: src/COOKBOOK.md:107
+#: src/COOKBOOK.md:119
 msgid ""
 "The auto-sizing option composes with the static-buffer option. Compute the "
 "capacity at compile time (if the module is `const`\\-loadable through "
@@ -10036,11 +10097,11 @@ msgid ""
 "value), then declare the static buffer at that size."
 msgstr ""
 
-#: src/COOKBOOK.md:109
+#: src/COOKBOOK.md:121
 msgid "Failure mode"
 msgstr ""
 
-#: src/COOKBOOK.md:111
+#: src/COOKBOOK.md:123
 msgid ""
 "If the chosen capacity is below the module's WCMU, `Vm::new` returns "
 "`VmError::VerifyError` before any code runs. This is detected at "
@@ -10048,23 +10109,23 @@ msgid ""
 "front rather than in the middle of a run."
 msgstr ""
 
-#: src/COOKBOOK.md:115
+#: src/COOKBOOK.md:127
 msgid ""
 "[EMBEDDING.md, Arena Sizing](./EMBEDDING.md#arena-sizing) is the "
 "embedding-guide reference."
 msgstr ""
 
-#: src/COOKBOOK.md:116
+#: src/COOKBOOK.md:128
 msgid ""
 "The bundled `examples/wcmu_basic.rs` shows the full auto-sizing pattern end "
 "to end."
 msgstr ""
 
-#: src/COOKBOOK.md:120 src/ROGUE.md:430
+#: src/COOKBOOK.md:132 src/ROGUE.md:430
 msgid "The data-loader pattern"
 msgstr ""
 
-#: src/COOKBOOK.md:124
+#: src/COOKBOOK.md:136
 msgid ""
 "The host needs a table of configuration data. The data is structurally "
 "homogeneous (a fixed-shape record per entry) but designer-tunable (game "
@@ -10073,36 +10134,36 @@ msgid ""
 "designers edit a `.kel` file and reload at runtime."
 msgstr ""
 
-#: src/COOKBOOK.md:126
+#: src/COOKBOOK.md:138
 msgid ""
 "Keleusma does not currently support module-scope `const` declarations for "
 "arrays of records, inline string tables, or runtime allocation of growable "
 "structures. The pattern below works inside those constraints."
 msgstr ""
 
-#: src/COOKBOOK.md:130
+#: src/COOKBOOK.md:142
 msgid "Encode the table as a Keleusma script with three pieces."
 msgstr ""
 
-#: src/COOKBOOK.md:132
+#: src/COOKBOOK.md:144
 msgid ""
 "**A data segment** declared on the script side, holding one field per output "
 "column of the record. The data segment is the host-script I/O struct."
 msgstr ""
 
-#: src/COOKBOOK.md:133
+#: src/COOKBOOK.md:145
 msgid ""
 "**A multi-headed dispatcher** with one head per entry. Each head writes the "
 "per-entry constants into the data segment."
 msgstr ""
 
-#: src/COOKBOOK.md:134
+#: src/COOKBOOK.md:146
 msgid ""
 "**A loader function** that resolves the index (including the negative-index "
 "convention) and chains into the dispatcher."
 msgstr ""
 
-#: src/COOKBOOK.md:136
+#: src/COOKBOOK.md:148
 msgid ""
 "The host runs the script once per entry at startup, reads the data segment "
 "after each call, and caches the result in a regular Rust container "
@@ -10111,7 +10172,7 @@ msgid ""
 "host wants to reload."
 msgstr ""
 
-#: src/COOKBOOK.md:138
+#: src/COOKBOOK.md:150
 msgid ""
 "The pattern admits runtime hot reload because the table is in script form. A "
 "host that re-compiles the script, re-runs the loader, and atomically "
@@ -10120,17 +10181,17 @@ msgid ""
 "into a file that designers can edit."
 msgstr ""
 
-#: src/COOKBOOK.md:140
+#: src/COOKBOOK.md:152
 msgid "Three component techniques"
 msgstr ""
 
-#: src/COOKBOOK.md:142
+#: src/COOKBOOK.md:154
 msgid ""
 "The pattern composes three techniques that are individually known but "
 "compose well."
 msgstr ""
 
-#: src/COOKBOOK.md:144
+#: src/COOKBOOK.md:156
 msgid ""
 "**Multi-headed dispatch encoding a constant table.** Keleusma admits "
 "multi-headed function definitions with integer-pattern parameters. One head "
@@ -10140,7 +10201,7 @@ msgid ""
 "matching are close analogues."
 msgstr ""
 
-#: src/COOKBOOK.md:146
+#: src/COOKBOOK.md:158
 msgid ""
 "**Data segment as host-script I/O struct.** The data segment is normally the "
 "place where a `loop main` script preserves state across resumes. Repurposing "
@@ -10151,7 +10212,7 @@ msgid ""
 "assignments."
 msgstr ""
 
-#: src/COOKBOOK.md:148
+#: src/COOKBOOK.md:160
 msgid ""
 "**Negative-index size discovery.** The loader resolves negative indices to "
 "`count + n` (Python sequence convention). Calling `fn main(-1)` writes the "
@@ -10161,15 +10222,15 @@ msgid ""
 "This avoids hard-coding the count in the Rust source."
 msgstr ""
 
-#: src/COOKBOOK.md:150
+#: src/COOKBOOK.md:162
 msgid "Minimal example"
 msgstr ""
 
-#: src/COOKBOOK.md:152
+#: src/COOKBOOK.md:164
 msgid "A table of three colours, each with red, green, blue channels."
 msgstr ""
 
-#: src/COOKBOOK.md:154
+#: src/COOKBOOK.md:166
 msgid ""
 "```keleusma\n"
 "// colours.kel\n"
@@ -10195,33 +10256,33 @@ msgid ""
 "```"
 msgstr ""
 
-#: src/COOKBOOK.md:174
+#: src/COOKBOOK.md:186
 msgid "Host side, with the cache discovered from the script."
 msgstr ""
 
-#: src/COOKBOOK.md:184
+#: src/COOKBOOK.md:196
 msgid "\"colours not loaded\""
 msgstr ""
 
-#: src/COOKBOOK.md:188
+#: src/COOKBOOK.md:200
 msgid ""
 "// The host lends a zeroed shared buffer; the script writes its fields into\n"
 "    // it and the host reads them back out (B28 item 2).\n"
 msgstr ""
 
-#: src/COOKBOOK.md:191
+#: src/COOKBOOK.md:203
 msgid "// Discover the count by calling with -1.\n"
 msgstr ""
 
-#: src/COOKBOOK.md:210
+#: src/COOKBOOK.md:222
 msgid "\"expected Int at slot {}, got {:?}\""
 msgstr ""
 
-#: src/COOKBOOK.md:215
+#: src/COOKBOOK.md:227
 msgid "Variations"
 msgstr ""
 
-#: src/COOKBOOK.md:217
+#: src/COOKBOOK.md:229
 msgid ""
 "**Multiple tables in one script.** If two tables share the same data-segment "
 "shape, dispatch on a leading `table` argument. `fn main(table, tier)` "
@@ -10229,7 +10290,7 @@ msgid ""
 "table is independently discoverable via `-1`."
 msgstr ""
 
-#: src/COOKBOOK.md:232
+#: src/COOKBOOK.md:244
 msgid ""
 "**Chained dispatchers.** When some output fields are derived from others, "
 "chain two dispatchers in the loader. The first dispatcher sets the keying "
@@ -10237,7 +10298,7 @@ msgid ""
 "fields. The host receives a fully populated entry from a single call."
 msgstr ""
 
-#: src/COOKBOOK.md:244
+#: src/COOKBOOK.md:256
 msgid ""
 "**Names through the return value.** Keleusma's data segment does not "
 "currently accept string fields in source. When entries have a name, encode "
@@ -10247,78 +10308,78 @@ msgid ""
 "the returned static string once at startup to obtain a `&'static str`."
 msgstr ""
 
-#: src/COOKBOOK.md:246
+#: src/COOKBOOK.md:258
 msgid "When to use"
 msgstr ""
 
-#: src/COOKBOOK.md:248
+#: src/COOKBOOK.md:260
 msgid "The pattern fits when all of the following hold."
 msgstr ""
 
-#: src/COOKBOOK.md:250
+#: src/COOKBOOK.md:262
 msgid ""
 "The table has more than about ten entries. Below that, the script overhead "
 "exceeds the savings."
 msgstr ""
 
-#: src/COOKBOOK.md:251
+#: src/COOKBOOK.md:263
 msgid ""
 "Each entry is a small struct of integers or enum ordinals. Strings, floats "
 "with quirky precision, or variable-size payloads need workarounds."
 msgstr ""
 
-#: src/COOKBOOK.md:252
+#: src/COOKBOOK.md:264
 msgid ""
 "The data benefits from being designer-editable without a host rebuild. If "
 "only the Rust author ever touches the table, leave it in Rust."
 msgstr ""
 
-#: src/COOKBOOK.md:253
+#: src/COOKBOOK.md:265
 msgid ""
 "Runtime hot reload is desirable, even if the initial implementation caches "
 "once. The pattern keeps the path open."
 msgstr ""
 
-#: src/COOKBOOK.md:255
+#: src/COOKBOOK.md:267
 msgid "When not to use"
 msgstr ""
 
-#: src/COOKBOOK.md:257
+#: src/COOKBOOK.md:269
 msgid ""
 "The data is already dense in Rust (one line per entry with no per-entry "
 "struct boilerplate). The migration adds script-loading overhead without "
 "compressing the storage."
 msgstr ""
 
-#: src/COOKBOOK.md:258
+#: src/COOKBOOK.md:270
 msgid ""
 "The data has lifecycle hooks (constructors, drop). Keleusma cannot carry "
 "those. Keep them in Rust."
 msgstr ""
 
-#: src/COOKBOOK.md:259
+#: src/COOKBOOK.md:271
 msgid ""
 "The data is keyed on a type that the script cannot represent. Strings, "
 "floats with specific precision requirements, or compound keys all push the "
 "pattern out of fit."
 msgstr ""
 
-#: src/COOKBOOK.md:261
+#: src/COOKBOOK.md:273
 msgid "Examples in this repository"
 msgstr ""
 
-#: src/COOKBOOK.md:263
+#: src/COOKBOOK.md:275
 msgid ""
 "The rogue example uses this pattern for its bestiary and equipment tables; "
 "see [ROGUE.md, _Reading the bestiary "
 "script_](./ROGUE.md#reading-the-bestiary-script)."
 msgstr ""
 
-#: src/COOKBOOK.md:267
+#: src/COOKBOOK.md:279
 msgid "Narrow-runtime type alias"
 msgstr ""
 
-#: src/COOKBOOK.md:271
+#: src/COOKBOOK.md:283
 msgid ""
 "The host targets a sub-64-bit native runtime. A 16-bit microcontroller, a "
 "retro-class 8-bit machine, a 32-bit embedded core. The default `Vm<'a, "
@@ -10328,7 +10389,7 @@ msgid ""
 "runtime's word, address, and float widths to match the target."
 msgstr ""
 
-#: src/COOKBOOK.md:275
+#: src/COOKBOOK.md:287
 msgid ""
 "The `Vm` shape is generic over three trait parameters that mirror the "
 "bytecode header's `word_bits_log2`, `addr_bits_log2`, and `float_bits_log2` "
@@ -10336,28 +10397,28 @@ msgid ""
 "chosen widths and define a type alias for the ergonomic call sites."
 msgstr ""
 
-#: src/COOKBOOK.md:279
+#: src/COOKBOOK.md:291
 msgid "// 16-bit signed word, 16-bit unsigned address, 32-bit float.\n"
 msgstr ""
 
-#: src/COOKBOOK.md:282
+#: src/COOKBOOK.md:294
 msgid ""
 "// 8-bit signed word, 16-bit unsigned address, 32-bit float\n"
 "// (6502-class retro target with floats kept for future opcodes).\n"
 msgstr ""
 
-#: src/COOKBOOK.md:288
+#: src/COOKBOOK.md:300
 msgid ""
 "Bytecode for the narrow target is produced through `compile_with_target`. "
 "The `embedded_16` preset rejects floating-point opcodes; use a custom "
 "`Target` if floats are wanted at a narrower width."
 msgstr ""
 
-#: src/COOKBOOK.md:307
+#: src/COOKBOOK.md:319
 msgid "Host functions speak Rust's natural types"
 msgstr ""
 
-#: src/COOKBOOK.md:309
+#: src/COOKBOOK.md:321
 msgid ""
 "The marshall layer (`KeleusmaType`, `IntoNativeFn`, `IntoFallibleNativeFn`) "
 "is parametric over `(W, F)`, with universal impls for `i64`, `f64`, `bool`, "
@@ -10367,18 +10428,18 @@ msgid ""
 "bridges through `Float::to_f64` and `Float::from_f64`."
 msgstr ""
 
-#: src/COOKBOOK.md:311
+#: src/COOKBOOK.md:323
 msgid ""
 "The host author writes `i64` and `f64` in closure signatures regardless of "
 "the script's narrower word and float types. The runtime truncates at the "
 "boundary."
 msgstr ""
 
-#: src/COOKBOOK.md:314
+#: src/COOKBOOK.md:326
 msgid "\"host::triple\""
 msgstr ""
 
-#: src/COOKBOOK.md:317
+#: src/COOKBOOK.md:329
 msgid ""
 "On a `NarrowVm`, the script-side `i16` argument widens to `i64` for the host "
 "closure; the `i64` return truncates back to `i16` through "
@@ -10387,11 +10448,11 @@ msgid ""
 "`KeleusmaType<i16, f32> for i16` impl in their crate."
 msgstr ""
 
-#: src/COOKBOOK.md:319
+#: src/COOKBOOK.md:331
 msgid "Standard library bundles work on narrow runtimes"
 msgstr ""
 
-#: src/COOKBOOK.md:321
+#: src/COOKBOOK.md:333
 msgid ""
 "The three `stddsl` bundles implement `Library<W, A, F>` universally and "
 "register on any admissible runtime shape. `Math` and `Audio` carry their "
@@ -10403,7 +10464,7 @@ msgid ""
 "implications."
 msgstr ""
 
-#: src/COOKBOOK.md:329
+#: src/COOKBOOK.md:341
 msgid ""
 "Programs that require full `f64` precision should declare a runtime whose "
 "`F` is `f64` rather than relying on the silent narrowing. The narrow-float "
@@ -10411,11 +10472,11 @@ msgid ""
 "and the script does not need the extra mantissa."
 msgstr ""
 
-#: src/COOKBOOK.md:331
+#: src/COOKBOOK.md:343
 msgid "Word-width arithmetic discipline"
 msgstr ""
 
-#: src/COOKBOOK.md:333
+#: src/COOKBOOK.md:345
 msgid ""
 "Script-side arithmetic on a narrow runtime wraps at the runtime's word "
 "boundary, not at 64 bits. The `Word` trait's `wrapping_add`, `wrapping_sub`, "
@@ -10426,32 +10487,32 @@ msgid ""
 "through a registered native that takes the natural Rust type."
 msgstr ""
 
-#: src/COOKBOOK.md:337
+#: src/COOKBOOK.md:349
 msgid "`examples/narrow_runtime.rs` is the worked demonstrator."
 msgstr ""
 
-#: src/COOKBOOK.md:338
+#: src/COOKBOOK.md:350
 msgid "`tests/narrow_vm.rs` is the integration test that pins the pattern."
 msgstr ""
 
-#: src/COOKBOOK.md:339
+#: src/COOKBOOK.md:351
 msgid ""
 "[`docs/decisions/BACKLOG.md`, B16](../../docs/decisions/BACKLOG.md) records "
 "the architectural rationale for the parametric shape."
 msgstr ""
 
-#: src/COOKBOOK.md:340
+#: src/COOKBOOK.md:352
 msgid ""
 "The `Word`, `Address`, and `Float` traits live in `src/word.rs`, "
 "`src/address.rs`, and `src/float.rs`. Custom impls are admissible; the "
 "bundled impls cover the standard widths."
 msgstr ""
 
-#: src/COOKBOOK.md:344
+#: src/COOKBOOK.md:356
 msgid "Distributing signed bytecode"
 msgstr ""
 
-#: src/COOKBOOK.md:348
+#: src/COOKBOOK.md:360
 msgid ""
 "The host application loads compiled bytecode that arrives from an untrusted "
 "source — over a comms link, from disk, from a content-delivery channel — and "
@@ -10460,13 +10521,13 @@ msgid ""
 "to sign modules; everything else is rejected."
 msgstr ""
 
-#: src/COOKBOOK.md:352
+#: src/COOKBOOK.md:364
 msgid ""
 "Three steps. The cargo feature `signatures` is off by default; turn it on "
 "for both the producer and the consumer."
 msgstr ""
 
-#: src/COOKBOOK.md:354
+#: src/COOKBOOK.md:366
 msgid ""
 "**One. Generate a keypair.** The `keleusma keygen --seed seed.bin --public "
 "pub.bin` subcommand writes a 32-byte Ed25519 seed and the matching public "
@@ -10476,48 +10537,48 @@ msgid ""
 "consumer trusts."
 msgstr ""
 
-#: src/COOKBOOK.md:356
+#: src/COOKBOOK.md:368
 msgid ""
 "**Two. Declare the requirement and sign.** The source script declares the "
 "signing requirement with the `signed` modifier on the entry function:"
 msgstr ""
 
-#: src/COOKBOOK.md:365
+#: src/COOKBOOK.md:377
 msgid ""
 "`keleusma compile script.kel --signing-key seed.bin -o script.kel.bin` "
 "produces signed bytecode. The compiler emits `FLAG_REQUIRES_SIGNATURE` in "
 "the framing header and the signer appends an Ed25519 signature."
 msgstr ""
 
-#: src/COOKBOOK.md:367
+#: src/COOKBOOK.md:379
 msgid ""
 "**Three. Verify at the consumer.** The host populates a trust matrix with "
 "the public keys it accepts, then loads through the signature-aware entry "
 "points:"
 msgstr ""
 
-#: src/COOKBOOK.md:374
+#: src/COOKBOOK.md:386
 msgid ""
 "For hot-swap delivery (signer/device pattern), the host constructs the VM "
 "from an unsigned baseline, registers the trust matrix, and accepts signed "
 "updates over the comm link:"
 msgstr ""
 
-#: src/COOKBOOK.md:378
+#: src/COOKBOOK.md:390
 msgid "// later, after receiving an update over the wire:\n"
 msgstr ""
 
-#: src/COOKBOOK.md:383
+#: src/COOKBOOK.md:395
 msgid ""
 "The signature is verified before the new bytecode is decoded; an invalid "
 "signature rejects the swap and the current module continues to run."
 msgstr ""
 
-#: src/COOKBOOK.md:385
+#: src/COOKBOOK.md:397
 msgid "Why this works for embedded targets"
 msgstr ""
 
-#: src/COOKBOOK.md:387
+#: src/COOKBOOK.md:399
 msgid ""
 "The verification path uses `ed25519-dalek` under `no_std + alloc`. The "
 "`examples/rtos` demonstrator builds with `--features keleusma-signatures` "
@@ -10527,35 +10588,35 @@ msgid ""
 "yield."
 msgstr ""
 
-#: src/COOKBOOK.md:391
+#: src/COOKBOOK.md:403
 msgid ""
 "`R42` in [`docs/decisions/RESOLVED.md`](../../docs/decisions/RESOLVED.md) is "
 "the design rationale."
 msgstr ""
 
-#: src/COOKBOOK.md:392
+#: src/COOKBOOK.md:404
 msgid ""
 "[`docs/spec/WIRE_FORMAT.md`](../../docs/spec/WIRE_FORMAT.md) documents the "
 "header extension layout."
 msgstr ""
 
-#: src/COOKBOOK.md:393
+#: src/COOKBOOK.md:405
 msgid ""
 "[`docs/guide/EMBEDDING.md`, Signed Modules](./EMBEDDING.md#signed-modules) "
 "covers the embedding-side API in more depth."
 msgstr ""
 
-#: src/COOKBOOK.md:394
+#: src/COOKBOOK.md:406
 msgid ""
 "[`examples/scripts/11_signed.kel`](../../examples/scripts/11_signed.kel) is "
 "a worked signed script."
 msgstr ""
 
-#: src/COOKBOOK.md:398
+#: src/COOKBOOK.md:410
 msgid "Calibrated WCET with a measured cost model"
 msgstr ""
 
-#: src/COOKBOOK.md:402
+#: src/COOKBOOK.md:414
 msgid ""
 "The host wants WCET (worst-case execution time) estimates in actual CPU "
 "cycles for the deployment target, not the relative-weight estimates the "
@@ -10566,7 +10627,7 @@ msgid ""
 "for any specific hardware."
 msgstr ""
 
-#: src/COOKBOOK.md:404
+#: src/COOKBOOK.md:416
 msgid ""
 "Real WCET analysis for a deployment target wants measured numbers: data "
 "movement on a Cortex-M55 at 800 MHz runs hundreds of cycles per VM dispatch; "
@@ -10575,7 +10636,7 @@ msgid ""
 "right one."
 msgstr ""
 
-#: src/COOKBOOK.md:408
+#: src/COOKBOOK.md:420
 msgid ""
 "The `keleusma-bench` workspace member measures per-opcode pipelined cycles "
 "on a host CPU and emits a Rust source fragment defining a "
@@ -10584,18 +10645,18 @@ msgid ""
 "it consumes."
 msgstr ""
 
-#: src/COOKBOOK.md:410
+#: src/COOKBOOK.md:422
 msgid ""
 "**One. Obtain a fragment.** The crate ships pre-generated fragments under "
 "[`keleusma-bench/measured_cost_models/`](../../keleusma-bench/measured_cost_models/) "
 "for the dev host and the STM32N6570-DK. For other hosts, regenerate:"
 msgstr ""
 
-#: src/COOKBOOK.md:413
+#: src/COOKBOOK.md:425
 msgid "# Host bench (writes a fragment for the running CPU)\n"
 msgstr ""
 
-#: src/COOKBOOK.md:429
+#: src/COOKBOOK.md:441
 msgid ""
 "`--cpu-hz` declares the host's CPU clock for the cycle calculation. The "
 "default is documented in `keleusma-bench/src/counter.rs` "
@@ -10604,56 +10665,56 @@ msgid ""
 "for the capture workflow per target."
 msgstr ""
 
-#: src/COOKBOOK.md:431
+#: src/COOKBOOK.md:443
 msgid ""
 "**Two. Include the fragment in the host crate.** The fragment is plain Rust "
 "source that declares `MEASURED_COST_MODEL` and a backing "
 "`measured_op_cycles` function:"
 msgstr ""
 
-#: src/COOKBOOK.md:436
+#: src/COOKBOOK.md:448
 msgid "\"/path/to/keleusma-bench/measured_cost_models/<fragment>.rs\""
 msgstr ""
 
-#: src/COOKBOOK.md:440
+#: src/COOKBOOK.md:452
 msgid ""
 "Multiple fragments cohabit cleanly when gated by `cfg(target_arch = ...)`:"
 msgstr ""
 
-#: src/COOKBOOK.md:443
+#: src/COOKBOOK.md:455
 msgid "\"aarch64\""
 msgstr ""
 
-#: src/COOKBOOK.md:443
+#: src/COOKBOOK.md:455
 msgid "\"macos\""
 msgstr ""
 
-#: src/COOKBOOK.md:447
+#: src/COOKBOOK.md:459
 msgid "\"arm\""
 msgstr ""
 
-#: src/COOKBOOK.md:449
+#: src/COOKBOOK.md:461
 msgid "\"/keleusma-bench/measured_cost_models/thumbv8m_main_none_eabihf.rs\""
 msgstr ""
 
-#: src/COOKBOOK.md:452
+#: src/COOKBOOK.md:464
 msgid ""
 "**Three. Pass the model to the verifier.** The `_with_cost_model` variants "
 "of the WCET APIs accept a `&CostModel`:"
 msgstr ""
 
-#: src/COOKBOOK.md:460
+#: src/COOKBOOK.md:472
 msgid "\"Chunk `{}`: {} CPU cycles per iteration\""
 msgstr ""
 
-#: src/COOKBOOK.md:464
+#: src/COOKBOOK.md:476
 msgid ""
 "For resource-bound verification at load time, "
 "`verify::verify_resource_bounds_with_cost_model` takes the same `&CostModel` "
 "and threads it through both the WCET and WCMU paths."
 msgstr ""
 
-#: src/COOKBOOK.md:468
+#: src/COOKBOOK.md:480
 msgid ""
 "The bundled `NOMINAL_COST_MODEL` is honest about being relative-only. It "
 "cannot answer \"how many microseconds per iteration.\" The measured model "
@@ -10662,11 +10723,11 @@ msgid ""
 "scheduler decisions, this conversion is the load-bearing step."
 msgstr ""
 
-#: src/COOKBOOK.md:470
+#: src/COOKBOOK.md:482
 msgid "Failure modes"
 msgstr ""
 
-#: src/COOKBOOK.md:472
+#: src/COOKBOOK.md:484
 msgid ""
 "**The fragment was measured on a different host than the deployment "
 "target.** The cycle counts are then dev-host estimates, not calibrated for "
@@ -10674,14 +10735,14 @@ msgid ""
 "clock; check both before using."
 msgstr ""
 
-#: src/COOKBOOK.md:473
+#: src/COOKBOOK.md:485
 msgid ""
 "**The host CPU's actual clock differs from the bench's assumption.** "
 "Re-bench with `--cpu-hz <Hz>` set to the actual clock, or pass `--cpu-hz` to "
 "`keleusma-bench --from-log` to correct the documented value post-capture."
 msgstr ""
 
-#: src/COOKBOOK.md:474
+#: src/COOKBOOK.md:486
 msgid ""
 "**The bench does not measure `Yield` or `Call` in isolation.** Both "
 "categories fall back to scaled nominal values. The scaled values are "
@@ -10689,33 +10750,33 @@ msgid ""
 "documented in the fragment header."
 msgstr ""
 
-#: src/COOKBOOK.md:478
+#: src/COOKBOOK.md:490
 msgid ""
 "[`examples/measured_wcet.rs`](../../examples/measured_wcet.rs) is the "
 "minimal working example: compiles a small Stream-classified program, prints "
 "WCET under both nominal and measured models."
 msgstr ""
 
-#: src/COOKBOOK.md:479
+#: src/COOKBOOK.md:491
 msgid ""
 "[`keleusma-bench/README.md`](../../keleusma-bench/README.md) documents the "
 "bench tool's methodology and CLI."
 msgstr ""
 
-#: src/COOKBOOK.md:480
+#: src/COOKBOOK.md:492
 msgid ""
 "[`keleusma-bench/measured_cost_models/README.md`](../../keleusma-bench/measured_cost_models/README.md) "
 "catalogues the pre-generated fragments and the capture workflows."
 msgstr ""
 
-#: src/COOKBOOK.md:481
+#: src/COOKBOOK.md:493
 msgid ""
 "[`docs/architecture/LANGUAGE_DESIGN.md` § Cost "
 "model](../../docs/architecture/LANGUAGE_DESIGN.md#cost-model) explains the "
 "`CostModel` contract and the host's role in calibration."
 msgstr ""
 
-#: src/COOKBOOK.md:482
+#: src/COOKBOOK.md:494
 msgid ""
 "[`examples/rtos`](../../examples/rtos/) demonstrates the wiring in a "
 "headline example: each task logs its measured WCET per iteration at boot."
@@ -11066,9 +11127,11 @@ msgstr ""
 
 #: src/FAQ.md:131
 msgid ""
-"For sizing the arena, use `auto_arena_capacity_for` plus a host-side margin, "
-"or the bundled `DEFAULT_ARENA_CAPACITY` of sixty-four kilobytes for typical "
-"embedded scripting."
+"For sizing the arena, use `auto_arena_capacity_for`, which counts the "
+"composite inputs the host passes, or the bundled `DEFAULT_ARENA_CAPACITY` of "
+"sixty-four kilobytes for typical embedded scripting. A host whose composite "
+"inputs carry `Text` uses `auto_arena_capacity_with_input_text` and supplies "
+"a bound on that text."
 msgstr ""
 
 #: src/FAQ.md:133

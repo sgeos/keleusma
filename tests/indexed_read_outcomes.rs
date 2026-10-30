@@ -333,8 +333,16 @@ fn malformed_host_array_stride_keeps_its_runtime_guard_in_both_modes() {
         .unwrap()
         .unwrap();
         let value = Value::Array(keleusma::bytecode::ArrayBody::Flat(body));
+        // Since 2026-10-30 a host composite argument whose body length differs
+        // from the chunk signature is refused at entry, before the read runs,
+        // so the three-byte body never reaches the stride guard by this route.
+        // The guard itself is unchanged and still covers a body that reaches
+        // the read without a signature to check it against.
+        let result = vm.call(&[value]);
         assert!(
-            matches!(vm.call(&[value]), Err(VmError::InvalidBytecode(message)) if message.contains("multiple of its element stride"))
+            matches!(&result, Err(VmError::TypeError(message)) if message.contains("3 bytes"))
+                || matches!(&result, Err(VmError::InvalidBytecode(message)) if message.contains("multiple of its element stride")),
+            "{result:?}"
         );
     }
 }

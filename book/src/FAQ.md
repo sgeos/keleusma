@@ -128,7 +128,7 @@ match vm.call(&[]) {
 }
 ```
 
-For sizing the arena, use `auto_arena_capacity_for` plus a host-side margin, or the bundled `DEFAULT_ARENA_CAPACITY` of sixty-four kilobytes for typical embedded scripting.
+For sizing the arena, use `auto_arena_capacity_for`, which counts the composite inputs the host passes, or the bundled `DEFAULT_ARENA_CAPACITY` of sixty-four kilobytes for typical embedded scripting. A host whose composite inputs carry `Text` uses `auto_arena_capacity_with_input_text` and supplies a bound on that text.
 
 ## Other Surprises
 
