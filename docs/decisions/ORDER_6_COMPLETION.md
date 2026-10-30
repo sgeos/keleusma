@@ -28,8 +28,9 @@ below. V0.4.0 is not released, since publication is held.
   For question 19 the self-hosted compiler runs with every stage native,
   `frame.kel` among them, and compiles byte-identically to the virtual machine
   and the reference. Stages are cached, and all 69 corpus sources in the
-  subset compile byte-identically with native stages. The compiler selector
-  remains. The operator answered question 23 that acceptance comes when the
+  subset compile byte-identically with native stages. The selector
+  `kel-native --compiler` chooses among the three compilers, and they build
+  byte-identical libraries. The operator answered question 23 that acceptance comes when the
   work is done.
 - **The operator's rulings, 2026-10-28.** Every open question was answered.
   The V0.2.X dependency is met, because native code consumes the reference
