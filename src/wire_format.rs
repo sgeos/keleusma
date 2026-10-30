@@ -2325,6 +2325,13 @@ pub fn decrypt_encrypted_signed_to_signed_bytes(
     // and ensures the encryption metadata has not been tampered
     // with.
     verify_module_signature(bytes, verifying_keys)?;
+    // The verified region ends at the declared total, which the signature check has bounded
+    // by the buffer. Bytes appended after it are not part of the artifact, so the ciphertext
+    // ends there too, as the operator ruled first-hand on 2026-10-28. It used to run to the end
+    // of the buffer, so an encrypted artifact with trailing bytes failed authentication while
+    // the same signed artifact loaded.
+    let total_length = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
+    let bytes = &bytes[..total_length];
 
     // Step 3. Parse the encryption metadata.
     let encrypted_header_len = encrypted_signed_header_length();

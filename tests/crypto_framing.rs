@@ -466,6 +466,35 @@ mod encryption {
         assert!(compared >= 36, "{compared}");
     }
 
+    /// Bytes appended after an encrypted artifact's declared total are not part of it, so it
+    /// decrypts to the same plaintext view as without them, on both sides. Before the
+    /// operator's ruling of 2026-10-28 the ciphertext ran to the end of the buffer and such an
+    /// artifact failed authentication while the same signed artifact loaded.
+    #[test]
+    fn trailing_bytes_after_the_declared_total_do_not_reach_the_cipher() {
+        let public = public_key_from_private(&RECIPIENT);
+        let key = signer(42);
+        let keys = [key.verifying_key()];
+        let module = compile("fn main() -> Word { 7 }").unwrap();
+        let sealed =
+            module_to_encrypted_signed_wire_bytes(&module, &key, &public, &[45; 32]).unwrap();
+        let view = decrypt_encrypted_signed_to_signed_bytes(&sealed, &keys, &RECIPIENT).unwrap();
+        for extra in [1usize, 9, 64] {
+            let mut padded = sealed.clone();
+            padded.extend(std::iter::repeat_n(0xA5u8, extra));
+            assert_eq!(
+                decrypt_encrypted_signed_to_signed_bytes(&padded, &keys, &RECIPIENT).unwrap(),
+                view,
+                "reference, {extra} trailing bytes"
+            );
+            assert_eq!(
+                cf::decrypt_to_signed_bytes(&padded, &keys, &RECIPIENT).unwrap(),
+                view,
+                "stage, {extra} trailing bytes"
+            );
+        }
+    }
+
     /// Mutations of an encrypted artifact. Those marked re-signed are signed again with the
     /// trusted key, so they pass verification and reach the checks after it.
     fn sealed_mutations(sealed: &[u8], key: &SigningKey) -> Vec<(String, Vec<u8>)> {
