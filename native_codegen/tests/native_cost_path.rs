@@ -353,6 +353,7 @@ fn every_native_step_executes_exactly_the_vm_instructions() {
 #[test]
 fn every_traced_step_stays_within_the_composed_claim() {
     let mut established = 0;
+    let mut lexer_claims = 0;
     for run in runs() {
         let entry = run.program.entry_point.unwrap();
         let block = run.program.chunks[entry].block_type;
@@ -376,23 +377,25 @@ fn every_traced_step_stays_within_the_composed_claim() {
                     run.what
                 );
                 established += 1;
+                if run.what.contains("lexer") {
+                    lexer_claims += 1;
+                }
                 eprintln!(
                     "  {:<48} worst traced {worst} of claim {bound} over {} steps",
                     run.what,
                     costs.len()
                 );
             }
-            // Two subjects have no claim, each for a reason stated in
+            // One subject has no claim, for the reason stated in
             // ORDER_4_COMPLETION.md. A suspending callee's cost spans host
             // steps. The lexer's `intern_id` compares two `Word` call results,
-            // which the verifier's text pass treats as an unbounded text
-            // comparison, so that callee has no bound of its own.
+            // which a chunk-only text pass treats as an unbounded text
+            // comparison. Since operator question 5 the bound is taken with
+            // each callee's declared return shape, so the lexer has a claim.
             Err(why) => {
                 eprintln!("  {:<48} no claim: {why}", run.what);
                 let expected = if run.what.contains("delegating") {
                     "suspending chunk"
-                } else if run.what.contains("lexer") {
-                    "unbounded-length string"
                 } else {
                     panic!("{}: an unexpected refusal: {why}", run.what)
                 };
@@ -407,6 +410,10 @@ fn every_traced_step_stays_within_the_composed_claim() {
     assert!(
         established >= 3,
         "too few claims were checked: {established}"
+    );
+    assert!(
+        lexer_claims > 0,
+        "the self-hosted lexer has no composed claim again"
     );
 }
 

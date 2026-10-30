@@ -60,6 +60,12 @@ names, below any dialogue metadata.
    comparison, so the callee has no bound and the lexer has no composed claim.
    This is a conservative refusal, reported to the V0.2.X line, which owns the
    verifier. This line edits neither `src/verify.rs` nor its callers.
+   **Amended 2026-10-30.** V0.2.X's pull request 598, absorbed in absorption
+   116, adds `wcet_whole_chunk_with_callees`, which knows each callee's text-ness
+   from its declared return shape. `native_codegen/src/cost.rs` now uses it for
+   every chunk that is not a `Stream` iteration, and the lexer has a composed
+   claim of 26669019 units against a traced worst of 1485. The claim is loose
+   for the reason item 1 gives.
 3. **Code generation rewrites the module it emits.** The first stack bound was
    measured on the same module that was then written, and the self-check in
    `write_object` caught the two disagreeing, 656 against 976 bytes. Both

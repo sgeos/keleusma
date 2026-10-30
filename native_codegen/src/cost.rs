@@ -34,6 +34,12 @@
 //! is the host's attestation and the library has no host. A chunk calling a
 //! `Stream` or `Reentrant` chunk has none either, because a suspending callee's
 //! cost per call spans several host steps. Any verifier refusal propagates.
+//!
+//! A `Func` or `Reentrant` chunk is bounded with each callee's text-ness known
+//! from its declared return shape, through the verifier's
+//! `wcet_whole_chunk_with_callees`. The verifier offers no such form for a
+//! `Stream` iteration, so a `Stream` chunk is still bounded treating each call
+//! result as possibly text.
 
 use keleusma::bytecode::{BlockType, CostModel, Module, NOMINAL_COST_MODEL, Op};
 use std::cell::RefCell;
@@ -122,6 +128,13 @@ pub fn composed_bounds(program: &Module) -> Vec<Result<u32, String>> {
     if let Some(why) = cycle {
         return vec![Err(why); n];
     }
+    // Operator question 5. A chunk-only query treats every call result as
+    // possibly unbounded text, so a comparison of two `Word` call results was
+    // refused. Given each callee's declared return shape it bears no text term.
+    let returns_text = match keleusma::verify::module_chunk_returns_text(program) {
+        Ok(r) => r,
+        Err(e) => return vec![Err(e.message); n],
+    };
     let mut bounds: Vec<Option<Result<u32, String>>> = vec![None; n];
     for c in order {
         let chunk = &program.chunks[c];
@@ -156,10 +169,11 @@ pub fn composed_bounds(program: &Module) -> Vec<Result<u32, String>> {
                     &COMPOSED_COST_MODEL,
                     &[],
                 ),
-                _ => keleusma::verify::wcet_whole_chunk_with_cost_model(
+                _ => keleusma::verify::wcet_whole_chunk_with_callees(
                     chunk,
                     &COMPOSED_COST_MODEL,
                     &[],
+                    &returns_text,
                 ),
             };
             CALLEE_BOUNDS.with(|cell| cell.borrow_mut().clear());
