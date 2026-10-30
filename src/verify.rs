@@ -1762,6 +1762,10 @@ pub fn wcet_whole_chunk_with_callees(
             message: String::from("wcet_whole_chunk requires a non-Stream block"),
         });
     }
+    // Audit H1, extended to the whole-chunk entries. This entry is public and
+    // standalone, so no target has been validated, and the region walks below
+    // do not terminate on a backward one.
+    check_forward_control_flow_targets(chunk)?;
     // The once-per-chunk external-native body contribution (#50) applies to
     // either path below.
     let external = external_native_wcet(chunk, native_bounds);
@@ -1937,6 +1941,8 @@ pub fn wcmu_whole_chunk_with_value_slot_bytes(
             message: String::from("wcmu_whole_chunk requires a non-Stream block"),
         });
     }
+    // Audit H1, as in `wcet_whole_chunk_with_cost_model`.
+    check_forward_control_flow_targets(chunk)?;
     let mut breaks: Vec<McuResult> = Vec::new();
     let resolver = CallResolver::empty();
     let body = wcmu_region(
@@ -2336,6 +2342,10 @@ fn compute_chunk_wcmu(
         }
         BlockType::Func | BlockType::Reentrant => (0, chunk.ops.len()),
     };
+    // Audit H1. Every module entry that reaches this walk is public and may be
+    // handed an unverified module, so the targets are checked here once for
+    // all of them.
+    check_forward_control_flow_targets(chunk)?;
 
     let mut breaks: Vec<McuResult> = Vec::new();
     let body = wcmu_region(chunk, start, end, &mut breaks, resolver, value_slot_bytes)?;
