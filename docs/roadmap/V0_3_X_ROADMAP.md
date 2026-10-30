@@ -352,7 +352,8 @@ Carried from `V0_4_0_NATIVE_CODEGEN.md`'s open questions, resolved as V0.3.x app
    best-effort, which informs this. **Answered 2026-10-28**, question 1: best effort, in
    bytecode cost units.
 2. **JIT versus AOT scope.** Whether V0.3.x pursues ahead-of-time only or admits a JIT path.
-   **Open** as question 21, raised 2026-10-30.
+   **Answered 2026-10-30**, question 21: both. Deployed native code is built ahead of time, and
+   the toolchain may compile in process, as the native self-hosted compiler does.
 3. **Flat-machine ISA timing.** Whether the B28 flat-machine redesign lands within V0.3.x or is
    staged into V0.4.x. **Answered 2026-10-28**, question 2: deferred.
 

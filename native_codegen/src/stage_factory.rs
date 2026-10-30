@@ -48,14 +48,19 @@
 //!
 //! # Costs this accepts
 //!
-//! - The driver owns the shared buffer and passes it to every turn, while the
-//!   native stage keeps its own with a canary. Each turn copies the buffer in
-//!   and out, so the canary still detects an overrun, at a cost proportional
-//!   to the buffer's size per turn.
-//! - Each build lowers and compiles its stage again and leaks one LLVM context,
-//!   as `NativeStage` documents. Nothing is cached between builds.
+//! - The driver owns the shared buffer and passes it to every turn, and a turn
+//!   runs the native code on it directly through `NativeStage::turn_with_shared`.
+//!   Copying it in and out instead, so that a canary could follow it, cost about
+//!   forty-five times the native execution on 2026-10-30. A write past the shared
+//!   segment is therefore undetected here, and the private and region buffers
+//!   keep their canaries.
+//! - [`NativeStageFactory`] compiles each distinct stage module once and leaks
+//!   one LLVM context for it, as `NativeStage` documents. A factory lives as
+//!   long as its caller keeps it, so the leak is bounded by the stage modules
+//!   that caller's factories see. One inner virtual machine per compiled stage
+//!   serves every run of it.
 
-use crate::stage::{HostNative, NativeStage};
+use crate::stage::{CompiledStage, HostNative, NativeStage};
 use keleusma::Arena;
 use keleusma::bytecode::{Module, Op, Value};
 use keleusma::selfhost::{StageExecutor, StageFactory, StageNative};
@@ -64,6 +69,7 @@ use keleusma::vm::{
 };
 use std::cell::{Cell, RefCell};
 use std::mem::ManuallyDrop;
+use std::rc::Rc;
 
 /// The most distinct host natives one stage may have bridged. `frame.kel`
 /// calls ten.
@@ -190,14 +196,68 @@ pub struct NativeExecutor {
     // registered for them.
     natives: Vec<String>,
     closures: Vec<Option<StageNative>>,
-    // Dropped before `arena`, which it borrows. See `Drop`.
-    vm: ManuallyDrop<Vm<'static, 'static>>,
-    arena: *mut Arena,
+    layout: Rc<RefCell<InnerVm>>,
     started: bool,
 }
 
-impl NativeExecutor {
-    /// Build `module` natively, or say why it cannot be.
+/// A virtual machine of a stage's module, kept for its layout queries and its
+/// plain function calls, with the arena it borrows.
+struct InnerVm {
+    // Dropped before `arena`, which it borrows. See `Drop`.
+    vm: ManuallyDrop<Vm<'static, 'static>>,
+    arena: *mut Arena,
+}
+
+impl InnerVm {
+    fn new(module: &Module) -> Result<Self, String> {
+        let need = required_persistent_capacity_for(module);
+        let arena = Box::into_raw(Box::new(Arena::with_capacity(
+            DEFAULT_ARENA_CAPACITY + need,
+        )));
+        // SAFETY: `arena` was just allocated and is freed only in `Drop`, after
+        // the virtual machine that borrows it has been dropped.
+        let arena_ref: &'static mut Arena = unsafe { &mut *arena };
+        let vm = arena_ref
+            .resize_persistent(need)
+            .map_err(|e| format!("{e:?}"))
+            .and_then(|()| Vm::new(module.clone(), arena_ref).map_err(|e| format!("{e:?}")));
+        match vm {
+            Ok(vm) => Ok(Self {
+                vm: ManuallyDrop::new(vm),
+                arena,
+            }),
+            Err(e) => {
+                // SAFETY: nothing borrows the arena, since no machine was built.
+                drop(unsafe { Box::from_raw(arena) });
+                Err(e)
+            }
+        }
+    }
+}
+
+impl Drop for InnerVm {
+    fn drop(&mut self) {
+        // SAFETY: the machine is dropped first and never used again, and then
+        // the arena it borrowed is freed exactly once.
+        unsafe {
+            ManuallyDrop::drop(&mut self.vm);
+            drop(Box::from_raw(self.arena));
+        }
+    }
+}
+
+/// A stage compiled once, with the natives it calls in bridge slot order.
+pub struct CompiledExecutor {
+    code: Rc<CompiledStage>,
+    natives: Vec<String>,
+    // Shared by every run, since the driver uses it only for layout queries
+    // and for the protocol constant functions, which read no state.
+    layout: Rc<RefCell<InnerVm>>,
+}
+
+impl CompiledExecutor {
+    /// Compile `module` with each native it calls bound to its trampoline, or
+    /// say why it cannot be.
     pub fn new(module: &Module) -> Result<Self, String> {
         let called = called_natives(module)?;
         let mut bindings = Vec::with_capacity(called.len());
@@ -210,34 +270,33 @@ impl NativeExecutor {
             })?;
             bindings.push((name.as_str(), native));
         }
-        let stage = NativeStage::with_natives(module, &bindings).map_err(|e| e.to_string())?;
-        let natives: Vec<String> = called.into_iter().map(|(name, _)| name).collect();
-        let closures = natives.iter().map(|_| None).collect();
-        let need = required_persistent_capacity_for(module);
-        let arena = Box::into_raw(Box::new(Arena::with_capacity(
-            DEFAULT_ARENA_CAPACITY + need,
-        )));
-        // SAFETY: `arena` was just allocated and is freed only in `Drop`, after
-        // the virtual machine that borrows it has been dropped.
-        let arena_ref: &'static mut Arena = unsafe { &mut *arena };
-        let vm = arena_ref
-            .resize_persistent(need)
-            .map_err(|e| format!("{e:?}"))
-            .and_then(|()| Vm::new(module.clone(), arena_ref).map_err(|e| format!("{e:?}")));
-        let vm = match vm {
-            Ok(vm) => vm,
-            Err(e) => {
-                // SAFETY: nothing borrows the arena, since no machine was built.
-                drop(unsafe { Box::from_raw(arena) });
-                return Err(e);
-            }
-        };
+        let code = CompiledStage::with_natives(module, &bindings).map_err(|e| e.to_string())?;
+        let natives = called.into_iter().map(|(name, _)| name).collect();
+        let layout = Rc::new(RefCell::new(InnerVm::new(module)?));
         Ok(Self {
-            stage,
+            code,
+            natives,
+            layout,
+        })
+    }
+}
+
+impl NativeExecutor {
+    /// Build `module` natively, or say why it cannot be.
+    pub fn new(module: &Module) -> Result<Self, String> {
+        Self::from_compiled(module, &CompiledExecutor::new(module)?)
+    }
+
+    /// A fresh run of `compiled`, which must have been compiled from `module`.
+    /// Its layout queries go to the inner virtual machine `compiled` holds.
+    pub fn from_compiled(_module: &Module, compiled: &CompiledExecutor) -> Result<Self, String> {
+        let natives = compiled.natives.clone();
+        let closures = natives.iter().map(|_| None).collect();
+        Ok(Self {
+            stage: compiled.code.instance(),
             natives,
             closures,
-            vm: ManuallyDrop::new(vm),
-            arena,
+            layout: Rc::clone(&compiled.layout),
             started: false,
         })
     }
@@ -248,54 +307,35 @@ impl NativeExecutor {
                 "a native stage takes a word reply, not {reply:?}"
             )));
         };
-        if shared.len() != self.stage.shared().len() {
-            return Err(VmError::NativeError(format!(
-                "the shared buffer holds {} bytes and the stage expects {}",
-                shared.len(),
-                self.stage.shared().len()
-            )));
-        }
+
         if let Some(i) = self.closures.iter().position(Option::is_none) {
             return Err(VmError::NativeError(format!(
                 "the stage calls `{}`, which the driver did not register",
                 self.natives[i]
             )));
         }
-        self.stage.shared_mut().copy_from_slice(shared);
         // Lend the closures to the trampolines for this turn only.
         ACTIVE.with(|a| std::mem::swap(&mut *a.borrow_mut(), &mut self.closures));
         FAULT.with(|f| *f.borrow_mut() = None);
-        let word = self.stage.turn(*reply);
+        let word = self.stage.turn_with_shared(shared, *reply);
         ACTIVE.with(|a| std::mem::swap(&mut *a.borrow_mut(), &mut self.closures));
         let word = word.map_err(|e| VmError::NativeError(e.to_string()))?;
         if let Some(fault) = FAULT.with(|f| f.borrow_mut().take()) {
             return Err(fault);
         }
-        shared.copy_from_slice(self.stage.shared());
         Ok(VmState::Yielded(Value::Int(word)))
-    }
-}
-
-impl Drop for NativeExecutor {
-    fn drop(&mut self) {
-        // SAFETY: the machine is dropped first and never used again, and then
-        // the arena it borrowed is freed exactly once.
-        unsafe {
-            ManuallyDrop::drop(&mut self.vm);
-            drop(Box::from_raw(self.arena));
-        }
     }
 }
 
 impl StageExecutor for NativeExecutor {
     fn shared_data_bytes(&self) -> usize {
-        self.vm.shared_data_bytes()
+        self.layout.borrow().vm.shared_data_bytes()
     }
     fn get_shared(&self, buf: &[u8], slot: usize) -> Result<Value, VmError> {
-        self.vm.get_shared(buf, slot)
+        self.layout.borrow().vm.get_shared(buf, slot)
     }
     fn set_shared(&self, buf: &mut [u8], slot: usize, value: Value) -> Result<(), VmError> {
-        self.vm.set_shared(buf, slot, value)
+        self.layout.borrow().vm.set_shared(buf, slot, value)
     }
     fn call_with_shared(&mut self, shared: &mut [u8], args: &[Value]) -> Result<VmState, VmError> {
         let [reply] = args else {
@@ -316,7 +356,7 @@ impl StageExecutor for NativeExecutor {
         self.turn(shared, &input)
     }
     fn call_function(&mut self, chunk: usize, args: &[Value]) -> Result<VmState, VmError> {
-        self.vm.call_function(chunk, args)
+        self.layout.borrow_mut().vm.call_function(chunk, args)
     }
     fn register_native(&mut self, name: &str, native: StageNative) {
         // A native the stage does not call is not bound, as the virtual
@@ -327,11 +367,22 @@ impl StageExecutor for NativeExecutor {
     }
 }
 
+/// A stage module's serialized bytes and its compiled form, or `None` when it
+/// was declined.
+type CacheEntry = (Vec<u8>, Option<Rc<CompiledExecutor>>);
+
 /// A factory that builds every stage it can natively and counts what it did.
+///
+/// Each distinct stage module is compiled once per factory and cached by its
+/// serialized bytes, so the driver's repeated builds of one stage share its
+/// code and each gets fresh buffers. A module the factory once declined is
+/// declined again without another attempt.
 #[derive(Default)]
 pub struct NativeStageFactory {
     built: Cell<usize>,
     declined: Cell<usize>,
+    compiled: Cell<usize>,
+    cache: RefCell<Vec<CacheEntry>>,
 }
 
 impl NativeStageFactory {
@@ -344,11 +395,33 @@ impl NativeStageFactory {
     pub fn declined(&self) -> usize {
         self.declined.get()
     }
+
+    /// Distinct stage modules compiled so far, which the cache bounds.
+    pub fn compiled(&self) -> usize {
+        self.compiled.get()
+    }
+
+    fn compiled_for(&self, module: &Module) -> Option<Rc<CompiledExecutor>> {
+        let key = module.to_bytes().ok()?;
+        if let Some((_, hit)) = self.cache.borrow().iter().find(|(k, _)| *k == key) {
+            return hit.clone();
+        }
+        let made = CompiledExecutor::new(module).ok().map(Rc::new);
+        if made.is_some() {
+            self.compiled.set(self.compiled.get() + 1);
+        }
+        self.cache.borrow_mut().push((key, made.clone()));
+        made
+    }
 }
 
 impl StageFactory for NativeStageFactory {
     fn build(&self, module: &Module) -> Option<Box<dyn StageExecutor>> {
-        match NativeExecutor::new(module) {
+        let executor = self
+            .compiled_for(module)
+            .ok_or_else(String::new)
+            .and_then(|compiled| NativeExecutor::from_compiled(module, &compiled));
+        match executor {
             Ok(executor) => {
                 self.built.set(self.built.get() + 1);
                 Some(Box::new(executor))

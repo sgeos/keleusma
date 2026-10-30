@@ -22,6 +22,8 @@
 //! they run reads its reply, and fails the framing test, whose stage reads its
 //! commands. Routing a two-argument native to the wrong closure also fails the
 //! framing test. Both were checked by mutation.
+mod common;
+
 use keleusma::selfhost::{self_hosted_compile, verify_module_via_kel, with_stage_factory};
 use keleusma::target::Target;
 use keleusma::{compiler::compile, lexer::tokenize, parser::parse};
@@ -73,6 +75,18 @@ fn native_stages_compile_byte_identically() {
         compiled += 1;
     }
     assert_eq!(compiled, PROGRAMS.len());
+    eprintln!(
+        "  {} builds from {} compiled stage modules",
+        factory.built(),
+        factory.compiled()
+    );
+    // The cache: one compile per distinct stage module, shared by every build.
+    assert!(
+        factory.compiled() <= 15 && factory.built() > factory.compiled(),
+        "{} builds compiled {} stage modules, so builds are not sharing code",
+        factory.built(),
+        factory.compiled()
+    );
     assert_eq!(
         factory.declined(),
         0,
@@ -162,3 +176,75 @@ fn the_framing_stage_runs_natively_with_its_natives_bridged() {
         native.len()
     );
 }
+
+/// Compile every `step`-th corpus source, in path order, with native stages,
+/// and require each the self-hosted compiler accepts to be byte-identical to
+/// the reference compiler's module. Returns the sources compared and those
+/// outside the self-hosted subset. The driver refuses some sources by a caught
+/// panic in `reconstruct.kel`, so a refusal message on the output is expected
+/// and does not fail the test.
+fn compile_corpus_natively(step: usize) -> (usize, usize) {
+    let factory = Rc::new(NativeStageFactory::default());
+    let (mut compared, mut outside) = (0usize, 0usize);
+    for path in common::corpus_sources().into_iter().step_by(step) {
+        let name = path.display().to_string();
+        let Ok(source) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(reference) = common::try_build(&source) else {
+            continue;
+        };
+        let Ok(native) = with_stage_factory(factory.clone(), || {
+            self_hosted_compile(&source, &Target::host())
+        }) else {
+            outside += 1;
+            continue;
+        };
+        assert_eq!(
+            native.to_bytes().expect("serializes"),
+            reference.to_bytes().expect("serializes"),
+            "{name}: native stages diverge from the reference"
+        );
+        compared += 1;
+    }
+    eprintln!(
+        "  compared {compared} corpus sources, {outside} outside the self-hosted subset, \
+         {} builds from {} compiled stage modules, {} declined",
+        factory.built(),
+        factory.compiled(),
+        factory.declined()
+    );
+    assert_eq!(factory.declined(), 0, "a stage ran on the virtual machine");
+    (compared, outside)
+}
+
+/// The corpus-wide end-to-end check of question 19, over the whole corpus.
+///
+/// It takes about six minutes in the suite's build, so it is ignored by
+/// default and run with `--ignored`. On 2026-10-30 all 69 sources the subset
+/// accepts agreed, and in a run that also compiled each on the virtual machine
+/// they agreed three ways, the reference, the virtual machine and the native
+/// stages. The virtual machine run is not repeated here, because its agreement
+/// with the reference is the driver's own cross-check.
+#[test]
+#[ignore = "about six minutes; run with --ignored"]
+fn every_corpus_source_compiles_identically_with_native_stages() {
+    let (compared, _) = compile_corpus_natively(1);
+    assert!(
+        compared >= 69,
+        "only {compared} corpus sources were compared"
+    );
+}
+
+/// Every fourth corpus source, the default suite's share of the check above.
+#[test]
+fn a_sample_of_the_corpus_compiles_identically_with_native_stages() {
+    let (compared, _) = compile_corpus_natively(4);
+    assert!(
+        compared >= MIN_SAMPLED,
+        "only {compared} sampled sources were compared"
+    );
+}
+
+/// Sampled sources compared on 2026-10-30. A drop fails the test.
+const MIN_SAMPLED: usize = 18;
