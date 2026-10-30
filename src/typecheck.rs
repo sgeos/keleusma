@@ -2026,6 +2026,35 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
                 let return_negative_labels = top_level_negative_labels(&sig.return_type);
                 let params: Vec<Type> = sig.params.iter().map(|t| ctx.resolve_type(t)).collect();
                 let return_type = ctx.resolve_type(&sig.return_type);
+                // A native's declaration decides the layout its result is decoded with, so two
+                // declarations of one native must agree, and a declaration of a bundled library
+                // native must agree with the library's own. Either disagreement compiled before
+                // and decoded the result by the wrong layout.
+                if let Some(earlier) = ctx.native_signatures.get(&full)
+                    && (earlier.params != params || earlier.return_type != return_type)
+                {
+                    return Err(TypeError::new(
+                        format!("native `{full}` is declared twice with different signatures"),
+                        use_decl.span,
+                    ));
+                }
+                if let Some((lib_params, lib_return)) = bundled_native_signature(&mut ctx, &full) {
+                    let shape = |t: &Type| strip_labels(t.clone());
+                    let agrees = lib_params.len() == params.len()
+                        && lib_params
+                            .iter()
+                            .zip(&params)
+                            .all(|(a, b)| shape(a) == shape(b))
+                        && shape(&lib_return) == shape(&return_type);
+                    if !agrees {
+                        return Err(TypeError::new(
+                            format!(
+                                "native `{full}` is declared with a signature that differs from its bundled library's declaration"
+                            ),
+                            use_decl.span,
+                        ));
+                    }
+                }
                 ctx.native_signatures.insert(
                     full.clone(),
                     FnSig {
@@ -2657,6 +2686,40 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
     // domain of B2 generic parameters.
     ctx.subst = subst_snapshot;
     Ok(())
+}
+
+/// The `SIGNATURES` text of the bundled library serving `namespace`, when the build carries it.
+fn bundled_signatures(namespace: &str) -> Option<&'static str> {
+    match namespace {
+        #[cfg(feature = "floats")]
+        "math" => Some(crate::stddsl::Math::SIGNATURES),
+        #[cfg(feature = "floats")]
+        "audio" => Some(crate::stddsl::Audio::SIGNATURES),
+        #[cfg(all(feature = "floats", feature = "shell"))]
+        "shell" => Some(crate::stddsl::Shell::SIGNATURES),
+        _ => None,
+    }
+}
+
+/// The declared parameter and return types of a native in one of the bundled libraries,
+/// `stddsl::Math`, `stddsl::Audio` and `stddsl::Shell`, when the build carries that library. The declarations are the libraries' own `SIGNATURES` text,
+/// parsed here, so a script's declaration is compared with the one the native was written to.
+fn bundled_native_signature(ctx: &mut Ctx, full: &str) -> Option<(Vec<Type>, Type)> {
+    let source = bundled_signatures(full.split("::").next()?)?;
+    let tokens = crate::lexer::tokenize(source).ok()?;
+    let program = crate::parser::parse(&tokens).ok()?;
+    let decl = program.uses.iter().find(|u| {
+        let ImportItem::Name(name) = &u.import else {
+            return false;
+        };
+        let mut path = u.path.join("::");
+        path.push_str("::");
+        path.push_str(name);
+        path == full
+    })?;
+    let sig = decl.signature.as_ref()?;
+    let params = sig.params.iter().map(|t| ctx.resolve_type(t)).collect();
+    Some((params, ctx.resolve_type(&sig.return_type)))
 }
 
 /// Bind a pattern's variables into the current scope at the given type.
