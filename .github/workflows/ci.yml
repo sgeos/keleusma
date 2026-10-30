@@ -445,13 +445,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@ccc8c1f930153b792217f06c65a38f23a882993a # 1.85
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # 1.85
         id: msrv-arena
       - name: MSRV keleusma-arena (1.85)
         run: |
           cargo +${{ steps.msrv-arena.outputs.name }} check -p keleusma-arena
           cargo +${{ steps.msrv-arena.outputs.name }} check -p keleusma-arena --no-default-features
-      - uses: dtolnay/rust-toolchain@360a4e93673de6630fac2478bc9e35244b01a759 # 1.88
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # 1.88
         id: msrv-keleusma
         if: ${{ !cancelled() }}
       - name: MSRV keleusma (1.88)
@@ -672,7 +672,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@2c76c034f9e32a5d6e2c104dc4df23a22476db04 # nightly
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # nightly
         with:
           components: miri
       - name: Stacked borrows
