@@ -4005,10 +4005,9 @@ const CRC32_POLY: u32 = 0xEDB88320;
 ///
 /// The hash is computed at compile time and stored in
 /// [`Module::schema_hash`]; [`crate::vm::Vm::replace_module`]
-/// compares the values across a hot swap. The hash covers slot
-/// names and visibility but not per-slot type tags; the layout
-/// does not carry per-slot type information at the bytecode
-/// level. Type-level checks remain a future extension.
+/// compares the values across a hot swap. This form covers slot names and visibility only, and
+/// a compiled module carries [`compute_typed_schema_hash`] instead, which also covers each
+/// slot's declared type. This form remains for a layout whose types are not known.
 pub fn compute_schema_hash(layout: Option<&DataLayout>) -> u32 {
     let layout = match layout {
         Some(l) => l,
@@ -4026,6 +4025,46 @@ pub fn compute_schema_hash(layout: Option<&DataLayout>) -> u32 {
             SlotVisibility::Private => b'P',
         };
         buf.push(vis_tag);
+        buf.push(b'\n');
+    }
+    crc32(&buf)
+}
+
+/// CRC-32 of the data-segment layout with each slot's declared type, the schema hash a module
+/// carries.
+///
+/// The canonical form extends [`compute_schema_hash`]'s. Each slot emits its name, a null byte,
+/// its visibility tag, a unit-separator byte `0x1F`, its type token from `slot_types`, which is
+/// parallel to `layout.slots`, and a newline. A missing token is empty. The operator ruled on
+/// 2026-10-28 that the hot-swap schema hash cover slot types, so two modules whose slots share
+/// names but not types, a reordered struct for example, no longer hash alike.
+///
+/// The type token is the slot's element type after every outer array level is removed, since an
+/// array field takes one slot per element. A scalar renders as its name, such as `Word`, `Byte`,
+/// `bool`, `Text`, `Float` or `Fixed<n>`. A struct renders as `Name{field:token,...}` in
+/// declaration order, an array inside one as `[token;N]`, a tuple as `(token,...)` and any other
+/// named type as its name. The reference compiler and the self-hosted driver both build these
+/// tokens, from the declared types and from the parser's records, and must agree byte for byte.
+pub fn compute_typed_schema_hash(layout: Option<&DataLayout>, slot_types: &[String]) -> u32 {
+    let layout = match layout {
+        Some(l) => l,
+        None => return 0,
+    };
+    if layout.slots.is_empty() {
+        return 0;
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    for (i, slot) in layout.slots.iter().enumerate() {
+        buf.extend_from_slice(slot.name.as_bytes());
+        buf.push(0x00);
+        buf.push(match slot.visibility {
+            SlotVisibility::Shared => b'S',
+            SlotVisibility::Private => b'P',
+        });
+        buf.push(0x1F);
+        if let Some(token) = slot_types.get(i) {
+            buf.extend_from_slice(token.as_bytes());
+        }
         buf.push(b'\n');
     }
     crc32(&buf)

@@ -1558,7 +1558,7 @@ fn panic_message(payload: &(dyn core::any::Any + Send)) -> String {
 pub fn parse_functions_fused(
     src: &str,
 ) -> (Vec<ParsedFn>, Vec<String>, Vec<(i64, i64)>, Vec<(i64, i64)>) {
-    let (fns, names, data_records, enum_records, _) = parse_functions_fused_with_natives(src);
+    let (fns, names, data_records, enum_records, _, _) = parse_functions_fused_with_natives(src);
     (fns, names, data_records, enum_records)
 }
 
@@ -1570,14 +1570,22 @@ type FusedParse = (
     Vec<(i64, i64)>,
     Vec<(i64, i64)>,
     Vec<Vec<i64>>,
+    Vec<(i64, i64)>,
 );
 
-/// [`parse_functions_fused`] with the native import paths as well.
+/// [`parse_functions_fused`] with the native import paths and the struct records as well.
 fn parse_functions_fused_with_natives(src: &str) -> FusedParse {
     let mut fns = Vec::new();
-    let (names, data_records, enum_records, _struct_records, native_paths) =
+    let (names, data_records, enum_records, struct_records, native_paths) =
         parse_functions_impl(src, true, &mut |_, f| fns.push(f), &mut |_, _, _| {});
-    (fns, names, data_records, enum_records, native_paths)
+    (
+        fns,
+        names,
+        data_records,
+        enum_records,
+        native_paths,
+        struct_records,
+    )
 }
 
 /// How many tokens `lexer.kel` produces for `src` — **the count `PARSE_TOKEN_CAP` is
@@ -6788,6 +6796,145 @@ pub fn validate_module_via_kel(module: &Module, arena_capacity: i64) -> bool {
 // assembly mirrors the corresponding Rust compiler pass, so the serialized module is
 // byte-identical to the reference for the loop-free stage sources.
 
+/// Each struct's fields, keyed by the struct's name id, as (field name id, type name id, the
+/// array count when the field is declared as an array).
+type StructFieldTable = alloc::collections::BTreeMap<i64, Vec<(i64, i64, Option<i64>)>>;
+
+/// The schema hash the self-hosted driver computes for `src`, from the pipeline's own records,
+/// for a check against the reference's.
+pub fn schema_hash_from_pipeline(src: &str) -> u32 {
+    let (_, names, data_records, _, _, struct_records) = parse_functions_fused_with_natives(src);
+    let dl = assemble_data_layout(&data_records, &names);
+    let layout = (!dl.slots.is_empty()).then_some(dl);
+    crate::bytecode::compute_typed_schema_hash(
+        layout.as_ref(),
+        &schema_slot_tokens(&data_records, &struct_records, &names),
+    )
+}
+
+/// Each data slot's type token for [`crate::bytecode::compute_typed_schema_hash`], parallel to
+/// [`assemble_data_slots`], from parse.kel's data records and its struct records.
+///
+/// A data record names each field's type, 6, and an array's element count, 8. A struct record
+/// opens a struct, 18, and gives each field's name, 4, its type, 6, and an array count, 8. The
+/// token is the reference's, built from the same declarations, which the byte-identical oracle
+/// checks for every source with data.
+fn schema_slot_tokens(
+    data_records: &[(i64, i64)],
+    struct_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<String> {
+    // Each struct's fields as (name id, type id, array count when declared).
+    let mut structs: StructFieldTable = alloc::collections::BTreeMap::new();
+    let mut current = None;
+    for &(code, val) in struct_records {
+        match code {
+            18 => {
+                current = Some(val);
+                structs.insert(val, Vec::new());
+            }
+            4 => {
+                if let Some(fields) = current.and_then(|c| structs.get_mut(&c)) {
+                    fields.push((val, -1, None));
+                }
+            }
+            6 => {
+                if let Some(f) = current
+                    .and_then(|c| structs.get_mut(&c))
+                    .and_then(|f| f.last_mut())
+                {
+                    f.1 = val;
+                }
+            }
+            8 => {
+                if let Some(f) = current
+                    .and_then(|c| structs.get_mut(&c))
+                    .and_then(|f| f.last_mut())
+                {
+                    f.2 = Some(val);
+                }
+            }
+            _ => {}
+        }
+    }
+    let name_of = |id: i64| {
+        usize::try_from(id)
+            .ok()
+            .and_then(|i| names.get(i))
+            .map_or("", String::as_str)
+    };
+    let struct_id = |type_id: i64| {
+        structs
+            .keys()
+            .copied()
+            .find(|&k| name_of(k) == name_of(type_id))
+    };
+    fn render<'n>(
+        type_id: i64,
+        depth: usize,
+        name_of: &dyn Fn(i64) -> &'n str,
+        struct_id: &dyn Fn(i64) -> Option<i64>,
+        structs: &StructFieldTable,
+        out: &mut String,
+    ) {
+        out.push_str(name_of(type_id));
+        if let Some(sid) = struct_id(type_id)
+            && depth < 16
+        {
+            out.push('{');
+            for (i, &(field, ty, count)) in structs[&sid].iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(name_of(field));
+                out.push(':');
+                match count {
+                    Some(n) => {
+                        out.push('[');
+                        render(ty, depth + 1, name_of, struct_id, structs, out);
+                        out.push(';');
+                        out.push_str(&n.to_string());
+                        out.push(']');
+                    }
+                    None => render(ty, depth + 1, name_of, struct_id, structs, out),
+                }
+            }
+            out.push('}');
+        }
+    }
+    // Data fields as (visibility, type id, slot count), in declaration order.
+    let mut fields: Vec<(i64, i64, i64)> = Vec::new();
+    let mut vis = 0;
+    for &(code, val) in data_records {
+        match code {
+            9 => vis = val % 4,
+            4 => fields.push((vis, -1, 1)),
+            6 => {
+                if let Some(f) = fields.last_mut() {
+                    f.1 = val;
+                }
+            }
+            8 => {
+                if let Some(f) = fields.last_mut() {
+                    f.2 = val;
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut tokens = Vec::new();
+    for pass in [0i64, 1i64] {
+        for &(_, ty, count) in fields.iter().filter(|f| f.0 == pass) {
+            let mut token = String::new();
+            render(ty, 0, &name_of, &struct_id, &structs, &mut token);
+            for _ in 0..count.max(1) {
+                tokens.push(token.clone());
+            }
+        }
+    }
+    tokens
+}
+
 /// Assemble the data-slot table from parse.kel's data-block record stream, mapping the
 /// interned block, field, and (unused here) type ids through the name table.
 fn assemble_data_slots(
@@ -7451,11 +7598,15 @@ fn assemble_chunk_metadata(
 /// modifiers) and self-hosting them is a distinct increment.
 pub fn self_host_compile_full(src: &str) -> Module {
     let mut module = self_host_compile(src);
-    let (fns, names, data_records, enum_records) = parse_functions_fused(src);
+    let (fns, names, data_records, enum_records, _, struct_records) =
+        parse_functions_fused_with_natives(src);
     let dl = assemble_data_layout(&data_records, &names);
     module.data_layout = (!dl.slots.is_empty()).then_some(dl);
     module.persistent_composite_bytes = private_composite_pool(&data_records).1;
-    module.schema_hash = crate::bytecode::compute_schema_hash(module.data_layout.as_ref());
+    module.schema_hash = crate::bytecode::compute_typed_schema_hash(
+        module.data_layout.as_ref(),
+        &schema_slot_tokens(&data_records, &struct_records, &names),
+    );
     module.enum_layouts = assemble_enum_layouts(&enum_records, &names);
     module.signatures = assemble_signatures(&fns, &names, &module.enum_layouts);
     // Self-assemble each source chunk's param_count, block_type, and param_types (the last
@@ -7547,7 +7698,7 @@ fn shared_data_bytes_of(shared_layout: &[crate::bytecode::SharedSlotLayout]) -> 
 /// `native_return_shapes` are empty.
 pub fn self_host_compile_scratch(src: &str) -> Module {
     use crate::bytecode::{Chunk, SlotVisibility};
-    let (mut fns, names, data_records, enum_records, native_paths) =
+    let (mut fns, names, data_records, enum_records, native_paths, struct_records) =
         parse_functions_fused_with_natives(src);
     let relocation = data_relocation::Plan::from_records(&data_records).expect("data address plan");
     for function in &mut fns {
@@ -7636,7 +7787,10 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
     // An absent data segment has no layout regions in the artifact. An empty
     // layout would encode extra regions and differ from the reference.
     let data_layout = (!dl.slots.is_empty()).then_some(dl);
-    let schema_hash = crate::bytecode::compute_schema_hash(data_layout.as_ref());
+    let schema_hash = crate::bytecode::compute_typed_schema_hash(
+        data_layout.as_ref(),
+        &schema_slot_tokens(&data_records, &struct_records, &names),
+    );
 
     let enum_layouts = assemble_enum_layouts(&enum_records, &names);
     let signatures = assemble_signatures(&fns, &names, &enum_layouts);
