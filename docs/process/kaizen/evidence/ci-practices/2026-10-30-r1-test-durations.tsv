@@ -1,0 +1,342 @@
+job	binary	test	median_s	samples
+Test (self-host feature, shard)	keleusma::selfhost_artifact_identity	production_compiler_matches_every_complete_stage_artifact	2119.9	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	every_source_has_its_pinned_self_hosted_outcome	1605.3	10
+Test (self-host feature, shard)	keleusma::selfhost_resource_admission	every_stage_matches_complete_resource_admission	1590.7	10
+Test	keleusma-cli::validator	shipping_validator_reaches_every_current_stage	977.1	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_assembled_scaffold_serializes_byte_identically	914.9	10
+Test (self-host feature, shard)	keleusma	selfhost::reference_poison_tests::production_type_verdicts_hold_with_the_reference_poisoned	870.1	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	production_types_accept_all_stage_inputs	809.2	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	pipeline_expression_extraction_reaches_every_stage	762.3	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	the_trap_analysis_agrees_with_the_reference_on_every_compiled_source	748.7	10
+Test (self-host feature, shard)	keleusma	selfhost::reference_poison_tests::scratch_assembly_matches_every_stage_with_the_reference_poisoned	734.9	10
+Test	keleusma	selfhost::reference_poison_tests::production_type_verdicts_hold_with_the_reference_poisoned	729.7	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	pipeline_call_inputs_fit_type_stage_capacity	705.0	10
+Test	keleusma-cli::self_hosted_stage_corpus	the_self_hosted_command_compiles_every_stage_to_the_reference_artifact	678.2	10
+Test	keleusma	selfhost::reference_poison_tests::scratch_assembly_matches_every_stage_with_the_reference_poisoned	642.8	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	the_self_hosted_validator_agrees_with_the_reference_on_every_compiled_source	619.7	10
+Test (self-host feature, shard)	keleusma::selfhost_admission	every_current_stage_completes_the_fallible_verifier	566.1	10
+Test	keleusma::trap_analysis	every_current_stage_has_a_completed_matching_classification	543.4	10
+Test	keleusma::trap_free_corpus	every_composed_handled_module_is_trap_free_in_both_analyses	467.3	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	assembled_signatures_match_the_reference	452.7	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	assembled_data_layout_matches_the_reference	438.6	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	assembled_chunk_metadata_matches_the_reference	432.1	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	assembled_shared_layout_matches_the_reference	431.8	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	assembled_schema_hash_matches_the_reference	430.2	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	assembled_data_slots_match_the_reference	429.8	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	assembled_enum_layouts_match_the_reference	429.0	10
+Test (self-host feature, shard)	keleusma::trap_analysis	every_current_stage_has_a_completed_matching_classification	405.2	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_parse_kel_byte_identically	401.7	10
+Test (self-host feature, shard)	keleusma::trap_free_corpus	every_composed_handled_module_is_trap_free_in_both_analyses	358.7	10
+Test	keleusma::trap_free_corpus	every_uncovered_form_is_possibly_trapping_in_both_analyses	272.0	10
+Test (self-host feature, shard)	keleusma::trap_free_corpus	every_uncovered_form_is_possibly_trapping_in_both_analyses	258.3	10
+Test (self-host feature, shard)	keleusma::hosted_runtime	the_interpreter_agrees_with_the_virtual_machine_on_the_corpus	219.2	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_framing	framing_matches_every_current_stage_artifact	208.7	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	validate_module_via_kel_is_a_drop_in_for_verify_resource_bounds	205.5	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_hosted_construct_support_boundary	199.9	10
+Test	keleusma::hosted_runtime	the_interpreter_agrees_with_the_virtual_machine_on_the_corpus	196.1	10
+Test (self-host feature, shard)	keleusma::selfhost_data_relocation	relocated_modules_execute_and_all_compile_paths_agree	186.2	10
+Test (self-host feature, shard)	keleusma::selfhost_chunk_names	the_derived_chunk_names_match_the_reference_compiler	174.6	10
+Test (self-host feature, shard)	keleusma::radix_literals	wire_kel_no_longer_fails_on_a_radix_literal	170.9	10
+Test (self-host feature, shard)	keleusma::reconstruct_failure_modes	wire_kel_reports_a_named_cause_rather_than_an_array_index	157.2	10
+Test (self-host feature, shard)	keleusma::selfhost_chunk_names	the_self_hosted_compiler_can_now_compile_wire_kel	150.4	10
+Test	keleusma::radix_literals	wire_kel_no_longer_fails_on_a_radix_literal	149.2	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_wire_kel_byte_identically	148.4	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_aux_decode	complete_auxiliary_values_and_opaque_debug_payloads_match	147.6	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	the_self_hosted_validator_agrees_with_the_reference_on_a_mutated_corpus	145.3	10
+Test	keleusma-cli::self_hosted_full_language	the_self_hosted_command_compiles_every_identical_census_row_to_the_reference_artifact	140.0	10
+Test	keleusma-cli::self_hosted_refusal	command_serializes_large_forests_and_text_through_keleusma	137.2	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	the_ast_census_has_its_pinned_outcomes	135.0	10
+Test	keleusma::reconstruct_failure_modes	wire_kel_reports_a_named_cause_rather_than_an_array_index	133.2	10
+Test	keleusma::wire_self_compile_status	wire_kel_has_the_chunk_count_the_documents_quote	125.6	10
+Test (self-host feature, shard)	keleusma::wire_self_compile_status	wire_kel_has_the_chunk_count_the_documents_quote	121.5	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	the_shipping_compiler_matches_the_boundary_it_is_recorded_against	105.1	10
+Test (self-host feature, shard)	keleusma::selfhost_parse	the_swept_caps_are_named_and_their_boundaries_hold	103.9	10
+Test (self-host feature, shard)	keleusma::selfhost_parse	the_chunk_table_cap_is_refused_by_the_driver_and_not_by_the_stage	98.5	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_module_decode	corrupt_headers_bounds_widths_and_mirrors_are_refused	90.9	10
+Test (self-host feature, shard)	keleusma::selfhost_tuple_construction	temporary_tuple_descriptors_do_not_accumulate_between_functions	89.1	10
+Test (self-host feature, shard)	keleusma::selfhost_source_initializers	initializer_values_execute_after_keleusma_serialization_and_decoding	83.7	10
+Test (self-host feature, shard)	keleusma::selfhost_tuple_construction	tuple_construction_and_nested_headers_preserve_artifacts	82.4	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	production_types_reach_corpus_and_rule_form_census	79.1	10
+Test (self-host feature, shard)	keleusma::selfhost_parse	the_data_field_bound_counts_the_whole_program	70.2	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_encoder_capacity	accepted_scalar_forests_cross_the_old_1365_node_boundary	68.7	10
+Test (self-host feature, shard)	keleusma::selfhost_loop_outcomes	decoded_outcome_dispatch_preserves_results_and_traps	67.2	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_codegen_kel_byte_identically	65.3	10
+Test (self-host feature, shard)	keleusma::selfhost_parse	wire_kel_parses_correctly_now_that_the_bare_loop_form_is_supported	64.8	10
+Test (self-host feature, shard)	keleusma::call_chunk_index_limit	a_call_across_the_old_boundary_compiles_and_matches_the_reference	60.6	10
+Test (self-host feature, shard)	keleusma::selfhost_text_boundary	text_boundary_flags_and_signatures_match_reference	59.9	10
+Test	keleusma::crypto_framing	the_self_hosted_sections_and_framing_reproduce_the_reference	58.1	10
+Test (self-host feature, shard)	keleusma::selfhost_region_coverage	no_region_the_driver_routes_disagrees_with_the_reference	57.4	10
+Test (self-host feature, shard)	keleusma::selfhost_region_coverage	the_skipped_region_kinds_are_the_ones_on_record	55.3	10
+Test (self-host feature, shard)	keleusma::selfhost_region_coverage	the_assembled_artifact_carries_the_constants_region	54.9	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_private	elision_is_exactly_nonempty_int_zero_and_spans_batches	54.5	10
+Test (self-host feature, shard)	keleusma::selfhost_region_coverage	the_self_hosted_share_of_the_corpus_is_the_one_recorded	53.9	10
+Test (self-host feature, shard)	keleusma::selfhost_region_coverage	the_computed_share_is_smaller_than_the_produced_share	53.7	10
+Test	keleusma::call_chunk_index_limit	a_call_across_the_old_boundary_compiles_and_matches_the_reference	53.6	10
+Test (self-host feature, shard)	keleusma::selfhost_wire	the_windowed_path_reaches_every_stage_it_can_walk	52.2	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	generic_functions_have_their_pinned_outcomes	52.0	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_module_decode	noncanonical_offsets_prefixes_and_trailing_bytes_preserve_values	46.8	10
+Test (self-host feature, shard)	keleusma::selfhost_tuple_construction	constructed_tuples_execute_after_keleusma_serialization	46.8	10
+Test (self-host feature, shard)	keleusma::selfhost_return_layouts	distant_queries_and_quoted_declarations_preserve_all_compile_paths	46.6	10
+Test (self-host feature, shard)	keleusma::lexical_divergence_census	the_lexical_surface_shows_no_divergence_between_the_two_pipelines	46.3	10
+Test (self-host feature, shard)	keleusma::selfhost_composite_members	composite_member_requirements_agree_with_reference	45.1	10
+Test (self-host feature, shard)	keleusma::selfhost_loop_outcomes	loop_outcome_programs_preserve_complete_artifacts	43.8	10
+Test (self-host feature, shard)	keleusma::selfhost_wide_literals	wide_integer_table_shares_the_intern_capacity	41.8	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_aux_decode	missing_and_malformed_metadata_are_distinct_from_unused_tables	40.8	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_run_encode	u16_boundaries_preserve_split_offsets_and_tail_stride	40.5	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_wire_schema_kel_byte_identically	40.0	10
+Test (self-host feature, shard)	keleusma::selfhost_parse	the_fused_parse_agrees_with_the_collecting_one	39.9	10
+Test	keleusma::lexical_divergence_census	the_lexical_surface_shows_no_divergence_between_the_two_pipelines	39.6	10
+Test (self-host feature, shard)	keleusma::selfhost_return_layouts	forward_results_execute_after_keleusma_serialization	38.8	10
+Test (self-host feature, shard)	keleusma::indexed_write_handlers	the_self_hosted_compiler_matches_every_handled_write_shape	38.2	10
+Test (self-host feature, shard)	keleusma::selfhost_resource_admission	native_attestations_preserve_per_site_and_per_chunk_charging	38.1	10
+Test (self-host feature, shard)	keleusma::selfhost_composite_annotations	composite_let_annotations_agree_with_reference	35.1	10
+Test (self-host feature, shard)	keleusma::selfhost_checked_outcomes	source_outcomes_match_reference_artifacts_and_execution	34.9	10
+Test (self-host feature, shard)	keleusma::selfhost_return_layouts	calls_preserve_declared_return_layouts	34.9	10
+Test	keleusma::indexed_write_handlers	the_self_hosted_compiler_matches_every_handled_write_shape	34.0	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_module_decode	extension_metadata_is_checked_without_authenticating_signature_bytes	33.1	10
+Test (self-host feature, shard)	keleusma::data_read_outcomes	data_read_wire_round_trip_preserves_valid_and_fallback_results	32.8	10
+Test (self-host feature, shard)	keleusma::selfhost_typed_opcode_boundary	the_bitwise_shift_and_boolean_operators_do_not_diverge	32.6	10
+Test (self-host feature, shard)	keleusma::selfhost_structural_types	tuple_and_nested_array_facts_agree_with_reference	32.2	10
+Test (signatures, and the broad signatures,shell set)	keleusma::crypto_framing	signature_verdicts_agree_with_the_reference	30.6	20
+Test (self-host feature, shard)	keleusma::selfhost_enum_types	enum_constructors_and_payloads_agree_with_reference	30.6	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	skipped_tokens_are_refused_or_lowered_rather_than_dropped	30.6	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	pipeline_call_computed_operands_require_resolved_types	30.5	10
+Test	keleusma::trap_analysis	bare_and_fully_handled_source_classes_agree	29.9	10
+Test (self-host feature, shard)	keleusma::selfhost_tuple_projections	tuple_projection_artifacts_and_host_supplied_values_match_reference	29.9	10
+Test	keleusma::crypto_framing	encryption::encrypted_artifacts_and_their_plaintext_views_are_byte_identical_to_the_reference	29.5	10
+Test (self-host feature, shard)	keleusma::selfhost_head_frames	head_frames_execute_after_keleusma_serialization	29.4	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_run_encode	data_names_compare_across_windows_and_stop_at_the_first_difference	29.1	10
+Test (self-host feature, shard)	keleusma::selfhost_nominal_signatures	nested_nominal_signatures_preserve_complete_artifacts	29.0	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_constants	forests_cross_former_node_and_name_caps	29.0	10
+Test	keleusma::data_read_outcomes	data_read_wire_round_trip_preserves_valid_and_fallback_results	28.9	10
+Test (self-host feature, shard)	keleusma::checked_wrap_default	the_self_hosted_compiler_agrees	28.6	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_framing	framing_preserves_every_resource_field_and_padding	28.1	10
+Test (self-host feature, shard)	keleusma::selfhost_composite_projections	composite_projection_types_agree_with_reference	28.0	10
+Test (self-host feature, shard)	keleusma::selfhost_composite_types	composite_source_facts_agree_with_reference	27.4	10
+Test (self-host feature, shard)	keleusma::selfhost_source_initializers	private_initializers_preserve_complete_artifacts	27.3	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_natives	native_names_cross_former_event_input_and_pool_limits	27.2	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	destructuring_and_wildcard_lets_compile_and_stale_equality_flags_are_cleared	27.2	10
+Test (self-host feature, shard)	keleusma::trap_analysis	bare_and_fully_handled_source_classes_agree	26.7	10
+Test (self-host feature, shard)	keleusma::selfhost_head_frames	head_frames_preserve_complete_artifacts	26.5	10
+Test	keleusma::crypto_framing	signature_verdicts_agree_with_the_reference	26.5	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_layout_decode	absent_empty_and_malformed_optional_tables_match_reference	26.4	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	labels_and_newtypes_have_their_pinned_outcomes	26.2	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	pipeline_declarations_and_indices_agree_with_reference	26.2	10
+Test (self-host feature, shard)	keleusma::selfhost_wide_literals	wide_literals_preserve_complete_arithmetic_artifacts	25.9	10
+Test (self-host feature, shard)	keleusma::selfhost_tuple_projections	repeated_tuple_headers_reuse_layouts_without_changing_admission	24.9	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_module_decode	debug_payload_rejection_occurs_at_complete_module_layer	24.9	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	pipeline_scalar_access_types_agree_with_reference	24.6	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	option_scrutinees_have_their_pinned_outcomes	24.6	10
+Test	keleusma::checked_wrap_default	the_self_hosted_compiler_agrees	24.3	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_natives	native_vectors_preserve_independent_empty_and_unequal_lengths	24.0	10
+Test (self-host feature, shard)	keleusma::selfhost_data_relocation	late_shared_declarations_preserve_complete_artifacts	23.9	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	scoped_pipeline_inputs_reach_the_rejection_corpus	23.8	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	the_pipe_and_literal_heads_compile_or_are_refused	23.5	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_framing	section_alignment_and_artifact_corruption_are_refused	23.4	10
+Test	keleusma::crypto_framing	encryption::decryption_verdicts_agree_with_the_reference	22.8	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_layout_decode	optional_families_fail_independently_after_shared_range_validation	22.3	10
+Test (signatures, and the broad signatures,shell set)	keleusma::crypto_framing	signed_artifacts_are_byte_identical_to_the_reference	22.3	20
+Test (self-host feature, shard)	keleusma::selfhost_wire_templates	templates_cross_former_event_and_checkpoint_caps	22.0	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	scoped_pipeline_reaches_the_rule_form_census	21.8	10
+Test (self-host feature, shard)	keleusma::selfhost_enum_types	enum_artifacts_and_execution_agree	21.6	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_encoder_capacity	accepted_text_crosses_name_and_aggregate_input_windows	21.3	10
+Test (self-host feature, shard)	keleusma::indexed_read_outcomes	checked_read_sources_match_reference_artifacts_and_execution	21.3	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_aux_decode	parameter_absence_and_selected_ranges_preserve_reference_admission	21.2	10
+Test (self-host feature, shard)	keleusma::selfhost_tuple_projections	tuple_projection_verdicts_preserve_valid_sources_and_reject_wrong_members	21.2	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	pipeline_match_exhaustiveness_agrees_with_reference	21.0	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_framing	auxiliary_streams_beyond_former_packer_capacities	20.8	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_verify_types_kel_byte_identically	20.3	10
+Test (self-host feature, shard)	keleusma	selfhost::wire_semantics::tests::utf8_stage_verdict_matches_rust_without_host_string_construction	20.1	10
+Test (self-host feature, shard)	keleusma::selfhost_tuple_projections	tuple_equality_preserves_struct_members_at_multiple_depths	19.9	10
+Test (self-host feature, shard)	keleusma::selfhost_parse	the_token_cap_is_named_and_its_boundary_holds	19.5	10
+Test	keleusma::crypto_framing	signed_artifacts_are_byte_identical_to_the_reference	19.0	10
+Test (self-host feature, shard)	keleusma::hosted_runtime	the_interpreter_agrees_with_the_virtual_machine_on_streams	18.7	10
+Test (self-host feature, shard)	keleusma::selfhost_checked_shifts	checked_shifts_preserve_artifacts_values_and_pool_order	18.6	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	native_imports_and_qualified_calls_compile_or_are_refused	18.6	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_reconstruct_kel_byte_identically	18.5	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_module_decode	selected_opcode_spans_and_unused_pool_parity_match	18.2	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	builtin_generic_signatures_have_their_pinned_outcomes	18.1	10
+Test	keleusma-cli::compile_reproducible	the_input_path_does_not_leak_into_the_artefact	18.0	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	float_arithmetic_on_typed_operands_compiles	18.0	10
+Test	keleusma::indexed_read_outcomes	checked_read_sources_match_reference_artifacts_and_execution	17.9	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	the_fused_compile_holds_one_group_not_the_program	17.9	10
+Test (self-host feature, shard)	keleusma::selfhost_source_initializers	invalid_initializers_are_rejected_without_reference_masking	17.9	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	struct_typed_data_fields_compile	17.9	10
+Test (self-host feature, shard)	keleusma::selfhost_parse	a_struct_trait_or_impl_declaration_is_skipped_rather_than_faulting	17.5	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_run_encode	encoded_split_layout_executes_on_both_sides_of_the_record_boundary	17.0	10
+Test	keleusma	selfhost::wire_semantics::tests::utf8_stage_verdict_matches_rust_without_host_string_construction	16.8	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	option_constructions_have_their_pinned_outcomes	16.7	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_an_enum_value_match	16.7	10
+Test	keleusma::hosted_runtime	the_interpreter_agrees_with_the_virtual_machine_on_streams	16.7	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_debug_decode	truncation_invalid_text_and_unknown_record_kinds_are_rejected	16.0	10
+Test (self-host feature, shard)	keleusma::selfhost_empty_arrays	empty_array_constraints_preserve_valid_sources_and_reject_length_mismatches	15.8	10
+Test (self-host feature, shard)	keleusma::composite_index_reads	one_element_array_equality_matches_the_self_hosted_compiler	15.7	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	destructuring_arms_compile	15.7	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_run_encode	shared_runs_preserve_greedy_stride_kind_and_length_boundaries	15.7	10
+Test (self-host feature, shard)	keleusma::selfhost_wire	constant_walk_propagates_an_interner_pool_refusal	15.6	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_constant_decode	decoded_constants_and_separate_initializer_pools_execute	15.4	10
+Test (self-host feature, shard)	keleusma::selfhost_expression_frames	conditional_operands_preserve_artifacts_and_values	15.3	10
+Test (self-host feature, shard)	keleusma::selfhost_composite_types	composite_aliases_and_nested_controls_agree	14.9	10
+Test (self-host feature, shard)	keleusma::selfhost_loop_outcomes	outcome_handlers_use_outer_names_and_explicit_bindings	14.9	10
+Test (signatures, and the broad signatures,shell set)	keleusma::selfhost_wire	constant_walk_propagates_an_interner_pool_refusal	14.9	20
+Test (self-host feature, shard)	keleusma::selfhost_empty_arrays	empty_array_controls_preserve_artifacts_and_execution	14.7	10
+Test (self-host feature, shard)	keleusma::selfhost_composite_members	composite_members_preserve_artifacts_and_execution	14.7	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	modifiers_compile_or_are_left_to_the_reference	14.7	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	option_parameter_matches_have_their_pinned_outcomes	14.6	10
+Test (self-host feature, shard)	keleusma::selfhost_typed_opcode_boundary	float_arithmetic_agrees_on_every_operator	14.1	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_analyze_kel_byte_identically	13.9	10
+Test (self-host feature, shard)	keleusma::identity_casts	self_hosted_identity_casts_match_the_reference	13.8	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	the_documented_expression_and_statement_forms_are_censused	13.8	10
+Test (self-host feature, shard)	keleusma::selfhost_typed_opcode_boundary	byte_agrees_on_every_binary_operator	13.8	10
+Test	keleusma::composite_index_reads	one_element_array_equality_matches_the_self_hosted_compiler	13.7	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	pipeline_declared_scalars_reject_projections	13.7	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	pipeline_call_inputs_drive_type_rejection	13.5	10
+Test	keleusma-cli::compile_reproducible	the_same_source_compiles_identically_in_separate_processes	13.4	10
+Test (self-host feature, shard)	keleusma::selfhost_parse_refusals	supported_loop_and_branch_controls_keep_complete_artifacts	13.4	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	pipe_placeholders_take_the_piped_operand	13.2	10
+Test (self-host feature, shard)	keleusma::selfhost_repeat_compile	compiling_twice_in_one_process_gives_the_same_module	13.1	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_debug_decode	parameter_ranges_ignore_unused_bytes_and_preserve_float_tag	12.9	10
+Test (self-host feature, shard)	keleusma::selfhost_artifact_identity	match_guards_preserve_complete_artifacts_and_execution	12.9	10
+Test (self-host feature, shard)	keleusma::selfhost_composite_annotations	composite_annotations_preserve_artifacts_and_execution	12.8	10
+Test (self-host feature, shard)	keleusma::selfhost_wire	the_driver_emits_the_chunk_region_on_the_stages_that_fit	12.8	10
+Test	keleusma-cli::secure_deploy	self_hosted_signing_and_encryption_produce_artifacts_that_run	12.8	10
+Test (self-host feature, shard)	keleusma::selfhost_structural_types	structural_signatures_preserve_artifacts_and_execution	12.7	10
+Test (self-host feature, shard)	keleusma::selfhost_typed_opcode_boundary	fixed_point_diverges_on_both_the_checked_and_the_scale_aware_ops	12.1	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	rtos_scripts_joined_with_the_prelude_have_their_pinned_outcomes	12.0	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_aux_decode	native_vectors_remain_independent_and_optional_families_default	12.0	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	the_fused_compile_agrees_with_the_collecting_one	11.9	10
+Test (self-host feature, shard)	keleusma	selfhost::wire_decode::tests::byte_level_forms_and_failures_match_the_reference_decoder	11.8	10
+Test (self-host feature, shard)	keleusma::selfhost_composite_projections	composite_projections_preserve_artifacts_and_execution	11.7	10
+Test	keleusma::identity_casts	self_hosted_identity_casts_match_the_reference	11.7	10
+Test (signatures, and the broad signatures,shell set)	keleusma::crypto_framing	multi_step_verdicts_agree_with_the_reference	11.7	20
+Test (self-host feature, shard)	keleusma::selfhost_parse	local_binding_cap_counts_disjoint_branch_scopes	11.5	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	the_tail_versus_return_rows_agree_between_the_pipeline_and_the_reference	11.4	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	wildcard_and_unused_payloads_compile	11.4	10
+Test (self-host feature, shard)	keleusma::selfhost_checked_shifts	bare_arithmetic_shifts_keep_word_and_byte_lowering	11.4	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	a_break_in_a_bare_for_compiles	11.4	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	pipeline_match_guard_types_agree_with_reference	11.3	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_semantics	signature_table_presence_and_empty_range_boundaries_match_reference	11.3	10
+Test (self-host feature, shard)	keleusma::indexed_write_handlers	the_self_hosted_compiler_matches_a_let_bound_handled_write	11.2	10
+Test (self-host feature, shard)	keleusma::selfhost_artifact_identity	loop_scope_and_match_admission_preserve_artifacts	11.2	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	variable_match_arms_compile	11.2	10
+Test (self-host feature, shard)	keleusma::selfhost_wire	the_emitted_debug_pool_matches_the_reference_on_real_compiler_output	10.8	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	pipeline_loop_scopes_agree_with_reference	10.7	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_compile_codegen_atomic_functions	10.6	10
+Test	keleusma-cli::self_hosted_refusal	command_emits_the_production_artifact_and_runs_it	10.4	10
+Test	keleusma::indexed_write_handlers	the_self_hosted_compiler_matches_a_let_bound_handled_write	10.4	10
+Test (self-host feature, shard)	keleusma::data_read_outcomes	data_reads_and_handlers_match_both_compilers	10.3	10
+Test (self-host feature, shard)	keleusma::selfhost_pool_tags	every_shipping_entry_point_carries_the_tags	10.3	10
+Test (signatures, and the broad signatures,shell set)	keleusma::selfhost_wire	the_emitted_debug_pool_matches_the_reference_on_real_compiler_output	10.3	20
+Test	keleusma::crypto_framing	multi_step_verdicts_agree_with_the_reference	10.2	10
+Test	keleusma	selfhost::wire_decode::tests::byte_level_forms_and_failures_match_the_reference_decoder	10.2	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_natives	compiled_native_calls_preserve_complete_artifacts	10.0	10
+Test (self-host feature, shard)	keleusma::selfhost_consts_driver	keleusma_emits_every_stage_consts_region_byte_identically	9.9	10
+Test (self-host feature, shard)	keleusma::selfhost_resource_admission	resource_admission_matches_transitive_boundaries	9.8	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	for_over_a_static_array_compiles	9.8	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	use_signatures_set_scalar_return_shapes	9.8	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	match_arm_rows_agree_with_reference_syntax	9.8	10
+Test (self-host feature, shard)	keleusma::selfhost_tuple_construction	invalid_tuple_members_are_rejected_independently	9.8	10
+Test (self-host feature, shard)	keleusma::selfhost_head_frames	generic_call_results_compile_with_and_without_a_layout	9.7	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	assert_statements_compile_out	9.6	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	pipeline_match_pairs_drive_type_rejection	9.5	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_names	malformed_unicode_and_missing_regions_are_refused	9.4	10
+Test (self-host feature, shard)	keleusma::selfhost_parse	the_remaining_caps_are_named_and_their_boundaries_hold	9.4	10
+Test (self-host feature, shard)	keleusma::selfhost_checked_outcomes	parser_independently_rejects_invalid_arithmetic_outcomes	9.4	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	natives_returning_an_enum_compile	9.2	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	pipeline_call_bindings_are_scoped_to_each_source_head	9.0	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_array_of_nested_element_equality	9.0	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_private	initializer_ranges_follow_all_chunk_roots_and_handle_no_chunks	9.0	10
+Test (self-host feature, shard)	keleusma::selfhost_return_layouts	incorrect_forward_result_uses_are_rejected_independently	9.0	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_constants	compiled_constant_forests_execute_after_decoding	8.9	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_tuple_in_tuple_equality	8.9	10
+Test (self-host feature, shard)	keleusma::selfhost_resource_admission	host_resource_stage_preserves_declared_subject_target_widths	8.8	10
+Test (self-host feature, shard)	keleusma::selfhost_loop_outcomes	outcome_source_errors_are_independently_rejected	8.8	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	pipeline_call_argument_tags_agree_with_reference_syntax	8.7	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	pipeline_name_failures_are_structured_source_rejections	8.7	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_literal_operand_enum_equality	8.6	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	float_negation_compiles	8.6	10
+Test	keleusma::data_read_outcomes	data_reads_and_handlers_match_both_compilers	8.6	10
+Test (self-host feature, shard)	keleusma::selfhost_parse_refusals	every_shipped_example_is_parsed_or_refused_by_name	8.6	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	the_name_occurrences_agree_between_the_pipeline_and_the_reference	8.4	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_constant_decode	names_auxiliary_bounds_and_required_tables_are_checked	8.3	10
+Test	keleusma-cli::self_hosted_refusal	a_float_typed_signature_without_a_literal_still_compiles	8.2	10
+Test (self-host feature, shard)	keleusma::indexed_write_outcomes	both_compilers_preserve_store_artifacts_and_explicit_failures	8.1	10
+Test (self-host feature, shard)	keleusma::trap_lowering	both_compilers_emit_identical_explicit_division_guards	8.0	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	trait_impls_and_method_calls_compile	7.8	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	branch_pair_rows_follow_explicit_else_presence	7.8	10
+Test (self-host feature, shard)	keleusma::selfhost_typed_opcode_boundary	unary_negation_diverges_on_fixed_and_byte_operands	7.8	10
+Test (self-host feature, shard)	keleusma::selfhost_composite_annotations	literal_tuple_layout_exhaustion_is_unavailable	7.6	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	the_derived_operator_rows_agree_between_the_pipeline_and_the_reference	7.6	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_constant_decode	invalid_ranges_and_duplicate_ownership_are_refused	7.6	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	the_array_element_rows_agree_between_the_pipeline_and_the_reference	7.5	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_lexer_kel_byte_identically	7.5	10
+Test	keleusma-cli::bin/keleusma	tests::unsigned_serializer_dispatch_reaches_the_selected_backend	7.5	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_aux_decode	decoded_auxiliary_fields_drive_persistent_execution	7.5	10
+Test (self-host feature, shard)	keleusma::selfhost_pool_tags	the_eager_boolean_operators_lower_byte_identically	7.4	10
+Test (self-host feature, shard)	keleusma::selfhost_wire	the_chunk_region_streams_one_record_per_call_past_the_old_batch_cap	7.4	10
+Test (self-host feature, shard)	keleusma::bounds_outcomes	wire_round_trip_keeps_the_new_outcome_contract	7.4	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	native_results_take_their_declared_scalar_type	7.3	10
+Test (self-host feature, shard)	keleusma::selfhost_parse	the_parser_pushes_back_at_most_two_tokens	7.3	10
+Test (self-host feature, shard)	keleusma::selfhost_checked_shifts	invalid_checked_shift_amounts_and_families_are_refused	7.2	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_framing	auxiliary_preserves_metadata_and_empty_composite_constants	7.2	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_semantics	optional_table_failures_and_semantic_tag_errors_remain_distinct	7.1	10
+Test	keleusma::trap_lowering	both_compilers_emit_identical_explicit_division_guards	7.1	10
+Test	keleusma::indexed_write_outcomes	both_compilers_preserve_store_artifacts_and_explicit_failures	7.1	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_verify_typed_kel_byte_identically	7.1	10
+Test (self-host feature, shard)	keleusma::selfhost_resource_admission	literal_array_loop_bounds_follow_backward_aliases	7.0	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_eager_and_or	6.9	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_const_lsr	6.9	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_constant_decode	empty_composites_unused_names_and_scalar_payloads_keep_reference_behavior	6.9	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	an_enum_match_in_a_stream_has_the_reference_execution_bound	6.8	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	the_stage_is_measured_against_the_real_stage_sources	6.8	10
+Test	keleusma-cli::runtasks_reload	a_missing_manifest_does_not_take_the_runner_down	6.7	10
+Test	keleusma-cli::runtasks_reload	an_unparseable_manifest_does_not_take_the_runner_down	6.7	10
+Test (self-host feature, shard)	keleusma::legacy_division_outcomes	legacy_outcomes_survive_wire_round_trip_and_both_verifiers	6.7	10
+Test	keleusma::bounds_outcomes	wire_round_trip_keeps_the_new_outcome_contract	6.7	10
+Test	keleusma-cli::runtasks_reload	without_a_reload_the_original_grace_still_governs	6.6	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	the_declared_binding_rows_agree_between_the_pipeline_and_the_reference	6.6	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	the_condition_rows_agree_between_the_pipeline_and_the_reference	6.6	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	the_documented_pattern_forms_are_censused_against_the_self_hosted_parser	6.5	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_nested_tuple_subfield_equality	6.3	10
+Test (self-host feature, shard)	keleusma::selfhost_full_language	use_paths_need_separators_shebangs_are_skipped_and_unclaimed_tokens_are_refused	6.3	10
+Test (self-host feature, shard)	keleusma::selfhost_checked_outcomes	lexer_source_capacity_accepts_the_boundary_and_refuses_the_next_byte	6.3	10
+Test (self-host feature, shard)	keleusma::forward_data_reference	moving_solver_storage_after_first_use_reproduces_stage_refusal	6.3	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	parse_into_codegen_arithmetic_matches_the_reference	6.3	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_array_of_tuple_equality	6.2	10
+Test (self-host feature, shard)	keleusma::selfhost_composite_types	array_signatures_and_whole_fields_preserve_artifacts	6.2	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_let_bound_composite_field_access	6.2	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_array_of_array_equality	6.1	10
+Test	keleusma::forward_data_reference	moving_solver_storage_after_first_use_reproduces_stage_refusal	6.1	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_struct_tuple_of_struct_equality	6.1	10
+Test	keleusma::legacy_division_outcomes	legacy_outcomes_survive_wire_round_trip_and_both_verifiers	6.1	10
+Test (self-host feature, shard)	keleusma::selfhost_wire	the_join_holds_across_every_stage	6.1	10
+Test (self-host feature, shard)	keleusma::selfhost_pool_tags	a_tuple_element_of_struct_type_lowers_byte_identically	6.1	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_word_shifts	6.1	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_constants	initializer_roots_share_the_same_forest_with_chunk_roots	6.0	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_debug	complete_debug_artifacts_match_for_compiled_source	5.9	10
+Test (self-host feature, shard)	keleusma::selfhost_typed_opcode_boundary	the_same_operators_on_word_do_not_diverge	5.9	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_a_scalar_array_parameter	5.8	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_a_whole_program_byte_identically	5.8	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_names	requested_names_preserve_aliases_and_ignore_unused_corruption	5.8	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_struct_boolean_array_equality	5.8	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_framing	malformed_layout_is_rejected_even_with_a_valid_checksum	5.7	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_a_let_bound_array_of_structs	5.7	10
+Test (self-host feature, shard)	keleusma::data_read_outcomes	checked_data_reads_have_no_fallback_trap_when_covered	5.6	10
+Test (self-host feature, shard)	keleusma::selfhost_checked_patterns	negative_one_patterns_preserve_complete_artifacts	5.6	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_let_bound_call_field_access	5.6	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_array_of_struct_equality	5.5	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	codegen_owns_its_constant_pool_and_matches_reference	5.5	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_nested_array_subfield_equality	5.4	10
+Test (self-host feature, shard)	keleusma::indexed_read_outcomes	both_bare_lowerings_preserve_artifacts_and_faults	5.4	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	explicit_and_implicit_else_compile_byte_identically	5.4	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_encoder_capacity	colliding_text_hashes_remain_distinct_during_execution	5.3	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_variable_lsr	5.3	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_nested_enum_subfield_equality	5.3	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_enum_payload_construction	5.3	10
+Test (self-host feature, shard)	keleusma::indexed_read_outcomes	parser_rejects_invalid_index_outcome_shapes_independently	5.1	10
+Test (self-host feature, shard)	keleusma::selfhost_codegen	self_host_compiles_byte_shifts	5.1	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_module_decode	complete_decoded_module_executes_with_debug_and_persistent_state	5.1	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	pipeline_function_head_requirements_drive_type_rejection	5.0	10
+Test (self-host feature, shard)	keleusma::selfhost_wire_data_decode	absent_empty_and_elided_initializers_preserve_scope	5.0	10
+Test (self-host feature, shard)	keleusma::indexed_write_handlers	the_self_hosted_parser_refuses_every_malformed_handled_write	5.0	10
+Test (self-host feature, shard)	keleusma::selfhost_typecheck	the_declaration_and_call_rows_agree_between_the_pipeline_and_the_reference	5.0	10

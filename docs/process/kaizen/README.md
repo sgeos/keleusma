@@ -7,6 +7,8 @@ rests on. The line's mailbox and resume prompt is [`../handoffs/kaizen.md`](../h
 
 | report | state |
 |---|---|
+| [`2026-10-30-open-decisions.md`](./2026-10-30-open-decisions.md) | every decision open with the operator on 2026-10-30, the kaizen line's own and the other lines' by pointer, lettered options with the obvious choices marked, nothing decided |
+| [`2026-10-30-r1-timing-pass.md`](./2026-10-30-r1-timing-pass.md) | R1 of the CI spike completed, ten full runs and a `--timings` probe measured, compiling 63 and test running 166 of 243 runner-minutes, dependencies 2 to 5 percent of a build, one 32-instance test grid setting every build's length, 2,446 tests run twice, no build cache added |
 | [`2026-10-30-ci-practices-spike.md`](./2026-10-30-ci-practices-spike.md) | research spike on how rustc, LLVM, Chromium, Go, Mozilla and Rust projects run CI, with 100 Keleusma runs measured, five gaps found, no build cache, 208 test binaries, an unfailing self-host tier at 46 percent of runner-minutes, hidden flaky retries and no fuzzing, and seven recommendations, none adopted |
 | [`2026-10-29-changelog-fragments.md`](./2026-10-29-changelog-fragments.md) | changelog entries moved to one fragment file per change, assembled at release, on the operator's ruling of 2026-10-29 after V0.2.X reported merge conflicts in `CHANGELOG.md`, and the operator's ruling the same day to keep branch runs uncancelled |
 | [`2026-10-28-pydromon-team-setup.md`](./2026-10-28-pydromon-team-setup.md) | proposal for running every Keleusma line in pydromon, six lines with a fresh-context reviewer and a blind Jev labeller, one full-gate lease, a validated project file and team rules, two phases, nothing installed, changeover timed by the operator |
