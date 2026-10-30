@@ -4167,6 +4167,24 @@ pub enum LoadError {
     SignaturesUnsupported,
 }
 
+/// A width written from its base-2 exponent, as `LoadError`'s messages print
+/// it.
+///
+/// The exponent comes from an untrusted header byte, so `1 << e` overflows for
+/// an exponent of 32 or more. Formatting the refusal of such a header panicked
+/// under overflow checks, and a fuzz run found it in about 1,400 executions. An
+/// exponent too large for the shift is written as a power of two instead.
+struct WidthBits(u8);
+
+impl core::fmt::Display for WidthBits {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match 1u32.checked_shl(u32::from(self.0)) {
+            Some(bits) => write!(f, "{bits}"),
+            None => write!(f, "2^{}", self.0),
+        }
+    }
+}
+
 impl core::fmt::Display for LoadError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -4185,24 +4203,24 @@ impl core::fmt::Display for LoadError {
                 write!(
                     f,
                     "bytecode requires {}-bit words, runtime supports up to {}-bit",
-                    1u32 << got,
-                    1u32 << max_supported
+                    WidthBits(*got),
+                    WidthBits(*max_supported)
                 )
             }
             LoadError::AddressSizeMismatch { got, max_supported } => {
                 write!(
                     f,
                     "bytecode requires {}-bit addresses, runtime supports up to {}-bit",
-                    1u32 << got,
-                    1u32 << max_supported
+                    WidthBits(*got),
+                    WidthBits(*max_supported)
                 )
             }
             LoadError::FloatSizeMismatch { got, max_supported } => {
                 write!(
                     f,
                     "bytecode requires {}-bit floats, runtime supports up to {}-bit",
-                    1u32 << got,
-                    1u32 << max_supported
+                    WidthBits(*got),
+                    WidthBits(*max_supported)
                 )
             }
             LoadError::BadChecksum => f.write_str("bytecode CRC-32 residue check failed"),

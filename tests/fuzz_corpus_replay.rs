@@ -167,7 +167,7 @@ fn resealing_a_valid_artifact_is_the_identity() {
     assert!(checked >= 3, "only {checked} decodable seeds were checked");
 }
 
-/// KNOWN FINDING, recorded and not fixed, found by the `load_bytes` target on 2026-10-30.
+/// A finding of the `load_bytes` target on 2026-10-30, repaired.
 ///
 /// A header whose word, address or float width exponent is 32 or more, under a valid
 /// trailer, makes [`keleusma::vm::Vm::load_bytes`] panic with "attempt to shift left with
@@ -179,13 +179,10 @@ fn resealing_a_valid_artifact_is_the_identity() {
 /// profiles, panics. A build without them wraps the shift and reports a wrong width
 /// instead.
 ///
-/// The test is ignored so that the suite stays green until the library is fixed, which
-/// this change deliberately does not do. Run it with `--ignored` to reproduce. It asserts
-/// the contract the fix must satisfy, so it passes once the defect is gone, and the
-/// `#[ignore]` should then be removed. The input is built from a committed seed rather than
-/// committed to the corpus, because a corpus entry that panics would fail the replay above.
+/// The defect is repaired by `WidthBits` in `src/bytecode.rs`, which writes an exponent too
+/// large for the shift as a power of two, and this test pins the repair. The input is built
+/// from a committed seed rather than committed to the corpus.
 #[test]
-#[ignore = "known finding, LoadError Display overflows a shift for a width exponent of 32 or more"]
 fn a_width_exponent_of_32_or_more_is_refused_without_panicking() {
     let seed = std::fs::read(corpus_root().join("load_bytes/seed-single_function.kbc"))
         .expect("the single-function seed");
