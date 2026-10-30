@@ -4801,6 +4801,37 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         });
     }
 
+    /// Register an external native as a closure that receives the native context, the form
+    /// [`Self::register_native_with_ctx_closure`] gives a verified native.
+    ///
+    /// A host whose natives are values of its own language, a Python callable for example,
+    /// cannot express them as the `fn` pointer [`Self::register_external_native`] takes, and an
+    /// external native that marshals a composite argument needs the context. The attestation
+    /// and the classification are those of [`Self::register_external_native`].
+    pub fn register_external_native_with_ctx_closure<Func>(
+        &mut self,
+        name: &str,
+        func: Func,
+        max_invocations_per_iteration: u32,
+    ) where
+        Func: for<'b> Fn(
+                &NativeCtx<'b>,
+                &[crate::bytecode::GenericValue<W, F>],
+            ) -> Result<crate::bytecode::GenericValue<W, F>, VmError>
+            + 'static,
+    {
+        self.native_classifications_verified = false;
+        self.natives.retain(|e| e.name != name);
+        self.natives.push(NativeEntry {
+            wcet: DEFAULT_NATIVE_WCET,
+            wcmu_bytes: DEFAULT_NATIVE_WCMU_BYTES,
+            name: String::from(name),
+            func: Box::new(func),
+            classification: NativeClassification::External,
+            max_invocations_per_iteration: Some(max_invocations_per_iteration),
+        });
+    }
+
     /// Register a verified native function with attested per-call
     /// WCET and WCMU bounds.
     ///
