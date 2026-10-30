@@ -424,6 +424,10 @@ fn the_package_manifest_still_excludes_the_paths_that_must_not_be_published() {
             "compiler/",
             "the self-hosted compiler subproject, not part of the consumed runtime",
         ),
+        (
+            "fuzz/",
+            "the detached nightly-only fuzz package and its seed corpus",
+        ),
         ("editors/", "editor integrations, not consumer material"),
         ("tools/", "contributor tooling, not consumer material"),
     ] {

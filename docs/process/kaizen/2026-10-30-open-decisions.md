@@ -15,6 +15,31 @@ is marked **judgment**. For a peer line's question, the recommendation is that l
 own, and where the kaizen line reads it differently the difference is stated as an
 inference. The owning line's text is the authority for every peer question.
 
+## Operator rulings, 2026-10-30
+
+The operator ruled first-hand in this line's session on 2026-10-30, the same day the
+list was published. The words are recorded as given, with the disposition after each.
+
+| Item | Ruling as given | Disposition |
+|---|---|---|
+| K1 | "Adopt obvious choice." | (a). No build cache. Closed by the R1 report |
+| K2 | "Implementation detail. We need reasonable converage in the context of the project, for what it is. Admittely, that should be a higher bar than most projects, but solutions should still be right-sized. Therefore, it is important not to go too far the other way and do extra work. The upshot is that redundant testing should be removed barring a good reason." | The kaizen line narrows the Test job to the `keleusma` tests no other job runs, in `ci.yml`, guarded by `tests/ci_shard_coverage.rs` |
+| K3 | "Adopt obvious choice." | (a). Requested of V0.2.X, which owns the tests |
+| K4, R2 | "Adopt obvious choice." | (a). R2 declined |
+| K4a | "Adopt obvious choice." | (a). Requested of V0.2.X. Option (b) is not adopted |
+| K5, R3 | "Accept recommendation." | (a). A draft pull request defers the self-host tier, in `ci.yml` and `GIT_STRATEGY.md` |
+| K6, R4 | "Adopt obvious choice." | (a). The operator looks in the settings for a merge queue |
+| K7, R6 | "Adopt obvious choice." | (a). Requested of V0.2.X. OSS-Fuzz is not adopted |
+| K8, R5 | "Adopt obvious choice." | Done by the kaizen line, a JUnit report and `scripts/ci_flaky_report.py` |
+| K9 | "Adopt obvious choice." | The operator checks the account plan |
+| K10 | "Adopt obvious choice." | The operator checks the billing page |
+| K11 | "Adopt obvious choice." | (a). The operator or a blog session applies the fixes |
+| K12 | "Accept recommendation." | (a). HTTPS with the `gh` credential helper |
+| K13 | "Accept recommendation." | (a). Corrected when the operator releases the proofs branch |
+| K14 | "Hold." | Held |
+
+The operator did not rule on the peer questions in this exchange.
+
 ## Continuous integration
 
 **K1. R1 build cache.** *Obvious.* The timing pass measured third-party compilation at
