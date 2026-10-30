@@ -83,6 +83,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`hosted::seeded_shared` and `hosted::protocol`.** The shared buffer of
+  `interp.kel` seeded for an admitted program, exactly as `Interpreter::run`
+  seeds it, and the command and status constants of the interpreter's
+  protocol. Another executor of `interp.kel`, such as a native build of it,
+  can now drive a program with the same encoder. `Interpreter` uses the
+  constants itself. Pinned by `tests/hosted_seed.rs`. Requested by the V0.3.X
+  line for its seeded `interp.kel` differential.
+
 - **The cryptographic framing in Keleusma, Order 5.** `src/crypto_frame/frame.kel` decides the
   signed and encrypted header layouts, the metadata blocks, the bytes a signature covers, every
   framing check and its order, verification before decryption, the recipient fingerprint
