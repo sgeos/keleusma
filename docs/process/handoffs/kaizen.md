@@ -57,12 +57,16 @@ run.
   [the open decisions](../kaizen/2026-10-30-open-decisions.md), which records each
   ruling verbatim. K1 to K13 are ruled and K14 is held. R1 closed with no build cache,
   by [the timing pass](../kaizen/2026-10-30-r1-timing-pass.md). R2 is declined.
-- **This increment.** It applies K2, K5 and K8 in `ci.yml`. The Test job keeps only the
-  `keleusma` tests no other job runs, about 60 test-minutes fewer per run, guarded by
-  `tests/ci_shard_coverage.rs`. A draft pull request defers the self-host tier, and
-  `CI result` fails a ready one whose shards did not run, as `GIT_STRATEGY.md` and
-  `CLAUDE.md` now say. Each test job lists the tests nextest retried. K3, K4a and K7
-  go to V0.2.X as requests. K6, K9, K10 and K11 are the operator's to do.
+- **Applied.** PR 649, merged as `43a14452`, applies K2, K5 and K8. Its draft run skipped
+  the self-host tier, its ready run ran it, and the merge state stayed `BLOCKED` until
+  the ready run finished. The Test job selects 1,607 tests, 49 test-minutes against 101,
+  and is now bounded by the `keleusma-cli` validator test, 20.6 minutes. Notice 163
+  asks V0.2.X for K3, K4a and K7, and notice 164 tells V0.3.X of the draft rule.
+- **Relayed by V0.2.X in notice 156, not confirmed here.** The operator pre-authorized
+  merging green security-only pull requests into `main`. V0.2.X asks for a Dependabot
+  ignore entry for `dtolnay/rust-toolchain`, after PR 641 collapsed the 1.85, 1.88 and
+  nightly pins again, which needs a merge into `main`. `v0.2.3` now requires `CI result`
+  with admins exempt. Both items wait on the operator.
 - **Dependabot security updates.** Enabled on the operator's instruction of 2026-10-30,
   with 0 alerts open. GitHub's options reference says they always use the default
   branch. Each one is therefore a merge into `main` needing the operator's
@@ -118,8 +122,7 @@ authority, so the startup-file positions reach them first-hand.
 5. A state-file budget guard, once the owning lines have converted their files.
 6. Measure branch-run cost again once changelog fragments are in use.
 7. A nightly fuzzing workflow, once V0.2.X lands the fuzz targets of K7.
-8. Read the first runs of a draft and of a ready pull request after this increment, and
-   the Test job's new length.
+8. The Dependabot ignore entry for `dtolnay/rust-toolchain`, once the operator confirms.
 
 ## Open with the operator
 
@@ -147,7 +150,7 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `2b42b45aa70bc6ec79b9cb736008e344319559b65b97a96cdfd2ac414a064840`, 155 messages, 3 unacknowledged at export, none addressed to `kaizen` |
+| [Interline](../interline/checkpoint.json) | `a63120d73dd868d0b683e92c5613f6b35b7e2a6170d7a31d8853393e07bfeb26`, 164 messages, 5 unacknowledged at export, none addressed to `kaizen` |
 | [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `6fb4783b8f0bf96d003311f0a84581f38bb9ff0cbfe232f0f85e014064d6cea6`, 3 samples evaluated and labelled, restored cleanly into a fresh store |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `417a126a7647b7099dcf1b8b4f4c67c64a5f9a06180cac492daefbbd427ca2fd`, 250 samples and 66 tasks, home directory written as `~` on 2026-10-28 with request digests recomputed, restored cleanly into a fresh store |
 
