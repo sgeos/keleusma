@@ -106,7 +106,10 @@ Supported `<scope>` values (branch names and commit subjects alike): `feat` (new
   shards, about half of a full run. Iterate as a draft. Marking the pull request ready starts the
   run that includes the tier, and **the merge waits for that run to be green**. A draft's green
   result does not cover the byte-identical oracle. GitHub refuses to merge a draft, and `CI result`
-  fails a ready pull request whose shards did not run.
+  fails a ready pull request whose shards did not run. Until the ready run's own `CI result` job
+  exists, near the end of that run, `gh pr checks` still lists the draft run's pass. GitHub's merge
+  state stays `BLOCKED` meanwhile, as it did throughout pull request 649's ready run, so read
+  `gh pr view --json mergeStateStatus` or wait for the ready run rather than that early pass.
 - **Direct commits** to the version branch or `main` are limited to small green documentation or
   process changes. Everything else flows through a feature branch.
 
