@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   virtual machine already set that flag. Pinned by
   `tests/checked_wrap_default.rs`.
 
+- **A registered trust matrix governs the in-memory hot swap too.** With the
+  `signatures` feature and a verifying key registered, `Vm::replace_module`
+  and `Vm::replace_module_unchecked` accepted an unsigned in-memory module,
+  although `Vm::replace_module_from_bytes` refused unsigned bytes in the same
+  state. Both now return `LoadError::InvalidSignature` and keep the running
+  module. A host that means to swap an in-memory module clears the matrix
+  first with `Vm::clear_verifying_keys`. Reported by the pykeleusma line.
+
 - **A cast to the operand's own primitive type is identity.** The reference
   compiler lowered `Word as Word` to `FloatToInt`, `Float as Float` to
   `IntToFloat`, `Byte as Byte` to `WordToByte` and `Fixed as Fixed` to
