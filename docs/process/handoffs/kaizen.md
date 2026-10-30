@@ -31,7 +31,8 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor 751fa668 HEAD     # the merge of PR 624 into v0.2.3
+git merge-base --is-ancestor 8f1b9c06 HEAD     # the merge of PR 633 into v0.2.3
+git merge-base --is-ancestor 7d5a5e82 HEAD     # the merge of PR 631 into main
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
 
@@ -43,18 +44,25 @@ run.
 - **Merged.** Into `v0.2.3`, PR 620, the template hygiene re-run, as `442de88b`. PR 625,
   changelog fragments, as `c55620ed`. PR 626, the labeller's fresh session, as
   `7301e739`. PR 624, `--locked` checks of the three tracked lockfiles, as `751fa668`.
-  Into `main`, PR 619, the `brace-expansion` fix that closed Dependabot alerts 1 to 5.
+  PR 630, the security-updates comment and this file, as `4e0c2304`. PR 633, the CI
+  practices spike, as `8f1b9c06`. Into `main`, PR 619, the `brace-expansion` fix that
+  closed Dependabot alerts 1 to 5, and PR 631, the same security-updates comment,
+  merged by the operator as `7d5a5e82`.
 - **Operator rulings of 2026-10-29.** Changelog entries are fragments under
   `changelog.d/`, assembled at release, and branch runs stay uncancelled. See
   [the report](../kaizen/2026-10-29-changelog-fragments.md). V0.2.X follows the rule.
   V0.3.X adopts it at absorption 117.
-- **This increment.** On the operator's instruction of 2026-10-30, Dependabot security
-  updates are enabled in the repository settings, replacing the choice of 2026-10-25.
-  The `dependabot.yml` comment is corrected here and, through a separate pull request,
-  on `main`, where Dependabot reads it. GitHub's options reference says security updates
-  always use the default branch. Each one is therefore a merge into `main` needing the
-  operator's confirmation, and is then carried into `v0.2.3`. 0 alerts were open when
-  this was enabled.
+- **This increment.** It merges `main` into `v0.2.3` after PR 631, which leaves the
+  tree unchanged because both carry the same comment, and it records the work below.
+- **Dependabot security updates.** Enabled on the operator's instruction of 2026-10-30,
+  with 0 alerts open. GitHub's options reference says they always use the default
+  branch. Each one is therefore a merge into `main` needing the operator's
+  confirmation, and is then carried into `v0.2.3` as this increment does.
+- **CI practices spike.** [The report](../kaizen/2026-10-30-ci-practices-spike.md)
+  compares 100 Keleusma runs with how rustc, LLVM, Chromium, Go and Mozilla run CI. It
+  found no build cache, 208 test binaries, a self-host tier at 46 percent of
+  runner-minutes with no failure in 203 shard runs, retries with no flaky record and no
+  fuzzing. It makes recommendations R1 to R7, none adopted.
 - **Runners.** On 2026-10-30 Keleusma CI jobs waited a median of 1.1 minutes for a
   runner, 9.5 at the 90th percentile and 47.7 at most, over 377 jobs since 12:00Z the
   day before. The blog's Pages build grew from about 5 to 60 to 90 minutes and holds one
@@ -100,9 +108,13 @@ authority, so the startup-file positions reach them first-hand.
 4. Finish the three selection tasks, record their outcomes, and read the comparison.
 5. A state-file budget guard, once the owning lines have converted their files.
 6. Measure branch-run cost again once changelog fragments are in use.
+7. The spike's R1 timing pass, which needs no ruling, before any build cache.
 
 ## Open with the operator
 
+- Rulings on the spike's R2, merging test binaries, R3, running the self-host tier once
+  per ready pull request, R4, a merge queue, and R6, fuzzing.
+- The account plan, and whether its Settings offer a merge queue, neither verified.
 - Who applies the blog audit's fixes, before the blog's next large push if possible.
 - The stale `origin/proofs` texts listed above.
 - The route for SSH under the sandbox. A pinned `known_hosts` outside `~/.ssh` with an
