@@ -928,7 +928,14 @@ fn decode_all_ops(bytes: &[u8]) -> Result<Vec<Vec<Op>>, VmError> {
 /// minimums the constructor applies (`MIN_STACK_RESERVE_SLOTS`,
 /// `MIN_FRAMES_RESERVE`) so the reported figure exactly matches the
 /// reservation the constructor makes, letting a host size its arena with
-/// zero margin. A host that needs headroom (for example to call a `Func`
+/// zero margin for the program's own use.
+///
+/// **Host inputs are not included.** A composite argument to the entry
+/// chunk, or a composite resume value, is copied into the arena's top
+/// region when it enters the VM, and that copy is not part of this figure.
+/// A host passing composites adds their flat sizes, once for the entry
+/// argument and once for each composite resume value an iteration can
+/// receive before its `Reset`. A scalar input needs nothing. A host that needs headroom (for example to call a `Func`
 /// chunk whose stack exceeds the Stream worst case) is already covered:
 /// the footprint is the module-wide maximum over every chunk.
 ///
@@ -1120,6 +1127,10 @@ pub struct GenericVm<
     pop_proof: Option<PopElisionProof>,
     proof_state: ExecutionProofState,
     elide_pops: bool,
+    /// Whether the last run ended in [`GenericVmState::Reset`]. A resume after a reset re-enters
+    /// the stream at `Stream + 1` with the input in slot 0 and nothing waiting for a value, so
+    /// [`Self::resume`] must not push the input as it does to complete a yield.
+    suspended_at_reset: bool,
     #[cfg(test)]
     pop_counts: (usize, usize),
     #[cfg(test)]
@@ -2732,6 +2743,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             pop_proof: None,
             proof_state: ExecutionProofState::Inactive,
             elide_pops: false,
+            suspended_at_reset: false,
             #[cfg(test)]
             pop_counts: (0, 0),
             #[cfg(test)]
@@ -2968,6 +2980,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             pop_proof: None,
             proof_state: ExecutionProofState::Inactive,
             elide_pops: false,
+            suspended_at_reset: false,
             #[cfg(test)]
             pop_counts: (0, 0),
             #[cfg(test)]
@@ -5345,8 +5358,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 self.stack[base] = input.clone();
             }
         }
-        // Push the input value onto the stack (it becomes the yield expression result).
-        sp!(self, input);
+        // Push the input value onto the stack, where it becomes the yield expression's result.
+        // After a reset there is no yield to complete. The body restarts at `Stream + 1` with the
+        // input already in slot 0, and a pushed copy would sit beneath the iteration unread, one
+        // slot above the operand-stack bound the verifier computed for it.
+        if !self.suspended_at_reset {
+            sp!(self, input);
+        }
         self.prepare_proven_run();
         self.run()
     }
@@ -5563,6 +5581,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         }
         let result = self.run_inner();
         self.elide_pops = false;
+        self.suspended_at_reset = matches!(result, Ok(GenericVmState::Reset));
         if let Ok(state) = &result {
             self.fault_location = None;
             if self.execution_checks == ExecutionChecks::Proven {
