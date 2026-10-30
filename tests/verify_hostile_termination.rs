@@ -219,6 +219,84 @@ fn the_standalone_wcmu_entry_terminates_on_a_backward_target() {
     }
 }
 
+/// The module and whole-chunk entries an embedder may call on a module it has
+/// not verified, each reduced to the refusal message it returns, if any.
+type Entry = (&'static str, fn(&Module) -> Option<String>);
+
+const UNVERIFIED_ENTRIES: [Entry; 6] = [
+    ("module_runtime_footprint", |m| {
+        keleusma::verify::module_runtime_footprint(m, &[])
+            .err()
+            .map(|e| e.message)
+    }),
+    ("module_wcmu", |m| {
+        keleusma::verify::module_wcmu(m, &[])
+            .err()
+            .map(|e| e.message)
+    }),
+    ("module_wcet_with_bounds", |m| {
+        let cm = &keleusma::bytecode::NOMINAL_COST_MODEL;
+        keleusma::verify::module_wcet_with_bounds(m, &[], cm)
+            .err()
+            .map(|e| e.message)
+    }),
+    ("wcmu_whole_chunk", |m| {
+        keleusma::verify::wcmu_whole_chunk(&m.chunks[0])
+            .err()
+            .map(|e| e.message)
+    }),
+    ("wcet_whole_chunk", |m| {
+        keleusma::verify::wcet_whole_chunk(&m.chunks[0])
+            .err()
+            .map(|e| e.message)
+    }),
+    ("verify_resource_bounds", |m| {
+        keleusma::verify::verify_resource_bounds(m, 1 << 20)
+            .err()
+            .map(|e| e.message)
+    }),
+];
+
+/// The module and whole-chunk entries terminate on a backward target, and the
+/// forward-target check is what refuses it.
+///
+/// A pykeleusma finding. These six entries reached a region walk with no
+/// target validation, and measured before the fix each hung on the first
+/// backward `If` of a `Func` chunk, at op 1 targeting 0, for at least sixty
+/// seconds. The finding reported a stack overflow from
+/// `module_runtime_footprint`, which this probe did not reproduce, so the
+/// position that overflows may differ from the one measured here.
+#[test]
+fn the_module_and_whole_chunk_entries_terminate_on_a_backward_target() {
+    let base = compiled(FUNC_SRC);
+    let n = base.chunks[0].ops.len();
+    let mut refused = 0usize;
+    for (name, entry) in UNVERIFIED_ENTRIES {
+        for i in 0..n {
+            for t in [0usize, i] {
+                let mut m = base.clone();
+                m.chunks[0].ops[i] = Op::If(t as u16);
+                let probe = m.clone();
+                assert!(
+                    finishes_within(WATCHDOG, move || entry(&probe)),
+                    "{name} did not terminate on {}",
+                    alloc_id(i, t)
+                );
+                let message = entry(&m).unwrap_or_else(|| {
+                    panic!("{name} admitted {}", alloc_id(i, t));
+                });
+                assert!(
+                    message.contains("forward position"),
+                    "{name} refused {}, but not by the forward-target check: {message}",
+                    alloc_id(i, t)
+                );
+                refused += 1;
+            }
+        }
+    }
+    assert!(refused >= 6 * 2 * 10, "only {refused} cases ran");
+}
+
 /// The check does not refuse what the compiler emits.
 ///
 /// The guard is only worth having if every real program passes it, and the
