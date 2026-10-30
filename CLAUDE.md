@@ -188,6 +188,9 @@ with `--miri`, and when working without a network. See
 [`docs/process/GIT_STRATEGY.md`](docs/process/GIT_STRATEGY.md), and for concurrent agents
 [`docs/process/PARALLEL_DEVELOPMENT.md`](docs/process/PARALLEL_DEVELOPMENT.md).
 
+A user-visible change adds a fragment under `changelog.d/` and does not edit `CHANGELOG.md`, so
+that open pull requests do not conflict there. See [`changelog.d/README.md`](changelog.d/README.md).
+
 Use scoped conventional commits, `<scope>: <imperative summary>`, with scopes such as `feat`,
 `fix`, `docs`, `refactor`, `chore` and `test`. Attribute assisted commits to the assistant that
 actually contributed, `Co-Authored-By: Codex <noreply@openai.com>` for Codex and

@@ -4,6 +4,8 @@ All notable changes to `keleusma` will be documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Changes not yet released are also kept as fragments in [`changelog.d/`](changelog.d/README.md),
+which are assembled into the `[Unreleased]` section at release.
 
 ## [Unreleased]
 

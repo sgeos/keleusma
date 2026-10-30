@@ -517,6 +517,10 @@ jobs:
           echo "ran ${ran:-0} tests"
           test "${ran:-0}" -ge 50
           ! grep -q "skipped" python-tests.log
+      # Every file in changelog.d/ must be a fragment the release assembly would use.
+      - name: Check the changelog fragments
+        if: ${{ !cancelled() }}
+        run: python3 -B scripts/changelog_fragments.py check
 
   # THE HOST HALF OF THE RTOS EXAMPLE, WHICH NOTHING BUILT, AND THE N6 CROSS-BUILD.
   #
