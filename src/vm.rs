@@ -4152,9 +4152,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     /// [`crate::bytecode::LoadError::InvalidSignature`]. An in-memory
     /// [`Module`] carries no signature, so admitting it would let any
     /// caller install unsigned code around the matrix that
-    /// [`Self::replace_module_from_bytes`] enforces. A host that means to
-    /// swap an in-memory module calls [`Self::clear_verifying_keys`]
-    /// first, which states that intent.
+    /// `replace_module_from_bytes` enforces. A host that means to swap an
+    /// in-memory module calls `clear_verifying_keys` first, which states
+    /// that intent. Both exist only under `signatures`, so they are named
+    /// here rather than linked, which keeps the documentation building
+    /// without that feature.
     pub fn replace_module(
         &mut self,
         new_module: Module,
