@@ -31,7 +31,7 @@ land one pull request at a time.
 | 16 | Native output from the `keleusma` command | V0.2.X confirmed with the operator that `keleusma-cli` delegates to `kel-native` when installed, done by V0.2.X | V0.2.X | Waiting on V0.2.X |
 | 17 | Release when the operator says so, and V0.4.0 only in the abstract for now | None until told | Operator | Held |
 | 18 | The V0.2.X dependency is met | Mark it met in the Order 6 record | This line | Done in this record |
-| 19 | A self-hosted compiler compiled to native code and used as the compiler, a V0.4.0 requirement | Planned in [its own record](./NATIVE_SELF_HOSTED_COMPILER_PLAN.md). The first step, an executor boundary in the driver, is requested from V0.2.X | V0.2.X, then this line | Step 1 requested. Step 2 begun on 2026-10-29, a native executor driven through a local adapter, with host natives still to bind |
+| 19 | A self-hosted compiler compiled to native code and used as the compiler, a V0.4.0 requirement | Planned in [its own record](./NATIVE_SELF_HOSTED_COMPILER_PLAN.md). The first step, an executor boundary in the driver, is requested from V0.2.X | V0.2.X, then this line | Step 1 done by V0.2.X, `StageExecutor` and `with_stage_factory`, absorbed in absorption 118. Step 2 begun on 2026-10-29, a native executor driven through a local adapter, with host natives bound by arity. A native `StageExecutor` is next |
 
 ## Watch items
 

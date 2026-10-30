@@ -6,6 +6,14 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-30 Rulings follow-up, pykeleusma findings and V0.3.X requests
+
+Pull requests 587, 588, 596, 598, 601, 603 and 615 merged, and 623 merged 618, 605, 621,
+592 and 593 as one. The second batch, `integrate/v02-batch-20261030b`, carries the stage
+executor boundary, items 11c, 11d in part, 11e and 10, and two VM fixes, the resume after a
+reset and the composite seed of a hot swap. Item 7 waits on question 1 in the reverse
+prompt. Items 12, 9, 8, 5 and 6 are next.
+
 ## 2026-10-27 Labels and newtypes
 
 Information-flow labels, `classify`, `declassify` and newtypes, refinement included, compile

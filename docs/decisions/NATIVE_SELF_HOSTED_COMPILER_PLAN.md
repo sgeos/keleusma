@@ -136,6 +136,15 @@ first line of evidence, and this check is the end-to-end one.
   The natives of `frame.kel` are private closures over the driver's signing
   state, so that binding waits on V0.2.X exposing them, requested in sequence
   137 together with step 1.
+- **2026-10-30, step 1 landed upstream.** V0.2.X's pull request 628, absorbed
+  in absorption 118, adds `stage_executor::StageExecutor` and
+  `selfhost::with_stage_factory`. The factory is offered each stage module
+  before the driver builds it, and `frame.kel`'s ten natives reach a returned
+  executor through `register_native` as boxed closures. The trait is shaped
+  like the virtual machine. A native implementation needs an entry for each
+  chunk the driver calls through `call_function`, a bridge from the boxed
+  closures to the native code's calls, and the conversion of a yielded word
+  to a `VmState`.
 
 ## Risks and open points
 

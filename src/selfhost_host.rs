@@ -12,7 +12,8 @@
 //! is a harness helper for the self-host tooling, not part of the stable runtime API.
 
 use crate::bytecode::Value;
-use crate::vm::{Vm, VmState};
+use crate::stage_executor::StageExecutor;
+use crate::vm::VmState;
 use alloc::format;
 use alloc::string::String;
 use core::ops::ControlFlow;
@@ -39,13 +40,14 @@ use core::ops::ControlFlow;
 ///
 /// The caller keeps ownership of its accumulator state by capturing it in `on_record`; this
 /// driver borrows only `vm` and `shared`, so a callback must not itself touch them.
-pub fn drive_parse_records<F>(
-    vm: &mut Vm<'_, '_>,
+pub fn drive_parse_records<V, F>(
+    vm: &mut V,
     shared: &mut [u8],
     state: VmState,
     budget: usize,
     on_record: F,
 ) where
+    V: StageExecutor + ?Sized,
     F: FnMut(i64, i64) -> ControlFlow<()>,
 {
     drive_parse_records_with(vm, shared, state, budget, on_record, |_, _| {});
@@ -111,16 +113,17 @@ impl core::fmt::Display for ParseRecordError {
 /// into a test had drifted, keeping a catch-all after this one became exhaustive,
 /// so the differential that was supposed to be the oracle ran against the
 /// unrepaired table. The transport here is subtler than that table.
-pub fn drive_parse_records_with<F, B>(
-    vm: &mut Vm<'_, '_>,
+pub fn drive_parse_records_with<V, F, B>(
+    vm: &mut V,
     shared: &mut [u8],
     state: VmState,
     budget: usize,
     on_record: F,
     before_resume: B,
 ) where
+    V: StageExecutor + ?Sized,
     F: FnMut(i64, i64) -> ControlFlow<()>,
-    B: FnMut(&mut Vm<'_, '_>, &mut [u8]),
+    B: FnMut(&mut V, &mut [u8]),
 {
     try_drive_parse_records_with(vm, shared, state, budget, on_record, before_resume)
         .unwrap_or_else(|error| panic!("{error}"));
@@ -129,8 +132,8 @@ pub fn drive_parse_records_with<F, B>(
 /// Fallible record transport used by source-rejection consumers.
 /// Callback panics are not caught. The error distinguishes explicit stage diagnostics
 /// from virtual-machine, protocol and budget failures.
-pub fn try_drive_parse_records_with<F, B>(
-    vm: &mut Vm<'_, '_>,
+pub fn try_drive_parse_records_with<V, F, B>(
+    vm: &mut V,
     shared: &mut [u8],
     state: VmState,
     budget: usize,
@@ -138,8 +141,9 @@ pub fn try_drive_parse_records_with<F, B>(
     mut before_resume: B,
 ) -> Result<(), ParseRecordError>
 where
+    V: StageExecutor + ?Sized,
     F: FnMut(i64, i64) -> ControlFlow<()>,
-    B: FnMut(&mut Vm<'_, '_>, &mut [u8]),
+    B: FnMut(&mut V, &mut [u8]),
 {
     let mut state = state;
     for _ in 0..budget {

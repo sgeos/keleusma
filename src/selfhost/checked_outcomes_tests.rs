@@ -1,5 +1,6 @@
 //! Record-level controls for the checked-arithmetic lowering stages.
 use super::*;
+use crate::vm::Vm;
 
 fn assert_lowering(source: &str, records: &[(i64, i64)]) {
     let reference = compile_src(source);

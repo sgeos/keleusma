@@ -928,7 +928,14 @@ fn decode_all_ops(bytes: &[u8]) -> Result<Vec<Vec<Op>>, VmError> {
 /// minimums the constructor applies (`MIN_STACK_RESERVE_SLOTS`,
 /// `MIN_FRAMES_RESERVE`) so the reported figure exactly matches the
 /// reservation the constructor makes, letting a host size its arena with
-/// zero margin. A host that needs headroom (for example to call a `Func`
+/// zero margin for the program's own use.
+///
+/// **Host inputs are not included.** A composite argument to the entry
+/// chunk, or a composite resume value, is copied into the arena's top
+/// region when it enters the VM, and that copy is not part of this figure.
+/// A host passing composites adds their flat sizes, once for the entry
+/// argument and once for each composite resume value an iteration can
+/// receive before its `Reset`. A scalar input needs nothing. A host that needs headroom (for example to call a `Func`
 /// chunk whose stack exceeds the Stream worst case) is already covered:
 /// the footprint is the module-wide maximum over every chunk.
 ///
@@ -1120,6 +1127,10 @@ pub struct GenericVm<
     pop_proof: Option<PopElisionProof>,
     proof_state: ExecutionProofState,
     elide_pops: bool,
+    /// Whether the last run ended in [`GenericVmState::Reset`]. A resume after a reset re-enters
+    /// the stream at `Stream + 1` with the input in slot 0 and nothing waiting for a value, so
+    /// [`Self::resume`] must not push the input as it does to complete a yield.
+    suspended_at_reset: bool,
     #[cfg(test)]
     pop_counts: (usize, usize),
     #[cfg(test)]
@@ -2732,6 +2743,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             pop_proof: None,
             proof_state: ExecutionProofState::Inactive,
             elide_pops: false,
+            suspended_at_reset: false,
             #[cfg(test)]
             pop_counts: (0, 0),
             #[cfg(test)]
@@ -2968,6 +2980,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             pop_proof: None,
             proof_state: ExecutionProofState::Inactive,
             elide_pops: false,
+            suspended_at_reset: false,
             #[cfg(test)]
             pop_counts: (0, 0),
             #[cfg(test)]
@@ -3677,7 +3690,21 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
     where
         T: crate::marshall::KeleusmaType<W, F>,
     {
-        let ctx = crate::marshall::RefContext {
+        T::from_value_ctx(value, &self.ref_context_for(value))
+    }
+
+    /// The resolution context [`Self::decode`] uses for `value`, for a host that decodes through
+    /// [`crate::marshall::KeleusmaType::from_value_ctx`] itself.
+    ///
+    /// It carries this VM's arena, opaque registry, packed widths and bytecode image, and the
+    /// originating epoch of `value`'s composite body, or the current epoch for any other value.
+    /// A context a host assembles field by field cannot otherwise name the bytecode image, and
+    /// one built with an empty image refuses a constant string.
+    pub fn ref_context_for(
+        &self,
+        value: &crate::bytecode::GenericValue<W, F>,
+    ) -> crate::marshall::RefContext<'_> {
+        crate::marshall::RefContext {
             arena: self.arena,
             opaques: &self.ephemeral_opaques,
             word_bytes: self.module_word_bytes(),
@@ -3689,9 +3716,14 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
             // than dereferencing reclaimed memory; a non-composite value
             // carries its own epoch and ignores this (B28 P3 item 1).
             ref_epoch: value.flat_ref_epoch().unwrap_or_else(|| self.arena.epoch()),
-            rodata: self.bytecode.as_slice(),
-        };
-        T::from_value_ctx(value, &ctx)
+            rodata: self.bytecode_image(),
+        }
+    }
+
+    /// The loaded bytecode image, where a constant string packed into a flat body points. It is
+    /// the value of [`crate::marshall::RefContext::rodata`] for this VM.
+    pub fn bytecode_image(&self) -> &[u8] {
+        self.bytecode.as_slice()
     }
 
     /// Reset the arena's top region and advance the epoch, leaving
@@ -4534,12 +4566,47 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // can reference a freed box at the moment it is dropped (and a dropped
         // `Flat(Arena)` handle reads no bytes in any case).
         self.build_const_pool();
+        self.persist_seeded_private_composites()?;
         self.started = false;
         self.pop_proof = new_proof;
         if self.pop_proof.is_some() {
             self.proof_state = ExecutionProofState::Ready;
         }
 
+        Ok(())
+    }
+
+    /// Move each composite in the private slots a hot swap was seeded with into the persistent
+    /// composite pool, as `SetData` stores one.
+    ///
+    /// The swap writes its `initial_data` straight into the slots and then clears the pool and
+    /// resets the arena, so a seeded composite was left either boxed, which the module's
+    /// flat-baked field reads refuse, or as a handle into arena memory the reset reclaimed. Each
+    /// is now canonicalised into the fresh arena and persisted at its slot's pool offset. A
+    /// scalar is left as written.
+    fn persist_seeded_private_composites(&mut self) -> Result<(), VmError> {
+        let base = self.arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
+        let wb = self.module_word_bytes();
+        let fb = self.module_float_bytes();
+        let ab = self.module_addr_bytes();
+        for i in 0..self.private_slot_count as usize {
+            let slot = self.shared_slot_count as usize + i;
+            if self.private_composite_pool_offset(slot).is_none() {
+                continue;
+            }
+            // SAFETY: `i` is within the private slot array the swap just initialised, and the
+            // value is replaced by `Unit` before it is moved out, so no slot is left aliased.
+            let seeded =
+                unsafe { core::ptr::replace(base.add(i), crate::bytecode::GenericValue::Unit) };
+            if matches!(seeded, crate::bytecode::GenericValue::Unit) {
+                continue;
+            }
+            let arena = self.arena;
+            let flat = seeded
+                .into_arena_canonical(wb, fb, ab, arena)
+                .map_err(|_| out_of_arena_push("seeded private composite", arena.capacity()))?;
+            self.write_data_slot(slot, flat)?;
+        }
         Ok(())
     }
 
@@ -5326,8 +5393,13 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 self.stack[base] = input.clone();
             }
         }
-        // Push the input value onto the stack (it becomes the yield expression result).
-        sp!(self, input);
+        // Push the input value onto the stack, where it becomes the yield expression's result.
+        // After a reset there is no yield to complete. The body restarts at `Stream + 1` with the
+        // input already in slot 0, and a pushed copy would sit beneath the iteration unread, one
+        // slot above the operand-stack bound the verifier computed for it.
+        if !self.suspended_at_reset {
+            sp!(self, input);
+        }
         self.prepare_proven_run();
         self.run()
     }
@@ -5544,6 +5616,7 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         }
         let result = self.run_inner();
         self.elide_pops = false;
+        self.suspended_at_reset = matches!(result, Ok(GenericVmState::Reset));
         if let Ok(state) = &result {
             self.fault_location = None;
             if self.execution_checks == ExecutionChecks::Proven {
