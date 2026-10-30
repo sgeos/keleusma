@@ -19,8 +19,9 @@
 # they check the manifests on `main`, open their pull requests against `main`, and
 # ignore `target-branch`. Because every entry below sets `target-branch`, none of its
 # options, the cooldown and the groups included, applies to them. Each one is therefore
-# a merge into `main`, which needs the operator's confirmation, and is then carried
-# forward into the version branch.
+# a merge into `main`, then carried forward into the version branch. On 2026-10-30 the
+# operator pre-authorized merging a green security-only pull request into `main`. Any
+# other merge into `main` still needs the operator's confirmation.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -28,6 +29,13 @@ updates:
     target-branch: v0.2.3
     schedule:
       interval: weekly
+    # `dtolnay/rust-toolchain` is pinned to a different commit per toolchain, its 1.85,
+    # 1.88, nightly and stable branches, and the commit selects the toolchain. Dependabot
+    # treats every use as one action and moved all of them to one commit in pull requests
+    # 592 and 641, which dropped the 1.85, 1.88 and nightly toolchains and failed Miri.
+    # Update these pins by hand. Ignored on the operator's instruction of 2026-10-30.
+    ignore:
+      - dependency-name: dtolnay/rust-toolchain
     cooldown:
       default-days: 7
     groups:

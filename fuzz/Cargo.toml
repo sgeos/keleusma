@@ -1,0 +1,69 @@
+# cargo-fuzz targets for the hostile-input surface of the runtime.
+#
+# Standalone package with a detached [workspace], like keleusma-lsp and keleusma-wasm.
+# It is not a member of the parent workspace, because libfuzzer-sys requires a nightly
+# toolchain and sanitizer instrumentation that the stable workspace jobs do not use. It
+# is also excluded from the published keleusma tarball. The harness bodies live in
+# harness.rs, which tests/fuzz_corpus_replay.rs in the parent package includes by path,
+# so the committed corpus is replayed by the ordinary stable test suite.
+[package]
+name = "keleusma-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "0BSD"
+description = "cargo-fuzz targets for the Keleusma loader, verifier, bound analyses and front end"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Detached from the parent workspace.
+[workspace]
+
+[features]
+default = ["signatures"]
+# Enables the signed-loader target. The feature name matches the parent's so that
+# harness.rs carries one `cfg` that means the same thing in both packages.
+signatures = ["keleusma/signatures", "dep:ed25519-dalek"]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+keleusma = { path = "..", features = ["compile", "verify"] }
+keleusma-wire = { path = "../keleusma-wire" }
+ed25519-dalek = { version = "3", default-features = false, features = ["alloc"], optional = true }
+
+[[bin]]
+name = "load_bytes"
+path = "fuzz_targets/load_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "load_signed"
+path = "fuzz_targets/load_signed.rs"
+test = false
+doc = false
+bench = false
+required-features = ["signatures"]
+
+[[bin]]
+name = "verify_module"
+path = "fuzz_targets/verify_module.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "module_bounds"
+path = "fuzz_targets/module_bounds.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "front_end"
+path = "fuzz_targets/front_end.rs"
+test = false
+doc = false
+bench = false

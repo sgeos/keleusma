@@ -1,0 +1,8 @@
+# Build output, crash artifacts and coverage reports. The seed corpus under corpus/ is
+# tracked, but the entries a fuzzing run adds are not. A new seed is committed
+# deliberately, under a name beginning with `seed-`, after it has been minimized.
+/target
+/artifacts
+/coverage
+/corpus/*/*
+!/corpus/*/seed-*

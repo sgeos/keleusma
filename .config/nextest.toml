@@ -67,6 +67,12 @@ fail-fast = false
 failure-output = "immediate-final"
 retries = 2
 
+# The retries hide a flake, so every CI run also writes a JUnit report, at
+# target/nextest/ci/junit.xml, and scripts/ci_flaky_report.py names each test that
+# needed a retry in the job summary. Adopted on 2026-10-30, kaizen recommendation R5.
+[profile.ci.junit]
+path = "junit.xml"
+
 # Routine-development tier: the necessary tests, excluding the heavy self-hosted
 # byte-identity suite. This is what the pre-push hook runs; the full suite runs at
 # the merge gate. Select with `--profile quick` (or the `cargo tnq` alias).

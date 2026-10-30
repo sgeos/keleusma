@@ -24,6 +24,15 @@
 //! widened by accident, or a filter added to the self-host job, would leave them running
 //! nowhere with every other check green. This file checks that case as well.
 //!
+//! **THE WORKSPACE JOB KEEPS ONLY THE `keleusma` TESTS NO OTHER JOB RUNS.** On 2026-10-30
+//! the operator ruled that redundant testing be removed barring a good reason, after the
+//! kaizen timing pass found 2,446 tests running in both jobs. The workspace job's filter
+//! became an allow-list for `keleusma`, the library's tests outside `selfhost::` and the
+//! integration binaries whose source names the `encryption`, `signatures` or `shell`
+//! feature, the features only that job enables together. A gated file the list omits would
+//! run its `encryption` cases nowhere, so this file derives the gated files from `tests/`
+//! and requires the filter to name exactly those.
+//!
 //! **THE SHARDS RUN ONE ARCHIVE, BUILT ONCE.** On 2026-10-25 the self-host shards stopped
 //! compiling the same binaries four times. `test-self-host-build` runs `cargo nextest
 //! archive` and each shard runs that archive. The feature selection then lives on the
@@ -185,9 +194,84 @@ fn every_partitioned_job_lists_each_shard_exactly_once() {
     );
 }
 
-/// The workspace job's filter, exactly. Widening it would drop tests from the only job
+/// The workspace job's filter, exactly. Narrowing it would drop tests from the only job
 /// that ran them, so a change here is meant to fail this file and be reviewed.
-const WORKSPACE_FILTER: &str = "-E 'not (package(keleusma) & binary(~selfhost))'";
+const WORKSPACE_FILTER: &str = "-E 'not package(keleusma) | (binary(=keleusma) & not test(/^selfhost::/)) | binary(=crypto_framing) | binary(=ecc_signature_ordering) | binary(=fuzz_corpus_replay) | binary(=hot_swap_trust_matrix) | binary(=native_declaration_agreement) | binary(=proven_execution) | binary(=signature_verify_bounds) | binary(=stage_executor) | binary(=trap_policy)'";
+
+/// The features that only the workspace job enables on `keleusma` together, through
+/// `keleusma-cli`. A test gated on one of them may run nowhere else in that combination.
+const WORKSPACE_ONLY_FEATURES: [&str; 3] = ["encryption", "signatures", "shell"];
+
+/// The `keleusma` integration binaries whose source names a workspace-only feature in a
+/// `feature = "..."` predicate, sorted. Comments count too, which errs toward keeping a
+/// binary in the workspace job rather than dropping one.
+fn gated_binaries() -> Vec<String> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(&dir).expect("tests/ is readable") {
+        let path = entry.expect("a tests/ entry is readable").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("a test file is UTF-8");
+        let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        if WORKSPACE_ONLY_FEATURES
+            .iter()
+            .any(|f| compact.contains(&format!("feature=\"{f}\"")))
+        {
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .expect("a UTF-8 name");
+            found.push(stem.to_string());
+        }
+    }
+    found.sort();
+    found
+}
+
+/// The `binary(=name)` names a filter allows, other than the library's, sorted.
+fn allowed_binaries(filter: &str) -> Vec<String> {
+    let mut names: Vec<String> = filter
+        .split("binary(=")
+        .skip(1)
+        .filter_map(|rest| rest.split(')').next())
+        .filter(|name| *name != "keleusma")
+        .map(str::to_string)
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn the_workspace_job_keeps_every_binary_gated_on_its_own_features() {
+    let gated = gated_binaries();
+    assert!(
+        gated.len() >= 8,
+        "found only {gated:?}; the scan of tests/ may have stopped matching"
+    );
+    assert_eq!(
+        allowed_binaries(WORKSPACE_FILTER),
+        gated,
+        "the workspace job's filter must name exactly the keleusma integration binaries \
+         whose source names {WORKSPACE_ONLY_FEATURES:?}"
+    );
+    assert!(
+        WORKSPACE_FILTER.contains("(binary(=keleusma) & not test(/^selfhost::/))"),
+        "the library's tests outside selfhost:: hold its encryption-gated unit tests"
+    );
+}
+
+/// The list comparison detects a gated binary the filter omits.
+#[test]
+fn the_allow_list_check_detects_an_omitted_binary() {
+    let omitted = WORKSPACE_FILTER.replace(" | binary(=trap_policy)", "");
+    assert_ne!(allowed_binaries(&omitted), gated_binaries());
+    assert_eq!(
+        allowed_binaries("-E 'binary(=keleusma) | binary(=b) | binary(=a)'"),
+        ["a", "b"]
+    );
+}
 
 /// The non-comment `cargo nextest run` commands of one job.
 fn nextest_commands(job: &Job) -> Vec<&str> {
@@ -365,11 +449,11 @@ fn the_split_check_rejects_a_widened_filter_and_a_filtered_self_host_job() {
     );
     assert!(split_errors(&good_workspace, &good_self_host, None).is_empty());
 
-    let widened = job(
+    let changed = job(
         "test",
         "cargo nextest run --profile ci --workspace -E 'not binary(~selfhost)'",
     );
-    assert_eq!(split_errors(&widened, &good_self_host, None).len(), 1);
+    assert_eq!(split_errors(&changed, &good_self_host, None).len(), 1);
 
     let filtered = job(
         "test-self-host",

@@ -10,6 +10,8 @@ on:
     branches: [main, 'v*']
   pull_request:
     branches: [main, 'v*']
+    # `ready_for_review` starts the run that includes the self-host tier, see 5 below.
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 # THE LOAD THIS WORKFLOW PUTS ON A SHARED ACCOUNT, AND WHAT KEEPS IT BOUNDED.
@@ -35,6 +37,13 @@ on:
 # 4. THE SMALL CHECKS ARE GROUPED into a few jobs whose steps keep their own names and
 #    run with `!cancelled()`, so one failure does not hide the next. A source push
 #    starts about 15 jobs rather than 29.
+# 5. A DRAFT PULL REQUEST DEFERS THE SELF-HOST TIER. Its full run skips the archive build
+#    and the four shards, about half of a full run's runner-minutes. Marking the pull
+#    request ready starts a run that includes them, and a draft cannot be merged, so no
+#    merge loses the byte-identical oracle. `CI result` fails a ready pull request whose
+#    shards did not run, and `certify` never certifies a draft's run. Every branch run
+#    includes the tier. The operator adopted this on 2026-10-30, recommendation R3 of
+#    docs/process/kaizen/2026-10-30-ci-practices-spike.md.
 permissions:
   contents: read
   actions: read
@@ -77,6 +86,8 @@ jobs:
     outputs:
       mode: ${{ steps.certify.outputs.mode || steps.classify.outputs.mode }}
       vscode: ${{ steps.classify.outputs.vscode }}
+      # `true` only for a draft pull request. It defers the self-host tier and nothing else.
+      draft: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -209,6 +220,19 @@ jobs:
   # self-host job still runs them unfiltered. The job was split into four hash
   # partitions on 2026-10-21, when it exceeded GitHub's six-hour limit on pull
   # request 484. With the filter and opt-level 1 that split is no longer needed.
+  #
+  # THE REST OF `keleusma` RUNS ELSEWHERE TOO, SO THIS JOB KEEPS ONLY WHAT IS ITS OWN.
+  # On 2026-10-30 the kaizen timing pass found 2,446 tests running both here and in the
+  # shards, about 64 test-minutes on each side per run, and the operator ruled the same
+  # day that redundant testing be removed barring a good reason. Every `keleusma` test
+  # also runs in the shards, built with `self-host`, and in the signatures job, built
+  # with `signatures` and with `signatures,shell`. What runs only here is `keleusma`
+  # built with `encryption`, and with those features together with `self-host`. So this
+  # job keeps, from `keleusma`, the library's tests outside its `selfhost::` module,
+  # which hold the unit tests gated on `encryption`, and the integration binaries whose
+  # source names the `encryption`, `signatures` or `shell` feature. Every other package
+  # runs in full. `tests/ci_shard_coverage.rs` derives that binary list from `tests/`
+  # and fails when the filter misses a gated file or names one that does not exist.
   test:
     name: Test
     needs: changes
@@ -223,7 +247,10 @@ jobs:
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: nextest
-      - run: cargo nextest run --profile ci --workspace -E 'not (package(keleusma) & binary(~selfhost))'
+      - run: cargo nextest run --profile ci --workspace -E 'not package(keleusma) | (binary(=keleusma) & not test(/^selfhost::/)) | binary(=crypto_framing) | binary(=ecc_signature_ordering) | binary(=fuzz_corpus_replay) | binary(=hot_swap_trust_matrix) | binary(=native_declaration_agreement) | binary(=proven_execution) | binary(=signature_verify_bounds) | binary(=stage_executor) | binary(=trap_policy)'
+      - name: List the tests that needed a retry
+        if: ${{ !cancelled() }}
+        run: scripts/ci_flaky_report.py --label "Test" --summary "$GITHUB_STEP_SUMMARY"
       - run: cargo test --workspace --doc
 
   # `keleusma-wire` runs in both configurations. Its reader is allocation-free and must
@@ -243,18 +270,22 @@ jobs:
       - name: keleusma, no default features
         run: |
           cargo nextest run --profile ci -p keleusma --no-default-features
+          scripts/ci_flaky_report.py --label "keleusma, no default features" --summary "$GITHUB_STEP_SUMMARY"
           cargo test -p keleusma --no-default-features --doc
       - name: keleusma-wire, all features and no default features
         if: ${{ !cancelled() }}
         run: |
           cargo nextest run --profile ci -p keleusma-wire --all-features
+          scripts/ci_flaky_report.py --label "keleusma-wire, all features" --summary "$GITHUB_STEP_SUMMARY"
           cargo test -p keleusma-wire --all-features --doc
           cargo nextest run --profile ci -p keleusma-wire --no-default-features
+          scripts/ci_flaky_report.py --label "keleusma-wire, no default features" --summary "$GITHUB_STEP_SUMMARY"
           cargo test -p keleusma-wire --no-default-features --doc
       - name: keleusma-bench, default features
         if: ${{ !cancelled() }}
         run: |
           cargo nextest run --profile ci -p keleusma-bench
+          scripts/ci_flaky_report.py --label "keleusma-bench" --summary "$GITHUB_STEP_SUMMARY"
           cargo test -p keleusma-bench --doc
       - name: keleusma-bench, no default features
         if: ${{ !cancelled() }}
@@ -281,11 +312,13 @@ jobs:
       - name: signatures
         run: |
           cargo nextest run --profile ci -p keleusma --features signatures
+          scripts/ci_flaky_report.py --label "signatures" --summary "$GITHUB_STEP_SUMMARY"
           cargo test -p keleusma --features signatures --doc
       - name: signatures,shell
         if: ${{ !cancelled() }}
         run: |
           cargo nextest run --profile ci -p keleusma --features signatures,shell
+          scripts/ci_flaky_report.py --label "signatures,shell" --summary "$GITHUB_STEP_SUMMARY"
           cargo test -p keleusma --features signatures,shell --doc
 
   # The `self-host` cargo feature of the main crate, which gates the
@@ -305,7 +338,7 @@ jobs:
   test-self-host-build:
     name: Build the self-host tests
     needs: changes
-    if: needs.changes.outputs.mode == 'full'
+    if: needs.changes.outputs.mode == 'full' && needs.changes.outputs.draft != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -331,7 +364,7 @@ jobs:
   test-self-host:
     name: Test (self-host feature, shard ${{ matrix.shard }}/4)
     needs: [changes, test-self-host-build]
-    if: needs.changes.outputs.mode == 'full'
+    if: needs.changes.outputs.mode == 'full' && needs.changes.outputs.draft != 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -347,6 +380,9 @@ jobs:
         with:
           name: selfhost-tests
       - run: cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst --workspace-remap . --partition hash:${{ matrix.shard }}/4
+      - name: List the tests that needed a retry
+        if: ${{ !cancelled() }}
+        run: scripts/ci_flaky_report.py --label "Self-host shard ${{ matrix.shard }}" --summary "$GITHUB_STEP_SUMMARY"
       - if: matrix.shard == 1
         run: cargo test -p keleusma --features self-host --doc
 
@@ -741,7 +777,7 @@ jobs:
   certify:
     name: Certify the tested tree
     needs: [changes, lint, test, test-packages, test-features, test-self-host-build, test-self-host, examples-sdl3, doc, portability, scripts, rtos-host, detached, selfhost-compiler, vscode-extension, miri, docs-links]
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.mode == 'full' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.mode == 'full' && needs.changes.outputs.draft != 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -785,3 +821,20 @@ jobs:
           case " $RESULTS " in
             *" failure "*|*" cancelled "*) exit 1 ;;
           esac
+      # A full run that is not a draft's must include the self-host tier. A skipped job
+      # counts as passing above, so a condition that wrongly skipped the shards would
+      # otherwise leave a ready pull request green without the byte-identical oracle.
+      - name: Fail a full run that skipped the self-host tier, unless it is a draft's
+        env:
+          MODE: ${{ needs.changes.outputs.mode }}
+          DRAFT: ${{ needs.changes.outputs.draft }}
+          BUILD: ${{ needs.test-self-host-build.result }}
+          SHARDS: ${{ needs.test-self-host.result }}
+        run: |
+          echo "mode $MODE, draft $DRAFT, self-host build $BUILD, shards $SHARDS"
+          if [ "$MODE" = full ] && [ "$DRAFT" = true ]; then
+            echo "A draft pull request. The self-host tier is deferred until it is marked ready." | tee -a "$GITHUB_STEP_SUMMARY"
+          elif [ "$MODE" = full ] && { [ "$BUILD" != success ] || [ "$SHARDS" != success ]; }; then
+            echo "A full run that is not a draft's skipped the self-host tier."
+            exit 1
+          fi
