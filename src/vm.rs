@@ -4498,12 +4498,47 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // can reference a freed box at the moment it is dropped (and a dropped
         // `Flat(Arena)` handle reads no bytes in any case).
         self.build_const_pool();
+        self.persist_seeded_private_composites()?;
         self.started = false;
         self.pop_proof = new_proof;
         if self.pop_proof.is_some() {
             self.proof_state = ExecutionProofState::Ready;
         }
 
+        Ok(())
+    }
+
+    /// Move each composite in the private slots a hot swap was seeded with into the persistent
+    /// composite pool, as `SetData` stores one.
+    ///
+    /// The swap writes its `initial_data` straight into the slots and then clears the pool and
+    /// resets the arena, so a seeded composite was left either boxed, which the module's
+    /// flat-baked field reads refuse, or as a handle into arena memory the reset reclaimed. Each
+    /// is now canonicalised into the fresh arena and persisted at its slot's pool offset. A
+    /// scalar is left as written.
+    fn persist_seeded_private_composites(&mut self) -> Result<(), VmError> {
+        let base = self.arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
+        let wb = self.module_word_bytes();
+        let fb = self.module_float_bytes();
+        let ab = self.module_addr_bytes();
+        for i in 0..self.private_slot_count as usize {
+            let slot = self.shared_slot_count as usize + i;
+            if self.private_composite_pool_offset(slot).is_none() {
+                continue;
+            }
+            // SAFETY: `i` is within the private slot array the swap just initialised, and the
+            // value is replaced by `Unit` before it is moved out, so no slot is left aliased.
+            let seeded =
+                unsafe { core::ptr::replace(base.add(i), crate::bytecode::GenericValue::Unit) };
+            if matches!(seeded, crate::bytecode::GenericValue::Unit) {
+                continue;
+            }
+            let arena = self.arena;
+            let flat = seeded
+                .into_arena_canonical(wb, fb, ab, arena)
+                .map_err(|_| out_of_arena_push("seeded private composite", arena.capacity()))?;
+            self.write_data_slot(slot, flat)?;
+        }
         Ok(())
     }
 
