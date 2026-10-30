@@ -1547,7 +1547,21 @@ fn chunk_wcet_extra(
     cost_model: &crate::bytecode::CostModel,
     native_bounds: &[NativeIterationBound],
 ) -> Vec<u32> {
-    let mut extra = crate::text_size::chunk_text_wcet_cycles(chunk, cost_model.text_byte_cycles);
+    chunk_wcet_extra_with_callees(chunk, cost_model, native_bounds, &[])
+}
+
+/// [`chunk_wcet_extra`] with each callee's text-ness known, indexed by chunk.
+fn chunk_wcet_extra_with_callees(
+    chunk: &Chunk,
+    cost_model: &crate::bytecode::CostModel,
+    native_bounds: &[NativeIterationBound],
+    callee_returns_text: &[bool],
+) -> Vec<u32> {
+    let mut extra = crate::text_size::chunk_text_wcet_cycles_with_callees(
+        chunk,
+        cost_model.text_byte_cycles,
+        callee_returns_text,
+    );
     if !native_bounds.is_empty() {
         for (ip, op) in chunk.ops.iter().enumerate() {
             if let Op::CallVerifiedNative(idx, _) = op
@@ -1705,6 +1719,43 @@ pub fn wcet_whole_chunk_with_cost_model(
     cost_model: &crate::bytecode::CostModel,
     native_bounds: &[NativeIterationBound],
 ) -> Result<u32, VerifyError> {
+    wcet_whole_chunk_with_callees(chunk, cost_model, native_bounds, &[])
+}
+
+/// Whether each chunk may return text, in chunk order, from its declared return shape.
+///
+/// A chunk is recorded as returning no text only when its signature's return is a scalar of a
+/// non-text kind, `Unit`, `bool`, `Byte`, `Word`, `Fixed` or `Float`. Any other shape, including
+/// `Top`, a composite and a module without signatures, is recorded as possibly text, which is
+/// the conservative reading. The text-heap analysis's own `returns_text` is not used here,
+/// because it tracks where strings are allocated rather than their type, so a function that
+/// returns its own text parameter is not marked by it.
+pub fn module_chunk_returns_text(module: &Module) -> Result<Vec<bool>, VerifyError> {
+    Ok((0..module.chunks.len())
+        .map(|i| {
+            !matches!(
+                module.signatures.get(i).map(|s| s.ret),
+                Some(crate::bytecode::WireShape::Scalar { kind: 0..=5 })
+            )
+        })
+        .collect())
+}
+
+/// [`wcet_whole_chunk_with_cost_model`] with each callee's text-ness known, as
+/// [`module_chunk_returns_text`] gives it.
+///
+/// A chunk-only query must treat every call result as possibly unbounded text, so a
+/// comparison of two calls' `Word` results, such as `peek_at(i) != peek_at(j)` in the
+/// self-hosted lexer's `intern_id`, is reported unboundable. Given the callees' text-ness the
+/// comparison bears no text term. The operator ruled first-hand on 2026-10-28 that this
+/// refusal is to be fixed. The chunk-only functions keep their conservative behaviour, since
+/// the compiler's debug witnesses depend on them.
+pub fn wcet_whole_chunk_with_callees(
+    chunk: &Chunk,
+    cost_model: &crate::bytecode::CostModel,
+    native_bounds: &[NativeIterationBound],
+    callee_returns_text: &[bool],
+) -> Result<u32, VerifyError> {
     if chunk.block_type == BlockType::Stream {
         return Err(VerifyError {
             chunk_name: chunk.name.clone(),
@@ -1717,7 +1768,8 @@ pub fn wcet_whole_chunk_with_cost_model(
     // A Reentrant chunk's per-resume WCET is the exact maximum inter-yield
     // segment cost when the yields are top-level.
     if chunk.block_type == BlockType::Reentrant
-        && let Some(segmented) = reentrant_segmented_wcet(chunk, cost_model, native_bounds)?
+        && let Some(segmented) =
+            reentrant_segmented_wcet(chunk, cost_model, native_bounds, callee_returns_text)?
     {
         return Ok(segmented.saturating_add(external));
     }
@@ -1727,7 +1779,8 @@ pub fn wcet_whole_chunk_with_cost_model(
     // clamp applies.
     let clamp = chunk.block_type == BlockType::Reentrant;
     let mut break_costs: Vec<u32> = Vec::new();
-    let wcet_extra = chunk_wcet_extra(chunk, cost_model, native_bounds);
+    let wcet_extra =
+        chunk_wcet_extra_with_callees(chunk, cost_model, native_bounds, callee_returns_text);
     let body_cost = wcet_region(
         chunk,
         0,
@@ -1761,12 +1814,13 @@ pub fn module_wcet_with_bounds(
     bounds: &[NativeIterationBound],
     cost_model: &crate::bytecode::CostModel,
 ) -> Result<Vec<u32>, VerifyError> {
+    let returns_text = module_chunk_returns_text(module)?;
     module
         .chunks
         .iter()
         .map(|chunk| match chunk.block_type {
             BlockType::Stream => wcet_stream_iteration_with_cost_model(chunk, cost_model, bounds),
-            _ => wcet_whole_chunk_with_cost_model(chunk, cost_model, bounds),
+            _ => wcet_whole_chunk_with_callees(chunk, cost_model, bounds, &returns_text),
         })
         .collect()
 }
@@ -1789,6 +1843,7 @@ fn reentrant_segmented_wcet(
     chunk: &Chunk,
     cost_model: &crate::bytecode::CostModel,
     native_bounds: &[NativeIterationBound],
+    callee_returns_text: &[bool],
 ) -> Result<Option<u32>, VerifyError> {
     // Collect Yield positions, bailing to None if any is nested.
     let mut depth: i32 = 0;
@@ -1813,7 +1868,8 @@ fn reentrant_segmented_wcet(
     }
 
     let len = chunk.ops.len();
-    let wcet_extra = chunk_wcet_extra(chunk, cost_model, native_bounds);
+    let wcet_extra =
+        chunk_wcet_extra_with_callees(chunk, cost_model, native_bounds, callee_returns_text);
     let mut max_cost: u32 = 0;
     let mut seg_start: usize = 0;
     // Each segment ends just past its terminating yield, so the yield
@@ -4075,7 +4131,7 @@ pub(crate) mod tests {
             ],
             BlockType::Reentrant,
         );
-        let segmented = reentrant_segmented_wcet(&reentrant, cm, &[])
+        let segmented = reentrant_segmented_wcet(&reentrant, cm, &[], &[])
             .expect("no loop bound error")
             .expect("top-level yields segment");
         // Whole-body cumulative cost for comparison.
@@ -4160,7 +4216,10 @@ pub(crate) mod tests {
             BlockType::Reentrant,
         );
         // The yield is nested, so the top-level segment split declines.
-        assert_eq!(reentrant_segmented_wcet(&chunk, cm, &[]).unwrap(), None);
+        assert_eq!(
+            reentrant_segmented_wcet(&chunk, cm, &[], &[]).unwrap(),
+            None
+        );
         // The clamped per-resume cost succeeds (loop counted once).
         let clamped = wcet_whole_chunk_with_cost_model(&chunk, cm, &[])
             .expect("clamp succeeds for productive loop");
@@ -4200,7 +4259,7 @@ pub(crate) mod tests {
             BlockType::Reentrant,
         );
         assert_eq!(
-            reentrant_segmented_wcet(&nested, cm, &[]).expect("no bound error"),
+            reentrant_segmented_wcet(&nested, cm, &[], &[]).expect("no bound error"),
             None,
             "a nested yield declines per-segment analysis"
         );
