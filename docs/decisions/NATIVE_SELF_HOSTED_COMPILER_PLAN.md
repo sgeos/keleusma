@@ -160,6 +160,12 @@ first line of evidence, and this check is the end-to-end one.
   trampolines for each turn. `frame.kel` signs byte-identically and verifies
   natively. A native's error fails the turn rather than reaching the script.
   Remaining are the stage cache, the selector and the corpus-wide check.
+- **2026-10-30, the cache and the corpus.** Each distinct stage module is
+  compiled once per factory, and a turn runs on the driver's shared buffer
+  directly, since copying it dominated. A warm native compile of
+  `10_multbyte.kel` takes 1.19 s against 1.46 s on the virtual machine. All 69
+  corpus sources in the subset compile byte-identically with native stages.
+  The selector remains.
 
 ## Risks and open points
 

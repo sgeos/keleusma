@@ -37,6 +37,7 @@ use inkwell::OptimizationLevel;
 use inkwell::context::Context;
 use inkwell::execution_engine::{ExecutionEngine, JitFunction};
 use keleusma::bytecode::Module;
+use std::rc::Rc;
 
 const CANARY: u64 = 0xDEAD_BEEF_FEED_FACE;
 
@@ -86,6 +87,14 @@ pub enum StageError {
     /// the stage wrote outside the extent its contract publishes. The stage
     /// must not be run again.
     Overrun(&'static str),
+    /// A caller's shared buffer is not the length the stage's contract
+    /// publishes, so the stage was not called.
+    SharedSize {
+        /// The published length.
+        expected: usize,
+        /// The length supplied.
+        actual: usize,
+    },
 }
 
 impl core::fmt::Display for StageError {
@@ -94,24 +103,35 @@ impl core::fmt::Display for StageError {
             StageError::Overrun(buffer) => {
                 write!(f, "the native stage wrote past its {buffer} buffer")
             }
+            StageError::SharedSize { expected, actual } => write!(
+                f,
+                "the shared buffer holds {actual} bytes and the stage publishes {expected}"
+            ),
         }
     }
 }
 
 impl std::error::Error for StageError {}
 
-/// One stage program, lowered and compiled once, with the buffers its native
-/// entry writes.
-pub struct NativeStage {
+/// One stage program, lowered and compiled once. Each [`NativeStage`] made
+/// from it with [`CompiledStage::instance`] owns fresh buffers and shares the
+/// code, so a caller that runs the same stage many times compiles it once.
+pub struct CompiledStage {
     // Kept alive for `entry`, which points into the engine's code.
     _engine: ExecutionEngine<'static>,
     entry: JitFunction<'static, Entry>,
-    shared: Vec<u8>,
     shared_bytes: usize,
-    private: Vec<u64>,
     private_words: usize,
-    region: Vec<u64>,
     region_words: usize,
+    image: Vec<u8>,
+}
+
+/// One run of a stage, with the buffers its native entry writes.
+pub struct NativeStage {
+    code: Rc<CompiledStage>,
+    shared: Vec<u8>,
+    private: Vec<u64>,
+    region: Vec<u64>,
     overrun: Option<StageError>,
 }
 
@@ -121,9 +141,21 @@ impl NativeStage {
         Self::with_natives(module, &[])
     }
 
+    /// Compile `module` with [`CompiledStage::with_natives`] and make one run
+    /// of it.
+    pub fn with_natives(
+        module: &Module,
+        natives: &[(&str, HostNative)],
+    ) -> Result<Self, LowerError> {
+        Ok(CompiledStage::with_natives(module, natives)?.instance())
+    }
+}
+
+impl CompiledStage {
     /// Lower `module`, bind each host native it calls to the function of the
-    /// same name in `natives`, compile it, and prepare a zeroed shared segment
-    /// with the private initializers installed.
+    /// same name in `natives`, and compile it. Each run made from the result
+    /// starts with a zeroed shared segment and the private initializers
+    /// installed.
     ///
     /// Refuses a module with no entry point, one whose entry is not the
     /// four-parameter stream entry the stage differential drives, and one whose
@@ -134,7 +166,7 @@ impl NativeStage {
     pub fn with_natives(
         module: &Module,
         natives: &[(&str, HostNative)],
-    ) -> Result<Self, LowerError> {
+    ) -> Result<Rc<Self>, LowerError> {
         let entry_index = module
             .entry_point
             .ok_or_else(|| LowerError::UnsupportedShape("a stage needs an entry point".into()))?;
@@ -192,38 +224,49 @@ impl NativeStage {
         let entry = unsafe { engine.get_function::<Entry>(&symbol) }
             .map_err(|e| LowerError::Internal(format!("JIT symbol `{symbol}`: {e}")))?;
 
-        let mut shared = vec![0u8; shared_bytes + 8];
-        shared[shared_bytes..].copy_from_slice(&CANARY.to_le_bytes());
-        let mut private = vec![0u64; private_words + 1];
-        for (word, chunk) in private.iter_mut().zip(image.chunks(8)) {
+        Ok(Rc::new(Self {
+            _engine: engine,
+            entry,
+            shared_bytes,
+            private_words,
+            region_words,
+            image,
+        }))
+    }
+
+    /// A fresh run of this stage, with a zeroed shared segment and region and
+    /// the private initializers installed, each buffer followed by a canary.
+    pub fn instance(self: &Rc<Self>) -> NativeStage {
+        let mut shared = vec![0u8; self.shared_bytes + 8];
+        shared[self.shared_bytes..].copy_from_slice(&CANARY.to_le_bytes());
+        let mut private = vec![0u64; self.private_words + 1];
+        for (word, chunk) in private.iter_mut().zip(self.image.chunks(8)) {
             let mut bytes = [0u8; 8];
             bytes[..chunk.len()].copy_from_slice(chunk);
             *word = u64::from_ne_bytes(bytes);
         }
-        private[private_words] = CANARY;
-        let mut region = vec![0u64; region_words + 1];
-        region[region_words] = CANARY;
-        Ok(Self {
-            _engine: engine,
-            entry,
+        private[self.private_words] = CANARY;
+        let mut region = vec![0u64; self.region_words + 1];
+        region[self.region_words] = CANARY;
+        NativeStage {
+            code: Rc::clone(self),
             shared,
-            shared_bytes,
             private,
-            private_words,
             region,
-            region_words,
             overrun: None,
-        })
+        }
     }
+}
 
+impl NativeStage {
     /// The stage's shared segment, `shared_data_bytes_for` bytes long.
     pub fn shared(&self) -> &[u8] {
-        &self.shared[..self.shared_bytes]
+        &self.shared[..self.code.shared_bytes]
     }
 
     /// The stage's shared segment, for the host's writes between turns.
     pub fn shared_mut(&mut self) -> &mut [u8] {
-        &mut self.shared[..self.shared_bytes]
+        &mut self.shared[..self.code.shared_bytes]
     }
 
     /// Deliver `reply` and return the word the stage yields next.
@@ -237,18 +280,62 @@ impl NativeStage {
         // SAFETY: each pointer addresses a buffer at least as long as the
         // extent the stage's contract publishes, plus a canary word.
         let word = unsafe {
-            self.entry.call(
+            self.code.entry.call(
                 reply,
                 self.shared.as_mut_ptr(),
                 self.private.as_mut_ptr().cast(),
                 self.region.as_mut_ptr().cast(),
             )
         };
-        let overrun = if self.shared[self.shared_bytes..] != CANARY.to_le_bytes() {
+        let overrun = if self.shared[self.code.shared_bytes..] != CANARY.to_le_bytes() {
             Some("shared")
-        } else if self.private[self.private_words] != CANARY {
+        } else if self.private[self.code.private_words] != CANARY {
             Some("private")
-        } else if self.region[self.region_words] != CANARY {
+        } else if self.region[self.code.region_words] != CANARY {
+            Some("region")
+        } else {
+            None
+        };
+        if let Some(buffer) = overrun {
+            let e = StageError::Overrun(buffer);
+            self.overrun = Some(e.clone());
+            return Err(e);
+        }
+        Ok(word)
+    }
+
+    /// [`Self::turn`] over a shared segment the caller owns, which must be
+    /// exactly the published length. The stage's own shared buffer is not used.
+    ///
+    /// This avoids copying the caller's buffer in and out on every turn, which
+    /// measured 62,542 MB over 118,014 turns for two compiles of one program on
+    /// 2026-10-30, against 81 ms of native execution. The cost is that a write
+    /// past the shared segment has no canary to land on. The private and region
+    /// buffers keep theirs.
+    pub fn turn_with_shared(&mut self, shared: &mut [u8], reply: i64) -> Result<i64, StageError> {
+        if let Some(e) = &self.overrun {
+            return Err(e.clone());
+        }
+        if shared.len() != self.code.shared_bytes {
+            return Err(StageError::SharedSize {
+                expected: self.code.shared_bytes,
+                actual: shared.len(),
+            });
+        }
+        // SAFETY: `shared` is exactly the published extent, which the length
+        // check above establishes, and the other two pointers address buffers
+        // at least as long as their published extents, plus a canary word.
+        let word = unsafe {
+            self.code.entry.call(
+                reply,
+                shared.as_mut_ptr(),
+                self.private.as_mut_ptr().cast(),
+                self.region.as_mut_ptr().cast(),
+            )
+        };
+        let overrun = if self.private[self.code.private_words] != CANARY {
+            Some("private")
+        } else if self.region[self.code.region_words] != CANARY {
             Some("region")
         } else {
             None
