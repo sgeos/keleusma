@@ -97,10 +97,16 @@ Supported `<scope>` values (branch names and commit subjects alike): `feat` (new
   the no-ff merge rule: the branch stays linear *toward* its base and is merged *into* the base with a
   bubble. Rebasing rewrites the branch's own (possibly red) work-in-progress commits, which is fine
   because a nested branch is private until it merges.
-- A merge **proceeds once CI is green on a draft pull request** from the feature branch to the
+- A merge **proceeds once CI is green on a pull request** from the feature branch to the
   version branch (changed 2026-08-11; the local gate no longer gates a merge) — see
   [Definition of Green](#definition-of-green). The merging agent does not wait for CI to start the
   merge, but CI is binding afterward.
+- **A draft defers the self-host tier.** Since 2026-10-30, on the operator's adoption of kaizen
+  recommendation R3, a draft pull request's full run skips the self-host archive build and its four
+  shards, about half of a full run. Iterate as a draft. Marking the pull request ready starts the
+  run that includes the tier, and **the merge waits for that run to be green**. A draft's green
+  result does not cover the byte-identical oracle. GitHub refuses to merge a draft, and `CI result`
+  fails a ready pull request whose shards did not run.
 - **Direct commits** to the version branch or `main` are limited to small green documentation or
   process changes. Everything else flows through a feature branch.
 
@@ -170,8 +176,9 @@ Remote continuous integration establishes the version-branch green requirement. 
 one machine.
 
 Open a **draft pull request** from the feature branch to the version branch. `pull_request:
-branches: [main, 'v*']` triggers the full matrix, so the branch is verified on hosted runners.
-**Merge on CI green**, at the commit CI ran, without rebasing.
+branches: [main, 'v*']` triggers the full matrix without the self-host tier while it is a draft,
+so the branch is verified on hosted runners. Mark it ready when the work is done, which runs the
+matrix with the tier. **Merge on the ready run's CI green**, at the commit CI ran, without rebasing.
 
 | | local `release-gate.sh` | CI |
 |---|---|---|
