@@ -15,17 +15,14 @@
 //! # What this does not do yet
 //!
 //! - Host natives are bound as C function pointers, [`HostNative`], through
-//!   the JIT's symbol mapping. The ten natives `frame.kel` calls reach an
-//!   executor through `StageExecutor::register_native` as boxed closures over
-//!   the driver's signing state, so binding them needs a bridge from a closure
-//!   to a C call, which is not built yet.
+//!   the JIT's symbol mapping. A caller with closures, as the driver has, binds
+//!   trampolines, which `crate::stage_factory` does for `frame.kel`.
 //! - A native is bound infallible, as `lower_module` lowers every native call
 //!   outside a coroutine. A native that reports a soft failure on the virtual
 //!   machine has no way to report it here.
 //! - The driver reaches this through `crate::stage_factory`, which answers
-//!   V0.2.X's `StageFactory` since absorption 118. A stage that calls a host
-//!   native is declined there, because the driver registers natives as boxed
-//!   Rust closures and `HostNative` binds C functions.
+//!   V0.2.X's `StageFactory` since absorption 118 and bridges the driver's
+//!   closure natives to `HostNative` trampolines.
 //!
 //! # The leaked context
 //!

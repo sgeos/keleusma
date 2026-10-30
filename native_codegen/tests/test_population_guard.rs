@@ -99,7 +99,9 @@
 // differential of operator question 6, 2026-10-30. No name disappeared.
 // 829 -> 831: two tests in `native_stage_factory.rs`, operator question 19
 // step 3, 2026-10-30. No name disappeared.
-const RECORDED_TEST_FUNCTIONS: usize = 831;
+// 831 -> 832: `the_framing_stage_runs_natively_with_its_natives_bridged` in
+// `native_stage_factory.rs`, operator question 19. No name disappeared.
+const RECORDED_TEST_FUNCTIONS: usize = 832;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

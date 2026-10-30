@@ -155,6 +155,11 @@ first line of evidence, and this check is the end-to-end one.
   declined. Remaining are a bridge from the driver's closure natives to C
   calls for `frame.kel`, a cache of built stages, a selector for the three
   compilers, and the corpus-wide end-to-end check.
+- **2026-10-30, the closure bridge.** Each native a stage calls is bound to a
+  C trampoline by arity and slot, and the driver's closures are lent to the
+  trampolines for each turn. `frame.kel` signs byte-identically and verifies
+  natively. A native's error fails the turn rather than reaching the script.
+  Remaining are the stage cache, the selector and the corpus-wide check.
 
 ## Risks and open points
 

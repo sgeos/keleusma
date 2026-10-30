@@ -14,9 +14,29 @@
 //! operations go to an inner virtual machine built from the same module. Its
 //! shared slot accessors only read the module's layout, and `call_function` is
 //! what the driver uses to read the protocol constants, small functions over no
-//! state. A stage that calls a host native is declined, because the natives the
-//! driver registers are boxed Rust closures and the native code calls C
-//! functions, so `frame.kel` stays on the virtual machine.
+//! state.
+//!
+//! # Host natives
+//!
+//! The driver registers a stage's natives as boxed Rust closures through
+//! `register_native`, and native code calls C functions. Each native a stage
+//! calls is therefore bound to a trampoline, a C function fixed by its arity
+//! and its slot in the stage's native list, when the stage is built. During a
+//! turn the executor lends its closures to a thread-local table, and the
+//! trampoline calls the closure in its slot with its arguments as words and
+//! returns the word it gives. This is how `frame.kel` runs natively.
+//!
+//! A native's error cannot reach native code, because the lowering treats a
+//! native call outside a coroutine as infallible. The trampoline records the
+//! first error and returns zero, the stage runs on to its next yield, and the
+//! turn then fails with that error. This is stricter than the virtual machine,
+//! which stops at a native whose call does not reify failure and hands a
+//! failure flag to the script at one that does, as every call in `frame.kel`
+//! does. V0.2.X states that a correct framing run reaches no native error, so
+//! the two agree wherever the virtual machine's run is correct, and a native
+//! run refuses where the script would have seen a failure flag. A native
+//! returning anything but a word fails the turn the same way. At most [`MAX_BRIDGED_NATIVES`] distinct natives of arity at
+//! most three are bridged, and a stage needing more is declined.
 //!
 //! # The turn rule
 //!
@@ -35,20 +55,141 @@
 //! - Each build lowers and compiles its stage again and leaks one LLVM context,
 //!   as `NativeStage` documents. Nothing is cached between builds.
 
-use crate::stage::NativeStage;
+use crate::stage::{HostNative, NativeStage};
 use keleusma::Arena;
 use keleusma::bytecode::{Module, Op, Value};
 use keleusma::selfhost::{StageExecutor, StageFactory, StageNative};
 use keleusma::vm::{
     DEFAULT_ARENA_CAPACITY, Vm, VmError, VmState, required_persistent_capacity_for,
 };
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::mem::ManuallyDrop;
+
+/// The most distinct host natives one stage may have bridged. `frame.kel`
+/// calls ten.
+pub const MAX_BRIDGED_NATIVES: usize = 16;
+
+thread_local! {
+    /// The closures of the stage whose turn is running, by bridge slot.
+    static ACTIVE: RefCell<Vec<Option<StageNative>>> = const { RefCell::new(Vec::new()) };
+    /// The first error a bridged native reported during the running turn.
+    static FAULT: RefCell<Option<VmError>> = const { RefCell::new(None) };
+}
+
+fn dispatch(slot: usize, args: &[i64]) -> i64 {
+    let mut values = [Value::Int(0), Value::Int(0), Value::Int(0)];
+    for (v, &a) in values.iter_mut().zip(args) {
+        *v = Value::Int(a);
+    }
+    let result = ACTIVE.with(|active| match active.borrow().get(slot) {
+        Some(Some(native)) => native(&values[..args.len()]),
+        _ => Err(VmError::NativeError(format!(
+            "bridge slot {slot} has no registered native"
+        ))),
+    });
+    let fault = match result {
+        Ok(Value::Int(word)) => return word,
+        Ok(other) => VmError::TypeError(format!(
+            "a bridged native returned {other:?}, and native code takes a word"
+        )),
+        Err(e) => e,
+    };
+    FAULT.with(|f| {
+        f.borrow_mut().get_or_insert(fault);
+    });
+    0
+}
+
+extern "C" fn bridge0<const S: usize>() -> i64 {
+    dispatch(S, &[])
+}
+extern "C" fn bridge1<const S: usize>(a: i64) -> i64 {
+    dispatch(S, &[a])
+}
+extern "C" fn bridge2<const S: usize>(a: i64, b: i64) -> i64 {
+    dispatch(S, &[a, b])
+}
+extern "C" fn bridge3<const S: usize>(a: i64, b: i64, c: i64) -> i64 {
+    dispatch(S, &[a, b, c])
+}
+
+macro_rules! slots {
+    ($f:ident, $t:ty) => {
+        [
+            $f::<0> as $t,
+            $f::<1>,
+            $f::<2>,
+            $f::<3>,
+            $f::<4>,
+            $f::<5>,
+            $f::<6>,
+            $f::<7>,
+            $f::<8>,
+            $f::<9>,
+            $f::<10>,
+            $f::<11>,
+            $f::<12>,
+            $f::<13>,
+            $f::<14>,
+            $f::<15>,
+        ]
+    };
+}
+
+/// The trampoline for `slot` taking `arity` words, or `None` past the limits.
+fn trampoline(slot: usize, arity: u8) -> Option<HostNative> {
+    type F0 = unsafe extern "C" fn() -> i64;
+    type F1 = unsafe extern "C" fn(i64) -> i64;
+    type F2 = unsafe extern "C" fn(i64, i64) -> i64;
+    type F3 = unsafe extern "C" fn(i64, i64, i64) -> i64;
+    let t0: [F0; MAX_BRIDGED_NATIVES] = slots!(bridge0, F0);
+    let t1: [F1; MAX_BRIDGED_NATIVES] = slots!(bridge1, F1);
+    let t2: [F2; MAX_BRIDGED_NATIVES] = slots!(bridge2, F2);
+    let t3: [F3; MAX_BRIDGED_NATIVES] = slots!(bridge3, F3);
+    match arity {
+        0 => t0.get(slot).copied().map(HostNative::Arity0),
+        1 => t1.get(slot).copied().map(HostNative::Arity1),
+        2 => t2.get(slot).copied().map(HostNative::Arity2),
+        3 => t3.get(slot).copied().map(HostNative::Arity3),
+        _ => None,
+    }
+}
+
+/// The natives `module` calls, each with its one arity, in first-call order.
+fn called_natives(module: &Module) -> Result<Vec<(String, u8)>, String> {
+    let mut out: Vec<(String, u8)> = Vec::new();
+    for op in module.chunks.iter().flat_map(|c| &c.ops) {
+        let (Op::CallVerifiedNative(index, n) | Op::CallExternalNative(index, n)) = *op else {
+            continue;
+        };
+        // The high bit asks the virtual machine to reify a native's failure as a
+        // flag. The low seven bits are the argument count.
+        let argc = n & 0x7F;
+        let name = module
+            .native_names
+            .get(usize::from(index))
+            .ok_or_else(|| format!("native index {index} is past the native table"))?;
+        match out.iter().find(|(n, _)| n == name) {
+            Some((_, a)) if *a != argc => {
+                return Err(format!(
+                    "`{name}` is called with {a} and with {argc} arguments"
+                ));
+            }
+            Some(_) => {}
+            None => out.push((name.clone(), argc)),
+        }
+    }
+    Ok(out)
+}
 
 /// A stage run natively, with an inner virtual machine for its layout queries
 /// and its plain function calls.
 pub struct NativeExecutor {
     stage: NativeStage,
+    // The natives the stage calls, by bridge slot, and the closures the driver
+    // registered for them.
+    natives: Vec<String>,
+    closures: Vec<Option<StageNative>>,
     // Dropped before `arena`, which it borrows. See `Drop`.
     vm: ManuallyDrop<Vm<'static, 'static>>,
     arena: *mut Arena,
@@ -58,12 +199,20 @@ pub struct NativeExecutor {
 impl NativeExecutor {
     /// Build `module` natively, or say why it cannot be.
     pub fn new(module: &Module) -> Result<Self, String> {
-        if calls_a_host_native(module) {
-            return Err(String::from(
-                "the stage calls a host native, which the driver registers as a closure",
-            ));
+        let called = called_natives(module)?;
+        let mut bindings = Vec::with_capacity(called.len());
+        for (slot, (name, arity)) in called.iter().enumerate() {
+            let native = trampoline(slot, *arity).ok_or_else(|| {
+                format!(
+                    "`{name}`, native {slot} of arity {arity}, is past the bridge's {MAX_BRIDGED_NATIVES} \
+                     slots of arity at most three"
+                )
+            })?;
+            bindings.push((name.as_str(), native));
         }
-        let stage = NativeStage::new(module).map_err(|e| e.to_string())?;
+        let stage = NativeStage::with_natives(module, &bindings).map_err(|e| e.to_string())?;
+        let natives: Vec<String> = called.into_iter().map(|(name, _)| name).collect();
+        let closures = natives.iter().map(|_| None).collect();
         let need = required_persistent_capacity_for(module);
         let arena = Box::into_raw(Box::new(Arena::with_capacity(
             DEFAULT_ARENA_CAPACITY + need,
@@ -85,6 +234,8 @@ impl NativeExecutor {
         };
         Ok(Self {
             stage,
+            natives,
+            closures,
             vm: ManuallyDrop::new(vm),
             arena,
             started: false,
@@ -104,11 +255,22 @@ impl NativeExecutor {
                 self.stage.shared().len()
             )));
         }
+        if let Some(i) = self.closures.iter().position(Option::is_none) {
+            return Err(VmError::NativeError(format!(
+                "the stage calls `{}`, which the driver did not register",
+                self.natives[i]
+            )));
+        }
         self.stage.shared_mut().copy_from_slice(shared);
-        let word = self
-            .stage
-            .turn(*reply)
-            .map_err(|e| VmError::NativeError(e.to_string()))?;
+        // Lend the closures to the trampolines for this turn only.
+        ACTIVE.with(|a| std::mem::swap(&mut *a.borrow_mut(), &mut self.closures));
+        FAULT.with(|f| *f.borrow_mut() = None);
+        let word = self.stage.turn(*reply);
+        ACTIVE.with(|a| std::mem::swap(&mut *a.borrow_mut(), &mut self.closures));
+        let word = word.map_err(|e| VmError::NativeError(e.to_string()))?;
+        if let Some(fault) = FAULT.with(|f| f.borrow_mut().take()) {
+            return Err(fault);
+        }
         shared.copy_from_slice(self.stage.shared());
         Ok(VmState::Yielded(Value::Int(word)))
     }
@@ -157,17 +319,12 @@ impl StageExecutor for NativeExecutor {
         self.vm.call_function(chunk, args)
     }
     fn register_native(&mut self, name: &str, native: StageNative) {
-        // Not reached for a stage this executor builds, which calls no native.
-        self.vm.register_native_closure(name, native);
+        // A native the stage does not call is not bound, as the virtual
+        // machine accepts a registration it never calls.
+        if let Some(slot) = self.natives.iter().position(|n| n == name) {
+            self.closures[slot] = Some(native);
+        }
     }
-}
-
-fn calls_a_host_native(module: &Module) -> bool {
-    module.chunks.iter().any(|c| {
-        c.ops
-            .iter()
-            .any(|op| matches!(op, Op::CallVerifiedNative(..) | Op::CallExternalNative(..)))
-    })
 }
 
 /// A factory that builds every stage it can natively and counts what it did.
