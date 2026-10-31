@@ -37,7 +37,7 @@ increment, and a table that drifts is worse than no table.
 | [ORDER3_COMPLETION_AUDIT.md](./ORDER3_COMPLETION_AUDIT.md) | Trap-analysis completion evidence, residual limits and verification receipts |
 | [FLAT_TEXT_DECODE_SOUNDNESS.md](./FLAT_TEXT_DECODE_SOUNDNESS.md) | The yield type gap and unchecked flat Text decode, their repair and residual limits |
 | [FLAT_TEXT_LAYOUT_PROOF.md](./FLAT_TEXT_LAYOUT_PROOF.md) | The design of the typed pass that proves a flat Text field is written only from text, and where it cannot reach |
-| [ARRAY_WIRE_SLOT_DESIGN.md](./ARRAY_WIRE_SLOT_DESIGN.md) | Designed 2026-10-30, not authorized: an array as one wire record plus a length, the fresh measurement that most per-element wire cost is already gone, packed private storage, and the operator's open decisions |
+| [ARRAY_WIRE_SLOT_DESIGN.md](./ARRAY_WIRE_SLOT_DESIGN.md) | Ruled 2026-10-31: encoding F, one wire record per declared field, the per-field schema hash, one logical slot per field and packed private storage, at `BYTECODE_VERSION` 2; not yet implemented |
 | [SIGNATURE_VERIFY_BOUNDS.md](./SIGNATURE_VERIFY_BOUNDS.md) | The signature verifier's panic on a short declared total, reachable from signed loading, and its repair |
 | [WCET_STRUCTURAL_MARKERS.md](./WCET_STRUCTURAL_MARKERS.md) | The time bound's uncharged Else, EndIf, EndLoop and final loop header, and their repair |
 | [ORDER5_COMPLETION_AUDIT.md](./ORDER5_COMPLETION_AUDIT.md) | Cryptographic-framing completion evidence, trust boundary, residual limits and receipts |
@@ -49,8 +49,8 @@ increment, and a table that drifts is worse than no table.
 | [COMPOSITE_REGION_EVIDENCE.md](./COMPOSITE_REGION_EVIDENCE.md) | What the V0.2.3 runtime establishes for the composite-region-reuse proof, with provenance per claim |
 | [YIELD_OWNERSHIP_MODE.md](./YIELD_OWNERSHIP_MODE.md) | Accepted in principle: `ref`/`out` on a yielding declaration's return signature, choosing machine-owned or host-owned storage for the yielded value (V0.3.0 or later) |
 | [STRING_ABI_OPTION_B.md](./STRING_ABI_OPTION_B.md) | Ruled and binding on this line, received directly 2026-08-30: string marshalling makes the two embeddings agree; not yet implemented |
-| [TEXT_CAPACITY_TYPE.md](./TEXT_CAPACITY_TYPE.md) | Authorized and designed 2026-08-31: static text is a `.rodata` pointer, dynamic text is the capacity-carrying `Text<N>`; values and the literal cast implemented 2026-10-30, operations not yet |
-| [RING_BUFFER_DESIGN.md](./RING_BUFFER_DESIGN.md) | Proposed 2026-10-30 for B42: the compiler-managed `Ring<T, N>` data field, its lowering to existing opcodes, its static bounds, schedule and open decisions; not yet implemented |
+| [TEXT_CAPACITY_TYPE.md](./TEXT_CAPACITY_TYPE.md) | Authorized and designed 2026-08-31: static text is a `.rodata` pointer, dynamic text is the capacity-carrying `Text<N>`; values, the literal cast and five operations implemented by 2026-10-31, the operations moving to method calls, the one-address collapse deferred |
+| [RING_BUFFER_DESIGN.md](./RING_BUFFER_DESIGN.md) | Ruled 2026-10-31 for B42 except the batch-push overflow arm, proposed for review: the compiler-managed `Ring<T, N>` data field with method-call operations, its lowering to existing opcodes, its static bounds and schedule; not yet implemented |
 | [FLOAT_ARITH_WIDTH_BRIEF.md](./FLOAT_ARITH_WIDTH_BRIEF.md) | Why float arithmetic must track the module's declared width, the ten narrowing sites, and the mutation result that measured their coverage |
 | [FLOAT_FORMAT_LADDER.md](./FLOAT_FORMAT_LADDER.md) | Companion to the V0.3.X line's `FLOAT_LADDER.md`, which holds the ruling: what the ladder demands of this runtime, why widen-compute-narrow is forced rather than preferred, and two refinements to the arithmetic-width precondition |
 | [INVALID_BYTECODE_CENSUS.md](./INVALID_BYTECODE_CENSUS.md) | Every site where the runtime raises `InvalidBytecode`, with a verdict per group; no site is claimed unreachable |
