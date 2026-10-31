@@ -230,9 +230,11 @@ jobs:
   # built with `encryption`, and with those features together with `self-host`. So this
   # job keeps, from `keleusma`, the library's tests outside its `selfhost::` module,
   # which hold the unit tests gated on `encryption`, and the integration binaries whose
-  # source names the `encryption`, `signatures` or `shell` feature. Every other package
-  # runs in full. `tests/ci_shard_coverage.rs` derives that binary list from `tests/`
-  # and fails when the filter misses a gated file or names one that does not exist.
+  # source names the `encryption`, `signatures`, `shell` or `text` feature. `text` is
+  # enabled only here, through `keleusma-cli`, so the bundled text operations run only
+  # here. Every other package runs in full. `tests/ci_shard_coverage.rs` derives that
+  # binary list from `tests/` and fails when the filter misses a gated file or names one
+  # that does not exist.
   test:
     name: Test
     needs: changes
@@ -247,7 +249,7 @@ jobs:
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: nextest
-      - run: cargo nextest run --profile ci --workspace -E 'not package(keleusma) | (binary(=keleusma) & not test(/^selfhost::/)) | binary(=crypto_framing) | binary(=ecc_signature_ordering) | binary(=fuzz_corpus_replay) | binary(=hot_swap_trust_matrix) | binary(=native_declaration_agreement) | binary(=proven_execution) | binary(=signature_verify_bounds) | binary(=stage_executor) | binary(=trap_policy)'
+      - run: cargo nextest run --profile ci --workspace -E 'not package(keleusma) | (binary(=keleusma) & not test(/^selfhost::/)) | binary(=crypto_framing) | binary(=ecc_signature_ordering) | binary(=fuzz_corpus_replay) | binary(=hot_swap_trust_matrix) | binary(=native_declaration_agreement) | binary(=proven_execution) | binary(=signature_verify_bounds) | binary(=stage_executor) | binary(=text_ops) | binary(=text_ops_without_feature) | binary(=trap_policy)'
       - name: List the tests that needed a retry
         if: ${{ !cancelled() }}
         run: scripts/ci_flaky_report.py --label "Test" --summary "$GITHUB_STEP_SUMMARY"
@@ -655,6 +657,17 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
           cargo test
           cargo build --target wasm32-unknown-unknown
+      # The fuzz package needs a nightly toolchain to build, which the scheduled Fuzz
+      # workflow provides. This step guards only what a pull request can break without
+      # touching fuzz/, its lockfile. The package depends on `keleusma` by path, so a
+      # dependency change in the workspace leaves fuzz/Cargo.lock stale, and
+      # `cargo metadata --locked` fails on a stale lock without compiling anything.
+      - name: Check the fuzz package's format and lockfile
+        if: ${{ !cancelled() }}
+        run: |
+          cd fuzz
+          cargo fmt --check
+          cargo metadata --locked --format-version 1 > /dev/null
 
   selfhost-compiler:
     name: Self-hosted compiler subproject
