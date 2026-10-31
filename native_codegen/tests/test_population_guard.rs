@@ -107,7 +107,11 @@
 // ignored by default, and `a_sample_of_the_corpus_compiles_identically_with_native_stages`
 // in `native_stage_factory.rs`, operator question 19, 2026-10-30. No name
 // disappeared.
-const RECORDED_TEST_FUNCTIONS: usize = 835;
+// 835 -> 837: `the_three_compilers_build_byte_identical_libraries` and
+// `an_out_of_subset_source_suggests_the_reference_compiler` in
+// `kel_native_cli.rs`, the compiler selector of operator question 19,
+// 2026-10-30. No name disappeared.
+const RECORDED_TEST_FUNCTIONS: usize = 837;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

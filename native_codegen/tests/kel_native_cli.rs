@@ -6,13 +6,18 @@
 //! package, and this file drives it as a user would. A library built through
 //! the command, archive included, is linked into a C host and agrees with the
 //! virtual machine, its shared object is produced, `inspect` reports the
-//! contract, and every documented exit status is reached.
+//! contract, and every documented exit status is reached. Since question 19
+//! the command also selects the compiler, and the three compilers build the
+//! same library bytes.
 //!
 //! # What this does not establish
 //!
 //! The command is not part of the `keleusma-cli` front end, because this
 //! package is detached so that LLVM is not a build dependency of the whole
-//! repository. Whether the shapes should share one command is an open question.
+//! repository. Under question 16, `keleusma native` delegates to this command
+//! and passes every argument through, which V0.2.X tests on its side. The
+//! selector's byte identity is shown here for one program, and for the corpus
+//! by `native_stage_factory.rs`.
 mod common;
 
 use keleusma::bytecode::Value;
@@ -193,6 +198,12 @@ fn every_documented_failure_reaches_its_exit_status() {
     let bad = write_source(&dir, "bad.kel", "fn main( -> Word {");
     let atomic = write_source(&dir, "atomic.kel", "fn main(a: Word) -> Word { a + 1 }");
     let missing = dir.join("absent.kel").to_string_lossy().into_owned();
+    let undefined = write_source(
+        &dir,
+        "undefined.kel",
+        "fn main() -> Word { undefined_symbol }",
+    );
+    let outside = write_source(&dir, "outside.kel", OUTSIDE_SUBSET);
     let cases: &[(&[&str], u8)] = &[
         (&["frobnicate", &good], 64),
         (&["build", &good, "--out", &out], 64),
@@ -201,6 +212,14 @@ fn every_documented_failure_reaches_its_exit_status() {
         (&["build", &bad, "--prefix", "p", "--out", &out], 65),
         (&["build", &atomic, "--prefix", "p", "--out", &out], 70),
         (&["build", &good, "--prefix", "9bad", "--out", &out], 70),
+        (&["inspect", &good, "--compiler", "bogus"], 64),
+        (&["inspect", &good, "--compiler"], 64),
+        (&["inspect", &undefined, "--compiler", "self-hosted"], 65),
+        (&["inspect", &outside, "--compiler", "self-hosted"], 72),
+        (
+            &["inspect", &outside, "--compiler", "self-hosted-native"],
+            72,
+        ),
     ];
     for (args, code) in cases {
         let ran = cli(args);
@@ -212,5 +231,81 @@ fn every_documented_failure_reaches_its_exit_status() {
         );
         assert!(!ran.stderr.is_empty(), "{args:?} failed silently");
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A pipe into a generic template. The reference compiler accepts it, and the
+/// self-hosted parser refuses it as outside the subset, which is the witness
+/// `tests/self_hosted_backend.rs` uses for `SelfHostError::Unsupported`.
+const OUTSIDE_SUBSET: &str = "fn id<T>(x: T) -> T { x } \
+    loop main(t: Word) -> Word { let v: Word = t |> id(); let r = yield v; yield r }";
+
+/// **QUESTION 19, THE SELECTOR.** Each of the three compilers produces the
+/// module the native route lowers, and the libraries they yield are the same
+/// bytes. Equal object files are the end-to-end form of the corpus check in
+/// `native_stage_factory.rs`, here through the command a user runs. The native
+/// self-hosted route must report every stage native and none declined, so a
+/// factory that silently fell back to the virtual machine fails here.
+#[test]
+fn the_three_compilers_build_byte_identical_libraries() {
+    let dir = scratch("compilers");
+    let src = write_source(&dir, "stream.kel", STREAM);
+    let mut files: Vec<(String, Vec<Vec<u8>>)> = Vec::new();
+    for compiler in ["rust", "self-hosted", "self-hosted-native"] {
+        let out = dir.join(compiler).to_string_lossy().into_owned();
+        let built = cli(&[
+            "build",
+            &src,
+            "--prefix",
+            "kel_cli",
+            "--out",
+            &out,
+            "--compiler",
+            compiler,
+        ]);
+        assert!(built.status.success(), "{compiler}: {built:?}");
+        let stderr = String::from_utf8_lossy(&built.stderr);
+        if compiler == "self-hosted-native" {
+            assert!(
+                stderr.contains("native stages, 0 declined"),
+                "the native route did not report a fully native compile: {stderr}"
+            );
+        } else {
+            assert!(
+                stderr.is_empty(),
+                "{compiler} wrote to standard error: {stderr}"
+            );
+        }
+        let bytes = ["kel_cli.o", "kel_cli.h", "kel_cli.rs"]
+            .iter()
+            .map(|f| std::fs::read(dir.join(compiler).join(f)).unwrap())
+            .collect();
+        files.push((compiler.to_string(), bytes));
+    }
+    for (compiler, bytes) in &files[1..] {
+        assert!(
+            bytes == &files[0].1,
+            "{compiler} built a library that differs from the reference compiler's"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The out-of-subset failure names the way forward, and the reference route
+/// does not stop at the compiler for the same source. The native route then
+/// refuses it for its own reason, which this test does not depend on.
+#[test]
+fn an_out_of_subset_source_suggests_the_reference_compiler() {
+    let dir = scratch("outside");
+    let src = write_source(&dir, "outside.kel", OUTSIDE_SUBSET);
+    let selfhosted = cli(&["inspect", &src, "--compiler", "self-hosted"]);
+    assert_eq!(selfhosted.status.code(), Some(72), "{selfhosted:?}");
+    assert!(
+        String::from_utf8_lossy(&selfhosted.stderr).contains("retry with --compiler rust"),
+        "{selfhosted:?}"
+    );
+    let reference = cli(&["inspect", &src]);
+    assert_ne!(reference.status.code(), Some(65), "{reference:?}");
+    assert_ne!(reference.status.code(), Some(72), "{reference:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }

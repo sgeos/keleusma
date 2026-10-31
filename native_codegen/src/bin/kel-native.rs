@@ -3,7 +3,9 @@
 //! ```text
 //! kel-native build <source.kel> --prefix <name> --out <dir>
 //!                  [--target <triple>] [--archive] [--shared] [--fallible <native>]...
+//!                  [--compiler <rust|self-hosted|self-hosted-native>]
 //! kel-native inspect <source.kel> [--target <triple>] [--fallible <native>]...
+//!                  [--compiler <rust|self-hosted|self-hosted-native>]
 //! ```
 //!
 //! `build` lowers the source's entry as a coroutine library through
@@ -17,12 +19,29 @@
 //! trap verdict, the cost claim, the stack bound and the kind census, so a user
 //! can see what the native shape will promise before writing anything.
 //!
+//! `--compiler` selects the compiler that produces the module the native route
+//! lowers, which is question 19's selector. `rust`, the default, is the
+//! reference compiler. `self-hosted` is the Keleusma-written pipeline on the
+//! virtual machine, and `self-hosted-native` is the same pipeline with every
+//! stage it can lower run as native code through
+//! [`keleusma_native::stage_factory::NativeStageFactory`]. Both self-hosted
+//! routes accept only the self-hosted subset, compile for the host's widths,
+//! and are cross-checked against the reference compiler by
+//! `keleusma::selfhost::self_hosted_compile`, so a divergence fails rather
+//! than producing a module. A divergence shows that the two disagree, not which
+//! one is wrong. A stage the native factory declines runs on the virtual
+//! machine, and the command reports how many did, so a fully native compile is
+//! visible as zero declined.
+//!
 //! # Exit status
 //!
 //! Zero on success, 64 for a usage error, 65 for a source the reference
-//! compiler rejects, 66 for a source that cannot be read, 70 for a module the
-//! native route refuses, and 71 for a failure to write or to run `ar` or `cc`.
-//! Every failure prints its reason on standard error.
+//! compiler or the self-hosted pipeline rejects, 66 for a source that cannot
+//! be read, 70 for a module the native route refuses, 71 for a failure to
+//! write or to run `ar` or `cc`, and 72 for a source the reference compiler
+//! accepts and a selected self-hosted compiler cannot compile, with a hint to
+//! retry with `--compiler rust`. Every failure prints its reason on standard
+//! error.
 
 use inkwell::OptimizationLevel;
 use inkwell::context::Context;
@@ -31,13 +50,53 @@ use inkwell::targets::{
 };
 use keleusma_native::coroutine::{self, HostContracts};
 use keleusma_native::linkage;
+use keleusma_native::stage_factory::NativeStageFactory;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::rc::Rc;
 
 const USAGE: &str = "usage:
-  kel-native build <source.kel> --prefix <name> --out <dir> [--target <triple>] [--archive] [--shared] [--fallible <native>]...
-  kel-native inspect <source.kel> [--target <triple>] [--fallible <native>]...";
+  kel-native build <source.kel> --prefix <name> --out <dir> [--target <triple>] [--archive] [--shared] [--fallible <native>]... [--compiler <rust|self-hosted|self-hosted-native>]
+  kel-native inspect <source.kel> [--target <triple>] [--fallible <native>]... [--compiler <rust|self-hosted|self-hosted-native>]";
+
+/// The compiler that produces the module the native route lowers.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Compiler {
+    /// The Rust reference compiler.
+    Rust,
+    /// The self-hosted pipeline with every stage on the virtual machine.
+    SelfHosted,
+    /// The self-hosted pipeline with its stages run as native code where they lower.
+    SelfHostedNative,
+}
+
+impl Compiler {
+    fn parse(name: &str) -> Option<Self> {
+        match name {
+            "rust" => Some(Self::Rust),
+            "self-hosted" => Some(Self::SelfHosted),
+            "self-hosted-native" => Some(Self::SelfHostedNative),
+            _ => None,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Rust => "rust",
+            Self::SelfHosted => "self-hosted",
+            Self::SelfHostedNative => "self-hosted-native",
+        }
+    }
+}
+
+/// The compiled module, the program it was parsed from, and, for the native
+/// self-hosted route, how many stages ran natively and how many were declined.
+struct Compiled {
+    module: keleusma::bytecode::Module,
+    program: keleusma::ast::Program,
+    stages: Option<(usize, usize)>,
+}
 
 /// A failure and the exit status it maps to.
 struct Failure(u8, String);
@@ -54,6 +113,7 @@ struct Args {
     archive: bool,
     shared: bool,
     fallible: Vec<String>,
+    compiler: Compiler,
 }
 
 fn usage(why: &str) -> Failure {
@@ -75,6 +135,7 @@ fn parse_args(raw: &[String]) -> Outcome<Args> {
         archive: false,
         shared: false,
         fallible: Vec::new(),
+        compiler: Compiler::Rust,
     };
     let mut source = None;
     while let Some(a) = it.next() {
@@ -90,6 +151,14 @@ fn parse_args(raw: &[String]) -> Outcome<Args> {
             "--fallible" => args.fallible.push(value("--fallible")?),
             "--archive" => args.archive = true,
             "--shared" => args.shared = true,
+            "--compiler" => {
+                let name = value("--compiler")?;
+                args.compiler = Compiler::parse(&name).ok_or_else(|| {
+                    usage(&format!(
+                        "unknown compiler `{name}`, expected rust, self-hosted or self-hosted-native"
+                    ))
+                })?;
+            }
             flag if flag.starts_with("--") => return Err(usage(&format!("unknown flag `{flag}`"))),
             path if source.is_none() => source = Some(PathBuf::from(path)),
             extra => return Err(usage(&format!("unexpected argument `{extra}`"))),
@@ -135,16 +204,59 @@ fn machine(target: Option<&str>) -> Outcome<TargetMachine> {
         .ok_or_else(|| Failure(70, String::from("the target machine could not be created")))
 }
 
-/// The module and the program it was compiled from, which supplies the opaque
-/// type names the module does not record.
-fn compile(path: &Path) -> Outcome<(keleusma::bytecode::Module, keleusma::ast::Program)> {
+/// The module the selected compiler produces, and the program parsed by the
+/// reference front end, which supplies the opaque type names the module does
+/// not record. The parse runs for every compiler, so a source the reference
+/// front end rejects fails with 65 before a self-hosted route is tried.
+fn compile(path: &Path, compiler: Compiler) -> Outcome<Compiled> {
     let src = std::fs::read_to_string(path)
         .map_err(|e| Failure(66, format!("{}: {e}", path.display())))?;
     let tokens = keleusma::lexer::tokenize(&src).map_err(|e| Failure(65, format!("lex: {e:?}")))?;
-    let ast = keleusma::parser::parse(&tokens).map_err(|e| Failure(65, format!("parse: {e:?}")))?;
-    let module =
-        keleusma::compiler::compile(&ast).map_err(|e| Failure(65, format!("compile: {e:?}")))?;
-    Ok((module, ast))
+    let program =
+        keleusma::parser::parse(&tokens).map_err(|e| Failure(65, format!("parse: {e:?}")))?;
+    let host = keleusma::target::Target::host();
+    let self_hosted = |src: &str| {
+        keleusma::selfhost::self_hosted_compile(src, &host).map_err(|e| {
+            if e.rust_backend_would_help() {
+                Failure(
+                    72,
+                    format!(
+                        "{} compile: {e}; retry with --compiler rust",
+                        compiler.name()
+                    ),
+                )
+            } else {
+                Failure(65, format!("compile: {e}"))
+            }
+        })
+    };
+    let (module, stages) = match compiler {
+        Compiler::Rust => (
+            keleusma::compiler::compile(&program)
+                .map_err(|e| Failure(65, format!("compile: {e:?}")))?,
+            None,
+        ),
+        Compiler::SelfHosted => (self_hosted(&src)?, None),
+        Compiler::SelfHostedNative => {
+            let factory = Rc::new(NativeStageFactory::default());
+            let module =
+                keleusma::selfhost::with_stage_factory(factory.clone(), || self_hosted(&src))?;
+            (module, Some((factory.built(), factory.declined())))
+        }
+    };
+    Ok(Compiled {
+        module,
+        program,
+        stages,
+    })
+}
+
+/// Report the native self-hosted route's stage counts on standard error, so
+/// that the library's own report on standard output keeps its shape.
+fn report_stages(stages: Option<(usize, usize)>) {
+    if let Some((built, declined)) = stages {
+        eprintln!("kel-native: compiled with {built} native stages, {declined} declined");
+    }
 }
 
 fn contracts(
@@ -186,7 +298,12 @@ fn tool(name: &str, args: &mut Command) -> Outcome<()> {
 }
 
 fn build(args: &Args) -> Outcome<()> {
-    let (module, program) = compile(&args.source)?;
+    let Compiled {
+        module,
+        program,
+        stages,
+    } = compile(&args.source, args.compiler)?;
+    report_stages(stages);
     let tm = machine(args.target.as_deref())?;
     let host = contracts(&module, &program, &args.fallible)?;
     let prefix = args.prefix.as_deref().expect("checked by parse_args");
@@ -239,7 +356,12 @@ fn build(args: &Args) -> Outcome<()> {
 }
 
 fn inspect(args: &Args) -> Outcome<()> {
-    let (module, program) = compile(&args.source)?;
+    let Compiled {
+        module,
+        program,
+        stages,
+    } = compile(&args.source, args.compiler)?;
+    report_stages(stages);
     let tm = machine(args.target.as_deref())?;
     let host = contracts(&module, &program, &args.fallible)?;
     let ctx = Context::create();

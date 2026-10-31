@@ -166,6 +166,16 @@ first line of evidence, and this check is the end-to-end one.
   `10_multbyte.kel` takes 1.19 s against 1.46 s on the virtual machine. All 69
   corpus sources in the subset compile byte-identically with native stages.
   The selector remains.
+- **2026-10-30, the selector.** `kel-native build` and `inspect` take
+  `--compiler rust`, the default, `self-hosted` or `self-hosted-native`. The
+  self-hosted routes run `self_hosted_compile`, the native one with
+  `NativeStageFactory` installed, and report how many stages ran natively and
+  how many were declined. A source the reference accepts and a self-hosted
+  route cannot compile exits 72 with the hint to retry with `--compiler rust`.
+  Since question 16 `keleusma native` reaches the same command. The three
+  compilers build byte-identical object files, headers and bindings for a
+  streaming program, as `kel_native_cli.rs` shows, and the corpus check of
+  step 4 is `native_stage_factory.rs`. Every step of this plan is done.
 
 ## Risks and open points
 
