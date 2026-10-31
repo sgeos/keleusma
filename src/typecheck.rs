@@ -1440,6 +1440,25 @@ struct Ctx {
     /// function by [`check_function`] and consulted at each call site to
     /// enforce the category-call discipline (see [`FnSig::category`]).
     current_category: crate::ast::FunctionCategory,
+    /// Type of the value a `yield` in the current function resumes with, when
+    /// it is known. `Vm::resume` checks the resume value against the entry
+    /// loop's first parameter type and stores it in that parameter's slot, so
+    /// that type is the yield's type in the loop and in every `yield`
+    /// function. `None` when the program has no loop or its loop has no
+    /// parameter, since then nothing checks the resume value. Seeded per
+    /// function by [`check_function`].
+    current_resume: Option<Type>,
+    /// The fresh variable given to each `yield` in the current function whose
+    /// resume type is not known.
+    unknown_resumes: Vec<Type>,
+    /// The type and span of each field access and destructuring pattern in
+    /// the current function whose subject's type was still a variable when it
+    /// was checked. The type checker admits both on a variable, and a later
+    /// use may still fix it. [`check_function`] refuses the function when one
+    /// of these subjects is, once the body is checked, an unresolved
+    /// [`Self::unknown_resumes`] variable, since the compiler then has no
+    /// layout to lower the read against.
+    open_projections: Vec<(Type, crate::token::Span)>,
     /// Spans in the current function that received conflicting concrete types
     /// and are therefore excluded from the authoritative table.
     fn_type_conflicts: BTreeSet<crate::token::Span>,
@@ -1478,6 +1497,9 @@ impl Ctx {
             record_types: false,
             current_fn_types: BTreeMap::new(),
             current_category: crate::ast::FunctionCategory::Fn,
+            current_resume: None,
+            unknown_resumes: Vec::new(),
+            open_projections: Vec::new(),
             fn_type_conflicts: BTreeSet::new(),
             fn_tables: BTreeMap::new(),
         }
@@ -2651,6 +2673,9 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
     // are not nested in the surface, so a plain assignment per function is
     // sufficient; there is no caller context to save and restore.
     ctx.current_category = func.category;
+    ctx.current_resume = resume_type_for(ctx, func.category);
+    ctx.unknown_resumes.clear();
+    ctx.open_projections.clear();
     // Snapshot the substitution at function entry so the per-function
     // resolution does not pollute later functions with this function's
     // local type variables. The vargen counter continues monotonically
@@ -2723,7 +2748,24 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
     } else {
         (body_type.clone(), return_type.clone())
     };
-    if !types_compatible(ctx, &struct_body, &struct_return) {
+    // A loop discards its body's value at the reset that ends each
+    // iteration. A tail `yield` there evaluates to the resumed input, of the
+    // parameter type rather than the return type, so a loop's tail is also
+    // admitted at the resume type. Before the resume type was inferred, the
+    // tail yield's fresh variable unified with the return type instead, so
+    // this keeps every such loop admitted. A failed unification can leave
+    // part of its bindings behind, so the second attempt starts from the
+    // substitution as it was before the first.
+    let before_tail = ctx.subst.clone();
+    let tail_ok = types_compatible(ctx, &struct_body, &struct_return)
+        || match ctx.current_resume.clone() {
+            Some(resume) if func.category == crate::ast::FunctionCategory::Loop => {
+                ctx.subst = before_tail;
+                types_compatible(ctx, &strip_labels(body_type.clone()), &strip_labels(resume))
+            }
+            _ => false,
+        };
+    if !tail_ok {
         ctx.pop_scope();
         ctx.current_return = None;
         ctx.current_return_negative_labels = prev_return_negatives;
@@ -2754,6 +2796,38 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
         ctx.current_return = None;
         ctx.current_return_negative_labels = prev_return_negatives;
         return Err(e);
+    }
+    // A resume value whose type nothing fixed has no layout the compiler can
+    // lower a field read or a destructuring against, and such a read faulted
+    // at run time. The operator ruled on 2026-10-31 that such a program is
+    // refused here with a request for an annotation. A resume value that is
+    // only passed on, compared or discarded is still admitted.
+    let unknown: Vec<Type> = ctx
+        .unknown_resumes
+        .iter()
+        .map(|var| var.apply(&ctx.subst))
+        .filter(|ty| matches!(ty, Type::Var(_)))
+        .collect();
+    let unresolved = ctx
+        .open_projections
+        .iter()
+        .find(|(subject, _)| unknown.contains(&subject.apply(&ctx.subst)))
+        .map(|(_, span)| *span);
+    ctx.unknown_resumes.clear();
+    ctx.open_projections.clear();
+    if let Some(span) = unresolved {
+        ctx.pop_scope();
+        ctx.current_return = None;
+        ctx.current_return_negative_labels = prev_return_negatives;
+        return Err(TypeError::new(
+            format!(
+                "cannot infer the type of the value `yield` resumes with in `{}`, which this \
+                 expression reads into: no `loop main` parameter declares it and no use fixes \
+                 it; annotate the binding that receives it, as in `let r: P = yield v`",
+                func.name
+            ),
+            span,
+        ));
     }
     ctx.pop_scope();
     ctx.current_return = None;
@@ -3982,6 +4056,11 @@ fn check_pattern_against_type(
     pattern: &Pattern,
     scrutinee_ty: &Type,
 ) -> Result<(), TypeError> {
+    // A label does not change a value's shape, so a labelled element of a
+    // tuple, struct or enum payload is checked by its underlying type.
+    if let Type::Labelled(inner, _) = scrutinee_ty {
+        return check_pattern_against_type(ctx, pattern, inner);
+    }
     match pattern {
         Pattern::Wildcard(_) | Pattern::Variable(_, _) => Ok(()),
         Pattern::Literal(lit, span) => {
@@ -4349,6 +4428,41 @@ fn type_of_block(ctx: &mut Ctx, block: &mut Block) -> Result<Type, TypeError> {
     Ok(ty)
 }
 
+/// Record a destructuring `pattern` over a subject of type `subject`, when
+/// the subject's type is still a variable, for the resume-type check in
+/// [`check_function`]. A variable or wildcard pattern reads nothing, and a
+/// literal pattern compares the whole value without reading into it.
+fn note_open_destructuring(ctx: &mut Ctx, pattern: &Pattern, subject: &Type) {
+    if !matches!(
+        pattern,
+        Pattern::Variable(_, _) | Pattern::Wildcard(_) | Pattern::Literal(_, _)
+    ) && let applied @ Type::Var(_) = subject.apply(&ctx.subst)
+    {
+        ctx.open_projections.push((applied, pattern.span()));
+    }
+}
+
+/// The type a `yield` in a function of `category` resumes with, when it is
+/// known.
+///
+/// `Vm::resume` checks a resume value against the first parameter type of the
+/// entry point and nothing else, and only when the entry point is a `loop`.
+/// The entry point is the function named `main`. Every suspension, whether
+/// from the loop itself or from a function it calls, resumes through that one
+/// check, so its type is the answer for every function that can yield. With
+/// no `loop main`, or one without a parameter, nothing checks the value, and
+/// the answer is `None`.
+fn resume_type_for(ctx: &Ctx, category: crate::ast::FunctionCategory) -> Option<Type> {
+    use crate::ast::FunctionCategory;
+    if category == FunctionCategory::Fn {
+        return None;
+    }
+    ctx.functions
+        .get("main")
+        .filter(|sig| sig.category == FunctionCategory::Loop)
+        .and_then(|sig| sig.params.first().cloned())
+}
+
 fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
     match stmt {
         Stmt::Let(let_stmt) => {
@@ -4404,18 +4518,17 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
                 }
                 None => value_ty,
             };
-            // A `let` pattern is bound without being checked against the value's
-            // type, so `let (a, b) = t` over a `Text<N>` would bind two fresh
-            // variables and then fault at runtime on the flat body. The pattern
-            // is checked here when the value carries a capacity-bounded text,
-            // which refuses destructuring of the text itself while admitting a
-            // tuple pattern that binds a `Text<N>` element whole. The check is
-            // confined to such values so that no program accepted before this
-            // increment changes behaviour.
+            // The pattern's shape is checked against the value's type before it
+            // is bound. `bind_pattern` alone gives a tuple pattern over a
+            // non-tuple fresh variables and pairs a tuple pattern with a tuple of
+            // another arity by position, so `let (a, b) = 5` compiled and faulted
+            // at run time. The operator ruled on 2026-10-31 that such a pattern
+            // is refused here. Until then the check ran only for a value that
+            // carried a `Text<N>`. A value whose type is still an unresolved
+            // variable passes, as it does for a match arm.
             let applied = bound_ty.apply(&ctx.subst);
-            if type_contains_text_capacity(ctx, &applied) {
-                check_pattern_against_type(ctx, &let_stmt.pattern, &strip_labels(applied))?;
-            }
+            check_pattern_against_type(ctx, &let_stmt.pattern, &strip_labels(applied))?;
+            note_open_destructuring(ctx, &let_stmt.pattern, &bound_ty);
             bind_pattern(ctx, &let_stmt.pattern, bound_ty);
             Ok(())
         }
@@ -5415,9 +5528,18 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                 &return_negatives,
                 *span,
             )?;
-            // Yield's expression value (received from host on resume)
-            // cannot be statically typed without dialogue annotations.
-            Ok(ctx.fresh())
+            // The expression's value is the resume value, of the entry loop's
+            // first parameter type when there is one. Otherwise it is a fresh
+            // variable that a use or an annotation must fix, which
+            // `check_function` verifies once the body is checked.
+            match ctx.current_resume.clone() {
+                Some(resume) => Ok(resume),
+                None => {
+                    let fresh = ctx.fresh();
+                    ctx.unknown_resumes.push(fresh.clone());
+                    Ok(fresh)
+                }
+            }
         }
         Expr::If {
             condition,
@@ -5484,6 +5606,7 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             let mut arm_labels: BTreeSet<String> = BTreeSet::new();
             for arm in arms.iter_mut() {
                 check_pattern_against_type(ctx, &arm.pattern, &scrutinee_ty)?;
+                note_open_destructuring(ctx, &arm.pattern, &scrutinee_ty);
                 ctx.push_scope();
                 bind_pattern(ctx, &arm.pattern, scrutinee_ty.clone());
                 // Guard expression must evaluate to Bool. The guard
@@ -5574,7 +5697,10 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                         *span,
                     ))
                 }
-                Type::Var(_) => Ok(ctx.fresh()),
+                Type::Var(_) => {
+                    ctx.open_projections.push((obj_ty.apply(&ctx.subst), *span));
+                    Ok(ctx.fresh())
+                }
                 other => Err(TypeError::new(
                     format!("field access on non-struct type {}", other.display()),
                     *span,

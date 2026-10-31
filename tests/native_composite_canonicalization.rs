@@ -199,6 +199,13 @@ fn a_boxed_composite_from_a_native_meets_a_baked_flat_access_and_works() {
 /// records that for a composite reply it is a closed one. If these begin to
 /// compile, the deferred operand meets the baked access at run time and group D
 /// needs re-examining.
+///
+/// Since 2026-10-31 the type checker types a `yield` as the `loop main`
+/// parameter's type, so each case below, which annotates a composite reply under
+/// a `Word` parameter, is refused there first, before the typed pass runs. Either
+/// refusal keeps the route closed, and both are accepted. A reply whose
+/// annotation agrees with a composite parameter now compiles, because
+/// `Vm::resume` checks the reply's shape against that parameter.
 #[test]
 fn a_composite_typed_yield_reply_is_refused_at_compile_time() {
     let cases: &[(&str, &str)] = &[
@@ -232,7 +239,10 @@ fn a_composite_typed_yield_reply_is_refused_at_compile_time() {
                 )
             });
         assert!(
-            err.contains("typed operand-stack") || err.contains("ExpectedComposite"),
+            err.contains("typed operand-stack")
+                || err.contains("ExpectedComposite")
+                || (err.starts_with("type error: let binding declared as")
+                    && err.ends_with("but value has type Word")),
             "the `{name}` case is refused for a different reason now ({err}), so this test no \
              longer measures the typed pass and the route may have reopened elsewhere"
         );
