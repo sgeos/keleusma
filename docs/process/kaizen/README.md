@@ -7,6 +7,7 @@ rests on. The line's mailbox and resume prompt is [`../handoffs/kaizen.md`](../h
 
 | report | state |
 |---|---|
+| [`2026-10-31-idle-compaction-trial.md`](./2026-10-31-idle-compaction-trial.md) | `context_quality.py` extended to compare resumptions after idle gaps, the `idleCompaction: false` setting found absent so the trial never ran, compacted resumptions showing about 0.8 points more tool errors and about 294,000 fewer cache-write tokens than uncompacted ones past the cache lifetime, suggestive only |
 | [`2026-10-31-open-decisions.md`](./2026-10-31-open-decisions.md) | the decisions open on 2026-10-31 after the rulings of 2026-10-30, new kaizen items N1 to N6 and the other lines' questions, with the obvious choices adopted by the operator the same day and N6 and five V0.2.X questions left for judgment |
 | [`2026-10-30-open-decisions.md`](./2026-10-30-open-decisions.md) | every decision open with the operator on 2026-10-30, the kaizen line's own and the other lines' by pointer, lettered options with the obvious choices marked, ruled by the operator the same day except K14, which is held |
 | [`2026-10-30-r1-timing-pass.md`](./2026-10-30-r1-timing-pass.md) | R1 of the CI spike completed, ten full runs and a `--timings` probe measured, compiling 63 and test running 166 of 243 runner-minutes, dependencies 2 to 5 percent of a build, one 32-instance test grid setting every build's length, 2,446 tests run twice, no build cache added |
