@@ -21,6 +21,13 @@
 // operand-consumption `dreq`/`dnet` (the reference `op_depth_effect`, NOT the WCMU stack effect),
 // and `is_term` (1 for Trap/Return, which end a path). The stage self-hosts the control-flow walk
 // and the underflow check.
+//
+// The same run also decides the definite-initialization rule, reference `verify_init.rs`, over the
+// op table already marshalled here. That rule is a forward may-analysis over the chunk's locals,
+// in which a `GetLocal` of a local that no path writes is refused. It needs only the successors
+// that `class`, `arg` and `is_term` already give, and the host adds `lget` and `lset`, the local
+// each op reads and writes. Its verdict is published apart from `out_reject`, so a depth caller
+// that reads only the depth verdict sees no change. The reasoning is beside `init_run` below.
 require word >= 32;
 
 // The host-facing block: the op table and the verdict. `op_count` bounds the walk and the
@@ -47,6 +54,22 @@ shared data dv {
     // APPENDED LAST. The block is addressed by SLOT and inserting in the middle
     // shifts every field after the insertion point.
     out_cause: Word,
+    // The definite-initialization facts, appended after `out_cause` for the same reason. Per
+    // op, `lget` is one more than the local it reads, or 0, and `lset` is one more than the
+    // local it writes, -1 for `Stream`, or 0. `l_width` is the chunk's local count,
+    // `l_params` the locals written at entry, and `l_stream_bit` 1 when each resume after
+    // `Stream` writes slot 0.
+    lget: [Word; 8192],
+    lset: [Word; 8192],
+    l_width: Word,
+    l_params: Word,
+    l_stream_bit: Word,
+    // 1 when some reached read observes a local that no path writes, with the lowest such op
+    // in `out_init_ip`. `out_init_cause` is 0 for a completed analysis, 1 when `l_width`
+    // exceeds `init_locals()`, and 2 when the sweep budget ended before the fixpoint.
+    out_init_reject: Word,
+    out_init_ip: Word,
+    out_init_cause: Word,
 }
 
 // THE DECLARED NESTING CAP. Operator ruling, 2026-08-19: 32 for now.
@@ -99,6 +122,16 @@ private data df {
     // latches a PROVEN operand underflow: conflating them would report an
     // unanalysed program as a defective one.
     over: Word,
+}
+
+// The definite-initialization state. `reach[ip]` is 1 once some path reaches op `ip`, and
+// `st[ip * 8 ..]` is the set of locals some path to it writes, eight words of 32 bits each.
+// `cur` is the set after the op being swept, and `changed` whether a sweep grew any set.
+private data di {
+    reach: [Word; 8192],
+    st: [Word; 65536],
+    cur: [Word; 8],
+    changed: Word,
 }
 
 // Push a fresh frame for region `[ip, end)` with entry depth `depth`; `end` is clamped to
@@ -369,7 +402,138 @@ fn run() -> Word {
             dv.out_reject = 0;
         }
     }
+    init_run();
     dv.out_reject
+}
+
+// THE DEFINITE-INITIALIZATION RULE.
+//
+// The reference computes, by a worklist over the chunk's control-flow edges, the least fixpoint
+// of the sets of locals that some path writes before each op, and then refuses a reached
+// `GetLocal` whose local is outside the set before it. The transfer only adds a written local,
+// except at `Stream`, which leaves slot 0 alone for a stream with a parameter and the empty set
+// otherwise. A join is union. Every such transfer is monotone, so every iteration that starts
+// from the entry set and applies the transfers until nothing changes reaches the same least
+// fixpoint, whatever order it visits the ops in. This stage therefore does not walk the region
+// frames above. It sweeps the op table in index order until a sweep changes nothing, and then
+// checks the reads. The verdict agrees with the reference because the two compute the same
+// fixpoint, not because they visit the ops alike, and a nested `Stream` or an unstructured
+// target needs no special case.
+//
+// A forward edge is settled within one sweep, since its target follows its source, and each
+// back edge of a loop needs at most one further sweep per level of nesting, so a structured
+// chunk within the 32-level nesting cap converges well inside `init_sweeps()`. A chunk that does
+// not converge in that budget is reported as unfinished, cause 2, and never as a verdict.
+
+// The locals a set holds, eight words of 32 bits. A wider chunk is refused as unanalysed.
+fn init_locals() -> Word { 256 }
+
+// The sweep budget. The final sweep must change nothing for the fixpoint to be established.
+fn init_sweeps() -> Word { 72 }
+
+// Whether local `b` is in the set of op `ip`.
+fn init_has(ip: Word, b: Word) -> Word {
+    (di.st[ip * 8 + b / 32] lsr (b % 32)) band 1
+}
+
+// Join `cur` into the set of op `to`, the first arrival making `to` reached.
+fn init_join(to: Word) -> Word {
+    if di.reach[to] == 0 {
+        di.reach[to] = 1;
+        for w in 0..8 limit 8 { di.st[to * 8 + w] = di.cur[w]; }
+        di.changed = 1;
+    } else {
+        for w in 0..8 limit 8 {
+            let old = di.st[to * 8 + w];
+            let next = old bor di.cur[w];
+            if next != old {
+                di.st[to * 8 + w] = next;
+                di.changed = 1;
+            }
+        }
+    }
+    0
+}
+
+// Apply op `ip` to its set into `cur`, then join `cur` into each successor. The successors are
+// the reference's. `If` and `BreakIf` fall through and jump, `Else`, `EndLoop` and `Break` only
+// jump, a path exit has none, and every other op falls through. A target outside the chunk adds
+// no edge.
+fn init_step(ip: Word) -> Word {
+    for w in 0..8 limit 8 { di.cur[w] = di.st[ip * 8 + w]; }
+    let s = dv.lset[ip];
+    if s > 0 andalso s <= dv.l_width {
+        let b = s - 1;
+        di.cur[b / 32] = di.cur[b / 32] bor (1 lsl (b % 32));
+    }
+    if s < 0 {
+        for w in 0..8 limit 8 { di.cur[w] = 0; }
+        di.cur[0] = dv.l_stream_bit;
+    }
+    if dv.is_term[ip] == 0 {
+        let k = dv.class[ip];
+        let t = dv.arg[ip];
+        if k != 2 andalso k != 5 andalso k != 6 andalso ip + 1 < dv.op_count {
+            init_join(ip + 1);
+        }
+        let jumps = k == 1 orelse k == 2 orelse k == 5 orelse k == 6 orelse k == 7;
+        if jumps andalso t >= 0 andalso t < dv.op_count {
+            init_join(t);
+        }
+    }
+    0
+}
+
+// One sweep over the op table in index order.
+fn init_sweep() -> Word {
+    di.changed = 0;
+    for ip in 0..dv.op_count limit 8192 {
+        if di.reach[ip] == 1 { init_step(ip); }
+    }
+    0
+}
+
+// Check the reads against the fixpoint in index order, so that the op reported is the lowest
+// refused, as in the reference.
+fn init_check() -> Word {
+    for ip in 0..dv.op_count limit 8192 {
+        let g = dv.lget[ip];
+        if dv.out_init_reject == 0 andalso di.reach[ip] == 1 andalso g > 0 andalso g <= dv.l_width {
+            if init_has(ip, g - 1) == 0 {
+                dv.out_init_reject = 1;
+                dv.out_init_ip = ip;
+            }
+        }
+    }
+    0
+}
+
+// Decide the rule for the marshalled chunk and publish it in the `out_init` fields.
+fn init_run() -> Word {
+    dv.out_init_reject = 0;
+    dv.out_init_ip = 0;
+    dv.out_init_cause = 0;
+    if dv.l_width < 0 orelse dv.l_width > init_locals() orelse dv.op_count > 8192 {
+        dv.out_init_cause = 1;
+    } else {
+    if dv.op_count > 0 {
+        for ip in 0..dv.op_count limit 8192 { di.reach[ip] = 0; }
+        di.reach[0] = 1;
+        for w in 0..8 limit 8 { di.st[w] = 0; }
+        // Clamped to the width, so that the range never exceeds its limit.
+        let np = if dv.l_params < dv.l_width { dv.l_params } else { dv.l_width };
+        for p in 0..np limit 256 { di.st[p / 32] = di.st[p / 32] bor (1 lsl (p % 32)); }
+        di.changed = 1;
+        for r in 0..72 limit 72 {
+            if di.changed == 1 andalso r < init_sweeps() { init_sweep(); }
+        }
+        if di.changed == 1 {
+            dv.out_init_cause = 2;
+        } else {
+            init_check();
+        }
+    } }
+    0
 }
 
 // Check the chunk's operand-stack depth balance in one call and yield the verdict.

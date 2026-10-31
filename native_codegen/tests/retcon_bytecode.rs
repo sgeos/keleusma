@@ -1608,87 +1608,26 @@ fn private_body_kind_tracks_the_most_recent_write() {
     }
 }
 
+/// **SINCE ABSORPTION 122 THE REFERENCE REFUSES THIS SHAPE.** The test drove a
+/// stream whose second parameter, an enum, is read after the rewind, and showed
+/// the native code clearing that parameter's run-time kind at `Reset` as the
+/// virtual machine clears the slot. V0.2.X's definite-initialization rule now
+/// refuses the read at compile time, and `coroutine::lower` verifies first, so
+/// both routes refuse it. The clearing stays in the backend as defense in depth
+/// that verified bytecode no longer reaches.
 #[test]
 fn reset_clears_runtime_kinds_of_later_entry_parameters() {
-    use keleusma::bytecode::Value;
-    use keleusma::vm::{Vm, VmState};
-    type StartTwo = unsafe extern "C" fn(i64, i64, *mut u8, *mut u8, *mut u8, *mut u8) -> Outcome;
     let source = "enum E { A, B } loop main(a: Word, e: E) -> Word { yield match e { E::A => 1, _ => 0 }; yield 2 }";
-    let program = common::build(source);
-    let expected = [1, 2, 0, 2, 0, 2];
-    let arena = keleusma_arena::Arena::with_capacity(65536);
-    let mut vm = Vm::new(program.clone(), &arena).unwrap();
-    let mut state = vm
-        .call(&[
-            Value::Int(5),
-            Value::enum_value("E".into(), "A".into(), 0, vec![]),
-        ])
-        .unwrap();
-    for (index, want) in expected.iter().enumerate() {
-        assert!(matches!(state, VmState::Yielded(Value::Int(value)) if value == *want));
-        if index + 1 < expected.len() {
-            state = vm.resume(Value::Int(7)).unwrap();
-            if matches!(state, VmState::Reset) {
-                state = vm.resume(Value::Int(7)).unwrap();
-            }
-        }
-    }
-    for optimized in [false, true] {
-        let context = Context::create();
-        let module = coroutine::lower(&context, &program, &machine(), 4096).unwrap();
-        if optimized {
-            common::force_optimize(&module);
-        }
-        let engine = module
-            .create_jit_execution_engine(OptimizationLevel::None)
-            .unwrap();
-        let prefix = format!("kel_coroutine_{}", program.entry_point.unwrap());
-        assert_eq!(
-            module
-                .get_function(&format!("{prefix}_start"))
-                .unwrap()
-                .count_params(),
-            6
-        );
-        let slot = Guarded::new(coroutine::slot_bytes(4096).unwrap() as usize);
-        let unused = Guarded::new(0);
-        let body = Guarded::new(8);
-        unsafe {
-            let start = engine
-                .get_function::<StartTwo>(&format!("{prefix}_start"))
-                .unwrap();
-            let resume = engine
-                .get_function::<HandleResume>(&format!("{prefix}_resume"))
-                .unwrap();
-            let mut result = start.call(
-                5,
-                body.ptr() as i64,
-                unused.ptr(),
-                unused.ptr(),
-                unused.ptr(),
-                slot.ptr(),
-            );
-            for (index, want) in expected.iter().enumerate() {
-                assert_eq!(
-                    result,
-                    Outcome {
-                        live: 1,
-                        value: *want
-                    }
-                );
-                if index + 1 < expected.len() {
-                    result = resume.call(slot.ptr(), 7);
-                }
-            }
-            engine
-                .get_function::<HandleRelease>(&format!("{prefix}_release"))
-                .unwrap()
-                .call(slot.ptr());
-        }
-        for region in [&slot, &unused, &body] {
-            region.check();
-        }
-    }
+    let tokens = keleusma::lexer::tokenize(source).expect("lex");
+    let program = keleusma::parser::parse(&tokens).expect("parse");
+    let why = format!(
+        "{:?}",
+        keleusma::compiler::compile(&program).expect_err(
+            "the reference compiles a read of a later stream parameter after the rewind again, \
+             so restore the kind-clearing differential from absorption 121"
+        )
+    );
+    assert!(why.contains("definite-initialization"), "{why}");
 }
 
 #[test]
@@ -4669,35 +4608,24 @@ fn zero_and_multiple_entry_arguments_preserve_host_contracts() {
     }
 }
 
+/// **SINCE ABSORPTION 122 THE REFERENCE REFUSES THIS SHAPE.** The test showed
+/// that `Reset` leaves a later stream parameter as `Unit` on the virtual machine
+/// and that the native code traps through its kind guard at the same read.
+/// V0.2.X's definite-initialization rule now refuses the read at compile time,
+/// so the guard is defense in depth that verified bytecode no longer reaches.
 #[test]
 fn stream_reset_does_not_replenish_later_parameters() {
-    use keleusma::bytecode::Value;
-    use keleusma::vm::{Vm, VmState};
     let source = "loop main(a: Word, b: Word) -> Word { yield a + b; yield a + b }";
-    let program = common::build(source);
-    let arena = keleusma_arena::Arena::with_capacity(65536);
-    let mut vm = Vm::new(program.clone(), &arena).unwrap();
-    assert!(matches!(
-        vm.call(&[Value::Int(5), Value::Int(7)]).unwrap(),
-        VmState::Yielded(Value::Int(12))
-    ));
-    assert!(matches!(
-        vm.resume(Value::Int(11)).unwrap(),
-        VmState::Yielded(Value::Int(18))
-    ));
-    assert!(matches!(vm.resume(Value::Int(13)).unwrap(), VmState::Reset));
-    assert!(
-        vm.resume(Value::Int(13)).is_err(),
-        "Reset cleared parameter b to Unit"
+    let tokens = keleusma::lexer::tokenize(source).expect("lex");
+    let program = keleusma::parser::parse(&tokens).expect("parse");
+    let why = format!(
+        "{:?}",
+        keleusma::compiler::compile(&program).expect_err(
+            "the reference compiles a read of a later stream parameter after the rewind again, \
+             so restore the kind-guard differential from absorption 121"
+        )
     );
-    #[cfg(unix)]
-    require_cleared_kind_trap(
-        "stream_reset_does_not_replenish_later_parameters",
-        source,
-        &[5, 7],
-        &[12, 18],
-        &[11, 13],
-    );
+    assert!(why.contains("definite-initialization"), "{why}");
 }
 
 #[test]
@@ -5197,11 +5125,18 @@ fn require_short_dialogue_trap(
     host.check();
 }
 
+/// Drive `source` on the virtual machine and natively under per-yield reply
+/// dialogues. With `reference_admits` false, the replies differ in size from
+/// the declared parameter type, which the virtual machine refuses at its host
+/// boundary since absorption 122. Then the virtual machine is shown to refuse
+/// the first such reply, and the native code, which reads each reply by the
+/// extent its dialogue declares, is compared with `expected` alone.
 fn stream_dialogue_sequence(
     source: &str,
     replies: [keleusma::bytecode::WireShape; 2],
     inputs: &[(keleusma::bytecode::Value, Vec<i64>)],
     expected: &[i64],
+    reference_admits: bool,
 ) {
     use keleusma::bytecode::{Op, Value, WireShape};
     use keleusma::vm::{Vm, VmState};
@@ -5241,7 +5176,15 @@ fn stream_dialogue_sequence(
             "{state:?}"
         );
         if index + 1 < inputs.len() {
-            state = vm.resume(inputs[index + 1].0.clone()).unwrap();
+            let next = vm.resume(inputs[index + 1].0.clone());
+            if !reference_admits {
+                let refused = format!("{:?}", next.expect_err(
+                    "the virtual machine admitted a reply whose size differs from the declared type"
+                ));
+                assert!(refused.contains("host composite"), "{refused}");
+                break;
+            }
+            state = next.unwrap();
             if matches!(state, VmState::Reset) {
                 state = vm.resume(inputs[index + 1].0.clone()).unwrap();
             }
@@ -5343,6 +5286,7 @@ fn stream_composite_replies_keep_their_actual_extents() {
             ],
             &inputs,
             &[5, 12, 21, 52, 41],
+            false,
         );
     }
 }
@@ -5385,6 +5329,7 @@ fn composite_stream_parameters_preserve_scalar_and_empty_replies() {
                     ],
                     &inputs,
                     &[5, 99, 99, 99, 99],
+                    true,
                 );
             }
         }
@@ -5428,13 +5373,19 @@ fn shortened_stream_reply_traps_before_an_out_of_bounds_read() {
                 .unwrap(),
             VmState::Yielded(Value::Int(5))
         ));
-        let state = vm.resume(Value::array(vec![]));
-        if after_reset {
-            assert!(matches!(state.unwrap(), VmState::Reset));
-            assert!(vm.resume(Value::array(vec![])).is_err());
-        } else {
-            assert!(state.is_err());
-        }
+        // Since absorption 122 the virtual machine refuses the shortened reply
+        // at its host boundary, before the rewind or the read is reached. The
+        // native code has no such boundary, so its bounds trap below is the
+        // native counterpart.
+        let refused = format!(
+            "{:?}",
+            vm.resume(Value::array(vec![]))
+                .expect_err("the virtual machine admitted a shortened reply")
+        );
+        assert!(
+            refused.contains("host composite"),
+            "{after_reset}: {refused}"
+        );
         let initial = Guarded::new(16);
         let reply = Guarded::new(0);
         unsafe { std::slice::from_raw_parts_mut(initial.ptr(), 8) }

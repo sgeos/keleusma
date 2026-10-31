@@ -1815,23 +1815,6 @@ fn a_fixed_point_multiply_lowers_rather_than_being_treated_as_an_integer_one() {
 // test. The `expect` message says so so the failure reads correctly.
 // ---------------------------------------------------------------------------
 
-/// Compile `src`, hand the module to `mutate`, then run the mutated module on
-/// the VM. Returns the finished value.
-///
-/// `Vm::new` runs `verify()`, so a module that reaches execution here has been
-/// ADMITTED by the verifier. Both controls below depend on that.
-fn vm_result_mutated(src: &str, mutate: impl FnOnce(&mut keleusma::bytecode::Module)) -> Value {
-    let mut m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
-    mutate(&mut m);
-    let cap = auto_arena_capacity_for(&m, &[]).expect("arena capacity");
-    let arena = keleusma_arena::Arena::with_capacity(cap);
-    let mut vm = Vm::new(m, &arena).expect("verify() ADMITTED the mutated module");
-    match vm.call(&[]).expect("vm run") {
-        keleusma::vm::VmState::Finished(v) => v,
-        other => panic!("unexpected VM outcome: {other:?}"),
-    }
-}
-
 /// Same mutation, lowered and JITed. Returns the native result.
 fn native_result_mutated(src: &str, mutate: impl FnOnce(&mut keleusma::bytecode::Module)) -> i64 {
     let mut m = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
@@ -1854,8 +1837,15 @@ fn native_result_mutated(src: &str, mutate: impl FnOnce(&mut keleusma::bytecode:
 /// MUST-FIRE for Fix 1: a `GetLocal` of a slot nothing ever wrote.
 ///
 /// `Op::Call` fills a callee frame's non-parameter slots with `Unit`, so the VM
-/// has a DEFINED value here. An uninitialised `alloca` loads as `undef`, so
+/// had a DEFINED value here. An uninitialised `alloca` loads as `undef`, so
 /// before Fix 1 the native side returned an arbitrary value.
+///
+/// **Since absorption 122 the verifier refuses this module.** V0.2.X's narrowed
+/// definite-initialization rule refuses a `GetLocal` of a local that no path
+/// writes, so the virtual machine no longer runs it. `lower_module` does not
+/// run that verifier, so the native store of `Unit` stays as defense in depth
+/// for a module that reaches lowering unverified, and the structural check
+/// below still holds it.
 ///
 /// The encoding claim this pins is explicit rather than incidental: **zero is
 /// this backend's `Unit`.** The operand stack is uniformly `i64` and `Unit`
@@ -1880,11 +1870,11 @@ fn control_unwritten_local_reads_as_unit_not_undef() {
         c.ops.push(Op::Return);
     };
 
-    let vm = vm_result_mutated(src, mutate);
-    assert_eq!(
-        vm,
-        Value::Unit,
-        "the VM fills non-parameter locals with Unit"
+    let rejection = vm_new_rejection(src, mutate)
+        .expect("verify() ADMITTED a read of a local that no path writes");
+    assert!(
+        rejection.contains("definite-initialization"),
+        "the module is refused, but not by the definite-initialization rule: {rejection}"
     );
 
     // STRUCTURAL, and this is the part that is actually a control.
@@ -1907,13 +1897,11 @@ fn control_unwritten_local_reads_as_unit_not_undef() {
          without that store a GetLocal of an unwritten slot loads undef.\nIR:\n{ir}"
     );
 
-    // Retained as a regression check, NOT as a control: it agrees with the VM
-    // but cannot fail when the fix is absent.
+    // Retained as a regression check, NOT as a control: it agreed with the VM
+    // before the verifier refused the module, and cannot fail when the fix is
+    // absent.
     let native = native_result_mutated(src, mutate);
-    assert_eq!(
-        native, 0,
-        "zero is this backend's Unit; agrees with the VM's Unit"
-    );
+    assert_eq!(native, 0, "zero is this backend's Unit");
 }
 
 /// Lower a mutated module and return its IR text.
@@ -1928,8 +1916,7 @@ fn lowered_ir_mutated(src: &str, mutate: impl FnOnce(&mut keleusma::bytecode::Mo
 
 /// Does `Vm::new` REJECT this mutated module, and with what message?
 ///
-/// `vm_result_mutated` cannot express a rejection: it `expect`s admission and
-/// panics otherwise. This returns the verifier's verdict instead of asserting it.
+/// This returns the verifier's verdict instead of asserting it.
 fn vm_new_rejection(
     src: &str,
     mutate: impl FnOnce(&mut keleusma::bytecode::Module),

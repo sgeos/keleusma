@@ -73,7 +73,7 @@ Every Keleusma `Vm` needs an arena. The host picks the capacity. Pick too small 
 
 ### Solution
 
-Use `keleusma::vm::auto_arena_capacity_for(&module, native_wcmu)` to compute the minimum-required capacity from the compiled module before constructing the VM. The function walks the module's Stream chunks, sums each chunk's stack and heap WCMU, and returns the largest total. The result is the smallest capacity that admits the module under the supplied native attestations.
+Use `keleusma::vm::auto_arena_capacity_for(&module, native_wcmu)` to compute the capacity from the compiled module before constructing the VM. The figure is the sum of the operand stack, the call frames, the opaque registry, the per-iteration heap, and the composite host inputs of the entry chunk. An arena of exactly that size constructs the VM under the supplied native attestations and admits the call and every resume up to each `Reset`, provided that no composite input contains `Text`.
 
 ```rust
 use keleusma::vm::{auto_arena_capacity_for, Vm};
@@ -93,6 +93,18 @@ The second argument is a slice of per-native heap-allocation attestations. Pass 
 let native_wcmu = &[upper_wcmu, trim_wcmu];
 let cap = auto_arena_capacity_for(&module, native_wcmu)?;
 ```
+
+A composite entry argument or resume value is copied into the arena when it enters the VM, and the copy stays until the next `Reset`. The figure counts the entry arguments, one resume value for each `Yield` that an iteration can execute, and the scratch space that packing one nested value needs. Yields inside bounded loops and inside called `yield` functions are counted. A scalar input costs nothing, so a module whose entry takes only scalars gets the same figure as before.
+
+A `Text` field inside a composite input is copied as well, and its length is that of the host's string, which the module cannot bound. A host that passes such inputs supplies its own bound on the total text bytes in any one input value.
+
+```rust
+// At most 256 bytes of Text inside any one composite argument or
+// resume value.
+let cap = keleusma::vm::auto_arena_capacity_with_input_text(&module, &[], 256)?;
+```
+
+The function `keleusma::vm::host_input_arena_bytes_for` returns the input term alone, for a host that sizes the rest of its arena another way. Composite arguments passed to a non-entry chunk through `Vm::call_function` are not counted.
 
 ### When to use which arena-sizing option
 

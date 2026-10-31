@@ -218,8 +218,12 @@ to debug.
 
 1. **A `confine.rs` index panic on a truncated op stream.** Still fires; watched by
    `lowering_robustness.rs`, which allows it by origin file and asserts it has not gone.
-2. **A multi-parameter stream faults after its first rewind** — `TypeError` on `Int and Unit`, after a
-   RESET, so slot 1 is still left undefined.
+2. **ANSWERED in absorption 122, 2026-10-30, from the verifier side.** Your narrowed
+   definite-initialization rule, pull request 658, refuses a read of a later stream parameter after
+   `Stream`, so the shape no longer compiles and no runtime change is needed. This backend's refusal
+   of it is now unreachable from source. The watch is now `report_two_is_answered_and_the_answer_holds`.
+   The original report follows unchanged. **A multi-parameter stream faults after its first rewind**,
+   with `TypeError` on `Int and Unit` after a RESET, so slot 1 is still left undefined.
 3. **The write-before-read check is flow-insensitive**: the unconditional shape rejected, the
    conditional one accepted, and the fault arriving at run time. Intended, or should the compiler
    reject the conditional shape too? **Either answer is implementable here; I assumed the first.**

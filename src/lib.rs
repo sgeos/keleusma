@@ -255,6 +255,10 @@ pub mod text_size;
 pub mod verify;
 #[cfg(feature = "verify")]
 mod verify_execution;
+/// Definite initialization, narrowed: the verifier rule that no read observes
+/// a local that no path writes.
+#[cfg(feature = "verify")]
+pub mod verify_init;
 
 /// First-pass language-trap classification with explicit availability boundaries.
 #[cfg(feature = "verify")]

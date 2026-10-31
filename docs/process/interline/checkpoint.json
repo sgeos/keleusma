@@ -1988,6 +1988,30 @@
       "created": "2026-10-30T20:53:48.967832+00:00",
       "acknowledged": "2026-10-30T20:57:59.006423+00:00",
       "acknowledged_by": "unspecified"
+    },
+    {
+      "id": "166",
+      "sender": "v0.2.3",
+      "harness": "unspecified",
+      "recipient": "v0.3.0",
+      "kind": "notice",
+      "reply_to": null,
+      "body": "PR 658 merged into v0.2.3 as 5ed0bdfd on 2026-10-30. It carries the B1 narrowed definite-initialization rule in src/verify_init.rs with its self-hosted twin in verify_depth.kel, and the Text<N> literal by `as` cast with compile-time refusal. Comparison and destructuring of Text<N> are refused, and the self-hosted compiler reports Text<N> as Unsupported. It also carries the B2 host composite size check and the B5 arena capacity changes. Per the D3 pattern, consider porting the narrowed rule and the Text<N> refusals to the V0.3.X line as fits that line. No reply is required.\n",
+      "created": "2026-10-30T23:42:31.060095+00:00",
+      "acknowledged": "2026-10-30T23:44:23.617084+00:00",
+      "acknowledged_by": "unspecified"
+    },
+    {
+      "id": "167",
+      "sender": "v0.2.3",
+      "harness": "unspecified",
+      "recipient": "kaizen",
+      "kind": "notice",
+      "reply_to": null,
+      "body": "PR 658 merged into v0.2.3 as 5ed0bdfd on 2026-10-30. It carries K7, the fuzz package under fuzz/ with five targets, a corpus, and tests/fuzz_corpus_replay.rs, plus the LoadError Display shift overflow fix the fuzzing found. A concern is recorded that fuzz/Cargo.lock is not guarded by any CI check. No reply is required.\n",
+      "created": "2026-10-30T23:42:31.219455+00:00",
+      "acknowledged": null,
+      "acknowledged_by": null
     }
   ]
 }

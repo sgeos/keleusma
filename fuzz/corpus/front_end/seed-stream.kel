@@ -1,0 +1,1 @@
+loop main(seed: Word) -> Word { let a = seed + 1; if a > 3 { yield a } else { yield seed } }
