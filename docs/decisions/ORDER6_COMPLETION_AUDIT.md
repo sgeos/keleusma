@@ -6,22 +6,23 @@
 
 This audit records the state of Order 6, full-language support for the self-hosted
 toolchain, on 2026-10-27. Its scope is the gate of
-[the full-language plan](./ORDER6_FULL_LANGUAGE_PLAN.md). **That gate is this line's reading
-of the roadmap gate and has not been ruled on by the operator.**
+[the full-language plan](./ORDER6_FULL_LANGUAGE_PLAN.md). That gate is this line's reading
+of the roadmap gate, and the operator accepted it on 2026-10-28.
 
 **Accepted by the operator first-hand on 2026-10-28.** The operator accepted this gate and
 ruled on question 10, "Cross-check is enough", so the self-hosted type stage does not port
 label-flow or newtype checking.
 
 **Disposition, revised 2026-10-27.** Order 6 is complete for its first-pass scope on this
-line's reading of the gate, pending the operator's acceptance. Every gate condition is met.
+line's reading of the gate, which the operator accepted on 2026-10-28. Every gate condition is met.
 The information-flow labels, `classify` and `declassify`, and the newtype with its
 refinement predicate, which the first version of this audit recorded as waiting on operator
 question 10, now compile byte-identically by erasure, as the reference compiles them.
-**Question 10 is not decided by that.** It asks whether the self-hosted type stage should
-also check label flow and nominal newtype identity, and until it is answered a violation is
-rejected by the reference cross-check alone, the same standing the generic and Option
-arguments have. That is a residual of the type stage, listed below, and not a refusal. `BYTECODE_VERSION` remains 2, the
+Question 10 asked whether the self-hosted type stage should also check label flow and
+nominal newtype identity. The operator answered it on 2026-10-28, "Cross-check is enough",
+so a violation is rejected by the reference cross-check alone, the same standing the
+generic and Option arguments have. That is a residual of the type stage, listed below, and
+not a refusal. `BYTECODE_VERSION` remains 2, the
 instruction set remains 66 opcodes, the wire format is unchanged, and nothing was published.
 Stage capacities were raised under the operator's ruling of 2026-10-26 that limits may be
 raised, each with its cost recorded in the plan.
@@ -72,7 +73,7 @@ These are refused, not miscompiled, and each is pinned by a test, so a change is
 failure rather than a silent move.
 
 - Information-flow labels and newtype identity are not checked by the self-hosted type
-  stage, which is question 10, so a violation is rejected by the reference cross-check
+  stage, by the ruling on question 10, so a violation is rejected by the reference cross-check
   alone. A newtype as a struct field, data field, payload or native signature type is
   refused.
 - An `Option` over a struct, and Option values whose payload is not `Word`, `Byte` or
