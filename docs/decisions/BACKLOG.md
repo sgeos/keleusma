@@ -2058,7 +2058,13 @@ Requested by the operator on 2026-10-14. Keleusma should provide first-class
 ring buffer support managed by the compiler. The operator reaffirmed this request
 on 2026-10-15 and requested a commit and push of the current work.
 
-This remains an explicit operator requirement for future language work.
-Status is requested, pending design and scheduling. Syntax, storage and capacity,
-full and empty behavior, ownership, and verification of resource bounds remain
-open design questions. No implementation or release target is assigned by this note.
+This remains an explicit operator requirement for future language work. The
+operator ruled on 2026-10-30 that it be scheduled now, a ruling relayed to the
+design's author by the commissioning session.
+
+Status is designed, not implemented. The design is
+[`RING_BUFFER_DESIGN.md`](./RING_BUFFER_DESIGN.md). It proposes `Ring<T, N>` as
+the type of a private or shared data field, lowered to `2 + N` data slots and
+existing opcodes with no new opcode and no wire change, and four increments, R1
+to R4, after items 5, 7 and 8. Decisions D1 to D7 in that document remain the
+operator's, and no release target is assigned.
