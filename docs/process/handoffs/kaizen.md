@@ -113,13 +113,18 @@ authority, so the startup-file positions reach them first-hand.
 
 1. Confirm the first scheduled fuzz run, due at 10:17 UTC on 2026-11-01, and measure
    the shards on four full runs after PR 689.
-2. If the operator applies `idleCompaction: false`, run `context_quality.py` again
+2. Claude Code makes its agent trees under `.claude/worktrees/` without
+   `worktree.sh`, so PR 697 does not link them, as the administrator session noted on
+   2026-10-31. Four held 11.7 GB of `target` on the data volume that day. Check for a
+   worktree hook, or report unlinked trees in `worktree.sh list`. Their output is the
+   operator's to move or delete.
+3. If the operator applies `idleCompaction: false`, run `context_quality.py` again
    about two weeks later and compare with the trial report.
-3. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
+4. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
    times the changeover. On hold.
-4. Finish the three selection tasks, record their outcomes, and read the comparison.
-5. A state-file budget guard, once the owning lines have converted their files.
-6. Measure branch-run cost again once changelog fragments are in use.
+5. Finish the three selection tasks, record their outcomes, and read the comparison.
+6. A state-file budget guard, once the owning lines have converted their files.
+7. Measure branch-run cost again once changelog fragments are in use.
 
 ## Open with the operator
 
