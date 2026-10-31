@@ -2527,20 +2527,59 @@ fn dispatch_emit(cmd: Word) -> Word {
 // eighteen a nested-call body allows; flattening the argument moves it well clear
 // rather than leaving the next kind to discover the ceiling as a SIGABRT.
 fn emit_at(k: Word, n: Word, at: Word) -> Word {
+    // TWENTY ARMS EXCEED THE EIGHTEEN A SINGLE CHAIN ALLOWS, so the kinds are split at
+    // DATA_SLOTS, 0x001A, into two chains of ten, the low kinds first. The split adds one
+    // level and no function, since a new function here would also push this stage past the
+    // name-occurrence capacity of the self-hosted type stage's input channels.
+    if k < kind_data_slots() {
     if k == kind_names() { emit_name_records(at, n) } else {
     if k == kind_consts() { emit_const_records(at, n) } else {
     if k == kind_shapes() { emit_shape_records(at, n) } else {
     if k == kind_signatures() { emit_signature_records(at, n) } else {
-    if k == kind_chunks() { emit_chunk_records(at, n) } else {
-    if k == kind_header() { emit_header_record_at(at) } else {
     if k == kind_string_pool() { emit_pool_bytes(at, n) } else {
-    if k == kind_param_types() { emit_pool_bytes(at, n) } else {
     // Added in slice 12. The original eight were exactly the minimal module's
     // regions, and the interner's constructed sources declare enums, so they
     // reach two more. The refusal is what surfaced it rather than a wrong
     // artifact — the guard slice 11 added, doing its job on its first real test.
     if k == kind_enum_variants() { emit_enum_variant_records(at, n) } else {
     if k == kind_enum_layouts() { emit_enum_layout_records(at, n) } else {
+    // STRUCT_TEMPLATES reaches this dispatch for the first time here, and the
+    // shape of the omission is the same as DEBUG_POOL's above: the EMITTER has
+    // existed since slice 7 and is reachable as command 130, but no caller that
+    // chooses the kind generically ever asked for it, so the arm was never
+    // written. A template record is produced only on the compiler's BOXED
+    // struct path, which every ordinary struct avoids by flattening, so no
+    // corpus artifact could surface the gap.
+    //
+    // Measured 2026-08-14 by instrumenting every emit command over the whole
+    // suite: of the seventeen record shapes, sixteen were emitted with at least
+    // one record and this one appeared under no command at any count. The
+    // `-222` refusal is what surfaced it, the fourth time this guard has earned
+    // its place on a kind nobody had exercised.
+    //
+    // THIS ARM TOOK THE CHAIN TO EIGHTEEN, and `MAX_PARSE_DEPTH` is a depth
+    // budget of 24 SHARED between chain position and arm-body nesting. Eighteen
+    // arms with a nested-call body is the measured ceiling for this shape in the
+    // TEST HARNESS, which is the binding measurement because that is where
+    // `wire.kel` compiles; the CLI reads two to three arms more generous and
+    // the harness aborts where the CLI reports a clean parse error. The chain
+    // is therefore split in two above rather than extended.
+    if k == kind_struct_templates() { emit_struct_template_records(at, n) } else {
+    // STRUCT_AUX and ENUM_AUX reach this dispatch for the first time here. Their emitters,
+    // commands 128 and 129, have existed since the constant forest was self-hosted, but a
+    // chunk's constant pool in the self-hosted subset never held a composite, so no caller
+    // choosing the kind generically asked for either. Option (b) of the operator's ruling of
+    // 2026-10-30 on definite initialization gives a private struct field its type's zero as
+    // a load-time initializer, which is a composite constant, so the region-table corpus now
+    // reaches STRUCT_AUX from a real compiled module, and its `-222` refusal surfaced the
+    // gap. ENUM_AUX is added with it because an enum zero would reach it the same way.
+    if k == kind_struct_aux() { emit_struct_aux_records(at, n) } else {
+    if k == kind_enum_aux() { emit_enum_aux_records(at, n) } else {
+    0 - 222 }}}}}}}}}}
+    } else {
+    if k == kind_chunks() { emit_chunk_records(at, n) } else {
+    if k == kind_header() { emit_header_record_at(at) } else {
+    if k == kind_param_types() { emit_pool_bytes(at, n) } else {
     // Added when the coverage upgrade drove these from real sources. The
     // refusal is what surfaced each one — a `-222` rather than a silently
     // mis-sized region — which is now the third time this guard has earned its
@@ -2558,29 +2597,8 @@ fn emit_at(k: Word, n: Word, at: Word) -> Word {
     // the window emitter does, can reach it, which is why a corpus that never sets
     // `emit_debug` left the gap invisible.
     if k == kind_debug_pool() { emit_pool_bytes(at, n) } else {
-    // STRUCT_TEMPLATES reaches this dispatch for the first time here, and the
-    // shape of the omission is the same as DEBUG_POOL's above: the EMITTER has
-    // existed since slice 7 and is reachable as command 130, but no caller that
-    // chooses the kind generically ever asked for it, so the arm was never
-    // written. A template record is produced only on the compiler's BOXED
-    // struct path, which every ordinary struct avoids by flattening, so no
-    // corpus artifact could surface the gap.
-    //
-    // Measured 2026-08-14 by instrumenting every emit command over the whole
-    // suite: of the seventeen record shapes, sixteen were emitted with at least
-    // one record and this one appeared under no command at any count. The
-    // `-222` refusal is what surfaced it, the fourth time this guard has earned
-    // its place on a kind nobody had exercised.
-    //
-    // THIS ARM TAKES THE CHAIN TO EIGHTEEN, and `MAX_PARSE_DEPTH` is a depth
-    // budget of 24 SHARED between chain position and arm-body nesting. Eighteen
-    // arms with a nested-call body is the measured ceiling for this shape in the
-    // TEST HARNESS, which is the binding measurement because that is where
-    // `wire.kel` compiles; the CLI reads two to three arms more generous and
-    // the harness aborts where the CLI reports a clean parse error. A nineteenth
-    // arm of this shape needs the chain restructured, not extended.
-    if k == kind_struct_templates() { emit_struct_template_records(at, n) } else {
-    0 - 222 }}}}}}}}}}}}}}}}}}
+    0 - 222 }}}}}}}}}}
+    }
 }
 
 // The absolute caller, unchanged in meaning. The directory guard lives here

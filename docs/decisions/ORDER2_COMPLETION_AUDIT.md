@@ -122,6 +122,85 @@ instruction with the reference on its own mutations and on every single-write
 and single-read mutation of a small corpus. They are evidence of agreement, not
 a proof of it for arbitrary bytecode. The shipping reference gate is unchanged.
 
+### Definite initialization widened, 2026-10-30
+
+The operator ruled first-hand on 2026-10-30, "Adopt C. Then attempt to maintain
+guarantees and widen to A and B together." This note records the widening.
+
+Option (a) changes one lowering. The handled indexed write,
+`compile_data_index_store` in src/compiler.rs, read its `old` and `new` slots
+in the arm dispatch under the same flag test that guards the success branch
+that writes them. It now writes each bound slot that only the success branch
+would write with the element type's zero before that test, an immediate for
+`Word`, `Byte` and `bool` and a pool constant otherwise. The arms never observe
+that zero. A light-tier run with a strict must-analysis for locals refused 22
+tests before the change, every one a handled write, a corpus holding one, or a
+test pinning the narrowed rule, and the handled read and every other lowering were already
+written on every path. codegen.kel mirrors the pre-writes for the `Word` and
+`Byte` elements it supports, and the handled-write corpus of
+tests/indexed_write_handlers.rs stays byte-identical.
+
+Option (b) gives every private slot its type's zero at load.
+`fill_private_zero_initializers` in src/compiler.rs replaces each `Unit`
+initializer with `zero_value` of the slot's type once the type tables are
+complete, a struct its canonical zero, an array of composites its element's
+zero in every element slot, and `Text` the empty static string. The container
+format is unchanged, since the private initializers were already a constant
+forest that may hold composites, and no opcode or `BYTECODE_VERSION` change is
+needed. The virtual machine materialises each composite initializer at the
+module's widths and moves it into the persistent composite pool at
+construction, by the routine a hot swap already used for a seeded composite. A
+hot swap that seeds a private slot with `Unit` gives it the new module's
+initializer, so the guarantee survives a swap. A program that read a composite
+private slot before writing it formerly observed `Unit` and now observes the
+zero. A crafted pool table that overruns a slot region now faults at
+construction rather than at the first write. On the self-hosted side parse.kel
+chooses kind 6 for a `Text` field and kind 7 for a struct field, the driver
+assembles the zero from the struct records, and wire.kel's generic region
+dispatch gained the STRUCT_AUX and ENUM_AUX arms that a composite initializer
+reaches, with its chain split in two at DATA_SLOTS to stay within the nesting
+ceiling, since a new function would have taken wire.kel past the name capacity
+of the self-hosted type stage.
+
+The rule in src/verify_init.rs is strengthened while keeping the narrowed
+guarantee. Rule 1 is a forward must-analysis over locals, so a read is refused
+unless every path writes the local first. Rule 2 holds a private slot whose
+initializer is still `Unit` to a write on every path before any read, with
+callee must-write summaries and no assumption about a caller, since the host
+may enter any chunk. The check is not that every initializer is non-`Unit`,
+because a module carries no slot types and the only value of a `()` slot is
+`Unit`. The residual `Unit` slots are a `()` slot, a slot whose zero would
+violate a refinement with no determinable lowest valid value, and a slot of a
+type with no zero.
+
+The self-hosted twin in verify_depth.kel now meets at a join and computes the
+greatest fixpoint, and agrees with the reference on rule 1 over the controls of
+tests/selfhost_definite_initialization.rs. Rule 2 has no self-hosted twin yet.
+The self-hosted validator does not read the private initializers, so it cannot
+see which slots rule 2 tracks, and the reference refuses a module that the
+self-hosted validator would accept only when such a module carries a `Unit`
+private initializer, which the current compilers emit only for the residual
+slots above.
+
+The measured costs are these. A bound `Word` or `bool` slot adds two
+instructions and two nominal cycles, and a bound `Byte` slot three instructions
+and four cycles. A `Word` write binding both values went from 55 to 59
+instructions and from a whole-chunk WCET of 80 to 84, and a `Byte` write binding
+`old` from 46 to 49 instructions and from 72 to 76, and each of the two
+artifacts grew by 16 bytes. The private data region and the persistent composite pool are
+unchanged in size, since every slot and pool body was already reserved. The
+artifact grows by the initializer constants, 64 bytes for one private struct of
+two words, 240 bytes for an array of four, and 8 bytes for a `Text` field, so a
+large private array of structs grows linearly with its length. Construction
+copies each composite initializer once, which is outside every per-call bound.
+None of the fifteen stage sources uses a handled write or a composite private
+field, so their artifacts are byte-unchanged.
+
+A defect outside this change was observed and not repaired. On the base this
+work was cut from, the `old` binding of a handled write to a struct element
+observes the new value, since the read and the write alias the element's pool
+body.
+
 ## Host and trust boundary
 
 The host decodes bytecode and transports opcode classes, operands, primitive costs,

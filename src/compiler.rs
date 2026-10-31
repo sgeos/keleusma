@@ -4027,6 +4027,7 @@ fn compile_with_recorded_type_hook(
     if let Some(dl) = data_layout.as_mut() {
         dl.shared_layout = shared_slot_layout;
         dl.private_composite_layout = private_composite_layout;
+        fill_private_zero_initializers(program, &type_info, &mut dl.private_init)?;
     }
 
     // Compile each function group. After emission, enforce the
@@ -5273,8 +5274,9 @@ fn private_composite_slot_index(
 /// Per-slot load-time initial values for a private data field, one entry per
 /// slot the field occupies (`slots_for_data_type`). A scalar field carries its
 /// `= literal` initializer or the primitive zero; a scalar array carries the
-/// element zero in every slot; every other shape carries `Unit`, preserving
-/// write-before-read for composite private slots.
+/// element zero in every slot; every other shape carries `Unit` here, which
+/// `fill_private_zero_initializers` replaces with the type's zero once the type
+/// tables are complete.
 fn private_init_for_field(
     data_name: &str,
     field: &DataFieldDecl,
@@ -5309,6 +5311,73 @@ fn private_init_for_field(
         },
         _ => Ok(alloc::vec![ConstValue::Unit; n]),
     }
+}
+
+/// Give every private slot that `private_init_for_field` left as `Unit` the
+/// canonical zero value of its type, so that no private slot starts as the
+/// virtual machine's empty-slot marker.
+///
+/// This is option (b) of the operator's ruling of 2026-10-30 on definite
+/// initialization. A composite slot receives its type's
+/// `crate::zero_value::zero_value`, an array of composites its element's zero
+/// in every element slot, and a `Text` slot the empty static string. The type
+/// tables are complete here, which `private_init_for_field` runs too early to
+/// use, so the zeros are filled in afterwards, in the same private-slot order.
+///
+/// A slot keeps `Unit` in three cases. Its type is `()`, whose only value is
+/// `Unit`. Its zero would violate a refinement, because some refined newtype in
+/// it has no determinable lowest valid value, and a load-time initializer is
+/// observable. Or its type has no zero, as an opaque host type does not. The
+/// verifier holds every slot that keeps `Unit` to a write before any read on
+/// every path, so such a program is still checked.
+fn fill_private_zero_initializers(
+    program: &Program,
+    type_info: &TypeInfo,
+    private_init: &mut [crate::bytecode::ConstValue],
+) -> Result<(), CompileError> {
+    use crate::bytecode::ConstValue;
+    let registry = type_info.zero_registry();
+    let mut at = 0usize;
+    for decl in &program.data_decls {
+        if decl.visibility != DataVisibility::Private {
+            continue;
+        }
+        for field in &decl.fields {
+            let n = slots_for_data_type(&field.type_expr) as usize;
+            let leaf = innermost_non_array_type(&field.type_expr);
+            let slots = private_init
+                .get_mut(at..at.saturating_add(n))
+                .ok_or_else(|| CompileError {
+                    message: format!(
+                        "internal error: private data field `{}.{}` has no initializer entry",
+                        decl.name, field.name
+                    ),
+                    span: field.span,
+                })?;
+            at = at.saturating_add(n);
+            if !slots.contains(&ConstValue::Unit)
+                || !crate::zero_value::zero_respects_refinements(leaf, &registry)
+            {
+                continue;
+            }
+            let Ok(mut zero) = crate::zero_value::zero_value(leaf, &registry) else {
+                continue;
+            };
+            resolve_const_enum_discriminants(&mut zero, &type_info.enum_variant_order);
+            for slot in slots.iter_mut().filter(|v| **v == ConstValue::Unit) {
+                *slot = zero.clone();
+            }
+        }
+    }
+    if at != private_init.len() {
+        return Err(CompileError {
+            message: String::from(
+                "internal error: the private initializer table and the private fields disagree",
+            ),
+            span: Span::default(),
+        });
+    }
+    Ok(())
 }
 
 /// A resolved indexed access into a data-segment array field.

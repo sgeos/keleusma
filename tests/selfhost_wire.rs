@@ -13021,8 +13021,10 @@ fn every_stage_fits_the_driver_caps_with_margin() {
     // block, `call_akind` and the `gen_*` helpers, made it 1119 and 34,554. Erasing
     // information-flow labels and newtypes, with the refinement check, made it 1150 and
     // 35,525. The identity cast's `cast_is_identity` made it 1151 and 35,583.
+    // The private initializer kinds for `Text` and struct fields, option (b) of the
+    // definite-initialization ruling, added no name and took the blob to 35,613.
     assert_eq!(worst_names, 1151, "the worst-case name count moved");
-    assert_eq!(worst_blob, 35583, "the worst-case blob size moved");
+    assert_eq!(worst_blob, 35613, "the worst-case blob size moved");
 }
 
 /// **THE 90-RECORD CAP IS GONE, and the subjects are the two stages it excluded.**

@@ -75,10 +75,12 @@ fn d4_private_composite_write_bounded_by_slot_region() {
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize_persistent");
-    let mut vm = Vm::new(m, &arena).expect("verify");
-    let err = vm
-        .call(&[])
-        .expect_err("the overrunning composite write must fault, not corrupt the neighbour");
+    // Construction writes each composite slot's zero initializer into its pool
+    // region, which is the first overrunning write, so the fault now arises at
+    // `Vm::new` rather than at the program's own write.
+    let err = Vm::new(m, &arena)
+        .err()
+        .expect("the overrunning composite write must fault, not corrupt the neighbour");
     let msg = alloc::format!("{err:?}");
     assert!(
         msg.contains("overruns its pool slot region"),

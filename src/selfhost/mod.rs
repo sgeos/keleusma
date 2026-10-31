@@ -6851,31 +6851,9 @@ pub fn validate_module_via_kel(module: &Module, arena_capacity: i64) -> bool {
 /// array count when the field is declared as an array).
 type StructFieldTable = alloc::collections::BTreeMap<i64, Vec<(i64, i64, Option<i64>)>>;
 
-/// The schema hash the self-hosted driver computes for `src`, from the pipeline's own records,
-/// for a check against the reference's.
-pub fn schema_hash_from_pipeline(src: &str) -> u32 {
-    let (_, names, data_records, _, _, struct_records) = parse_functions_fused_with_natives(src);
-    let dl = assemble_data_layout(&data_records, &names);
-    let layout = (!dl.slots.is_empty()).then_some(dl);
-    crate::bytecode::compute_typed_schema_hash(
-        layout.as_ref(),
-        &schema_slot_tokens(&data_records, &struct_records, &names),
-    )
-}
-
-/// Each data slot's type token for [`crate::bytecode::compute_typed_schema_hash`], parallel to
-/// [`assemble_data_slots`], from parse.kel's data records and its struct records.
-///
-/// A data record names each field's type, 6, and an array's element count, 8. A struct record
-/// opens a struct, 18, and gives each field's name, 4, its type, 6, and an array count, 8. The
-/// token is the reference's, built from the same declarations, which the byte-identical oracle
-/// checks for every source with data.
-fn schema_slot_tokens(
-    data_records: &[(i64, i64)],
-    struct_records: &[(i64, i64)],
-    names: &[String],
-) -> Vec<String> {
-    // Each struct's fields as (name id, type id, array count when declared).
+/// Each struct's fields as (name id, type id, array count when declared), from parse.kel's
+/// struct records: 18 opens a struct, 4 names a field, 6 gives its type and 8 an array count.
+fn struct_field_table(struct_records: &[(i64, i64)]) -> StructFieldTable {
     let mut structs: StructFieldTable = alloc::collections::BTreeMap::new();
     let mut current = None;
     for &(code, val) in struct_records {
@@ -6908,6 +6886,93 @@ fn schema_slot_tokens(
             _ => {}
         }
     }
+    structs
+}
+
+/// The canonical zero of the type named `type_id`, as `crate::zero_value::zero_value` gives
+/// it, for the types a self-hosted private struct field can hold. A scalar is its zero, `Text`
+/// the empty static string, and a struct its fields' zeros in declaration order, an array field
+/// its element's zero repeated. Any other type panics, which the driver reports as a refusal
+/// rather than emit an initializer that might differ from the reference's.
+fn self_hosted_zero(
+    type_id: i64,
+    depth: usize,
+    names: &[String],
+    structs: &StructFieldTable,
+) -> ConstValue {
+    let name = usize::try_from(type_id)
+        .ok()
+        .and_then(|i| names.get(i))
+        .map_or("", String::as_str);
+    match name {
+        "Word" => ConstValue::Int(0),
+        "Byte" => ConstValue::Byte(0),
+        "bool" | "Bool" => ConstValue::Bool(false),
+        "Text" => ConstValue::StaticStr(String::new()),
+        _ => {
+            assert!(depth < 16, "private initializer nests too deeply");
+            let fields = structs
+                .iter()
+                .find(|&(&k, _)| {
+                    usize::try_from(k)
+                        .ok()
+                        .and_then(|i| names.get(i))
+                        .map(String::as_str)
+                        == Some(name)
+                })
+                .map(|(_, f)| f)
+                .unwrap_or_else(|| panic!("no zero for private field type `{name}`"));
+            ConstValue::Struct {
+                type_name: String::from(name),
+                fields: fields
+                    .iter()
+                    .map(|&(field, ty, count)| {
+                        let zero = self_hosted_zero(ty, depth + 1, names, structs);
+                        let value = match count {
+                            Some(n) => ConstValue::Array(alloc::vec![
+                                zero;
+                                usize::try_from(n).expect("negative array count")
+                            ]),
+                            None => zero,
+                        };
+                        let field_name = usize::try_from(field)
+                            .ok()
+                            .and_then(|i| names.get(i))
+                            .cloned()
+                            .unwrap_or_default();
+                        (field_name, value)
+                    })
+                    .collect(),
+            }
+        }
+    }
+}
+
+/// The schema hash the self-hosted driver computes for `src`, from the pipeline's own records,
+/// for a check against the reference's.
+pub fn schema_hash_from_pipeline(src: &str) -> u32 {
+    let (_, names, data_records, _, _, struct_records) = parse_functions_fused_with_natives(src);
+    let dl = assemble_data_layout(&data_records, &struct_records, &names);
+    let layout = (!dl.slots.is_empty()).then_some(dl);
+    crate::bytecode::compute_typed_schema_hash(
+        layout.as_ref(),
+        &schema_slot_tokens(&data_records, &struct_records, &names),
+    )
+}
+
+/// Each data slot's type token for [`crate::bytecode::compute_typed_schema_hash`], parallel to
+/// [`assemble_data_slots`], from parse.kel's data records and its struct records.
+///
+/// A data record names each field's type, 6, and an array's element count, 8. A struct record
+/// opens a struct, 18, and gives each field's name, 4, its type, 6, and an array count, 8. The
+/// token is the reference's, built from the same declarations, which the byte-identical oracle
+/// checks for every source with data.
+fn schema_slot_tokens(
+    data_records: &[(i64, i64)],
+    struct_records: &[(i64, i64)],
+    names: &[String],
+) -> Vec<String> {
+    let structs = struct_field_table(struct_records);
     let name_of = |id: i64| {
         usize::try_from(id)
             .ok()
@@ -7108,12 +7173,23 @@ fn assemble_shared_layout(
 
 /// Assemble parser-produced private initializer descriptors in private-slot order.
 /// The parser decides the scalar kind, default, literal value and admission verdict.
-fn assemble_private_init(data_records: &[(i64, i64)], _names: &[String]) -> Vec<ConstValue> {
+///
+/// Kind 6 is a `Text` field, whose initializer is the empty static string, and kind 7 a struct
+/// field, whose initializer is its type's zero, which parse.kel chooses for every field it
+/// does not give a scalar initializer, under option (b) of the operator's ruling of 2026-10-30
+/// on definite initialization. The zero itself is assembled here from the struct records, as
+/// the slot type tokens are.
+fn assemble_private_init(
+    data_records: &[(i64, i64)],
+    names: &[String],
+    structs: &StructFieldTable,
+) -> Vec<ConstValue> {
     use crate::selfhost_host::{
         PARSE_PRIVATE_INIT_KIND_TAG, PARSE_PRIVATE_INIT_NEGATIVE_TAG, PARSE_PRIVATE_INIT_VALUE_TAG,
     };
     struct Field {
         count: i64,
+        type_id: i64,
         kind: Option<i64>,
         value: Option<ConstValue>,
     }
@@ -7124,9 +7200,13 @@ fn assemble_private_init(data_records: &[(i64, i64)], _names: &[String]) -> Vec<
             9 => visibility = value % 4,
             4 if visibility == 1 => fields.push(Field {
                 count: 1,
+                type_id: -1,
                 kind: None,
                 value: None,
             }),
+            6 if visibility == 1 => {
+                fields.last_mut().expect("type without field").type_id = value;
+            }
             8 if visibility == 1 => fields.last_mut().expect("array without field").count = value,
             PARSE_PRIVATE_INIT_KIND_TAG if visibility == 1 => {
                 let field = fields.last_mut().expect("initializer kind without field");
@@ -7163,6 +7243,14 @@ fn assemble_private_init(data_records: &[(i64, i64)], _names: &[String]) -> Vec<
                         assert_eq!(value, 0, "unsupported Float initializer transport");
                         ConstValue::Float(0.0)
                     }
+                    6 => {
+                        assert_eq!(value, 0, "nonzero Text initializer");
+                        ConstValue::StaticStr(String::new())
+                    }
+                    7 => {
+                        assert_eq!(value, 0, "nonzero struct initializer");
+                        self_hosted_zero(field.type_id, 0, names, structs)
+                    }
                     other => panic!("unknown private initializer kind {other}"),
                 };
                 assert!(
@@ -7196,13 +7284,18 @@ fn assemble_private_init(data_records: &[(i64, i64)], _names: &[String]) -> Vec<
 /// Assemble a whole `DataLayout` from parse.kel's data-block records.
 fn assemble_data_layout(
     data_records: &[(i64, i64)],
+    struct_records: &[(i64, i64)],
     names: &[String],
 ) -> crate::bytecode::DataLayout {
     crate::bytecode::DataLayout {
         slots: assemble_data_slots(data_records, names),
         shared_layout: assemble_shared_layout(data_records, names),
         private_composite_layout: private_composite_pool(data_records).0,
-        private_init: assemble_private_init(data_records, names),
+        private_init: assemble_private_init(
+            data_records,
+            names,
+            &struct_field_table(struct_records),
+        ),
     }
 }
 
@@ -7651,7 +7744,7 @@ pub fn self_host_compile_full(src: &str) -> Module {
     let mut module = self_host_compile(src);
     let (fns, names, data_records, enum_records, _, struct_records) =
         parse_functions_fused_with_natives(src);
-    let dl = assemble_data_layout(&data_records, &names);
+    let dl = assemble_data_layout(&data_records, &struct_records, &names);
     module.data_layout = (!dl.slots.is_empty()).then_some(dl);
     module.persistent_composite_bytes = private_composite_pool(&data_records).1;
     module.schema_hash = crate::bytecode::compute_typed_schema_hash(
@@ -7826,7 +7919,7 @@ pub fn self_host_compile_scratch(src: &str) -> Module {
 
     // The data layout, assembled from parse.kel's data-block records, drives both the shared
     // and private byte totals the reference derives from the same layout.
-    let dl = assemble_data_layout(&data_records, &names);
+    let dl = assemble_data_layout(&data_records, &struct_records, &names);
     let shared_data_bytes = shared_data_bytes_of(&dl.shared_layout);
     let private_slot_count = dl
         .slots
