@@ -94,6 +94,7 @@ REACH=(
     ../docs/process/handoffs/v0.3.0.md
     ../docs/process/REVERSE_PROMPT.md
     "../docs/decisions/ABSORPTION_*_BRIEF.md"
+    ../docs/decisions/NATIVE_REGION_SUPPLEMENT_FORMULA.md
     ../src
     ../examples
     ../compiler/kel

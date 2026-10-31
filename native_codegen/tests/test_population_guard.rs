@@ -122,7 +122,9 @@
 // 841 -> 842: `bodies_yielded_in_a_cycle_stay_intact_until_the_reset` in
 // `retcon_bytecode.rs`, the copy at the yield of operator question 24,
 // 2026-10-31. No name disappeared.
-const RECORDED_TEST_FUNCTIONS: usize = 842;
+// 842 -> 844: the two tests of `region_supplement_formula.rs`, operator
+// question 22, 2026-10-31. No name disappeared.
+const RECORDED_TEST_FUNCTIONS: usize = 844;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise
@@ -337,7 +339,8 @@ const RECORDED_TEST_FUNCTIONS: usize = 842;
 // 171 -> 172: `native_stage_executor.rs` for operator question 19, none removed.
 // 172 -> 173: `native_seeded_interp.rs` for operator question 6, none removed.
 // 173 -> 174: `native_stage_factory.rs` for operator question 19, none removed.
-const RECORDED_TEST_FILES: usize = 174;
+// 174 -> 175: `region_supplement_formula.rs` for operator question 22, none removed.
+const RECORDED_TEST_FILES: usize = 175;
 
 fn test_files() -> Vec<std::path::PathBuf> {
     let mut out: Vec<_> = std::fs::read_dir("tests")
