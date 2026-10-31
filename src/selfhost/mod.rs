@@ -7431,7 +7431,7 @@ fn private_composite_pool(
 
 /// Each private composite slot, in pool order, with its flat body size in bytes.
 ///
-/// This is the layout [`private_composite_pool`] places, and it is what `codegen.kel`'s
+/// This is the layout `private_composite_pool` places, and it is what `codegen.kel`'s
 /// copy pass needs to recognise a private struct read and size its copy. Every such slot
 /// holds a struct, the only private composite field parse.kel marks with a size record.
 #[must_use]
