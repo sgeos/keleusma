@@ -54,10 +54,18 @@ updates:
       cargo:
         patterns: ["*"]
 
-  # The detached packages with their own tracked lockfiles. Root CI does not build
-  # them, so an update here needs the package's own checks before merging.
+  # The detached packages with their own tracked lockfiles. They are outside the
+  # workspace. Root CI builds, lints and tests the first two in its `detached` job, and
+  # checks the fuzz package's lockfile there. The scheduled Fuzz workflow builds and runs
+  # the fuzz package on nightly.
+  #
+  # They depend on workspace members by path, and Dependabot also edits those members'
+  # manifests, as `c90fe3e8` did for `syn` on 2026-10-28, without updating the root
+  # Cargo.lock. Root CI checks with `--locked` and fails such a pull request. Before
+  # merging it, run `cargo metadata --format-version 1 > /dev/null` at the root and
+  # commit the refreshed Cargo.lock to the same pull request.
   - package-ecosystem: cargo
-    directories: ["/keleusma-lsp", "/keleusma-wasm"]
+    directories: ["/keleusma-lsp", "/keleusma-wasm", "/fuzz"]
     target-branch: v0.2.3
     schedule:
       interval: weekly
