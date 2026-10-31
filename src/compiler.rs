@@ -6940,6 +6940,12 @@ fn infer_expr_type(fc: &FuncCompiler, expr: &Expr) -> Option<TypeExpr> {
                 ))
             }
         }
+        #[cfg(feature = "text")]
+        Expr::Call { name, args, .. }
+            if crate::text_intrinsic::namespace_member(name).is_some() =>
+        {
+            text_intrinsics::result_type(fc, name, args)
+        }
         Expr::Call { name, .. } => fc.type_info.function_returns.get(name).cloned(),
         Expr::Ident { name, .. } => fc.local_type(name).cloned(),
         Expr::FieldAccess { object, field, .. } => {
@@ -12542,6 +12548,28 @@ fn compile_call(
     args: &[Expr],
     span: &Span,
 ) -> Result<(), CompileError> {
+    // A bundled text operation lowers in place. The type checker has already
+    // refused it in a build without the `text` feature, and the refusal is
+    // repeated here so that a program reaching the compiler by another route
+    // is refused too.
+    match crate::text_intrinsic::resolve(name) {
+        Err(message) => {
+            return Err(CompileError {
+                message,
+                span: *span,
+            });
+        }
+        #[cfg(feature = "text")]
+        Ok(Some(op)) => return text_intrinsics::compile(fc, op, name, args, *span),
+        #[cfg(not(feature = "text"))]
+        Ok(Some(_)) => {
+            return Err(CompileError {
+                message: format!("`{name}` requires the `text` cargo feature"),
+                span: *span,
+            });
+        }
+        Ok(None) => {}
+    }
     // Newtype construction. `Name(value)` where `Name` is a
     // declared newtype emits the inner expression's bytecode
     // directly with no `Op::Call`. Newtypes are transparent at the
@@ -13104,6 +13132,9 @@ fn compile_pattern_bind_typed(
 
 #[cfg(all(test, feature = "verify"))]
 mod inference_independence;
+
+#[cfg(feature = "text")]
+mod text_intrinsics;
 
 #[cfg(test)]
 mod tests {
