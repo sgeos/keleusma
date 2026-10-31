@@ -70,6 +70,24 @@ shared data dv {
     out_init_reject: Word,
     out_init_ip: Word,
     out_init_cause: Word,
+    // Rule 2 of the reference, over private data slots whose load-time initializer is `Unit`.
+    // The host numbers those slots densely and `d_width` is how many there are, 0 for none,
+    // in which case nothing below is read. Per op, `d_set` is one more than the dense slot a
+    // `SetData` writes, -1 at a `Return`, or 0, `d_lo` and `d_hi` bound the dense slots a
+    // `GetData` or `GetDataIndexed` reads, and `d_call` is one more than the row of `d_sum`
+    // holding the callee's must-write summary, eight words a row, or 0. The verdict follows,
+    // with the same causes as `out_init_cause`, and `out_data_sum` is this chunk's own summary,
+    // the meet of its sets at every reached `Return`.
+    d_width: Word,
+    d_set: [Word; 8192],
+    d_lo: [Word; 8192],
+    d_hi: [Word; 8192],
+    d_call: [Word; 8192],
+    d_sum: [Word; 8192],
+    out_data_reject: Word,
+    out_data_ip: Word,
+    out_data_cause: Word,
+    out_data_sum: [Word; 8],
 }
 
 // THE DECLARED NESTING CAP. Operator ruling, 2026-08-19: 32 for now.
@@ -132,6 +150,10 @@ private data di {
     st: [Word; 65536],
     cur: [Word; 8],
     changed: Word,
+    // 0 while the sweep applies the transfer of rule 1 over locals, 1 for rule 2 over the
+    // dense private slots, and `ret` whether rule 2 has met a reached `Return`.
+    mode: Word,
+    ret: Word,
 }
 
 // Push a fresh frame for region `[ip, end)` with entry depth `depth`; `end` is clamped to
@@ -462,14 +484,28 @@ fn init_join(to: Word) -> Word {
 // no edge.
 fn init_step(ip: Word) -> Word {
     for w in 0..8 limit 8 { di.cur[w] = di.st[ip * 8 + w]; }
-    let s = dv.lset[ip];
-    if s > 0 andalso s <= dv.l_width {
-        let b = s - 1;
-        di.cur[b / 32] = di.cur[b / 32] bor (1 lsl (b % 32));
-    }
-    if s < 0 {
-        for w in 0..8 limit 8 { di.cur[w] = 0; }
-        di.cur[0] = dv.l_stream_bit;
+    if di.mode == 0 {
+        let s = dv.lset[ip];
+        if s > 0 andalso s <= dv.l_width {
+            let b = s - 1;
+            di.cur[b / 32] = di.cur[b / 32] bor (1 lsl (b % 32));
+        }
+        if s < 0 {
+            for w in 0..8 limit 8 { di.cur[w] = 0; }
+            di.cur[0] = dv.l_stream_bit;
+        }
+    } else {
+        // Rule 2 adds a written slot and a callee's summary. `Stream` changes nothing, since
+        // private data persists across `Reset`.
+        let s = dv.d_set[ip];
+        if s > 0 andalso s <= dv.d_width {
+            let b = s - 1;
+            di.cur[b / 32] = di.cur[b / 32] bor (1 lsl (b % 32));
+        }
+        let c = dv.d_call[ip];
+        if c > 0 andalso c <= 1024 {
+            for w in 0..8 limit 8 { di.cur[w] = di.cur[w] bor dv.d_sum[(c - 1) * 8 + w]; }
+        }
     }
     if dv.is_term[ip] == 0 {
         let k = dv.class[ip];
@@ -509,6 +545,18 @@ fn init_check() -> Word {
     0
 }
 
+// Sweep from the entry set already in the set of op 0 until a sweep changes nothing, under the
+// transfer `di.mode` selects. 1 when the fixpoint is established, 0 when the budget ended first.
+fn init_solve() -> Word {
+    for ip in 0..dv.op_count limit 8192 { di.reach[ip] = 0; }
+    di.reach[0] = 1;
+    di.changed = 1;
+    for r in 0..72 limit 72 {
+        if di.changed == 1 andalso r < init_sweeps() { init_sweep(); }
+    }
+    1 - di.changed
+}
+
 // Decide the rule for the marshalled chunk and publish it in the `out_init` fields.
 fn init_run() -> Word {
     dv.out_init_reject = 0;
@@ -518,21 +566,82 @@ fn init_run() -> Word {
         dv.out_init_cause = 1;
     } else {
     if dv.op_count > 0 {
-        for ip in 0..dv.op_count limit 8192 { di.reach[ip] = 0; }
-        di.reach[0] = 1;
+        di.mode = 0;
         for w in 0..8 limit 8 { di.st[w] = 0; }
         // Clamped to the width, so that the range never exceeds its limit.
         let np = if dv.l_params < dv.l_width { dv.l_params } else { dv.l_width };
         for p in 0..np limit 256 { di.st[p / 32] = di.st[p / 32] bor (1 lsl (p % 32)); }
-        di.changed = 1;
-        for r in 0..72 limit 72 {
-            if di.changed == 1 andalso r < init_sweeps() { init_sweep(); }
-        }
-        if di.changed == 1 {
+        if init_solve() == 0 {
             dv.out_init_cause = 2;
         } else {
             init_check();
         }
+    } }
+    data_run();
+    0
+}
+
+// RULE 2, PRIVATE DATA. The reference holds a private slot whose load-time initializer is
+// `Unit` to a write on every path before any `GetData` or `GetDataIndexed` reads it. It is the
+// same must-analysis as rule 1 over the dense slots, with three differences. Every chunk starts
+// from the empty set, since the host may enter any chunk. A `Call` adds the callee's summary,
+// which the host supplies from an earlier run of this stage over the callee, callees first.
+// `Stream` clears nothing. The sweep, its budget and its convergence argument are rule 1's.
+
+// Check each reached read against the fixpoint in index order, so that the op reported is the
+// lowest refused. A read of several dense slots is refused when any one of them is outside.
+fn data_check() -> Word {
+    for ip in 0..dv.op_count limit 8192 {
+        let lo = dv.d_lo[ip];
+        let n = dv.d_hi[ip] - lo;
+        if dv.out_data_reject == 0 andalso di.reach[ip] == 1 andalso lo >= 0 andalso n > 0 {
+            for k in 0..n limit 256 {
+                if lo + k < dv.d_width andalso init_has(ip, lo + k) == 0 {
+                    dv.out_data_reject = 1;
+                    dv.out_data_ip = ip;
+                }
+            }
+        }
+    }
+    0
+}
+
+// This chunk's must-write summary, the meet of its sets at every reached `Return`, and the
+// empty set when no `Return` is reached.
+fn data_summary() -> Word {
+    di.ret = 0;
+    for w in 0..8 limit 8 { dv.out_data_sum[w] = 0 - 1; }
+    for ip in 0..dv.op_count limit 8192 {
+        if di.reach[ip] == 1 andalso dv.d_set[ip] == 0 - 1 {
+            di.ret = 1;
+            for w in 0..8 limit 8 { dv.out_data_sum[w] = dv.out_data_sum[w] band di.st[ip * 8 + w]; }
+        }
+    }
+    if di.ret == 0 { for w in 0..8 limit 8 { dv.out_data_sum[w] = 0; } }
+    0
+}
+
+// Decide rule 2 for the marshalled chunk and publish it in the `out_data` fields. A width of 0
+// tracks nothing and costs nothing, which is every chunk of every module the compilers emit
+// short of the residual `Unit` slots.
+fn data_run() -> Word {
+    dv.out_data_reject = 0;
+    dv.out_data_ip = 0;
+    dv.out_data_cause = 0;
+    for w in 0..8 limit 8 { dv.out_data_sum[w] = 0; }
+    if dv.d_width < 0 orelse dv.d_width > init_locals() orelse dv.op_count > 8192 {
+        dv.out_data_cause = 1;
+    } else {
+    if dv.d_width > 0 andalso dv.op_count > 0 {
+        di.mode = 1;
+        for w in 0..8 limit 8 { di.st[w] = 0; }
+        if init_solve() == 0 {
+            dv.out_data_cause = 2;
+        } else {
+            data_check();
+            data_summary();
+        }
+        di.mode = 0;
     } }
     0
 }
