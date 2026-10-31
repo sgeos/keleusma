@@ -3580,14 +3580,18 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 ));
             }
             let base = self.arena.persistent_ptr().as_ptr();
+            let src = bytes.as_ptr();
             // SAFETY: `dst_off + len <= persistent_capacity`, so the destination
-            // lies wholly within the persistent region. It is disjoint from the
-            // source (the value's arena-top or inline body) because the
-            // compiler assigns each private composite slot a distinct pool
-            // offset and the persistent region is a different arena range, so
-            // the copy does not overlap.
+            // lies wholly within the persistent region, and the source is the
+            // `len` resolved bytes of the value's body. The two may overlap. A
+            // value read from this slot and written straight back, which
+            // verified bytecode can express as `GetData(s); SetData(s)`, is a
+            // handle to this very body, and a view of part of it can be written
+            // over the whole. `copy` permits overlap, where `copy_nonoverlapping`
+            // would make that write undefined behaviour. `bytes` is not used
+            // after the copy.
             let dst = unsafe { base.add(dst_off) };
-            unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, len) };
+            unsafe { core::ptr::copy(src, dst, len) };
             let raw: *mut [u8] = core::ptr::slice_from_raw_parts_mut(dst, len);
             // SAFETY: `dst` is a freshly written, non-null pointer into the
             // persistent region addressing `len` initialised bytes.

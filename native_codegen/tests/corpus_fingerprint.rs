@@ -332,6 +332,10 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // **RE-PINNED 2026-10-31, absorption 128.** Upstream pull request 685, the
 // self-hosted twin of the private-data definite-initialization rule, changed
 // `verify_depth.kel`. Nothing was added or removed.
+//
+// **RE-PINNED 2026-10-31, absorption 129.** Upstream pull request 690, which
+// copies a private composite read that a later write can reach, changed
+// `codegen.kel`. Nothing was added or removed.
 const PINNED: &[(&str, u64)] = &[
     // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
     // added or removed. Every census this instrument names to re-derive was run on
@@ -540,7 +544,7 @@ const PINNED: &[(&str, u64)] = &[
     ("src/hosted/interp.kel", 0x0b6e4007b12016f5),
     ("src/selfhost/kel/analyze.kel", 0xe45a770e222b1931),
     // Absorption 116 omits the unreachable default of checked arithmetic.
-    ("src/selfhost/kel/codegen.kel", 0xeea94cadb5135d16),
+    ("src/selfhost/kel/codegen.kel", 0x1acaf3651d678a06),
     ("src/selfhost/kel/lexer.kel", 0x897a561eef4f18d1),
     // Absorption 83 changes cast Byte tracking and FixedDiv classification.
     // The non-corpus run re-derived coverage and refusal figures unchanged.

@@ -363,6 +363,19 @@ jobs:
   # Every shard must run. `tests/ci_shard_coverage.rs` checks that the matrix lists each
   # shard exactly once, because the gate correspondence guard does not read
   # `--partition` and would pass with a shard missing.
+  #
+  # THE LONGEST TESTS ARE PINNED TO A SHARD BY MEASURED DURATION. Hashing alone left the
+  # shards between 26 and 37 minutes, because the 43 tests over 150 seconds hold about two
+  # thirds of the shards' test-seconds and fell unevenly into the hash buckets. Each
+  # shard first runs the tests its PINNED_<shard> list names, then hashes every test that
+  # no list names. A test therefore runs in exactly one shard whether it is pinned or not,
+  # and a new or renamed test falls into the hashed part rather than running nowhere. The
+  # operator adopted this on 2026-10-31 as option (a) of item N6 in
+  # docs/process/kaizen/2026-10-31-open-decisions.md, which records the measurement and
+  # the assignment method. `tests/ci_shard_coverage.rs` checks that the lists are disjoint,
+  # that the hashed run excludes exactly their union, and that every pinned name still
+  # appears in the sources. Re-measure and reassign when a shard drifts well past the
+  # others.
   test-self-host:
     name: Test (self-host feature, shard ${{ matrix.shard }}/4)
     needs: [changes, test-self-host-build]
@@ -372,6 +385,54 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
+    env:
+      PINNED_1: >-
+        test(=assembled_chunk_metadata_matches_the_reference) |
+        test(=complete_auxiliary_values_and_opaque_debug_payloads_match) |
+        test(=every_source_has_its_pinned_self_hosted_outcome::src_selfhost_kel_parse) |
+        test(=every_stage_matches_complete_resource_admission::parse) |
+        test(=pipeline_expression_extraction_reaches_every_stage) |
+        test(=self_assembled_scaffold_serializes_byte_identically) |
+        test(=self_host_compiles_parse_kel_byte_identically) |
+        test(=self_hosted_construct_support_boundary) |
+        test(=the_interpreter_agrees_with_the_virtual_machine_on_the_corpus) |
+        test(=wire_kel_no_longer_fails_on_a_radix_literal)
+      PINNED_2: >-
+        test(=assembled_shared_layout_matches_the_reference) |
+        test(=every_composed_handled_module_is_trap_free_in_both_analyses) |
+        test(=every_stage_matches_complete_resource_admission::wire) |
+        test(=framing_matches_every_current_stage_artifact) |
+        test(=pipeline_call_inputs_fit_type_stage_capacity) |
+        test(=production_compiler_matches_complete_stage_artifact::wire) |
+        test(=selfhost::reference_poison_tests::production_type_verdicts_hold_with_the_reference_poisoned) |
+        test(=the_ast_census_has_its_pinned_outcomes) |
+        test(=the_self_hosted_validator_agrees_with_the_reference_on_a_mutated_corpus) |
+        test(=wire_kel_reports_a_named_cause_rather_than_an_array_index)
+      PINNED_3: >-
+        test(=assembled_data_slots_match_the_reference) |
+        test(=assembled_schema_hash_matches_the_reference) |
+        test(=assembled_signatures_match_the_reference) |
+        test(=every_current_stage_completes_the_fallible_verifier) |
+        test(=every_source_has_its_pinned_self_hosted_outcome::src_selfhost_kel_wire) |
+        test(=every_stage_matches_complete_resource_admission::codegen) |
+        test(=every_stage_matches_complete_resource_admission::wire_schema) |
+        test(=production_compiler_matches_complete_stage_artifact::parse) |
+        test(=relocated_modules_execute_and_all_compile_paths_agree) |
+        test(=self_host_compiles_wire_kel_byte_identically) |
+        test(=selfhost::reference_poison_tests::scratch_assembly_matches_every_stage_with_the_reference_poisoned) |
+        test(=the_derived_chunk_names_match_the_reference_compiler)
+      PINNED_4: >-
+        test(=assembled_data_layout_matches_the_reference) |
+        test(=assembled_enum_layouts_match_the_reference) |
+        test(=every_current_stage_has_a_completed_matching_classification) |
+        test(=every_uncovered_form_is_possibly_trapping_in_both_analyses) |
+        test(=production_compiler_matches_complete_stage_artifact::codegen) |
+        test(=production_types_accept_all_stage_inputs) |
+        test(=the_self_hosted_compiler_can_now_compile_wire_kel) |
+        test(=the_self_hosted_validator_agrees_with_the_reference_on_every_compiled_source) |
+        test(=the_trap_analysis_agrees_with_the_reference_on_every_compiled_source) |
+        test(=validate_module_via_kel_is_a_drop_in_for_verify_resource_bounds) |
+        test(=wire_kel_has_the_chunk_count_the_documents_quote)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -381,10 +442,19 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: selfhost-tests
-      - run: cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst --workspace-remap . --partition hash:${{ matrix.shard }}/4
-      - name: List the tests that needed a retry
+      - name: Run the tests pinned to this shard
+        env:
+          PINNED: ${{ env[format('PINNED_{0}', matrix.shard)] }}
+        run: cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst --workspace-remap . -E "$PINNED"
+      - name: List the pinned tests that needed a retry
         if: ${{ !cancelled() }}
-        run: scripts/ci_flaky_report.py --label "Self-host shard ${{ matrix.shard }}" --summary "$GITHUB_STEP_SUMMARY"
+        run: scripts/ci_flaky_report.py --label "Self-host shard ${{ matrix.shard }}, pinned" --summary "$GITHUB_STEP_SUMMARY"
+      - name: Run this shard's hash partition of the other tests
+        if: ${{ !cancelled() }}
+        run: cargo nextest run --profile ci --archive-file selfhost-tests.tar.zst --workspace-remap . -E "not ($PINNED_1 | $PINNED_2 | $PINNED_3 | $PINNED_4)" --partition hash:${{ matrix.shard }}/4
+      - name: List the hashed tests that needed a retry
+        if: ${{ !cancelled() }}
+        run: scripts/ci_flaky_report.py --label "Self-host shard ${{ matrix.shard }}, hashed" --summary "$GITHUB_STEP_SUMMARY"
       - if: matrix.shard == 1
         run: cargo test -p keleusma --features self-host --doc
 
