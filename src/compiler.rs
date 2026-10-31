@@ -64,6 +64,11 @@ struct TypeInfo {
     function_returns: BTreeMap<String, TypeExpr>,
     /// Data block name to (field name to declared field type).
     data_field_types: BTreeMap<String, BTreeMap<String, TypeExpr>>,
+    /// Names of the `private data` blocks. A read of a flat composite slot
+    /// in one of these yields a handle into the persistent pool body that a
+    /// later write overwrites in place, so it is a candidate for
+    /// [`alias_copy`]. A shared read already copies its bytes out.
+    private_data_blocks: alloc::collections::BTreeSet<String>,
     /// Names of declared newtypes. The compiler treats a call
     /// expression whose function name is a newtype as a transparent
     /// construction: the inner expression is compiled in place,
@@ -237,6 +242,14 @@ struct FuncCompiler {
     /// reserves no registry (`aux_arena_bytes = 0`); one that does falls back
     /// to the sound heap-derived bound (B28 P3 item 5 registry tightening).
     may_intern_opaque: bool,
+    /// The private composite reads emitted so far, in emission order. The
+    /// first compile of a chunk records them without copying, and
+    /// [`alias_copy::plan`] decides from that chunk's ops which of them a
+    /// later write can reach while their value is live.
+    alias_reads: Vec<alias_copy::Read>,
+    /// The ordinals in `alias_reads` that the second compile copies right
+    /// after the read. Empty on the first compile.
+    alias_copies: alloc::collections::BTreeSet<usize>,
 }
 
 /// A debug annotation captured during codegen, pending assembly into a
@@ -543,6 +556,37 @@ impl FuncCompiler {
             emit_debug,
             pending_debug: Vec::new(),
             may_intern_opaque: false,
+            alias_reads: Vec::new(),
+            alias_copies: alloc::collections::BTreeSet::new(),
+        }
+    }
+
+    /// Record a read of private data slots `[lo, lo + len)` whose flat
+    /// composite `element` is now on top of the operand stack, and copy it
+    /// when the plan for this chunk says a write can reach it.
+    ///
+    /// A shared block, a scalar element, and a boxed element are not
+    /// recorded, because their reads already yield values that no data
+    /// write changes. The ordinal is the read's position in emission order,
+    /// which is the same on both compiles because the copy only appends
+    /// straight-line ops.
+    fn note_data_read(&mut self, data_name: &str, lo: u32, len: u32, element: &TypeExpr) {
+        if !self.type_info.private_data_blocks.contains(data_name)
+            || !matches!(
+                classify_flat_field(element, &self.type_info),
+                FlatFieldForm::Nested(_, _)
+            )
+        {
+            return;
+        }
+        let ordinal = self.alias_reads.len();
+        self.alias_reads.push(alias_copy::Read {
+            at: self.chunk.ops.len(),
+            lo,
+            hi: lo.saturating_add(len),
+        });
+        if self.alias_copies.contains(&ordinal) {
+            emit_detach_data_element(self, element);
         }
     }
 
@@ -3892,6 +3936,9 @@ fn compile_with_recorded_type_hook(
             fields.insert(f.name.clone(), f.type_expr.clone());
         }
         type_info.data_field_types.insert(decl.name.clone(), fields);
+        if decl.visibility == DataVisibility::Private {
+            type_info.private_data_blocks.insert(decl.name.clone());
+        }
     }
 
     // Compute per-function return-range summaries through a
@@ -5660,6 +5707,7 @@ fn emit_data_indexed_read(
     // A dynamic data-array index can trap out-of-bounds; record the
     // operator site so the fault resolves exactly (B29 item 2).
     fc.record_operator_site(&span);
+    fc.note_data_read(chain.data_name, base, total, element);
     Ok(())
 }
 
@@ -6399,6 +6447,14 @@ fn pattern_shape_eq(a: &Pattern, b: &Pattern) -> bool {
 }
 
 /// Compile a group of function definitions with the same name into one chunk.
+///
+/// The group is compiled once without copying any private composite read,
+/// and [`alias_copy::plan`] then decides from those ops which reads a write
+/// can reach while their value is live. When any can, the group is compiled
+/// a second time with exactly those reads copied. Compilation is a pure
+/// function of its inputs, so the second compile emits the first one's ops
+/// with the copies inserted after the chosen reads, and the read ordinals of
+/// the two compiles agree.
 #[allow(clippy::too_many_arguments)]
 fn compile_function_group(
     name: &str,
@@ -6413,6 +6469,68 @@ fn compile_function_group(
     emit_debug: bool,
     generic_origin: Option<(&str, &str)>,
 ) -> Result<(Chunk, bool, crate::bytecode::ChunkSignature), CompileError> {
+    let pass = |copies: alloc::collections::BTreeSet<usize>| {
+        compile_function_group_pass(
+            name,
+            defs,
+            function_map,
+            native_map,
+            native_externals,
+            data_fields,
+            const_fields,
+            type_info,
+            fn_expr_types,
+            emit_debug,
+            generic_origin,
+            copies,
+        )
+    };
+    let (chunk, may_intern_opaque, signature, reads) = pass(alloc::collections::BTreeSet::new())?;
+    let copies = alias_copy::plan(&chunk.ops, &reads);
+    if copies.is_empty() {
+        return Ok((chunk, may_intern_opaque, signature));
+    }
+    let (copied, may_intern_opaque, signature, again) = pass(copies)?;
+    // The second compile must reach the same reads in the same order, or the
+    // ordinals it copied are not the ones the plan chose.
+    if again.len() != reads.len() {
+        return Err(CompileError {
+            message: alloc::format!(
+                "internal error: `{name}` reached {} private composite reads on its second compile and {} on its first",
+                again.len(),
+                reads.len()
+            ),
+            span: defs[0].span,
+        });
+    }
+    Ok((copied, may_intern_opaque, signature))
+}
+
+/// One compile of a function group, copying the private composite reads
+/// whose ordinals are in `alias_copies`. Returns the reads it recorded.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn compile_function_group_pass(
+    name: &str,
+    defs: &[&FunctionDef],
+    function_map: &BTreeMap<String, u16>,
+    native_map: &BTreeMap<String, u16>,
+    native_externals: &BTreeMap<String, bool>,
+    data_fields: &BTreeMap<String, Vec<(String, u32)>>,
+    const_fields: &BTreeMap<String, BTreeMap<String, crate::bytecode::ConstValue>>,
+    type_info: &TypeInfo,
+    fn_expr_types: &BTreeMap<String, BTreeMap<crate::token::Span, TypeExpr>>,
+    emit_debug: bool,
+    generic_origin: Option<(&str, &str)>,
+    alias_copies: alloc::collections::BTreeSet<usize>,
+) -> Result<
+    (
+        Chunk,
+        bool,
+        crate::bytecode::ChunkSignature,
+        Vec<alias_copy::Read>,
+    ),
+    CompileError,
+> {
     // Within a group, every head after the first must dispatch on
     // a pattern shape distinct from every earlier head; otherwise
     // the later head is unreachable. Single-head groups skip this
@@ -6472,6 +6590,7 @@ fn compile_function_group(
         fn_expr_types.get(name).cloned().unwrap_or_default(),
         emit_debug,
     );
+    fc.alias_copies = alias_copies;
     fc.chunk.param_count = param_count;
     fc.chunk.param_types = first.params.iter().map(type_tag_for_param).collect();
     if let Some((origin, type_args)) = generic_origin {
@@ -6637,7 +6756,8 @@ fn compile_function_group(
     fc.record_function_entry(&first.span);
 
     let may_intern_opaque = fc.may_intern_opaque;
-    Ok((fc.finish(), may_intern_opaque, signature))
+    let reads = core::mem::take(&mut fc.alias_reads);
+    Ok((fc.finish(), may_intern_opaque, signature, reads))
 }
 
 /// Check if any parameter has a non-trivial pattern (not a simple variable).
@@ -8490,6 +8610,7 @@ fn compile_for_in_data_array(
     // Bind the iteration variable to the indexed element.
     fc.emit(Op::GetLocal(idx_slot));
     fc.emit_data_read(base, total_slots, elem_type);
+    fc.note_data_read(data_name, base, total_slots, elem_type);
     let var_slot = fc.declare_local_typed(&for_stmt.var, Some(elem_type.clone()));
     fc.emit(Op::SetLocal(var_slot));
 
@@ -10946,8 +11067,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     .type_info
                     .data_field_types
                     .get(name)
-                    .and_then(|fields| fields.get(field));
-                if let Some(t) = field_type
+                    .and_then(|fields| fields.get(field))
+                    .cloned();
+                if let Some(t) = &field_type
                     && matches!(t, TypeExpr::Array(_, _, _))
                 {
                     return Err(CompileError {
@@ -10959,6 +11081,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
                     });
                 }
                 fc.emit(Op::GetData(slot));
+                if let Some(t) = &field_type {
+                    fc.note_data_read(name, slot, 1, t);
+                }
                 return Ok(());
             }
             // Bake the flat field access when the object's struct type is
@@ -11942,7 +12067,7 @@ fn compile_checked_index(
                     span: *span,
                 })?;
             let count = emit_indexed_offset(fc, &field_type, &chain.indices, *span)?;
-            Some((base, count))
+            Some((base, count, chain.data_name))
         } else {
             compile_expr(fc, object)?;
             compile_expr(fc, index)?;
@@ -11955,7 +12080,7 @@ fn compile_checked_index(
             fc.declare_local(&alloc::format!("__idx_bound_{}_{}", suffix, i))
         });
         // Deliberately bypass the bare-read wrapper so handlers own the outcome.
-        if let Some((base, count)) = data_range {
+        if let Some((base, count, _)) = data_range {
             fc.emit_data_fallback(&elem_ty);
             fc.emit(Op::GetDataIndexed(base, count));
         } else {
@@ -11968,6 +12093,29 @@ fn compile_checked_index(
         }
         fc.emit(Op::SetLocal(index));
         fc.emit(Op::SetLocal(value));
+        // A private composite element is a handle into its pool body, and
+        // every `ok` arm binds it into another local, which the alias
+        // analysis treats as an escape. It is therefore copied without
+        // analysis, on the in-range path only. An invalid index leaves the
+        // scalar fallback in the slot, which holds no body to copy.
+        if let Some((_, _, data_name)) = data_range
+            && fc.type_info.private_data_blocks.contains(data_name)
+            && matches!(
+                classify_flat_field(&elem_ty, &fc.type_info),
+                FlatFieldForm::Nested(_, _)
+            )
+        {
+            fc.emit(Op::GetLocal(flag));
+            let zero = fc.add_constant(Value::Int(0));
+            fc.emit(Op::Const(zero));
+            fc.emit(Op::CmpEq);
+            let skip = fc.emit_jump(Op::If(0));
+            fc.emit(Op::GetLocal(value));
+            emit_detach_data_element(fc, &elem_ty);
+            fc.emit(Op::SetLocal(value));
+            fc.patch_jump(skip);
+            fc.emit(Op::EndIf);
+        }
         (index, flag, value, None, limbs)
     } else {
         let arr_slot = fc.declare_local(&alloc::format!("__idx_arr_{}", suffix));
@@ -13319,6 +13467,8 @@ fn compile_pattern_bind_typed(
     }
     Ok(())
 }
+
+mod alias_copy;
 
 #[cfg(all(test, feature = "verify"))]
 mod inference_independence;
