@@ -24,7 +24,9 @@ below. V0.4.0 is not released, since publication is held.
   yet.
 - **Status on 2026-10-30.** Opaque handles pass as typed host pointers on four
   routes under question 14, and a struct field or shared slot holding one is
-  still refused. Dynamic `Text` waits on V0.2.X's `Text<N>` under question 13.
+  still refused. Dynamic `Text` is V0.2.X's `Text<N>` under question 13. Its
+  values and literal cast agree with the virtual machine natively since
+  2026-10-30, and its operations beyond the cast wait on question 25.
   For question 19 the self-hosted compiler runs with every stage native,
   `frame.kel` among them, and compiles byte-identically to the virtual machine
   and the reference. Stages are cached, and all 69 corpus sources in the

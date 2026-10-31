@@ -1035,6 +1035,14 @@ fn analyze(
                     byte_size,
                     ..
                 }) => widths[0] = Width::Body(u32::from(*byte_size)),
+                // A composite constant the lowering copies into a region site has
+                // its packed body's exact length, by the same function that
+                // reserves the site.
+                Op::Const(_) => {
+                    if let Some(size) = crate::region::flat_site_size(chunk, op) {
+                        widths[0] = Width::Body(size);
+                    }
+                }
                 Op::GetField(keleusma::bytecode::StructField::FlatNested { size, .. })
                 | Op::GetTupleField(keleusma::bytecode::TupleField::FlatNested { size, .. })
                 | Op::GetEnumField(keleusma::bytecode::EnumField::FlatNested { size, .. })

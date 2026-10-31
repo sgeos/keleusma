@@ -111,7 +111,11 @@
 // `an_out_of_subset_source_suggests_the_reference_compiler` in
 // `kel_native_cli.rs`, the compiler selector of operator question 19,
 // 2026-10-30. No name disappeared.
-const RECORDED_TEST_FUNCTIONS: usize = 837;
+// 837 -> 839: `text_n_literals_agree_with_the_vm` in `retcon_bytecode.rs` and
+// `a_text_n_lowers_on_the_module_route` in `text_surface.rs`, the native
+// `Text<N>` differential of operator question 13, 2026-10-30. No name
+// disappeared.
+const RECORDED_TEST_FUNCTIONS: usize = 839;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

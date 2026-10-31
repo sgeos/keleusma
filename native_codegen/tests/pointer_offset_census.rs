@@ -1,3 +1,8 @@
+//! The composite constant of question 13, 2026-10-30, forms one address, its
+//! region site's base at the COMPILE-TIME CONSTANT offset that
+//! `region::plan_chunk_region` gives the `Const`, inside a reservation of the
+//! constant body's full length.
+//!
 //! Order 6 adds five sites. Text equality turns two literal operands into
 //! pointers, which are addresses of constant records this backend emitted, and
 //! forms two byte addresses at eight plus an index bounded by the record's own
@@ -144,7 +149,8 @@
 // 44 -> 45 in Order 4 for the constant trap-record offset described above.
 // 45 -> 46 for the instruction meter's constant word address.
 // 46 -> 51 for the five Order 6 sites described above.
-const RECORDED_GEP_SITES: usize = 51;
+// 51 -> 52 for the composite constant's site base described above.
+const RECORDED_GEP_SITES: usize = 52;
 // 22 -> 24 on 2026-09-11, when the shared composite slot landed. **Both are
 // compile-time constant.** The body's address is the slot's STATED offset in the
 // host buffer — a field of the layout, not a computed quantity — and the second

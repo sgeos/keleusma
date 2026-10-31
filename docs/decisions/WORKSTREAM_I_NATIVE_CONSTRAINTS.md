@@ -34,7 +34,7 @@ one has since been answered. The table above records the constraints as Order
 | `Unit` after `Reset` on one path | The operator answered question 20 with option a, a narrowed definite-initialization rule. V0.2.X's checked default change, absorbed in absorption 116, made `interp.kel` static. Resolved. V0.2.X's widening, absorbed in absorption 124, gives every private slot its type's zero, and no corpus instruction needs a run-time kind |
 | A composite built in a loop and yielded | V0.2.X's records relay the operator's ruling that such a composite may be yielded. The native coroutine route still refuses `13_telemetry_stream.kel`, and a copy at the yield is this line's work |
 | Two `Word` call results compared | Resolved. V0.2.X's callee-aware bound arrived in absorption 116, and since question 5 the lexer has a composed claim |
-| `Text` across the host boundary | Question 13. Literals pass as two words, and dynamic text waits on V0.2.X's `Text<N>` |
+| `Text` across the host boundary | Question 13. Literals pass as two words. `Text<N>` values and the literal cast arrived in absorption 122 and agree with the virtual machine natively. Operations beyond the cast wait on question 25 |
 | Opaque host handles | Question 14. Handles pass as typed host pointers on four routes, and a struct field or shared slot holding one is still refused |
 | Native WCET | Question 1. Best effort, in bytecode cost units |
 | The bytecode flat-machine ISA | Question 2. Deferred |

@@ -1743,6 +1743,34 @@ fn static_string_global<'ctx>(
     g.as_pointer_value()
 }
 
+/// An internal constant global holding a composite constant's packed body, the
+/// source a `Const` copies into its region site.
+fn composite_constant_global<'ctx>(
+    ctx: &'ctx Context,
+    module: &LlvmModule<'ctx>,
+    body: &[u8],
+) -> PointerValue<'ctx> {
+    let i8t = ctx.i8_type();
+    let mut n = 0usize;
+    let name = loop {
+        let cand = format!("kel_const_body_{n}");
+        if module.get_global(&cand).is_none() {
+            break cand;
+        }
+        n += 1;
+    };
+    let bytes: Vec<_> = body
+        .iter()
+        .map(|b| i8t.const_int(u64::from(*b), false))
+        .collect();
+    let data = i8t.const_array(&bytes);
+    let g = module.add_global(data.get_type(), None, &name);
+    g.set_initializer(&data);
+    g.set_constant(true);
+    g.set_linkage(inkwell::module::Linkage::Internal);
+    g.as_pointer_value()
+}
+
 /// Whether two string literal records hold the same bytes.
 ///
 /// Each operand is the address of a `{ i64 len, [len x i8] ... }` record from
@@ -2881,14 +2909,13 @@ fn trailing_ptrs(data: &DataCtx<'_>) -> u32 {
 /// body.
 ///
 /// `Boxed` does not count: it carries no baked body size, the corpus contains
-/// none, and the construction arm refuses it rather than placing it.
+/// none, and the construction arm refuses it rather than placing it. A `Const`
+/// holding a packed composite counts, because it copies its body into a site.
 fn chunk_builds_composite(chunk: &Chunk) -> bool {
-    chunk.ops.iter().any(|o| {
-        matches!(
-            o,
-            Op::NewComposite(keleusma::bytecode::NewCompositeOperand::Flat { .. })
-        )
-    })
+    chunk
+        .ops
+        .iter()
+        .any(|o| crate::region::flat_site_size(chunk, o).is_some())
 }
 
 /// Per-chunk lowering configuration.
@@ -6180,10 +6207,12 @@ fn lower_chunk_body<'ctx>(
                     st.push(v);
                 }
             }
-            // Scalar constants only. The compiler routes most literals here
-            // rather than through `PushImmediate`, including the bounds and
-            // stride of a range `for`, so this is required for iteration.
-            // Composite and string constants are Workstream C and are refused.
+            // The compiler routes most literals here rather than through
+            // `PushImmediate`, including the bounds and stride of a range `for`,
+            // so this is required for iteration. A composite constant that
+            // `region::composite_constant_body` packs, such as a `Text<N>`
+            // literal cast, is copied into its region site, and any other
+            // composite constant is refused.
             Op::Const(idx) => {
                 let cv = chunk.constants.get(*idx as usize).ok_or_else(|| {
                     LowerError::MalformedInput(format!("Const({idx}) out of range"))
@@ -6232,6 +6261,53 @@ fn lower_chunk_body<'ctx>(
                     // exists to make impossible. The kind says it is a literal
                     // record, which is what lets two of them compare by content.
                     st.push_k(addr, Width::Unknown, OperandKind::Text);
+                } else if let Some(body) = crate::region::composite_constant_body(cv) {
+                    // **A COMPOSITE CONSTANT IS A CONSTRUCTION SITE.** Its body
+                    // is copied from a constant global into the site that
+                    // `region::plan_chunk_region` reserves for this `Const`, so
+                    // the operand is a region address like a `NewComposite`'s,
+                    // and every region figure a host provisions counts it. The
+                    // copy runs on every execution and writes the same bytes,
+                    // which no later instruction changes in place.
+                    let region = region_base.ok_or_else(|| {
+                        LowerError::Internal(
+                            "a composite Const needs the region pointer, which lower_chunk \
+                             does not receive"
+                                .into(),
+                        )
+                    })?;
+                    let plan = crate::region::plan_chunk_region(chunk);
+                    let site = plan.sites.iter().find(|s| s.op_index == i).ok_or_else(|| {
+                        LowerError::Internal(format!(
+                            "no region placement for the composite Const at op {i}"
+                        ))
+                    })?;
+                    let size = u32::try_from(body.len()).map_err(|_| {
+                        LowerError::Internal(format!("the composite Const at op {i} is too large"))
+                    })?;
+                    let source = composite_constant_global(ctx, module, &body);
+                    let base = unsafe {
+                        st.b.build_in_bounds_gep(
+                            i8t,
+                            region,
+                            &[i64t.const_int(u64::from(site.offset), false)],
+                            "const_body",
+                        )
+                        .unwrap()
+                    };
+                    st.b.build_memcpy(base, 1, source, 1, i64t.const_int(u64::from(size), false))
+                        .map_err(|e| {
+                            LowerError::unsupported_op(
+                                "Const",
+                                format!(
+                                    "the composite Const at op {i} could not copy its body: {e}"
+                                ),
+                            )
+                        })?;
+                    let bits =
+                        st.b.build_ptr_to_int(base, i64t, "const_body_bits")
+                            .unwrap();
+                    st.push_w(bits, Width::Body(size));
                 } else {
                     let (v, w): (i64, Width) = match cv {
                         ConstValue::Int(i) => (*i, Width::Scalar(8)),
