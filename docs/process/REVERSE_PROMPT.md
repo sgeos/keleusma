@@ -51,7 +51,7 @@ What each number named, so that the bare letters can be read.
 | 10 | Rule 2's self-hosted twin | (a), implement |
 | 11 | `let (a, b) = 5` | (a), refuse in the type checker |
 | 12 | An unannotated `let r = yield` | (b), infer, refuse when impossible |
-| 13 | `hostile_module_mutation` without `floats` | (a), gate on `floats` |
+| 13 | `tests/hostile_module_mutation.rs` without `floats` | (a), gate on `floats` |
 | 14 | The `selfhost_typecheck` over-rejection | (a), isolate and report |
 | 15 | The flaky CLI validator test | (a), watch and capture |
 | 16 | The C5 self-hosted review before V0.3.0 | Yes |
