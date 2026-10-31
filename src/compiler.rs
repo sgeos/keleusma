@@ -3899,12 +3899,10 @@ fn compile_with_recorded_type_hook(
                     if n == 1 {
                         // A single composite field: record its pool offset in
                         // the table, resolved by slot at the `SetData` write.
-                        if let Ok(slot_u16) = u16::try_from(slot_idx) {
-                            table.push(crate::bytecode::PrivateCompositeSlot {
-                                slot: slot_u16,
-                                offset: total,
-                            });
-                        }
+                        table.push(crate::bytecode::PrivateCompositeSlot {
+                            slot: private_composite_slot_index(slot_idx, decl, field)?,
+                            offset: total,
+                        });
                         // Saturate the widening so a body larger than u32::MAX
                         // fails closed at the downstream arena check rather than
                         // truncating and under-sizing the pool (audit B13).
@@ -3915,12 +3913,14 @@ fn compile_with_recorded_type_hook(
                         // carried in the table and resolved by slot at the
                         // `SetDataIndexed` write.
                         for k in 0..n {
-                            if let Ok(slot_u16) = u16::try_from(slot_idx + k) {
-                                table.push(crate::bytecode::PrivateCompositeSlot {
-                                    slot: slot_u16,
-                                    offset: total,
-                                });
-                            }
+                            table.push(crate::bytecode::PrivateCompositeSlot {
+                                slot: private_composite_slot_index(
+                                    slot_idx.saturating_add(k),
+                                    decl,
+                                    field,
+                                )?,
+                                offset: total,
+                            });
                             // Saturate the widening so a body larger than u32::MAX
                             // fails closed at the downstream arena check rather than
                             // truncating and under-sizing the pool (audit B13).
@@ -5194,6 +5194,31 @@ fn scalar_array_elem_zero(mut elem: &TypeExpr) -> Option<crate::bytecode::ConstV
             _ => return None,
         }
     }
+}
+
+/// The `u16` slot index a private composite placement record carries.
+///
+/// The data slot index space is 24 bits, and a `PrivateCompositeSlot` records
+/// its slot in 16. A composite slot above `u16::MAX` was dropped from the table
+/// with no diagnostic, so its writes found no pool offset. Widening the record
+/// changes the wire format, which needs the operator's authorization, so such a
+/// module is refused here instead. Measured on 2026-10-30, a private
+/// `[P; 70000]` produced 65,536 records for 70,000 elements.
+fn private_composite_slot_index(
+    slot: u32,
+    decl: &crate::ast::DataDecl,
+    field: &DataFieldDecl,
+) -> Result<u16, CompileError> {
+    u16::try_from(slot).map_err(|_| CompileError {
+        message: format!(
+            "private data field `{}.{}` places a composite at slot {slot}, beyond the {} \
+             composite slots a module can record",
+            decl.name,
+            field.name,
+            u32::from(u16::MAX) + 1
+        ),
+        span: field.span,
+    })
 }
 
 /// Per-slot load-time initial values for a private data field, one entry per
