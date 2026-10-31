@@ -83,9 +83,15 @@ fn coroutines() -> Vec<(String, Module)> {
 
 /// A subject this file can drive: a single `Word` parameter and no host
 /// natives, whose input a scalar reply sequence fully determines.
+/// A coroutine this file can drive and compare, which takes a `Word` and yields
+/// scalars. A yielded composite is a body address whose bytes this harness does
+/// not read, so its bodies are compared by `retcon_bytecode.rs` instead.
 fn drivable(m: &Module) -> bool {
     let entry = m.entry_point.unwrap();
     m.chunks[entry].param_types.as_slice() == [TypeTag::Word]
+        && m.signatures
+            .get(entry)
+            .is_none_or(|s| matches!(s.ret, keleusma::bytecode::WireShape::Scalar { .. }))
         && !m
             .chunks
             .iter()

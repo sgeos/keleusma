@@ -1,3 +1,10 @@
+//! The copy at the yield of operator question 24, 2026-10-31, adds three
+//! moves. Two store the cursor, zero at `Op::Stream` and `Op::Reset` and one
+//! more after each copy, a count and never an address. The third copies a
+//! yielded body's bytes into a slot of the entry's region, which the host may
+//! hold until the `Reset`. It copies bytes and stores no address, and the slot
+//! is not written again before the `Reset` returns the cursor to the start.
+//!
 //! The composite constant of question 13, 2026-10-30, copies a constant body
 //! from an internal constant global into its own region site. It copies bytes
 //! and stores no address, and the destination is the body itself, which lives
@@ -164,7 +171,8 @@ const MOVE_FORMS: &[&str] = &[
 // 89 -> 90 for the instruction meter's store of its count.
 // 90 -> 91 for the enum zero fill described above.
 // 91 -> 92 for the composite constant's body copy described above.
-const RECORDED_MOVE_SITES: usize = 92;
+// 92 -> 95 for the copy at the yield's three moves described above.
+const RECORDED_MOVE_SITES: usize = 95;
 // 18 -> 19 on 2026-09-11, when the shared composite slot landed: one body copy
 // into the host's buffer, at the offset and length the module's shared layout
 // STATES. Unlike the persistent pool, nothing here is derived — so there is no

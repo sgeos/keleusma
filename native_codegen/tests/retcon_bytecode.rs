@@ -617,9 +617,18 @@ fn invalid_bytecode_and_composite_escape_remain_refused() {
             .to_string()
             .contains("verification")
     );
-    let escaping = common::build(
-        &std::fs::read_to_string("../examples/scripts/13_telemetry_stream.kel").unwrap(),
-    );
+    // **SINCE OPERATOR QUESTION 24, 2026-10-31, THE ENTRY'S OWN YIELDS COPY.**
+    // `13_telemetry_stream.kel` builds its composite in the entry's loop and
+    // yields it there, so the copy at the yield applies and it lowers. A
+    // composite built in a CALLEE's loop and yielded through delegation has no
+    // copy, so the refusal remains for it, and this subject keeps the check.
+    let telemetry = std::fs::read_to_string("../examples/scripts/13_telemetry_stream.kel").unwrap();
+    coroutine::lower(&ctx, &common::build(&telemetry), &tm, 4096)
+        .expect("the entry's yields copy, so the telemetry stream lowers");
+    let source = "struct R { c: Word, v: Word }\n\
+        yield emit(n: Word) -> R { for c in [0, 1, 2] { let _a = yield R { c: c, v: n }; } R { c: 9, v: 0 } }\n\
+        loop main(t: Word) -> R { let r = emit(t); yield r }";
+    let escaping = common::build(source);
     let baseline = keleusma_native::module_refusals(&escaping, Default::default());
     assert!(!baseline.is_empty());
     let error = coroutine::lower(&ctx, &escaping, &tm, 4096).unwrap_err();
@@ -631,7 +640,6 @@ fn invalid_bytecode_and_composite_escape_remain_refused() {
     );
     // An unrelated reentrant yield must neither add a boundary requirement
     // nor bypass the reachable composite escape refusal.
-    let source = std::fs::read_to_string("../examples/scripts/13_telemetry_stream.kel").unwrap();
     let with_delegate = common::build(&format!(
         "{source}\nyield unused(a: Word) -> Word {{ yield a }}"
     ));
@@ -3626,6 +3634,74 @@ fn text_n_literals_agree_with_the_vm() {
     ];
     for (src, expected) in cases {
         assert_eq!(composite_bodies(src, 7, &replies), expected, "{src}");
+    }
+}
+
+/// **BODIES YIELDED IN ONE CYCLE STAY INTACT UNTIL THE `RESET`, QUESTION 24.**
+///
+/// `13_telemetry_stream.kel` builds a `Reading` at one construction site on
+/// each iteration of a bounded `for` and yields it, so without a copy every
+/// yield of a cycle would hand the host the same region bytes, rewritten by
+/// the next iteration. The virtual machine gives each body yielded in a cycle
+/// its own address until the `Reset`, and the operator confirmed on 2026-10-31
+/// that such a composite may be yielded. The entry now copies each yielded
+/// body into a slot of its own.
+///
+/// The test holds every address the host receives within a cycle and, at each
+/// yield, reads back all of them. Each must still hold the body it held when it
+/// was yielded, and the bodies must be the virtual machine's, in four lowering
+/// configurations over two cycles. Without the copy the first three yields of
+/// a cycle share one address, and the earlier reads would show the later
+/// readings.
+#[test]
+fn bodies_yielded_in_a_cycle_stay_intact_until_the_reset() {
+    let src = std::fs::read_to_string("../examples/scripts/13_telemetry_stream.kel")
+        .expect("the subject is readable");
+    let replies = [1i64; 8];
+    let expected = composite_bodies(&src, 0, &replies);
+    let reading = |c: i64, v: i64| [c.to_le_bytes(), v.to_le_bytes()].concat();
+    let cycle = vec![reading(0, 1), reading(1, 8), reading(2, 15), reading(9, 0)];
+    assert_eq!(
+        expected,
+        [cycle.clone(), cycle].concat(),
+        "the virtual machine's bodies"
+    );
+    let program = common::build(&src);
+    for (optimize, stable) in [(false, false), (false, true), (true, false), (true, true)] {
+        let mut held: Vec<usize> = Vec::new();
+        let (snapshots, _) = native_module_read(
+            &program,
+            &vec![0; program.shared_data_bytes as usize],
+            0,
+            &replies,
+            optimize,
+            stable,
+            |bits, region, _, _| {
+                if held.len() == 4 {
+                    held.clear();
+                }
+                held.push(bits as usize);
+                let bytes = unsafe { std::slice::from_raw_parts(region.ptr(), region.len) };
+                held.iter()
+                    .map(|address| {
+                        let offset = address
+                            .checked_sub(region.ptr() as usize)
+                            .filter(|o| o + 16 <= region.len)
+                            .expect("a yielded body lies in the region");
+                        bytes[offset..offset + 16].to_vec()
+                    })
+                    .collect::<Vec<_>>()
+            },
+        );
+        for (k, snapshot) in snapshots.iter().enumerate() {
+            let start = k - k % 4;
+            assert_eq!(
+                snapshot,
+                &expected[start..=k].to_vec(),
+                "yield {k}, optimized={optimize}, stable={stable}: a body yielded earlier in \
+                 the cycle no longer holds what was yielded"
+            );
+        }
     }
 }
 

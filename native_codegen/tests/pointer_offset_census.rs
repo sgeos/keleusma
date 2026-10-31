@@ -1,3 +1,11 @@
+//! The copy at the yield of operator question 24, 2026-10-31, forms three. The
+//! cursor's address is a COMPILE-TIME CONSTANT offset in the entry's region
+//! reservation. A slot's address is RUNTIME-AND-BOUNDED, the buffer's base plus
+//! the cursor times the slot size, formed only after the cursor is compared
+//! UNSIGNED against the slot count and branched to the trap. The yielded
+//! body's address becomes a pointer only for an operand whose width is proven
+//! equal to the slot size, the bytes the copy reads.
+//!
 //! The composite constant of question 13, 2026-10-30, forms one address, its
 //! region site's base at the COMPILE-TIME CONSTANT offset that
 //! `region::plan_chunk_region` gives the `Const`, inside a reservation of the
@@ -150,7 +158,8 @@
 // 45 -> 46 for the instruction meter's constant word address.
 // 46 -> 51 for the five Order 6 sites described above.
 // 51 -> 52 for the composite constant's site base described above.
-const RECORDED_GEP_SITES: usize = 52;
+// 52 -> 55 for the copy at the yield's three addresses described above.
+const RECORDED_GEP_SITES: usize = 55;
 // 22 -> 24 on 2026-09-11, when the shared composite slot landed. **Both are
 // compile-time constant.** The body's address is the slot's STATED offset in the
 // host buffer — a field of the layout, not a computed quantity — and the second

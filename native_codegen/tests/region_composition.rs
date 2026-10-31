@@ -54,12 +54,15 @@ struct Terms {
     composite_sites: u32,
     stream_locals: u32,
     stream_spill: u32,
+    /// The entry's copy at the yield, operator question 24. Counted once, at
+    /// the entry, because `region::yield_copy` plans it for the entry alone.
+    yield_copy: u32,
     chunks_visited: u32,
 }
 
 impl Terms {
     fn named(&self) -> u32 {
-        self.composite_sites + self.stream_locals + self.stream_spill
+        self.composite_sites + self.stream_locals + self.stream_spill + self.yield_copy
     }
 }
 
@@ -91,6 +94,7 @@ fn census() -> Vec<(String, Terms, u32, bool)> {
             let entry = m.entry_point?;
             let mut t = Terms::default();
             decompose(&m, entry, 0, &mut t);
+            t.yield_copy = keleusma_native::region::yield_copy(&m).map_or(0, |c| c.bytes());
             let published = host_arena_supplement_bytes(&m);
             let has_stream = m.chunks.iter().any(|c| c.block_type == BlockType::Stream);
             Some((name, t, published, has_stream))
