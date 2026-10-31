@@ -1829,15 +1829,15 @@ impl<W: crate::word::Word, F: crate::float::Float> GenericValue<W, F> {
     /// when the runtime's word or float width is narrower than
     /// the bytecode's; programs whose constants do not fit are
     /// rejected at load time by the bytecode-header width check.
-    /// Materialize a **scalar** constant into a runtime value. Used to
-    /// initialize private data slots at load, the `.data`-section model:
-    /// the compiler bakes one scalar [`ConstValue`] per zero-initializable
-    /// private slot (its `= literal` initializer or the type's zero) and the
-    /// VM writes it through this. Composite variants are never baked into a
-    /// private slot (they retain write-before-read) and map to `Unit`, so this
-    /// never allocates or touches the arena. A `StaticStr` clones its bytes
-    /// onto the global heap rather than resting on rodata; private data does
-    /// not currently zero-initialize `Text`, so this arm is defensive only.
+    /// Materialize a **scalar** constant into a runtime value. Composite
+    /// variants map to `Unit`, so this never allocates or touches the arena.
+    /// A `StaticStr` clones its bytes onto the global heap rather than resting
+    /// on rodata.
+    ///
+    /// The virtual machine no longer initializes private data slots through
+    /// this. A private slot's initializer may now be a composite zero, which
+    /// [`Self::from_const`] materializes at the module's widths and the
+    /// virtual machine then moves into the persistent composite pool.
     pub fn scalar_from_const(c: &ConstValue) -> Self {
         match c {
             ConstValue::Unit => Self::Unit,

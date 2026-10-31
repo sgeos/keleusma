@@ -2918,8 +2918,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         if private_count > 0 {
             let base = arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
             // Private slots initialize from the module's `.data`-section
-            // initializer table (scalar zero or `= literal`); a slot with no
-            // entry, or a module predating the table, falls back to `Unit`.
+            // initializer table, a scalar zero or `= literal` or a composite's
+            // zero, which `persist_seeded_private_composites` moves into the
+            // pool below. A slot with no entry, or a module predating the
+            // table, falls back to `Unit`.
             let aux_bytes = Self::aux_body_slice(bytes);
             let word_bytes = (1usize << bytes[12]) / 8;
             let float_bytes = (1usize << bytes[14]) / 8;
@@ -3011,6 +3013,9 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // composite const load is allocation-free here too; the build reads
         // only the trusted archived constant pool (B28 P3 item 2, Increment 2).
         vm.build_const_pool();
+        // As the owned path does, move each composite private initializer into
+        // its pool slot.
+        vm.persist_seeded_private_composites()?;
         Ok(vm)
     }
 
@@ -3162,8 +3167,11 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // the old occupant. The arena's persistent region is freshly zeroed
         // when first resized, but those zero bytes are not a valid `Value`, so
         // write through `write` not assignment. A scalar slot receives its
-        // baked zero or `= literal`; a composite slot, a slot with no entry, or
-        // a module predating the table falls back to `Unit` (write-before-read).
+        // baked zero or `= literal`. A composite slot receives its type's zero,
+        // materialised here at the module's widths and moved into the
+        // persistent composite pool once the VM exists, by
+        // `persist_seeded_private_composites`, as a hot swap's seed is. A slot
+        // with no entry, or a module predating the table, falls back to `Unit`.
         if private_count > 0 {
             let base = arena.persistent_ptr().as_ptr() as *mut crate::bytecode::GenericValue<W, F>;
             let inits = module
@@ -3171,9 +3179,15 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
                 .as_ref()
                 .map(|dl| dl.private_init.as_slice())
                 .unwrap_or(&[]);
+            let word_bytes = (1usize << module.word_bits_log2) / 8;
+            let float_bytes = (1usize << module.float_bits_log2) / 8;
             for i in 0..private_count as usize {
                 let value = match inits.get(i) {
-                    Some(cv) => crate::bytecode::GenericValue::<W, F>::scalar_from_const(cv),
+                    Some(cv) => crate::bytecode::GenericValue::<W, F>::from_const(
+                        cv,
+                        word_bytes,
+                        float_bytes,
+                    ),
                     None => crate::bytecode::GenericValue::Unit,
                 };
                 // SAFETY: `i` is within the slot count just
@@ -3247,6 +3261,10 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         // Materialise scalar const composites into the VM-owned rodata pool
         // now that the bytecode image is in place (B28 P3 item 2, Increment 2).
         vm.build_const_pool();
+        // Move each composite private initializer into its pool slot, so that a
+        // read before the program's first write sees its type's zero rather than
+        // the empty-slot `Unit` (definite initialization, option (b)).
+        vm.persist_seeded_private_composites()?;
         Ok(vm)
     }
 
@@ -4742,7 +4760,36 @@ impl<'a, 'arena, W: crate::word::Word, A: crate::address::Address, F: crate::flo
         }
         // The host-supplied initial values are exactly the new module's
         // private slots; shared slots live in the borrowed buffer.
-        let private_init = initial_data;
+        //
+        // A host seeds `Unit` to mean "no value", as every host did before
+        // composite private fields had initializers. Such a seed takes the new
+        // module's own load-time initializer instead, so that a hot swap keeps
+        // the guarantee construction gives, that no private slot with an
+        // initializer starts as the empty-slot `Unit` (definite
+        // initialization, option (b)). Any other seed is written as given.
+        let new_word_bytes = (1usize << new_module.word_bits_log2) / 8;
+        let new_float_bytes = (1usize << new_module.float_bits_log2) / 8;
+        let new_inits = new_module
+            .data_layout
+            .as_ref()
+            .map(|dl| dl.private_init.as_slice())
+            .unwrap_or(&[]);
+        let private_init: Vec<crate::bytecode::GenericValue<W, F>> = initial_data
+            .into_iter()
+            .enumerate()
+            .map(|(i, seeded)| match (&seeded, new_inits.get(i)) {
+                (crate::bytecode::GenericValue::Unit, Some(cv))
+                    if *cv != crate::bytecode::ConstValue::Unit =>
+                {
+                    crate::bytecode::GenericValue::<W, F>::from_const(
+                        cv,
+                        new_word_bytes,
+                        new_float_bytes,
+                    )
+                }
+                _ => seeded,
+            })
+            .collect();
 
         // Recompute the bottom-region footprint for the new module so the
         // `full_reset_arena_internal` below re-reserves the operand stack,

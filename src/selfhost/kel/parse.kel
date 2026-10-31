@@ -1454,7 +1454,7 @@ private data fields {
     cur_cval: Word,
 }
 
-// Private scalar initialization is emitted as a kind followed by a full-word value.
+// Private initialization is emitted as a kind followed by a full-word value.
 // Negative values use their bitwise complement so payload minus one is never the
 // legacy packed-record sentinel.
 private data di {
@@ -1485,7 +1485,14 @@ fn data_group_type(k: Word, v: Word) -> Word {
 fn data_field_finish(ending: Word) -> Word {
     if ps.dvis == 1 andalso fields.has_field == 1 andalso di.sent == 0 {
         di.sent = 1; di.pending = 1; di.ending = ending;
-        ps.emit_arg = if di.kind >= 1 andalso di.kind <= 5 { di.kind } else { 0 };
+        // Under option (b) of the operator's ruling of 2026-10-30 on definite initialization,
+        // a field with no scalar initializer starts as its type's zero rather than the
+        // empty-slot Unit. Kind 6 is a Text field, the empty static string, and kind 7 a
+        // struct field, whose zero the host assembles from the struct records. Any other
+        // shape, such as a tuple, keeps kind 0, which the cross-check against the reference
+        // refuses rather than emit a differing initializer.
+        ps.emit_arg = if di.kind >= 1 andalso di.kind <= 6 { di.kind } else {
+            if di.kind >= 1024 { 7 } else { 0 } };
         107
     } else { if ending == 1 { 5 } else { 0 } }
 }
