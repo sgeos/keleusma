@@ -242,10 +242,20 @@ const CORPUS: &[(&str, &str)] = &[
     // that whole descriptor table receives no mutant. The per-family census
     // caught exactly this: the aggregate looked healthy at 5184 mutants while
     // one table had never been touched.
+    #[cfg(feature = "floats")]
     (
         "native_call",
         "use math::sqrt\n\
          fn main() -> Float { math::sqrt(9.0) }",
+    ),
+    // Without `floats` the float literal does not lex, so the native call
+    // takes and returns a `Word` instead, and the native return-shape table
+    // still receives mutants.
+    #[cfg(not(feature = "floats"))]
+    (
+        "native_call",
+        "use math::bump\n\
+         fn main(x: Word) -> Word { math::bump(x) }",
     ),
     (
         "stream_delegating",
@@ -953,7 +963,13 @@ fn args_for(chunk: &keleusma::bytecode::Chunk) -> Vec<Value> {
             TypeTag::Word => Value::Int(1),
             TypeTag::Byte => Value::Byte(1),
             TypeTag::Fixed => Value::Fixed(1),
+            #[cfg(feature = "floats")]
             TypeTag::Float => Value::Float(1.0),
+            // Without `floats` no float value exists to pass, so a mutant
+            // declaring a float parameter receives `Unit`, which the call's
+            // type check refuses, as it refuses a `Composite` parameter.
+            #[cfg(not(feature = "floats"))]
+            TypeTag::Float => Value::Unit,
             TypeTag::Bool => Value::Bool(true),
             TypeTag::Unit | TypeTag::Text | TypeTag::Composite => Value::Unit,
         })
