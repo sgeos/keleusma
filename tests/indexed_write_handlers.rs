@@ -86,6 +86,24 @@ fn a_handled_write_binds_the_old_and_new_values_and_writes() {
     );
 }
 
+/// The lowering writes each bound `old` and `new` slot with the element's zero
+/// before the flag test, for the definite-initialization rule. A struct
+/// element's zero is a pool constant. The arm still sees the new value, and an
+/// invalid index still reaches its arm. The `old` binding of a struct element
+/// is not asserted here, since it observes the new value on the base this
+/// change was cut from as well, which is a separate defect.
+#[test]
+fn a_handled_write_on_a_struct_element_binds_the_new_value() {
+    let prefix = "struct P { x: Word, y: Word }\nprivate data d { x: [P; 2] } ";
+    for (index, expected) in [(1, 2), (5, 5)] {
+        let source = format!(
+            "{prefix}fn main() -> Word {{ d.x[1] = P {{ x: 3, y: 4 }}; \
+             d.x[{index}] = P {{ x: 1, y: 2 }} {{ ok(o, n) => n.y + o.x * 0, invalid_index(j) => j }} }}"
+        );
+        assert_eq!(run_word(&source), expected, "{source}");
+    }
+}
+
 #[test]
 fn an_invalid_index_reaches_its_arm_without_evaluating_the_value() {
     let source = alloc_source(

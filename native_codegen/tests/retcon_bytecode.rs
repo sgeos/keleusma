@@ -3016,9 +3016,11 @@ fn private_scalar_consumption_traps_after_a_valid_unit_store() {
 #[test]
 fn private_composite_slots_preserve_unit_values_without_eager_faults() {
     for (source, expected) in [
+        // Since absorption 124 the slot starts with its type's zero, `E::A`, so
+        // the first read matches `E::A` where it once read `Unit`.
         (
             "enum E { A, B } private data st { saved: E } loop main(t: Word) -> Word { yield match st.saved { E::A => 1, _ => 0 }; st.saved = E::A; 0 }",
-            [0, 1, 1, 1],
+            [1, 1, 1, 1],
         ),
         (
             "enum E { A, B } private data st { saved: E } loop child(a: E) -> Word { st.saved = a; yield match st.saved { E::A => 1, _ => 0 } } loop main(t: Word) -> Word { child(E::A) }",
@@ -5602,18 +5604,30 @@ fn composite_reply_kinds_must_match_the_consuming_operation() {
                 },
             },
         )]);
-        let error = coroutine::lower_with_dialogues(
-            &Context::create(),
-            &program,
-            &machine(),
-            4096,
-            &contracts,
-        )
-        .unwrap_err();
-        assert!(
-            error.to_string().contains("types are not proven"),
-            "{source}: {error}"
-        );
+        // **SINCE ABSORPTION 124 A PRIVATE SLOT MAY BE ADMITTED WITH A GUARD.**
+        // A private composite slot now starts with its type's zero, so the
+        // slot's kinds are the declared tuple joined with the reply's array.
+        // The tuple read then has one admissible kind, and the lowering may
+        // admit it behind a run-time kind guard that traps on the array, which
+        // the virtual machine refuses too. A lowering is accepted only when it
+        // carries that guard, so an unguarded admission still fails here. The
+        // guard is recognised by the name the emitter gives its kind comparison,
+        // which branches to the trap, because LLVM may merge the block that
+        // follows it away.
+        let context = Context::create();
+        match coroutine::lower_with_dialogues(&context, &program, &machine(), 4096, &contracts) {
+            Err(error) => assert!(
+                error.to_string().contains("types are not proven"),
+                "{source}: {error}"
+            ),
+            Ok(module) => {
+                let ir = module.print_to_string().to_string();
+                assert!(
+                    source.contains("private data") && ir.contains("%kind_valid"),
+                    "{source}: the mismatched reply lowered without a kind guard"
+                );
+            }
+        }
     }
     // Chained private writes require more than one pass through the slot-kind
     // equations. Correct inference preserves the storage aliases across yield.

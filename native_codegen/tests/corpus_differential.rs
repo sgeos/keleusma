@@ -2482,69 +2482,18 @@ const TRAP_SUBJECTS: &[(&str, &str, TrapKind)] = &[
     // paths, and the fault each module reaches is the opcode.
     ("faulty.kel", "DivisionByZero", TrapKind::Op),
     ("rogue_dungen.kel", "IndexOutOfBounds", TrapKind::Op),
-    // **A composite data slot read on a path that never wrote it.** Added
-    // 2026-09-11, after measuring that this backend RETURNED 0 where the
-    // reference faults. See `SYNTHETIC_UNINIT_COMPOSITE_SLOT`.
-    (
-        "synthetic:uninit_composite_slot",
-        "cannot access field on Unit",
-        TrapKind::Guard,
-    ),
-    // **An UNWRITTEN SIBLING of a written array element.** Added 2026-09-11 with
-    // the indexed composite lowering: each element slot has its own
-    // initialisation word, and using the base slot's would let one written
-    // element make every sibling read as written.
-    (
-        "synthetic:unwritten_sibling_element",
-        "cannot access field on Unit",
-        TrapKind::Guard,
-    ),
+    // **TWO GUARD ROWS RETIRED IN ABSORPTION 124, 2026-10-30, NOT DELETED
+    // SILENTLY.** `synthetic:uninit_composite_slot` read a composite private
+    // slot on a path that never wrote it, and `synthetic:unwritten_sibling_element`
+    // read an array element a sibling's write did not cover. Both faulted on the
+    // virtual machine while the slot started as `Unit`. V0.2.X's widening, its
+    // pull request 666, gives every composite private slot its type's zero at
+    // load, so neither faults, and a slot still initialized to `Unit` must now
+    // be written on every path before a read, so verified source cannot reach
+    // the native initialisation-word guard at all. The guard stays as defense
+    // in depth. That both programs now read the zero on both sides is shown by
+    // `private_init_image.rs` and `indexed_composite_slot.rs`.
 ];
-
-/// **ELEMENT 0 IS WRITTEN AND ELEMENT 2 IS READ.**
-///
-/// An array-of-composite private field gives every element its own pool entry and
-/// therefore its own initialisation word. A lowering that used the base slot's
-/// word for the whole field would answer here instead of faulting, and every
-/// other test of the indexed path would still pass — they all write the element
-/// they read.
-///
-/// Driven with the harness's seed-0 argument, which is 4: any value writes
-/// element 0 and leaves element 2 untouched.
-const SYNTHETIC_UNWRITTEN_SIBLING_ELEMENT: &str = "\
-struct F { a: Word, b: Word }\n\
-private data log { items: [F; 3], count: Word }\n\
-fn main(t: Word) -> Word {\n\
-    log.items[0] = F { a: t, b: 0 };\n\
-    log.items[2].a\n\
-}\n";
-
-/// **A COMPOSITE DATA SLOT WRITTEN ON ONE PATH AND READ ON THE OTHER.**
-///
-/// A composite private slot's load-time value is `Unit`: the compiler keeps a
-/// write-before-read contract for composite slots rather than baking a zero body,
-/// and the reference REJECTS an unconditional read-before-write. **Its check is
-/// flow-insensitive**, so a write on one branch satisfies it, and the runtime then
-/// faults at execution with `TypeError("cannot access field on Unit")`.
-///
-/// **This backend returned `0`.** The pool is bytes, and zeros are
-/// indistinguishable from a written body of zeros — the same shape as the
-/// unguarded array index that returned the caller's buffer filler. An
-/// initialisation word per composite slot, outside the body, now faults where the
-/// reference faults.
-///
-/// **The branch condition is `t < 0` because of how this harness drives it.** It
-/// passes `args_for_seed(1, 0)`, which is 4, not 0 — a first version used `t > 0`
-/// and the write HAPPENED, so the virtual machine did not fault and the harness
-/// correctly refused the row as "no longer a trap subject". The premise check
-/// caught a subject that did not exercise what its name claimed.
-const SYNTHETIC_UNINIT_COMPOSITE_SLOT: &str = "\
-struct F { a: Word, b: Word }\n\
-private data log { latest: F, count: Word }\n\
-fn main(t: Word) -> Word {\n\
-    if t < 0 { log.latest = F { a: 11, b: 22 }; }\n\
-    log.latest.a\n\
-}\n";
 
 /// **A CORPUS FACT THIS FILE ASSERTS HAS EXPIRED, and one counterexample settles it.**
 ///
@@ -2596,6 +2545,11 @@ enum TrapKind {
     Op,
     /// Faults through an emitter-inserted guard (division, bounds). Valuable,
     /// and NOT evidence about `Op::Trap`.
+    ///
+    /// No row has used it since absorption 124 retired the two composite slot
+    /// subjects above. It is kept so that a new guard subject is labelled as
+    /// such rather than counted as opcode coverage.
+    #[allow(dead_code)]
     Guard,
 }
 
@@ -2665,8 +2619,6 @@ fn subject_source(name: &str) -> Option<String> {
     if let Some(key) = name.strip_prefix("synthetic:") {
         return match key {
             "no_matching_head" => Some(SYNTHETIC_NO_MATCHING_HEAD.to_string()),
-            "uninit_composite_slot" => Some(SYNTHETIC_UNINIT_COMPOSITE_SLOT.to_string()),
-            "unwritten_sibling_element" => Some(SYNTHETIC_UNWRITTEN_SIBLING_ELEMENT.to_string()),
             _ => None,
         };
     }

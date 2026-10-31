@@ -204,6 +204,71 @@ fn zero_named(name: &str, reg: &TypeRegistry, depth: usize) -> Result<ConstValue
     Err(ZeroValueError::UnknownType(String::from(name)))
 }
 
+/// Whether the canonical zero value of `ty` satisfies every refinement it
+/// contains.
+///
+/// [`zero_value`] substitutes the hard zero of a refined newtype's underlying
+/// type when [`lowest_valid`] cannot determine a lowest valid value, which may
+/// violate the predicate. That is the native default for an unhandled partial
+/// operation, but a load-time initializer is observable by the program, so a
+/// caller that bakes a zero into storage the program reads asks this first and
+/// keeps its previous behaviour when the answer is `false`. A type the
+/// registry does not know, an opaque host type for instance, also answers
+/// `false`, since it has no zero at all. The walk follows the variant
+/// [`zero_value`] picks for an enum, and an `Option` is `None`, so its payload
+/// is not visited.
+pub fn zero_respects_refinements(ty: &TypeExpr, reg: &TypeRegistry) -> bool {
+    zero_respects_refinements_at(ty, reg, 0)
+}
+
+fn zero_respects_refinements_at(ty: &TypeExpr, reg: &TypeRegistry, depth: usize) -> bool {
+    if depth > MAX_DEPTH {
+        return false;
+    }
+    match ty {
+        TypeExpr::Unit(_)
+        | TypeExpr::Prim(_, _)
+        | TypeExpr::TextN(_, _)
+        | TypeExpr::Multiword(_, _, _)
+        | TypeExpr::Option(_, _) => true,
+        TypeExpr::Tuple(elems, _) => elems
+            .iter()
+            .all(|e| zero_respects_refinements_at(e, reg, depth + 1)),
+        TypeExpr::Array(elem, _, _)
+        | TypeExpr::Labelled(elem, _, _)
+        | TypeExpr::NegativeLabelled(elem, _, _) => {
+            zero_respects_refinements_at(elem, reg, depth + 1)
+        }
+        TypeExpr::Named(name, _, _, _) => {
+            if let Some(nt) = reg.newtypes.get(name) {
+                if nt.refinement.is_some() && lowest_valid(nt, reg).is_none() {
+                    return false;
+                }
+                return zero_respects_refinements_at(&nt.underlying, reg, depth + 1);
+            }
+            if let Some(sd) = reg.structs.get(name) {
+                return sd
+                    .fields
+                    .iter()
+                    .all(|f| zero_respects_refinements_at(&f.type_expr, reg, depth + 1));
+            }
+            if let Some(ed) = reg.enums.get(name) {
+                let variant = ed
+                    .variants
+                    .iter()
+                    .find(|v| v.discriminant_value == 0)
+                    .or_else(|| ed.variants.iter().min_by_key(|v| v.discriminant_value));
+                return variant.is_some_and(|v| {
+                    v.fields
+                        .iter()
+                        .all(|t| zero_respects_refinements_at(t, reg, depth + 1))
+                });
+            }
+            false
+        }
+    }
+}
+
 /// Wrap a resolved lowest-valid integer in the `ConstValue` for the
 /// newtype's underlying type. Refinements and saturation values are
 /// integer-domain, so this handles `Word`, `Byte`, and `Fixed`

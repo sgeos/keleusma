@@ -19,8 +19,9 @@ and carry their own operator decisions. B9 and B10 information is in the reverse
 
 Later on 2026-10-30, pull request 652 merged C2, C1 and the slot refusal, and pull request 658
 merged B2, B5, B1's narrowed rule with its twin, the `Text<N>` literal and kaizen K7's fuzz
-targets as `5ed0bdfd`. Kaizen K3 and K4a, the slow-test split, are in pull request 662. The
-B1 widening is in progress on `feat/v02-definite-init-widen`.
+targets as `5ed0bdfd`. Pull request 662 merged kaizen K3 and K4a, the slow-test split, and
+pull request 663 the rulings record. Pull request 666 merged the B1 widening as `d8dae4cc`,
+options (a) and (b), with its residuals in the reverse prompt.
 
 ## 2026-10-30 Third batch
 

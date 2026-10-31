@@ -23,10 +23,10 @@
 // and the underflow check.
 //
 // The same run also decides the definite-initialization rule, reference `verify_init.rs`, over the
-// op table already marshalled here. That rule is a forward may-analysis over the chunk's locals,
-// in which a `GetLocal` of a local that no path writes is refused. It needs only the successors
-// that `class`, `arg` and `is_term` already give, and the host adds `lget` and `lset`, the local
-// each op reads and writes. Its verdict is published apart from `out_reject`, so a depth caller
+// op table already marshalled here. That rule is a forward must-analysis over the chunk's locals,
+// in which a `GetLocal` of a local that some path to it leaves unwritten is refused. It needs
+// only the successors that `class`, `arg` and `is_term` already give, and the host adds `lget`
+// and `lset`, the local each op reads and writes. Its verdict is published apart from `out_reject`, so a depth caller
 // that reads only the depth verdict sees no change. The reasoning is beside `init_run` below.
 require word >= 32;
 
@@ -64,9 +64,9 @@ shared data dv {
     l_width: Word,
     l_params: Word,
     l_stream_bit: Word,
-    // 1 when some reached read observes a local that no path writes, with the lowest such op
-    // in `out_init_ip`. `out_init_cause` is 0 for a completed analysis, 1 when `l_width`
-    // exceeds `init_locals()`, and 2 when the sweep budget ended before the fixpoint.
+    // 1 when some reached read may observe a local that some path leaves unwritten, with the
+    // lowest such op in `out_init_ip`. `out_init_cause` is 0 for a completed analysis, 1 when
+    // `l_width` exceeds `init_locals()`, and 2 when the sweep budget ended before the fixpoint.
     out_init_reject: Word,
     out_init_ip: Word,
     out_init_cause: Word,
@@ -125,8 +125,8 @@ private data df {
 }
 
 // The definite-initialization state. `reach[ip]` is 1 once some path reaches op `ip`, and
-// `st[ip * 8 ..]` is the set of locals some path to it writes, eight words of 32 bits each.
-// `cur` is the set after the op being swept, and `changed` whether a sweep grew any set.
+// `st[ip * 8 ..]` is the set of locals every path to it writes, eight words of 32 bits each.
+// `cur` is the set after the op being swept, and `changed` whether a sweep changed any set.
 private data di {
     reach: [Word; 8192],
     st: [Word; 65536],
@@ -408,13 +408,14 @@ fn run() -> Word {
 
 // THE DEFINITE-INITIALIZATION RULE.
 //
-// The reference computes, by a worklist over the chunk's control-flow edges, the least fixpoint
-// of the sets of locals that some path writes before each op, and then refuses a reached
-// `GetLocal` whose local is outside the set before it. The transfer only adds a written local,
-// except at `Stream`, which leaves slot 0 alone for a stream with a parameter and the empty set
-// otherwise. A join is union. Every such transfer is monotone, so every iteration that starts
-// from the entry set and applies the transfers until nothing changes reaches the same least
-// fixpoint, whatever order it visits the ops in. This stage therefore does not walk the region
+// The reference computes, by a worklist over the chunk's control-flow edges, the greatest
+// fixpoint of the sets of locals that every path writes before each op, in which an unreached op
+// is the top, and then refuses a reached `GetLocal` whose local is outside the set before it.
+// The transfer only adds a written local, except at `Stream`, which leaves slot 0 alone for a
+// stream with a parameter and the empty set otherwise. A join is intersection, and the first
+// arrival at an op copies the set, which is intersection with the top. Every such transfer is
+// monotone, so every iteration that starts from the entry set and applies the transfers until
+// nothing changes reaches the same greatest fixpoint, whatever order it visits the ops in. This stage therefore does not walk the region
 // frames above. It sweeps the op table in index order until a sweep changes nothing, and then
 // checks the reads. The verdict agrees with the reference because the two compute the same
 // fixpoint, not because they visit the ops alike, and a nested `Stream` or an unstructured
@@ -436,7 +437,7 @@ fn init_has(ip: Word, b: Word) -> Word {
     (di.st[ip * 8 + b / 32] lsr (b % 32)) band 1
 }
 
-// Join `cur` into the set of op `to`, the first arrival making `to` reached.
+// Meet `cur` into the set of op `to`, the first arrival making `to` reached and copying `cur`.
 fn init_join(to: Word) -> Word {
     if di.reach[to] == 0 {
         di.reach[to] = 1;
@@ -445,7 +446,7 @@ fn init_join(to: Word) -> Word {
     } else {
         for w in 0..8 limit 8 {
             let old = di.st[to * 8 + w];
-            let next = old bor di.cur[w];
+            let next = old band di.cur[w];
             if next != old {
                 di.st[to * 8 + w] = next;
                 di.changed = 1;

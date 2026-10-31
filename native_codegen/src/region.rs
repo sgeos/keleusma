@@ -935,12 +935,21 @@ pub fn plan_call_site_regions(
 /// not prevent.** It is stated, not enforced, exactly like the supplement figure
 /// a host must add to the runtime's sizing.
 ///
-/// # Composite slots are deliberately left ZERO
+/// # A composite slot starts written with its type's zero
 ///
-/// Their `private_init` is `Unit`, which is not a body. The initialisation word
-/// added alongside the pool copy makes a read of an unwritten composite slot
-/// FAULT, matching the reference, and filling zeros here without setting that
-/// word keeps exactly that behaviour. **Setting the word would undo it.**
+/// Until absorption 124 a composite slot's `private_init` was `Unit`, the image
+/// left its pool body and initialisation word zero, and a read of an unwritten
+/// slot faulted as the reference faulted. V0.2.X's widening, its pull request
+/// 666, gives every composite private slot its type's zero as its initializer,
+/// and the reference moves that body into the persistent pool when the module
+/// is constructed. So the image now covers the pool and the initialisation
+/// words. Each composite slot whose initializer is not `Unit` has its packed
+/// initializer written at its pool offset, zero padded to its pool entry, and
+/// its initialisation word set as a write sets it, the body's kind tag with its
+/// length above bit 32. A slot still
+/// initialized to `Unit`, which the reference requires to be written on every
+/// path before a read, keeps a zero word and so keeps faulting. A module with no
+/// composite slot keeps the image of its slot array alone.
 ///
 /// # Failure is a refusal, not a guess
 ///
@@ -956,18 +965,64 @@ pub fn private_init_image(module: &keleusma::bytecode::Module) -> Option<Vec<u8>
         .iter()
         .filter(|s| s.visibility == SlotVisibility::Private)
         .count();
-    let mut out = vec![0u8; private_slots * crate::PRIVATE_SLOT_BYTES as usize];
+    let shared_slots = dl.slots.len() - private_slots;
+    let composites = &dl.private_composite_layout;
+    let pool_base = private_slots * crate::PRIVATE_SLOT_BYTES as usize;
+    let init_base = keleusma::vm::required_persistent_capacity_for(module)
+        + stream_state_supplement_bytes(module) as usize;
+    let image_len = if composites.is_empty() {
+        pool_base
+    } else {
+        init_base + composites.len() * 8
+    };
+    let mut out = vec![0u8; image_len];
 
     for (i, v) in dl.private_init.iter().enumerate() {
         if i >= private_slots {
             break;
         }
+        let composite = composites
+            .iter()
+            .position(|c| usize::from(c.slot) == shared_slots + i);
+        if let Some(index) = composite {
+            // A composite slot's body lives in the pool, and its slot word is
+            // not read. `Unit` keeps the slot unwritten.
+            if matches!(v, ConstValue::Unit) {
+                continue;
+            }
+            let entry = &composites[index];
+            let next = composites
+                .iter()
+                .map(|c| c.offset)
+                .filter(|o| *o > entry.offset)
+                .min()
+                .unwrap_or(module.persistent_composite_bytes);
+            let size = next.checked_sub(entry.offset)? as usize;
+            let body = initializer_body(v, module.float_bits_log2)?;
+            if body.len() > size {
+                return None;
+            }
+            let at = pool_base + entry.offset as usize;
+            out.get_mut(at..at + body.len())?.copy_from_slice(&body);
+            // The word a write stores: the body's kind tag in the low bits and
+            // its length above bit 32, which the coroutine route decodes, and
+            // which is nonzero, which is all the legacy route tests. The tag is
+            // the initializer's kind by the same function as the coroutine
+            // route's initial-kind table.
+            let tag = u64::from(crate::coroutine::types::initial_kind(v));
+            if tag < u64::from(crate::coroutine::types::TUPLE) {
+                return None;
+            }
+            let metadata = tag | ((size as u64) << 32);
+            let word = init_base + index * 8;
+            out.get_mut(word..word + 8)?
+                .copy_from_slice(&metadata.to_le_bytes());
+            continue;
+        }
         // Each slot is a whole word in this backend's private ABI, so a scalar
         // is placed as its i64 bit pattern and the reads at
         // `PRIVATE_SLOT_BYTES` stride pick it up unchanged.
         let bits: i64 = match v {
-            // The composite and `Text` case: not a body, and left zero so the
-            // initialisation word still reports "never written".
             ConstValue::Unit => continue,
             ConstValue::Bool(b) => i64::from(*b),
             ConstValue::Int(n) | ConstValue::Fixed(n) => *n,
@@ -983,13 +1038,66 @@ pub fn private_init_image(module: &keleusma::bytecode::Module) -> Option<Vec<u8>
                 6 => f.to_bits() as i64,
                 _ => return None,
             },
-            // A string, a tuple or anything else is not a word, and this
-            // backend has no place to put it. Refuse the whole image rather
-            // than install a partially correct one.
+            // A string, including the empty `Text` a `Text` slot now starts
+            // with, is an address this image cannot hold, and anything else is
+            // not a word. Refuse the whole image rather than install a partially
+            // correct one.
             _ => return None,
         };
         let off = i * crate::PRIVATE_SLOT_BYTES as usize;
         out[off..off + 8].copy_from_slice(&bits.to_le_bytes());
     }
+    Some(out)
+}
+
+/// The flat body of a composite private initializer, as the reference packs it
+/// into the persistent pool, or `None` for a member this backend does not pack.
+///
+/// Members are packed contiguously in order with no padding, a `Word` and a
+/// `Fixed` in eight bytes, a `Byte` and a `Bool` in one, and a `Float` at the
+/// module's float width. An enum is its discriminant word followed by its
+/// payload, and it needs a resolved discriminant. A static string, `Unit`
+/// inside a body and an enum without a discriminant are refused.
+fn initializer_body(
+    constant: &keleusma::bytecode::ConstValue,
+    float_bits_log2: u8,
+) -> Option<Vec<u8>> {
+    use keleusma::bytecode::ConstValue;
+    fn pack(constant: &ConstValue, float_bits_log2: u8, out: &mut Vec<u8>) -> Option<()> {
+        match constant {
+            ConstValue::Int(v) | ConstValue::Fixed(v) => out.extend_from_slice(&v.to_le_bytes()),
+            ConstValue::Byte(v) => out.push(*v),
+            ConstValue::Bool(v) => out.push(u8::from(*v)),
+            ConstValue::Float(f) => match float_bits_log2 {
+                5 => out.extend_from_slice(&(*f as f32).to_bits().to_le_bytes()),
+                6 => out.extend_from_slice(&f.to_bits().to_le_bytes()),
+                _ => return None,
+            },
+            ConstValue::Tuple(items) | ConstValue::Array(items) => {
+                for item in items {
+                    pack(item, float_bits_log2, out)?;
+                }
+            }
+            ConstValue::Struct { fields, .. } => {
+                for (_, field) in fields {
+                    pack(field, float_bits_log2, out)?;
+                }
+            }
+            ConstValue::Enum {
+                discriminant: Some(d),
+                fields,
+                ..
+            } => {
+                out.extend_from_slice(&d.to_le_bytes());
+                for field in fields {
+                    pack(field, float_bits_log2, out)?;
+                }
+            }
+            _ => return None,
+        }
+        Some(())
+    }
+    let mut out = Vec::new();
+    pack(constant, float_bits_log2, &mut out)?;
     Some(out)
 }

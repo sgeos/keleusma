@@ -91,39 +91,34 @@ fn a_runtime_index_agrees_with_the_reference() {
     }
 }
 
-/// **The reference's half of the independence property**, pinned here so the
-/// trap subject in `corpus_differential.rs` has a stated counterpart. Reading an
-/// element a sibling's write did not cover is a fault, not a value.
+/// **An unwritten sibling reads as its type's zero, on both sides.**
+///
+/// Until absorption 124 the reference faulted on a read of an element that a
+/// sibling's write did not cover, and this test pinned that fault as the
+/// counterpart of a trap subject in `corpus_differential.rs`. V0.2.X's widening
+/// gives every element its type's zero at load, so the reference now reads that
+/// zero, and native code must read the same zero from the installed image. Each
+/// element keeps its own initialisation word, so the write to element 0 still
+/// does not stand in for element 2.
 #[test]
-fn the_reference_faults_on_an_unwritten_sibling_element() {
-    use keleusma::bytecode::Value;
-    use keleusma::vm::{Vm, auto_arena_capacity_for, required_persistent_capacity_for};
-
+fn an_unwritten_sibling_element_reads_as_its_zero() {
     const SIBLING: &str = "\
 struct F { a: Word, b: Word }\n\
 private data log { items: [F; 3], count: Word }\n\
-fn main(t: Word) -> Word {\n\
+fn main(t: Word, u: Word) -> Word {\n\
     log.items[0] = F { a: t, b: 0 };\n\
-    log.items[2].a\n\
+    log.items[2].a * 100 + log.items[0].a + u\n\
 }\n";
     let m = common::build(SIBLING);
     assert!(
         module_refusals(&m, LowerOptions::default()).is_empty(),
-        "the subject must lower, or the trap subject it pairs with proves nothing"
+        "the subject must lower"
     );
-    let need = required_persistent_capacity_for(&m);
-    let cap = auto_arena_capacity_for(&m, &[]).expect("arena") + need + (1 << 20);
-    let mut arena = keleusma_arena::Arena::with_capacity(cap);
-    arena.resize_persistent(need).expect("persistent");
-    let mut vm = Vm::new(m, &arena).expect("vm");
-    let err = vm
-        .call(&[Value::Int(4)])
-        .expect_err("reading an unwritten element must fault on the reference");
-    let text = format!("{err:?}");
-    assert!(
-        text.contains("Unit"),
-        "the fault must be about the slot never having been written: {text}"
-    );
+    for (t, u) in [(4, 1), (-7, 3)] {
+        let (vm, nat) = common::vm_and_native_two_arg(SIBLING, t, u);
+        assert_eq!(vm, t + u, "the reference reads element 2 as the zero of F");
+        assert_eq!(nat, vm, "t = {t}, u = {u}: native={nat} vm={vm}");
+    }
 }
 
 /// The direct form still lowers, so nothing above was bought by loosening it.

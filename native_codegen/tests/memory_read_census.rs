@@ -75,20 +75,23 @@
 //! | composite field and array element | the constructor that built the body, which is the only producer of a pointer to it |
 //! | enum discriminant | the same |
 //! | **stream resume-state word** | **the host's zeroed persistent buffer.** Zero means "the loop top", which is the correct meaning for a fresh instance |
-//! | **composite initialisation word** | **the host's zeroed buffer.** Zero means "never written", and a read of such a slot FAULTS |
+//! | **composite initialisation word** | **the host, installing `region::private_init_image`.** Since absorption 124 a composite slot starts with its type's zero, so the image writes its body and sets the word. Zero still means "never written" for a slot initialized to `Unit`, and a read of such a slot FAULTS |
 //! | **private slot array** | **the host, installing `region::private_init_image`.** This is the guarantee that did not exist |
 //! | retcon reply cell | the host writes scalar bits or a body pointer before each resume, as specified by `coroutine::lower`; exercised by `retcon_bytecode.rs` |
 //! | retcon delegate context | five pointer fields initialised by the entry before any call, promoted into the frame by LLVM; the helper reads the host reply cell under the same resume contract |
 //! | retcon latest reply | initialised from the start argument and updated after each suspension; LLVM preserves it in the frame until release |
 //! | **shared data segment** | **the host, by contract.** Out of this backend's reach and deliberately so |
 //!
-//! # Three of the four host-boundary rows are satisfied by a ZEROED buffer
+//! # Two of the four host-boundary rows are satisfied by a ZEROED buffer
 //!
-//! That is worth stating because it is why the fourth went unnoticed: a host that
-//! zeroes the region satisfies the resume-state word, the initialisation flags,
-//! and every composite slot, and is wrong only about scalar initializers. **A
-//! plausible host is right three times out of four**, which is exactly the
-//! coverage pattern that lets a defect live.
+//! A host that zeroes the region satisfies the resume-state word and the shared
+//! data it seeds itself, and is wrong about scalar initializers. Until
+//! absorption 124 it also satisfied the initialisation flags and every
+//! composite slot, which is why the scalar row once went unnoticed: **a
+//! plausible host was right three times out of four**, which is exactly the
+//! coverage pattern that lets a defect live. Since V0.2.X's widening gave every
+//! composite private slot its type's zero, a zeroed buffer is wrong about those
+//! too, and the image serves both rows.
 //!
 //! # What this census cannot do
 //!
@@ -149,7 +152,7 @@ fn every_memory_read_has_a_stated_guarantee() {
     println!("  sites: {}", sites.len());
     println!(
         "\n  Every read's guarantee is recorded in this file's header. FIVE are on\n  \
-         the host-provided boundary, and a zeroed buffer satisfies three of\n  \
+         the host-provided boundary, and a zeroed buffer satisfies two of\n  \
          the original four. Retcon additionally requires a reply before resume.\n================\n"
     );
 
@@ -171,7 +174,7 @@ fn every_memory_read_has_a_stated_guarantee() {
 
 /// **THE HOST-BOUNDARY ROWS, DRIVEN.**
 ///
-/// The header says three of four are satisfied by a zeroed buffer and one needs
+/// The header says two of four are satisfied by a zeroed buffer and two need
 /// an installed image. That is a claim about this backend's published surface,
 /// so it is checked against that surface rather than left as prose.
 #[test]
@@ -194,24 +197,40 @@ fn the_host_boundary_rows_have_a_published_way_to_be_satisfied() {
          that needs it is not actually served"
     );
 
-    // The other three rows live beyond the slot array, and a host zeroes them.
-    // Asserting the image stops at the array is what keeps "zero means never
-    // written" true for the composite slots.
-    let private_slots = m
-        .data_layout
-        .as_ref()
-        .map(|dl| {
-            dl.slots
-                .iter()
-                .filter(|s| s.visibility == keleusma::bytecode::SlotVisibility::Private)
-                .count()
-        })
-        .unwrap_or(0);
+    // Since absorption 124 the image also covers the composite pool and the
+    // initialisation words, because the composite slot starts with its type's
+    // zero. The resume-state word between them must stay zero, since zero means
+    // the loop top for a fresh instance.
+    let dl = m.data_layout.as_ref().expect("the subject declares data");
+    let private_slots = dl
+        .slots
+        .iter()
+        .filter(|s| s.visibility == keleusma::bytecode::SlotVisibility::Private)
+        .count();
+    let resume = keleusma::vm::required_persistent_capacity_for(&m);
+    let init = resume + region::stream_state_supplement_bytes(&m) as usize;
     assert_eq!(
         image.len(),
-        private_slots * 8,
-        "the image must cover the slot array only; the resume-state word and the \
-         initialisation flags mean 'fresh' when zero, and an image reaching them \
-         would make a slot claim to hold a body it does not"
+        init + dl.private_composite_layout.len() * 8,
+        "the image must reach the end of the initialisation words and no further"
+    );
+    assert!(
+        image[resume..init].iter().all(|b| *b == 0),
+        "the image writes the resume-state word, so a fresh instance would not start \
+         at the loop top"
+    );
+    // A write stores the body's kind tag with its length above bit 32. The
+    // struct tag is 1024 and `F` is sixteen bytes.
+    assert_eq!(
+        image[init..init + 8],
+        (1024u64 | (16 << 32)).to_le_bytes(),
+        "the composite slot starts with its type's zero, so its initialisation word \
+         must say written, as a write of a sixteen-byte struct says it"
+    );
+    let entry = &dl.private_composite_layout[0];
+    let body = private_slots * 8 + entry.offset as usize;
+    assert!(
+        image[body..body + 16].iter().all(|b| *b == 0),
+        "the zero of `F` is sixteen zero bytes"
     );
 }

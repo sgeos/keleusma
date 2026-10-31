@@ -90,13 +90,19 @@ The lettered options the rulings select, as the list stated them.
   and the literal cast refused at compile time when too long. The kaizen K7 fuzz targets,
   which found a loader panic on a header width exponent of 32 or more, repaired there.
 - **Kaizen K3 and K4a.** The slow tests are split per stage and per word type, on branch
-  `test/v02-split-slow-tests`, in pull request 662 with `v0.2.3` merged in. Whether the split
-  shortens the slowest shard is to be read from that run's job durations and is not yet measured.
+  merged in pull request 662 as `1294ca21`. On one run each, so with runner variance not
+  measured, the slowest self-host shard fell from 47 to 35 minutes and the run from about 69
+  to about 45 minutes.
 - **C3 and C7.** `docs/decisions/ARRAY_WIRE_SLOT_DESIGN.md` and
   `docs/decisions/RING_BUFFER_DESIGN.md`. The array design measured that the August work
   already removed most of the 16 MB growth, `lexer.kel` now giving a 28,212-byte artifact.
-- **In progress.** The B1 widening, the compiler writing every path with initializers for
-  composite private fields, is being attempted.
+- **B1 widened, options (a) and (b).** Merged in pull request 666 as `d8dae4cc`. The
+  compiler writes every local on every path, and the verifier's rule for locals is a
+  must-analysis with its self-hosted twin. Every private slot starts as its type's zero, and a
+  private slot whose initializer is still `Unit` must be written on every path before a read.
+  No opcode, version or wire container change was needed. The record is in the Order 2 audit,
+  section "Definite initialization widened, 2026-10-30".
+- **The rulings record.** Merged in pull request 663 as `5ea94b3a`.
 
 ## Information the operator asked for
 
@@ -209,6 +215,12 @@ Each has lettered options with my recommendation first.
    is done as its option (a).
 6. **The C7 design's seven decisions**, in `RING_BUFFER_DESIGN.md`. D1 should follow the
    answer to item 2 above.
+7. **Two behaviour changes of the B1 widening, for review rather than a new ruling.** A hot
+   swap that seeds a private slot with `Unit` now gives it the new module's initializer, which
+   changes a public API's behaviour. A `Text` private slot read before its first write now
+   returns the empty string where it returned `Unit`, the empty string being my choice of the
+   `Text` zero. (a) Keep both. (b) Revert the hot swap change and keep a `Unit` seed as given,
+   which would leave such a slot to rule 2 alone.
 
 ## Concerns
 
@@ -218,6 +230,15 @@ Each has lettered options with my recommendation first.
 - Question 3 of the previous reverse prompt attributed the `brace-expansion` fix to pull
   request 630. The kaizen line corrected it in sequence 155. The fix was pull request 619,
   merged into `main` at 02:33 UTC on 2026-10-30.
+- The rule for private data has no self-hosted twin, so the self-hosted validator would admit
+  a module carrying a `Unit` private initializer that the reference refuses. Current compilers
+  emit one only for a `()` slot, a slot whose zero would violate a refinement, or a slot of a
+  type with no zero. A private array of structs or a private tuple field now differs from the
+  reference's bytes, so the self-hosted cross-check refuses it.
+- A defect predating the widening was found and not fixed. The `old` binding of a handled
+  write to a struct element observes the new value, which the implementing agent attributes to
+  the read and the write aliasing the element's pool body. That is a hypothesis not yet
+  confirmed, and the defect is a wrong value, not a refusal.
 - Two compiler defects were found and not fixed. `let (a, b) = 5` compiles and faults at run
   time, and `let r = yield ...` without an annotation faults when a field of `r` is read.
 - The fuzz package's own `Cargo.lock` is guarded by neither CI nor Dependabot, which is the
