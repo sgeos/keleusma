@@ -1089,7 +1089,19 @@ fn compile_kel_file(path: &'static str) -> Module {
 /// Drive the codegen; return its emitted ops, the constant pool it built, and the
 /// local-frame size (`local_count`) it computed.
 fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<(i64, i64)>, i64) {
+    run_codegen_with(body, param_count, &[])
+}
+
+/// [`run_codegen`] with the private struct slots and sizes the codegen's copy pass needs,
+/// laid out from parse.kel's data records as the shipping driver lays them out.
+fn run_codegen_with(
+    body: &Body,
+    param_count: usize,
+    composites: &[(u16, u32)],
+) -> (Vec<Op>, Vec<(i64, i64)>, i64) {
     let m = compile_kel_file("compiler/kel/codegen.kel");
+    let copy_inputs = keleusma::selfhost::codegen_copy_pass_inputs(&m, composites);
+    let copy_refuse = keleusma::selfhost::codegen_copy_refuse_slot(&m);
     let need = required_persistent_capacity_for(&m);
     let mut arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY + need);
     arena.resize_persistent(need).expect("resize");
@@ -1132,6 +1144,10 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<(i64, i64)>, i6
         .expect("param_count");
     vm.set_shared(&mut shared, CATEGORY, Value::Int(body.category))
         .expect("category");
+    for (slot, word) in copy_inputs {
+        vm.set_shared(&mut shared, slot, Value::Int(word))
+            .expect("copy pass input");
+    }
 
     // Phase 1: ops until Return.
     let mut ops = Vec::new();
@@ -1166,6 +1182,11 @@ fn run_codegen(body: &Body, param_count: usize) -> (Vec<Op>, Vec<(i64, i64)>, i6
             .resume_with_shared(&mut shared, Value::Int(0))
             .expect("resume");
     }
+    assert_eq!(
+        vm.get_shared(&shared, copy_refuse).expect("copy refusal"),
+        Value::Int(0),
+        "the codegen's copy pass refused this function"
+    );
 
     // Phase 2: the pool the stage built. Size, then that many raw values, then that many raw
     // tags (0 Int, 1 StaticStr). Each pool entry is returned as (value, tag): an Int carries its
@@ -2090,7 +2111,9 @@ fn self_compile_codegen_atomic_functions() {
     // Order 6 slice 2 adds `push_native_call`, the native-call lowering (102 -> 103), and
     // slice 5b `push_floatlit` (103 -> 104).
     // 105 since `push_refinement`, the refinement check, 2026-10-27.
-    const EXPECTED_SELF_COMPILE: usize = 105;
+    // The private struct read copy pass of 2026-10-31 adds the twelve `dc_` helpers, all
+    // self-compiling (105 -> 117).
+    const EXPECTED_SELF_COMPILE: usize = 117;
     assert!(
         gaps.is_empty(),
         "codegen self-compile regressed; functions that no longer round-trip: {gaps:?}"
@@ -4443,7 +4466,8 @@ fn the_host_unescape_agrees_with_the_reference_on_every_accepted_escape() {
 }
 
 fn self_host_compile(src: &str) -> Module {
-    let (fns, names, _, _) = parse_functions(src);
+    let (fns, names, data_records, _) = parse_functions(src);
+    let composites = keleusma::selfhost::private_composite_sizes(&data_records);
     let mut module = compile_src(src);
     let parsed_names: std::collections::BTreeSet<_> = fns
         .iter()
@@ -4479,7 +4503,7 @@ fn self_host_compile(src: &str) -> Module {
             let category = reconstruct_category_copy(group[0].cat);
             reconstruct_via_kel(&group[0].body, category, pc, &name)
         };
-        let (ops, pool, lc) = run_codegen(&body, pc);
+        let (ops, pool, lc) = run_codegen_with(&body, pc, &composites);
         let idx = module
             .chunks
             .iter()

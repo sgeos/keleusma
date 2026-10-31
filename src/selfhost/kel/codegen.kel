@@ -293,6 +293,11 @@ shared data ast {
     // A separate command translates data operands through parser-produced field ranges.
     relocate_mode: Word, relocate_count: Word, relocate_kind: Word, relocate_arg: Word,
     relocate_source: [Word; 1024], relocate_length: [Word; 1024], relocate_target: [Word; 1024],
+    // The private struct data slots and their flat byte sizes, which the host lays out from
+    // parse.kel's data records, for the copy pass after the walk. `dc_refuse` is the pass's
+    // one output, set to 1 when a function needs more copies than `dcopy` holds or than the
+    // op buffer fits, so the host refuses that function rather than emit unlike bytes.
+    dc_count: Word, dc_slot: [Word; 64], dc_size: [Word; 64], dc_refuse: Word,
 }
 
 // The work-stack (R3.1), the op buffer the stage backpatches, and the constant
@@ -3371,6 +3376,178 @@ fn drain_header() -> Word {
     ast.param_count + st.let_count
 }
 
+// Phase 2b: copy each private struct read that a later write can reach while its value is
+// live, the rule of `src/compiler/alias_copy.rs` run over the finished op buffer. A private
+// struct read pushes a handle into the slot's persistent body, which a later `SetData`
+// overwrites in place. The reference decides over its own copy-free ops, which equal this
+// buffer, so the two decide alike. A copy is four ops inserted after the `GetData`, and every
+// jump target past an insertion moves with it. Yields the PENDING 0.
+private data dcopy {
+    done: Word, reads: Word, at: [Word; 64], size: [Word; 64],
+    found: Word, q: Word, stop: Word, verdict: Word, last: Word, skipped: Word,
+    open: [Word; 32], open_n: Word, c: Word, shift: Word,
+}
+
+// The flat byte size of private struct slot `slot`, or 0 when the slot is not one.
+fn dc_size_of(slot: Word) -> Word {
+    dcopy.found = 0;
+    for j in 0..ast.dc_count limit 64 {
+        if ast.dc_slot[j] == slot { dcopy.found = ast.dc_size[j]; }
+    }
+    dcopy.found
+}
+
+// A view keeps the alias, a FlatNested field, tuple element or payload read.
+fn dc_is_view(w: Word) -> Word {
+    let tag = w % wire.radix; let opd = w / wire.radix;
+    if tag == wire.getfieldnested orelse tag == wire.getenumfieldnested
+        orelse (tag == wire.gettuplefield andalso opd >= 4294967296 andalso opd / 4294967296 != 5) { 1 } else { 0 }
+}
+
+// A dead end leaves nothing that refers to the body. It is a Flat scalar read, a flat
+// NewComposite, which copies a nested element's bytes, or a SetData to another slot.
+fn dc_is_dead_end(w: Word, lo: Word) -> Word {
+    let tag = w % wire.radix; let opd = w / wire.radix;
+    if tag == wire.getfield orelse tag == wire.getenumfield
+        orelse (tag == wire.gettuplefield andalso opd < 4294967296)
+        orelse tag == wire.newcomposite orelse tag == wire.newcompositearray
+        orelse tag == wire.newcompositeenum orelse tag == wire.newcompositetuple
+        orelse (tag == wire.setdata andalso opd != lo) { 1 } else { 0 }
+}
+
+// A hazard may write slot `lo`. It is an overlapping SetData or SetDataIndexed, a call or
+// a yield.
+fn dc_is_hazard(w: Word, lo: Word) -> Word {
+    let tag = w % wire.radix; let opd = w / wire.radix;
+    if (tag == wire.setdata andalso opd == lo)
+        orelse (tag == wire.setdataix andalso opd % 16777216 <= lo andalso lo < opd % 16777216 + opd / 16777216)
+        orelse tag == wire.call orelse tag == wire.callnative orelse tag == wire.callext
+        orelse tag == wire.yieldop { 1 } else { 0 }
+}
+
+// A forward jump, every jump tag but the two `EndLoop` back-edges.
+fn dc_is_jump(tag: Word) -> Word {
+    if tag == wire.iff orelse tag == wire.els orelse tag == wire.mif orelse tag == wire.mbreak
+        orelse tag == wire.breakif orelse tag == wire.mbreakif { 1 } else { 0 }
+}
+
+// Any op whose operand is an op position.
+fn dc_is_target(tag: Word) -> Word {
+    if dc_is_jump(tag) == 1 orelse tag == wire.loopop orelse tag == wire.mloop
+        orelse tag == wire.endloop orelse tag == wire.mendloop { 1 } else { 0 }
+}
+
+// The first position at or after `from` that is not a view, skipping at most sixteen.
+fn dc_skip_views(from: Word) -> Word {
+    dcopy.q = from; dcopy.stop = 0;
+    for v in 0..16 limit 16 {
+        if dcopy.stop == 0 andalso dcopy.q < st.op_count andalso dc_is_view(st.ops[dcopy.q]) == 1 {
+            dcopy.q = dcopy.q + 1;
+        } else { dcopy.stop = 1; }
+    }
+    dcopy.q
+}
+
+// The local rule for a read at `at` of slot `lo` bound by the SetLocal(k) at `def`.
+fn dc_local(at: Word, lo: Word, def: Word, k: Word) -> Word {
+    dcopy.verdict = 0; dcopy.last = def; dcopy.skipped = 16777216; dcopy.open_n = 0;
+    for i in 0..st.op_count limit 8192 {
+        let w = st.ops[i]; let tag = w % wire.radix; let opd = w / wire.radix;
+        if i < def {
+            if (tag == wire.getlocal orelse tag == wire.setlocal) andalso opd == k { dcopy.verdict = 1; }
+            if dc_is_jump(tag) == 1 andalso opd > def andalso opd < dcopy.skipped { dcopy.skipped = opd; }
+        }
+        if i > def {
+            if dcopy.open_n > 0 andalso dcopy.open[dcopy.open_n - 1] <= i { dcopy.open_n = dcopy.open_n - 1; }
+            if tag == wire.loopop orelse tag == wire.mloop {
+                if dcopy.open_n >= 32 { dcopy.verdict = 1; } else {
+                    dcopy.open[dcopy.open_n] = opd; dcopy.open_n = dcopy.open_n + 1;
+                }
+            }
+            if tag == wire.setlocal andalso opd == k { dcopy.verdict = 1; }
+            if tag == wire.getlocal andalso opd == k {
+                let q = dc_skip_views(i + 1);
+                if q >= st.op_count { dcopy.verdict = 1; } else {
+                    if dc_is_dead_end(st.ops[q], lo) == 0 { dcopy.verdict = 1; }
+                }
+                let end = if dcopy.open_n > 0 { dcopy.open[0] - 1 } else { q };
+                if end > dcopy.last { dcopy.last = end; }
+                if q > dcopy.last { dcopy.last = q; }
+            }
+        }
+    }
+    if dcopy.skipped <= dcopy.last { dcopy.verdict = 1; }
+    if dcopy.verdict == 0 {
+        let end = if dcopy.last < st.op_count { dcopy.last } else { st.op_count - 1 };
+        for h in at..end + 1 limit 8192 {
+            if dc_is_hazard(st.ops[h], lo) == 1 { dcopy.verdict = 1; }
+        }
+    }
+    dcopy.verdict
+}
+
+// Whether the read whose value is on top before position `at`, of slot `lo`, needs a copy.
+fn dc_needs_copy(at: Word, lo: Word) -> Word {
+    let q = dc_skip_views(at);
+    if q >= st.op_count { 1 } else {
+        let w = st.ops[q];
+        if dc_is_dead_end(w, lo) == 1 { 0 } else {
+            if w % wire.radix == wire.setlocal { dc_local(at, lo, q, w / wire.radix) } else { 1 }
+        }
+    }
+}
+
+// The position `t` names after the copies are inserted, four more per copied read before it.
+fn dc_moved(t: Word) -> Word {
+    dcopy.shift = 0;
+    for r in 0..dcopy.reads limit 64 {
+        if dcopy.at[r] < t { dcopy.shift = dcopy.shift + 4; }
+    }
+    t + dcopy.shift
+}
+
+// Insert the copies, moving each op from the end down so that no unmoved op is overwritten.
+fn dc_insert() -> Word {
+    let n = st.op_count;
+    dcopy.c = dcopy.reads;
+    for jj in 0..n limit 8192 {
+        let j = n - 1 - jj;
+        if dcopy.c > 0 andalso dcopy.at[dcopy.c - 1] >= j { dcopy.c = dcopy.c - 1; }
+        let dst = j + 4 * dcopy.c;
+        let w = st.ops[j];
+        let tag = w % wire.radix;
+        st.ops[dst] = if dc_is_target(tag) == 1 { tag + dc_moved(w / wire.radix) * wire.radix } else { w };
+        if dcopy.c < dcopy.reads andalso dcopy.at[dcopy.c] == j {
+            let size = dcopy.size[dcopy.c];
+            st.ops[dst + 1] = wire.newcompositearray + (1 + size * 65536) * wire.radix;
+            st.ops[dst + 2] = wire.pushimm + 4 * wire.radix;
+            st.ops[dst + 3] = wire.getindexnested + (size + 2 * 65536) * wire.radix;
+            st.ops[dst + 4] = wire.popn + 6 * wire.radix;
+        }
+    }
+    st.op_count = n + 4 * dcopy.reads;
+    0
+}
+
+fn dc_pass() -> Word {
+    dcopy.done = 1;
+    dcopy.reads = 0;
+    for i in 0..st.op_count limit 8192 {
+        let w = st.ops[i];
+        if w % wire.radix == wire.getdata andalso dc_size_of(w / wire.radix) > 0 {
+            if dc_needs_copy(i + 1, w / wire.radix) == 1 {
+                if dcopy.reads >= 64 { ast.dc_refuse = 1; } else {
+                    dcopy.at[dcopy.reads] = i; dcopy.size[dcopy.reads] = dc_size_of(w / wire.radix);
+                    dcopy.reads = dcopy.reads + 1;
+                }
+            }
+        }
+    }
+    if st.op_count + 4 * dcopy.reads > 8192 { ast.dc_refuse = 1; }
+    if dcopy.reads > 0 andalso ast.dc_refuse == 0 { dc_insert(); }
+    0
+}
+
 // The phase machine is a multiheaded `yield` function: one head per phase,
 // selected by a `when` guard. The heads are tried top to bottom and the first
 // satisfied guard wins, so the guard order is the phase order. Each head yields
@@ -3388,6 +3565,10 @@ fn emit_next(resume: Word) -> Word when st.sp > 0 {
 
 fn emit_next(resume: Word) -> Word when st.ret_done == 0 {
     drain_return()
+}
+
+fn emit_next(resume: Word) -> Word when dcopy.done == 0 {
+    dc_pass()
 }
 
 fn emit_next(resume: Word) -> Word when st.emit_cursor < st.op_count {

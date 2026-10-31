@@ -5,7 +5,7 @@ use crate::vm::Vm;
 fn assert_lowering(source: &str, records: &[(i64, i64)]) {
     let reference = compile_src(source);
     let body = reconstruct_via_kel(records, 0, 0, "main");
-    let (ops, pool, local_count) = run_codegen(&body, 0);
+    let (ops, pool, local_count) = run_codegen(&body, 0, &[]);
     let chunk = &reference.chunks[0];
     assert_eq!(ops, chunk.ops, "{source}");
     assert_eq!(pool_to_constants(&pool, &[]), chunk.constants, "{source}");
