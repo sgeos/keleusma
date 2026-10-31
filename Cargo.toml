@@ -151,6 +151,14 @@ verify = []
 # leave this feature off; the Shell library is not compiled.
 shell = []
 
+# Enables the bundled text operations over `Text<N>`, the compiler intrinsics
+# `text::len`, `text::capacity`, `text::concat`, `text::eq` and `text::slice`.
+# Each lowers to existing opcodes with a static cost, so the feature adds no
+# opcode, no native and no runtime dependency, and it is `no_std`. With the
+# feature off, a call under the `text::` path is refused at compile time rather
+# than resolved as a host native. See `docs/decisions/TEXT_CAPACITY_TYPE.md`.
+text = []
+
 # Enables compiled-module signing and signature verification at
 # load time. Adds `ed25519-dalek` as a dependency for the Ed25519
 # scheme (the only scheme V0.2.0 ships). With the feature off, the

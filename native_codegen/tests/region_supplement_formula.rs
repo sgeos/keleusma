@@ -170,6 +170,34 @@ fn the_documented_formula_reproduces_every_corpus_figure() {
     );
 }
 
+/// Absorption 127 brought V0.2.X's own copy of the formula,
+/// `keleusma::native_region`, which `auto_arena_capacity_for` now adds. The
+/// backend stays the authority, so that copy is checked here against it on
+/// every corpus module, which is the check V0.2.X's module documentation says
+/// this line makes.
+#[test]
+fn the_shipping_crates_copy_agrees_with_the_backend() {
+    let mut compared = 0;
+    let mut nonzero = 0;
+    for (name, m) in common::corpus() {
+        let native = keleusma_native::region::host_arena_supplement_bytes(&m);
+        assert_eq!(
+            keleusma::native_region::native_region_supplement_bytes(&m),
+            native,
+            "{name}: keleusma::native_region disagrees with the backend"
+        );
+        if native > 0 {
+            nonzero += 1;
+        }
+        compared += 1;
+    }
+    assert!(
+        compared >= 70,
+        "only {compared} corpus modules were compared"
+    );
+    assert!(nonzero >= 1, "no corpus module has a supplement to compare");
+}
+
 #[test]
 fn the_record_prints_this_code() {
     let doc = std::fs::read_to_string("../docs/decisions/NATIVE_REGION_SUPPLEMENT_FORMULA.md")

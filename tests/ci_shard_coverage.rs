@@ -31,7 +31,8 @@
 //! integration binaries whose source names the `encryption`, `signatures` or `shell`
 //! feature, the features only that job enables together. A gated file the list omits would
 //! run its `encryption` cases nowhere, so this file derives the gated files from `tests/`
-//! and requires the filter to name exactly those.
+//! and requires the filter to name exactly those. The `text` feature joined the list on
+//! 2026-10-31, because the workspace job is the only one that enables it.
 //!
 //! **THE SHARDS RUN ONE ARCHIVE, BUILT ONCE.** On 2026-10-25 the self-host shards stopped
 //! compiling the same binaries four times. `test-self-host-build` runs `cargo nextest
@@ -196,11 +197,11 @@ fn every_partitioned_job_lists_each_shard_exactly_once() {
 
 /// The workspace job's filter, exactly. Narrowing it would drop tests from the only job
 /// that ran them, so a change here is meant to fail this file and be reviewed.
-const WORKSPACE_FILTER: &str = "-E 'not package(keleusma) | (binary(=keleusma) & not test(/^selfhost::/)) | binary(=crypto_framing) | binary(=ecc_signature_ordering) | binary(=fuzz_corpus_replay) | binary(=hot_swap_trust_matrix) | binary(=native_declaration_agreement) | binary(=proven_execution) | binary(=signature_verify_bounds) | binary(=stage_executor) | binary(=trap_policy)'";
+const WORKSPACE_FILTER: &str = "-E 'not package(keleusma) | (binary(=keleusma) & not test(/^selfhost::/)) | binary(=crypto_framing) | binary(=ecc_signature_ordering) | binary(=fuzz_corpus_replay) | binary(=hot_swap_trust_matrix) | binary(=native_declaration_agreement) | binary(=proven_execution) | binary(=signature_verify_bounds) | binary(=stage_executor) | binary(=text_ops) | binary(=text_ops_without_feature) | binary(=trap_policy)'";
 
 /// The features that only the workspace job enables on `keleusma` together, through
 /// `keleusma-cli`. A test gated on one of them may run nowhere else in that combination.
-const WORKSPACE_ONLY_FEATURES: [&str; 3] = ["encryption", "signatures", "shell"];
+const WORKSPACE_ONLY_FEATURES: [&str; 4] = ["encryption", "signatures", "shell", "text"];
 
 /// The `keleusma` integration binaries whose source names a workspace-only feature in a
 /// `feature = "..."` predicate, sorted. Comments count too, which errs toward keeping a
