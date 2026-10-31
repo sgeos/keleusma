@@ -328,6 +328,10 @@ fn the_corpus_is_what_the_pinned_figures_were_measured_against() {
 // **RE-PINNED 2026-10-30, absorption 124.** Upstream pull request 666, which
 // widens definite initialization, changed `codegen.kel`, `parse.kel`,
 // `verify_depth.kel` and `wire.kel`. Nothing was added or removed.
+//
+// **RE-PINNED 2026-10-31, absorption 128.** Upstream pull request 685, the
+// self-hosted twin of the private-data definite-initialization rule, changed
+// `verify_depth.kel`. Nothing was added or removed.
 const PINNED: &[(&str, u64)] = &[
     // **Re-pinned at absorption 60.** `src/selfhost/kel/parse.kel` moved; nothing was
     // added or removed. Every census this instrument names to re-derive was run on
@@ -546,7 +550,7 @@ const PINNED: &[(&str, u64)] = &[
     // Absorption 119 adds the template header scan as the fifteenth stage.
     ("src/selfhost/kel/template_scan.kel", 0x2389d34aaba8c2c7),
     ("src/selfhost/kel/verify_datalayout.kel", 0xe625b5656d576b86),
-    ("src/selfhost/kel/verify_depth.kel", 0x6fa9a7d145459e72),
+    ("src/selfhost/kel/verify_depth.kel", 0x925cd38d9f5c04ed),
     // Absorption 116 rejects a native index past the native table.
     ("src/selfhost/kel/verify_structural.kel", 0x3c716a472f94e1c3),
     // Absorption 119 adds the flat Text layout proof to the typed stage.

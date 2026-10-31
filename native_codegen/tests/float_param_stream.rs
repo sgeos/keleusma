@@ -41,7 +41,7 @@ const SUBJECTS: &[(&str, &str)] = &[
     ),
     (
         "float in, word out",
-        "loop main(t: Float) -> Word { let r = yield (t as Word); yield r }",
+        "loop main(t: Float) -> Word { let r = yield (t as Word); yield (r as Word) }",
     ),
     (
         "float in, negated across a yield",

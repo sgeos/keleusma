@@ -21,7 +21,9 @@
 //!   the slot reservation that bound needs.
 //! - `<prefix>_buffer_align`, the alignment of every buffer the host passes.
 //! - `<prefix>_shared_bytes`, `<prefix>_private_bytes` and
-//!   `<prefix>_region_bytes`, the three ordinary buffers.
+//!   `<prefix>_region_bytes`, the three ordinary buffers. Since absorption 127
+//!   `keleusma::vm::auto_arena_capacity_for` includes the region figure, so a
+//!   host that sizes one arena from that function must not add it again.
 //! - `<prefix>_private_init_bytes`, and `<prefix>_private_init` when that is
 //!   not zero, the image to copy into the start of a zeroed private buffer
 //!   before start.
