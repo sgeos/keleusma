@@ -10,6 +10,8 @@
   must be written on every path before its read. The soundness invariant strengthened is that a
   verified module never reads the empty-slot marker from a local or from private data, which
   the narrowed rule held only for a local that no path writes. The self-hosted compiler emits
-  the same bytes, and its validator twin decides the strengthened rule for locals. On the
+  the same bytes within its subset, and its validator twin decides the strengthened rule for
+  locals. A private array of structs or a private tuple field now differs from the reference's
+  bytes, so the cross-check refuses it. The rule for private data has no self-hosted twin yet. On the
   operator's ruling of 2026-10-30. Pinned by `tests/definite_initialization.rs` and
   `tests/selfhost_definite_initialization.rs`.
