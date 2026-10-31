@@ -12,9 +12,10 @@
 //!
 //! # What it deliberately does not build
 //!
-//! The operations, concatenation and the rest, wait on how a native signature
-//! can be generic over a capacity. The language has no `len` surface to extend,
-//! so the length is observed here from the host side by reading the flat body.
+//! The operations, concatenation and the rest, landed on 2026-10-31 as the
+//! intrinsics under `text::` behind the `text` feature, and are pinned in
+//! `tests/text_ops.rs`. This file does not use them, so the length is observed
+//! here from the host side by reading the flat body.
 //! Every other cast, all arithmetic, and all comparison stay type errors, and
 //! the tests below pin that they do, because a comparison the type checker
 //! admitted would verify and then fault at runtime.

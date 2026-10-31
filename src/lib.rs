@@ -221,6 +221,11 @@ pub mod parser;
 /// portability.
 #[cfg(feature = "compile")]
 pub mod target;
+/// The bundled text operations over `Text<N>`, recognised by name and lowered
+/// by the compiler as intrinsics. Present in every compiling build so that a
+/// build without the `text` feature refuses the operations by name.
+#[cfg(feature = "compile")]
+mod text_intrinsic;
 /// Token definitions and keyword recognition.
 #[cfg(feature = "compile")]
 pub mod token;

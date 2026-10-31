@@ -2,7 +2,7 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**: authorized. The value representation and the literal cast are implemented as of 2026-10-30. The operations are not. See [the literal-cast increment](#the-literal-cast-increment-landed-2026-10-30).
+**Status**: authorized. The value representation and the literal cast are implemented as of 2026-10-30. Five bundled operations are implemented as compiler intrinsics behind the `text` cargo feature as of 2026-10-31. See [the literal-cast increment](#the-literal-cast-increment-landed-2026-10-30) and [the bundled operations](#the-bundled-operations-as-compiler-intrinsics-landed-2026-10-31). The `ScalarKind::Text` collapse was investigated on 2026-10-31 and not performed. See [the collapse investigation](#the-scalarkindtext-collapse-investigated-2026-10-31-and-stopped).
 
 ## The authorization, recorded with provenance
 
@@ -266,6 +266,12 @@ Two questions remain genuinely open.
    literal cast with compile-time refusals and the operations are free functions. How a native
    signature can be generic over a capacity is still open, and it blocks the operations.
 
+**Both are ruled as of 2026-10-31.** The operator chose compiler intrinsics, option (b), over
+generic natives and per-capacity natives. That restores the bundled operations without answering
+the generic native signature question, which stays open for natives alone. The surface is the
+literal cast and free functions under `text::`, and the comparison operators stay refused. See
+[the bundled operations](#the-bundled-operations-as-compiler-intrinsics-landed-2026-10-31).
+
 ## The literal-cast increment, landed 2026-10-30
 
 ### The ruling
@@ -337,6 +343,208 @@ signature question. With them come the length surface, equality over whole bodie
 truncation default with its optional arm following `CheckedArmKind`, and the end of the
 `"ab" + "cd"` defect recorded above. A `shared` field needs a host-side type and a length check at
 the boundary. The self-hosted stages need the type before the shipping refusal can be lifted.
+
+**Updated 2026-10-31.** The operations, the length surface and equality landed as intrinsics and
+are recorded in the next section. The `"ab" + "cd"` defect had already been closed by a type
+checker refusal pinned in `tests/text_composition_hole.rs`, whose diagnostic now names
+`text::concat`. The truncation arm, the `shared` field and the self-hosted stages remain.
+
+## The bundled operations as compiler intrinsics, landed 2026-10-31
+
+### The ruling
+
+The operator ruled first-hand in session on 2026-10-31, as relayed to this line in the task that
+built this increment. The operations are compiler intrinsics over `Text<N>`, option (b), chosen
+over generic natives and over one native per capacity. They are conditionally includable behind a
+cargo feature named `text`, and a build without the feature refuses their use at compile time. The
+surface is the literal cast and free functions, so `==` and `<` on `Text<N>` stay refused and
+`text::eq` is the comparison.
+
+### What existed before V0.2.0 removed it
+
+Commit `afc6079f` removed the bundled text library. It registered four natives, `to_string`,
+`length`, `concat` and `slice`, and `Op::Add` carried a text arm. `length` and `slice` counted
+Unicode scalar values, `slice` faulted on a negative or reversed range, and every result was an
+arena string with no static bound. That last property is why they were removed.
+
+### The operations
+
+`A`, `B` and `N` are operand capacities, read from the operand types after monomorphization.
+`wb` is the target word width in bytes. The instruction counts and costs exclude evaluating the
+operands, and were measured on 2026-10-31 on the 64-bit host target with
+`verify::wcet_whole_chunk` and `verify::wcmu_whole_chunk`, at capacities 1, 2, 4, 8, 16 and 32. Each
+formula reproduces all six measurements exactly.
+
+| operation | result | instructions | WCET | arena WCMU |
+|---|---|---|---|---|
+| `text::len(t: Text<N>)` | `Word` | 1 | 2 | 0 |
+| `text::capacity(t: Text<N>)` | `Word`, the literal `N` | 2 | 2 | 0 |
+| `text::concat(a: Text<A>, b: Text<B>)` | `Text<A + B>` | `7(A + B) + 3A + 15` | `15(A + B) + 5A + 27` | `2(A + B) + wb` |
+| `text::eq(a: Text<A>, b: Text<B>)` | `bool` | `7 min(A, B) + 9` | `12 min(A, B) + 13` | 0 |
+| `text::slice(t: Text<N>, start: Word, end: Word)` | `Text<N>` | `16N + 47` | `29N + 62` | `2N + wb` |
+
+The arena figure for a constructed result counts the byte array and the enclosing tuple, which
+the verifier charges separately. Concatenation and slicing also push one operand-stack value per
+result byte before the two `NewComposite` instructions, so their operand stack peak grows by
+`A + B` and `N` value slots respectively, which the verifier counts in the stack term.
+
+### Semantics
+
+- **Lengths and positions count bytes**, as `N` does. This differs from the removed `length` and
+  `slice`, which counted Unicode scalar values. A slice that splits a multi-byte UTF-8 sequence
+  yields the bytes it names.
+- **Concatenation cannot overflow.** The result capacity is the sum of the operand capacities, so
+  no truncation arises and no outcome arm is needed.
+- **Slicing is total.** The range `[start, end)` is clamped, `start` into `[0, len]` and then `end`
+  into `[start, len]`. An empty, reversed or out-of-range request yields a shorter or empty text
+  rather than a fault. The result capacity is the operand capacity, so no truncation arises.
+- **Equality compares live content** and admits operands of different capacities, so
+  `"ab" as Text<2>` equals `"ab" as Text<8>`.
+
+### Lowering
+
+All five lower to existing opcodes. None emits `Op::Len`, a call or a native call, and none adds a
+native to the module. The length is the word at offset zero and byte `i` is the byte at offset
+`wb + i`, both read with a constant-offset `GetTupleField`. A byte at a position computed at run
+time is read from the nested byte array with the total `GetIndex` form, whose out-of-range result
+is a zero byte with an outcome suffix that is discarded, so no read can trap. No opcode writes one
+byte of a flat body, so each constructed result is pushed one byte at a time and packed by one
+`NewComposite` for the array and one for the tuple. The code size and the execution time are
+therefore linear in the capacity, as the table shows.
+
+- **`concat`** computes result byte `i` as `a[i] + b[i - len(a)]` in wrapping byte arithmetic.
+  Exactly one term can be nonzero, because each operand is zero outside its live range and a read
+  at a negative index is zero. The selection therefore needs no branch.
+- **`eq`** folds `len(a) xor len(b)` and the wrapping byte difference of each position below
+  `min(A, B)` into one accumulator with `BitOr`, and compares it with zero. Positions past the
+  smaller capacity are zero in both operands whenever the lengths agree.
+- **`slice`** clamps with four one-sided conditional moves and masks each result byte with the
+  sign of `i - rlen`, taken by an arithmetic shift, so bytes past the result length are zero.
+
+### The invariant, and the trust assumption it carries
+
+**Every `Text<N>` has a live length of at most `N`, and every byte at or past the length is zero.**
+The literal cast and the zero value establish it, and every operation above establishes it for
+its result. `concat` and `eq` rely on it. Nothing in script code can produce a value that breaks
+it. A host can, by passing a malformed `Text<N>` as an argument to an entry or a function, and
+then the result of an operation is defined but unspecified. Every read remains bounds-checked by
+the virtual machine, so such a value cannot reach memory outside its body. Checking the invariant
+at the host boundary belongs with the `shared` field work, which needs the same check.
+
+### Feature gating and the reserved namespace
+
+The `text` feature is off by default, as `shell` is, and it is `no_std`. `keleusma-cli` enables it,
+so the shipping command line compiles the operations. The `math` and `audio` libraries named in
+the ruling are not cargo features in this tree. `math` is a library bundle and `audio` is gated
+on `floats`, so `shell` is the only precedent of the requested kind.
+
+The `text` path is reserved in every build. With the feature, a call under it is an intrinsic.
+Without the feature, the same call is refused at compile time with a message naming the feature,
+rather than being accepted as a permissive native call, which is what any other `a::b(..)` call
+without a `use` declaration becomes. A `use text::..` declaration is refused in both builds, so
+one spelling never means a host native in one build and an intrinsic in the other. **That is a
+host-observable change**, since a host could previously import a native under `text::`. None in
+this tree did.
+
+The continuous-integration feature sets cover both builds. The workspace run unifies the feature
+on through `keleusma-cli` and runs `tests/text_ops.rs`. The single-package runs leave it off and
+run `tests/text_ops_without_feature.rs`. The isolated `self-host` run has the feature off.
+
+### What stays refused, and why
+
+- **`==`, `<` and the other comparison operators** on `Text<N>`, by the ruling. `text::eq` is the
+  comparison.
+- **A pipeline target or a guarded operation under `text::`.** A pipeline would route the call
+  through the permissive native path, and the operations are total and have no outcome arms.
+- **A turbofish** on an operation, and an operand whose `Text<N>` capacity the compiler cannot read
+  after monomorphization.
+- **A result past the flat body limit.** A flat body is at most `u16::MAX` bytes including the
+  length word, and on a narrow-word target a capacity must also be a non-negative word.
+- **The self-hosted compiler** does not mirror the operations. A program using one necessarily
+  names a `Text<N>`, because the literal cast is the only way to make an operand, so the existing
+  shipping refusal reports it as unsupported. It is pinned by
+  `a_bundled_text_operation_is_outside_the_self_hosted_subset` in
+  `tests/selfhost_full_language.rs`. Mirroring them in the stages was not attempted, so whether it
+  fits the stage caps is not measured.
+
+### What is not built
+
+Lexicographic ordering, rendering a number as text in the manner of the removed `to_string`,
+reading one byte, and any operation into a smaller fixed capacity. The last is the first operation
+that can overflow, and with it comes the truncation default and its optional arm following
+`CheckedArmKind`.
+
+## The `ScalarKind::Text` collapse, investigated 2026-10-31 and stopped
+
+The operator authorized the collapse on 2026-10-31, with an instruction to stop and report rather
+than implement if it required a `BYTECODE_VERSION` change, a new opcode, the removal of a
+capability a host uses today, or a decision the brief does not settle. It requires the third or
+the fourth, so it was not performed. Nothing below changes code.
+
+### The premise does not hold yet
+
+[The brief](./TEXT_N_IMPLEMENTATION_BRIEF.md) and the size comment in `src/value_layout.rs` both
+state that the one-address form is correct only once `Text<N>` removes the dynamic case from bare
+`Text`. **`Text<N>` has not removed it.** No producer of dynamic bare text has moved to
+`Text<N>`, and none can today, because a native signature naming `Text<N>` is refused and a
+`shared` field of that type is refused. These are the producers that remain, each found in the
+tree on 2026-10-31.
+
+- **Host natives returning text.** `KeleusmaType for String` in `src/marshall.rs` lets any native
+  return an owned string. The `shell` library does so for environment values, command output and
+  file contents in `src/stddsl/shell.rs`, and one of its natives returns a tuple of two strings.
+- **Host inputs.** An entry argument or a resume value of type `Text` arrives owned, and when it
+  sits inside a composite it is copied into the arena by `promote_field_text` in
+  `src/bytecode.rs` and by the pack path in `src/vm.rs`. Its size is the host's, which is why
+  `auto_arena_capacity_with_input_text` takes a host allowance.
+- **The flat field read.** `read_flat_scalar` in `src/vm.rs` rebuilds the string with
+  `KString::from_raw_parts(ptr, len, ref_epoch)` from the field's two words. The length lives in
+  the second word and nowhere else.
+- **Static text is length-delimited, not length-prefixed.** A string constant is an offset and a
+  length into the wire string pool, read by `ConstTable::str_bytes` in `src/wire_schema.rs`, and a
+  constant load hands out a pointer into the bytecode image with that length. No length word sits
+  before the bytes.
+- **Hot swap and shared data hold no text.** `replace_module` zeroes the persistent composite pool,
+  and `src/marshall.rs` refuses to write a `Text` field into a flat host buffer.
+
+### What a one-address form would have to be
+
+A single address must recover the length from what it points at, so both kinds of text body would
+need a length word in front of their bytes. That means an arena string allocated with a length
+prefix, which changes the `KString` layout and adds a word per host string to the arena bound and
+to the meaning of the host allowance, and a string pool that stores a length prefix beside each
+constant, which changes the constant section of the wire format. **Neither choice is settled by
+the brief**, which discusses only the scalar size. The alternative, dropping the dynamic case,
+removes the host capabilities listed above.
+
+No opcode would be needed, and a wire format change at version 2 is described by the brief as
+free before publication. Both of those are inferences from the documents rather than measured
+consequences, because nothing was implemented.
+
+### Where the size feeds
+
+Recorded so that the eventual change does not have to rediscover it. The size is
+`ScalarKind::size_in_bytes` in `src/value_layout.rs`, where `flat_byte_size` also keeps text
+boxed on a narrow-word target. It is consumed by `src/layout_pass.rs`, by the compiler's field
+classification and its two text-specific sites in `src/compiler.rs`, by the text offset checks in
+`src/verify_typed.rs`, by the flat read and pack paths in `src/vm.rs` and `src/bytecode.rs`, by
+`src/marshall.rs`, and by the self-hosted driver's tables in `src/selfhost/mod.rs`, which derive
+from `size_in_bytes` and would follow it. The baked field offsets of every composite with a text
+field would move, and those offsets are on the wire. The tests pinning the current size are in
+`src/value_layout.rs` and `tests/flat_text_layout_proof.rs`. The specification text is in
+`docs/spec/TYPE_SYSTEM.md` and `docs/spec/NATIVE_STRING_ABI.md`. The scalar tag, `6`, would not
+change.
+
+`docs/spec/TYPE_SYSTEM.md` states that a flat `Text` field is always dynamic. The pack path in
+`src/vm.rs` now packs a constant load's pointer into the bytecode image directly, so a flat field
+can also hold static text. That observation is from reading the code and is not pinned by a test
+written for this record.
+
+### The decision this needs
+
+Whether bare dynamic text keeps its place, with both bodies gaining a length prefix, or whether
+the host producers move to `Text<N>` first, which needs the generic native signature question and
+a host-side `Text<N>` type answered. Until one is chosen, `ScalarKind::Text` stays two words.
 
 ## A DEFECT THIS WORK UNCOVERED, AND WHICH IT WILL CLOSE
 
