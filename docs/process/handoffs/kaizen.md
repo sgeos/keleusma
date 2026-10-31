@@ -58,7 +58,7 @@ run.
   choices, take appropriate action, then give me the updated list of questions and
   obvious choices.", recorded with each disposition in
   [the open decisions of 2026-10-31](../kaizen/2026-10-31-open-decisions.md). It
-  adopted N1 to N5 and V0.2.X's item 4 and C7 D2, D3, D5, D6 and D7. Applied on branch
+  adopted N1 to N5, V0.2.X's item 4, since contested, and C7 D2, D3, D5, D6 and D7. Applied on branch
   `ci/kaizen-nightly-fuzz`, the nightly fuzz workflow, the fuzz lockfile check and the
   Dependabot entry for `/fuzz`. The workflow and the Dependabot entry take effect only
   from `main`.
@@ -108,10 +108,9 @@ authority, so the startup-file positions reach them first-hand.
 
 [The open decisions of 2026-10-31](../kaizen/2026-10-31-open-decisions.md) hold the
 list. N6, the shard partition, and V0.2.X's items 1, 2, 5, 6 D4 and 7 need judgment.
-The operator's own checks are K6, K9, K10, K11 and K14, held. N3's deletion of
-`test/kaizen-split-stage-artifact` at `e7a59d20` was refused by auto mode and is the
-operator's. A local tag `archive/test/kaizen-split-stage-artifact` keeps the commit,
-because the remote refuses a tag on a commit with a private author address.
+The operator's own checks are K6, K9, K10, K11 and K14, held. V0.2.X item 4 is contested. This list ruled (a), and V0.2.X
+relays in sequence 175 a later first-hand (b) from its session, which only the operator
+can confirm here. V0.2.X also relays that all its questions are answered.
 
 ## Concerns
 

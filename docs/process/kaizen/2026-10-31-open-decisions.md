@@ -28,10 +28,10 @@ was presented. It decides no item marked judgment.
 |---|---|
 | N1 | (a). `.github/workflows/fuzz.yml`, a nightly run of every target |
 | N2 | (a). A Dependabot entry for `/fuzz` and a `--locked` lockfile check in the `detached` job |
-| N3 | (a). Attempted. One kaizen branch remained, `test/kaizen-split-stage-artifact` at `e7a59d20`. The remote refused an archive tag because the commit carries a private author address, and auto mode refused the branch deletion. A local tag `archive/test/kaizen-split-stage-artifact` keeps the commit. The deletion is left to the operator |
+| N3 | (a). One kaizen branch remained, `test/kaizen-split-stage-artifact` at `e7a59d20`. The remote refused an archive tag because the commit carries a private author address, and auto mode refused this line's deletion. V0.2.X reports in sequence 175 that it deleted the remote branch on the operator's instruction to prune stale branches, keeping the commit under the local tag `archive/test-kaizen-split-stage-artifact`. The kaizen line removed its clean worktree `kaizen-test-duration` |
 | N4 | (a). Requested of V0.2.X |
 | N5 | (a). Re-measured, and item 3 is withdrawn on the measurement. N6 below replaces it |
-| V0.2.X item 4 | (a). The `Text<N>` wire item is deferred with the version. Relayed to V0.2.X |
+| V0.2.X item 4 | (a) as this list presented it, the `Text<N>` wire item deferred with the version, relayed to V0.2.X in sequence 173. **Contested.** V0.2.X replied in sequence 175 that the operator had ruled (b), authorize the collapse now, first-hand in its session, and confirmed (b) first-hand there on 2026-10-31. That reaches this line as a relay, and V0.2.X's tracked record did not yet show it when read. Open for the operator's confirmation here |
 | V0.2.X C7 D2, D3, D5, D6, D7 | (a) each, as `RING_BUFFER_DESIGN.md` recommends. Relayed to V0.2.X |
 
 ## Kaizen items
@@ -97,7 +97,10 @@ texts when it merges, and nothing remains for the operator.
 
 ## Questions held by V0.2.X
 
-From its "Decisions waiting on the operator", with its recommendation first.
+From its "Decisions waiting on the operator", with its recommendation first. V0.2.X
+reports in sequence 175 that every question below has since been answered first-hand
+in its session. That is a relay, and its tracked record had not shown the answers when
+read, so the list is kept until the operator confirms it here or the record shows them.
 
 1. **B9 with B2 (c).** *Judgment.* (d) Field layouts on the wire, which closes the
    host struct reorder case and the flat `Text` boundary for every live source and
@@ -110,7 +113,7 @@ From its "Decisions waiting on the operator", with its recommendation first.
    Compiler intrinsics. (c) One native per capacity.
 3. **B10.** Not yet decidable. It waits on pykeleusma's use case, requested in sequence
    159.
-4. **The `Text<N>` wire item.** Ruled (a) above.
+4. **The `Text<N>` wire item.** Contested, as the table above records.
 5. **The eight C3 decisions in `ARRAY_WIRE_SLOT_DESIGN.md`.** *Judgment.* Decision 8 is
    done. Decisions 1 and 2 choose the encoding and authorize the wire change. Decision 3
    recommends a fingerprint roll, since raising the version would reverse the 2026-09-01
