@@ -13,8 +13,11 @@
 //!
 //! # What this does not establish
 //!
-//! A struct field and a shared slot holding an opaque value stay refused, as
-//! `ORDER_6_RULINGS_PLAN.md` records. The type distinction is a C compile-time
+//! Since 2026-10-30 a handle held in a struct field, a tuple, an array and an
+//! enum payload also lowers and agrees, as the composite test below shows. A
+//! shared or private data slot holding one is refused by the reference
+//! compiler itself, which reports that opaque types are not yet admissible in
+//! data segment fields, so no native route reaches it. The type distinction is a C compile-time
 //! property only. Native code cannot detect a stale or wrong pointer, so the
 //! differential shows that a valid pointer survives the routes unchanged, not
 //! that an invalid one is caught.
@@ -276,18 +279,70 @@ fn vm_outcomes(module: &Module, start: i64, reply: i64) -> (i64, i64) {
     (y, r)
 }
 
+/// Whether `cc` can run. Without it the C host differential cannot run, which
+/// is refused under `KEL_REQUIRE_LLVM_TOOLS` and in continuous integration.
+fn cc_available() -> bool {
+    if Command::new("cc").arg("--version").output().is_ok() {
+        return true;
+    }
+    assert!(
+        std::env::var_os("KEL_REQUIRE_LLVM_TOOLS").is_none() && std::env::var_os("CI").is_none(),
+        "`cc` is required here and could not be run"
+    );
+    eprintln!("\nSKIPPED: `cc` was not found, so the opaque differential did not run.\n");
+    false
+}
+
 #[test]
 fn an_opaque_handle_crosses_a_yield_and_a_call_and_agrees_with_the_vm() {
-    if Command::new("cc").arg("--version").output().is_err() {
-        assert!(
-            std::env::var_os("KEL_REQUIRE_LLVM_TOOLS").is_none()
-                && std::env::var_os("CI").is_none(),
-            "`cc` is required here and could not be run"
-        );
-        eprintln!("\nSKIPPED: `cc` was not found, so the opaque differential did not run.\n");
+    if cc_available() {
+        c_host_agrees_with_the_vm(SOURCE, "run");
+    }
+}
+
+/// **AN OPAQUE HANDLE INSIDE A COMPOSITE, QUESTION 14.** A handle made by a
+/// native is placed in a struct field, a tuple, an array and an enum payload,
+/// held across the yield, read back and passed to a native. Native code
+/// carries the host's pointer in the eight-byte field the reference fills with
+/// a registry index, so each body's layout agrees and only the representation
+/// differs, which no Keleusma operation can observe. The outcome is compared
+/// with the virtual machine's through a C host.
+#[test]
+fn an_opaque_handle_inside_a_composite_agrees_with_the_vm() {
+    if !cc_available() {
         return;
     }
-    let module = common::build(SOURCE);
+    const HEADER: &str = "use host::make(Word) -> Device\nuse host::poke(Device, Word) -> Word\n";
+    for (tag, body) in [
+        (
+            "field",
+            "struct S { d: Device, n: Word }\n\
+             yield main(x: Word) -> Word { let s = S { d: host::make(x), n: x }; let a = yield x; host::poke(s.d, a + s.n) }",
+        ),
+        (
+            "tuple",
+            "yield main(x: Word) -> Word { let t = (host::make(x), x); let a = yield x; host::poke(t.0, a + t.1) }",
+        ),
+        (
+            "array",
+            "yield main(x: Word) -> Word { let xs = [host::make(x), host::make(x + 1)]; let a = yield x; host::poke(xs[1], a) }",
+        ),
+        (
+            "enum",
+            "enum E { D(Device), N }\n\
+             yield main(x: Word) -> Word { let e = E::D(host::make(x)); let a = yield x; match e { E::D(d) => host::poke(d, a), E::N => 0 } }",
+        ),
+    ] {
+        c_host_agrees_with_the_vm(&format!("{HEADER}{body}"), tag);
+    }
+}
+
+/// Build `source` as a library through `linkage`, link it into a C host whose
+/// `host::make` allocates a `Device` and whose `host::poke` reads it, and
+/// compare the host's two outcomes with the virtual machine's for three
+/// start and reply pairs.
+fn c_host_agrees_with_the_vm(source: &str, tag: &str) {
+    let module = common::build(source);
     let tm = host_machine();
     let ctx = Context::create();
     let lib = linkage::build(
@@ -295,10 +350,10 @@ fn an_opaque_handle_crosses_a_yield_and_a_call_and_agrees_with_the_vm() {
         &module,
         &tm,
         "kel_dev",
-        &contracts(&parse(SOURCE), &module),
+        &contracts(&parse(source), &module),
     )
-    .unwrap();
-    let dir = scratch("run");
+    .unwrap_or_else(|e| panic!("{tag}: {e:?}"));
+    let dir = scratch(tag);
     lib.write_object(&tm, &dir.join("kel_dev.o")).unwrap();
     std::fs::write(dir.join("kel_dev.h"), lib.c_header()).unwrap();
     let (make, poke) = (
@@ -364,7 +419,7 @@ int main(int argc, char **argv) {{
         assert_eq!(
             lines,
             [format!("1 {y}"), format!("2 {r}")],
-            "start {start}, reply {reply}"
+            "{tag}: start {start}, reply {reply}"
         );
     }
     let _ = std::fs::remove_dir_all(&dir);

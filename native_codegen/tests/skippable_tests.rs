@@ -73,6 +73,10 @@ const SKIPPABLE: &[&str] = &[
     "m3_timing_a_resumption_against_an_equivalent_direct_call",
     "spike_report_real_native_frame",
     "trap_child_runs_one_module_natively",
+    // Operator question 14, 2026-10-30. Skips loudly where `cc` is absent, unless
+    // `CI` or `KEL_REQUIRE_LLVM_TOOLS` is set, when `cc_available` fails instead,
+    // so the native gate cannot skip it.
+    "an_opaque_handle_inside_a_composite_agrees_with_the_vm",
 ];
 
 /// # ⚠ A KNOWN FALSE POSITIVE: A `return` INSIDE A CLOSURE

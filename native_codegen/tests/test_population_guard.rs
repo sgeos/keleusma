@@ -115,7 +115,9 @@
 // `a_text_n_lowers_on_the_module_route` in `text_surface.rs`, the native
 // `Text<N>` differential of operator question 13, 2026-10-30. No name
 // disappeared.
-const RECORDED_TEST_FUNCTIONS: usize = 839;
+// 839 -> 840: `an_opaque_handle_inside_a_composite_agrees_with_the_vm` in
+// `native_opaque.rs`, operator question 14, 2026-10-30. No name disappeared.
+const RECORDED_TEST_FUNCTIONS: usize = 840;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise
