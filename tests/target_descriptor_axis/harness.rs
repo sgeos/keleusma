@@ -1,4 +1,3 @@
-#![cfg(all(feature = "compile", feature = "verify"))]
 //! Every target descriptor the compiler ACCEPTS, against a corpus of ordinary
 //! programs, asking whether any of them reaches a run-time `InvalidBytecode`.
 //!
@@ -39,8 +38,22 @@
 //! Every width bound comes from the runtime's own constants and trait impls.
 //! Three increments of this line have been repairing hard-coded widths, and a
 //! matrix carrying one would be the same defect a seventh time.
-
-extern crate alloc;
+//!
+//! # Why this is a shared harness rather than one test file
+//!
+//! Until 2026-10-30 the sweep and the grid lived in one file,
+//! `tests/target_descriptor_axis.rs`. The grid instantiates `GenericVm` once for
+//! each of thirty-two runtimes, and that binary took between 594 and 659 seconds
+//! to compile, which made it the last to finish in every test build. The
+//! operator adopted option (a) of decision K4a in
+//! `docs/process/kaizen/2026-10-30-open-decisions.md`, which splits the grid into
+//! four binaries, one per word type, each covering eight runtimes. This module
+//! holds everything those four binaries share, and each binary keeps the
+//! original `cfg` gate, so the feature coverage is unchanged.
+//!
+//! The four binaries are named in [`GRID_FILES`], and
+//! [`assert_every_grid_file_is_present`] fails when one of them is removed, so the
+//! grid cannot lose a word type silently.
 
 use alloc::format;
 use alloc::string::String;
@@ -50,10 +63,10 @@ use keleusma::compiler::compile_with_target;
 use keleusma::lexer::tokenize;
 use keleusma::parser::parse;
 use keleusma::target::Target;
-use keleusma::vm::{VmError, VmState};
+use keleusma::vm::VmError;
 use keleusma::{Arena, HostOpaque, host_arc};
 
-struct Handle;
+pub struct Handle;
 impl HostOpaque for Handle {
     fn type_name(&self) -> &'static str {
         "Handle"
@@ -61,10 +74,10 @@ impl HostOpaque for Handle {
 }
 
 /// The narrowest widths any runtime implements, from the trait impls.
-const WORD_FLOOR: u8 = <i8 as keleusma::word::Word>::BITS_LOG2;
-const ADDR_FLOOR: u8 = <u8 as keleusma::address::Address>::BITS_LOG2;
+pub const WORD_FLOOR: u8 = <i8 as keleusma::word::Word>::BITS_LOG2;
+pub const ADDR_FLOOR: u8 = <u8 as keleusma::address::Address>::BITS_LOG2;
 
-const PRELUDE: &str = "use make_handle() -> Handle\nuse handle_val(Handle) -> Word\n";
+pub const PRELUDE: &str = "use make_handle() -> Handle\nuse handle_val(Handle) -> Word\n";
 
 /// A program and the value it must produce wherever it runs at all.
 ///
@@ -72,10 +85,10 @@ const PRELUDE: &str = "use make_handle() -> Handle\nuse handle_val(Handle) -> Wo
 /// corpus whose answers overflow at the narrow end would report a legitimate
 /// arithmetic trap as though it were an artefact defect, which is the failure
 /// mode that makes a sweep like this useless.
-struct Shape {
-    name: &'static str,
-    src: &'static str,
-    expect: i64,
+pub struct Shape {
+    pub name: &'static str,
+    pub src: &'static str,
+    pub expect: i64,
     /// Whether the program cannot compile for a target that declares no floats.
     ///
     /// **This exists because the prediction below must model what each shape
@@ -84,10 +97,10 @@ struct Shape {
     /// descriptor and the prediction could ignore the distinction. It cannot
     /// now, and a prediction that ignored it would report a correct refusal as
     /// a harness fault.
-    needs_floats: bool,
+    pub needs_floats: bool,
 }
 
-fn corpus() -> Vec<Shape> {
+pub fn corpus() -> Vec<Shape> {
     #[allow(unused_mut)]
     let mut v = alloc::vec![
         Shape {
@@ -240,7 +253,7 @@ fn corpus() -> Vec<Shape> {
 
 /// What one (target, program) cell did.
 #[derive(Debug, PartialEq, Eq)]
-enum Cell {
+pub enum Cell {
     /// Refused before a module existed. Safe.
     CompileRefused,
     /// A module existed and the loader refused it. Safe.
@@ -257,49 +270,10 @@ enum Cell {
     OtherFault(String),
 }
 
-fn run_cell(target: &Target, shape: &Shape) -> Cell {
-    let full = format!("{PRELUDE}{}", shape.src);
-    let Ok(tokens) = tokenize(&full) else {
-        return Cell::CompileRefused;
-    };
-    let Ok(program) = parse(&tokens) else {
-        return Cell::CompileRefused;
-    };
-    let Ok(module) = compile_with_target(&program, target) else {
-        return Cell::CompileRefused;
-    };
-    let arena = Arena::with_capacity(8192);
-    let Ok(mut vm) = keleusma::vm::Vm::new(module, &arena) else {
-        return Cell::LoadRefused;
-    };
-    vm.register_native("make_handle", |_args| {
-        Ok(GenericValue::Opaque(host_arc(Handle)))
-    });
-    vm.register_native("handle_val", |_args| Ok(GenericValue::Int(100)));
-    match vm.call(&[]) {
-        Ok(VmState::Finished(GenericValue::Int(n))) => {
-            // `Word::to_i64` rather than `i64::from`: the runtime word is `i64`
-            // at the default build and NARROWER at every `narrow-word-*` one, so
-            // the `From` form is a useless conversion in one configuration and
-            // the only correct one in the others. The trait method is right in
-            // all of them and needs no lint exemption to say so.
-            let got = keleusma::word::Word::to_i64(n);
-            if got == shape.expect {
-                Cell::Ran
-            } else {
-                Cell::WrongAnswer(got)
-            }
-        }
-        Ok(other) => Cell::OtherFault(format!("unexpected final state: {other:?}")),
-        Err(VmError::InvalidBytecode(m)) => Cell::InvalidBytecodeAtRuntime(m),
-        Err(e) => Cell::OtherFault(format!("{e:?}")),
-    }
-}
-
 /// Every descriptor the compiler could accept, derived from the runtime's own
 /// maxima. `has_floats` is swept too, because the float floor is enforced in a
 /// different function from the other two and the flag gates it.
-fn targets() -> Vec<(String, Target)> {
+pub fn targets() -> Vec<(String, Target)> {
     let mut out = Vec::new();
     let word_max = keleusma::bytecode::RUNTIME_WORD_BITS_LOG2;
     let addr_max = keleusma::bytecode::RUNTIME_ADDRESS_BITS_LOG2;
@@ -335,126 +309,6 @@ fn targets() -> Vec<(String, Target)> {
     out
 }
 
-/// **THE SWEEP.**
-///
-/// The assertion is narrow on purpose: a run-time `InvalidBytecode` is a
-/// finding, and every other outcome is reported but permitted. Refusal is the
-/// correct and expected majority outcome, and a sweep that treated it as a
-/// defect would be wrong about its own subject.
-#[test]
-fn no_accepted_target_lets_an_ordinary_program_reach_invalid_bytecode() {
-    let mut findings: Vec<String> = Vec::new();
-    let mut wrong: Vec<String> = Vec::new();
-    let mut not_run: Vec<String> = Vec::new();
-    let (mut ran, mut compile_refused, mut load_refused, mut other) = (0, 0, 0, 0);
-
-    for (label, target) in targets() {
-        for shape in corpus() {
-            match run_cell(&target, &shape) {
-                Cell::Ran => ran += 1,
-                Cell::CompileRefused => {
-                    compile_refused += 1;
-                    // **NAME THE SHAPE, NOT JUST THE COUNT.** A shape refused
-                    // under every descriptor contributes no evidence, and a bare
-                    // total cannot distinguish that from one refused nowhere.
-                    not_run.push(format!("{label} / {} (compile)", shape.name));
-                }
-                Cell::LoadRefused => {
-                    load_refused += 1;
-                    not_run.push(format!("{label} / {} (load)", shape.name));
-                }
-                Cell::OtherFault(m) => {
-                    other += 1;
-                    not_run.push(format!("{label} / {}: {m}", shape.name));
-                }
-                Cell::WrongAnswer(got) => wrong.push(format!(
-                    "{label} / {}: expected {}, got {got}",
-                    shape.name, shape.expect
-                )),
-                Cell::InvalidBytecodeAtRuntime(m) => {
-                    findings.push(format!("{label} / {}: {m}", shape.name))
-                }
-            }
-        }
-    }
-
-    // **NON-VACUITY.** A sweep in which nothing ran proves nothing about the
-    // runtime, and one whose descriptor set has collapsed to a single point is
-    // not varying what it claims to vary.
-    //
-    // The first draft ALSO required at least one refusal, on the assumption that
-    // some admissible descriptor would be rejected for these programs. **That was
-    // wrong, and the sweep said so on its first run**: every descriptor the
-    // compiler accepts compiles and loads every shape in this corpus. Requiring a
-    // refusal asserted a property that had not been measured, in a test written
-    // to measure properties -- so the check now constrains the SWEEP's spread,
-    // which is what non-vacuity actually needs, and the refusal counts are
-    // reported rather than demanded.
-    assert!(
-        ran > 0,
-        "no cell ran a program to completion, so this sweep measured nothing about the runtime"
-    );
-    let spread = targets();
-    assert!(
-        spread.len() > 1
-            && spread.iter().any(|(_, t)| t.word_bits_log2 == WORD_FLOOR)
-            && spread
-                .iter()
-                .any(|(_, t)| t.word_bits_log2 == keleusma::bytecode::RUNTIME_WORD_BITS_LOG2),
-        "the descriptor set does not span the runtime's width range, so the sweep is not \
-         varying the axis it names ({} descriptors)",
-        spread.len()
-    );
-
-    assert!(
-        findings.is_empty(),
-        "a module that COMPILED and LOADED raised InvalidBytecode, which is the class verify() \
-         exists to exclude:\n{}\n(ran {ran}, compile-refused {compile_refused}, load-refused \
-         {load_refused}, other {other})",
-        findings.join("\n")
-    );
-    assert!(
-        wrong.is_empty(),
-        "a module that compiled and loaded returned the WRONG ANSWER, which is worse than a \
-         fault because nothing reports it:\n{}",
-        wrong.join("\n")
-    );
-
-    // **THE RESULT, PINNED RATHER THAN DESCRIBED.** Measured 2026-09-10 at the default build:
-    // every one of the 288 cells RAN and returned the expected value. Nothing was refused at
-    // either boundary and nothing faulted.
-    //
-    // A refusal is a SAFE outcome and this is not asserting that refusals are wrong. It asserts
-    // that the sweep's shape has not changed silently: if a descriptor starts being refused, or a
-    // shape stops running, that is worth a reader's attention even though neither is a defect.
-    // The figure is derived from the corpus and descriptor set rather than written as a literal,
-    // so adding either moves it.
-    // **THE EXPECTED TOTAL IS NOW PER CELL, NOT A PRODUCT.** It was
-    // `descriptors * shapes` while every shape could run under every
-    // descriptor. A float-using shape cannot run where the descriptor declares
-    // no floats, and its refusal is CORRECT; a product would report that as the
-    // sweep having changed shape.
-    let expected_to_run: usize = targets()
-        .iter()
-        .map(|(_, t)| {
-            corpus()
-                .iter()
-                .filter(|s| !s.needs_floats || t.has_floats)
-                .count()
-        })
-        .sum();
-    assert_eq!(
-        ran,
-        expected_to_run,
-        "not every accepted descriptor ran every shape: {ran} of {} cells ran ({compile_refused} \
-         compile-refused, {load_refused} load-refused, {other} other). None of those outcomes is \
-         unsafe, but the sweep's shape has changed and the document describing it is now stale. \
-         The cells that did not run:\n{}",
-        expected_to_run,
-        not_run.join("\n")
-    );
-}
-
 // ---------------------------------------------------------------------------
 // THE SECOND AUTHORITY
 // ---------------------------------------------------------------------------
@@ -465,7 +319,8 @@ fn no_accepted_target_lets_an_ordinary_program_reach_invalid_bytecode() {
 // that asymmetry is where the second authority becomes visible. It is where the
 // original opaque-width defect lived.
 //
-// The sweep above varies the module and holds the runtime at the build's
+// The default-runtime sweep, which lives in `tests/target_descriptor_axis_i64.rs`
+// since the split, varies the module and holds the runtime at the build's
 // default `Vm`. So it exercises the narrower-module direction only at whichever
 // runtime the build happens to provide.
 //
@@ -481,7 +336,7 @@ fn no_accepted_target_lets_an_ordinary_program_reach_invalid_bytecode() {
 /// because a literal `100` would infer to the runtime's word only by accident
 /// of it fitting, and would stop compiling the moment a narrower word joined
 /// the grid.
-fn run_cell_on<
+pub fn run_cell_on<
     W: keleusma::word::Word,
     A: keleusma::address::Address,
     F: keleusma::float::Float,
@@ -526,19 +381,24 @@ fn run_cell_on<
 
 /// Tally for one runtime across the whole descriptor and shape space.
 #[derive(Default)]
-struct Tally {
-    ran: usize,
+pub struct Tally {
+    pub ran: usize,
     /// How many cells SHOULD load, computed from the documented rule rather
     /// than from the loader. See the closed-form check at the end of the grid.
-    predicted: usize,
-    compile_refused: usize,
-    load_refused: usize,
-    other: usize,
-    findings: Vec<String>,
-    wrong: Vec<String>,
+    pub predicted: usize,
+    /// How many cells the same rule says the loader must REFUSE.
+    ///
+    /// Added when the grid was split across four binaries, one per word type, so that each
+    /// binary can state its own refusal expectation rather than inherit the whole grid's.
+    pub predicted_refused: usize,
+    pub compile_refused: usize,
+    pub load_refused: usize,
+    pub other: usize,
+    pub findings: Vec<String>,
+    pub wrong: Vec<String>,
 }
 
-fn sweep_runtime<
+pub fn sweep_runtime<
     W: keleusma::word::Word,
     A: keleusma::address::Address,
     F: keleusma::float::Float,
@@ -565,6 +425,13 @@ fn sweep_runtime<
                 .iter()
                 .filter(|s| !s.needs_floats || target.has_floats)
                 .count();
+        } else {
+            // The complement of the same rule. Every shape the compiler admits for this
+            // descriptor yields a module the loader must refuse on this runtime.
+            t.predicted_refused += corpus()
+                .iter()
+                .filter(|s| !s.needs_floats || target.has_floats)
+                .count();
         }
         for shape in corpus() {
             match run_cell_on::<W, A, F>(&target, &shape) {
@@ -584,16 +451,13 @@ fn sweep_runtime<
     }
 }
 
-/// **THE GRID.** Every implemented word paired with every implemented address.
-///
-/// The pairs are concrete Rust types, so the types themselves must be written
-/// out; what is NOT written out is any width number beside them. Each runtime's
-/// widths come from the trait, so a change to either family cannot leave a stale
-/// number here.
 /// The label for one runtime, built from the width traits so no number is
 /// written beside a type.
-fn rt_label<W: keleusma::word::Word, A: keleusma::address::Address, F: keleusma::float::Float>()
--> String {
+pub fn rt_label<
+    W: keleusma::word::Word,
+    A: keleusma::address::Address,
+    F: keleusma::float::Float,
+>() -> String {
     format!(
         "w{}/a{}/f{}",
         W::BITS_LOG2,
@@ -608,54 +472,85 @@ fn rt_label<W: keleusma::word::Word, A: keleusma::address::Address, F: keleusma:
 /// 2026-09-10.** A module declaring a sixty-four-bit float against an `f32`
 /// runtime must be refused at load, the same asymmetry already swept on the
 /// word and the address.
-macro_rules! pair {
-    ($t:expr, $w:ty, $a:ty) => {
-        sweep_runtime::<$w, $a, f64>(&rt_label::<$w, $a, f64>(), $t);
-        sweep_runtime::<$w, $a, f32>(&rt_label::<$w, $a, f32>(), $t);
-    };
+fn sweep_pair<W: keleusma::word::Word, A: keleusma::address::Address>(t: &mut Tally) {
+    sweep_runtime::<W, A, f64>(&rt_label::<W, A, f64>(), t);
+    sweep_runtime::<W, A, f32>(&rt_label::<W, A, f32>(), t);
 }
 
-/// **THE GRID.** Every implemented word paired with every implemented address,
-/// each on both float runtimes.
+/// **ONE ROW OF THE GRID.** One implemented word paired with every implemented
+/// address, each on both float runtimes, which is eight runtimes.
 ///
-/// The pairs are concrete Rust types, so the types themselves must be written
-/// out; what is NOT written out is any width number beside them. Each runtime's
-/// widths come from the trait, so a change to either family cannot leave a
-/// stale number here.
-macro_rules! grid {
-    ($t:expr, $( ($w:ty, $a:ty) ),+ $(,)?) => {
-        $( pair!($t, $w, $a); )+
-    };
+/// `Address` is implemented for `u8`, `u16`, `u32` and `u64`, all
+/// unconditionally. The address types are written out here once, for every
+/// word, so the four binaries cannot disagree about which addresses a row
+/// covers. Each runtime's widths come from the trait, so a change to either
+/// family cannot leave a stale number here.
+pub fn sweep_word<W: keleusma::word::Word>(t: &mut Tally) {
+    sweep_pair::<W, u8>(t);
+    sweep_pair::<W, u16>(t);
+    sweep_pair::<W, u32>(t);
+    sweep_pair::<W, u64>(t);
 }
 
-/// The same question as the sweep above, asked of the OTHER authority.
+/// The four grid binaries, one per implemented word type, as paths relative to
+/// the package root, each with the call that sweeps its row.
 ///
-/// A load refusal here is the guarantee WORKING: a module declaring a width
+/// `Word` is implemented for `i8`, `i16`, `i32` and `i64`, all unconditionally,
+/// and each binary sweeps one of them through [`sweep_word`]. Together they
+/// cover the sixteen (word, address) pairs on both float runtimes, which is the
+/// thirty-two runtimes the single file covered before the split.
+pub const GRID_FILES: [(&str, &str); 4] = [
+    ("tests/target_descriptor_axis_i8.rs", "sweep_word::<i8>"),
+    ("tests/target_descriptor_axis_i16.rs", "sweep_word::<i16>"),
+    ("tests/target_descriptor_axis_i32.rs", "sweep_word::<i32>"),
+    ("tests/target_descriptor_axis_i64.rs", "sweep_word::<i64>"),
+];
+
+/// **THE GRID CANNOT SHRINK SILENTLY.**
+///
+/// Each binary sees only its own row, so no single binary can count the whole
+/// grid. This check reads every sibling source and requires each to exist and
+/// to call [`sweep_word`] for its word type, so removing a binary, or leaving
+/// one that no longer sweeps its row, fails in each of the others.
+pub fn assert_every_grid_file_is_present() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut missing = Vec::new();
+    for (file, call) in GRID_FILES {
+        match std::fs::read_to_string(root.join(file)) {
+            Ok(text) if text.contains(call) => {}
+            Ok(_) => missing.push(format!("{file} does not call {call}")),
+            Err(e) => missing.push(format!("{file} is unreadable: {e}")),
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "the runtime grid has lost a row, so it no longer pairs every implemented word \
+         with every implemented address:\n{}",
+        missing.join("\n")
+    );
+}
+
+/// The same question as the default-runtime sweep, asked of the OTHER authority,
+/// for one row of the grid.
+///
+/// A load refusal here is the guarantee WORKING. A module declaring a width
 /// wider than the runtime must be refused, and most of this grid is exactly
 /// that. Only a module that compiled, loaded, and then faulted is a finding.
-#[test]
-fn no_runtime_and_module_width_pair_reaches_invalid_bytecode() {
-    let mut t = Tally::default();
-    grid!(
-        &mut t,
-        (i8, u8),
-        (i8, u16),
-        (i8, u32),
-        (i8, u64),
-        (i16, u8),
-        (i16, u16),
-        (i16, u32),
-        (i16, u64),
-        (i32, u8),
-        (i32, u16),
-        (i32, u32),
-        (i32, u64),
-        (i64, u8),
-        (i64, u16),
-        (i64, u32),
-        (i64, u64),
+///
+/// `require_refusal` carries the unconditional refusal claim the whole grid made
+/// before the split. The narrowest row refuses every module that any row
+/// refuses, because the width rule is monotone in each runtime width, so the
+/// whole grid saw a refusal exactly when the `i8` row does. That row passes
+/// `true`. Every row also checks its refusal count against the independent
+/// prediction in both directions.
+pub fn assert_grid_row(t: &Tally, word: &str, require_refusal: bool) {
+    // The reach of this row, printed so a reader can sum the four rows and compare
+    // the total with the grid's figure before the split.
+    eprintln!(
+        "{word} row: {} ran, {} predicted, {} refused at load, {} predicted refused, \
+         {} compile-refused, {} other",
+        t.ran, t.predicted, t.load_refused, t.predicted_refused, t.compile_refused, t.other
     );
-
     // **BOTH DIRECTIONS OF NON-VACUITY.** Cells must actually run, and cells
     // must actually be refused -- unlike the single-runtime sweep, where
     // requiring a refusal was an unmeasured assumption, here a refusal is
@@ -663,12 +558,22 @@ fn no_runtime_and_module_width_pair_reaches_invalid_bytecode() {
     // its absence would mean the grid had collapsed to one runtime.
     assert!(
         t.ran > 0,
-        "no cell ran on any runtime, so this grid measured nothing"
+        "no cell ran on any {word} runtime, so this row measured nothing"
     );
-    assert!(
+    if require_refusal {
+        assert!(
+            t.load_refused > 0,
+            "no module was refused at load anywhere in a grid that pairs narrow runtimes \
+             with wide modules; the load-time width check is not being exercised"
+        );
+    }
+    assert_eq!(
         t.load_refused > 0,
-        "no module was refused at load anywhere in a grid that pairs narrow runtimes with \
-         wide modules; the load-time width check is not being exercised"
+        t.predicted_refused > 0,
+        "the {word} row's load refusals disagree with the documented \
+         module-no-wider-than-runtime rule: {} refused at load, {} predicted",
+        t.load_refused,
+        t.predicted_refused
     );
     assert!(
         t.findings.is_empty(),
@@ -697,7 +602,7 @@ fn no_runtime_and_module_width_pair_reaches_invalid_bytecode() {
     // the two sets relate. Agreement tests the HARNESS, not the runtime.
     assert_eq!(
         t.ran, t.predicted,
-        "the number of cells that LOADED disagrees with the documented \
+        "the number of cells that LOADED on the {word} row disagrees with the documented \
          module-no-wider-than-runtime rule: {} ran, {} predicted, {} refused at load. Either the \
          harness is not pairing what it claims to pair, or a refusal came from a check other \
          than the width one",

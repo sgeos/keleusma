@@ -2,8 +2,9 @@
 //!
 //! The Order 1 audit's shipping-command row rested on a historical manual run of
 //! `keleusma compile --compiler self-hosted` over every stage, recorded only in an
-//! ignored log. The library test `production_compiler_matches_every_complete_stage_artifact`
-//! exercises the same entry and serializer in process, and the command fixtures here
+//! ignored log. The per-stage library tests in module
+//! `production_compiler_matches_complete_stage_artifact` exercise the same entry and
+//! serializer in process, and the command fixtures here
 //! cover small programs. Neither reaches the binary with the real stage corpus, so a
 //! defect in argument handling, shebang stripping, output writing or the command's
 //! choice of serializer could pass both. This test runs the built binary once per stage.
