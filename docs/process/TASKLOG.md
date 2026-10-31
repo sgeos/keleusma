@@ -6,6 +6,38 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-21 Indexed-write handlers in the self-hosted compiler
+
+Same branch. The self-hosted compiler now mirrors the index-first bare write and
+the single-index handled write byte for byte, for Word and Byte elements. The
+mechanism, the capacity measurements and what is not mirrored are recorded in
+the "Self-hosted mirror" section of ORDER3_HANDLER_SURFACE_PLAN.md.
+
+- Transport tag 66 carries the existing BoundsCheck in both decoders and the
+  tag tables. The ISA stays at 66 opcodes.
+- tests/indexed_write_handlers.rs adds nineteen byte-identity shapes, a refused
+  bool-element shape and eight malformed shapes refused by the self-hosted
+  parser alone. tests/trap_analysis.rs adds three agreement rows.
+  tests/selfhost_codegen.rs gains a `data/` family of three cases, and
+  tests/selfhost_data_relocation.rs a handled write in both relocation tests.
+- Test-side mirrors of the parser, the reconstruction and the lowering in
+  tests/selfhost_parse.rs and tests/selfhost_codegen.rs follow the new order.
+  Three pins moved and record why: the parse record pin, the parse stage's blob
+  size of 30,359 bytes, and the code generator's self-compiled function count,
+  from 100 to 102.
+- The parse stage's name count held at 1023 of 1024. A first version reached
+  1029 and was folded into existing functions. No capacity was raised.
+- Found and not fixed. `(o as Word) + (n as Word)` over two Byte locals lowers
+  to Add in the self-hosted compiler and to CheckedAdd with PopN(2) in the
+  reference, with or without a handler.
+
+## 2026-10-21 Pull request 484 merged
+
+Every CI job passed on 89aaba69, and pull request 484 merged into v0.2.3 as
+3e4f4984. The sharded jobs fit within the six-hour limit on hosted runners.
+The longest shards were the workspace shard 1 at 3h39m and the self-host shard
+1 at 2h38m. The shortest was the self-host shard 2 at 54m.
+
 ## 2026-10-21 Indexed-write handlers in the reference compiler
 
 Branch feat/v02-indexed-write-handlers, cut from feat/v02-order3-audit-followup
@@ -24,11 +56,8 @@ reference tests, and the order control in tests/indexed_write_outcomes.rs
 moves from 19 to 28. GRAMMAR.md describes the construct, the arm attachment
 and the evaluation order.
 
-Not done. The self-hosted mirror. Until it lands, every self-hosted
-byte-identity test whose source contains an indexed write fails, including the
-stages' self-compilation, and `--compiler self-hosted` fails loudly on such
-programs. The branch is red for that reason and must not merge before the
-mirror. The plan document lists the mirror's nine parts.
+The self-hosted mirror was not done in that step, and the entry above records
+it.
 
 ## 2026-10-21 Book catalogue regenerated and long CI test jobs sharded
 

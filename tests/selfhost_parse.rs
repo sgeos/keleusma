@@ -934,8 +934,10 @@ fn flatten_block(
                 value,
                 ..
             } => {
-                // `d.f[i] = e` — the index, the value, an IndexStore signal (kind 36), then
-                // an IndexAssignIn (kind 14, arg = base + len*2^24) folded around the block.
+                // `d.f[i] = e` — the index, the value, an IndexStore signal (kind 36) carrying
+                // the offset slot claimed at `=`, then an IndexAssignIn (kind 14, arg = base +
+                // len*2^24, plus the kind lane added below) folded around the block. The slot
+                // follows the index's own locals, as the index-first write of 2026-10-21 needs.
                 assert_eq!(indices.len(), 1, "single-dimension array assignment only");
                 flatten(
                     &indices[0],
@@ -947,6 +949,8 @@ fn flatten_block(
                     enum_table,
                     out,
                 );
+                let offset_slot = *next_slot;
+                *next_slot += 1;
                 flatten(
                     value,
                     &local,
@@ -958,7 +962,7 @@ fn flatten_block(
                     out,
                 );
                 let (base, len) = array_base_len(data_slots, data_name, field);
-                out.push((36, 0));
+                out.push((36, offset_slot));
                 stmt_nodes.push((14, base + len * 16_777_216));
             }
             Stmt::For(fs) if fs.limit.is_some() => {
@@ -1125,7 +1129,7 @@ fn reference(src: &str, names: &[String]) -> Parsed {
         );
         // Add the kind lane from declarations after flattening the legacy address records.
         for (kind, arg) in body.iter_mut().chain(guard.iter_mut()) {
-            if *kind == 13 {
+            if *kind == 13 || *kind == 14 {
                 let base = usize::try_from(*arg % 16_777_216).unwrap();
                 *arg += data_kinds[&data_slots[base]] * 281_474_976_710_656;
             }
@@ -1603,10 +1607,18 @@ fn an_indexed_data_assignment_parses() {
     let mut names = Vec::new();
     let got = run_parse(src, &mut names);
     assert_eq!(got, reference(src, &names));
-    // index i(0), value x(1), IndexStore(36); tail 0; IndexAssignIn(base 0 + len 4*2^24).
+    // index i(0), value x(1), IndexStore(36) carrying the offset slot 2, the first after
+    // the two parameters; tail 0; IndexAssignIn(base 0 + len 4*2^24 + Word kind 3*2^48).
+    // The slot and the kind arrived with the index-first write of 2026-10-21.
     assert_eq!(
         got.funcs[0].3,
-        vec![(2, 0), (2, 1), (36, 0), (1, 0), (14, 4 * 16_777_216)]
+        vec![
+            (2, 0),
+            (2, 1),
+            (36, 2),
+            (1, 0),
+            (14, 4 * 16_777_216 + 3 * 281_474_976_710_656)
+        ]
     );
 }
 

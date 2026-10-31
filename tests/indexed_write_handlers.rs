@@ -273,3 +273,95 @@ fn an_arm_block_after_an_indexed_write_belongs_to_the_write() {
          let a = [4, 5]; d.x[0] = (a[1] { ok(v) => v, invalid_index(_) => 0 }); d.x[0] }";
     assert_eq!(run_word(source), 5);
 }
+
+/// The self-hosted compiler mirrors every accepted shape byte for byte.
+///
+/// `self_hosted_compile` itself refuses a module that differs from the
+/// reference, so success here is the byte-identity verdict. The comparison
+/// is repeated explicitly so that a change to that entry cannot quietly
+/// weaken the check.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_self_hosted_compiler_matches_every_handled_write_shape() {
+    let mut sources: Vec<String> = [
+        "private data d { x: [Word; 2] } fn main() -> Word { d.x[1] = 3; d.x[1] = 7 { ok(old, new) => old * 100 + new, invalid_index(j) => j } }",
+        "private data d { x: [Word; 2] } fn main() -> Word { d.x[1] = 3; d.x[1] = 7 { ok(_, _) => (), invalid_index(_) => () }; d.x[1] }",
+        "private data d { x: [Word; 2] } fn main() -> Word { d.x[2] = 7 { ok(_, n) => n } }",
+        "private data d { x: [Word; 2] } fn main() -> Word { d.x[2] = 7 { ok(_, n) => n, invalid_index(0) => 0 } }",
+        "private data d { x: [Word; 2] } fn main() -> Word { d.x[2] = 7 { ok(_, n) => n, invalid_index(j) when j < 0 => 0 } }",
+        "private data d { x: [Word; 2] } fn main() -> Word { d.x[3] = 7 { ok(_, n) => n, invalid_index(j) => j } }",
+        // Not `(o as Word) + (n as Word)`, which the self-hosted compiler mis-lowers
+        // to Add outside any handler as well. That gap predates this construct.
+        "private data d { x: [Byte; 2] } fn main() -> Byte { d.x[1] = 7 as Byte { ok(o, _) => o, invalid_index(_) => 0 as Byte } }",
+        "private data d { x: [Byte; 2] } fn main() -> Byte { d.x[1] = 7 as Byte { ok(_, n) => n, invalid_index(_) => 0 as Byte } }",
+        "private data d { x: [Word; 2] } fn main() -> bool { d.x[0] = 1 { ok(_, _) => true, invalid_index(_) => false } }",
+        "private data d { x: [Word; 2] } fn main() -> Word { d.x[1] = 7 { ok(o, _) => o, invalid_index(_) => 0 } }",
+        "private data d { x: [Word; 2] } fn main() -> Word { let a = [4, 5]; d.x[0] = (a[1] { ok(v) => v, invalid_index(_) => 0 }); d.x[0] }",
+        "private data d { x: [Word; 2] } fn main() -> Word { d.x[0] = 1 { ok(o, n) when n > 5 => o, ok(_, n) => n, invalid_index(j) => j } }",
+        "private data d { x: [Word; 2] } fn main() -> Word { if true { d.x[0] = 2 { ok(_, n) => n, invalid_index(_) => 0 } } else { 1 } }",
+        "private data d { x: [Word; 2] } fn main() -> Word { d.x[0] = 2 { ok(_, n) => n, invalid_index(-1) => 5, invalid_index(_) => 0 } }",
+        // Beyond sixteen bits the probe is the wide read, both with and without old.
+        "shared data d { x: [Byte; 70000] } fn main() -> Word { d.x[69999] = 9 as Byte; d.x[70000] = 1 as Byte { ok(_, _) => 0, invalid_index(j) => j } }",
+        "shared data d { x: [Byte; 70000] } fn main() -> Byte { d.x[5] = 1 as Byte { ok(o, _) => o, invalid_index(_) => 0 as Byte } }",
+    ]
+    .iter()
+    .map(|s| String::from(*s))
+    .collect();
+    sources.push(alloc_source(
+        "fn main() -> Word { d.x[idx(5)] = val() { ok(_, n) => n, invalid_index(j) => j * 1000 + d.trace } }",
+    ));
+    sources.push(alloc_source(
+        "fn main() -> Word { d.x[idx(1)] = val() { ok(o, n) => o * 1000 + n * 100 + d.trace, invalid_index(j) => j } }",
+    ));
+    sources.push(alloc_source(
+        "fn main() -> Word { d.x[idx(1)] = val(); d.trace + d.x[1] }",
+    ));
+    for source in &sources {
+        let reference = compile(source);
+        let actual =
+            keleusma::selfhost::self_hosted_compile(source, &keleusma::target::Target::host())
+                .unwrap_or_else(|e| panic!("{source}: {e:?}"));
+        assert_eq!(
+            actual.to_bytes().unwrap(),
+            reference.to_bytes().unwrap(),
+            "{source}"
+        );
+    }
+    // Non-vacuity: every case above reached the comparison.
+    assert_eq!(sources.len(), 19);
+    // Outside the mirrored subset. The reference compiles a handled write on a
+    // bool element, and the self-hosted compiler refuses it rather than emit a
+    // module, as it refuses the handled read on one.
+    let outside = "private data d { x: [bool; 2] } fn main() -> bool { d.x[0] = true { ok(_, n) => n, invalid_index(_) => false } }";
+    compile(outside);
+    assert!(
+        keleusma::selfhost::self_hosted_compile(outside, &keleusma::target::Target::host())
+            .is_err()
+    );
+}
+
+/// The self-hosted parser refuses each malformed handled write on its own,
+/// without the reference compiler's verdict.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_self_hosted_parser_refuses_every_malformed_handled_write() {
+    for source in [
+        "private data d { x: [Word; 2] } fn main() -> Word { d.x[0] = 1 { ok(v) => v } }",
+        "private data d { x: [Word; 2] } fn main() -> Word { d.x[0] = 1 { ok(0, n) => n } }",
+        "private data d { x: [Word; 2] } fn main() -> Word { d.x[0] = 1 { ok(v, v) => v } }",
+        "private data d { x: [Word; 2] } fn main() -> Word { d.x[0] = 1 { ok(_, n) when n > 0 => n } }",
+        "private data d { x: [Word; 2] } fn main() -> Word { d.x[0] = 1 { ok(_, n) => n, overflow(h, l) => l } }",
+        "private data d { m: [[Word; 2]; 2] } fn main() -> Word { d.m[0][1] = 1 { ok(_, n) => n } }",
+        "private data d { x: [Word; 2] } fn main() -> Word { d.x[0] = 1 { ok(_, n) => n, ok(o, _) => o } }",
+        "private data d { x: [Word; 2] } fn main() -> Word { d.x[0] = 1 { ok(_, n) => n } + 1 }",
+    ] {
+        assert!(
+            keleusma::selfhost::try_parse_functions(source).is_err(),
+            "{source}"
+        );
+        assert!(
+            try_compile(source).is_err(),
+            "the reference accepts {source}"
+        );
+    }
+}

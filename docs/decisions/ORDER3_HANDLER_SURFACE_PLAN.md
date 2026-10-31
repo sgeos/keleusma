@@ -2,10 +2,12 @@
 
 > **Navigation**: [Decisions](./README.md) | [Documentation Root](../README.md)
 
-**Status**. Scope resolved by the operator on 2026-10-20. Indexed-write handlers
-are implemented in the Rust reference compiler on 2026-10-21, and the
-self-hosted mirror is not yet implemented. Native-call handlers, handler-required
-composite reads and FixedDiv totalization are not started.
+**Status**. Scope resolved by the operator on 2026-10-20. Single-index
+indexed-write handlers and the index-first order are implemented in the Rust
+reference compiler and mirrored by the self-hosted compiler on 2026-10-21, with
+the self-hosted mirror limited to Word and Byte elements. Handled multi-index
+writes, native-call handlers, handler-required composite reads and FixedDiv
+totalization are not started.
 This document resolves the open question that the 2026-10-20 handoff recorded as
 the first audit priority, which asked whether source-level indexed-write handlers
 belong to Order 3. They do. It extends [the completion plan](./ORDER3_COMPLETION_PLAN.md)
@@ -156,13 +158,54 @@ Loop
 EndLoop
 ```
 
-## Self-hosted mirror, not yet implemented
+## Self-hosted mirror
 
-The reference compiler alone implements the above as of 2026-10-21. Until the
-self-hosted compiler matches, every byte-identity test whose source contains an
-indexed write fails, including the stages' own self-compilation, because the
-stages are full of bare writes. The mirror needs the following. Line numbers
-are from the survey of 2026-10-21 and will drift.
+Implemented on 2026-10-21 on branch feat/v02-indexed-write-handlers. The plan as
+written before the work follows the record of how it was done. Line numbers are
+from the survey of 2026-10-21 and will drift.
+
+### As implemented
+
+- **Transport tag 66** carries the existing BoundsCheck. The ISA stays at 66
+  opcodes.
+- **Bare write.** The parser claims the offset slot at `=`, records the operator
+  depth there in the pending statement's otherwise unused name field, and carries
+  the element kind at 2^48 on the IndexAssignIn argument. The IndexStore record
+  carries the slot. `push_index_assign` emits the bare sequence above.
+- **Handled write.** `checked_open` tests first whether a pending indexed
+  assignment sits at the operator depth recorded at its `=`. If so, the arm block
+  handles the write. The parser pops the assignment, reserves the block of seven
+  and emits the IndexStore record with a full-word payload. That payload holds the
+  operand, the kind, and the offset slot plus one at 2^51, which keeps it apart
+  from a bare write's payload. Record 118 then opens the arms over that root. The
+  arms reuse the handled read's protocol. Reconstruction accepts a kind-15 root
+  and validates the write's binder sources, and `push_checked_store` emits the
+  handled sequence.
+- **Frame size.** The reference always declares the seventh slot of the block.
+  The self-hosted code generator grows its frame only when a slot is first
+  emitted, so a new work item, kind 14, maps that slot without emitting anything
+  when `new` is unbound.
+- **Relocation.** Late shared declarations relocate data addresses. Records 13
+  and 14 now share one kind lane, and the handled root's operand is relocated
+  apart from its slot in `src/selfhost/data_relocation.rs`.
+- **Capacity.** The parse stage sits at 1023 of the type stage's 1024 names. The
+  first version added six names and reached 1029, so its parsing was folded into
+  `checked_open` and `checked_pattern`. The offset slot is kept in a pattern-value
+  entry that no write arm uses, and the probe state's value 3 asks the next
+  token to end the statement or the block. The parse blob grew to 30,359 of
+  49,152 bytes. No capacity was raised.
+- **Not mirrored.** Elements other than Word and Byte are refused, as in the
+  handled read. A pre-existing divergence was found while building the corpus.
+  The sum `(o as Word) + (n as Word)` of two Byte locals lowers to `Add` in the
+  self-hosted compiler and to `CheckedAdd; PopN(2)` in the reference, with or
+  without a handler. That gap is outside this construct and is not fixed here.
+
+### Plan as written before the work
+
+The reference compiler alone implemented the above at first. Until the
+self-hosted compiler matched, every byte-identity test whose source contains an
+indexed write failed, including the stages' own self-compilation, because the
+stages are full of bare writes. The mirror needed the following.
 
 1. **Decoder.** The self-hosted code generator has no `BoundsCheck` tag today.
    Add tag 66 to the wire table in `codegen.kel` and to `decode_op` in

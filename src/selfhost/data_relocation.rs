@@ -75,15 +75,31 @@ impl Plan {
             targets,
         )?;
         for records in [&mut function.guard, &mut function.body] {
-            for (kind, value) in records {
-                if (11..=14).contains(kind) {
-                    *value = machine.translate(*kind, *value)?;
-                }
-            }
+            relocate_records(&mut machine, records)?;
         }
         function.data_bases = Arc::new(targets.to_vec());
         Ok(())
     }
+}
+
+/// A handled indexed write's root record carries its offset slot plus one at
+/// this radix, above the data operand and its kind lane. A bare write's record
+/// 36 carries the slot alone, below it, and holds no data address.
+const STORE_ROOT_SLOT: i64 = 1 << 51;
+
+fn relocate_records(
+    machine: &mut Machine<'_>,
+    records: &mut [(i64, i64)],
+) -> Result<(), SelfHostError> {
+    for (kind, value) in records {
+        if (11..=14).contains(kind) {
+            *value = machine.translate(*kind, *value)?;
+        } else if *kind == 36 && *value >= STORE_ROOT_SLOT {
+            let operand = *value % STORE_ROOT_SLOT;
+            *value = *value - operand + machine.translate(13, operand)?;
+        }
+    }
+    Ok(())
 }
 
 fn stage() -> Module {
@@ -247,24 +263,34 @@ mod tests {
 
     #[test]
     fn indexed_read_kinds_survive_relocation_and_reserved_lanes_refuse() {
+        // Stores gained the read's kind lane with the index-first write of
+        // 2026-10-21, whose probe needs the element's fallback. Both kinds keep
+        // lanes 0, 2 and 3 and refuse the rest rather than mask them.
         with_machine(&[0], &[4], &[8], |machine| {
-            for scalar in [0, 2, 3] {
-                let arg = scalar * SPACE * SPACE + 2 * SPACE + 1;
-                assert_eq!(machine.translate(13, arg).unwrap(), arg + 8);
+            for kind in [13, 14] {
+                for scalar in [0, 2, 3] {
+                    let arg = scalar * SPACE * SPACE + 2 * SPACE + 1;
+                    assert_eq!(machine.translate(kind, arg).unwrap(), arg + 8);
+                }
+                for scalar in [1, 4, 255] {
+                    let arg = scalar * SPACE * SPACE + 2 * SPACE + 1;
+                    assert!(machine.translate(kind, arg).is_err());
+                    assert_eq!(machine.translate(11, 1).unwrap(), 9);
+                }
             }
-            for scalar in [1, 4, 255] {
-                let arg = scalar * SPACE * SPACE + 2 * SPACE + 1;
-                assert!(machine.translate(13, arg).is_err());
-                assert_eq!(machine.translate(11, 1).unwrap(), 9);
-            }
-            // Stores have no kind lane. Never mask an oversized length to fit.
-            for scalar in [1, 2, 3] {
-                assert!(
-                    machine
-                        .translate(14, scalar * SPACE * SPACE + 2 * SPACE + 1)
-                        .is_err()
-                );
-            }
+        });
+    }
+
+    #[test]
+    fn a_handled_write_root_relocates_its_operand_and_keeps_its_slot() {
+        with_machine(&[0], &[4], &[8], |machine| {
+            let operand = 3 * SPACE * SPACE + 2 * SPACE + 1;
+            let mut records = vec![(36, operand + 6 * STORE_ROOT_SLOT), (36, 5)];
+            relocate_records(machine, &mut records).unwrap();
+            assert_eq!(
+                records,
+                vec![(36, operand + 8 + 6 * STORE_ROOT_SLOT), (36, 5)]
+            );
         });
     }
 

@@ -57,6 +57,20 @@ fn bare_and_fully_handled_source_classes_agree() {
             "fn main(a: Word, b: Word) -> Word { a % b { ok(v) => v, zero_divisor(n) when n == 1 => n } }",
             true,
         ),
+        // Indexed writes. A bare write keeps its default trap, a fully handled write
+        // removes it, and a write whose invalid_index arm is guarded keeps it.
+        (
+            "private data d { a: [Word; 2] } fn main(i: Word) -> Word { d.a[i] = 1; 0 }",
+            true,
+        ),
+        (
+            "private data d { a: [Word; 2] } fn main(i: Word) -> Word { d.a[i] = 1 { ok(o, n) => o + n, invalid_index(j) => j } }",
+            false,
+        ),
+        (
+            "private data d { a: [Word; 2] } fn main(i: Word) -> Word { d.a[i] = 1 { ok(_, n) => n, invalid_index(j) when j > 2 => j } }",
+            true,
+        ),
     ] {
         let module = compile(source);
         assert_eq!(

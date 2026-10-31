@@ -732,6 +732,9 @@ fn checked_start(a: Word) -> Word {
             orelse (kind == 13 andalso io.args[root] / 281474976710656 == a / 65536 andalso a % 65536 <= 2041)
             orelse ((kind == 3 orelse kind == 45) andalso op >= 1 andalso op <= 5 andalso io.args[root] == op)
             orelse (kind == 10 andalso a / 65536 == 3)
+            // A handled indexed write. The root carries the data operand, the element kind
+            // at 2^48 and the offset slot plus one at 2^51.
+            orelse (kind == 15 andalso (io.args[root] / 281474976710656) % 8 == a / 65536 andalso a % 65536 <= 2041)
             orelse (shift andalso io.kinds[amount] == 1 andalso io.args[amount] >= 0 andalso io.args[amount] < 63);
         if not valid { rerr(6, kind) } else {
             let d = checked.depth; let base = rs.mp; rs.mp = rs.mp + 4;
@@ -745,16 +748,37 @@ fn checked_start(a: Word) -> Word {
 
 fn checked_allowed(root: Word, scalar: Word) -> Word {
     let op = io.args[root] % 64;
-    if io.kinds[root] == 10 orelse io.kinds[root] == 31 orelse io.kinds[root] == 13 { 3 } else {
+    if io.kinds[root] == 10 orelse io.kinds[root] == 31 orelse io.kinds[root] == 13 orelse io.kinds[root] == 15 { 3 } else {
     if op == 5 { 9 } else { if op == 4 { if scalar == 3 { 11 } else { 9 } } else {
         if scalar == 3 { 7 } else { if op == 3 { 5 } else { 3 } }
     } } }
 }
 
 // Only the binding wrappers emitted by this protocol may surround an arm node.
+// A handled write's `ok` binds old from f+1 and new from f+6 in the element's scalar,
+// and its `invalid_index` binds the offset slot as a Word.
+fn store_arm_binding(init: Word, base: Word) -> Word {
+    let d = checked.depth - 1;
+    let flag = io.match_parts[base] % 65536;
+    let source = io.args[init] % 65536;
+    let scalar = io.args[init] / 65536;
+    let ok = checked.ctx_meta[d] % 4 == 0;
+    if io.kinds[init] != 80 { 0 } else {
+    if ok andalso scalar == io.match_parts[base] / 65536
+        andalso (source == flag + 1 orelse source == flag + 6) { 1 } else {
+    if not ok andalso scalar == 3 andalso checked.binds == 0
+        andalso source == io.args[checked.ctx_root[d]] / 2251799813685248 - 1 { 1 } else { 0 }
+    } }
+}
 fn checked_arm_shape(result: Word, base: Word) -> Word {
     checked.inspect = result; checked.binds = 0; checked.valid = 1;
+    let store = io.kinds[checked.ctx_root[checked.depth - 1]] == 15;
     for i in 0..2 limit 2 {
+        if store andalso io.kinds[checked.inspect] == 5 {
+            if store_arm_binding(io.lhs[checked.inspect], base) == 0 { checked.valid = 0; }
+            checked.binds = checked.binds + 1;
+            checked.inspect = io.rhs[checked.inspect];
+        } else {
         if io.kinds[checked.inspect] == 5 {
             let init = io.lhs[checked.inspect]; let packed = io.match_parts[base];
             let source = io.args[init] % 65536;
@@ -769,7 +793,7 @@ fn checked_arm_shape(result: Word, base: Word) -> Word {
             }
             checked.binds = checked.binds + 1;
             checked.inspect = io.rhs[checked.inspect];
-        }
+        } }
     }
     if io.kinds[checked.inspect] != 78 { checked.valid = 0; }
     checked.valid
@@ -780,7 +804,7 @@ fn checked_arm_finish(d: Word) -> Word {
         let result = pop(); let base = checked.ctx_base[d]; let arm = rs.mp;
         let meta = checked.ctx_meta[d]; let mask = 1 lsl (meta % 4);
         let allowed = checked_allowed(checked.ctx_root[d], io.match_parts[base] / 65536);
-        if ((io.kinds[checked.ctx_root[d]] == 31 orelse io.kinds[checked.ctx_root[d]] == 13) andalso meta >= 16)
+        if ((io.kinds[checked.ctx_root[d]] == 31 orelse io.kinds[checked.ctx_root[d]] == 13 orelse io.kinds[checked.ctx_root[d]] == 15) andalso meta >= 16)
             orelse io.match_parts[base + 3] band mask != 0 orelse allowed band mask == 0
             orelse checked.ctx_literal_seen[d] != meta / 8
             orelse checked_arm_shape(result, base) == 0 {
@@ -906,10 +930,11 @@ fn step_record(k: Word, a: Word) -> Word {
     if k == 36 {
         // IndexStore signal: fold the value (top) and index into a kind-15 node
         // (value in lhs, index in rhs). The record kind is 36 because 15 collides
-        // with the record DONE marker.
+        // with the record DONE marker. The record's argument is the local slot that holds
+        // the offset while the value is evaluated.
         let value = pop();
         let index = pop();
-        emit(15, 0, value, index)
+        emit(15, a, value, index)
     } else {
     if k == 7 {
         // Call: arg packs `chunk + count * rc_call_chunk_radix()`. Pop the `count` node indices

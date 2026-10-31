@@ -847,7 +847,7 @@ fn store(i: Word, s: Word) -> Word {
 d.samples[i] = s { ok(_, _) => (), invalid_index(_) => () };
 ````
 
-The self-hosted compiler does not yet implement this construct or the index-first order. Until it does, `--compiler self-hosted` fails loudly on a program containing any indexed write, by a refusal or by its cross-check against the reference compiler.
+The self-hosted compiler implements the construct and the index-first order byte for byte, for Word and Byte elements. It refuses a handled write on any other element type, as it refuses the handled read on one, so `--compiler self-hosted` fails loudly on such a program rather than emitting a module. The shapes it is checked against are listed in `tests/indexed_write_handlers.rs`.
 
 ### Newtype Construction Construct
 
