@@ -7,6 +7,7 @@ rests on. The line's mailbox and resume prompt is [`../handoffs/kaizen.md`](../h
 
 | report | state |
 |---|---|
+| [`2026-10-31-open-decisions.md`](./2026-10-31-open-decisions.md) | the decisions open on 2026-10-31 after the rulings of 2026-10-30, new kaizen items N1 to N6 and the other lines' questions, with the obvious choices adopted by the operator the same day and N6 and five V0.2.X questions left for judgment |
 | [`2026-10-30-open-decisions.md`](./2026-10-30-open-decisions.md) | every decision open with the operator on 2026-10-30, the kaizen line's own and the other lines' by pointer, lettered options with the obvious choices marked, ruled by the operator the same day except K14, which is held |
 | [`2026-10-30-r1-timing-pass.md`](./2026-10-30-r1-timing-pass.md) | R1 of the CI spike completed, ten full runs and a `--timings` probe measured, compiling 63 and test running 166 of 243 runner-minutes, dependencies 2 to 5 percent of a build, one 32-instance test grid setting every build's length, 2,446 tests run twice, no build cache added |
 | [`2026-10-30-ci-practices-spike.md`](./2026-10-30-ci-practices-spike.md) | research spike on how rustc, LLVM, Chromium, Go, Mozilla and Rust projects run CI, with 100 Keleusma runs measured, five gaps found, no build cache, 208 test binaries, an unfailing self-host tier at 46 percent of runner-minutes, hidden flaky retries and no fuzzing, and seven recommendations, R1, R3, R4, R5 and R6 adopted on 2026-10-30 and R2 declined |
