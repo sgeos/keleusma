@@ -8346,13 +8346,76 @@ fn compile_let_pattern_typed(
                 compile_let_pattern_typed(fc, pat, sub_ty)?;
             }
         }
-        _ => {
-            // For other patterns in let, just bind as a single variable.
-            let slot = fc.declare_local("_");
-            fc.emit(Op::SetLocal(slot));
+        Pattern::Struct(struct_name, field_pats, _) => {
+            // The value is stored in a fresh local and each field is read from it
+            // in pattern order, exactly as `let t = v; let x = t.x;` lowers, so the
+            // self-hosted compiler can reach the same bytes by that rewrite. The
+            // field access is resolved through the value's type as a field access
+            // resolves it, and through the pattern's struct name when the value's
+            // type is not inferred, since the type checker has matched the two.
+            let type_name = String::from(named_type_name(ty.as_ref()).unwrap_or(struct_name));
+            let field_types: BTreeMap<String, TypeExpr> = fc
+                .type_info
+                .structs
+                .get(&type_name)
+                .cloned()
+                .unwrap_or_default();
+            let temp = fc.declare_local("__let_tmp");
+            fc.emit(Op::SetLocal(temp));
+            for field_pat in field_pats {
+                fc.emit(Op::GetLocal(temp));
+                let field_op = struct_field_access(fc, &type_name, &field_pat.name);
+                fc.emit(Op::GetField(field_op));
+                let field_ty = field_types.get(&field_pat.name).cloned();
+                match &field_pat.pattern {
+                    Some(pat) => compile_let_pattern_typed(fc, pat, field_ty)?,
+                    None => {
+                        let slot = fc.declare_local_typed(&field_pat.name, field_ty);
+                        fc.emit(Op::SetLocal(slot));
+                    }
+                }
+            }
+        }
+        Pattern::Enum(enum_name, variant, sub_pats, span) => {
+            // Only a variant of a single-variant enum is irrefutable, and the type
+            // checker refuses every other variant pattern in a `let`. The check is
+            // repeated here for a program that reaches the compiler by another
+            // route, so a refutable pattern is never bound as if it had matched.
+            let payload_types: Option<Vec<TypeExpr>> = fc
+                .type_info
+                .enums
+                .get(enum_name)
+                .filter(|variants| variants.len() == 1)
+                .and_then(|variants| variants.get(variant))
+                .cloned();
+            let Some(payload_types) = payload_types else {
+                return Err(refutable_let_error(*span));
+            };
+            let temp = fc.declare_local("__let_tmp");
+            fc.emit(Op::SetLocal(temp));
+            for (i, sub_pat) in sub_pats.iter().enumerate() {
+                fc.emit(Op::GetLocal(temp));
+                let efield = enum_field_access(fc, enum_name, variant, i);
+                fc.emit(Op::GetEnumField(efield));
+                compile_let_pattern_typed(fc, sub_pat, payload_types.get(i).cloned())?;
+            }
+        }
+        Pattern::Literal(_, span) => {
+            return Err(refutable_let_error(*span));
         }
     }
     Ok(())
+}
+
+/// The refusal of a refutable `let` pattern that reached the compiler, the
+/// type checker's refusal restated for a program that bypassed it.
+fn refutable_let_error(span: Span) -> CompileError {
+    CompileError {
+        message: String::from(
+            "refutable pattern in `let`, since the pattern does not match every value of its type. Use `match` to handle the values it does not cover",
+        ),
+        span,
+    }
 }
 
 /// Compile a for loop.

@@ -43,6 +43,18 @@ fn a_pipe_into_a_generic_function_compiles_to_the_plain_call_module() {
             "fn id<T>(x: T) -> T { x }\nfn main() -> Word { let b = true |> id(); if b { 1 |> id() } else { 2 } }",
             "fn id<T>(x: T) -> T { x }\nfn main() -> Word { let b = id(true); if b { id(1) } else { 2 } }",
         ),
+        // A generic pipe whose operand is itself a pipe into a non-generic
+        // function. The rewrite makes it `id(x |> d())`, and that argument is
+        // typed by `d`'s return as the call `d(x)` is. Found 2026-10-31 by the
+        // self-hosted differential, where the reference kept `id` generic.
+        (
+            "fn id<T>(x: T) -> T { x }\nfn d(x: Word) -> Word { x + x }\nfn main(x: Word) -> Word { x |> d() |> id() |> d() }",
+            "fn id<T>(x: T) -> T { x }\nfn d(x: Word) -> Word { x + x }\nfn main(x: Word) -> Word { d(id(d(x))) }",
+        ),
+        (
+            "fn id<T>(x: T) -> T { x }\nfn d(x: Word) -> Word { x + x }\nfn main(x: Word) -> Word { id(x |> d()) }",
+            "fn id<T>(x: T) -> T { x }\nfn d(x: Word) -> Word { x + x }\nfn main(x: Word) -> Word { id(d(x)) }",
+        ),
     ] {
         let piped_module = compile(piped);
         let called_module = compile(called);
@@ -57,6 +69,88 @@ fn a_pipe_into_a_generic_function_compiles_to_the_plain_call_module() {
             piped_module.to_bytes().unwrap(),
             called_module.to_bytes().unwrap(),
             "{piped}"
+        );
+    }
+}
+
+/// A generic call whose argument is an unannotated resume binding specializes
+/// as the annotated form does.
+///
+/// The V0.3.X line found that `let r = yield v; yield r |> id()` failed with
+/// `undefined function `id`` once another instance of `id` existed, and kept
+/// the generic chunk `id` when none did, while `let r: Word = yield v`
+/// produced `id__Word`. The type checker infers the resume type from
+/// `loop main`'s first parameter, but monomorphization did not see it. The
+/// operator ruled on 2026-10-31 to infer where possible and to refuse where
+/// impossible.
+#[test]
+fn a_generic_call_on_an_unannotated_resume_binding_is_specialized() {
+    const ID: &str = "fn id<T>(x: T) -> T { x }\n";
+    for (inferred, annotated) in [
+        (
+            format!(
+                "{ID}loop main(t: Word) -> Word {{ let v: Word = t |> id(); let r = yield v; yield r |> id() }}"
+            ),
+            format!(
+                "{ID}loop main(t: Word) -> Word {{ let v: Word = t |> id(); let r: Word = yield v; yield r |> id() }}"
+            ),
+        ),
+        (
+            format!(
+                "{ID}loop main(t: Word) -> Word {{ let v: Word = id(t); let r = yield v; yield id(r) }}"
+            ),
+            format!(
+                "{ID}loop main(t: Word) -> Word {{ let v: Word = id(t); let r: Word = yield v; yield id(r) }}"
+            ),
+        ),
+        (
+            format!("{ID}loop main(t: Word) -> Word {{ let r = yield 1; yield r |> id() }}"),
+            format!("{ID}loop main(t: Word) -> Word {{ let r: Word = yield 1; yield r |> id() }}"),
+        ),
+        // A `yield` function called from the loop resumes through the same
+        // entry check, so its resume binding has the same type.
+        (
+            format!(
+                "{ID}yield g() -> Word {{ let r = yield 1; id(r) }}\nloop main(t: Word) -> Word {{ let a = g(); yield a }}"
+            ),
+            format!(
+                "{ID}yield g() -> Word {{ let r: Word = yield 1; id(r) }}\nloop main(t: Word) -> Word {{ let a = g(); yield a }}"
+            ),
+        ),
+    ] {
+        let inferred_module = compile(&inferred);
+        let annotated_module = compile(&annotated);
+        let names = chunk_names(&inferred_module);
+        assert!(
+            names.iter().any(|n| n == "id__Word") && !names.iter().any(|n| n == "id"),
+            "{inferred}: {names:?}"
+        );
+        assert_eq!(
+            inferred_module.to_bytes().unwrap(),
+            annotated_module.to_bytes().unwrap(),
+            "{inferred}"
+        );
+    }
+}
+
+/// With no `loop main` parameter and no use that fixes it, the resume type
+/// cannot be inferred, and the type checker's request for an annotation
+/// applies rather than a generic chunk or an undefined function after
+/// monomorphization. A plain call and a pipe are both refused, with and
+/// without a second instance of the template.
+#[test]
+fn an_uninferable_resume_binding_in_a_generic_call_asks_for_an_annotation() {
+    for source in [
+        "fn id<T>(x: T) -> T { x }\nloop main() -> Word { let r = yield 1; let s = id(r); yield 0 }",
+        "fn id<T>(x: T) -> T { x }\nloop main() -> Word { let r = yield 1; let s = r |> id(); yield id(2) }",
+    ] {
+        let tokens = keleusma::lexer::tokenize(source).expect("lex");
+        let program = keleusma::parser::parse(&tokens).expect("parse");
+        let err = keleusma::compiler::compile(&program).expect_err(source);
+        assert!(
+            err.message.contains("annotate") && !err.message.contains("undefined function"),
+            "{source}: {}",
+            err.message
         );
     }
 }

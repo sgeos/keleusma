@@ -2918,8 +2918,9 @@ fn check_function(ctx: &mut Ctx, func: &mut FunctionDef) -> Result<(), TypeError
         return Err(TypeError::new(
             format!(
                 "cannot infer the type of the value `yield` resumes with in `{}`, which this \
-                 expression reads into: no `loop main` parameter declares it and no use fixes \
-                 it; annotate the binding that receives it, as in `let r: P = yield v`",
+                 expression reads into or instantiates a generic function with: no `loop main` \
+                 parameter declares it and no use fixes it; annotate the binding that receives \
+                 it, as in `let r: P = yield v`",
                 func.name
             ),
             span,
@@ -4528,6 +4529,64 @@ fn type_of_block(ctx: &mut Ctx, block: &mut Block) -> Result<Type, TypeError> {
 /// the subject's type is still a variable, for the resume-type check in
 /// [`check_function`]. A variable or wildcard pattern reads nothing, and a
 /// literal pattern compares the whole value without reading into it.
+/// The first part of `pattern` that can fail to match a value of `ty`, with
+/// its span and a description, or `None` when the pattern is irrefutable.
+///
+/// The pattern's shape has already been checked against the type, so this
+/// walk only decides refutability. A name and a wildcard match everything. A
+/// tuple or struct pattern is irrefutable when every part is. A variant
+/// pattern is irrefutable only when its enum declares exactly one variant and
+/// the value is that enum, so `Option` and a discriminant match against a
+/// `Word` are refutable. Every literal pattern is refutable, since the grammar
+/// admits no unit literal pattern. A part whose type is not known is walked
+/// with no type, which only the variant rule consults.
+fn first_refutable_part(ctx: &Ctx, pattern: &Pattern, ty: Option<&Type>) -> Option<(Span, String)> {
+    let ty = match ty {
+        Some(Type::Labelled(inner, _)) => Some(inner.as_ref()),
+        other => other,
+    };
+    match pattern {
+        Pattern::Wildcard(_) | Pattern::Variable(_, _) => None,
+        Pattern::Literal(_, span) => Some((*span, String::from("a literal pattern"))),
+        Pattern::Tuple(parts, _) => {
+            let elems = match ty {
+                Some(Type::Tuple(elems)) if elems.len() == parts.len() => Some(elems),
+                _ => None,
+            };
+            parts
+                .iter()
+                .enumerate()
+                .find_map(|(i, part)| first_refutable_part(ctx, part, elems.and_then(|e| e.get(i))))
+        }
+        Pattern::Struct(name, field_pats, _) => {
+            let fields = ctx.structs.get(name);
+            field_pats.iter().find_map(|field_pat| {
+                let field_ty = fields.and_then(|f| f.get(&field_pat.name));
+                field_pat
+                    .pattern
+                    .as_ref()
+                    .and_then(|p| first_refutable_part(ctx, p, field_ty))
+            })
+        }
+        Pattern::Enum(enum_name, variant, sub_pats, span) => {
+            let single = enum_name != "Option"
+                && !matches!(ty, Some(Type::Word))
+                && ctx.enums.get(enum_name).is_some_and(|vs| vs.len() == 1);
+            if !single {
+                return Some((
+                    *span,
+                    format!("the variant pattern `{enum_name}::{variant}`"),
+                ));
+            }
+            let payload = ctx.enums.get(enum_name).and_then(|vs| vs.get(variant));
+            sub_pats
+                .iter()
+                .enumerate()
+                .find_map(|(i, sub)| first_refutable_part(ctx, sub, payload.and_then(|p| p.get(i))))
+        }
+    }
+}
+
 fn note_open_destructuring(ctx: &mut Ctx, pattern: &Pattern, subject: &Type) {
     if !matches!(
         pattern,
@@ -4622,8 +4681,22 @@ fn check_stmt(ctx: &mut Ctx, stmt: &mut Stmt) -> Result<(), TypeError> {
             // is refused here. Until then the check ran only for a value that
             // carried a `Text<N>`. A value whose type is still an unresolved
             // variable passes, as it does for a match arm.
-            let applied = bound_ty.apply(&ctx.subst);
-            check_pattern_against_type(ctx, &let_stmt.pattern, &strip_labels(applied))?;
+            let applied = strip_labels(bound_ty.apply(&ctx.subst));
+            check_pattern_against_type(ctx, &let_stmt.pattern, &applied)?;
+            // A `let` has no other arm to take when its pattern fails, so the
+            // pattern must match every value of its type. The operator ruled on
+            // 2026-10-31 that a refutable pattern is refused here. Before the
+            // repair `let 3 = 5` compiled and silently matched nothing.
+            if let Some((span, what)) = first_refutable_part(ctx, &let_stmt.pattern, Some(&applied))
+            {
+                return Err(TypeError::new(
+                    format!(
+                        "refutable pattern in `let`, since {what} does not match every value of type {}. Use `match` to handle the values it does not cover",
+                        applied.display()
+                    ),
+                    span,
+                ));
+            }
             note_open_destructuring(ctx, &let_stmt.pattern, &bound_ty);
             bind_pattern(ctx, &let_stmt.pattern, bound_ty);
             Ok(())
@@ -5471,6 +5544,20 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     &sig.param_negative_labels,
                     arg.span(),
                 )?;
+            }
+            // A type argument that is still an unknown resume type at the end
+            // of the function cannot be specialized, since monomorphization
+            // sees the resume type only through `loop main`'s parameter. Such
+            // a call kept the generic chunk, or failed after monomorphization
+            // as an undefined function once another instance existed. The
+            // operator ruled on 2026-10-31 to infer where possible and refuse
+            // where impossible, so it joins the projections the end of the
+            // function check refuses with a request for an annotation.
+            if !sig.type_params.is_empty() {
+                for var in &fresh_vars {
+                    let applied = var.apply(&ctx.subst);
+                    ctx.open_projections.push((applied, *span));
+                }
             }
             // Validate trait bounds on type parameters now that the
             // substitution has been recorded by argument unification.

@@ -630,6 +630,13 @@ fn lex_raw() -> Word {
 // string is therefore `let`, which no identifier can be, so it shadows nothing, and the
 // host recovers it from source bytes like any other name.
 //
+// A struct pattern takes the same path, Order 6 follow-up of 2026-10-31. `let P { x, y: b,
+// z: _ } = e;` reaches the parser as `let T = e; let x = T.x; let b = T.y; T.z;`, which is
+// the reference's lowering of a struct `let` statement for statement. The struct name is
+// dropped, because the reference type checker has matched it against the value's type
+// before any self-hosted output is accepted. A variant pattern after `let`, `let E::A(x)`,
+// becomes Tok 67, since its lowering reads an enum payload this filter does not model.
+//
 // Only a flat pattern of names and wildcards with no annotation is rewritten. Anything
 // else becomes Tok 67, which the parser refuses as unsupported syntax: a nested or typed
 // pattern, more than eight elements, a `let` inside the destructured value, and input
@@ -637,7 +644,9 @@ fn lex_raw() -> Word {
 //
 // States: 0 passing, 1 a `let` held, 2 inside the pattern, 3 awaiting `=`, 4 inside the
 // value, where `depth` counts open brackets so the statement's own `;` can be found, and
-// 5 after `let _`, awaiting the `=` that is dropped with it.
+// 5 after `let _`, awaiting the `=` that is dropped with it. A struct pattern adds 6 after
+// `let Name`, holding the name, 7 awaiting a field, 8 after a field name, 9 after its `:`,
+// and 10 after its binding.
 private data dq {
     q: [Word; 96],
     pos: Word,
@@ -648,6 +657,9 @@ private data dq {
     names: [Word; 8],
     tmp: Word,
     let_at: Word,
+    is_struct: Word,
+    fields: [Word; 8],
+    held: Word,
 }
 
 fn dq_push(t: Word) -> Word {
@@ -668,7 +680,8 @@ fn dq_elements() -> Word {
         if dq.names[i] >= 0 {
             dq_push(38); dq_push(1 + dq.names[i] * 256); dq_push(17);
         }
-        dq_push(1 + dq.tmp * 256); dq_push(40); dq_push(12 + i * 256); dq_push(39);
+        dq_push(1 + dq.tmp * 256); dq_push(40);
+        dq_push(if dq.is_struct == 1 { 1 + dq.fields[i] * 256 } else { 12 + i * 256 }); dq_push(39);
     }
     0
 }
@@ -681,12 +694,14 @@ fn dq_filter(t: Word) -> Word {
         if dq.state > 1 { dq.state = 0; 67 } else { 62 } }
     } else {
     if t == 63 { 63 } else {
+    if dq.state >= 6 { dq_struct(t, k) } else {
     if dq.state == 0 {
         if k == 38 { dq.state = 1; dq.let_at = st.start; 63 } else { t }
     } else {
     if dq.state == 1 {
-        if k == 7 { dq.state = 2; dq.n = 0; 63 } else {
-        if k == 50 { dq.state = 5; 63 } else { dq.state = 0; dq_push(t); 38 } }
+        if k == 7 { dq.state = 2; dq.n = 0; dq.is_struct = 0; 63 } else {
+        if k == 50 { dq.state = 5; 63 } else {
+        if k == 1 { dq.state = 6; dq.held = t; 63 } else { dq.state = 0; dq_push(t); 38 } } }
     } else {
     if dq.state == 5 {
         // `let _ = e;` is the expression statement `e;` to the reference, operation for
@@ -719,7 +734,39 @@ fn dq_filter(t: Word) -> Word {
             if dq.depth == 0 { dq.state = 0; 67 } else { dq.depth = dq.depth - 1; t }
         } else {
         if k == 39 andalso dq.depth == 0 { dq.state = 0; dq_elements(); t } else { t } } } }
-    } } } } } } }
+    } } } } } } } }
+}
+
+// The struct pattern states of the filter. After `let Name`, a `{` opens a struct pattern,
+// a `::` is a variant pattern and is refused, and anything else releases the held `let`
+// and name as an ordinary binding. A field binds its own name unless a `:` renames it to a
+// name or a wildcard. A nested pattern, more than eight fields and any other token are
+// refused as Tok 67.
+fn dq_struct(t: Word, k: Word) -> Word {
+    if dq.state == 6 {
+        if k == 2 { dq.state = 7; dq.n = 0; dq.is_struct = 1; 63 } else {
+        if k == 51 { dq.state = 0; 67 } else { dq.state = 0; dq_push(dq.held); dq_push(t); 38 } }
+    } else {
+    if dq.state == 7 {
+        if k == 1 andalso dq.n < 8 {
+            dq.fields[dq.n] = t / 256;
+            dq.names[dq.n] = t / 256;
+            dq.n = dq.n + 1;
+            dq.state = 8;
+            63
+        } else { if k == 3 { dq.state = 3; 63 } else { dq.state = 0; 67 } }
+    } else {
+    if dq.state == 9 {
+        if k == 1 orelse k == 50 {
+            dq.names[dq.n - 1] = if k == 1 { t / 256 } else { 0 - 1 };
+            dq.state = 10;
+            63
+        } else { dq.state = 0; 67 }
+    } else {
+        if k == 10 { dq.state = 7; 63 } else {
+        if k == 3 { dq.state = 3; 63 } else {
+        if k == 9 andalso dq.state == 8 { dq.state = 9; 63 } else { dq.state = 0; 67 } } }
+    } } }
 }
 
 fn next_token() -> Word {

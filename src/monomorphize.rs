@@ -97,6 +97,27 @@ pub fn monomorphize_with_provenance(
         })
         .collect();
 
+    // The type a `yield` resumes with in a `yield` or `loop` function, the
+    // first parameter of `loop main`, which is the one value `Vm::resume`
+    // checks. The type checker infers an unannotated resume binding from the
+    // same parameter, so a generic call on that binding specializes here as
+    // it does under the annotation `let r: T = yield v`. With no such
+    // parameter it is `None` and the binding stays unknown, which the type
+    // checker refuses when a generic call depends on it.
+    let main_resume: Option<TypeExpr> = program
+        .functions
+        .iter()
+        .find(|f| f.name == "main" && f.category == crate::ast::FunctionCategory::Loop)
+        .and_then(|f| f.params.first())
+        .and_then(|p| p.type_expr.clone());
+    let resume_for = |category: crate::ast::FunctionCategory| {
+        if category == crate::ast::FunctionCategory::Fn {
+            None
+        } else {
+            main_resume.clone()
+        }
+    };
+
     // Local-type information for argument-type inference.
     let mut local_types: BTreeMap<String, TypeExpr> = BTreeMap::new();
     // Specializations generated. Keyed on (function, type_args
@@ -124,6 +145,7 @@ pub fn monomorphize_with_provenance(
                     new_functions: &mut new_functions,
                     fn_returns: &fn_returns,
                     struct_table: &struct_table,
+                    resume: resume_for(func.category),
                 };
                 visitor.visit_block(&mut func.body);
             }
@@ -184,6 +206,7 @@ pub fn monomorphize_with_provenance(
         // new_functions mutably for inserting nested specializations.
         let len_before = new_functions.len();
         let mut body_clone = new_functions[idx].body.clone();
+        let resume = resume_for(new_functions[idx].category);
         {
             use crate::visitor::MutVisitor;
             let mut visitor = CallSpecializer {
@@ -193,6 +216,7 @@ pub fn monomorphize_with_provenance(
                 new_functions: &mut new_functions,
                 fn_returns: &fn_returns,
                 struct_table: &struct_table,
+                resume,
             };
             visitor.visit_block(&mut body_clone);
         }
@@ -1519,6 +1543,11 @@ fn infer_arg_type(
             *span,
         )),
         Expr::Call { name, .. } => fn_returns.get(name).cloned(),
+        // A pipe into a declared function has that function's return type, as the
+        // call it stands for does. Without this a generic call whose argument was a
+        // pipe, `x |> d() |> id()` once the outer pipe is rewritten to `id(..)`,
+        // kept the generic chunk where `id(d(x))` specialized it.
+        Expr::Pipeline { func, .. } => fn_returns.get(func).cloned(),
         Expr::Cast { target, .. } => Some(target.clone()),
         Expr::TupleLiteral { elements, span } => {
             let parts: Option<Vec<TypeExpr>> = elements
@@ -2458,6 +2487,20 @@ struct CallSpecializer<'a> {
     new_functions: &'a mut Vec<FunctionDef>,
     fn_returns: &'a BTreeMap<String, TypeExpr>,
     struct_table: &'a BTreeMap<String, StructDef>,
+    /// The type a `yield` in the function being rewritten resumes with, when
+    /// `loop main` declares it.
+    resume: Option<TypeExpr>,
+}
+
+impl CallSpecializer<'_> {
+    /// An expression's type for specialization, with a `yield` typed by the
+    /// resume type, which `infer_arg_type` has no context to know.
+    fn infer(&self, expr: &Expr) -> Option<TypeExpr> {
+        if matches!(expr, Expr::Yield { .. }) {
+            return self.resume.clone();
+        }
+        infer_arg_type(expr, self.locals, self.fn_returns, Some(self.struct_table))
+    }
 }
 
 impl crate::visitor::MutVisitor for CallSpecializer<'_> {
@@ -2467,14 +2510,7 @@ impl crate::visitor::MutVisitor for CallSpecializer<'_> {
             // Record local type for subsequent type inference at call
             // sites that reference this binding.
             if let Pattern::Variable(name, _) = &l.pattern
-                && let Some(t) = l.type_expr.clone().or_else(|| {
-                    infer_arg_type(
-                        &l.value,
-                        self.locals,
-                        self.fn_returns,
-                        Some(self.struct_table),
-                    )
-                })
+                && let Some(t) = l.type_expr.clone().or_else(|| self.infer(&l.value))
             {
                 self.locals.insert(name.clone(), t);
             }
@@ -2510,8 +2546,7 @@ impl crate::visitor::MutVisitor for CallSpecializer<'_> {
                 if let Some(TypeExpr::Named(n, _, _, _)) = &param.type_expr
                     && *n == tp.name
                     && let Some(arg) = args.get(param_idx)
-                    && let Some(t) =
-                        infer_arg_type(arg, self.locals, self.fn_returns, Some(self.struct_table))
+                    && let Some(t) = self.infer(arg)
                 {
                     inferred = Some(t);
                     break;
