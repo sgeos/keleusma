@@ -248,3 +248,55 @@ fn a_sample_of_the_corpus_compiles_identically_with_native_stages() {
 
 /// Sampled sources compared on 2026-10-30. A drop fails the test.
 const MIN_SAMPLED: usize = 18;
+
+/// **THE TEMPLATE SCAN STAGE FINDS TEMPLATES NATIVELY.** `template_scan.kel`
+/// is in `corpus_differential.rs`'s vacuous set, because that harness gives it
+/// no token batch. The driver feeds it every token of every source, generic or
+/// not, so the corpus-wide check above already runs it natively on real input,
+/// but no corpus source in the self-hosted subset declares a generic template,
+/// so it never found one there. Each program here declares one, and compiles
+/// byte-identically with every stage native, on the virtual machine and
+/// through the reference. This line infers, and has not shown by mutation, that
+/// a scan which missed the template would leave the call unresolved, so that
+/// the compile would fail or diverge from the reference. The concrete twin shows
+/// that the scan stage runs either way, because both compile the same number
+/// of distinct stage modules.
+#[test]
+fn the_template_scan_stage_finds_templates_natively() {
+    for (generic, concrete) in [
+        (
+            "fn id<T>(x: T) -> T { x }\nfn main(a: Word) -> Word { id(a) + 1 }",
+            "fn id(x: Word) -> Word { x }\nfn main(a: Word) -> Word { id(a) + 1 }",
+        ),
+        (
+            "fn pick<T>(c: bool, a: T, b: T) -> T { if c { a } else { b } }\n\
+             fn main(a: Word) -> Word { pick(a > 2, a, 7) }",
+            "fn pick(c: bool, a: Word, b: Word) -> Word { if c { a } else { b } }\n\
+             fn main(a: Word) -> Word { pick(a > 2, a, 7) }",
+        ),
+    ] {
+        let modules = |source: &str| {
+            let factory = Rc::new(NativeStageFactory::default());
+            let native = with_stage_factory(factory.clone(), || self_hosted(source));
+            assert_eq!(factory.declined(), 0, "{source}: a stage was declined");
+            (native, factory.compiled())
+        };
+        let (native, with_template) = modules(generic);
+        assert_eq!(
+            native,
+            self_hosted(generic),
+            "{generic}: native stages diverge from the vm"
+        );
+        assert_eq!(
+            native,
+            reference(generic),
+            "{generic}: diverges from the reference"
+        );
+        let (_, without_template) = modules(concrete);
+        assert_eq!(
+            with_template, without_template,
+            "{generic}: the generic and concrete programs compiled different stage sets"
+        );
+        eprintln!("  {with_template} native stage modules, template found and resolved");
+    }
+}

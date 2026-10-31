@@ -2416,7 +2416,11 @@ const KNOWN_VACUOUS: &[&str] = &[
     // **`template_scan.kel` JOINED in absorption 119, as the added fifteenth
     // stage.** The host feeds it batches of tokens through `AnalysisMachine`, and
     // this harness gives it no batch, so its run agrees while changing nothing.
-    // No seed for it exists on this line yet.
+    // It stays here because this harness still seeds nothing. Its real-input
+    // evidence is elsewhere since 2026-10-30. The driver feeds it every token
+    // of every source, so `native_stage_factory.rs` runs it natively over the
+    // whole corpus, and `the_template_scan_stage_finds_templates_natively` gives
+    // it generic templates to find.
     "template_scan.kel",
 ];
 
