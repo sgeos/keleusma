@@ -3554,6 +3554,81 @@ fn composite_bodies(src: &str, first: i64, replies: &[i64]) -> Vec<Vec<u8>> {
     expected
 }
 
+/// The packed body of a `Text<N>` literal, its length word and then its UTF-8
+/// bytes zero padded to the capacity, as `tests/textn_literal.rs` pins it at
+/// the root.
+fn text_n(text: &str, capacity: usize) -> Vec<u8> {
+    let mut body = (text.len() as i64).to_le_bytes().to_vec();
+    body.extend_from_slice(text.as_bytes());
+    body.resize(8 + capacity, 0);
+    body
+}
+
+/// **`TEXT<N>` VALUES AGREE WITH THE VIRTUAL MACHINE, QUESTION 13.**
+///
+/// The compiler pools a `"..." as Text<N>` cast as one composite constant, so a
+/// `Text<N>` reaches this backend as a `Const` holding a tuple of a length word
+/// and a byte array. The backend copies that body into a region site of its
+/// own. Each subject yields `Text<N>` values, alone and inside a tuple, a
+/// struct, an array and a private data field, through a call, and across both
+/// arms of a branch. Every yielded body is compared byte for byte with the
+/// virtual machine's, in four lowering configurations, by `composite_bodies`.
+/// The expected bodies are also stated independently of both, so a defect the
+/// two shared would still fail.
+///
+/// The private data subject needs run-time kinds, because its slot starts as
+/// `Unit`, so both kind routes are reached.
+#[test]
+fn text_n_literals_agree_with_the_vm() {
+    // The second reply of each pass is the branch's operand, so 3 then -4 takes
+    // both arms.
+    let replies = [3, -1, -4, 0];
+    let alternate = |a: Vec<u8>, b: Vec<u8>| vec![a.clone(), b.clone(), a, b];
+    let cases: Vec<(&str, Vec<Vec<u8>>)> = vec![
+        (
+            "loop main(t: Word) -> Text<4> { let r: Word = yield \"hi\" as Text<4>; yield \"abcd\" as Text<4> }",
+            alternate(text_n("hi", 4), text_n("abcd", 4)),
+        ),
+        (
+            "loop main(t: Word) -> (Word, Text<4>) { let r: Word = yield (t, \"hi\" as Text<4>); yield (r, \"\" as Text<4>) }",
+            [(7i64, "hi"), (3, ""), (-1, "hi"), (-4, "")]
+                .into_iter()
+                .map(|(w, t)| [w.to_le_bytes().to_vec(), text_n(t, 4)].concat())
+                .collect(),
+        ),
+        (
+            "struct S { a: Word, t: Text<8> } loop main(t: Word) -> S { let r: Word = yield S { a: t, t: \"abc\" as Text<8> }; yield S { a: r, t: \"x\" as Text<8> } }",
+            [(7i64, "abc"), (3, "x"), (-1, "abc"), (-4, "x")]
+                .into_iter()
+                .map(|(w, t)| [w.to_le_bytes().to_vec(), text_n(t, 8)].concat())
+                .collect(),
+        ),
+        (
+            "loop main(t: Word) -> [Text<4>; 2] { let r: Word = yield [\"ab\" as Text<4>, \"cd\" as Text<4>]; yield [\"\" as Text<4>, \"e\" as Text<4>] }",
+            alternate(
+                [text_n("ab", 4), text_n("cd", 4)].concat(),
+                [text_n("", 4), text_n("e", 4)].concat(),
+            ),
+        ),
+        (
+            "private data d { t: Text<8> } loop main(t: Word) -> Text<8> { d.t = \"abc\" as Text<8>; let r: Word = yield d.t; yield d.t }",
+            vec![text_n("abc", 8); 4],
+        ),
+        (
+            "fn make() -> Text<4> { \"mk\" as Text<4> } fn id(x: Text<4>) -> Text<4> { x } loop main(t: Word) -> Text<4> { let r: Word = yield id(make()); yield if r > 0 { \"p\" as Text<4> } else { \"n\" as Text<4> } }",
+            vec![
+                text_n("mk", 4),
+                text_n("p", 4),
+                text_n("mk", 4),
+                text_n("n", 4),
+            ],
+        ),
+    ];
+    for (src, expected) in cases {
+        assert_eq!(composite_bodies(src, 7, &replies), expected, "{src}");
+    }
+}
+
 #[test]
 fn flat_yields_preserve_bodies_across_resumes_and_resets() {
     let replies = [11, 20, 31, 40, 55, 0];

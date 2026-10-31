@@ -1,3 +1,8 @@
+//! The composite constant of question 13, 2026-10-30, copies a constant body
+//! from an internal constant global into its own region site. It copies bytes
+//! and stores no address, and the destination is the body itself, which lives
+//! in the region like a constructed body.
+//!
 //! The Order 6 enum zero fill writes zero bytes over an enum body's slack, the
 //! tail a smaller variant leaves inside the site's reservation. It stores no
 //! address and the destination is the body itself.
@@ -158,7 +163,8 @@ const MOVE_FORMS: &[&str] = &[
 // 81 -> 89 in Order 4 for the eight trap-reporting stores described above.
 // 89 -> 90 for the instruction meter's store of its count.
 // 90 -> 91 for the enum zero fill described above.
-const RECORDED_MOVE_SITES: usize = 91;
+// 91 -> 92 for the composite constant's body copy described above.
+const RECORDED_MOVE_SITES: usize = 92;
 // 18 -> 19 on 2026-09-11, when the shared composite slot landed: one body copy
 // into the host's buffer, at the offset and length the module's shared layout
 // STATES. Unlike the persistent pool, nothing here is derived — so there is no

@@ -79,7 +79,7 @@
 //! rather than a different layout, and the first lowering slice refuses them
 //! instead of guessing.
 
-use keleusma::bytecode::{Chunk, NewCompositeOperand, Op};
+use keleusma::bytecode::{Chunk, ConstValue, NewCompositeOperand, Op};
 
 /// Where one construction site's body lives, relative to the chunk's region base.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -380,14 +380,72 @@ pub fn composite_init_supplement_bytes(module: &keleusma::bytecode::Module) -> u
     align_up((slots as u32).saturating_mul(8))
 }
 
+/// The packed body of a composite constant, or `None` for a scalar constant and
+/// for a composite holding a member this backend does not pack.
+///
+/// The compiler pools a `Text<N>` literal cast as a tuple of its length word
+/// and an array of `N` bytes, which is the first composite constant this backend
+/// meets. A flat body is packed contiguously with no padding between fields, as
+/// `Value::pack_flat_in_arena` documents. A `Word` and a `Fixed` take eight
+/// bytes, because this backend lowers only a 64-bit word, and a `Byte` and a
+/// `Bool` take one. A tuple or an array inlines its members in order.
+///
+/// A float, a static string, a struct, an enum and `Unit` are refused rather
+/// than packed. A float's width is a module property this function does not
+/// see, and the others have layouts that no composite constant has needed. A
+/// refused constant keeps the `Const` arm's existing refusal.
+pub fn composite_constant_body(constant: &ConstValue) -> Option<Vec<u8>> {
+    fn pack(constant: &ConstValue, out: &mut Vec<u8>) -> Option<()> {
+        match constant {
+            ConstValue::Int(v) | ConstValue::Fixed(v) => out.extend_from_slice(&v.to_le_bytes()),
+            ConstValue::Byte(v) => out.push(*v),
+            ConstValue::Bool(v) => out.push(u8::from(*v)),
+            ConstValue::Tuple(items) | ConstValue::Array(items) => {
+                for item in items {
+                    pack(item, out)?;
+                }
+            }
+            _ => return None,
+        }
+        Some(())
+    }
+    if !matches!(constant, ConstValue::Tuple(_) | ConstValue::Array(_)) {
+        return None;
+    }
+    let mut out = Vec::new();
+    pack(constant, &mut out)?;
+    Some(out)
+}
+
+/// The body size a flat construction site reserves, or `None` when `op` builds
+/// no flat body.
+///
+/// A `NewComposite` reserves its baked size, and a `Const` holding a composite
+/// that [`composite_constant_body`] packs reserves that body's length. A
+/// constant body is copied into its site when the `Const` executes, so it lives
+/// in the region like any constructed body, and every figure derived from
+/// [`plan_chunk_region`] counts it.
+pub fn flat_site_size(chunk: &Chunk, op: &Op) -> Option<u32> {
+    match op {
+        Op::NewComposite(NewCompositeOperand::Flat { byte_size, .. }) => {
+            Some(u32::from(*byte_size))
+        }
+        Op::Const(index) => chunk
+            .constants
+            .get(usize::from(*index))
+            .and_then(composite_constant_body)
+            .and_then(|body| u32::try_from(body.len()).ok()),
+        _ => None,
+    }
+}
+
 pub fn plan_chunk_region(chunk: &Chunk) -> RegionLayout {
     let mut sites = Vec::new();
     let mut next: u32 = 0;
     for (op_index, op) in chunk.ops.iter().enumerate() {
-        let Op::NewComposite(NewCompositeOperand::Flat { byte_size, .. }) = op else {
+        let Some(size) = flat_site_size(chunk, op) else {
             continue;
         };
-        let size = u32::from(*byte_size);
         sites.push(SitePlacement {
             op_index,
             offset: next,
@@ -505,6 +563,13 @@ pub fn loop_body_sites(chunk: &Chunk) -> Vec<usize> {
 /// "this module is free of the defect"; it means "no single-chunk instance".
 /// Bounding the residual is the `Call` disqualifier in
 /// `tests/loop_composite_census.rs`.
+///
+/// # Why a composite constant is not a site here
+///
+/// A `Const` site writes the same bytes on every execution, and no instruction
+/// writes into a flat body after its construction, so an overwrite in place
+/// leaves a body the host holds exactly as it was. The defect needs a second
+/// value at the same offset, and a constant has only one.
 pub fn yield_escape_hazards(chunk: &Chunk) -> Vec<YieldEscapeHazard> {
     let mut out: Vec<YieldEscapeHazard> = Vec::new();
     // `loop_scopes` completes an inner scope before the outer one that contains
@@ -716,6 +781,45 @@ mod tests {
             "a source written to construct a struct produced no placement, so this \
              pass cannot see what the compiler actually emits"
         );
+    }
+
+    /// A `Text<N>` literal cast packs as its length word and its bytes zero
+    /// padded to the capacity, reserves a site of that length, and is placed
+    /// in the region. A constant the packer does not handle reserves nothing,
+    /// so the `Const` arm keeps its refusal for it.
+    #[test]
+    fn a_text_n_constant_is_a_site_and_other_constants_are_not() {
+        let m = compile_src("fn main() -> Word { let t = \"hi\" as Text<4>; 1 }");
+        let chunk = &m.chunks[m.entry_point.expect("entry")];
+        let (index, constant) = chunk
+            .constants
+            .iter()
+            .enumerate()
+            .find(|(_, c)| matches!(c, ConstValue::Tuple(_)))
+            .expect("the cast is pooled as a tuple constant");
+        let mut expected = 2i64.to_le_bytes().to_vec();
+        expected.extend_from_slice(b"hi\0\0");
+        assert_eq!(composite_constant_body(constant), Some(expected));
+        let op = chunk
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::Const(i) if usize::from(*i) == index))
+            .expect("the constant is loaded");
+        let plan = plan_chunk_region(chunk);
+        assert!(
+            plan.sites.iter().any(|s| s.op_index == op && s.size == 12),
+            "the constant reserved no 12-byte site: {:?}",
+            plan.sites
+        );
+        for refused in [
+            ConstValue::Int(1),
+            ConstValue::Float(1.0),
+            ConstValue::StaticStr("a".into()),
+            ConstValue::Tuple(vec![ConstValue::Float(1.0)]),
+            ConstValue::Tuple(vec![ConstValue::Unit]),
+        ] {
+            assert_eq!(composite_constant_body(&refused), None, "{refused:?}");
+        }
     }
 }
 

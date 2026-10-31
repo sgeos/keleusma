@@ -159,3 +159,36 @@ fn the_string_type_is_text_and_length_is_a_host_native() {
          isolating the type name and the function name at all"
     );
 }
+
+/// **A `Text<N>` LOWERS ON THE MODULE ROUTE, IN A LOCAL, A FIELD AND A CALL.**
+///
+/// A `"..." as Text<N>` cast is a pooled composite constant, which the backend
+/// copies into a region site. Unlike a bare `Text`, a `Text<N>` is a flat body
+/// with no reference inside it, so a struct field holding one lowers. Its
+/// agreement with the virtual machine is shown on the coroutine route by
+/// `text_n_literals_agree_with_the_vm` in `retcon_bytecode.rs`, and this pins
+/// that the module route admits the same shapes rather than refusing them.
+#[test]
+fn a_text_n_lowers_on_the_module_route() {
+    for (what, src) in [
+        (
+            "a literal cast bound to a local",
+            "fn main(a: Word) -> Word { let t = \"hi\" as Text<4>; a }",
+        ),
+        (
+            "a struct field",
+            "struct S { a: Word, t: Text<8> }\n\
+             fn main(a: Word) -> Word { let s = S { a: a, t: \"abc\" as Text<8> }; s.a }",
+        ),
+        (
+            "an argument and a return",
+            "fn id(t: Text<4>) -> Text<4> { t }\n\
+             fn main(a: Word) -> Word { let t = id(\"hi\" as Text<4>); a }",
+        ),
+    ] {
+        let m = common::build(src);
+        let refusals =
+            keleusma_native::module_refusals(&m, keleusma_native::LowerOptions::default());
+        assert!(refusals.is_empty(), "{what} is refused: {refusals:?}");
+    }
+}
