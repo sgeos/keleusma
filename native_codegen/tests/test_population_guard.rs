@@ -117,7 +117,9 @@
 // disappeared.
 // 839 -> 840: `an_opaque_handle_inside_a_composite_agrees_with_the_vm` in
 // `native_opaque.rs`, operator question 14, 2026-10-30. No name disappeared.
-const RECORDED_TEST_FUNCTIONS: usize = 840;
+// 840 -> 841: `the_template_scan_stage_finds_templates_natively` in
+// `native_stage_factory.rs`, 2026-10-30. No name disappeared.
+const RECORDED_TEST_FUNCTIONS: usize = 841;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise
