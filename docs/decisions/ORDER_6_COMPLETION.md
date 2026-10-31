@@ -35,7 +35,8 @@ below. V0.4.0 is not released, since publication is held.
   subset compile byte-identically with native stages. The selector
   `kel-native --compiler` chooses among the three compilers, and they build
   byte-identical libraries. The operator answered question 23 that acceptance comes when the
-  work is done.
+  work is done, and question 27 on 2026-10-31 that the independent review of
+  the self-hosted validator, owned by V0.2.X, is a condition of it.
 - **The operator's rulings, 2026-10-28.** Every open question was answered.
   The V0.2.X dependency is met, because native code consumes the reference
   compiler's bytecode, which is question 18. The `Text`, opaque and Linux
