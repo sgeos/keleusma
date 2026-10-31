@@ -31,68 +31,50 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor 68188e3f HEAD     # the merge of PR 644 into v0.2.3
-git merge-base --is-ancestor 7d5a5e82 HEAD     # the merge of PR 631 into main
+git merge-base --is-ancestor 1ea45456 HEAD     # the merge of PR 660 into v0.2.3
+git merge-base --is-ancestor 430b2625 HEAD     # the merge of PR 655 into main
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
 
 Ancestry alone never establishes freshness. Report any foreign commit or any check not
 run.
 
-## State on 2026-10-30
+## State on 2026-10-31
 
-- **Merged.** Into `v0.2.3`, PR 620, the template hygiene re-run, as `442de88b`. PR 625,
-  changelog fragments, as `c55620ed`. PR 626, the labeller's fresh session, as
-  `7301e739`. PR 624, `--locked` checks of the three tracked lockfiles, as `751fa668`.
-  PR 630, the security-updates comment and this file, as `4e0c2304`. PR 633, the CI
-  practices spike, as `8f1b9c06`. PR 644, `main` merged back after PR 631, as
-  `68188e3f`. Into `main`, PR 619, the `brace-expansion` fix that
-  closed Dependabot alerts 1 to 5, and PR 631, the same security-updates comment,
-  merged by the operator as `7d5a5e82`.
+- **Merged.** Into `v0.2.3`, PRs 620, 625, 626, 624, 630, 633, 647, 649, 654 and 656,
+  and PR 660, `main` merged back after PR 655, as `1ea45456`. Into `main`, PR 619, the
+  `brace-expansion` fix, and the operator's merges of PR 631 as `7d5a5e82` and PR 655,
+  the Dependabot ignore entry for `dtolnay/rust-toolchain`, as `430b2625`.
 - **Operator rulings of 2026-10-29.** Changelog entries are fragments under
   `changelog.d/`, assembled at release, and branch runs stay uncancelled. See
-  [the report](../kaizen/2026-10-29-changelog-fragments.md). V0.2.X follows the rule.
-  V0.3.X adopts it at absorption 117.
-- **Operator rulings of 2026-10-30.** First-hand in this session, on
-  [the open decisions](../kaizen/2026-10-30-open-decisions.md), which records each
-  ruling verbatim. K1 to K13 are ruled and K14 is held. R1 closed with no build cache,
-  by [the timing pass](../kaizen/2026-10-30-r1-timing-pass.md). R2 is declined.
-- **Applied.** PR 649, merged as `43a14452`, applies K2, K5 and K8. Its draft run skipped
-  the self-host tier, its ready run ran it, and the merge state stayed `BLOCKED` until
-  the ready run finished. The Test job selects 1,607 tests, 49 test-minutes against 101,
-  and is now bounded by the `keleusma-cli` validator test, 20.6 minutes. Notice 163
-  asks V0.2.X for K3, K4a and K7, and notice 164 tells V0.3.X of the draft rule.
-- **Operator confirmations of 2026-10-30, first-hand in this session.** "Yes. I
-  pre-authorize merging green security-only pull requests into `main`." "Yes. Add a
-  Dependabot ignore entry for `dtolnay/rust-toolchain`." The entry is added on `main`
-  and on `v0.2.3`. V0.2.X had relayed both in notice 156. `v0.2.3` now requires
-  `CI result` with admins exempt, by V0.2.X's report.
-- **Dependabot security updates.** Enabled on the operator's instruction of 2026-10-30,
-  with 0 alerts open. GitHub's options reference says they always use the default
-  branch. Each one is therefore a merge into `main` needing the operator's
-  confirmation, and is then carried into `v0.2.3` as this increment does.
-- **CI practices spike.** [The report](../kaizen/2026-10-30-ci-practices-spike.md)
-  compares 100 Keleusma runs with how rustc, LLVM, Chromium, Go and Mozilla run CI. It
-  found no build cache, 208 test binaries, a self-host tier at 46 percent of
-  runner-minutes with no failure in 203 shard runs, retries with no flaky record and no
-  fuzzing. It makes recommendations R1 to R7, none adopted.
-- **Runners.** On 2026-10-30 Keleusma CI jobs waited a median of 1.1 minutes for a
-  runner, 9.5 at the 90th percentile and 47.7 at most, over 377 jobs since 12:00Z the
-  day before. The blog's Pages build grew from about 5 to 60 to 90 minutes and holds one
-  shared runner for most of each busy day. The audit, with three fixes estimated to
-  return about 250 runner-minutes a day, is untracked in the blog's `tmp/`, as
-  `2026-10-30-ci-runner-audit.md`. On the operator's instruction, a ghost run on
-  `v0.3.0`, `34749385428`, queued since 2026-09-13 with no jobs, artifacts or checks,
-  was deleted after both cancel endpoints refused it.
+  [the report](../kaizen/2026-10-29-changelog-fragments.md).
+- **Operator rulings of 2026-10-30.** First-hand in this session, recorded verbatim in
+  [the open decisions](../kaizen/2026-10-30-open-decisions.md). K1 to K13 are ruled and
+  K14 is held. PR 649 applied K2, K5 and K8. V0.2.X landed K7 in PR 658 and K3 with
+  K4a in PR 662. Also first-hand, "Yes. I pre-authorize merging green security-only
+  pull requests into `main`." and "Yes. Add a Dependabot ignore entry for
+  `dtolnay/rust-toolchain`."
+- **Operator ruling of 2026-10-31.** First-hand in this session, "Accept obvious
+  choices, take appropriate action, then give me the updated list of questions and
+  obvious choices.", recorded with each disposition in
+  [the open decisions of 2026-10-31](../kaizen/2026-10-31-open-decisions.md). It
+  adopted N1 to N5, V0.2.X's item 4, since contested, and C7 D2, D3, D5, D6 and D7. Applied on branch
+  `ci/kaizen-nightly-fuzz`, the nightly fuzz workflow, the fuzz lockfile check and the
+  Dependabot entry for `/fuzz`. The workflow and the Dependabot entry take effect only
+  from `main`.
+- **Shard balance.** After PR 662 the four self-host shards ran 13 to 19 minutes for
+  shard 2 and 34 to 37 for shard 4 on four `v0.2.3`-lineage runs. The cause is uneven
+  work per hash bucket, not one long test, which is question N6.
+- **Runners.** On 2026-10-30 jobs waited a median of 1.1 minutes for a runner and 47.7
+  at most. The blog's Pages build holds one shared runner for most of a busy day, by
+  the untracked audit in the blog's `tmp/2026-10-30-ci-runner-audit.md`, item K11.
 - **Disclosure list.** 21 terms since the operator's pruning of 2026-10-29. Term numbers
   count the pruned list. A backup is outside the repository.
 - **Propagation.** `origin/proofs`, unchanged since 2026-08-29, still holds the old
-  `wire_schema.rs` comment and four kept-term lines, which is for the operator. `main`
-  holds four kept-term lines that the next release merge replaces. V0.3.X confirmed
-  that `v0.3.0` matches no term.
-- **Pydromon.** The operator holds the changeover and is working out SSH support, which
-  meets sandbox limits. The proposal's labeller uses `fresh_session_each_turn`, from
-  pydromon `5ef0fd7`.
+  `wire_schema.rs` comment and four kept-term lines, item K13. `main` matches no term
+  since PR 650, by V0.2.X's report. V0.3.X confirmed that `v0.3.0` matches no term.
+- **Pydromon.** The operator holds the changeover. The proposal's labeller uses
+  `fresh_session_each_turn`, from pydromon `5ef0fd7`.
 - **Jev selection cohort.** The three cases were evaluated and labelled blind. The
   comparison opens when each task is finished.
 
@@ -111,33 +93,31 @@ authority, so the startup-file positions reach them first-hand.
 
 ## Next increments, in order
 
-1. Extend `context_quality.py` for the operator's global `idleCompaction: false` trial,
+1. Land `ci/kaizen-nightly-fuzz` on `v0.2.3`, then on `main`, which needs the operator,
+   and confirm the first scheduled run.
+2. Extend `context_quality.py` for the operator's global `idleCompaction: false` trial,
    comparing error rates and cache writes after long gaps with the idle compactions
    already measured.
-2. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
-   times the changeover, as step 3 of the team proposal lists. On hold.
-3. Run the self-host documentation tests in their own job, in parallel with the archive
-   build, to shorten shard 1.
+3. Rewrite Keleusma's process documents for messaging in pydromon, when the operator
+   times the changeover. On hold.
 4. Finish the three selection tasks, record their outcomes, and read the comparison.
 5. A state-file budget guard, once the owning lines have converted their files.
 6. Measure branch-run cost again once changelog fragments are in use.
-7. A nightly fuzzing workflow, once V0.2.X lands the fuzz targets of K7.
 
 ## Open with the operator
 
-[The open decisions](../kaizen/2026-10-30-open-decisions.md) hold the record. Still
-open are the operator's own checks, a merge queue in the settings for K6, the account
-plan for K9 and the billing page for K10, the blog fixes of K11, the proofs branch's
-release for K13 and the pydromon changeover, held as K14. V0.2.X's question 1 may be
-answered through V0.3.X's question 20, which only the operator can confirm.
+[The open decisions of 2026-10-31](../kaizen/2026-10-31-open-decisions.md) hold the
+list. N6, the shard partition, and V0.2.X's items 1, 2, 5, 6 D4 and 7 need judgment.
+The operator's own checks are K6, K9, K10, K11 and K14, held. V0.2.X item 4 is contested. This list ruled (a), and V0.2.X
+relays in sequence 175 a later first-hand (b) from its session, which only the operator
+can confirm here. V0.2.X also relays that all its questions are answered.
 
 ## Concerns
 
 - The self-host archive storage cost is unverified, item K10.
-- Branch `test/kaizen-split-stage-artifact` at `e7a59d20` keeps a per-stage split of
-  the slowest test, now a median of 35 minutes in a shard, item K3.
-- Lines open pull requests as non-draft today, 40 of the last 40 merged. They gain
-  nothing from K5 until they iterate as drafts, which the notices ask.
+- The fuzz workflow ran only locally. Its first GitHub run waits on `main`.
+- Lines opened pull requests as non-draft, 40 of the last 40 merged on 2026-10-30.
+  They gain nothing from K5 until they iterate as drafts, which V0.2.X now does.
 
 ## Mailbox and pilot
 
