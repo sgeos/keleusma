@@ -320,7 +320,207 @@ pub fn initialization_rejects_via_kel(module: &Module) -> Result<Option<(usize, 
             return Ok(Some((index, ip)));
         }
     }
-    Ok(None)
+    private_data(module, verify_depth_kel_module())
+}
+
+/// The private data slots whose load-time initializer is `Unit`, or absent, ascending.
+///
+/// This reads the initializers, which is what rule 2 of
+/// `crate::verify_init` tracks. It is transport, the same selection the reference makes, and
+/// the stage receives only the dense numbering it induces.
+fn unit_private_slots(module: &Module) -> Vec<u32> {
+    use crate::bytecode::{ConstValue, SlotVisibility};
+    let Some(layout) = module.data_layout.as_ref() else {
+        return Vec::new();
+    };
+    let private = layout
+        .slots
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.visibility == SlotVisibility::Private);
+    private
+        .enumerate()
+        .filter(|(k, _)| matches!(layout.private_init.get(*k), None | Some(ConstValue::Unit)))
+        .filter_map(|(_, (slot, _))| u32::try_from(slot).ok())
+        .collect()
+}
+
+/// The dense numbers, into `unit`, of the slots in `[base, base + len)`.
+fn unit_span(unit: &[u32], base: u32, len: u32) -> (usize, usize) {
+    let end = base.saturating_add(len);
+    (
+        unit.partition_point(|&s| s < base),
+        unit.partition_point(|&s| s < end),
+    )
+}
+
+/// The chunks in an order where every callee precedes its callers, and whether each was
+/// ordered. A chunk on a call cycle, or one that reaches a cycle, is not ordered and keeps the
+/// empty summary, as in the reference, which the surface language makes unreachable.
+fn callees_first(module: &Module) -> (Vec<usize>, Vec<bool>) {
+    let n = module.chunks.len();
+    let mut callers: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut pending = vec![0usize; n];
+    for (c, chunk) in module.chunks.iter().enumerate() {
+        let mut seen = BTreeSet::new();
+        for op in &chunk.ops {
+            if let Op::Call(callee, _) = op {
+                let callee = usize::from(*callee);
+                if callee < n && seen.insert(callee) {
+                    callers[callee].push(c);
+                    pending[c] += 1;
+                }
+            }
+        }
+    }
+    let mut order = Vec::with_capacity(n);
+    let mut ordered = vec![false; n];
+    let mut ready: alloc::collections::VecDeque<usize> =
+        (0..n).filter(|&c| pending[c] == 0).collect();
+    // Each chunk enters `ready` once, when its last callee is ordered, so this ends.
+    while let Some(c) = ready.pop_front() {
+        order.push(c);
+        ordered[c] = true;
+        for &caller in &callers[c] {
+            pending[caller] -= 1;
+            if pending[caller] == 0 {
+                ready.push_back(caller);
+            }
+        }
+    }
+    (order, ordered)
+}
+
+/// One stage run deciding rule 2 for chunk `index`, given the callee summaries so far.
+/// Returns the lowest refused instruction and the chunk's own summary.
+fn private_data_chunk(
+    module: &Module,
+    index: usize,
+    unit: &[u32],
+    summaries: &[[i64; 8]],
+    stage: Module,
+) -> Result<(Option<usize>, [i64; 8])> {
+    const STAGE: &str = "initialization";
+    let chunk = &module.chunks[index];
+    capacity("depth", "opcodes", chunk.ops.len(), OPS)?;
+    let n = module.chunks.len();
+    let mut rows: Vec<usize> = Vec::new();
+    for op in &chunk.ops {
+        if let Op::Call(callee, _) = op {
+            let callee = usize::from(*callee);
+            if callee < n && !rows.contains(&callee) {
+                rows.push(callee);
+            }
+        }
+    }
+    capacity(STAGE, "callees", rows.len(), DV_DATA_CALLEES)?;
+    run(
+        STAGE,
+        stage,
+        |vm| {
+            let mut shared = seed_verify_depth_shared(vm, chunk);
+            set(vm, &mut shared, DV_D_WIDTH, size(unit.len(), STAGE)?, STAGE)?;
+            for (i, op) in chunk.ops.iter().enumerate() {
+                let (put, span, call) = match op {
+                    Op::SetData(s) => (unit.binary_search(s).map_or(0, |k| k + 1) as i64, None, 0),
+                    Op::Return => (-1, None, 0),
+                    Op::GetData(s) => (0, Some(unit_span(unit, *s, 1)), 0),
+                    Op::GetDataIndexed(base, len) => (0, Some(unit_span(unit, *base, *len)), 0),
+                    Op::Call(callee, _) => (
+                        0,
+                        None,
+                        rows.iter()
+                            .position(|&r| r == usize::from(*callee))
+                            .map_or(0, |r| r + 1),
+                    ),
+                    _ => (0, None, 0),
+                };
+                if put != 0 {
+                    set(vm, &mut shared, DV_D_SET + i, put, STAGE)?;
+                }
+                if let Some((lo, hi)) = span.filter(|(lo, hi)| lo < hi) {
+                    set(vm, &mut shared, DV_D_LO + i, size(lo, STAGE)?, STAGE)?;
+                    set(vm, &mut shared, DV_D_HI + i, size(hi, STAGE)?, STAGE)?;
+                }
+                if call != 0 {
+                    set(vm, &mut shared, DV_D_CALL + i, size(call, STAGE)?, STAGE)?;
+                }
+            }
+            for (row, &callee) in rows.iter().enumerate() {
+                for (w, &bits) in summaries[callee].iter().enumerate() {
+                    set(vm, &mut shared, DV_D_SUM + row * 8 + w, bits, STAGE)?;
+                }
+            }
+            Ok(shared)
+        },
+        |vm, shared, _| {
+            let mut summary = [0i64; 8];
+            for (w, bits) in summary.iter_mut().enumerate() {
+                *bits = word(vm, shared, DV_OUT_DATA_SUM + w, STAGE)?;
+            }
+            match word(vm, shared, DV_OUT_DATA_CAUSE, STAGE)? {
+                0 => {}
+                1 => {
+                    return Err(VerificationError::Capacity {
+                        stage: STAGE,
+                        resource: "private slots",
+                        limit: DV_INIT_LOCALS,
+                        actual: unit.len(),
+                    });
+                }
+                2 => {
+                    return Err(VerificationError::Incomplete {
+                        stage: STAGE,
+                        cause: 2,
+                    });
+                }
+                _ => return Err(protocol(STAGE, "unknown completion cause")),
+            }
+            if !flag(word(vm, shared, DV_OUT_DATA_REJECT, STAGE)?, STAGE)? {
+                return Ok((None, summary));
+            }
+            match usize::try_from(word(vm, shared, DV_OUT_DATA_IP, STAGE)?) {
+                Ok(ip) if ip < chunk.ops.len() => Ok((Some(ip), summary)),
+                _ => Err(protocol(STAGE, "refused instruction outside the chunk")),
+            }
+        },
+    )
+}
+
+/// Rule 2 of `crate::verify_init`, private data, decided by `verify_depth.kel`. The first
+/// refused read in module order, as the chunk and instruction.
+///
+/// The driver supplies what the reference computes outside its dataflow, which slots are
+/// tracked and the callees-first order of the chunks, and carries each chunk's summary from
+/// its run to its callers' runs. The stage computes every set, every summary and every
+/// verdict. A module with no tracked slot costs no run, as in the reference.
+fn private_data(module: &Module, stage: Module) -> Result<Option<(usize, usize)>> {
+    let unit = unit_private_slots(module);
+    if unit.is_empty() {
+        return Ok(None);
+    }
+    capacity(
+        "initialization",
+        "private slots",
+        unit.len(),
+        DV_INIT_LOCALS,
+    )?;
+    let n = module.chunks.len();
+    let (order, ordered) = callees_first(module);
+    let mut summaries = vec![[0i64; 8]; n];
+    let mut verdicts: Vec<Option<usize>> = vec![None; n];
+    for c in order {
+        let (verdict, summary) = private_data_chunk(module, c, &unit, &summaries, stage.clone())?;
+        summaries[c] = summary;
+        verdicts[c] = verdict;
+    }
+    for c in (0..n).filter(|&c| !ordered[c]) {
+        verdicts[c] = private_data_chunk(module, c, &unit, &summaries, stage.clone())?.0;
+    }
+    Ok(verdicts
+        .iter()
+        .enumerate()
+        .find_map(|(c, v)| v.map(|ip| (c, ip))))
 }
 #[cfg(test)]
 fn yield_region(
@@ -614,6 +814,12 @@ pub fn verify_module_via_kel(module: &Module) -> Result<VerificationVerdict> {
             }
         }
     }
+    // Rule 2, private data, is decided after rule 1 has admitted every chunk, as the reference
+    // orders them, and only once the structural checks have validated every slot index.
+    let initialization = match initialization {
+        Some(refusal) => Some(refusal),
+        None => private_data(module, verify_depth_kel_module())?.map(|(chunk, _)| Ok(chunk)),
+    };
     if let Some(refusal) = initialization {
         return Ok(VerificationVerdict::Rejected {
             stage: "initialization",
@@ -699,6 +905,44 @@ mod tests {
             None,
             "the declared width is admitted"
         );
+    }
+
+    /// Rule 2's verdict and each chunk's summary are the stage's. A stage whose
+    /// refusal is disabled admits the refused module, and a stage that never
+    /// records a reached `Return` gives every callee the empty summary, so a
+    /// read that only a callee's write protects is then refused.
+    #[test]
+    fn private_data_verdict_and_summary_are_decided_by_the_stage() {
+        let source = read_stage("kel/verify_depth.kel");
+        let stage = verify_depth_kel_module();
+
+        let mut unread = compile_src(
+            "private data d { u: (), n: Word }\nfn main() -> Word { d.u = (); d.n = 1; let v = d.u; d.n }",
+        );
+        assert_eq!(private_data(&unread, stage.clone()).unwrap(), None);
+        let write = unread.chunks[0]
+            .ops
+            .iter()
+            .position(|op| matches!(op, Op::SetData(0)))
+            .unwrap();
+        unread.chunks[0].ops[write] = Op::PopN(1);
+        assert!(private_data(&unread, stage.clone()).unwrap().is_some());
+        let marker = "                    dv.out_data_reject = 1;";
+        assert_eq!(source.matches(marker).count(), 1);
+        let silent =
+            compile_src(&source.replace(marker, "                    dv.out_data_reject = 0;"));
+        assert_eq!(private_data(&unread, silent).unwrap(), None);
+
+        let mut callee = compile_src(
+            "private data d { u: (), n: Word }\nfn init() -> Word { d.u = (); 0 }\n\
+             fn main() -> Word { let z = init(); let v = d.u; d.n + z }",
+        );
+        callee.data_layout.as_mut().unwrap().private_init[1] = crate::bytecode::ConstValue::Int(0);
+        assert_eq!(private_data(&callee, stage).unwrap(), None);
+        let found = "            di.ret = 1;";
+        assert_eq!(source.matches(found).count(), 1);
+        let blind = compile_src(&source.replace(found, "            di.ret = 0;"));
+        assert!(private_data(&callee, blind).unwrap().is_some());
     }
 
     #[test]
