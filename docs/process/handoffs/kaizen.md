@@ -146,7 +146,7 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `4577769ebcf25dac580ad11a2717de1169188e98c3234205fac9bafc0827e3ef`, 189 messages, 8 unacknowledged at export, none addressed to `kaizen`. Not re-exported on 2026-10-31 after sequence 190, because two later V0.3.X messages to other lines contain disclosure terms 5 and 6 and home paths |
+| [Interline](../interline/checkpoint.json) | `f8e1b133f7c54b1999acd3dba4228cf11a5ebae005d47da02a0394727c2ebd06`, 199 messages, 10 unacknowledged at export, none addressed to `kaizen`, with the bodies of sequences 193 and 194 redacted on the operator's decision of 2026-10-31 |
 | [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `6fb4783b8f0bf96d003311f0a84581f38bb9ff0cbfe232f0f85e014064d6cea6`, 3 samples evaluated and labelled, restored cleanly into a fresh store |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `417a126a7647b7099dcf1b8b4f4c67c64a5f9a06180cac492daefbbd427ca2fd`, 250 samples and 66 tasks, home directory written as `~` on 2026-10-28 with request digests recomputed, restored cleanly into a fresh store |
 
