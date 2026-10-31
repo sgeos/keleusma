@@ -203,6 +203,42 @@ fn native(m: &Module, replies: &[i64]) -> Vec<i64> {
     }
 }
 
+/// **A coroutine that needs a run-time kind, built on purpose.** Since
+/// absorption 124 no corpus coroutine needs one, because V0.2.X's widening gave
+/// `14_frame_log.kel`'s private slot its type's zero, which was the last `Unit`
+/// start. This subject declares a reply contract of an array for a value the
+/// program stores in a private tuple slot and reads through a tuple field, so
+/// the slot's kinds are the tuple of its initializer and the array of the
+/// reply, and the read needs a run-time kind guard.
+fn synthetic_dynamic() -> (Module, HostContracts) {
+    use keleusma::bytecode::WireShape;
+    use keleusma_native::coroutine::{Dialogue, YieldSite};
+    let m = common::build(
+        "private data st { p: (Word, Word) } \
+         yield main(a: Word) -> Word { let p: (Word, Word) = yield a; st.p = p; st.p.0 }",
+    );
+    let entry = m.entry_point.expect("entry");
+    let ip = m.chunks[entry]
+        .ops
+        .iter()
+        .position(|op| matches!(op, Op::Yield))
+        .expect("a yield");
+    let contracts = HostContracts {
+        dialogues: Some(BTreeMap::from([(
+            YieldSite {
+                chunk: entry as u32,
+                instruction: ip as u32,
+            },
+            Dialogue {
+                yielded: WireShape::Scalar { kind: 3 },
+                reply: WireShape::Flat { kind: 1, size: 16 },
+            },
+        )])),
+        ..HostContracts::default()
+    };
+    (m, contracts)
+}
+
 #[test]
 fn the_kind_census_over_the_corpus() {
     let mut statics = 0;
@@ -244,11 +280,22 @@ fn the_kind_census_over_the_corpus() {
          with an ambiguous but unread local {ambiguous_locals}"
     );
     assert!(statics > 0, "no corpus coroutine is static");
-    assert!(
-        dynamic > 0,
-        "no corpus coroutine needs a run-time kind, so the census measures nothing"
+    // **SINCE ABSORPTION 124 THE CORPUS NEEDS NO RUN-TIME KIND.** Question 9's
+    // aim, measured: 0 of 192,597 instructions, with 31 static, 0 dynamic and
+    // 2 refused coroutines. A dynamic coroutine here is a regression to explain.
+    assert_eq!(
+        (dynamic, needing),
+        (0, 0),
+        "a corpus coroutine needs a run-time kind again"
     );
-    assert!(instructions > needing);
+    // **NON-VACUITY.** A census that cannot report a need would pass the
+    // assertion above forever, so it must report one on a subject that has it.
+    let (m, contracts) = synthetic_dynamic();
+    let c = coroutine::kind_census(&m, &contracts).expect("the synthetic subject is analysed");
+    assert!(
+        c.first_dynamic.is_some() && c.guarded + c.dynamic_operands > 0,
+        "the census reports no run-time kind for a subject that needs one"
+    );
 }
 
 #[test]
@@ -278,20 +325,30 @@ fn every_static_corpus_coroutine_lowers_tag_free_and_agrees_with_the_vm() {
 
 #[test]
 fn a_dynamic_coroutine_is_refused_only_when_static_kinds_are_requested() {
+    // The corpus has no dynamic coroutine since absorption 124, so the subject
+    // is the synthetic one, and the default route must admit it first.
     let tm = machine();
-    let (name, m) = coroutines()
-        .into_iter()
-        .find(|(_, m)| {
-            coroutine::kind_census(m, &HostContracts::default()).is_ok_and(|c| !c.is_static())
-                && coroutine::lower(&Context::create(), m, &tm, FRAME).is_ok()
-        })
-        .expect("a dynamic coroutine the default lowering admits");
+    let name = "synthetic_dynamic";
+    let (m, contracts) = synthetic_dynamic();
+    assert!(
+        coroutine::kind_census(&m, &contracts).is_ok_and(|c| !c.is_static()),
+        "the synthetic subject must be dynamic"
+    );
+    coroutine::lower_with_options(
+        &Context::create(),
+        &m,
+        &tm,
+        FRAME,
+        &contracts,
+        LowerOptions::default(),
+    )
+    .expect("the default lowering admits the dynamic subject");
     let error = coroutine::lower_with_options(
         &Context::create(),
         &m,
         &tm,
         FRAME,
-        &HostContracts::default(),
+        &contracts,
         static_kinds(),
     )
     .unwrap_err();

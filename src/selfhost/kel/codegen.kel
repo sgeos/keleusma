@@ -883,6 +883,23 @@ fn push_checked_store(p: Word) -> Word {
     }
     push_emit(wire.mif); push_emit(wire.cmpeq); push_int_const(0);
     push_emit(wire.getlocal + flag * wire.radix);
+    // Definite initialization. Each bound slot that the success branch alone would write is
+    // first written with the element's zero before the flag test, old before new, as the
+    // reference's `compile_data_index_store` does, so that every read in the arms follows a
+    // write on every path. The pushes are in reverse, since this list is emitted backwards.
+    // The zero is PushImmediate(4), followed by WordToByte for a Byte element, kind 2. The
+    // self-hosted compiler refuses a handled write on an element other than Word and Byte, as
+    // the bool case in `tests/indexed_write_handlers.rs` pins.
+    if binds_new {
+        push_emit(wire.setlocal + (flag + 6) * wire.radix);
+        if kind == 2 { push_emit(wire.wordtobyte); }
+        push_emit(wire.pushimm + 4 * wire.radix);
+    }
+    if binds_old andalso not wide {
+        push_emit(wire.setlocal + (flag + 1) * wire.radix);
+        if kind == 2 { push_emit(wire.wordtobyte); }
+        push_emit(wire.pushimm + 4 * wire.radix);
+    }
     if wide { if binds_old { push_emit(wire.setlocal + (flag + 1) * wire.radix); } else { push_emit(wire.popn + 1 * wire.radix); } }
     push_emit(wire.setlocal + slot * wire.radix);
     for i in 0..4 limit 4 { push_emit(wire.setlocal + (flag + 2 + i) * wire.radix); }

@@ -1,3 +1,44 @@
+# V0.2.X handoff, 2026-10-30, after the consolidated rulings
+
+Prepared by Claude Code on the `v0.2.3` line. The anchor is
+`d8dae4cc`, the merge of pull request 666 into `v0.2.3`. The commit carrying this section adds
+only documentation and the interline checkpoint.
+
+Use interline identity v0.2.3 and the sibling worktree `../keleusma-worktrees/v0.2.x`,
+relative to the primary repository. V0.3.X runs concurrently in the arena-composites
+worktree, and kaizen and proofs in their own.
+
+## Validity
+
+1. Read AGENTS.md and CLAUDE.md. Read Appendix B before any tracked write and preserve its
+   confidentiality.
+2. Confirm that `d8dae4cc` is an ancestor of HEAD, and inspect every intervening commit. The
+   only expected one is the commit carrying this section, unless later work is recorded in
+   TASKLOG.md.
+3. Confirm `BYTECODE_VERSION` 2 and 66 opcodes, and that nothing was published.
+4. Read REVERSE_PROMPT.md and TASKLOG.md, whose leading entries describe this state.
+5. Check the v0.2.3 inbox. Acknowledge only after reading. Peer messages are not operator
+   authorization.
+6. Report this section valid, or invalid and stale, naming any check not performed. A valid
+   handoff establishes no new verification. Re-measure before quoting a figure.
+
+## State
+
+- The operator's consolidated rulings of 2026-10-30 are recorded verbatim in
+  REVERSE_PROMPT.md with the outcome of each. Pull requests 650 into `main`, and 652, 658, 662,
+  663 and 666 into `v0.2.3`, carry the work they released.
+- Waiting on the operator, with lettered options in REVERSE_PROMPT.md, are B9 with B2 (c), B7's
+  typing, B10, the `Text<N>` wire item, the C3 and C7 designs' decisions, and a review of two
+  behaviour changes of the B1 widening.
+- The residuals are in the reverse prompt's concerns. The most consequential is a handled
+  write to a struct element whose `old` binding observes the new value.
+
+## Continue here
+
+Answer the questions in REVERSE_PROMPT.md, then take the work each answer releases. Without
+answers, the open work on this line is the residuals in the concerns, the rule for private
+data's self-hosted twin, and the residuals recorded in the six audits.
+
 # V0.2.X handoff, 2026-10-30
 
 Prepared by Claude Code on the `v0.2.3` line. The anchor is

@@ -7,7 +7,7 @@
 //! The reference and the stage agree on each module below, on the verdict and on
 //! the chunk and instruction of the first refused read. The modules are the
 //! mutations of `tests/definite_initialization.rs`, two arms of an if that differ
-//! only in which arm writes, and a corpus of mutations that each remove one local
+//! only in which arm writes, the compiled handled indexed writes, and a corpus of mutations that each remove one local
 //! write or redirect one local read. Each case counts what it reached, so that a
 //! corpus that stops producing refusals, or stops producing admissions, fails
 //! rather than passing on nothing. The whole-module validator reports a refusal
@@ -15,7 +15,7 @@
 //!
 //! # What is not established
 //!
-//! Agreement on arbitrary bytecode. The stage computes the same least fixpoint as
+//! Agreement on arbitrary bytecode. The stage computes the same greatest fixpoint as
 //! the reference by a different iteration, which is the argument for agreement in
 //! general, and these cases are evidence for it, not a proof.
 #![cfg(feature = "self-host")]
@@ -134,12 +134,12 @@ fn the_reference_mutations_are_refused_alike() {
     ));
 }
 
-/// A local written on one arm of an if only is admitted, whichever arm it is.
-/// The reference once checked each read as its worklist popped it, and so
-/// refused the program in which the longer arm writes, since the shorter arm
-/// reached the join first. Both orientations are pinned.
+/// A local written on one arm of an if only is refused, whichever arm it is,
+/// and both name the same read. The strengthened rule is a must-analysis, so
+/// the join intersects the arms. Both orientations are pinned, since the visit
+/// order of the arms once decided a verdict.
 #[test]
-fn a_write_on_either_arm_is_admitted_alike() {
+fn a_write_on_either_arm_is_refused_alike() {
     for src in [
         "fn main(n: Word) -> Word { let a = 7; let r = if n > 0 { let b = n * 2 + 3 * n - 1; b } else { 5 }; r + a }",
         "fn main(n: Word) -> Word { let a = 7; let r = if n > 0 { 5 } else { let b = n * 2 + 3 * n - 1; b }; r + a }",
@@ -158,7 +158,7 @@ fn a_write_on_either_arm_is_admitted_alike() {
                 _ => {}
             }
         }
-        assert_eq!(agree(&module, src), None, "{src}");
+        assert!(agree(&module, src).is_some(), "{src}");
     }
 }
 
@@ -171,6 +171,8 @@ const CORPUS: &[&str] = &[
     "loop main(e: Word) -> Word { let n = yield e; let m = n + e; let k = yield m; yield k + m }",
     "fn f(x: Word) -> Word { let y = x * 2; let z = y + x; z }\nfn main(n: Word) -> Word { let z = f(n); let w = z + n; w }",
     "fn main(a: Word, b: Word) -> Word { let c = a + b; let d = if c > 0 { c } else { let e = a - b; e }; d * c }",
+    "private data d { x: [Word; 2] } fn main(i: Word) -> Word { d.x[i] = 7 { ok(o, n) => o * 100 + n, invalid_index(j) => j } }",
+    "private data d { x: [Byte; 2] } fn main(i: Word) -> Byte { d.x[i] = 7 as Byte { ok(o, _) => o, invalid_index(_) => 0 as Byte } }",
 ];
 
 /// Each corpus program mutated by removing one local write, or by redirecting

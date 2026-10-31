@@ -111,48 +111,52 @@ fn the_published_image_carries_the_declared_bytes() {
     );
 }
 
-/// **A composite slot is NOT marked written by the image.**
+/// **A composite slot starts WRITTEN, with its type's zero, since absorption 124.**
 ///
-/// The previous increment made a read of an unwritten composite slot fault. An
-/// image that zero-filled the pool and set the initialisation word would undo
-/// that silently, and every test of it would still pass, because a zeroed body
-/// reads as a body.
+/// Until then a composite slot's initializer was `Unit`, the image stopped at
+/// the slot array, and a read of an unwritten slot faulted as the reference
+/// faulted. V0.2.X's widening, its pull request 666, gives the slot its type's
+/// zero and the reference moves that body into the pool at construction. So
+/// the image writes the zero body and sets the initialisation word, and a read
+/// before the first write agrees with the reference rather than faulting.
 #[test]
-fn the_image_does_not_mark_a_composite_slot_as_written() {
-    let m = common::build(
-        "struct F { a: Word, b: Word }\n\
+fn a_composite_slot_starts_written_with_its_types_zero() {
+    let source = "struct F { a: Word, b: Word }\n\
          private data log { latest: F, count: Word = 3 }\n\
-         fn main(t: Word) -> Word { log.latest = F { a: t, b: t }; log.latest.a + log.count }\n",
-    );
+         fn main(a: Word, b: Word) -> Word { let before = log.latest.a + log.latest.b; \
+           log.latest = F { a: a, b: b }; before * 100 + log.latest.a + log.count }\n";
+    let m = common::build(source);
     let image = region::private_init_image(&m).expect("placeable");
-    let slots = m
-        .data_layout
-        .as_ref()
-        .map(|dl| dl.private_composite_layout.len())
-        .unwrap_or(0);
+    let dl = m.data_layout.as_ref().expect("data");
     assert_eq!(
-        slots, 1,
+        dl.private_composite_layout.len(),
+        1,
         "the subject must declare exactly one composite slot"
     );
-
-    // The image covers only the slot array. The initialisation words live beyond
-    // it, so an image that reached them would be longer than the array.
-    let private_slots = m
-        .data_layout
-        .as_ref()
-        .map(|dl| {
-            dl.slots
-                .iter()
-                .filter(|s| s.visibility == keleusma::bytecode::SlotVisibility::Private)
-                .count()
-        })
-        .unwrap_or(0);
+    let init = keleusma::vm::required_persistent_capacity_for(&m)
+        + region::stream_state_supplement_bytes(&m) as usize;
     assert_eq!(
         image.len(),
-        private_slots * 8,
-        "the image must cover the slot array and nothing beyond it; reaching the \
-         initialisation words would mark a composite slot as written"
+        init + 8,
+        "the image ends after the one initialisation word"
     );
+    assert_eq!(
+        image[init..init + 8],
+        (1024u64 | (16 << 32)).to_le_bytes(),
+        "the composite slot's initialisation word must say written, as a write of \
+         a sixteen-byte struct, tag 1024, says it"
+    );
+    // Read before the first write, the reference sees the zero of `F`, and so
+    // must native code. A backend that still faulted, or read garbage, differs.
+    for (a, b) in [(4, 9), (-2, 7)] {
+        let (vm, native) = common::vm_and_native_two_arg(source, a, b);
+        assert_eq!(
+            vm,
+            a + 3,
+            "the reference reads the zero of F before the write"
+        );
+        assert_eq!(native, vm, "a = {a}, b = {b}");
+    }
 }
 
 #[test]
