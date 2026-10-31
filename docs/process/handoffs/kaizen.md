@@ -76,9 +76,12 @@ run.
 - **Scratch volume.** On the operator's request of 2026-10-31 this worktree's `target`
   is a link to `/Volumes/Scratch/keleusma/kaizen/target`. Run
   `SCRATCH_BASE=/Volumes/Scratch ~/projects/project-template/scripts/scratch.sh link
-  target` after any `cargo clean`. The proposal to adopt it in `worktree.sh`, and the
-  orphaned copy of `kaizen-test-duration`, wait on the operator. See
-  [the proposal](../kaizen/2026-10-31-scratch-volume-proposal.md).
+  target` after any `cargo clean`. The operator approved
+  [the proposal](../kaizen/2026-10-31-scratch-volume-proposal.md). Branch
+  `chore/kaizen-scratch-worktrees` implements it, for the operator to merge, and the
+  notices to the other lines follow the merge. The administrator session deletes the
+  orphaned copy. Export the interline checkpoint, with the bodies of sequences 193 and
+  194 redacted, once V0.3.X reports that it has rebuilt its own redacted.
 - **Idle compaction.** The `idleCompaction` setting is absent from every settings file,
   so the trial never ran. See [the trial report](../kaizen/2026-10-31-idle-compaction-trial.md).
   Applying it is the operator's decision.
@@ -124,8 +127,8 @@ authority, so the startup-file positions reach them first-hand.
 ## Open with the operator
 
 [The open decisions of 2026-10-31](../kaizen/2026-10-31-open-decisions.md) hold the
-list. Whether to apply `idleCompaction: false` is open, and so are the scratch-volume
-proposal, the orphaned scratch copy and this line's temporary target directories. The operator's own checks K6,
+list. Whether to apply `idleCompaction: false` is open, and so is the merge of the
+scratch pull request. The operator's own checks K6,
 K9, K10 and K11 remain, and K14 is held. K13 waits on a proofs session, because
 `origin/proofs` is unchanged since the release and its inbox holds the release unread.
 
@@ -161,9 +164,8 @@ Pilot judgments never change gates.
 - The pre-push hook can pass the full gate and then exit 141 without the push landing.
   Confirm with `git ls-remote` and re-push the identical tree with `--no-verify`.
 - `sccache` fails inside the sandbox. Build with an empty `RUSTC_WRAPPER`, in the
-  linked `target`. The isolated `CARGO_TARGET_DIR` directories under the sandbox's
-  temporary directory hold 8.5 GB on the data volume, and their deletion is the
-  operator's decision.
+  linked `target`. The old isolated `CARGO_TARGET_DIR` folders, 8.0 GB, were deleted on
+  the operator's approval of 2026-10-31.
 
 ## Governing rules
 
