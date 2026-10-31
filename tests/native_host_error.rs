@@ -63,8 +63,9 @@ fn native_calls(module: &Module) -> Vec<u8> {
         .collect()
 }
 
-/// `host::risky` fails with a coded error on 0, a message-only error on 1 and
-/// a VM-internal error on 2, and otherwise returns its argument.
+/// `host::risky` fails with a coded error on 0, a message-only error on 1, a
+/// VM-internal error on 2 and a halting host error on 3, and otherwise returns
+/// its argument.
 fn run(source: &str, x: i64) -> Result<Value, VmError> {
     let arena = Arena::with_capacity(DEFAULT_ARENA_CAPACITY);
     let mut vm = Vm::new(compile(source), &arena).unwrap();
@@ -75,6 +76,7 @@ fn run(source: &str, x: i64) -> Result<Value, VmError> {
         }),
         Value::Int(1) => Err(VmError::NativeError(String::from("plain"))),
         Value::Int(2) => Err(VmError::DivisionByZero),
+        Value::Int(3) => Err(VmError::HostHalt(String::from("stop"))),
         ref v => Ok(v.clone()),
     });
     match vm.call(&[Value::Int(x)])? {
@@ -137,6 +139,34 @@ fn an_internal_fault_still_propagates_unreified() {
             "{source}"
         );
     }
+}
+
+#[test]
+fn a_halting_host_error_is_never_reified() {
+    // B10, ruled on 2026-10-31. A native that must end the run returns
+    // `HostHalt`. A covering handler does not catch it, the default trap does
+    // not rewrite it, and its category tells the host to halt.
+    let handled = "use host::risky\nfn main(x: Word) -> Word { host::risky(x) { ok(v) => v, host_error => 5 } }";
+    let bound = "use host::risky\nfn main(x: Word) -> Word { host::risky(x) { ok(v) => v, host_error(c) => c } }";
+    for source in [BARE, handled, bound] {
+        match run(source, 3) {
+            Err(e @ VmError::HostHalt(_)) => {
+                assert_eq!(
+                    e.category(),
+                    keleusma::vm::VmErrorCategory::Halt,
+                    "{source}"
+                );
+                assert!(
+                    matches!(e, VmError::HostHalt(ref m) if m == "stop"),
+                    "{source}"
+                );
+            }
+            other => panic!("{source}: expected the halting host error, got {other:?}"),
+        }
+    }
+    // The soft failures stay catchable by the same handler.
+    assert_eq!(run(handled, 0).unwrap(), Value::Int(5));
+    assert_eq!(run(handled, 1).unwrap(), Value::Int(5));
 }
 
 #[test]
