@@ -1,249 +1,162 @@
 # Reverse prompt
 
-## V0.2.X state, 2026-10-30, after the consolidated rulings
+## V0.2.X state, 2026-10-31, after the second consolidated list
 
-The operator asked for an archaeology of every open item on `main` and on the V0.2.X line,
-and answered the consolidated list first-hand in this session on 2026-10-30. The list
-numbered the items A1 to A5, B1 to B10, C1 to C7, D1 to D4, E1 to E7, F1 and G1. The
-B numbers are the questions of the previous reverse prompt.
+The operator asked on 2026-10-31 for every outstanding issue on `main` and on the V0.2.X line
+that needed a decision or attention, with the obvious choices. A list of twenty items was
+presented and answered first-hand in this session. Later answers in the same session settled
+relayed rulings, the questions the work raised, and the array and ring designs. The record of
+2026-10-30 is in git history and in `TASKLOG.md`.
 
-## Rulings received, 2026-10-30, verbatim
+## Rulings received first-hand, 2026-10-31, verbatim
 
-> - A series. Address all open items appropriately.
-> - B1. Adopt C. Then attempt to maintain guarantees and widen to A and B together.
-> - B2. B now with C later. Give me more information to make a decision after work lands.
-> - B5. `auto_arena_capacity_for` needs to return an autosized memory capacity based on
->   WCMU. The value should be suitable for allocation that will work. If capturing
->   composites is inappropriate, then we may need a separate function for that, and we may
->   need to update the cookbook. A function that returns arena plus composite capacity is
->   reasonable if this is the only realistic conceivable use case.
-> - B6. Keep them private.
-> - B7. A, restore operations. If posssible, it should be possible to conditionally include
->   them if we are looking at pulling text routines in or not.
-> - B8. A, the case for literals with compile time refusals. If free is a function to free
->   memory, then we need to talk about this.
-> - B9. I need more information.
-> - B10. I need more information about the use case.
-> - C1. A, refuse at compile time if the bound cannot be computed.
-> - C2. Option A.
-> - C3. Option B.
-> - C4. Option A.
-> - C5. Keep the Rust reference for now. Note that we need the review before V0.3.0.
-> - C6. Option A.
-> - C7. Option B.
-> - D1. Option A.
-> - D2. Option B.
-> - D3. Option A. Message the V0.3.X line so it does the same for the V0.3.X line.
-> - D4. Option B.
-> - E-series. Send a message to the kaizen line, and I will handle these issues there.
-> - F1. Option A.
-> - G1. Option A. Message other lines about stale branches.
+The twenty-item list. The numbers are that list's, recorded beside each item below.
 
-The lettered options the rulings select, as the list stated them.
+> 1. C for now. Reordering without updating the Keleusma code is a contract violation.
+>    Underlying Keleusma needs to be replaced or reloaded with a patched version before
+>    reordered data is passed in.
+> 2. B.
+> 3. B.
+> 4. B.
+> 5. B.
+> 6. A.
+> 7. A.
+> 8. A.
+> 9. A.
+> 10. A.
+> 11. A.
+> 12. B. Infer if possible. Refuse when impossible.
+> 13. A.
+> 14. A.
+> 15. A.
+> 16. Yes.
+> 17. Prune stale branches, local and remote.
+> 18. A. If anything needs to be done manually, I can work with you on that.
+> 19. A.
+> 20. Yes.
 
-- B1 (c) narrows the definite-initialization rule to what the current compiler already
-  guarantees. (a) and (b) together are the compiler writing every path and initializers
-  for composite private fields.
-- B2 (b) is a documented host struct contract with a size check, recommending
-  `#[derive(KeleusmaType)]`. (c) is field layouts on the wire, which needs authorization.
-- B7 (a) restores the bundled text operations with `Text<N>` signatures.
-- B8 (a) is an `as` cast for a literal, refused at compile time when the literal is longer
-  than `N`, with free functions for the operations.
-- C1 (a) refuses at compile time a module whose bound cannot be computed.
-- C2 (a) refuses float opcodes in `verify()` when the `floats` feature is absent.
-- C3 (b) designs one wire slot plus a length per array now. It needs authorization before
-  any wire-format change lands.
-- C4 (a) keeps version granularity continuous, with no tagged release for the milestone.
-- C5 keeps the Rust reference, and an independent review of the self-hosted validator is
-  required before V0.3.0.
-- C6 (a) keeps the primitives in Keleusma as a later opt-in milestone gated on review.
-- C7 (b) schedules backlog B42, first-class ring buffers, now.
-- D1 (a) holds the release, under the ruling of 2026-10-20 that the version moves only on
-  traction.
-- D2 (b) pre-authorizes merging green security-only pull requests into `main`.
-- D3 (a) requires `CI result` on pull requests into `v0.2.3`, with admins exempt.
-- D4 (b) corrects now, on `main`, the four lines flagged under the Appendix B review.
-- F1 (a) releases the proof branch, so the proofs line merges `v0.2.3` in, corrects its
-  texts and opens its pull request.
-- G1 (a) deletes this line's remote branches that are merged into `v0.2.3`.
+What each number named, so that the bare letters can be read.
 
-## Done in this session
+| Item | Question | Option chosen |
+|---|---|---|
+| 1 | B9 with B2 (c), host data the layout proof cannot cover | (c), the documented host contract |
+| 2 | B7, typing the restored text operations | (b), compiler intrinsics |
+| 3 | B10, a halting error for hosts | (b), `VmError` non-exhaustive with `HostHalt` |
+| 4 | The `Text<N>` wire item, the collapse to one address | (b), authorize now, later replaced, see below |
+| 5 | The array design's decisions | (b), answer them now |
+| 6 | The ring design's D1 to D7 | (a), answer item 2 first, then the rest |
+| 7 | Two behaviour changes of the B1 widening | (a), keep both |
+| 8 | Publishing V0.2.3 | (a), keep holding |
+| 9 | A handled write's `old` observing the new value | (a), fix now |
+| 10 | Rule 2's self-hosted twin | (a), implement |
+| 11 | `let (a, b) = 5` | (a), refuse in the type checker |
+| 12 | An unannotated `let r = yield` | (b), infer, refuse when impossible |
+| 13 | `tests/hostile_module_mutation.rs` without `floats` | (a), gate on `floats` |
+| 14 | The `selfhost_typecheck` over-rejection | (a), isolate and report |
+| 15 | The flaky CLI validator test | (a), watch and capture |
+| 16 | The C5 self-hosted review before V0.3.0 | Yes |
+| 17 | Stale branches | Prune, local and remote |
+| 18 | Stale agent worktrees | (a), remove |
+| 19 | Kaizen's stale records | (a), send a correction |
+| 20 | The items held in the kaizen session | Yes |
 
-- **A series.** Pull requests 642, 643 and 644 merged. Pull request 641 closed, because it
-  collapsed the 1.85, 1.88 and nightly toolchain pins again and failed Miri. The Order 5 and
-  Order 6 audits no longer read as unruled.
-- **D3.** `v0.2.3` requires `CI result` on pull requests, with admins exempt and force pushes
-  and deletions refused, as `main` does. V0.3.X applied the same to `v0.3.0` on its own
-  operator's confirmation, sequence 161.
-- **D4.** Pull request 650 merged into `main` after `main`'s full CI. The private term list
-  matches no line of `main`.
-- **G1.** Nine merged remote branches of this line deleted. V0.3.X deleted its thirteen,
-  tagging the four unmerged ones first. Kaizen and proofs were told of theirs.
-- **E series, F1, D2 and D3.** Relayed to kaizen, proofs and V0.3.X, as relays.
-- **C1, C2 and stage 0 of the C3 design.** Merged in pull request 652. `compile` refuses a
-  module whose memory bound cannot be computed. `verify()` refuses a float opcode without
-  `floats`. A private composite slot beyond 65,535, whose placement record the compiler had
-  dropped without a diagnostic, is refused at compile time.
-- **Merged in pull request 658,** as `5ed0bdfd`. B2's composite input check and the host contract. B5's arena
-  sizing for composite inputs, with a new `unsafe` compaction that Miri passes under Tree
-  Borrows. B1's narrowed rule and its self-hosted twin. The first `Text<N>` increment, values
-  and the literal cast refused at compile time when too long. The kaizen K7 fuzz targets,
-  which found a loader panic on a header width exponent of 32 or more, repaired there.
-- **Kaizen K3 and K4a.** The slow tests are split per stage and per word type, on branch
-  merged in pull request 662 as `1294ca21`. On one run each, so with runner variance not
-  measured, the slowest self-host shard fell from 47 to 35 minutes and the run from about 69
-  to about 45 minutes.
-- **C3 and C7.** `docs/decisions/ARRAY_WIRE_SLOT_DESIGN.md` and
-  `docs/decisions/RING_BUFFER_DESIGN.md`. The array design measured that the August work
-  already removed most of the 16 MB growth, `lexer.kel` now giving a 28,212-byte artifact.
-- **B1 widened, options (a) and (b).** Merged in pull request 666 as `d8dae4cc`. The
-  compiler writes every local on every path, and the verifier's rule for locals is a
-  must-analysis with its self-hosted twin. Every private slot starts as its type's zero, and a
-  private slot whose initializer is still `Unit` must be written on every path before a read.
-  No opcode, version or wire container change was needed. The record is in the Order 2 audit,
-  section "Definite initialization widened, 2026-10-30".
-- **The rulings record.** Merged in pull request 663 as `5ea94b3a`.
+Relayed rulings, each confirmed first-hand through lettered options in this session.
 
-## Information the operator asked for
+| Relay | Ruling relayed | Confirmed as |
+|---|---|---|
+| V0.3.X, sequence 172, question 22 | "b. Fold it in" | "Yes, fold it in" |
+| V0.3.X, sequence 172, question 27 | "a. Both lines", V0.2.X owning the C5 review | "Yes, V0.2.X owns it" |
+| Kaizen, sequence 173 | C7 D2, D3, D5, D6 and D7 as (a) | "Yes, confirm all five" |
+| Kaizen, sequence 173 | Item 4 as (a), defer | Conflicted with item 4 above. The operator answered "B, authorize now" |
 
-### B9, the boundary of the flat Text proof
+The collapse was then put back to the operator once its premise proved false, and the answer
+was "(c) Defer collapse". Dynamic bare `Text` is still produced by natives returning `String`,
+by the shell library and by host composite inputs, so a lone address cannot carry the length.
 
-What is measured or read from the code, as of `v0.2.3` on 2026-10-30.
+Questions the work raised, answered through lettered options.
 
-- A flat `Text` field is two words, a pointer and a length. `read_flat_scalar` in `src/vm.rs`
-  rebuilds a string from them with `KString::from_raw_parts`, which is `unsafe`. Its safety
-  contract requires that the two words describe a live region that holds valid UTF-8.
-- When the script built the body, item 5's proof establishes that contract statically.
-- When the body came from outside the program, nothing establishes it at the read. The five
-  sources are an entry argument, a resume value, a native's result, a shared slot and a hot-swap
-  seed.
-- Shared data refuses `Text` at compile time, so the shared slot source does not arise today.
-- The other four are packed by the VM itself from a host value tree, in the host's field order.
-  The words are a real pointer and length whenever the host's layout matches the script's.
+| Question | Answer |
+|---|---|
+| A plain read of a private composite aliases its pool body | "(c) Copy only when needed" |
+| `let 3 = 5` compiles and matches nothing | "(a) Refuse refutable let" |
+| A struct destructuring `let` is refused | "(a) Support it" |
+| The self-hosted compiler refuses pipes | "(b) Add pipes to self-host" |
 
-The failure is therefore exactly the host struct defect of B2. Suppose the host passes
-`(Word, Text)` where the script declares `(Text, Word)`. Both are three words, so the size check
-landed for B2 does not catch it. The script then rebuilds a string from the integer, and in Rust
-terms that is undefined behaviour, a read through an arbitrary address. Inference: a host that
-follows the contract never reaches it, and a malicious or mistaken host can.
+The array design, `ARRAY_WIRE_SLOT_DESIGN.md`, and the ring design, `RING_BUFFER_DESIGN.md`.
 
-What each option does.
+> C3.1. Explain encodings F and R.
+> C3.2. A. Authorize without version bump once a decision has been made.
+> C3.3. Fingerprints (and bytecode versions) are only updated when public releases are cut. We
+> are approaching a new public release, so a bumps are premature.
+> C3.4. A.
+> C3.5. A.
+> C3.6. A, option B.
+> C3.7. A.
+>
+> D1. A. Switch `Text<N>` to match.
+> D4. A. Also, we want some sort of overflow arm if it is possible to batch push something like
+> 6 elements into a 4 element ring buffer.
 
-- **(a) A constant-cost range check at the read.** It confirms the region lies inside the arena
-  or the bytecode image before rebuilding the string. That keeps every read inside memory the VM
-  owns. It does not establish UTF-8, because validating UTF-8 costs time linear in the length.
-  An in-range region of arbitrary bytes still breaks the `str` contract. Range plus UTF-8 is
-  sound, but it makes each such read cost up to the arena's size, which puts a large term into
-  the time bound.
-- **(b) Refuse such reads.** That refuses every program that reads a `Text` field of a struct
-  parameter, resume value or native result, which is ordinary code.
-- **(c) Record a trust assumption.** This is the B2 host contract, already documented in
-  `LANGUAGE_DESIGN.md`. It is honest, but the cost of a violation is undefined behaviour.
-- **(d), new, field layouts on the wire, which is B2's option (c).** The VM packs these bodies
-  itself. With each field's kind on the wire, it could refuse a host value whose field kinds do not
-  match at the moment it packs it, in time linear in the number of fields and independent of string
-  lengths. That closes all four live sources soundly, with no cost at the read. It needs a wire
-  change and your authorization.
+After the explanation of the two encodings, "Proceed with encoding F."
 
-My recommendation, an inference to weigh: (d), with (a) as a stopgap until it lands, and (c)
-recorded in the meantime, which is now done. If (d) is authorized, B2's remaining reorder case
-closes with it, so B2 (c) and B9 become one decision.
+## Done, 2026-10-31
 
-### B10, a halting error for hosts
+| Pull request | Merge | What it carries |
+|---|---|---|
+| 677 | `d9fb3a5f` | Item 3, `VmError::HostHalt` and a non-exhaustive `VmError`, and item 1's contract wording |
+| 679 | `2065aa3e` | Kaizen N4, the shipping validator test split per stage |
+| 680 | `bf5b80cd` | Question 22, the native region supplement in `auto_arena_capacity_for` |
+| 682 | `86069615` | Item 2, the text operations as intrinsics behind the `text` feature |
+| 684 | `29649eee` | Items 9, 11, 12 and 13, and the piped generic call of V0.3.X sequence 171 |
+| 685 | `35955511` | Items 10 and 14, and the lone-join names of V0.3.X sequence 170 |
 
-The request came from pykeleusma. I asked that line, in sequence 159, for the concrete use case,
-the host exception that must stop the VM rather than be caught, and what the host must observe
-afterwards. What is known now:
+`v0.2.3` was green after each merge that combined untested pairs, at `86069615` and at
+`35955511`. Items 17 to 19 are done. Fourteen remote and 180 local branches were pruned,
+nineteen stale worktrees were removed, and three unmerged branches and one dirty snapshot are
+kept as local `archive/*` tags. GitHub refused the tags because those commits carry the
+private author email, so they exist only in the shared local repository.
 
-- Every error a native returns is a soft error that the native-error construct may catch, by
-  design, so a script can recover from a host failure.
-- A host that wants a failure the script cannot catch has no variant for it.
-- The present routes are two. A native can return `InvalidBytecode`, which the construct does not
-  catch but which misreports the cause as a malformed artifact. Or the host can fail outside the
-  VM call.
+## In progress
 
-I will bring pykeleusma's answer to you when it arrives. The decision then is between a new
-variant, made non-exhaustive first so that adding it does not break a host's exhaustive match,
-and documenting the existing route.
+- The private read alias, option (c), on `fix/v02-private-read-alias`.
+- Refutable `let` refusal, struct destructuring in `let`, pipes in the self-hosted compiler, and
+  V0.3.X sequence 181's unmonomorphized call on an unannotated resume value, on
+  `feat/v02-let-patterns-pipes`.
 
-### B8, "free functions"
+## Next, in order
 
-"Free functions" meant functions that are not methods, `text::concat(a, b)` rather than
-`a.concat(b)`. It has nothing to do with freeing memory. A `Text<N>` is a flat value of exactly
-`word_bytes + N` bytes. A local is reclaimed with the iteration's arena at `Reset` like every
-other value, and a data field lives in its region. There is no `free`, and none is proposed,
-because an explicit deallocation would make memory use depend on the program's run-time path,
-which the worst-case memory bound exists to exclude.
-
-### B7, a decision the restored operations need
-
-Native declarations cannot be generic today. `NativeSignature` in `src/ast.rs` carries concrete
-parameter and return types, and a native's memory cost is attested per native, not per call
-site. A concatenation typed `(Text<A>, Text<B>) -> Text<A + B>` therefore has no way to be
-declared.
-
-- **(a) Generic native declarations over const parameters.** For example,
-  `use text::concat<const A: Word, const B: Word>(Text<A>, Text<B>) -> Text<A + B>`. The type
-  checker instantiates it at each call, and the result size, known at the call site, enters the
-  memory bound there. The Rust implementation reads sizes from the bodies, so one host function
-  serves every capacity. No opcode is needed, and the native table records each instantiation's
-  return shape. This is a language extension, and I recommend it.
-- **(b) Compiler intrinsics.** The operations lower to existing opcodes. Since no opcode writes
-  one byte of a flat body, each result is built whole with `NewComposite`, so code size grows
-  with `N`. It needs no native and no library.
-- **(c) One native per capacity.** For example, `text::concat_8_8`, declared and registered per
-  instantiation. It is simple and verbose.
-
-For conditional inclusion, I propose that the operations form a bundled `text` library behind a
-cargo feature, as `math`, `audio` and `shell` already are. A script imports them with
-`use text::...`, and a build without the feature refuses the import at compile time.
+1. Integrate the two branches above.
+2. Switch the `Text<N>` operations to method calls, `a.concat(b)` and the like, replacing the
+   free functions of pull request 682, as D1 directs.
+3. Encoding F, the per-field schema hash, option B addressing, the field-based `DataLayout`,
+   and then packed private storage S1, under `ARRAY_WIRE_SLOT_DESIGN.md`. No fingerprint or
+   version moves before the release is cut, per C3.3. Artifacts inside the repository built
+   under the old layout are regenerated in the same change, since nothing is published.
+4. The ring buffer, after the batch-push overflow arm of D4 is written into
+   `RING_BUFFER_DESIGN.md` for review.
+5. The C5 review of the self-hosted validator, once the self-hosted changes above land.
 
 ## Decisions waiting on the operator
 
-Each has lettered options with my recommendation first.
-
-1. **B9 and B2 (c) together.** (d) Field layouts on the wire, which closes the reorder case
-   and the flat `Text` boundary for every live source and needs a wire change. (a) A range
-   check at the read as a stopgap. (c) The documented trust assumption alone, as now.
-2. **B7, typing the restored operations.** (a) Generic native declarations over const
-   parameters. (b) Compiler intrinsics. (c) One native per capacity.
-3. **B10.** Waits on pykeleusma's use case, requested in sequence 159.
-4. **The `Text<N>` brief's wire item.** `TEXT_N_IMPLEMENTATION_BRIEF.md` records that shrinking
-   a flat `Text` field to one address should land with `Text<N>` or wait for a new version.
-   (a) Defer it with the version. (b) Authorize it now.
-5. **The C3 design's eight decisions**, in `ARRAY_WIRE_SLOT_DESIGN.md`. Decision 8, stage 0,
-   is done as its option (a).
-6. **The C7 design's seven decisions**, in `RING_BUFFER_DESIGN.md`. D1 should follow the
-   answer to item 2 above.
-7. **Two behaviour changes of the B1 widening, for review rather than a new ruling.** A hot
-   swap that seeds a private slot with `Unit` now gives it the new module's initializer, which
-   changes a public API's behaviour. A `Text` private slot read before its first write now
-   returns the empty string where it returned `Unit`, the empty string being my choice of the
-   `Text` zero. (a) Keep both. (b) Revert the hot swap change and keep a `Unit` seed as given,
-   which would leave such a slot to rule 2 alone.
+1. **The batch-push overflow arm**, once it is written into the ring design.
+2. **V0.3.X's native header figure.** V0.3.X keeps `<prefix>_region_bytes` for a C host that
+   cannot call `auto_arena_capacity_for`, and put that choice to the operator in its own
+   session. That line documents that the two figures must not be added together.
 
 ## Concerns
 
-- The peer message of sequence 154 relays the same definite-initialization choice from the
-  V0.3.X session, "Proceed with option a", which there named the narrowed rule. It agrees
-  with B1 and is recorded as a relay.
-- Question 3 of the previous reverse prompt attributed the `brace-expansion` fix to pull
-  request 630. The kaizen line corrected it in sequence 155. The fix was pull request 619,
-  merged into `main` at 02:33 UTC on 2026-10-30.
-- The rule for private data has no self-hosted twin, so the self-hosted validator would admit
-  a module carrying a `Unit` private initializer that the reference refuses. Current compilers
-  emit one only for a `()` slot, a slot whose zero would violate a refinement, or a slot of a
-  type with no zero. A private array of structs or a private tuple field now differs from the
-  reference's bytes, so the self-hosted cross-check refuses it.
-- A defect predating the widening was found and not fixed. The `old` binding of a handled
-  write to a struct element observes the new value, which the implementing agent attributes to
-  the read and the write aliasing the element's pool body. That is a hypothesis not yet
-  confirmed, and the defect is a wrong value, not a refusal.
-- Two compiler defects were found and not fixed. `let (a, b) = 5` compiles and faults at run
-  time, and `let r = yield ...` without an annotation faults when a field of `r` is read.
-- The fuzz package's own `Cargo.lock` is guarded by neither CI nor Dependabot, which is the
-  kaizen line's to decide.
-- The CLI test `shipping_validator_reaches_every_current_stage` failed once and passed on a
-  rerun in the twin agent's run, with its output not captured.
-- GitHub refused the job-log API with an account egress limit on 2026-10-30, so a CI failure
-  of pull request 652 was diagnosed by reproducing it locally.
+- Item 1 leaves the field-order contract to the host. A reordered `Text` field read crosswise is
+  undefined behaviour, which only the documented contract excludes.
+- The fold of question 22 means `auto_arena_capacity_for` is no longer the virtual machine's
+  byte-exact minimum. A host that runs only the virtual machine is over-provisioned by the
+  native supplement.
+- The native supplement formula in `src/native_region.rs` is a copy. The native backend stays
+  the authority, and V0.3.X's differential is what catches drift.
+- The `text` intrinsics trust a host-supplied `Text<N>` to keep its length at most `N` with zero
+  bytes past it. A violation gives a defined but unspecified result, with every read
+  bounds-checked.
+- The pipe fix does not handle a local closure that shadows a generic function's name.
+- The test-side self-hosted typecheck driver keys names by spelling across the whole program,
+  pinned as a known over-rejection.
+- Git crashed once on 2026-10-31 because a MacPorts library was briefly missing. The cause is
+  unknown, and the interrupted step completed on rerun.
