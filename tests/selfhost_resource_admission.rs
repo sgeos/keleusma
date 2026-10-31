@@ -267,19 +267,72 @@ fn native_attestations_preserve_per_site_and_per_chunk_charging() {
     }
 }
 
+#[path = "selfhost_stages/registry.rs"]
+mod registry;
+
+/// One list defines both `RESOURCE_STAGES` and one complete resource-admission test per
+/// stage, so the two cannot drift apart.
+///
+/// The tests were one function, `every_stage_matches_complete_resource_admission`, until
+/// 2026-10-30. It ran for a median of 27 minutes in the self-host shards, and nextest
+/// partitions by test, so one function bounded its shard from below. The operator adopted
+/// option (a) of decision K3 in `docs/process/kaizen/2026-10-30-open-decisions.md`, which
+/// splits it per stage. Each generated test runs the former loop body on one stage.
+///
+/// `resource_admission_covers_every_stage_source` keeps the former count of fifteen and
+/// requires the list to equal the stage directory and the driver's embedded table.
+macro_rules! stage_resource_tests {
+    ($($stage:ident),+ $(,)?) => {
+        const RESOURCE_STAGES: &[&str] = &[$(stringify!($stage)),+];
+
+        mod every_stage_matches_complete_resource_admission {
+            $(
+                #[test]
+                fn $stage() {
+                    let module = super::compile_src(include_str!(concat!(
+                        "../src/selfhost/kel/",
+                        stringify!($stage),
+                        ".kel"
+                    )));
+                    super::assert_admission_boundary(&module);
+                }
+            )+
+        }
+    };
+}
+
+stage_resource_tests!(
+    analyze,
+    codegen,
+    lexer,
+    parse,
+    reconstruct,
+    template_scan,
+    verify_datalayout,
+    verify_depth,
+    verify_structural,
+    verify_typed,
+    verify_types,
+    verify_yield,
+    wire,
+    wire_debug,
+    wire_schema,
+);
+
 #[test]
-fn every_stage_matches_complete_resource_admission() {
-    let mut paths: Vec<_> = std::fs::read_dir("src/selfhost/kel")
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|s| s == "kel"))
+fn resource_admission_covers_every_stage_source() {
+    let listed: std::collections::BTreeSet<String> = RESOURCE_STAGES
+        .iter()
+        .map(|name| (*name).to_string())
         .collect();
-    paths.sort();
-    assert_eq!(paths.len(), 15);
-    for path in paths {
-        let module = compile_src(&std::fs::read_to_string(&path).unwrap());
-        assert_admission_boundary(&module);
-    }
+    assert_eq!(
+        listed.len(),
+        RESOURCE_STAGES.len(),
+        "a stage is listed twice"
+    );
+    assert_eq!(listed.len(), 15);
+    assert_eq!(listed, registry::directory_stage_names());
+    assert_eq!(listed, registry::driver_stage_names());
 }
 
 #[test]

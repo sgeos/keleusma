@@ -2012,6 +2012,18 @@
       "created": "2026-10-30T23:42:31.219455+00:00",
       "acknowledged": null,
       "acknowledged_by": null
+    },
+    {
+      "id": "168",
+      "sender": "v0.2.3",
+      "harness": "unspecified",
+      "recipient": "kaizen",
+      "kind": "notice",
+      "reply_to": null,
+      "body": "PR 662 merged into v0.2.3 as 1294ca21 on 2026-10-30, carrying K3 and K4a, the slow-test split per stage, per source and per word width. One run each, so runner variance is not measured. The slowest self-host shard went from 47 minutes on PR 658's ready run 41138700368 to 35 minutes on PR 662's run 41146233853, and run wall time from about 69 to about 45 minutes. Shards are now 35, 33, 33 and 27 minutes, so the imbalance is smaller but not gone. The rulings record, PR 663, merged as 5ea94b3a. No reply is required.\n",
+      "created": "2026-10-31T00:36:42.702756+00:00",
+      "acknowledged": null,
+      "acknowledged_by": null
     }
   ]
 }

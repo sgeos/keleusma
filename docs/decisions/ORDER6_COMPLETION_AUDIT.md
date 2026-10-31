@@ -6,22 +6,23 @@
 
 This audit records the state of Order 6, full-language support for the self-hosted
 toolchain, on 2026-10-27. Its scope is the gate of
-[the full-language plan](./ORDER6_FULL_LANGUAGE_PLAN.md). **That gate is this line's reading
-of the roadmap gate and has not been ruled on by the operator.**
+[the full-language plan](./ORDER6_FULL_LANGUAGE_PLAN.md). That gate is this line's reading
+of the roadmap gate, and the operator accepted it on 2026-10-28.
 
 **Accepted by the operator first-hand on 2026-10-28.** The operator accepted this gate and
 ruled on question 10, "Cross-check is enough", so the self-hosted type stage does not port
 label-flow or newtype checking.
 
 **Disposition, revised 2026-10-27.** Order 6 is complete for its first-pass scope on this
-line's reading of the gate, pending the operator's acceptance. Every gate condition is met.
+line's reading of the gate, which the operator accepted on 2026-10-28. Every gate condition is met.
 The information-flow labels, `classify` and `declassify`, and the newtype with its
 refinement predicate, which the first version of this audit recorded as waiting on operator
 question 10, now compile byte-identically by erasure, as the reference compiles them.
-**Question 10 is not decided by that.** It asks whether the self-hosted type stage should
-also check label flow and nominal newtype identity, and until it is answered a violation is
-rejected by the reference cross-check alone, the same standing the generic and Option
-arguments have. That is a residual of the type stage, listed below, and not a refusal. `BYTECODE_VERSION` remains 2, the
+Question 10 asked whether the self-hosted type stage should also check label flow and
+nominal newtype identity. The operator answered it on 2026-10-28, "Cross-check is enough",
+so a violation is rejected by the reference cross-check alone, the same standing the
+generic and Option arguments have. That is a residual of the type stage, listed below, and
+not a refusal. `BYTECODE_VERSION` remains 2, the
 instruction set remains 66 opcodes, the wire format is unchanged, and nothing was published.
 Stage capacities were raised under the operator's ruling of 2026-10-26 that limits may be
 raised, each with its cost recorded in the plan.
@@ -35,7 +36,7 @@ selfhost_full_language`.
 
 | Gate condition | Evidence | Disposition |
 |---|---|---|
-| 1. Every repository source the reference compiles is Identical, and every source it rejects is rejected by both | `every_source_has_its_pinned_self_hosted_outcome` pins 75 sources, 70 Identical and 5 rejected by the reference. The five are RTOS scripts the reference rejects standalone because their natives are declared in the RTOS prelude, and their prelude-joined forms are Identical in `rtos_scripts_joined_with_the_prelude_have_their_pinned_outcomes` | Met |
+| 1. Every repository source the reference compiles is Identical, and every source it rejects is rejected by both | The per-source tests in module `every_source_has_its_pinned_self_hosted_outcome`, one function until 2026-10-30, pin 75 sources, 70 Identical and 5 rejected by the reference. The five are RTOS scripts the reference rejects standalone because their natives are declared in the RTOS prelude, and their prelude-joined forms are Identical in `rtos_scripts_joined_with_the_prelude_have_their_pinned_outcomes` | Met |
 | 2. A construct corpus with a program for every reference AST variant is byte-identical | `the_census_names_every_ast_variant` finds a row for every variant of the six AST enums. `the_ast_census_has_its_pinned_outcomes` reads 71 Identical and 3 RefRejects of 74 rows, the three being forms the reference itself rejects | Met |
 | 3. The self-hosted validator gives the reference verdict on every compiled source and on a rejection corpus, with no capacity refusal | `the_self_hosted_validator_agrees_with_the_reference_on_every_compiled_source` finds no disagreement and an empty capacity list. `the_self_hosted_validator_agrees_with_the_reference_on_a_mutated_corpus` finds no disagreement over 350 mutated modules in seven families | Met |
 | 4. The trap-free analysis agrees with the reference on the widened corpus | `the_trap_analysis_agrees_with_the_reference_on_every_compiled_source` compares 70 sources, 46 MayTrap, 23 TrapFree and 1 refused by both analyses, `scripts/check-md-links.kel`, for its boxed tuple read | Met, with the one shared refusal |
@@ -72,7 +73,7 @@ These are refused, not miscompiled, and each is pinned by a test, so a change is
 failure rather than a silent move.
 
 - Information-flow labels and newtype identity are not checked by the self-hosted type
-  stage, which is question 10, so a violation is rejected by the reference cross-check
+  stage, by the ruling on question 10, so a violation is rejected by the reference cross-check
   alone. A newtype as a struct field, data field, payload or native signature type is
   refused.
 - An `Option` over a struct, and Option values whose payload is not `Word`, `Byte` or

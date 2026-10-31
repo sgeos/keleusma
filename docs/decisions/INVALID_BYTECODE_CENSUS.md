@@ -565,7 +565,7 @@ not only the program.
 
 The addendum above says the next pass should ask each group's question with the target descriptor as
 a variable rather than only the program. That sweep now exists as
-`tests/target_descriptor_axis.rs`.
+`tests/target_descriptor_axis.rs`. Since 2026-10-30 that file is split into four binaries, `tests/target_descriptor_axis_i8.rs` through `tests/target_descriptor_axis_i64.rs`, one per runtime word type, which share `tests/target_descriptor_axis/harness.rs` and check the same cells.
 
 ### What it varies, and how the bounds are obtained
 
