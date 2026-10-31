@@ -986,9 +986,106 @@ pub fn region_total_bytes(
 /// deliberately no second region model: a parallel one would measure the model.
 pub fn host_arena_supplement_bytes(module: &keleusma::bytecode::Module) -> u32 {
     match module.entry_point {
-        Some(entry) => region_total_bytes(module, entry, 0),
+        Some(entry) => {
+            let base = region_total_bytes(module, entry, 0);
+            match yield_copy(module) {
+                Some(copy) => copy.offset.saturating_add(copy.bytes()),
+                None => base,
+            }
+        }
         None => 0,
     }
+}
+
+/// **THE COPY AT THE YIELD, OPERATOR QUESTION 24.** Where an entry stream's
+/// yielded bodies are copied so that a host may hold each until the next
+/// `Reset`, as the virtual machine allows.
+///
+/// # Why a copy is needed
+///
+/// A construction site has one region offset for the life of the chunk, so a
+/// site inside a loop rewrites the same bytes on every iteration, and a host
+/// holding an earlier iteration's yielded body would read the later one's
+/// bytes. [`yield_escape_hazards`] refuses that shape. The virtual machine
+/// gives each body yielded within one stream cycle its own address until the
+/// `Reset`, and the operator confirmed on 2026-10-31 that such a composite may
+/// be yielded. So each yield of the entry copies its body into the next slot
+/// of a buffer in the region, the host receives the slot's address, and the
+/// cursor returns to the first slot at the `Reset`.
+///
+/// # When it applies, and why that is sound
+///
+/// Only to the entry chunk of a stream, and only when every condition holds.
+///
+/// - The entry has a [`yield_escape_hazards`] site, so a copy is needed.
+/// - Its declared yield is a flat body of a fixed size, the slot size.
+/// - `keleusma::verify::max_resumes_before_reset` bounds the yields between
+///   resets, the slot count, so the buffer is static.
+/// - With every entry `Yield` replaced by `Len`, which pops a composite and
+///   pushes a word without carrying a region, every iteration-scope site of
+///   the entry is `Confined` under `keleusma::confine::module_confinement`. The
+///   yield was then the only route out of the iteration, and the copy closes
+///   it. A site with another route keeps its refusal, because no plan exists.
+///
+/// The buffer is placed after everything the entry already reserves, one word
+/// for the cursor followed by the slots, and [`host_arena_supplement_bytes`]
+/// counts it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct YieldCopy {
+    /// Byte offset of the cursor word from the region base. The slots follow it.
+    pub offset: u32,
+    /// Bytes per slot, the declared yield's body size.
+    pub slot_bytes: u32,
+    /// Slots, the bound on yields between resets.
+    pub slots: u32,
+}
+
+impl YieldCopy {
+    /// Bytes the cursor word and the slots occupy.
+    pub fn bytes(&self) -> u32 {
+        align_up(8u32.saturating_add(self.slot_bytes.saturating_mul(self.slots)))
+    }
+}
+
+/// The copy plan for the module's entry, or `None` when the entry needs no copy
+/// or cannot have one. See [`YieldCopy`].
+pub fn yield_copy(module: &keleusma::bytecode::Module) -> Option<YieldCopy> {
+    use keleusma::bytecode::{BlockType, WireShape};
+    use keleusma::confine::{Confinement, Scope};
+    let entry = module.entry_point?;
+    let chunk = module.chunks.get(entry)?;
+    if chunk.block_type != BlockType::Stream || yield_escape_hazards(chunk).is_empty() {
+        return None;
+    }
+    let WireShape::Flat { size, .. } = module.signatures.get(entry)?.ret else {
+        return None;
+    };
+    let slots = keleusma::verify::max_resumes_before_reset(module, entry).ok()?;
+    if size == 0 || slots == 0 {
+        return None;
+    }
+    size.checked_mul(slots)?.checked_add(8)?;
+    let mut without_yields = module.clone();
+    for op in &mut without_yields.chunks[entry].ops {
+        if matches!(op, Op::Yield) {
+            *op = Op::Len;
+        }
+    }
+    let verdicts = keleusma::confine::module_confinement(&without_yields);
+    let confined = verdicts.get(entry).is_some_and(|sites| {
+        sites
+            .iter()
+            .filter(|v| matches!(v.scope, Scope::Iteration { .. }))
+            .all(|v| matches!(v.verdict, Confinement::Confined))
+    });
+    if !confined {
+        return None;
+    }
+    Some(YieldCopy {
+        offset: align_up(region_total_bytes(module, entry, 0)),
+        slot_bytes: size,
+        slots,
+    })
 }
 
 /// Per-call-site region offsets for one chunk, in instruction order.

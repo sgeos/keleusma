@@ -1,3 +1,8 @@
+//! The copy at the yield of operator question 24, 2026-10-31, reads one word,
+//! its cursor, at a constant offset in the entry's region reservation. The
+//! entry writes it at `Op::Stream`, before any yield can run, and again at each
+//! `Op::Reset`, so every read follows a write of this instance.
+//!
 //! Order 6 text equality reads four words of two string literal records. Each
 //! record is a constant global `{ i64 len, bytes }` that `static_string_global`
 //! initialises, and its operand kind is `Text` only when a string constant
@@ -113,7 +118,8 @@ const READ_FORMS: &[&str] = &["build_load(", " = load "];
 // 33 -> 36 for the two trap-code loads and the handle's trap-record load.
 // 36 -> 37 for the instruction meter's read of its own word.
 // 37 -> 41 for the four text equality reads described above.
-const RECORDED_READ_SITES: usize = 41;
+// 41 -> 42 for the copy at the yield's cursor, described above.
+const RECORDED_READ_SITES: usize = 42;
 // 16 at first derivation, 2026-09-11. Four are on the host-provided boundary —
 // the resume-state word, the composite initialisation word, the private slot
 // array and the shared segment — and the rest read memory this lowering wrote

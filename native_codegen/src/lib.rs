@@ -1743,6 +1743,115 @@ fn static_string_global<'ctx>(
     g.as_pointer_value()
 }
 
+/// The address of the copy at the yield's cursor word, at a constant offset
+/// inside the entry's region reservation. See [`region::YieldCopy`].
+fn yield_cursor_pointer<'ctx>(
+    b: &Builder<'ctx>,
+    region: PointerValue<'ctx>,
+    copy: region::YieldCopy,
+    i64t: IntType<'ctx>,
+) -> PointerValue<'ctx> {
+    unsafe {
+        b.build_in_bounds_gep(
+            i64t.get_context().i8_type(),
+            region,
+            &[i64t.const_int(u64::from(copy.offset), false)],
+            "yield_cursor",
+        )
+        .unwrap()
+    }
+}
+
+/// Return the copy at the yield's cursor to its first slot.
+fn yield_cursor_reset<'ctx>(
+    b: &Builder<'ctx>,
+    region: PointerValue<'ctx>,
+    copy: region::YieldCopy,
+    i64t: IntType<'ctx>,
+) {
+    let cursor = yield_cursor_pointer(b, region, copy, i64t);
+    b.build_store(cursor, i64t.const_zero())
+        .unwrap()
+        .set_alignment(1)
+        .expect("1 is a power of two");
+}
+
+/// Copy a yielded body into the cursor's slot, advance the cursor, and return
+/// the slot's address as the value to yield.
+///
+/// The slot count is the verifier's bound on yields between resets, so the
+/// cursor cannot pass the last slot. It is checked anyway, and a cursor past
+/// it traps rather than writing beyond the reservation.
+#[allow(clippy::too_many_arguments)]
+fn yield_copy_body<'ctx>(
+    b: &Builder<'ctx>,
+    ctx: &'ctx Context,
+    func: FunctionValue<'ctx>,
+    region: PointerValue<'ctx>,
+    copy: region::YieldCopy,
+    body: IntValue<'ctx>,
+    trap: inkwell::basic_block::BasicBlock<'ctx>,
+    i64t: IntType<'ctx>,
+) -> Result<IntValue<'ctx>, LowerError> {
+    let i8t = ctx.i8_type();
+    let cursor_ptr = yield_cursor_pointer(b, region, copy, i64t);
+    let cursor = b
+        .build_load(i64t, cursor_ptr, "yield_slot")
+        .unwrap()
+        .into_int_value();
+    cursor
+        .as_instruction()
+        .expect("a load is an instruction")
+        .set_alignment(1)
+        .expect("1 is a power of two");
+    let in_range = b
+        .build_int_compare(
+            IntPredicate::ULT,
+            cursor,
+            i64t.const_int(u64::from(copy.slots), false),
+            "yield_slot_in_range",
+        )
+        .unwrap();
+    let copying = ctx.append_basic_block(func, "yield_copy");
+    b.build_conditional_branch(in_range, copying, trap).unwrap();
+    b.position_at_end(copying);
+    let offset = b
+        .build_int_add(
+            i64t.const_int(u64::from(copy.offset) + 8, false),
+            b.build_int_mul(
+                cursor,
+                i64t.const_int(u64::from(copy.slot_bytes), false),
+                "yield_slot_stride",
+            )
+            .unwrap(),
+            "yield_slot_offset",
+        )
+        .unwrap();
+    let slot = unsafe {
+        b.build_in_bounds_gep(i8t, region, &[offset], "yield_slot_ptr")
+            .unwrap()
+    };
+    let source = b
+        .build_int_to_ptr(body, ctx.ptr_type(AddressSpace::default()), "yield_source")
+        .unwrap();
+    b.build_memcpy(
+        slot,
+        1,
+        source,
+        1,
+        i64t.const_int(u64::from(copy.slot_bytes), false),
+    )
+    .map_err(|e| LowerError::Internal(format!("the copy at the yield: {e}")))?;
+    let next = b
+        .build_int_add(cursor, i64t.const_int(1, false), "yield_slot_next")
+        .unwrap();
+    b.build_store(cursor_ptr, next)
+        .unwrap()
+        .set_alignment(1)
+        .expect("1 is a power of two");
+    Ok(b.build_ptr_to_int(slot, i64t, "yield_slot_bits").unwrap())
+}
+
 /// An internal constant global holding a composite constant's packed body, the
 /// source a `Const` copies into its region site.
 fn composite_constant_global<'ctx>(
@@ -1977,6 +2086,7 @@ pub fn lower_chunk<'ctx>(
             // `Op::Call`, so a stream chunk here has no callee to suspend.
             suspending_callee: None,
             confinement: None,
+            yield_copy: None,
             natives: &[],
             native_shapes: &[],
             chunk_signatures: &[],
@@ -2609,6 +2719,11 @@ fn lower_module_with<'ctx>(
                 None
             },
             confinement: confinement.get(i).map(|v| v.as_slice()),
+            yield_copy: if retcon {
+                region::yield_copy(program)
+            } else {
+                None
+            },
             natives: &program.native_names,
             native_shapes: &program.native_return_shapes,
             chunk_signatures: &program.signatures,
@@ -2975,6 +3090,11 @@ struct BodyCfg<'a> {
     /// the behaviour it had, which is the same reason it refuses `Op::Call`
     /// outright rather than guessing at one.
     confinement: Option<&'a [keleusma::confine::SiteVerdict]>,
+    /// The entry stream's copy at the yield, operator question 24. `Some` only
+    /// for the retcon entry chunk, and only when [`region::yield_copy`] finds
+    /// that the yields are the only route out of the iteration. It then
+    /// replaces the two escape refusals of a construction site in this chunk.
+    yield_copy: Option<region::YieldCopy>,
     /// Op index of a tail-position `Call` whose result is RETURNED rather than
     /// pushed, because the callee suspends on the caller's behalf. See
     /// [`delegated_suspension_plan`].
@@ -3852,6 +3972,7 @@ fn lower_chunk_body<'ctx>(
         own_signature,
         suspending_callee,
         confinement,
+        yield_copy,
         natives,
         native_shapes,
         chunk_signatures,
@@ -8074,9 +8195,13 @@ fn lower_chunk_body<'ctx>(
                 // verdict-consuming placement intact: a wrong verdict here
                 // rejects a sound program loudly, and never places a value
                 // where the defect can occur.
+                // **Unless the entry copies at its yields**, operator question
+                // 24. `region::yield_copy` exists only when the yields are the
+                // only route out of the iteration, so the copy below closes the
+                // hazard this refusal reports, and both refusals give way to it.
                 if let Some(h) = crate::region::yield_escape_hazards(chunk)
                     .into_iter()
-                    .find(|h| h.site_op == i)
+                    .find(|h| h.site_op == i && yield_copy.is_none())
                 {
                     return Err(LowerError::YieldEscapingLoopComposite {
                         site_op: h.site_op,
@@ -8106,7 +8231,8 @@ fn lower_chunk_body<'ctx>(
                 // call and the composite-return ABI governs; 144 of 252 corpus
                 // sites decline at that scope, so consuming it here would refuse
                 // a large part of a corpus that must keep lowering.
-                if let Some(verdicts) = confinement
+                if yield_copy.is_none()
+                    && let Some(verdicts) = confinement
                     && let Some(v) = verdicts.iter().find(|v| v.ip == i)
                     && matches!(v.scope, keleusma::confine::Scope::Iteration { .. })
                     && !matches!(v.verdict, keleusma::confine::Confinement::Confined)
@@ -8780,7 +8906,13 @@ fn lower_chunk_body<'ctx>(
             Op::Stream | Op::Reset if degenerate_yield.is_some() => {}
             // **`Op::Stream` MARKS THE LOOP TOP AND EMITS NOTHING.** The block
             // after it is entered from the dispatch or by the `Reset` back edge.
-            Op::Stream if general_stream || retcon_stream => {}
+            Op::Stream if general_stream || retcon_stream => {
+                // The copy at the yield starts each instance at its first slot.
+                // The `Reset` below returns the cursor there at every rewind.
+                if retcon && let (Some(copy), Some(region)) = (yield_copy, region_base) {
+                    yield_cursor_reset(&st.b, region, copy, i64t);
+                }
+            }
 
             // **`Op::Yield` SAVES THE RESUME POINT AND RETURNS.**
             //
@@ -8842,7 +8974,27 @@ fn lower_chunk_body<'ctx>(
                 let reply_type = coroutine::dialogue::tag(contract.reply);
                 let owned_reply =
                     matches!(contract.reply, keleusma::bytecode::WireShape::Flat { .. });
-                let v = st.pop();
+                // **THE COPY AT THE YIELD, operator question 24.** The yielded
+                // body is copied into the cursor's slot, and the host receives
+                // the slot, which nothing overwrites before the `Reset`. The
+                // body's width must be the slot's, proven rather than assumed.
+                let v = match (yield_copy, region_base) {
+                    (Some(copy), Some(region)) => {
+                        match st.width_at(0) {
+                            Width::Body(n) if n == copy.slot_bytes => {}
+                            other => {
+                                return Err(LowerError::UnsupportedShape(format!(
+                                    "the yield at op {i} copies {} bytes into its slot, and its \
+                                     operand's width is {other:?}",
+                                    copy.slot_bytes
+                                )));
+                            }
+                        }
+                        let body = st.pop();
+                        yield_copy_body(&st.b, ctx, func, region, copy, body, trap_bb, i64t)?
+                    }
+                    _ => st.pop(),
+                };
                 let suspend = module
                     .get_function("llvm.coro.suspend.retcon.i1")
                     .unwrap_or_else(|| {
@@ -9191,6 +9343,12 @@ fn lower_chunk_body<'ctx>(
                     if let Some(flags) = &st.ownership {
                         st.b.build_store(flags.locals[0], owned).unwrap();
                     }
+                }
+                // Bodies yielded in the cycle that ends here are released, as
+                // the virtual machine's epoch releases them, so the next cycle
+                // copies into the first slot again.
+                if retcon && let (Some(copy), Some(region)) = (yield_copy, region_base) {
+                    yield_cursor_reset(&st.b, region, copy, i64t);
                 }
                 let top = loop_top.unwrap();
                 note!(top, 0);

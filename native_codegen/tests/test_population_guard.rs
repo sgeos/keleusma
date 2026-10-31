@@ -119,7 +119,10 @@
 // `native_opaque.rs`, operator question 14, 2026-10-30. No name disappeared.
 // 840 -> 841: `the_template_scan_stage_finds_templates_natively` in
 // `native_stage_factory.rs`, 2026-10-30. No name disappeared.
-const RECORDED_TEST_FUNCTIONS: usize = 841;
+// 841 -> 842: `bodies_yielded_in_a_cycle_stay_intact_until_the_reset` in
+// `retcon_bytecode.rs`, the copy at the yield of operator question 24,
+// 2026-10-31. No name disappeared.
+const RECORDED_TEST_FUNCTIONS: usize = 842;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise
