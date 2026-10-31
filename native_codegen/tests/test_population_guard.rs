@@ -124,7 +124,10 @@
 // 2026-10-31. No name disappeared.
 // 842 -> 844: the two tests of `region_supplement_formula.rs`, operator
 // question 22, 2026-10-31. No name disappeared.
-const RECORDED_TEST_FUNCTIONS: usize = 844;
+// 844 -> 845: `the_shipping_crates_copy_agrees_with_the_backend` in
+// `region_supplement_formula.rs`, absorption 127, 2026-10-31. No name
+// disappeared.
+const RECORDED_TEST_FUNCTIONS: usize = 845;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

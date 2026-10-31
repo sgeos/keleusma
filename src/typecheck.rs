@@ -993,6 +993,94 @@ fn check_text_literal_cast(
     Ok(())
 }
 
+/// Type a call to a bundled text operation.
+///
+/// Each `Text<N>` operand must type as a `Text<N>`. A type variable is accepted
+/// in its place, because inside a generic body the operand is not yet concrete
+/// and the mandatory re-typecheck after monomorphization decides it again with
+/// the variable resolved. The compiler refuses any operand whose capacity it
+/// still cannot read, so a variable never reaches emission unresolved.
+///
+/// The result carries the union of the operands' information-flow labels, as
+/// the result of an arithmetic operation does.
+#[cfg(feature = "text")]
+fn check_text_intrinsic(
+    ctx: &mut Ctx,
+    op: crate::text_intrinsic::TextOp,
+    name: &str,
+    args: &mut [Expr],
+    span: Span,
+) -> Result<Type, TypeError> {
+    use crate::text_intrinsic::TextOp;
+    if args.len() != op.arity() {
+        return Err(TypeError::new(
+            format!(
+                "`{name}` expects {} argument(s), got {}",
+                op.arity(),
+                args.len()
+            ),
+            span,
+        ));
+    }
+    let mut labels: BTreeSet<String> = BTreeSet::new();
+    // The capacity of each text operand, `None` for a still-generic operand.
+    let mut caps: Vec<Option<ConstDim>> = Vec::with_capacity(args.len());
+    for (i, arg) in args.iter_mut().enumerate() {
+        let raw = type_of_expr(ctx, arg)?;
+        let resolved = raw.apply(&ctx.subst);
+        labels.extend(labels_of(&resolved));
+        let ty = strip_labels(resolved);
+        let wants_text = !(op == TextOp::Slice && i > 0);
+        if wants_text {
+            match ty {
+                Type::TextN(cap) => caps.push(Some(cap)),
+                Type::Var(_) => caps.push(None),
+                other => {
+                    return Err(TypeError::new(
+                        format!(
+                            "`{name}` argument {i} expects a capacity-bounded text `Text<N>`, \
+                             got {}",
+                            other.display()
+                        ),
+                        arg.span(),
+                    ));
+                }
+            }
+        } else if !types_compatible(ctx, &ty, &Type::Word) {
+            return Err(TypeError::new(
+                format!("`{name}` argument {i} expects Word, got {}", ty.display()),
+                arg.span(),
+            ));
+        }
+    }
+    let first = caps.first().cloned().flatten();
+    let second = caps.get(1).cloned().flatten();
+    let result = match op {
+        TextOp::Len | TextOp::Capacity => Type::Word,
+        TextOp::Eq => Type::Bool,
+        TextOp::Slice => match first {
+            Some(cap) => Type::TextN(cap),
+            None => ctx.fresh(),
+        },
+        TextOp::Concat => match (first, second) {
+            (Some(ConstDim::Known(a)), Some(ConstDim::Known(b))) => match a.checked_add(b) {
+                Some(sum) => Type::TextN(ConstDim::Known(sum)),
+                None => {
+                    return Err(TypeError::new(
+                        format!("`{name}` result capacity Text<{a} + {b}> overflows a word"),
+                        span,
+                    ));
+                }
+            },
+            // A symbolic capacity is decided after monomorphization. A fresh
+            // variable unifies with whatever the generic body declares, and the
+            // re-typecheck replaces it with the concrete sum.
+            _ => ctx.fresh(),
+        },
+    };
+    Ok(apply_labels(result, &labels))
+}
+
 /// Whether a value of type `t` carries a `Text<N>` anywhere in its body.
 ///
 /// Used to refuse the operations this increment does not build, which today is
@@ -2102,6 +2190,14 @@ fn run_check(program: &mut Program, mut ctx: Ctx) -> Result<(), TypeError> {
     // parenthesised signature (`use host::name(T1, T2, ...) -> R`)
     // also populate `ctx.native_signatures` for call-site validation.
     for use_decl in &program.uses {
+        // The `text` path names the bundled text operations in every build, so
+        // a host native cannot be imported under it. See `text_intrinsic`.
+        if crate::text_intrinsic::use_path_is_reserved(&use_decl.path) {
+            return Err(TypeError::new(
+                crate::text_intrinsic::reserved_use_message(&use_decl.path),
+                use_decl.span,
+            ));
+        }
         if let ImportItem::Name(name) = &use_decl.import {
             let full = if use_decl.path.is_empty() {
                 name.clone()
@@ -4899,14 +4995,19 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                         // rejection is now at the compile boundary, where the conservative
                         // stance says an unsupported construct belongs.
                         //
-                        // The refusal is TEMPORARY BY DESIGN. Bounded text composition returns
-                        // with `Text<N>`, where a literal carries its own byte capacity and
-                        // concatenation composes them by const arithmetic -- `Text<A>` and
-                        // `Text<B>` yielding `Text<A + B>`. At that point this arm comes back with
-                        // an implementation behind it. See `docs/decisions/TEXT_CAPACITY_TYPE.md`.
+                        // Bounded composition returned on 2026-10-31 as the intrinsic
+                        // `text::concat` over `Text<N>`, behind the `text` feature, and not as
+                        // this operator. Static text has no capacity in its type, so `+` on it
+                        // still has nothing to bound a result by, and it stays refused. See
+                        // `docs/decisions/TEXT_CAPACITY_TYPE.md`.
                         Err(TypeError::new(
                             alloc::string::String::from(
-                                "text concatenation is not available: `Text + Text` has no                                  runtime implementation, so admitting it here would produce a                                  program that verifies and cannot run. Bounded concatenation                                  returns with the capacity-carrying `Text<N>` type; until then,                                  compose text in a host-registered native.",
+                                "text concatenation is not available on static text: `Text + Text` \
+                                 has no runtime implementation, so admitting it here would produce \
+                                 a program that verifies and cannot run. Cast each literal to a \
+                                 capacity-bounded `Text<N>` and use `text::concat`, which the \
+                                 `text` cargo feature provides, or compose text in a \
+                                 host-registered native.",
                             ),
                             *span,
                         ))
@@ -5052,6 +5153,32 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             span,
             const_args,
         } => {
+            // A call under the `text` path is a bundled text operation, decided
+            // before any other resolution so that it can never fall through to
+            // the permissive native path below. A build without the `text`
+            // feature refuses it here.
+            match crate::text_intrinsic::resolve(name) {
+                Err(message) => return Err(TypeError::new(message, *span)),
+                Ok(Some(op)) => {
+                    if !const_args.is_empty() {
+                        return Err(TypeError::new(
+                            format!("`{name}` takes no const arguments"),
+                            *span,
+                        ));
+                    }
+                    #[cfg(feature = "text")]
+                    return check_text_intrinsic(ctx, op, name, args, *span);
+                    // `resolve` answers an operation only when the feature is
+                    // compiled in, so this arm is not reached without it. It
+                    // still refuses rather than panics.
+                    #[cfg(not(feature = "text"))]
+                    return Err(TypeError::new(
+                        format!("`{name}` ({}) requires the `text` cargo feature", op.name()),
+                        *span,
+                    ));
+                }
+                Ok(None) => {}
+            }
             // Const-generic arity: a call to a function with const
             // parameters must supply exactly that many const arguments
             // through a turbofish, and a turbofish is admissible only on
@@ -5362,6 +5489,17 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
                     }
                 }
                 Ok(sig.return_type)
+            } else if crate::text_intrinsic::namespace_member(func).is_some() {
+                // A bundled text operation is called directly. Admitting it as a
+                // pipeline target would route it through the permissive native
+                // path, which is exactly what the reserved namespace prevents.
+                Err(TypeError::new(
+                    format!(
+                        "`{func}` is a bundled text operation and is not a pipeline target; \
+                         call it directly"
+                    ),
+                    *span,
+                ))
             } else if ctx.natives.contains(func) || func.contains("::") {
                 // Native pipeline target. Accept arguments without
                 // signature check.
@@ -6165,6 +6303,20 @@ fn type_of_expr_inner(ctx: &mut Ctx, expr: &mut Expr) -> Result<Type, TypeError>
             // operation is a native call, the admissible arms are
             // `ok` (the success value) and `error` (the Word error
             // code a fallible native reported).
+            // A bundled text operation is total and has no outcome arms, so it
+            // is refused as a guarded operation rather than mistaken for a
+            // native whose `error` arm could never fire.
+            if let Expr::Call { name, .. } = op_expr.as_ref()
+                && crate::text_intrinsic::namespace_member(name).is_some()
+            {
+                return Err(TypeError::new(
+                    format!(
+                        "`{name}` is a bundled text operation, which is total and has no \
+                         outcome arms to handle"
+                    ),
+                    *span,
+                ));
+            }
             if let Expr::Call { name, .. } = op_expr.as_ref()
                 && (ctx.natives.contains(name) || name.contains("::"))
             {

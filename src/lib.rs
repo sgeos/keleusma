@@ -221,6 +221,11 @@ pub mod parser;
 /// portability.
 #[cfg(feature = "compile")]
 pub mod target;
+/// The bundled text operations over `Text<N>`, recognised by name and lowered
+/// by the compiler as intrinsics. Present in every compiling build so that a
+/// build without the `text` feature refuses the operations by name.
+#[cfg(feature = "compile")]
+mod text_intrinsic;
 /// Token definitions and keyword recognition.
 #[cfg(feature = "compile")]
 pub mod token;
@@ -270,6 +275,10 @@ pub mod trap_analysis;
 /// establish" so the completeness gradient is measurable.
 #[cfg(feature = "verify")]
 pub mod confine;
+/// The arena bytes a native compilation needs beyond the virtual machine,
+/// folded into [`vm::auto_arena_capacity_for`].
+#[cfg(feature = "verify")]
+pub mod native_region;
 /// Phase 0 spike for the A.2.1 typed operand-stack verifier pass. Not yet
 /// wired into [`verify`]; a standalone proof of concept for the abstract
 /// operand-stack domain and baked-offset validation.
