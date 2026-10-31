@@ -14139,3 +14139,87 @@ fn names_only_commands_do_not_consume_constant_forest_storage() {
     .unwrap();
     assert_eq!(ret, -240, "read-only scan work remains bounded");
 }
+
+/// THE LONE JOINS SEE A COMPOSITE PRIVATE INITIALIZER, OR REFUSE.
+///
+/// `examples/scripts/14_frame_log.kel` holds a private `Frame`, whose zero
+/// initializer is a `Struct` constant naming `Frame` and its fields. The
+/// reference interns those names into `NAMES` and `STRING_POOL`. The joins
+/// behind `wire_names_via_kel`, `wire_regions_via_kel` and `wire_chunks_via_kel`
+/// intern only what the module-input blob carries, and that blob carried the
+/// chunk constants alone, so each join wrote zeros where the names belong. The
+/// shipping serializer does not run these joins and was unaffected.
+///
+/// The blob now carries the reference's root set. The joins still intern a
+/// forest's names in preorder where the reference interns them breadth-first,
+/// so a module whose two orders differ is refused, and the second program,
+/// with two nested composite roots and a `Text` root, is that case.
+#[cfg(feature = "self-host")]
+#[test]
+fn the_lone_joins_reproduce_the_names_of_a_composite_private_initializer() {
+    let directory_of = |module: &keleusma::bytecode::Module| {
+        let want = keleusma::wire_schema::encode_aux_body(&corpus_aux_of(module)).expect("encode");
+        let specs = region_counts_for(&want);
+        let mut vm = vm_for(WIRE_KEL);
+        let (_, directory) = run_call(
+            &mut vm,
+            &Call {
+                cmd: CMD_BUILD_REGION_TABLE,
+                nregions: specs.len() as i64,
+                seed: &[],
+                regions: &specs,
+                fields: &[],
+                names: &[],
+                pool: &[],
+                args: [0, 0, 0, 0, 0],
+                read_len: want.len(),
+            },
+        )
+        .expect("run");
+        (want, directory, specs.len())
+    };
+    type Join = fn(
+        &keleusma::bytecode::Module,
+        &[u8],
+        usize,
+    ) -> Result<Vec<u8>, keleusma::selfhost::SelfHostError>;
+    let joins: [(&str, Join); 3] = [
+        ("names", keleusma::selfhost::wire_names_via_kel),
+        ("regions", keleusma::selfhost::wire_regions_via_kel),
+        ("chunks", keleusma::selfhost::wire_chunks_via_kel),
+    ];
+
+    let src = include_str!("../examples/scripts/14_frame_log.kel");
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let (want, directory, regions) = directory_of(&module);
+    let view = keleusma_wire::WireView::parse(&want).expect("reference parses");
+    let mut compared = 0;
+    for (join, run) in joins {
+        let out = run(&module, &directory, regions).unwrap_or_else(|e| panic!("{join}: {e:?}"));
+        for k in [kind::NAMES, kind::STRING_POOL] {
+            let region = view.find_region(k).expect("region");
+            let base = region.byte_offset().expect("offset");
+            let stored = view.region_bytes(&region).expect("payload");
+            assert!(!stored.is_empty(), "region {k:#06x} is empty");
+            assert_eq!(
+                &out[base..base + stored.len()],
+                stored,
+                "{join}: region {k:#06x} differs from the reference"
+            );
+            compared += 1;
+        }
+    }
+    assert_eq!(compared, 6, "three joins, two regions each");
+
+    let src = "struct I { a: Word }\nstruct P { i: I, b: Word }\nstruct Q { j: I, c: Word }\n\
+               private data d { p: P, q: Q, t: Text }\n\
+               fn main() -> Word { d.q = Q { j: I { a: 1 }, c: 2 }; let p = d.p; let q = d.q; p.b + q.c }";
+    let module = compile(&parse(&tokenize(src).expect("lex")).expect("parse")).expect("compile");
+    let (_, directory, regions) = directory_of(&module);
+    for (join, run) in joins {
+        assert!(
+            run(&module, &directory, regions).is_err(),
+            "{join}: a forest whose name orders differ must be refused"
+        );
+    }
+}

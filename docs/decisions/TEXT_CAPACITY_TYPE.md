@@ -569,3 +569,18 @@ analysing operations reproduces the widening problem the type exists to remove.
 **Do not silently reintroduce unbounded text.** If any path can produce a `Text<N>` whose live
 length may exceed `N`, the worst-case memory bound is wrong rather than merely loose, and the
 language's central claim is compromised.
+
+## Operator rulings, 2026-10-31, on the collapse and the surface
+
+Received first-hand in the V0.2.X session.
+
+**The collapse is deferred.** After the investigation above, the operator was given three
+options and answered "(c) Defer collapse". `ScalarKind::Text` stays two words, and nothing on
+the wire changes. The collapse becomes possible once host producers of text move to `Text<N>`.
+
+**The operations become method calls.** The operator answered the ring design's D1 with "A.
+Switch `Text<N>` to match." The bundled operations therefore move from the free functions of
+pull request 682 to method calls on the value, `a.concat(b)`, `t.len()`, `t.capacity()`,
+`a.eq(b)` and `t.slice(start, end)`. The free functions are replaced, not kept beside the
+methods, so that each operation has one spelling. The lowering, the costs and the `text` feature
+gating are unchanged. This supersedes the free-function surface recorded for question 8.

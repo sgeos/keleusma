@@ -175,12 +175,20 @@ type with no zero.
 
 The self-hosted twin in verify_depth.kel now meets at a join and computes the
 greatest fixpoint, and agrees with the reference on rule 1 over the controls of
-tests/selfhost_definite_initialization.rs. Rule 2 has no self-hosted twin yet.
-The self-hosted validator does not read the private initializers, so it cannot
-see which slots rule 2 tracks, and the reference refuses a module that the
-self-hosted validator would accept only when such a module carries a `Unit`
-private initializer, which the current compilers emit only for the residual
-slots above.
+tests/selfhost_definite_initialization.rs. Rule 2 gained its twin on
+2026-10-31. The driver reads the private initializers, numbers the slots whose
+initializer is `Unit` densely, orders the chunks callees first as the reference
+does, and carries each chunk's summary to its callers' runs. verify_depth.kel
+computes every set, every summary and every verdict in the same run as rule 1,
+by the same sweep, from the empty set at each chunk's entry. A module with no
+such slot costs no further run. The two agree on the controls and mutations of
+that file, which reach a `()` slot, a write in one arm of an if, a callee that
+writes on every path and one that writes on one path only, an indexed read of
+composites whose elements only an indexed write reaches, and a stream. The
+driver refuses a module with more than 256 such slots, or a chunk with more
+than 1024 distinct callees, as a capacity error rather than a verdict. The
+callees-first order is the driver's and not the stage's, so a defect in that
+order would be shared by neither validator's dataflow and caught by neither.
 
 The measured costs are these. A bound `Word` or `bool` slot adds two
 instructions and two nominal cycles, and a bound `Byte` slot three instructions

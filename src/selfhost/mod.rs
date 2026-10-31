@@ -5990,6 +5990,23 @@ pub(crate) const DV_OUT_INIT_IP: usize = 7 + crate::selfhost_host::VERIFY_OP_CAP
 pub(crate) const DV_OUT_INIT_CAUSE: usize = 8 + crate::selfhost_host::VERIFY_OP_CAP * 7;
 /// The locals one set of the stage holds, its `init_locals()`.
 pub(crate) const DV_INIT_LOCALS: usize = 256;
+// Rule 2 of `crate::verify_init`, private data, decided by the same run after rule 1. The host
+// numbers the private slots whose initializer is `Unit` densely, and `d_width` is their count.
+// Per op, `d_set` is one more than the dense slot written, or -1 at `Return`, `d_lo` and `d_hi`
+// bound the dense slots read, and `d_call` is one more than the row of `d_sum` that holds the
+// callee's summary. The verdict, its cause and this chunk's own summary follow.
+pub(crate) const DV_D_WIDTH: usize = 9 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+pub(crate) const DV_D_SET: usize = 10 + crate::selfhost_host::VERIFY_OP_CAP * 7;
+pub(crate) const DV_D_LO: usize = 10 + crate::selfhost_host::VERIFY_OP_CAP * 8;
+pub(crate) const DV_D_HI: usize = 10 + crate::selfhost_host::VERIFY_OP_CAP * 9;
+pub(crate) const DV_D_CALL: usize = 10 + crate::selfhost_host::VERIFY_OP_CAP * 10;
+pub(crate) const DV_D_SUM: usize = 10 + crate::selfhost_host::VERIFY_OP_CAP * 11;
+pub(crate) const DV_OUT_DATA_REJECT: usize = 10 + crate::selfhost_host::VERIFY_OP_CAP * 12;
+pub(crate) const DV_OUT_DATA_IP: usize = 11 + crate::selfhost_host::VERIFY_OP_CAP * 12;
+pub(crate) const DV_OUT_DATA_CAUSE: usize = 12 + crate::selfhost_host::VERIFY_OP_CAP * 12;
+pub(crate) const DV_OUT_DATA_SUM: usize = 13 + crate::selfhost_host::VERIFY_OP_CAP * 12;
+/// The callee summaries one run of the stage holds, the rows of its `d_sum`.
+pub(crate) const DV_DATA_CALLEES: usize = 1024;
 
 /// The compiled `verify_depth.kel` stage module, cached after the first build.
 ///
@@ -8156,13 +8173,17 @@ pub mod wire_slots {
 /// produced no auxiliary body at all.
 ///
 /// The module reaches Keleusma as a length-prefixed blob and nothing else: no
-/// Every constant root in a module, in chunk order.
+/// Every constant root the reference encoder emits, the chunk constants in chunk order and
+/// then the private initializers unless they are elided.
+///
+/// This was the chunk constants alone. The two sets coincided while every private initializer
+/// was a scalar, and parted once a composite private field was given its type's zero, as for
+/// the `Frame` of `examples/scripts/14_frame_log.kel`. The joins this blob feeds then interned
+/// no name for the initializer and wrote zeros in `NAMES` and `STRING_POOL` where the reference
+/// holds its names. The root set is now the reference's own definition rather than a model of
+/// it. The shipping serializer, `wire_auxiliary_from_module_via_kel`, does not read this blob.
 fn const_roots_of(module: &Module) -> Vec<ConstValue> {
-    let mut roots = Vec::new();
-    for c in &module.chunks {
-        roots.extend(c.constants.iter().cloned());
-    }
-    roots
+    crate::wire_schema::constant_roots_of_module(module)
 }
 
 /// The wire tag and payload for a constant node.
@@ -8337,8 +8358,8 @@ fn push_blob_node(c: &ConstValue, out: &mut Vec<u8>, names: &mut usize) {
 /// by ten bytes per scalar, a two-byte tag and an eight-byte payload. Other
 /// forests retain the legacy thirty-byte node header and its name data.
 pub fn module_input(module: &Module) -> (Vec<u8>, usize) {
-    let constants = module.chunks.iter().flat_map(|chunk| &chunk.constants);
-    let compact = constants.clone().all(constant_is_scalar) && constants.count() <= 0x7FFF;
+    let constants = const_roots_of(module);
+    let compact = constants.iter().all(constant_is_scalar) && constants.len() <= 0x7FFF;
     module_input_encoded(module, compact)
 }
 
@@ -8468,8 +8489,46 @@ pub fn wire_names_via_kel(
     directory: &[u8],
     regions: usize,
 ) -> Result<Vec<u8>, SelfHostError> {
-    let (blob, names) = module_input(module);
+    let (blob, names) = lone_join_input(module)?;
     wire_names_from_input(&blob, names, directory, regions)
+}
+
+/// The module-input blob for the joins that read it, or a refusal where they would intern
+/// names in an order the reference does not.
+///
+/// The reference interns the names of its constant forest breadth-first across every root,
+/// while the joins' walk of this blob interns them in preorder. The two orders agree on the
+/// stage corpus, where no constant carries a name, and on a forest with one name-bearing root,
+/// such as the private `Frame` of `examples/scripts/14_frame_log.kel`. They part when two roots
+/// carry names below them, for instance two private struct fields that each hold a struct.
+/// Such a module is refused here rather than given a `NAMES` region that differs from the
+/// reference's. Reordering the walk is a change to `wire.kel`, which is at the name capacity of
+/// the self-hosted type stage. The shipping serializer, `wire_auxiliary_from_module_via_kel`,
+/// interns in the reference's order and is not affected.
+fn lone_join_input(module: &Module) -> Result<(Vec<u8>, usize), SelfHostError> {
+    let roots = const_roots_of(module);
+    let mut preorder: Vec<&str> = Vec::new();
+    let mut stack: Vec<&ConstValue> = roots.iter().rev().collect();
+    // Each node is pushed once by its parent, so both walks visit the finite forest once.
+    while let Some(c) = stack.pop() {
+        preorder.extend(blob_node_names(c));
+        stack.extend(const_children(c).into_iter().rev());
+    }
+    let mut breadth: Vec<&str> = Vec::new();
+    let mut queue: alloc::collections::VecDeque<&ConstValue> = roots.iter().collect();
+    while let Some(c) = queue.pop_front() {
+        breadth.extend(blob_node_names(c));
+        queue.extend(const_children(c));
+    }
+    if preorder != breadth {
+        return Err(SelfHostError::Unsupported {
+            detail: "the module-input joins intern constant names in preorder and the reference \
+                     interns them breadth-first, and this module's constant forest orders its \
+                     names differently under the two"
+                .into(),
+        });
+    }
+    Ok(module_input(module))
 }
 
 /// [`wire_names_via_kel`] with the module input supplied directly.
@@ -8673,11 +8732,9 @@ fn header_fields_of(module: &Module) -> [i64; 11] {
 /// * **What the emitted set actually is.** `keleusma::wire_schema::constant_roots`
 ///   is the one definition of it: every chunk's constants in chunk order, then
 ///   `DataLayout::private_init` unless the encoder elides it. `const_roots_of`
-///   below is the narrower BLOB model and is not that set. For this corpus the
-///   two coincide, because every stage's private pool is wholly default and so
-///   contributes nothing — but they coincide by measurement rather than by
-///   construction, and a stage that gained one non-zero initialiser would part
-///   them silently.
+///   now returns that set. It was the chunk constants alone, which coincided with
+///   it only while no module carried a non-elided initializer, and a composite
+///   private field's zero initializer parted them, as this paragraph warned.
 ///
 /// # Why enlarging `wire.fin` cannot be the answer
 ///
@@ -8704,7 +8761,7 @@ pub fn wire_regions_via_kel(
     directory: &[u8],
     regions: usize,
 ) -> Result<Vec<u8>, SelfHostError> {
-    let (blob, names) = module_input(module);
+    let (blob, names) = lone_join_input(module)?;
     wire_regions_from_input(&blob, names, directory, regions, &header_fields_of(module))
 }
 
@@ -8873,7 +8930,7 @@ pub fn wire_chunks_via_kel(
     // The real limit is enforced where it is actually known. The stage writes at
     // absolute artifact offsets and FAILS CLOSED with an out-of-bounds fault
     // naming the offset and the bound, which the call below turns into a refusal.
-    let (blob, names) = module_input(module);
+    let (blob, names) = lone_join_input(module)?;
     wire_chunks_from_input(
         &blob,
         names,
@@ -10152,7 +10209,7 @@ pub fn wire_windowed_via_kel(
     regions: &[(u16, usize, usize)],
 ) -> Result<WindowedArtifact, SelfHostError> {
     const WINDOW: usize = 65536;
-    let (blob, names) = module_input(module);
+    let (blob, names) = lone_join_input(module)?;
     let header = header_fields_of(module);
     let fields = chunk_fields_of(module);
     // COMPILED ONCE FOR THE WHOLE ARTIFACT, NOT ONCE PER REGION.
