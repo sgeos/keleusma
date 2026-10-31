@@ -270,6 +270,10 @@ pub mod trap_analysis;
 /// establish" so the completeness gradient is measurable.
 #[cfg(feature = "verify")]
 pub mod confine;
+/// The arena bytes a native compilation needs beyond the virtual machine,
+/// folded into [`vm::auto_arena_capacity_for`].
+#[cfg(feature = "verify")]
+pub mod native_region;
 /// Phase 0 spike for the A.2.1 typed operand-stack verifier pass. Not yet
 /// wired into [`verify`]; a standalone proof of concept for the abstract
 /// operand-stack domain and baked-offset validation.

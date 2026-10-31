@@ -48,6 +48,14 @@ until the next `Reset`. When such a value carries `Text`, use
 in any one value, since the module cannot know the length of a host
 string.
 
+The figure also includes the region a native compilation of the module
+reserves, so that one capacity works whether the module runs on the
+virtual machine or as native code. A host that runs only the virtual
+machine is therefore over-provisioned by that region, which
+`keleusma::native_region::native_region_supplement_bytes` reports, and a
+host that used to add the native figure itself should stop, or it counts
+the region twice.
+
 ## Option C: a static buffer
 
 On an embedded target without a heap, the arena can run from a host-owned

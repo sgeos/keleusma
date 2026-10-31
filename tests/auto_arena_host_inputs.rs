@@ -100,6 +100,13 @@ fn drive_nested(module: Module, capacity: usize, iterations: usize) -> Result<us
     Ok(resets)
 }
 
+/// The figure without the native region supplement, the part the virtual
+/// machine itself needs, which the tightness checks below measure. The
+/// supplement is slack on the virtual machine route since question 22.
+fn vm_figure(module: &keleusma::bytecode::Module) -> usize {
+    auto_arena_capacity_for(module, &[]).expect("bounded")
+        - keleusma::native_region::native_region_supplement_bytes(module) as usize
+}
 #[test]
 fn the_resume_count_covers_straight_line_and_loop_yields() {
     let module = compile(NESTED_STREAM);
@@ -124,7 +131,7 @@ fn an_arena_of_exactly_the_figure_holds_nested_composite_inputs() {
 #[test]
 fn the_figure_without_its_input_term_is_too_small() {
     let module = compile(NESTED_STREAM);
-    let capacity = auto_arena_capacity_for(&module, &[]).expect("bounded");
+    let capacity = vm_figure(&module);
     let inputs = host_input_arena_bytes_for(&module, 0).expect("bounded");
     // Q is four words, so each input is a 32-byte body, and the term counts
     // the entry argument, at least five resumes, and one transient body.
@@ -148,7 +155,7 @@ fn a_scalar_only_module_keeps_its_figure() {
         0
     );
     // Measured before the input term existed, at the same tree.
-    assert_eq!(auto_arena_capacity_for(&module, &[]).expect("bounded"), 184);
+    assert_eq!(vm_figure(&module), 184);
 }
 
 /// A `yield fn` callee whose two yields are charged at its call site.
@@ -234,8 +241,9 @@ fn drive_text(module: Module, capacity: usize, text: &str) -> Result<(), VmError
 fn text_inside_a_composite_input_needs_the_host_allowance() {
     let text = "a host string longer than any slack in the figure, sixty-four bytes";
     let module = compile(TEXT_STREAM);
-    let without = auto_arena_capacity_for(&module, &[]).expect("bounded");
-    let with = auto_arena_capacity_with_input_text(&module, &[], text.len()).expect("bounded");
+    let without = vm_figure(&module);
+    let with = auto_arena_capacity_with_input_text(&module, &[], text.len()).expect("bounded")
+        - keleusma::native_region::native_region_supplement_bytes(&module) as usize;
     assert!(with > without);
     drive_text(module.clone(), with, text).expect("the allowance covers the text");
     match drive_text(module, without, text) {

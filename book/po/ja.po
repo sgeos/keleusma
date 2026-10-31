@@ -2,7 +2,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The Keleusma Guide\n"
-"POT-Creation-Date: 2026-10-24T16:26:00-07:00\n"
+"POT-Creation-Date: 2026-10-31T03:58:58-07:00\n"
 "PO-Revision-Date: 2026-07-08T21:49:53-07:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -1425,7 +1425,7 @@ msgstr ""
 #: src/28_song_playground.md:66 src/29_writing_a_song.md:81
 #: src/30_song_roster.md:62 src/31_embedding_orientation.md:82
 #: src/32_constructing_a_vm.md:81 src/33_registering_natives.md:146
-#: src/34_coroutine_protocol.md:97 src/35_arena_sizing.md:78
+#: src/34_coroutine_protocol.md:97 src/35_arena_sizing.md:86
 #: src/36_loading_bytecode.md:71 src/37_hot_swap_host.md:74
 #: src/38_cost_models.md:71 src/39_full_host.md:66
 msgid "What you now know"
@@ -6512,11 +6512,11 @@ msgid ""
 "than writing a file that every runtime would refuse. Chapter 19 explains why "
 "a program is rejected."
 msgstr ""
-"コンパイラは、自分自身を再帰的に呼び出すプログラムのように、最悪時のメモリ使用"
-"量を計算できないプログラムも拒否します。そのようなプログラムは、どれだけのメモ"
-"リがあってもどのマシンでも実行できないため、すべてのランタイムが拒否するファイ"
-"ルを書き出すのではなく、コンパイラがその場でそう伝えます。プログラムが拒否され"
-"る理由は第19章で説明します。"
+"コンパイラは、自分自身を再帰的に呼び出すプログラムのように、最悪時のメモリ使"
+"用量を計算できないプログラムも拒否します。そのようなプログラムは、どれだけの"
+"メモリがあってもどのマシンでも実行できないため、すべてのランタイムが拒否する"
+"ファイルを書き出すのではなく、コンパイラがその場でそう伝えます。プログラムが"
+"拒否される理由は第19章で説明します。"
 
 #: src/25_from_source_to_bytecode.md:100
 msgid ""
@@ -7677,7 +7677,7 @@ msgstr ""
 "繰り返すまでに約50分かかります。**楽曲9**は長い実験的なループで、スケールと楽"
 "器の16通りの組み合わせを巡って、繰り返すまでに約50分かかります。"
 
-#: src/30_song_roster.md:49 src/COOKBOOK.md:478
+#: src/30_song_roster.md:49 src/COOKBOOK.md:480
 msgid "Why this matters"
 msgstr "なぜこれが大切か"
 
@@ -7870,22 +7870,22 @@ msgid "\"fn main() -> Word { 60 + 7 }\""
 msgstr "\"fn main() -> Word { 60 + 7 }\""
 
 #: src/31_embedding_orientation.md:56 src/GETTING_STARTED.md:118
-#: src/COOKBOOK.md:310
+#: src/COOKBOOK.md:312
 msgid "\"lex\""
 msgstr "\"lex\""
 
 #: src/31_embedding_orientation.md:57 src/GETTING_STARTED.md:119
-#: src/COOKBOOK.md:311
+#: src/COOKBOOK.md:313
 msgid "\"parse\""
 msgstr "\"parse\""
 
 #: src/31_embedding_orientation.md:58 src/GETTING_STARTED.md:120
-#: src/COOKBOOK.md:312
+#: src/COOKBOOK.md:314
 msgid "\"compile\""
 msgstr "\"compile\""
 
 #: src/31_embedding_orientation.md:61 src/GETTING_STARTED.md:123
-#: src/COOKBOOK.md:316 src/COOKBOOK.md:336
+#: src/COOKBOOK.md:318 src/COOKBOOK.md:338
 msgid "\"verify\""
 msgstr "\"verify\""
 
@@ -8736,10 +8736,28 @@ msgstr ""
 "バイト数の上界を渡します。"
 
 #: src/35_arena_sizing.md:51
+msgid ""
+"The figure also includes the region a native compilation of the module "
+"reserves, so that one capacity works whether the module runs on the virtual "
+"machine or as native code. A host that runs only the virtual machine is "
+"therefore over-provisioned by that region, which "
+"`keleusma::native_region::native_region_supplement_bytes` reports, and a "
+"host that used to add the native figure itself should stop, or it counts the "
+"region twice."
+msgstr ""
+"この値には、モジュールをネイティブコードへコンパイルしたときに確保される領域も"
+"含まれます。そのため、モジュールを仮想マシンで実行する場合とネイティブコード"
+"として実行する場合のどちらでも、一つの容量で動作します。仮想マシンだけを実行"
+"するホストには、その領域の分だけ余分に割り当てられます。その大きさは "
+"`keleusma::native_region::native_region_supplement_bytes` が返します。以前に"
+"ネイティブ用の値を自分で加えていたホストは、それをやめてください。そうしない"
+"と、その領域を二重に数えることになります。"
+
+#: src/35_arena_sizing.md:59
 msgid "Option C: a static buffer"
 msgstr "選択肢C: 静的バッファ"
 
-#: src/35_arena_sizing.md:53
+#: src/35_arena_sizing.md:61
 msgid ""
 "On an embedded target without a heap, the arena can run from a host-owned "
 "buffer placed in static memory:"
@@ -8748,7 +8766,7 @@ msgstr ""
 "のバッファから動かせます。ヒープが無い組み込みターゲットでは、アリーナをホス"
 "トが所有する静的メモリの中のバッファから動かせます。"
 
-#: src/35_arena_sizing.md:63
+#: src/35_arena_sizing.md:71
 msgid ""
 "This is the pattern for a `no_std` deployment, where the arena is a fixed "
 "region of `.bss` rather than a heap allocation."
@@ -8757,11 +8775,11 @@ msgstr ""
 "の固定領域になります。これは`no_std`デプロイメントのパターンで、アリーナは"
 "ヒープ確保ではなく`.bss`の固定領域になります。"
 
-#: src/35_arena_sizing.md:66
+#: src/35_arena_sizing.md:74
 msgid "When the arena is too small"
 msgstr "アリーナが小さすぎるとき"
 
-#: src/35_arena_sizing.md:68
+#: src/35_arena_sizing.md:76
 msgid ""
 "If the chosen capacity is below the module's analyzed WCMU, `Vm::new` "
 "returns `VmError::VerifyError`. The error is surfaced at construction, "
@@ -8778,7 +8796,7 @@ msgstr ""
 "行時のハザードではありません。構築時の却下、検証器が出すその他の却下と同じ種"
 "類のものです。"
 
-#: src/35_arena_sizing.md:74
+#: src/35_arena_sizing.md:82
 msgid ""
 "This is the memory budget of Chapter 20 seen from the host side. The "
 "verifier proved a WCMU bound; the host must provide an arena at least that "
@@ -8791,11 +8809,11 @@ msgstr ""
 "きさのアリーナを提供しなければならず、両者が一致することの確認は`Vm::new`で行"
 "われます。"
 
-#: src/35_arena_sizing.md:80
+#: src/35_arena_sizing.md:88
 msgid "The arena is bounded working memory; its size is the host's choice."
 msgstr "アリーナは有界の作業メモリで、サイズはホストの選択です。"
 
-#: src/35_arena_sizing.md:81
+#: src/35_arena_sizing.md:89
 msgid ""
 "`DEFAULT_ARENA_CAPACITY` is the default; `auto_arena_capacity_for` computes "
 "an exact size; `Arena::from_static_buffer` runs from static memory."
@@ -8805,7 +8823,7 @@ msgstr ""
 "`DEFAULT_ARENA_CAPACITY`がデフォルト、`auto_arena_capacity_for`が厳密なサイズ"
 "を計算、`Arena::from_static_buffer`が静的メモリから動かします。"
 
-#: src/35_arena_sizing.md:84
+#: src/35_arena_sizing.md:92
 msgid ""
 "An arena smaller than the module's WCMU is rejected at `Vm::new`, before any "
 "code runs."
@@ -8814,7 +8832,7 @@ msgstr ""
 "る前に。モジュールのWCMUより小さいアリーナは`Vm::new`で却下されます — コード"
 "が1つも走る前に。"
 
-#: src/35_arena_sizing.md:87
+#: src/35_arena_sizing.md:95
 msgid "The next chapter loads bytecode that was compiled ahead of time."
 msgstr "次の章では事前にコンパイルされたバイトコードを読み込みます。"
 
@@ -9273,8 +9291,8 @@ msgstr ""
 "片を出力します。ホストは自分のターゲット用の断片をインクルードし、WCET APIの"
 "`_with_cost_model`バリアントにモデルを渡します。"
 
-#: src/38_cost_models.md:32 src/EMBEDDING.md:297 src/COOKBOOK.md:447
-#: src/COOKBOOK.md:456 src/COOKBOOK.md:460
+#: src/38_cost_models.md:32 src/EMBEDDING.md:297 src/COOKBOOK.md:449
+#: src/COOKBOOK.md:458 src/COOKBOOK.md:462
 msgid "\"CARGO_MANIFEST_DIR\""
 msgstr "\"CARGO_MANIFEST_DIR\""
 
@@ -10641,7 +10659,7 @@ msgstr ""
 "measured_cost_models/)からの測定モデル断片の`include!`と、それからWCET APIの"
 "`_with_cost_model`ヴァリアントへの呼び出しです。"
 
-#: src/EMBEDDING.md:298 src/COOKBOOK.md:457
+#: src/EMBEDDING.md:298 src/COOKBOOK.md:459
 msgid "\"/keleusma-bench/measured_cost_models/aarch64_apple_darwin.rs\""
 msgstr "\"/keleusma-bench/measured_cost_models/aarch64_apple_darwin.rs\""
 
@@ -13122,7 +13140,7 @@ msgstr "索引"
 msgid "Recipe"
 msgstr "レシピ"
 
-#: src/COOKBOOK.md:9 src/COOKBOOK.md:113
+#: src/COOKBOOK.md:9 src/COOKBOOK.md:115
 msgid "Use it when"
 msgstr "使うとき"
 
@@ -13205,8 +13223,8 @@ msgstr ""
 msgid "Working with `Text`"
 msgstr "`Text` を扱う"
 
-#: src/COOKBOOK.md:22 src/COOKBOOK.md:70 src/COOKBOOK.md:134
-#: src/COOKBOOK.md:281 src/COOKBOOK.md:358 src/COOKBOOK.md:412
+#: src/COOKBOOK.md:22 src/COOKBOOK.md:70 src/COOKBOOK.md:136
+#: src/COOKBOOK.md:283 src/COOKBOOK.md:360 src/COOKBOOK.md:414
 msgid "Problem"
 msgstr "問題"
 
@@ -13222,8 +13240,8 @@ msgstr ""
 "ける付加価値ではありませんが、実際のアプリケーションは境界において何らかの文"
 "字列処理を日常的に必要とします。"
 
-#: src/COOKBOOK.md:26 src/COOKBOOK.md:74 src/COOKBOOK.md:140
-#: src/COOKBOOK.md:285 src/COOKBOOK.md:362 src/COOKBOOK.md:418
+#: src/COOKBOOK.md:26 src/COOKBOOK.md:74 src/COOKBOOK.md:142
+#: src/COOKBOOK.md:287 src/COOKBOOK.md:364 src/COOKBOOK.md:420
 msgid "Solution"
 msgstr "解決"
 
@@ -13311,8 +13329,8 @@ msgstr ""
 "ません。固定サイズの静的文字列ハンドルを通るか、検証器境界付きのヒープ割り当"
 "てに計上されるか、そもそもコンパイルされないかです。"
 
-#: src/COOKBOOK.md:60 src/COOKBOOK.md:125 src/COOKBOOK.md:347
-#: src/COOKBOOK.md:401 src/COOKBOOK.md:488 src/SECURITY_POLICY.md:279
+#: src/COOKBOOK.md:60 src/COOKBOOK.md:127 src/COOKBOOK.md:349
+#: src/COOKBOOK.md:403 src/COOKBOOK.md:490 src/SECURITY_POLICY.md:279
 #: src/BIG_NUMBERS.md:88
 msgid "Cross-references"
 msgstr "相互参照"
@@ -13374,7 +13392,21 @@ msgstr ""
 "イティブ計上のもとでVMを構築し、どの複合入力も`Text`を含まない限り、呼び出し"
 "と各`Reset`までのすべての再開を許容します。"
 
-#: src/COOKBOOK.md:87
+#: src/COOKBOOK.md:78
+msgid ""
+"The figure also adds the region a native compilation of the module reserves, "
+"reported by `keleusma::native_region::native_region_supplement_bytes`, so "
+"that one capacity serves both the virtual machine and native code. A host "
+"that runs only the virtual machine is over-provisioned by exactly that "
+"region."
+msgstr ""
+"この値には、モジュールをネイティブコードへコンパイルしたときに確保される領域も"
+"加算されます。その大きさは "
+"`keleusma::native_region::native_region_supplement_bytes` が返し、一つの容量で"
+"仮想マシンとネイティブコードの両方に対応できます。仮想マシンだけを実行するホス"
+"トには、ちょうどその領域の分だけ余分に割り当てられます。"
+
+#: src/COOKBOOK.md:89
 msgid ""
 "The second argument is a slice of per-native heap-allocation attestations. "
 "Pass an empty slice when no native allocates from the arena. Pass the "
@@ -13385,7 +13417,7 @@ msgstr ""
 "り当てるネイティブが無いときは空のスライスを渡します。ヒープ割り当てネイティ"
 "ブをホストが登録している場合は適切な`u32`値を渡します。"
 
-#: src/COOKBOOK.md:90
+#: src/COOKBOOK.md:92
 msgid ""
 "// Script that uses host-registered text or buffer natives. The\n"
 "// host's per-call attestations flow through the slice in the\n"
@@ -13395,7 +13427,7 @@ msgstr ""
 "// ホストの呼び出しごとの計上は、モジュールの`native_names`テーブルと\n"
 "// 同じ順序でスライスを流れる。\n"
 
-#: src/COOKBOOK.md:97
+#: src/COOKBOOK.md:99
 msgid ""
 "A composite entry argument or resume value is copied into the arena when it "
 "enters the VM, and the copy stays until the next `Reset`. The figure counts "
@@ -13412,7 +13444,7 @@ msgstr ""
 "えられます。スカラーの入力には費用がかからないため、エントリがスカラーだけを"
 "受け取るモジュールは以前と同じ値を得ます。"
 
-#: src/COOKBOOK.md:99
+#: src/COOKBOOK.md:101
 msgid ""
 "A `Text` field inside a composite input is copied as well, and its length is "
 "that of the host's string, which the module cannot bound. A host that passes "
@@ -13424,13 +13456,13 @@ msgstr ""
 "渡すホストは、一つの入力値に含まれるテキストの合計バイト数について、自ら上界"
 "を与えます。"
 
-#: src/COOKBOOK.md:102
+#: src/COOKBOOK.md:104
 msgid ""
 "// At most 256 bytes of Text inside any one composite argument or\n"
 "// resume value.\n"
 msgstr "// 一つの複合引数または再開値の中のTextは最大256バイトです。\n"
 
-#: src/COOKBOOK.md:107
+#: src/COOKBOOK.md:109
 msgid ""
 "The function `keleusma::vm::host_input_arena_bytes_for` returns the input "
 "term alone, for a host that sizes the rest of its arena another way. "
@@ -13442,34 +13474,34 @@ msgstr ""
 "`Vm::call_function`を通じてエントリ以外のチャンクに渡す複合引数は数えられませ"
 "ん。"
 
-#: src/COOKBOOK.md:109
+#: src/COOKBOOK.md:111
 msgid "When to use which arena-sizing option"
 msgstr "どのアリーナサイズオプションをいつ使うか"
 
-#: src/COOKBOOK.md:111
+#: src/COOKBOOK.md:113
 msgid "The library offers three patterns."
 msgstr "ライブラリは3つのパターンを提供しています。"
 
-#: src/COOKBOOK.md:113
+#: src/COOKBOOK.md:115
 msgid "Option"
 msgstr "オプション"
 
-#: src/COOKBOOK.md:115
+#: src/COOKBOOK.md:117
 msgid "`Arena::with_capacity(DEFAULT_ARENA_CAPACITY)`"
 msgstr "`Arena::with_capacity(DEFAULT_ARENA_CAPACITY)`"
 
-#: src/COOKBOOK.md:115
+#: src/COOKBOOK.md:117
 msgid ""
 "Hosted development and quick prototyping; a generous default capacity is "
 "acceptable."
 msgstr ""
 "ホスト型開発と素早いプロトタイピング。寛大なデフォルト容量が許容できる。"
 
-#: src/COOKBOOK.md:116
+#: src/COOKBOOK.md:118
 msgid "`auto_arena_capacity_for`"
 msgstr "`auto_arena_capacity_for`"
 
-#: src/COOKBOOK.md:116
+#: src/COOKBOOK.md:118
 msgid ""
 "Production hosts that want the smallest correct capacity, especially when "
 "running many VMs or when host memory is tight."
@@ -13477,11 +13509,11 @@ msgstr ""
 "最小の正しい容量が欲しいプロダクションホスト、特に多くのVMを動かすときやホス"
 "トメモリが厳しいとき。"
 
-#: src/COOKBOOK.md:117
+#: src/COOKBOOK.md:119
 msgid "`Arena::from_static_buffer`"
 msgstr "`Arena::from_static_buffer`"
 
-#: src/COOKBOOK.md:117
+#: src/COOKBOOK.md:119
 msgid ""
 "Bare-metal targets with no heap. The host owns a fixed-size buffer in `.bss` "
 "and hands its pointer to the arena."
@@ -13489,7 +13521,7 @@ msgstr ""
 "ヒープなしのベアメタルターゲット。ホストが`.bss`内の固定サイズバッファを所有"
 "して、そのポインタをアリーナに渡す。"
 
-#: src/COOKBOOK.md:119
+#: src/COOKBOOK.md:121
 msgid ""
 "The auto-sizing option composes with the static-buffer option. Compute the "
 "capacity at compile time (if the module is `const`\\-loadable through "
@@ -13501,11 +13533,11 @@ msgstr ""
 "するか、ビルド時に計算(ホストを1度走らせて値を表示)して、それからそのサイズで"
 "静的バッファを宣言します。"
 
-#: src/COOKBOOK.md:121
+#: src/COOKBOOK.md:123
 msgid "Failure mode"
 msgstr "失敗モード"
 
-#: src/COOKBOOK.md:123
+#: src/COOKBOOK.md:125
 msgid ""
 "If the chosen capacity is below the module's WCMU, `Vm::new` returns "
 "`VmError::VerifyError` before any code runs. This is detected at "
@@ -13516,7 +13548,7 @@ msgstr ""
 "`VmError::VerifyError`を返します。これは実行時ではなく構築時に検出されるの"
 "で、失敗はランの途中ではなく前面で観測可能です。"
 
-#: src/COOKBOOK.md:127
+#: src/COOKBOOK.md:129
 msgid ""
 "[EMBEDDING.md, Arena Sizing](./EMBEDDING.md#arena-sizing) is the embedding-"
 "guide reference."
@@ -13524,7 +13556,7 @@ msgstr ""
 "[EMBEDDING.md, Arena Sizing](./EMBEDDING.md#arena-sizing)が組み込みガイドリ"
 "ファレンスです。"
 
-#: src/COOKBOOK.md:128
+#: src/COOKBOOK.md:130
 msgid ""
 "The bundled `examples/wcmu_basic.rs` shows the full auto-sizing pattern end "
 "to end."
@@ -13532,11 +13564,11 @@ msgstr ""
 "バンドルされた`examples/wcmu_basic.rs`が完全な自動サイズパターンを最初から最"
 "後まで示します。"
 
-#: src/COOKBOOK.md:132 src/ROGUE.md:430
+#: src/COOKBOOK.md:134 src/ROGUE.md:430
 msgid "The data-loader pattern"
 msgstr "データローダーパターン"
 
-#: src/COOKBOOK.md:136
+#: src/COOKBOOK.md:138
 msgid ""
 "The host needs a table of configuration data. The data is structurally "
 "homogeneous (a fixed-shape record per entry) but designer-tunable (game "
@@ -13551,7 +13583,7 @@ msgstr ""
 "ファイルに保存することは、設計者が`.kel`ファイルを編集して実行時に再読み込み"
 "できることを意味します。"
 
-#: src/COOKBOOK.md:138
+#: src/COOKBOOK.md:140
 msgid ""
 "Keleusma does not currently support module-scope `const` declarations for "
 "arrays of records, inline string tables, or runtime allocation of growable "
@@ -13561,11 +13593,11 @@ msgstr ""
 "テーブル、成長可能な構造の実行時割り当てをサポートしません。下のパターンはそ"
 "れらの制約の中で動きます。"
 
-#: src/COOKBOOK.md:142
+#: src/COOKBOOK.md:144
 msgid "Encode the table as a Keleusma script with three pieces."
 msgstr "テーブルを3つの部分を持つKeleusmaスクリプトとしてエンコードします。"
 
-#: src/COOKBOOK.md:144
+#: src/COOKBOOK.md:146
 msgid ""
 "**A data segment** declared on the script side, holding one field per output "
 "column of the record. The data segment is the host-script I/O struct."
@@ -13573,7 +13605,7 @@ msgstr ""
 "**データセグメント**をスクリプト側で宣言し、レコードの出力列ごとに1つのフィー"
 "ルドを持ちます。データセグメントはホスト-スクリプトI/O構造体です。"
 
-#: src/COOKBOOK.md:145
+#: src/COOKBOOK.md:147
 msgid ""
 "**A multi-headed dispatcher** with one head per entry. Each head writes the "
 "per-entry constants into the data segment."
@@ -13581,7 +13613,7 @@ msgstr ""
 "**多頭ディスパッチャ**をエントリごとに1つの頭で持ちます。各頭はエントリごとの"
 "定数をデータセグメントに書き込みます。"
 
-#: src/COOKBOOK.md:146
+#: src/COOKBOOK.md:148
 msgid ""
 "**A loader function** that resolves the index (including the negative-index "
 "convention) and chains into the dispatcher."
@@ -13589,7 +13621,7 @@ msgstr ""
 "**ローダー関数**がインデックス(負のインデックス慣習を含む)を解決し、ディス"
 "パッチャに連鎖します。"
 
-#: src/COOKBOOK.md:148
+#: src/COOKBOOK.md:150
 msgid ""
 "The host runs the script once per entry at startup, reads the data segment "
 "after each call, and caches the result in a regular Rust container "
@@ -13603,7 +13635,7 @@ msgstr ""
 "シュを通ります。スクリプトはホストが再読み込みを欲しがるときにのみ再び触られ"
 "ます。"
 
-#: src/COOKBOOK.md:150
+#: src/COOKBOOK.md:152
 msgid ""
 "The pattern admits runtime hot reload because the table is in script form. A "
 "host that re-compiles the script, re-runs the loader, and atomically "
@@ -13617,11 +13649,11 @@ msgstr ""
 "キャッシュするホストも恩恵を受けます。テーブルがRustソースから設計者が編集で"
 "きるファイルに移動するからです。"
 
-#: src/COOKBOOK.md:152
+#: src/COOKBOOK.md:154
 msgid "Three component techniques"
 msgstr "3つの構成テクニック"
 
-#: src/COOKBOOK.md:154
+#: src/COOKBOOK.md:156
 msgid ""
 "The pattern composes three techniques that are individually known but "
 "compose well."
@@ -13629,7 +13661,7 @@ msgstr ""
 "パターンは個別に知られている3つのテクニックを構成しますが、それらが組み合わさ"
 "ることがうまくいきます。"
 
-#: src/COOKBOOK.md:156
+#: src/COOKBOOK.md:158
 msgid ""
 "**Multi-headed dispatch encoding a constant table.** Keleusma admits multi-"
 "headed function definitions with integer-pattern parameters. One head per "
@@ -13644,7 +13676,7 @@ msgstr ""
 "証器に優しいです。すべての本体が直線コードだからです。Prologファクトと、"
 "Erlang/Elixirのパターンマッチングが近い類似物です。"
 
-#: src/COOKBOOK.md:158
+#: src/COOKBOOK.md:160
 msgid ""
 "**Data segment as host-script I/O struct.** The data segment is normally the "
 "place where a `loop main` script preserves state across resumes. Repurposing "
@@ -13660,7 +13692,7 @@ msgstr ""
 "`set_data`がすでにホスト境界の一部だから動きます。スクリプトは関数の引数を通"
 "じて入力を読み、`state.field = ...`代入を通じて出力を書きます。"
 
-#: src/COOKBOOK.md:160
+#: src/COOKBOOK.md:162
 msgid ""
 "**Negative-index size discovery.** The loader resolves negative indices to "
 "`count + n` (Python sequence convention). Calling `fn main(-1)` writes the "
@@ -13676,15 +13708,15 @@ msgstr ""
 "イズし、並列のホスト側定数に対してその値をアサートします。これはRustソースに"
 "数を埋め込むことを避けます。"
 
-#: src/COOKBOOK.md:162
+#: src/COOKBOOK.md:164
 msgid "Minimal example"
 msgstr "最小例"
 
-#: src/COOKBOOK.md:164
+#: src/COOKBOOK.md:166
 msgid "A table of three colours, each with red, green, blue channels."
 msgstr "3色のテーブル、それぞれに赤、緑、青のチャネルがあります。"
 
-#: src/COOKBOOK.md:166
+#: src/COOKBOOK.md:168
 msgid ""
 "```keleusma\n"
 "// colours.kel\n"
@@ -13732,15 +13764,15 @@ msgstr ""
 "fn fill(_n: Word) -> Word { 0 }\n"
 "```"
 
-#: src/COOKBOOK.md:186
+#: src/COOKBOOK.md:188
 msgid "Host side, with the cache discovered from the script."
 msgstr "ホスト側で、キャッシュをスクリプトから発見します。"
 
-#: src/COOKBOOK.md:196
+#: src/COOKBOOK.md:198
 msgid "\"colours not loaded\""
 msgstr "\"colours not loaded\""
 
-#: src/COOKBOOK.md:200
+#: src/COOKBOOK.md:202
 msgid ""
 "// The host lends a zeroed shared buffer; the script writes its fields into\n"
 "    // it and the host reads them back out (B28 item 2).\n"
@@ -13748,19 +13780,19 @@ msgstr ""
 "// The host lends a zeroed shared buffer; the script writes its fields into\n"
 "    // it and the host reads them back out (B28 item 2).\n"
 
-#: src/COOKBOOK.md:203
+#: src/COOKBOOK.md:205
 msgid "// Discover the count by calling with -1.\n"
 msgstr "// Discover the count by calling with -1.\n"
 
-#: src/COOKBOOK.md:222
+#: src/COOKBOOK.md:224
 msgid "\"expected Int at slot {}, got {:?}\""
 msgstr "\"expected Int at slot {}, got {:?}\""
 
-#: src/COOKBOOK.md:227
+#: src/COOKBOOK.md:229
 msgid "Variations"
 msgstr "バリエーション"
 
-#: src/COOKBOOK.md:229
+#: src/COOKBOOK.md:231
 msgid ""
 "**Multiple tables in one script.** If two tables share the same data-segment "
 "shape, dispatch on a leading `table` argument. `fn main(table, tier)` "
@@ -13772,7 +13804,7 @@ msgstr ""
 "tier)`は`table`に基づいて2つのテーブルごとの内部関数のうち1つにディスパッチし"
 "ます。各テーブルは`-1`を通じて独立に発見可能です。"
 
-#: src/COOKBOOK.md:244
+#: src/COOKBOOK.md:246
 msgid ""
 "**Chained dispatchers.** When some output fields are derived from others, "
 "chain two dispatchers in the loader. The first dispatcher sets the keying "
@@ -13784,7 +13816,7 @@ msgstr ""
 "ルドを設定し、2番目がデータセグメントからそれを読んで派生フィールドを設定しま"
 "す。ホストは1回の呼び出しから完全に埋まったエントリを受け取ります。"
 
-#: src/COOKBOOK.md:256
+#: src/COOKBOOK.md:258
 msgid ""
 "**Names through the return value.** Keleusma's data segment does not "
 "currently accept string fields in source. When entries have a name, encode "
@@ -13800,15 +13832,15 @@ msgstr ""
 "す。ホストは起動時に1度返された静的文字列をリークして、`&'static str`を取得で"
 "きます。"
 
-#: src/COOKBOOK.md:258
+#: src/COOKBOOK.md:260
 msgid "When to use"
 msgstr "いつ使うか"
 
-#: src/COOKBOOK.md:260
+#: src/COOKBOOK.md:262
 msgid "The pattern fits when all of the following hold."
 msgstr "パターンが合うのは次のすべてが成り立つときです。"
 
-#: src/COOKBOOK.md:262
+#: src/COOKBOOK.md:264
 msgid ""
 "The table has more than about ten entries. Below that, the script overhead "
 "exceeds the savings."
@@ -13816,7 +13848,7 @@ msgstr ""
 "テーブルが約10エントリより多い。それより下では、スクリプトのオーバーヘッドが"
 "節約を超えます。"
 
-#: src/COOKBOOK.md:263
+#: src/COOKBOOK.md:265
 msgid ""
 "Each entry is a small struct of integers or enum ordinals. Strings, floats "
 "with quirky precision, or variable-size payloads need workarounds."
@@ -13824,7 +13856,7 @@ msgstr ""
 "各エントリが整数または列挙型の序数の小さな構造体。文字列、奇妙な精度の浮動小"
 "数点、可変サイズのペイロードは回避策が必要です。"
 
-#: src/COOKBOOK.md:264
+#: src/COOKBOOK.md:266
 msgid ""
 "The data benefits from being designer-editable without a host rebuild. If "
 "only the Rust author ever touches the table, leave it in Rust."
@@ -13832,7 +13864,7 @@ msgstr ""
 "データが、ホストの再ビルド無しに設計者が編集できることから恩恵を受ける。Rust"
 "作者だけがテーブルに触るなら、Rustに残します。"
 
-#: src/COOKBOOK.md:265
+#: src/COOKBOOK.md:267
 msgid ""
 "Runtime hot reload is desirable, even if the initial implementation caches "
 "once. The pattern keeps the path open."
@@ -13840,11 +13872,11 @@ msgstr ""
 "初期実装が一度だけキャッシュするとしても、実行時のホットリロードが望ましい。"
 "パターンが経路を開いておきます。"
 
-#: src/COOKBOOK.md:267
+#: src/COOKBOOK.md:269
 msgid "When not to use"
 msgstr "いつ使わないか"
 
-#: src/COOKBOOK.md:269
+#: src/COOKBOOK.md:271
 msgid ""
 "The data is already dense in Rust (one line per entry with no per-entry "
 "struct boilerplate). The migration adds script-loading overhead without "
@@ -13854,7 +13886,7 @@ msgstr ""
 "トなし)。移行はストレージを圧縮することなくスクリプト読み込みオーバーヘッドを"
 "追加します。"
 
-#: src/COOKBOOK.md:270
+#: src/COOKBOOK.md:272
 msgid ""
 "The data has lifecycle hooks (constructors, drop). Keleusma cannot carry "
 "those. Keep them in Rust."
@@ -13862,7 +13894,7 @@ msgstr ""
 "データがライフサイクルフック(コンストラクタ、ドロップ)を持つ。Keleusmaはそれ"
 "らを運べません。Rustに残します。"
 
-#: src/COOKBOOK.md:271
+#: src/COOKBOOK.md:273
 msgid ""
 "The data is keyed on a type that the script cannot represent. Strings, "
 "floats with specific precision requirements, or compound keys all push the "
@@ -13871,11 +13903,11 @@ msgstr ""
 "データがスクリプトが表現できない型でキーされる。文字列、特定の精度要件を持つ"
 "浮動小数点、複合キーはすべてパターンを適合外に押し出します。"
 
-#: src/COOKBOOK.md:273
+#: src/COOKBOOK.md:275
 msgid "Examples in this repository"
 msgstr "このリポジトリでの例"
 
-#: src/COOKBOOK.md:275
+#: src/COOKBOOK.md:277
 msgid ""
 "The rogue example uses this pattern for its bestiary and equipment tables; "
 "see [ROGUE.md, _Reading the bestiary script_](./ROGUE.md#reading-the-"
@@ -13885,11 +13917,11 @@ msgstr ""
 "_bestiaryスクリプトを読む_](./ROGUE.md#reading-the-bestiary-script)を参照して"
 "ください。"
 
-#: src/COOKBOOK.md:279
+#: src/COOKBOOK.md:281
 msgid "Narrow-runtime type alias"
 msgstr "狭いランタイム型エイリアス"
 
-#: src/COOKBOOK.md:283
+#: src/COOKBOOK.md:285
 msgid ""
 "The host targets a sub-64-bit native runtime. A 16-bit microcontroller, a "
 "retro-class 8-bit machine, a 32-bit embedded core. The default `Vm<'a, "
@@ -13906,7 +13938,7 @@ msgstr ""
 "ます。ホストはランタイムのワード、アドレス、フロート幅をターゲットに合わせた"
 "いのです。"
 
-#: src/COOKBOOK.md:287
+#: src/COOKBOOK.md:289
 msgid ""
 "The `Vm` shape is generic over three trait parameters that mirror the "
 "bytecode header's `word_bits_log2`, `addr_bits_log2`, and `float_bits_log2` "
@@ -13918,12 +13950,12 @@ msgstr ""
 "す。`GenericVm<W, A, F>`をホストの選んだ幅で直接インスタンス化し、人間工学的"
 "な呼び出し場所のために型エイリアスを定義します。"
 
-#: src/COOKBOOK.md:291
+#: src/COOKBOOK.md:293
 msgid "// 16-bit signed word, 16-bit unsigned address, 32-bit float.\n"
 msgstr ""
 "// 16ビット符号付きワード、16ビット符号なしアドレス、32ビットフロート。\n"
 
-#: src/COOKBOOK.md:294
+#: src/COOKBOOK.md:296
 msgid ""
 "// 8-bit signed word, 16-bit unsigned address, 32-bit float\n"
 "// (6502-class retro target with floats kept for future opcodes).\n"
@@ -13931,7 +13963,7 @@ msgstr ""
 "// 8ビット符号付きワード、16ビット符号なしアドレス、32ビットフロート\n"
 "// (6502クラスのレトロターゲット。将来のオペコードのためにフロートを保持)。\n"
 
-#: src/COOKBOOK.md:300
+#: src/COOKBOOK.md:302
 msgid ""
 "Bytecode for the narrow target is produced through `compile_with_target`. "
 "The `embedded_16` preset rejects floating-point opcodes; use a custom "
@@ -13941,11 +13973,11 @@ msgstr ""
 "`embedded_16`プリセットは浮動小数点オペコードを却下します。フロートが狭い幅で"
 "欲しい場合はカスタム`Target`を使います。"
 
-#: src/COOKBOOK.md:319
+#: src/COOKBOOK.md:321
 msgid "Host functions speak Rust's natural types"
 msgstr "ホスト関数はRustの自然な型を話す"
 
-#: src/COOKBOOK.md:321
+#: src/COOKBOOK.md:323
 msgid ""
 "The marshall layer (`KeleusmaType`, `IntoNativeFn`, `IntoFallibleNativeFn`) "
 "is parametric over `(W, F)`, with universal impls for `i64`, `f64`, `bool`, "
@@ -13961,7 +13993,7 @@ msgstr ""
 "す。`KeleusmaType<W, F> for f64`の普遍実装は`Float::to_f64`と"
 "`Float::from_f64`を通じて橋渡しします。"
 
-#: src/COOKBOOK.md:323
+#: src/COOKBOOK.md:325
 msgid ""
 "The host author writes `i64` and `f64` in closure signatures regardless of "
 "the script's narrower word and float types. The runtime truncates at the "
@@ -13970,11 +14002,11 @@ msgstr ""
 "ホスト作者は、スクリプトの狭いワードとフロート型に関わらず、クロージャのシグ"
 "ネチャに`i64`と`f64`を書きます。ランタイムが境界で切り捨てます。"
 
-#: src/COOKBOOK.md:326
+#: src/COOKBOOK.md:328
 msgid "\"host::triple\""
 msgstr "\"host::triple\""
 
-#: src/COOKBOOK.md:329
+#: src/COOKBOOK.md:331
 msgid ""
 "On a `NarrowVm`, the script-side `i16` argument widens to `i64` for the host "
 "closure; the `i64` return truncates back to `i16` through "
@@ -13988,11 +14020,11 @@ msgstr ""
 "体)は、自分のクレートで自分の`KeleusmaType<i16, f32> for i16`実装を追加できま"
 "す。"
 
-#: src/COOKBOOK.md:331
+#: src/COOKBOOK.md:333
 msgid "Standard library bundles work on narrow runtimes"
 msgstr "標準ライブラリバンドルは狭いランタイムで動く"
 
-#: src/COOKBOOK.md:333
+#: src/COOKBOOK.md:335
 msgid ""
 "The three `stddsl` bundles implement `Library<W, A, F>` universally and "
 "register on any admissible runtime shape. `Math` and `Audio` carry their "
@@ -14010,7 +14042,7 @@ msgstr ""
 "めは数学的に定義されていて、静かです。`Shell`は浮動小数点サーフェスを持たない"
 "ので、精度の含みなく`F`を量化します。"
 
-#: src/COOKBOOK.md:341
+#: src/COOKBOOK.md:343
 msgid ""
 "Programs that require full `f64` precision should declare a runtime whose "
 "`F` is `f64` rather than relying on the silent narrowing. The narrow-float "
@@ -14021,11 +14053,11 @@ msgstr ""
 "ンタイムを宣言すべきです。狭いフロートランタイムは、ターゲットのFPUが単精度"
 "で、スクリプトが余分な仮数を必要としないときの適切な選択です。"
 
-#: src/COOKBOOK.md:343
+#: src/COOKBOOK.md:345
 msgid "Word-width arithmetic discipline"
 msgstr "ワード幅算術の規律"
 
-#: src/COOKBOOK.md:345
+#: src/COOKBOOK.md:347
 msgid ""
 "Script-side arithmetic on a narrow runtime wraps at the runtime's word "
 "boundary, not at 64 bits. The `Word` trait's `wrapping_add`, `wrapping_sub`, "
@@ -14043,15 +14075,15 @@ msgstr ""
 "広いワードを宣言するか、自然なRust型を取る登録されたネイティブを通じてホスト"
 "側で操作を実行すべきです。"
 
-#: src/COOKBOOK.md:349
+#: src/COOKBOOK.md:351
 msgid "`examples/narrow_runtime.rs` is the worked demonstrator."
 msgstr "`examples/narrow_runtime.rs`が作業デモです。"
 
-#: src/COOKBOOK.md:350
+#: src/COOKBOOK.md:352
 msgid "`tests/narrow_vm.rs` is the integration test that pins the pattern."
 msgstr "`tests/narrow_vm.rs`がパターンをピンする統合テストです。"
 
-#: src/COOKBOOK.md:351
+#: src/COOKBOOK.md:353
 msgid ""
 "[`docs/decisions/BACKLOG.md`, B16](../../docs/decisions/BACKLOG.md) records "
 "the architectural rationale for the parametric shape."
@@ -14059,7 +14091,7 @@ msgstr ""
 "[`docs/decisions/BACKLOG.md`、B16](../../docs/decisions/BACKLOG.md) がパラメ"
 "トリック形状に関する設計上の根拠を記録しています。"
 
-#: src/COOKBOOK.md:352
+#: src/COOKBOOK.md:354
 msgid ""
 "The `Word`, `Address`, and `Float` traits live in `src/word.rs`, `src/"
 "address.rs`, and `src/float.rs`. Custom impls are admissible; the bundled "
@@ -14069,11 +14101,11 @@ msgstr ""
 "float.rs`に住みます。カスタム実装は許容されます。バンドルされた実装は標準の幅"
 "をカバーします。"
 
-#: src/COOKBOOK.md:356
+#: src/COOKBOOK.md:358
 msgid "Distributing signed bytecode"
 msgstr "署名付きバイトコードの配信"
 
-#: src/COOKBOOK.md:360
+#: src/COOKBOOK.md:362
 msgid ""
 "The host application loads compiled bytecode that arrives from an untrusted "
 "source — over a comms link, from disk, from a content-delivery channel — and "
@@ -14087,7 +14119,7 @@ msgstr ""
 "関係者です。1つ以上の既知のマザーシップ識別がモジュールに署名することを信頼さ"
 "れ、その他すべては却下されます。"
 
-#: src/COOKBOOK.md:364
+#: src/COOKBOOK.md:366
 msgid ""
 "Three steps. The cargo feature `signatures` is off by default; turn it on "
 "for both the producer and the consumer."
@@ -14095,7 +14127,7 @@ msgstr ""
 "3つのステップ。Cargo機能の`signatures`はデフォルトでオフです。プロデューサと"
 "コンシューマの両方でオンにします。"
 
-#: src/COOKBOOK.md:366
+#: src/COOKBOOK.md:368
 msgid ""
 "**One. Generate a keypair.** The `keleusma keygen --seed seed.bin --public "
 "pub.bin` subcommand writes a 32-byte Ed25519 seed and the matching public "
@@ -14110,7 +14142,7 @@ msgstr ""
 "れません。シードを署名システム上で保管された長命の秘密として扱います。公開鍵"
 "は自由に配布可能で、コンシューマが信頼するものです。"
 
-#: src/COOKBOOK.md:368
+#: src/COOKBOOK.md:370
 msgid ""
 "**Two. Declare the requirement and sign.** The source script declares the "
 "signing requirement with the `signed` modifier on the entry function:"
@@ -14118,7 +14150,7 @@ msgstr ""
 "**2. 要求を宣言して署名する。** ソーススクリプトは、エントリ関数の`signed`修"
 "飾子で署名要求を宣言します。"
 
-#: src/COOKBOOK.md:377
+#: src/COOKBOOK.md:379
 msgid ""
 "`keleusma compile script.kel --signing-key seed.bin -o script.kel.bin` "
 "produces signed bytecode. The compiler emits `FLAG_REQUIRES_SIGNATURE` in "
@@ -14128,7 +14160,7 @@ msgstr ""
 "付きバイトコードを生成します。コンパイラはフレーミングヘッダに"
 "`FLAG_REQUIRES_SIGNATURE`を発行し、署名者はEd25519署名を追加します。"
 
-#: src/COOKBOOK.md:379
+#: src/COOKBOOK.md:381
 msgid ""
 "**Three. Verify at the consumer.** The host populates a trust matrix with "
 "the public keys it accepts, then loads through the signature-aware entry "
@@ -14137,7 +14169,7 @@ msgstr ""
 "**3. コンシューマで検証する。** ホストは受け入れる公開鍵で信頼マトリクスを "
 "populate し、署名対応エントリポイントを通じて読み込みます。"
 
-#: src/COOKBOOK.md:386
+#: src/COOKBOOK.md:388
 msgid ""
 "For hot-swap delivery (signer/device pattern), the host constructs the VM "
 "from an unsigned baseline, registers the trust matrix, and accepts signed "
@@ -14147,11 +14179,11 @@ msgstr ""
 "ベースラインからVMを構築し、信頼マトリクスを登録し、通信リンク上で署名付きの"
 "更新を受け入れます。"
 
-#: src/COOKBOOK.md:390
+#: src/COOKBOOK.md:392
 msgid "// later, after receiving an update over the wire:\n"
 msgstr "// 後で、ワイヤ上で更新を受け取ったあと:\n"
 
-#: src/COOKBOOK.md:395
+#: src/COOKBOOK.md:397
 msgid ""
 "The signature is verified before the new bytecode is decoded; an invalid "
 "signature rejects the swap and the current module continues to run."
@@ -14159,11 +14191,11 @@ msgstr ""
 "署名は新しいバイトコードがデコードされる前に検証されます。無効な署名はスワッ"
 "プを却下し、現在のモジュールが走り続けます。"
 
-#: src/COOKBOOK.md:397
+#: src/COOKBOOK.md:399
 msgid "Why this works for embedded targets"
 msgstr "なぜこれが組み込みターゲットで動くか"
 
-#: src/COOKBOOK.md:399
+#: src/COOKBOOK.md:401
 msgid ""
 "The verification path uses `ed25519-dalek` under `no_std + alloc`. The "
 "`examples/rtos` demonstrator builds with `--features keleusma-signatures` "
@@ -14178,7 +14210,7 @@ msgstr ""
 "Ed25519検証はミリ秒のオーダーで走ります。コストはモジュール読み込みまたはホッ"
 "トスワップごとに払われ、yieldごとではありません。"
 
-#: src/COOKBOOK.md:403
+#: src/COOKBOOK.md:405
 msgid ""
 "`R42` in [`docs/decisions/RESOLVED.md`](../../docs/decisions/RESOLVED.md) is "
 "the design rationale."
@@ -14186,7 +14218,7 @@ msgstr ""
 "[`docs/decisions/RESOLVED.md`](../../docs/decisions/RESOLVED.md) の `R42` が"
 "設計上の根拠です。"
 
-#: src/COOKBOOK.md:404
+#: src/COOKBOOK.md:406
 msgid ""
 "[`docs/spec/WIRE_FORMAT.md`](../../docs/spec/WIRE_FORMAT.md) documents the "
 "header extension layout."
@@ -14194,7 +14226,7 @@ msgstr ""
 "[`docs/spec/WIRE_FORMAT.md`](../../docs/spec/WIRE_FORMAT.md) がヘッダー拡張の"
 "レイアウトを説明しています。"
 
-#: src/COOKBOOK.md:405
+#: src/COOKBOOK.md:407
 msgid ""
 "[`docs/guide/EMBEDDING.md`, Signed Modules](./EMBEDDING.md#signed-modules) "
 "covers the embedding-side API in more depth."
@@ -14202,7 +14234,7 @@ msgstr ""
 "組み込み側APIをより深く扱うのは[`docs/guide/EMBEDDING.md`, Signed Modules](./"
 "EMBEDDING.md#signed-modules)。"
 
-#: src/COOKBOOK.md:406
+#: src/COOKBOOK.md:408
 msgid ""
 "[`examples/scripts/11_signed.kel`](../../examples/scripts/11_signed.kel) is "
 "a worked signed script."
@@ -14210,11 +14242,11 @@ msgstr ""
 "作業署名付きスクリプトは[`examples/scripts/11_signed.kel`](../../examples/"
 "scripts/11_signed.kel)。"
 
-#: src/COOKBOOK.md:410
+#: src/COOKBOOK.md:412
 msgid "Calibrated WCET with a measured cost model"
 msgstr "測定コストモデルでのキャリブレートされたWCET"
 
-#: src/COOKBOOK.md:414
+#: src/COOKBOOK.md:416
 msgid ""
 "The host wants WCET (worst-case execution time) estimates in actual CPU "
 "cycles for the deployment target, not the relative-weight estimates the "
@@ -14231,7 +14263,7 @@ msgstr ""
 "ラムを互いに順序付けるのに役立ちますが、絶対スケールは特定のハードウェアのパ"
 "イプライン化CPUサイクルではありません。"
 
-#: src/COOKBOOK.md:416
+#: src/COOKBOOK.md:418
 msgid ""
 "Real WCET analysis for a deployment target wants measured numbers: data "
 "movement on a Cortex-M55 at 800 MHz runs hundreds of cycles per VM dispatch; "
@@ -14244,7 +14276,7 @@ msgstr ""
 "Apple M1 MaxのPコア上の同じワークロードは数十サイクル走ります。2つは別の単位"
 "で、WCETを壁時計時間に変換したいホストは正しいほうを必要とします。"
 
-#: src/COOKBOOK.md:420
+#: src/COOKBOOK.md:422
 msgid ""
 "The `keleusma-bench` workspace member measures per-opcode pipelined cycles "
 "on a host CPU and emits a Rust source fragment defining a "
@@ -14257,7 +14289,7 @@ msgstr ""
 "行します。ホストクレートが断片をインクルードし、消費するWCET APIの"
 "`_with_cost_model`ヴァリアントに定数を渡します。"
 
-#: src/COOKBOOK.md:422
+#: src/COOKBOOK.md:424
 msgid ""
 "**One. Obtain a fragment.** The crate ships pre-generated fragments under "
 "[`keleusma-bench/measured_cost_models/`](../../keleusma-bench/"
@@ -14268,11 +14300,11 @@ msgstr ""
 "(../../keleusma-bench/measured_cost_models/)で開発ホストとSTM32N6570-DK用の事"
 "前生成された断片を出荷します。他のホストには再生成します。"
 
-#: src/COOKBOOK.md:425
+#: src/COOKBOOK.md:427
 msgid "# Host bench (writes a fragment for the running CPU)\n"
 msgstr "# ホストベンチ(走っているCPU用の断片を書く)\n"
 
-#: src/COOKBOOK.md:441
+#: src/COOKBOOK.md:443
 msgid ""
 "`--cpu-hz` declares the host's CPU clock for the cycle calculation. The "
 "default is documented in `keleusma-bench/src/counter.rs` "
@@ -14286,7 +14318,7 @@ msgstr ""
 "measured_cost_models/README.md`](../../keleusma-bench/measured_cost_models/"
 "README.md)を参照してください。"
 
-#: src/COOKBOOK.md:443
+#: src/COOKBOOK.md:445
 msgid ""
 "**Two. Include the fragment in the host crate.** The fragment is plain Rust "
 "source that declares `MEASURED_COST_MODEL` and a backing "
@@ -14295,33 +14327,33 @@ msgstr ""
 "**2. 断片をホストクレートにインクルードする。** 断片は`MEASURED_COST_MODEL`と"
 "バッキングの`measured_op_cycles`関数を宣言する平のRustソースです。"
 
-#: src/COOKBOOK.md:448
+#: src/COOKBOOK.md:450
 msgid "\"/path/to/keleusma-bench/measured_cost_models/<fragment>.rs\""
 msgstr "\"/path/to/keleusma-bench/measured_cost_models/<fragment>.rs\""
 
-#: src/COOKBOOK.md:452
+#: src/COOKBOOK.md:454
 msgid ""
 "Multiple fragments cohabit cleanly when gated by `cfg(target_arch = ...)`:"
 msgstr ""
 "複数の断片は`cfg(target_arch = ...)`でゲートすれば、きれいに同居します。"
 
-#: src/COOKBOOK.md:455
+#: src/COOKBOOK.md:457
 msgid "\"aarch64\""
 msgstr "\"aarch64\""
 
-#: src/COOKBOOK.md:455
+#: src/COOKBOOK.md:457
 msgid "\"macos\""
 msgstr "\"macos\""
 
-#: src/COOKBOOK.md:459
+#: src/COOKBOOK.md:461
 msgid "\"arm\""
 msgstr "\"arm\""
 
-#: src/COOKBOOK.md:461
+#: src/COOKBOOK.md:463
 msgid "\"/keleusma-bench/measured_cost_models/thumbv8m_main_none_eabihf.rs\""
 msgstr "\"/keleusma-bench/measured_cost_models/thumbv8m_main_none_eabihf.rs\""
 
-#: src/COOKBOOK.md:464
+#: src/COOKBOOK.md:466
 msgid ""
 "**Three. Pass the model to the verifier.** The `_with_cost_model` variants "
 "of the WCET APIs accept a `&CostModel`:"
@@ -14329,11 +14361,11 @@ msgstr ""
 "**3. モデルを検証器に渡す。** WCET APIの`_with_cost_model`ヴァリアントは"
 "`&CostModel`を受け取ります。"
 
-#: src/COOKBOOK.md:472
+#: src/COOKBOOK.md:474
 msgid "\"Chunk `{}`: {} CPU cycles per iteration\""
 msgstr "\"Chunk `{}`: {} CPU cycles per iteration\""
 
-#: src/COOKBOOK.md:476
+#: src/COOKBOOK.md:478
 msgid ""
 "For resource-bound verification at load time, "
 "`verify::verify_resource_bounds_with_cost_model` takes the same `&CostModel` "
@@ -14343,7 +14375,7 @@ msgstr ""
 "`verify::verify_resource_bounds_with_cost_model`が同じ`&CostModel`を取り、"
 "WCETとWCMUの両方の経路に通します。"
 
-#: src/COOKBOOK.md:480
+#: src/COOKBOOK.md:482
 msgid ""
 "The bundled `NOMINAL_COST_MODEL` is honest about being relative-only. It "
 "cannot answer \"how many microseconds per iteration.\" The measured model "
@@ -14357,11 +14389,11 @@ msgstr ""
 "ます。WCET境界がスケジューラの判断を伝えるデプロイメントでは、この変換が土台"
 "のステップです。"
 
-#: src/COOKBOOK.md:482
+#: src/COOKBOOK.md:484
 msgid "Failure modes"
 msgstr "失敗モード"
 
-#: src/COOKBOOK.md:484
+#: src/COOKBOOK.md:486
 msgid ""
 "**The fragment was measured on a different host than the deployment "
 "target.** The cycle counts are then dev-host estimates, not calibrated for "
@@ -14372,7 +14404,7 @@ msgstr ""
 "するCPUのキャリブレーションではなく開発ホストの推定値です。断片のヘッダがホス"
 "トと仮定されたCPUクロックを記録します。使う前に両方を確認します。"
 
-#: src/COOKBOOK.md:485
+#: src/COOKBOOK.md:487
 msgid ""
 "**The host CPU's actual clock differs from the bench's assumption.** Re-"
 "bench with `--cpu-hz <Hz>` set to the actual clock, or pass `--cpu-hz` to "
@@ -14382,7 +14414,7 @@ msgstr ""
 "た`--cpu-hz <Hz>`で再ベンチするか、`--cpu-hz`を`keleusma-bench --from-log`に"
 "渡してキャプチャ後に文書化された値を訂正します。"
 
-#: src/COOKBOOK.md:486
+#: src/COOKBOOK.md:488
 msgid ""
 "**The bench does not measure `Yield` or `Call` in isolation.** Both "
 "categories fall back to scaled nominal values. The scaled values are "
@@ -14393,7 +14425,7 @@ msgstr ""
 "された名目値にフォールバックします。スケールされた値はWCETには保守的ですが、"
 "外挿であって測定ではありません。これは断片のヘッダに文書化されています。"
 
-#: src/COOKBOOK.md:490
+#: src/COOKBOOK.md:492
 msgid ""
 "[`examples/measured_wcet.rs`](../../examples/measured_wcet.rs) is the "
 "minimal working example: compiles a small Stream-classified program, prints "
@@ -14403,7 +14435,7 @@ msgstr ""
 "です。小さなStream分類されたプログラムをコンパイルし、名目と測定の両方のモデ"
 "ルでWCETを表示します。"
 
-#: src/COOKBOOK.md:491
+#: src/COOKBOOK.md:493
 msgid ""
 "[`keleusma-bench/README.md`](../../keleusma-bench/README.md) documents the "
 "bench tool's methodology and CLI."
@@ -14411,7 +14443,7 @@ msgstr ""
 "[`keleusma-bench/README.md`](../../keleusma-bench/README.md)がベンチツールの"
 "方法論とCLIを文書化します。"
 
-#: src/COOKBOOK.md:492
+#: src/COOKBOOK.md:494
 msgid ""
 "[`keleusma-bench/measured_cost_models/README.md`](../../keleusma-bench/"
 "measured_cost_models/README.md) catalogues the pre-generated fragments and "
@@ -14421,7 +14453,7 @@ msgstr ""
 "measured_cost_models/README.md)が事前生成された断片とキャプチャワークフローを"
 "カタログします。"
 
-#: src/COOKBOOK.md:493
+#: src/COOKBOOK.md:495
 msgid ""
 "[`docs/architecture/LANGUAGE_DESIGN.md` § Cost model](../../docs/"
 "architecture/LANGUAGE_DESIGN.md#cost-model) explains the `CostModel` "
@@ -14431,7 +14463,7 @@ msgstr ""
 "architecture/LANGUAGE_DESIGN.md#cost-model) が `CostModel` の契約とキャリブ"
 "レーションにおけるホストの役割を説明しています。"
 
-#: src/COOKBOOK.md:494
+#: src/COOKBOOK.md:496
 msgid ""
 "[`examples/rtos`](../../examples/rtos/) demonstrates the wiring in a "
 "headline example: each task logs its measured WCET per iteration at boot."
