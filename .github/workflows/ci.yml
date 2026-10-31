@@ -655,6 +655,17 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings
           cargo test
           cargo build --target wasm32-unknown-unknown
+      # The fuzz package needs a nightly toolchain to build, which the scheduled Fuzz
+      # workflow provides. This step guards only what a pull request can break without
+      # touching fuzz/, its lockfile. The package depends on `keleusma` by path, so a
+      # dependency change in the workspace leaves fuzz/Cargo.lock stale, and
+      # `cargo metadata --locked` fails on a stale lock without compiling anything.
+      - name: Check the fuzz package's format and lockfile
+        if: ${{ !cancelled() }}
+        run: |
+          cd fuzz
+          cargo fmt --check
+          cargo metadata --locked --format-version 1 > /dev/null
 
   selfhost-compiler:
     name: Self-hosted compiler subproject
