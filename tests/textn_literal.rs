@@ -12,9 +12,10 @@
 //!
 //! # What it deliberately does not build
 //!
-//! The operations, concatenation and the rest, wait on how a native signature
-//! can be generic over a capacity. The language has no `len` surface to extend,
-//! so the length is observed here from the host side by reading the flat body.
+//! The operations, concatenation and the rest, landed on 2026-10-31 as the
+//! intrinsics under `text::` behind the `text` feature, and are pinned in
+//! `tests/text_ops.rs`. This file does not use them, so the length is observed
+//! here from the host side by reading the flat body.
 //! Every other cast, all arithmetic, and all comparison stay type errors, and
 //! the tests below pin that they do, because a comparison the type checker
 //! admitted would verify and then fault at runtime.
@@ -491,7 +492,11 @@ fn an_enclosing_allocation_is_sized_word_bytes_plus_n_and_the_bound_follows() {
             vec![(wb + wb + cap) as u16],
             "Text<{cap}>: one flat allocation of word + word + N"
         );
-        bounds.push(auto_arena_capacity_for(&module, &[]).expect("the bound is provable"));
+        // Without the native region supplement, which grows with the same site.
+        bounds.push(
+            auto_arena_capacity_for(&module, &[]).expect("the bound is provable")
+                - keleusma::native_region::native_region_supplement_bytes(&module) as usize,
+        );
     }
     assert_eq!(
         bounds[1] - bounds[0],

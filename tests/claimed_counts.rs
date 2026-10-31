@@ -829,6 +829,37 @@ fn the_only_test_gated_out_of_every_ci_configuration_is_the_known_one() {
         }
         sets.push(set);
     }
+    // The workspace job runs `keleusma` with the features `keleusma-cli` unifies on, and
+    // since 2026-10-31 it is the only job that enables `text`. Its set is read from the
+    // dependency line in `keleusma-cli/Cargo.toml` rather than restated. The job runs only
+    // the binaries its filter allows, and `tests/ci_shard_coverage.rs` requires that filter
+    // to name every binary gated on a feature only this job enables, so counting the set
+    // here does not admit a binary the job skips.
+    if workflow
+        .lines()
+        .any(|l| l.contains("nextest run") && l.contains("--workspace -E"))
+    {
+        let cli = std::fs::read_to_string(root.join("keleusma-cli/Cargo.toml"))
+            .expect("read keleusma-cli/Cargo.toml; if the manifest moved, update this guard");
+        let dep = cli
+            .lines()
+            .find(|l| l.starts_with("keleusma = {"))
+            .expect("keleusma-cli depends on keleusma");
+        let list = dep
+            .split("features = [")
+            .nth(1)
+            .and_then(|r| r.split(']').next())
+            .expect("the keleusma dependency names its features");
+        let mut set: Vec<String> = default_features.iter().map(|s| s.to_string()).collect();
+        for f in list.split(',') {
+            set.push(f.trim().trim_matches('"').to_string());
+        }
+        assert!(
+            set.iter().any(|f| f == "text"),
+            "the workspace set {set:?} was read without `text`, so the extraction stopped matching"
+        );
+        sets.push(set);
+    }
     assert!(
         sets.len() >= 4,
         "only {} feature sets were derived from the workflow, so the extraction stopped matching \

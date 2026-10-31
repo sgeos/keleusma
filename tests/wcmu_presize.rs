@@ -68,7 +68,10 @@ fn auto_arena_capacity_is_tight_for_a_heap_free_program() {
     // construction, so the shortfall surfaces at `Vm::new`. This pins the
     // figure as the byte-exact minimum, not a loose over-bound.
     let module = compile_src(CALL_CHAIN);
-    let cap = auto_arena_capacity_for(&module, &[]).expect("autosize");
+    // The native region supplement folded in by question 22 is slack on the
+    // virtual machine route, so the tight figure is the one without it.
+    let cap = auto_arena_capacity_for(&module, &[]).expect("autosize")
+        - keleusma::native_region::native_region_supplement_bytes(&module) as usize;
     let arena = Arena::with_capacity(cap - 1);
     assert!(
         Vm::new(module, &arena).is_err(),

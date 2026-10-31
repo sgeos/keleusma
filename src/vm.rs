@@ -67,7 +67,13 @@ macro_rules! fp {
 }
 
 /// A runtime error from the Keleusma VM.
+///
+/// The enum is non-exhaustive, so a host that matches it must carry a
+/// wildcard arm. A variant added later then does not break the host's
+/// build. [`VmError::category`] gives the retry-or-halt split for any
+/// variant.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum VmError {
     /// The value stack was empty when a pop was attempted.
     StackUnderflow,
@@ -140,6 +146,17 @@ pub enum VmError {
     /// resuming. Distinguished from [`VmError::InvalidBytecode`] to
     /// keep API misuse separate from corrupt or malformed bytecode.
     NotSuspended,
+    /// A native function asked the virtual machine to stop.
+    ///
+    /// Unlike [`VmError::NativeError`] and [`VmError::NativeErrorCode`],
+    /// which a script may catch through the native-error construct, this
+    /// error is never reified into the construct. It propagates out of the
+    /// call that ran the native, and its category is
+    /// [`VmErrorCategory::Halt`], so the host must call
+    /// [`Vm::reset_after_error`] before running the program again. A native
+    /// returns it when a host failure must end the run rather than be
+    /// recovered by the script. The message is the host's own diagnostic.
+    HostHalt(String),
 }
 
 impl From<crate::bytecode::LoadError> for VmError {
@@ -174,7 +191,7 @@ pub enum VmErrorCategory {
     /// programs must call [`Vm::reset_after_error`] before any
     /// further [`Vm::call`] or [`Vm::resume`]. Examples:
     /// `StackUnderflow`, `InvalidBytecode`, `VerifyError`,
-    /// `LoadError`, `OutOfArena`, `NotSuspended`.
+    /// `LoadError`, `OutOfArena`, `NotSuspended`, `HostHalt`.
     Halt,
     /// Recoverable script-side error. The script asked for something
     /// that the VM rejected; the host may surface the error to the
@@ -203,7 +220,8 @@ impl VmError {
             | VmError::VerifyError(_)
             | VmError::LoadError(_)
             | VmError::OutOfArena(_)
-            | VmError::NotSuspended => VmErrorCategory::Halt,
+            | VmError::NotSuspended
+            | VmError::HostHalt(_) => VmErrorCategory::Halt,
             // Soft script: the script's request was invalid at the
             // VM level, but the VM's invariants hold and the host
             // can ask the script to retry through `resume_err`.
@@ -1017,6 +1035,14 @@ fn decode_all_ops(bytes: &[u8]) -> Result<Vec<Vec<Op>>, VmError> {
 /// one input the module cannot bound, text inside a composite, is the only
 /// reason for the companion, which takes the host's allowance for it.
 ///
+/// **Native allocation is included.** The figure also adds
+/// [`crate::native_region::native_region_supplement_bytes`], the region a
+/// native compilation of the module reserves, on the operator's ruling of
+/// 2026-10-31 that one figure serve both routes. A host that runs only the
+/// virtual machine is over-provisioned by exactly that supplement, and a host
+/// that formerly added the native figure itself must stop, or it counts it
+/// twice.
+///
 /// **Not covered.** A direct call of a non-entry chunk through
 /// `Vm::call_function` copies its composite arguments too, and is not counted.
 /// An input whose declared shape is not flat, which the module records as
@@ -1084,11 +1110,13 @@ pub fn auto_arena_capacity_with_input_text(
         slots.saturating_mul(core::mem::size_of::<crate::bytecode::GenericValue<i64, f64>>());
     let frame_bytes = frames.saturating_mul(core::mem::size_of::<CallFrame>());
     let inputs = host_input_arena_bytes_for(module, text_bytes_per_input)?;
+    let native = crate::native_region::native_region_supplement_bytes(module) as usize;
     Ok(stack_bytes
         .saturating_add(frame_bytes)
         .saturating_add(module.aux_arena_bytes as usize)
         .saturating_add(footprint.max_heap_bytes as usize)
-        .saturating_add(inputs))
+        .saturating_add(inputs)
+        .saturating_add(native))
 }
 
 /// Arena bytes that the host inputs of the module's entry chunk occupy at

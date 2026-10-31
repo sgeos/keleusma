@@ -75,6 +75,8 @@ Every Keleusma `Vm` needs an arena. The host picks the capacity. Pick too small 
 
 Use `keleusma::vm::auto_arena_capacity_for(&module, native_wcmu)` to compute the capacity from the compiled module before constructing the VM. The figure is the sum of the operand stack, the call frames, the opaque registry, the per-iteration heap, and the composite host inputs of the entry chunk. An arena of exactly that size constructs the VM under the supplied native attestations and admits the call and every resume up to each `Reset`, provided that no composite input contains `Text`.
 
+The figure also adds the region a native compilation of the module reserves, reported by `keleusma::native_region::native_region_supplement_bytes`, so that one capacity serves both the virtual machine and native code. A host that runs only the virtual machine is over-provisioned by exactly that region.
+
 ```rust
 use keleusma::vm::{auto_arena_capacity_for, Vm};
 use keleusma::Arena;
