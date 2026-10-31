@@ -21,6 +21,8 @@ pub(crate) const BYTE: u16 = 4;
 pub(crate) const WORD: u16 = 8;
 pub(crate) const FIXED: u16 = 16;
 pub(crate) const FLOAT: u16 = 32;
+/// `ScalarKind::Opaque`, tag 7, a host handle carried as one address word.
+pub(crate) const OPAQUE: u16 = 128;
 pub(crate) const TUPLE: u16 = 256;
 pub(crate) const ARRAY: u16 = 512;
 pub(crate) const STRUCT: u16 = 1024;
@@ -178,7 +180,7 @@ fn packed_extent(tags: &[u16], flows: &[Flow], float_bytes: u32) -> Option<(u32,
     let mut total_max = 0u32;
     for (&tag, flow) in tags.iter().zip(flows) {
         let tag = kind(tag);
-        if tag == 0 || tag & !(UNIT | FALSE | BYTE | WORD | FIXED | FLOAT | BODY) != 0 {
+        if tag == 0 || tag & !(UNIT | FALSE | BYTE | WORD | FIXED | FLOAT | OPAQUE | BODY) != 0 {
             return None;
         }
         let mut minimum = u32::MAX;
@@ -190,6 +192,7 @@ fn packed_extent(tags: &[u16], flows: &[Flow], float_bytes: u32) -> Option<(u32,
             (WORD, 8),
             (FIXED, 8),
             (FLOAT, float_bytes),
+            (OPAQUE, 8),
         ] {
             if tag & mask != 0 {
                 minimum = minimum.min(bytes);

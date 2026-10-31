@@ -8393,7 +8393,10 @@ fn lower_chunk_body<'ctx>(
                     // sixteen bytes -- identical to a pair of `Word`s. THE BITS
                     // ARE THE VALUE: no zero-extension, no mask, no rescale.
                     // Scaling lives in the opcodes that consume them.
-                    SK::Int | SK::Fixed => 8,
+                    // An opaque element is the host's pointer, one address word,
+                    // which `linkage` requires to be eight bytes. Native code
+                    // carries it and never reads through it.
+                    SK::Int | SK::Fixed | SK::Opaque => 8,
                     SK::Byte | SK::Bool => 1,
                     // **A FLOAT ELEMENT IS THE SAME EIGHT RAW BYTES.** A body
                     // field is INTERNAL -- the compiler packs it, the same
@@ -8671,7 +8674,13 @@ fn lower_chunk_body<'ctx>(
                     // after the operand WIDTH was widened. Packing a field and
                     // reading it back are separate arms, and only packing
                     // followed from the width.
-                    SK::Int | SK::Fixed => {
+                    //
+                    // **An `Opaque` field reads the same eight bytes**, the
+                    // host's pointer as question 14 types it. The reference
+                    // holds a registry index in the same eight-byte field, so
+                    // the layouts agree and the bytes differ by representation,
+                    // which no Keleusma operation can observe.
+                    SK::Int | SK::Fixed | SK::Opaque => {
                         let iv =
                             st.b.build_load(i64t, addr, "cfint")
                                 .unwrap()

@@ -431,8 +431,8 @@ MUTATIONS_ROUND3 = {
         # first attempt built the anchor from a `grep -v` view with comments
         # stripped, so the text looked contiguous and did not place. A display
         # filter is not the file.
-        "                    SK::Int | SK::Fixed => 8,",
-        "                    SK::Int | SK::Fixed => 4,",
+        "                    SK::Int | SK::Fixed | SK::Opaque => 8,",
+        "                    SK::Int | SK::Fixed | SK::Opaque => 4,",
     ),
     "IsEnum": (
         "                    Some(ConstValue::Int(v)) => *v,",
