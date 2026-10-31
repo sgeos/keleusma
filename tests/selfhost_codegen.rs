@@ -8413,7 +8413,8 @@ fn the_boundary_tables_thin_families_are_the_ones_on_record() {
     // The acknowledged thin families. `literal` is the one that cost something: its single case is
     // `let s = "hi"`, and the string defects of 2026-08-30 lived exactly where that case does not
     // reach.
-    let acknowledged = ["literal", "removed", "tuple"];
+    // `removed` stopped being thin on 2026-10-31, when the refutable `let` case joined it.
+    let acknowledged = ["literal", "tuple"];
     assert_eq!(
         thin.as_slice(),
         acknowledged.as_slice(),
@@ -9128,17 +9129,43 @@ fn boundary_cases() -> &'static [(&'static str, Support, &'static str)] {
             SOk,
             "fn id<T>(x: T) -> T { x }\nfn f() -> Word { id(1) }",
         ),
-        // A pipe into a template, which the reference keeps generic rather than instantiating.
+        // A pipe into a template, which both compilers instantiate as the plain call since
+        // 2026-10-31. It was `scope/generic_pipe__GAP`, refused, before that.
         (
-            "scope/generic_pipe__GAP",
-            Refuses,
+            "scope/generic_pipe",
+            SOk,
             "fn id<T>(x: T) -> T { x }\nfn f() -> Word { 1 |> id() }",
+        ),
+        // A struct pattern in a `let`, which the lexer's destructuring filter rewrites to the
+        // reference's lowering, 2026-10-31.
+        (
+            "let/struct_destructure",
+            SOk,
+            "struct P { x: Word, y: Word }\nfn f(p: P) -> Word { let P { x, y: b } = p; x + b }",
+        ),
+        (
+            "let/struct_destructure_wildcard_field",
+            SOk,
+            "struct P { x: Word, y: Word }\nfn f(p: P) -> Word { let P { y, x: _ } = p; y }",
+        ),
+        // A nested destructuring pattern, which the reference compiles and the filter
+        // refuses rather than rewriting.
+        (
+            "scope/nested_let_pattern__GAP",
+            Refuses,
+            "fn f() -> Word { let (a, (b, c)) = (1, (2, 3)); a + b + c }",
         ),
         // --- removed V0.1.x surface (reference rejects) --------------------------
         (
             "removed/closure__REJECT",
             RefRejects,
             "fn f() -> Word { let g = |x| x; g(1) }",
+        ),
+        // A refutable `let` pattern, refused by the reference since 2026-10-31.
+        (
+            "removed/refutable_let__REJECT",
+            RefRejects,
+            "fn f() -> Word { let 3 = 5; 7 }",
         ),
     ]
 }
@@ -9304,10 +9331,12 @@ fn the_fused_compile_holds_one_group_not_the_program() {
             // pipe token's compound code took it to 1968, the shebang skip to 1991, and
             // the `signed`, `pure`, `ephemeral` and `external` keywords to 2168. The float
             // literal state took it to 2230 and the peak to 421. The label punctuation,
-            // `punct_label`, took it to 2242 on 2026-10-27.
+            // `punct_label`, took it to 2242 on 2026-10-27. The struct pattern states of
+            // the destructuring filter, `dq_struct`, took it to 2403 on 2026-10-31 with the
+            // peak unchanged.
             "lexer",
             include_str!("../src/selfhost/kel/lexer.kel"),
-            2242,
+            2403,
             421,
         ),
         (

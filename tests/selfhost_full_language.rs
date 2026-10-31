@@ -1517,6 +1517,240 @@ fn pipe_placeholders_take_the_piped_operand() {
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
 }
 
+/// A pipe into a generic function, the operator's ruling of 2026-10-31. The reference
+/// rewrites `x |> f(a)` into `f(x, a)` before monomorphizing when `f` is generic, and the
+/// self-hosted parser now records the piped operand's kind as the first argument's, and a
+/// placeholder's position as the operand's, so it instantiates the same template. Every
+/// pipe form of `tests/pipe_generic_monomorphize.rs` is here, with the non-generic, native,
+/// placeholder and `match` forms beside them. `Identical` is the shipping cross-check, and
+/// the bytes are compared again directly so the claim does not rest on the classifier.
+#[test]
+fn pipes_into_generic_functions_compile_byte_identically() {
+    const ID: &str = "fn id<T>(x: T) -> T { x }\n";
+    const D: &str = "fn d(x: Word) -> Word { x + x }\n";
+    let cases: Vec<(String, Class)> = vec![
+        (format!("{ID}fn main() -> Word {{ 1 |> id() }}"), Identical),
+        (
+            format!(
+                "{ID}loop main(t: Word) -> Word {{ let v: Word = t |> id(); let r = yield v; yield r }}"
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "fn second<T>(a: Word, b: T) -> T { b }\nfn main() -> Word { 7 |> second(1, _) }",
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{ID}fn main() -> Word {{ let b = true |> id(); if b {{ 1 |> id() }} else {{ 2 }} }}"
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "fn pick<T>(a: T, b: Word, c: T) -> T { c }\nfn main(x: Word) -> Word { x |> pick(5, 2, _) }",
+            ),
+            Identical,
+        ),
+        (
+            format!("{ID}{D}fn main(x: Word) -> Word {{ x |> d() |> id() |> d() }}"),
+            Identical,
+        ),
+        (
+            format!("{ID}{D}fn main(x: Word) -> Word {{ id(x |> d()) }}"),
+            Identical,
+        ),
+        (format!("{D}fn main() -> Word {{ 6 |> d() }}"), Identical),
+        (
+            String::from(
+                "use host::f(Word, Word) -> Word\nfn main(a: Word) -> Word { a |> host::f(9, _) }",
+            ),
+            Identical,
+        ),
+        (
+            format!("{D}fn main() -> Word {{ 3 |> d() |> match {{ 6 => 1, _ => 0 }} }}"),
+            Identical,
+        ),
+        // An unannotated resume binding passed to a generic function, item 4 of
+        // 2026-10-31. The reference now specializes it from `loop main`'s parameter.
+        (
+            format!(
+                "{ID}loop main(t: Word) -> Word {{ let v: Word = t |> id(); let r = yield v; yield r |> id() }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{ID}loop main(t: Word) -> Word {{ let v: Word = id(t); let r = yield v; yield id(r) }}"
+            ),
+            Identical,
+        ),
+        (
+            format!("{ID}loop main(t: Word) -> Word {{ let r = yield 1; yield r |> id() }}"),
+            Identical,
+        ),
+        (
+            format!("{ID}loop main() -> Word {{ let r = yield 1; let s = id(r); yield 0 }}"),
+            RefRejects,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in &cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+            continue;
+        }
+        if *expected != Identical {
+            continue;
+        }
+        let target = keleusma::target::Target::host();
+        let ours = self_hosted_compile(src, &target).expect("classified Identical");
+        let tokens = keleusma::lexer::tokenize(src).expect("lex");
+        let program = keleusma::parser::parse(&tokens).expect("parse");
+        let reference = keleusma::compiler::compile(&program).expect("reference");
+        assert_eq!(
+            ours.to_bytes().unwrap(),
+            reference.to_bytes().unwrap(),
+            "{src}"
+        );
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// The `let` pattern follow-ups of 2026-10-31. A flat struct pattern destructures through
+/// the lexer's destructuring filter, which rewrites it to the reference's own lowering,
+/// `let T = e; let x = T.x;`. A nested pattern and a single-variant enum pattern, which the
+/// reference admits, are refused here as unsupported, so neither can diverge. A refutable
+/// pattern is refused by the reference type checker, and the self-hosted pipeline reports
+/// that rejection.
+#[test]
+fn let_struct_patterns_compile_and_refutable_lets_are_rejected() {
+    const P: &str = "struct P { x: Word, y: Word }\n";
+    let cases: Vec<(String, Class)> = vec![
+        (
+            format!(
+                "{P}fn main() -> Word {{ let p = P {{ x: 1, y: 2 }}; let P {{ x, y }} = p; x * 10 + y }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{P}fn main() -> Word {{ let P {{ y: b, x: a }} = P {{ x: 1, y: 2 }}; a * 10 + b }}"
+            ),
+            Identical,
+        ),
+        (
+            format!("{P}fn main() -> Word {{ let P {{ x: _, y }} = P {{ x: 1, y: 2 }}; y }}"),
+            Identical,
+        ),
+        (
+            format!("{P}fn main() -> Word {{ let P {{ y }} = P {{ x: 1, y: 2 }}; y }}"),
+            Identical,
+        ),
+        (
+            format!("{P}fn main() -> Word {{ let P {{ x, y, }} = P {{ x: 1, y: 2 }}; x + y }}"),
+            Identical,
+        ),
+        (
+            format!(
+                "{P}fn mk(n: Word) -> P {{ P {{ x: n, y: n + 1 }} }}\nfn main() -> Word {{ let P {{ x, y }} = mk(4); x * 10 + y }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{P}fn sum(p: P) -> Word {{ let P {{ x, y }} = p; x + y }}\nfn main() -> Word {{ sum(P {{ x: 3, y: 4 }}) }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{P}fn main(c: bool) -> Word {{ let P {{ x, y }} = if c {{ P {{ x: 1, y: 2 }} }} else {{ P {{ x: 3, y: 4 }} }}; x + y }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{P}loop main(r: Word) -> Word {{ let P {{ x, y }} = P {{ x: r, y: 2 }}; let n = yield x + y; yield n }}"
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{P}fn main() -> Word {{ for i in 0..3 {{ let P {{ x, y }} = P {{ x: i, y: 2 }}; }} 7 }}"
+            ),
+            Identical,
+        ),
+        (
+            String::from(
+                "struct M { b: Byte, f: bool, w: Word }\nfn main() -> Word { let M { b, f, w } = M { b: 7 as Byte, f: true, w: 9 }; if f { (b as Word) * 10 + w } else { 0 } }",
+            ),
+            Identical,
+        ),
+        (
+            format!(
+                "{P}struct Q {{ p: P, z: Word }}\nfn main() -> Word {{ let q = Q {{ p: P {{ x: 1, y: 2 }}, z: 3 }}; let Q {{ p, z }} = q; p.x + z }}"
+            ),
+            Identical,
+        ),
+        // Admitted by the reference and refused here.
+        (
+            format!(
+                "{P}struct Q {{ p: P, z: Word }}\nfn main() -> Word {{ let Q {{ p: P {{ x, y }}, z }} = Q {{ p: P {{ x: 1, y: 2 }}, z: 3 }}; x + y + z }}"
+            ),
+            Unsupported,
+        ),
+        (
+            String::from(
+                "enum W { A(Word, Word) }\nfn main() -> Word { let W::A(x, y) = W::A(3, 4); x * 10 + y }",
+            ),
+            Unsupported,
+        ),
+        // A mismatched struct name and every refutable form are reference rejections.
+        (
+            format!(
+                "{P}struct Q {{ x: Word, y: Word }}\nfn main() -> Word {{ let P {{ x, y }} = Q {{ x: 1, y: 2 }}; x + y }}"
+            ),
+            RefRejects,
+        ),
+        (
+            String::from("fn main() -> Word { let 3 = 5; 7 }"),
+            RefRejects,
+        ),
+        (
+            String::from("fn main() -> Word { let (a, 3) = (1, 2); a }"),
+            RefRejects,
+        ),
+        (
+            String::from("enum E { A(Word), B }\nfn main() -> Word { let E::A(x) = E::A(4); x }"),
+            RefRejects,
+        ),
+        (
+            String::from("fn main() -> Word { let Option::Some(x) = Option::Some(4); x }"),
+            RefRejects,
+        ),
+        (
+            format!("{P}fn main() -> Word {{ let P {{ x: 0, y }} = P {{ x: 0, y: 2 }}; y }}"),
+            RefRejects,
+        ),
+    ];
+    let mut mismatches = Vec::new();
+    for (src, expected) in &cases {
+        let (actual, detail) = classify(src);
+        if actual != *expected {
+            mismatches.push(format!(
+                "{src}\n  expected {expected:?}, got {actual:?} {detail}"
+            ));
+        }
+    }
+    assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
 /// `assert`, which the reference compiles out of a release build. The self-hosted parser
 /// commits the statement as kind 83, which codegen lowers to its continuation alone, while the
 /// condition's nodes still reach the type stage, so a condition naming an undefined binding is
@@ -2535,7 +2769,8 @@ fn generic_functions_have_their_pinned_outcomes() {
         ("fn k<T>(x: T, n: Word) -> Word { n }\nfn main() -> Word { k(true, 5) }".to_string(), Identical),
         (format!("{id}loop main(x: Word) -> Word {{ let x = yield id(x); x }}"), Identical),
         (format!("{id}fn main() -> Word {{ 7 }}"), Unsupported),
-        (format!("{id}fn main() -> Word {{ 1 |> id() }}"), Unsupported),
+        // A pipe into a template compiles as the call it stands for since 2026-10-31.
+        (format!("{id}fn main() -> Word {{ 1 |> id() }}"), Identical),
         ("fn wrap<T>(x: T) -> Option<T> { Option::Some(x) }\nfn main() -> Word { match wrap(1) { Option::Some(v) => v, Option::None => 0 } }".to_string(), Unsupported),
         ("fn first<A>(a: A, b: A) -> A { a }\nfn main() -> Word { first(1, 2 as Byte) }".to_string(), RefRejects),
         ("fn f<T: Ord>(x: T) -> T { x }\nfn main() -> Word { f(1) }".to_string(), RefRejects),
