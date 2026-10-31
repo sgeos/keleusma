@@ -273,12 +273,15 @@ third is `total(entry)` before the copy, which differs only for
 
 ## What a fold changes for hosts
 
-A host that today adds this figure to `auto_arena_capacity_for` would count it
-twice after the fold. This line will remove the separate figure from the
-generated native header, `<prefix>_region_bytes`, only once V0.2.X's sizing
-includes it, and will say so in the interline channel, so the two never apply
-together. Whether the native region and the virtual machine's arena are one
-allocation for a native host is a question of the host ABI that the fold does
-not settle. This line reads the operator's principle, that the figure is one
-an allocation will work with, as covering the native host's region
-allocation.
+A host that adds this figure to `auto_arena_capacity_for` counts it twice now
+that V0.2.X's pull request 680 folds it in, absorbed here as absorption 127.
+This record said this line would then remove the separate figure from the
+generated native header, `<prefix>_region_bytes`. That figure is the only way
+a C host linking the static library can size the composite region buffer it
+passes to native code, since such a host cannot call the Rust function, so
+the figure stays, which the operator confirmed first hand on 2026-10-31 in
+answering question 28 with option a. A
+host that sizes one arena from `auto_arena_capacity_for` must not add it. A
+double count over-provisions and never under-provisions. Whether the native
+region and the virtual machine's arena are one allocation for a native host
+is a question of the host ABI that the fold does not settle.

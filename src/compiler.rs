@@ -3459,6 +3459,7 @@ fn compile_with_recorded_type_hook(
     // unresolved `Fixed(None)` form would silently fall back to
     // `DEFAULT_FIXED_FRAC_BITS` (Q31.32) regardless of target.
     normalize_fixed_defaults(&mut owned, target.fixed_default_frac_bits());
+    desugar_generic_pipes(&mut owned);
     crate::typecheck::check_with_target(&mut owned, *target).map_err(|e| CompileError {
         message: format!("type error: {}", e.message),
         span: e.span,
@@ -5893,6 +5894,44 @@ fn emit_type_zero(fc: &mut FuncCompiler, ty: &TypeExpr, span: Span) -> Result<()
     Ok(())
 }
 
+/// Replace the flat composite element on top of the operand stack with a copy
+/// held in a fresh arena body, so that a later write to its data slot does not
+/// change it.
+///
+/// A private composite slot keeps its body at a fixed offset in the persistent
+/// pool, and reading the slot pushes a handle to that body rather than a copy.
+/// `SetDataIndexed` copies the new body over the old one in place, so a handle
+/// read before the write observes the written value afterwards. The handled
+/// write's `old` binding is read before and used after its write, which is why
+/// it needs a copy that the write cannot reach.
+///
+/// No opcode copies a composite, so the copy is built from existing ones. The
+/// element is packed as the only element of a one-element flat array, which
+/// copies its bytes into a fresh arena body, and the array is then indexed at
+/// zero, which yields a view of that body. The index is the constant zero
+/// against a length of one, so the read never fails, and its outcome suffix is
+/// dropped. The array's allocation is the `NewComposite` byte size that the
+/// worst-case memory analysis already sums. A scalar or a boxed element is
+/// owned by its slot value and is left unchanged.
+fn emit_detach_data_element(fc: &mut FuncCompiler, element: &TypeExpr) {
+    let FlatFieldForm::Nested(size, variant) = classify_flat_field(element, &fc.type_info) else {
+        return;
+    };
+    if type_may_intern_opaque(element, &fc.type_info) {
+        fc.may_intern_opaque = true;
+    }
+    fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+        kind: crate::value_layout::CompositeKind::Array,
+        count: 1,
+        byte_size: size,
+    }));
+    // `PushImmediate(4)` is the word zero.
+    fc.emit(Op::PushImmediate(4));
+    fc.emit(Op::GetIndex(ArrayElem::FlatNested { size, variant }));
+    // Drop the index, the four bound limbs and the flag, keeping the element.
+    fc.emit(Op::PopN(6));
+}
+
 /// Emit a bare `state.field[i][j]... = value;` write.
 ///
 /// Index, probe, the default `Trap(8)` on an invalid index, the offset held
@@ -5993,6 +6032,7 @@ fn compile_data_index_store(
         fc.emit(Op::SetLocal(offset));
         if probe.read_old {
             if binds_old {
+                emit_detach_data_element(fc, &probe.element);
                 pending.push((fc.emit(Op::SetLocal(0)), STORE_OLD));
             } else {
                 fc.emit(Op::PopN(1));
@@ -6041,6 +6081,7 @@ fn compile_data_index_store(
         fc.emit(Op::GetDataIndexed(probe.base, probe.total));
         // Drop the flag, the four limbs and the index, keeping the element.
         fc.emit(Op::PopN(6));
+        emit_detach_data_element(fc, &probe.element);
         pending.push((fc.emit(Op::SetLocal(0)), OLD));
     }
     compile_expr(fc, value)?;
@@ -8959,6 +9000,92 @@ fn compile_for_scoped(fc: &mut FuncCompiler, for_stmt: &ForStmt) -> Result<(), C
 /// binding annotations, and cast targets. Composite type
 /// expressions (`Tuple`, `Array`, `Option`, `Named<T, U, …>`)
 /// recurse into their components.
+/// Rewrite each pipe whose target is a generic function into the call it
+/// stands for, `x |> f(a)` into `f(x, a)` and `x |> f(a, _)` into `f(a, x)`.
+///
+/// Monomorphization specializes only `Expr::Call` sites, and the type checker
+/// types a pipe against the generic's own parameter variables rather than a
+/// fresh instance, so a piped generic call kept the generic chunk with `Opaque`
+/// parameter and return kinds. The operator ruled on 2026-10-31 that a pipe is
+/// to monomorphize exactly as the plain call does, and this rewrite, run before
+/// the type checker, gives both forms one path. A pipe into a non-generic
+/// function or a native keeps its own lowering, so its bytecode is unchanged.
+/// A pipe with more than one placeholder is left for the type checker to
+/// refuse.
+///
+/// The resolution of the target name is unchanged only where no local of the
+/// same name shadows the generic function, since a pipe always names a
+/// declared function and a call may name a local closure. That shadowing case
+/// is not distinguished here and is a known residual.
+fn desugar_generic_pipes(program: &mut Program) {
+    use crate::visitor::MutVisitor;
+    struct Desugar {
+        generics: BTreeSet<String>,
+    }
+    impl MutVisitor for Desugar {
+        fn visit_expr(&mut self, expr: &mut Expr) {
+            self.walk_expr(expr);
+            let Expr::Pipeline {
+                left,
+                func,
+                args,
+                span,
+            } = expr
+            else {
+                return;
+            };
+            if !self.generics.contains(func.as_str()) {
+                return;
+            }
+            let placeholders = args
+                .iter()
+                .filter(|a| matches!(a, Expr::Placeholder { .. }))
+                .count();
+            if placeholders > 1 {
+                return;
+            }
+            let piped = core::mem::replace(
+                left.as_mut(),
+                Expr::Placeholder {
+                    span: Span::default(),
+                },
+            );
+            let mut call_args = core::mem::take(args);
+            match call_args
+                .iter()
+                .position(|a| matches!(a, Expr::Placeholder { .. }))
+            {
+                Some(at) => call_args[at] = piped,
+                None => call_args.insert(0, piped),
+            }
+            *expr = Expr::Call {
+                name: core::mem::take(func),
+                args: call_args,
+                const_args: Vec::new(),
+                span: *span,
+            };
+        }
+    }
+    let generics: BTreeSet<String> = program
+        .functions
+        .iter()
+        .filter(|f| !f.type_params.is_empty() || !f.const_params.is_empty())
+        .map(|f| f.name.clone())
+        .collect();
+    if generics.is_empty() {
+        return;
+    }
+    let mut pass = Desugar { generics };
+    for func in &mut program.functions {
+        pass.visit_block(&mut func.body);
+    }
+    for block in &mut program.impls {
+        for method in &mut block.methods {
+            pass.visit_block(&mut method.body);
+        }
+    }
+}
+
 fn normalize_fixed_defaults(program: &mut Program, frac_bits: u8) {
     use crate::ast::*;
     fn fix_type(t: &mut TypeExpr, frac_bits: u8) {

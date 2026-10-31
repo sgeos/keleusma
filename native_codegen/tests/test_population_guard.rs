@@ -127,7 +127,10 @@
 // 844 -> 845: `the_shipping_crates_copy_agrees_with_the_backend` in
 // `region_supplement_formula.rs`, absorption 127, 2026-10-31. No name
 // disappeared.
-const RECORDED_TEST_FUNCTIONS: usize = 845;
+// 845 -> 846: `a_pipe_into_a_generic_template_agrees_with_the_vm` in
+// `general_stream_sequence.rs`, absorption 128, 2026-10-31. No name
+// disappeared.
+const RECORDED_TEST_FUNCTIONS: usize = 846;
 // UNCHANGED at 535 by the comparison increment: `operand_variant_sweep.rs` gained
 // six CASES in its matrix, which is data rather than test functions. Worth saying,
 // because a reader reconciling that increment against this number would otherwise

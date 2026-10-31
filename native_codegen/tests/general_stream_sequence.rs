@@ -271,3 +271,27 @@ fn the_parameter_slot_carries_the_resume_value_after_a_suspension() {
         &[3, 0],
     );
 }
+
+/// **A PIPE INTO A GENERIC TEMPLATE LOWERS, SEQUENCE 171.**
+///
+/// Until absorption 128 the reference kept `t |> id()` generic, so the
+/// template's signature gave its type parameter the `Opaque` kind and the
+/// backend refused the coroutine at the yield, while `id(t)` lowered. V0.2.X's
+/// pull request 684 monomorphizes the piped call as its plain call, and the
+/// coroutine now lowers and agrees with the virtual machine. A return to the
+/// generic form fails the refusal check inside the helper.
+///
+/// The resume binding is annotated. Measured on absorption 128, the same
+/// program with `let r = yield v` fails to compile with an undefined function
+/// `id` after monomorphization, and so does the plain call `id(r)`, whenever
+/// the module already holds an instance of the template. That is the
+/// reference compiler's and was reported to V0.2.X in sequence 181.
+#[test]
+fn a_pipe_into_a_generic_template_agrees_with_the_vm() {
+    common::assert_general_stream_agrees(
+        "fn id<T>(x: T) -> T { x } \
+         loop main(t: Word) -> Word { let v: Word = t |> id(); let r: Word = yield v; yield r |> id() }",
+        5,
+        &[3, 0],
+    );
+}

@@ -804,7 +804,7 @@ fn scalar_reply_widths_and_kinds_match_the_vm() {
             Value::Bool(true),
         ),
         (
-            "yield emit() -> Float { yield 0.5 } loop main(t: Word) -> Word { emit(); yield t }",
+            "yield emit() -> Float { yield 0.5; 0.5 } loop main(t: Word) -> Word { emit(); yield t }",
             Value::Float(0.5),
         ),
     ] {
@@ -880,7 +880,7 @@ fn release_inside_a_callee_does_not_execute_its_remaining_effects() {
 #[test]
 fn delegated_composite_yields_remain_refused() {
     let p = common::build(
-        "yield emit(a: Word) -> (Word, Word) { yield (a, a) } loop main(t: Word) -> Word { emit(t); yield t }",
+        "yield emit(a: Word) -> (Word, Word) { yield (a, a); (a, a) } loop main(t: Word) -> Word { emit(t); yield t }",
     );
     let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
     assert!(
@@ -1045,17 +1045,11 @@ fn private_scalar_initializers_do_not_constrain_later_values() {
 
 #[test]
 fn mixed_reply_arithmetic_is_refused_where_the_vm_faults() {
-    use keleusma::bytecode::Value;
-    use keleusma::vm::{
-        Vm, VmError, VmState, auto_arena_capacity_for, required_persistent_capacity_for,
-    };
-    for (tag, input) in [
-        ("Byte", Value::Byte(5)),
-        ("bool", Value::Bool(true)),
-        ("Fixed", Value::Fixed(65536)),
-        ("Float", Value::Float(5.25)),
-        ("()", Value::Unit),
-    ] {
+    // Since absorption 128 the reference refuses every source here, because
+    // each mixes the resume value's type with another. See
+    // `assert_refused_for_its_resume_type`.
+    let mut refused = 0;
+    for tag in ["Byte", "bool", "Fixed", "Float", "()"] {
         for expression in [
             "r + 1", "r - 1", "r * 2", "r / 2", "r % 2", "r band 1", "r bor 1", "r bxor 1",
             "r lsl 1",
@@ -1068,79 +1062,25 @@ fn mixed_reply_arithmetic_is_refused_where_the_vm_faults() {
                 } else {
                     format!("loop main(t: {tag}) -> Word {{ let r = yield 5; yield {expression} }}")
                 };
-                let p = common::build(&src);
-                keleusma::verify::verify(&p).unwrap();
-                let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
-                assert!(
-                    error.to_string().contains("coroutine scalar types")
-                        || error.to_string().contains("consume a float")
-                        || error.to_string().contains("one side is a float"),
-                    "{src}: {error}"
-                );
-                let need = required_persistent_capacity_for(&p);
-                let mut arena = keleusma_arena::Arena::with_capacity(
-                    auto_arena_capacity_for(&p, &[]).unwrap() + need + 65536,
-                );
-                arena.resize_persistent(need).unwrap();
-                let mut vm = Vm::new(p, &arena).unwrap();
-                assert!(matches!(
-                    vm.call(std::slice::from_ref(&input)).unwrap(),
-                    VmState::Yielded(Value::Int(5))
-                ));
-                let VmError::TypeError(message) = vm.resume(input.clone()).unwrap_err() else {
-                    panic!("expected mixed-type arithmetic fault");
-                };
-                assert!(!message.is_empty(), "{src}");
+                assert_refused_for_its_resume_type(&src);
+                refused += 1;
             }
         }
     }
+    assert_eq!(refused, 90);
 }
 
 #[test]
 fn reply_tags_are_checked_through_calls_and_branch_joins() {
-    use keleusma::bytecode::Value;
-    use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
+    // Since absorption 128 the reference refuses the three mismatched sources,
+    // because each yields a `Byte` resume value from an entry declared `Word`.
+    // See `assert_refused_for_its_resume_type`.
     for src in [
         "loop main(t: Byte) -> Word { let r = yield 5; yield r }",
         "yield emit() -> Word { yield 5 } loop main(t: Byte) -> Word { let r = emit(); yield r }",
         "loop main(t: Byte) -> Word { let r = yield 5; let v = if t > (0 as Byte) { r } else { 0 }; yield v }",
     ] {
-        let p = common::build(src);
-        keleusma::verify::verify(&p).unwrap();
-        match coroutine::lower(&Context::create(), &p, &machine(), 4096) {
-            Err(error) => assert!(
-                error.to_string().contains("coroutine scalar types"),
-                "{error}"
-            ),
-            Ok(_) => {
-                // The VM can yield Byte, but this host dialogue promises Word.
-                // A joined value is checked before crossing that boundary.
-                #[cfg(unix)]
-                require_program_kind_trap(
-                    "reply_tags_are_checked_through_calls_and_branch_joins",
-                    &p,
-                    None,
-                    &[5],
-                    &[5],
-                    &[7],
-                    src,
-                );
-            }
-        }
-        let need = required_persistent_capacity_for(&p);
-        let mut arena = keleusma_arena::Arena::with_capacity(
-            auto_arena_capacity_for(&p, &[]).unwrap() + need + 65536,
-        );
-        arena.resize_persistent(need).unwrap();
-        let mut vm = Vm::new(p, &arena).unwrap();
-        assert!(matches!(
-            vm.call(&[Value::Byte(5)]).unwrap(),
-            VmState::Yielded(Value::Int(5))
-        ));
-        assert!(matches!(
-            vm.resume(Value::Byte(7)).unwrap(),
-            VmState::Yielded(Value::Byte(7))
-        ));
+        assert_refused_for_its_resume_type(src);
     }
     // A matching byte reply remains usable through the same branch shape.
     let src = "loop main(t: Byte) -> Byte { let r = yield t; let v = if t > (0 as Byte) { r } else { 0 as Byte }; yield v + (1 as Byte) }";
@@ -1164,7 +1104,11 @@ fn coroutine_scalar_admission_requires_complete_parameter_signatures() {
     keleusma::verify::verify(&p).unwrap();
     let error = coroutine::lower(&Context::create(), &p, &machine(), 4096).unwrap_err();
     assert!(error.to_string().contains("complete signatures"), "{error}");
-    let mut p = common::build("loop main(t: Byte) -> Word { let r = yield 5; yield r + 1 }");
+    // Since absorption 128 the resume value is a `Byte` here, so the output is
+    // one too. The signature is then corrupted as before.
+    let mut p = common::build(
+        "loop main(t: Byte) -> Byte { let r = yield (5 as Byte); yield r + (1 as Byte) }",
+    );
     let entry = p.entry_point.unwrap();
     p.signatures[entry].params[0] = keleusma::bytecode::WireShape::Scalar {
         kind: keleusma::value_layout::ScalarKind::Int.to_tag(),
@@ -1237,8 +1181,13 @@ fn scalar_reply_admission_reaches_a_later_loop_iteration() {
 
 #[test]
 fn scalar_replies_do_not_become_enum_pointers() {
+    // Since absorption 128 the resume value takes the entry parameter's type,
+    // so the reference refuses every source here except a unit variant pattern
+    // matched against a `Word`, which it still admits as a discriminant
+    // comparison. The admitted sources keep the original comparison.
     use keleusma::bytecode::Value;
     use keleusma::vm::{Vm, VmState, auto_arena_capacity_for, required_persistent_capacity_for};
+    let (mut admitted, mut refused) = (0, 0);
     for (tag, bits, input) in [
         ("Word", 7, Value::Int(7)),
         ("Byte", 7, Value::Byte(7)),
@@ -1263,16 +1212,11 @@ fn scalar_replies_do_not_become_enum_pointers() {
                 } else {
                     format!("enum E {{ {variants} }} loop main(t: {tag}) -> Word {{ {body} 0 }}")
                 };
-                if !delegated && pattern == "E::A(x)" {
-                    // The core verifier already knows a direct scalar resume
-                    // cannot supply a composite field, even in this dead arm.
-                    let ast =
-                        keleusma::parser::parse(&keleusma::lexer::tokenize(&src).unwrap()).unwrap();
-                    let error = keleusma::compiler::compile(&ast).unwrap_err();
-                    assert!(error.message.contains("ExpectedComposite"), "{error:?}");
+                let Some(p) = reference_admits(&src) else {
+                    refused += 1;
                     continue;
-                }
-                let p = common::build(&src);
+                };
+                admitted += 1;
                 let before = format!("{p:?}");
                 let expected: &[i64] = if delegated {
                     &[5, 0, 99, 5, 0, 99]
@@ -1314,6 +1258,7 @@ fn scalar_replies_do_not_become_enum_pointers() {
             }
         }
     }
+    assert_eq!((admitted, refused), (2, 22));
 }
 
 #[test]
@@ -1361,119 +1306,85 @@ fn coroutine_inspection_distinguishes_enum_and_struct_bodies() {
 
 #[test]
 fn mixed_enum_receiver_kinds_execute_with_guarded_body_inspection() {
-    // Scalar bits include null and invalid addresses. The false edge must never
-    // interpret them as a body pointer. A successful test also refines payload
-    // reads, including the compiler's Boolean temporary and structured match.
-    for (declaration, branch, pattern, expected_true, enum_on_positive) in [
-        ("A, B", "if t > 0 { E::A } else { r }", "E::A => 1", 1, true),
-        (
-            "A, B",
-            "if t > 0 { r } else { E::A }",
-            "E::A => 1",
-            1,
-            false,
-        ),
+    // Since absorption 128 the reference refuses every source here, because
+    // each mixes the resume value's type with another. See
+    // `assert_refused_for_its_resume_type`.
+    let mut refused = 0;
+    for (declaration, branch, pattern) in [
+        ("A, B", "if t > 0 { E::A } else { r }", "E::A => 1"),
+        ("A, B", "if t > 0 { r } else { E::A }", "E::A => 1"),
         (
             "A(Word), B",
             "if t > 0 { E::A(9) } else { r }",
             "E::A(x) => x",
-            9,
-            true,
         ),
         (
             "A(Word), B",
             "if t > 0 { r } else { E::A(9) }",
             "E::A(x) => x",
-            9,
-            false,
         ),
     ] {
         let src = format!(
             "enum E {{ {declaration} }} loop main(t: Word) -> Word {{ let r = yield 5; let e = {branch}; yield match e {{ {pattern}, _ => 0 }} }}"
         );
-        for reply in [7, -7, 0, i64::MIN, i64::MAX] {
-            let expected = if (reply > 0) == enum_on_positive {
-                expected_true
-            } else {
-                0
-            };
-            let replies = [reply, 3, reply, 3];
-            let want = [5, expected, 5, expected];
-            assert_eq!(common::general_vm_sequence(&src, 5, &replies), want);
-            for optimize in [false, true] {
-                assert_eq!(
-                    native(&src, 5, &replies, optimize),
-                    want,
-                    "{src} reply {reply} optimize {optimize}"
-                );
-            }
-        }
+        assert_refused_for_its_resume_type(&src);
+        refused += 1;
     }
+    assert_eq!(refused, 4);
 }
 
 #[test]
 fn mixed_owned_bodies_keep_selected_extents_across_suspension() {
-    use keleusma::bytecode::Value;
-    let inputs: Vec<_> = [5, 7, 20, 3, -40, 1]
-        .into_iter()
-        .map(|a| {
-            Value::enum_value(
-                "E".into(),
-                "Pair".into(),
-                0,
-                vec![Value::Int(a), Value::Int(a * 10)],
-            )
-        })
-        .collect();
+    // Since absorption 128 the reference refuses every source here, because
+    // each mixes the resume value's type with another. See
+    // `assert_refused_for_its_resume_type`.
+    let mut refused = 0;
     for other in ["0", "1.5", "(99, 100)"] {
-        for (condition, expected) in [
-            ("n > 0", [5, 6, 7, 5, 6, 0]),
-            ("n < 0", [5, 6, 0, 5, 6, -40]),
-        ] {
+        for condition in ["n > 0", "n < 0"] {
             let src = format!(
                 "enum E {{ Pair(Word, Word) }} loop main(t: E) -> Word {{ let r = yield 5; let n = match t {{ E::Pair(a, b) => a }}; let e = if {condition} {{ r }} else {{ {other} }}; yield 6; yield match e {{ E::Pair(a, b) => a, _ => 0 }} }}"
             );
-            flat_inputs(&src, &inputs, &expected);
+            assert_refused_for_its_resume_type(&src);
+            refused += 1;
         }
     }
+    assert_eq!(refused, 6);
 }
 
 #[test]
 fn enum_field_reads_use_the_minimum_extent_without_overcopying() {
-    use keleusma::bytecode::Value;
-    let inputs: Vec<_> = [5, 7, 20, 3, -40, 1]
-        .into_iter()
-        .map(|a| Value::enum_value("E".into(), "A".into(), 0, vec![Value::Int(a)]))
-        .collect();
-    // Flat enum inspection uses the discriminant, not a boxed nominal name.
-    // The two body sizes join, but each copy retains its actual byte count.
-    flat_inputs(
+    // Since absorption 128 the reference refuses every source here, because
+    // each mixes the resume value's type with another. See
+    // `assert_refused_for_its_resume_type`.
+    assert_refused_for_its_resume_type(
         "enum E { A(Word) } enum F { A(Word, Word) } loop main(t: E) -> Word { let r = yield 5; let n = match t { E::A(a) => a }; let e = if n > 0 { r } else { F::A(99, 100) }; yield 6; yield match e { E::A(a) => a, _ => 0 } }",
-        &inputs,
-        &[5, 6, 7, 5, 6, 99],
     );
 }
 
 #[test]
 fn mixed_array_extents_use_the_selected_runtime_bound() {
-    use keleusma::bytecode::Value;
-    let inputs: Vec<_> = [5, 7, 20, 3, -40, 1]
-        .into_iter()
-        .map(|a| Value::array(vec![Value::Int(a), Value::Int(a * 10)]))
-        .collect();
-    flat_inputs(
+    // Since absorption 128 the reference refuses every source here, because
+    // each mixes the resume value's type with another. See
+    // `assert_refused_for_its_resume_type`.
+    assert_refused_for_its_resume_type(
         "loop main(t: [Word; 2]) -> Word { let r = yield 5; let n = t[0]; let e: [Word; 3] = if n > 0 { r } else { [99, 100, 101] }; let i = if n > 0 { 1 } else { 2 }; yield 6; yield e[i] }",
-        &inputs,
-        &[5, 6, 70, 5, 6, 101],
     );
 }
 
 #[test]
 #[cfg(unix)]
 fn mixed_array_extents_trap_before_out_of_bounds_access() {
+    // Since absorption 128 the reference refuses the mixed source, because the
+    // resume value is a `[Word; 2]` and the other arm a `[Word; 3]`. See
+    // `assert_refused_for_its_resume_type`. The trap is still reached by
+    // indexing the resume value itself out of its bounds.
     use keleusma::bytecode::Value;
     use keleusma::vm::{Vm, VmState};
-    let source = "loop main(t: [Word; 2]) -> Word { let r = yield 5; let n = t[1]; let e: [Word; 3] = if n > 0 { r } else { [99, 100, 101] }; let i = t[0]; yield 6; yield e[i] }";
+    assert_refused_for_its_resume_type(
+        "loop main(t: [Word; 2]) -> Word { let r = yield 5; let n = t[1]; let e: [Word; 3] = if n > 0 { r } else { [99, 100, 101] }; let i = t[0]; yield 6; yield e[i] }",
+    );
+    let source =
+        "loop main(t: [Word; 2]) -> Word { let r = yield 5; let i = t[0]; yield 6; yield r[i] }";
     let program = common::build(source);
     for index in [-1, 2] {
         let arena = keleusma_arena::Arena::with_capacity(65536);
@@ -1523,7 +1434,10 @@ fn mixed_array_extents_trap_before_out_of_bounds_access() {
 fn enum_refinement_is_invalidated_when_the_receiver_local_changes() {
     use keleusma::bytecode::{Op, Value};
     use keleusma::vm::{Vm, VmState};
-    let source = "enum E { A(Word), B } loop main(t: Word) -> Word { let r = yield 5; let e = if t > 0 { E::A(9) } else { r }; yield match e { E::A(x) => x, _ => 0 } }";
+    // Until absorption 128 the false arm was the resume value, a `Word`, which
+    // the reference now refuses. The arm is an enum, and the mutation below
+    // still writes a scalar into the receiver, which is this test's subject.
+    let source = "enum E { A(Word), B } loop main(t: Word) -> Word { let r = yield 5; let e = if t > 0 { E::A(9) } else { E::B }; yield match e { E::A(x) => x, _ => 0 } }";
     let mut program = common::build(source);
     let entry = program.entry_point.unwrap();
     let ops = &mut program.chunks[entry].ops;
@@ -3075,22 +2989,16 @@ fn shortened_private_view_traps_while_an_older_long_view_remains_valid() {
 
 #[test]
 fn owned_variable_bodies_cross_calls_and_delegated_suspension() {
-    use keleusma::bytecode::Value;
-    let inputs: Vec<_> = [5, 7, 20, -3, -40, 1]
-        .into_iter()
-        .map(|v| Value::array(vec![Value::Int(v), Value::Int(v * 10)]))
-        .collect();
+    // Since absorption 128 the reference refuses every source here, because
+    // each mixes the resume value's type with another. See
+    // `assert_refused_for_its_resume_type`.
     for source in [
         "fn first(p: [Word; 3]) -> Word { p[0] } loop main(t: [Word; 2]) -> Word { let r = yield 5; let p = if t[0] > 0 { r } else { [99, 100, 101] }; yield first(p) }",
         "fn identity(p: [Word; 3]) -> [Word; 3] { p } fn first(p: [Word; 3]) -> Word { p[0] } loop main(t: [Word; 2]) -> Word { let r = yield 5; let p = if t[0] > 0 { r } else { [99, 100, 101] }; yield first(identity(p)) }",
-    ] {
-        flat_inputs(source, &inputs, &[5, 7, 5, 99, 5, 1]);
-    }
-    flat_inputs(
         "yield second(p: [Word; 3]) -> Word { yield 9; p[1] } loop main(t: [Word; 2]) -> Word { let r = yield 5; let p = if t[0] > 0 { r } else { [99, 100, 101] }; yield second(p) }",
-        &inputs,
-        &[5, 9, 70, 5, 9, 100],
-    );
+    ] {
+        assert_refused_for_its_resume_type(source);
+    }
 }
 
 #[test]
@@ -4039,6 +3947,55 @@ int main(void) {{
 
 /// Reuse one exact-sized host buffer for every incoming body. Older values
 /// must survive overwrite, while private-storage references still alias.
+/// **A SOURCE THE REFERENCE REFUSES SINCE ABSORPTION 128.**
+///
+/// V0.2.X's pull request 684 types a resume value as the first parameter of
+/// `loop main`, on the operator's ruling of 2026-10-31 as V0.2.X records it,
+/// and a yield function's tail value is that resume value. Several sources in
+/// this file mixed a reply's kind or extent with another on purpose, to reach
+/// the native backend's run-time reply guards, and the type checker now
+/// refuses each of them. The guards stay as defense in depth, as the guard
+/// subjects retired at absorption 124 did, and checked source cannot reach
+/// them any more. This asserts the refusal, so that a relaxation of the rule
+/// brings the source back here rather than passing unnoticed.
+fn assert_refused_for_its_resume_type(src: &str) {
+    assert!(
+        reference_admits(src).is_none(),
+        "{src}: the reference admits a source that mixes a reply's type"
+    );
+}
+
+/// The module the reference builds from `src`, or `None` when it refuses the
+/// source for one of the type errors a mixed reply type raises. A refusal for
+/// any other reason fails, so a broken fixture cannot pass as a refusal.
+fn reference_admits(src: &str) -> Option<keleusma::bytecode::Module> {
+    let ast =
+        keleusma::parser::parse(&keleusma::lexer::tokenize(src).expect("lex")).expect("parse");
+    let error = match keleusma::compiler::compile(&ast) {
+        Ok(module) => return Some(module),
+        Err(error) => error,
+    };
+    assert!(
+        error.message.starts_with("type error: ")
+            && [
+                "yielded value has type",
+                "if branches have differing types",
+                "but body produces",
+                "arithmetic on incompatible types",
+                "bitwise operator requires",
+                "cannot add",
+                "cannot shift",
+                "does not match scrutinee type",
+                "cannot match a",
+            ]
+            .iter()
+            .any(|m| error.message.contains(m)),
+        "{src}: refused for another reason, {}",
+        error.message
+    );
+    None
+}
+
 fn flat_inputs(src: &str, inputs: &[keleusma::bytecode::Value], expected: &[i64]) {
     flat_inputs_read(
         src,

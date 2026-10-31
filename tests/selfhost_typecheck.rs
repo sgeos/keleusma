@@ -591,6 +591,11 @@ fn is_logical(op: &keleusma::ast::BinOp) -> bool {
     matches!(op, B::And | B::Or | B::Xor | B::Andalso | B::Orelse)
 }
 
+fn is_comparison(op: &keleusma::ast::BinOp) -> bool {
+    use keleusma::ast::BinOp as B;
+    matches!(op, B::Eq | B::NotEq | B::Lt | B::Gt | B::LtEq | B::GtEq)
+}
+
 /// A field read's row index, by the pair of spellings that names it.
 type FieldReadIndex = std::collections::BTreeMap<(String, String), i64>;
 
@@ -656,8 +661,10 @@ fn operand_form(
 ///
 /// **Known narrowing, stated rather than discovered later.** One flat namespace
 /// covers locals and functions, so a local shadowing a function name would give
-/// one row for two meanings. The subset's stage sources do not do this and the
-/// corpus does not exercise it; a shadowing case would need the table split.
+/// one row for two meanings, and so does one spelling bound with two types in two
+/// functions. The second is a real over-rejection, pinned by
+/// `one_spelling_with_two_types_in_two_functions_is_refused_by_the_driver_alone`.
+/// The stage sources do not do either, and a repair would need the table split.
 fn binding_rows(ast: &keleusma::ast::Program) -> BindingRows {
     use keleusma::ast::{Expr, Pattern, Stmt};
     use keleusma::visitor::Visitor;
@@ -885,6 +892,7 @@ fn expression_nodes_over_with(
     // relation sitting here unused. **A constant named after its first caller
     // reads as a special case even when it is a general rule.**
     const DECLARED_VS_ACTUAL: i64 = 8;
+    const SCALAR_COMPARISON: i64 = 9;
 
     let mut struct_fields: BTreeMap<String, i64> = BTreeMap::new();
     for t in &ast.types {
@@ -1017,6 +1025,23 @@ fn expression_nodes_over_with(
                     let (a, af) = operand_form(left, self.names, self.freads);
                     let (b, bf) = operand_form(right, self.names, self.freads);
                     self.out.push((BINOP, a, af, b, bf));
+                }
+                // A COMPARISON YIELDS BOOL, AND AS A BINOP ROW IT YIELDED THE TYPE
+                // OF ITS OPERANDS. The stage gives a kind 1 row the tag both
+                // operands share and a kind 9 row `bool`, and refuses either on the
+                // same disagreement for these operand forms, so the two kinds differ
+                // only in the type of a `let` bound to the expression. `let u = x >
+                // 0; u` in a `bool` function was refused here, with `u` typed `Word`,
+                // while the reference and the shipping pipeline, which emits kind 9,
+                // admit it. That is the over-rejection recorded on 2026-10-29
+                // against a draft of codegen.kel, and its regression test is
+                // `a_let_bound_to_a_comparison_is_typed_bool`.
+                Expr::BinOp {
+                    op, left, right, ..
+                } if is_comparison(op) => {
+                    let (a, af) = operand_form(left, self.names, self.freads);
+                    let (b, bf) = operand_form(right, self.names, self.freads);
+                    self.out.push((SCALAR_COMPARISON, a, af, b, bf));
                 }
                 Expr::BinOp { left, right, .. } => {
                     let (a, af) = operand_form(left, self.names, self.freads);
@@ -10704,6 +10729,96 @@ fn production_types_accept_all_stage_inputs() {
         eprintln!(
             "production type stage accepted {name} with {} batches",
             inputs.batches.len()
+        );
+    }
+}
+
+/// **A `let` BOUND TO A COMPARISON IS TYPED `bool`.**
+///
+/// The over-rejection recorded on 2026-10-29, isolated. The resolving driver of
+/// this file emitted a comparison as a kind 1 binop row, which the stage types as
+/// the tag its operands share, so `u` in `let u = x > 0` was typed `Word`. Every
+/// later use of `u` as a `bool` was then refused. The reference and the shipping
+/// pipeline, which emits kind 9, admit these programs. The shipping self-hosted
+/// checker never over-rejected them, and only this driver, which runs the stage
+/// over the real stage sources, did.
+///
+/// The refused controls show that the binding is typed rather than unknown, since
+/// an unknown operand is never refused.
+#[cfg(feature = "self-host")]
+#[test]
+fn a_let_bound_to_a_comparison_is_typed_bool() {
+    let admitted = [
+        "fn main(x: Word) -> bool { let u = x > 0; u }",
+        "fn main(x: Word) -> Word { let u = x == 0; if u { 1 } else { 0 } }",
+        "fn main(x: Word) -> bool { let u = x > 0; not u }",
+        "fn main(x: Word) -> bool { let u = x > 0; u andalso true }",
+        "fn main(x: Word) -> Word { let a = x > 0; let b = not a andalso x == 3; let c = b andalso x > 1; if c { 1 } else { 0 } }",
+    ];
+    let refused = [
+        "fn main(x: Word) -> Word { let u = x > 0; u + 1 }",
+        "fn main(x: Word) -> Word { let u = x != 0; if u { u } else { 0 } }",
+    ];
+    for (sources, accept) in [(&admitted[..], true), (&refused[..], false)] {
+        for src in sources {
+            let program = parse(&tokenize(src).expect("lex")).expect("parse");
+            assert_eq!(compile(&program).is_ok(), accept, "reference: {src}");
+            assert_eq!(
+                stage_verdict_resolving(src),
+                accept,
+                "resolving driver: {src}"
+            );
+            assert_eq!(pipeline_call_verdict(src), accept, "pipeline: {src}");
+        }
+    }
+}
+
+/// **ONE SPELLING BOUND WITH TWO TYPES IN TWO FUNCTIONS IS REFUSED HERE, AND PINNED.**
+///
+/// The second over-rejection of this file's resolving driver, found while
+/// isolating the first. [`binding_rows`] keys every name by its spelling across
+/// the whole program, and the stage keeps the last row for a name, so a local
+/// `u` that is `bool` in one function and `Word` in another is typed alike in
+/// both and one of them is refused. The reference scopes each local to its
+/// function and admits these programs, and so does the shipping pipeline, which
+/// sends each source head as its own batch. The repair splits the driver's name
+/// table per function, which reaches every walk that consults it, and is not
+/// local. The stage sources avoid such a reuse, which is why every one of them
+/// still fits and is admitted by
+/// `the_stage_is_measured_against_the_real_stage_sources`.
+///
+/// A case moving to admitted means the driver was repaired. Delete it then.
+#[cfg(feature = "self-host")]
+#[test]
+fn one_spelling_with_two_types_in_two_functions_is_refused_by_the_driver_alone() {
+    let cases = [
+        "fn f(x: Word) -> Word { let u = 1; u + x }\nfn main(x: Word) -> Word { let u = true; if u { f(x) } else { 0 } }",
+        "fn f(u: Word) -> Word { u + 1 }\nfn main(x: Word) -> Word { let u = x > 0; if u { f(1) } else { 0 } }",
+        "fn f(x: Word) -> Word { let u = x + 1; u + x }\nfn main(x: Word) -> Word { let u = x > 1; if u { f(x) } else { 0 } }",
+    ];
+    for src in cases {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(compile(&program).is_ok(), "the reference admits {src}");
+        assert!(pipeline_call_verdict(src), "the pipeline admits {src}");
+        assert!(
+            !stage_verdict_resolving(src),
+            "the resolving driver now admits {src}; its name table was split, so delete this pin"
+        );
+    }
+    // The same programs with the local of `f` renamed are admitted by all three,
+    // so the collision and nothing else is the cause.
+    let renamed = [
+        "fn f(x: Word) -> Word { let w = 1; w + x }\nfn main(x: Word) -> Word { let u = true; if u { f(x) } else { 0 } }",
+        "fn f(w: Word) -> Word { w + 1 }\nfn main(x: Word) -> Word { let u = x > 0; if u { f(1) } else { 0 } }",
+        "fn f(x: Word) -> Word { let w = x + 1; w + x }\nfn main(x: Word) -> Word { let u = x > 1; if u { f(x) } else { 0 } }",
+    ];
+    for src in renamed {
+        let program = parse(&tokenize(src).expect("lex")).expect("parse");
+        assert!(compile(&program).is_ok(), "the reference admits {src}");
+        assert!(pipeline_call_verdict(src), "the pipeline admits {src}");
+        assert!(
+            stage_verdict_resolving(src),
+            "the resolving driver admits {src}"
         );
     }
 }

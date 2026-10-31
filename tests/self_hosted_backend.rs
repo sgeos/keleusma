@@ -81,8 +81,11 @@ fn non_host_target_is_refused() {
 /// retry hint.
 #[test]
 fn out_of_subset_program_is_rejected_loudly() {
-    // A pipe into a generic template, which the reference keeps generic and the parser
-    // refuses. It replaced a newtype, which compiles since Order 6 erased newtypes.
+    // A pipe into a generic template, which the self-hosted parser refuses. Since
+    // 2026-10-31 the reference rewrites it into the plain call `id(1)` and monomorphizes
+    // it to `id__Word`, which the self-hosted compiler does compile, so the two disagree
+    // on admission and not on bytes. It replaced a newtype, which compiles since Order 6
+    // erased newtypes.
     let src = "fn id<T>(x: T) -> T { x } fn main() -> Word { 1 |> id() }";
     match self_hosted_compile(src, &Target::host()) {
         Err(e @ SelfHostError::Unsupported { .. }) => {

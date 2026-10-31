@@ -89,9 +89,8 @@ fn a_handled_write_binds_the_old_and_new_values_and_writes() {
 /// The lowering writes each bound `old` and `new` slot with the element's zero
 /// before the flag test, for the definite-initialization rule. A struct
 /// element's zero is a pool constant. The arm still sees the new value, and an
-/// invalid index still reaches its arm. The `old` binding of a struct element
-/// is not asserted here, since it observes the new value on the base this
-/// change was cut from as well, which is a separate defect.
+/// invalid index still reaches its arm. The `old` binding of a composite
+/// element is asserted by the test that follows.
 #[test]
 fn a_handled_write_on_a_struct_element_binds_the_new_value() {
     let prefix = "struct P { x: Word, y: Word }\nprivate data d { x: [P; 2] } ";
@@ -101,6 +100,65 @@ fn a_handled_write_on_a_struct_element_binds_the_new_value() {
              d.x[{index}] = P {{ x: 1, y: 2 }} {{ ok(o, n) => n.y + o.x * 0, invalid_index(j) => j }} }}"
         );
         assert_eq!(run_word(&source), expected, "{source}");
+    }
+}
+
+/// The `old` binding of a composite element holds the element as it was
+/// before the write.
+///
+/// A private composite element's body lives at a fixed offset in the
+/// persistent pool, and reading the slot yields a handle to that body rather
+/// than a copy. The write then overwrites the body in place, so before the
+/// repair of 2026-10-31 `old` observed the new value, and every case below
+/// yielded the value built from the written element instead. The lowering now
+/// copies the element into a fresh arena body before the write.
+#[test]
+fn a_handled_write_on_a_composite_element_binds_the_old_value() {
+    let cases = [
+        (
+            "struct P { x: Word, y: Word }\nprivate data d { x: [P; 2] } fn main() -> Word { \
+             d.x[1] = P { x: 3, y: 4 }; \
+             d.x[1] = P { x: 1, y: 2 } { ok(o, n) => o.x * 10 + o.y + n.x * 0, invalid_index(j) => j } }",
+            34,
+        ),
+        (
+            "private data d { x: [(Word, Word); 2] } fn main() -> Word { \
+             d.x[1] = (3, 4); \
+             d.x[1] = (1, 2) { ok(o, _) => o.0 * 10 + o.1, invalid_index(j) => j } }",
+            34,
+        ),
+        (
+            "enum E { A(Word), B(Word, Word) }\nprivate data d { x: [E; 2] } fn main() -> Word { \
+             d.x[1] = E::B(3, 4); \
+             d.x[1] = E::A(1) { ok(o, _) => match o { E::A(a) => a, E::B(a, b) => a * 10 + b }, \
+             invalid_index(j) => j } }",
+            34,
+        ),
+        (
+            "struct Q { p: (Word, Word), z: Word }\nprivate data d { x: [Q; 2] } fn main() -> Word { \
+             d.x[1] = Q { p: (3, 4), z: 5 }; \
+             d.x[1] = Q { p: (1, 2), z: 0 } { ok(o, _) => o.p.0 * 100 + o.p.1 * 10 + o.z, \
+             invalid_index(j) => j } }",
+            345,
+        ),
+        (
+            "struct P { x: Word, y: Word }\nprivate data d { m: [[P; 2]; 2] } fn main() -> Word { \
+             d.m[1][0] = P { x: 3, y: 4 }; \
+             d.m[1][0] = P { x: 1, y: 2 } { ok(o, _) => o.x * 10 + o.y, invalid_index(j) => j } }",
+            34,
+        ),
+        // The new value and the element read after the write are unaffected.
+        (
+            "struct P { x: Word, y: Word }\nprivate data d { x: [P; 2] } fn main() -> Word { \
+             d.x[1] = P { x: 3, y: 4 }; \
+             let s = d.x[1] = P { x: 1, y: 2 } { ok(o, n) => o.x * 1000 + o.y * 100 + n.x * 10 + n.y, \
+             invalid_index(j) => j }; \
+             s * 100 + d.x[1].x * 10 + d.x[1].y }",
+            341_212,
+        ),
+    ];
+    for (source, expected) in cases {
+        assert_eq!(run_word(source), expected, "{source}");
     }
 }
 
@@ -173,6 +231,9 @@ fn a_fully_handled_write_emits_no_trap_and_classifies_trap_free() {
         "private data d { x: [Word; 2] } fn main() -> Word { d.x[3] = 7 { ok(_, n) => n, invalid_index(j) => j } }",
         "private data d { x: [Byte; 2] } fn main() -> Word { d.x[1] = 7 as Byte { ok(o, n) => (o as Word) + (n as Word), invalid_index(_) => 0 } }",
         "private data d { x: [Word; 2] } fn main() -> bool { d.x[0] = 1 { ok(_, _) => true, invalid_index(_) => false } }",
+        // The copy of a composite `old` indexes a one-element array at zero
+        // and adds no trap.
+        "struct P { x: Word, y: Word }\nprivate data d { x: [P; 2] } fn main() -> Word { d.x[1] = P { x: 1, y: 2 } { ok(o, n) => o.x + n.y, invalid_index(j) => j } }",
     ] {
         let module = compile(source);
         assert!(
@@ -350,12 +411,21 @@ fn the_self_hosted_compiler_matches_every_handled_write_shape() {
     // Outside the mirrored subset. The reference compiles a handled write on a
     // bool element, and the self-hosted compiler refuses it rather than emit a
     // module, as it refuses the handled read on one.
-    let outside = "private data d { x: [bool; 2] } fn main() -> bool { d.x[0] = true { ok(_, n) => n, invalid_index(_) => false } }";
-    compile(outside);
-    assert!(
-        keleusma::selfhost::self_hosted_compile(outside, &keleusma::target::Target::host())
-            .is_err()
-    );
+    // The handled write on a composite element, whose `old` binding the
+    // reference copies before the write, is outside it too, so the copy has no
+    // self-hosted twin to keep byte-identical.
+    for outside in [
+        "private data d { x: [bool; 2] } fn main() -> bool { d.x[0] = true { ok(_, n) => n, invalid_index(_) => false } }",
+        "struct P { x: Word, y: Word }\nprivate data d { x: [P; 2] } fn main() -> Word { d.x[1] = P { x: 1, y: 2 } { ok(o, _) => o.x, invalid_index(j) => j } }",
+        "private data d { x: [(Word, Word); 2] } fn main() -> Word { d.x[1] = (1, 2) { ok(o, _) => o.0, invalid_index(j) => j } }",
+    ] {
+        compile(outside);
+        assert!(
+            keleusma::selfhost::self_hosted_compile(outside, &keleusma::target::Target::host())
+                .is_err(),
+            "{outside}"
+        );
+    }
 }
 
 /// The self-hosted parser refuses each malformed handled write on its own,
