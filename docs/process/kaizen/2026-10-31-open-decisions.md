@@ -59,6 +59,24 @@ Decision 3 was N6, and decision 4 was the operator's own checks below.
 | K6, K9, K10, K11, K13, K14 | Open. The operator will return to them |
 | Obvious choices O1 to O7 | Adopted. O1 merges `main` back into `v0.2.3`. O2 confirms the first nightly fuzz run. O3 asks V0.2.X to exempt `fuzz/corpus/` from the final-newline rule, item N7. O4 leaves V0.2.X's compiler defects with V0.2.X. O5 leaves the stale worktree record to the operator. O6 and O7 are the handoff and the next items |
 
+## Operator ruling, 2026-10-31, third
+
+The operator was given a further updated list on 2026-10-31, in the session, and
+ruled first-hand in these words.
+
+> Accept all obvious choices and address all open concerns that need no further input
+> from me.
+
+| Item | Disposition |
+|---|---|
+| Fuzz run | Checked after its first scheduled run at 10:17 UTC on 2026-11-01 |
+| N6 | Measured on the next four full runs. The one run so far put the shards at 32.5 to 35.5 minutes. If the longest shard is not clearly shorter, keeping the lists or returning to hashing goes to the operator |
+| V0.2.X decision 2 | V0.3.X's record holds the operator's first-hand answer to its question 28 as (a). V0.2.X was asked in sequence 189 to confirm against that record and drop the item |
+| K13 | Checked. F1 (a), recorded verbatim on `v0.2.3`, released the proofs branch, but `origin/proofs` is unchanged at `6537a36f` and four of its files match kept disclosure terms. The proofs line's inbox holds the release message unread. The correction is owed by the proofs line and waits on a proofs session, which only the operator can start |
+| N7 | Closed by V0.2.X's pull request 691, `7996af8e`, checked |
+| Stale worktree record | Pruned by the operator |
+| Next increment, `context_quality.py` | Done, in [the trial report](./2026-10-31-idle-compaction-trial.md). The `idleCompaction` setting is absent, so the trial never ran |
+
 ## Kaizen items
 
 **N1. A nightly fuzzing workflow.** *Obvious.* The fuzz targets of K7 merged into
