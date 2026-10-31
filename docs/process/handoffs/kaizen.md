@@ -31,7 +31,7 @@ lines.
 ```sh
 git branch --show-current                      # the increment's branch
 git status --short                             # clean
-git merge-base --is-ancestor 1ea45456 HEAD     # the merge of PR 660 into v0.2.3
+git merge-base --is-ancestor b5762e2e HEAD     # the merge of PR 675 into v0.2.3
 git merge-base --is-ancestor 430b2625 HEAD     # the merge of PR 655 into main
 git log --oneline origin/v0.2.3..HEAD          # only this increment's commits
 ```
@@ -42,9 +42,11 @@ run.
 ## State on 2026-10-31
 
 - **Merged.** Into `v0.2.3`, PRs 620, 625, 626, 624, 630, 633, 647, 649, 654 and 656,
-  and PR 660, `main` merged back after PR 655, as `1ea45456`. Into `main`, PR 619, the
-  `brace-expansion` fix, and the operator's merges of PR 631 as `7d5a5e82` and PR 655,
-  the Dependabot ignore entry for `dtolnay/rust-toolchain`, as `430b2625`.
+  PR 660, `main` merged back after PR 655, as `1ea45456`, and PR 675, the nightly fuzz
+  workflow and the fuzz lockfile check, as `b5762e2e`. Into `main`, PR 619, the
+  `brace-expansion` fix, and the operator's merges of PR 631 as `7d5a5e82`, PR 655 as
+  `430b2625` and PR 676, the fuzz workflow and the `/fuzz` Dependabot entry, as
+  `694783ab`. PR 688 merges `main` back into `v0.2.3` with an identical tree.
 - **Operator rulings of 2026-10-29.** Changelog entries are fragments under
   `changelog.d/`, assembled at release, and branch runs stay uncancelled. See
   [the report](../kaizen/2026-10-29-changelog-fragments.md).
@@ -58,13 +60,17 @@ run.
   choices, take appropriate action, then give me the updated list of questions and
   obvious choices.", recorded with each disposition in
   [the open decisions of 2026-10-31](../kaizen/2026-10-31-open-decisions.md). It
-  adopted N1 to N5, V0.2.X's item 4, since contested, and C7 D2, D3, D5, D6 and D7. Applied on branch
-  `ci/kaizen-nightly-fuzz`, the nightly fuzz workflow, the fuzz lockfile check and the
-  Dependabot entry for `/fuzz`. The workflow and the Dependabot entry take effect only
-  from `main`.
-- **Shard balance.** After PR 662 the four self-host shards ran 13 to 19 minutes for
-  shard 2 and 34 to 37 for shard 4 on four `v0.2.3`-lineage runs. The cause is uneven
-  work per hash bucket, not one long test, which is question N6.
+  adopted N1 to N5 and C7 D2, D3, D5, D6 and D7, applied in PRs 675 and 676.
+- **Second operator ruling of 2026-10-31.** First-hand in this session, recorded
+  verbatim in the same file. V0.2.X's record is the source of truth for its item 4,
+  now (b), and for its other questions, for those items only. N6 is (a). The
+  obvious choices O1 to O7 are adopted. The operator's checks stay open.
+- **Shard balance, N6.** Branch `ci/kaizen-shard-by-duration` pins 43 self-host tests
+  over 150 seconds to shards by measured duration and hashes the rest, guarded in
+  `tests/ci_shard_coverage.rs`. A simulation expects the longest shard to fall from
+  about 35 to about 32 minutes, within runner variance. Measure it after the merge.
+- **N7.** Requested of V0.2.X in sequence 183, exempting `fuzz/corpus/` from the
+  final-newline rule.
 - **Runners.** On 2026-10-30 jobs waited a median of 1.1 minutes for a runner and 47.7
   at most. The blog's Pages build holds one shared runner for most of a busy day, by
   the untracked audit in the blog's `tmp/2026-10-30-ci-runner-audit.md`, item K11.
@@ -93,8 +99,8 @@ authority, so the startup-file positions reach them first-hand.
 
 ## Next increments, in order
 
-1. Land `ci/kaizen-nightly-fuzz` on `v0.2.3`, then on `main`, which needs the operator,
-   and confirm the first scheduled run.
+1. Merge PR 688 and the N6 pull request. Confirm the first scheduled fuzz run, due at
+   10:17 UTC on 2026-11-01, and measure the shards on the runs after N6.
 2. Extend `context_quality.py` for the operator's global `idleCompaction: false` trial,
    comparing error rates and cache writes after long gaps with the idle compactions
    already measured.
@@ -107,15 +113,14 @@ authority, so the startup-file positions reach them first-hand.
 ## Open with the operator
 
 [The open decisions of 2026-10-31](../kaizen/2026-10-31-open-decisions.md) hold the
-list. N6, the shard partition, and V0.2.X's items 1, 2, 5, 6 D4 and 7 need judgment.
-The operator's own checks are K6, K9, K10, K11 and K14, held. V0.2.X item 4 is contested. This list ruled (a), and V0.2.X
-relays in sequence 175 a later first-hand (b) from its session, which only the operator
-can confirm here. V0.2.X also relays that all its questions are answered.
+list. No judgment item is open. The operator's own checks K6, K9, K10, K11 and K13
+remain, and K14 is held. The operator will return to them. The stale worktree record
+of `kaizen-test-duration` needs `git worktree prune`, which the sandbox refuses.
 
 ## Concerns
 
 - The self-host archive storage cost is unverified, item K10.
-- The fuzz workflow ran only locally. Its first GitHub run waits on `main`.
+- The fuzz workflow ran only locally. Its crash path and artifact upload are untested.
 - Lines opened pull requests as non-draft, 40 of the last 40 merged on 2026-10-30.
   They gain nothing from K5 until they iterate as drafts, which V0.2.X now does.
 
@@ -129,7 +134,7 @@ Pilot judgments never change gates.
 
 | Checkpoint | SHA-256 |
 |---|---|
-| [Interline](../interline/checkpoint.json) | `a63120d73dd868d0b683e92c5613f6b35b7e2a6170d7a31d8853393e07bfeb26`, 164 messages, 5 unacknowledged at export, none addressed to `kaizen` |
+| [Interline](../interline/checkpoint.json) | `bbcf13708c9660a75ebd1eea1d92d548042d73443986b860ee9fa0a3b5b83299`, 183 messages, 6 unacknowledged at export, none addressed to `kaizen` |
 | [Jev selection cohort](../jev-shadow/selection-checkpoint.json) | `6fb4783b8f0bf96d003311f0a84581f38bb9ff0cbfe232f0f85e014064d6cea6`, 3 samples evaluated and labelled, restored cleanly into a fresh store |
 | [Jev pilot](../jev-shadow/checkpoint.json) | `417a126a7647b7099dcf1b8b4f4c67c64a5f9a06180cac492daefbbd427ca2fd`, 250 samples and 66 tasks, home directory written as `~` on 2026-10-28 with request digests recomputed, restored cleanly into a fresh store |
 

@@ -34,6 +34,31 @@ was presented. It decides no item marked judgment.
 | V0.2.X item 4 | (a) as this list presented it, the `Text<N>` wire item deferred with the version, relayed to V0.2.X in sequence 173. **Contested.** V0.2.X replied in sequence 175 that the operator had ruled (b), authorize the collapse now, first-hand in its session, and confirmed (b) first-hand there on 2026-10-31. That reaches this line as a relay, and V0.2.X's tracked record did not yet show it when read. Open for the operator's confirmation here |
 | V0.2.X C7 D2, D3, D5, D6, D7 | (a) each, as `RING_BUFFER_DESIGN.md` recommends. Relayed to V0.2.X |
 
+## Operator ruling, 2026-10-31, second
+
+The operator was given the updated list later on 2026-10-31 and ruled first-hand in
+this line's session, in these words.
+
+> Re: Decisions
+>
+> 1. Treat the V0.2.X lines ruling as the source of truth for this particular item.
+> 2. Treat the V0.2.X lines ruling as the source of truth for this particular item.
+> 3. A. Use recommended option.
+> 4. Will circle back to you.
+>
+> Re: Obvious choices. All good. Proceed.
+
+Decision 1 of that list was V0.2.X item 4, and decision 2 was V0.2.X's other questions.
+Decision 3 was N6, and decision 4 was the operator's own checks below.
+
+| Item | Disposition |
+|---|---|
+| V0.2.X item 4 | (b), authorize the `Text<N>` wire collapse now, as V0.2.X recorded the operator's ruling. The contest above is closed. The ruling here governs this item only and does not make a relayed ruling binding in general |
+| V0.2.X questions 1, 2, 3, 5, 6 and 7 | Answered as V0.2.X records the operator's answers. V0.2.X's record is the authority for what each answer is |
+| N6 | (a). Carried out in the pull request that adds the pinned lists, with the measurement and its limits in N6 below |
+| K6, K9, K10, K11, K13, K14 | Open. The operator will return to them |
+| Obvious choices O1 to O7 | Adopted. O1 merges `main` back into `v0.2.3`. O2 confirms the first nightly fuzz run. O3 asks V0.2.X to exempt `fuzz/corpus/` from the final-newline rule, item N7. O4 leaves V0.2.X's compiler defects with V0.2.X. O5 leaves the stale worktree record to the operator. O6 and O7 are the handoff and the next items |
+
 ## Kaizen items
 
 **N1. A nightly fuzzing workflow.** *Obvious.* The fuzz targets of K7 merged into
@@ -76,13 +101,36 @@ to its test-seconds over four threads, and the longest test, 884 seconds, is sho
 than every shard, so the cause is the hash placing uneven work in each shard, not one
 long test. Shard 2 was the shortest and shard 4 among the longest on each of the four
 `v0.2.3`-lineage runs after pull request 662. A balanced partition would run each shard
-about 25 minutes, an estimate from the one run, with the same runner-minutes.
+about 25 minutes, an estimate from the one run, with the same runner-minutes. That
+estimate was wrong, as the measurement below shows.
 (a) Assign the twenty or so tests over 250 seconds to shards by measured duration and
 hash-partition the rest, with `tests/ci_shard_coverage.rs` checking that every assigned
 test exists and runs once. The list goes stale as tests change, and a stale entry fails
 the guard rather than dropping a test.
 (b) A fifth shard, which shortens each shard by about a fifth and adds a job.
 (c) Leave it.
+
+*Carried out as (a), 2026-10-31.* The logs of the twelve shard jobs of runs
+41226417780, 41225820890, 41219329660 and 41195469596 give 3,547 tests and 28,919
+median test-seconds. Over 16 threads that is about 30 minutes a shard, so 25 minutes
+was never reachable. The longest test is now 1,354 seconds. The jobs ran 26 to 37
+minutes. A simulation that fills four threads in nextest's order put the current
+partition's longest shard at 35.2 minutes.
+
+nextest's filter language has no hash predicate, and `--partition` applies to every
+test a run selects, so a pinned test cannot share a run with the hashed tests. Each
+shard therefore runs twice, first its pinned list and then the hash partition of every
+test no list names. Threads left idle at the end of the pinned run are the cost of
+that. With the threshold of 250 seconds the simulated longest shard was 33.0 minutes.
+With 150 seconds, 43 tests holding two thirds of the test-seconds, it was 31.8 minutes,
+and that threshold was taken. The assignment was a longest-first placement followed by
+single moves and swaps that lowered the longest shard.
+
+The expected saving is about three minutes on the critical path, with total
+runner-minutes about the same. That is an inference from a simulation, and the same
+shard ranged from 26 to 37 minutes between runs with nearly the same tests, so runner
+variance is as large as the saving. Whether it holds is measured on the runs after the
+change merges.
 
 ## The operator's own checks, open since 2026-10-30
 
@@ -99,8 +147,9 @@ texts when it merges, and nothing remains for the operator.
 
 From its "Decisions waiting on the operator", with its recommendation first. V0.2.X
 reports in sequence 175 that every question below has since been answered first-hand
-in its session. That is a relay, and its tracked record had not shown the answers when
-read, so the list is kept until the operator confirms it here or the record shows them.
+in its session. The operator's second ruling of 2026-10-31 above makes V0.2.X's record
+the source of truth for these items, so none is open with the kaizen line. The text is
+kept as it was presented.
 
 1. **B9 with B2 (c).** *Judgment.* (d) Field layouts on the wire, which closes the
    host struct reorder case and the flat `Text` boundary for every live source and
