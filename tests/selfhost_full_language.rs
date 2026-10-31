@@ -55,104 +55,130 @@ const DIRS: &[&str] = &[
     "src/selfhost/kel",
 ];
 
-/// The pinned outcome of the shipping self-hosted compile for every source.
-const CORPUS: &[(&str, Class)] = &[
-    ("examples/scripts/01_arithmetic.kel", Identical),
-    ("examples/scripts/02_struct_field.kel", Identical),
-    ("examples/scripts/03_enum_match.kel", Identical),
-    ("examples/scripts/04_for_in.kel", Identical),
-    ("examples/scripts/05_pipeline.kel", Identical),
-    ("examples/scripts/06_multiheaded.kel", Identical),
+/// One table defines both `CORPUS` and one pinned-outcome test per source, so the two
+/// cannot drift apart.
+///
+/// The tests were one function, `every_source_has_its_pinned_self_hosted_outcome`, until
+/// 2026-10-30. It ran for a median of 27 minutes in the self-host shards, and nextest
+/// partitions by test, so one function bounded its shard from below. The operator adopted
+/// option (a) of decision K3 in `docs/process/kaizen/2026-10-30-open-decisions.md`, which
+/// splits it. Each generated test runs the former loop body on one source and carries the
+/// source's path as its name. `the_corpus_table_names_every_source_once` still requires the
+/// table to equal the discovered file set, so a source cannot leave the table, and its test
+/// cannot vanish, without a failure.
+macro_rules! pinned_corpus {
+    ($($test:ident => ($file:literal, $class:ident)),+ $(,)?) => {
+        /// The pinned outcome of the shipping self-hosted compile for every source.
+        const CORPUS: &[(&str, Class)] = &[$(($file, $class)),+];
+
+        mod every_source_has_its_pinned_self_hosted_outcome {
+            $(
+                #[test]
+                fn $test() {
+                    super::assert_pinned_outcome($file, super::$class);
+                }
+            )+
+        }
+    };
+}
+
+pinned_corpus! {
+    examples_scripts_01_arithmetic => ("examples/scripts/01_arithmetic.kel", Identical),
+    examples_scripts_02_struct_field => ("examples/scripts/02_struct_field.kel", Identical),
+    examples_scripts_03_enum_match => ("examples/scripts/03_enum_match.kel", Identical),
+    examples_scripts_04_for_in => ("examples/scripts/04_for_in.kel", Identical),
+    examples_scripts_05_pipeline => ("examples/scripts/05_pipeline.kel", Identical),
+    examples_scripts_06_multiheaded => ("examples/scripts/06_multiheaded.kel", Identical),
     // Identical since information-flow labels and newtypes are erased as the reference
     // erases them, Order 6.
-    ("examples/scripts/07_refinement.kel", Identical),
-    ("examples/scripts/08_method_dispatch.kel", Identical),
-    ("examples/scripts/09_big_numbers.kel", Identical),
-    ("examples/scripts/10_multbyte.kel", Identical),
-    ("examples/scripts/11_signed.kel", Identical),
-    ("examples/scripts/12_sensor_window.kel", Identical),
-    ("examples/scripts/13_telemetry_stream.kel", Identical),
+    examples_scripts_07_refinement => ("examples/scripts/07_refinement.kel", Identical),
+    examples_scripts_08_method_dispatch => ("examples/scripts/08_method_dispatch.kel", Identical),
+    examples_scripts_09_big_numbers => ("examples/scripts/09_big_numbers.kel", Identical),
+    examples_scripts_10_multbyte => ("examples/scripts/10_multbyte.kel", Identical),
+    examples_scripts_11_signed => ("examples/scripts/11_signed.kel", Identical),
+    examples_scripts_12_sensor_window => ("examples/scripts/12_sensor_window.kel", Identical),
+    examples_scripts_13_telemetry_stream => ("examples/scripts/13_telemetry_stream.kel", Identical),
     // Unsupported until slice 6 lowered the projection of a struct-typed data field.
-    ("examples/scripts/14_frame_log.kel", Identical),
-    ("examples/scripts/15_pixel_blend.kel", Identical),
-    ("examples/scripts/rogue/rogue_ai_boss.kel", Identical),
-    ("examples/scripts/rogue/rogue_ai_chaser.kel", Identical),
-    ("examples/scripts/rogue/rogue_ai_fast.kel", Identical),
-    ("examples/scripts/rogue/rogue_ai_hunter.kel", Identical),
-    ("examples/scripts/rogue/rogue_ai_idle.kel", Identical),
-    ("examples/scripts/rogue/rogue_ai_ranged.kel", Identical),
-    ("examples/scripts/rogue/rogue_ai_sleeper.kel", Identical),
-    ("examples/scripts/rogue/rogue_ai_smart.kel", Identical),
-    ("examples/scripts/rogue/rogue_ai_tracker.kel", Identical),
-    ("examples/scripts/rogue/rogue_ai_wander.kel", Identical),
+    examples_scripts_14_frame_log => ("examples/scripts/14_frame_log.kel", Identical),
+    examples_scripts_15_pixel_blend => ("examples/scripts/15_pixel_blend.kel", Identical),
+    examples_scripts_rogue_rogue_ai_boss => ("examples/scripts/rogue/rogue_ai_boss.kel", Identical),
+    examples_scripts_rogue_rogue_ai_chaser => ("examples/scripts/rogue/rogue_ai_chaser.kel", Identical),
+    examples_scripts_rogue_rogue_ai_fast => ("examples/scripts/rogue/rogue_ai_fast.kel", Identical),
+    examples_scripts_rogue_rogue_ai_hunter => ("examples/scripts/rogue/rogue_ai_hunter.kel", Identical),
+    examples_scripts_rogue_rogue_ai_idle => ("examples/scripts/rogue/rogue_ai_idle.kel", Identical),
+    examples_scripts_rogue_rogue_ai_ranged => ("examples/scripts/rogue/rogue_ai_ranged.kel", Identical),
+    examples_scripts_rogue_rogue_ai_sleeper => ("examples/scripts/rogue/rogue_ai_sleeper.kel", Identical),
+    examples_scripts_rogue_rogue_ai_smart => ("examples/scripts/rogue/rogue_ai_smart.kel", Identical),
+    examples_scripts_rogue_rogue_ai_tracker => ("examples/scripts/rogue/rogue_ai_tracker.kel", Identical),
+    examples_scripts_rogue_rogue_ai_wander => ("examples/scripts/rogue/rogue_ai_wander.kel", Identical),
     // Identical since the reconstruct, codegen and constant-pool capacities rose, 2026-10-26.
-    ("examples/scripts/rogue/rogue_bestiary.kel", Identical),
-    ("examples/scripts/rogue/rogue_book_keeping.kel", Identical),
-    ("examples/scripts/rogue/rogue_combat.kel", Identical),
-    ("examples/scripts/rogue/rogue_consume.kel", Identical),
-    ("examples/scripts/rogue/rogue_descend.kel", Identical),
+    examples_scripts_rogue_rogue_bestiary => ("examples/scripts/rogue/rogue_bestiary.kel", Identical),
+    examples_scripts_rogue_rogue_book_keeping => ("examples/scripts/rogue/rogue_book_keeping.kel", Identical),
+    examples_scripts_rogue_rogue_combat => ("examples/scripts/rogue/rogue_combat.kel", Identical),
+    examples_scripts_rogue_rogue_consume => ("examples/scripts/rogue/rogue_consume.kel", Identical),
+    examples_scripts_rogue_rogue_descend => ("examples/scripts/rogue/rogue_descend.kel", Identical),
     // Identical since the parser's local capacity rose and native results are typed from
     // their declared scalar return, 2026-10-26.
-    ("examples/scripts/rogue/rogue_dungen.kel", Identical),
-    ("examples/scripts/rogue/rogue_game.kel", Identical),
+    examples_scripts_rogue_rogue_dungen => ("examples/scripts/rogue/rogue_dungen.kel", Identical),
+    examples_scripts_rogue_rogue_game => ("examples/scripts/rogue/rogue_game.kel", Identical),
     // Identical since the reconstruct, codegen and constant-pool capacities rose, 2026-10-26.
-    ("examples/scripts/rogue/rogue_gear.kel", Identical),
-    ("examples/scripts/rogue/rogue_item_potion.kel", Identical),
-    ("examples/scripts/rogue/rogue_item_scroll.kel", Identical),
-    ("examples/scripts/rogue/rogue_move_resolve.kel", Identical),
-    ("examples/scripts/rogue/rogue_pickup.kel", Identical),
-    ("examples/scripts/rogue/rogue_player_ai.kel", Identical),
-    ("examples/scripts/rogue/rogue_scroll_apply.kel", Identical),
+    examples_scripts_rogue_rogue_gear => ("examples/scripts/rogue/rogue_gear.kel", Identical),
+    examples_scripts_rogue_rogue_item_potion => ("examples/scripts/rogue/rogue_item_potion.kel", Identical),
+    examples_scripts_rogue_rogue_item_scroll => ("examples/scripts/rogue/rogue_item_scroll.kel", Identical),
+    examples_scripts_rogue_rogue_move_resolve => ("examples/scripts/rogue/rogue_move_resolve.kel", Identical),
+    examples_scripts_rogue_rogue_pickup => ("examples/scripts/rogue/rogue_pickup.kel", Identical),
+    examples_scripts_rogue_rogue_player_ai => ("examples/scripts/rogue/rogue_player_ai.kel", Identical),
+    examples_scripts_rogue_rogue_scroll_apply => ("examples/scripts/rogue/rogue_scroll_apply.kel", Identical),
     // Identical since the reconstruct, codegen and constant-pool capacities rose, 2026-10-26.
-    ("examples/scripts/piano_roll/piano_roll_0.kel", Identical),
+    examples_scripts_piano_roll_piano_roll_0 => ("examples/scripts/piano_roll/piano_roll_0.kel", Identical),
     // Identical since the reconstruct, codegen and constant-pool capacities rose, 2026-10-26.
-    ("examples/scripts/piano_roll/piano_roll_1.kel", Identical),
-    ("examples/scripts/piano_roll/piano_roll_2.kel", Identical),
+    examples_scripts_piano_roll_piano_roll_1 => ("examples/scripts/piano_roll/piano_roll_1.kel", Identical),
+    examples_scripts_piano_roll_piano_roll_2 => ("examples/scripts/piano_roll/piano_roll_2.kel", Identical),
     // Identical since the parser's local capacity rose and native results are typed from
     // their declared scalar return, 2026-10-26.
-    ("examples/scripts/piano_roll/piano_roll_3.kel", Identical),
+    examples_scripts_piano_roll_piano_roll_3 => ("examples/scripts/piano_roll/piano_roll_3.kel", Identical),
     // Identical since the reconstruct, codegen and constant-pool capacities rose, 2026-10-26.
-    ("examples/scripts/piano_roll/piano_roll_4.kel", Identical),
-    ("examples/scripts/piano_roll/piano_roll_5.kel", Identical),
-    ("examples/scripts/piano_roll/piano_roll_6.kel", Identical),
-    ("examples/scripts/piano_roll/piano_roll_7.kel", Identical),
+    examples_scripts_piano_roll_piano_roll_4 => ("examples/scripts/piano_roll/piano_roll_4.kel", Identical),
+    examples_scripts_piano_roll_piano_roll_5 => ("examples/scripts/piano_roll/piano_roll_5.kel", Identical),
+    examples_scripts_piano_roll_piano_roll_6 => ("examples/scripts/piano_roll/piano_roll_6.kel", Identical),
+    examples_scripts_piano_roll_piano_roll_7 => ("examples/scripts/piano_roll/piano_roll_7.kel", Identical),
     // Identical since the reconstruct, codegen and constant-pool capacities rose, 2026-10-26.
-    ("examples/scripts/piano_roll/piano_roll_8.kel", Identical),
+    examples_scripts_piano_roll_piano_roll_8 => ("examples/scripts/piano_roll/piano_roll_8.kel", Identical),
     // Identical since the reconstruct, codegen and constant-pool capacities rose, 2026-10-26.
-    ("examples/scripts/piano_roll/piano_roll_9.kel", Identical),
-    ("examples/rtos/scripts/event_listener.kel", RefRejects),
-    ("examples/rtos/scripts/faulty.kel", RefRejects),
+    examples_scripts_piano_roll_piano_roll_9 => ("examples/scripts/piano_roll/piano_roll_9.kel", Identical),
+    examples_rtos_scripts_event_listener => ("examples/rtos/scripts/event_listener.kel", RefRejects),
+    examples_rtos_scripts_faulty => ("examples/rtos/scripts/faulty.kel", RefRejects),
     // Rejected by the pipeline until slice 5d, which stopped reading `saturate_max` as an
     // undefined name. The remaining rejection is the reference's, since the script calls
     // `host::log_event` without the RTOS prelude that declares it.
-    ("examples/rtos/scripts/heartbeat.kel", RefRejects),
-    ("examples/rtos/scripts/led.kel", RefRejects),
+    examples_rtos_scripts_heartbeat => ("examples/rtos/scripts/heartbeat.kel", RefRejects),
+    examples_rtos_scripts_led => ("examples/rtos/scripts/led.kel", RefRejects),
     // Identical since slice 8 accepted its tuple-returning signatures.
-    ("examples/rtos/scripts/prelude.kel", Identical),
-    ("examples/rtos/scripts/sensor.kel", RefRejects),
-    ("examples/zero_copy_demo.kel", Identical),
-    ("compiler/kel/prelude.kel", Identical),
-    ("keleusma-cli/examples/hello.kel", Identical),
+    examples_rtos_scripts_prelude => ("examples/rtos/scripts/prelude.kel", Identical),
+    examples_rtos_scripts_sensor => ("examples/rtos/scripts/sensor.kel", RefRejects),
+    examples_zero_copy_demo => ("examples/zero_copy_demo.kel", Identical),
+    compiler_kel_prelude => ("compiler/kel/prelude.kel", Identical),
+    keleusma_cli_examples_hello => ("keleusma-cli/examples/hello.kel", Identical),
     // Identical since an untyped native's destructured elements read boxed, 2026-10-26.
-    ("scripts/check-md-links.kel", Identical),
-    ("src/crypto_frame/frame.kel", Identical),
-    ("src/hosted/interp.kel", Identical),
-    ("src/selfhost/kel/analyze.kel", Identical),
-    ("src/selfhost/kel/codegen.kel", Identical),
-    ("src/selfhost/kel/lexer.kel", Identical),
-    ("src/selfhost/kel/parse.kel", Identical),
-    ("src/selfhost/kel/reconstruct.kel", Identical),
-    ("src/selfhost/kel/template_scan.kel", Identical),
-    ("src/selfhost/kel/verify_datalayout.kel", Identical),
-    ("src/selfhost/kel/verify_depth.kel", Identical),
-    ("src/selfhost/kel/verify_structural.kel", Identical),
-    ("src/selfhost/kel/verify_typed.kel", Identical),
-    ("src/selfhost/kel/verify_types.kel", Identical),
-    ("src/selfhost/kel/verify_yield.kel", Identical),
-    ("src/selfhost/kel/wire.kel", Identical),
-    ("src/selfhost/kel/wire_debug.kel", Identical),
-    ("src/selfhost/kel/wire_schema.kel", Identical),
-];
+    scripts_check_md_links => ("scripts/check-md-links.kel", Identical),
+    src_crypto_frame_frame => ("src/crypto_frame/frame.kel", Identical),
+    src_hosted_interp => ("src/hosted/interp.kel", Identical),
+    src_selfhost_kel_analyze => ("src/selfhost/kel/analyze.kel", Identical),
+    src_selfhost_kel_codegen => ("src/selfhost/kel/codegen.kel", Identical),
+    src_selfhost_kel_lexer => ("src/selfhost/kel/lexer.kel", Identical),
+    src_selfhost_kel_parse => ("src/selfhost/kel/parse.kel", Identical),
+    src_selfhost_kel_reconstruct => ("src/selfhost/kel/reconstruct.kel", Identical),
+    src_selfhost_kel_template_scan => ("src/selfhost/kel/template_scan.kel", Identical),
+    src_selfhost_kel_verify_datalayout => ("src/selfhost/kel/verify_datalayout.kel", Identical),
+    src_selfhost_kel_verify_depth => ("src/selfhost/kel/verify_depth.kel", Identical),
+    src_selfhost_kel_verify_structural => ("src/selfhost/kel/verify_structural.kel", Identical),
+    src_selfhost_kel_verify_typed => ("src/selfhost/kel/verify_typed.kel", Identical),
+    src_selfhost_kel_verify_types => ("src/selfhost/kel/verify_types.kel", Identical),
+    src_selfhost_kel_verify_yield => ("src/selfhost/kel/verify_yield.kel", Identical),
+    src_selfhost_kel_wire => ("src/selfhost/kel/wire.kel", Identical),
+    src_selfhost_kel_wire_debug => ("src/selfhost/kel/wire_debug.kel", Identical),
+    src_selfhost_kel_wire_schema => ("src/selfhost/kel/wire_schema.kel", Identical),
+}
 
 /// Sources the reference verifier accepts and the self-hosted validator cannot yet
 /// analyse, each for the per-chunk opcode capacity. Every other source the reference
@@ -227,29 +253,30 @@ fn the_corpus_table_names_every_source_once() {
     );
 }
 
-#[test]
-fn every_source_has_its_pinned_self_hosted_outcome() {
-    let root = root();
-    let mut mismatches = Vec::new();
-    let mut counts: BTreeMap<Class, usize> = BTreeMap::new();
-    for (file, expected) in CORPUS {
-        let src = std::fs::read_to_string(root.join(file)).expect("readable source");
-        let (actual, detail) = classify(&src);
-        *counts.entry(actual).or_default() += 1;
-        if actual != *expected {
-            mismatches.push(format!(
-                "{file}: expected {expected:?}, got {actual:?} {detail}"
-            ));
-        }
-    }
+/// The former loop body of `every_source_has_its_pinned_self_hosted_outcome`, for one
+/// source.
+fn assert_pinned_outcome(file: &str, expected: Class) {
+    let src = std::fs::read_to_string(root().join(file)).expect("readable source");
+    let (actual, detail) = classify(&src);
     assert!(
-        mismatches.is_empty(),
+        actual == expected,
         "self-hosted outcomes moved. Update the table deliberately when a slice widens \
-         support, and treat any move away from Identical as a regression:\n{}",
-        mismatches.join("\n")
+         support, and treat any move away from Identical as a regression:\n\
+         {file}: expected {expected:?}, got {actual:?} {detail}"
     );
-    // Non-vacuity. A classifier that called everything one class would fail above, and
-    // this keeps the population each class claims from collapsing unnoticed.
+}
+
+/// The non-vacuity check the single test made after its loop.
+///
+/// Each per-source test requires its actual class to equal the pinned one, so when every
+/// one of them passes the measured class counts are the table's counts. This keeps the
+/// population each class claims from collapsing unnoticed.
+#[test]
+fn the_pinned_outcomes_keep_their_identical_population() {
+    let mut counts: BTreeMap<Class, usize> = BTreeMap::new();
+    for (_, class) in CORPUS {
+        *counts.entry(*class).or_default() += 1;
+    }
     assert!(
         counts.get(&Identical).copied().unwrap_or(0) >= 30,
         "{counts:?}"

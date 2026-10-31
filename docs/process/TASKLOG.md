@@ -6,6 +6,22 @@ Current sprint source of truth.
 
 ---
 
+## 2026-10-30 Consolidated rulings
+
+The operator answered the consolidated archaeology list first-hand. The A series is
+addressed, D3 and G1 are applied, D4 is pull request 650 into `main`, and the E series, F1 and
+D3 are relayed to kaizen, proofs and V0.3.X. Work in flight, on feature branches, is C2, a
+float opcode refused without `floats`, C1, `compile` refusing an unbounded module, a refusal of
+a private composite slot beyond 65,535, B2's composite input size check, B1's narrowed
+definite-initialization rule with its self-hosted twin, B5's arena sizing for composite
+inputs, and the first `Text<N>` increment, the literal cast. The C3 and C7 designs are written
+and carry their own operator decisions. B9 and B10 information is in the reverse prompt.
+
+Later on 2026-10-30, pull request 652 merged C2, C1 and the slot refusal, and pull request 658
+merged B2, B5, B1's narrowed rule with its twin, the `Text<N>` literal and kaizen K7's fuzz
+targets as `5ed0bdfd`. Kaizen K3 and K4a, the slow-test split, are in pull request 662. The
+B1 widening is in progress on `feat/v02-definite-init-widen`.
+
 ## 2026-10-30 Third batch
 
 Pull request 628 merged. The third batch carries item 12, the template scan as the fifteenth
