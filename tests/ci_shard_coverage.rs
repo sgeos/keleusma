@@ -196,7 +196,7 @@ fn every_partitioned_job_lists_each_shard_exactly_once() {
 
 /// The workspace job's filter, exactly. Narrowing it would drop tests from the only job
 /// that ran them, so a change here is meant to fail this file and be reviewed.
-const WORKSPACE_FILTER: &str = "-E 'not package(keleusma) | (binary(=keleusma) & not test(/^selfhost::/)) | binary(=crypto_framing) | binary(=ecc_signature_ordering) | binary(=hot_swap_trust_matrix) | binary(=native_declaration_agreement) | binary(=proven_execution) | binary(=signature_verify_bounds) | binary(=stage_executor) | binary(=trap_policy)'";
+const WORKSPACE_FILTER: &str = "-E 'not package(keleusma) | (binary(=keleusma) & not test(/^selfhost::/)) | binary(=crypto_framing) | binary(=ecc_signature_ordering) | binary(=fuzz_corpus_replay) | binary(=hot_swap_trust_matrix) | binary(=native_declaration_agreement) | binary(=proven_execution) | binary(=signature_verify_bounds) | binary(=stage_executor) | binary(=trap_policy)'";
 
 /// The features that only the workspace job enables on `keleusma` together, through
 /// `keleusma-cli`. A test gated on one of them may run nowhere else in that combination.

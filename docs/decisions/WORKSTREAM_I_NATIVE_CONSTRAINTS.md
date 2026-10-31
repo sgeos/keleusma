@@ -31,7 +31,7 @@ one has since been answered. The table above records the constraints as Order
 
 | Constraint | Status |
 |---|---|
-| `Unit` after `Reset` on one path | The operator answered question 20 with option a, a narrowed definite-initialization rule. V0.2.X's checked default change, absorbed in absorption 116, made `interp.kel` static. One coroutine, `14_frame_log.kel`, and one instruction still need a run-time kind, waiting on V0.2.X's narrowed rule |
+| `Unit` after `Reset` on one path | The operator answered question 20 with option a, a narrowed definite-initialization rule. V0.2.X's checked default change, absorbed in absorption 116, made `interp.kel` static. V0.2.X's narrowed rule arrived in absorption 122 and leaves composite private data unchecked, so one coroutine, `14_frame_log.kel`, and one instruction still need a run-time kind. Whether to accept that is question 26 |
 | A composite built in a loop and yielded | V0.2.X's records relay the operator's ruling that such a composite may be yielded. The native coroutine route still refuses `13_telemetry_stream.kel`, and a copy at the yield is this line's work |
 | Two `Word` call results compared | Resolved. V0.2.X's callee-aware bound arrived in absorption 116, and since question 5 the lexer has a composed claim |
 | `Text` across the host boundary | Question 13. Literals pass as two words, and dynamic text waits on V0.2.X's `Text<N>` |

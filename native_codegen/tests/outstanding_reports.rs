@@ -59,68 +59,41 @@ fn report_one_is_watched_by_the_robustness_sweep() {
     );
 }
 
-/// **REPORT 2 — a multi-parameter stream faults after its first rewind.**
+/// **REPORT 2, ANSWERED IN ABSORPTION 122, 2026-10-30, from the verifier side.**
 ///
+/// The report was that a multi-parameter stream faults after its first rewind.
 /// `Op::Reset` clears every local and the resume writes slot 0 only, so a second
-/// parameter has no defined value on re-entry. This backend REFUSES the shape,
-/// and the refusal's justification is that the program does not work on the
+/// parameter had no defined value on re-entry. This backend refuses the shape,
+/// and the refusal's justification was that the program does not work on the
 /// reference either.
 ///
-/// **If the reference stops faulting, that justification is gone** and the
-/// refusal must be revisited — which is exactly what this assertion is for.
+/// V0.2.X's narrowed definite-initialization rule, its pull request 658, now
+/// refuses the shape at compile time. `Stream` resets the set of written locals
+/// to the stream parameter, so a read of a later parameter after it is a read
+/// of a local that no path writes. That is the answer this watch named, that the
+/// verifier rejects the shape and no runtime change is needed. The native
+/// refusal is now unreachable from source.
+///
+/// **If the reference starts compiling the shape again**, the question reopens,
+/// and this assertion says so.
 #[test]
-fn report_two_still_reproduces_on_the_reference() {
+fn report_two_is_answered_and_the_answer_holds() {
     const MULTI_PARAM: &str =
         "loop main(a: Word, b: Word) -> Word { let r = yield a + b; yield r + 1 }\n";
 
-    let m = common::try_build(MULTI_PARAM).expect(
-        "the reference still COMPILES a multi-parameter stream. If it now rejects the \
-         shape, that ANSWERS the open question — the verifier rejects it and no runtime \
-         change is needed — so update report 2 rather than this test",
+    let tokens = keleusma::lexer::tokenize(MULTI_PARAM).expect("lex");
+    let program = keleusma::parser::parse(&tokens).expect("parse");
+    let error = keleusma::compiler::compile(&program).expect_err(
+        "the reference COMPILES a multi-parameter stream again, so report 2 is open \
+         again. Restore the run-time watch from absorption 121 and revisit this \
+         backend's refusal of the shape",
     );
-
-    let need = required_persistent_capacity_for(&m);
-    let cap = auto_arena_capacity_for(&m, &[]).expect("arena") + need + (1 << 20);
-    let mut arena = keleusma_arena::Arena::with_capacity(cap);
-    arena.resize_persistent(need).expect("persistent");
-    let mut vm = Vm::new(m, &arena).expect("vm");
-
-    // Drive past the rewind. The fault is reported to arrive AFTER the reset, so
-    // a run that ends before one proves nothing.
-    let mut st = vm.call(&[Value::Int(3), Value::Int(4)]);
-    let mut saw_reset = false;
-    let mut fault: Option<String> = None;
-    for _ in 0..8 {
-        match st {
-            Ok(VmState::Yielded(_)) => st = vm.resume(Value::Int(1)),
-            Ok(VmState::Reset) => {
-                saw_reset = true;
-                st = vm.resume(Value::Int(1));
-            }
-            Ok(_) => break,
-            Err(e) => {
-                fault = Some(format!("{e:?}"));
-                break;
-            }
-        }
-    }
-
-    // **NON-VACUITY.** A run that faulted before reaching a reset would satisfy a
-    // naive "it still faults" check while testing something else entirely.
+    let message = format!("{error:?}");
     assert!(
-        saw_reset,
-        "the subject never reached a rewind, so whatever happened says nothing about \
-         a fault AFTER one"
-    );
-    let fault = fault.expect(
-        "the multi-parameter stream no longer faults after its rewind. If the `v0.2.3` \
-         line fixed it, RETRACT report 2 and revisit this backend's refusal of the \
-         shape, whose only justification is that the program does not work there either",
-    );
-    assert!(
-        fault.contains("Unit"),
-        "the fault is no longer the reported one — slot 1 left undefined by the rewind. \
-         It now reads {fault}. Update report 2 rather than this assertion."
+        message.contains("definite-initialization"),
+        "the reference refuses a multi-parameter stream, but not by the \
+         definite-initialization rule, so the answer recorded for report 2 is no \
+         longer the reason: {message}"
     );
 }
 

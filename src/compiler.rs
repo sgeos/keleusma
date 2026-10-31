@@ -3047,33 +3047,45 @@ fn compile_multiword_div(
     Ok(())
 }
 
-/// Refuse every type the front end can name but the back end cannot build.
+/// Refuse every `Text<N>` the back end cannot build.
 ///
-/// Today that is `Text<N>` alone. The type surface exists so a program naming
-/// it gets a message about the feature rather than about an unknown type, and
-/// **nothing below the surface is built**: no flat layout, no runtime
-/// representation, no operation.
+/// The value representation and the literal cast are built, so a `Text<N>` with
+/// a positive literal capacity is admitted. What remains refused is a capacity
+/// that is still symbolic after monomorphization and a capacity below one. A
+/// symbolic capacity has no size, and guessing one is how a wrong figure reaches
+/// the worst-case memory analysis, which is the number this ecosystem sells.
 ///
-/// Refused rather than approximated. Guessing a representation is how a wrong
-/// size reaches the worst-case memory analysis, which is the number this
-/// ecosystem sells. Each later increment removes one refusal from here.
+/// # Why this runs after monomorphization
+///
+/// A generic function may name `Text<N>` over a const parameter, and that is
+/// legal until monomorphization erases the parameter to a literal.
+/// Monomorphization removes every function that declares a const parameter,
+/// so after it every capacity this walk reaches belongs to code that will be
+/// emitted.
 ///
 /// # Why a whole-program walk rather than the existing per-position checks
 ///
-/// Because the per-position checks do not see it. The infallible `TypeExpr` to
-/// `Type` conversion resolves `Text<N>` to the static text type, so a parameter
-/// or a return has lost the distinction before any fallible pass runs. Only the
-/// data-field path, which keeps the `TypeExpr`, refused.
+/// The per-position checks are spread across declaration forms and an earlier
+/// version of the refusal that relied on them missed four of five positions.
+/// One walk over every signature and annotation reaches them by construction.
 fn refuse_unimplemented_types(program: &Program) -> Result<(), CompileError> {
     fn walk(te: &TypeExpr) -> Result<(), CompileError> {
         match te {
-            TypeExpr::TextN(_, span) => Err(CompileError {
-                message: alloc::string::String::from(
-                    "Text<N> is not implemented beyond the type surface: no code is generated \
-                     for it and its operations are not built yet",
-                ),
-                span: *span,
-            }),
+            TypeExpr::TextN(cap, span) => match cap.as_lit() {
+                Some(n) if n > 0 => Ok(()),
+                Some(n) => Err(CompileError {
+                    message: format!(
+                        "Text<{n}> is not a legal type: a text capacity must be positive"
+                    ),
+                    span: *span,
+                }),
+                None => Err(CompileError {
+                    message: format!(
+                        "Text<{cap}> has a capacity that is unresolved after monomorphization"
+                    ),
+                    span: *span,
+                }),
+            },
             TypeExpr::Array(inner, _, _)
             | TypeExpr::Option(inner, _)
             | TypeExpr::Labelled(inner, _, _)
@@ -3160,6 +3172,37 @@ fn refuse_unimplemented_types(program: &Program) -> Result<(), CompileError> {
                     walk(te)?;
                 }
             }
+        }
+    }
+    // A NATIVE SIGNATURE IS REFUSED OUTRIGHT, not merely checked for a literal
+    // capacity. The native string ABI carries static text and host strings,
+    // and nothing marshals a flat `Text<N>` body across the host boundary yet.
+    // How a native signature can be generic over a capacity is also still
+    // undecided, and admitting a concrete capacity here would fix that answer
+    // by accident.
+    fn refuse_in_native(te: &TypeExpr) -> Result<(), CompileError> {
+        match te {
+            TypeExpr::TextN(_, span) => Err(CompileError {
+                message: String::from(
+                    "Text<N> is not admissible in a native signature: no marshalling for a \
+                     capacity-bounded text across the host boundary exists yet",
+                ),
+                span: *span,
+            }),
+            TypeExpr::Array(inner, _, _)
+            | TypeExpr::Option(inner, _)
+            | TypeExpr::Labelled(inner, _, _)
+            | TypeExpr::NegativeLabelled(inner, _, _) => refuse_in_native(inner),
+            TypeExpr::Tuple(elems, _) | TypeExpr::Named(_, elems, _, _) => {
+                elems.iter().try_for_each(refuse_in_native)
+            }
+            TypeExpr::Prim(_, _) | TypeExpr::Unit(_) | TypeExpr::Multiword(_, _, _) => Ok(()),
+        }
+    }
+    for u in &program.uses {
+        if let Some(sig) = &u.signature {
+            refuse_in_native(&sig.return_type)?;
+            sig.params.iter().try_for_each(refuse_in_native)?;
         }
     }
     Ok(())
@@ -3355,19 +3398,6 @@ fn compile_with_recorded_type_hook(
 ) -> Result<(Module, Vec<CompileWarning>), CompileError> {
     let mut warnings: Vec<CompileWarning> = Vec::new();
     target.validate_against_runtime()?;
-    // ONE GUARD, RUN ONCE, OVER EVERY DECLARATION POSITION.
-    //
-    // The first attempt refused `Text<N>` inside the existing per-position
-    // checks and it did not work: the infallible `TypeExpr` to `Type`
-    // conversion maps it to the static text type, so by the time a fallible
-    // pass looked at a parameter or a return the distinction was gone. Only the
-    // data-field position refused, because that path keeps the `TypeExpr`.
-    //
-    // Measured, not assumed: an uncalled parameter, a called parameter, a
-    // return type and a `let` annotation all COMPILED, and a data field did
-    // not. The comment claiming a downstream check would catch the rest was the
-    // assertion nothing verified.
-    refuse_unimplemented_types(program)?;
     crate::target::validate_program_for_target(program, target)?;
     let mut owned = program.clone();
 
@@ -3440,6 +3470,10 @@ fn compile_with_recorded_type_hook(
             span: e.span,
         }
     })?;
+    // ONE GUARD, RUN ONCE, OVER EVERY DECLARATION POSITION, after
+    // monomorphization has erased every const parameter it can. See
+    // `refuse_unimplemented_types` for why it is a whole-program walk.
+    refuse_unimplemented_types(&owned)?;
     // V0.2.0 Consolidation Phase 4 retired the closure-hoisting
     // pass and the four closure opcodes (`Op::PushFunc`,
     // `Op::MakeClosure`, `Op::MakeRecursiveClosure`, and
@@ -6011,13 +6045,23 @@ fn validate_data_field_type(
 ) -> Result<(), CompileError> {
     match type_expr {
         TypeExpr::Multiword(_, _, _) => Ok(()),
-        TypeExpr::TextN(_, span) => Err(CompileError {
-            message: alloc::string::String::from(
-                "Text<N> is not implemented beyond the type surface: no code is generated \
-                 for it and its operations are not built yet",
-            ),
-            span: *span,
-        }),
+        // A `private` field holds a flat `Text<N>` body in the persistent
+        // composite pool like any other flat composite, and only script code
+        // writes it, so its length never exceeds `N`. A `shared` field is
+        // refused. The host writes the shared buffer directly, nothing checks
+        // that a host-written length is at most `N`, and no host-side type
+        // marshals the body. Admitting it would let a host produce a `Text<N>`
+        // whose length exceeds its capacity, which the type exists to rule out.
+        TypeExpr::TextN(_, span) => match visibility {
+            DataVisibility::Private | DataVisibility::Const => Ok(()),
+            DataVisibility::Shared => Err(CompileError {
+                message: String::from(
+                    "data field type Text<N> is not admissible in a `shared` data segment: a \
+                     host-written length is not checked against the capacity",
+                ),
+                span: *span,
+            }),
+        },
         TypeExpr::Prim(prim, span) => match prim {
             PrimType::Byte
             | PrimType::Word
@@ -9748,6 +9792,104 @@ fn infer_arg_range_with(
     }
 }
 
+/// Compile `"..." as Text<N>` to one pooled constant load.
+///
+/// The value is the flat body `Tuple(Int length, Array[Byte; N])` that
+/// `layout_pass` and `zero_value` describe, with the literal's UTF-8 bytes
+/// followed by zero bytes up to the capacity. **The padding is part of the
+/// value, not slack.** A later equality operation compares whole bodies, so two
+/// texts with the same content must agree in the bytes past their length too.
+///
+/// # Why a pooled constant rather than a `NewComposite` sequence
+///
+/// The compiler already lowers a compile-time composite constant, a const data
+/// field, to `Op::Const` over a `ConstValue` tuple or array, and the virtual
+/// machine packs every transitively scalar constant into its const pool once at
+/// construction. The literal cast is the same kind of value, so it takes the
+/// same path. One instruction replaces the `N + 3` a byte-by-byte construction
+/// would emit, so the execution cost does not grow with the capacity, and the
+/// load allocates nothing in the arena. Arena memory is spent where it always
+/// is, when an enclosing composite packs the body, and that allocation is sized
+/// from the layout as `word_bytes + N`.
+///
+/// # Failure modes
+///
+/// The type checker admits only a string literal operand and refuses one longer
+/// than the capacity. Both conditions are checked again here, because emitting
+/// a body longer than `N` would put a wrong figure into the worst-case memory
+/// bound rather than fail visibly. A capacity that is still symbolic, or not
+/// positive, is refused for the same reason.
+fn compile_text_literal_cast(
+    fc: &mut FuncCompiler,
+    operand: &Expr,
+    cap: &ConstExpr,
+    span: Span,
+) -> Result<(), CompileError> {
+    use crate::bytecode::ConstValue;
+    let n = match cap.as_lit() {
+        Some(n) if n > 0 => n,
+        Some(n) => {
+            return Err(CompileError {
+                message: format!("Text<{n}> is not a legal type: a text capacity must be positive"),
+                span,
+            });
+        }
+        None => {
+            return Err(CompileError {
+                message: format!(
+                    "Text<{cap}> has a capacity that is unresolved after monomorphization"
+                ),
+                span,
+            });
+        }
+    };
+    let Expr::Literal {
+        value: Literal::String(text),
+        ..
+    } = operand
+    else {
+        return Err(CompileError {
+            message: String::from(
+                "only a string literal may be cast to a capacity-bounded text, because its \
+                 length must be known at compile time",
+            ),
+            span,
+        });
+    };
+    let bytes = text.as_bytes();
+    let capacity = usize::try_from(n).map_err(|_| CompileError {
+        message: format!("Text<{n}> exceeds the addressable capacity of the compiling host"),
+        span,
+    })?;
+    if bytes.len() > capacity {
+        return Err(CompileError {
+            message: format!(
+                "string literal of {} bytes does not fit in Text<{n}>: a literal longer than \
+                 the capacity is refused rather than truncated",
+                bytes.len()
+            ),
+            span,
+        });
+    }
+    // The length is stored as a word. A literal no longer than a capacity that
+    // fits `i64` fits `i64` too, so the conversion cannot fail after the check
+    // above, and it is made fallible anyway rather than cast.
+    let length = i64::try_from(bytes.len()).map_err(|_| CompileError {
+        message: String::from("string literal length does not fit in a word"),
+        span,
+    })?;
+    let mut content: Vec<ConstValue> = Vec::with_capacity(capacity);
+    content.extend(bytes.iter().map(|b| ConstValue::Byte(*b)));
+    content.resize(capacity, ConstValue::Byte(0));
+    let value = ConstValue::Tuple(alloc::vec![
+        ConstValue::Int(length),
+        ConstValue::Array(content)
+    ]);
+    let idx = fc.add_const_value(value);
+    fc.emit(Op::Const(idx));
+    Ok(())
+}
+
 /// Compile an expression, leaving the result on the stack.
 fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> {
     match expr {
@@ -10756,6 +10898,9 @@ fn compile_expr(fc: &mut FuncCompiler, expr: &Expr) -> Result<(), CompileError> 
             target,
             span,
         } => {
+            if let TypeExpr::TextN(cap, _) = &strip_type_labels(target) {
+                return compile_text_literal_cast(fc, inner, cap, *span);
+            }
             // A Multiword cast target whose dimensions do not resolve to a
             // concrete `u16` after monomorphization is an unresolved or
             // overflowed dimension, not a valid construction (audit F2). Reject

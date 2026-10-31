@@ -299,13 +299,30 @@ fn a_narrow_stream_agrees_with_the_reference_value_for_value() {
 /// reason. **Pinned so a change announces itself**: if either began to lower, the
 /// resume path would define slot 0 only and the other parameters would hold
 /// whatever the previous iteration left — a wrong number rather than a fault.
+///
+/// Since absorption 122 the reference refuses a two-parameter stream that reads
+/// its second parameter, by V0.2.X's definite-initialization rule, so that case
+/// asserts the reference's refusal. The backend's own refusal is pinned for the
+/// zero-parameter stream, and for a two-parameter stream that never reads its
+/// second parameter, which the reference still compiles.
 #[test]
 fn a_stream_with_other_than_one_parameter_is_refused() {
+    let unread = "loop main(a: Word, b: Word) -> Word { let r = yield a; yield (r + 1) }";
+    let read = "loop main(a: Word, b: Word) -> Word { let r = yield a; yield (r + b) }";
+    let tokens = keleusma::lexer::tokenize(read).expect("lex");
+    let program = keleusma::parser::parse(&tokens).expect("parse");
+    let why = format!(
+        "{:?}",
+        keleusma::compiler::compile(&program).expect_err(
+            "the reference compiles a two-parameter stream that reads its second parameter again"
+        )
+    );
+    assert!(
+        why.contains("definite-initialization"),
+        "the reference refuses the shape, but not by the definite-initialization rule: {why}"
+    );
     for (what, src) in [
-        (
-            "two parameters",
-            "loop main(a: Word, b: Word) -> Word { let r = yield a; yield (r + b) }",
-        ),
+        ("two parameters, the second unread", unread),
         (
             "zero parameters",
             "loop main() -> Word { let r = yield 1; yield (r + 1) }",
