@@ -5893,6 +5893,44 @@ fn emit_type_zero(fc: &mut FuncCompiler, ty: &TypeExpr, span: Span) -> Result<()
     Ok(())
 }
 
+/// Replace the flat composite element on top of the operand stack with a copy
+/// held in a fresh arena body, so that a later write to its data slot does not
+/// change it.
+///
+/// A private composite slot keeps its body at a fixed offset in the persistent
+/// pool, and reading the slot pushes a handle to that body rather than a copy.
+/// `SetDataIndexed` copies the new body over the old one in place, so a handle
+/// read before the write observes the written value afterwards. The handled
+/// write's `old` binding is read before and used after its write, which is why
+/// it needs a copy that the write cannot reach.
+///
+/// No opcode copies a composite, so the copy is built from existing ones. The
+/// element is packed as the only element of a one-element flat array, which
+/// copies its bytes into a fresh arena body, and the array is then indexed at
+/// zero, which yields a view of that body. The index is the constant zero
+/// against a length of one, so the read never fails, and its outcome suffix is
+/// dropped. The array's allocation is the `NewComposite` byte size that the
+/// worst-case memory analysis already sums. A scalar or a boxed element is
+/// owned by its slot value and is left unchanged.
+fn emit_detach_data_element(fc: &mut FuncCompiler, element: &TypeExpr) {
+    let FlatFieldForm::Nested(size, variant) = classify_flat_field(element, &fc.type_info) else {
+        return;
+    };
+    if type_may_intern_opaque(element, &fc.type_info) {
+        fc.may_intern_opaque = true;
+    }
+    fc.emit(Op::NewComposite(NewCompositeOperand::Flat {
+        kind: crate::value_layout::CompositeKind::Array,
+        count: 1,
+        byte_size: size,
+    }));
+    // `PushImmediate(4)` is the word zero.
+    fc.emit(Op::PushImmediate(4));
+    fc.emit(Op::GetIndex(ArrayElem::FlatNested { size, variant }));
+    // Drop the index, the four bound limbs and the flag, keeping the element.
+    fc.emit(Op::PopN(6));
+}
+
 /// Emit a bare `state.field[i][j]... = value;` write.
 ///
 /// Index, probe, the default `Trap(8)` on an invalid index, the offset held
@@ -5993,6 +6031,7 @@ fn compile_data_index_store(
         fc.emit(Op::SetLocal(offset));
         if probe.read_old {
             if binds_old {
+                emit_detach_data_element(fc, &probe.element);
                 pending.push((fc.emit(Op::SetLocal(0)), STORE_OLD));
             } else {
                 fc.emit(Op::PopN(1));
@@ -6041,6 +6080,7 @@ fn compile_data_index_store(
         fc.emit(Op::GetDataIndexed(probe.base, probe.total));
         // Drop the flag, the four limbs and the index, keeping the element.
         fc.emit(Op::PopN(6));
+        emit_detach_data_element(fc, &probe.element);
         pending.push((fc.emit(Op::SetLocal(0)), OLD));
     }
     compile_expr(fc, value)?;
